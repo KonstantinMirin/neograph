@@ -320,6 +320,108 @@ class TestEach:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# TEST 5b: .map() — sugar over Each(over=..., key=...)
+#
+# Node.map() accepts a lambda introspected at definition time, or a string
+# path as an escape hatch. Both compile to the same Each modifier.
+# This proves: .map() is pure sugar, lambda introspection resolves attribute
+# chains to dotted paths, the resulting graph runs identically to | Each(...).
+# ═══════════════════════════════════════════════════════════════════════════
+
+class TestNodeMap:
+    def test_map_with_lambda_resolves_path(self):
+        """A lambda `s.foo.bar` resolves to the same Each(over='foo.bar', ...)."""
+        node = Node.scripted("verify", fn="noop", input=ClusterGroup, output=MatchResult)
+        mapped = node.map(lambda s: s.make_clusters.groups, key="label")
+
+        each = mapped.get_modifier(Each)
+        assert isinstance(each, Each)
+        assert each.over == "make_clusters.groups"
+        assert each.key == "label"
+
+    def test_map_with_string_path(self):
+        """A string source is passed straight through to Each.over."""
+        node = Node.scripted("verify", fn="noop", input=ClusterGroup, output=MatchResult)
+        mapped = node.map("make_clusters.groups", key="label")
+
+        each = mapped.get_modifier(Each)
+        assert isinstance(each, Each)
+        assert each.over == "make_clusters.groups"
+        assert each.key == "label"
+
+    def test_map_equivalent_to_pipe_each(self):
+        """node.map(...) and node | Each(...) produce structurally identical nodes."""
+        base = Node.scripted("verify", fn="noop", input=ClusterGroup, output=MatchResult)
+
+        via_map = base.map(lambda s: s.make_clusters.groups, key="label")
+        via_pipe = base | Each(over="make_clusters.groups", key="label")
+
+        assert via_map.modifiers == via_pipe.modifiers
+
+    def test_map_end_to_end_fanout(self):
+        """.map() drives the same fan-out/collect behavior as | Each(...)."""
+        from neograph.factory import register_scripted
+
+        register_scripted("make_clusters", lambda input_data, config: Clusters(
+            groups=[
+                ClusterGroup(label="alpha", claim_ids=["c1", "c2"]),
+                ClusterGroup(label="beta", claim_ids=["c3"]),
+            ]
+        ))
+        register_scripted("verify_cluster", lambda input_data, config: MatchResult(
+            cluster_label=input_data.label if hasattr(input_data, "label") else "unknown",
+            matched=["match-1"],
+        ))
+
+        make = Node.scripted("make-clusters", fn="make_clusters", output=Clusters)
+        verify = Node.scripted(
+            "verify", fn="verify_cluster", input=ClusterGroup, output=MatchResult
+        ).map(lambda s: s.make_clusters.groups, key="label")
+
+        pipeline = Construct("test-map", nodes=[make, verify])
+        graph = compile(pipeline)
+        result = run(graph, input={"node_id": "test-001"})
+
+        verify_results = result.get("verify", {})
+        assert "alpha" in verify_results or len(verify_results) == 2
+
+    def test_map_lambda_with_no_attrs_raises(self):
+        """`lambda s: s` has no path — clear error."""
+        node = Node.scripted("verify", fn="noop", output=MatchResult)
+        with pytest.raises(TypeError, match="at least one attribute"):
+            node.map(lambda s: s, key="label")
+
+    def test_map_lambda_returning_scalar_raises(self):
+        """`lambda s: 42` — clear error, not a silent Each."""
+        node = Node.scripted("verify", fn="noop", output=MatchResult)
+        with pytest.raises(TypeError, match="attribute-access chain"):
+            node.map(lambda s: 42, key="label")
+
+    def test_map_lambda_that_errors_raises_typeerror(self):
+        """A lambda that does something illegal (e.g. indexing) reports cleanly."""
+        node = Node.scripted("verify", fn="noop", output=MatchResult)
+        with pytest.raises(TypeError, match="pure attribute-access chain"):
+            node.map(lambda s: s.items[0], key="label")  # __getitem__ on recorder
+
+    def test_map_rejects_non_string_non_callable(self):
+        """Passing an int or other non-source type raises immediately."""
+        node = Node.scripted("verify", fn="noop", output=MatchResult)
+        with pytest.raises(TypeError, match="string path or a lambda"):
+            node.map(42, key="label")  # type: ignore[arg-type]
+
+    def test_map_on_construct(self):
+        """Construct also gets .map() via Modifiable — sub-construct fan-out."""
+        inner = Node.scripted("inner", fn="noop", input=ClusterGroup, output=MatchResult)
+        sub = Construct("sub", input=ClusterGroup, output=MatchResult, nodes=[inner])
+        mapped = sub.map(lambda s: s.upstream.items, key="label")
+
+        each = mapped.get_modifier(Each)
+        assert isinstance(each, Each)
+        assert each.over == "upstream.items"
+        assert each.key == "label"
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # TEST 6: Operator — human-in-the-loop interrupt
 #
 # A node produces a validation result. If validation fails,

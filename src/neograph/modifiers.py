@@ -16,6 +16,30 @@ class Modifier(BaseModel, frozen=True):
     """Base class for node modifiers. Applied via Node.__or__."""
 
 
+class _PathRecorder:
+    """Proxy that records attribute-access chains for .map() lambda introspection.
+
+    Passed into a user lambda to resolve a dotted state path at definition time:
+
+        recorder = _PathRecorder()
+        result = (lambda s: s.make_clusters.groups)(recorder)
+        result._neo_path  # ('make_clusters', 'groups')
+
+    Any attribute access returns a fresh recorder whose path extends the parent's,
+    so chained access walks the tree without ever materializing a real value.
+    """
+
+    __slots__ = ("_neo_path",)
+
+    def __init__(self, path: tuple[str, ...] = ()) -> None:
+        object.__setattr__(self, "_neo_path", path)
+
+    def __getattr__(self, name: str) -> "_PathRecorder":
+        # __getattr__ only fires for attrs not found by normal lookup; _neo_path
+        # lives in __slots__ so it returns via __getattribute__ and never hits here.
+        return _PathRecorder(self._neo_path + (name,))
+
+
 class Modifiable:
     """Mixin for objects that accept modifiers via the | operator.
 
@@ -40,6 +64,64 @@ class Modifiable:
             if isinstance(m, modifier_type):
                 return m
         return None
+
+    def map(self, source: Any, *, key: str):
+        """Fan-out over a collection — sugar over `| Each(over=..., key=...)`.
+
+        `source` can be:
+
+        1. A lambda taking the state and returning an attribute chain::
+
+               verify.map(lambda s: s.make_clusters.groups, key="label")
+
+           The lambda is introspected once at definition time via a recording
+           proxy. Pyright/Pylance catch typos in `.make_clusters.groups`, and
+           renaming the upstream node surfaces as a red squiggle — the
+           refactor-safety win over string paths.
+
+        2. A string path (escape hatch, equivalent to `| Each(...)`)::
+
+               verify.map("make_clusters.groups", key="label")
+
+        Returns a new instance with an `Each` modifier appended. Fully
+        equivalent to `self | Each(over=..., key=key)` — the compiler, state
+        builder, and factory all see the same Each modifier as before.
+        """
+        if isinstance(source, str):
+            over = source
+        elif callable(source):
+            recorder = _PathRecorder()
+            try:
+                result = source(recorder)
+            except Exception as exc:  # TypeError, AttributeError, etc.
+                msg = (
+                    "Node.map() lambda must be a pure attribute-access chain "
+                    "like `lambda s: s.upstream_node.field`; "
+                    f"got error when introspecting: {exc}"
+                )
+                raise TypeError(msg) from exc
+            if not isinstance(result, _PathRecorder):
+                msg = (
+                    "Node.map() lambda must return an attribute-access chain "
+                    f"like `s.upstream_node.field`; got {type(result).__name__}"
+                )
+                raise TypeError(msg)
+            path = result._neo_path
+            if not path:
+                msg = (
+                    "Node.map() lambda must access at least one attribute, "
+                    "e.g. `lambda s: s.make_clusters.groups`"
+                )
+                raise TypeError(msg)
+            over = ".".join(path)
+        else:
+            msg = (
+                "Node.map() source must be a string path or a lambda; "
+                f"got {type(source).__name__}"
+            )
+            raise TypeError(msg)
+
+        return self | Each(over=over, key=key)
 
 
 class Oracle(Modifier):
