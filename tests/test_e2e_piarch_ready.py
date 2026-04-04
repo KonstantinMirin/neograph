@@ -12,6 +12,7 @@ import pytest
 from pydantic import BaseModel
 
 from neograph import Construct, Node, Operator, Oracle, Each, Tool, compile, raw_node, run
+from tests.fakes import FakeTool, ReActFake, StructuredFake, TextFake, configure_fake_llm
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -94,20 +95,10 @@ class TestScriptedPipeline:
 class TestProduceMode:
     def test_produce_node_with_fake_llm(self):
         """Produce node calls LLM and gets structured output."""
-        from neograph._llm import configure_llm
-
-        # Fake LLM that returns a Claims object
-        class FakeLLM:
-            def with_structured_output(self, model):
-                self._model = model
-                return self
-
-            def invoke(self, messages, **kwargs):
-                return self._model(items=["extracted-1", "extracted-2", "extracted-3"])
-
-        configure_llm(
-            llm_factory=lambda tier: FakeLLM(),
-            prompt_compiler=lambda template, data: [{"role": "user", "content": "test"}],
+        configure_fake_llm(
+            lambda tier: StructuredFake(
+                lambda m: m(items=["extracted-1", "extracted-2", "extracted-3"])
+            )
         )
 
         extract = Node(
@@ -139,52 +130,21 @@ class TestProduceMode:
 class TestGatherMode:
     def test_gather_with_tool_budgets(self):
         """Gather node uses tools within budget, then forced to respond."""
-        from langchain_core.messages import AIMessage, ToolMessage
-
-        from neograph._llm import configure_llm
         from neograph.factory import register_tool_factory
 
-        call_count = {"search": 0}
+        search_tool = FakeTool("search_nodes", response="found")
+        register_tool_factory("search_nodes", lambda config, tool_config: search_tool)
 
-        # Fake tool
-        class FakeSearchTool:
-            name = "search_nodes"
-
-            def invoke(self, args):
-                call_count["search"] += 1
-                return f"found: result-{call_count['search']}"
-
-        register_tool_factory("search_nodes", lambda config, tool_config: FakeSearchTool())
-
-        # Fake LLM: calls tool twice, then responds
-        class FakeGatherLLM:
-            def __init__(self):
-                self._call = 0
-                self._tools_bound = True
-
-            def bind_tools(self, tools):
-                clone = FakeGatherLLM()
-                clone._call = self._call
-                clone._tools_bound = len(tools) > 0
-                return clone
-
-            def invoke(self, messages, **kwargs):
-                self._call += 1
-                if self._tools_bound and self._call <= 2:
-                    msg = AIMessage(content="")
-                    msg.tool_calls = [{"name": "search_nodes", "args": {"query": "test"}, "id": f"call-{self._call}"}]
-                    return msg
-                # Final response — no tool calls
-                return AIMessage(content="done researching")
-
-            def with_structured_output(self, model):
-                self._model = model
-                return self
-
-        configure_llm(
-            llm_factory=lambda tier: FakeGatherLLM(),
-            prompt_compiler=lambda template, data: [{"role": "user", "content": "research this"}],
+        # Fake LLM: calls tool twice, then responds (budget will cap at 2 anyway)
+        fake = ReActFake(
+            tool_calls=[
+                [{"name": "search_nodes", "args": {"query": "test"}, "id": "call-1"}],
+                [{"name": "search_nodes", "args": {"query": "test"}, "id": "call-2"}],
+                [],  # stop — forced response
+            ],
+            final=lambda m: m(items=["done researching"]),
         )
+        configure_fake_llm(lambda tier: fake)
 
         explore = Node(
             name="explore",
@@ -200,48 +160,27 @@ class TestGatherMode:
         result = run(graph, input={"node_id": "test-001"})
 
         # Tool was called exactly twice (budget=2)
-        assert call_count["search"] == 2
+        assert len(search_tool.calls) == 2
 
     def test_gather_unlimited_budget(self):
         """Tool with budget=0 is never exhausted — LLM decides when to stop."""
-        from langchain_core.messages import AIMessage
-
-        from neograph._llm import configure_llm
         from neograph.factory import register_tool_factory
 
-        call_count = {"n": 0}
+        lookup_tool = FakeTool("lookup", response="result")
+        register_tool_factory("lookup", lambda config, tool_config: lookup_tool)
 
-        class FakeTool:
-            name = "lookup"
-
-            def invoke(self, args):
-                call_count["n"] += 1
-                return f"result-{call_count['n']}"
-
-        register_tool_factory("lookup", lambda config, tool_config: FakeTool())
-
-        invoke_count = {"n": 0}
-
-        class FakeLLM:
-            def bind_tools(self, tools):
-                return self
-
-            def invoke(self, messages, **kwargs):
-                invoke_count["n"] += 1
-                if invoke_count["n"] <= 5:
-                    msg = AIMessage(content="")
-                    msg.tool_calls = [{"name": "lookup", "args": {}, "id": f"c{invoke_count['n']}"}]
-                    return msg
-                return AIMessage(content="done")
-
-            def with_structured_output(self, model):
-                self._model = model
-                return self
-
-        configure_llm(
-            llm_factory=lambda tier: FakeLLM(),
-            prompt_compiler=lambda template, data: [{"role": "user", "content": "go"}],
+        fake = ReActFake(
+            tool_calls=[
+                [{"name": "lookup", "args": {}, "id": "c1"}],
+                [{"name": "lookup", "args": {}, "id": "c2"}],
+                [{"name": "lookup", "args": {}, "id": "c3"}],
+                [{"name": "lookup", "args": {}, "id": "c4"}],
+                [{"name": "lookup", "args": {}, "id": "c5"}],
+                [],  # LLM stops on its own
+            ],
+            final=lambda m: m(items=["done"]),
         )
+        configure_fake_llm(lambda tier: fake)
 
         node = Node(
             name="scan",
@@ -257,7 +196,7 @@ class TestGatherMode:
         result = run(graph, input={"node_id": "test-001"})
 
         # Tool was called 5 times — budget=0 never blocked it
-        assert call_count["n"] == 5
+        assert len(lookup_tool.calls) == 5
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -309,23 +248,11 @@ class TestOracle:
 
     def test_llm_merge(self):
         """Oracle with merge_prompt calls LLM to judge-merge variants."""
-        from neograph._llm import configure_llm
         from neograph.factory import register_scripted
 
         register_scripted("gen", lambda input_data, config: Claims(items=["v1"]))
 
-        class FakeMergeLLM:
-            def with_structured_output(self, model):
-                self._model = model
-                return self
-
-            def invoke(self, messages, **kwargs):
-                return self._model(items=["merged-consensus"])
-
-        configure_llm(
-            llm_factory=lambda tier: FakeMergeLLM(),
-            prompt_compiler=lambda template, data: [{"role": "user", "content": "merge"}],
-        )
+        configure_fake_llm(lambda tier: StructuredFake(lambda m: m(items=["merged-consensus"])))
 
         gen_node = Node.scripted(
             "generate", fn="gen", output=Claims
@@ -488,29 +415,19 @@ class TestRawNode:
 class TestMiniRWPipeline:
     def test_mixed_mode_pipeline(self):
         """Realistic pipeline mixing produce + scripted modes."""
-        from neograph._llm import configure_llm
         from neograph.factory import register_scripted
 
-        # Fake LLM
-        class FakeLLM:
-            def with_structured_output(self, model):
-                self._model = model
-                return self
+        def respond(model):
+            if model is Claims:
+                return Claims(items=["r1: system shall validate", "r2: system shall log"])
+            if model is ClassifiedClaims:
+                return ClassifiedClaims(classified=[
+                    {"claim": "r1", "category": "requirement"},
+                    {"claim": "r2", "category": "requirement"},
+                ])
+            return model()
 
-            def invoke(self, messages, **kwargs):
-                if self._model is Claims:
-                    return Claims(items=["r1: system shall validate", "r2: system shall log"])
-                if self._model is ClassifiedClaims:
-                    return ClassifiedClaims(classified=[
-                        {"claim": "r1", "category": "requirement"},
-                        {"claim": "r2", "category": "requirement"},
-                    ])
-                return self._model()
-
-        configure_llm(
-            llm_factory=lambda tier: FakeLLM(),
-            prompt_compiler=lambda template, data: [{"role": "user", "content": "test"}],
-        )
+        configure_fake_llm(lambda tier: StructuredFake(respond))
 
         register_scripted("build_catalog", lambda input_data, config: RawText(text="node catalog: 42 nodes"))
 
@@ -559,49 +476,19 @@ class TestExecuteMode:
 
     def test_execute_with_tools(self):
         """Execute node calls tools and produces structured output."""
-        from langchain_core.messages import AIMessage
-
-        from neograph._llm import configure_llm
         from neograph.factory import register_tool_factory
 
-        mutations = []
+        write_tool = FakeTool("write_file", response="written")
+        register_tool_factory("write_file", lambda config, tool_config: write_tool)
 
-        class FakeMutationTool:
-            name = "write_file"
-
-            def invoke(self, args):
-                mutations.append(args)
-                return "written"
-
-        register_tool_factory("write_file", lambda config, tool_config: FakeMutationTool())
-
-        class FakeExecuteLLM:
-            def __init__(self):
-                self._call = 0
-                self._tools_bound = True
-
-            def bind_tools(self, tools):
-                clone = FakeExecuteLLM()
-                clone._call = self._call
-                clone._tools_bound = len(tools) > 0
-                return clone
-
-            def invoke(self, messages, **kwargs):
-                self._call += 1
-                if self._tools_bound and self._call == 1:
-                    msg = AIMessage(content="")
-                    msg.tool_calls = [{"name": "write_file", "args": {"path": "out.txt"}, "id": "call-1"}]
-                    return msg
-                return AIMessage(content="done")
-
-            def with_structured_output(self, model):
-                self._model = model
-                return self
-
-        configure_llm(
-            llm_factory=lambda tier: FakeExecuteLLM(),
-            prompt_compiler=lambda template, data: [{"role": "user", "content": "execute"}],
+        fake = ReActFake(
+            tool_calls=[
+                [{"name": "write_file", "args": {"path": "out.txt"}, "id": "call-1"}],
+                [],  # stop
+            ],
+            final=lambda m: m(text="done"),
         )
+        configure_fake_llm(lambda tier: fake)
 
         writer = Node(
             name="writer",
@@ -616,8 +503,8 @@ class TestExecuteMode:
         graph = compile(pipeline)
         result = run(graph, input={"node_id": "test-001"})
 
-        assert len(mutations) == 1
-        assert mutations[0]["path"] == "out.txt"
+        assert len(write_tool.calls) == 1
+        assert write_tool.calls[0]["path"] == "out.txt"
 
 
 class TestOperatorContinues:
@@ -740,20 +627,7 @@ class TestErrorPaths:
 
     def test_unregistered_tool_factory(self):
         """Gather node with unregistered tool factory raises ValueError."""
-        from neograph._llm import configure_llm
-
-        class FakeLLM:
-            def bind_tools(self, tools):
-                return self
-
-            def invoke(self, messages, **kwargs):
-                from langchain_core.messages import AIMessage
-                return AIMessage(content="done")
-
-        configure_llm(
-            llm_factory=lambda tier: FakeLLM(),
-            prompt_compiler=lambda template, data: [{"role": "user", "content": "x"}],
-        )
+        configure_fake_llm(lambda tier: ReActFake(tool_calls=[[]]))
 
         node = Node(
             name="explore",
@@ -801,13 +675,8 @@ class TestLLMUnknownToolCall:
         from neograph._llm import configure_llm
         from neograph.factory import register_tool_factory
 
-        class FakeRealTool:
-            name = "search"
-
-            def invoke(self, args):
-                return "found it"
-
-        register_tool_factory("search", lambda config, tool_config: FakeRealTool())
+        search_tool = FakeTool("search", response="found it")
+        register_tool_factory("search", lambda config, tool_config: search_tool)
 
         call_counter = {"n": 0}
 
@@ -1390,23 +1259,11 @@ class TestConstructOracle:
 
     def test_construct_oracle_llm_merge(self):
         """Sub-pipeline runs 2 times, LLM merge combines outputs."""
-        from neograph._llm import configure_llm
         from neograph.factory import register_scripted
 
         register_scripted("gen_claim", lambda input_data, config: Claims(items=["variant"]))
 
-        class FakeMergeLLM:
-            def with_structured_output(self, model):
-                self._model = model
-                return self
-
-            def invoke(self, messages, **kwargs):
-                return self._model(items=["llm-merged"])
-
-        configure_llm(
-            llm_factory=lambda tier: FakeMergeLLM(),
-            prompt_compiler=lambda template, data: [{"role": "user", "content": "merge"}],
-        )
+        configure_fake_llm(lambda tier: StructuredFake(lambda m: m(items=["llm-merged"])))
 
         sub = Construct(
             "gen-pipeline",
@@ -1601,54 +1458,23 @@ class TestDeepCompositions:
 
     def test_tool_budget_exhaustion_in_subgraph(self):
         """Gather node inside subgraph exhausts tool budget, forced to respond."""
-        from langchain_core.messages import AIMessage
-
-        from neograph._llm import configure_llm
         from neograph.factory import register_scripted, register_tool_factory
 
-        tool_calls = {"n": 0}
+        deep_search_tool = FakeTool("deep_search", response="found")
+        register_tool_factory("deep_search", lambda config, tool_config: deep_search_tool)
 
-        class FakeTool:
-            name = "deep_search"
-
-            def invoke(self, args):
-                tool_calls["n"] += 1
-                return f"found-{tool_calls['n']}"
-
-        register_tool_factory("deep_search", lambda config, tool_config: FakeTool())
-
-        class FakeGatherLLM:
-            def __init__(self):
-                self._call = 0
-
-            def bind_tools(self, tools):
-                clone = FakeGatherLLM()
-                clone._call = self._call
-                clone._tools_bound = len(tools) > 0
-                return clone
-
-            def invoke(self, messages, **kwargs):
-                self._call += 1
-                if getattr(self, '_tools_bound', True) and self._call <= 5:
-                    msg = AIMessage(content="")
-                    msg.tool_calls = [{"name": "deep_search", "args": {}, "id": f"c{self._call}"}]
-                    return msg
-                return AIMessage(content="done searching")
-
-            def with_structured_output(self, model):
-                return FakeStructuredLLM(model)
-
-        class FakeStructuredLLM:
-            def __init__(self, model):
-                self._model = model
-
-            def invoke(self, messages, **kwargs):
-                return self._model(text="search complete")
-
-        configure_llm(
-            llm_factory=lambda tier: FakeGatherLLM(),
-            prompt_compiler=lambda template, data: [{"role": "user", "content": "search"}],
+        fake = ReActFake(
+            tool_calls=[
+                [{"name": "deep_search", "args": {}, "id": "c1"}],
+                [{"name": "deep_search", "args": {}, "id": "c2"}],
+                [{"name": "deep_search", "args": {}, "id": "c3"}],
+                [{"name": "deep_search", "args": {}, "id": "c4"}],
+                [{"name": "deep_search", "args": {}, "id": "c5"}],
+                [],  # stop
+            ],
+            final=lambda m: m(text="search complete"),
         )
+        configure_fake_llm(lambda tier: fake)
 
         register_scripted("prep_search", lambda input_data, config: Claims(items=["query"]))
 
@@ -1677,7 +1503,7 @@ class TestDeepCompositions:
         result = run(graph, input={"node_id": "test-001"})
 
         # Tool budget was 3, so exactly 3 calls made despite LLM wanting 5
-        assert tool_calls["n"] == 3
+        assert len(deep_search_tool.calls) == 3
         # Subgraph still produced output
         assert result["deep_search"] is not None
 
@@ -1843,17 +1669,7 @@ class TestLLMConfig:
 
     def test_llm_config_passed_to_factory(self):
         """Node's llm_config dict reaches the llm_factory."""
-        from neograph._llm import configure_llm
-
         factory_calls = []
-
-        class FakeLLM:
-            def with_structured_output(self, model):
-                self._model = model
-                return self
-
-            def invoke(self, messages, **kwargs):
-                return self._model(items=["result"])
 
         def tracking_factory(tier, node_name=None, llm_config=None):
             factory_calls.append({
@@ -1861,12 +1677,9 @@ class TestLLMConfig:
                 "node_name": node_name,
                 "llm_config": llm_config,
             })
-            return FakeLLM()
+            return StructuredFake(lambda m: m(items=["result"]))
 
-        configure_llm(
-            llm_factory=tracking_factory,
-            prompt_compiler=lambda template, data: [{"role": "user", "content": "test"}],
-        )
+        configure_fake_llm(tracking_factory)
 
         node = Node(
             name="custom-llm",
@@ -1890,21 +1703,8 @@ class TestLLMConfig:
 
     def test_llm_config_backward_compatible(self):
         """Old-style factory(tier) still works without llm_config."""
-        from neograph._llm import configure_llm
-
-        class FakeLLM:
-            def with_structured_output(self, model):
-                self._model = model
-                return self
-
-            def invoke(self, messages, **kwargs):
-                return self._model(items=["ok"])
-
         # Old-style factory: only accepts tier
-        configure_llm(
-            llm_factory=lambda tier: FakeLLM(),
-            prompt_compiler=lambda template, data: [{"role": "user", "content": "test"}],
-        )
+        configure_fake_llm(lambda tier: StructuredFake(lambda m: m(items=["ok"])))
 
         node = Node(
             name="old-style",
@@ -1951,17 +1751,7 @@ class TestLLMConfig:
 
     def test_prompt_compiler_receives_config(self):
         """Prompt compiler gets node_name and full config with pipeline metadata."""
-        from neograph._llm import configure_llm
-
         compiler_calls = []
-
-        class FakeLLM:
-            def with_structured_output(self, model, **kwargs):
-                self._model = model
-                return self
-
-            def invoke(self, messages, **kwargs):
-                return self._model(items=["result"])
 
         def tracking_compiler(template, data, *, node_name=None, config=None):
             compiler_calls.append({
@@ -1972,8 +1762,8 @@ class TestLLMConfig:
             })
             return [{"role": "user", "content": "test"}]
 
-        configure_llm(
-            llm_factory=lambda tier: FakeLLM(),
+        configure_fake_llm(
+            lambda tier: StructuredFake(lambda m: m(items=["result"])),
             prompt_compiler=tracking_compiler,
         )
 
@@ -2174,20 +1964,7 @@ class TestOutputStrategyStructured:
 
     def test_structured_output_default(self):
         """Produce node uses with_structured_output by default."""
-        from neograph._llm import configure_llm
-
-        class FakeLLM:
-            def with_structured_output(self, model, **kwargs):
-                self._model = model
-                return self
-
-            def invoke(self, messages, **kwargs):
-                return self._model(items=["via-structured"])
-
-        configure_llm(
-            llm_factory=lambda tier: FakeLLM(),
-            prompt_compiler=lambda template, data, **kw: [{"role": "user", "content": "test"}],
-        )
+        configure_fake_llm(lambda tier: StructuredFake(lambda m: m(items=["via-structured"])))
 
         node = Node(name="extract", mode="produce", output=Claims, model="fast", prompt="test")
         pipeline = Construct("test-structured", nodes=[node])
@@ -2202,22 +1979,14 @@ class TestOutputStrategyJsonMode:
 
     def test_json_mode_injects_schema_and_parses(self):
         """json_mode: schema injected into prompt, LLM returns raw JSON, framework parses."""
-        from neograph._llm import configure_llm
-
         compiler_calls = []
-
-        class FakeJsonLLM:
-            """LLM that doesn't support with_structured_output — returns raw text."""
-            def invoke(self, messages, **kwargs):
-                from langchain_core.messages import AIMessage
-                return AIMessage(content='{"items": ["via-json-mode"]}')
 
         def tracking_compiler(template, data, **kw):
             compiler_calls.append(kw)
             return [{"role": "user", "content": "test"}]
 
-        configure_llm(
-            llm_factory=lambda tier: FakeJsonLLM(),
+        configure_fake_llm(
+            lambda tier: TextFake('{"items": ["via-json-mode"]}'),
             prompt_compiler=tracking_compiler,
         )
 
@@ -2238,17 +2007,7 @@ class TestOutputStrategyJsonMode:
 
     def test_json_mode_handles_markdown_fences(self):
         """json_mode: strips markdown code fences before parsing."""
-        from neograph._llm import configure_llm
-
-        class FakeSloppyLLM:
-            def invoke(self, messages, **kwargs):
-                from langchain_core.messages import AIMessage
-                return AIMessage(content='```json\n{"items": ["fenced"]}\n```')
-
-        configure_llm(
-            llm_factory=lambda tier: FakeSloppyLLM(),
-            prompt_compiler=lambda template, data, **kw: [{"role": "user", "content": "test"}],
-        )
+        configure_fake_llm(lambda tier: TextFake('```json\n{"items": ["fenced"]}\n```'))
 
         node = Node(
             name="extract",
@@ -2270,16 +2029,8 @@ class TestOutputStrategyText:
 
     def test_text_mode_parses_json_from_response(self):
         """text mode: LLM returns text containing JSON, framework extracts and parses."""
-        from neograph._llm import configure_llm
-
-        class FakeTextLLM:
-            def invoke(self, messages, **kwargs):
-                from langchain_core.messages import AIMessage
-                return AIMessage(content='Here is my analysis:\n{"items": ["from-text"]}\nDone.')
-
-        configure_llm(
-            llm_factory=lambda tier: FakeTextLLM(),
-            prompt_compiler=lambda template, data, **kw: [{"role": "user", "content": "test"}],
+        configure_fake_llm(
+            lambda tier: TextFake('Here is my analysis:\n{"items": ["from-text"]}\nDone.')
         )
 
         node = Node(
@@ -2307,14 +2058,11 @@ class TestOutputStrategyOnGather:
         from neograph._llm import configure_llm
         from neograph.factory import register_tool_factory
 
-        class FakeTool:
-            name = "lookup"
+        lookup_tool = FakeTool("lookup", response="found")
+        register_tool_factory("lookup", lambda config, tool_config: lookup_tool)
 
-            def invoke(self, args):
-                return "found"
-
-        register_tool_factory("lookup", lambda config, tool_config: FakeTool())
-
+        # Custom fake: json_mode gather requires specific JSON text as final response,
+        # which ReActFake's hardcoded "done" text can't provide.
         call_n = {"n": 0}
 
         class FakeGatherLLM:
@@ -2355,23 +2103,16 @@ class TestPromptCompilerReceivesOutputModel:
 
     def test_compiler_receives_output_model_in_produce(self):
         """Produce node's prompt compiler sees the output Pydantic model."""
-        from neograph._llm import configure_llm
-
         compiler_calls = []
-
-        class FakeLLM:
-            def with_structured_output(self, model, **kwargs):
-                self._model = model
-                return self
-
-            def invoke(self, messages, **kwargs):
-                return self._model(items=["ok"])
 
         def tracking_compiler(template, data, **kw):
             compiler_calls.append(kw)
             return [{"role": "user", "content": "test"}]
 
-        configure_llm(llm_factory=lambda tier: FakeLLM(), prompt_compiler=tracking_compiler)
+        configure_fake_llm(
+            lambda tier: StructuredFake(lambda m: m(items=["ok"])),
+            prompt_compiler=tracking_compiler,
+        )
 
         node = Node(name="x", mode="produce", output=Claims, model="fast", prompt="test")
         pipeline = Construct("test", nodes=[node])
@@ -2383,20 +2124,16 @@ class TestPromptCompilerReceivesOutputModel:
 
     def test_compiler_receives_llm_config(self):
         """Prompt compiler sees the node's llm_config including output_strategy."""
-        from neograph._llm import configure_llm
-
         compiler_calls = []
-
-        class FakeJsonLLM:
-            def invoke(self, messages, **kwargs):
-                from langchain_core.messages import AIMessage
-                return AIMessage(content='{"items": ["ok"]}')
 
         def tracking_compiler(template, data, **kw):
             compiler_calls.append(kw)
             return [{"role": "user", "content": "test"}]
 
-        configure_llm(llm_factory=lambda tier: FakeJsonLLM(), prompt_compiler=tracking_compiler)
+        configure_fake_llm(
+            lambda tier: TextFake('{"items": ["ok"]}'),
+            prompt_compiler=tracking_compiler,
+        )
 
         node = Node(
             name="x", mode="produce", output=Claims, model="fast", prompt="test",
@@ -2414,14 +2151,7 @@ class TestPromptCompilerReceivesOutputModel:
         """End-to-end: compiler injects JSON schema into prompt for json_mode."""
         import json
 
-        from neograph._llm import configure_llm
-
         injected_prompts = []
-
-        class FakeJsonLLM:
-            def invoke(self, messages, **kwargs):
-                from langchain_core.messages import AIMessage
-                return AIMessage(content='{"items": ["schema-injected"]}')
 
         def schema_injecting_compiler(template, data, **kw):
             output_model = kw.get("output_model")
@@ -2436,7 +2166,10 @@ class TestPromptCompilerReceivesOutputModel:
             injected_prompts.append(prompt)
             return [{"role": "user", "content": prompt}]
 
-        configure_llm(llm_factory=lambda tier: FakeJsonLLM(), prompt_compiler=schema_injecting_compiler)
+        configure_fake_llm(
+            lambda tier: TextFake('{"items": ["schema-injected"]}'),
+            prompt_compiler=schema_injecting_compiler,
+        )
 
         node = Node(
             name="x", mode="produce", output=Claims, model="fast", prompt="decompose",
