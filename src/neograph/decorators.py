@@ -52,36 +52,43 @@ Design notes
 
 from __future__ import annotations
 
+import ast
 import inspect
+import textwrap
+import warnings
 import weakref
 from typing import Any, Callable, Literal
 
-from neograph._construct_validation import ConstructError
+from neograph._construct_validation import ConstructError, _fmt_type, _types_compatible
 from neograph.construct import Construct
+from neograph.modifiers import Each
 from neograph.node import Node
 from neograph.tool import Tool
 
 
-# Sidecar: id(Node) -> (original_fn, param_names_tuple).
+# Sidecar: id(Node) -> (original_fn, param_names_tuple, fan_out_param).
 # Keyed by id() so `Node` is not mutated. A `weakref.finalize` callback evicts
 # entries when the Node is garbage-collected, so the dict cannot leak.
-_node_sidecar: dict[int, tuple[Callable, tuple[str, ...]]] = {}
+# fan_out_param is the parameter name that receives Each items (None if no fan-out).
+_node_sidecar: dict[int, tuple[Callable, tuple[str, ...], str | None]] = {}
 
 
-def _register_sidecar(n: Node, fn: Callable, param_names: tuple[str, ...]) -> None:
+def _register_sidecar(
+    n: Node, fn: Callable, param_names: tuple[str, ...], fan_out_param: str | None = None,
+) -> None:
     node_id = id(n)
-    _node_sidecar[node_id] = (fn, param_names)
+    _node_sidecar[node_id] = (fn, param_names, fan_out_param)
     weakref.finalize(n, _node_sidecar.pop, node_id, None)
 
 
-def _get_sidecar(n: Node) -> tuple[Callable, tuple[str, ...]] | None:
+def _get_sidecar(n: Node) -> tuple[Callable, tuple[str, ...], str | None] | None:
     return _node_sidecar.get(id(n))
 
 
 def node(
     fn: Callable | None = None,
     *,
-    mode: Literal["produce", "gather", "execute", "scripted"] = "produce",
+    mode: Literal["produce", "gather", "execute", "scripted"] | None = None,
     input: Any = None,
     output: Any = None,
     model: str | None = None,
@@ -89,6 +96,8 @@ def node(
     llm_config: dict[str, Any] | None = None,
     tools: list[Tool] | None = None,
     name: str | None = None,
+    map_over: str | None = None,
+    map_key: str | None = None,
 ) -> Any:
     """Decorator that turns a function into a Node spec with signature-inferred
     dependencies. Supports both `@node` and `@node(...)` call forms.
@@ -98,12 +107,95 @@ def node(
         * `output` ← kwarg, else function return annotation
         * `input`  ← kwarg, else annotation of the first annotated parameter
 
+    Fan-out via Each::
+
+        @node(mode='scripted', output=MatchResult,
+              map_over='make_clusters.groups', map_key='label')
+        def verify(cluster: ClusterGroup) -> MatchResult: ...
+
+    When ``map_over`` is set the node is automatically composed with
+    ``Each(over=map_over, key=map_key)``. The first parameter whose name does
+    NOT match any upstream ``@node`` is treated as the fan-out item receiver;
+    ``construct_from_module`` skips it in topology wiring.
+
     For `mode='scripted'`, the function is executed via `Node.raw_fn` set at
     `construct_from_module` time — this keeps `factory.py` untouched and
     supports fan-in (>1 parameter) nodes uniformly.
     """
 
     def decorator(f: Callable) -> Node:
+        # -- Validate map_over / map_key pairing early -----------------------
+        if map_over is not None and map_key is None:
+            raise ConstructError(
+                f"@node '{(name or f.__name__).replace('_', '-')}': "
+                f"map_over= requires map_key=. Pass map_key='<field>' to "
+                f"specify the dispatch key on each item."
+            )
+        if map_key is not None and map_over is None:
+            raise ConstructError(
+                f"@node '{(name or f.__name__).replace('_', '-')}': "
+                f"map_key= requires map_over=. Pass map_over='<dotted.path>' "
+                f"to specify the collection to fan out over."
+            )
+
+        # -- Mode inference: if not explicitly set, infer from kwargs ----------
+        effective_mode = mode
+        if effective_mode is None:
+            if prompt is not None or model is not None:
+                effective_mode = "produce"
+            else:
+                effective_mode = "scripted"
+
+        node_label = (name or f.__name__).replace("_", "-")
+
+        # -- Decoration-time validation for LLM modes -------------------------
+        if effective_mode in ("produce", "gather", "execute"):
+            if prompt is None:
+                raise ConstructError(
+                    f"@node '{node_label}' uses mode='{effective_mode}' "
+                    f"which requires prompt=. Pass prompt='<template>' or "
+                    f"switch to mode='scripted'."
+                )
+            if model is None:
+                raise ConstructError(
+                    f"@node '{node_label}' uses mode='{effective_mode}' "
+                    f"which requires model=. Pass model='<model_name>' or "
+                    f"switch to mode='scripted'."
+                )
+
+            # -- Dead-body warning for LLM modes ------------------------------
+            # Check if the function body is non-trivial (more than just `...`,
+            # `pass`, or a bare constant/return). Uses AST inspection.
+            try:
+                source = textwrap.dedent(inspect.getsource(f))
+                tree = ast.parse(source)
+                func_def = next(
+                    (n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))),
+                    None,
+                )
+                if func_def is not None:
+                    body = func_def.body
+                    trivial = False
+                    if len(body) == 1:
+                        stmt = body[0]
+                        # `...` / `pass` / bare constant
+                        if isinstance(stmt, ast.Pass):
+                            trivial = True
+                        elif isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Constant):
+                            trivial = True
+                    if not trivial:
+                        warnings.warn(
+                            f"@node '{node_label}': the body of mode='{effective_mode}' "
+                            f"functions is not executed; the LLM call via prompt= provides "
+                            f"the output. Move this logic into a scripted node, or remove "
+                            f"the body and use '...' as placeholder.",
+                            UserWarning,
+                            stacklevel=3,
+                        )
+            except (OSError, TypeError):
+                # Source not available (e.g. built-in, dynamic) — skip check.
+                pass
+
         sig = inspect.signature(f)
 
         # Reject *args / **kwargs early — they have no sensible mapping to
@@ -121,7 +213,6 @@ def node(
                 raise ConstructError(msg)
 
         param_names = tuple(p.name for p in sig.parameters.values())
-        node_name = (name or f.__name__).replace("_", "-")
 
         # Output inference: explicit kwarg wins; fall back to return annotation.
         inferred_output = output
@@ -143,8 +234,8 @@ def node(
                     break
 
         n = Node(
-            name=node_name,
-            mode=mode,
+            name=node_label,
+            mode=effective_mode,
             input=inferred_input,
             output=inferred_output,
             model=model,
@@ -152,6 +243,15 @@ def node(
             llm_config=llm_config or {},
             tools=tools or [],
         )
+
+        # -- Fan-out via Each when map_over is set ---------------------------
+        if map_over is not None:
+            # Apply | Each(...) — this creates a new Node via model_copy.
+            n_mapped = n | Each(over=map_over, key=map_key)  # type: ignore[arg-type]
+            # The model_copy produced a new id(); re-register the sidecar on
+            # the new instance so construct_from_module can find it.
+            _register_sidecar(n_mapped, f, param_names)
+            return n_mapped
 
         _register_sidecar(n, f, param_names)
         return n
@@ -187,13 +287,27 @@ def construct_from_module(mod: Any, name: str | None = None) -> Construct:
         return Construct(name=construct_name, nodes=[])
 
     # Build adjacency: for each node, which other nodes does it depend on?
+    # Identify fan-out parameters: for nodes with Each modifier, params that
+    # don't match any @node name are Each item receivers (fan-out params) and
+    # must be skipped in adjacency wiring.
+    fan_out_params: dict[str, set[str]] = {}  # field_name -> set of fan-out param names
+    for field_name, n in decorated.items():
+        if n.has_modifier(Each):
+            sidecar = _get_sidecar(n)
+            assert sidecar is not None
+            _, pnames, _ = sidecar
+            fan_out_params[field_name] = {p for p in pnames if p not in decorated}
+
     adjacency: dict[str, list[str]] = {k: [] for k in decorated}
     for field_name, n in decorated.items():
         sidecar = _get_sidecar(n)
         assert sidecar is not None  # filtered above
-        _, param_names = sidecar
+        _, param_names, _ = sidecar
+        skip = fan_out_params.get(field_name, set())
         seen_deps: set[str] = set()
         for pname in param_names:
+            if pname in skip:
+                continue  # fan-out item receiver — not an upstream dependency
             if pname not in decorated:
                 msg = (
                     f"@node '{n.name}' parameter '{pname}' does not match any "
@@ -238,6 +352,12 @@ def construct_from_module(mod: Any, name: str | None = None) -> Construct:
     for field in decorated:
         visit(field)
 
+    # Validate that every fan-in parameter's annotation matches the upstream
+    # node's output type. The existing _validate_node_chain only checks
+    # Node.input (a single type derived from the first annotated param);
+    # this pass covers ALL parameters.
+    _validate_fan_in_types(decorated)
+
     # Install the execution dispatch for scripted nodes. We use Node.raw_fn
     # (which factory._make_raw_wrapper already handles) rather than
     # register_scripted, because raw_fn receives the full LangGraph state
@@ -245,13 +365,14 @@ def construct_from_module(mod: Any, name: str | None = None) -> Construct:
     # fan-in without editing factory.py.
     for n in ordered:
         if n.mode == "scripted":
-            _attach_scripted_raw_fn(n)
+            field = n.name.replace("-", "_")
+            _attach_scripted_raw_fn(n, fan_out_params.get(field, set()))
 
     construct_name = name or mod.__name__.split(".")[-1]
     return Construct(name=construct_name, nodes=ordered)
 
 
-def _attach_scripted_raw_fn(n: Node) -> None:
+def _attach_scripted_raw_fn(n: Node, fan_out: set[str] | None = None) -> None:
     """Wrap the original user function in a raw-node adapter that reads
     upstream values from LangGraph state by parameter name.
 
@@ -260,12 +381,17 @@ def _attach_scripted_raw_fn(n: Node) -> None:
     keyed by this node's state-field name. If the user function produces
     `None`, nothing is written — matching `factory._make_scripted_wrapper`
     semantics.
+
+    For fan-out params (``fan_out`` set), the value is read from
+    ``neo_each_item`` in state instead of looking up by parameter name.
     """
     sidecar = _get_sidecar(n)
     if sidecar is None:
         return
-    fn, param_names = sidecar
+    fn, param_names, _ = sidecar
     field_name = n.name.replace("-", "_")
+    _fan_out = fan_out or set()
+    each_mod = n.get_modifier(Each)
 
     def raw_adapter(state: Any, config: Any) -> dict:
         def _get(key: str) -> Any:
@@ -273,11 +399,25 @@ def _attach_scripted_raw_fn(n: Node) -> None:
                 return state.get(key)
             return getattr(state, key, None)
 
-        args = [_get(pname) for pname in param_names]
+        args = []
+        for pname in param_names:
+            if pname in _fan_out:
+                # Fan-out param: value comes from neo_each_item (set by Send)
+                args.append(_get("neo_each_item"))
+            else:
+                args.append(_get(pname))
         result = fn(*args)
 
         if result is None:
             return {}
+
+        # Each fan-out: wrap result in dict keyed by item's key field
+        if each_mod and _fan_out:
+            each_item = _get("neo_each_item")
+            if each_item is not None:
+                key_val = getattr(each_item, each_mod.key, str(each_item))
+                return {field_name: {key_val: result}}
+
         return {field_name: result}
 
     raw_adapter.__name__ = field_name
@@ -287,3 +427,65 @@ def _attach_scripted_raw_fn(n: Node) -> None:
     # Node (used by the existing @raw_node decorator) so assigning it does
     # not mutate the schema — only the field value.
     n.raw_fn = raw_adapter
+
+
+def _validate_fan_in_types(decorated: dict[str, Node]) -> None:
+    """Check every fan-in parameter's type annotation against the upstream
+    node's declared output. Raises ConstructError on the first mismatch.
+
+    Unannotated parameters are silently skipped. ForwardRef / string
+    annotations are resolved via ``typing.get_type_hints``; resolution
+    failures are skipped (same pattern as ``_resolve_field_annotation``).
+    """
+    import inspect as _inspect
+    from typing import ForwardRef as _ForwardRef, get_type_hints as _get_type_hints
+
+    # Build a localns dict from output/input types of all decorated nodes.
+    # This lets get_type_hints resolve string annotations produced by
+    # `from __future__ import annotations` when those types aren't in the
+    # function's __globals__ (e.g. types defined in a local scope).
+    localns: dict[str, Any] = {}
+    for nd in decorated.values():
+        for tp in (nd.output, nd.input):
+            if isinstance(tp, type) and hasattr(tp, "__name__"):
+                localns.setdefault(tp.__name__, tp)
+
+    for field_name, n in decorated.items():
+        sidecar = _get_sidecar(n)
+        if sidecar is None:
+            continue
+        fn, param_names, _ = sidecar
+
+        # Resolve annotations, handling `from __future__ import annotations`
+        # which turns all annotations into strings / ForwardRef objects.
+        try:
+            resolved_hints = _get_type_hints(fn, localns=localns)
+        except Exception:
+            resolved_hints = {}
+
+        sig = _inspect.signature(fn)
+        for pname in param_names:
+            if pname not in decorated:
+                continue  # unknown-param error already raised earlier
+
+            param = sig.parameters.get(pname)
+            if param is None or param.annotation is _inspect.Parameter.empty:
+                continue  # unannotated — skip
+
+            # Prefer resolved hint (handles ForwardRef); fall back to raw annotation.
+            expected = resolved_hints.get(pname, param.annotation)
+            if isinstance(expected, (str, _ForwardRef)):
+                continue  # unresolvable ForwardRef — skip
+
+            upstream = decorated[pname]
+            if upstream.output is None:
+                continue
+
+            actual = upstream.output
+            if not _types_compatible(actual, expected):
+                msg = (
+                    f"@node '{n.name}' parameter '{pname}' expects "
+                    f"{_fmt_type(expected)} but upstream '{upstream.name}' "
+                    f"produces {_fmt_type(actual)}."
+                )
+                raise ConstructError(msg)

@@ -114,7 +114,7 @@ configure_llm(
 # Step 1: Decompose requirement into claims (single LLM call)
 # Step 2: Research claims using search tool (budget: max 2 searches)
 
-@node(mode="produce", output=Claims, model="fast", prompt="req/decompose")
+@node(output=Claims, model="fast", prompt="req/decompose")
 def decompose() -> Claims:
     # body unused for mode='produce' — LLM handles execution via prompt=
     ...

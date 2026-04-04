@@ -2906,3 +2906,382 @@ class TestNodeDecorator:
         classified = result["summarize"].classified
         assert len(classified) == 2
         assert classified[0]["category"] == "g"
+
+
+class TestNodeDecoratorModeInference:
+    """@node mode inference: mode=None infers from prompt/model presence."""
+
+    def test_default_mode_infers_scripted_when_no_prompt(self):
+        """@node(output=X) with no prompt/model infers mode='scripted'."""
+        from neograph import node
+
+        @node(output=RawText)
+        def seed() -> RawText:
+            return RawText(text="hello")
+
+        assert seed.mode == "scripted"
+
+    def test_default_mode_infers_produce_when_prompt_present(self):
+        """@node(output=X, prompt='...', model='...') infers mode='produce'."""
+        from neograph import node
+
+        @node(output=Claims, prompt="rw/decompose", model="reason")
+        def decompose(topic: RawText) -> Claims: ...
+
+        assert decompose.mode == "produce"
+
+    def test_produce_without_prompt_raises(self):
+        """@node(mode='produce', output=X, model='reason') with no prompt raises at decoration time."""
+        from neograph import ConstructError, node
+
+        with pytest.raises(ConstructError, match="requires prompt="):
+
+            @node(mode="produce", output=Claims, model="reason")
+            def decompose(topic: RawText) -> Claims: ...
+
+    def test_gather_without_model_raises(self):
+        """@node(mode='gather', output=X, prompt='...') with no model raises at decoration time."""
+        from neograph import ConstructError, node
+
+        with pytest.raises(ConstructError, match="requires model="):
+
+            @node(mode="gather", output=Claims, prompt="rw/decompose")
+            def decompose(topic: RawText) -> Claims: ...
+
+    def test_produce_with_nontrivial_body_warns(self):
+        """@node(mode='produce', ...) with a real function body emits UserWarning."""
+        import warnings as _warnings
+
+        from neograph import node
+
+        with pytest.warns(UserWarning, match="body.*not executed"):
+
+            @node(mode="produce", output=Claims, prompt="rw/decompose", model="reason")
+            def decompose(topic: RawText) -> Claims:
+                return Claims(items=topic.text.split("."))
+
+    def test_produce_with_ellipsis_body_no_warn(self):
+        """@node(mode='produce', ...) with `...` body does NOT warn."""
+        import warnings as _warnings
+
+        from neograph import node
+
+        with _warnings.catch_warnings():
+            _warnings.simplefilter("error")
+
+            @node(mode="produce", output=Claims, prompt="rw/decompose", model="reason")
+            def decompose(topic: RawText) -> Claims: ...
+
+
+class TestNodeDecoratorFanInValidation:
+    """@node fan-in: ALL parameter types must match their upstream's output."""
+
+    @staticmethod
+    def _fresh_module(name: str):
+        import types as _types
+        return _types.ModuleType(name)
+
+    def test_fan_in_type_mismatch_on_second_param_raises(self):
+        """3-way fan-in where param 2's annotation doesn't match upstream output
+        → ConstructError naming both types, the param, and both nodes.
+
+        Uses module-level types so `from __future__ import annotations` string
+        annotations are resolvable by `typing.get_type_hints`.
+        """
+        from neograph import ConstructError, construct_from_module, node
+
+        # RawText, Claims, ClassifiedClaims, MergedResult are module-level.
+        # alpha produces RawText, beta produces RawText (mismatch for Claims),
+        # gamma produces ClassifiedClaims.
+        mod = self._fresh_module("test_fan_in_mismatch_2nd")
+
+        @node(mode="scripted", output=RawText)
+        def alpha() -> RawText:
+            return RawText(text="a")
+
+        # beta produces RawText, but report expects Claims for param 'beta'
+        @node(mode="scripted", output=RawText)
+        def beta() -> RawText:
+            return RawText(text="wrong-type")
+
+        @node(mode="scripted", output=ClassifiedClaims)
+        def gamma() -> ClassifiedClaims:
+            return ClassifiedClaims(classified=[])
+
+        @node(mode="scripted", output=MergedResult)
+        def report(alpha: RawText, beta: Claims, gamma: ClassifiedClaims) -> MergedResult:
+            return MergedResult(final_text="unreachable")
+
+        mod.alpha = alpha
+        mod.beta = beta
+        mod.gamma = gamma
+        mod.report = report
+
+        with pytest.raises(ConstructError) as exc_info:
+            construct_from_module(mod)
+        msg = str(exc_info.value)
+        assert "beta" in msg       # param name
+        assert "report" in msg     # consumer node
+        assert "Claims" in msg     # expected type
+        assert "RawText" in msg    # actual upstream type
+
+    def test_fan_in_type_mismatch_on_last_param_raises(self):
+        """4-way fan-in where the LAST param mismatches → proves we check ALL
+        params, not just first two."""
+        from neograph import ConstructError, construct_from_module, node
+
+        # 4 module-level types: RawText, Claims, ClassifiedClaims, Clusters.
+        # The last param (d_src) expects Clusters but upstream produces RawText.
+        mod = self._fresh_module("test_fan_in_mismatch_last")
+
+        @node(mode="scripted", output=RawText)
+        def a_src() -> RawText:
+            return RawText(text="a")
+
+        @node(mode="scripted", output=Claims)
+        def b_src() -> Claims:
+            return Claims(items=["b"])
+
+        @node(mode="scripted", output=ClassifiedClaims)
+        def c_src() -> ClassifiedClaims:
+            return ClassifiedClaims(classified=[])
+
+        # d_src produces RawText, but sink expects Clusters for param 'd_src'
+        @node(mode="scripted", output=RawText)
+        def d_src() -> RawText:
+            return RawText(text="wrong")
+
+        @node(mode="scripted", output=MergedResult)
+        def sink(a_src: RawText, b_src: Claims, c_src: ClassifiedClaims, d_src: Clusters) -> MergedResult:
+            return MergedResult(final_text="unreachable")
+
+        mod.a_src = a_src
+        mod.b_src = b_src
+        mod.c_src = c_src
+        mod.d_src = d_src
+        mod.sink = sink
+
+        with pytest.raises(ConstructError) as exc_info:
+            construct_from_module(mod)
+        msg = str(exc_info.value)
+        assert "d_src" in msg or "d-src" in msg   # param / node name
+        assert "sink" in msg                       # consumer node
+        assert "Clusters" in msg                   # expected type
+        assert "RawText" in msg                    # actual upstream type
+
+    def test_fan_in_all_types_match_passes(self):
+        """3-way fan-in with correct types → no error (regression guard)."""
+        from neograph import construct_from_module, node
+
+        mod = self._fresh_module("test_fan_in_match")
+
+        @node(mode="scripted", output=RawText)
+        def alpha() -> RawText:
+            return RawText(text="a")
+
+        @node(mode="scripted", output=Claims)
+        def beta() -> Claims:
+            return Claims(items=["b"])
+
+        @node(mode="scripted", output=ClassifiedClaims)
+        def gamma() -> ClassifiedClaims:
+            return ClassifiedClaims(classified=[])
+
+        @node(mode="scripted", output=MergedResult)
+        def report(alpha: RawText, beta: Claims, gamma: ClassifiedClaims) -> MergedResult:
+            return MergedResult(final_text="ok")
+
+        mod.alpha = alpha
+        mod.beta = beta
+        mod.gamma = gamma
+        mod.report = report
+
+        # Should NOT raise
+        pipeline = construct_from_module(mod)
+        assert [n.name for n in pipeline.nodes][-1] == "report"
+
+    def test_fan_in_unannotated_param_skipped(self):
+        """A param with no annotation is skipped (not flagged as mismatch)."""
+        from neograph import construct_from_module, node
+
+        mod = self._fresh_module("test_fan_in_unannotated")
+
+        @node(mode="scripted", output=RawText)
+        def alpha() -> RawText:
+            return RawText(text="a")
+
+        # beta produces Claims
+        @node(mode="scripted", output=Claims)
+        def beta() -> Claims:
+            return Claims(items=["b"])
+
+        # 'beta' has no annotation — should be skipped, not cause a type error
+        # even though beta's output (Claims) != RawText
+        @node(mode="scripted", output=MergedResult)
+        def report(alpha: RawText, beta) -> MergedResult:
+            return MergedResult(final_text="ok")
+
+        mod.alpha = alpha
+        mod.beta = beta
+        mod.report = report
+
+        # Should NOT raise despite beta having no annotation
+        pipeline = construct_from_module(mod)
+        assert [n.name for n in pipeline.nodes][-1] == "report"
+
+
+class TestNodeDecoratorFanout:
+    """@node decorator: map_over=/map_key= kwargs for Each fan-out interop."""
+
+    @staticmethod
+    def _fresh_module(name: str):
+        import types as _types
+        return _types.ModuleType(name)
+
+    def test_node_decorator_with_map_over(self):
+        """Full chain: producer → fan-out consumer via map_over= compiles, runs
+        end-to-end, and produces a dict keyed by cluster label."""
+        from neograph import compile, construct_from_module, node, run
+
+        mod = self._fresh_module("test_fanout_e2e")
+
+        @node(mode="scripted", output=Clusters)
+        def make_clusters() -> Clusters:
+            return Clusters(groups=[
+                ClusterGroup(label="alpha", claim_ids=["c1", "c2"]),
+                ClusterGroup(label="beta", claim_ids=["c3"]),
+            ])
+
+        @node(
+            mode="scripted",
+            output=MatchResult,
+            map_over="make_clusters.groups",
+            map_key="label",
+        )
+        def verify(cluster: ClusterGroup) -> MatchResult:
+            return MatchResult(cluster_label=cluster.label, matched=cluster.claim_ids)
+
+        mod.make_clusters = make_clusters
+        mod.verify = verify
+
+        pipeline = construct_from_module(mod)
+
+        # verify should have an Each modifier
+        verify_node = [n for n in pipeline.nodes if n.name == "verify"][0]
+        each = verify_node.get_modifier(Each)
+        assert each is not None
+        assert each.over == "make_clusters.groups"
+        assert each.key == "label"
+
+        graph = compile(pipeline)
+        result = run(graph, input={"node_id": "fanout-e2e"})
+
+        # Fan-out fired for BOTH clusters — pin cardinality and payload
+        verify_results = result.get("verify", {})
+        assert set(verify_results.keys()) == {"alpha", "beta"}
+        assert verify_results["alpha"].cluster_label == "alpha"
+        assert verify_results["beta"].cluster_label == "beta"
+        assert verify_results["alpha"].matched == ["c1", "c2"]
+
+    def test_node_decorator_map_over_requires_key(self):
+        """map_over= without map_key= raises ConstructError at decoration time."""
+        from neograph import ConstructError, node
+
+        with pytest.raises(ConstructError, match="map_key"):
+            @node(mode="scripted", output=MatchResult, map_over="make_clusters.groups")
+            def verify(cluster: ClusterGroup) -> MatchResult:
+                ...
+
+    def test_node_decorator_map_key_without_map_over_raises(self):
+        """map_key= without map_over= raises ConstructError at decoration time."""
+        from neograph import ConstructError, node
+
+        with pytest.raises(ConstructError, match="map_over"):
+            @node(mode="scripted", output=MatchResult, map_key="label")
+            def verify(cluster: ClusterGroup) -> MatchResult:
+                ...
+
+    def test_node_decorator_map_over_sidecar_propagates(self):
+        """The Each-modified Node copy retains its sidecar entry so
+        construct_from_module picks it up."""
+        from neograph.decorators import _get_sidecar
+        from neograph import node
+
+        @node(
+            mode="scripted",
+            output=MatchResult,
+            map_over="make_clusters.groups",
+            map_key="label",
+        )
+        def verify(cluster: ClusterGroup) -> MatchResult:
+            return MatchResult(cluster_label=cluster.label, matched=[])
+
+        # The node has an Each modifier
+        assert verify.has_modifier(Each)
+
+        # The sidecar survived the model_copy from | Each(...)
+        sidecar = _get_sidecar(verify)
+        assert sidecar is not None
+        fn, param_names, _fan_out = sidecar
+        assert param_names == ("cluster",)
+
+    def test_node_decorator_map_over_fanout_param_skipped_in_adjacency(self):
+        """The fan-out parameter is NOT looked up as an upstream @node,
+        so it doesn't cause 'does not match any @node' ConstructError."""
+        from neograph import construct_from_module, node
+
+        mod = self._fresh_module("test_fanout_skip_adj")
+
+        @node(mode="scripted", output=Clusters)
+        def make_clusters() -> Clusters:
+            return Clusters(groups=[])
+
+        @node(
+            mode="scripted",
+            output=MatchResult,
+            map_over="make_clusters.groups",
+            map_key="label",
+        )
+        def verify(cluster: ClusterGroup) -> MatchResult:
+            return MatchResult(cluster_label=cluster.label, matched=[])
+
+        mod.make_clusters = make_clusters
+        mod.verify = verify
+
+        # Should NOT raise — 'cluster' param is fan-out, not an upstream name
+        pipeline = construct_from_module(mod)
+        assert len(pipeline.nodes) == 2
+
+    def test_node_decorator_map_over_mixed_params_only_fanout_skipped(self):
+        """A node with both upstream params and a fan-out param: only the
+        fan-out param is skipped in adjacency; upstream params still wire."""
+        from neograph import construct_from_module, node
+
+        mod = self._fresh_module("test_fanout_mixed")
+
+        @node(mode="scripted", output=RawText)
+        def context() -> RawText:
+            return RawText(text="ctx")
+
+        @node(mode="scripted", output=Clusters)
+        def make_clusters() -> Clusters:
+            return Clusters(groups=[])
+
+        @node(
+            mode="scripted",
+            output=MatchResult,
+            map_over="make_clusters.groups",
+            map_key="label",
+        )
+        def verify(context: RawText, cluster: ClusterGroup) -> MatchResult:
+            return MatchResult(cluster_label="x", matched=[])
+
+        mod.context = context
+        mod.make_clusters = make_clusters
+        mod.verify = verify
+
+        # 'context' wires as upstream; 'cluster' is fan-out → skipped
+        pipeline = construct_from_module(mod)
+        names = [n.name for n in pipeline.nodes]
+        assert "verify" in names
+        assert "context" in names
