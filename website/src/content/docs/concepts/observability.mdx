@@ -126,21 +126,18 @@ If you do not configure structlog, it uses its defaults (which are reasonable fo
 ### One-line setup
 
 ```python
-from langfuse.callback import CallbackHandler as LangfuseHandler
+from langfuse.langchain import CallbackHandler
 from neograph import compile, run
 
-langfuse = LangfuseHandler(
-    public_key="pk-...",
-    secret_key="sk-...",
-    host="https://cloud.langfuse.com",
-)
+# Reads LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY, LANGFUSE_HOST from env
+langfuse_handler = CallbackHandler()
 
 graph = compile(pipeline)
 
 result = run(
     graph,
     input={"node_id": "BR-042"},
-    config={"callbacks": [langfuse]},
+    config={"callbacks": [langfuse_handler]},
 )
 ```
 
@@ -150,7 +147,7 @@ That is all. Every LLM call inside every node -- produce, gather, execute, and e
 
 NeoGraph does not integrate with Langfuse directly. The mechanism is LangGraph's standard callback threading:
 
-1. You pass `callbacks=[langfuse]` in the `config` dict to `run()`.
+1. You pass `callbacks=[langfuse_handler]` in the `config` dict to `run()`.
 2. LangGraph propagates that config to every node invocation.
 3. NeoGraph's LLM layer calls `llm.invoke(messages, config=config)`, which passes the callbacks to the underlying LangChain model.
 4. The LangChain model fires callback events that Langfuse (or any other handler) captures.

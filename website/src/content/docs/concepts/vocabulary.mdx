@@ -87,7 +87,8 @@ Modifiers are applied to Nodes or Constructs with the `|` (pipe) operator. They 
 decompose = Node(...) | Oracle(n=3, merge_prompt="rw/merge")
 
 # Each: run match_verify once per cluster
-match_verify = Node(...) | Each(over="clusters.groups", key="label")
+# The "discover" prefix is a previous node's name; "groups" is its output field.
+match_verify = Node(...) | Each(over="discover.groups", key="label")
 
 # Operator: pause after validation if tests failed
 validate = Node(...) | Operator(when="any_test_failed")

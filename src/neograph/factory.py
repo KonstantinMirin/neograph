@@ -81,9 +81,9 @@ def make_node_fn(node: Node) -> Callable:
     This is the core of NeoGraph — the generic factory that eliminates
     the 70% boilerplate from every hand-coded node.
     """
-    # Raw node — use the function directly
+    # Raw node — wrap with observability so node_start/node_complete fire
     if node.raw_fn is not None:
-        return node.raw_fn
+        return _make_raw_wrapper(node)
 
     # Scripted node — look up registered function
     if node.mode == "scripted":
@@ -99,6 +99,26 @@ def make_node_fn(node: Node) -> Callable:
         return _make_gather_fn(node)
     if node.mode == "execute":
         return _make_execute_fn(node)
+
+
+def _make_raw_wrapper(node: Node) -> Callable:
+    """Wrap a @raw_node function with observability (node_start/node_complete)."""
+    raw_fn = node.raw_fn
+    field_name = node.name.replace("-", "_")
+
+    def raw_node_wrapper(state: BaseModel, config: RunnableConfig) -> dict[str, Any]:
+        node_log = log.bind(node=node.name, mode="raw")
+        node_log.info("node_start", input_type=_type_name(node.input), output_type=_type_name(node.output))
+        t0 = time.monotonic()
+
+        result = raw_fn(state, config)
+
+        elapsed = time.monotonic() - t0
+        node_log.info("node_complete", duration_s=round(elapsed, 3))
+        return result
+
+    raw_node_wrapper.__name__ = field_name
+    return raw_node_wrapper
 
 
 def _make_scripted_wrapper(node: Node) -> Callable:

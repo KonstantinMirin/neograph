@@ -48,7 +48,7 @@ class Node(BaseModel):
 
 ```python
 node | Oracle(n=3, merge_fn="merge")
-node | Each(over="clusters.groups", key="label")
+node | Each(over="discover.groups", key="label")
 node | Operator(when="needs_review")
 node | Oracle(n=3, merge_fn="m") | Operator(when="check")
 ```
@@ -176,7 +176,7 @@ parent = Construct("parent", nodes=[decompose, enrich, report])
 
 ```python
 enrich | Oracle(n=3, merge_fn="merge")
-enrich | Each(over="items.groups", key="label")
+enrich | Each(over="discover.groups", key="label")
 ```
 
 ---
@@ -368,7 +368,7 @@ def configure_llm(
 | `llm_factory` | `Callable` | Creates LLM instances. Simple: `(tier) -> BaseChatModel`. Advanced: `(tier, node_name=, llm_config=) -> BaseChatModel`. |
 | `prompt_compiler` | `Callable` | Builds message lists. Simple: `(template, input_data) -> list[BaseMessage]`. Advanced: `(template, input_data, node_name=, config=) -> list[BaseMessage]`. |
 
-Both signatures are auto-detected via `TypeError` fallback -- simple and advanced forms work without configuration.
+The framework inspects your callable with `inspect.signature` at registration time and passes only the kwargs it declares. Functions using `**kwargs` receive everything. No runtime TypeError fallback — user errors propagate cleanly.
 
 **Example:**
 

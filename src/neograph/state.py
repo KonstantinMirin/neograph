@@ -96,7 +96,10 @@ def compile_state_model(construct: Construct) -> type[BaseModel]:
         fields["neo_subgraph_input"] = (construct.input | None, None)
 
     # Framework fields — always present
-    fields["node_id"] = (str, ...)
+    # node_id and project_root have defaults so consumers can omit them
+    # in run(input=...); they're still accessible via config["configurable"]
+    # for node functions that need pipeline metadata.
+    fields["node_id"] = (str, "")
     fields["project_root"] = (str, "")
     fields["human_feedback"] = (dict[str, Any] | None, None)
 

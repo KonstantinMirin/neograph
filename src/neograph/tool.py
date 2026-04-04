@@ -19,6 +19,12 @@ class Tool(BaseModel, frozen=True):
     budget: int = 0  # max calls for this tool (0 = unlimited)
     config: dict[str, Any] = Field(default_factory=dict)
 
+    def __init__(self, name_: str | None = None, /, **kwargs):
+        """Tool accepts name positionally or as a keyword argument."""
+        if name_ is not None:
+            kwargs["name"] = name_
+        super().__init__(**kwargs)
+
 
 class ToolBudgetTracker:
     """Tracks per-tool call counts and enforces budgets at runtime.

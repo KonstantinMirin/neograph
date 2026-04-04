@@ -113,7 +113,7 @@ def run_neograph():
     from langgraph.checkpoint.memory import MemorySaver
 
     from neograph import (Construct, Node, Operator, compile, configure_llm,
-                          register_condition, register_scripted, run)
+                          register_condition, run)
 
     configure_llm(
         llm_factory=lambda tier: llm,

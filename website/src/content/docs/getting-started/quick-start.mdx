@@ -117,12 +117,14 @@ The Construct defines execution order. Nodes run in the order they appear in the
 from neograph import compile, run
 
 graph = compile(pipeline)
-result = run(graph, input={"node_id": "demo", "topic": "microservice authentication"})
+result = run(graph, input={"topic": "microservice authentication"})
 
 print(result["summarize"].text)
 ```
 
 `compile()` converts the Construct into a LangGraph `StateGraph`, wires all edges, infers the state schema, and compiles. `run()` executes the graph and returns the final state with framework internals stripped out.
+
+Every field you pass in `input=` also flows into `config["configurable"]`, so your prompt compiler can read them via `config["configurable"]["topic"]`. This is how pipeline-level metadata (topic, node_id, project_root, whatever you need) reaches every node without threading it through state manually.
 
 The result is a dict keyed by node name. Each value is the typed Pydantic model that node produced.
 
@@ -154,7 +156,9 @@ configure_llm(
     ),
     prompt_compiler=lambda template, data, **kwargs: [
         {"role": "user", "content": (
-            "Break this topic into 3-5 factual claims: microservice authentication"
+            # Read the topic from run() input via config injection
+            f"Break this topic into 3-5 factual claims: "
+            f"{kwargs.get('config', {}).get('configurable', {}).get('topic', 'AI')}"
             if template == "decompose"
             else f"Classify each claim as security/reliability/performance: {data}"
             if template == "classify"
@@ -164,15 +168,15 @@ configure_llm(
 )
 
 # --- Pipeline ---
-decompose = Node(name="decompose", mode="produce", output=Claims, model="fast", prompt="decompose")
-classify  = Node(name="classify",  mode="produce", input=Claims, output=ClassifiedClaims, model="fast", prompt="classify")
-summarize = Node(name="summarize", mode="produce", input=ClassifiedClaims, output=Summary, model="fast", prompt="summarize")
+decompose = Node("decompose", mode="produce", output=Claims, model="fast", prompt="decompose")
+classify  = Node("classify",  mode="produce", input=Claims, output=ClassifiedClaims, model="fast", prompt="classify")
+summarize = Node("summarize", mode="produce", input=ClassifiedClaims, output=Summary, model="fast", prompt="summarize")
 
 pipeline = Construct("analysis", nodes=[decompose, classify, summarize])
 
 # --- Run ---
 graph = compile(pipeline)
-result = run(graph, input={"node_id": "demo"})
+result = run(graph, input={"topic": "microservice authentication"})
 
 print(result["summarize"].text)
 ```
@@ -192,5 +196,5 @@ You got a standard LangGraph graph. You can stream it, checkpoint it, visualize 
 ## Next Steps
 
 - Add tools to a node with `mode="gather"` and `Tool("name", budget=5)` -- see the [Walkthrough](/walkthrough/scripted-pipeline/)
-- Fan out with `Oracle(n=3)` or `Each(over="items")` -- see [Core Concepts](/concepts/vocabulary/)
+- Fan out with `Oracle(n=3, merge_fn="...")` or `Each(over="previous_node.field", key="id")` -- see [Core Concepts](/concepts/vocabulary/)
 - Add human-in-the-loop with `Operator(when="condition")` -- see the [Walkthrough](/walkthrough/human-in-the-loop/)

@@ -96,7 +96,7 @@ Fan-out over a collection. The compiler expands an Each-modified node into:
 3. **Barrier:** A deferred assembly node collects results into `dict[key, result]`.
 
 ```python
-from neograph import Node, Each
+from neograph import Node, Each, Tool
 
 match_verify = Node(
     "match-verify",
@@ -107,11 +107,13 @@ match_verify = Node(
     prompt="rw/match-verify",
     tools=[Tool("search_nodes", budget=5)],
 ) | Each(over="clusters.groups", key="label")
+# Assumes a previous node named "clusters" produced a Clusters object
+# with a "groups" field — a list of ClusterGroup items.
 ```
 
 ### Parameters
 
-- `over`: Dotted path to the collection in state. `"clusters.groups"` means `state.clusters.groups`. The path is navigated at runtime using attribute access.
+- `over`: Dotted path to the collection in state. The first segment is a previous node's name (its output becomes a state field). `"clusters.groups"` means "find the node named `clusters`, navigate to its `groups` attribute."
 - `key`: Field on each item used as the dispatch key. The results dict is keyed by this value.
 
 ### Result shape

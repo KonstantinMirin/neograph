@@ -18,7 +18,7 @@ configure_llm(
 )
 ```
 
-If you call `run()` on a graph that has LLM nodes without calling `configure_llm()` first, you get a `RuntimeError`.
+If you call `run()` on a graph that has LLM nodes without calling `configure_llm()` first, you get a `ValueError`.
 
 ## LLM factory
 
@@ -59,7 +59,7 @@ def my_factory(tier, node_name=None, llm_config=None):
 configure_llm(llm_factory=my_factory, prompt_compiler=my_compiler)
 ```
 
-The framework calls the advanced signature when available, falling back to the simple `(tier,)` signature if the factory does not accept keyword arguments. This provides backward compatibility -- you can start simple and add parameters later without breaking existing factories.
+The framework inspects your factory with `inspect.signature` at `configure_llm()` time and passes only the kwargs it declares on each call. Factories that use `**kwargs` receive everything. This provides backward compatibility without runtime try/except — you can start simple and add parameters later.
 
 ## Per-node llm_config
 
@@ -135,12 +135,13 @@ def my_compiler(template, data, *, node_name=None, config=None,
 configure_llm(llm_factory=my_factory, prompt_compiler=my_compiler)
 ```
 
-The framework tries signatures from most specific to least specific:
-1. `(template, data, node_name=, config=, output_model=, llm_config=)` -- full context
-2. `(template, data, node_name=, config=)` -- without output model
-3. `(template, data)` -- minimal
+The framework inspects your compiler with `inspect.signature` at `configure_llm()` time and passes only the kwargs it declares. Any of these work:
+- `(template, data, node_name=, config=, output_model=, llm_config=)` — full context
+- `(template, data, node_name=, config=)` — partial
+- `(template, data)` — minimal
+- `(template, data, **kw)` — accepts everything
 
-This means you can upgrade incrementally without breaking existing compilers.
+No try/except at runtime. You can upgrade incrementally without breaking existing compilers.
 
 ## Config injection
 
@@ -281,11 +282,13 @@ Node(name="research", mode="gather", output=ResearchResult,
 
 ## Backward compatibility
 
-Both the factory and compiler support multiple signatures. The framework tries from most to least specific:
+Both the factory and compiler accept multiple signatures. The framework inspects your callable at `configure_llm()` time and passes only the kwargs it declares:
 
-| Callback | Signatures (tried in order) |
+| Callback | Accepted parameters |
 |---|---|
-| `llm_factory` | `(tier, node_name=, llm_config=)` then `(tier)` |
-| `prompt_compiler` | `(template, data, node_name=, config=, output_model=, llm_config=)` then `(template, data, node_name=, config=)` then `(template, data)` |
+| `llm_factory` | `tier` (required) — plus any of: `node_name`, `llm_config` |
+| `prompt_compiler` | `template`, `data` (required) — plus any of: `node_name`, `config`, `output_model`, `llm_config` |
+
+Functions using `**kwargs` receive all parameters. This lets you start with a minimal lambda and add parameters later without breaking any Node definitions.
 
 Start with a simple lambda. Add parameters as you need them. No Node definitions need to change.

@@ -100,7 +100,8 @@ The compiler expands this into fan-out with `Send()`, a deferred barrier node, a
 A modifier that fans out a Node (or Construct) over a collection in state. Implements the map-reduce pattern. Applied via `|`.
 
 ```python
-verify = Node(...) | Each(over="clusters.clusters", key="label")
+verify = Node(...) | Each(over="discover.groups", key="label")
+# "discover.groups" — a previous node named "discover" produces Clusters with a "groups" field
 ```
 
 The compiler expands this into a router that iterates the collection, `Send()` per item, and a barrier that collects results.

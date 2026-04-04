@@ -66,6 +66,12 @@ class Node(Modifiable, BaseModel):
 
     model_config = {"arbitrary_types_allowed": True}
 
+    def __init__(self, name_: str | None = None, /, **kwargs):
+        """Node accepts name positionally or as a keyword argument."""
+        if name_ is not None:
+            kwargs["name"] = name_
+        super().__init__(**kwargs)
+
     @classmethod
     def scripted(
         cls,
@@ -88,7 +94,6 @@ class Node(Modifiable, BaseModel):
         )
 
     # has_modifier, get_modifier, __or__ inherited from Modifiable
-        return None
 
 
 def raw_node(
