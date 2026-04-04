@@ -331,6 +331,8 @@ class TestEach:
 # ═══════════════════════════════════════════════════════════════════════════
 
 class TestNodeMap:
+    """Node.map() — lambda- and string-path fan-out sugar over `| Each(...)`."""
+
     def test_map_with_lambda_resolves_path(self):
         """A lambda `s.foo.bar` resolves to the same Each(over='foo.bar', ...)."""
         node = Node.scripted("verify", fn="noop", input=ClusterGroup, output=MatchResult)

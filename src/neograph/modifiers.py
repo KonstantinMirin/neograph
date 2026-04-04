@@ -7,7 +7,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Self
 
 from pydantic import BaseModel
 
@@ -32,7 +32,11 @@ class _PathRecorder:
     __slots__ = ("_neo_path",)
 
     def __init__(self, path: tuple[str, ...] = ()) -> None:
-        object.__setattr__(self, "_neo_path", path)
+        # Plain assignment is fine — __slots__ without a custom __setattr__
+        # stores through the slot descriptor directly. `_neo_path` is always
+        # resolved via __getattribute__ (slot lookup), never __getattr__,
+        # so future attribute access on the recorder records only user names.
+        self._neo_path = path
 
     def __getattr__(self, name: str) -> "_PathRecorder":
         # __getattr__ only fires for attrs not found by normal lookup; _neo_path
@@ -55,7 +59,7 @@ class Modifiable:
 
     modifiers: list[Modifier]
 
-    def __or__(self, modifier: Modifier):
+    def __or__(self, modifier: Modifier) -> Self:
         """Compose modifiers via pipe: obj | Oracle(n=3) | Operator(when=...)"""
         return self.model_copy(update={"modifiers": [*self.modifiers, modifier]})
 
@@ -70,27 +74,35 @@ class Modifiable:
                 return m
         return None
 
-    def map(self, source: Any, *, key: str):
+    def map(self, source: Any, *, key: str) -> Self:
         """Fan-out over a collection — sugar over `| Each(over=..., key=...)`.
 
-        `source` can be:
+        Usage:
+            # Lambda form (refactor-safe, mypy-friendly):
+            verify.map(lambda s: s.make_clusters.groups, key="label")
 
-        1. A lambda taking the state and returning an attribute chain::
+            # String form (escape hatch, equivalent to | Each(...)):
+            verify.map("make_clusters.groups", key="label")
 
-               verify.map(lambda s: s.make_clusters.groups, key="label")
+        The lambda is introspected once at definition time via a recording
+        proxy. Pyright/Pylance catch typos in `.make_clusters.groups`, and
+        renaming the upstream node surfaces as a red squiggle — the
+        refactor-safety win over string paths.
 
-           The lambda is introspected once at definition time via a recording
-           proxy. Pyright/Pylance catch typos in `.make_clusters.groups`, and
-           renaming the upstream node surfaces as a red squiggle — the
-           refactor-safety win over string paths.
+        Args:
+            source: Either a string dotted path (equivalent to `Each.over`)
+                or a lambda taking the state proxy and returning an attribute
+                chain. The lambda must be a pure attribute-access chain;
+                indexing, arithmetic, or underscore-prefixed attributes raise
+                TypeError.
+            key: Field on each iterated item used as the dispatch key
+                (same semantics as `Each.key`).
 
-        2. A string path (escape hatch, equivalent to `| Each(...)`)::
-
-               verify.map("make_clusters.groups", key="label")
-
-        Returns a new instance with an `Each` modifier appended. Fully
-        equivalent to `self | Each(over=..., key=key)` — the compiler, state
-        builder, and factory all see the same Each modifier as before.
+        Returns:
+            A new instance of the same type with an `Each` modifier
+            appended — fully equivalent to `self | Each(over=..., key=key)`.
+            The compiler, state builder, and factory all see the same Each
+            modifier as before.
         """
         if isinstance(source, str):
             over = source
@@ -108,27 +120,27 @@ class Modifiable:
                 msg = (
                     "Node.map() lambda must be a pure attribute-access chain "
                     "like `lambda s: s.upstream_node.field`; "
-                    f"got error when introspecting: {exc}"
+                    f"got error when introspecting: {exc}."
                 )
                 raise TypeError(msg) from exc
             if not isinstance(result, _PathRecorder):
                 msg = (
                     "Node.map() lambda must return an attribute-access chain "
-                    f"like `s.upstream_node.field`; got {type(result).__name__}"
+                    f"like `s.upstream_node.field`; got {type(result).__name__}."
                 )
                 raise TypeError(msg)
             path = result._neo_path
             if not path:
                 msg = (
                     "Node.map() lambda must access at least one attribute, "
-                    "e.g. `lambda s: s.make_clusters.groups`"
+                    "e.g. `lambda s: s.make_clusters.groups`."
                 )
                 raise TypeError(msg)
             over = ".".join(path)
         else:
             msg = (
                 "Node.map() source must be a string path or a lambda; "
-                f"got {type(source).__name__}"
+                f"got {type(source).__name__}."
             )
             raise TypeError(msg)
 
