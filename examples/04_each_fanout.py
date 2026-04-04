@@ -16,8 +16,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel
 
-from neograph import Construct, Each, Node, compile, run
-from neograph.factory import register_scripted
+from neograph import Construct, Each, Node, compile, register_scripted, run
 
 
 # ── Schemas ──────────────────────────────────────────────────────────────

@@ -66,7 +66,7 @@ The `TypedDict` must list every field. Every node is added individually. Every e
 ### NeoGraph
 
 ```python
-from neograph import Node, Construct, compile, run
+from neograph import Construct, Node, compile, run
 
 decompose = Node(name="decompose", mode="produce", output=Claims, model="fast", prompt="decompose")
 classify  = Node(name="classify",  mode="produce", input=Claims, output=ClassifiedClaims, model="fast", prompt="classify")
@@ -124,7 +124,7 @@ LangGraph also has no built-in concept of tool budgets. If you want to limit how
 ### NeoGraph
 
 ```python
-from neograph import Node, Tool, Construct, compile, run
+from neograph import Construct, Node, Tool, compile, run
 
 research = Node(
     name="research",
@@ -198,7 +198,7 @@ This requires two state schemas (parent and per-worker), an `Annotated` reducer 
 ### NeoGraph
 
 ```python
-from neograph import Node, Oracle, Construct, compile, run
+from neograph import Construct, Node, Oracle, compile, run
 
 generate = Node(
     name="jokes",
@@ -282,7 +282,7 @@ You need a dedicated `review_gate` node just for the interrupt, a separate `rout
 
 ```python
 from langgraph.checkpoint.memory import MemorySaver
-from neograph import Node, Operator, Construct, compile, register_condition, run
+from neograph import Construct, Node, Operator, compile, register_condition, run
 
 register_condition("low_confidence", lambda state: (
     {"message": f"Confidence {state.analyze.confidence:.0%} is low. Approve?"}
@@ -372,7 +372,7 @@ Two `TypedDict` schemas, two `StateGraph` builds, two `compile()` calls, and a m
 ### NeoGraph
 
 ```python
-from neograph import Node, Construct, compile, run
+from neograph import Construct, Node, compile, run
 
 enrich = Construct(
     "enrich",

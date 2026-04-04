@@ -54,37 +54,59 @@ class RateLimiter:
 # ══════════════════════════════════════════════════════════════════════════
 # PROMPT COMPILER — receives full context from NeoGraph
 #
-# Signature: (template, data, *, node_name=None, config=None) → messages
+# Full signature:
+#   (template, data, *, node_name=None, config=None,
+#                       output_model=None, llm_config=None) → messages
 #
 # config["configurable"] contains:
 #   - Everything from run(input={...})  → node_id, project_root
 #   - Everything from run(config={...}) → rate_limiter, custom fields
+#
+# output_model is the Pydantic class the node will parse into — use it to
+# inject JSON schema for json_mode / text output strategies (models without
+# native structured output support like DeepSeek).
+#
+# llm_config is the Node's llm_config dict — check output_strategy here.
 # ══════════════════════════════════════════════════════════════════════════
 
-def my_prompt_compiler(template, data, *, node_name=None, config=None):
+import json
+
+
+def my_prompt_compiler(template, data, *, node_name=None, config=None,
+                       output_model=None, llm_config=None):
     """Production prompt compiler with full context access."""
     configurable = (config or {}).get("configurable", {})
 
     node_id = configurable.get("node_id", "unknown")
     project_root = configurable.get("project_root", ".")
+    strategy = (llm_config or {}).get("output_strategy", "structured")
 
     print(f"  [prompt] template={template}, node={node_name}, "
-          f"node_id={node_id}, project_root={project_root}")
+          f"node_id={node_id}, strategy={strategy}")
 
-    # In production, this would call get_generator_prompt() with:
-    # - atom_type=template
-    # - node_id=node_id
-    # - context_files=load_files(project_root, node_id)
-    # - analysis_notes=format_previous_output(data)
-
+    # Base prompt per template
     if template == "decompose":
-        return [{"role": "user", "content": (
+        prompt = (
             f"Decompose requirement {node_id} from {project_root} into claims. "
             f"Previous analysis: {data}"
-        )}]
-    if template == "summarize":
-        return [{"role": "user", "content": f"Summarize: {data}"}]
-    return [{"role": "user", "content": str(data)}]
+        )
+    elif template == "summarize":
+        prompt = f"Summarize: {data}"
+    else:
+        prompt = str(data)
+
+    messages = [{"role": "user", "content": prompt}]
+
+    # For json_mode / text: inject the output schema so the LLM knows what
+    # shape to return. The framework will parse the JSON from the response.
+    if strategy in ("json_mode", "text") and output_model is not None:
+        schema = json.dumps(output_model.model_json_schema(), indent=2)
+        messages.append({
+            "role": "user",
+            "content": f"Return ONLY a valid JSON object matching this schema:\n{schema}",
+        })
+
+    return messages
 
 
 # ══════════════════════════════════════════════════════════════════════════

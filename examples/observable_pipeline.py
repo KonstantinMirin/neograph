@@ -23,9 +23,7 @@ from langchain_openai import ChatOpenAI
 from langfuse.langchain import CallbackHandler
 from pydantic import BaseModel
 
-from neograph import Construct, Node, Oracle, compile, run
-from neograph._llm import configure_llm
-from neograph.factory import register_scripted
+from neograph import Construct, Node, Oracle, compile, configure_llm, register_scripted, run
 
 # ── Structlog: human-readable for this example ──────────────────────────
 

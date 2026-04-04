@@ -71,7 +71,7 @@ class Summary(BaseModel):
 Declare three Nodes and compose them into a Construct:
 
 ```python
-from neograph import Node, Construct
+from neograph import Construct, Node
 
 decompose = Node(
     name="decompose",
@@ -134,7 +134,7 @@ Here is the full script, copy-paste-runnable:
 import os
 from langchain_openai import ChatOpenAI
 from pydantic import BaseModel
-from neograph import Node, Construct, compile, run, configure_llm
+from neograph import Construct, Node, compile, configure_llm, run
 
 # --- Schemas ---
 class Claims(BaseModel):

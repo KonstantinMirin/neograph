@@ -120,8 +120,7 @@ The compiler inserts a check node after the modified node. If the registered con
 A 3-node pipeline with no LLM -- pure Python functions:
 
 ```python
-from neograph import Node, Construct, compile, run
-from neograph.factory import register_scripted
+from neograph import Construct, Node, compile, register_scripted, run
 from pydantic import BaseModel
 
 class Claims(BaseModel):

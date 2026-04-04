@@ -22,8 +22,7 @@ import sys
 
 from pydantic import BaseModel
 
-from neograph import Construct, Node, compile, run
-from neograph._llm import configure_llm
+from neograph import Construct, Node, compile, configure_llm, run
 
 
 # ── Schemas ──────────────────────────────────────────────────────────────

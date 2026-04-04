@@ -22,8 +22,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel
 
-from neograph import Construct, Node, compile, raw_node, run
-from neograph.factory import register_scripted
+from neograph import Construct, Node, compile, raw_node, register_scripted, run
 
 
 # ── Schemas ──────────────────────────────────────────────────────────────
