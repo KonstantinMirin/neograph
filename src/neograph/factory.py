@@ -5,6 +5,12 @@ Dispatches by mode:
     gather        — ReAct tool loop with per-tool budgets
     execute       — ReAct tool loop with mutation tools
     scripted      — deterministic Python function
+
+Also provides higher-order factory functions for modifier wiring:
+    make_oracle_redirect_fn   — redirects node output to collector field
+    make_oracle_merge_fn      — creates the merge barrier function
+    make_subgraph_fn          — creates function to run a sub-Construct
+    make_each_redirect_fn     — wraps node output keyed by Each item
 """
 
 from __future__ import annotations
@@ -16,7 +22,7 @@ import structlog
 from langchain_core.runnables import RunnableConfig
 from pydantic import BaseModel
 
-from neograph.modifiers import Each
+from neograph.modifiers import Each, Oracle
 from neograph.node import Node
 from neograph.tool import ToolBudgetTracker
 
@@ -42,6 +48,24 @@ def register_condition(name: str, fn: Callable) -> None:
 def register_tool_factory(name: str, fn: Callable) -> None:
     """Register a tool factory that creates LangChain @tool functions."""
     _tool_factory_registry[name] = fn
+
+
+def lookup_condition(name: str) -> Callable:
+    """Look up a registered condition function by name. Raises ValueError if missing."""
+    fn = _condition_registry.get(name)
+    if fn is None:
+        msg = f"Condition '{name}' not registered. Use register_condition()."
+        raise ValueError(msg)
+    return fn
+
+
+def lookup_scripted(name: str) -> Callable:
+    """Look up a registered scripted function by name. Raises ValueError if missing."""
+    fn = _scripted_registry.get(name)
+    if fn is None:
+        msg = f"Merge function '{name}' not registered. Use register_scripted()."
+        raise ValueError(msg)
+    return fn
 
 
 def make_node_fn(node: Node) -> Callable:
@@ -269,3 +293,129 @@ def _extract_input(state: Any, node: Node) -> Any:
             return val
 
     return None
+
+
+# ── Factory functions for modifier wiring ──────────────────────────────
+
+
+def make_oracle_redirect_fn(raw_fn: Callable, field_name: str, collector_field: str) -> Callable:
+    """Wrap a node function to redirect output from field_name to collector_field.
+
+    Used by Oracle generators: the node writes to the collector (list reducer)
+    instead of the consumer-facing field.
+    """
+
+    def oracle_redirect_fn(state: Any, config: RunnableConfig) -> dict:
+        result = raw_fn(state, config)
+        val = result.get(field_name)
+        if val is not None:
+            return {collector_field: val}
+        return result
+
+    oracle_redirect_fn.__name__ = raw_fn.__name__
+    return oracle_redirect_fn
+
+
+def make_oracle_merge_fn(
+    oracle: Oracle,
+    field_name: str,
+    collector_field: str,
+    output_model: Any,
+) -> Callable:
+    """Create the merge barrier function for Oracle.
+
+    If oracle.merge_prompt, calls invoke_structured (LLM judge).
+    If oracle.merge_fn, calls the registered scripted function.
+    Reads from collector_field, writes to field_name.
+    """
+    if oracle.merge_prompt:
+        def merge_fn(state: Any, config: RunnableConfig) -> dict:
+            from neograph._llm import invoke_structured
+
+            results = getattr(state, collector_field, [])
+            return {field_name: invoke_structured(
+                model_tier=oracle.merge_model,
+                prompt_template=oracle.merge_prompt,
+                input_data=results,
+                output_model=output_model,
+                config=config,
+            )}
+    else:
+        scripted_merge = lookup_scripted(oracle.merge_fn)
+
+        def merge_fn(state: Any, config: RunnableConfig) -> dict:
+            results = getattr(state, collector_field, [])
+            return {field_name: scripted_merge(results, config)}
+
+    return merge_fn
+
+
+def make_subgraph_fn(sub: Any, sub_graph: Any) -> Callable:
+    """Create a function that runs a sub-Construct in isolation.
+
+    Extracts input from parent state by type, runs sub_graph,
+    extracts output by type, returns {field_name: output}.
+    """
+    from neograph.runner import _strip_internals
+
+    sub_log = log.bind(subgraph=sub.name)
+    field_name = sub.name.replace("-", "_")
+
+    def subgraph_node(state: Any, config: RunnableConfig) -> dict:
+        sub_log.info("subgraph_start")
+
+        # Extract input from parent state by type
+        input_data = None
+        if isinstance(state, dict):
+            for val in state.values():
+                if val is not None and isinstance(val, sub.input):
+                    input_data = val
+                    break
+        else:
+            for attr_name in state.__class__.model_fields:
+                val = getattr(state, attr_name, None)
+                if val is not None and isinstance(val, sub.input):
+                    input_data = val
+                    break
+
+        # Run sub-graph with isolated state
+        sub_input: dict[str, Any] = {"node_id": state.get("node_id", "") if isinstance(state, dict) else getattr(state, "node_id", "")}
+        if input_data is not None:
+            sub_input["neo_subgraph_input"] = input_data
+
+        sub_result = _strip_internals(sub_graph.invoke(sub_input, config=config))
+
+        # Extract the declared output type from sub result
+        output_val = None
+        for val in sub_result.values():
+            if isinstance(val, sub.output):
+                output_val = val
+                break
+
+        sub_log.info("subgraph_complete")
+        return {field_name: output_val}
+
+    subgraph_node.__name__ = field_name
+    return subgraph_node
+
+
+def make_each_redirect_fn(raw_fn: Callable, field_name: str, each: Each) -> Callable:
+    """Wrap a node function to key the result by the Each item's key field.
+
+    Reads neo_each_item from state, uses each.key to extract the dispatch key.
+    """
+
+    def each_redirect_fn(state: Any, config: RunnableConfig = None) -> dict:
+        # Get the item being processed
+        each_item = state.get("neo_each_item") if isinstance(state, dict) else getattr(state, "neo_each_item", None)
+
+        result = raw_fn(state, config) if config else raw_fn(state)
+        val = result.get(field_name)
+
+        if val is not None and each_item is not None:
+            key_val = getattr(each_item, each.key, str(each_item))
+            return {field_name: {key_val: val}}
+        return result
+
+    each_redirect_fn.__name__ = raw_fn.__name__ if hasattr(raw_fn, '__name__') else field_name
+    return each_redirect_fn
