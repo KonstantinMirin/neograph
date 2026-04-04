@@ -20,12 +20,24 @@
 
 from __future__ import annotations
 
-from typing import Any
+import inspect
+import os
+import types
+from typing import Any, Union, get_args, get_origin, get_type_hints
 
 from pydantic import BaseModel
 
-from neograph.modifiers import Modifiable, Modifier
+from neograph.modifiers import Each, Modifiable, Modifier
 from neograph.node import Node
+
+
+class ConstructError(ValueError):
+    """Raised when Construct assembly fails type/topology validation.
+
+    Subclasses ValueError so existing `pytest.raises(ValueError)` patterns
+    still catch it, while allowing callers that want finer-grained handling
+    to catch the specific type.
+    """
 
 
 class Construct(Modifiable, BaseModel):
@@ -42,6 +54,11 @@ class Construct(Modifiable, BaseModel):
         sub | Oracle(n=3, merge_fn="merge")   — ensemble the entire sub-pipeline
         sub | Each(over="items", key="label") — run sub-pipeline per item
         sub | Operator(when="check")          — interrupt after sub-pipeline
+
+    Type safety: input/output compatibility across the node chain is validated
+    at assembly time (when `Construct(nodes=[...])` is called), not at
+    `compile()` time. Mismatches raise `ConstructError` with a pointer to the
+    user source line and a suggestion (e.g. "did you forget .map()?").
     """
 
     name: str
@@ -61,5 +78,291 @@ class Construct(Modifiable, BaseModel):
         if name_ is not None:
             kwargs["name"] = name_
         super().__init__(**kwargs)
+        # Validate after pydantic finishes so ConstructError escapes cleanly
+        # rather than being wrapped in a pydantic ValidationError. Nested
+        # constructs self-validate during their own __init__.
+        _validate_node_chain(self)
 
-    # has_modifier, get_modifier, __or__ inherited from Modifiable
+    # has_modifier, get_modifier, __or__, map inherited from Modifiable
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Assembly-time validation
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def _validate_node_chain(construct: Construct) -> None:
+    """Walk the node list, verifying each input has a compatible producer."""
+    # Producers: (state_field_name, output_type, human_label)
+    producers: list[tuple[str, Any, str]] = []
+
+    # The Construct's own input port is the first producer, if declared —
+    # used by inner nodes that read from `neo_subgraph_input`.
+    if construct.input is not None:
+        producers.append((
+            "neo_subgraph_input",
+            construct.input,
+            f"construct '{construct.name}' input port",
+        ))
+
+    for item in construct.nodes:
+        input_type = getattr(item, "input", None)
+        if input_type is not None:
+            _check_item_input(construct, item, input_type, producers)
+
+        output_type = getattr(item, "output", None)
+        name = getattr(item, "name", None)
+        if output_type is not None and name is not None:
+            field_name = name.replace("-", "_")
+            label = (
+                f"node '{name}'"
+                if isinstance(item, Node)
+                else f"sub-construct '{name}'"
+            )
+            producers.append((field_name, output_type, label))
+
+
+def _check_item_input(
+    construct: Construct,
+    item: Any,
+    input_type: Any,
+    producers: list[tuple[str, Any, str]],
+) -> None:
+    """Validate that `item.input` is satisfied by some upstream producer.
+
+    Static validation only fires when there's enough evidence to make a
+    definite call. Cases that defer to runtime isinstance-scanning:
+      - No upstream producers at all (first-of-chain — input comes from
+        `run(input=...)` kwargs).
+      - `dict` / non-class input types (multi-field or raw extraction).
+      - Each modifier whose root segment doesn't match a known producer
+        (the collection is pre-seeded by runtime state).
+    """
+    # Can't know what run(input=...) kwargs will seed the state with.
+    if not producers:
+        return
+    # dict inputs (multi-field extraction) are too permissive to validate.
+    if isinstance(input_type, dict):
+        return
+    # Anything that isn't a class — skip (defensive; shouldn't happen).
+    if not isinstance(input_type, type):
+        return
+
+    # Each modifier rewires the effective input type via the `over` path.
+    get_mod = getattr(item, "get_modifier", None)
+    each = get_mod(Each) if get_mod else None
+    if each is not None:
+        _check_each_path(construct, item, input_type, each, producers)
+        return
+
+    # Plain input: any producer whose output is assignable to input_type wins.
+    for _, producer_type, _ in producers:
+        if _types_compatible(producer_type, input_type):
+            return
+
+    raise ConstructError(
+        _format_no_producer_error(construct, item, input_type, producers)
+    )
+
+
+def _check_each_path(
+    construct: Construct,
+    item: Any,
+    input_type: Any,
+    each: Each,
+    producers: list[tuple[str, Any, str]],
+) -> None:
+    """Resolve each.over against producers; verify it lands on list[input_type]."""
+    parts = each.over.split(".")
+    root = parts[0]
+
+    root_type: Any = None
+    for field_name, producer_type, _ in producers:
+        if field_name == root:
+            root_type = producer_type
+            break
+
+    if root_type is None:
+        # Root doesn't name any upstream producer. The collection is likely
+        # pre-seeded by runtime state (e.g. a top-level Each with a state
+        # field supplied via run(input=...)); defer to runtime.
+        return
+
+    # Walk remaining segments through Pydantic model_fields.
+    current_type: Any = root_type
+    walked = [root]
+    for segment in parts[1:]:
+        walked.append(segment)
+        resolved = _resolve_field_annotation(current_type, segment)
+        if resolved is _MISSING:
+            raise ConstructError(
+                f"Node '{item.name}' in construct '{construct.name}' has "
+                f"Each(over='{each.over}') but '{'.'.join(walked)}' does not "
+                f"resolve: {_type_name(current_type)} has no field '{segment}'.\n"
+                f"{_location_suffix()}"
+            )
+        current_type = resolved
+
+    element_type = _extract_list_element(current_type)
+    if element_type is None:
+        raise ConstructError(
+            f"Node '{item.name}' in construct '{construct.name}' has "
+            f"Each(over='{each.over}'), but the path resolves to "
+            f"{_type_name(current_type)}, not a list.\n"
+            f"  hint: Each fans out over a collection; the terminal field "
+            f"must be a list.\n"
+            f"{_location_suffix()}"
+        )
+
+    if not _types_compatible(element_type, input_type):
+        raise ConstructError(
+            f"Node '{item.name}' in construct '{construct.name}' declares "
+            f"input={_type_name(input_type)} with Each(over='{each.over}'), "
+            f"but the path resolves to list[{_type_name(element_type)}].\n"
+            f"{_location_suffix()}"
+        )
+
+
+_MISSING = object()
+
+
+def _resolve_field_annotation(model_class: Any, field_name: str) -> Any:
+    """Return the fully-resolved annotation for a field, or _MISSING if absent.
+
+    Uses `typing.get_type_hints` first to unwrap ForwardRefs and string
+    annotations introduced by `from __future__ import annotations`, then
+    falls back to `model_fields[name].annotation` if get_type_hints can't
+    resolve (e.g. names in unusual scopes).
+    """
+    model_fields = getattr(model_class, "model_fields", None) or {}
+    if field_name not in model_fields:
+        return _MISSING
+    try:
+        hints = get_type_hints(model_class)
+    except Exception:
+        hints = {}
+    if field_name in hints:
+        return hints[field_name]
+    # Fallback: raw annotation (may still be a ForwardRef/str)
+    return model_fields[field_name].annotation
+
+
+def _types_compatible(producer: Any, target: Any) -> bool:
+    """True if a value of type `producer` can satisfy a consumer of `target`."""
+    if producer is target:
+        return True
+    if not (isinstance(producer, type) and isinstance(target, type)):
+        return False
+    try:
+        return issubclass(producer, target)
+    except TypeError:
+        return False
+
+
+def _extract_list_element(tp: Any) -> Any:
+    """If tp is list[X], Optional[list[X]], or list[X] | None, return X."""
+    origin = get_origin(tp)
+    if origin is list:
+        args = get_args(tp)
+        return args[0] if args else None
+    # Handle Union / Optional / X | None
+    is_union = origin is Union or (
+        hasattr(types, "UnionType") and origin is types.UnionType
+    )
+    if is_union:
+        for arg in get_args(tp):
+            if arg is type(None):
+                continue
+            element = _extract_list_element(arg)
+            if element is not None:
+                return element
+    return None
+
+
+def _type_name(tp: Any) -> str:
+    if tp is None:
+        return "None"
+    if hasattr(tp, "__name__"):
+        return tp.__name__
+    return repr(tp)
+
+
+def _format_no_producer_error(
+    construct: Construct,
+    item: Any,
+    input_type: Any,
+    producers: list[tuple[str, Any, str]],
+) -> str:
+    if producers:
+        producer_summary = "\n".join(
+            f"    • {label}: {_type_name(t)}"
+            for _, t, label in producers
+        )
+    else:
+        producer_summary = "    (no upstream producers)"
+
+    hint = _suggest_hint(input_type, producers)
+    hint_line = f"  hint: {hint}\n" if hint else ""
+
+    return (
+        f"Node '{item.name}' in construct '{construct.name}' declares "
+        f"input={_type_name(input_type)} but no upstream produces a "
+        f"compatible value.\n"
+        f"  upstream producers:\n{producer_summary}\n"
+        f"{hint_line}"
+        f"{_location_suffix()}"
+    )
+
+
+def _suggest_hint(
+    input_type: Any,
+    producers: list[tuple[str, Any, str]],
+) -> str | None:
+    """Scan producer outputs for a list[input_type] field; suggest .map()."""
+    for field_name, producer_type, _ in producers:
+        model_fields = getattr(producer_type, "model_fields", None) or {}
+        for fname in model_fields:
+            resolved = _resolve_field_annotation(producer_type, fname)
+            if resolved is _MISSING:
+                continue
+            element = _extract_list_element(resolved)
+            if element is not None and _types_compatible(element, input_type):
+                return (
+                    f"did you forget to fan out? try "
+                    f".map(lambda s: s.{field_name}.{fname}, key='...')"
+                )
+    return None
+
+
+def _location_suffix() -> str:
+    loc = _source_location()
+    return f"  at {loc}" if loc else ""
+
+
+def _source_location() -> str | None:
+    """Return 'file.py:line' for the user-code frame that assembled this Construct.
+
+    Walks inspect.stack() past neograph and pydantic internals to find the
+    first user frame — typically the `Construct(...)` call site. Filters by
+    module name (`frame.f_globals["__name__"]`) rather than path substring,
+    because user tests/examples often live under a `neograph/` directory
+    that would otherwise get mis-filtered.
+    """
+    try:
+        stack = inspect.stack()
+        try:
+            for frame_info in stack:
+                module_name = frame_info.frame.f_globals.get("__name__", "")
+                if module_name == "neograph" or module_name.startswith("neograph."):
+                    continue
+                if module_name.startswith("pydantic"):
+                    continue
+                fname = frame_info.filename
+                if not fname or fname.startswith("<"):
+                    continue
+                return f"{os.path.basename(fname)}:{frame_info.lineno}"
+        finally:
+            del stack
+    except Exception:
+        pass
+    return None

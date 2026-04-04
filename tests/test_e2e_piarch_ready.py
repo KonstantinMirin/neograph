@@ -11,7 +11,7 @@ from typing import Any
 import pytest
 from pydantic import BaseModel
 
-from neograph import Construct, Node, Operator, Oracle, Each, Tool, compile, raw_node, run, tool
+from neograph import Construct, ConstructError, Node, Operator, Oracle, Each, Tool, compile, raw_node, run, tool
 from tests.fakes import FakeTool, ReActFake, StructuredFake, TextFake, configure_fake_llm
 
 
@@ -1729,6 +1729,132 @@ class TestFirstNodeEdgeCases:
         parent = Construct("parent", nodes=[sub])
         # Compile succeeds — Each wired from START
         graph = compile(parent)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Assembly-time type validation — compile errors surface at Construct(...)
+# ═══════════════════════════════════════════════════════════════════════════
+
+class TestConstructValidation:
+    """Input/output compatibility is checked at Construct assembly time."""
+
+    def test_valid_chain_passes(self):
+        """A correctly typed chain assembles without error."""
+        a = Node.scripted("a", fn="f", output=RawText)
+        b = Node.scripted("b", fn="f", input=RawText, output=Claims)
+        c = Node.scripted("c", fn="f", input=Claims, output=ClassifiedClaims)
+        # No exception — the chain RawText → Claims → ClassifiedClaims is consistent
+        Construct("good", nodes=[a, b, c])
+
+    def test_plain_input_mismatch_raises(self):
+        """Downstream input with no compatible upstream raises ConstructError."""
+        a = Node.scripted("a", fn="f", output=RawText)
+        b = Node.scripted("b", fn="f", input=Claims, output=ClassifiedClaims)
+        with pytest.raises(ConstructError, match="declares input=Claims"):
+            Construct("bad", nodes=[a, b])
+
+    def test_mismatch_hint_suggests_map(self):
+        """When upstream has list[input_type] field, hint suggests .map()."""
+        # Clusters has `groups: list[ClusterGroup]` — downstream wants a
+        # single ClusterGroup, so the fix is .map(lambda s: s.a.groups, ...).
+        a = Node.scripted("a", fn="f", output=Clusters)
+        b = Node.scripted("b", fn="f", input=ClusterGroup, output=MatchResult)
+        with pytest.raises(ConstructError, match="did you forget to fan out"):
+            Construct("bad-fanout", nodes=[a, b])
+
+    def test_mismatch_error_includes_source_location(self):
+        """Error message includes a file:line pointer to the user call site."""
+        a = Node.scripted("a", fn="f", output=RawText)
+        b = Node.scripted("b", fn="f", input=Claims, output=ClassifiedClaims)
+        with pytest.raises(ConstructError, match=r"at test_e2e_piarch_ready\.py:\d+"):
+            Construct("bad-loc", nodes=[a, b])
+
+    def test_each_correct_path_passes(self):
+        """Each whose path resolves to list[input_type] assembles cleanly."""
+        a = Node.scripted("a", fn="f", output=Clusters)
+        b = Node.scripted(
+            "b", fn="f", input=ClusterGroup, output=MatchResult
+        ).map(lambda s: s.a.groups, key="label")
+        Construct("good-each", nodes=[a, b])  # no error
+
+    def test_each_missing_field_raises(self):
+        """Each path that walks to a non-existent field raises."""
+        a = Node.scripted("a", fn="f", output=Clusters)
+        b = Node.scripted(
+            "b", fn="f", input=ClusterGroup, output=MatchResult
+        ) | Each(over="a.nonexistent", key="label")
+        with pytest.raises(ConstructError, match="has no field 'nonexistent'"):
+            Construct("bad-each-field", nodes=[a, b])
+
+    def test_each_terminal_not_list_raises(self):
+        """Each whose terminal field isn't a list is flagged."""
+        # RawText.text is a str — not a list; Each can't fan out over it.
+        a = Node.scripted("a", fn="f", output=RawText)
+        b = Node.scripted(
+            "b", fn="f", input=ClusterGroup, output=MatchResult
+        ) | Each(over="a.text", key="label")
+        with pytest.raises(ConstructError, match="not a list"):
+            Construct("bad-each-terminal", nodes=[a, b])
+
+    def test_each_list_wrong_element_raises(self):
+        """Each whose list element type doesn't match input raises."""
+        # Claims.items is list[str]; downstream wants ClusterGroup, not str.
+        a = Node.scripted("a", fn="f", output=Claims)
+        b = Node.scripted(
+            "b", fn="f", input=ClusterGroup, output=MatchResult
+        ) | Each(over="a.items", key="label")
+        with pytest.raises(ConstructError, match="list\\[str\\]"):
+            Construct("bad-each-element", nodes=[a, b])
+
+    def test_first_item_with_input_deferred_to_runtime(self):
+        """First-of-chain with declared input is NOT flagged — runtime-seeded."""
+        # No producers exist yet when checking `b` — defer to runtime.
+        b = Node.scripted("b", fn="f", input=Claims, output=ClassifiedClaims)
+        Construct("top-level", nodes=[b])  # no error
+
+    def test_sub_construct_input_port_satisfies_inner_node(self):
+        """Inner node reading from the sub-construct's input port validates."""
+        inner = Node.scripted("inner", fn="f", input=Claims, output=Claims)
+        # sub.input=Claims is injected as `neo_subgraph_input` producer for inner
+        Construct("sub", input=Claims, output=Claims, nodes=[inner])  # no error
+
+    def test_sub_construct_chained_in_parent(self):
+        """Parent producing sub.input satisfies the sub-construct's input check."""
+        upstream = Node.scripted("upstream", fn="f", output=Claims)
+        sub = Construct(
+            "sub", input=Claims, output=ClassifiedClaims,
+            nodes=[Node.scripted("inner", fn="f", input=Claims, output=ClassifiedClaims)],
+        )
+        Construct("parent", nodes=[upstream, sub])  # no error
+
+    def test_sub_construct_input_mismatch_in_parent(self):
+        """Parent's upstream output incompatible with sub.input raises."""
+        upstream = Node.scripted("upstream", fn="f", output=RawText)
+        sub = Construct(
+            "sub", input=Claims, output=ClassifiedClaims,
+            nodes=[Node.scripted("inner", fn="f", input=Claims, output=ClassifiedClaims)],
+        )
+        with pytest.raises(ConstructError, match="sub.*declares input=Claims"):
+            Construct("parent", nodes=[upstream, sub])
+
+    def test_construct_error_is_valueerror(self):
+        """ConstructError subclasses ValueError for existing except clauses."""
+        a = Node.scripted("a", fn="f", output=RawText)
+        b = Node.scripted("b", fn="f", input=Claims, output=ClassifiedClaims)
+        with pytest.raises(ValueError):
+            Construct("bad", nodes=[a, b])
+
+    def test_dict_input_skipped(self):
+        """Nodes with dict[str, type] input spec aren't statically validated."""
+        # step-c has multi-field input; static validation punts to runtime.
+        step_a = Node.scripted("step-a", fn="f", output=Claims)
+        step_b = Node.scripted("step-b", fn="f", output=RawText)
+        step_c = Node.scripted(
+            "step-c", fn="f",
+            input={"step_a": Claims, "step_b": RawText},
+            output=RawText,
+        )
+        Construct("multi-input", nodes=[step_a, step_b, step_c])  # no error
 
 
 class TestConstructOracleErrors:
