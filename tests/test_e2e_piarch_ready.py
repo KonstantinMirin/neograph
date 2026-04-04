@@ -1984,3 +1984,178 @@ class TestLLMConfig:
         assert compiler_calls[0]["node_name"] == "analyze"
         assert compiler_calls[0]["node_id"] == "BR-001"
         assert compiler_calls[0]["project_root"] == "/proj"
+
+
+class TestConfigInjectionPatterns:
+    """Real-world config injection patterns from piarch consumer."""
+
+    def test_shared_resources_in_config(self):
+        """Consumer passes shared infrastructure (rate limiter, tracer) via config."""
+        from neograph.factory import register_scripted
+
+        class FakeRateLimiter:
+            def __init__(self):
+                self.calls = 0
+
+            def call(self):
+                self.calls += 1
+
+        limiter = FakeRateLimiter()
+
+        def node_with_resources(input_data, config):
+            rl = config["configurable"]["rate_limiter"]
+            rl.call()
+            return Claims(items=[f"calls={rl.calls}"])
+
+        register_scripted("resourced", node_with_resources)
+
+        pipeline = Construct("test-resources", nodes=[
+            Node.scripted("step", fn="resourced", output=Claims),
+        ])
+        graph = compile(pipeline)
+        result = run(
+            graph,
+            input={"node_id": "test"},
+            config={"configurable": {"rate_limiter": limiter}},
+        )
+
+        assert limiter.calls == 1
+        assert result["step"].items == ["calls=1"]
+
+    def test_config_available_in_subgraph(self):
+        """Config flows through to sub-construct node functions."""
+        from neograph.factory import register_scripted
+
+        seen_in_sub = {}
+
+        def sub_node(input_data, config):
+            seen_in_sub["node_id"] = config.get("configurable", {}).get("node_id")
+            seen_in_sub["custom"] = config.get("configurable", {}).get("custom")
+            return RawText(text="sub-done")
+
+        register_scripted("sub_node", sub_node)
+        register_scripted("parent_seed", lambda input_data, config: Claims(items=["x"]))
+
+        sub = Construct(
+            "sub",
+            input=Claims,
+            output=RawText,
+            nodes=[Node.scripted("inner", fn="sub_node", output=RawText)],
+        )
+
+        parent = Construct("parent", nodes=[
+            Node.scripted("seed", fn="parent_seed", output=Claims),
+            sub,
+        ])
+        graph = compile(parent)
+        run(graph,
+            input={"node_id": "BR-042"},
+            config={"configurable": {"custom": "my-value"}})
+
+        # Sub-construct node function received both pipeline input and custom config
+        assert seen_in_sub["node_id"] == "BR-042"
+        assert seen_in_sub["custom"] == "my-value"
+
+    def test_config_available_in_oracle_generators(self):
+        """Each Oracle generator sees config with node_id and custom fields."""
+        from neograph.factory import register_scripted
+
+        gen_configs = []
+
+        def gen_fn(input_data, config):
+            gen_configs.append({
+                "node_id": config.get("configurable", {}).get("node_id"),
+                "project_root": config.get("configurable", {}).get("project_root"),
+                "gen_id": config.get("configurable", {}).get("_generator_id"),
+            })
+            return Claims(items=["v"])
+
+        def merge_fn(variants, config):
+            return Claims(items=[f"merged-{len(variants)}"])
+
+        register_scripted("cfg_gen", gen_fn)
+        register_scripted("cfg_merge", merge_fn)
+
+        node = Node.scripted(
+            "gen", fn="cfg_gen", output=Claims
+        ) | Oracle(n=3, merge_fn="cfg_merge")
+
+        pipeline = Construct("test-oracle-config", nodes=[node])
+        graph = compile(pipeline)
+        run(graph,
+            input={"node_id": "BR-099", "project_root": "/proj"},
+            config={})
+
+        # All 3 generators saw the pipeline metadata
+        assert len(gen_configs) == 3
+        for gc in gen_configs:
+            assert gc["node_id"] == "BR-099"
+            assert gc["project_root"] == "/proj"
+            assert gc["gen_id"] is not None  # generator ID also present
+
+    def test_config_available_in_each_fanout(self):
+        """Each fan-out node sees config with node_id."""
+        from neograph.factory import register_scripted
+
+        each_configs = []
+
+        register_scripted("make_groups", lambda input_data, config: Clusters(
+            groups=[ClusterGroup(label="a", claim_ids=["1"]),
+                    ClusterGroup(label="b", claim_ids=["2"])]
+        ))
+
+        def verify_with_config(input_data, config):
+            each_configs.append({
+                "node_id": config.get("configurable", {}).get("node_id"),
+                "label": input_data.label if hasattr(input_data, "label") else "?",
+            })
+            return MatchResult(cluster_label=input_data.label, matched=["ok"])
+
+        register_scripted("verify_cfg", verify_with_config)
+
+        make = Node.scripted("make", fn="make_groups", output=Clusters)
+        verify = Node.scripted(
+            "verify", fn="verify_cfg", input=ClusterGroup, output=MatchResult
+        ) | Each(over="make.groups", key="label")
+
+        pipeline = Construct("test-each-config", nodes=[make, verify])
+        graph = compile(pipeline)
+        run(graph, input={"node_id": "BR-050"})
+
+        # Both fan-out invocations saw node_id
+        assert len(each_configs) == 2
+        assert all(c["node_id"] == "BR-050" for c in each_configs)
+        labels = {c["label"] for c in each_configs}
+        assert labels == {"a", "b"}
+
+    def test_multi_node_pipeline_all_see_config(self):
+        """Every node in a multi-step pipeline sees the same config metadata."""
+        from neograph.factory import register_scripted
+
+        nodes_seen = []
+
+        def tracking_fn(input_data, config):
+            nodes_seen.append({
+                "node_id": config.get("configurable", {}).get("node_id"),
+                "env": config.get("configurable", {}).get("env"),
+            })
+            return Claims(items=["done"])
+
+        register_scripted("track_a", tracking_fn)
+        register_scripted("track_b", tracking_fn)
+        register_scripted("track_c", tracking_fn)
+
+        pipeline = Construct("test-all-config", nodes=[
+            Node.scripted("a", fn="track_a", output=Claims),
+            Node.scripted("b", fn="track_b", output=Claims),
+            Node.scripted("c", fn="track_c", output=Claims),
+        ])
+        graph = compile(pipeline)
+        run(graph,
+            input={"node_id": "REQ-001"},
+            config={"configurable": {"env": "staging"}})
+
+        assert len(nodes_seen) == 3
+        for seen in nodes_seen:
+            assert seen["node_id"] == "REQ-001"
+            assert seen["env"] == "staging"
