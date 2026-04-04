@@ -700,7 +700,7 @@ class TestErrorPaths:
         pipeline = Construct("test-no-llm", nodes=[node])
         graph = compile(pipeline)
 
-        with pytest.raises(RuntimeError, match="LLM not configured"):
+        with pytest.raises(ValueError, match="LLM not configured"):
             run(graph, input={"node_id": "test-001"})
 
     def test_unregistered_scripted_fn(self):

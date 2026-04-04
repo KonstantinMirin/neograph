@@ -12,6 +12,7 @@ Structlog captures the framework-level view regardless.
 
 from __future__ import annotations
 
+import inspect
 import time
 from typing import Any, Callable
 
@@ -24,9 +25,30 @@ log = structlog.get_logger()
 
 # Consumer-provided LLM factory
 _llm_factory: Callable[[str], Any] | None = None
+_llm_factory_params: set[str] = set()
 
 # Consumer-provided prompt compiler
 _prompt_compiler: Callable[[str, Any], list] | None = None
+_prompt_compiler_params: set[str] = set()
+
+
+_ACCEPT_ALL = frozenset({"__all__"})  # sentinel for **kwargs functions
+
+
+def _accepted_params(fn: Callable) -> set[str]:
+    """Inspect a callable and return the set of parameter names it accepts.
+
+    If the function accepts **kwargs, returns a sentinel that matches all keys.
+    """
+    try:
+        sig = inspect.signature(fn)
+        for p in sig.parameters.values():
+            if p.kind == inspect.Parameter.VAR_KEYWORD:
+                return _ACCEPT_ALL  # accepts everything
+        return set(sig.parameters.keys())
+    except (ValueError, TypeError):
+        # Builtins, C extensions — assume simple signature
+        return set()
 
 
 def configure_llm(
@@ -72,20 +94,23 @@ def configure_llm(
 
         configure_llm(llm_factory=my_factory, prompt_compiler=my_compiler)
     """
-    global _llm_factory, _prompt_compiler  # noqa: PLW0603
+    global _llm_factory, _prompt_compiler, _llm_factory_params, _prompt_compiler_params  # noqa: PLW0603
     _llm_factory = llm_factory
+    _llm_factory_params = _accepted_params(llm_factory)
     _prompt_compiler = prompt_compiler
+    _prompt_compiler_params = _accepted_params(prompt_compiler)
 
 
 def _get_llm(tier: str, node_name: str = "", llm_config: dict | None = None) -> Any:
     if _llm_factory is None:
         msg = "LLM not configured. Call neograph.configure_llm() first."
-        raise RuntimeError(msg)
-    try:
-        return _llm_factory(tier, node_name=node_name, llm_config=llm_config or {})
-    except TypeError:
-        # Backward compatible: factory only accepts (tier,)
-        return _llm_factory(tier)
+        raise ValueError(msg)
+    all_kwargs = {"node_name": node_name, "llm_config": llm_config or {}}
+    if _llm_factory_params is _ACCEPT_ALL:
+        kwargs = all_kwargs
+    else:
+        kwargs = {k: v for k, v in all_kwargs.items() if k in _llm_factory_params}
+    return _llm_factory(tier, **kwargs)
 
 
 def _compile_prompt(
@@ -97,20 +122,18 @@ def _compile_prompt(
     output_model: type[BaseModel] | None = None,
     llm_config: dict | None = None,
 ) -> list:
-    # Try full signature first, then progressively simpler ones
-    try:
-        return _prompt_compiler(
-            template, input_data,
-            node_name=node_name, config=config,
-            output_model=output_model, llm_config=llm_config,
-        )
-    except TypeError:
-        pass
-    try:
-        return _prompt_compiler(template, input_data, node_name=node_name, config=config)
-    except TypeError:
-        pass
-    return _prompt_compiler(template, input_data)
+    all_kwargs = {
+        "node_name": node_name,
+        "config": config,
+        "output_model": output_model,
+        "llm_config": llm_config,
+    }
+    # Only pass kwargs the compiler accepts — inspected at configure_llm() time
+    if _prompt_compiler_params is _ACCEPT_ALL:
+        kwargs = all_kwargs
+    else:
+        kwargs = {k: v for k, v in all_kwargs.items() if k in _prompt_compiler_params}
+    return _prompt_compiler(template, input_data, **kwargs)
 
 
 def _extract_json(text: str) -> str:
