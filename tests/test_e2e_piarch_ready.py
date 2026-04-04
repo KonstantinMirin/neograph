@@ -2159,3 +2159,189 @@ class TestConfigInjectionPatterns:
         for seen in nodes_seen:
             assert seen["node_id"] == "REQ-001"
             assert seen["env"] == "staging"
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# OUTPUT STRATEGIES — structured, json_mode, text
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TestOutputStrategyStructured:
+    """Default strategy: llm.with_structured_output(model). Current behavior."""
+
+    def test_structured_output_default(self):
+        """Produce node uses with_structured_output by default."""
+        from neograph._llm import configure_llm
+
+        class FakeLLM:
+            def with_structured_output(self, model, **kwargs):
+                self._model = model
+                return self
+
+            def invoke(self, messages, **kwargs):
+                return self._model(items=["via-structured"])
+
+        configure_llm(
+            llm_factory=lambda tier: FakeLLM(),
+            prompt_compiler=lambda template, data, **kw: [{"role": "user", "content": "test"}],
+        )
+
+        node = Node(name="extract", mode="produce", output=Claims, model="fast", prompt="test")
+        pipeline = Construct("test-structured", nodes=[node])
+        graph = compile(pipeline)
+        result = run(graph, input={"node_id": "test"})
+
+        assert result["extract"].items == ["via-structured"]
+
+
+class TestOutputStrategyJsonMode:
+    """json_mode strategy: inject schema into prompt, parse response as JSON."""
+
+    def test_json_mode_injects_schema_and_parses(self):
+        """json_mode: schema injected into prompt, LLM returns raw JSON, framework parses."""
+        from neograph._llm import configure_llm
+
+        compiler_calls = []
+
+        class FakeJsonLLM:
+            """LLM that doesn't support with_structured_output — returns raw text."""
+            def invoke(self, messages, **kwargs):
+                from langchain_core.messages import AIMessage
+                return AIMessage(content='{"items": ["via-json-mode"]}')
+
+        def tracking_compiler(template, data, **kw):
+            compiler_calls.append(kw)
+            return [{"role": "user", "content": "test"}]
+
+        configure_llm(
+            llm_factory=lambda tier: FakeJsonLLM(),
+            prompt_compiler=tracking_compiler,
+        )
+
+        node = Node(
+            name="extract",
+            mode="produce",
+            output=Claims,
+            model="fast",
+            prompt="test",
+            llm_config={"output_strategy": "json_mode"},
+        )
+        pipeline = Construct("test-json-mode", nodes=[node])
+        graph = compile(pipeline)
+        result = run(graph, input={"node_id": "test"})
+
+        # Parsed correctly from raw JSON
+        assert result["extract"].items == ["via-json-mode"]
+
+    def test_json_mode_handles_markdown_fences(self):
+        """json_mode: strips markdown code fences before parsing."""
+        from neograph._llm import configure_llm
+
+        class FakeSloppyLLM:
+            def invoke(self, messages, **kwargs):
+                from langchain_core.messages import AIMessage
+                return AIMessage(content='```json\n{"items": ["fenced"]}\n```')
+
+        configure_llm(
+            llm_factory=lambda tier: FakeSloppyLLM(),
+            prompt_compiler=lambda template, data, **kw: [{"role": "user", "content": "test"}],
+        )
+
+        node = Node(
+            name="extract",
+            mode="produce",
+            output=Claims,
+            model="fast",
+            prompt="test",
+            llm_config={"output_strategy": "json_mode"},
+        )
+        pipeline = Construct("test-json-fence", nodes=[node])
+        graph = compile(pipeline)
+        result = run(graph, input={"node_id": "test"})
+
+        assert result["extract"].items == ["fenced"]
+
+
+class TestOutputStrategyText:
+    """text strategy: LLM returns plain text, consumer's prompt_compiler handles schema."""
+
+    def test_text_mode_parses_json_from_response(self):
+        """text mode: LLM returns text containing JSON, framework extracts and parses."""
+        from neograph._llm import configure_llm
+
+        class FakeTextLLM:
+            def invoke(self, messages, **kwargs):
+                from langchain_core.messages import AIMessage
+                return AIMessage(content='Here is my analysis:\n{"items": ["from-text"]}\nDone.')
+
+        configure_llm(
+            llm_factory=lambda tier: FakeTextLLM(),
+            prompt_compiler=lambda template, data, **kw: [{"role": "user", "content": "test"}],
+        )
+
+        node = Node(
+            name="extract",
+            mode="produce",
+            output=Claims,
+            model="fast",
+            prompt="test",
+            llm_config={"output_strategy": "text"},
+        )
+        pipeline = Construct("test-text", nodes=[node])
+        graph = compile(pipeline)
+        result = run(graph, input={"node_id": "test"})
+
+        assert result["extract"].items == ["from-text"]
+
+
+class TestOutputStrategyOnGather:
+    """Output strategy also applies to the final parse in gather/execute modes."""
+
+    def test_gather_json_mode_parses_final_response(self):
+        """Gather node with json_mode parses the final structured output from raw JSON."""
+        from langchain_core.messages import AIMessage
+
+        from neograph._llm import configure_llm
+        from neograph.factory import register_tool_factory
+
+        class FakeTool:
+            name = "lookup"
+
+            def invoke(self, args):
+                return "found"
+
+        register_tool_factory("lookup", lambda config, tool_config: FakeTool())
+
+        call_n = {"n": 0}
+
+        class FakeGatherLLM:
+            def bind_tools(self, tools):
+                return self
+
+            def invoke(self, messages, **kwargs):
+                call_n["n"] += 1
+                if call_n["n"] == 1:
+                    msg = AIMessage(content="")
+                    msg.tool_calls = [{"name": "lookup", "args": {}, "id": "c1"}]
+                    return msg
+                return AIMessage(content='{"items": ["gathered-json"]}')
+
+        configure_llm(
+            llm_factory=lambda tier: FakeGatherLLM(),
+            prompt_compiler=lambda template, data, **kw: [{"role": "user", "content": "go"}],
+        )
+
+        node = Node(
+            name="research",
+            mode="gather",
+            output=Claims,
+            model="fast",
+            prompt="test",
+            tools=[Tool(name="lookup", budget=1)],
+            llm_config={"output_strategy": "json_mode"},
+        )
+        pipeline = Construct("test-gather-json", nodes=[node])
+        graph = compile(pipeline)
+        result = run(graph, input={"node_id": "test"})
+
+        assert result["research"].items == ["gathered-json"]

@@ -96,6 +96,32 @@ def _compile_prompt(template: str, input_data: Any, *, node_name: str = "", conf
         return _prompt_compiler(template, input_data)
 
 
+def _extract_json(text: str) -> str:
+    """Extract JSON from LLM response text — strips markdown fences, finds JSON object."""
+    import re
+
+    # Strip markdown code fences
+    cleaned = re.sub(r'^```(?:json)?\s*', '', text.strip(), flags=re.MULTILINE)
+    cleaned = re.sub(r'\s*```\s*$', '', cleaned, flags=re.MULTILINE)
+
+    # Try the cleaned text directly
+    cleaned = cleaned.strip()
+    if cleaned.startswith('{'):
+        return cleaned
+
+    # Find first { ... } block in the text
+    match = re.search(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', cleaned, re.DOTALL)
+    if match:
+        return match.group(0)
+
+    return cleaned
+
+
+def _parse_json_response(text: str, output_model: type[BaseModel]) -> BaseModel:
+    """Parse a JSON string into a Pydantic model."""
+    return output_model.model_validate_json(_extract_json(text))
+
+
 def invoke_structured(
     model_tier: str,
     prompt_template: str,
@@ -105,30 +131,50 @@ def invoke_structured(
     node_name: str = "",
     llm_config: dict | None = None,
 ) -> BaseModel:
-    """Single LLM call with structured JSON output. Mode: produce."""
-    llm_log = log.bind(tier=model_tier, prompt=prompt_template, output=output_model.__name__)
+    """Single LLM call with structured JSON output. Mode: produce.
+
+    Output strategy (from llm_config["output_strategy"]):
+        "structured" — llm.with_structured_output(model) (default, widest LangChain support)
+        "json_mode"  — inject schema into prompt, LLM returns raw JSON, framework parses
+        "text"       — LLM returns plain text, framework extracts and parses JSON from it
+    """
+    llm_config = llm_config or {}
+    strategy = llm_config.get("output_strategy", "structured")
+    llm_log = log.bind(tier=model_tier, prompt=prompt_template, output=output_model.__name__, strategy=strategy)
 
     llm = _get_llm(model_tier, node_name=node_name, llm_config=llm_config)
     messages = _compile_prompt(prompt_template, input_data, node_name=node_name, config=config)
-    try:
-        structured_llm = llm.with_structured_output(output_model, include_raw=True)
-        include_raw = True
-    except TypeError:
-        structured_llm = llm.with_structured_output(output_model)
-        include_raw = False
 
     t0 = time.monotonic()
-    raw_result = structured_llm.invoke(messages, config=config)
-    elapsed = time.monotonic() - t0
+    usage = None
 
-    # Extract parsed model and usage metadata
-    if include_raw and isinstance(raw_result, dict) and "parsed" in raw_result:
-        result = raw_result["parsed"]
-        raw_msg = raw_result.get("raw")
-        usage = getattr(raw_msg, "usage_metadata", None) if raw_msg else None
+    if strategy == "structured":
+        # Default: use with_structured_output
+        try:
+            structured_llm = llm.with_structured_output(output_model, include_raw=True)
+            raw_result = structured_llm.invoke(messages, config=config)
+            if isinstance(raw_result, dict) and "parsed" in raw_result:
+                result = raw_result["parsed"]
+                raw_msg = raw_result.get("raw")
+                usage = getattr(raw_msg, "usage_metadata", None) if raw_msg else None
+            else:
+                result = raw_result
+        except TypeError:
+            structured_llm = llm.with_structured_output(output_model)
+            result = structured_llm.invoke(messages, config=config)
+
+    elif strategy in ("json_mode", "text"):
+        # json_mode / text: call LLM directly, parse response ourselves
+        response = llm.invoke(messages, config=config)
+        raw_text = response.content if hasattr(response, 'content') else str(response)
+        usage = getattr(response, "usage_metadata", None)
+        result = _parse_json_response(raw_text, output_model)
+
     else:
-        result = raw_result
-        usage = None
+        msg = f"Unknown output_strategy: {strategy}. Use 'structured', 'json_mode', or 'text'."
+        raise ValueError(msg)
+
+    elapsed = time.monotonic() - t0
 
     usage_info = {}
     if usage:
@@ -247,23 +293,31 @@ def invoke_with_tools(
 
     elapsed = time.monotonic() - t0
 
-    # Parse final response as structured output
-    try:
-        final_llm = llm.with_structured_output(output_model, include_raw=True)
-        final_include_raw = True
-    except TypeError:
-        final_llm = llm.with_structured_output(output_model)
-        final_include_raw = False
+    # Parse final response as structured output — strategy-aware
+    llm_config = llm_config or {}
+    strategy = llm_config.get("output_strategy", "structured")
+    usage = None
 
-    raw_result = final_llm.invoke(messages, config=config)
-
-    if final_include_raw and isinstance(raw_result, dict) and "parsed" in raw_result:
-        parse_result = raw_result["parsed"]
-        raw_msg = raw_result.get("raw")
-        usage = getattr(raw_msg, "usage_metadata", None) if raw_msg else None
+    if strategy in ("json_mode", "text"):
+        # Already have the final response in messages[-1] — parse it
+        last_msg = messages[-1]
+        raw_text = last_msg.content if hasattr(last_msg, 'content') else str(last_msg)
+        parse_result = _parse_json_response(raw_text, output_model)
+        usage = getattr(last_msg, "usage_metadata", None)
     else:
-        parse_result = raw_result
-        usage = None
+        # Default: use with_structured_output for a final parse call
+        try:
+            final_llm = llm.with_structured_output(output_model, include_raw=True)
+            raw_result = final_llm.invoke(messages, config=config)
+            if isinstance(raw_result, dict) and "parsed" in raw_result:
+                parse_result = raw_result["parsed"]
+                raw_msg = raw_result.get("raw")
+                usage = getattr(raw_msg, "usage_metadata", None) if raw_msg else None
+            else:
+                parse_result = raw_result
+        except TypeError:
+            final_llm = llm.with_structured_output(output_model)
+            parse_result = final_llm.invoke(messages, config=config)
 
     # Collect total usage from all LLM calls in the loop
     total_input_tokens = 0
