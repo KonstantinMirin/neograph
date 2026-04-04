@@ -1758,126 +1758,185 @@ class TestFirstNodeEdgeCases:
 # Assembly-time type validation — compile errors surface at Construct(...)
 # ═══════════════════════════════════════════════════════════════════════════
 
+# Tiny factory helpers for the validation tests below — each test cares
+# about input/output type flow, not scripted function names, so the `fn="f"`
+# placeholder is noise that the helpers strip.
+def _producer(name: str, out: type) -> Node:
+    return Node.scripted(name, fn="f", output=out)
+
+
+def _consumer(name: str, in_: type, out: type) -> Node:
+    return Node.scripted(name, fn="f", input=in_, output=out)
+
+
 class TestConstructValidation:
     """Input/output compatibility is checked at Construct assembly time."""
 
     def test_valid_chain_passes(self):
         """A correctly typed chain assembles without error."""
-        a = Node.scripted("a", fn="f", output=RawText)
-        b = Node.scripted("b", fn="f", input=RawText, output=Claims)
-        c = Node.scripted("c", fn="f", input=Claims, output=ClassifiedClaims)
-        # No exception — the chain RawText → Claims → ClassifiedClaims is consistent
-        Construct("good", nodes=[a, b, c])
+        a = _producer("a", RawText)
+        b = _consumer("b", RawText, Claims)
+        c = _consumer("c", Claims, ClassifiedClaims)
+        pipeline = Construct("good", nodes=[a, b, c])
+        # Pin the resulting construct shape so a no-op validator regression
+        # (e.g. silently dropping nodes) is caught.
+        assert len(pipeline.nodes) == 3
+        assert [n.name for n in pipeline.nodes] == ["a", "b", "c"]
 
     def test_plain_input_mismatch_raises(self):
-        """Downstream input with no compatible upstream raises ConstructError."""
-        a = Node.scripted("a", fn="f", output=RawText)
-        b = Node.scripted("b", fn="f", input=Claims, output=ClassifiedClaims)
-        with pytest.raises(ConstructError, match="declares input=Claims"):
+        """Downstream input with no compatible upstream raises ConstructError
+        AND the error message lists the upstream producers."""
+        a = _producer("a", RawText)
+        b = _consumer("b", Claims, ClassifiedClaims)
+        with pytest.raises(ConstructError) as exc_info:
             Construct("bad", nodes=[a, b])
+        msg = str(exc_info.value)
+        assert "declares input=Claims" in msg
+        # Pin the producer listing, not just the header
+        assert "node 'a': RawText" in msg
 
     def test_mismatch_hint_suggests_map(self):
-        """When upstream has list[input_type] field, hint suggests .map()."""
-        # Clusters has `groups: list[ClusterGroup]` — downstream wants a
-        # single ClusterGroup, so the fix is .map(lambda s: s.a.groups, ...).
-        a = Node.scripted("a", fn="f", output=Clusters)
-        b = Node.scripted("b", fn="f", input=ClusterGroup, output=MatchResult)
-        with pytest.raises(ConstructError, match="did you forget to fan out"):
+        """When upstream has list[input_type] field, hint names the correct path."""
+        # Clusters has `groups: list[ClusterGroup]` — the hint should point
+        # at `s.a.groups`, not some other field.
+        a = _producer("a", Clusters)
+        b = _consumer("b", ClusterGroup, MatchResult)
+        with pytest.raises(ConstructError) as exc_info:
             Construct("bad-fanout", nodes=[a, b])
+        msg = str(exc_info.value)
+        assert "did you forget to fan out" in msg
+        # Pin the concrete path the hint renders — a bug that emits the
+        # wrong field (e.g. s.b.other) would pass a mere phrase match.
+        assert "s.a.groups" in msg
 
     def test_mismatch_error_includes_source_location(self):
         """Error message includes a file:line pointer to the user call site."""
-        a = Node.scripted("a", fn="f", output=RawText)
-        b = Node.scripted("b", fn="f", input=Claims, output=ClassifiedClaims)
+        a = _producer("a", RawText)
+        b = _consumer("b", Claims, ClassifiedClaims)
         with pytest.raises(ConstructError, match=r"at test_e2e_piarch_ready\.py:\d+"):
             Construct("bad-loc", nodes=[a, b])
 
     def test_each_correct_path_passes(self):
-        """Each whose path resolves to list[input_type] assembles cleanly."""
-        a = Node.scripted("a", fn="f", output=Clusters)
-        b = Node.scripted(
-            "b", fn="f", input=ClusterGroup, output=MatchResult
-        ).map(lambda s: s.a.groups, key="label")
-        Construct("good-each", nodes=[a, b])  # no error
+        """Each whose path resolves to list[input_type] assembles AND attaches the modifier."""
+        a = _producer("a", Clusters)
+        b = _consumer("b", ClusterGroup, MatchResult).map(
+            lambda s: s.a.groups, key="label"
+        )
+        pipeline = Construct("good-each", nodes=[a, b])
+        assert len(pipeline.nodes) == 2
+        each = pipeline.nodes[1].get_modifier(Each)
+        assert isinstance(each, Each)
+        assert each.over == "a.groups"
+        assert each.key == "label"
 
     def test_each_missing_field_raises(self):
         """Each path that walks to a non-existent field raises."""
-        a = Node.scripted("a", fn="f", output=Clusters)
-        b = Node.scripted(
-            "b", fn="f", input=ClusterGroup, output=MatchResult
-        ) | Each(over="a.nonexistent", key="label")
+        a = _producer("a", Clusters)
+        b = _consumer("b", ClusterGroup, MatchResult) | Each(
+            over="a.nonexistent", key="label"
+        )
         with pytest.raises(ConstructError, match="has no field 'nonexistent'"):
             Construct("bad-each-field", nodes=[a, b])
 
     def test_each_terminal_not_list_raises(self):
         """Each whose terminal field isn't a list is flagged."""
         # RawText.text is a str — not a list; Each can't fan out over it.
-        a = Node.scripted("a", fn="f", output=RawText)
-        b = Node.scripted(
-            "b", fn="f", input=ClusterGroup, output=MatchResult
-        ) | Each(over="a.text", key="label")
+        a = _producer("a", RawText)
+        b = _consumer("b", ClusterGroup, MatchResult) | Each(
+            over="a.text", key="label"
+        )
         with pytest.raises(ConstructError, match="not a list"):
             Construct("bad-each-terminal", nodes=[a, b])
 
     def test_each_list_wrong_element_raises(self):
         """Each whose list element type doesn't match input raises."""
         # Claims.items is list[str]; downstream wants ClusterGroup, not str.
-        a = Node.scripted("a", fn="f", output=Claims)
-        b = Node.scripted(
-            "b", fn="f", input=ClusterGroup, output=MatchResult
-        ) | Each(over="a.items", key="label")
-        with pytest.raises(ConstructError, match="list\\[str\\]"):
+        a = _producer("a", Claims)
+        b = _consumer("b", ClusterGroup, MatchResult) | Each(
+            over="a.items", key="label"
+        )
+        with pytest.raises(ConstructError, match=r"list\[str\]"):
             Construct("bad-each-element", nodes=[a, b])
 
     def test_first_item_with_input_deferred_to_runtime(self):
         """First-of-chain with declared input is NOT flagged — runtime-seeded."""
         # No producers exist yet when checking `b` — defer to runtime.
-        b = Node.scripted("b", fn="f", input=Claims, output=ClassifiedClaims)
-        Construct("top-level", nodes=[b])  # no error
+        b = _consumer("b", Claims, ClassifiedClaims)
+        pipeline = Construct("top-level", nodes=[b])
+        assert len(pipeline.nodes) == 1
+        assert pipeline.nodes[0].input is Claims
+
+    def test_top_level_each_deferred_to_runtime(self):
+        """Each at position 0 whose root isn't a known producer defers cleanly.
+
+        Exercises construct.py:189 — Each root-not-in-producers branch.
+        """
+        process = _consumer("process", ClusterGroup, MatchResult) | Each(
+            over="seeded_from_runtime.groups", key="label"
+        )
+        pipeline = Construct("top-each", nodes=[process])
+        assert len(pipeline.nodes) == 1
+        each = pipeline.nodes[0].get_modifier(Each)
+        assert isinstance(each, Each)
+        assert each.over == "seeded_from_runtime.groups"
 
     def test_sub_construct_input_port_satisfies_inner_node(self):
         """Inner node reading from the sub-construct's input port validates."""
-        inner = Node.scripted("inner", fn="f", input=Claims, output=Claims)
+        inner = _consumer("inner", Claims, Claims)
         # sub.input=Claims is injected as `neo_subgraph_input` producer for inner
-        Construct("sub", input=Claims, output=Claims, nodes=[inner])  # no error
+        sub = Construct("sub", input=Claims, output=Claims, nodes=[inner])
+        assert sub.input is Claims
+        assert sub.output is Claims
+        assert len(sub.nodes) == 1
 
     def test_sub_construct_chained_in_parent(self):
         """Parent producing sub.input satisfies the sub-construct's input check."""
-        upstream = Node.scripted("upstream", fn="f", output=Claims)
+        upstream = _producer("upstream", Claims)
         sub = Construct(
             "sub", input=Claims, output=ClassifiedClaims,
-            nodes=[Node.scripted("inner", fn="f", input=Claims, output=ClassifiedClaims)],
+            nodes=[_consumer("inner", Claims, ClassifiedClaims)],
         )
-        Construct("parent", nodes=[upstream, sub])  # no error
+        parent = Construct("parent", nodes=[upstream, sub])
+        assert len(parent.nodes) == 2
+        assert parent.nodes[1].input is Claims
 
     def test_sub_construct_input_mismatch_in_parent(self):
-        """Parent's upstream output incompatible with sub.input raises."""
-        upstream = Node.scripted("upstream", fn="f", output=RawText)
+        """Parent's upstream output incompatible with sub.input raises with
+        a tight error pinning BOTH the construct name and the clause."""
+        upstream = _producer("upstream", RawText)
         sub = Construct(
             "sub", input=Claims, output=ClassifiedClaims,
-            nodes=[Node.scripted("inner", fn="f", input=Claims, output=ClassifiedClaims)],
+            nodes=[_consumer("inner", Claims, ClassifiedClaims)],
         )
-        with pytest.raises(ConstructError, match="sub.*declares input=Claims"):
+        with pytest.raises(ConstructError) as exc_info:
             Construct("parent", nodes=[upstream, sub])
+        msg = str(exc_info.value)
+        # Anchor on the specific sub-construct name (not a permissive `sub.*`)
+        # and the declaration clause — bug that raised the wrong inner error
+        # first would not match both anchors.
+        assert "'sub' in construct 'parent'" in msg
+        assert "declares input=Claims" in msg
 
     def test_construct_error_is_valueerror(self):
         """ConstructError subclasses ValueError for existing except clauses."""
-        a = Node.scripted("a", fn="f", output=RawText)
-        b = Node.scripted("b", fn="f", input=Claims, output=ClassifiedClaims)
+        a = _producer("a", RawText)
+        b = _consumer("b", Claims, ClassifiedClaims)
         with pytest.raises(ValueError):
             Construct("bad", nodes=[a, b])
 
     def test_dict_input_skipped(self):
         """Nodes with dict[str, type] input spec aren't statically validated."""
         # step-c has multi-field input; static validation punts to runtime.
-        step_a = Node.scripted("step-a", fn="f", output=Claims)
-        step_b = Node.scripted("step-b", fn="f", output=RawText)
+        step_a = _producer("step-a", Claims)
+        step_b = _producer("step-b", RawText)
         step_c = Node.scripted(
             "step-c", fn="f",
             input={"step_a": Claims, "step_b": RawText},
             output=RawText,
         )
-        Construct("multi-input", nodes=[step_a, step_b, step_c])  # no error
+        pipeline = Construct("multi-input", nodes=[step_a, step_b, step_c])
+        assert len(pipeline.nodes) == 3
+        assert isinstance(pipeline.nodes[2].input, dict)
 
 
 class TestConstructOracleErrors:
