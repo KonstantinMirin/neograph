@@ -20,14 +20,14 @@
 
 from __future__ import annotations
 
-import inspect
 import os
+import sys
 import types
-from typing import Any, Union, get_args, get_origin, get_type_hints
+from typing import Any, ForwardRef, Union, get_args, get_origin, get_type_hints
 
 from pydantic import BaseModel
 
-from neograph.modifiers import Each, Modifiable, Modifier
+from neograph.modifiers import Each, Modifiable, Modifier, split_each_path
 from neograph.node import Node
 
 
@@ -66,8 +66,8 @@ class Construct(Modifiable, BaseModel):
     nodes: list[Any] = []  # list[Node | Construct] — Any avoids circular ref issues
 
     # I/O boundary — required when used as a sub-construct
-    input: Any = None   # type[BaseModel] | None
-    output: Any = None  # type[BaseModel] | None
+    input: type[BaseModel] | None = None
+    output: type[BaseModel] | None = None
 
     # Modifiers applied via | operator
     modifiers: list[Modifier] = []
@@ -160,9 +160,8 @@ def _check_item_input(
         if _types_compatible(producer_type, input_type):
             return
 
-    raise ConstructError(
-        _format_no_producer_error(construct, item, input_type, producers)
-    )
+    msg = _format_no_producer_error(construct, item, input_type, producers)
+    raise ConstructError(msg)
 
 
 def _check_each_path(
@@ -173,8 +172,7 @@ def _check_each_path(
     producers: list[tuple[str, Any, str]],
 ) -> None:
     """Resolve each.over against producers; verify it lands on list[input_type]."""
-    parts = each.over.split(".")
-    root = parts[0]
+    root, segments = split_each_path(each.over)
 
     root_type: Any = None
     for field_name, producer_type, _ in producers:
@@ -191,21 +189,22 @@ def _check_each_path(
     # Walk remaining segments through Pydantic model_fields.
     current_type: Any = root_type
     walked = [root]
-    for segment in parts[1:]:
+    for segment in segments:
         walked.append(segment)
         resolved = _resolve_field_annotation(current_type, segment)
         if resolved is _MISSING:
-            raise ConstructError(
+            msg = (
                 f"Node '{item.name}' in construct '{construct.name}' has "
                 f"Each(over='{each.over}') but '{'.'.join(walked)}' does not "
                 f"resolve: {_fmt_type(current_type)} has no field '{segment}'.\n"
                 f"{_location_suffix()}"
             )
+            raise ConstructError(msg)
         current_type = resolved
 
     element_type = _extract_list_element(current_type)
     if element_type is None:
-        raise ConstructError(
+        msg = (
             f"Node '{item.name}' in construct '{construct.name}' has "
             f"Each(over='{each.over}'), but the path resolves to "
             f"{_fmt_type(current_type)}, not a list.\n"
@@ -213,14 +212,16 @@ def _check_each_path(
             f"must be a list.\n"
             f"{_location_suffix()}"
         )
+        raise ConstructError(msg)
 
     if not _types_compatible(element_type, input_type):
-        raise ConstructError(
+        msg = (
             f"Node '{item.name}' in construct '{construct.name}' declares "
             f"input={_fmt_type(input_type)} with Each(over='{each.over}'), "
             f"but the path resolves to list[{_fmt_type(element_type)}].\n"
             f"{_location_suffix()}"
         )
+        raise ConstructError(msg)
 
 
 _MISSING = object()
@@ -229,10 +230,13 @@ _MISSING = object()
 def _resolve_field_annotation(model_class: Any, field_name: str) -> Any:
     """Return the fully-resolved annotation for a field, or _MISSING if absent.
 
-    Uses `typing.get_type_hints` first to unwrap ForwardRefs and string
+    Tries `typing.get_type_hints` first to unwrap ForwardRefs and string
     annotations introduced by `from __future__ import annotations`, then
-    falls back to `model_fields[name].annotation` if get_type_hints can't
-    resolve (e.g. names in unusual scopes).
+    falls back to `model_fields[name].annotation`. If the final result is
+    still unresolved (ForwardRef or bare string), returns `_MISSING` rather
+    than leaking it to callers — otherwise `_extract_list_element` silently
+    returns None on an unresolved annotation and the validation appears to
+    pass when it should have flagged a resolution failure.
     """
     model_fields = getattr(model_class, "model_fields", None) or {}
     if field_name not in model_fields:
@@ -241,10 +245,10 @@ def _resolve_field_annotation(model_class: Any, field_name: str) -> Any:
         hints = get_type_hints(model_class)
     except Exception:
         hints = {}
-    if field_name in hints:
-        return hints[field_name]
-    # Fallback: raw annotation (may still be a ForwardRef/str)
-    return model_fields[field_name].annotation
+    ann = hints.get(field_name, model_fields[field_name].annotation)
+    if ann is None or isinstance(ann, (str, ForwardRef)):
+        return _MISSING
+    return ann
 
 
 def _types_compatible(producer: Any, target: Any) -> bool:
@@ -293,6 +297,13 @@ def _format_no_producer_error(
     input_type: Any,
     producers: list[tuple[str, Any, str]],
 ) -> str:
+    # ConstructError messages deliberately diverge from the package-wide
+    # one-line error shape (see state.py, compiler.py, factory.py). Assembly-
+    # time type mismatches benefit from structured help — a producer inventory,
+    # a `.map()` hint when applicable, and a source-location pointer — that
+    # a terse "Node 'X' has wrong input." would lose. Other errors in the
+    # package either stay single-line by design (missing output type is a
+    # one-fix mistake) or can adopt this richer format deliberately.
     if producers:
         producer_summary = "\n".join(
             f"    • {label}: {_fmt_type(t)}"
@@ -342,27 +353,29 @@ def _location_suffix() -> str:
 def _source_location() -> str | None:
     """Return 'file.py:line' for the user-code frame that assembled this Construct.
 
-    Walks inspect.stack() past neograph and pydantic internals to find the
-    first user frame — typically the `Construct(...)` call site. Filters by
-    module name (`frame.f_globals["__name__"]`) rather than path substring,
-    because user tests/examples often live under a `neograph/` directory
-    that would otherwise get mis-filtered.
+    Walks frames via `sys._getframe` past neograph and pydantic internals to
+    find the first user frame — typically the `Construct(...)` call site.
+    `sys._getframe` is ~50× cheaper than `inspect.stack()` because it doesn't
+    materialize source context for every frame.
+
+    Filters by module name (`frame.f_globals['__name__']`) rather than path
+    substring, because user tests/examples often live under a `neograph/`
+    directory that would otherwise get mis-filtered.
     """
     try:
-        stack = inspect.stack()
-        try:
-            for frame_info in stack:
-                module_name = frame_info.frame.f_globals.get("__name__", "")
-                if module_name == "neograph" or module_name.startswith("neograph."):
-                    continue
-                if module_name.startswith("pydantic"):
-                    continue
-                fname = frame_info.filename
-                if not fname or fname.startswith("<"):
-                    continue
-                return f"{os.path.basename(fname)}:{frame_info.lineno}"
-        finally:
-            del stack
+        frame = sys._getframe(1)
+        while frame is not None:
+            module_name = frame.f_globals.get("__name__", "")
+            if not (
+                module_name == "neograph"
+                or module_name.startswith("neograph.")
+                or module_name.startswith("pydantic")
+            ):
+                fname = frame.f_code.co_filename
+                if fname and not fname.startswith("<"):
+                    return f"{os.path.basename(fname)}:{frame.f_lineno}"
+            frame = frame.f_back
     except Exception:
-        pass
+        # Best-effort: location lookup must never crash Construct assembly.
+        return None
     return None

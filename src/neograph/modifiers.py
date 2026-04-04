@@ -183,6 +183,18 @@ class Each(Modifier):
     key: str        # field on each item used as the dispatch key
 
 
+def split_each_path(over: str) -> tuple[str, tuple[str, ...]]:
+    """Parse an `Each.over` dotted path into (root_field, remaining_segments).
+
+    Single point of truth for the path grammar. Both the assembly-time
+    type walker in `construct.py` and the runtime value walker in
+    `compiler.py` consume this so future extensions to the syntax (indexing,
+    wildcards, escaping) land in one place.
+    """
+    parts = over.split(".")
+    return parts[0], tuple(parts[1:])
+
+
 class Operator(Modifier):
     """Human-in-the-loop modifier: pause graph for human review.
 

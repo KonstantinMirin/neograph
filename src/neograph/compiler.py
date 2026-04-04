@@ -23,7 +23,7 @@ from neograph.factory import (
     make_oracle_redirect_fn,
     make_subgraph_fn,
 )
-from neograph.modifiers import Each, Operator, Oracle
+from neograph.modifiers import Each, Operator, Oracle, split_each_path
 from neograph.node import Node
 from neograph.state import compile_state_model
 
@@ -259,10 +259,12 @@ def _wire_each(
     graph.add_node(fan_name, fan_fn)
 
     # Router that iterates over the collection
+    root, segments = split_each_path(each.over)
+
     def each_router(state: Any) -> list:
         # Navigate dotted path to get collection
-        obj = state
-        for part in each.over.split("."):
+        obj = getattr(state, root) if hasattr(state, root) else state[root]
+        for part in segments:
             obj = getattr(obj, part) if hasattr(obj, part) else obj[part]
 
         state_dict = {
