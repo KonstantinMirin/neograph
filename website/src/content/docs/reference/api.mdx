@@ -1,6 +1,6 @@
 ---
 title: "API Reference"
-description: "Every public symbol in NeoGraph with signatures, parameters, and examples."
+description: "Complete reference for every public symbol in NeoGraph: classes, functions, parameters, and return types."
 ---
 
 All public symbols are available from the package root:
@@ -13,208 +13,500 @@ from neograph import (
 )
 ```
 
+---
+
 ## Node
 
-Typed processing block. The unit of graph specification.
+A typed processing block that compiles to a LangGraph node.
 
 ```python
-Node(
-    name: str,                    # unique name within the Construct
-    mode: str = "produce",        # "produce" | "gather" | "execute" | "scripted"
-    input: type | dict | None,    # Pydantic model or dict[str, type]
-    output: type,                 # Pydantic model (required)
-    model: str | None,            # LLM tier: "fast", "reason", "large"
-    prompt: str | None,           # template name passed to prompt_compiler
-    tools: list[Tool] = [],       # tools for gather/execute modes
-    llm_config: dict = {},        # per-node LLM settings (temperature, max_tokens, etc.)
+class Node(BaseModel):
+    name: str
+    mode: Literal["produce", "gather", "execute", "scripted"] = "produce"
+    input: type[BaseModel] | None = None
+    output: type[BaseModel] | None = None
+    model: str | None = None
+    prompt: str | None = None
+    llm_config: dict[str, Any] = {}
+    tools: list[Tool] = []
+```
+
+**Parameters:**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `name` | `str` | Unique node name. Becomes the state field name (hyphens become underscores). |
+| `mode` | `"produce" \| "gather" \| "execute" \| "scripted"` | Execution mode. `produce`: single LLM call. `gather`: ReAct tool loop (read-only). `execute`: ReAct tool loop (mutations). `scripted`: pure Python. |
+| `input` | `type[BaseModel] \| None` | Pydantic model consumed from state. `None` for the first node in a pipeline. |
+| `output` | `type[BaseModel] \| None` | Pydantic model written to state. Required for all nodes. |
+| `model` | `str \| None` | LLM tier name passed to `llm_factory`. E.g., `"fast"`, `"reason"`. |
+| `prompt` | `str \| None` | Prompt template name passed to `prompt_compiler`. |
+| `llm_config` | `dict[str, Any]` | Extra LLM settings (temperature, max_tokens, etc.) forwarded to `llm_factory`. |
+| `tools` | `list[Tool]` | Tools available to gather/execute mode nodes. |
+
+**Pipe operator:**
+
+```python
+node | Oracle(n=3, merge_fn="merge")
+node | Each(over="clusters.groups", key="label")
+node | Operator(when="needs_review")
+node | Oracle(n=3, merge_fn="m") | Operator(when="check")
+```
+
+**Example:**
+
+```python
+decompose = Node(
+    name="decompose",
+    mode="produce",
+    output=Claims,
+    model="fast",
+    prompt="req/decompose",
+    llm_config={"temperature": 0.7},
 )
 ```
 
-### Node.scripted()
+---
 
-Factory for deterministic nodes (no LLM).
+## Node.scripted()
+
+Class method that creates a deterministic node with no LLM.
 
 ```python
-extract = Node.scripted(
-    "extract",
-    fn="extract_text",       # registered function name
-    input=RawText,           # optional
-    output=Claims,           # required
-)
+@classmethod
+def scripted(
+    cls,
+    name: str,
+    fn: str,
+    input: type[BaseModel] | None = None,
+    output: type[BaseModel] | None = None,
+) -> Node
 ```
+
+**Parameters:**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `name` | `str` | Unique node name. |
+| `fn` | `str` | Name of a function registered with `register_scripted()`. |
+| `input` | `type[BaseModel] \| None` | Pydantic model consumed from state. |
+| `output` | `type[BaseModel] \| None` | Pydantic model written to state. |
+
+**Example:**
+
+```python
+register_scripted("classify", classify_fn)
+classify = Node.scripted("classify", fn="classify", input=Claims, output=ClassifiedClaims)
+```
+
+---
 
 ## Tool
 
-LLM-callable tool with per-tool call budget.
+An LLM-callable tool with a per-tool call budget.
 
 ```python
-Tool(
-    name: str,               # must match a registered tool factory
-    budget: int = 0,         # max calls (0 = unlimited)
-    config: dict = {},       # passed to the tool factory
-)
+class Tool(BaseModel, frozen=True):
+    name: str
+    budget: int = 0
+    config: dict[str, Any] = {}
 ```
+
+**Parameters:**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `name` | `str` | Tool name. Must match a factory registered with `register_tool_factory()`. |
+| `budget` | `int` | Maximum calls allowed. `0` means unlimited. |
+| `config` | `dict[str, Any]` | Per-tool configuration passed to the tool factory. |
+
+**Example:**
+
+```python
+tools = [
+    Tool(name="search_codebase", budget=5),
+    Tool(name="read_artifact", budget=10, config={"max_chars": 6000}),
+]
+```
+
+---
 
 ## Construct
 
-Ordered composition of Nodes and sub-Constructs.
+An ordered composition of Nodes and sub-Constructs that compiles to a LangGraph `StateGraph`.
 
 ```python
-# Top-level pipeline
-pipeline = Construct("my-pipeline", nodes=[node_a, node_b, node_c])
-
-# Sub-construct with I/O boundary (for nesting)
-sub = Construct(
-    "enrich",
-    input=Claims,            # required when nested
-    output=ScoredClaims,     # required when nested
-    nodes=[lookup, score],
-)
+class Construct(BaseModel):
+    name: str
+    description: str = ""
+    nodes: list[Node | Construct] = []
+    input: type[BaseModel] | None = None
+    output: type[BaseModel] | None = None
 ```
 
-Accepts name as positional or keyword argument. Supports pipe operator for modifiers.
+**Parameters:**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `name` | `str` | Pipeline name (positional or keyword). |
+| `description` | `str` | Optional human-readable description. |
+| `nodes` | `list[Node \| Construct]` | Ordered list of nodes and sub-constructs. Execution order follows list order. |
+| `input` | `type[BaseModel] \| None` | Required when used as a sub-construct. Declares input boundary. |
+| `output` | `type[BaseModel] \| None` | Required when used as a sub-construct. Declares output boundary. |
+
+**Top-level pipeline:**
+
+```python
+pipeline = Construct("my-pipeline", nodes=[node_a, node_b, node_c])
+```
+
+**Sub-construct (subgraph with isolated state):**
+
+```python
+enrich = Construct(
+    "enrich",
+    input=Claims,
+    output=ScoredClaims,
+    nodes=[lookup, score],
+)
+parent = Construct("parent", nodes=[decompose, enrich, report])
+```
+
+**With modifiers:**
+
+```python
+enrich | Oracle(n=3, merge_fn="merge")
+enrich | Each(over="items.groups", key="label")
+```
+
+---
 
 ## Oracle
 
-Modifier: N-way ensemble fan-out + merge. Must provide exactly one of `merge_prompt` or `merge_fn`.
+Modifier: N-way ensemble fan-out + merge. Exactly one of `merge_prompt` or `merge_fn` must be provided.
 
 ```python
-# LLM merge
-node | Oracle(n=3, merge_prompt="rw/merge")
-
-# Scripted merge
-node | Oracle(n=3, merge_fn="combine_variants")
-
-# Also works on Constructs
-sub | Oracle(n=3, merge_fn="merge_sub")
+class Oracle(Modifier, frozen=True):
+    n: int = 3
+    merge_prompt: str | None = None
+    merge_model: str = "reason"
+    merge_fn: str | None = None
 ```
+
+**Parameters:**
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `n` | `int` | `3` | Number of parallel generators |
-| `merge_prompt` | `str \| None` | `None` | Template name for LLM judge merge |
-| `merge_fn` | `str \| None` | `None` | Registered scripted function name |
-| `merge_model` | `str` | `"reason"` | LLM tier for merge (when using merge_prompt) |
+| `n` | `int` | `3` | Number of parallel generators. |
+| `merge_prompt` | `str \| None` | `None` | Prompt template name for LLM judge merge. |
+| `merge_model` | `str` | `"reason"` | LLM tier for merge (when using `merge_prompt`). |
+| `merge_fn` | `str \| None` | `None` | Registered scripted merge function name. |
+
+**Example:**
+
+```python
+# Scripted merge
+node | Oracle(n=3, merge_fn="deduplicate_claims")
+
+# LLM merge
+node | Oracle(n=5, merge_prompt="rw/merge-judge", merge_model="fast")
+```
+
+---
 
 ## Each
 
 Modifier: fan-out over a collection, process each item in parallel.
 
 ```python
-node | Each(over="clusters.groups", key="label")
+class Each(Modifier, frozen=True):
+    over: str
+    key: str
 ```
+
+**Parameters:**
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `over` | `str` | Dotted path to collection in state |
-| `key` | `str` | Field on each item used as the dispatch key |
+| `over` | `str` | Dotted path to the collection in state. E.g., `"discover.groups"` resolves to `state.discover.groups`. |
+| `key` | `str` | Field on each collection item used as the result dictionary key. |
 
-Results collected as `dict[str, output_type]`.
+Results are collected as `dict[str, output_type]`.
+
+**Example:**
+
+```python
+verify = Node.scripted(
+    "verify", fn="verify_cluster", input=ClusterGroup, output=VerifyResult
+) | Each(over="discover.groups", key="label")
+
+# result["verify"] -> {"auth": VerifyResult(...), "logging": VerifyResult(...)}
+```
+
+---
 
 ## Operator
 
-Modifier: human-in-the-loop interrupt. Requires a checkpointer.
+Modifier: human-in-the-loop interrupt. Requires a checkpointer at `compile()` time.
 
 ```python
-node | Operator(when="validation_failed")
+class Operator(Modifier, frozen=True):
+    when: str
 ```
+
+**Parameters:**
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `when` | `str` | Registered condition function name |
+| `when` | `str` | Name of a condition function registered with `register_condition()`. |
 
 The condition function receives the full state. Return a truthy value to interrupt (the value becomes the interrupt payload). Return `None` to continue.
 
-## compile()
-
-Compile a Construct into an executable graph.
+**Example:**
 
 ```python
-graph = compile(
-    construct: Construct,
-    checkpointer = None,    # required if any node uses Operator
-)
+register_condition("needs_review", lambda state: (
+    {"issues": state.check.issues}
+    if state.check and not state.check.passed
+    else None
+))
+
+check = Node.scripted("check", fn="validate", ...) | Operator(when="needs_review")
+graph = compile(pipeline, checkpointer=MemorySaver())
 ```
 
-Raises `ValueError` if Operator is used without a checkpointer.
+---
+
+## compile()
+
+Compile a Construct into an executable LangGraph `StateGraph`.
+
+```python
+def compile(
+    construct: Construct,
+    checkpointer: Any = None,
+) -> CompiledStateGraph
+```
+
+**Parameters:**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `construct` | `Construct` | The pipeline to compile. |
+| `checkpointer` | `Any \| None` | LangGraph checkpointer instance. Required if any node uses `Operator`. |
+
+**Returns:** A compiled LangGraph `StateGraph`.
+
+**Raises:** `ValueError` if `Operator` is used without a checkpointer.
+
+**Example:**
+
+```python
+graph = compile(pipeline)
+graph = compile(pipeline, checkpointer=MemorySaver())
+```
+
+---
 
 ## run()
 
-Execute a compiled graph.
+Execute a compiled NeoGraph graph.
+
+```python
+def run(
+    graph: CompiledStateGraph,
+    input: dict[str, Any] | None = None,
+    resume: dict[str, Any] | None = None,
+    config: dict[str, Any] | None = None,
+) -> dict[str, Any]
+```
+
+**Parameters:**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `graph` | compiled graph | Output of `compile()`. |
+| `input` | `dict \| None` | Initial state values. All fields are also injected into `config["configurable"]`. |
+| `resume` | `dict \| None` | Human feedback for resuming after an `Operator` interrupt. |
+| `config` | `dict \| None` | LangGraph `RunnableConfig`. Must include `thread_id` for interrupt/resume. |
+
+Either `input` or `resume` must be provided, not both.
+
+**Returns:** A dict of node results. Keys are node names (hyphens become underscores). Values are typed Pydantic model instances. Framework internal fields (`neo_*`) are stripped. If the graph was interrupted, the result includes an `"__interrupt__"` key.
+
+**Example:**
 
 ```python
 # First run
-result = run(
-    graph,
-    input={"node_id": "REQ-001", "project_root": "/path"},
-    config={"configurable": {"rate_limiter": my_limiter}},
-)
+result = run(graph, input={"node_id": "REQ-001"})
+
+# With config for checkpointing
+config = {"configurable": {"thread_id": "review-001"}}
+result = run(graph, input={"node_id": "REQ-001"}, config=config)
 
 # Resume after interrupt
 result = run(graph, resume={"approved": True}, config=config)
 ```
 
-All `input` fields are injected into `config["configurable"]` so every node function can access pipeline metadata without reaching into state.
-
-Framework internals (`neo_*` fields) are stripped from the result.
+---
 
 ## configure_llm()
 
-Configure the LLM layer. Call once before compile/run.
+Configure the LLM layer. Must be called before using any LLM node (`produce`, `gather`, `execute`).
 
 ```python
-configure_llm(
-    llm_factory,        # (tier) -> LLM  or  (tier, node_name=, llm_config=) -> LLM
-    prompt_compiler,    # (template, data) -> messages  or  (template, data, node_name=, config=) -> messages
-)
+def configure_llm(
+    llm_factory: Callable,
+    prompt_compiler: Callable,
+) -> None
 ```
 
-Both signatures are backward compatible -- simple and advanced forms are auto-detected.
+**Parameters:**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `llm_factory` | `Callable` | Creates LLM instances. Simple: `(tier) -> BaseChatModel`. Advanced: `(tier, node_name=, llm_config=) -> BaseChatModel`. |
+| `prompt_compiler` | `Callable` | Builds message lists. Simple: `(template, input_data) -> list[BaseMessage]`. Advanced: `(template, input_data, node_name=, config=) -> list[BaseMessage]`. |
+
+Both signatures are auto-detected via `TypeError` fallback -- simple and advanced forms work without configuration.
+
+**Example:**
+
+```python
+# Simple
+configure_llm(
+    llm_factory=lambda tier: ChatOpenAI(model=MODELS[tier]),
+    prompt_compiler=lambda template, data: [HumanMessage(content=str(data))],
+)
+
+# Production
+def my_factory(tier, node_name=None, llm_config=None):
+    return ChatOpenAI(
+        model=MODELS[tier],
+        temperature=(llm_config or {}).get("temperature", 0),
+    )
+
+def my_compiler(template, data, *, node_name=None, config=None):
+    node_id = config["configurable"]["node_id"]
+    return build_prompt(template, node_id, data)
+
+configure_llm(llm_factory=my_factory, prompt_compiler=my_compiler)
+```
+
+---
 
 ## register_scripted()
 
-Register a deterministic function for `Node.scripted()`.
+Register a deterministic function for use with `Node.scripted()` and `Oracle(merge_fn=...)`.
 
 ```python
-register_scripted("extract_text", lambda input_data, config: RawText(text="hello"))
+def register_scripted(name: str, fn: Callable) -> None
 ```
 
-The function receives `(input_data, config)` where `input_data` is the typed output from the previous node (or `None`), and `config` is `RunnableConfig` with `config["configurable"]` containing pipeline metadata.
+**Parameters:**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `name` | `str` | Lookup name. Must match `fn=` on `Node.scripted()` or `merge_fn=` on `Oracle`. |
+| `fn` | `Callable` | For nodes: `(input_data, config) -> BaseModel`. For Oracle merge: `(variants: list, config) -> BaseModel`. |
+
+**Example:**
+
+```python
+def extract_text(input_data, config):
+    return RawText(text="extracted content")
+
+register_scripted("extract_text", extract_text)
+Node.scripted("extract", fn="extract_text", output=RawText)
+```
+
+---
 
 ## register_condition()
 
-Register a condition function for `Operator(when=...)`.
+Register a condition function for use with `Operator(when=...)`.
 
 ```python
-register_condition("validation_failed", lambda state: (
-    {"issues": state.check.issues}
-    if state.check and not state.check.passed
-    else None
-))
+def register_condition(name: str, fn: Callable) -> None
 ```
 
-Return truthy to interrupt (value becomes interrupt payload). Return `None` to continue.
+**Parameters:**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `name` | `str` | Lookup name. Must match `when=` on `Operator`. |
+| `fn` | `Callable` | `(state) -> dict \| None`. Return a truthy dict to trigger interrupt (the dict becomes the payload). Return `None` to continue. |
+
+**Example:**
+
+```python
+def needs_review(state):
+    val = state.check
+    if val and not val.passed:
+        return {"issues": val.issues, "message": "Review required"}
+    return None
+
+register_condition("needs_review", needs_review)
+```
+
+---
 
 ## register_tool_factory()
 
-Register a factory that creates tool instances for gather/execute nodes.
+Register a factory that creates tool instances for `gather`/`execute` mode nodes.
 
 ```python
-register_tool_factory("search", lambda config, tool_config: MySearchTool())
+def register_tool_factory(name: str, fn: Callable) -> None
 ```
 
-## @raw_node
+**Parameters:**
 
-Decorator for escape-hatch LangGraph functions. The function receives the full state and returns a dict update.
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `name` | `str` | Tool name. Must match `Tool(name=...)`. |
+| `fn` | `Callable` | `(config: dict, tool_config: dict) -> tool_instance`. The tool must have a `.name` attribute and an `.invoke(args)` method. |
+
+**Example:**
 
 ```python
-@raw_node(input=Claims, output=FilteredClaims)
+register_tool_factory(
+    "search_codebase",
+    lambda config, tool_config: SearchTool(
+        api_key=config["configurable"]["api_key"],
+        max_results=tool_config.get("max_results", 10),
+    ),
+)
+```
+
+---
+
+## raw_node
+
+Decorator that wraps a classic LangGraph function as a NeoGraph `Node`. The framework wires edges, observability, and state around it; the function body is yours.
+
+```python
+@raw_node(input=SomeInput, output=SomeOutput)
 def custom_logic(state, config):
-    claims = None
-    for field_name in state.__class__.model_fields:
-        val = getattr(state, field_name, None)
-        if isinstance(val, Claims):
-            claims = val
-            break
-    return {"custom_logic": FilteredClaims(kept=claims.items[:3], dropped=[])}
+    ...
+```
+
+**Parameters:**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `input` | `type[BaseModel] \| None` | Pydantic model consumed from state. |
+| `output` | `type[BaseModel] \| None` | Pydantic model written to state. |
+
+**Returns:** A `Node` instance. The function name (underscores replaced by hyphens) becomes the node name.
+
+**Example:**
+
+```python
+@raw_node(input=ConsolidatedResult, output=ConsolidatedResult)
+def custom_resolution(state, config):
+    result = state.consolidated
+    # ... custom logic with full state access ...
+    return {"custom_resolution": modified_result}
+
+pipeline = Construct("my-pipeline", nodes=[other_node, custom_resolution])
 ```
