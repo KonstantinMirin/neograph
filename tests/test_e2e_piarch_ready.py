@@ -425,18 +425,13 @@ class TestOperator:
         pipeline = Construct("test-operator", nodes=[validate])
         graph = compile(pipeline, checkpointer=MemorySaver())
 
-        # Run — interrupt pauses the graph
+        # Run — with checkpointer, interrupt returns result with __interrupt__
         config = {"configurable": {"thread_id": "test-interrupt"}}
+        result = run(graph, input={"node_id": "test-001"}, config=config)
 
-        # First run should pause at interrupt
-        try:
-            result = run(graph, input={"node_id": "test-001"}, config=config)
-            # If we get here, interrupt was raised and caught by LangGraph
-        except Exception:
-            pass  # interrupt() raises GraphInterrupt
-
-        # Resume with human approval
-        # result = run(graph, resume={"approved": True}, config=config)
+        # Verify the graph paused
+        assert "__interrupt__" in result
+        assert result["validate"].passed is False
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -817,10 +812,15 @@ class TestLLMUnknownToolCall:
         call_counter = {"n": 0}
 
         class FakeLLMHallucinator:
+            def __init__(self):
+                self._structured = False
+
             def bind_tools(self, tools):
                 return self
 
             def invoke(self, messages, **kwargs):
+                if self._structured:
+                    return self._model(items=["recovered"])
                 call_counter["n"] += 1
                 if call_counter["n"] == 1:
                     # LLM hallucinates a tool that doesn't exist
@@ -829,9 +829,11 @@ class TestLLMUnknownToolCall:
                     return msg
                 return AIMessage(content="ok done")
 
-            def with_structured_output(self, model):
-                self._model = model
-                return self
+            def with_structured_output(self, model, **kwargs):
+                clone = FakeLLMHallucinator()
+                clone._structured = True
+                clone._model = model
+                return clone
 
         configure_llm(
             llm_factory=lambda tier: FakeLLMHallucinator(),
@@ -851,7 +853,8 @@ class TestLLMUnknownToolCall:
         graph = compile(pipeline)
         # Should complete without crashing — unknown tool gets error message
         result = run(graph, input={"node_id": "test-001"})
-        assert result["explore"] is not None
+        assert isinstance(result["explore"], Claims)
+        assert result["explore"].items == ["recovered"]
 
 
 class TestModifierAsFirstNode:
