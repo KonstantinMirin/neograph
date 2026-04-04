@@ -102,29 +102,45 @@ configure_llm(
 
 ### Advanced compiler
 
-The advanced signature receives `node_name` and the full `config` dict. This is where the real power is -- the config contains everything from `run()`'s input plus anything you put in `config["configurable"]`.
+The full signature receives `node_name`, `config`, `output_model`, and `llm_config`:
 
 ```python
-def my_compiler(template, data, *, node_name=None, config=None):
+def my_compiler(template, data, *, node_name=None, config=None,
+                output_model=None, llm_config=None):
     configurable = (config or {}).get("configurable", {})
     node_id = configurable.get("node_id", "")
     project_root = configurable.get("project_root", "")
+    strategy = (llm_config or {}).get("output_strategy", "structured")
 
     # Load context files from disk based on pipeline metadata
     context = load_context(project_root, node_id)
 
-    # Build a rich prompt using the template name as a key
-    return get_prompt(
+    # Build prompt -- inject JSON schema for json_mode
+    messages = get_prompt(
         template_name=template,
         node_id=node_id,
         context_files=context,
         analysis_notes=format_notes(data),
     )
 
+    # For json_mode: tell the LLM what JSON shape to return
+    if strategy in ("json_mode", "text") and output_model:
+        import json
+        schema = json.dumps(output_model.model_json_schema(), indent=2)
+        messages.append({"role": "user",
+            "content": f"Return a JSON object matching this schema:\n{schema}"})
+
+    return messages
+
 configure_llm(llm_factory=my_factory, prompt_compiler=my_compiler)
 ```
 
-Like the factory, the framework tries the advanced signature first and falls back to `(template, data)` if the compiler does not accept keyword arguments.
+The framework tries signatures from most specific to least specific:
+1. `(template, data, node_name=, config=, output_model=, llm_config=)` -- full context
+2. `(template, data, node_name=, config=)` -- without output model
+3. `(template, data)` -- minimal
+
+This means you can upgrade incrementally without breaking existing compilers.
 
 ## Config injection
 
@@ -265,11 +281,11 @@ Node(name="research", mode="gather", output=ResearchResult,
 
 ## Backward compatibility
 
-Both the factory and compiler support two signatures:
+Both the factory and compiler support multiple signatures. The framework tries from most to least specific:
 
-| Callback | Simple signature | Advanced signature |
-|---|---|---|
-| `llm_factory` | `(tier) -> BaseChatModel` | `(tier, node_name=, llm_config=) -> BaseChatModel` |
-| `prompt_compiler` | `(template, data) -> list[BaseMessage]` | `(template, data, node_name=, config=) -> list[BaseMessage]` |
+| Callback | Signatures (tried in order) |
+|---|---|
+| `llm_factory` | `(tier, node_name=, llm_config=)` then `(tier)` |
+| `prompt_compiler` | `(template, data, node_name=, config=, output_model=, llm_config=)` then `(template, data, node_name=, config=)` then `(template, data)` |
 
-The framework detects which signature your callback supports by catching `TypeError` on the advanced call and falling back to the simple one. This means you can upgrade incrementally: start with a simple lambda, then switch to a full function when you need per-node configuration or config access, without changing any Node definitions.
+Start with a simple lambda. Add parameters as you need them. No Node definitions need to change.

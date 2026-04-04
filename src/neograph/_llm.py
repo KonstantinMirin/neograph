@@ -88,12 +88,29 @@ def _get_llm(tier: str, node_name: str = "", llm_config: dict | None = None) -> 
         return _llm_factory(tier)
 
 
-def _compile_prompt(template: str, input_data: Any, *, node_name: str = "", config: dict | None = None) -> list:
+def _compile_prompt(
+    template: str,
+    input_data: Any,
+    *,
+    node_name: str = "",
+    config: dict | None = None,
+    output_model: type[BaseModel] | None = None,
+    llm_config: dict | None = None,
+) -> list:
+    # Try full signature first, then progressively simpler ones
+    try:
+        return _prompt_compiler(
+            template, input_data,
+            node_name=node_name, config=config,
+            output_model=output_model, llm_config=llm_config,
+        )
+    except TypeError:
+        pass
     try:
         return _prompt_compiler(template, input_data, node_name=node_name, config=config)
     except TypeError:
-        # Backward compatible: compiler only accepts (template, data)
-        return _prompt_compiler(template, input_data)
+        pass
+    return _prompt_compiler(template, input_data)
 
 
 def _extract_json(text: str) -> str:
@@ -143,7 +160,11 @@ def invoke_structured(
     llm_log = log.bind(tier=model_tier, prompt=prompt_template, output=output_model.__name__, strategy=strategy)
 
     llm = _get_llm(model_tier, node_name=node_name, llm_config=llm_config)
-    messages = _compile_prompt(prompt_template, input_data, node_name=node_name, config=config)
+    messages = _compile_prompt(
+        prompt_template, input_data,
+        node_name=node_name, config=config,
+        output_model=output_model, llm_config=llm_config,
+    )
 
     t0 = time.monotonic()
     usage = None
@@ -212,7 +233,11 @@ def invoke_with_tools(
     )
 
     llm = _get_llm(model_tier, node_name=node_name, llm_config=llm_config)
-    messages = _compile_prompt(prompt_template, input_data, node_name=node_name, config=config)
+    messages = _compile_prompt(
+        prompt_template, input_data,
+        node_name=node_name, config=config,
+        output_model=output_model, llm_config=llm_config,
+    )
 
     # Create tool instances from registered factories
     tool_instances = {}

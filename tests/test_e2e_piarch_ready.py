@@ -2345,3 +2345,105 @@ class TestOutputStrategyOnGather:
         result = run(graph, input={"node_id": "test"})
 
         assert result["research"].items == ["gathered-json"]
+
+
+class TestPromptCompilerReceivesOutputModel:
+    """prompt_compiler must receive output_model and llm_config for json_mode prompts."""
+
+    def test_compiler_receives_output_model_in_produce(self):
+        """Produce node's prompt compiler sees the output Pydantic model."""
+        from neograph._llm import configure_llm
+
+        compiler_calls = []
+
+        class FakeLLM:
+            def with_structured_output(self, model, **kwargs):
+                self._model = model
+                return self
+
+            def invoke(self, messages, **kwargs):
+                return self._model(items=["ok"])
+
+        def tracking_compiler(template, data, **kw):
+            compiler_calls.append(kw)
+            return [{"role": "user", "content": "test"}]
+
+        configure_llm(llm_factory=lambda tier: FakeLLM(), prompt_compiler=tracking_compiler)
+
+        node = Node(name="x", mode="produce", output=Claims, model="fast", prompt="test")
+        pipeline = Construct("test", nodes=[node])
+        graph = compile(pipeline)
+        run(graph, input={"node_id": "test"})
+
+        assert len(compiler_calls) == 1
+        assert compiler_calls[0].get("output_model") is Claims
+
+    def test_compiler_receives_llm_config(self):
+        """Prompt compiler sees the node's llm_config including output_strategy."""
+        from neograph._llm import configure_llm
+
+        compiler_calls = []
+
+        class FakeJsonLLM:
+            def invoke(self, messages, **kwargs):
+                from langchain_core.messages import AIMessage
+                return AIMessage(content='{"items": ["ok"]}')
+
+        def tracking_compiler(template, data, **kw):
+            compiler_calls.append(kw)
+            return [{"role": "user", "content": "test"}]
+
+        configure_llm(llm_factory=lambda tier: FakeJsonLLM(), prompt_compiler=tracking_compiler)
+
+        node = Node(
+            name="x", mode="produce", output=Claims, model="fast", prompt="test",
+            llm_config={"output_strategy": "json_mode", "temperature": 0.5},
+        )
+        pipeline = Construct("test", nodes=[node])
+        graph = compile(pipeline)
+        run(graph, input={"node_id": "test"})
+
+        assert len(compiler_calls) == 1
+        assert compiler_calls[0].get("llm_config") == {"output_strategy": "json_mode", "temperature": 0.5}
+        assert compiler_calls[0].get("output_model") is Claims
+
+    def test_json_mode_compiler_can_inject_schema(self):
+        """End-to-end: compiler injects JSON schema into prompt for json_mode."""
+        import json
+
+        from neograph._llm import configure_llm
+
+        injected_prompts = []
+
+        class FakeJsonLLM:
+            def invoke(self, messages, **kwargs):
+                from langchain_core.messages import AIMessage
+                return AIMessage(content='{"items": ["schema-injected"]}')
+
+        def schema_injecting_compiler(template, data, **kw):
+            output_model = kw.get("output_model")
+            llm_config = kw.get("llm_config", {})
+            strategy = llm_config.get("output_strategy", "structured")
+
+            prompt = f"Analyze: {template}"
+            if strategy in ("json_mode", "text") and output_model:
+                schema = json.dumps(output_model.model_json_schema(), indent=2)
+                prompt += f"\n\nReturn a JSON object matching this schema:\n{schema}"
+
+            injected_prompts.append(prompt)
+            return [{"role": "user", "content": prompt}]
+
+        configure_llm(llm_factory=lambda tier: FakeJsonLLM(), prompt_compiler=schema_injecting_compiler)
+
+        node = Node(
+            name="x", mode="produce", output=Claims, model="fast", prompt="decompose",
+            llm_config={"output_strategy": "json_mode"},
+        )
+        pipeline = Construct("test", nodes=[node])
+        graph = compile(pipeline)
+        result = run(graph, input={"node_id": "test"})
+
+        assert result["x"].items == ["schema-injected"]
+        # Verify schema was injected into the prompt
+        assert "json_schema" in injected_prompts[0] or "items" in injected_prompts[0]
+        assert "Return a JSON object" in injected_prompts[0]
