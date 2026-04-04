@@ -77,7 +77,7 @@ class TestScriptedPipeline:
         result = run(graph, input={"node_id": "test-001"})
 
         # Verify data flowed through all three nodes
-        assert result["classify"] is not None
+        assert isinstance(result["classify"], ClassifiedClaims)
         classified = result["classify"]
         assert len(classified.classified) == 2
         assert classified.classified[0]["claim"] == "claim-1"
@@ -122,7 +122,7 @@ class TestProduceMode:
         graph = compile(pipeline)
         result = run(graph, input={"node_id": "test-001"})
 
-        assert result["extract"] is not None
+        assert isinstance(result["extract"], Claims)
         assert len(result["extract"].items) == 3
         assert result["extract"].items[0] == "extracted-1"
 
@@ -541,9 +541,9 @@ class TestMiniRWPipeline:
         result = run(graph, input={"node_id": "BR-RW-042"})
 
         # All three nodes produced output
-        assert result["decompose"] is not None
-        assert result["classify"] is not None
-        assert result["catalog"] is not None
+        assert isinstance(result["decompose"], Claims)
+        assert isinstance(result["classify"], ClassifiedClaims)
+        assert isinstance(result["catalog"], RawText)
         assert len(result["decompose"].items) == 2
         assert len(result["classify"].classified) == 2
         assert "42 nodes" in result["catalog"].text
