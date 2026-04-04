@@ -89,7 +89,7 @@ def _add_subgraph(
 ) -> str:
     """Compile a sub-Construct as an isolated subgraph node, with modifier support."""
     if sub.input is None:
-        msg = f"Sub-construct '{sub.name}' must declare input type."
+        msg = f"Sub-construct '{sub.name}' has no input type. Declare input=SomeModel."
         raise ValueError(msg)
 
     sub_log = log.bind(subgraph=sub.name)

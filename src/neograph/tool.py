@@ -54,6 +54,8 @@ class ToolBudgetTracker:
 
     def all_exhausted(self) -> bool:
         """True if every budgeted tool is spent. Unlimited tools (budget=0) never exhaust."""
+        if not self._budgets:
+            return False  # no tools → nothing to exhaust
         for name, budget in self._budgets.items():
             if budget == 0:
                 return False

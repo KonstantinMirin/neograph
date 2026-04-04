@@ -293,7 +293,7 @@ def invoke_with_tools(
             if not budget_tracker.can_call(tool_name):
                 llm_log.info("tool_budget_exhausted", tool=tool_name)
                 messages.append(ToolMessage(
-                    content=f"Tool '{tool_name}' budget exhausted ({budget_tracker._budgets[tool_name]} calls used). Use remaining tools or respond.",
+                    content=f"Tool '{tool_name}' budget exhausted. Use remaining tools or respond.",
                     tool_call_id=tool_call["id"],
                 ))
                 continue

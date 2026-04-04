@@ -60,7 +60,7 @@ def compile_state_model(construct: Construct) -> type[BaseModel]:
     # Sub-constructs: handle modifiers same as nodes
     for sub in sub_constructs:
         if sub.output is None:
-            msg = f"Sub-construct '{sub.name}' must declare output type."
+            msg = f"Sub-construct '{sub.name}' has no output type. Declare output=SomeModel."
             raise ValueError(msg)
         field_name = sub.name.replace("-", "_")
 

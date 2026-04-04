@@ -57,7 +57,7 @@ class Construct(Modifiable, BaseModel):
 
     model_config = {"arbitrary_types_allowed": True}
 
-    def __init__(self, name_: str = None, /, **kwargs):
+    def __init__(self, name_: str | None = None, /, **kwargs):
         if name_ is not None:
             kwargs["name"] = name_
         super().__init__(**kwargs)

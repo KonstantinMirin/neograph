@@ -1159,7 +1159,7 @@ class TestSubgraph:
 
         parent = Construct("parent", nodes=[sub])
 
-        with pytest.raises(ValueError, match="must declare input"):
+        with pytest.raises(ValueError, match="has no input type"):
             compile(parent)
 
     def test_subgraph_without_output_raises(self):
@@ -1174,7 +1174,7 @@ class TestSubgraph:
 
         parent = Construct("parent", nodes=[sub])
 
-        with pytest.raises(ValueError, match="must declare output"):
+        with pytest.raises(ValueError, match="has no output type"):
             compile(parent)
 
     def test_subgraph_with_oracle_inside(self):

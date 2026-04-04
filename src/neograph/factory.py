@@ -63,9 +63,16 @@ def lookup_scripted(name: str) -> Callable:
     """Look up a registered scripted function by name. Raises ValueError if missing."""
     fn = _scripted_registry.get(name)
     if fn is None:
-        msg = f"Merge function '{name}' not registered. Use register_scripted()."
+        msg = f"Scripted function '{name}' not registered. Use register_scripted()."
         raise ValueError(msg)
     return fn
+
+
+def _type_name(t: Any) -> str | None:
+    """Get a readable name from a type, or None."""
+    if t is None:
+        return None
+    return getattr(t, '__name__', str(t))
 
 
 def make_node_fn(node: Node) -> Callable:
@@ -101,9 +108,7 @@ def _make_scripted_wrapper(node: Node) -> Callable:
 
     def scripted_node(state: BaseModel, config: RunnableConfig) -> dict[str, Any]:
         node_log = log.bind(node=node.name, mode="scripted", fn=node.scripted_fn)
-        node_log.info("node_start",
-                      input_type=node.input.__name__ if node.input and hasattr(node.input, '__name__') else None,
-                      output_type=node.output.__name__ if node.output and hasattr(node.output, '__name__') else None)
+        node_log.info("node_start", input_type=_type_name(node.input), output_type=_type_name(node.output))
 
         t0 = time.monotonic()
 
@@ -151,7 +156,7 @@ def _make_produce_fn(node: Node) -> Callable:
         from neograph._llm import invoke_structured
 
         node_log = log.bind(node=node.name, mode="produce", model=node.model, prompt=node.prompt)
-        node_log.info("node_start", output_type=node.output.__name__ if node.output else None)
+        node_log.info("node_start", input_type=_type_name(node.input), output_type=_type_name(node.output))
 
         t0 = time.monotonic()
         input_data = _extract_input(state, node)
@@ -186,6 +191,7 @@ def _make_gather_fn(node: Node) -> Callable:
 
         node_log = log.bind(node=node.name, mode="gather", model=node.model, prompt=node.prompt)
         node_log.info("node_start",
+                      input_type=_type_name(node.input), output_type=_type_name(node.output),
                       tools=[t.name for t in node.tools],
                       budgets={t.name: t.budget for t in node.tools})
 
@@ -226,6 +232,7 @@ def _make_execute_fn(node: Node) -> Callable:
 
         node_log = log.bind(node=node.name, mode="execute", model=node.model, prompt=node.prompt)
         node_log.info("node_start",
+                      input_type=_type_name(node.input), output_type=_type_name(node.output),
                       tools=[t.name for t in node.tools],
                       budgets={t.name: t.budget for t in node.tools})
 
@@ -257,6 +264,20 @@ def _make_execute_fn(node: Node) -> Callable:
     return execute_node
 
 
+def _is_instance_safe(val: Any, type_spec: Any) -> bool:
+    """isinstance() that handles parameterized generics like dict[str, X]."""
+    from typing import get_origin, get_args
+
+    origin = get_origin(type_spec)
+    if origin is not None:
+        # Parameterized generic: check base type (dict, list, etc.)
+        return isinstance(val, origin)
+    try:
+        return isinstance(val, type_spec)
+    except TypeError:
+        return False
+
+
 def _extract_input(state: Any, node: Node) -> Any:
     """Extract typed input from state based on node's input spec."""
     if node.input is None:
@@ -275,7 +296,7 @@ def _extract_input(state: Any, node: Node) -> Any:
 
     # Each fan-out: item is passed via neo_each_item
     replicate_item = _get("neo_each_item")
-    if replicate_item is not None and isinstance(replicate_item, node.input):
+    if replicate_item is not None and _is_instance_safe(replicate_item, node.input):
         return replicate_item
 
     # dict[str, type] — multiple fields from state
@@ -289,7 +310,7 @@ def _extract_input(state: Any, node: Node) -> Any:
     # Single type — find matching field in state by type or name
     for attr_name in _fields():
         val = _get(attr_name)
-        if val is not None and isinstance(val, node.input):
+        if val is not None and _is_instance_safe(val, node.input):
             return val
 
     return None
