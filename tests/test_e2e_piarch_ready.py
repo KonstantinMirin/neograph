@@ -314,9 +314,11 @@ class TestEach:
         graph = compile(pipeline)
         result = run(graph, input={"node_id": "test-001"})
 
-        # Both clusters were processed
+        # Both clusters were processed — pin cardinality AND per-key payload
         verify_results = result.get("verify", {})
-        assert "alpha" in verify_results or len(verify_results) == 2
+        assert set(verify_results.keys()) == {"alpha", "beta"}
+        assert verify_results["alpha"].cluster_label == "alpha"
+        assert verify_results["beta"].cluster_label == "beta"
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -382,8 +384,11 @@ class TestNodeMap:
         graph = compile(pipeline)
         result = run(graph, input={"node_id": "test-001"})
 
+        # Fan-out fired for BOTH clusters — pin cardinality and payload
         verify_results = result.get("verify", {})
-        assert "alpha" in verify_results or len(verify_results) == 2
+        assert set(verify_results.keys()) == {"alpha", "beta"}
+        assert verify_results["alpha"].cluster_label == "alpha"
+        assert verify_results["beta"].cluster_label == "beta"
 
     def test_map_lambda_with_no_attrs_raises(self):
         """`lambda s: s` has no path — clear error."""

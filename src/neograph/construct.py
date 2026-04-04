@@ -198,7 +198,7 @@ def _check_each_path(
             raise ConstructError(
                 f"Node '{item.name}' in construct '{construct.name}' has "
                 f"Each(over='{each.over}') but '{'.'.join(walked)}' does not "
-                f"resolve: {_type_name(current_type)} has no field '{segment}'.\n"
+                f"resolve: {_fmt_type(current_type)} has no field '{segment}'.\n"
                 f"{_location_suffix()}"
             )
         current_type = resolved
@@ -208,7 +208,7 @@ def _check_each_path(
         raise ConstructError(
             f"Node '{item.name}' in construct '{construct.name}' has "
             f"Each(over='{each.over}'), but the path resolves to "
-            f"{_type_name(current_type)}, not a list.\n"
+            f"{_fmt_type(current_type)}, not a list.\n"
             f"  hint: Each fans out over a collection; the terminal field "
             f"must be a list.\n"
             f"{_location_suffix()}"
@@ -217,8 +217,8 @@ def _check_each_path(
     if not _types_compatible(element_type, input_type):
         raise ConstructError(
             f"Node '{item.name}' in construct '{construct.name}' declares "
-            f"input={_type_name(input_type)} with Each(over='{each.over}'), "
-            f"but the path resolves to list[{_type_name(element_type)}].\n"
+            f"input={_fmt_type(input_type)} with Each(over='{each.over}'), "
+            f"but the path resolves to list[{_fmt_type(element_type)}].\n"
             f"{_location_suffix()}"
         )
 
@@ -279,7 +279,7 @@ def _extract_list_element(tp: Any) -> Any:
     return None
 
 
-def _type_name(tp: Any) -> str:
+def _fmt_type(tp: Any) -> str:
     if tp is None:
         return "None"
     if hasattr(tp, "__name__"):
@@ -295,7 +295,7 @@ def _format_no_producer_error(
 ) -> str:
     if producers:
         producer_summary = "\n".join(
-            f"    • {label}: {_type_name(t)}"
+            f"    • {label}: {_fmt_type(t)}"
             for _, t, label in producers
         )
     else:
@@ -306,7 +306,7 @@ def _format_no_producer_error(
 
     return (
         f"Node '{item.name}' in construct '{construct.name}' declares "
-        f"input={_type_name(input_type)} but no upstream produces a "
+        f"input={_fmt_type(input_type)} but no upstream produces a "
         f"compatible value.\n"
         f"  upstream producers:\n{producer_summary}\n"
         f"{hint_line}"
