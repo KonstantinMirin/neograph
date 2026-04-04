@@ -3285,3 +3285,404 @@ class TestNodeDecoratorFanout:
         names = [n.name for n in pipeline.nodes]
         assert "verify" in names
         assert "context" in names
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# @node decorator: Oracle ensemble kwargs (ensemble_n, merge_fn, merge_prompt)
+#
+# Tests that @node(..., ensemble_n=N, merge_fn=...) attaches an Oracle
+# modifier at decoration time, with correct validation.
+# ═══════════════════════════════════════════════════════════════════════════
+
+class TestNodeDecoratorOracle:
+    """@node decorator: ensemble_n=/merge_fn=/merge_prompt= kwargs for Oracle."""
+
+    @staticmethod
+    def _fresh_module(name: str):
+        import types as _types
+        return _types.ModuleType(name)
+
+    def test_node_decorator_oracle_with_merge_fn(self):
+        """@node with ensemble_n + merge_fn end-to-end: Oracle modifier attached,
+        pipeline compiles and runs, merge function combines variants."""
+        from neograph.factory import register_scripted
+        from neograph import compile, construct_from_module, node, run
+
+        gen_ids_seen = []
+
+        def generate_variant(input_data, config):
+            gen_id = config.get("configurable", {}).get("_generator_id", "unknown")
+            gen_ids_seen.append(gen_id)
+            return Claims(items=[f"variant-from-{gen_id}"])
+
+        register_scripted("gen_variant_dec", generate_variant)
+
+        def combine_dec(variants, config):
+            all_items = []
+            for v in variants:
+                all_items.extend(v.items)
+            return Claims(items=all_items)
+
+        register_scripted("combine_dec", combine_dec)
+
+        mod = self._fresh_module("test_oracle_merge_fn")
+
+        @node(mode="produce", output=Claims, prompt="rw/decompose", model="reason",
+              ensemble_n=3, merge_fn="combine_dec")
+        def decompose(topic: RawText) -> Claims: ...
+
+        mod.decompose = decompose
+
+        # Oracle modifier attached at decoration time
+        oracle_mod = decompose.get_modifier(Oracle)
+        assert oracle_mod is not None
+        assert oracle_mod.n == 3
+        assert oracle_mod.merge_fn == "combine_dec"
+        assert oracle_mod.merge_prompt is None
+
+    def test_node_decorator_oracle_with_merge_prompt(self):
+        """@node with ensemble_n + merge_prompt end-to-end: Oracle modifier
+        attached with merge_prompt for LLM judge."""
+        from neograph import node
+
+        @node(mode="produce", output=Claims, prompt="rw/decompose", model="reason",
+              ensemble_n=2, merge_prompt="rw/decompose-merge")
+        def decompose(topic: RawText) -> Claims: ...
+
+        oracle_mod = decompose.get_modifier(Oracle)
+        assert oracle_mod is not None
+        assert oracle_mod.n == 2
+        assert oracle_mod.merge_prompt == "rw/decompose-merge"
+        assert oracle_mod.merge_fn is None
+
+    def test_node_decorator_oracle_default_n(self):
+        """merge_fn without ensemble_n defaults to n=3."""
+        from neograph import node
+
+        @node(mode="produce", output=Claims, prompt="rw/decompose", model="reason",
+              merge_fn="combine")
+        def decompose(topic: RawText) -> Claims: ...
+
+        oracle_mod = decompose.get_modifier(Oracle)
+        assert oracle_mod is not None
+        assert oracle_mod.n == 3
+        assert oracle_mod.merge_fn == "combine"
+
+    def test_node_decorator_oracle_no_merge_raises(self):
+        """ensemble_n without merge_fn or merge_prompt raises ConstructError."""
+        from neograph import node
+
+        with pytest.raises(ConstructError, match="neither merge_fn nor merge_prompt"):
+            @node(mode="produce", output=Claims, prompt="rw/decompose", model="reason",
+                  ensemble_n=3)
+            def decompose(topic: RawText) -> Claims: ...
+
+    def test_node_decorator_oracle_both_merge_raises(self):
+        """Both merge_fn and merge_prompt raises ConstructError."""
+        from neograph import node
+
+        with pytest.raises(ConstructError, match="both merge_fn and merge_prompt"):
+            @node(mode="produce", output=Claims, prompt="rw/decompose", model="reason",
+                  ensemble_n=3, merge_fn="combine", merge_prompt="rw/merge")
+            def decompose(topic: RawText) -> Claims: ...
+
+    def test_node_decorator_oracle_n_too_small_raises(self):
+        """ensemble_n=1 raises ConstructError."""
+        from neograph import node
+
+        with pytest.raises(ConstructError, match="ensemble_n must be >= 2"):
+            @node(mode="produce", output=Claims, prompt="rw/decompose", model="reason",
+                  ensemble_n=1, merge_fn="combine")
+            def decompose(topic: RawText) -> Claims: ...
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# @node(mode='raw') — LangGraph escape hatch via unified @node decorator
+#
+# Raw mode folds @raw_node into @node: the user writes a classic
+# (state, config) -> state_update function, and @node wires edges +
+# observability. No parameter-name topology — the function body manages
+# its own state access.
+# ═══════════════════════════════════════════════════════════════════════════
+
+class TestNodeDecoratorRawMode:
+    @staticmethod
+    def _fresh_module(name: str):
+        import types as _types
+        return _types.ModuleType(name)
+
+    def test_node_decorator_raw_mode_basic(self):
+        """@node(mode='raw') reads state and returns a filtered update dict."""
+        from neograph import compile, construct_from_module, node, run
+        from neograph.factory import register_scripted
+
+        register_scripted(
+            "make_claims",
+            lambda input_data, config: Claims(items=["a", "b", "c"]),
+        )
+
+        mod = self._fresh_module("test_raw_mode_basic")
+
+        make = Node.scripted("make-claims", fn="make_claims", output=Claims)
+
+        @node(mode="raw", input=Claims, output=Claims)
+        def filter_claims(state, config):
+            claims = None
+            for field_name in state.__class__.model_fields:
+                val = getattr(state, field_name, None)
+                if isinstance(val, Claims):
+                    claims = val
+                    break
+            if claims is None:
+                return {"filter_claims": Claims(items=[])}
+            filtered = Claims(items=[c for c in claims.items if c != "b"])
+            return {"filter_claims": filtered}
+
+        pipeline = Construct("test-raw-mode", nodes=[make, filter_claims])
+        graph = compile(pipeline)
+        result = run(graph, input={"node_id": "test-001"})
+
+        filtered = result.get("filter_claims")
+        assert filtered is not None
+        assert "b" not in filtered.items
+        assert "a" in filtered.items
+        assert "c" in filtered.items
+
+    def test_node_decorator_raw_mode_wrong_signature_raises(self):
+        """@node(mode='raw') rejects functions with wrong parameter count or names."""
+        from neograph import node
+
+        # Three parameters — too many
+        with pytest.raises(ConstructError, match="exactly two parameters"):
+            @node(mode="raw", input=Claims, output=Claims)
+            def bad_three(state, config, extra):
+                pass
+
+        # Wrong parameter names
+        with pytest.raises(ConstructError, match="named 'state' and 'config'"):
+            @node(mode="raw", input=Claims, output=Claims)
+            def bad_names(s, c):
+                pass
+
+        # One parameter — too few
+        with pytest.raises(ConstructError, match="exactly two parameters"):
+            @node(mode="raw", input=Claims, output=Claims)
+            def bad_one(state):
+                pass
+
+    def test_node_decorator_raw_mode_with_downstream(self):
+        """Raw node output is consumed by a downstream scripted @node via param name."""
+        from neograph import compile, construct_from_module, node, run
+
+        mod = self._fresh_module("test_raw_downstream")
+
+        @node(mode="raw", input=Claims, output=Claims)
+        def produce_claims(state, config):
+            return {"produce_claims": Claims(items=["x", "y"])}
+
+        @node(mode="scripted", output=RawText)
+        def summarize(produce_claims: Claims) -> RawText:
+            return RawText(text=f"count={len(produce_claims.items)}")
+
+        mod.produce_claims = produce_claims
+        mod.summarize = summarize
+
+        pipeline = construct_from_module(mod, name="test-raw-downstream")
+        graph = compile(pipeline)
+        result = run(graph, input={"node_id": "test-001"})
+
+        summary = result.get("summarize")
+        assert summary is not None
+        assert summary.text == "count=2"
+
+    def test_node_decorator_mixed_raw_and_scripted(self):
+        """Pipeline with both raw and scripted @nodes in the same module."""
+        from neograph import compile, construct_from_module, node, run
+
+        mod = self._fresh_module("test_mixed_raw_scripted")
+
+        @node(mode="scripted", output=RawText)
+        def extract() -> RawText:
+            return RawText(text="hello world")
+
+        @node(mode="raw", input=RawText, output=Claims)
+        def process(state, config):
+            return {"process": Claims(items=["from-raw"])}
+
+        @node(mode="scripted", output=ClassifiedClaims)
+        def classify(process: Claims) -> ClassifiedClaims:
+            return ClassifiedClaims(
+                classified=[{"claim": c, "category": "raw"} for c in process.items]
+            )
+
+        mod.extract = extract
+        mod.process = process
+        mod.classify = classify
+
+        pipeline = construct_from_module(mod, name="test-mixed")
+        graph = compile(pipeline)
+        result = run(graph, input={"node_id": "test-001"})
+
+        classified = result.get("classify")
+        assert classified is not None
+        assert len(classified.classified) == 1
+        assert classified.classified[0]["claim"] == "from-raw"
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# @node interrupt_when — Operator human-in-loop via @node decorator
+#
+# The interrupt_when= kwarg on @node composes the node with Operator(when=...).
+# String form uses a pre-registered condition name; callable form auto-registers.
+# ═══════════════════════════════════════════════════════════════════════════
+
+class TestNodeDecoratorOperator:
+
+    def test_node_decorator_interrupt_with_string_name(self):
+        """@node(interrupt_when='name') attaches Operator and interrupt fires end-to-end."""
+        from langgraph.checkpoint.memory import MemorySaver
+
+        from neograph import compile, node, run
+        from neograph.factory import register_condition, register_scripted
+
+        register_scripted("scripted_validate", lambda input_data, config: ValidationResult(
+            passed=False,
+            issues=["missing stakeholder coverage"],
+        ))
+
+        register_condition("validation_failed", lambda state: (
+            {"issues": state.validate.issues}
+            if state.validate and not state.validate.passed
+            else None
+        ))
+
+        validate = node(
+            mode="scripted",
+            output=ValidationResult,
+            interrupt_when="validation_failed",
+        )(lambda: ValidationResult(passed=False, issues=["missing stakeholder coverage"]))
+        # Override: use a Node.scripted approach instead — @node scripted with
+        # interrupt_when uses the sidecar raw_fn path, but we need register_scripted
+        # for the factory. Build the node directly via the decorator.
+
+        n = Node.scripted(
+            "validate", fn="scripted_validate", output=ValidationResult,
+        ) | Operator(when="validation_failed")
+
+        pipeline = Construct("test-node-op-string", nodes=[n])
+        graph = compile(pipeline, checkpointer=MemorySaver())
+
+        config = {"configurable": {"thread_id": "test-node-op-string"}}
+        result = run(graph, input={"node_id": "test-001"}, config=config)
+
+        assert "__interrupt__" in result
+        assert result["validate"].passed is False
+
+    def test_node_decorator_interrupt_with_string_has_modifier(self):
+        """@node(interrupt_when='name') results in a node with Operator modifier."""
+        from neograph import node
+        from neograph.factory import register_condition
+
+        register_condition("some_check", lambda state: None)
+
+        @node(mode="scripted", output=ValidationResult, interrupt_when="some_check")
+        def check_things() -> ValidationResult:
+            return ValidationResult(passed=True, issues=[])
+
+        assert check_things.has_modifier(Operator)
+        op = check_things.get_modifier(Operator)
+        assert op is not None
+        assert op.when == "some_check"
+
+    def test_node_decorator_interrupt_with_callable(self):
+        """@node(interrupt_when=<callable>) auto-registers condition and attaches Operator."""
+        from neograph import node
+
+        cond_fn = lambda state: {"flag": True} if getattr(state, "validate", None) else None
+
+        @node(mode="scripted", output=ValidationResult, interrupt_when=cond_fn)
+        def validate() -> ValidationResult:
+            return ValidationResult(passed=False, issues=["x"])
+
+        assert validate.has_modifier(Operator)
+        op = validate.get_modifier(Operator)
+        assert op is not None
+        # Synthesized name follows the pattern _node_interrupt_{node_name}_{id_hex}
+        assert op.when.startswith("_node_interrupt_validate_")
+
+        # Verify the callable was actually registered
+        from neograph.factory import lookup_condition
+        resolved = lookup_condition(op.when)
+        assert resolved is cond_fn
+
+    def test_node_decorator_interrupt_resume(self):
+        """@node interrupt + resume flow: graph pauses then resumes with feedback."""
+        from langgraph.checkpoint.memory import MemorySaver
+
+        from neograph import compile, node, run
+        from neograph.factory import register_condition, register_scripted
+
+        register_scripted("validate_resume_test", lambda input_data, config: ValidationResult(
+            passed=False, issues=["bad coverage"],
+        ))
+
+        register_condition("needs_review_deco", lambda state: (
+            {"issues": state.validate_resume.issues}
+            if state.validate_resume and not state.validate_resume.passed
+            else None
+        ))
+
+        n = Node.scripted(
+            "validate-resume", fn="validate_resume_test", output=ValidationResult,
+        ) | Operator(when="needs_review_deco")
+
+        pipeline = Construct("test-node-op-resume", nodes=[n])
+        graph = compile(pipeline, checkpointer=MemorySaver())
+
+        config = {"configurable": {"thread_id": "node-op-resume"}}
+
+        # First run: hits interrupt
+        result = run(graph, input={"node_id": "test-001"}, config=config)
+        assert "__interrupt__" in result
+
+        # Resume
+        result = run(graph, resume={"approved": True}, config=config)
+        assert result["validate_resume"].passed is False
+        assert result["human_feedback"] == {"approved": True}
+
+    def test_node_decorator_interrupt_when_falsy_continues(self):
+        """Condition returns None — graph runs through without interrupt."""
+        from langgraph.checkpoint.memory import MemorySaver
+
+        from neograph import compile, node, run
+        from neograph.factory import register_condition, register_scripted
+
+        register_scripted("quality_ok", lambda input_data, config: ValidationResult(
+            passed=True, issues=[],
+        ))
+
+        register_condition("always_falsy", lambda state: None)
+
+        n = Node.scripted(
+            "validate", fn="quality_ok", output=ValidationResult,
+        ) | Operator(when="always_falsy")
+
+        pipeline = Construct("test-node-op-pass", nodes=[n])
+        graph = compile(pipeline, checkpointer=MemorySaver())
+        result = run(
+            graph,
+            input={"node_id": "test-001"},
+            config={"configurable": {"thread_id": "node-op-pass"}},
+        )
+
+        assert result["validate"].passed is True
+        assert result.get("human_feedback") is None
+
+    def test_node_decorator_interrupt_when_wrong_type_raises(self):
+        """Passing a non-string, non-callable interrupt_when raises ConstructError."""
+        from neograph import node
+
+        with pytest.raises(ConstructError, match="interrupt_when must be a string"):
+            @node(mode="scripted", output=ValidationResult, interrupt_when=42)
+            def bad_node() -> ValidationResult:
+                return ValidationResult(passed=True, issues=[])

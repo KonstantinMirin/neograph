@@ -61,7 +61,7 @@ from typing import Any, Callable, Literal
 
 from neograph._construct_validation import ConstructError, _fmt_type, _types_compatible
 from neograph.construct import Construct
-from neograph.modifiers import Each
+from neograph.modifiers import Each, Operator, Oracle
 from neograph.node import Node
 from neograph.tool import Tool
 
@@ -88,7 +88,7 @@ def _get_sidecar(n: Node) -> tuple[Callable, tuple[str, ...], str | None] | None
 def node(
     fn: Callable | None = None,
     *,
-    mode: Literal["produce", "gather", "execute", "scripted"] | None = None,
+    mode: Literal["produce", "gather", "execute", "scripted", "raw"] | None = None,
     input: Any = None,
     output: Any = None,
     model: str | None = None,
@@ -98,6 +98,10 @@ def node(
     name: str | None = None,
     map_over: str | None = None,
     map_key: str | None = None,
+    ensemble_n: int | None = None,
+    merge_fn: str | None = None,
+    merge_prompt: str | None = None,
+    interrupt_when: str | Callable | None = None,
 ) -> Any:
     """Decorator that turns a function into a Node spec with signature-inferred
     dependencies. Supports both `@node` and `@node(...)` call forms.
@@ -117,6 +121,27 @@ def node(
     ``Each(over=map_over, key=map_key)``. The first parameter whose name does
     NOT match any upstream ``@node`` is treated as the fan-out item receiver;
     ``construct_from_module`` skips it in topology wiring.
+
+    Oracle ensemble::
+
+        @node(mode='produce', output=Claims, prompt='rw/decompose', model='reason',
+              ensemble_n=3, merge_prompt='rw/decompose-merge')
+        def decompose(topic: RawText) -> Claims: ...
+
+    When any of ``ensemble_n``, ``merge_fn``, or ``merge_prompt`` is set the
+    node is composed with ``Oracle(n=..., merge_fn=..., merge_prompt=...)``.
+    Exactly one of ``merge_fn`` or ``merge_prompt`` is required; ``ensemble_n``
+    defaults to 3 if omitted.
+
+    Human-in-the-loop via Operator::
+
+        @node(mode='scripted', output=ValidationResult,
+              interrupt_when='validation_failed')
+        def validate(claims: Claims) -> ValidationResult: ...
+
+    When ``interrupt_when`` is set the node is composed with
+    ``Operator(when=...)``. The value can be a string (registered condition
+    name) or a callable (auto-registered under a synthesized name).
 
     For `mode='scripted'`, the function is executed via `Node.raw_fn` set at
     `construct_from_module` time — this keeps `factory.py` untouched and
@@ -198,21 +223,37 @@ def node(
 
         sig = inspect.signature(f)
 
-        # Reject *args / **kwargs early — they have no sensible mapping to
-        # upstream nodes.
-        for p in sig.parameters.values():
-            if p.kind in (
-                inspect.Parameter.VAR_POSITIONAL,
-                inspect.Parameter.VAR_KEYWORD,
-            ):
-                msg = (
-                    f"@node decorator on '{f.__name__}': parameter '{p.name}' "
-                    f"is *args/**kwargs, which has no upstream-node mapping. "
-                    f"Use explicit named parameters."
+        # -- Raw mode: enforce (state, config) signature ----------------------
+        if effective_mode == "raw":
+            params = list(sig.parameters.values())
+            if len(params) != 2:
+                raise ConstructError(
+                    f"@node(mode='raw') '{f.__name__}' must have exactly two "
+                    f"parameters (state, config); got {len(params)}."
                 )
-                raise ConstructError(msg)
+            if [p.name for p in params] != ["state", "config"]:
+                raise ConstructError(
+                    f"@node(mode='raw') '{f.__name__}' parameters must be "
+                    f"named 'state' and 'config'; got {[p.name for p in params]}."
+                )
+            # Raw mode: empty param_names — not used for topology.
+            param_names: tuple[str, ...] = ()
+        else:
+            # Reject *args / **kwargs early — they have no sensible mapping to
+            # upstream nodes.
+            for p in sig.parameters.values():
+                if p.kind in (
+                    inspect.Parameter.VAR_POSITIONAL,
+                    inspect.Parameter.VAR_KEYWORD,
+                ):
+                    msg = (
+                        f"@node decorator on '{f.__name__}': parameter '{p.name}' "
+                        f"is *args/**kwargs, which has no upstream-node mapping. "
+                        f"Use explicit named parameters."
+                    )
+                    raise ConstructError(msg)
 
-        param_names = tuple(p.name for p in sig.parameters.values())
+            param_names = tuple(p.name for p in sig.parameters.values())
 
         # Output inference: explicit kwarg wins; fall back to return annotation.
         inferred_output = output
@@ -235,13 +276,14 @@ def node(
 
         n = Node(
             name=node_label,
-            mode=effective_mode,
+            mode="scripted" if effective_mode == "raw" else effective_mode,
             input=inferred_input,
             output=inferred_output,
             model=model,
             prompt=prompt,
             llm_config=llm_config or {},
             tools=tools or [],
+            raw_fn=f if effective_mode == "raw" else None,
         )
 
         # -- Fan-out via Each when map_over is set ---------------------------
@@ -254,6 +296,46 @@ def node(
             return n_mapped
 
         _register_sidecar(n, f, param_names)
+
+        # -- Oracle ensemble when any ensemble kwarg is set --------------------
+        if ensemble_n is not None or merge_fn is not None or merge_prompt is not None:
+            if merge_fn is None and merge_prompt is None:
+                raise ConstructError(
+                    f"@node '{node_label}' sets ensemble_n={ensemble_n} but "
+                    f"neither merge_fn nor merge_prompt. One is required."
+                )
+            if merge_fn is not None and merge_prompt is not None:
+                raise ConstructError(
+                    f"@node '{node_label}' sets both merge_fn and merge_prompt. "
+                    f"Choose exactly one."
+                )
+            n_copies = ensemble_n if ensemble_n is not None else 3
+            if n_copies < 2:
+                raise ConstructError(
+                    f"@node '{node_label}' ensemble_n must be >= 2, got {n_copies}."
+                )
+            n = n | Oracle(n=n_copies, merge_fn=merge_fn, merge_prompt=merge_prompt)
+            _register_sidecar(n, f, param_names)
+
+        # -- Operator interrupt when interrupt_when is set --------------------
+        if interrupt_when is not None:
+            from neograph.factory import register_condition
+
+            if isinstance(interrupt_when, str):
+                condition_name = interrupt_when
+            elif callable(interrupt_when):
+                condition_name = f"_node_interrupt_{node_label}_{id(f):x}"
+                register_condition(condition_name, interrupt_when)
+            else:
+                raise ConstructError(
+                    f"@node '{node_label}' interrupt_when must be a string "
+                    f"(registered condition name) or a callable; got "
+                    f"{type(interrupt_when).__name__}"
+                )
+
+            n = n | Operator(when=condition_name)
+            _register_sidecar(n, f, param_names)
+
         return n
 
     # Support both @node and @node(...) forms (see tool.py:130-132).
@@ -364,7 +446,7 @@ def construct_from_module(mod: Any, name: str | None = None) -> Construct:
     # and can read N upstream values by name — the only v1 way to support
     # fan-in without editing factory.py.
     for n in ordered:
-        if n.mode == "scripted":
+        if n.mode == "scripted" and n.raw_fn is None:
             field = n.name.replace("-", "_")
             _attach_scripted_raw_fn(n, fan_out_params.get(field, set()))
 
