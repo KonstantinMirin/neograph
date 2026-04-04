@@ -37,6 +37,11 @@ class _PathRecorder:
     def __getattr__(self, name: str) -> "_PathRecorder":
         # __getattr__ only fires for attrs not found by normal lookup; _neo_path
         # lives in __slots__ so it returns via __getattribute__ and never hits here.
+        # Reject leading-underscore names (dunders, privates) so that
+        # `lambda s: s.__dict__.foo` or `lambda s: s._private` can't silently
+        # produce Each(over="__dict__.foo", ...) paths that would fail at runtime.
+        if name.startswith("_"):
+            raise AttributeError(name)
         return _PathRecorder(self._neo_path + (name,))
 
 
@@ -93,7 +98,13 @@ class Modifiable:
             recorder = _PathRecorder()
             try:
                 result = source(recorder)
-            except Exception as exc:  # TypeError, AttributeError, etc.
+            except (TypeError, AttributeError) as exc:
+                # Only these two error shapes indicate "not a pure attribute-
+                # access chain" — indexing/subscript → TypeError, underscore-
+                # prefixed attrs → AttributeError (see _PathRecorder). Any
+                # other exception (ValueError, ZeroDivisionError, etc.) is a
+                # genuine bug in the user lambda and should propagate unchanged
+                # so they see their own error, not our wrapper.
                 msg = (
                     "Node.map() lambda must be a pure attribute-access chain "
                     "like `lambda s: s.upstream_node.field`; "

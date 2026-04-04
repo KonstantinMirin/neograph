@@ -408,6 +408,24 @@ class TestNodeMap:
         with pytest.raises(TypeError, match="pure attribute-access chain"):
             node.map(lambda s: s.items[0], key="label")  # __getitem__ on recorder
 
+    def test_map_rejects_dunder_attribute_access(self):
+        """`lambda s: s.__dict__.foo` must not silently produce Each(over='__dict__.foo')."""
+        node = Node.scripted("verify", fn="noop", input=ClusterGroup, output=MatchResult)
+        with pytest.raises(TypeError, match="pure attribute-access chain"):
+            node.map(lambda s: s.__dict__.foo, key="label")
+
+    def test_map_rejects_leading_underscore_attribute(self):
+        """Reject `lambda s: s._private.field` — underscores are a footgun trapdoor."""
+        node = Node.scripted("verify", fn="noop", input=ClusterGroup, output=MatchResult)
+        with pytest.raises(TypeError, match="pure attribute-access chain"):
+            node.map(lambda s: s._private.x, key="label")
+
+    def test_map_user_exception_propagates_unchanged(self):
+        """Non-attribute errors (e.g. ZeroDivisionError) propagate with their own type."""
+        node = Node.scripted("verify", fn="noop", input=ClusterGroup, output=MatchResult)
+        with pytest.raises(ZeroDivisionError):
+            node.map(lambda s: 1 / 0 and s.x, key="label")
+
     def test_map_rejects_non_string_non_callable(self):
         """Passing an int or other non-source type raises immediately."""
         node = Node.scripted("verify", fn="noop", output=MatchResult)
