@@ -1940,6 +1940,31 @@ class TestConstructValidation:
         assert len(pipeline.nodes) == 3
         assert isinstance(pipeline.nodes[2].input, dict)
 
+    def test_dict_class_input_deferred(self):
+        """input=dict (raw class) defers to runtime isinstance scan.
+
+        factory._extract_input handles this shape via isinstance(val, dict)
+        over state fields; the validator must not reject it even when no
+        upstream producer's output is a dict subclass.
+        """
+        a = _producer("a", RawText)
+        b = Node.scripted("b", fn="f", input=dict, output=Claims)
+        pipeline = Construct("dict-class", nodes=[a, b])
+        assert len(pipeline.nodes) == 2
+        assert pipeline.nodes[1].input is dict
+
+    def test_dict_generic_input_deferred(self):
+        """input=dict[str, X] (parameterized generic) defers to runtime.
+
+        factory._is_instance_safe uses get_origin(dict[str, X]) → dict and
+        then isinstance(val, dict); the validator must accept this shape too.
+        """
+        a = _producer("a", RawText)
+        b = Node.scripted("b", fn="f", input=dict[str, Claims], output=Claims)
+        pipeline = Construct("dict-generic", nodes=[a, b])
+        assert len(pipeline.nodes) == 2
+        assert pipeline.nodes[1].input == dict[str, Claims]
+
 
 class TestConstructOracleErrors:
     """Error paths for Construct | Oracle."""
@@ -2624,3 +2649,233 @@ class TestPromptCompilerReceivesOutputModel:
         # Verify schema was injected into the prompt
         assert "json_schema" in injected_prompts[0] or "items" in injected_prompts[0]
         assert "Return a JSON object" in injected_prompts[0]
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# TestNodeDecorator — @node + construct_from_module (Dagster-style signatures)
+#
+# Parameter names in the decorated function name the upstream nodes. The
+# decorator produces a plain Node; construct_from_module walks a module's
+# @node-built nodes and topologically sorts them into a Construct. No new
+# IR path — compile()/run() handle the result unchanged.
+# ═══════════════════════════════════════════════════════════════════════════
+
+class TestNodeDecorator:
+    """@node decorator: parameter-name-based dependency inference."""
+
+    @staticmethod
+    def _fresh_module(name: str):
+        """Create a throwaway module object for construct_from_module to walk."""
+        import types as _types
+        return _types.ModuleType(name)
+
+    def test_node_decorator_basic_chain(self):
+        """Two @node-decorated scripted functions wired by parameter name,
+        assembled via construct_from_module, compile and run end-to-end."""
+        from neograph import compile, construct_from_module, node, run
+
+        mod = self._fresh_module("test_basic_chain_mod")
+
+        @node(mode="scripted", output=RawText)
+        def seed() -> RawText:
+            return RawText(text="hello world")
+
+        @node(mode="scripted", output=Claims)
+        def split(seed: RawText) -> Claims:
+            return Claims(items=[w for w in seed.text.split() if w])
+
+        mod.seed = seed
+        mod.split = split
+
+        pipeline = construct_from_module(mod)
+
+        # It is a Construct, with nodes in dependency order
+        assert isinstance(pipeline, Construct)
+        assert [n.name for n in pipeline.nodes] == ["seed", "split"]
+
+        graph = compile(pipeline)
+        result = run(graph, input={"node_id": "basic-chain"})
+
+        assert isinstance(result["split"], Claims)
+        assert result["split"].items == ["hello", "world"]
+
+    def test_node_decorator_fan_in_three_upstreams(self):
+        """A node with three parameters gets wired to three upstream nodes,
+        and topological sort puts all upstreams before the fan-in."""
+        from neograph import construct_from_module, node
+
+        class A(BaseModel, frozen=True):
+            value: str
+
+        class B(BaseModel, frozen=True):
+            value: str
+
+        class C(BaseModel, frozen=True):
+            value: str
+
+        class Report(BaseModel, frozen=True):
+            summary: str
+
+        mod = self._fresh_module("test_fan_in_mod")
+
+        @node(mode="scripted", output=A)
+        def alpha() -> A:
+            return A(value="a")
+
+        @node(mode="scripted", output=B)
+        def beta() -> B:
+            return B(value="b")
+
+        @node(mode="scripted", output=C)
+        def gamma() -> C:
+            return C(value="c")
+
+        @node(mode="scripted", output=Report)
+        def report(alpha: A, beta: B, gamma: C) -> Report:
+            return Report(summary=f"{alpha.value}-{beta.value}-{gamma.value}")
+
+        mod.alpha = alpha
+        mod.beta = beta
+        mod.gamma = gamma
+        mod.report = report
+
+        pipeline = construct_from_module(mod)
+        names = [n.name for n in pipeline.nodes]
+
+        # All three upstreams appear before the fan-in consumer.
+        assert set(names[:3]) == {"alpha", "beta", "gamma"}
+        assert names[-1] == "report"
+
+        # Register the scripted fns and run end-to-end.
+        from neograph import compile, run
+
+        graph = compile(pipeline)
+        result = run(graph, input={"node_id": "fan-in"})
+        assert result["report"].summary == "a-b-c"
+
+    def test_node_decorator_explicit_kwargs_override_annotations(self):
+        """Explicit @node(output=X) beats the function's return annotation."""
+        from neograph import construct_from_module, node
+
+        class Bogus(BaseModel, frozen=True):
+            nope: str
+
+        mod = self._fresh_module("test_kwargs_override_mod")
+
+        @node(mode="scripted", output=Claims)  # explicit output overrides `-> Bogus`
+        def producer() -> Bogus:  # intentional mismatch
+            return Claims(items=["overridden"])
+
+        mod.producer = producer
+
+        pipeline = construct_from_module(mod)
+        (only_node,) = pipeline.nodes
+        assert only_node.output is Claims
+        assert only_node.output is not Bogus
+
+    def test_node_decorator_unknown_param_raises(self):
+        """A parameter that doesn't name any @node in the module raises
+        ConstructError with a helpful message."""
+        from neograph import ConstructError, construct_from_module, node
+
+        mod = self._fresh_module("test_unknown_param_mod")
+
+        @node(mode="scripted", output=Claims)
+        def orphan(ghost: RawText) -> Claims:
+            return Claims(items=["x"])
+
+        mod.orphan = orphan
+
+        with pytest.raises(ConstructError) as exc_info:
+            construct_from_module(mod)
+        msg = str(exc_info.value)
+        assert "ghost" in msg
+        assert "orphan" in msg
+
+    def test_node_decorator_topological_ordering(self):
+        """Out-of-declaration-order dependencies get sorted correctly."""
+        from neograph import construct_from_module, node
+
+        mod = self._fresh_module("test_topo_mod")
+
+        # Attach to module in a SHUFFLED order (report, seed, split).
+        # Declaration order inside the function body is also shuffled: the
+        # downstream-most node is declared first.
+
+        @node(mode="scripted", output=ClassifiedClaims)
+        def report(split: Claims) -> ClassifiedClaims:
+            return ClassifiedClaims(
+                classified=[{"claim": c, "category": "x"} for c in split.items],
+            )
+
+        @node(mode="scripted", output=RawText)
+        def seed() -> RawText:
+            return RawText(text="a b c")
+
+        @node(mode="scripted", output=Claims)
+        def split(seed: RawText) -> Claims:
+            return Claims(items=seed.text.split())
+
+        # Assign in a different order from their dependency DAG.
+        mod.report = report
+        mod.seed = seed
+        mod.split = split
+
+        pipeline = construct_from_module(mod)
+        names = [n.name for n in pipeline.nodes]
+        assert names == ["seed", "split", "report"]
+
+        from neograph import compile, run
+
+        graph = compile(pipeline)
+        result = run(graph, input={"node_id": "topo"})
+        assert [c["claim"] for c in result["report"].classified] == ["a", "b", "c"]
+
+    def test_node_decorator_name_underscore_to_hyphen(self):
+        """Function `make_clusters` becomes node 'make-clusters'; downstream
+        parameter `make_clusters` resolves to it."""
+        from neograph import compile, construct_from_module, node, run
+
+        mod = self._fresh_module("test_name_convention_mod")
+
+        @node(mode="scripted", output=Claims)
+        def seed_text() -> Claims:
+            return Claims(items=["one", "two"])
+
+        @node(mode="scripted", output=Clusters)
+        def make_clusters(seed_text: Claims) -> Clusters:
+            return Clusters(
+                groups=[ClusterGroup(label="g", claim_ids=list(seed_text.items))],
+            )
+
+        @node(mode="scripted", output=ClassifiedClaims)
+        def summarize(make_clusters: Clusters) -> ClassifiedClaims:
+            return ClassifiedClaims(
+                classified=[
+                    {"claim": cid, "category": g.label}
+                    for g in make_clusters.groups
+                    for cid in g.claim_ids
+                ],
+            )
+
+        mod.seed_text = seed_text
+        mod.make_clusters = make_clusters
+        mod.summarize = summarize
+
+        # Node names are hyphenated.
+        assert make_clusters.name == "make-clusters"
+        assert seed_text.name == "seed-text"
+
+        pipeline = construct_from_module(mod)
+        assert [n.name for n in pipeline.nodes] == [
+            "seed-text",
+            "make-clusters",
+            "summarize",
+        ]
+
+        graph = compile(pipeline)
+        result = run(graph, input={"node_id": "name-conv"})
+        # Output field uses underscore form of the node name.
+        classified = result["summarize"].classified
+        assert len(classified) == 2
+        assert classified[0]["category"] == "g"

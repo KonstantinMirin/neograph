@@ -82,7 +82,14 @@ def _check_item_input(
     """
     if not producers:
         return
+    # dict-shaped inputs of all three flavors defer to runtime isinstance
+    # scanning (factory._extract_input / _is_instance_safe):
+    #   - dict instance: multi-field extraction, e.g. input={"a": X, "b": Y}
+    #   - raw dict class: input=dict (isinstance match on any dict state field)
+    #   - parameterized generic: input=dict[str, X] (get_origin-based match)
     if isinstance(input_type, dict):
+        return
+    if input_type is dict or get_origin(input_type) is dict:
         return
     if not isinstance(input_type, type):
         return
