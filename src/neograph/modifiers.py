@@ -16,6 +16,32 @@ class Modifier(BaseModel, frozen=True):
     """Base class for node modifiers. Applied via Node.__or__."""
 
 
+class Modifiable:
+    """Mixin for objects that accept modifiers via the | operator.
+
+    Both Node and Construct inherit this. Provides has_modifier(),
+    get_modifier(), and __or__() — the pipe composition syntax.
+    Requires a `modifiers: list[Modifier]` field on the subclass.
+    """
+
+    modifiers: list[Modifier]
+
+    def __or__(self, modifier: Modifier):
+        """Compose modifiers via pipe: obj | Oracle(n=3) | Operator(when=...)"""
+        return self.model_copy(update={"modifiers": [*self.modifiers, modifier]})
+
+    def has_modifier(self, modifier_type: type[Modifier]) -> bool:
+        """Check if a specific modifier is applied."""
+        return any(isinstance(m, modifier_type) for m in self.modifiers)
+
+    def get_modifier(self, modifier_type: type[Modifier]) -> Modifier | None:
+        """Get the first modifier of a given type, or None."""
+        for m in self.modifiers:
+            if isinstance(m, modifier_type):
+                return m
+        return None
+
+
 class Oracle(Modifier):
     """Ensemble modifier: N parallel generators + judge-merge.
 

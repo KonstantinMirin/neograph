@@ -25,11 +25,11 @@ from typing import Any, Callable, Literal
 
 from pydantic import BaseModel
 
-from neograph.modifiers import Modifier
+from neograph.modifiers import Modifiable, Modifier
 from neograph.tool import Tool
 
 
-class Node(BaseModel):
+class Node(Modifiable, BaseModel):
     """A typed processing block. The unit of graph specification.
 
     mode= determines execution mechanics:
@@ -66,10 +66,6 @@ class Node(BaseModel):
 
     model_config = {"arbitrary_types_allowed": True}
 
-    def __or__(self, modifier: Modifier) -> Node:
-        """Compose modifiers via pipe: node | Oracle(n=3) | Operator(when=...)"""
-        return self.model_copy(update={"modifiers": [*self.modifiers, modifier]})
-
     @classmethod
     def scripted(
         cls,
@@ -91,15 +87,7 @@ class Node(BaseModel):
             scripted_fn=fn,
         )
 
-    def has_modifier(self, modifier_type: type[Modifier]) -> bool:
-        """Check if a specific modifier is applied."""
-        return any(isinstance(m, modifier_type) for m in self.modifiers)
-
-    def get_modifier(self, modifier_type: type[Modifier]) -> Modifier | None:
-        """Get the first modifier of a given type, or None."""
-        for m in self.modifiers:
-            if isinstance(m, modifier_type):
-                return m
+    # has_modifier, get_modifier, __or__ inherited from Modifiable
         return None
 
 

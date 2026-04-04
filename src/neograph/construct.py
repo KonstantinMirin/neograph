@@ -24,11 +24,11 @@ from typing import Any
 
 from pydantic import BaseModel
 
-from neograph.modifiers import Modifier
+from neograph.modifiers import Modifiable, Modifier
 from neograph.node import Node
 
 
-class Construct(BaseModel):
+class Construct(Modifiable, BaseModel):
     """An ordered composition of Nodes that compiles to a LangGraph StateGraph.
 
     Nodes execute in sequence. Modifiers (Oracle, Each, Operator) on
@@ -62,15 +62,4 @@ class Construct(BaseModel):
             kwargs["name"] = name_
         super().__init__(**kwargs)
 
-    def __or__(self, modifier: Modifier) -> Construct:
-        """Compose modifiers via pipe: construct | Oracle(n=3)"""
-        return self.model_copy(update={"modifiers": [*self.modifiers, modifier]})
-
-    def has_modifier(self, modifier_type: type[Modifier]) -> bool:
-        return any(isinstance(m, modifier_type) for m in self.modifiers)
-
-    def get_modifier(self, modifier_type: type[Modifier]) -> Modifier | None:
-        for m in self.modifiers:
-            if isinstance(m, modifier_type):
-                return m
-        return None
+    # has_modifier, get_modifier, __or__ inherited from Modifiable
