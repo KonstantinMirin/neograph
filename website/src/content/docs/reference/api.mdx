@@ -1,0 +1,220 @@
+---
+title: "API Reference"
+description: "Every public symbol in NeoGraph with signatures, parameters, and examples."
+---
+
+All public symbols are available from the package root:
+
+```python
+from neograph import (
+    Node, Tool, Construct, Oracle, Each, Operator,
+    compile, run, configure_llm, raw_node,
+    register_scripted, register_condition, register_tool_factory,
+)
+```
+
+## Node
+
+Typed processing block. The unit of graph specification.
+
+```python
+Node(
+    name: str,                    # unique name within the Construct
+    mode: str = "produce",        # "produce" | "gather" | "execute" | "scripted"
+    input: type | dict | None,    # Pydantic model or dict[str, type]
+    output: type,                 # Pydantic model (required)
+    model: str | None,            # LLM tier: "fast", "reason", "large"
+    prompt: str | None,           # template name passed to prompt_compiler
+    tools: list[Tool] = [],       # tools for gather/execute modes
+    llm_config: dict = {},        # per-node LLM settings (temperature, max_tokens, etc.)
+)
+```
+
+### Node.scripted()
+
+Factory for deterministic nodes (no LLM).
+
+```python
+extract = Node.scripted(
+    "extract",
+    fn="extract_text",       # registered function name
+    input=RawText,           # optional
+    output=Claims,           # required
+)
+```
+
+## Tool
+
+LLM-callable tool with per-tool call budget.
+
+```python
+Tool(
+    name: str,               # must match a registered tool factory
+    budget: int = 0,         # max calls (0 = unlimited)
+    config: dict = {},       # passed to the tool factory
+)
+```
+
+## Construct
+
+Ordered composition of Nodes and sub-Constructs.
+
+```python
+# Top-level pipeline
+pipeline = Construct("my-pipeline", nodes=[node_a, node_b, node_c])
+
+# Sub-construct with I/O boundary (for nesting)
+sub = Construct(
+    "enrich",
+    input=Claims,            # required when nested
+    output=ScoredClaims,     # required when nested
+    nodes=[lookup, score],
+)
+```
+
+Accepts name as positional or keyword argument. Supports pipe operator for modifiers.
+
+## Oracle
+
+Modifier: N-way ensemble fan-out + merge. Must provide exactly one of `merge_prompt` or `merge_fn`.
+
+```python
+# LLM merge
+node | Oracle(n=3, merge_prompt="rw/merge")
+
+# Scripted merge
+node | Oracle(n=3, merge_fn="combine_variants")
+
+# Also works on Constructs
+sub | Oracle(n=3, merge_fn="merge_sub")
+```
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `n` | `int` | `3` | Number of parallel generators |
+| `merge_prompt` | `str \| None` | `None` | Template name for LLM judge merge |
+| `merge_fn` | `str \| None` | `None` | Registered scripted function name |
+| `merge_model` | `str` | `"reason"` | LLM tier for merge (when using merge_prompt) |
+
+## Each
+
+Modifier: fan-out over a collection, process each item in parallel.
+
+```python
+node | Each(over="clusters.groups", key="label")
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `over` | `str` | Dotted path to collection in state |
+| `key` | `str` | Field on each item used as the dispatch key |
+
+Results collected as `dict[str, output_type]`.
+
+## Operator
+
+Modifier: human-in-the-loop interrupt. Requires a checkpointer.
+
+```python
+node | Operator(when="validation_failed")
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `when` | `str` | Registered condition function name |
+
+The condition function receives the full state. Return a truthy value to interrupt (the value becomes the interrupt payload). Return `None` to continue.
+
+## compile()
+
+Compile a Construct into an executable graph.
+
+```python
+graph = compile(
+    construct: Construct,
+    checkpointer = None,    # required if any node uses Operator
+)
+```
+
+Raises `ValueError` if Operator is used without a checkpointer.
+
+## run()
+
+Execute a compiled graph.
+
+```python
+# First run
+result = run(
+    graph,
+    input={"node_id": "REQ-001", "project_root": "/path"},
+    config={"configurable": {"rate_limiter": my_limiter}},
+)
+
+# Resume after interrupt
+result = run(graph, resume={"approved": True}, config=config)
+```
+
+All `input` fields are injected into `config["configurable"]` so every node function can access pipeline metadata without reaching into state.
+
+Framework internals (`neo_*` fields) are stripped from the result.
+
+## configure_llm()
+
+Configure the LLM layer. Call once before compile/run.
+
+```python
+configure_llm(
+    llm_factory,        # (tier) -> LLM  or  (tier, node_name=, llm_config=) -> LLM
+    prompt_compiler,    # (template, data) -> messages  or  (template, data, node_name=, config=) -> messages
+)
+```
+
+Both signatures are backward compatible -- simple and advanced forms are auto-detected.
+
+## register_scripted()
+
+Register a deterministic function for `Node.scripted()`.
+
+```python
+register_scripted("extract_text", lambda input_data, config: RawText(text="hello"))
+```
+
+The function receives `(input_data, config)` where `input_data` is the typed output from the previous node (or `None`), and `config` is `RunnableConfig` with `config["configurable"]` containing pipeline metadata.
+
+## register_condition()
+
+Register a condition function for `Operator(when=...)`.
+
+```python
+register_condition("validation_failed", lambda state: (
+    {"issues": state.check.issues}
+    if state.check and not state.check.passed
+    else None
+))
+```
+
+Return truthy to interrupt (value becomes interrupt payload). Return `None` to continue.
+
+## register_tool_factory()
+
+Register a factory that creates tool instances for gather/execute nodes.
+
+```python
+register_tool_factory("search", lambda config, tool_config: MySearchTool())
+```
+
+## @raw_node
+
+Decorator for escape-hatch LangGraph functions. The function receives the full state and returns a dict update.
+
+```python
+@raw_node(input=Claims, output=FilteredClaims)
+def custom_logic(state, config):
+    claims = None
+    for field_name in state.__class__.model_fields:
+        val = getattr(state, field_name, None)
+        if isinstance(val, Claims):
+            claims = val
+            break
+    return {"custom_logic": FilteredClaims(kept=claims.items[:3], dropped=[])}
+```

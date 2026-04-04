@@ -1,0 +1,238 @@
+---
+title: "5. Human-in-the-Loop"
+description: "Pause a pipeline for human review using the Operator modifier, then resume with feedback."
+---
+
+The `Operator` modifier pauses a pipeline when a condition is met. The graph checkpoints its state and stops. A human reviews the situation, provides feedback, and the pipeline resumes from where it left off.
+
+This requires a **checkpointer** (for state persistence) and a **condition function** (to decide when to pause).
+
+## What you will learn
+
+- Registering a condition function with `register_condition()`
+- Applying `Operator(when=...)` to a node
+- Why a checkpointer is required
+- Two-phase `run()`: first run pauses, second run resumes
+- Reading interrupt payloads and providing human feedback
+
+## The complete pipeline
+
+```python
+"""Human-in-the-Loop: pause for review when validation fails.
+
+Run:
+    python human_in_the_loop.py
+"""
+
+from __future__ import annotations
+
+from langgraph.checkpoint.memory import MemorySaver
+from pydantic import BaseModel
+
+from neograph import Construct, Node, Operator, compile, run
+from neograph.factory import register_condition, register_scripted
+
+
+# -- Schemas ----------------------------------------------------------------
+
+class Analysis(BaseModel, frozen=True):
+    claims: list[str]
+    coverage_pct: int
+
+class ValidationResult(BaseModel, frozen=True):
+    passed: bool
+    issues: list[str]
+
+class FinalReport(BaseModel, frozen=True):
+    text: str
+
+
+# -- Functions --------------------------------------------------------------
+
+def analyze_requirement(input_data, config):
+    return Analysis(
+        claims=["auth", "logging", "encryption"],
+        coverage_pct=55,
+    )
+
+def validate_analysis(input_data, config):
+    """Check if analysis meets quality bar."""
+    if input_data.coverage_pct < 80:
+        return ValidationResult(
+            passed=False,
+            issues=[f"Coverage {input_data.coverage_pct}% is below 80% threshold"],
+        )
+    return ValidationResult(passed=True, issues=[])
+
+def build_report(input_data, config):
+    return FinalReport(
+        text=f"Report: {input_data.claims}, coverage: {input_data.coverage_pct}%"
+    )
+
+register_scripted("analyze", analyze_requirement)
+register_scripted("validate", validate_analysis)
+register_scripted("report", build_report)
+
+
+# -- Condition: when should the graph pause? --------------------------------
+# The condition function receives the full state object. If it returns a
+# truthy value, interrupt() is called with that value as the payload.
+# If it returns None/falsy, the graph continues without pausing.
+
+def check_validation(state):
+    val = state.check  # field name matches the node name "check"
+    if val and not val.passed:
+        return {"issues": val.issues, "message": "Please review and approve"}
+    return None
+
+register_condition("needs_human_review", check_validation)
+
+
+# -- Pipeline ---------------------------------------------------------------
+
+analyze = Node.scripted("analyze", fn="analyze", output=Analysis)
+
+check = Node.scripted(
+    "check", fn="validate", input=Analysis, output=ValidationResult
+) | Operator(when="needs_human_review")  # pauses here if validation fails
+
+report = Node.scripted(
+    "report", fn="report", input=Analysis, output=FinalReport
+)
+
+pipeline = Construct("review-pipeline", nodes=[analyze, check, report])
+
+
+# -- Run with checkpointer (required for interrupt/resume) ------------------
+
+if __name__ == "__main__":
+    # Checkpointer is REQUIRED when using Operator -- compile() enforces this
+    graph = compile(pipeline, checkpointer=MemorySaver())
+
+    # Thread ID identifies this execution for resume
+    config = {"configurable": {"thread_id": "review-001"}}
+
+    # First run -- will pause at Operator
+    print("=== First run: will pause for human review ===\n")
+    result = run(graph, input={"node_id": "REQ-001"}, config=config)
+
+    print(f"Analysis: {result['analyze'].coverage_pct}% coverage")
+    print(f"Validation: passed={result['check'].passed}")
+
+    if "__interrupt__" in result:
+        interrupt_data = result["__interrupt__"]
+        print(f"\nGraph PAUSED. Interrupt payload:")
+        for interrupt in interrupt_data:
+            print(f"  {interrupt.value}")
+
+        # Human reviews and approves
+        print("\n=== Human approves, resuming... ===\n")
+        result = run(
+            graph,
+            resume={"approved": True, "reviewer": "alice"},
+            config=config,
+        )
+
+        print(f"Human feedback recorded: {result.get('human_feedback')}")
+        print(f"Report generated: {result['report'].text}")
+    else:
+        print("Validation passed -- no interrupt needed")
+        print(f"Report: {result['report'].text}")
+```
+
+## Expected output
+
+```
+=== First run: will pause for human review ===
+
+Analysis: 55% coverage
+Validation: passed=False
+
+Graph PAUSED. Interrupt payload:
+  {'issues': ['Coverage 55% is below 80% threshold'], 'message': 'Please review and approve'}
+
+=== Human approves, resuming... ===
+
+Human feedback recorded: {'approved': True, 'reviewer': 'alice'}
+Report generated: Report: ['auth', 'logging', 'encryption'], coverage: 55%
+```
+
+## The condition function
+
+A condition function receives the full pipeline state and decides whether to pause:
+
+```python
+def check_validation(state):
+    val = state.check  # access the node's output by field name
+    if val and not val.passed:
+        # Return truthy value -> graph pauses
+        # This value becomes the interrupt payload
+        return {"issues": val.issues, "message": "Please review and approve"}
+    # Return None -> graph continues
+    return None
+```
+
+The return value becomes the interrupt payload. Your application reads this payload to show the human what needs review.
+
+Register the function before compiling:
+
+```python
+register_condition("needs_human_review", check_validation)
+```
+
+## The Operator modifier
+
+Apply it to the node whose output you want to check:
+
+```python
+check = Node.scripted("check", fn="validate", ...) | Operator(when="needs_human_review")
+```
+
+The compiler inserts a check node immediately after `check`. If the condition returns truthy, LangGraph's `interrupt()` is called.
+
+## Checkpointer requirement
+
+Operator requires a checkpointer because interrupt/resume depends on persisted state. The graph must be able to save its state at the pause point and restore it when resuming.
+
+```python
+graph = compile(pipeline, checkpointer=MemorySaver())
+```
+
+If you use `Operator` without a checkpointer, `compile()` raises a `ValueError`:
+
+```
+Construct 'review-pipeline' uses Operator (interrupt/resume) but no
+checkpointer provided. Pass checkpointer= to compile().
+```
+
+`MemorySaver()` works for development. In production, use a persistent checkpointer like `PostgresSaver` or `SqliteSaver`.
+
+## Two-phase run()
+
+### Phase 1: initial run (pauses)
+
+```python
+config = {"configurable": {"thread_id": "review-001"}}
+result = run(graph, input={"node_id": "REQ-001"}, config=config)
+```
+
+The `thread_id` identifies this execution. The graph runs until it hits the interrupt, then returns the current state including an `"__interrupt__"` key.
+
+### Phase 2: resume with feedback
+
+```python
+result = run(graph, resume={"approved": True, "reviewer": "alice"}, config=config)
+```
+
+Pass `resume=` instead of `input=`. The resume data becomes `state.human_feedback`. The graph picks up from the interrupt point and continues executing remaining nodes.
+
+The same `config` with the same `thread_id` is required -- this is how the checkpointer knows which execution to resume.
+
+## What the compiler generates
+
+When it encounters `Operator(when="needs_human_review")`, the compiler adds a check node named `{node_name}__operator` immediately after the modified node:
+
+1. `check` node runs, writes `ValidationResult` to state
+2. `check__operator` node runs the condition function against full state
+3. If truthy: calls `interrupt(payload)`, graph pauses, the resume value is written to `state.human_feedback`
+4. If falsy: passes through, next node runs normally

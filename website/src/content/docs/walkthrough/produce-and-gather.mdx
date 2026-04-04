@@ -1,0 +1,239 @@
+---
+title: "2. LLM Produce + Gather"
+description: "Use an LLM to decompose a requirement, then research it with tools under a call budget."
+---
+
+This walkthrough introduces NeoGraph's two primary LLM modes: **produce** (single structured call) and **gather** (ReAct tool loop with budget enforcement). Together they form the most common two-step pattern: decompose a problem, then research it.
+
+The example uses fake LLM and tool implementations so you can run it without API keys. Replace them with real ones for production.
+
+## What you will learn
+
+- Configuring the LLM layer with `configure_llm()`
+- Using `mode="produce"` for structured LLM output
+- Using `mode="gather"` for ReAct tool loops
+- Declaring tools with `Tool(name, budget)`
+- Registering tool factories with `register_tool_factory()`
+
+## The complete pipeline
+
+```python
+"""Produce + Gather: decompose a requirement, then research with tools.
+
+Run:
+    python produce_and_gather.py
+"""
+
+from __future__ import annotations
+
+from langchain_core.messages import AIMessage
+from pydantic import BaseModel
+
+from neograph import Construct, Node, Tool, compile, run
+from neograph._llm import configure_llm
+from neograph.factory import register_tool_factory
+
+
+# -- Schemas ----------------------------------------------------------------
+
+class Requirement(BaseModel, frozen=True):
+    text: str
+
+class Claims(BaseModel, frozen=True):
+    items: list[str]
+
+class ResearchResult(BaseModel, frozen=True):
+    findings: list[dict[str, str]]
+
+
+# -- Fake LLM (replace with real OpenRouter/OpenAI in production) -----------
+
+class FakeDecomposeLLM:
+    """Simulates an LLM that decomposes a requirement into claims."""
+    def with_structured_output(self, model):
+        self._model = model
+        return self
+
+    def invoke(self, messages, **kwargs):
+        return self._model(items=[
+            "system shall authenticate users",
+            "system shall log failed attempts",
+            "system shall rate-limit login",
+        ])
+
+
+class FakeResearchLLM:
+    """Simulates an LLM that calls a search tool, then responds."""
+    def __init__(self):
+        self._call_count = 0
+
+    def bind_tools(self, tools):
+        clone = FakeResearchLLM()
+        clone._call_count = self._call_count
+        clone._has_tools = len(tools) > 0
+        return clone
+
+    def invoke(self, messages, **kwargs):
+        self._call_count += 1
+        if getattr(self, "_has_tools", True) and self._call_count <= 3:
+            msg = AIMessage(content="")
+            msg.tool_calls = [{
+                "name": "search_codebase",
+                "args": {"query": f"claim-{self._call_count}"},
+                "id": f"call-{self._call_count}",
+            }]
+            return msg
+        return AIMessage(content="research complete")
+
+    def with_structured_output(self, model):
+        self._model = model
+        return self
+
+
+# -- Fake tool --------------------------------------------------------------
+
+search_count = {"n": 0}
+
+class FakeSearchTool:
+    name = "search_codebase"
+
+    def invoke(self, args):
+        search_count["n"] += 1
+        return f"Found 3 references for: {args.get('query', '?')}"
+
+register_tool_factory(
+    "search_codebase",
+    lambda config, tool_config: FakeSearchTool(),
+)
+
+
+# -- Configure LLM layer ---------------------------------------------------
+
+def llm_factory(tier):
+    if tier == "fast":
+        return FakeDecomposeLLM()
+    return FakeResearchLLM()
+
+configure_llm(
+    llm_factory=llm_factory,
+    prompt_compiler=lambda template, data: [
+        {"role": "user", "content": "analyze"}
+    ],
+)
+
+
+# -- Build pipeline ---------------------------------------------------------
+
+decompose = Node(
+    name="decompose",
+    mode="produce",        # single LLM call, structured JSON output
+    output=Claims,
+    model="fast",          # tier passed to llm_factory
+    prompt="req/decompose",
+)
+
+research = Node(
+    name="research",
+    mode="gather",         # ReAct tool loop
+    input=Claims,
+    output=ResearchResult,
+    model="reason",
+    prompt="req/research",
+    tools=[Tool(name="search_codebase", budget=2)],  # max 2 searches
+)
+
+pipeline = Construct("requirement-analysis", nodes=[decompose, research])
+
+
+# -- Run --------------------------------------------------------------------
+
+if __name__ == "__main__":
+    graph = compile(pipeline)
+    result = run(graph, input={"node_id": "REQ-042"})
+
+    print(f"Decomposed into {len(result['decompose'].items)} claims:")
+    for claim in result["decompose"].items:
+        print(f"  - {claim}")
+
+    print(f"\nSearch tool called {search_count['n']} times (budget was 2)")
+    print(f"Research complete: {result['research'] is not None}")
+```
+
+## Expected output
+
+```
+Decomposed into 3 claims:
+  - system shall authenticate users
+  - system shall log failed attempts
+  - system shall rate-limit login
+
+Search tool called 2 times (budget was 2)
+Research complete: True
+```
+
+## Produce mode
+
+A **produce** node makes a single LLM call and expects structured JSON back. The framework calls `llm.with_structured_output(output_model)` and parses the response into your Pydantic schema automatically.
+
+```python
+Node(
+    name="decompose",
+    mode="produce",
+    output=Claims,        # LLM must return valid Claims JSON
+    model="fast",         # tier name -> llm_factory("fast")
+    prompt="req/decompose", # template name -> prompt_compiler("req/decompose", input_data)
+)
+```
+
+No tool loop. No message history management. One call, one typed result.
+
+## Gather mode
+
+A **gather** node runs a ReAct loop: call the LLM, if it requests tool calls execute them, feed results back, repeat. The loop continues until the LLM responds without tool calls, or all tool budgets are exhausted.
+
+```python
+Node(
+    name="research",
+    mode="gather",
+    input=Claims,
+    output=ResearchResult,
+    model="reason",
+    prompt="req/research",
+    tools=[Tool(name="search_codebase", budget=2)],
+)
+```
+
+### Tool budget enforcement
+
+Each `Tool` has a `budget` -- the maximum number of calls allowed. When a tool's budget is exhausted, the framework removes it from the LLM's available tools. When all budgeted tools are spent, the LLM is forced to produce a final response.
+
+This prevents runaway loops and controls API costs. Set `budget=0` for unlimited calls.
+
+## configure_llm()
+
+Before using any LLM node, you must call `configure_llm()` with two functions:
+
+```python
+configure_llm(
+    llm_factory=llm_factory,       # (tier) -> BaseChatModel
+    prompt_compiler=prompt_compiler, # (template, input_data) -> list[BaseMessage]
+)
+```
+
+- **llm_factory** receives a tier string (`"fast"`, `"reason"`, etc.) and returns a LangChain chat model. In production, map tiers to real models (e.g., `"fast"` -> GPT-4o-mini, `"reason"` -> Claude Sonnet).
+- **prompt_compiler** receives a template name and the typed input data, and returns a message list. This is where you build your prompts.
+
+Both functions accept optional keyword arguments for advanced use (`node_name`, `llm_config`, `config`).
+
+## register_tool_factory()
+
+Tool factories create tool instances at runtime. The factory receives the pipeline config and any per-tool config:
+
+```python
+register_tool_factory(
+    "search_codebase",
+    lambda config, tool_config: MySearchTool(api_key=config["configurable"]["api_key"]),
+)
+```
+
+This lets you create tools that depend on runtime context (API keys, rate limiters, database connections) without hardcoding them.

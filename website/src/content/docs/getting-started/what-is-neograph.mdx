@@ -1,0 +1,155 @@
+---
+title: What is NeoGraph?
+description: NeoGraph is a declarative LLM graph compiler that lets you define typed Nodes, compose them into Constructs, and compile to LangGraph.
+---
+
+NeoGraph is a declarative compiler for LLM pipelines. You describe your pipeline as typed Nodes and Constructs. NeoGraph compiles that description into an executable LangGraph `StateGraph`.
+
+NeoGraph is not a replacement for LangGraph. It is a layer on top of it. The compiled output is a standard LangGraph graph with full access to checkpointing, streaming, and the LangGraph ecosystem.
+
+## The Problem
+
+LangGraph is powerful but repetitive. Every pipeline requires:
+
+1. A `TypedDict` state schema listing every field
+2. Node functions that manually read from and write to state dicts
+3. Explicit `add_node` calls for each processing step
+4. Explicit `add_edge` calls for each connection
+5. A `compile()` call
+
+For common patterns like sequential pipelines, tool agents, fan-out/fan-in, and human-in-the-loop, the wiring is nearly identical every time. The interesting part -- what the nodes do, what types flow between them, how they compose -- gets buried in boilerplate.
+
+## The Architecture
+
+```
+Your code          NeoGraph            LangGraph
+-----------        --------            ---------
+Node declarations  compile()  ----->   StateGraph
+Construct             |                  add_node()
+  + modifiers         |                  add_edge()
+                      |                  compile()
+                      v
+                 Executable graph
+```
+
+NeoGraph reads your Node and Construct declarations, infers the state schema from Node type annotations (`input`/`output`), wires edges from the Construct's node ordering, and expands modifiers (Oracle, Each, Operator) into the appropriate LangGraph topology. The result is a compiled LangGraph graph that you execute with `run()`.
+
+## The 6 Vocabulary Terms
+
+NeoGraph's entire API surface uses six terms:
+
+### Node
+
+A typed processing block. The fundamental unit. Each Node declares its `input` type, `output` type, execution `mode`, and LLM configuration.
+
+```python
+classify = Node(
+    name="classify",
+    mode="produce",
+    input=Claims,
+    output=ClassifiedClaims,
+    model="fast",
+    prompt="classify",
+)
+```
+
+Modes:
+- **produce** -- single LLM call with structured JSON output, no tools
+- **gather** -- ReAct tool loop (read-only exploration)
+- **execute** -- ReAct tool loop (mutations, side effects)
+- **scripted** -- deterministic Python, no LLM (via `Node.scripted()`)
+
+### Tool
+
+An LLM-callable tool with a per-tool call budget. Used in `gather` and `execute` mode Nodes.
+
+```python
+search = Tool("search_web", budget=5)
+read   = Tool("read_artifact", budget=10, config={"max_chars": 6000})
+```
+
+The budget enforces a hard limit on how many times the LLM can call each tool within a single node execution. When the budget is exhausted, the tool is removed from the LLM's available tools and it is forced to produce a final response.
+
+### Construct
+
+An ordered composition of Nodes. The pipeline blueprint. Nodes execute in declared order. The compiler handles all edge wiring.
+
+```python
+pipeline = Construct("analysis", nodes=[decompose, classify, summarize])
+```
+
+Constructs can be nested. A sub-Construct with declared `input`/`output` types runs as an isolated subgraph with its own state:
+
+```python
+enrich = Construct("enrich", input=Claims, output=ScoredClaims, nodes=[lookup, score])
+main   = Construct("main", nodes=[decompose, enrich, report])
+```
+
+### Oracle
+
+A modifier that runs a Node (or Construct) N times in parallel and merges the results. Implements the ensemble pattern. Applied via the `|` operator.
+
+```python
+classify = Node(...) | Oracle(n=3, merge_prompt="pick-best")
+```
+
+The compiler expands this into fan-out with `Send()`, a deferred barrier node, and a merge step (either LLM-judged via `merge_prompt` or scripted via `merge_fn`).
+
+### Each
+
+A modifier that fans out a Node (or Construct) over a collection in state. Implements the map-reduce pattern. Applied via `|`.
+
+```python
+verify = Node(...) | Each(over="clusters.clusters", key="label")
+```
+
+The compiler expands this into a router that iterates the collection, `Send()` per item, and a barrier that collects results.
+
+### Operator
+
+A modifier that pauses the graph for human review. Implements human-in-the-loop. Applied via `|`.
+
+```python
+validate = Node(...) | Operator(when="any_test_failed")
+```
+
+The compiler inserts a check node after the modified node. If the registered condition function returns a truthy value, LangGraph's `interrupt()` is called. The graph checkpoints and stops. Resume with `run(graph, resume={...}, config=config)`.
+
+## Simplest Possible Example
+
+A 3-node pipeline with no LLM -- pure Python functions:
+
+```python
+from neograph import Node, Construct, compile, run
+from neograph.factory import register_scripted
+from pydantic import BaseModel
+
+class Claims(BaseModel):
+    items: list[str]
+
+class Classified(BaseModel):
+    classified: list[dict[str, str]]
+
+def extract_fn(input_data, config):
+    return Claims(items=["The system shall log access", "The system shall validate input"])
+
+def classify_fn(input_data, config):
+    return Classified(classified=[
+        {"claim": c, "category": "security"} for c in input_data.items
+    ])
+
+register_scripted("extract", extract_fn)
+register_scripted("classify", classify_fn)
+
+extract  = Node.scripted("extract",  fn="extract",  output=Claims)
+classify = Node.scripted("classify", fn="classify", input=Claims, output=Classified)
+
+pipeline = Construct("demo", nodes=[extract, classify])
+graph = compile(pipeline)
+result = run(graph, input={"node_id": "doc-001"})
+
+print(result["classify"].classified)
+# [{'claim': 'The system shall log access', 'category': 'security'}, ...]
+```
+
+No LLM, no API keys, no wiring. The compiler builds the LangGraph graph from the Node declarations.

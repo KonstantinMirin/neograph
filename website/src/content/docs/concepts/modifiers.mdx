@@ -1,0 +1,218 @@
+---
+title: Modifiers
+description: Oracle, Each, and Operator — composable behaviors applied to Nodes and Constructs via the pipe operator.
+---
+
+Modifiers change how a Node or Construct executes without changing its definition. They are applied with the `|` (pipe) operator and compiled into the correct LangGraph topology automatically.
+
+```python
+from neograph import Oracle, Each, Operator
+```
+
+## The pipe operator
+
+Every modifier is applied the same way:
+
+```python
+node_with_modifier = some_node | SomeModifier(...)
+```
+
+Pipe returns a new Node (or Construct) with the modifier appended. The original is not mutated. You can chain modifiers:
+
+```python
+node = Node(...) | Oracle(n=3, merge_prompt="rw/merge") | Operator(when="needs_review")
+```
+
+Modifiers work on both Nodes and Constructs:
+
+```python
+sub = Construct("enrich", ...) | Oracle(n=3, merge_fn="combine")
+```
+
+## Oracle
+
+N-way fan-out with a merge step. The compiler expands an Oracle-modified node into three parts:
+
+1. **Fan-out:** N copies of the node execute in parallel (via LangGraph `Send`), each with a different generator ID.
+2. **Barrier:** A deferred merge node waits for all N results.
+3. **Merge:** The results are combined by either an LLM judge or a scripted function.
+
+### LLM merge (merge_prompt)
+
+The merge node calls an LLM with a prompt template. The LLM receives all N results and produces the final merged output.
+
+```python
+from neograph import Node, Oracle
+
+decompose = Node(
+    "decompose",
+    mode="produce",
+    input=RawText,
+    output=Claims,
+    model="reason",
+    prompt="rw/decompose",
+) | Oracle(n=3, merge_prompt="rw/decompose-merge")
+```
+
+The `merge_model` parameter controls which LLM tier runs the merge (defaults to `"reason"`):
+
+```python
+Oracle(n=3, merge_prompt="rw/merge", merge_model="large")
+```
+
+### Scripted merge (merge_fn)
+
+The merge node calls a registered Python function. Use this when the merge logic is deterministic.
+
+```python
+from neograph import Node, Oracle, register_scripted
+
+def combine_variants(results, config):
+    """Union all claims from N generators, deduplicate."""
+    seen = set()
+    merged = []
+    for r in results:
+        for item in r.items:
+            if item not in seen:
+                seen.add(item)
+                merged.append(item)
+    return Claims(items=merged)
+
+register_scripted("combine_variants", combine_variants)
+
+decompose = Node(...) | Oracle(n=3, merge_fn="combine_variants")
+```
+
+### Validation
+
+Exactly one of `merge_prompt` or `merge_fn` must be provided. Providing both (or neither) raises a `ValueError` at definition time, not at compile time.
+
+## Each
+
+Fan-out over a collection. The compiler expands an Each-modified node into:
+
+1. **Router:** Iterates over a collection field in state, dispatches one `Send` per item.
+2. **Per-item execution:** The node runs once for each item, receiving the item as input.
+3. **Barrier:** A deferred assembly node collects results into `dict[key, result]`.
+
+```python
+from neograph import Node, Each
+
+match_verify = Node(
+    "match-verify",
+    mode="gather",
+    input=ClusterGroup,
+    output=MatchResult,
+    model="reason",
+    prompt="rw/match-verify",
+    tools=[Tool("search_nodes", budget=5)],
+) | Each(over="clusters.groups", key="label")
+```
+
+### Parameters
+
+- `over`: Dotted path to the collection in state. `"clusters.groups"` means `state.clusters.groups`. The path is navigated at runtime using attribute access.
+- `key`: Field on each item used as the dispatch key. The results dict is keyed by this value.
+
+### Result shape
+
+After fan-out completes, the node's state field contains a dict mapping each item's key to its result:
+
+```python
+# If clusters.groups has items with labels "auth", "payments", "search":
+result["match_verify"] == {
+    "auth": MatchResult(...),
+    "payments": MatchResult(...),
+    "search": MatchResult(...),
+}
+```
+
+Duplicate keys raise a `ValueError` -- two items must not produce the same dispatch key.
+
+## Operator
+
+Human-in-the-loop interrupt. The compiler inserts a check node after the modified node. If the condition function returns a truthy value, `interrupt()` is called: the graph checkpoints and stops. A human reviews and provides feedback, then the graph resumes.
+
+```python
+from neograph import Node, Operator, register_condition
+
+def any_test_failed(state):
+    """Return truthy if validation found issues."""
+    result = state.validate
+    if result and not result.passed:
+        return {"issues": result.issues, "action_required": "review"}
+    return None  # falsy — no interrupt
+
+register_condition("any_test_failed", any_test_failed)
+
+validate = Node(
+    "validate",
+    mode="produce",
+    input=ApplyResult,
+    output=ValidationResult,
+    model="fast",
+    prompt="rw/validate",
+) | Operator(when="any_test_failed")
+```
+
+### Requirements
+
+- **Checkpointer required.** If any node in a Construct uses Operator, you must pass a `checkpointer` to `compile()`. Otherwise, `compile()` raises a `ValueError`.
+
+```python
+from langgraph.checkpoint.memory import MemorySaver
+
+graph = compile(pipeline, checkpointer=MemorySaver())
+```
+
+- **Condition function.** The `when` parameter names a registered condition function. Register it with `register_condition()` before compiling.
+
+### Resume
+
+After interrupt, resume the graph by passing human feedback:
+
+```python
+from neograph import run
+
+result = run(
+    graph,
+    resume={"approved": True, "notes": "Looks good"},
+    config={"configurable": {"thread_id": "abc-123"}},
+)
+```
+
+The resume payload is written to `state.human_feedback` and available to downstream nodes.
+
+## Modifiers on Constructs
+
+All three modifiers work on Constructs, not just Nodes. When you apply a modifier to a Construct, the entire sub-pipeline is treated as the unit:
+
+```python
+from neograph import Construct, Oracle, Each, Operator
+
+# Oracle: run the entire enrich sub-pipeline 3 times, merge outputs
+enrich = Construct(
+    "enrich",
+    input=Claims,
+    output=ScoredClaims,
+    nodes=[lookup, verify, score],
+) | Oracle(n=3, merge_fn="combine_scores")
+
+# Each: run the entire review sub-pipeline per item
+review = Construct(
+    "review",
+    input=ClusterGroup,
+    output=ReviewResult,
+    nodes=[analyze, check, summarize],
+) | Each(over="clusters.groups", key="label")
+
+# Operator: pause after the entire validation sub-pipeline
+validation = Construct(
+    "validation",
+    input=Draft,
+    output=ValidationResult,
+    nodes=[lint, test, report],
+) | Operator(when="validation_failed")
+```
+
+The compiler handles all the topology expansion -- fan-out, barriers, interrupt insertion -- regardless of whether the target is a Node or a Construct.

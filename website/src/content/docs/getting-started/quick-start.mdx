@@ -1,0 +1,196 @@
+---
+title: Quick Start
+description: Install NeoGraph, configure an LLM, build a 3-node pipeline, and run it.
+---
+
+This guide gets you from zero to a running LLM pipeline in under 5 minutes.
+
+## 1. Install
+
+```python
+pip install neograph
+```
+
+NeoGraph depends on `langgraph`, `langchain-core`, `pydantic`, and `structlog`. These are installed automatically.
+
+You will also need an LLM provider. This guide uses OpenAI, but any LangChain-compatible chat model works (Anthropic, Google, OpenRouter, local models via Ollama, etc.):
+
+```python
+pip install langchain-openai
+```
+
+## 2. Configure the LLM
+
+NeoGraph does not own LLM configuration. You provide two functions: an **LLM factory** that creates chat model instances, and a **prompt compiler** that builds message lists for each node.
+
+```python
+import os
+from langchain_openai import ChatOpenAI
+from neograph import configure_llm
+
+# Map model tiers to actual models
+MODELS = {
+    "fast": "gpt-4o-mini",
+    "reason": "gpt-4o",
+}
+
+configure_llm(
+    llm_factory=lambda tier: ChatOpenAI(
+        model=MODELS.get(tier, "gpt-4o-mini"),
+        api_key=os.environ["OPENAI_API_KEY"],
+    ),
+    prompt_compiler=lambda template, data, **kwargs: [
+        {"role": "user", "content": f"[{template}] {data}"}
+    ],
+)
+```
+
+The `llm_factory` receives a tier string (like `"fast"` or `"reason"`) and returns a `BaseChatModel`. The `prompt_compiler` receives a template name and the input data from the previous node, and returns a list of messages.
+
+In production, you would replace the prompt compiler with something that loads real prompt templates and injects context. For now, this inline version works.
+
+## 3. Define Your Schemas
+
+Every Node declares its input and output types as Pydantic models. This is how NeoGraph knows what data flows between nodes.
+
+```python
+from pydantic import BaseModel
+
+class Claims(BaseModel):
+    items: list[str]
+
+class ClassifiedClaims(BaseModel):
+    classified: list[dict[str, str]]
+
+class Summary(BaseModel):
+    text: str
+```
+
+## 4. Build the Pipeline
+
+Declare three Nodes and compose them into a Construct:
+
+```python
+from neograph import Node, Construct
+
+decompose = Node(
+    name="decompose",
+    mode="produce",
+    output=Claims,
+    model="fast",
+    prompt="decompose",
+)
+
+classify = Node(
+    name="classify",
+    mode="produce",
+    input=Claims,
+    output=ClassifiedClaims,
+    model="fast",
+    prompt="classify",
+)
+
+summarize = Node(
+    name="summarize",
+    mode="produce",
+    input=ClassifiedClaims,
+    output=Summary,
+    model="fast",
+    prompt="summarize",
+)
+
+pipeline = Construct("analysis", nodes=[decompose, classify, summarize])
+```
+
+Each Node specifies:
+- **name** -- identifier, used as the LangGraph node name and the state field key
+- **mode** -- `"produce"` means a single LLM call with structured JSON output
+- **input** / **output** -- Pydantic models defining the typed contract
+- **model** -- tier string passed to your `llm_factory`
+- **prompt** -- template name passed to your `prompt_compiler`
+
+The Construct defines execution order. Nodes run in the order they appear in the list.
+
+## 5. Compile and Run
+
+```python
+from neograph import compile, run
+
+graph = compile(pipeline)
+result = run(graph, input={"node_id": "demo", "topic": "microservice authentication"})
+
+print(result["summarize"].text)
+```
+
+`compile()` converts the Construct into a LangGraph `StateGraph`, wires all edges, infers the state schema, and compiles. `run()` executes the graph and returns the final state with framework internals stripped out.
+
+The result is a dict keyed by node name. Each value is the typed Pydantic model that node produced.
+
+## Complete Example
+
+Here is the full script, copy-paste-runnable:
+
+```python
+import os
+from langchain_openai import ChatOpenAI
+from pydantic import BaseModel
+from neograph import Node, Construct, compile, run, configure_llm
+
+# --- Schemas ---
+class Claims(BaseModel):
+    items: list[str]
+
+class ClassifiedClaims(BaseModel):
+    classified: list[dict[str, str]]
+
+class Summary(BaseModel):
+    text: str
+
+# --- LLM Configuration ---
+configure_llm(
+    llm_factory=lambda tier: ChatOpenAI(
+        model="gpt-4o-mini",
+        api_key=os.environ["OPENAI_API_KEY"],
+    ),
+    prompt_compiler=lambda template, data, **kwargs: [
+        {"role": "user", "content": (
+            "Break this topic into 3-5 factual claims: microservice authentication"
+            if template == "decompose"
+            else f"Classify each claim as security/reliability/performance: {data}"
+            if template == "classify"
+            else f"Summarize these classified claims in one paragraph: {data}"
+        )}
+    ],
+)
+
+# --- Pipeline ---
+decompose = Node(name="decompose", mode="produce", output=Claims, model="fast", prompt="decompose")
+classify  = Node(name="classify",  mode="produce", input=Claims, output=ClassifiedClaims, model="fast", prompt="classify")
+summarize = Node(name="summarize", mode="produce", input=ClassifiedClaims, output=Summary, model="fast", prompt="summarize")
+
+pipeline = Construct("analysis", nodes=[decompose, classify, summarize])
+
+# --- Run ---
+graph = compile(pipeline)
+result = run(graph, input={"node_id": "demo"})
+
+print(result["summarize"].text)
+```
+
+## What Just Happened
+
+Behind the scenes, `compile()` did the following:
+
+1. Walked the Construct's node list
+2. Inferred a Pydantic state model with fields for each node's output type
+3. Created LangGraph node functions that call your `llm_factory` and `prompt_compiler`
+4. Wired `START -> decompose -> classify -> summarize -> END`
+5. Compiled the LangGraph `StateGraph`
+
+You got a standard LangGraph graph. You can stream it, checkpoint it, visualize it, or deploy it with LangGraph Platform -- NeoGraph does not change the runtime, only the authoring.
+
+## Next Steps
+
+- Add tools to a node with `mode="gather"` and `Tool("name", budget=5)` -- see the [Walkthrough](/walkthrough/scripted-pipeline/)
+- Fan out with `Oracle(n=3)` or `Each(over="items")` -- see [Core Concepts](/concepts/vocabulary/)
+- Add human-in-the-loop with `Operator(when="condition")` -- see the [Walkthrough](/walkthrough/human-in-the-loop/)

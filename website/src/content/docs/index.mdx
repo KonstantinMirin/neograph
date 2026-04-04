@@ -1,0 +1,91 @@
+---
+title: NeoGraph
+description: Declarative LLM graph compiler. Define typed Nodes, compose into Constructs, compile to LangGraph.
+template: splash
+hero:
+  tagline: Stop writing LangGraph boilerplate. Declare what your pipeline does, not how to wire it.
+  actions:
+    - text: Get Started
+      link: /getting-started/what-is-neograph/
+      icon: right-arrow
+    - text: View on GitHub
+      link: https://github.com/KonstantinMirin/neograph
+      icon: external
+      variant: minimal
+---
+
+import { Card, CardGrid, LinkCard } from '@astrojs/starlight/components';
+
+## The Problem
+
+Every LangGraph pipeline repeats the same wiring: define a `TypedDict`, write node functions that read/write state dicts, call `add_node` for each node, call `add_edge` for each connection, and `compile`. A 3-node sequential pipeline takes ~35 lines of plumbing before you write any logic.
+
+NeoGraph eliminates this. You declare typed Nodes, compose them into a Construct, and call `compile`. The compiler generates the LangGraph graph for you.
+
+## LangGraph: ~35 lines
+
+```python
+from typing import TypedDict
+from langgraph.graph import END, START, StateGraph
+
+class PipelineState(TypedDict):
+    topic: str
+    claims: Claims | None
+    classified: ClassifiedClaims | None
+    summary: Summary | None
+
+def decompose(state: PipelineState):
+    result = llm.with_structured_output(Claims).invoke(
+        f"Break this topic into 3-5 factual claims: {state['topic']}")
+    return {"claims": result}
+
+def classify(state: PipelineState):
+    result = llm.with_structured_output(ClassifiedClaims).invoke(
+        f"Classify each claim by category: {state['claims']}")
+    return {"classified": result}
+
+def summarize(state: PipelineState):
+    result = llm.with_structured_output(Summary).invoke(
+        f"Summarize these classified claims: {state['classified']}")
+    return {"summary": result}
+
+graph = StateGraph(PipelineState)
+graph.add_node("decompose", decompose)
+graph.add_node("classify", classify)
+graph.add_node("summarize", summarize)
+graph.add_edge(START, "decompose")
+graph.add_edge("decompose", "classify")
+graph.add_edge("classify", "summarize")
+graph.add_edge("summarize", END)
+app = graph.compile()
+```
+
+## NeoGraph: ~8 lines
+
+```python
+from neograph import Node, Construct, compile, run
+
+decompose = Node(name="decompose", mode="produce", output=Claims, model="fast", prompt="decompose")
+classify  = Node(name="classify",  mode="produce", input=Claims, output=ClassifiedClaims, model="fast", prompt="classify")
+summarize = Node(name="summarize", mode="produce", input=ClassifiedClaims, output=Summary, model="fast", prompt="summarize")
+
+pipeline = Construct("analysis", nodes=[decompose, classify, summarize])
+graph = compile(pipeline)
+result = run(graph, input={"node_id": "demo", "topic": "microservice authentication"})
+```
+
+Same LangGraph graph underneath. No `TypedDict`, no `add_node`, no `add_edge`. The compiler infers the state schema from your Node type annotations and wires the edges from the Construct's node order.
+
+---
+
+<CardGrid>
+  <LinkCard title="What is NeoGraph?" href="/getting-started/what-is-neograph/" description="Architecture, vocabulary, and the compiler model." />
+  <LinkCard title="Quick Start" href="/getting-started/quick-start/" description="Install, configure, build a pipeline, run it." />
+  <LinkCard title="Why Not Just LangGraph?" href="/getting-started/why-neograph/" description="Pattern-by-pattern comparison with line counts." />
+</CardGrid>
+
+<CardGrid>
+  <LinkCard title="Core Concepts" href="/concepts/vocabulary/" description="The 6 vocabulary terms: Node, Tool, Construct, Oracle, Each, Operator." />
+  <LinkCard title="Walkthrough" href="/walkthrough/scripted-pipeline/" description="6 progressively complex examples from scripted to full pipeline." />
+  <LinkCard title="API Reference" href="/reference/api/" description="Complete API surface for Node, Tool, Construct, compile, run." />
+</CardGrid>

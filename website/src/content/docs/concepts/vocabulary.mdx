@@ -1,0 +1,155 @@
+---
+title: Vocabulary
+description: Every term in NeoGraph — Nodes, Tools, Constructs, modifiers, and runtime functions — with imports and usage.
+---
+
+NeoGraph has a small, intentional vocabulary. Every concept maps to a single class or function. This page is the glossary.
+
+## Import
+
+```python
+from neograph import (
+    Node,
+    Tool,
+    Construct,
+    Oracle,
+    Each,
+    Operator,
+    compile,
+    run,
+    configure_llm,
+    raw_node,
+)
+```
+
+## Terms at a glance
+
+| Term | Kind | What it does |
+|---|---|---|
+| `Node` | Class | A typed processing block. One LLM call, one tool loop, or one Python function. The atom of every graph. |
+| `Tool` | Class | An LLM-callable tool with a per-tool call budget. Attached to `gather` and `execute` nodes. |
+| `Construct` | Class | An ordered list of Nodes (and nested Constructs). The pipeline blueprint that the compiler turns into a LangGraph `StateGraph`. |
+| `Oracle` | Modifier | N-way fan-out with a merge step. Run a node (or Construct) N times in parallel, then combine the results via an LLM judge or a scripted function. |
+| `Each` | Modifier | Fan-out over a collection. Run a node (or Construct) once per item, collect results as `dict[key, result]`. |
+| `Operator` | Modifier | Human-in-the-loop interrupt. Pause the graph when a condition is met, checkpoint, and wait for human input before resuming. |
+| `compile()` | Function | Turns a `Construct` into an executable LangGraph `StateGraph`. Resolves modifiers, builds the state bus, wires edges. |
+| `run()` | Function | Executes a compiled graph. Accepts initial input or resume payload. Injects input into `config["configurable"]` so every node can access pipeline metadata. |
+| `configure_llm()` | Function | Registers the LLM factory and prompt compiler that NeoGraph uses for all LLM calls. Called once at startup. |
+| `raw_node` | Decorator | Escape hatch. Wraps a plain `(state, config) -> dict` function as a NeoGraph Node. You get full control; the framework still wires edges, state, and observability. |
+
+## Node
+
+The fundamental unit. Every Node declares typed `input` and `output` (Pydantic models), a `mode` that determines how it runs, and optionally a `model` tier and `prompt` template.
+
+```python
+classify = Node(
+    "classify",
+    mode="produce",
+    input=RawClaims,
+    output=ClassifiedClaims,
+    model="reason",
+    prompt="rw/classify",
+)
+```
+
+See [Node Modes](/concepts/node-modes/) for the four execution modes.
+
+## Tool
+
+Declares a tool that gather/execute nodes can call, with an optional budget cap.
+
+```python
+search = Tool("search_nodes", budget=5)
+read   = Tool("read_artifact", budget=10, config={"max_chars": 6000})
+```
+
+`budget=0` means unlimited. When a budgeted tool is exhausted mid-loop, the LLM is told to use remaining tools or respond. When all budgeted tools are spent, tools are unbound and the LLM is forced to produce a final answer.
+
+## Construct
+
+An ordered composition of Nodes. The compiler walks the list, wires sequential edges, and expands any modifiers into the correct fan-out / barrier topology.
+
+```python
+pipeline = Construct(
+    "ingestion",
+    nodes=[extract, decompose, classify, score],
+)
+```
+
+Constructs can be nested. A sub-Construct must declare `input` and `output` to define its state boundary. See [Subgraphs](/concepts/subgraphs/).
+
+## Modifiers and the pipe operator
+
+Modifiers are applied to Nodes or Constructs with the `|` (pipe) operator. They compose left to right:
+
+```python
+# Oracle: run decompose 3 times, merge with an LLM judge
+decompose = Node(...) | Oracle(n=3, merge_prompt="rw/merge")
+
+# Each: run match_verify once per cluster
+match_verify = Node(...) | Each(over="clusters.groups", key="label")
+
+# Operator: pause after validation if tests failed
+validate = Node(...) | Operator(when="any_test_failed")
+```
+
+Modifiers also work on Constructs:
+
+```python
+enrich_sub = Construct(...) | Oracle(n=3, merge_fn="combine_results")
+```
+
+See [Modifiers](/concepts/modifiers/) for full details.
+
+## compile()
+
+Takes a Construct (plus an optional checkpointer) and returns a compiled LangGraph graph.
+
+```python
+graph = compile(pipeline)
+
+# With checkpointing (required if any node uses Operator):
+from langgraph.checkpoint.memory import MemorySaver
+graph = compile(pipeline, checkpointer=MemorySaver())
+```
+
+## run()
+
+Executes a compiled graph. There are two call patterns: initial run and resume after interrupt.
+
+```python
+# Initial run
+result = run(graph, input={"node_id": "BR-042", "project_root": "/repo"})
+
+# Resume after Operator interrupt
+result = run(graph, resume={"approved": True}, config=config)
+```
+
+All fields in `input` are also injected into `config["configurable"]`, so any node function or prompt compiler can access them without reaching into state.
+
+## configure_llm()
+
+Registers two callbacks that NeoGraph calls for every LLM invocation:
+
+```python
+configure_llm(
+    llm_factory=lambda tier: ChatOpenAI(model=MODELS[tier]),
+    prompt_compiler=lambda template, data: [HumanMessage(content=str(data))],
+)
+```
+
+See [LLM Configuration](/concepts/llm-configuration/) for the advanced signature with `node_name`, `llm_config`, and `config` access.
+
+## raw_node
+
+Decorator for when you need full control over a node function. The framework handles wiring, state, and observability; you write the body.
+
+```python
+@raw_node(input=Disposition, output=Disposition)
+def custom_resolution(state, config):
+    # Full access to state and config — your logic here
+    disp = state.disposition
+    return {"disposition": disp.model_copy(update={"resolved": True})}
+```
+
+The decorated function becomes a `Node` with `mode="scripted"` and the function stored as `raw_fn`.

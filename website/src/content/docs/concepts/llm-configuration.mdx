@@ -1,0 +1,207 @@
+---
+title: LLM Configuration
+description: configure_llm(), per-node llm_config, prompt compilers with full context access, and config injection.
+---
+
+NeoGraph does not own the LLM client. You register a factory that creates LLM instances and a compiler that builds prompts. The framework calls them for every LLM invocation -- produce, gather, execute, and Oracle merge.
+
+## configure_llm()
+
+Called once at application startup. Registers two callbacks:
+
+```python
+from neograph import configure_llm
+
+configure_llm(
+    llm_factory=my_factory,
+    prompt_compiler=my_compiler,
+)
+```
+
+If you call `run()` on a graph that has LLM nodes without calling `configure_llm()` first, you get a `RuntimeError`.
+
+## LLM factory
+
+The factory creates a LangChain `BaseChatModel` instance for a given tier. NeoGraph calls it once per LLM invocation (not per node definition).
+
+### Simple factory
+
+The minimal factory takes a tier string and returns a model:
+
+```python
+from langchain_openai import ChatOpenAI
+
+MODELS = {
+    "fast": "gpt-4o-mini",
+    "reason": "gpt-4o",
+    "large": "o1",
+}
+
+configure_llm(
+    llm_factory=lambda tier: ChatOpenAI(model=MODELS[tier]),
+    prompt_compiler=my_compiler,
+)
+```
+
+### Advanced factory
+
+The advanced signature receives the node name and per-node LLM config:
+
+```python
+def my_factory(tier, node_name=None, llm_config=None):
+    config = llm_config or {}
+    return ChatOpenAI(
+        model=MODELS[tier],
+        temperature=config.get("temperature", 0),
+        max_tokens=config.get("max_tokens", 4096),
+    )
+
+configure_llm(llm_factory=my_factory, prompt_compiler=my_compiler)
+```
+
+The framework calls the advanced signature when available, falling back to the simple `(tier,)` signature if the factory does not accept keyword arguments. This provides backward compatibility -- you can start simple and add parameters later without breaking existing factories.
+
+## Per-node llm_config
+
+Each Node can carry an `llm_config` dict that is passed to the factory:
+
+```python
+from neograph import Node
+
+classify = Node(
+    "classify",
+    mode="produce",
+    input=RawClaims,
+    output=ClassifiedClaims,
+    model="reason",
+    prompt="rw/classify",
+    llm_config={"temperature": 0.7, "max_tokens": 2048},
+)
+```
+
+The `llm_config` dict is opaque to NeoGraph. The framework passes it through to your factory; you decide what keys mean. Common uses: temperature, max_tokens, top_p, stop sequences.
+
+## Prompt compiler
+
+The compiler builds the message list that the LLM receives. NeoGraph calls it for every LLM invocation.
+
+### Simple compiler
+
+The minimal compiler takes a template name and the input data:
+
+```python
+from langchain_core.messages import HumanMessage
+
+configure_llm(
+    llm_factory=my_factory,
+    prompt_compiler=lambda template, data: [
+        HumanMessage(content=f"Template: {template}\n\nData: {data}")
+    ],
+)
+```
+
+### Advanced compiler
+
+The advanced signature receives `node_name` and the full `config` dict. This is where the real power is -- the config contains everything from `run()`'s input plus anything you put in `config["configurable"]`.
+
+```python
+def my_compiler(template, data, *, node_name=None, config=None):
+    configurable = (config or {}).get("configurable", {})
+    node_id = configurable.get("node_id", "")
+    project_root = configurable.get("project_root", "")
+
+    # Load context files from disk based on pipeline metadata
+    context = load_context(project_root, node_id)
+
+    # Build a rich prompt using the template name as a key
+    return get_prompt(
+        template_name=template,
+        node_id=node_id,
+        context_files=context,
+        analysis_notes=format_notes(data),
+    )
+
+configure_llm(llm_factory=my_factory, prompt_compiler=my_compiler)
+```
+
+Like the factory, the framework tries the advanced signature first and falls back to `(template, data)` if the compiler does not accept keyword arguments.
+
+## Config injection
+
+When you call `run()`, all fields from the `input` dict are automatically injected into `config["configurable"]`:
+
+```python
+from neograph import run
+
+result = run(
+    graph,
+    input={"node_id": "BR-042", "project_root": "/repo"},
+    config={"configurable": {"rate_limiter": my_limiter}},
+)
+```
+
+Inside every node, `config["configurable"]` contains:
+
+```python
+{
+    "node_id": "BR-042",
+    "project_root": "/repo",
+    "rate_limiter": my_limiter,  # from explicit config
+}
+```
+
+Input fields take precedence over existing configurable values if there is a key conflict. This means your prompt compiler and LLM factory can access pipeline metadata (node_id, project_root) and shared resources (rate limiters, database connections) without any node reaching into state.
+
+## Shared resources via config
+
+Put expensive-to-create resources in `config["configurable"]` and access them from your factory, compiler, or scripted functions:
+
+```python
+# At the call site
+db_pool = create_connection_pool()
+rate_limiter = TokenBucketLimiter(tokens_per_minute=100_000)
+
+result = run(
+    graph,
+    input={"node_id": "BR-042"},
+    config={
+        "configurable": {
+            "db_pool": db_pool,
+            "rate_limiter": rate_limiter,
+        }
+    },
+)
+
+# In your prompt compiler
+def my_compiler(template, data, *, node_name=None, config=None):
+    db = config["configurable"]["db_pool"]
+    context = db.query("SELECT * FROM context WHERE template = %s", template)
+    ...
+
+# In a scripted function
+def my_scripted_fn(input_data, config):
+    limiter = config["configurable"]["rate_limiter"]
+    limiter.acquire()
+    ...
+```
+
+## Structured output coercion
+
+NeoGraph always requests structured output from the LLM. The framework calls `llm.with_structured_output(output_model)` where `output_model` is the node's `output` Pydantic model.
+
+The framework first tries `with_structured_output(model, include_raw=True)` to capture both the parsed result and raw response metadata (token counts). If the LLM provider does not support `include_raw`, it falls back to `with_structured_output(model)` without it.
+
+This means structured output works with any LangChain chat model that supports `with_structured_output` -- OpenAI, Anthropic, Google, Fireworks, and others.
+
+For ReAct modes (gather and execute), structured output is applied as a final parsing step after the tool loop completes. The LLM's last message in the loop is not required to be structured; a separate `with_structured_output` call parses the final answer.
+
+## Backward compatibility
+
+Both the factory and compiler support two signatures:
+
+| Callback | Simple signature | Advanced signature |
+|---|---|---|
+| `llm_factory` | `(tier) -> BaseChatModel` | `(tier, node_name=, llm_config=) -> BaseChatModel` |
+| `prompt_compiler` | `(template, data) -> list[BaseMessage]` | `(template, data, node_name=, config=) -> list[BaseMessage]` |
+
+The framework detects which signature your callback supports by catching `TypeError` on the advanced call and falling back to the simple one. This means you can upgrade incrementally: start with a simple lambda, then switch to a full function when you need per-node configuration or config access, without changing any Node definitions.

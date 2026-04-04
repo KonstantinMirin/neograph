@@ -1,0 +1,175 @@
+---
+title: Subgraphs
+description: Constructs as isolated sub-pipelines — state boundaries, nesting, and modifiers on Constructs.
+---
+
+A Construct can contain other Constructs. When a Construct appears inside another Construct's `nodes` list, it becomes a **subgraph** with its own isolated state. Internal nodes do not leak into the parent.
+
+## Why subgraphs
+
+Without subgraphs, every node in a pipeline shares the same flat state. This is fine for small graphs, but as pipelines grow, state fields accumulate and nodes can accidentally read or overwrite each other's data.
+
+Subgraphs solve this by introducing a state boundary:
+
+- The sub-Construct gets its own `StateGraph` with its own generated state model.
+- The parent only sees the sub-Construct's declared `output` type, stored in a single state field named after the sub-Construct.
+- Internal node outputs (the intermediate steps) never appear in the parent state.
+
+## Declaring a sub-Construct
+
+A sub-Construct must declare both `input` and `output` to define what crosses the boundary:
+
+```python
+from pydantic import BaseModel
+from neograph import Construct, Node
+
+class Claims(BaseModel):
+    items: list[str]
+
+class ScoredClaims(BaseModel):
+    scored: list[dict]
+
+# Internal nodes
+lookup = Node("lookup", mode="gather", input=Claims, output=LookupResults, ...)
+verify = Node("verify", mode="produce", input=LookupResults, output=VerifiedClaims, ...)
+score  = Node("score", mode="produce", input=VerifiedClaims, output=ScoredClaims, ...)
+
+# Sub-construct with I/O boundary
+enrich = Construct(
+    "enrich",
+    input=Claims,
+    output=ScoredClaims,
+    nodes=[lookup, verify, score],
+)
+```
+
+The `input` type tells the framework how to extract data from the parent state. At runtime, the framework scans the parent state for a field whose value is an instance of `Claims` and passes it into the sub-graph. The `output` type defines what comes back -- the sub-graph's result is stored in `parent_state.enrich` as a `ScoredClaims` instance.
+
+## Using a sub-Construct in a parent
+
+A sub-Construct goes into a parent's `nodes` list like any other node:
+
+```python
+extract   = Node("extract", mode="produce", ..., output=RawText)
+decompose = Node("decompose", mode="produce", input=RawText, output=Claims, ...)
+
+# enrich is the sub-Construct defined above
+
+report = Node("report", mode="produce", input=ScoredClaims, output=FinalReport, ...)
+
+pipeline = Construct(
+    "ingestion",
+    nodes=[extract, decompose, enrich, report],
+)
+
+graph = compile(pipeline)
+result = run(graph, input={"node_id": "BR-042"})
+```
+
+The compiled graph executes `extract -> decompose -> enrich (subgraph) -> report` in sequence. The `enrich` subgraph runs its three internal nodes (`lookup -> verify -> score`) in isolation, then surfaces the `ScoredClaims` result back to the parent.
+
+## State isolation
+
+The parent state model will contain a field `enrich: ScoredClaims | None`, but it will not contain `lookup`, `verify`, or `score` fields. Those exist only inside the sub-graph's state.
+
+This means:
+
+- The `report` node can read `enrich` (the `ScoredClaims` output) but cannot see `lookup` or `verify` results.
+- If the sub-Construct has a node named `score` and the parent also has a node named `score`, there is no conflict. They write to different state models.
+- The sub-graph's internal framework fields (`neo_oracle_gen_id`, `neo_each_item`, etc.) are confined to the sub-graph.
+
+## Nesting: Construct in Construct
+
+Nesting composes. A sub-Construct can itself contain sub-Constructs:
+
+```python
+# Level 2: inner sub-construct
+verify_block = Construct(
+    "verify-block",
+    input=LookupResults,
+    output=VerifiedClaims,
+    nodes=[cross_check, validate, consolidate],
+)
+
+# Level 1: outer sub-construct containing the inner one
+enrich = Construct(
+    "enrich",
+    input=Claims,
+    output=ScoredClaims,
+    nodes=[lookup, verify_block, score],
+)
+
+# Top level
+pipeline = Construct(
+    "ingestion",
+    nodes=[extract, decompose, enrich, report],
+)
+```
+
+Each level gets its own isolated state. The inner `verify-block` is invisible to `enrich`'s siblings, and `enrich`'s internals are invisible to `pipeline`'s nodes.
+
+## Modifiers on Constructs
+
+All three modifiers -- Oracle, Each, Operator -- work on Constructs. When applied, the entire sub-pipeline is treated as the modified unit.
+
+### Oracle on a Construct
+
+Run the entire sub-pipeline N times in parallel, then merge the outputs:
+
+```python
+enrich = Construct(
+    "enrich",
+    input=Claims,
+    output=ScoredClaims,
+    nodes=[lookup, verify, score],
+) | Oracle(n=3, merge_fn="combine_scores")
+```
+
+The compiler creates N copies of the sub-graph execution, each receiving the same parent state but running independently. The merge function receives a list of N `ScoredClaims` results.
+
+### Each on a Construct
+
+Run the entire sub-pipeline once per item in a collection:
+
+```python
+review_cluster = Construct(
+    "review-cluster",
+    input=ClusterGroup,
+    output=ClusterReview,
+    nodes=[analyze, check, summarize],
+) | Each(over="clusters.groups", key="label")
+```
+
+If `clusters.groups` contains 5 items, the sub-pipeline runs 5 times in parallel. The result is a dict:
+
+```python
+result["review_cluster"] == {
+    "auth": ClusterReview(...),
+    "payments": ClusterReview(...),
+    "search": ClusterReview(...),
+    ...
+}
+```
+
+### Operator on a Construct
+
+Pause after the entire sub-pipeline completes:
+
+```python
+validation = Construct(
+    "validation",
+    input=Draft,
+    output=ValidationResult,
+    nodes=[lint, test, report],
+) | Operator(when="validation_failed")
+```
+
+The interrupt check runs after all three internal nodes have completed, not after each one individually.
+
+## Compile-time validation
+
+The compiler enforces sub-Construct contracts:
+
+- A sub-Construct without `input` raises `ValueError` at compile time.
+- A sub-Construct without `output` raises `ValueError` during state model generation.
+- An Operator modifier anywhere in the graph without a `checkpointer` passed to `compile()` raises `ValueError`.

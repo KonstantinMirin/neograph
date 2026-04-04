@@ -1,0 +1,172 @@
+---
+title: Observability
+description: Two layers of observability — always-on structlog for framework events and opt-in Langfuse for LLM tracing.
+---
+
+NeoGraph provides observability at two layers. The framework layer (structlog) is always on and captures every node execution, LLM call, tool invocation, and budget event. The tracing layer (Langfuse or any LangChain callback) is opt-in and provides deep LLM call traces with token-level detail.
+
+NeoGraph does not own the observability backend. It emits structured logs and threads callback configuration through the LangGraph runtime. You choose where the data goes.
+
+## structlog: always on
+
+Every NeoGraph operation emits structured log events via [structlog](https://www.structlog.org/). This happens automatically -- no configuration required.
+
+### What gets logged
+
+| Event | Fields | When |
+|---|---|---|
+| `compile_start` | `construct`, `nodes`, `node_names`, `modifiers` | `compile()` is called |
+| `compile_complete` | `construct`, `state_fields` | Graph compilation finishes |
+| `subgraph_compile` | `subgraph`, `input`, `output` | Sub-Construct compiled |
+| `node_start` | `node`, `mode`, `model`, `prompt`, `tools`, `budgets` | Node execution begins |
+| `node_complete` | `node`, `mode`, `duration_s` | Node execution finishes |
+| `llm_call` | `tier`, `prompt`, `mode`, `duration_s`, `input_tokens`, `output_tokens`, `total_tokens` | LLM call completes |
+| `tool_call` | `tool`, `call_num`, `duration_s` | Individual tool invocation |
+| `tool_budget_exhausted` | `tool` | Tool hits its budget cap |
+| `all_tools_exhausted` | `exhausted`, `forcing_response` | All budgeted tools spent |
+| `react_final_response` | `loop` | ReAct loop produces final answer |
+
+### Example output
+
+A produce node emits something like this (formatted as JSON for clarity):
+
+```json
+{
+  "node": "classify",
+  "mode": "produce",
+  "model": "reason",
+  "prompt": "rw/classify",
+  "event": "node_start",
+  "output_type": "ClassifiedClaims"
+}
+{
+  "tier": "reason",
+  "prompt": "rw/classify",
+  "mode": "produce",
+  "duration_s": 1.847,
+  "input_tokens": 2340,
+  "output_tokens": 512,
+  "total_tokens": 2852,
+  "event": "llm_call"
+}
+{
+  "node": "classify",
+  "mode": "produce",
+  "duration_s": 1.851,
+  "event": "node_complete"
+}
+```
+
+A gather node with tools adds tool-level detail:
+
+```json
+{
+  "node": "explore",
+  "mode": "gather",
+  "model": "reason",
+  "prompt": "rw/explore",
+  "tools": ["search_nodes", "read_artifact"],
+  "budgets": {"search_nodes": 5, "read_artifact": 10},
+  "event": "node_start"
+}
+{
+  "tool": "search_nodes",
+  "call_num": 1,
+  "duration_s": 0.234,
+  "event": "tool_call"
+}
+{
+  "tool": "search_nodes",
+  "call_num": 2,
+  "duration_s": 0.189,
+  "event": "tool_call"
+}
+{
+  "tool": "search_nodes",
+  "event": "tool_budget_exhausted"
+}
+{
+  "tier": "reason",
+  "prompt": "rw/explore",
+  "mode": "react",
+  "loops": 4,
+  "tool_calls": 7,
+  "duration_s": 8.312,
+  "input_tokens": 12400,
+  "output_tokens": 1890,
+  "total_tokens": 14290,
+  "output": "ResearchFindings",
+  "event": "llm_call"
+}
+```
+
+### Configuring structlog
+
+NeoGraph calls `structlog.get_logger()` -- it does not configure structlog itself. You configure structlog in your application the way you normally would:
+
+```python
+import structlog
+
+structlog.configure(
+    processors=[
+        structlog.processors.TimeStamper(fmt="iso"),
+        structlog.processors.add_log_level,
+        structlog.dev.ConsoleRenderer(),  # pretty for dev
+        # or structlog.processors.JSONRenderer() for prod
+    ],
+)
+```
+
+If you do not configure structlog, it uses its defaults (which are reasonable for development).
+
+## Langfuse: opt-in tracing
+
+[Langfuse](https://langfuse.com/) provides deep LLM call tracing -- prompt/completion pairs, token counts, latency waterfalls, cost tracking. NeoGraph supports it (and any LangChain-compatible callback) through the standard `config["callbacks"]` mechanism.
+
+### One-line setup
+
+```python
+from langfuse.callback import CallbackHandler as LangfuseHandler
+from neograph import compile, run
+
+langfuse = LangfuseHandler(
+    public_key="pk-...",
+    secret_key="sk-...",
+    host="https://cloud.langfuse.com",
+)
+
+graph = compile(pipeline)
+
+result = run(
+    graph,
+    input={"node_id": "BR-042"},
+    config={"callbacks": [langfuse]},
+)
+```
+
+That is all. Every LLM call inside every node -- produce, gather, execute, and even Oracle merge calls -- will appear in your Langfuse dashboard with full prompt/completion detail, token counts, and timing.
+
+### How it works
+
+NeoGraph does not integrate with Langfuse directly. The mechanism is LangGraph's standard callback threading:
+
+1. You pass `callbacks=[langfuse]` in the `config` dict to `run()`.
+2. LangGraph propagates that config to every node invocation.
+3. NeoGraph's LLM layer calls `llm.invoke(messages, config=config)`, which passes the callbacks to the underlying LangChain model.
+4. The LangChain model fires callback events that Langfuse (or any other handler) captures.
+
+This means any LangChain-compatible callback works. If you use LangSmith, Weights & Biases, or a custom handler, pass it the same way:
+
+```python
+config = {"callbacks": [my_langsmith_handler, my_custom_handler]}
+result = run(graph, input={...}, config=config)
+```
+
+### Combining structlog and Langfuse
+
+The two layers complement each other:
+
+- **structlog** gives you the framework-level view: which node ran, how long it took, how many tool calls, total tokens. Useful for pipeline debugging and operational monitoring.
+- **Langfuse** gives you the LLM-level view: exact prompts, completions, per-call token breakdown, cost. Useful for prompt engineering and model evaluation.
+
+Both run simultaneously. structlog is always on; Langfuse activates only when you pass the callback.

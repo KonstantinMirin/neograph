@@ -1,0 +1,145 @@
+---
+title: "1. Scripted Pipeline"
+description: "Build a three-node deterministic pipeline with typed state flow -- no LLM required."
+---
+
+A scripted pipeline is the simplest thing you can build with NeoGraph. Every node is a plain Python function. No API keys, no model configuration, no network calls. Data flows through Pydantic models that enforce types at every boundary.
+
+This walkthrough builds a document processor: **extract** raw text, **split** it into claims, **classify** each claim by category.
+
+## What you will learn
+
+- Defining Pydantic schemas for typed state
+- Registering scripted functions with `register_scripted()`
+- Creating nodes with `Node.scripted()`
+- Composing nodes into a `Construct`
+- Compiling and running the pipeline
+
+## The complete pipeline
+
+```python
+"""Scripted pipeline: extract -> split -> classify. No LLM needed.
+
+Run:
+    python scripted_pipeline.py
+"""
+
+from __future__ import annotations
+
+from pydantic import BaseModel
+
+from neograph import Construct, Node, compile, run
+from neograph.factory import register_scripted
+
+
+# -- Schemas ----------------------------------------------------------------
+# Each schema is a frozen Pydantic model. Frozen ensures immutability --
+# once a node produces output, nothing can mutate it downstream.
+
+class RawText(BaseModel, frozen=True):
+    text: str
+
+class Claims(BaseModel, frozen=True):
+    items: list[str]
+
+class ClassifiedClaims(BaseModel, frozen=True):
+    classified: list[dict[str, str]]
+
+
+# -- Scripted functions -----------------------------------------------------
+# Each function receives (input_data, config).
+#   input_data: the typed output from the previous node, or None for the first.
+#   config:     LangGraph RunnableConfig with pipeline metadata.
+
+def extract_text(input_data, config):
+    """Simulate extracting text from a document source."""
+    return RawText(
+        text="The system shall log all access attempts. "
+             "The system shall validate input."
+    )
+
+def split_claims(input_data, config):
+    """Split raw text into individual claims by sentence."""
+    sentences = [s.strip() for s in input_data.text.split(".") if s.strip()]
+    return Claims(items=sentences)
+
+def classify_claims(input_data, config):
+    """Classify each claim by category based on keywords."""
+    classified = []
+    for claim in input_data.items:
+        if "access" in claim.lower() or "validate" in claim.lower():
+            category = "security"
+        else:
+            category = "general"
+        classified.append({"claim": claim, "category": category})
+    return ClassifiedClaims(classified=classified)
+
+
+# -- Register functions -----------------------------------------------------
+# NeoGraph looks up scripted functions by name at compile time.
+# The name you pass here must match the fn= argument on Node.scripted().
+
+register_scripted("extract_text", extract_text)
+register_scripted("split_claims", split_claims)
+register_scripted("classify_claims", classify_claims)
+
+
+# -- Build pipeline ---------------------------------------------------------
+# Node.scripted() creates a deterministic node. The input= and output=
+# parameters declare the typed contract. The first node has no input
+# (it receives None). Each subsequent node declares the type it consumes.
+
+extract = Node.scripted("extract", fn="extract_text", output=RawText)
+split = Node.scripted("split", fn="split_claims", input=RawText, output=Claims)
+classify = Node.scripted("classify", fn="classify_claims", input=Claims, output=ClassifiedClaims)
+
+pipeline = Construct("doc-processor", nodes=[extract, split, classify])
+
+
+# -- Run --------------------------------------------------------------------
+
+if __name__ == "__main__":
+    graph = compile(pipeline)
+    result = run(graph, input={"node_id": "doc-001"})
+
+    print("Claims found:", len(result["classify"].classified))
+    for item in result["classify"].classified:
+        print(f"  [{item['category']}] {item['claim']}")
+```
+
+## Expected output
+
+```
+Claims found: 2
+  [security] The system shall log all access attempts
+  [security] The system shall validate input
+```
+
+## How typed state flow works
+
+NeoGraph auto-generates a Pydantic state model from the union of all node I/O types. For this pipeline the generated state looks like:
+
+```python
+class DocProcessorState(BaseModel):
+    node_id: str
+    extract: RawText | None = None
+    split: Claims | None = None
+    classify: ClassifiedClaims | None = None
+```
+
+Each node writes to its own field. The next node reads from state by matching the declared `input` type. You never write state-wiring code -- the compiler handles it.
+
+The flow:
+
+1. `extract` runs, writes `RawText` to `state.extract`
+2. `split` declares `input=RawText`, framework finds `state.extract`, passes it as `input_data`
+3. `classify` declares `input=Claims`, framework finds `state.split`, passes it as `input_data`
+
+If a type mismatch occurs (no field in state matches the declared input type), the node receives `None`.
+
+## Key points
+
+- **No LLM required.** Scripted nodes are pure Python. Use them for parsing, formatting, validation, or any deterministic logic.
+- **Type safety at the boundary.** Pydantic validates every input and output. If your function returns the wrong shape, you get an error at runtime, not a silent corruption downstream.
+- **Nodes are ordered by list position.** The `nodes=` list in `Construct` determines execution order. No manual edge wiring.
+- **Field names come from node names.** A node named `"classify"` writes to `state.classify`. Hyphens become underscores: `"check-results"` becomes `state.check_results`.

@@ -1,0 +1,170 @@
+---
+title: "4. Each Fan-Out"
+description: "Process each item in a collection independently and in parallel, collecting results as a keyed dict."
+---
+
+The `Each` modifier takes a node and runs it once per item in a collection produced by a previous node. Results are collected into a `dict[label, result]` keyed by a field you specify.
+
+This is the map phase of map-reduce: discover a set of items, process each one in parallel, gather the results.
+
+## What you will learn
+
+- Producing a collection from one node
+- Applying `Each(over=..., key=...)` to fan out over collection items
+- How each parallel instance receives its item as `input_data`
+- Reading fan-out results as a keyed dictionary
+
+## The complete pipeline
+
+```python
+"""Each Fan-Out: discover clusters, verify each in parallel.
+
+Run:
+    python each_fanout.py
+"""
+
+from __future__ import annotations
+
+from pydantic import BaseModel
+
+from neograph import Construct, Each, Node, compile, run
+from neograph.factory import register_scripted
+
+
+# -- Schemas ----------------------------------------------------------------
+
+class ClusterGroup(BaseModel, frozen=True):
+    label: str
+    claim_ids: list[str]
+
+class Clusters(BaseModel, frozen=True):
+    groups: list[ClusterGroup]
+
+class VerifyResult(BaseModel, frozen=True):
+    cluster_label: str
+    coverage_pct: int
+    gaps: list[str]
+
+
+# -- Functions --------------------------------------------------------------
+
+def discover_clusters(input_data, config):
+    """Simulate discovering requirement clusters from analysis."""
+    return Clusters(groups=[
+        ClusterGroup(label="authentication", claim_ids=["REQ-1", "REQ-2", "REQ-3"]),
+        ClusterGroup(label="logging", claim_ids=["REQ-4", "REQ-5"]),
+        ClusterGroup(label="performance", claim_ids=["REQ-6"]),
+    ])
+
+def verify_cluster(input_data, config):
+    """Verify a single cluster -- check coverage against codebase.
+
+    input_data is a ClusterGroup -- the specific item from the collection.
+    """
+    coverage = {"authentication": 85, "logging": 60, "performance": 100}
+    gaps_map = {
+        "authentication": ["MFA not implemented"],
+        "logging": ["no structured logging", "missing audit trail"],
+        "performance": [],
+    }
+    return VerifyResult(
+        cluster_label=input_data.label,
+        coverage_pct=coverage.get(input_data.label, 0),
+        gaps=gaps_map.get(input_data.label, ["unknown"]),
+    )
+
+register_scripted("discover_clusters", discover_clusters)
+register_scripted("verify_cluster", verify_cluster)
+
+
+# -- Build pipeline ---------------------------------------------------------
+
+discover = Node.scripted("discover", fn="discover_clusters", output=Clusters)
+
+verify = Node.scripted(
+    "verify", fn="verify_cluster", input=ClusterGroup, output=VerifyResult
+) | Each(over="discover.groups", key="label")
+
+pipeline = Construct("cluster-verification", nodes=[discover, verify])
+
+
+# -- Run --------------------------------------------------------------------
+
+if __name__ == "__main__":
+    graph = compile(pipeline)
+    result = run(graph, input={"node_id": "analysis-001"})
+
+    verify_results = result["verify"]  # dict[str, VerifyResult]
+
+    print(f"Verified {len(verify_results)} clusters:\n")
+    for label, vr in verify_results.items():
+        status = "PASS" if vr.coverage_pct >= 80 else "GAPS"
+        print(f"  [{status}] {label}: {vr.coverage_pct}% coverage")
+        for gap in vr.gaps:
+            print(f"         - {gap}")
+```
+
+## Expected output
+
+```
+Verified 3 clusters:
+
+  [PASS] authentication: 85% coverage
+         - MFA not implemented
+  [GAPS] logging: 60% coverage
+         - no structured logging
+         - missing audit trail
+  [PASS] performance: 100% coverage
+```
+
+## The Each modifier
+
+```python
+verify = Node.scripted(
+    "verify", fn="verify_cluster", input=ClusterGroup, output=VerifyResult
+) | Each(over="discover.groups", key="label")
+```
+
+Two parameters:
+
+- **`over`** -- dotted path to the collection in state. `"discover.groups"` means: look at `state.discover`, then access its `.groups` attribute. The collection must be iterable.
+- **`key`** -- field on each item used as the dictionary key for results. `"label"` means each `ClusterGroup`'s `.label` becomes the key in the output dict.
+
+## How each instance receives its item
+
+The `verify` node declares `input=ClusterGroup`. During fan-out, each parallel instance receives a single `ClusterGroup` as its `input_data` argument. You write your function as if it processes one item -- the framework handles the iteration.
+
+```python
+def verify_cluster(input_data, config):
+    # input_data is a ClusterGroup -- one specific item
+    return VerifyResult(
+        cluster_label=input_data.label,
+        coverage_pct=compute_coverage(input_data),
+        gaps=find_gaps(input_data),
+    )
+```
+
+## Reading fan-out results
+
+The result for an `Each` node is a dictionary keyed by the `key` field:
+
+```python
+result["verify"]
+# {
+#     "authentication": VerifyResult(cluster_label="authentication", coverage_pct=85, gaps=[...]),
+#     "logging":        VerifyResult(cluster_label="logging", coverage_pct=60, gaps=[...]),
+#     "performance":    VerifyResult(cluster_label="performance", coverage_pct=100, gaps=[]),
+# }
+```
+
+Each key is the value of `input_data.label` for that item. Keys must be unique across the collection -- if two items share a key, the compiler raises an error.
+
+## What the compiler generates
+
+When it encounters `Each(over="discover.groups", key="label")`, the compiler expands the node into:
+
+1. **Fan-out router** -- iterates over `state.discover.groups`, dispatches one `Send()` per item with the item set as `neo_each_item` in state
+2. **Worker node** -- runs once per item, extracts the item from state, passes it as `input_data`, wraps the result in `{key_value: result}`
+3. **Barrier node** (`defer=True`) -- waits for all workers to complete, collects results via a dict-merge reducer
+
+The state field for the node uses an `Annotated` dict reducer that merges results additively. Duplicate keys raise an error.
