@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class Tool(BaseModel, frozen=True):
@@ -17,7 +17,7 @@ class Tool(BaseModel, frozen=True):
 
     name: str
     budget: int = 0  # max calls for this tool (0 = unlimited)
-    config: dict[str, Any] = {}
+    config: dict[str, Any] = Field(default_factory=dict)
 
 
 class ToolBudgetTracker:

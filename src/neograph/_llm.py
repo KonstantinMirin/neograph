@@ -17,6 +17,7 @@ import time
 from typing import Any, Callable
 
 import structlog
+from langchain_core.runnables import RunnableConfig
 from pydantic import BaseModel
 
 from neograph.tool import Tool, ToolBudgetTracker
@@ -162,12 +163,49 @@ def _parse_json_response(text: str, output_model: type[BaseModel]) -> BaseModel:
     return output_model.model_validate_json(_extract_json(text))
 
 
+def _call_structured(
+    llm: Any,
+    messages: list,
+    output_model: type[BaseModel],
+    strategy: str,
+    config: RunnableConfig,
+) -> tuple[BaseModel, Any]:
+    """Dispatch structured output by strategy. Returns (result, usage_metadata)."""
+    usage = None
+
+    if strategy == "structured":
+        try:
+            structured_llm = llm.with_structured_output(output_model, include_raw=True)
+            raw_result = structured_llm.invoke(messages, config=config)
+            if isinstance(raw_result, dict) and "parsed" in raw_result:
+                result = raw_result["parsed"]
+                raw_msg = raw_result.get("raw")
+                usage = getattr(raw_msg, "usage_metadata", None) if raw_msg else None
+            else:
+                result = raw_result
+        except TypeError:
+            structured_llm = llm.with_structured_output(output_model)
+            result = structured_llm.invoke(messages, config=config)
+
+    elif strategy in ("json_mode", "text"):
+        response = llm.invoke(messages, config=config)
+        raw_text = response.content if hasattr(response, "content") else str(response)
+        usage = getattr(response, "usage_metadata", None)
+        result = _parse_json_response(raw_text, output_model)
+
+    else:
+        msg = f"Unknown output_strategy: {strategy}. Use 'structured', 'json_mode', or 'text'."
+        raise ValueError(msg)
+
+    return result, usage
+
+
 def invoke_structured(
     model_tier: str,
     prompt_template: str,
     input_data: Any,
     output_model: type[BaseModel],
-    config: dict,
+    config: RunnableConfig,
     node_name: str = "",
     llm_config: dict | None = None,
 ) -> BaseModel:
@@ -190,34 +228,7 @@ def invoke_structured(
     )
 
     t0 = time.monotonic()
-    usage = None
-
-    if strategy == "structured":
-        # Default: use with_structured_output
-        try:
-            structured_llm = llm.with_structured_output(output_model, include_raw=True)
-            raw_result = structured_llm.invoke(messages, config=config)
-            if isinstance(raw_result, dict) and "parsed" in raw_result:
-                result = raw_result["parsed"]
-                raw_msg = raw_result.get("raw")
-                usage = getattr(raw_msg, "usage_metadata", None) if raw_msg else None
-            else:
-                result = raw_result
-        except TypeError:
-            structured_llm = llm.with_structured_output(output_model)
-            result = structured_llm.invoke(messages, config=config)
-
-    elif strategy in ("json_mode", "text"):
-        # json_mode / text: call LLM directly, parse response ourselves
-        response = llm.invoke(messages, config=config)
-        raw_text = response.content if hasattr(response, 'content') else str(response)
-        usage = getattr(response, "usage_metadata", None)
-        result = _parse_json_response(raw_text, output_model)
-
-    else:
-        msg = f"Unknown output_strategy: {strategy}. Use 'structured', 'json_mode', or 'text'."
-        raise ValueError(msg)
-
+    result, usage = _call_structured(llm, messages, output_model, strategy, config)
     elapsed = time.monotonic() - t0
 
     usage_info = {}
@@ -239,7 +250,7 @@ def invoke_with_tools(
     output_model: type[BaseModel],
     tools: list[Tool],
     budget_tracker: ToolBudgetTracker,
-    config: dict,
+    config: RunnableConfig,
     node_name: str = "",
     llm_config: dict | None = None,
 ) -> BaseModel | None:
@@ -256,11 +267,11 @@ def invoke_with_tools(
     )
 
     llm = _get_llm(model_tier, node_name=node_name, llm_config=llm_config)
-    messages = _compile_prompt(
+    messages = list(_compile_prompt(
         prompt_template, input_data,
         node_name=node_name, config=config,
         output_model=output_model, llm_config=llm_config,
-    )
+    ))  # copy — the loop appends to this list
 
     # Create tool instances from registered factories
     tool_instances = {}
@@ -344,28 +355,15 @@ def invoke_with_tools(
     # Parse final response as structured output — strategy-aware
     llm_config = llm_config or {}
     strategy = llm_config.get("output_strategy", "structured")
-    usage = None
 
     if strategy in ("json_mode", "text"):
-        # Already have the final response in messages[-1] — parse it
+        # Already have the final response in messages[-1] — parse directly
         last_msg = messages[-1]
-        raw_text = last_msg.content if hasattr(last_msg, 'content') else str(last_msg)
+        raw_text = last_msg.content if hasattr(last_msg, "content") else str(last_msg)
         parse_result = _parse_json_response(raw_text, output_model)
         usage = getattr(last_msg, "usage_metadata", None)
     else:
-        # Default: use with_structured_output for a final parse call
-        try:
-            final_llm = llm.with_structured_output(output_model, include_raw=True)
-            raw_result = final_llm.invoke(messages, config=config)
-            if isinstance(raw_result, dict) and "parsed" in raw_result:
-                parse_result = raw_result["parsed"]
-                raw_msg = raw_result.get("raw")
-                usage = getattr(raw_msg, "usage_metadata", None) if raw_msg else None
-            else:
-                parse_result = raw_result
-        except TypeError:
-            final_llm = llm.with_structured_output(output_model)
-            parse_result = final_llm.invoke(messages, config=config)
+        parse_result, usage = _call_structured(llm, messages, output_model, strategy, config)
 
     # Collect total usage from all LLM calls in the loop
     total_input_tokens = 0

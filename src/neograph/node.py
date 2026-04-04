@@ -23,7 +23,7 @@ from __future__ import annotations
 
 from typing import Any, Callable, Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from neograph.modifiers import Modifiable, Modifier
 from neograph.tool import Tool
@@ -50,7 +50,7 @@ class Node(Modifiable, BaseModel):
     # LLM configuration
     model: str | None = None        # "fast", "reason", "large"
     prompt: str | None = None       # template name in prompt registry
-    llm_config: dict[str, Any] = {} # consumer-specific LLM settings (temperature, max_tokens, etc.)
+    llm_config: dict[str, Any] = Field(default_factory=dict)  # temperature, max_tokens, output_strategy, etc.
 
     # Tools with per-tool budgets
     tools: list[Tool] = []
