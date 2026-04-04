@@ -185,15 +185,83 @@ def my_scripted_fn(input_data, config):
     ...
 ```
 
-## Structured output coercion
+## Output strategies
 
-NeoGraph always requests structured output from the LLM. The framework calls `llm.with_structured_output(output_model)` where `output_model` is the node's `output` Pydantic model.
+Many models (DeepSeek-R1, o1, QwQ, local models) don't support `with_structured_output`. NeoGraph provides three output strategies, selected per-node via `llm_config["output_strategy"]`:
 
-The framework first tries `with_structured_output(model, include_raw=True)` to capture both the parsed result and raw response metadata (token counts). If the LLM provider does not support `include_raw`, it falls back to `with_structured_output(model)` without it.
+| Strategy | How it works | Best for |
+|---|---|---|
+| `"structured"` | `llm.with_structured_output(model)` | OpenAI, Anthropic, Gemini |
+| `"json_mode"` | LLM returns raw text, framework strips fences + parses JSON | DeepSeek, local models |
+| `"text"` | LLM returns prose with embedded JSON, framework extracts it | Reasoning models (o1, R1) |
 
-This means structured output works with any LangChain chat model that supports `with_structured_output` -- OpenAI, Anthropic, Google, Fireworks, and others.
+### structured (default)
 
-For ReAct modes (gather and execute), structured output is applied as a final parsing step after the tool loop completes. The LLM's last message in the loop is not required to be structured; a separate `with_structured_output` call parses the final answer.
+The framework calls `llm.with_structured_output(output_model)`. Works with any LangChain model that supports native structured output. The framework tries `include_raw=True` to capture token counts, falling back without it.
+
+```python
+Node(name="classify", mode="produce", output=Claims, model="fast", prompt="classify")
+# No output_strategy needed — "structured" is the default
+```
+
+### json_mode
+
+The framework calls `llm.invoke()` directly (no `with_structured_output`), then strips markdown code fences and parses the JSON into the Pydantic model. Works with any model that returns JSON in its text response.
+
+```python
+Node(name="decompose", mode="produce", output=Claims, model="reason", prompt="decompose",
+     llm_config={"output_strategy": "json_mode"})
+```
+
+The framework handles:
+- Markdown fence stripping (```` ```json ... ``` ````)
+- JSON object extraction from surrounding text
+- Pydantic `model_validate_json` for type-safe parsing
+
+### text
+
+Same as `json_mode` — the framework extracts JSON from the LLM's plain text response. Use this name to signal intent when the model returns prose with embedded JSON rather than fenced code blocks.
+
+```python
+Node(name="analyze", mode="produce", output=Analysis, model="reason", prompt="analyze",
+     llm_config={"output_strategy": "text"})
+```
+
+### Mixing strategies in one pipeline
+
+Different nodes can use different strategies. This is the production pattern for pipelines that use multiple model providers:
+
+```python
+# DeepSeek for creative decomposition (no structured output support)
+decompose = Node(
+    name="decompose", mode="produce", output=Claims,
+    model="reason", prompt="decompose",
+    llm_config={"temperature": 0.9, "output_strategy": "json_mode"},
+)
+
+# Gemini for precise classification (native structured output)
+classify = Node(
+    name="classify", mode="produce", output=ClassifiedClaims,
+    model="fast", prompt="classify",
+    llm_config={"temperature": 0, "output_strategy": "structured"},
+)
+
+pipeline = Construct("mixed-models", nodes=[decompose, classify])
+```
+
+### Strategies in gather/execute modes
+
+For ReAct modes, the output strategy applies to the final parsing step after the tool loop completes:
+
+- `"structured"`: a separate `with_structured_output` call parses the final answer
+- `"json_mode"` / `"text"`: the last message in the tool loop is parsed directly as JSON
+
+```python
+Node(name="research", mode="gather", output=ResearchResult,
+     model="reason", prompt="research",
+     tools=[Tool(name="search", budget=5)],
+     llm_config={"output_strategy": "json_mode"})
+```
 
 ## Backward compatibility
 

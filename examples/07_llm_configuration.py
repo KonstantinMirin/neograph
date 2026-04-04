@@ -140,7 +140,35 @@ classify = Node(
     },
 )
 
+# Mixed models: reasoning model with json_mode (no structured output support)
+# + fast model with native structured output
+decompose_deepseek = Node(
+    name="decompose-ds",
+    mode="produce",
+    output=Claims,
+    model="reason",
+    prompt="decompose",
+    llm_config={
+        "temperature": 0.9,
+        "output_strategy": "json_mode",  # DeepSeek doesn't support with_structured_output
+    },
+)
+
+classify_gemini = Node(
+    name="classify-gm",
+    mode="produce",
+    input=Claims,
+    output=ClassifiedClaims,
+    model="fast",
+    prompt="classify",
+    llm_config={
+        "temperature": 0,
+        "output_strategy": "structured",  # Gemini supports native structured output
+    },
+)
+
 pipeline = Construct("configured-pipeline", nodes=[decompose, classify])
+pipeline_mixed = Construct("mixed-models", nodes=[decompose_deepseek, classify_gemini])
 
 
 # ── Run ──────────────────────────────────────────────────────────────────
@@ -152,3 +180,6 @@ if __name__ == "__main__":
 
     print(f"\nDecomposed: {result['decompose'].items}")
     print(f"Classified: {result['classify'].classified}")
+    print()
+    print("Note: output_strategy is per-node — mix structured and json_mode")
+    print("in the same pipeline when using different model providers.")

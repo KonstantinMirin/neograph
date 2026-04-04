@@ -41,7 +41,7 @@ class Node(BaseModel):
 | `output` | `type[BaseModel] \| None` | Pydantic model written to state. Required for all nodes. |
 | `model` | `str \| None` | LLM tier name passed to `llm_factory`. E.g., `"fast"`, `"reason"`. |
 | `prompt` | `str \| None` | Prompt template name passed to `prompt_compiler`. |
-| `llm_config` | `dict[str, Any]` | Extra LLM settings (temperature, max_tokens, etc.) forwarded to `llm_factory`. |
+| `llm_config` | `dict[str, Any]` | LLM settings forwarded to `llm_factory`. Common keys: `temperature`, `max_tokens`, `output_strategy` (`"structured"`, `"json_mode"`, `"text"`). |
 | `tools` | `list[Tool]` | Tools available to gather/execute mode nodes. |
 
 **Pipe operator:**
