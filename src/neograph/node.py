@@ -95,6 +95,58 @@ class Node(Modifiable, BaseModel):
 
     # has_modifier, get_modifier, __or__ inherited from Modifiable
 
+    def run_isolated(
+        self,
+        input: Any = None,
+        *,
+        config: dict | None = None,
+    ) -> Any:
+        """Execute this node in isolation — for unit testing.
+
+        Bypasses compile() and run(). Creates the node function via the
+        factory, builds a minimal state with the provided input, and invokes
+        it directly. Returns the node's output (the Pydantic model instance),
+        not a state dict.
+
+        Usage:
+
+            # Unit test a scripted node
+            result = extract.run_isolated(input={"raw": "hello"})
+            assert result.text == "hello"
+
+            # Unit test a produce node (with configure_llm already set)
+            configure_llm(llm_factory=lambda tier: FakeLLM(), prompt_compiler=...)
+            result = classify.run_isolated(input=Claims(items=["x"]))
+            assert isinstance(result, Classified)
+
+        Args:
+            input: Either the typed input instance (e.g. a Claims(...) object)
+                   or a dict of field-value pairs to seed the state.
+            config: Optional RunnableConfig. Pipeline metadata goes in
+                    config["configurable"]. Defaults to an empty configurable.
+        """
+        from neograph.factory import make_node_fn
+
+        node_fn = make_node_fn(self)
+
+        # Build a minimal state dict the node function can read
+        state: dict[str, Any] = {}
+        if isinstance(input, dict):
+            state.update(input)
+        elif input is not None:
+            # Typed instance — place it under the node name so _extract_input finds it by type
+            state["_neo_isolated_input"] = input
+
+        config = config or {"configurable": {}}
+        if "configurable" not in config:
+            config["configurable"] = {}
+
+        result = node_fn(state, config)
+
+        # node_fn returns a state update dict — extract the output field
+        field_name = self.name.replace("-", "_")
+        return result.get(field_name)
+
 
 def raw_node(
     input: Any = None,

@@ -11,7 +11,7 @@ from typing import Any
 import pytest
 from pydantic import BaseModel
 
-from neograph import Construct, Node, Operator, Oracle, Each, Tool, compile, raw_node, run
+from neograph import Construct, Node, Operator, Oracle, Each, Tool, compile, raw_node, run, tool
 from tests.fakes import FakeTool, ReActFake, StructuredFake, TextFake, configure_fake_llm
 
 
@@ -1777,6 +1777,135 @@ class TestLLMConfig:
         assert compiler_calls[0]["node_name"] == "analyze"
         assert compiler_calls[0]["node_id"] == "BR-001"
         assert compiler_calls[0]["project_root"] == "/proj"
+
+
+class TestToolDecorator:
+    """@tool decorator: signature-inferred tool schemas."""
+
+    def test_tool_decorator_auto_registers(self):
+        """@tool wraps a function, auto-registers the factory, returns a Tool spec."""
+        from langchain_core.messages import AIMessage
+
+        call_log = []
+
+        @tool(budget=3)
+        def search_codebase(query: str) -> str:
+            """Search the codebase for a query."""
+            call_log.append(query)
+            return f"Results for: {query}"
+
+        # The decorator returns a Tool instance
+        assert isinstance(search_codebase, Tool)
+        assert search_codebase.name == "search_codebase"
+        assert search_codebase.budget == 3
+
+        # Build a pipeline using it directly (no register_tool_factory needed)
+        counter = {"n": 0}
+
+        class FakeGatherLLM:
+            def bind_tools(self, tools):
+                return self
+
+            def invoke(self, messages, **kwargs):
+                counter["n"] += 1
+                if counter["n"] <= 2:
+                    msg = AIMessage(content="")
+                    msg.tool_calls = [{
+                        "name": "search_codebase",
+                        "args": {"query": f"q{counter['n']}"},
+                        "id": f"c{counter['n']}",
+                    }]
+                    return msg
+                return AIMessage(content="done")
+
+            def with_structured_output(self, model, **kwargs):
+                self._model = model
+                return self
+
+        configure_fake_llm(lambda tier: FakeGatherLLM())
+
+        researcher = Node(
+            name="research",
+            mode="gather",
+            output=Claims,
+            model="fast",
+            prompt="test",
+            tools=[search_codebase],  # decorator output used directly
+        )
+
+        pipeline = Construct("test-tool-decorator", nodes=[researcher])
+        graph = compile(pipeline)
+        run(graph, input={})
+
+        # The decorated function was called twice (within budget)
+        assert len(call_log) == 2
+        assert call_log == ["q1", "q2"]
+
+    def test_tool_decorator_without_args(self):
+        """@tool (no parens) also works."""
+        @tool
+        def noop(x: str) -> str:
+            """A no-op tool."""
+            return x
+
+        assert isinstance(noop, Tool)
+        assert noop.name == "noop"
+        assert noop.budget == 0  # unlimited by default
+
+
+class TestRunIsolated:
+    """Node.run_isolated() — direct invocation for unit testing."""
+
+    def test_scripted_node_run_isolated(self):
+        """Scripted nodes can be tested without compile()/run()."""
+        from neograph import register_scripted
+
+        register_scripted("upper", lambda input_data, config: RawText(
+            text=input_data.text.upper() if input_data else "NONE"
+        ))
+
+        upper_node = Node.scripted("upper", fn="upper", input=RawText, output=RawText)
+
+        # Direct invocation — no pipeline, no compile, no run
+        result = upper_node.run_isolated(input=RawText(text="hello"))
+
+        assert isinstance(result, RawText)
+        assert result.text == "HELLO"
+
+    def test_produce_node_run_isolated(self):
+        """Produce nodes can be tested with a fake LLM."""
+        configure_fake_llm(lambda tier: StructuredFake(
+            lambda model: model(items=["isolated-result"])
+        ))
+
+        decompose = Node(
+            "decompose", mode="produce", output=Claims, model="fast", prompt="test"
+        )
+
+        result = decompose.run_isolated()
+
+        assert isinstance(result, Claims)
+        assert result.items == ["isolated-result"]
+
+    def test_run_isolated_with_config(self):
+        """run_isolated passes config through to the node function."""
+        from neograph import register_scripted
+
+        seen_config = {}
+        def fn(input_data, config):
+            seen_config.update(config.get("configurable", {}))
+            return Claims(items=["ok"])
+
+        register_scripted("cfg_test", fn)
+        node = Node.scripted("cfg-test", fn="cfg_test", output=Claims)
+
+        result = node.run_isolated(
+            config={"configurable": {"node_id": "TEST-001", "env": "staging"}}
+        )
+
+        assert result.items == ["ok"]
+        assert seen_config["node_id"] == "TEST-001"
+        assert seen_config["env"] == "staging"
 
 
 class TestConfigInjectionPatterns:

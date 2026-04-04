@@ -1,8 +1,24 @@
-"""Tool — LLM-callable tool with per-tool budget."""
+"""Tool — LLM-callable tool with per-tool budget.
+
+Two ways to define a tool:
+
+    # 1. Declarative: Tool class + register_tool_factory
+    search = Tool("search_code", budget=5)
+    register_tool_factory("search_code", lambda config, tool_config: MySearchTool())
+
+    # 2. Decorator: @tool wraps a function, auto-registers the factory
+    @tool(budget=5)
+    def search_code(query: str) -> list[str]:
+        '''Search the codebase for the given query.'''
+        return _do_search(query)
+
+    # In both cases, pass to a Node via tools=[...]
+    research = Node("research", mode="gather", tools=[search_code], ...)
+"""
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Callable
 
 from pydantic import BaseModel, Field
 
@@ -68,4 +84,51 @@ class ToolBudgetTracker:
             if self._counts.get(name, 0) < budget:
                 return False
         return True
+
+
+def tool(
+    fn: Callable | None = None,
+    *,
+    name: str | None = None,
+    budget: int = 0,
+    config: dict[str, Any] | None = None,
+) -> Any:
+    """Decorator that turns a function into a Tool and auto-registers its factory.
+
+    The tool's name defaults to the function name. The description comes from
+    the docstring. Arguments are introspected from the function signature.
+
+    Usage:
+
+        @tool(budget=5)
+        def search_code(query: str) -> list[str]:
+            '''Search the codebase for the given query.'''
+            return _do_search(query)
+
+        research = Node("research", mode="gather", tools=[search_code], ...)
+
+    The decorated function IS a Tool instance (with the original function
+    attached as .fn), so it can be passed directly to Node's tools= list.
+    The factory is auto-registered under the tool's name.
+    """
+    def decorator(f: Callable) -> Tool:
+        # Avoid circular import
+        from neograph.factory import register_tool_factory
+
+        tool_name = name or f.__name__
+
+        # Build a LangChain-compatible tool from the function
+        from langchain_core.tools import tool as lc_tool
+        lc_tool_instance = lc_tool(f)
+
+        # Register the factory so the ReAct loop can instantiate it
+        register_tool_factory(tool_name, lambda config, tool_config: lc_tool_instance)
+
+        # Return a Tool spec that Node accepts in tools=[...]
+        return Tool(tool_name, budget=budget, config=config or {})
+
+    # Support both @tool and @tool(budget=5)
+    if fn is not None:
+        return decorator(fn)
+    return decorator
 

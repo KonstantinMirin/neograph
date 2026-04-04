@@ -12,7 +12,7 @@ from neograph.factory import register_condition, register_scripted, register_too
 from neograph.modifiers import Operator, Oracle, Each
 from neograph.node import Node, raw_node
 from neograph.runner import run
-from neograph.tool import Tool
+from neograph.tool import Tool, tool
 
 __all__ = [
     "Node",
@@ -24,6 +24,7 @@ __all__ = [
     "compile",
     "run",
     "raw_node",
+    "tool",
     "configure_llm",
     "register_scripted",
     "register_condition",
