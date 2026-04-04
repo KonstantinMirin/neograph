@@ -22,13 +22,18 @@ via llm_config["output_strategy"]:
 The strategy is per-node, so you can mix models in the same pipeline:
 fast structured calls for classification, json_mode for reasoning models.
 
+Built with the @node decorator + construct_from_module — all three
+strategy nodes live in one pipeline and produce identical parsed output.
+
 Run:
     python examples/08_structured_output_coercion.py
 """
 
+import sys
+
 from pydantic import BaseModel
 
-from neograph import Construct, Node, compile, configure_llm, run
+from neograph import compile, configure_llm, construct_from_module, node, run
 
 
 # ── Schema ───────────────────────────────────────────────────────────────
@@ -94,34 +99,42 @@ configure_llm(
 # ══════════════════════════════════════════════════════════════════════════
 
 # Strategy 1: structured (default) — model supports with_structured_output
-structured_node = Node(
-    name="structured",
-    mode="produce",
-    output=Claims,
-    model="fast",
-    prompt="extract",
-    # No output_strategy — defaults to "structured"
-)
+@node(mode="produce", output=Claims, model="fast", prompt="extract")
+def structured() -> Claims:
+    # body unused for mode='produce' — LLM handles execution via prompt=
+    # No output_strategy in llm_config — defaults to "structured"
+    ...
+
 
 # Strategy 2: json_mode — model returns JSON in fences, framework parses
-json_mode_node = Node(
-    name="json-mode",
+@node(
     mode="produce",
     output=Claims,
     model="fast",
     prompt="extract",
     llm_config={"output_strategy": "json_mode"},
+    name="json-mode",
 )
+def json_mode() -> Claims:
+    # body unused for mode='produce' — LLM handles execution via prompt=
+    ...
+
 
 # Strategy 3: text — model returns prose with embedded JSON, framework extracts
-text_node = Node(
-    name="text-mode",
+@node(
     mode="produce",
     output=Claims,
     model="fast",
     prompt="extract",
     llm_config={"output_strategy": "text"},
+    name="text-mode",
 )
+def text_mode() -> Claims:
+    # body unused for mode='produce' — LLM handles execution via prompt=
+    ...
+
+
+pipeline = construct_from_module(sys.modules[__name__], name="output-strategies")
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -131,17 +144,17 @@ text_node = Node(
 if __name__ == "__main__":
     print("Output strategy comparison:\n")
 
-    for node in [structured_node, json_mode_node, text_node]:
-        pipeline = Construct(f"test-{node.name}", nodes=[node])
-        graph = compile(pipeline)
-        result = run(graph, input={"node_id": "test"})
-        field = node.name.replace("-", "_")
+    graph = compile(pipeline)
+    result = run(graph, input={"node_id": "test"})
+
+    for field in ("structured", "json_mode", "text_mode"):
         print(f"  Result: {result[field].items}\n")
 
     print("All three strategies produce the same parsed output.")
     print("The consumer writes zero parsing code — NeoGraph handles it.")
     print()
     print("Production pattern:")
-    print('  Node(name="decompose", mode="produce", output=Claims,')
-    print('       model="reason", prompt="decompose",')
-    print('       llm_config={"output_strategy": "json_mode"})  # <-- one line')
+    print('  @node(mode="produce", output=Claims,')
+    print('        model="reason", prompt="decompose",')
+    print('        llm_config={"output_strategy": "json_mode"})  # <-- one line')
+    print('  def decompose() -> Claims: ...')

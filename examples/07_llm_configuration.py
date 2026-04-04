@@ -9,6 +9,10 @@ This shows how llm_config on each Node flows through to the LLM factory,
 giving you per-node control over model, temperature, max tokens, and any
 other parameter your LLM provider accepts.
 
+Built with the @node decorator + construct_from_module — each function's
+`llm_config=` kwarg on `@node(...)` flows through to the LLM factory when
+that node runs.
+
 Run (requires .env with OPENROUTER_API_KEY):
     python examples/07_llm_configuration.py
 
@@ -22,7 +26,7 @@ import sys
 
 from pydantic import BaseModel
 
-from neograph import Construct, Node, compile, configure_llm, run
+from neograph import compile, configure_llm, construct_from_module, node, run
 
 
 # ── Schemas ──────────────────────────────────────────────────────────────
@@ -38,9 +42,9 @@ class ClassifiedClaims(BaseModel, frozen=True):
 # LLM FACTORY — the single place where all LLM configuration happens.
 #
 # NeoGraph calls this with:
-#   tier       — from Node(model="fast") or Node(model="reason")
+#   tier       — from @node(model="fast") or @node(model="reason")
 #   node_name  — the node's name, for per-node routing
-#   llm_config — from Node(llm_config={...}), any dict you want
+#   llm_config — from @node(llm_config={...}), any dict you want
 #
 # You control what these mean. NeoGraph just passes them through.
 # ══════════════════════════════════════════════════════════════════════════
@@ -113,8 +117,7 @@ configure_llm(
 # ══════════════════════════════════════════════════════════════════════════
 
 # Creative decomposition: high temperature, more tokens
-decompose = Node(
-    name="decompose",
+@node(
     mode="produce",
     output=Claims,
     model="reason",          # uses the "reason" tier (more capable model)
@@ -124,12 +127,14 @@ decompose = Node(
         "max_tokens": 2000,
     },
 )
+def decompose() -> Claims:
+    # body unused for mode='produce' — LLM handles execution via prompt=
+    ...
+
 
 # Precise classification: zero temperature, fewer tokens
-classify = Node(
-    name="classify",
+@node(
     mode="produce",
-    input=Claims,
     output=ClassifiedClaims,
     model="fast",            # uses the "fast" tier (cheaper model)
     prompt="classify",
@@ -138,36 +143,12 @@ classify = Node(
         "max_tokens": 500,
     },
 )
+def classify(decompose: Claims) -> ClassifiedClaims:
+    # body unused for mode='produce' — LLM handles execution via prompt=
+    ...
 
-# Mixed models: reasoning model with json_mode (no structured output support)
-# + fast model with native structured output
-decompose_deepseek = Node(
-    name="decompose-ds",
-    mode="produce",
-    output=Claims,
-    model="reason",
-    prompt="decompose",
-    llm_config={
-        "temperature": 0.9,
-        "output_strategy": "json_mode",  # DeepSeek doesn't support with_structured_output
-    },
-)
 
-classify_gemini = Node(
-    name="classify-gm",
-    mode="produce",
-    input=Claims,
-    output=ClassifiedClaims,
-    model="fast",
-    prompt="classify",
-    llm_config={
-        "temperature": 0,
-        "output_strategy": "structured",  # Gemini supports native structured output
-    },
-)
-
-pipeline = Construct("configured-pipeline", nodes=[decompose, classify])
-pipeline_mixed = Construct("mixed-models", nodes=[decompose_deepseek, classify_gemini])
+pipeline = construct_from_module(sys.modules[__name__], name="configured-pipeline")
 
 
 # ── Run ──────────────────────────────────────────────────────────────────

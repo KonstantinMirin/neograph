@@ -58,22 +58,31 @@ class ValidationResult(BaseModel, frozen=True):
 class TestScriptedPipeline:
     def test_three_node_pipeline(self):
         """Data flows through 3 scripted nodes via typed state bus."""
-        from neograph.factory import register_scripted
+        import types as _types
 
-        # Register scripted functions
-        register_scripted("extract_text", lambda input_data, config: RawText(text="hello world"))
-        register_scripted("split_claims", lambda input_data, config: Claims(items=["claim-1", "claim-2"]))
-        register_scripted("count_claims", lambda input_data, config: ClassifiedClaims(
-            classified=[{"claim": c, "category": "fact"} for c in input_data.items]
-        ))
+        from neograph import construct_from_module, node
 
-        # Define nodes
-        extract = Node.scripted("extract", fn="extract_text", output=RawText)
-        split = Node.scripted("split", fn="split_claims", input=RawText, output=Claims)
-        classify = Node.scripted("classify", fn="count_claims", input=Claims, output=ClassifiedClaims)
+        mod = _types.ModuleType("test_scripted_pipeline_mod")
 
-        # Compose and run
-        pipeline = Construct("test-scripted", nodes=[extract, split, classify])
+        @node(mode="scripted", output=RawText)
+        def extract() -> RawText:
+            return RawText(text="hello world")
+
+        @node(mode="scripted", output=Claims)
+        def split(extract: RawText) -> Claims:
+            return Claims(items=["claim-1", "claim-2"])
+
+        @node(mode="scripted", output=ClassifiedClaims)
+        def classify(split: Claims) -> ClassifiedClaims:
+            return ClassifiedClaims(
+                classified=[{"claim": c, "category": "fact"} for c in split.items]
+            )
+
+        mod.extract = extract
+        mod.split = split
+        mod.classify = classify
+
+        pipeline = construct_from_module(mod, name="test-scripted")
         graph = compile(pipeline)
         result = run(graph, input={"node_id": "test-001"})
 
@@ -95,21 +104,24 @@ class TestScriptedPipeline:
 class TestProduceMode:
     def test_produce_node_with_fake_llm(self):
         """Produce node calls LLM and gets structured output."""
+        import types as _types
+
+        from neograph import construct_from_module, node
+
         configure_fake_llm(
             lambda tier: StructuredFake(
                 lambda m: m(items=["extracted-1", "extracted-2", "extracted-3"])
             )
         )
 
-        extract = Node(
-            name="extract",
-            mode="produce",
-            output=Claims,
-            model="fast",
-            prompt="test/extract",
-        )
+        mod = _types.ModuleType("test_produce_mode_mod")
 
-        pipeline = Construct("test-produce", nodes=[extract])
+        @node(mode="produce", output=Claims, model="fast", prompt="test/extract")
+        def extract() -> Claims: ...
+
+        mod.extract = extract
+
+        pipeline = construct_from_module(mod, name="test-produce")
         graph = compile(pipeline)
         result = run(graph, input={"node_id": "test-001"})
 
@@ -130,6 +142,9 @@ class TestProduceMode:
 class TestGatherMode:
     def test_gather_with_tool_budgets(self):
         """Gather node uses tools within budget, then forced to respond."""
+        import types as _types
+
+        from neograph import construct_from_module, node
         from neograph.factory import register_tool_factory
 
         search_tool = FakeTool("search_nodes", response="found")
@@ -146,16 +161,20 @@ class TestGatherMode:
         )
         configure_fake_llm(lambda tier: fake)
 
-        explore = Node(
-            name="explore",
+        mod = _types.ModuleType("test_gather_budget_mod")
+
+        @node(
             mode="gather",
             output=Claims,
             model="reason",
             prompt="test/explore",
             tools=[Tool(name="search_nodes", budget=2)],
         )
+        def explore() -> Claims: ...
 
-        pipeline = Construct("test-gather", nodes=[explore])
+        mod.explore = explore
+
+        pipeline = construct_from_module(mod, name="test-gather")
         graph = compile(pipeline)
         result = run(graph, input={"node_id": "test-001"})
 
@@ -164,6 +183,9 @@ class TestGatherMode:
 
     def test_gather_unlimited_budget(self):
         """Tool with budget=0 is never exhausted — LLM decides when to stop."""
+        import types as _types
+
+        from neograph import construct_from_module, node
         from neograph.factory import register_tool_factory
 
         lookup_tool = FakeTool("lookup", response="result")
@@ -182,16 +204,20 @@ class TestGatherMode:
         )
         configure_fake_llm(lambda tier: fake)
 
-        node = Node(
-            name="scan",
+        mod = _types.ModuleType("test_gather_unlimited_mod")
+
+        @node(
             mode="gather",
             output=Claims,
             model="fast",
             prompt="test/scan",
             tools=[Tool(name="lookup", budget=0)],  # unlimited
         )
+        def scan() -> Claims: ...
 
-        pipeline = Construct("test-unlimited", nodes=[node])
+        mod.scan = scan
+
+        pipeline = construct_from_module(mod, name="test-unlimited")
         graph = compile(pipeline)
         result = run(graph, input={"node_id": "test-001"})
 
@@ -542,7 +568,9 @@ class TestRawNode:
 class TestMiniRWPipeline:
     def test_mixed_mode_pipeline(self):
         """Realistic pipeline mixing produce + scripted modes."""
-        from neograph.factory import register_scripted
+        import types as _types
+
+        from neograph import construct_from_module, node
 
         def respond(model):
             if model is Claims:
@@ -556,31 +584,23 @@ class TestMiniRWPipeline:
 
         configure_fake_llm(lambda tier: StructuredFake(respond))
 
-        register_scripted("build_catalog", lambda input_data, config: RawText(text="node catalog: 42 nodes"))
+        mod = _types.ModuleType("test_mini_rw_mod")
 
-        # Pipeline
-        decompose = Node(
-            name="decompose",
-            mode="produce",
-            output=Claims,
-            model="reason",
-            prompt="rw/decompose",
-        )
-        classify = Node(
-            name="classify",
-            mode="produce",
-            input=Claims,
-            output=ClassifiedClaims,
-            model="fast",
-            prompt="rw/classify",
-        )
-        catalog = Node.scripted("catalog", fn="build_catalog", output=RawText)
+        @node(mode="produce", output=Claims, model="reason", prompt="rw/decompose")
+        def decompose() -> Claims: ...
 
-        pipeline = Construct(
-            "mini-rw",
-            description="Simplified RW pipeline: decompose → classify → catalog",
-            nodes=[decompose, classify, catalog],
-        )
+        @node(mode="produce", output=ClassifiedClaims, model="fast", prompt="rw/classify")
+        def classify(decompose: Claims) -> ClassifiedClaims: ...
+
+        @node(mode="scripted", output=RawText)
+        def catalog() -> RawText:
+            return RawText(text="node catalog: 42 nodes")
+
+        mod.decompose = decompose
+        mod.classify = classify
+        mod.catalog = catalog
+
+        pipeline = construct_from_module(mod, name="mini-rw")
         graph = compile(pipeline)
         result = run(graph, input={"node_id": "BR-RW-042"})
 
@@ -603,6 +623,9 @@ class TestExecuteMode:
 
     def test_execute_with_tools(self):
         """Execute node calls tools and produces structured output."""
+        import types as _types
+
+        from neograph import construct_from_module, node
         from neograph.factory import register_tool_factory
 
         write_tool = FakeTool("write_file", response="written")
@@ -617,16 +640,20 @@ class TestExecuteMode:
         )
         configure_fake_llm(lambda tier: fake)
 
-        writer = Node(
-            name="writer",
+        mod = _types.ModuleType("test_execute_mode_mod")
+
+        @node(
             mode="execute",
             output=RawText,
             model="fast",
             prompt="test/write",
             tools=[Tool(name="write_file", budget=1)],
         )
+        def writer() -> RawText: ...
 
-        pipeline = Construct("test-execute", nodes=[writer])
+        mod.writer = writer
+
+        pipeline = construct_from_module(mod, name="test-execute")
         graph = compile(pipeline)
         result = run(graph, input={"node_id": "test-001"})
 

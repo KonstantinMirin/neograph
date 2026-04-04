@@ -5,6 +5,12 @@ requirement into claims (produce mode — single structured call). Then,
 a gather node uses a search tool to research each claim, constrained
 by a per-tool call budget. The tool budget prevents runaway API costs.
 
+Built with the @node decorator + construct_from_module. Each function
+becomes a Node; dependencies come from parameter names (e.g., `research`
+takes `decompose: Claims`, which wires it to the upstream `decompose`
+node). LLM-mode bodies are `...` — the LLM handles execution via the
+`prompt=` template.
+
 This example requires API keys (uses fakes here for demonstration).
 
 Run:
@@ -13,10 +19,12 @@ Run:
 
 from __future__ import annotations
 
+import sys
+
 from langchain_core.messages import AIMessage
 from pydantic import BaseModel
 
-from neograph import Construct, Node, Tool, compile, configure_llm, register_tool_factory, run
+from neograph import Tool, compile, configure_llm, construct_from_module, node, register_tool_factory, run
 
 
 # ── Schemas ──────────────────────────────────────────────────────────────
@@ -89,7 +97,7 @@ class FakeSearchTool:
 register_tool_factory("search_codebase", lambda config, tool_config: FakeSearchTool())
 
 
-# ── Configure LLM layer ────────────────────────────────────────────���────
+# ── Configure LLM layer ──────────────────────────────────────────────────
 
 def llm_factory(tier):
     if tier == "fast":
@@ -102,29 +110,29 @@ configure_llm(
 )
 
 
-# ── Build pipeline ───────────────────────────────────────────────────────
+# ── Pipeline nodes ───────────────────────────────────────────────────────
 # Step 1: Decompose requirement into claims (single LLM call)
 # Step 2: Research claims using search tool (budget: max 2 searches)
 
-decompose = Node(
-    name="decompose",
-    mode="produce",
-    output=Claims,
-    model="fast",
-    prompt="req/decompose",
-)
+@node(mode="produce", output=Claims, model="fast", prompt="req/decompose")
+def decompose() -> Claims:
+    # body unused for mode='produce' — LLM handles execution via prompt=
+    ...
 
-research = Node(
-    name="research",
+
+@node(
     mode="gather",
-    input=Claims,
     output=ResearchResult,
     model="reason",
     prompt="req/research",
     tools=[Tool(name="search_codebase", budget=2)],  # max 2 searches
 )
+def research(decompose: Claims) -> ResearchResult:
+    # body unused for mode='gather' — LLM handles execution via prompt=
+    ...
 
-pipeline = Construct("requirement-analysis", nodes=[decompose, research])
+
+pipeline = construct_from_module(sys.modules[__name__], name="requirement-analysis")
 
 
 # ── Run ──────────────────────────────────────────────────────────────────
