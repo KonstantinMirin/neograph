@@ -1917,3 +1917,70 @@ class TestLLMConfig:
         result = run(graph, input={"node_id": "test-001"})
 
         assert result["old_style"].items == ["ok"]
+
+    def test_input_injected_into_config(self):
+        """Pipeline input fields (node_id, project_root) accessible via config["configurable"]."""
+        from neograph.factory import register_scripted
+
+        config_seen = {}
+
+        def capture_config(input_data, config):
+            configurable = config.get("configurable", {})
+            config_seen["node_id"] = configurable.get("node_id")
+            config_seen["project_root"] = configurable.get("project_root")
+            config_seen["custom_field"] = configurable.get("custom_field")
+            return Claims(items=["done"])
+
+        register_scripted("capture", capture_config)
+
+        node = Node.scripted("capture", fn="capture", output=Claims)
+        pipeline = Construct("test-config-inject", nodes=[node])
+        graph = compile(pipeline)
+
+        result = run(graph,
+                     input={"node_id": "BR-RW-042", "project_root": "/my/project"},
+                     config={"configurable": {"custom_field": "extra-data"}})
+
+        # All input fields + custom config accessible
+        assert config_seen["node_id"] == "BR-RW-042"
+        assert config_seen["project_root"] == "/my/project"
+        assert config_seen["custom_field"] == "extra-data"
+
+    def test_prompt_compiler_receives_config(self):
+        """Prompt compiler gets node_name and full config with pipeline metadata."""
+        from neograph._llm import configure_llm
+
+        compiler_calls = []
+
+        class FakeLLM:
+            def with_structured_output(self, model, **kwargs):
+                self._model = model
+                return self
+
+            def invoke(self, messages, **kwargs):
+                return self._model(items=["result"])
+
+        def tracking_compiler(template, data, *, node_name=None, config=None):
+            compiler_calls.append({
+                "template": template,
+                "node_name": node_name,
+                "node_id": config.get("configurable", {}).get("node_id") if config else None,
+                "project_root": config.get("configurable", {}).get("project_root") if config else None,
+            })
+            return [{"role": "user", "content": "test"}]
+
+        configure_llm(
+            llm_factory=lambda tier: FakeLLM(),
+            prompt_compiler=tracking_compiler,
+        )
+
+        node = Node(name="analyze", mode="produce", output=Claims, model="fast", prompt="rw/analyze")
+        pipeline = Construct("test-prompt-ctx", nodes=[node])
+        graph = compile(pipeline)
+        run(graph, input={"node_id": "BR-001", "project_root": "/proj"})
+
+        assert len(compiler_calls) == 1
+        assert compiler_calls[0]["template"] == "rw/analyze"
+        assert compiler_calls[0]["node_name"] == "analyze"
+        assert compiler_calls[0]["node_id"] == "BR-001"
+        assert compiler_calls[0]["project_root"] == "/proj"

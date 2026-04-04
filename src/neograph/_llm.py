@@ -31,33 +31,46 @@ _prompt_compiler: Callable[[str, Any], list] | None = None
 
 def configure_llm(
     llm_factory: Callable,
-    prompt_compiler: Callable[[str, Any], list],
+    prompt_compiler: Callable,
 ) -> None:
     """Configure NeoGraph's LLM layer.
 
     Args:
-        llm_factory: Callable that creates LLM instances. Signature:
-                     (tier: str, node_name: str, llm_config: dict) → BaseChatModel
-                     Or the simpler (tier: str) → BaseChatModel for basic usage.
-        prompt_compiler: Callable that takes (template_name, input_data) and
-                        returns list[BaseMessage].
+        llm_factory: Creates LLM instances per node.
+            Simple:   (tier) → BaseChatModel
+            Advanced: (tier, node_name=, llm_config=) → BaseChatModel
+
+        prompt_compiler: Builds message lists for LLM calls.
+            Simple:   (template, input_data) → list[BaseMessage]
+            Advanced: (template, input_data, node_name=, config=) → list[BaseMessage]
+            The config contains everything from run()'s input + config["configurable"],
+            so the compiler can access node_id, project_root, shared resources, etc.
 
     Usage:
-        # Simple: just tier routing
-        def my_factory(tier, **kwargs):
-            return ChatOpenAI(model={"fast": "gpt-4o-mini", "reason": "o1"}[tier])
+        # Simple
+        configure_llm(
+            llm_factory=lambda tier: ChatOpenAI(model=MODELS[tier]),
+            prompt_compiler=lambda template, data: [HumanMessage(content=str(data))],
+        )
 
-        # Advanced: per-node configuration
-        def my_factory(tier, node_name=None, llm_config=None):
-            llm_config = llm_config or {}
-            return ChatOpenAI(
-                model={"fast": "gpt-4o-mini", "reason": "o1"}[tier],
-                temperature=llm_config.get("temperature", 0),
-                max_tokens=llm_config.get("max_tokens"),
-                timeout=llm_config.get("timeout", 30),
+        # Production: full context access
+        def my_compiler(template, data, *, node_name=None, config=None):
+            node_id = config["configurable"]["node_id"]
+            project_root = config["configurable"]["project_root"]
+            return get_generator_prompt(
+                atom_type=template,
+                node_id=node_id,
+                context_files=load_context(project_root, node_id),
+                analysis_notes=format_notes(data),
             )
 
-        configure_llm(llm_factory=my_factory, prompt_compiler=my_prompt_compiler)
+        def my_factory(tier, node_name=None, llm_config=None):
+            return ChatOpenAI(
+                model=MODELS[tier],
+                temperature=(llm_config or {}).get("temperature", 0),
+            )
+
+        configure_llm(llm_factory=my_factory, prompt_compiler=my_compiler)
     """
     global _llm_factory, _prompt_compiler  # noqa: PLW0603
     _llm_factory = llm_factory
@@ -75,8 +88,12 @@ def _get_llm(tier: str, node_name: str = "", llm_config: dict | None = None) -> 
         return _llm_factory(tier)
 
 
-def _compile_prompt(template: str, input_data: Any) -> list:
-    return _prompt_compiler(template, input_data)
+def _compile_prompt(template: str, input_data: Any, *, node_name: str = "", config: dict | None = None) -> list:
+    try:
+        return _prompt_compiler(template, input_data, node_name=node_name, config=config)
+    except TypeError:
+        # Backward compatible: compiler only accepts (template, data)
+        return _prompt_compiler(template, input_data)
 
 
 def invoke_structured(
@@ -92,7 +109,7 @@ def invoke_structured(
     llm_log = log.bind(tier=model_tier, prompt=prompt_template, output=output_model.__name__)
 
     llm = _get_llm(model_tier, node_name=node_name, llm_config=llm_config)
-    messages = _compile_prompt(prompt_template, input_data)
+    messages = _compile_prompt(prompt_template, input_data, node_name=node_name, config=config)
     try:
         structured_llm = llm.with_structured_output(output_model, include_raw=True)
         include_raw = True
@@ -149,7 +166,7 @@ def invoke_with_tools(
     )
 
     llm = _get_llm(model_tier, node_name=node_name, llm_config=llm_config)
-    messages = _compile_prompt(prompt_template, input_data)
+    messages = _compile_prompt(prompt_template, input_data, node_name=node_name, config=config)
 
     # Create tool instances from registered factories
     tool_instances = {}
