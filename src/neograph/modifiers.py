@@ -1,11 +1,13 @@
 """Modifiers — composable pipeline behaviors applied via the | operator.
 
     node | Oracle(n=3, merge_prompt="rw/merge")
-    node | Replicate(over="clusters.clusters", key="label")
+    node | Each(over="clusters.clusters", key="label")
     node | Operator(when="has_open_questions")
 """
 
 from __future__ import annotations
+
+from typing import Any
 
 from pydantic import BaseModel
 
@@ -20,18 +22,33 @@ class Oracle(Modifier):
     The compiler expands this into:
     1. Fan-out: Send(node, payload) x N with different generator IDs
     2. Barrier: merge node with defer=True
-    3. Merge: judge LLM combines N variants into consensus
+    3. Merge: LLM judge (merge_prompt) or scripted function (merge_fn)
+
+    Exactly one of merge_prompt or merge_fn must be provided.
 
     Usage:
-        decompose = Node(...) | Oracle(n=3, merge_prompt="rw/decompose-merge")
+        # LLM merge:
+        node | Oracle(n=3, merge_prompt="rw/decompose-merge")
+
+        # Scripted merge:
+        node | Oracle(n=3, merge_fn="combine_variants")
     """
 
     n: int = 3
     merge_prompt: str | None = None
     merge_model: str = "reason"
+    merge_fn: str | None = None  # registered scripted function name
+
+    def model_post_init(self, __context: Any) -> None:
+        if not self.merge_prompt and not self.merge_fn:
+            msg = "Oracle requires either merge_prompt (LLM judge) or merge_fn (scripted function)."
+            raise ValueError(msg)
+        if self.merge_prompt and self.merge_fn:
+            msg = "Oracle accepts merge_prompt or merge_fn, not both."
+            raise ValueError(msg)
 
 
-class Replicate(Modifier):
+class Each(Modifier):
     """Fan-out modifier: dispatch parallel instances over a collection.
 
     The compiler expands this into:
@@ -40,7 +57,7 @@ class Replicate(Modifier):
     3. Barrier node with defer=True that collects results
 
     Usage:
-        match_verify = Node(...) | Replicate(over="clusters.clusters", key="label")
+        match_verify = Node(...) | Each(over="clusters.clusters", key="label")
     """
 
     over: str       # dotted path to collection in state (e.g., "clusters.clusters")

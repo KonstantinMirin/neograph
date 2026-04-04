@@ -1,0 +1,145 @@
+"""Runnable example: observable LLM pipeline with Langfuse tracing.
+
+Requires .env with:
+    OPENROUTER_API_KEY=sk-or-...
+    LANGFUSE_SECRET_KEY=sk-lf-...
+    LANGFUSE_PUBLIC_KEY=pk-lf-...
+    LANGFUSE_BASE_URL=https://cloud.langfuse.com
+
+Run:
+    python examples/observable_pipeline.py
+"""
+
+from __future__ import annotations
+
+import os
+
+import structlog
+from dotenv import load_dotenv
+
+load_dotenv()
+
+from langchain_openai import ChatOpenAI
+from langfuse.langchain import CallbackHandler
+from pydantic import BaseModel
+
+from neograph import Construct, Node, Oracle, compile, run
+from neograph._llm import configure_llm
+from neograph.factory import register_scripted
+
+# ── Structlog: human-readable for this example ──────────────────────────
+
+structlog.configure(
+    processors=[
+        structlog.dev.ConsoleRenderer(),
+    ],
+    wrapper_class=structlog.make_filtering_bound_logger(0),
+)
+
+# ── Schemas ──────────────────────────────────────────────────────────────
+
+
+class Topic(BaseModel, frozen=True):
+    text: str
+
+
+class Claims(BaseModel, frozen=True):
+    items: list[str]
+
+
+# ── LLM factory: OpenRouter ─────────────────────────────────────────────
+
+MODELS = {
+    "fast": "google/gemini-2.0-flash-001",
+    "reason": "google/gemini-2.0-flash-001",
+}
+
+
+def llm_factory(tier: str) -> ChatOpenAI:
+    return ChatOpenAI(
+        model=MODELS.get(tier, MODELS["fast"]),
+        openai_api_key=os.environ["OPENROUTER_API_KEY"],
+        openai_api_base="https://openrouter.ai/api/v1",
+        temperature=0.7,
+    )
+
+
+def prompt_compiler(template: str, input_data) -> list[dict]:
+    if template == "decompose":
+        return [{"role": "user", "content": (
+            "Break the following topic into 3-5 distinct factual claims. "
+            "Return ONLY a JSON object with an 'items' field containing a list of strings.\n\n"
+            f"Topic: {input_data.text if input_data else 'artificial intelligence'}"
+        )}]
+    if template == "merge-claims":
+        # input_data is a list of Claims from Oracle generators
+        all_claims = []
+        for claims in input_data:
+            all_claims.extend(claims.items)
+        return [{"role": "user", "content": (
+            "You received multiple decompositions of a topic. "
+            "Deduplicate and synthesize into one definitive list of 3-5 claims. "
+            "Return ONLY a JSON object with an 'items' field containing a list of strings.\n\n"
+            "All claims:\n" + "\n".join(f"- {c}" for c in all_claims)
+        )}]
+    return [{"role": "user", "content": "Hello"}]
+
+
+configure_llm(llm_factory=llm_factory, prompt_compiler=prompt_compiler)
+
+# ── Scripted node: format output ─────────────────────────────────────────
+
+
+def format_report(input_data, config):
+    return Topic(text="Final report:\n" + "\n".join(f"  - {c}" for c in input_data.items))
+
+
+register_scripted("format_report", format_report)
+
+# ── Pipeline ─────────────────────────────────────────────────────────────
+
+# produce: LLM decomposes topic into claims (3 variants via Oracle, LLM merge)
+decompose = Node(
+    name="decompose",
+    mode="produce",
+    input=Topic,
+    output=Claims,
+    model="fast",
+    prompt="decompose",
+) | Oracle(n=3, merge_prompt="merge-claims")
+
+# scripted: format the merged result
+report = Node.scripted("report", fn="format_report", input=Claims, output=Topic)
+
+pipeline = Construct("observable-demo", nodes=[decompose, report])
+
+# ── Run with Langfuse callback ───────────────────────────────────────────
+
+if __name__ == "__main__":
+    langfuse_handler = CallbackHandler()
+
+    graph = compile(pipeline)
+    result = run(
+        graph,
+        input={"node_id": "demo-001"},
+        config={"callbacks": [langfuse_handler]},
+    )
+
+    print("\n" + "=" * 60)
+    print("RESULT:")
+    print("=" * 60)
+
+    merged = result.get("decompose")
+    if merged:
+        print(f"\n  Merged claims ({len(merged.items)}):")
+        for claim in merged.items:
+            print(f"    - {claim}")
+
+    report_out = result.get("report")
+    if report_out:
+        print(f"\n  Report:\n{report_out.text}")
+
+    # Flush traces to Langfuse
+    from langfuse import get_client
+    get_client().flush()
+    print("\n\nTraces pushed to Langfuse.")

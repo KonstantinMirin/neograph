@@ -50,6 +50,7 @@ class Node(BaseModel):
     # LLM configuration
     model: str | None = None        # "fast", "reason", "large"
     prompt: str | None = None       # template name in prompt registry
+    llm_config: dict[str, Any] = {} # consumer-specific LLM settings (temperature, max_tokens, etc.)
 
     # Tools with per-tool budgets
     tools: list[Tool] = []

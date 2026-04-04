@@ -45,18 +45,19 @@ class ToolBudgetTracker:
         self._counts[tool_name] = self._counts.get(tool_name, 0) + 1
 
     def exhausted_tools(self) -> set[str]:
-        """Return set of tool names that have exhausted their budget."""
-        result = set()
-        for name, budget in self._budgets.items():
-            if budget > 0 and self._counts.get(name, 0) >= budget:
-                result.add(name)
-        return result
+        """Return names of tools that have hit their budget."""
+        return {
+            name
+            for name, budget in self._budgets.items()
+            if budget > 0 and self._counts.get(name, 0) >= budget
+        }
 
     def all_exhausted(self) -> bool:
-        """True if every tool with a budget has exhausted it."""
+        """True if every budgeted tool is spent. Unlimited tools (budget=0) never exhaust."""
         for name, budget in self._budgets.items():
             if budget == 0:
-                return False  # unlimited tool always available
+                return False
             if self._counts.get(name, 0) < budget:
                 return False
         return True
+

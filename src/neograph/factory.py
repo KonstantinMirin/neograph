@@ -9,11 +9,14 @@ Dispatches by mode:
 
 from __future__ import annotations
 
+import time
 from typing import Any, Callable
 
 import structlog
+from langchain_core.runnables import RunnableConfig
 from pydantic import BaseModel
 
+from neograph.modifiers import Each
 from neograph.node import Node
 from neograph.tool import ToolBudgetTracker
 
@@ -66,28 +69,50 @@ def make_node_fn(node: Node) -> Callable:
     if node.mode == "execute":
         return _make_execute_fn(node)
 
-    msg = f"Unknown mode: {node.mode}"
-    raise ValueError(msg)
-
 
 def _make_scripted_wrapper(node: Node) -> Callable:
     """Wrap a scripted function with state extraction and output wiring."""
     fn = _scripted_registry[node.scripted_fn]
     field_name = node.name.replace("-", "_")
 
-    def scripted_node(state: BaseModel, config: dict) -> dict[str, Any]:
-        node_log = log.bind(node=node.name, mode="scripted")
-        node_log.info("node_start")
+    def scripted_node(state: BaseModel, config: RunnableConfig) -> dict[str, Any]:
+        node_log = log.bind(node=node.name, mode="scripted", fn=node.scripted_fn)
+        node_log.info("node_start",
+                      input_type=node.input.__name__ if node.input and hasattr(node.input, '__name__') else None,
+                      output_type=node.output.__name__ if node.output and hasattr(node.output, '__name__') else None)
+
+        t0 = time.monotonic()
+
+        # Helper for dict/model state access
+        def _state_get(key: str) -> Any:
+            if isinstance(state, dict):
+                return state.get(key)
+            return getattr(state, key, None)
+
+        # Inject oracle generator ID into config if present in state
+        oracle_gen_id = _state_get("neo_oracle_gen_id")
+        if oracle_gen_id is not None:
+            configurable = config.get("configurable", {})
+            config = {**config, "configurable": {**configurable, "_generator_id": oracle_gen_id}}
 
         # Extract input from state if specified
         input_data = _extract_input(state, node)
-        result = fn(input_data, config) if input_data is not None else fn(config)
+        result = fn(input_data, config)
 
         update: dict[str, Any] = {}
         if node.output is not None and result is not None:
-            update[field_name] = result
+            # Each fan-out: wrap result in dict keyed by item's key field
+            each_mod = node.get_modifier(Each)
+            each_item = _state_get("neo_each_item")
+            if each_mod and each_item is not None:
+                key_val = getattr(each_item, each_mod.key, str(each_item))
+                update[field_name] = {key_val: result}
+            else:
+                # Oracle redirection handled by compiler wrapper, not here
+                update[field_name] = result
 
-        node_log.info("node_complete")
+        elapsed = time.monotonic() - t0
+        node_log.info("node_complete", duration_s=round(elapsed, 3))
         return update
 
     scripted_node.__name__ = node.name.replace("-", "_")
@@ -98,13 +123,13 @@ def _make_produce_fn(node: Node) -> Callable:
     """Single LLM call with structured JSON output. No tools."""
     field_name = node.name.replace("-", "_")
 
-    def produce_node(state: BaseModel, config: dict) -> dict[str, Any]:
-        # Import here to avoid circular deps and allow optional LangChain
+    def produce_node(state: BaseModel, config: RunnableConfig) -> dict[str, Any]:
         from neograph._llm import invoke_structured
 
-        node_log = log.bind(node=node.name, mode="produce")
-        node_log.info("node_start")
+        node_log = log.bind(node=node.name, mode="produce", model=node.model, prompt=node.prompt)
+        node_log.info("node_start", output_type=node.output.__name__ if node.output else None)
 
+        t0 = time.monotonic()
         input_data = _extract_input(state, node)
         result = invoke_structured(
             model_tier=node.model,
@@ -112,12 +137,16 @@ def _make_produce_fn(node: Node) -> Callable:
             input_data=input_data,
             output_model=node.output,
             config=config,
+            node_name=node.name,
+            llm_config=node.llm_config,
         )
 
         update: dict[str, Any] = {}
         if result is not None:
             update[field_name] = result
-        node_log.info("node_complete", output_field=field_name)
+
+        elapsed = time.monotonic() - t0
+        node_log.info("node_complete", duration_s=round(elapsed, 3))
         return update
 
     produce_node.__name__ = node.name.replace("-", "_")
@@ -128,12 +157,15 @@ def _make_gather_fn(node: Node) -> Callable:
     """ReAct tool loop with per-tool budgets."""
     field_name = node.name.replace("-", "_")
 
-    def gather_node(state: BaseModel, config: dict) -> dict[str, Any]:
+    def gather_node(state: BaseModel, config: RunnableConfig) -> dict[str, Any]:
         from neograph._llm import invoke_with_tools
 
-        node_log = log.bind(node=node.name, mode="gather")
-        node_log.info("node_start", tools=[t.name for t in node.tools])
+        node_log = log.bind(node=node.name, mode="gather", model=node.model, prompt=node.prompt)
+        node_log.info("node_start",
+                      tools=[t.name for t in node.tools],
+                      budgets={t.name: t.budget for t in node.tools})
 
+        t0 = time.monotonic()
         input_data = _extract_input(state, node)
         budget_tracker = ToolBudgetTracker(node.tools)
 
@@ -145,12 +177,16 @@ def _make_gather_fn(node: Node) -> Callable:
             tools=node.tools,
             budget_tracker=budget_tracker,
             config=config,
+            node_name=node.name,
+            llm_config=node.llm_config,
         )
 
         update: dict[str, Any] = {}
         if result is not None:
             update[field_name] = result
-        node_log.info("node_complete", output_field=field_name)
+
+        elapsed = time.monotonic() - t0
+        node_log.info("node_complete", duration_s=round(elapsed, 3))
         return update
 
     gather_node.__name__ = node.name.replace("-", "_")
@@ -161,12 +197,15 @@ def _make_execute_fn(node: Node) -> Callable:
     """ReAct tool loop with mutation tools."""
     field_name = node.name.replace("-", "_")
 
-    def execute_node(state: BaseModel, config: dict) -> dict[str, Any]:
+    def execute_node(state: BaseModel, config: RunnableConfig) -> dict[str, Any]:
         from neograph._llm import invoke_with_tools
 
-        node_log = log.bind(node=node.name, mode="execute")
-        node_log.info("node_start", tools=[t.name for t in node.tools])
+        node_log = log.bind(node=node.name, mode="execute", model=node.model, prompt=node.prompt)
+        node_log.info("node_start",
+                      tools=[t.name for t in node.tools],
+                      budgets={t.name: t.budget for t in node.tools})
 
+        t0 = time.monotonic()
         input_data = _extract_input(state, node)
         budget_tracker = ToolBudgetTracker(node.tools)
 
@@ -178,36 +217,55 @@ def _make_execute_fn(node: Node) -> Callable:
             tools=node.tools,
             budget_tracker=budget_tracker,
             config=config,
+            node_name=node.name,
+            llm_config=node.llm_config,
         )
 
         update: dict[str, Any] = {}
         if result is not None:
             update[field_name] = result
-        node_log.info("node_complete", output_field=field_name)
+
+        elapsed = time.monotonic() - t0
+        node_log.info("node_complete", duration_s=round(elapsed, 3))
         return update
 
     execute_node.__name__ = node.name.replace("-", "_")
     return execute_node
 
 
-def _extract_input(state: BaseModel, node: Node) -> Any:
+def _extract_input(state: Any, node: Node) -> Any:
     """Extract typed input from state based on node's input spec."""
     if node.input is None:
         return None
+
+    # Handle both Pydantic model and dict states (Send passes dicts)
+    def _get(key: str) -> Any:
+        if isinstance(state, dict):
+            return state.get(key)
+        return getattr(state, key, None)
+
+    def _fields() -> list[str]:
+        if isinstance(state, dict):
+            return list(state.keys())
+        return list(state.__class__.model_fields.keys())
+
+    # Each fan-out: item is passed via neo_each_item
+    replicate_item = _get("neo_each_item")
+    if replicate_item is not None and isinstance(replicate_item, node.input):
+        return replicate_item
 
     # dict[str, type] — multiple fields from state
     if isinstance(node.input, dict):
         result = {}
         for field_name, _field_type in node.input.items():
             state_key = field_name.replace("-", "_")
-            result[field_name] = getattr(state, state_key, None)
+            result[field_name] = _get(state_key)
         return result
 
     # Single type — find matching field in state by type or name
-    field_name = node.name.replace("-", "_")
-    for attr_name in state.model_fields:
-        val = getattr(state, attr_name, None)
+    for attr_name in _fields():
+        val = _get(attr_name)
         if val is not None and isinstance(val, node.input):
             return val
 
-    return getattr(state, field_name, None)
+    return None

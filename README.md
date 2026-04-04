@@ -3,7 +3,7 @@
 Declarative LLM graph compiler. Define typed Nodes, compose into Constructs, compile to LangGraph.
 
 ```python
-from neograph import Node, Tool, Construct, Oracle, Replicate, Operator, compile, run
+from neograph import Node, Tool, Construct, Oracle, Each, Operator, compile, run
 
 search = Tool("search_nodes", budget=5)
 
@@ -31,7 +31,7 @@ match_verify = Node(
     model="reason",
     prompt="match-verify/explore",
     tools=[search],
-) | Replicate(over="clusters.clusters", key="label")
+) | Each(over="clusters.clusters", key="label")
 
 validate = Node(
     "validate",
@@ -53,7 +53,7 @@ result = run(graph, input={"node_id": "BR-001", "project_root": "."})
 | **Tool** | LLM-callable tool with per-tool budget |
 | **Construct** | Ordered composition of Nodes (the blueprint) |
 | **Oracle** | Modifier: N-way ensemble + judge-merge |
-| **Replicate** | Modifier: fan-out over collection |
+| **Each** | Modifier: fan-out over collection |
 | **Operator** | Modifier: human-in-the-loop interrupt |
 | **compile()** | Construct to executable LangGraph |
 | **run()** | Execute with checkpointing |

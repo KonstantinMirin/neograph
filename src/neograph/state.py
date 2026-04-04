@@ -6,22 +6,14 @@ No monolithic state that grows with every derivation type.
 
 from __future__ import annotations
 
-import operator
-from typing import Annotated, Any, get_args, get_origin
+from typing import Annotated, Any
 
 from pydantic import BaseModel, create_model
 
 from neograph.construct import Construct
-from neograph.modifiers import Oracle, Replicate
+from neograph.modifiers import Oracle, Each
 from neograph.node import Node
 
-
-class AtomResult(BaseModel, frozen=True):
-    """Record of a completed atom execution."""
-
-    node_name: str
-    success: bool
-    error: str | None = None
 
 
 def _last_write_wins(existing: Any, new: Any) -> Any:
@@ -29,10 +21,25 @@ def _last_write_wins(existing: Any, new: Any) -> Any:
     return new
 
 
-def _merge_dicts(existing: dict, new: dict) -> dict:
+def _collect_oracle_results(existing: Any, new: Any) -> list:
+    """Reducer: collect oracle fan-out results into a list."""
+    if existing is None:
+        existing = []
+    if isinstance(new, list):
+        return existing + new
+    return [*existing, new]
+
+
+def _merge_dicts(existing: Any, new: dict) -> dict:
     """Reducer: merge dicts additively (for fan-out results)."""
+    if existing is None:
+        existing = {}
     merged = {**existing}
-    merged.update(new)
+    for key, val in new.items():
+        if key in merged:
+            msg = f"Each fan-out: duplicate key '{key}'. Two items produced the same dispatch key."
+            raise ValueError(msg)
+        merged[key] = val
     return merged
 
 
@@ -44,14 +51,53 @@ def compile_state_model(construct: Construct) -> type[BaseModel]:
     """
     fields: dict[str, Any] = {}
 
-    for node in construct.nodes:
+    nodes_only = [n for n in construct.nodes if isinstance(n, Node)]
+    sub_constructs = [n for n in construct.nodes if isinstance(n, Construct)]
+
+    for node in nodes_only:
         _add_output_field(node, fields)
+
+    # Sub-constructs: handle modifiers same as nodes
+    for sub in sub_constructs:
+        if sub.output is None:
+            msg = f"Sub-construct '{sub.name}' must declare output type."
+            raise ValueError(msg)
+        field_name = sub.name.replace("-", "_")
+
+        if sub.has_modifier(Oracle):
+            # Oracle on Construct: collector + consumer field
+            collector_field = f"neo_oracle_{field_name}"
+            fields[collector_field] = (
+                Annotated[list[sub.output], _collect_oracle_results],
+                [],
+            )
+            fields[field_name] = (sub.output | None, None)
+        elif sub.has_modifier(Each):
+            # Each on Construct: dict field
+            field_type = dict[str, sub.output] | None
+            fields[field_name] = (
+                Annotated[field_type, _merge_dicts],
+                None,
+            )
+        else:
+            fields[field_name] = (sub.output | None, None)
+
+    # Oracle support: generator ID passed via state
+    all_items = nodes_only + sub_constructs
+    if any(item.has_modifier(Oracle) for item in all_items):
+        fields["neo_oracle_gen_id"] = (str | None, None)
+
+    # Each support: current item passed via state
+    if any(item.has_modifier(Each) for item in all_items):
+        fields["neo_each_item"] = (Any, None)
+
+    # Subgraph input port — when this Construct declares an input type
+    if construct.input is not None:
+        fields["neo_subgraph_input"] = (construct.input | None, None)
 
     # Framework fields — always present
     fields["node_id"] = (str, ...)
     fields["project_root"] = (str, "")
-    fields["total_cost"] = (Annotated[float, operator.add], 0.0)
-    fields["completed_atoms"] = (Annotated[list[AtomResult], operator.add], [])
     fields["human_feedback"] = (dict[str, Any] | None, None)
 
     return create_model(f"{construct.name}State", **fields)
@@ -60,24 +106,29 @@ def compile_state_model(construct: Construct) -> type[BaseModel]:
 def _add_output_field(node: Node, fields: dict[str, Any]) -> None:
     """Add a node's output type as a field on the state model."""
     if node.output is None:
-        return
+        msg = f"Node '{node.name}' has no output type. Every node must declare output=SomeModel."
+        raise ValueError(msg)
 
     field_name = node.name.replace("-", "_")
     output_type = node.output
 
-    # Fan-out nodes (Replicate) produce dict[key, output_type]
-    if node.has_modifier(Replicate):
+    # Fan-out nodes (Each) produce dict[key, output_type]
+    if node.has_modifier(Each):
         field_type = dict[str, output_type] | None
         fields[field_name] = (
             Annotated[field_type, _merge_dicts],
             None,
         )
-    # Ensemble nodes (Oracle) use last-write-wins (merge node produces single output)
+    # Ensemble nodes (Oracle): internal collector + consumer-facing merge result
     elif node.has_modifier(Oracle):
-        fields[field_name] = (
-            Annotated[output_type | None, _last_write_wins],
-            None,
+        # Internal: collects N generator outputs
+        collector_field = f"neo_oracle_{field_name}"
+        fields[collector_field] = (
+            Annotated[list[output_type], _collect_oracle_results],
+            [],
         )
+        # Consumer-facing: the merged result, named after the node
+        fields[field_name] = (output_type | None, None)
     # Sequential nodes — simple last-write-wins
     else:
         fields[field_name] = (output_type | None, None)

@@ -13,6 +13,13 @@ from typing import Any
 from langgraph.types import Command
 
 
+def _strip_internals(result: Any) -> Any:
+    """Remove neo_* framework plumbing from the result dict."""
+    if not isinstance(result, dict):
+        return result
+    return {k: v for k, v in result.items() if not k.startswith("neo_")}
+
+
 def run(
     graph: Any,
     input: dict[str, Any] | None = None,
@@ -28,11 +35,10 @@ def run(
         config: LangGraph RunnableConfig (thread_id, checkpointer, etc.).
     """
     if resume is not None:
-        # Resume after interrupt
-        return graph.invoke(Command(resume=resume), config=config)
+        return _strip_internals(graph.invoke(Command(resume=resume), config=config))
 
     if input is not None:
-        return graph.invoke(input, config=config)
+        return _strip_internals(graph.invoke(input, config=config))
 
     msg = "Either input or resume must be provided."
     raise ValueError(msg)
