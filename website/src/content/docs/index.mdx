@@ -1,10 +1,10 @@
 ---
 title: neograph
-description: Write Python. Get a production LLM graph. A declarative LLM graph compiler that turns @node-decorated Python functions into LangGraph state machines with type-safe topology inference.
+description: Ship typed, durable, observable agents on LangGraph — fast. Declare your agent as typed Python functions; neograph handles the graph, the types, the durability, and the observability.
 template: splash
 hero:
   title: neograph
-  tagline: Declaring — not wiring — LLM graphs.
+  tagline: Ship typed, production agents on LangGraph — fast.
   actions:
     - text: Quick Start
       link: /getting-started/quick-start/
@@ -26,50 +26,82 @@ import { Card, CardGrid, LinkCard } from '@astrojs/starlight/components';
   <a href="https://github.com/KonstantinMirin/neograph"><img src="https://img.shields.io/github/stars/KonstantinMirin/neograph?style=social" alt="GitHub stars" /></a>
 </p>
 
-**neograph is a declarative LLM graph compiler for Python.** You define your pipeline as typed Python functions. neograph reads your function signatures, infers the DAG from parameter names, validates types at assembly time, and compiles to [LangGraph](https://github.com/langchain-ai/langgraph) — with checkpointing, observability, and tool orchestration.
+**neograph is the fastest way to build production-grade agents on [LangGraph](https://github.com/langchain-ai/langgraph).** You declare your agent as typed Python functions; neograph infers the graph, validates every input and output at assembly time, and compiles to a LangGraph state machine with durable checkpointing, structured observability, and tool orchestration built in.
 
-The key features are:
+It's for real-world execution — not vibes. Every edge in your graph is a typed Pydantic contract. Every run is checkpointed and resumable. Every node emits structured logs. You focus on the agent logic; the plumbing is handled.
 
-- **Zero wiring.** A function is a node. A parameter name is an edge. An `if` is a branch. No `add_node`, no `add_edge`, no router functions.
-- **Type-safe.** Assembly-time validation catches mismatches before you run. Your IDE sees every dependency. Rename a function — downstream breaks at import time.
-- **Production-ready.** Compiles to standard LangGraph. Full access to checkpointing, streaming, interrupts, and the LangGraph ecosystem.
-- **Three APIs, one compiler.** `@node` for most pipelines. `ForwardConstruct` for Python `if`/`for`/`try` control flow. Programmatic `|` pipe for runtime construction.
-- **Testable at every level.** `run_isolated()` for unit tests. Direct `forward()` call for debugging. Fake LLMs without mocking.
-- **No lock-in.** Drop down to raw LangGraph whenever you need to. `mode='raw'` is a first-class escape hatch.
+- **Typed end to end.** Inputs and outputs are Pydantic models. Parameter names are dependencies. Type mismatches fail at assembly time, not in production at 2 a.m.
+- **Durable by default.** Compiles to standard LangGraph — you get checkpointing, interrupts, streaming, and resume-from-failure for free.
+- **Observable out of the box.** Structured logs on every node. Trace providers and shared resources flow through `FromConfig[T]` without polluting signatures.
+- **No wiring.** A function is a node. A parameter name is an edge. An `if` is a branch. You write the logic; the graph assembles itself.
+- **Three APIs, one compiler.** `@node` for most agents. `ForwardConstruct` for Python `if`/`for`/`try` control flow. Programmatic `|` pipe for runtime construction.
+- **No lock-in.** `mode='raw'` is a first-class escape hatch to raw LangGraph.
 
-## Installation
+## Install
 
 ```bash
-# uv (recommended)
 uv add neograph
+```
 
-# pip
+<details>
+<summary>Using pip?</summary>
+
+```bash
 pip install neograph
 ```
 
-## Example
+</details>
+
+## Your first agent
 
 ```python
 import sys
+from pydantic import BaseModel
 from neograph import node, construct_from_module, compile, run
 
+# Types — plain Pydantic.
+class Claims(BaseModel):
+    items: list[str]
+
+class Classified(BaseModel):
+    security: list[str]
+    performance: list[str]
+
+class Report(BaseModel):
+    summary: str
+
+# Agent — plain Python functions. Types flow through the signatures.
 @node(output=Claims, prompt='decompose', model='reason')
-def decompose(topic: RawText) -> Claims: ...
+def decompose(topic: str) -> Claims: ...
 
 @node(output=Classified, prompt='classify', model='fast')
 def classify(decompose: Claims) -> Classified: ...
 
-@node(output=Summary, prompt='summarize', model='fast')
-def summarize(classify: Classified) -> Summary: ...
+@node(output=Report, prompt='summarize', model='fast')
+def summarize(classify: Classified) -> Report: ...
 
+# Compile and run.
 pipeline = construct_from_module(sys.modules[__name__])
 graph = compile(pipeline)
+
 result = run(graph, input={'topic': 'microservice authentication'})
+print(result['summarize'].summary)
 ```
 
-The parameter name `decompose` in `classify(decompose: Claims)` IS the dependency. No `nodes=[...]` list, no ordering, no wiring. Fan-in is just more parameters: `def report(claims, scores, verified)`.
+That's the whole agent. Three functions, three types, three lines of compilation. No `TypedDict`, no `add_node`, no `add_edge`, no state-dict reads and writes.
+
+The parameter name `decompose` in `classify(decompose: Claims)` IS the dependency. neograph reads the signature, builds the DAG, validates that `decompose` produces `Claims`, and wires `decompose → classify → summarize` automatically. Rename the `decompose` function and the downstream parameter breaks at import time — your IDE will tell you before you even hit save.
+
+Fan-in is just more parameters:
+
+```python
+@node(output=Report, prompt='report', model='reason')
+def report(claims: Claims, scores: Scores, verified: VerifyResult) -> Report: ...
+```
 
 ## Control flow is Python
+
+For agents with real branching logic — retries, quality gates, conditional paths — use `ForwardConstruct`:
 
 ```python
 from neograph import ForwardConstruct, Node, compile
@@ -88,19 +120,7 @@ class Analysis(ForwardConstruct):
 graph = compile(Analysis())
 ```
 
-The `if` compiles to a LangGraph conditional edge. `for` compiles to Each fan-out. Python is the graph language — your type checker sees every branch, your debugger works, and you can call `forward()` directly in tests with fakes.
-
-## What you don't write
-
-| You skip | Because NeoGraph |
-|----------|-----------------|
-| `TypedDict` state schemas | Infers state from your node output types |
-| `add_node` / `add_edge` calls | Reads dependencies from parameter names |
-| State dict reads and writes | Passes typed values directly to your functions |
-| Router functions for branches | Compiles Python `if` to conditional edges |
-| `Send` scaffolding for fan-out | Compiles `map_over=...` to the same IR |
-| Ensemble boilerplate | Compiles `ensemble_n=3, merge_fn=...` to fan-out + barrier + merge |
-| Condition registries | Accepts inline lambdas via `interrupt_when=` |
+The `if` compiles to a LangGraph conditional edge. `for` compiles to fan-out. Python is the graph language — your type checker sees every branch, your debugger works, and you can call `forward()` directly in tests with fake LLMs.
 
 ## Next steps
 
@@ -111,34 +131,29 @@ The `if` compiles to a LangGraph conditional edge. `for` compiles to Each fan-ou
     description="Install, configure an LLM, build a pipeline with @node, run it. Five minutes."
   />
   <LinkCard
+    title="The @node API"
+    href="/node-api/functions-as-nodes/"
+    description="Functions as nodes. Modifiers as keywords. Fan-in, fan-out, ensembles, human-in-the-loop."
+  />
+  <LinkCard
+    title="ForwardConstruct"
+    href="/forward/control-flow/"
+    description="Class-based agents with real Python if/for/try control flow. torch.fx-style tracing."
+  />
+  <LinkCard
+    title="Runtime Construction"
+    href="/runtime/programmatic/"
+    description="LLM-driven and config-driven pipelines via the programmatic | pipe syntax."
+  />
+  <LinkCard
     title="Why not just LangGraph?"
     href="/getting-started/why-neograph/"
-    description="Five common pipeline patterns side-by-side. Same runtime, less wiring."
+    description="Pattern-by-pattern comparison with raw LangGraph. Same runtime, less wiring."
   />
   <LinkCard
     title="Examples"
     href="https://github.com/KonstantinMirin/neograph/tree/main/examples"
     description="13 runnable pipelines covering every feature, plus LangGraph comparisons."
-  />
-</CardGrid>
-
-## Three API surfaces, one compiler
-
-<CardGrid>
-  <LinkCard
-    title="@node"
-    href="/node-api/functions-as-nodes/"
-    description="The primary API. Functions are nodes. Parameter names are edges. Modifiers as keyword arguments."
-  />
-  <LinkCard
-    title="ForwardConstruct"
-    href="/forward/control-flow/"
-    description="Class-based. A forward() method with real Python if/for/try. torch.fx-style symbolic tracing."
-  />
-  <LinkCard
-    title="Programmatic"
-    href="/runtime/programmatic/"
-    description="Runtime construction for LLM-driven pipelines, config-driven workflows, routing layers."
   />
 </CardGrid>
 
