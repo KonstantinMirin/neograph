@@ -5112,3 +5112,60 @@ class TestTypesCompatibleListOverDict:
 
         # list[Claims] vs Claims (plain class) — existing rules reject this.
         assert _types_compatible(Claims, list[Claims]) is False
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# TestExtractInputListUnwrap (neograph-kqd.3)
+#
+# Factory runtime unwrap: dict[str, X] state value → list[X] for consumers
+# whose inputs dict declares a list[X] expected type. This is the runtime
+# half of the merge-after-fanout pattern (validator side landed in kqd.2).
+# ═══════════════════════════════════════════════════════════════════════════
+
+class TestExtractInputListUnwrap:
+    def test_list_consumer_unwraps_dict_state_to_list(self):
+        """inputs={'upstream': list[MatchResult]} + dict state value
+        → list of values in dict insertion order."""
+        from neograph.factory import _extract_input
+
+        consumer = Node.scripted(
+            "consumer", fn="f",
+            inputs={"make_clusters": list[MatchResult]},
+            output=MergedResult,
+        )
+        mr1 = MatchResult(cluster_label="a", matched=["x"])
+        mr2 = MatchResult(cluster_label="b", matched=["y"])
+        state = {"make_clusters": {"a": mr1, "b": mr2}}
+        result = _extract_input(state, consumer)
+        assert isinstance(result, dict)
+        assert "make_clusters" in result
+        assert result["make_clusters"] == [mr1, mr2]
+
+    def test_dict_consumer_keeps_dict_state(self):
+        """inputs={'upstream': dict[str, MatchResult]} + dict state value
+        → dict pass-through, no unwrap."""
+        from neograph.factory import _extract_input
+
+        consumer = Node.scripted(
+            "consumer", fn="f",
+            inputs={"make_clusters": dict[str, MatchResult]},
+            output=MergedResult,
+        )
+        mr1 = MatchResult(cluster_label="a", matched=["x"])
+        mr2 = MatchResult(cluster_label="b", matched=["y"])
+        state = {"make_clusters": {"a": mr1, "b": mr2}}
+        result = _extract_input(state, consumer)
+        assert result["make_clusters"] == {"a": mr1, "b": mr2}
+
+    def test_list_consumer_over_none_state_returns_none(self):
+        """Missing state field (None) is not unwrapped — passthrough None."""
+        from neograph.factory import _extract_input
+
+        consumer = Node.scripted(
+            "consumer", fn="f",
+            inputs={"make_clusters": list[MatchResult]},
+            output=MergedResult,
+        )
+        state = {}  # no make_clusters field
+        result = _extract_input(state, consumer)
+        assert result["make_clusters"] is None

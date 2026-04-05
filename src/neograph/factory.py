@@ -319,12 +319,25 @@ def _extract_input(state: Any, node: Node) -> Any:
     if replicate_item is not None and _is_instance_safe(replicate_item, node.inputs):
         return replicate_item
 
-    # dict[str, type] — multiple fields from state
+    # Fan-in dict: inputs={'upstream_name': expected_type, ...}. Read each
+    # named state field by key; when the consumer expects list[X] and the
+    # state value is a dict (Each-fanned-out result), unwrap via
+    # list(values()). Ordering is dict insertion order = LangGraph barrier
+    # arrival order (neograph-kqd.3).
     if isinstance(node.inputs, dict):
+        from typing import get_origin as _get_origin
+
         result = {}
-        for field_name, _field_type in node.inputs.items():
+        for field_name, expected_type in node.inputs.items():
             state_key = field_name.replace("-", "_")
-            result[field_name] = _get(state_key)
+            value = _get(state_key)
+            if (
+                value is not None
+                and _get_origin(expected_type) is list
+                and isinstance(value, dict)
+            ):
+                value = list(value.values())
+            result[field_name] = value
         return result
 
     # Single type — find matching field in state by type or name
