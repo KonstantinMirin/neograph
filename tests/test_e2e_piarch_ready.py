@@ -234,19 +234,19 @@ class TestGatherMode:
 # ═══════════════════════════════════════════════════════════════════════════
 
 class TestOracle:
+    @staticmethod
+    def _fresh_module(name: str):
+        import types as _types
+        return _types.ModuleType(name)
+
     def test_three_way_ensemble(self):
         """Oracle dispatches 3 generators and merges results."""
-        gen_ids_seen = []
+        import types as _types
 
+        from neograph import construct_from_module, node
         from neograph.factory import register_scripted
 
-        # Each generator records its ID and produces a variant
-        def generate_variant(input_data, config):
-            gen_id = config.get("configurable", {}).get("_generator_id", "unknown")
-            gen_ids_seen.append(gen_id)
-            return Claims(items=[f"variant-from-{gen_id}"])
-
-        register_scripted("generate_variant", generate_variant)
+        gen_call_count = [0]
 
         # Merge: combine all variant items into one Claims
         def combine_variants(variants, config):
@@ -257,16 +257,20 @@ class TestOracle:
 
         register_scripted("combine_variants", combine_variants)
 
-        gen_node = Node.scripted(
-            "generate", fn="generate_variant", output=Claims
-        ) | Oracle(n=3, merge_fn="combine_variants")
+        @node(output=Claims, ensemble_n=3, merge_fn="combine_variants")
+        def generate() -> Claims:
+            gen_call_count[0] += 1
+            return Claims(items=[f"variant-{gen_call_count[0]}"])
 
-        pipeline = Construct("test-oracle", nodes=[gen_node])
+        mod = self._fresh_module("test_oracle_ensemble")
+        mod.generate = generate
+
+        pipeline = construct_from_module(mod, name="test-oracle")
         graph = compile(pipeline)
         result = run(graph, input={"node_id": "test-001"})
 
         # All 3 generators ran
-        assert len(gen_ids_seen) == 3
+        assert gen_call_count[0] == 3
         # Merge combined all 3 variants
         merged = result.get("generate")
         assert merged is not None
@@ -274,17 +278,23 @@ class TestOracle:
 
     def test_llm_merge(self):
         """Oracle with merge_prompt calls LLM to judge-merge variants."""
+        import types as _types
+
+        from neograph import construct_from_module, node
         from neograph.factory import register_scripted
 
-        register_scripted("gen", lambda input_data, config: Claims(items=["v1"]))
+        register_scripted("gen_llm", lambda input_data, config: Claims(items=["v1"]))
 
         configure_fake_llm(lambda tier: StructuredFake(lambda m: m(items=["merged-consensus"])))
 
-        gen_node = Node.scripted(
-            "generate", fn="gen", output=Claims
-        ) | Oracle(n=2, merge_prompt="test/merge")
+        @node(output=Claims, ensemble_n=2, merge_prompt="test/merge")
+        def generate() -> Claims:
+            return Claims(items=["v1"])
 
-        pipeline = Construct("test-oracle-llm", nodes=[gen_node])
+        mod = self._fresh_module("test_oracle_llm")
+        mod.generate = generate
+
+        pipeline = construct_from_module(mod, name="test-oracle-llm")
         graph = compile(pipeline)
         result = run(graph, input={"node_id": "test-001"})
 
@@ -314,29 +324,35 @@ class TestOracle:
 
 class TestEach:
     def test_fanout_over_collection(self):
-        """Each dispatches per-item and collects results."""
-        from neograph.factory import register_scripted
+        """Each dispatches per-item and collects results (@node API)."""
+        import types as _types
+        from neograph import compile, construct_from_module, node, run
 
-        # First node produces clusters
-        register_scripted("make_clusters", lambda input_data, config: Clusters(
-            groups=[
+        mod = _types.ModuleType("test_each_fanout")
+
+        @node(mode="scripted", output=Clusters)
+        def make_clusters() -> Clusters:
+            return Clusters(groups=[
                 ClusterGroup(label="alpha", claim_ids=["c1", "c2"]),
                 ClusterGroup(label="beta", claim_ids=["c3"]),
-            ]
-        ))
+            ])
 
-        # Fan-out node processes each cluster
-        register_scripted("verify_cluster", lambda input_data, config: MatchResult(
-            cluster_label=input_data.label if hasattr(input_data, 'label') else "unknown",
-            matched=["match-1"],
-        ))
+        @node(
+            mode="scripted",
+            output=MatchResult,
+            map_over="make_clusters.groups",
+            map_key="label",
+        )
+        def verify(cluster: ClusterGroup) -> MatchResult:
+            return MatchResult(
+                cluster_label=cluster.label,
+                matched=["match-1"],
+            )
 
-        make = Node.scripted("make-clusters", fn="make_clusters", output=Clusters)
-        verify = Node.scripted(
-            "verify", fn="verify_cluster", input=ClusterGroup, output=MatchResult
-        ) | Each(over="make_clusters.groups", key="label")
+        mod.make_clusters = make_clusters
+        mod.verify = verify
 
-        pipeline = Construct("test-replicate", nodes=[make, verify])
+        pipeline = construct_from_module(mod)
         graph = compile(pipeline)
         result = run(graph, input={"node_id": "test-001"})
 
@@ -1991,6 +2007,69 @@ class TestConstructValidation:
         pipeline = Construct("dict-generic", nodes=[a, b])
         assert len(pipeline.nodes) == 2
         assert pipeline.nodes[1].input == dict[str, Claims]
+
+    # -- Each downstream type tracking (neograph-8k3) ----------------------
+
+    def test_each_downstream_raw_input_rejected(self):
+        """Consumer declaring raw input=X after an Each-modified producer
+        that emits dict[str, X] must be rejected at assembly time."""
+        make = _producer("make", Clusters)
+        verify = _consumer("verify", ClusterGroup, MatchResult).map(
+            lambda s: s.make.groups, key="label"
+        )
+        summarize = _consumer("summarize", MatchResult, MergedResult)
+        with pytest.raises(ConstructError, match=r"dict\[str, MatchResult\]"):
+            Construct("bad", nodes=[make, verify, summarize])
+
+    def test_each_downstream_dict_input_accepted(self):
+        """Consumer with input=dict (raw class) after Each-modified producer passes."""
+        make = _producer("make", Clusters)
+        verify = _consumer("verify", ClusterGroup, MatchResult).map(
+            lambda s: s.make.groups, key="label"
+        )
+        summarize = Node.scripted("summarize", fn="f", input=dict, output=MergedResult)
+        pipeline = Construct("good-dict", nodes=[make, verify, summarize])
+        assert len(pipeline.nodes) == 3
+
+    def test_each_downstream_typed_dict_input_accepted(self):
+        """Consumer with input=dict[str, X] matching Each output passes."""
+        make = _producer("make", Clusters)
+        verify = _consumer("verify", ClusterGroup, MatchResult).map(
+            lambda s: s.make.groups, key="label"
+        )
+        summarize = Node.scripted(
+            "summarize", fn="f",
+            input=dict[str, MatchResult], output=MergedResult,
+        )
+        pipeline = Construct("good-typed-dict", nodes=[make, verify, summarize])
+        assert len(pipeline.nodes) == 3
+
+    def test_each_downstream_wrong_element_type_rejected(self):
+        """Consumer with input=dict[str, WrongType] after Each is rejected."""
+        make = _producer("make", Clusters)
+        verify = _consumer("verify", ClusterGroup, MatchResult).map(
+            lambda s: s.make.groups, key="label"
+        )
+        summarize = Node.scripted(
+            "summarize", fn="f",
+            input=dict[str, ValidationResult], output=MergedResult,
+        )
+        with pytest.raises(ConstructError):
+            Construct("bad-element", nodes=[make, verify, summarize])
+
+    def test_each_hint_suggests_dict_input(self):
+        """Error for raw-type consumer after Each mentions 'via Each'
+        and suggests using dict input."""
+        make = _producer("make", Clusters)
+        verify = _consumer("verify", ClusterGroup, MatchResult).map(
+            lambda s: s.make.groups, key="label"
+        )
+        summarize = _consumer("summarize", MatchResult, MergedResult)
+        with pytest.raises(ConstructError) as exc_info:
+            Construct("bad-hint", nodes=[make, verify, summarize])
+        msg = str(exc_info.value)
+        assert "via Each" in msg
+        assert "dict" in msg
 
 
 class TestConstructOracleErrors:
@@ -3686,3 +3765,160 @@ class TestNodeDecoratorOperator:
             @node(mode="scripted", output=ValidationResult, interrupt_when=42)
             def bad_node() -> ValidationResult:
                 return ValidationResult(passed=True, issues=[])
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# TEST: @node scalar parameters — FromInput, FromConfig, default constants
+#
+# Not every @node parameter must name an upstream @node. Three additional
+# parameter resolution mechanisms:
+#   1. FromInput[T]  — value from run(input={param: ...})
+#   2. FromConfig[T] — value from config["configurable"][param]
+#   3. default value  — compile-time constant, no upstream needed
+# ═══════════════════════════════════════════════════════════════════════════
+
+class TestNodeDecoratorParams:
+    """Scalar parameter support: FromInput, FromConfig, default constants."""
+
+    def test_from_input_param(self):
+        """FromInput[str] param is delivered via run(input={'topic': 'x'})."""
+        import types as _types
+
+        from neograph import FromInput, compile, construct_from_module, node, run
+
+        mod = _types.ModuleType("test_from_input_mod")
+
+        @node(mode="scripted", output=RawText)
+        def greet(topic: FromInput[str]) -> RawText:
+            return RawText(text=f"Hello, {topic}!")
+
+        mod.greet = greet
+
+        pipeline = construct_from_module(mod, name="test-from-input")
+        graph = compile(pipeline)
+        result = run(graph, input={"node_id": "t-001", "topic": "world"})
+
+        assert result["greet"] == RawText(text="Hello, world!")
+
+    def test_from_config_param(self):
+        """FromConfig[RateLimiter] param is delivered via config['configurable']."""
+        import types as _types
+
+        from neograph import FromConfig, compile, construct_from_module, node, run
+
+        mod = _types.ModuleType("test_from_config_mod")
+
+        class FakeRateLimiter:
+            def __init__(self):
+                self.calls = 0
+
+            def call(self):
+                self.calls += 1
+
+        limiter = FakeRateLimiter()
+
+        @node(mode="scripted", output=Claims)
+        def process(rate_limiter: FromConfig[FakeRateLimiter]) -> Claims:
+            rate_limiter.call()
+            return Claims(items=[f"calls={rate_limiter.calls}"])
+
+        mod.process = process
+
+        pipeline = construct_from_module(mod, name="test-from-config")
+        graph = compile(pipeline)
+        result = run(
+            graph,
+            input={"node_id": "t-002"},
+            config={"configurable": {"rate_limiter": limiter}},
+        )
+
+        assert limiter.calls == 1
+        assert result["process"] == Claims(items=["calls=1"])
+
+    def test_default_value_constant(self):
+        """Param with default value not matching any @node is used as compile-time constant."""
+        import types as _types
+
+        from neograph import compile, construct_from_module, node, run
+
+        mod = _types.ModuleType("test_default_const_mod")
+
+        @node(mode="scripted", output=RawText)
+        def greet(greeting: str = "Hi") -> RawText:
+            return RawText(text=f"{greeting}, friend!")
+
+        mod.greet = greet
+
+        pipeline = construct_from_module(mod, name="test-default-const")
+        graph = compile(pipeline)
+        result = run(graph, input={"node_id": "t-003"})
+
+        assert result["greet"] == RawText(text="Hi, friend!")
+
+    def test_mixed_params(self):
+        """One function with upstream + FromInput + FromConfig + default."""
+        import types as _types
+
+        from neograph import FromConfig, FromInput, compile, construct_from_module, node, run
+
+        mod = _types.ModuleType("test_mixed_mod")
+
+        class FakeLogger:
+            def __init__(self):
+                self.logged: list[str] = []
+
+            def log(self, msg: str):
+                self.logged.append(msg)
+
+        logger = FakeLogger()
+
+        @node(mode="scripted", output=RawText)
+        def seed() -> RawText:
+            return RawText(text="base")
+
+        @node(mode="scripted", output=Claims)
+        def combine(
+            seed: RawText,
+            topic: FromInput[str],
+            logger: FromConfig[FakeLogger],
+            separator: str = " | ",
+        ) -> Claims:
+            logger.log(f"combining {seed.text} with {topic}")
+            return Claims(items=[f"{seed.text}{separator}{topic}"])
+
+        mod.seed = seed
+        mod.combine = combine
+
+        pipeline = construct_from_module(mod, name="test-mixed")
+        graph = compile(pipeline)
+        result = run(
+            graph,
+            input={"node_id": "t-004", "topic": "science"},
+            config={"configurable": {"logger": logger}},
+        )
+
+        assert result["combine"] == Claims(items=["base | science"])
+        assert len(logger.logged) == 1
+        assert "combining base with science" in logger.logged[0]
+
+    def test_from_input_missing_returns_none(self):
+        """FromInput param not in run(input=...) returns None (not an error)."""
+        import types as _types
+
+        from neograph import FromInput, compile, construct_from_module, node, run
+
+        mod = _types.ModuleType("test_from_input_missing_mod")
+
+        @node(mode="scripted", output=RawText)
+        def greet(topic: FromInput[str]) -> RawText:
+            if topic is None:
+                return RawText(text="no topic")
+            return RawText(text=f"Hello, {topic}!")
+
+        mod.greet = greet
+
+        pipeline = construct_from_module(mod, name="test-from-input-missing")
+        graph = compile(pipeline)
+        result = run(graph, input={"node_id": "t-005"})
+
+        assert result["greet"] == RawText(text="no topic")

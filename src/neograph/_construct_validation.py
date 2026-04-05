@@ -63,7 +63,13 @@ def _validate_node_chain(construct: Any) -> None:
                 if isinstance(item, Node)
                 else f"sub-construct '{name}'"
             )
-            producers.append((field_name, output_type, label))
+            # Each modifier aggregates results as dict[str, output_type] —
+            # match the effective state shape (see state.py:119-124).
+            effective_output = output_type
+            get_mod = getattr(item, "get_modifier", None)
+            if get_mod and get_mod(Each) is not None:
+                effective_output = dict[str, output_type]
+            producers.append((field_name, effective_output, label))
 
 
 def _check_item_input(
@@ -82,16 +88,27 @@ def _check_item_input(
     """
     if not producers:
         return
-    # dict-shaped inputs of all three flavors defer to runtime isinstance
-    # scanning (factory._extract_input / _is_instance_safe):
+    # dict-shaped inputs defer to runtime isinstance scanning
+    # (factory._extract_input / _is_instance_safe) except parameterized
+    # generics (dict[str, X]) which can be validated against upstream
+    # Each-modified producers.
     #   - dict instance: multi-field extraction, e.g. input={"a": X, "b": Y}
     #   - raw dict class: input=dict (isinstance match on any dict state field)
-    #   - parameterized generic: input=dict[str, X] (get_origin-based match)
     if isinstance(input_type, dict):
         return
-    if input_type is dict or get_origin(input_type) is dict:
+    if input_type is dict:
         return
-    if not isinstance(input_type, type):
+    # Parameterized generic dict[str, X]: validate against producers if any
+    # upstream has a parameterized dict output, otherwise defer to runtime.
+    if get_origin(input_type) is dict:
+        has_dict_producer = any(
+            get_origin(pt) is dict for _, pt, _ in producers
+        )
+        if not has_dict_producer:
+            return
+        # Fall through to plain-input validation below — _types_compatible
+        # handles parameterized generic comparison.
+    if not isinstance(input_type, type) and get_origin(input_type) is None:
         return
 
     # Each modifier rewires the effective input type via the `over` path.
@@ -201,9 +218,24 @@ def _resolve_field_annotation(model_class: Any, field_name: str) -> Any:
 
 
 def _types_compatible(producer: Any, target: Any) -> bool:
-    """True if a value of type `producer` can satisfy a consumer of `target`."""
+    """True if a value of type `producer` can satisfy a consumer of `target`.
+
+    Handles parameterized generics (e.g. dict[str, X]) as well as plain classes.
+    """
     if producer is target:
         return True
+    # Parameterized generic producer (e.g. dict[str, X]):
+    # compatible with raw origin class (dict) or exact parameterized match.
+    producer_origin = get_origin(producer)
+    target_origin = get_origin(target)
+    if producer_origin is not None:
+        # dict[str, X] vs dict → compatible (runtime isinstance handles it)
+        if isinstance(target, type) and issubclass(producer_origin, target):
+            return True
+        # dict[str, X] vs dict[str, X] → compare origin + args
+        if target_origin is not None and producer_origin is target_origin:
+            return get_args(producer) == get_args(target)
+        return False
     if not (isinstance(producer, type) and isinstance(target, type)):
         return False
     try:
@@ -276,7 +308,27 @@ def _suggest_hint(
     input_type: Any,
     producers: list[tuple[str, Any, str]],
 ) -> str | None:
-    """Scan producer outputs for a list[input_type] field; suggest .map()."""
+    """Scan producer outputs for actionable suggestions."""
+    # Check for Each dict[str, X] → raw X mismatch first.
+    for _field_name, producer_type, _ in producers:
+        p_origin = get_origin(producer_type)
+        if p_origin is dict:
+            p_args = get_args(producer_type)
+            if p_args and len(p_args) == 2:
+                element_type = p_args[1]
+                if isinstance(input_type, type) and isinstance(element_type, type):
+                    try:
+                        match = issubclass(element_type, input_type) or issubclass(input_type, element_type)
+                    except TypeError:
+                        match = False
+                    if match:
+                        return (
+                            f"upstream produces dict[str, {_fmt_type(element_type)}] "
+                            f"via Each — consume the whole dict with input=dict "
+                            f"or input=dict[str, {_fmt_type(element_type)}]"
+                        )
+
+    # Fallback: scan for list[input_type] fields and suggest .map().
     for field_name, producer_type, _ in producers:
         model_fields = getattr(producer_type, "model_fields", None) or {}
         for fname in model_fields:

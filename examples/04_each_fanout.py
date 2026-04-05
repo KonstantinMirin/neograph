@@ -14,9 +14,11 @@ Run:
 
 from __future__ import annotations
 
+import sys
+
 from pydantic import BaseModel
 
-from neograph import Construct, Each, Node, compile, register_scripted, run
+from neograph import compile, construct_from_module, node, run
 
 
 # ── Schemas ──────────────────────────────────────────────────────────────
@@ -34,9 +36,10 @@ class VerifyResult(BaseModel, frozen=True):
     gaps: list[str]
 
 
-# ── Functions ────────────────────────────────────────────────────────────
+# ── Nodes ───────────────────────────────────────────────────────────────
 
-def discover_clusters(input_data, config):
+@node(output=Clusters)
+def discover_clusters() -> Clusters:
     """Simulate discovering requirement clusters from analysis."""
     return Clusters(groups=[
         ClusterGroup(label="authentication", claim_ids=["REQ-1", "REQ-2", "REQ-3"]),
@@ -44,9 +47,9 @@ def discover_clusters(input_data, config):
         ClusterGroup(label="performance", claim_ids=["REQ-6"]),
     ])
 
-def verify_cluster(input_data, config):
+@node(output=VerifyResult, map_over="discover_clusters.groups", map_key="label")
+def verify(cluster: ClusterGroup) -> VerifyResult:
     """Verify a single cluster — check coverage against codebase."""
-    # input_data is a ClusterGroup (the specific item from the collection)
     coverage = {"authentication": 85, "logging": 60, "performance": 100}
     gaps_map = {
         "authentication": ["MFA not implemented"],
@@ -54,26 +57,15 @@ def verify_cluster(input_data, config):
         "performance": [],
     }
     return VerifyResult(
-        cluster_label=input_data.label,
-        coverage_pct=coverage.get(input_data.label, 0),
-        gaps=gaps_map.get(input_data.label, ["unknown"]),
+        cluster_label=cluster.label,
+        coverage_pct=coverage.get(cluster.label, 0),
+        gaps=gaps_map.get(cluster.label, ["unknown"]),
     )
-
-register_scripted("discover_clusters", discover_clusters)
-register_scripted("verify_cluster", verify_cluster)
 
 
 # ── Build pipeline ───────────────────────────────────────────────────────
-# Step 1: discover clusters
-# Step 2: verify each cluster in parallel (Each over clusters.groups, keyed by label)
 
-discover = Node.scripted("discover", fn="discover_clusters", output=Clusters)
-
-verify = Node.scripted(
-    "verify", fn="verify_cluster", input=ClusterGroup, output=VerifyResult
-) | Each(over="discover.groups", key="label")
-
-pipeline = Construct("cluster-verification", nodes=[discover, verify])
+pipeline = construct_from_module(sys.modules[__name__])
 
 
 # ── Run ──────────────────────────────────────────────────────────────────

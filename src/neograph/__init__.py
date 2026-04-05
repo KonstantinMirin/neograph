@@ -8,7 +8,7 @@ Define typed Nodes, compose them into Constructs, compile to LangGraph.
 from neograph._llm import configure_llm
 from neograph.compiler import compile
 from neograph.construct import Construct, ConstructError
-from neograph.decorators import construct_from_module, node
+from neograph.decorators import FromConfig, FromInput, construct_from_module, node
 from neograph.factory import register_condition, register_scripted, register_tool_factory
 from neograph.modifiers import Operator, Oracle, Each
 from neograph.node import Node, raw_node
@@ -23,6 +23,8 @@ __all__ = [
     "Oracle",
     "Each",
     "Operator",
+    "FromInput",
+    "FromConfig",
     "compile",
     "run",
     "raw_node",

@@ -57,7 +57,35 @@ import inspect
 import textwrap
 import warnings
 import weakref
-from typing import Any, Callable, Literal
+from typing import Any, Callable, Generic, Literal, TypeVar, get_origin
+
+T = TypeVar("T")
+
+
+class FromInput(Generic[T]):
+    """Annotation wrapper: parameter value comes from run(input={param: ...}).
+
+    Usage::
+
+        @node(mode="scripted", output=RawText)
+        def greet(topic: FromInput[str]) -> RawText: ...
+
+    At runtime, ``topic`` is resolved from ``config["configurable"][param_name]``
+    (run() injects all input fields into configurable). If absent, None is passed.
+    """
+
+
+class FromConfig(Generic[T]):
+    """Annotation wrapper: parameter value comes from config["configurable"].
+
+    Usage::
+
+        @node(mode="scripted", output=Claims)
+        def process(rate_limiter: FromConfig[RateLimiter]) -> Claims: ...
+
+    At runtime, ``rate_limiter`` is resolved from
+    ``config["configurable"]["rate_limiter"]``. If absent, None is passed.
+    """
 
 from neograph._construct_validation import ConstructError, _fmt_type, _types_compatible
 from neograph.construct import Construct
@@ -66,11 +94,23 @@ from neograph.node import Node
 from neograph.tool import Tool
 
 
+# Param resolution: how each parameter gets its value at runtime.
+# 'upstream'    — read from state by param name (existing @node output)
+# 'from_input'  — read from config["configurable"][param_name]  (run input kwarg)
+# 'from_config' — read from config["configurable"][param_name]  (shared resource)
+# 'constant'    — use the captured default value
+ParamResolution = dict[str, tuple[str, Any]]  # param_name -> (kind, default_or_None)
+
 # Sidecar: id(Node) -> (original_fn, param_names_tuple, fan_out_param).
 # Keyed by id() so `Node` is not mutated. A `weakref.finalize` callback evicts
 # entries when the Node is garbage-collected, so the dict cannot leak.
 # fan_out_param is the parameter name that receives Each items (None if no fan-out).
 _node_sidecar: dict[int, tuple[Callable, tuple[str, ...], str | None]] = {}
+
+# Separate storage for param resolutions — keyed by id(Node), same lifecycle
+# as _node_sidecar. Kept separate to preserve the 3-element sidecar tuple
+# contract that existing code depends on.
+_param_resolutions: dict[int, ParamResolution] = {}
 
 
 def _register_sidecar(
@@ -79,6 +119,18 @@ def _register_sidecar(
     node_id = id(n)
     _node_sidecar[node_id] = (fn, param_names, fan_out_param)
     weakref.finalize(n, _node_sidecar.pop, node_id, None)
+
+
+def _register_param_resolutions(n: Node, resolutions: ParamResolution) -> None:
+    """Store param resolution metadata for a Node, separate from the sidecar."""
+    node_id = id(n)
+    _param_resolutions[node_id] = resolutions
+    weakref.finalize(n, _param_resolutions.pop, node_id, None)
+
+
+def _get_param_resolutions(n: Node) -> ParamResolution:
+    """Get param resolution metadata for a Node."""
+    return _param_resolutions.get(id(n), {})
 
 
 def _get_sidecar(n: Node) -> tuple[Callable, tuple[str, ...], str | None] | None:
@@ -255,6 +307,39 @@ def node(
 
             param_names = tuple(p.name for p in sig.parameters.values())
 
+        # Classify non-upstream params at decoration time.
+        # FromInput[T] / FromConfig[T] are detectable from annotations now.
+        # Default-value constants are deferred to construct_from_module (we
+        # don't yet know which names map to @node upstreams).
+        param_res: ParamResolution = {}
+        if effective_mode != "raw":
+            # Try to resolve string annotations (from __future__ import annotations).
+            # If get_type_hints fails (e.g. local types not in globals), fall back
+            # to string-prefix matching on the raw annotation.
+            try:
+                import typing as _typing
+                resolved = _typing.get_type_hints(
+                    f, localns={"FromInput": FromInput, "FromConfig": FromConfig},
+                )
+            except Exception:
+                resolved = {}
+            for p in sig.parameters.values():
+                ann = resolved.get(p.name, p.annotation)
+                if ann is inspect.Parameter.empty:
+                    continue
+                origin = get_origin(ann)
+                if origin is FromInput:
+                    param_res[p.name] = ("from_input", None)
+                elif origin is FromConfig:
+                    param_res[p.name] = ("from_config", None)
+                elif isinstance(ann, str):
+                    # Fallback for string annotations where get_type_hints failed
+                    # (e.g. FromConfig[LocalClass] where LocalClass isn't in globals)
+                    if ann.startswith("FromInput[") or ann.startswith("FromInput "):
+                        param_res[p.name] = ("from_input", None)
+                    elif ann.startswith("FromConfig[") or ann.startswith("FromConfig "):
+                        param_res[p.name] = ("from_config", None)
+
         # Output inference: explicit kwarg wins; fall back to return annotation.
         inferred_output = output
         if inferred_output is None:
@@ -263,13 +348,16 @@ def node(
                 inferred_output = ret
 
         # Input inference: explicit kwarg wins. Otherwise use the annotation
-        # of the first annotated parameter. The per-node `.input` field only
-        # tracks a single type (matches the existing Node contract); fan-in
-        # still drives topology via param names, only the first annotated
-        # param feeds `.input`.
+        # of the first annotated parameter that is an upstream dependency
+        # (skip FromInput/FromConfig/constant params). The per-node `.input`
+        # field only tracks a single type (matches the existing Node contract);
+        # fan-in still drives topology via param names, only the first
+        # annotated upstream param feeds `.input`.
         inferred_input = input
         if inferred_input is None:
             for p in sig.parameters.values():
+                if p.name in param_res:
+                    continue  # skip from_input / from_config params
                 if p.annotation is not inspect.Parameter.empty:
                     inferred_input = p.annotation
                     break
@@ -293,9 +381,13 @@ def node(
             # The model_copy produced a new id(); re-register the sidecar on
             # the new instance so construct_from_module can find it.
             _register_sidecar(n_mapped, f, param_names)
+            if param_res:
+                _register_param_resolutions(n_mapped, param_res)
             return n_mapped
 
         _register_sidecar(n, f, param_names)
+        if param_res:
+            _register_param_resolutions(n, param_res)
 
         # -- Oracle ensemble when any ensemble kwarg is set --------------------
         if ensemble_n is not None or merge_fn is not None or merge_prompt is not None:
@@ -316,6 +408,8 @@ def node(
                 )
             n = n | Oracle(n=n_copies, merge_fn=merge_fn, merge_prompt=merge_prompt)
             _register_sidecar(n, f, param_names)
+            if param_res:
+                _register_param_resolutions(n, param_res)
 
         # -- Operator interrupt when interrupt_when is set --------------------
         if interrupt_when is not None:
@@ -335,6 +429,8 @@ def node(
 
             n = n | Operator(when=condition_name)
             _register_sidecar(n, f, param_names)
+            if param_res:
+                _register_param_resolutions(n, param_res)
 
         return n
 
@@ -380,22 +476,50 @@ def construct_from_module(mod: Any, name: str | None = None) -> Construct:
             _, pnames, _ = sidecar
             fan_out_params[field_name] = {p for p in pnames if p not in decorated}
 
+    # Classify default-value constants: params with defaults that don't match
+    # any decorated @node and aren't already classified as from_input/from_config.
+    # This must happen here (not at decoration time) because we need the full
+    # set of decorated names.
+    for field_name, n in decorated.items():
+        sidecar = _get_sidecar(n)
+        assert sidecar is not None
+        fn, pnames, _ = sidecar
+        param_res = _get_param_resolutions(n)
+        sig = inspect.signature(fn)
+        updated = False
+        for pname in pnames:
+            if pname in param_res:
+                continue  # already classified (from_input / from_config)
+            if pname in fan_out_params.get(field_name, set()):
+                continue  # fan-out item receiver
+            if pname not in decorated:
+                # Not an upstream @node — check for default value
+                p = sig.parameters.get(pname)
+                if p is not None and p.default is not inspect.Parameter.empty:
+                    param_res[pname] = ("constant", p.default)
+                    updated = True
+        if updated:
+            _register_param_resolutions(n, param_res)
+
     adjacency: dict[str, list[str]] = {k: [] for k in decorated}
     for field_name, n in decorated.items():
         sidecar = _get_sidecar(n)
         assert sidecar is not None  # filtered above
         _, param_names, _ = sidecar
+        param_res = _get_param_resolutions(n)
         skip = fan_out_params.get(field_name, set())
         seen_deps: set[str] = set()
         for pname in param_names:
             if pname in skip:
                 continue  # fan-out item receiver — not an upstream dependency
+            if pname in param_res:
+                continue  # from_input, from_config, or constant — not topology
             if pname not in decorated:
                 msg = (
                     f"@node '{n.name}' parameter '{pname}' does not match any "
                     f"@node in module '{mod.__name__}'. All parameters must "
-                    f"name an upstream @node (v1 does not support scalar or "
-                    f"run-input parameters).\n"
+                    f"name an upstream @node, use FromInput/FromConfig annotation, "
+                    f"or have a default value.\n"
                     f"  available @nodes: {sorted(decorated.keys())}"
                 )
                 raise ConstructError(msg)
@@ -471,6 +595,7 @@ def _attach_scripted_raw_fn(n: Node, fan_out: set[str] | None = None) -> None:
     if sidecar is None:
         return
     fn, param_names, _ = sidecar
+    param_res = _get_param_resolutions(n)
     field_name = n.name.replace("-", "_")
     _fan_out = fan_out or set()
     each_mod = n.get_modifier(Each)
@@ -481,12 +606,35 @@ def _attach_scripted_raw_fn(n: Node, fan_out: set[str] | None = None) -> None:
                 return state.get(key)
             return getattr(state, key, None)
 
+        def _get_configurable(key: str) -> Any:
+            cfg = config or {}
+            if isinstance(cfg, dict):
+                return cfg.get("configurable", {}).get(key)
+            # RunnableConfig object
+            return getattr(cfg, "configurable", {}).get(key)
+
         args = []
         for pname in param_names:
-            if pname in _fan_out:
+            resolution = param_res.get(pname)
+            if resolution is not None:
+                kind, default_val = resolution
+                if kind == "from_input":
+                    # FromInput: read from config["configurable"] (run() injects
+                    # all input fields there via _inject_input_to_config)
+                    args.append(_get_configurable(pname))
+                elif kind == "from_config":
+                    # FromConfig: read from config["configurable"]
+                    args.append(_get_configurable(pname))
+                elif kind == "constant":
+                    # Default value constant
+                    args.append(default_val)
+                else:
+                    args.append(_get(pname))
+            elif pname in _fan_out:
                 # Fan-out param: value comes from neo_each_item (set by Send)
                 args.append(_get("neo_each_item"))
             else:
+                # Upstream @node: read from state
                 args.append(_get(pname))
         result = fn(*args)
 
@@ -537,6 +685,7 @@ def _validate_fan_in_types(decorated: dict[str, Node]) -> None:
         if sidecar is None:
             continue
         fn, param_names, _ = sidecar
+        param_res = _get_param_resolutions(n)
 
         # Resolve annotations, handling `from __future__ import annotations`
         # which turns all annotations into strings / ForwardRef objects.
@@ -547,6 +696,8 @@ def _validate_fan_in_types(decorated: dict[str, Node]) -> None:
 
         sig = _inspect.signature(fn)
         for pname in param_names:
+            if pname in param_res:
+                continue  # from_input / from_config / constant — not upstream
             if pname not in decorated:
                 continue  # unknown-param error already raised earlier
 
