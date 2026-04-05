@@ -132,4 +132,6 @@ See [`examples/`](examples/) for runnable pipelines and [`examples/vs_langgraph/
 
 ## License
 
-MIT
+Code: MIT
+
+Documentation content &copy; 2025-2026 Constantine Mirin, [mirin.pro](https://mirin.pro). Licensed under [CC BY-ND 4.0](https://creativecommons.org/licenses/by-nd/4.0/).
