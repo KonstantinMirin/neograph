@@ -108,12 +108,7 @@ class FromConfig:
     this when your shared resources are a typed bundle.
     """
 
-from neograph._construct_validation import (
-    ConstructError,
-    _fmt_type,
-    _types_compatible,
-    effective_producer_type,
-)
+from neograph._construct_validation import ConstructError
 from neograph.construct import Construct
 from neograph.modifiers import Each, Operator, Oracle
 from neograph.node import Node
@@ -504,21 +499,68 @@ def node(
             if ret is not inspect.Signature.empty:
                 inferred_output = ret
 
-        # Inputs inference: explicit kwarg wins. Otherwise use the annotation
-        # of the first annotated parameter that is an upstream dependency
-        # (skip FromInput/FromConfig/constant params). The per-node `.inputs`
-        # field only tracks a single type here (matches the existing Node
-        # contract for step 1 of neograph-kqd); fan-in still drives topology
-        # via param names, only the first annotated upstream param feeds
-        # `.inputs`. Dict-only shape is introduced in later subtasks.
-        inferred_inputs = inputs
-        if inferred_inputs is None:
+        # Inputs inference: explicit kwarg wins. Otherwise build a dict-form
+        # `inputs = {param_name: annotation}` from every typed upstream
+        # parameter (neograph-kqd.4). DI params (FromInput/FromConfig/constant)
+        # are excluded because they come from config, not state. Fan-out
+        # params (Each receivers) are also excluded later at
+        # _build_construct_from_decorated time — we can't identify them yet
+        # without the full module context.
+        #
+        # Resolve string annotations (from __future__ import annotations)
+        # via typing.get_type_hints so the dict carries real types, not
+        # ForwardRef strings. Include locals from the caller's frame to
+        # catch class definitions inside test methods, same trick as
+        # _classify_di_params.
+        inferred_inputs: Any
+        if inputs is not None:
+            inferred_inputs = inputs
+        elif effective_mode == "raw":
+            inferred_inputs = None
+        else:
+            resolved_hints: dict[str, Any] = {}
+            try:
+                import typing as _typing
+                extra_ns: dict[str, Any] = {
+                    "FromInput": FromInput,
+                    "FromConfig": FromConfig,
+                    "Annotated": Annotated,
+                }
+                try:
+                    _cv = inspect.getclosurevars(f)
+                    extra_ns.update(_cv.globals)
+                    extra_ns.update(_cv.nonlocals)
+                except (TypeError, ValueError):
+                    pass
+                try:
+                    # Frame 0: this inline block inside decorator(f).
+                    # Frame 1: the user scope applying @node to a function.
+                    caller_frame = sys._getframe(1)  # noqa: SLF001
+                    _hops = 0
+                    while caller_frame is not None and _hops < 8:
+                        for _k, _v in caller_frame.f_locals.items():
+                            if not _k.startswith("_") and _k not in extra_ns:
+                                extra_ns[_k] = _v
+                        caller_frame = caller_frame.f_back
+                        _hops += 1
+                except Exception:
+                    pass
+                resolved_hints = _typing.get_type_hints(
+                    f, localns=extra_ns, include_extras=False,
+                )
+            except Exception:
+                resolved_hints = {}
+
+            inputs_dict: dict[str, Any] = {}
             for p in sig.parameters.values():
                 if p.name in param_res:
-                    continue  # skip from_input / from_config params
-                if p.annotation is not inspect.Parameter.empty:
-                    inferred_inputs = p.annotation
-                    break
+                    continue  # skip from_input / from_config / constant params
+                if p.annotation is inspect.Parameter.empty:
+                    continue  # unannotated — can't type-check
+                # Prefer resolved hint (handles from __future__ annotations).
+                hint = resolved_hints.get(p.name, p.annotation)
+                inputs_dict[p.name] = hint
+            inferred_inputs = inputs_dict if inputs_dict else None
 
         n = Node(
             name=node_label,
@@ -905,10 +947,30 @@ def _build_construct_from_decorated(
     for field in decorated:
         visit(field)
 
-    # Validate fan-in parameter types.
-    _validate_fan_in_types(decorated)
+    # Strip non-upstream keys from n.inputs so the step-2 validator sees
+    # only real upstream names (neograph-kqd.4). At @node time we emit ALL
+    # typed params into inputs because we don't yet know which are Each
+    # receivers, DI params, or constant defaults. Here we have the full
+    # module context: anything not in `decorated` is a non-upstream param
+    # (fan-out receiver, FromInput, FromConfig, or default constant), and
+    # must be removed before the validator walks the dict.
+    for field, n in decorated.items():
+        if not isinstance(n.inputs, dict):
+            continue
+        filtered = {
+            k: v for k, v in n.inputs.items()
+            if k in decorated and k != field  # keep only real upstream refs
+        }
+        if filtered != n.inputs:
+            try:
+                n.inputs = filtered
+            except (TypeError, ValueError):
+                pass  # frozen model — validator will surface an error
 
-    # Install raw_fn adapters for scripted @node functions.
+    # Install raw_fn adapters for scripted @node functions. This dispatches
+    # through factory._make_raw_wrapper; the factory logs mode=node.mode so
+    # the log line reports 'scripted' rather than 'raw' for this path
+    # (neograph-kqd.4).
     for n in ordered:
         if n.mode == "scripted" and n.raw_fn is None:
             field = n.name.replace("-", "_")
@@ -1012,73 +1074,9 @@ def _attach_scripted_raw_fn(n: Node, fan_out: set[str] | None = None) -> None:
     n.raw_fn = raw_adapter
 
 
-def _validate_fan_in_types(decorated: dict[str, Node]) -> None:
-    """Check every fan-in parameter's type annotation against the upstream
-    node's declared output. Raises ConstructError on the first mismatch.
-
-    Unannotated parameters are silently skipped. ForwardRef / string
-    annotations are resolved via ``typing.get_type_hints``; resolution
-    failures are skipped (same pattern as ``_resolve_field_annotation``).
-    """
-    import inspect as _inspect
-    from typing import ForwardRef as _ForwardRef, get_type_hints as _get_type_hints
-
-    # Build a localns dict from output/input types of all decorated nodes.
-    # This lets get_type_hints resolve string annotations produced by
-    # `from __future__ import annotations` when those types aren't in the
-    # function's __globals__ (e.g. types defined in a local scope).
-    localns: dict[str, Any] = {}
-    for nd in decorated.values():
-        for tp in (nd.output, nd.inputs):
-            if isinstance(tp, type) and hasattr(tp, "__name__"):
-                localns.setdefault(tp.__name__, tp)
-
-    for field_name, n in decorated.items():
-        sidecar = _get_sidecar(n)
-        if sidecar is None:
-            continue
-        fn, param_names, _ = sidecar
-        param_res = _get_param_resolutions(n)
-
-        # Resolve annotations, handling `from __future__ import annotations`
-        # which turns all annotations into strings / ForwardRef objects.
-        try:
-            resolved_hints = _get_type_hints(fn, localns=localns)
-        except Exception:
-            resolved_hints = {}
-
-        sig = _inspect.signature(fn)
-        for pname in param_names:
-            if pname in param_res:
-                continue  # from_input / from_config / constant — not upstream
-            if pname not in decorated:
-                continue  # unknown-param error already raised earlier
-
-            param = sig.parameters.get(pname)
-            if param is None or param.annotation is _inspect.Parameter.empty:
-                continue  # unannotated — skip
-
-            # Prefer resolved hint (handles ForwardRef); fall back to raw annotation.
-            expected = resolved_hints.get(pname, param.annotation)
-            if isinstance(expected, (str, _ForwardRef)):
-                continue  # unresolvable ForwardRef — skip
-
-            upstream = decorated[pname]
-            # Shared helper from _construct_validation.py — single source
-            # of truth for modifier-aware producer types. Handles Each
-            # dict[str, X] wrapping and any future modifier that reshapes
-            # state. Do NOT inline modifier checks here.
-            actual = effective_producer_type(upstream)
-            if actual is None:
-                continue
-
-            if not _types_compatible(actual, expected):
-                src = _get_node_source(n)
-                src_suffix = f"\n  @node defined at {src}" if src else ""
-                msg = (
-                    f"@node '{n.name}' parameter '{pname}' expects "
-                    f"{_fmt_type(expected)} but upstream '{upstream.name}' "
-                    f"produces {_fmt_type(actual)}."
-                    f"{src_suffix}"
-                )
-                raise ConstructError(msg)
+# _validate_fan_in_types was deleted in neograph-kqd.4. Fan-in validation
+# now flows through Construct.__init__ → _validate_node_chain →
+# _check_fan_in_inputs (see src/neograph/_construct_validation.py). The
+# @node decoration emits dict-form inputs {param_name: annotation} at
+# decoration time, which the validator walks by upstream name. One walker,
+# not two.

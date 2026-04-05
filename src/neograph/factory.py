@@ -102,12 +102,18 @@ def make_node_fn(node: Node) -> Callable:
 
 
 def _make_raw_wrapper(node: Node) -> Callable:
-    """Wrap a @raw_node function with observability (node_start/node_complete)."""
+    """Wrap a raw_fn dispatch with observability (node_start/node_complete).
+
+    The log's ``mode`` field comes from ``node.mode`` rather than a hardcoded
+    'raw' string so scripted @node nodes — which the decorator dispatches
+    via raw_fn but conceptually remain scripted — report their actual mode
+    in logs (neograph-kqd.4).
+    """
     raw_fn = node.raw_fn
     field_name = node.name.replace("-", "_")
 
     def raw_node_wrapper(state: BaseModel, config: RunnableConfig) -> dict[str, Any]:
-        node_log = log.bind(node=node.name, mode="raw")
+        node_log = log.bind(node=node.name, mode=node.mode)
         node_log.info("node_start", input_type=_type_name(node.inputs), output_type=_type_name(node.output))
         t0 = time.monotonic()
 

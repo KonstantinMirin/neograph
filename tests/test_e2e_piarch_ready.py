@@ -5169,3 +5169,152 @@ class TestExtractInputListUnwrap:
         state = {}  # no make_clusters field
         result = _extract_input(state, consumer)
         assert result["make_clusters"] is None
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# TestNodeDecoratorDictInputs (neograph-kqd.4)
+#
+# @node decoration now emits dict-form inputs={param_name: annotation, ...}
+# for all typed upstream params. This is the metadata shift that lets
+# step-2's validator catch fan-in mismatches via _check_fan_in_inputs.
+# Fan-out params (Each) are stripped from inputs at construct-assembly time.
+# ═══════════════════════════════════════════════════════════════════════════
+
+class TestNodeDecoratorDictInputs:
+    def test_node_decorator_emits_dict_form_inputs_single_upstream(self):
+        """@node with one typed upstream param emits dict form."""
+        from neograph import node
+        from neograph.decorators import construct_from_functions
+
+        @node(output=Claims)
+        def produce() -> Claims:
+            return Claims(items=["a"])
+
+        @node(output=MergedResult)
+        def consume(produce: Claims) -> MergedResult:
+            return MergedResult(final_text=",".join(produce.items))
+
+        construct_from_functions("p", [produce, consume])
+        assert isinstance(consume.inputs, dict)
+        assert consume.inputs == {"produce": Claims}
+
+    def test_node_decorator_emits_dict_form_inputs_fan_in(self):
+        """@node with three typed upstreams emits a 3-key dict."""
+        from neograph import node
+        from neograph.decorators import construct_from_functions
+
+        @node(output=Claims)
+        def produce_a() -> Claims:
+            return Claims(items=["a"])
+
+        @node(output=RawText)
+        def produce_b() -> RawText:
+            return RawText(text="b")
+
+        @node(output=ClusterGroup)
+        def produce_c() -> ClusterGroup:
+            return ClusterGroup(label="c", claim_ids=[])
+
+        @node(output=MergedResult)
+        def consume(
+            produce_a: Claims,
+            produce_b: RawText,
+            produce_c: ClusterGroup,
+        ) -> MergedResult:
+            return MergedResult(final_text="x")
+
+        construct_from_functions("p", [produce_a, produce_b, produce_c, consume])
+        assert isinstance(consume.inputs, dict)
+        assert consume.inputs == {
+            "produce_a": Claims,
+            "produce_b": RawText,
+            "produce_c": ClusterGroup,
+        }
+
+    def test_node_decorator_fan_out_param_stripped_from_inputs(self):
+        """Each fan-out param is NOT in the emitted inputs dict."""
+        from neograph import node
+        from neograph.decorators import construct_from_functions
+
+        @node(output=Clusters)
+        def make_clusters() -> Clusters:
+            return Clusters(groups=[])
+
+        @node(
+            output=MatchResult,
+            map_over="make_clusters.groups",
+            map_key="label",
+        )
+        def verify(cluster: ClusterGroup) -> MatchResult:
+            return MatchResult(cluster_label=cluster.label, matched=[])
+
+        construct_from_functions("p", [make_clusters, verify])
+        # verify has Each modifier; 'cluster' is the fan-out receiver, not an
+        # upstream. After construct assembly, it should be stripped from inputs.
+        assert isinstance(verify.inputs, dict)
+        assert "cluster" not in verify.inputs
+        # No other upstream for this node — inputs should be empty dict.
+        assert verify.inputs == {}
+
+    def test_node_decorator_fan_in_type_mismatch_caught_by_validator(self):
+        """Step-2's validator catches @node fan-in type mismatches via
+        dict-form inputs (no more two-walker setup)."""
+        from neograph import node
+        from neograph.decorators import construct_from_functions
+
+        @node(output=Claims)
+        def upstream() -> Claims:
+            return Claims(items=["x"])
+
+        @node(output=MergedResult)
+        def consume(upstream: RawText) -> MergedResult:  # WRONG TYPE
+            return MergedResult(final_text="x")
+
+        with pytest.raises(ConstructError) as exc_info:
+            construct_from_functions("p", [upstream, consume])
+        msg = str(exc_info.value)
+        assert "'upstream'" in msg
+        assert "Claims" in msg or "RawText" in msg
+
+    def test_scripted_fan_in_log_mode_is_scripted(self, caplog):
+        """@node fan-in execution logs mode='scripted', not 'raw'
+        (neograph-kqd.4 criterion 9)."""
+        import logging
+        from neograph import compile, run, node
+        from neograph.factory import register_scripted
+        from neograph.decorators import construct_from_functions
+
+        @node(output=Claims)
+        def produce_claims() -> Claims:
+            return Claims(items=["a", "b"])
+
+        @node(output=RawText)
+        def produce_text() -> RawText:
+            return RawText(text="hello")
+
+        @node(output=MergedResult)
+        def combine(produce_claims: Claims, produce_text: RawText) -> MergedResult:
+            return MergedResult(final_text=produce_text.text + ":" + ",".join(produce_claims.items))
+
+        pipeline = construct_from_functions("p", [produce_claims, produce_text, combine])
+        graph = compile(pipeline)
+
+        import structlog
+        captured: list[dict] = []
+
+        def capture_processor(logger, method_name, event_dict):
+            captured.append(dict(event_dict))
+            return event_dict
+
+        structlog.configure(processors=[capture_processor, structlog.processors.KeyValueRenderer()])
+        try:
+            run(graph, input={"node_id": "test"})
+        finally:
+            structlog.reset_defaults()
+
+        # Find the node_start event for 'combine' and assert mode='scripted'
+        combine_starts = [e for e in captured if e.get("node") == "combine" and e.get("event") == "node_start"]
+        assert combine_starts, f"no node_start event for combine; captured={captured}"
+        assert all(e.get("mode") == "scripted" for e in combine_starts), (
+            f"combine fan-in should log mode='scripted', got: {combine_starts}"
+        )
