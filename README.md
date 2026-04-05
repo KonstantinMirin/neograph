@@ -2,6 +2,8 @@
 
 **Write Python. Get a production graph.**
 
+**Docs & guides: [neograph.pro](https://neograph.pro)** — full documentation site with tutorials, API reference, and side-by-side LangGraph comparisons.
+
 ```bash
 pip install neograph
 ```
@@ -126,9 +128,20 @@ graph = compile(pipeline)
 
 Three surfaces — `@node`, `ForwardConstruct`, `Node | Modifier` — one compiler.
 
+## Documentation
+
+Full documentation is at **[neograph.pro](https://neograph.pro)**:
+
+- [Quick Start](https://neograph.pro/getting-started/quick-start/) — install, configure, build a pipeline, run it
+- [The @node API](https://neograph.pro/node-api/functions-as-nodes/) — functions as nodes, modifier kwargs, FromInput/FromConfig, organizing pipelines
+- [ForwardConstruct](https://neograph.pro/forward/control-flow/) — class-based pipelines with Python `if`/`for`/`try`
+- [Runtime Construction](https://neograph.pro/runtime/programmatic/) — LLM-driven pipeline assembly, programmatic API
+- [vs LangGraph](https://neograph.pro/comparison/overview/) — side-by-side for five common patterns
+- [API Reference](https://neograph.pro/reference/api/)
+
 ## Examples
 
-See [`examples/`](examples/) for runnable pipelines and [`examples/vs_langgraph/`](examples/vs_langgraph/) for side-by-side comparisons.
+See [`examples/`](examples/) for runnable pipelines and [`examples/vs_langgraph/`](examples/vs_langgraph/) for side-by-side comparisons. Each example is narrated on [neograph.pro](https://neograph.pro/walkthrough/scripted-pipeline/) as a walkthrough.
 
 ## License
 
