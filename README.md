@@ -1,8 +1,20 @@
 # NeoGraph
 
-Declarative LLM graph compiler. Declare nodes with `@node`, assemble from function signatures, compile to LangGraph.
+**A declarative LLM graph compiler.** Write Python functions. The framework builds the graph.
 
-## Quickstart
+NeoGraph compiles typed node definitions into [LangGraph](https://github.com/langchain-ai/langgraph) state machines with automatic topology inference, assembly-time type validation, and structured error messages. You write Python; you get a production-grade execution graph with checkpointing, observability, and tool orchestration.
+
+## Philosophy
+
+**The graph is Python.** Not a DSL, not YAML, not `add_node`/`add_edge` calls. You express your pipeline in two ways — pick whichever fits the problem:
+
+1. **`@node` decorator** — functions are nodes, parameter names are edges. The framework reads your function signatures and assembles the DAG. Rename a function, and downstream parameters break at import time. Fan-in is free: `def report(claims, scores, verified)`.
+
+2. **`ForwardConstruct`** — a class with a `forward()` method. Python `if`/`for`/`try` compile to conditional edges and fan-out. No string dispatch, no `add_conditional_edges`. The type checker sees everything.
+
+Both compile to the same IR and the same LangGraph backend. They coexist in the same project — use `@node` for most pipelines, reach for `ForwardConstruct` when you need branching logic.
+
+## Quickstart: `@node`
 
 ```python
 import sys
@@ -14,54 +26,244 @@ def decompose(topic: RawText) -> Claims: ...
 @node(output=Classified, prompt='rw/classify', model='fast')
 def classify(decompose: Claims) -> Classified: ...
 
-@node(mode='gather', output=MatchResult, prompt='match/explore',
-      tools=[search], each=Each(over='clusters', key='label'))
-def verify(classify: Classified) -> MatchResult: ...
-
 pipeline = construct_from_module(sys.modules[__name__])
 graph = compile(pipeline)
 result = run(graph, input={'node_id': 'doc-001'})
 ```
 
-Dependencies are inferred from parameter names: `classify(decompose: Claims)`
-means *classify* depends on *decompose*. No explicit wiring needed.
+`classify(decompose: Claims)` — the parameter name `decompose` matches the upstream function. No `nodes=[...]` list, no ordering, no wiring. Mode is inferred: `prompt=` present means LLM call; absent means the function body runs.
 
-## Modifiers
+## Quickstart: `ForwardConstruct`
 
-Pass modifiers as `@node` kwargs:
+```python
+from neograph import ForwardConstruct, Node, compile, run
 
-| Modifier | Purpose | Example kwarg |
-|----------|---------|---------------|
-| `Oracle` | N-way ensemble + judge-merge | `oracle=Oracle(n=3, merge_prompt='rw/merge')` |
-| `Each` | Fan-out over a collection | `each=Each(over='clusters', key='label')` |
-| `Operator` | Human-in-the-loop interrupt | `operator=Operator(when='has_failures')` |
+class Analysis(ForwardConstruct):
+    check    = Node(output=CheckResult, prompt='check', model='fast')
+    deep     = Node(output=DeepResult, prompt='deep', model='reason')
+    shallow  = Node(output=ShallowResult, prompt='shallow', model='fast')
+
+    def forward(self, topic):
+        checked = self.check(topic)
+        if checked.score > 0.7:          # compiles to conditional edge
+            return self.deep(checked)
+        else:
+            return self.shallow(checked)
+
+graph = compile(Analysis())
+result = run(graph, input={'node_id': 'analysis-001'})
+```
+
+The `if` is real Python. At compile time, NeoGraph traces `forward()` with symbolic proxies (torch.fx-style) and emits the branch as a conditional edge with a runtime router. At execution time, the LangGraph graph runs — `forward()` doesn't re-run. For testing, call `Analysis().forward(topic)` directly with fakes.
+
+## Modifier kwargs
+
+Modifiers are `@node` keyword arguments — no pipe `|` syntax needed:
+
+| Pattern | `@node` kwarg | What it does |
+|---------|--------------|--------------|
+| Fan-out over a collection | `map_over='upstream.items', map_key='label'` | Runs the node once per item; results collected as `dict[str, output]` |
+| N-way ensemble + merge | `ensemble_n=3, merge_fn='combine'` | N parallel generators, then a scripted or LLM merge step |
+| Human-in-the-loop | `interrupt_when=lambda state: {...} if bad else None` | Pauses the graph; resume with `run(graph, resume={...})` |
+
+```python
+@node(output=MatchResult, map_over='clusters.groups', map_key='label')
+def verify(cluster: ClusterGroup) -> MatchResult: ...
+
+@node(output=Claims, prompt='rw/decompose', model='reason',
+      ensemble_n=3, merge_fn='merge_claims')
+def decompose() -> Claims: ...
+
+@node(output=ValidationResult, interrupt_when=lambda s: (
+    {'issues': s.validate.issues} if not s.validate.passed else None
+))
+def validate(claims: Claims) -> ValidationResult: ...
+```
+
+## Non-node parameters
+
+Not every parameter is an upstream node. NeoGraph supports three non-node parameter types:
+
+```python
+from neograph import node, FromInput, FromConfig
+
+@node(output=Report)
+def summarize(
+    claims: Claims,                        # upstream @node
+    topic: FromInput[str],                 # from run(input={'topic': '...'})
+    rate_limiter: FromConfig[RateLimiter], # from config['configurable']
+    max_items: int = 10,                   # compile-time constant
+) -> Report: ...
+```
+
+## Organizing large pipelines
+
+### Module-per-pipeline
+
+Each pipeline lives in its own module. `construct_from_module` walks the module's `@node` functions:
+
+```
+pipelines/
+    ingestion.py      # @node functions → construct_from_module(sys.modules[__name__])
+    analysis.py       # separate module, separate pipeline
+    reporting.py
+```
+
+### Cross-module composition
+
+Import `@node` functions from other modules — they're just Python symbols:
+
+```python
+from pipelines.ingestion import extract, normalize
+from neograph import node, construct_from_module
+
+@node(output=Report)
+def analyze(normalize: NormalizedData) -> Report: ...
+
+pipeline = construct_from_module(sys.modules[__name__])
+# Finds extract, normalize (imported), and analyze (local).
+```
+
+### Sub-constructs for isolation boundaries
+
+When a sub-pipeline needs its own state boundary (isolated state, typed I/O contract):
+
+```python
+from neograph import Construct, Node
+
+enrich = Construct(
+    "enrich",
+    input=Claims,
+    output=ScoredClaims,
+    nodes=[lookup, verify, score],
+)
+```
+
+Sub-constructs get their own compiled subgraph. The parent pipeline wires input/output at the boundary.
+
+### ForwardConstruct for complex branching
+
+When the pipeline has non-trivial control flow (retries, conditional paths, fallbacks):
+
+```python
+class QualityGate(ForwardConstruct):
+    validate = Node(output=ValidationResult, prompt='validate', model='fast')
+    fix      = Node(output=FixedClaims, prompt='fix', model='reason')
+    accept   = Node.scripted("accept", fn="accept_fn", output=AcceptedClaims)
+
+    def forward(self, claims):
+        result = self.validate(claims)
+        if result.passed:
+            return self.accept(claims)
+        else:
+            fixed = self.fix(claims)
+            return self.validate(fixed)  # re-check
+```
+
+## Modes
+
+Every `@node` function operates in one of five modes:
+
+| Mode | When | What happens |
+|------|------|-------------|
+| `scripted` | No `prompt=`/`model=` | Function body runs at execution time |
+| `produce` | `prompt=` + `model=` present | Single LLM call, structured JSON output |
+| `gather` | Same + `tools=[...]` | ReAct tool loop (read-only exploration) |
+| `execute` | Same + `tools=[...]` (mutations) | ReAct tool loop (side effects allowed) |
+| `raw` | `mode='raw'` explicit | Full LangGraph `(state, config) -> dict` escape hatch |
+
+Mode is inferred from kwargs unless set explicitly. If you pass `prompt=` and `model=`, mode is `produce`. If you pass neither, mode is `scripted` and your function body runs.
+
+## Observability
+
+Every node execution emits structured logs via [structlog](https://www.structlog.org/):
+
+```
+node_start   node=decompose mode=produce output_type=Claims
+node_complete node=decompose duration_s=1.2
+```
+
+For production tracing, pass a trace provider via `config['configurable']`:
+
+```python
+result = run(graph, input={...}, config={
+    'configurable': {
+        'node_id': 'analysis-001',
+        'trace_provider': langfuse_tracer,
+        'rate_limiter': my_limiter,
+    }
+})
+```
+
+Node functions access these via `FromConfig[T]` parameters. The observable_pipeline example shows Langfuse integration.
+
+## Testing
+
+### Unit testing individual nodes
+
+```python
+result = my_node.run_isolated(input=Claims(items=["test"]))
+assert isinstance(result, ClassifiedClaims)
+```
+
+`run_isolated` bypasses `compile()`/`run()`. For LLM nodes, configure a fake first:
+
+```python
+from neograph import configure_llm
+configure_llm(llm_factory=lambda tier: FakeLLM(), prompt_compiler=...)
+result = decompose.run_isolated()
+```
+
+### End-to-end testing
+
+```python
+pipeline = construct_from_module(my_module)
+graph = compile(pipeline)
+result = run(graph, input={'node_id': 'test-001'})
+assert isinstance(result['classify'], ClassifiedClaims)
+```
+
+### ForwardConstruct testing
+
+Call `forward()` directly — it runs real Python with real values, not the traced graph:
+
+```python
+pipeline = MyPipeline()
+result = pipeline.forward(Claims(items=["test"]))  # direct call, debuggable
+```
+
+## Assembly-time validation
+
+NeoGraph catches type mismatches when you construct the pipeline, not at runtime:
+
+```
+ConstructError: Node 'verify' in construct 'pipeline' declares input=ClusterGroup
+  but no upstream produces a compatible value.
+  upstream producers:
+    • node 'cluster': Clusters
+  hint: did you forget to fan out? try .map(lambda s: s.cluster.groups, key='...')
+  at my_pipeline.py:42
+```
+
+Validation runs at `Construct(nodes=[...])` time and at `construct_from_module()` time. Fan-in parameters are type-checked against their upstream outputs. `Each`-modified producers are tracked as `dict[str, X]`.
 
 ## Examples
 
-See [`examples/`](examples/) for runnable pipelines covering every feature.
+See [`examples/`](examples/) for 13 runnable pipelines covering every feature, plus 5 LangGraph comparison scripts.
 
-## Advanced Use
+## Advanced: low-level IR
 
-For IR-level tests, programmatic construction from config, or sub-constructs,
-use `Node` and `Construct` directly:
+For programmatic construction, IR-level testing, or sub-constructs, use `Node` and `Construct` directly:
 
 ```python
 from neograph import Node, Construct, compile, run
 
-decompose = Node("decompose", mode="produce", output=Claims, prompt="rw/decompose")
-classify = Node("classify", mode="produce", output=Classified, prompt="rw/classify")
-pipeline = Construct("my-pipeline", nodes=[decompose, classify])
+a = Node.scripted("extract", fn="extract_fn", output=RawText)
+b = Node("classify", mode="produce", output=Claims, prompt="rw/classify", model="fast")
+pipeline = Construct("my-pipeline", nodes=[a, b])
 ```
 
-## Vocabulary
-
-| Term | What it is |
-|------|------------|
-| **Node** | Typed processing block (mode: produce / gather / execute / scripted) |
-| **Tool** | LLM-callable tool with per-tool budget |
-| **Construct** | Ordered composition of Nodes (the blueprint) |
-| **compile()** | Construct to executable LangGraph |
-| **run()** | Execute with checkpointing |
+This is the same IR that `@node` and `ForwardConstruct` compile to internally.
 
 ## Install
 
