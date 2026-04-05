@@ -1049,8 +1049,21 @@ def _attach_scripted_raw_fn(n: Node, fan_out: set[str] | None = None) -> None:
                 # Fan-out param: value comes from neo_each_item (set by Send)
                 args.append(_get("neo_each_item"))
             else:
-                # Upstream @node: read from state
-                args.append(_get(pname))
+                # Upstream @node: read from state by param name. If the
+                # consumer's annotation is list[X] and the state holds a
+                # dict (Each fan-out output), unwrap via list(values())
+                # (neograph-kqd.5). Mirrors factory._extract_input.
+                value = _get(pname)
+                if isinstance(n.inputs, dict):
+                    expected_type = n.inputs.get(pname)
+                    if (
+                        value is not None
+                        and expected_type is not None
+                        and get_origin(expected_type) is list
+                        and isinstance(value, dict)
+                    ):
+                        value = list(value.values())
+                args.append(value)
         result = fn(*args)
 
         if result is None:

@@ -5318,3 +5318,148 @@ class TestNodeDecoratorDictInputs:
         assert all(e.get("mode") == "scripted" for e in combine_starts), (
             f"combine fan-in should log mode='scripted', got: {combine_starts}"
         )
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# TestListOverEachEndToEnd (neograph-kqd.5)
+#
+# Merge-after-fan-out pattern across all three API surfaces: Each producer
+# + list[X] consumer. Validator rule (kqd.2) + factory unwrap (kqd.3) +
+# decorator dict-form inputs (kqd.4) + raw_adapter unwrap (kqd.5) wire
+# together into a complete end-to-end feature.
+# ═══════════════════════════════════════════════════════════════════════════
+
+class TestListOverEachEndToEnd:
+    def test_declarative_each_to_list_consumer(self):
+        """Declarative: Each producer + Node.scripted consumer that
+        annotates inputs={'verify': list[MatchResult]}."""
+        from neograph import compile, run
+        from neograph.factory import register_scripted
+
+        register_scripted(
+            "make_clusters_l5",
+            lambda _in, _cfg: Clusters(groups=[
+                ClusterGroup(label="a", claim_ids=["1"]),
+                ClusterGroup(label="b", claim_ids=["2"]),
+                ClusterGroup(label="c", claim_ids=["3"]),
+            ]),
+        )
+        register_scripted(
+            "verify_cluster_l5",
+            lambda input_data, _cfg: MatchResult(
+                cluster_label=input_data.label if hasattr(input_data, "label") else "?",
+                matched=[f"m-{input_data.label}" if hasattr(input_data, "label") else "?"],
+            ),
+        )
+
+        def summarize_fn(input_data, _cfg):
+            verify_list = input_data["verify"]
+            assert isinstance(verify_list, list), f"expected list, got {type(verify_list).__name__}"
+            return MergedResult(
+                final_text=f"verified:{len(verify_list)}:" + ",".join(sorted(v.cluster_label for v in verify_list)),
+            )
+
+        register_scripted("summarize_l5", summarize_fn)
+
+        make = Node.scripted("make-clusters", fn="make_clusters_l5", output=Clusters)
+        verify = (
+            Node.scripted("verify", fn="verify_cluster_l5", inputs=ClusterGroup, output=MatchResult)
+            .map(lambda s: s.make_clusters.groups, key="label")
+        )
+        summarize = Node.scripted(
+            "summarize", fn="summarize_l5",
+            inputs={"verify": list[MatchResult]},
+            output=MergedResult,
+        )
+        pipeline = Construct("l5-decl", nodes=[make, verify, summarize])
+        graph = compile(pipeline)
+        result = run(graph, input={"node_id": "l5"})
+        assert result["summarize"].final_text == "verified:3:a,b,c"
+
+    def test_decorator_each_to_list_consumer(self):
+        """@node: Each producer + @node consumer with list[X] annotation."""
+        from neograph import compile, run, node
+        from neograph.decorators import construct_from_functions
+
+        @node(mode="scripted", output=Clusters)
+        def gen_clusters() -> Clusters:
+            return Clusters(groups=[
+                ClusterGroup(label="alpha", claim_ids=["1"]),
+                ClusterGroup(label="beta", claim_ids=["2"]),
+            ])
+
+        @node(
+            mode="scripted",
+            output=MatchResult,
+            map_over="gen_clusters.groups",
+            map_key="label",
+        )
+        def verify(cluster: ClusterGroup) -> MatchResult:
+            return MatchResult(cluster_label=cluster.label, matched=[f"m-{cluster.label}"])
+
+        @node(mode="scripted", output=MergedResult)
+        def summarize(verify: list[MatchResult]) -> MergedResult:
+            assert isinstance(verify, list), f"expected list, got {type(verify).__name__}"
+            return MergedResult(
+                final_text=f"got:{len(verify)}:" + ",".join(sorted(v.cluster_label for v in verify)),
+            )
+
+        pipeline = construct_from_functions("l5-dec", [gen_clusters, verify, summarize])
+        graph = compile(pipeline)
+        result = run(graph, input={"node_id": "l5"})
+        assert result["summarize"].final_text == "got:2:alpha,beta"
+
+    def test_list_wrong_element_type_rejected(self):
+        """list[WrongType] consumer + Each producer raises ConstructError."""
+        make = _producer("make", Clusters)
+        verify = _consumer("verify", ClusterGroup, MatchResult).map(
+            lambda s: s.make.groups, key="label"
+        )
+        summarize = Node.scripted(
+            "summarize", fn="f",
+            inputs={"verify": list[Claims]},  # WRONG: Each emits MatchResult
+            output=MergedResult,
+        )
+        with pytest.raises(ConstructError) as exc_info:
+            Construct("bad-list-type", nodes=[make, verify, summarize])
+        msg = str(exc_info.value)
+        assert "verify" in msg
+
+    def test_dict_consumer_still_works_after_each(self):
+        """dict[str, X] consumer still passes through unchanged (regression)."""
+        from neograph import compile, run
+        from neograph.factory import register_scripted
+
+        register_scripted(
+            "make_clusters_l5b",
+            lambda _in, _cfg: Clusters(groups=[ClusterGroup(label="x", claim_ids=["1"])]),
+        )
+        register_scripted(
+            "verify_cluster_l5b",
+            lambda input_data, _cfg: MatchResult(
+                cluster_label=input_data.label if hasattr(input_data, "label") else "?",
+                matched=["ok"],
+            ),
+        )
+
+        def summarize_dict_fn(input_data, _cfg):
+            verify_dict = input_data["verify"]
+            assert isinstance(verify_dict, dict), f"expected dict, got {type(verify_dict).__name__}"
+            return MergedResult(final_text=f"keys:{sorted(verify_dict.keys())}")
+
+        register_scripted("summarize_l5b", summarize_dict_fn)
+
+        make = Node.scripted("make-clusters", fn="make_clusters_l5b", output=Clusters)
+        verify = (
+            Node.scripted("verify", fn="verify_cluster_l5b", inputs=ClusterGroup, output=MatchResult)
+            .map(lambda s: s.make_clusters.groups, key="label")
+        )
+        summarize = Node.scripted(
+            "summarize", fn="summarize_l5b",
+            inputs={"verify": dict[str, MatchResult]},
+            output=MergedResult,
+        )
+        pipeline = Construct("l5-dict", nodes=[make, verify, summarize])
+        graph = compile(pipeline)
+        result = run(graph, input={"node_id": "l5"})
+        assert result["summarize"].final_text == "keys:['x']"
