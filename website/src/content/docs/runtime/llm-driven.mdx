@@ -1,0 +1,184 @@
+---
+title: "LLM-Driven Pipelines"
+description: "Use an LLM to emit pipeline specs via tool calling or structured output, then compile and run them at runtime."
+---
+
+The `@node` decorator and `ForwardConstruct` are for humans writing source code. But pipelines don't have to be defined at source-code time — they can be assembled at runtime by an LLM, a config file, or a routing layer. This is where the programmatic API (`Node` + `Construct` + `|` pipe) earns its place as a first-class surface, not a legacy leftover.
+
+## The use case
+
+An LLM is the graph architect. You give it a high-level goal, expose a schema for what a pipeline looks like (nodes, modes, modifiers), and it emits a structured spec via tool calling or JSON mode. Your runtime parses the spec, constructs Nodes, chains modifiers, and calls `compile()` + `run()`. The validator catches malformed specs before anything executes.
+
+This is fundamentally different from hardcoded pipelines. The LLM can:
+- Pick which nodes to include based on the input
+- Decide whether to run an ensemble or a single pass
+- Add fan-out when the input is a collection
+- Insert human-in-the-loop checks for sensitive outputs
+- Skip steps that aren't needed for this particular request
+
+## Example: LLM emits a pipeline spec
+
+Suppose you've given an LLM a prompt like "Given this user request, design a NeoGraph pipeline to handle it. Return JSON matching this schema: ..." The LLM returns:
+
+```python
+llm_output = {
+    "name": "requirements-analysis",
+    "nodes": [
+        {
+            "name": "decompose",
+            "mode": "produce",
+            "output": "Claims",
+            "prompt": "rw/decompose",
+            "model": "reason",
+            "modifiers": [
+                {"type": "Oracle", "n": 3, "merge_fn": "merge_claims"}
+            ],
+        },
+        {
+            "name": "verify",
+            "mode": "gather",
+            "output": "MatchResult",
+            "prompt": "match/verify",
+            "model": "fast",
+            "tools": ["search_codebase"],
+            "modifiers": [
+                {"type": "Each", "over": "decompose.items", "key": "label"}
+            ],
+        },
+        {
+            "name": "report",
+            "mode": "produce",
+            "output": "Report",
+            "prompt": "rw/report",
+            "model": "fast",
+        },
+    ],
+}
+```
+
+Your runtime turns it into a pipeline:
+
+```python
+from neograph import (
+    Node, Tool, Construct, Oracle, Each, Operator, compile, run,
+)
+
+# Your type registry (schemas the LLM can reference by name)
+TYPES = {"Claims": Claims, "MatchResult": MatchResult, "Report": Report}
+TOOLS = {"search_codebase": Tool("search_codebase", budget=5)}
+
+
+def build_node(spec):
+    n = Node(
+        spec["name"],
+        mode=spec["mode"],
+        output=TYPES[spec["output"]],
+        prompt=spec.get("prompt"),
+        model=spec.get("model"),
+        tools=[TOOLS[t] for t in spec.get("tools", [])],
+    )
+    for mod_spec in spec.get("modifiers", []):
+        match mod_spec["type"]:
+            case "Oracle":
+                n = n | Oracle(
+                    n=mod_spec["n"],
+                    merge_fn=mod_spec.get("merge_fn"),
+                    merge_prompt=mod_spec.get("merge_prompt"),
+                )
+            case "Each":
+                n = n | Each(over=mod_spec["over"], key=mod_spec["key"])
+            case "Operator":
+                n = n | Operator(when=mod_spec["when"])
+    return n
+
+
+def build_pipeline(llm_output):
+    nodes = [build_node(spec) for spec in llm_output["nodes"]]
+    return Construct(llm_output["name"], nodes=nodes)
+```
+
+And runs it:
+
+```python
+pipeline = build_pipeline(llm_output)
+graph = compile(pipeline)
+result = run(graph, input={"node_id": "user-request-42"})
+```
+
+## Why the `|` pipe syntax matters here
+
+The pipe operator composes modifiers at runtime without modules, function signatures, or class definitions. The LLM emits a list of modifier dicts, and your runtime chains them with a simple `for` loop:
+
+```python
+for mod_spec in spec.get("modifiers", []):
+    n = n | build_modifier(mod_spec)
+```
+
+This is impossible with `@node` — the decorator needs a function at source-code time, with a specific signature. `ForwardConstruct` is similar — it needs a class definition. The programmatic `Node(...) | Modifier(...)` form works with a dict as input, no Python syntax required.
+
+## Assembly-time validation still runs
+
+When you call `Construct(name, nodes=[...])`, NeoGraph validates the whole chain before returning:
+
+- Every node's declared `input` is type-checked against upstream `output` types
+- Modifier chains are validated (e.g., `Each` requires a dotted path that resolves to `list[X]` where X matches the downstream input)
+- Fan-in parameters are type-checked across all upstreams
+- Cycles and self-dependencies raise `ConstructError`
+
+If the LLM emits a malformed spec — say, `verify` consumes `MatchResult` but the upstream actually produces `dict[str, MatchResult]` via the Each modifier — the validator catches it with a clear error pointing at the broken edge. You surface that error back to the LLM, and it can revise the spec. The graph never executes a malformed pipeline.
+
+## Tool calling pattern
+
+The cleanest integration is to expose `build_pipeline` as a tool the LLM can call:
+
+```python
+from neograph import tool
+
+@tool
+def construct_pipeline(spec: dict) -> str:
+    """Build and validate a NeoGraph pipeline from a spec dict.
+
+    Returns a pipeline ID on success, or a validation error on failure.
+    """
+    try:
+        pipeline = build_pipeline(spec)
+        pipeline_id = register(pipeline)   # your storage
+        return f"Pipeline '{spec['name']}' built successfully (id={pipeline_id})"
+    except ConstructError as e:
+        return f"Validation failed: {e}"
+```
+
+The LLM calls `construct_pipeline` with a JSON spec. If the validator rejects it, the error comes back as the tool's return value — the LLM sees the exact problem and can try again. If it succeeds, the LLM calls a second tool to dispatch: `run_pipeline(pipeline_id, input={...})`.
+
+This gives you a self-correcting loop: the LLM proposes a pipeline, validation either accepts or rejects with a diagnostic, and the LLM iterates until the spec is correct.
+
+## Config-driven pipelines
+
+The same pattern works when pipelines come from YAML, JSON config files, or a database:
+
+```python
+import yaml
+
+with open("pipelines/daily-ingestion.yaml") as f:
+    spec = yaml.safe_load(f)
+
+pipeline = build_pipeline(spec)
+graph = compile(pipeline)
+run(graph, input={"node_id": "daily-001"})
+```
+
+The runtime logic is identical. Only the source of the spec changes.
+
+## Summary
+
+Three surfaces, one compiler:
+
+- **`@node`** — humans writing pipelines in source code
+- **`ForwardConstruct`** — humans writing branching logic as Python
+- **`Node` + `Construct` + `|`** — LLMs and config systems building pipelines at runtime
+
+The runtime API is a first-class citizen. It's the path for every use case where "who writes the pipeline" isn't a human at a keyboard.
+
+---
+
+Documentation © 2025-2026 Constantine Mirin, [mirin.pro](https://mirin.pro). Licensed under [CC BY-ND 4.0](https://creativecommons.org/licenses/by-nd/4.0/).

@@ -1,6 +1,6 @@
 ---
 title: Observability
-description: Two layers of observability — always-on structlog for framework events and opt-in Langfuse for LLM tracing.
+description: Structured logging on every node, FromConfig[T] for trace providers, and opt-in LLM tracing via callbacks.
 ---
 
 NeoGraph provides observability at two layers. The framework layer (structlog) is always on and captures every node execution, LLM call, tool invocation, and budget event. The tracing layer (Langfuse or any LangChain callback) is opt-in and provides deep LLM call traces with token-level detail.
@@ -77,12 +77,6 @@ A gather node with tools adds tool-level detail:
 }
 {
   "tool": "search_nodes",
-  "call_num": 2,
-  "duration_s": 0.189,
-  "event": "tool_call"
-}
-{
-  "tool": "search_nodes",
   "event": "tool_budget_exhausted"
 }
 {
@@ -119,7 +113,67 @@ structlog.configure(
 
 If you do not configure structlog, it uses its defaults (which are reasonable for development).
 
-## Langfuse: opt-in tracing
+## Injecting trace providers via FromConfig
+
+Use `FromConfig[T]` to inject trace providers, span managers, or any shared observability resource into scripted nodes without threading them through state:
+
+```python
+from neograph import node, FromConfig
+
+@node(output=Report)
+def summarize(
+    claims: Claims,
+    tracer: FromConfig[LangfuseTracer],
+) -> Report:
+    with tracer.span("summarize-claims"):
+        result = Report(summary=f"{len(claims.items)} claims")
+    return result
+```
+
+At runtime, `tracer` is resolved from `config["configurable"]["tracer"]`. Pass it when calling `run()`:
+
+```python
+from langfuse import Langfuse
+
+langfuse = Langfuse()
+tracer = langfuse.trace(name="ingestion-pipeline")
+
+result = run(
+    graph,
+    input={"node_id": "BR-042"},
+    config={"configurable": {"tracer": tracer}},
+)
+```
+
+This pattern works for any shared resource -- rate limiters, database pools, metrics collectors -- not just tracing. The key is that `FromConfig[T]` reads from `config["configurable"]`, which is propagated to every node by the LangGraph runtime.
+
+## The config\["configurable"\] pattern
+
+All shared resources and runtime metadata flow through `config["configurable"]`. When you call `run()`, input fields are automatically injected there too:
+
+```python
+result = run(
+    graph,
+    input={"node_id": "BR-042"},
+    config={
+        "configurable": {
+            "tracer": langfuse_tracer,
+            "rate_limiter": my_limiter,
+        }
+    },
+)
+
+# Inside every node, config["configurable"] contains:
+# {
+#     "node_id": "BR-042",        # from input
+#     "tracer": <LangfuseTracer>, # from config
+#     "rate_limiter": <Limiter>,  # from config
+# }
+```
+
+This means your prompt compiler, LLM factory, and scripted functions can all access pipeline metadata and shared resources uniformly.
+
+## Langfuse: opt-in LLM tracing
 
 [Langfuse](https://langfuse.com/) provides deep LLM call tracing -- prompt/completion pairs, token counts, latency waterfalls, cost tracking. NeoGraph supports it (and any LangChain-compatible callback) through the standard `config["callbacks"]` mechanism.
 
@@ -141,7 +195,7 @@ result = run(
 )
 ```
 
-That is all. Every LLM call inside every node -- produce, gather, execute, and even Oracle merge calls -- will appear in your Langfuse dashboard with full prompt/completion detail, token counts, and timing.
+Every LLM call inside every node -- produce, gather, execute, and even Oracle merge calls -- will appear in your Langfuse dashboard with full prompt/completion detail, token counts, and timing.
 
 ### How it works
 
@@ -159,11 +213,15 @@ config = {"callbacks": [my_langsmith_handler, my_custom_handler]}
 result = run(graph, input={...}, config=config)
 ```
 
-### Combining structlog and Langfuse
+### Combining both layers
 
 The two layers complement each other:
 
 - **structlog** gives you the framework-level view: which node ran, how long it took, how many tool calls, total tokens. Useful for pipeline debugging and operational monitoring.
-- **Langfuse** gives you the LLM-level view: exact prompts, completions, per-call token breakdown, cost. Useful for prompt engineering and model evaluation.
+- **Langfuse/callbacks** give you the LLM-level view: exact prompts, completions, per-call token breakdown, cost. Useful for prompt engineering and model evaluation.
 
-Both run simultaneously. structlog is always on; Langfuse activates only when you pass the callback.
+Both run simultaneously. structlog is always on; callbacks activate only when you pass them.
+
+---
+
+Documentation &copy; 2025-2026 Constantine Mirin, [mirin.pro](https://mirin.pro). Licensed under [CC BY-ND 4.0](https://creativecommons.org/licenses/by-nd/4.0/).

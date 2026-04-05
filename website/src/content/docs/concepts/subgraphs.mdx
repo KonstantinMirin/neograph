@@ -1,19 +1,17 @@
 ---
 title: Subgraphs
-description: Constructs as isolated sub-pipelines — state boundaries, nesting, and modifiers on Constructs.
+description: Sub-constructs as isolated sub-pipelines — state boundaries, nesting, and modifiers on Constructs.
 ---
 
 A Construct can contain other Constructs. When a Construct appears inside another Construct's `nodes` list, it becomes a **subgraph** with its own isolated state. Internal nodes do not leak into the parent.
 
-## Why subgraphs
+## Why sub-constructs stay declarative
 
-Without subgraphs, every node in a pipeline shares the same flat state. This is fine for small graphs, but as pipelines grow, state fields accumulate and nodes can accidentally read or overwrite each other's data.
+Top-level pipelines use `@node` and `construct_from_module` for ergonomic, signature-driven wiring. Sub-constructs use the declarative `Construct(input=X, output=Y, nodes=[...])` form instead.
 
-Subgraphs solve this by introducing a state boundary:
+The reason is isolation. A sub-construct is a typed I/O boundary: it takes one type in, produces one type out, and hides everything in between. The explicit `input` and `output` declarations define that contract. With `@node`, dependencies are inferred from parameter names -- but a sub-construct's internal nodes should not be visible to the parent's namespace. The declarative form makes the boundary explicit and prevents internal node names from leaking into parent wiring.
 
-- The sub-Construct gets its own `StateGraph` with its own generated state model.
-- The parent only sees the sub-Construct's declared `output` type, stored in a single state field named after the sub-Construct.
-- Internal node outputs (the intermediate steps) never appear in the parent state.
+Think of it like a function signature: the top-level pipeline is the function body (where `@node` infers the flow), and each sub-construct is a called function with a declared interface.
 
 ## Declaring a sub-Construct
 
@@ -29,10 +27,14 @@ class Claims(BaseModel):
 class ScoredClaims(BaseModel):
     scored: list[dict]
 
-# Internal nodes
-lookup = Node("lookup", mode="gather", input=Claims, output=LookupResults, ...)
-verify = Node("verify", mode="produce", input=LookupResults, output=VerifiedClaims, ...)
-score  = Node("score", mode="produce", input=VerifiedClaims, output=ScoredClaims, ...)
+# Internal nodes use the declarative Node(...) form
+lookup = Node("lookup", mode="gather", input=Claims, output=LookupResults,
+              model="reason", prompt="rw/lookup",
+              tools=[Tool("search", budget=5)])
+verify = Node("verify", mode="produce", input=LookupResults, output=VerifiedClaims,
+              model="fast", prompt="rw/verify")
+score  = Node("score", mode="produce", input=VerifiedClaims, output=ScoredClaims,
+              model="fast", prompt="rw/score")
 
 # Sub-construct with I/O boundary
 enrich = Construct(
@@ -45,18 +47,27 @@ enrich = Construct(
 
 The `input` type tells the framework how to extract data from the parent state. At runtime, the framework scans the parent state for a field whose value is an instance of `Claims` and passes it into the sub-graph. The `output` type defines what comes back -- the sub-graph's result is stored in `parent_state.enrich` as a `ScoredClaims` instance.
 
-## Using a sub-Construct in a parent
+## Using a sub-Construct in a top-level pipeline
 
-A sub-Construct goes into a parent's `nodes` list like any other node:
+The top-level pipeline uses `@node` for its own nodes. The sub-construct slots in alongside them:
 
 ```python
-extract   = Node("extract", mode="produce", ..., output=RawText)
-decompose = Node("decompose", mode="produce", input=RawText, output=Claims, ...)
+from neograph import node, construct_from_module, compile, run
+import sys
+
+@node(output=RawText, prompt='rw/extract', model='fast')
+def extract(topic: FromInput[str]) -> RawText: ...
+
+@node(output=Claims, prompt='rw/decompose', model='reason')
+def decompose(extract: RawText) -> Claims: ...
 
 # enrich is the sub-Construct defined above
 
-report = Node("report", mode="produce", input=ScoredClaims, output=FinalReport, ...)
+@node(output=FinalReport, prompt='rw/report', model='fast')
+def report(enrich: ScoredClaims) -> FinalReport: ...
 
+# construct_from_module discovers @node functions;
+# add the sub-construct manually to the node list
 pipeline = Construct(
     "ingestion",
     nodes=[extract, decompose, enrich, report],
@@ -170,6 +181,10 @@ The interrupt check runs after all three internal nodes have completed, not afte
 
 The compiler enforces sub-Construct contracts:
 
-- A sub-Construct without `input` raises `ValueError` at compile time.
-- A sub-Construct without `output` raises `ValueError` during state model generation.
-- An Operator modifier anywhere in the graph without a `checkpointer` passed to `compile()` raises `ValueError`.
+- A sub-Construct without `input` raises `ConstructError` at compile time.
+- A sub-Construct without `output` raises `ConstructError` during state model generation.
+- An Operator modifier anywhere in the graph without a `checkpointer` passed to `compile()` raises `ConstructError`.
+
+---
+
+Documentation &copy; 2025-2026 Constantine Mirin, [mirin.pro](https://mirin.pro). Licensed under [CC BY-ND 4.0](https://creativecommons.org/licenses/by-nd/4.0/).

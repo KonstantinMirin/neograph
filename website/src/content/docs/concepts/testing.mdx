@@ -1,0 +1,179 @@
+---
+title: Testing
+description: Unit testing with run_isolated, integration testing with compile/run, ForwardConstruct direct calls, FakeLLM patterns, and assembly-time validation.
+---
+
+NeoGraph pipelines are testable at every level -- from individual nodes to full integration runs. Assembly-time validation catches structural errors before any code executes, and the `@node` decorator makes unit testing natural.
+
+## Assembly-time validation
+
+The most important testing feature is the one you don't have to write. When you define a pipeline, the framework validates it immediately:
+
+```
+ConstructError: Node 'verify' in construct 'ingestion' declares
+  input=ClusterGroup but no upstream produces a compatible value.
+  upstream producers:
+    - node 'cluster': Clusters
+  hint: did you forget to fan out? try
+    .map(lambda s: s.cluster.groups, key='...')
+  at my_pipeline.py:42
+```
+
+These checks run at assembly time -- when the `Construct` is instantiated or `construct_from_module` is called -- not when the graph is executed. This means:
+
+- **Type mismatches** between nodes are caught at import time.
+- **Missing upstream dependencies** are flagged with the list of available producers.
+- **Self-dependencies and cycles** in `@node` parameter names raise immediately.
+- **Fan-out path errors** (e.g., `Each(over="clusters.groups")` where `groups` is not a list) are validated against Pydantic model fields.
+- **Invalid mode configurations** (e.g., `produce` without `prompt=`) raise `ConstructError` at decoration time.
+
+This shifts most structural bugs from runtime failures to import-time errors.
+
+## Unit testing: run_isolated
+
+Test individual nodes in isolation by calling the underlying function directly. For `scripted` nodes, the `@node` decorator returns a `Node` instance, but the original function is accessible through the sidecar:
+
+```python
+from neograph import node
+
+@node(output=Report)
+def report(claims: Claims, scores: ScoredClaims) -> Report:
+    return Report(
+        total=len(claims.items),
+        avg_score=sum(s.value for s in scores.items) / len(scores.items),
+    )
+
+# Test the logic directly
+def test_report():
+    claims = Claims(items=["claim1", "claim2"])
+    scores = ScoredClaims(items=[Score(value=0.8), Score(value=0.6)])
+
+    result = report.raw_fn(
+        {"claims": claims, "scores": scores},
+        {"configurable": {}},
+    )
+
+    assert result["report"].total == 2
+    assert result["report"].avg_score == 0.7
+```
+
+For `produce`/`gather`/`execute` nodes, unit testing focuses on the input/output types -- the LLM call is mocked at integration test time.
+
+## Integration testing: compile + run
+
+Test the full pipeline with `compile()` + `run()`. Use a `FakeLLM` to make tests deterministic:
+
+```python
+from neograph import compile, run, configure_llm
+
+class FakeLLM:
+    """Returns canned responses keyed by prompt template."""
+
+    def __init__(self, responses):
+        self.responses = responses
+
+    def with_structured_output(self, model, **kwargs):
+        self._output_model = model
+        return self
+
+    def invoke(self, messages, **kwargs):
+        # Extract template name from messages or return default
+        for template, response in self.responses.items():
+            return self._output_model.model_validate(response)
+
+def test_pipeline_integration():
+    fake = FakeLLM({
+        "rw/decompose": {"items": ["claim1", "claim2"]},
+        "rw/classify": {"classified": [{"claim": "claim1", "category": "A"}]},
+    })
+
+    configure_llm(
+        llm_factory=lambda tier: fake,
+        prompt_compiler=lambda template, data: [{"role": "user", "content": str(data)}],
+    )
+
+    graph = compile(pipeline)
+    result = run(graph, input={"node_id": "test-001"})
+
+    assert result["classify"] is not None
+```
+
+The key pattern: `configure_llm` with a fake factory before `run()`. Since `configure_llm` is a global registration, call it in test setup (or use a fixture) and reset it in teardown.
+
+## ForwardConstruct: direct forward() calls
+
+`ForwardConstruct` subclasses support direct `forward()` calls for debugging. Because `forward()` defines execution order with plain Python control flow, you can call individual node methods with real data:
+
+```python
+from neograph import ForwardConstruct, Node, compile
+
+class Analysis(ForwardConstruct):
+    check   = Node(output=CheckResult, prompt='check', model='fast')
+    deep    = Node(output=Result, prompt='deep-analysis', model='reason')
+    shallow = Node(output=Result, prompt='quick-scan', model='fast')
+
+    def forward(self, topic):
+        checked = self.check(topic)
+        if checked.confidence > 0.8:
+            return self.shallow(checked)
+        else:
+            return self.deep(checked)
+```
+
+For debugging, you can trace through `forward()` by inspecting the proxy objects returned by node calls. For full execution, use `compile()` + `run()`.
+
+## Testing modifiers
+
+Modifiers (Oracle, Each, Operator) are tested through integration tests since they affect the compiled graph topology:
+
+```python
+def test_each_fan_out():
+    """Each modifier fans out and collects results as dict."""
+    graph = compile(pipeline_with_each)
+    result = run(graph, input={
+        "node_id": "test",
+        "clusters": Clusters(groups=[
+            ClusterGroup(label="auth", items=[...]),
+            ClusterGroup(label="payments", items=[...]),
+        ]),
+    })
+
+    # Each produces dict[key, result]
+    assert "auth" in result["verify"]
+    assert "payments" in result["verify"]
+
+def test_operator_interrupt():
+    """Operator pauses the graph on condition."""
+    from langgraph.checkpoint.memory import MemorySaver
+
+    checkpointer = MemorySaver()
+    graph = compile(pipeline_with_operator, checkpointer=checkpointer)
+
+    result = run(
+        graph,
+        input={"node_id": "test"},
+        config={"configurable": {"thread_id": "test-thread"}},
+    )
+
+    # Graph paused -- resume with human feedback
+    result = run(
+        graph,
+        resume={"approved": True},
+        config={"configurable": {"thread_id": "test-thread"}},
+    )
+```
+
+## Testing patterns summary
+
+| Level | Tool | What it tests |
+|---|---|---|
+| Structure | `Construct()` / `construct_from_module()` | Types, topology, cycles, fan-out paths |
+| Unit | `node.raw_fn(state, config)` | Individual node logic (scripted nodes) |
+| Integration | `compile()` + `run()` with FakeLLM | Full pipeline flow, modifier behavior |
+| Debug | `ForwardConstruct.forward()` | Control flow tracing, branch paths |
+
+Assembly-time validation is the first line of defense. It catches the mistakes that would otherwise surface as runtime `KeyError` or `TypeError` deep in a LangGraph execution trace.
+
+---
+
+Documentation &copy; 2025-2026 Constantine Mirin, [mirin.pro](https://mirin.pro). Licensed under [CC BY-ND 4.0](https://creativecommons.org/licenses/by-nd/4.0/).

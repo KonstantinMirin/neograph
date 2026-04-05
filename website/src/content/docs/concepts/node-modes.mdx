@@ -1,9 +1,9 @@
 ---
 title: Node Modes
-description: The four execution modes — produce, gather, execute, scripted — and the raw_node escape hatch.
+description: Five execution modes — produce, gather, execute, scripted, raw — and how @node infers them from kwargs.
 ---
 
-Every Node has a `mode` that determines how it runs. The mode controls whether an LLM is called, whether tools are available, and what side effects are permitted.
+Every node has a `mode` that determines how it runs. The mode controls whether an LLM is called, whether tools are available, and what side effects are permitted.
 
 ## Overview
 
@@ -13,8 +13,38 @@ Every Node has a `mode` that determines how it runs. The mode controls whether a
 | `gather` | Yes | Yes (read-only) | No | ReAct tool loop. Research, lookup, exploration. |
 | `execute` | Yes | Yes (mutations) | Yes | ReAct tool loop. Write files, call APIs, apply changes. |
 | `scripted` | No | No | Up to you | Pure Python. Deterministic transforms, filtering, formatting. |
+| `raw` | No | No | Up to you | LangGraph escape hatch. Full access to `(state, config)`. |
 
-The mode is a declaration of intent. `gather` and `execute` are mechanically identical (both run a ReAct loop), but the distinction communicates whether the node is read-only or mutating. This matters for code review, audit, and reasoning about what a pipeline does.
+## Mode inference
+
+You rarely need to set `mode` explicitly. The `@node` decorator infers it from the kwargs you pass:
+
+| You pass... | Inferred mode |
+|---|---|
+| `prompt=` and/or `model=` | `produce` |
+| Neither `prompt=` nor `model=` | `scripted` |
+| `mode='raw'` | `raw` (must be explicit) |
+
+```python
+from neograph import node
+
+# Inferred as produce — prompt= and model= are present
+@node(output=Claims, prompt='rw/decompose', model='reason')
+def decompose(topic: RawText) -> Claims: ...
+
+# Inferred as scripted — no prompt or model
+@node(output=Report)
+def report(classify: Classified) -> Report:
+    return Report(summary=f"{len(classify.items)} claims processed")
+```
+
+If you need `gather` or `execute`, set mode explicitly — the presence of `tools=` alone does not trigger inference:
+
+```python
+@node(mode='gather', output=ResearchFindings, prompt='rw/explore', model='reason',
+      tools=[Tool("search_nodes", budget=5)])
+def explore(query: SearchQuery) -> ResearchFindings: ...
+```
 
 ## produce
 
@@ -23,19 +53,22 @@ A single LLM call with structured output. The LLM receives a compiled prompt and
 **When to use:** Classification, extraction, summarization, generation -- any task where the LLM has all the context it needs in the prompt and should produce a single structured answer.
 
 ```python
-from neograph import Node
-
-classify = Node(
-    "classify",
-    mode="produce",
-    input=RawClaims,
-    output=ClassifiedClaims,
-    model="reason",
-    prompt="rw/classify",
-)
+@node(output=ClassifiedClaims, prompt='rw/classify', model='reason')
+def classify(raw_claims: RawClaims) -> ClassifiedClaims: ...
 ```
 
 Under the hood, the framework calls `llm.with_structured_output(output_model)` and logs the token usage, duration, and output type via structlog.
+
+The function body is not executed for `produce` nodes -- the LLM call provides the output. If you write a non-trivial body, the framework emits a warning:
+
+```python
+# WARNING: body is dead code for produce nodes
+@node(output=Claims, prompt='rw/decompose', model='reason')
+def decompose(topic: RawText) -> Claims:
+    print("This never runs")  # ⚠️ UserWarning at decoration time
+```
+
+Use `...` as a placeholder body, or omit the body entirely.
 
 ## gather
 
@@ -44,20 +77,14 @@ A ReAct tool loop with read-only tools. The LLM can call tools repeatedly (subje
 **When to use:** Research tasks where the LLM needs to explore -- searching a codebase, reading documents, querying databases -- before synthesizing a result. The tools should be read-only; gather nodes do not modify external state.
 
 ```python
-from neograph import Node, Tool
+from neograph import node, Tool
 
-explore = Node(
-    "explore",
-    mode="gather",
-    input=SearchQuery,
-    output=ResearchFindings,
-    model="reason",
-    prompt="rw/explore",
-    tools=[
-        Tool("search_nodes", budget=5),
-        Tool("read_artifact", budget=10, config={"max_chars": 6000}),
-    ],
-)
+@node(mode='gather', output=ResearchFindings, prompt='rw/explore', model='reason',
+      tools=[
+          Tool("search_nodes", budget=5),
+          Tool("read_artifact", budget=10, config={"max_chars": 6000}),
+      ])
+def explore(query: SearchQuery) -> ResearchFindings: ...
 ```
 
 Tool budgets are enforced per tool. When `search_nodes` hits 5 calls, the LLM is told that tool is exhausted and must use remaining tools or respond. When all budgeted tools are spent, tools are unbound entirely and the LLM is forced to produce a final structured answer.
@@ -69,71 +96,74 @@ A ReAct tool loop with mutation tools. Mechanically identical to `gather`, but t
 **When to use:** Tasks that change the world. Applying code fixes, updating records, sending notifications. Separating `execute` from `gather` makes it clear during review which nodes are write-capable.
 
 ```python
-from neograph import Node, Tool
-
-apply_fix = Node(
-    "apply-fix",
-    mode="execute",
-    input=ProposedFix,
-    output=ApplyResult,
-    model="reason",
-    prompt="rw/apply-fix",
-    tools=[
-        Tool("write_file", budget=3),
-        Tool("run_tests", budget=1),
-    ],
-)
+@node(mode='execute', output=ApplyResult, prompt='rw/apply-fix', model='reason',
+      tools=[
+          Tool("write_file", budget=3),
+          Tool("run_tests", budget=1),
+      ])
+def apply_fix(proposed: ProposedFix) -> ApplyResult: ...
 ```
 
 ## scripted
 
-Pure Python. No LLM, no tools. A registered function receives the extracted input and the config, and returns a Pydantic model.
+Pure Python. No LLM, no tools. The function body is executed directly. Parameters are resolved from upstream nodes, runtime input, config, or default values.
 
 **When to use:** Deterministic transforms that do not need an LLM. Parsing, filtering, formatting, aggregation, or any logic where the output is a known function of the input.
 
 ```python
-from neograph import Node
-from neograph import register_scripted
+from neograph import node
 
-def build_catalog(input_data, config):
-    """Deterministic: turn classified claims into a catalog."""
+@node(output=Catalog)
+def build_catalog(classify: ClassifiedClaims) -> Catalog:
     return Catalog(entries=[
-        CatalogEntry(claim=c["claim"], category=c["category"])
-        for c in input_data.classified
+        CatalogEntry(claim=c.claim, category=c.category)
+        for c in classify.items
     ])
-
-register_scripted("build_catalog", build_catalog)
-
-catalog_node = Node.scripted(
-    "build-catalog",
-    fn="build_catalog",
-    input=ClassifiedClaims,
-    output=Catalog,
-)
 ```
 
-`Node.scripted()` is a convenience factory that sets `mode="scripted"` and `scripted_fn` for you. The function name passed to `fn=` must match what you registered with `register_scripted()`.
+### Fan-in
 
-### Scripted function signature
-
-Every scripted function receives two arguments:
+Scripted nodes support fan-in naturally -- just add more parameters. Each parameter name must match an upstream `@node` function name:
 
 ```python
-def my_fn(input_data, config):
-    # input_data: the Pydantic model extracted from state (or None)
-    # config:     RunnableConfig dict with config["configurable"] containing
-    #             pipeline metadata (node_id, project_root, shared resources)
-    ...
+@node(output=Report)
+def report(claims: Claims, scores: ScoredClaims, verified: VerifiedClaims) -> Report:
+    return Report(
+        total=len(claims.items),
+        avg_score=sum(s.value for s in scores.items) / len(scores.items),
+        passed=verified.passed,
+    )
 ```
 
-## raw_node escape hatch
+### Non-node parameters
 
-When you need full control over the node function -- direct state access, custom wiring, or something the four modes do not cover -- use the `@raw_node` decorator.
+Not every parameter needs to be an upstream node. Use type annotations to declare where each value comes from:
 
 ```python
-from neograph import raw_node
+from neograph import node, FromInput, FromConfig
 
-@raw_node(input=Disposition, output=Disposition)
+@node(output=Report)
+def summarize(
+    claims: Claims,                        # upstream node
+    topic: FromInput[str],                 # from run(input={...})
+    rate_limiter: FromConfig[RateLimiter], # from config['configurable']
+    max_items: int = 10,                   # constant (default value)
+) -> Report:
+    rate_limiter.acquire()
+    items = claims.items[:max_items]
+    return Report(topic=topic, count=len(items))
+```
+
+## raw
+
+The LangGraph escape hatch. When you need direct access to the full LangGraph state and config -- custom wiring, conditional state updates, or something the other four modes do not cover.
+
+**When to use:** Sparingly. The declarative modes exist to eliminate exactly this kind of boilerplate. Use `raw` when you genuinely need access to the full state dict or config that the framework's extraction layer cannot provide.
+
+```python
+from neograph import node
+
+@node(mode='raw', output=Disposition)
 def custom_resolution(state, config):
     """Full access to the LangGraph state and config."""
     disp = state.disposition
@@ -145,24 +175,17 @@ def custom_resolution(state, config):
     return {"disposition": disp.model_copy(update={"resolved": True})}
 ```
 
-The decorator creates a `Node` with `mode="scripted"` and stores your function as `raw_fn`. The key difference from `Node.scripted()`:
+Raw mode enforces a strict signature: exactly two parameters named `state` and `config`. Any other signature raises `ConstructError` at decoration time.
 
-- `Node.scripted()`: the framework extracts input from state by type, passes it to your function, and writes the result to the correct state field.
-- `@raw_node`: your function receives the full state object and must return a dict of state updates directly. You handle extraction and wiring yourself.
+The function must return a dict of state field updates. The framework handles wiring, edges, and observability -- you handle extraction and state writing.
 
-Use `@raw_node` sparingly. The declarative modes exist to eliminate exactly this kind of boilerplate.
-
-### raw_node in a pipeline
-
-A raw node is just a Node. It goes into a Construct like any other, and modifiers work on it:
+A raw node is still a Node. It goes into a `Construct` or `construct_from_module` like any other, and modifiers work on it:
 
 ```python
-pipeline = Construct(
-    "review",
-    nodes=[
-        analyze,
-        custom_resolution,  # the @raw_node function
-        report,
-    ],
-)
+pipeline = construct_from_module(sys.modules[__name__])
+# custom_resolution is discovered alongside other @node functions
 ```
+
+---
+
+Documentation &copy; 2025-2026 Constantine Mirin, [mirin.pro](https://mirin.pro). Licensed under [CC BY-ND 4.0](https://creativecommons.org/licenses/by-nd/4.0/).

@@ -1,0 +1,127 @@
+---
+title: ForwardConstruct
+description: Define pipeline topology with Python control flow — subclass Construct, declare Nodes, override forward().
+---
+
+`ForwardConstruct` is the class-based API for pipelines that need control flow. Subclass it, declare Nodes as class attributes, and override `forward()` to define execution order. Python's `if`, `for`, and function calls become graph topology.
+
+## How it works
+
+```python
+from neograph import ForwardConstruct, Node, compile
+
+class Analysis(ForwardConstruct):
+    check   = Node(output=CheckResult, prompt='check', model='fast')
+    deep    = Node(output=Result, prompt='deep-analysis', model='reason')
+    shallow = Node(output=Result, prompt='quick-scan', model='fast')
+
+    def forward(self, topic):
+        checked = self.check(topic)
+        if checked.confidence > 0.8:
+            return self.shallow(checked)
+        else:
+            return self.deep(checked)
+
+graph = compile(Analysis())
+```
+
+Three parts:
+
+1. **Node class attributes** — declare every node the pipeline can use. These are discovered via MRO walk (subclass attributes shadow parent attributes).
+2. **`forward(self, topic)`** — define execution order by calling `self.<node>(...)`. The `topic` argument represents the pipeline input.
+3. **`compile()`** — traces `forward()` to discover the node call graph, then compiles to LangGraph.
+
+## Tracing
+
+When you instantiate a `ForwardConstruct` subclass, the framework traces `forward()` with symbolic proxies — similar to `torch.fx`. No real data flows. Instead:
+
+- `topic` is a `_Proxy` object that records attribute access.
+- `self.check(topic)` records that the `check` node was called and returns a new proxy.
+- `checked.confidence` returns a child proxy that tracks the attribute path.
+- `if checked.confidence > 0.8` records a branch point (see [Branching](/forward/branching/)).
+
+The tracer collects nodes in call order and builds the same node list that `Construct(nodes=[...])` expects. From there, `compile()` works unchanged.
+
+## Straight-line example
+
+A pipeline with no branches — just sequential node calls:
+
+```python
+from neograph import ForwardConstruct, Node, compile, run
+from pydantic import BaseModel
+
+class RawText(BaseModel, frozen=True):
+    text: str
+
+class Claims(BaseModel, frozen=True):
+    items: list[str]
+
+class Report(BaseModel, frozen=True):
+    summary: str
+
+class Pipeline(ForwardConstruct):
+    extract = Node(output=RawText, prompt='extract', model='fast')
+    analyze = Node(output=Claims, prompt='analyze', model='reason')
+    report  = Node(output=Report, prompt='report', model='fast')
+
+    def forward(self, topic):
+        raw = self.extract(topic)
+        claims = self.analyze(raw)
+        return self.report(claims)
+
+graph = compile(Pipeline())
+result = run(graph, input={"node_id": "doc-001"})
+```
+
+This compiles to a three-node linear chain: `extract -> analyze -> report`. The same graph you'd get from `Construct(nodes=[extract, analyze, report])`, but the execution order is explicit in Python.
+
+## Testing
+
+Call `forward()` directly with fakes to test your pipeline logic without compiling or running the graph:
+
+```python
+class FakeProxy:
+    """Minimal stand-in for testing forward() logic."""
+    def __init__(self, **attrs):
+        self.__dict__.update(attrs)
+    def __getattr__(self, name):
+        return FakeProxy()
+    def __bool__(self):
+        return True
+
+def test_pipeline_calls_all_nodes():
+    p = Pipeline.__new__(Pipeline)
+    calls = []
+
+    class Recorder:
+        def __init__(self, name):
+            self.name = name
+        def __call__(self, *args):
+            calls.append(self.name)
+            return FakeProxy()
+
+    p.extract = Recorder("extract")
+    p.analyze = Recorder("analyze")
+    p.report = Recorder("report")
+
+    p.forward(FakeProxy())
+    assert calls == ["extract", "analyze", "report"]
+```
+
+For integration testing, use `compile()` + `run()` with real or mocked LLMs.
+
+## When to use ForwardConstruct vs @node
+
+| Need | Use |
+|---|---|
+| DAG with no conditional branching | `@node` + `construct_from_module` |
+| Conditional edges (`if` on node output) | `ForwardConstruct` |
+| Loop fan-out (`for` over node output) | `ForwardConstruct` |
+| Fan-out over a known collection path | `@node(map_over=..., map_key=...)` |
+| Runtime/dynamic graph construction | `Node \| Modifier` pipe syntax |
+
+`@node` is simpler when you don't need branching. `ForwardConstruct` is more powerful when you do. Both compile to the same graph format.
+
+---
+
+Documentation &copy; 2025-2026 Constantine Mirin, [mirin.pro](https://mirin.pro). Licensed under [CC BY-ND 4.0](https://creativecommons.org/licenses/by-nd/4.0/).

@@ -1,0 +1,183 @@
+---
+title: Branching in forward()
+description: if compiles to conditional edges, for compiles to fan-out, and try/except limitations in v1.
+---
+
+The power of `ForwardConstruct` is that Python control flow becomes graph topology. An `if` statement compiles to a conditional edge. A `for` loop compiles to an Each fan-out. The framework discovers both arms by re-tracing `forward()` with alternate branch decisions.
+
+## if compiles to conditional edges
+
+```python
+from neograph import ForwardConstruct, Node, compile, run
+from pydantic import BaseModel
+
+class CheckResult(BaseModel, frozen=True):
+    confidence: float
+
+class Result(BaseModel, frozen=True):
+    analysis: str
+
+class QualityGate(ForwardConstruct):
+    check   = Node(output=CheckResult, prompt='check', model='fast')
+    deep    = Node(output=Result, prompt='deep-analysis', model='reason')
+    shallow = Node(output=Result, prompt='quick-scan', model='fast')
+
+    def forward(self, topic):
+        checked = self.check(topic)
+        if checked.confidence > 0.8:
+            return self.shallow(checked)
+        else:
+            return self.deep(checked)
+
+graph = compile(QualityGate())
+```
+
+The compiled graph has three nodes and a conditional edge after `check`:
+
+- If `check.confidence > 0.8` at runtime, the graph routes to `shallow`.
+- Otherwise, it routes to `deep`.
+
+### How re-tracing works
+
+The tracer uses the same strategy as `torch.fx`:
+
+1. **First trace:** all `if` branches take the `True` arm. The tracer records which nodes appear.
+2. **Re-trace for each branch:** flip that branch to `False`, re-run `forward()`, record which nodes appear.
+3. **Diff:** nodes unique to the true trace become the true arm; nodes unique to the false trace become the false arm; shared nodes are unconditional.
+
+The result is a node list annotated with `_BranchMeta` that the compiler lowers to `add_conditional_edges`.
+
+### Limitations
+
+Only comparisons against constants are supported in v1:
+
+```python
+# Supported — proxy attribute compared to a constant
+if checked.confidence > 0.8:
+    ...
+
+# Supported — equality check
+if checked.status == "approved":
+    ...
+
+# Not yet supported — comparison between two proxy values
+if checked.score_a > checked.score_b:
+    ...
+```
+
+Maximum 8 branches per `forward()`. Beyond that, `ValueError` is raised — extract sub-pipelines to reduce branch count.
+
+## for compiles to Each fan-out
+
+Iterating over a proxy attribute compiles to an Each modifier on the loop body's nodes:
+
+```python
+from neograph import ForwardConstruct, Node, compile, run
+from pydantic import BaseModel
+
+class ClusterGroup(BaseModel, frozen=True):
+    label: str
+    claims: list[str]
+
+class Clusters(BaseModel, frozen=True):
+    groups: list[ClusterGroup]
+
+class VerifyResult(BaseModel, frozen=True):
+    label: str
+    passed: bool
+
+class FanOutPipeline(ForwardConstruct):
+    discover = Node(output=Clusters, prompt='discover', model='fast')
+    verify   = Node(output=VerifyResult, prompt='verify', model='reason')
+
+    def forward(self, topic):
+        clusters = self.discover(topic)
+        for group in clusters.groups:
+            self.verify(group)
+
+graph = compile(FanOutPipeline())
+```
+
+During tracing, `for group in clusters.groups` enters loop mode. The tracer:
+
+1. Yields a single proxy item (enough to trace the loop body once).
+2. Records that `verify` was called inside the loop.
+3. Attaches `Each(over="discover.groups", key="label")` to the `verify` node.
+
+The compiled graph runs `verify` once per item in `discover.groups`, collecting results as a dict keyed by `label`.
+
+## Example: quality gate with retry
+
+Combine branching and sequential calls for a retry pattern:
+
+```python
+class RetryPipeline(ForwardConstruct):
+    analyze  = Node(output=Analysis, prompt='analyze', model='reason')
+    validate = Node(output=Validation, prompt='validate', model='fast')
+    fix      = Node(output=Analysis, prompt='fix-issues', model='reason')
+    report   = Node(output=Report, prompt='report', model='fast')
+
+    def forward(self, topic):
+        result = self.analyze(topic)
+        checked = self.validate(result)
+        if checked.score < 0.7:
+            result = self.fix(result)
+        return self.report(result)
+```
+
+This compiles to: `analyze -> validate -> (if score < 0.7: fix) -> report`. The `fix` node only runs when the quality gate fails.
+
+## Example: fan-out in a for loop
+
+Process each cluster independently, then continue with the collected results:
+
+```python
+class ClusterAnalysis(ForwardConstruct):
+    discover = Node(output=Clusters, prompt='discover', model='fast')
+    verify   = Node(output=VerifyResult, prompt='verify', model='reason')
+    score    = Node(output=ScoreResult, prompt='score', model='fast')
+    report   = Node(output=Report, prompt='report', model='fast')
+
+    def forward(self, topic):
+        clusters = self.discover(topic)
+        for group in clusters.groups:
+            self.verify(group)
+            self.score(group)
+        return self.report(clusters)
+```
+
+Both `verify` and `score` get Each modifiers and run once per cluster group. `report` runs once after all fan-out branches complete.
+
+## try/except in v1
+
+`try/except` blocks in `forward()` are valid Python and don't break tracing, but they don't compile to fallback graphs.
+
+During tracing, node calls are symbolic — they never raise. The `except` block is dead code during tracing because proxy operations always succeed. Only the `try` body's nodes appear in the compiled graph.
+
+```python
+class WithTryCatch(ForwardConstruct):
+    primary  = Node(output=Result, prompt='primary', model='reason')
+    fallback = Node(output=Result, prompt='fallback', model='fast')
+
+    def forward(self, topic):
+        try:
+            return self.primary(topic)
+        except Exception:
+            return self.fallback(topic)  # never reached during tracing
+```
+
+In this example, only `primary` appears in the compiled graph. `fallback` is never traced.
+
+For retry/fallback patterns in v1, use the conditional branch approach instead:
+
+```python
+def forward(self, topic):
+    result = self.primary(topic)
+    if result.failed:
+        return self.fallback(topic)
+    return result
+```
+
+---
+
+Documentation &copy; 2025-2026 Constantine Mirin, [mirin.pro](https://mirin.pro). Licensed under [CC BY-ND 4.0](https://creativecommons.org/licenses/by-nd/4.0/).

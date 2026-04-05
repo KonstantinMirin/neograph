@@ -1,0 +1,173 @@
+---
+title: Programmatic API
+description: Node/Construct/pipe API for dynamic construction from config, LLM-driven pipelines, and testing.
+---
+
+The `@node` decorator and `construct_from_module` are the ergonomic surface for defining pipelines in source code. But when pipelines need to be built dynamically -- from a config file, a database, or an LLM's tool calls -- you use the programmatic API: `Node(...)`, `Construct(nodes=[...])`, and the `|` pipe operator.
+
+## When to use the programmatic API
+
+- **Config-driven pipelines:** A YAML/JSON file describes which nodes to include, what models to use, and how to compose them. Your application reads the config and builds `Node` + `Construct` instances at runtime.
+- **LLM-driven construction:** An LLM emits a JSON spec via tool calling. Your tool handler builds `Node` instances from the spec, pipes on modifiers, and compiles the result. See [LLM-Driven Pipelines](/runtime/llm-driven/) for a full example.
+- **Testing:** Build specific graph topologies programmatically to test edge cases, modifier combinations, or error paths.
+- **Dynamic composition:** A platform that lets users assemble pipelines by dragging and dropping nodes, with the backend translating UI state into `Node` + `Construct` calls.
+
+## Node(...) -- the IR
+
+Every `@node` decorator call produces a `Node` instance. The programmatic API constructs them directly:
+
+```python
+from neograph import Node
+
+decompose = Node(
+    "decompose",
+    mode="produce",
+    input=RawText,
+    output=Claims,
+    model="reason",
+    prompt="rw/decompose",
+)
+
+classify = Node(
+    "classify",
+    mode="produce",
+    input=Claims,
+    output=ClassifiedClaims,
+    model="fast",
+    prompt="rw/classify",
+)
+```
+
+`Node` is a Pydantic BaseModel. It is the intermediate representation (IR) that the compiler operates on. Whether you create it via `@node`, `ForwardConstruct`, or `Node(...)` directly, the compiler sees the same object.
+
+## Construct(nodes=\[...\])
+
+Group nodes into a pipeline:
+
+```python
+from neograph import Construct, compile, run
+
+pipeline = Construct("ingestion", nodes=[decompose, classify])
+graph = compile(pipeline)
+result = run(graph, input={"node_id": "doc-001"})
+```
+
+The compiler walks the node list, wires sequential edges, validates types at assembly time, and generates the LangGraph `StateGraph`. Same validation, same compilation, same runtime -- regardless of how the nodes were created.
+
+## The | pipe operator
+
+Modifiers are composed onto nodes using `|`. The pipe returns a new `Node` with the modifier appended (the original is not mutated):
+
+```python
+from neograph import Node, Oracle, Each, Operator
+
+# Oracle: 3-way ensemble with LLM merge
+decompose = Node(
+    "decompose", mode="produce", output=Claims,
+    prompt="rw/decompose", model="reason",
+) | Oracle(n=3, merge_prompt="rw/decompose-merge")
+
+# Each: fan-out over a collection
+verify = Node(
+    "verify", mode="gather", output=MatchResult,
+    prompt="rw/verify", model="fast",
+    tools=[Tool("search", budget=5)],
+) | Each(over="decompose.items", key="label")
+
+# Operator: human-in-the-loop interrupt
+validate = Node(
+    "validate", mode="produce", output=ValidationResult,
+    prompt="rw/validate", model="fast",
+) | Operator(when="validation_failed")
+
+# Chain multiple modifiers
+robust_decompose = Node(
+    "decompose", mode="produce", output=Claims,
+    prompt="rw/decompose", model="reason",
+) | Oracle(n=3, merge_prompt="rw/merge") | Operator(when="needs_review")
+```
+
+Modifiers work on both Nodes and Constructs:
+
+```python
+enrich = Construct(
+    "enrich",
+    input=Claims,
+    output=ScoredClaims,
+    nodes=[lookup, verify, score],
+) | Oracle(n=3, merge_fn="combine_scores")
+```
+
+## Assembly-time validation still runs
+
+The programmatic API is not an escape hatch from validation. When you instantiate a `Construct`, the same `_validate_node_chain` runs:
+
+```python
+# This raises ConstructError -- verify expects ClusterGroup
+# but decompose produces Claims
+pipeline = Construct("broken", nodes=[
+    Node("decompose", mode="produce", output=Claims, ...),
+    Node("verify", mode="produce", input=ClusterGroup, output=MatchResult, ...),
+])
+# ConstructError: Node 'verify' in construct 'broken' declares
+#   input=ClusterGroup but no upstream produces a compatible value.
+```
+
+Type mismatches, missing producers, and invalid `Each` paths are caught before you call `compile()`.
+
+## Three surfaces, one compiler
+
+NeoGraph provides three ways to define pipelines:
+
+| Surface | When to use | How it works |
+|---|---|---|
+| `@node` + `construct_from_module` | Source-code pipelines | Decorator infers topology from function signatures |
+| `ForwardConstruct` | Branching / looping pipelines | Python control flow traced into node list |
+| `Node(...)` + `Construct(nodes=[...])` + `\|` | Dynamic / runtime construction | Direct IR construction with pipe modifiers |
+
+All three produce the same IR -- a `Construct` containing `Node` instances with optional modifiers. The compiler does not know or care which surface created them. Same validation, same compilation, same LangGraph output.
+
+## Example: building from config
+
+```python
+import yaml
+from neograph import Node, Construct, Oracle, Each, compile, run
+
+def build_from_config(config_path: str) -> Construct:
+    with open(config_path) as f:
+        spec = yaml.safe_load(f)
+
+    nodes = []
+    for node_spec in spec["nodes"]:
+        n = Node(
+            node_spec["name"],
+            mode=node_spec["mode"],
+            input=resolve_type(node_spec.get("input")),
+            output=resolve_type(node_spec["output"]),
+            model=node_spec.get("model"),
+            prompt=node_spec.get("prompt"),
+        )
+
+        # Apply modifiers from config
+        if "ensemble" in node_spec:
+            n = n | Oracle(
+                n=node_spec["ensemble"]["n"],
+                merge_prompt=node_spec["ensemble"]["merge_prompt"],
+            )
+        if "fan_out" in node_spec:
+            n = n | Each(
+                over=node_spec["fan_out"]["over"],
+                key=node_spec["fan_out"]["key"],
+            )
+
+        nodes.append(n)
+
+    return Construct(spec["name"], nodes=nodes)
+
+pipeline = build_from_config("pipeline.yaml")
+graph = compile(pipeline)
+```
+
+---
+
+Documentation &copy; 2025-2026 Constantine Mirin, [mirin.pro](https://mirin.pro). Licensed under [CC BY-ND 4.0](https://creativecommons.org/licenses/by-nd/4.0/).

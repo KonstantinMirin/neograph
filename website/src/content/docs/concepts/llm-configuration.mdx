@@ -59,27 +59,23 @@ def my_factory(tier, node_name=None, llm_config=None):
 configure_llm(llm_factory=my_factory, prompt_compiler=my_compiler)
 ```
 
-The framework inspects your factory with `inspect.signature` at `configure_llm()` time and passes only the kwargs it declares on each call. Factories that use `**kwargs` receive everything. This provides backward compatibility without runtime try/except — you can start simple and add parameters later.
+The framework inspects your factory with `inspect.signature` at `configure_llm()` time and passes only the kwargs it declares on each call. Factories that use `**kwargs` receive everything. This provides backward compatibility without runtime try/except -- you can start simple and add parameters later.
 
 ## Per-node llm_config
 
-Each Node can carry an `llm_config` dict that is passed to the factory:
+Each node can carry an `llm_config` dict that is passed to the factory. With `@node`, pass it as a keyword:
 
 ```python
-from neograph import Node
+from neograph import node
 
-classify = Node(
-    "classify",
-    mode="produce",
-    input=RawClaims,
-    output=ClassifiedClaims,
-    model="reason",
-    prompt="rw/classify",
-    llm_config={"temperature": 0.7, "max_tokens": 2048},
-)
+@node(output=ClassifiedClaims, prompt='rw/classify', model='reason',
+      llm_config={"temperature": 0.7, "max_tokens": 2048})
+def classify(raw_claims: RawClaims) -> ClassifiedClaims: ...
 ```
 
 The `llm_config` dict is opaque to NeoGraph. The framework passes it through to your factory; you decide what keys mean. Common uses: temperature, max_tokens, top_p, stop sequences.
+
+Mode inference still works when `llm_config` is present -- the decorator infers `produce` from the `prompt=` and `model=` kwargs, regardless of `llm_config`.
 
 ## Prompt compiler
 
@@ -136,10 +132,10 @@ configure_llm(llm_factory=my_factory, prompt_compiler=my_compiler)
 ```
 
 The framework inspects your compiler with `inspect.signature` at `configure_llm()` time and passes only the kwargs it declares. Any of these work:
-- `(template, data, node_name=, config=, output_model=, llm_config=)` — full context
-- `(template, data, node_name=, config=)` — partial
-- `(template, data)` — minimal
-- `(template, data, **kw)` — accepts everything
+- `(template, data, node_name=, config=, output_model=, llm_config=)` -- full context
+- `(template, data, node_name=, config=)` -- partial
+- `(template, data)` -- minimal
+- `(template, data, **kw)` -- accepts everything
 
 No try/except at runtime. You can upgrade incrementally without breaking existing compilers.
 
@@ -171,9 +167,11 @@ Input fields take precedence over existing configurable values if there is a key
 
 ## Shared resources via config
 
-Put expensive-to-create resources in `config["configurable"]` and access them from your factory, compiler, or scripted functions:
+Put expensive-to-create resources in `config["configurable"]` and access them from your factory, compiler, or `@node` functions via `FromConfig[T]`:
 
 ```python
+from neograph import node, FromConfig
+
 # At the call site
 db_pool = create_connection_pool()
 rate_limiter = TokenBucketLimiter(tokens_per_minute=100_000)
@@ -189,17 +187,16 @@ result = run(
     },
 )
 
-# In your prompt compiler
-def my_compiler(template, data, *, node_name=None, config=None):
-    db = config["configurable"]["db_pool"]
-    context = db.query("SELECT * FROM context WHERE template = %s", template)
-    ...
-
-# In a scripted function
-def my_scripted_fn(input_data, config):
-    limiter = config["configurable"]["rate_limiter"]
-    limiter.acquire()
-    ...
+# In a scripted @node function
+@node(output=ContextData)
+def load_context(
+    claims: Claims,
+    db_pool: FromConfig[ConnectionPool],
+    rate_limiter: FromConfig[RateLimiter],
+) -> ContextData:
+    rate_limiter.acquire()
+    rows = db_pool.query("SELECT * FROM context WHERE id = %s", claims.id)
+    return ContextData(rows=rows)
 ```
 
 ## Output strategies
@@ -217,7 +214,8 @@ Many models (DeepSeek-R1, o1, QwQ, local models) don't support `with_structured_
 The framework calls `llm.with_structured_output(output_model)`. Works with any LangChain model that supports native structured output. The framework tries `include_raw=True` to capture token counts, falling back without it.
 
 ```python
-Node(name="classify", mode="produce", output=Claims, model="fast", prompt="classify")
+@node(output=Claims, prompt='rw/classify', model='fast')
+def classify(topic: RawText) -> Claims: ...
 # No output_strategy needed — "structured" is the default
 ```
 
@@ -226,8 +224,9 @@ Node(name="classify", mode="produce", output=Claims, model="fast", prompt="class
 The framework calls `llm.invoke()` directly (no `with_structured_output`), then strips markdown code fences and parses the JSON into the Pydantic model. Works with any model that returns JSON in its text response.
 
 ```python
-Node(name="decompose", mode="produce", output=Claims, model="reason", prompt="decompose",
-     llm_config={"output_strategy": "json_mode"})
+@node(output=Claims, prompt='rw/decompose', model='reason',
+      llm_config={"output_strategy": "json_mode"})
+def decompose(topic: RawText) -> Claims: ...
 ```
 
 The framework handles:
@@ -237,11 +236,12 @@ The framework handles:
 
 ### text
 
-Same as `json_mode` — the framework extracts JSON from the LLM's plain text response. Use this name to signal intent when the model returns prose with embedded JSON rather than fenced code blocks.
+Same as `json_mode` -- the framework extracts JSON from the LLM's plain text response. Use this name to signal intent when the model returns prose with embedded JSON rather than fenced code blocks.
 
 ```python
-Node(name="analyze", mode="produce", output=Analysis, model="reason", prompt="analyze",
-     llm_config={"output_strategy": "text"})
+@node(output=Analysis, prompt='rw/analyze', model='reason',
+      llm_config={"output_strategy": "text"})
+def analyze(topic: RawText) -> Analysis: ...
 ```
 
 ### Mixing strategies in one pipeline
@@ -249,21 +249,19 @@ Node(name="analyze", mode="produce", output=Analysis, model="reason", prompt="an
 Different nodes can use different strategies. This is the production pattern for pipelines that use multiple model providers:
 
 ```python
+from neograph import node
+
 # DeepSeek for creative decomposition (no structured output support)
-decompose = Node(
-    name="decompose", mode="produce", output=Claims,
-    model="reason", prompt="decompose",
-    llm_config={"temperature": 0.9, "output_strategy": "json_mode"},
-)
+@node(output=Claims, prompt='rw/decompose', model='reason',
+      llm_config={"temperature": 0.9, "output_strategy": "json_mode"})
+def decompose(topic: RawText) -> Claims: ...
 
 # Gemini for precise classification (native structured output)
-classify = Node(
-    name="classify", mode="produce", output=ClassifiedClaims,
-    model="fast", prompt="classify",
-    llm_config={"temperature": 0, "output_strategy": "structured"},
-)
+@node(output=ClassifiedClaims, prompt='rw/classify', model='fast',
+      llm_config={"temperature": 0, "output_strategy": "structured"})
+def classify(decompose: Claims) -> ClassifiedClaims: ...
 
-pipeline = Construct("mixed-models", nodes=[decompose, classify])
+pipeline = construct_from_module(sys.modules[__name__])
 ```
 
 ### Strategies in gather/execute modes
@@ -274,10 +272,10 @@ For ReAct modes, the output strategy applies to the final parsing step after the
 - `"json_mode"` / `"text"`: the last message in the tool loop is parsed directly as JSON
 
 ```python
-Node(name="research", mode="gather", output=ResearchResult,
-     model="reason", prompt="research",
-     tools=[Tool(name="search", budget=5)],
-     llm_config={"output_strategy": "json_mode"})
+@node(mode='gather', output=ResearchResult, prompt='rw/research', model='reason',
+      tools=[Tool(name="search", budget=5)],
+      llm_config={"output_strategy": "json_mode"})
+def research(query: SearchQuery) -> ResearchResult: ...
 ```
 
 ## Backward compatibility
@@ -286,9 +284,11 @@ Both the factory and compiler accept multiple signatures. The framework inspects
 
 | Callback | Accepted parameters |
 |---|---|
-| `llm_factory` | `tier` (required) — plus any of: `node_name`, `llm_config` |
-| `prompt_compiler` | `template`, `data` (required) — plus any of: `node_name`, `config`, `output_model`, `llm_config` |
+| `llm_factory` | `tier` (required) -- plus any of: `node_name`, `llm_config` |
+| `prompt_compiler` | `template`, `data` (required) -- plus any of: `node_name`, `config`, `output_model`, `llm_config` |
 
-Functions using `**kwargs` receive all parameters. This lets you start with a minimal lambda and add parameters later without breaking any Node definitions.
+Functions using `**kwargs` receive all parameters. This lets you start with a minimal lambda and add parameters later without breaking any node definitions.
 
-Start with a simple lambda. Add parameters as you need them. No Node definitions need to change.
+---
+
+Documentation &copy; 2025-2026 Constantine Mirin, [mirin.pro](https://mirin.pro). Licensed under [CC BY-ND 4.0](https://creativecommons.org/licenses/by-nd/4.0/).

@@ -1,13 +1,13 @@
 ---
 title: Quick Start
-description: Install NeoGraph, configure an LLM, build a 3-node pipeline, and run it.
+description: Install NeoGraph, configure an LLM, build a 3-node pipeline with @node, and run it.
 ---
 
 This guide gets you from zero to a running LLM pipeline in under 5 minutes.
 
 ## 1. Install
 
-```python
+```bash
 pip install neograph
 ```
 
@@ -15,7 +15,7 @@ NeoGraph depends on `langgraph`, `langchain-core`, `pydantic`, and `structlog`. 
 
 You will also need an LLM provider. This guide uses OpenAI, but any LangChain-compatible chat model works (Anthropic, Google, OpenRouter, local models via Ollama, etc.):
 
-```python
+```bash
 pip install langchain-openai
 ```
 
@@ -51,7 +51,7 @@ In production, you would replace the prompt compiler with something that loads r
 
 ## 3. Define Your Schemas
 
-Every Node declares its input and output types as Pydantic models. This is how NeoGraph knows what data flows between nodes.
+Every node declares its output type as a Pydantic model. This is how NeoGraph knows what data flows between nodes.
 
 ```python
 from pydantic import BaseModel
@@ -68,48 +68,32 @@ class Summary(BaseModel):
 
 ## 4. Build the Pipeline
 
-Declare three Nodes and compose them into a Construct:
+Decorate functions with `@node`. The parameter name IS the dependency -- `classify(decompose: Claims)` wires `classify` after the `decompose` node automatically.
 
 ```python
-from neograph import Construct, Node
+import sys
+from neograph import node, construct_from_module
 
-decompose = Node(
-    name="decompose",
-    mode="produce",
-    output=Claims,
-    model="fast",
-    prompt="decompose",
-)
+@node(output=Claims, prompt='decompose', model='fast')
+def decompose() -> Claims: ...
 
-classify = Node(
-    name="classify",
-    mode="produce",
-    input=Claims,
-    output=ClassifiedClaims,
-    model="fast",
-    prompt="classify",
-)
+@node(output=ClassifiedClaims, prompt='classify', model='fast')
+def classify(decompose: Claims) -> ClassifiedClaims: ...
 
-summarize = Node(
-    name="summarize",
-    mode="produce",
-    input=ClassifiedClaims,
-    output=Summary,
-    model="fast",
-    prompt="summarize",
-)
+@node(output=Summary, prompt='summarize', model='fast')
+def summarize(classify: ClassifiedClaims) -> Summary: ...
 
-pipeline = Construct("analysis", nodes=[decompose, classify, summarize])
+pipeline = construct_from_module(sys.modules[__name__])
 ```
 
-Each Node specifies:
-- **name** -- identifier, used as the LangGraph node name and the state field key
-- **mode** -- `"produce"` means a single LLM call with structured JSON output
-- **input** / **output** -- Pydantic models defining the typed contract
-- **model** -- tier string passed to your `llm_factory`
+Each `@node` specifies:
+- **output** -- Pydantic model defining the typed output contract
 - **prompt** -- template name passed to your `prompt_compiler`
+- **model** -- tier string passed to your `llm_factory`
 
-The Construct defines execution order. Nodes run in the order they appear in the list.
+Mode is inferred: `prompt=` + `model=` means LLM call (`produce` mode). Neither means the function body runs as scripted Python.
+
+`construct_from_module` scans the module for all `@node`-decorated functions, infers the dependency graph from parameter names, and builds a `Construct`.
 
 ## 5. Compile and Run
 
@@ -124,7 +108,7 @@ print(result["summarize"].text)
 
 `compile()` converts the Construct into a LangGraph `StateGraph`, wires all edges, infers the state schema, and compiles. `run()` executes the graph and returns the final state with framework internals stripped out.
 
-Every field you pass in `input=` also flows into `config["configurable"]`, so your prompt compiler can read them via `config["configurable"]["topic"]`. This is how pipeline-level metadata (topic, node_id, project_root, whatever you need) reaches every node without threading it through state manually.
+Every field you pass in `input=` also flows into `config["configurable"]`, so your prompt compiler can read them via `config["configurable"]["topic"]`. This is how pipeline-level metadata (topic, project_root, whatever you need) reaches every node without threading it through state manually.
 
 The result is a dict keyed by node name. Each value is the typed Pydantic model that node produced.
 
@@ -134,9 +118,10 @@ Here is the full script, copy-paste-runnable:
 
 ```python
 import os
+import sys
 from langchain_openai import ChatOpenAI
 from pydantic import BaseModel
-from neograph import Construct, Node, compile, configure_llm, run
+from neograph import node, construct_from_module, compile, configure_llm, run
 
 # --- Schemas ---
 class Claims(BaseModel):
@@ -156,7 +141,6 @@ configure_llm(
     ),
     prompt_compiler=lambda template, data, **kwargs: [
         {"role": "user", "content": (
-            # Read the topic from run() input via config injection
             f"Break this topic into 3-5 factual claims: "
             f"{kwargs.get('config', {}).get('configurable', {}).get('topic', 'AI')}"
             if template == "decompose"
@@ -168,11 +152,16 @@ configure_llm(
 )
 
 # --- Pipeline ---
-decompose = Node("decompose", mode="produce", output=Claims, model="fast", prompt="decompose")
-classify  = Node("classify",  mode="produce", input=Claims, output=ClassifiedClaims, model="fast", prompt="classify")
-summarize = Node("summarize", mode="produce", input=ClassifiedClaims, output=Summary, model="fast", prompt="summarize")
+@node(output=Claims, prompt='decompose', model='fast')
+def decompose() -> Claims: ...
 
-pipeline = Construct("analysis", nodes=[decompose, classify, summarize])
+@node(output=ClassifiedClaims, prompt='classify', model='fast')
+def classify(decompose: Claims) -> ClassifiedClaims: ...
+
+@node(output=Summary, prompt='summarize', model='fast')
+def summarize(classify: ClassifiedClaims) -> Summary: ...
+
+pipeline = construct_from_module(sys.modules[__name__])
 
 # --- Run ---
 graph = compile(pipeline)
@@ -183,18 +172,21 @@ print(result["summarize"].text)
 
 ## What Just Happened
 
-Behind the scenes, `compile()` did the following:
+Behind the scenes, NeoGraph did the following:
 
-1. Walked the Construct's node list
-2. Inferred a Pydantic state model with fields for each node's output type
-3. Created LangGraph node functions that call your `llm_factory` and `prompt_compiler`
-4. Wired `START -> decompose -> classify -> summarize -> END`
-5. Compiled the LangGraph `StateGraph`
+1. `@node` decorated each function and created a `Node` spec with the inferred mode, output type, and upstream dependencies
+2. `construct_from_module` scanned the module for all `@node` functions, built the dependency graph from parameter names (`classify` depends on `decompose` because it has a parameter named `decompose`), topologically sorted the nodes, and created a `Construct`
+3. `compile()` inferred a Pydantic state model with fields for each node's output type, created LangGraph node functions that call your `llm_factory` and `prompt_compiler`, wired `START -> decompose -> classify -> summarize -> END`, and compiled the LangGraph `StateGraph`
 
 You got a standard LangGraph graph. You can stream it, checkpoint it, visualize it, or deploy it with LangGraph Platform -- NeoGraph does not change the runtime, only the authoring.
 
 ## Next Steps
 
 - Add tools to a node with `mode="gather"` and `Tool("name", budget=5)` -- see the [Walkthrough](/walkthrough/scripted-pipeline/)
-- Fan out with `Oracle(n=3, merge_fn="...")` or `Each(over="previous_node.field", key="id")` -- see [Core Concepts](/concepts/vocabulary/)
-- Add human-in-the-loop with `Operator(when="condition")` -- see the [Walkthrough](/walkthrough/human-in-the-loop/)
+- Fan out with `ensemble_n=3` or `map_over='field.path'` in `@node` kwargs -- see [Core Concepts](/concepts/vocabulary/)
+- Add human-in-the-loop with `interrupt_when=` -- see the [Walkthrough](/walkthrough/human-in-the-loop/)
+- Use `ForwardConstruct` for branching pipelines -- see [What is NeoGraph?](/getting-started/what-is-neograph/)
+
+---
+
+Documentation &copy; 2025-2026 Constantine Mirin, [mirin.pro](https://mirin.pro). Licensed under [CC BY-ND 4.0](https://creativecommons.org/licenses/by-nd/4.0/).

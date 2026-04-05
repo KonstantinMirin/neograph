@@ -1,60 +1,31 @@
 ---
 title: "6. Full Pipeline"
-description: "Combine Oracle, subgraph, Each, Operator, and tools into one realistic end-to-end pipeline."
+description: "Combine @node with Oracle, Each, Operator, a sub-construct, and observability in one realistic end-to-end pipeline."
 ---
 
-This walkthrough assembles every NeoGraph feature into a single pipeline: a requirement verification system that decomposes, enriches, clusters, verifies, validates with human review, and reports.
+The previous walkthroughs showed each NeoGraph feature in isolation. Real pipelines combine several at once. This walkthrough shows a requirement verification system that uses Oracle ensemble, sub-construct isolation, Each fan-out, Operator interrupt, and mixed modes — all wired together.
 
-It uses fake LLMs and tools so you can run it without API keys, but the structure is production-realistic.
+The pipeline:
 
-## What you will learn
+1. **decompose** — LLM breaks a requirement into claims (produce mode, Oracle ensemble x3)
+2. **enrich** — sub-pipeline that looks up context and scores each claim (sub-construct)
+3. **cluster** — group claims by theme
+4. **verify** — verify each cluster in parallel (Each fan-out)
+5. **check-results** — pause if any cluster failed (Operator interrupt)
+6. **report** — format the final output
 
-- Combining Oracle, Each, Operator, subgraph, and tools in one pipeline
-- Nesting a `Construct` as a subgraph with isolated state
-- Per-node LLM configuration with `llm_config`
-- How all the pieces compose into a flat node list
+## The mixed API question
 
-## Pipeline overview
+This example uses `@node` for the top-level decompose (with Oracle kwargs) but drops to declarative `Node` + `Construct` for the rest. Why?
 
-```
-decompose ──> enrich (subgraph) ──> cluster ──> verify (Each) ──> validate (Operator) ──> report
-   |               |                               |                  |
-   Oracle x3    lookup + score              per-cluster parallel    pauses if fails
-   merge_fn     isolated state              dict[label, result]    human review
-```
+The sub-construct (`enrich`) needs an explicit I/O boundary: `input=Claims, output=ScoredClaims`. `construct_from_module` walks a whole module into one flat Construct — it can't inline a sub-pipeline with its own isolated state. That's a legitimate boundary case where the declarative form is the right tool.
 
-1. **decompose** -- LLM breaks requirement into claims. Oracle runs 3 generators in parallel, merges with a scripted function.
-2. **enrich** -- Sub-pipeline with isolated state. Looks up context references, then scores each claim.
-3. **cluster** -- Groups claims into domain clusters.
-4. **verify** -- Each fan-out: verifies each cluster independently and in parallel.
-5. **validate** -- Checks if all clusters pass. Operator pauses for human review if any fail.
-6. **report** -- Generates final output.
+For the other scripted nodes, declarative stays for consistency with the sub-construct. In a pipeline without sub-constructs, every node here could be `@node`-decorated.
 
-## The complete pipeline
+## The schemas
 
 ```python
-"""Full Pipeline: every NeoGraph feature in one realistic scenario.
-
-Run:
-    python full_pipeline.py
-"""
-
-from __future__ import annotations
-
-from langchain_core.messages import AIMessage
-from langgraph.checkpoint.memory import MemorySaver
 from pydantic import BaseModel
-
-from neograph import (
-    Construct, Each, Node, Operator, Oracle, Tool,
-    compile, configure_llm, run,
-    register_condition, register_scripted, register_tool_factory,
-)
-
-
-# =========================================================================
-# SCHEMAS
-# =========================================================================
 
 class Claims(BaseModel, frozen=True):
     items: list[str]
@@ -63,7 +34,7 @@ class Context(BaseModel, frozen=True):
     references: list[str]
 
 class ScoredClaims(BaseModel, frozen=True):
-    scored: list[dict[str, str]]  # [{claim, score}]
+    scored: list[dict[str, str]]
 
 class ClusterGroup(BaseModel, frozen=True):
     label: str
@@ -83,168 +54,24 @@ class ValidationResult(BaseModel, frozen=True):
 
 class Report(BaseModel, frozen=True):
     text: str
+```
 
+## The pipeline
 
-# =========================================================================
-# FAKE LLM + TOOLS (replace with real ones in production)
-# =========================================================================
-
-class FakeProduceLLM:
-    def with_structured_output(self, model):
-        self._model = model
-        return self
-
-    def invoke(self, messages, **kwargs):
-        if self._model is Claims:
-            return Claims(items=[
-                "shall authenticate", "shall log", "shall encrypt"
-            ])
-        return self._model()
-
-
-call_count = {"search": 0}
-
-
-class FakeGatherLLM:
-    def __init__(self):
-        self._call = 0
-
-    def bind_tools(self, tools):
-        clone = FakeGatherLLM()
-        clone._call = self._call
-        clone._has_tools = len(tools) > 0
-        return clone
-
-    def invoke(self, messages, **kwargs):
-        self._call += 1
-        if getattr(self, "_has_tools", True) and self._call <= 2:
-            msg = AIMessage(content="")
-            msg.tool_calls = [{
-                "name": "search_code",
-                "args": {"q": "test"},
-                "id": f"c{self._call}",
-            }]
-            return msg
-        return AIMessage(content="done")
-
-    def with_structured_output(self, model):
-        self._model = model
-        return self
-
-
-class FakeSearchTool:
-    name = "search_code"
-
-    def invoke(self, args):
-        call_count["search"] += 1
-        return f"Found reference #{call_count['search']}"
-
-
-def llm_factory(tier, node_name=None, llm_config=None):
-    if tier == "fast":
-        return FakeProduceLLM()
-    return FakeGatherLLM()
-
-
-configure_llm(
-    llm_factory=llm_factory,
-    prompt_compiler=lambda template, data: [
-        {"role": "user", "content": "analyze"}
-    ],
+```python
+from neograph import (
+    Construct, Each, Node, Operator,
+    compile, node, register_condition, register_scripted,
 )
+from langgraph.checkpoint.memory import MemorySaver
 
-register_tool_factory(
-    "search_code",
-    lambda config, tool_config: FakeSearchTool(),
-)
+# Step 1 — @node with Oracle kwargs for LLM ensemble
+@node(output=Claims, prompt="decompose", model="fast",
+      llm_config={"temperature": 0.8},
+      ensemble_n=3, merge_fn="merge_claims")
+def decompose() -> Claims: ...
 
-
-# =========================================================================
-# SCRIPTED FUNCTIONS
-# =========================================================================
-
-def merge_claims(variants, config):
-    """Oracle merge: deduplicate claims from N generators."""
-    seen = set()
-    merged = []
-    for v in variants:
-        for item in v.items:
-            if item not in seen:
-                seen.add(item)
-                merged.append(item)
-    return Claims(items=merged)
-
-def lookup_context(input_data, config):
-    return Context(references=["auth.py:42", "logger.py:18", "crypto.py:7"])
-
-def score_claims(input_data, config):
-    scores = {"authenticate": "high", "log": "medium", "encrypt": "high"}
-    scored = []
-    for claim in input_data.items:
-        s = next((v for k, v in scores.items() if k in claim), "low")
-        scored.append({"claim": claim, "score": s})
-    return ScoredClaims(scored=scored)
-
-def make_clusters(input_data, config):
-    return Clusters(groups=[
-        ClusterGroup(label="security", claim_ids=["authenticate", "encrypt"]),
-        ClusterGroup(label="observability", claim_ids=["log"]),
-    ])
-
-def verify_cluster(input_data, config):
-    passing = {"security": True, "observability": False}
-    gaps = {"observability": ["missing structured logging"]}
-    return VerifyResult(
-        cluster_label=input_data.label,
-        passed=passing.get(input_data.label, False),
-        gaps=gaps.get(input_data.label, []),
-    )
-
-def check_all_passed(input_data, config):
-    return ValidationResult(
-        passed=False, issues=["observability cluster failed"]
-    )
-
-def build_report(input_data, config):
-    return Report(text="Verification complete. 1 cluster needs attention.")
-
-register_scripted("merge_claims", merge_claims)
-register_scripted("lookup_context", lookup_context)
-register_scripted("score_claims", score_claims)
-register_scripted("make_clusters", make_clusters)
-register_scripted("verify_cluster", verify_cluster)
-register_scripted("check_passed", check_all_passed)
-register_scripted("build_report", build_report)
-
-
-# =========================================================================
-# CONDITION (for Operator)
-# =========================================================================
-
-def needs_review(state):
-    val = state.check_results
-    if val and not val.passed:
-        return {"issues": val.issues}
-    return None
-
-register_condition("needs_review", needs_review)
-
-
-# =========================================================================
-# PIPELINE ASSEMBLY
-# =========================================================================
-
-# Step 1: Decompose requirement into claims -- 3 generators, merge
-decompose = Node(
-    name="decompose",
-    mode="produce",
-    output=Claims,
-    model="fast",
-    prompt="decompose",
-    llm_config={"temperature": 0.8},
-) | Oracle(n=3, merge_fn="merge_claims")
-
-# Step 2: Enrich -- sub-pipeline with isolated state
+# Step 2 — sub-construct with isolated state
 enrich = Construct(
     "enrich",
     input=Claims,
@@ -255,143 +82,97 @@ enrich = Construct(
     ],
 )
 
-# Step 3: Cluster and verify -- Each fan-out
+# Step 3 — scripted clustering
 cluster = Node.scripted("cluster", fn="make_clusters", output=Clusters)
+
+# Step 4 — Each fan-out over the clusters
 verify = Node.scripted(
     "verify", fn="verify_cluster", input=ClusterGroup, output=VerifyResult
 ) | Each(over="cluster.groups", key="label")
 
-# Step 4: Validate -- Operator pauses if not all clusters pass
+# Step 5 — Operator pauses if any cluster failed
 check_results = Node.scripted(
     "check-results", fn="check_passed", output=ValidationResult
 ) | Operator(when="needs_review")
 
-# Step 5: Report
+# Step 6 — final report
 report = Node.scripted("report", fn="build_report", output=Report)
 
-# Assemble
+# Assembly
 pipeline = Construct(
     "full-verification",
-    description="End-to-end requirement verification with all NeoGraph features",
-    nodes=[decompose, enrich, cluster, verify, check_results, report],
-)
-
-
-# =========================================================================
-# RUN
-# =========================================================================
-
-if __name__ == "__main__":
-    # Checkpointer required because Operator is in the pipeline
-    graph = compile(pipeline, checkpointer=MemorySaver())
-    config = {"configurable": {"thread_id": "full-001"}}
-
-    print("=== Running full pipeline ===\n")
-    result = run(graph, input={"node_id": "REQ-FULL-001"}, config=config)
-
-    print(f"Decompose: {result['decompose'].items}")
-    print(f"Enrich: {[s['score'] for s in result['enrich'].scored]}")
-    print(f"Verify clusters: {list(result['verify'].keys())}")
-    print(f"Validation: passed={result['check_results'].passed}")
-    print(f"Search tool calls: {call_count['search']}")
-
-    if "__interrupt__" in result:
-        print(f"\nPaused for review: {result['__interrupt__'][0].value}")
-        print("\n=== Resuming with approval ===\n")
-        result = run(
-            graph, resume={"approved": True}, config=config
-        )
-        print(f"Report: {result['report'].text}")
-```
-
-## How the pieces compose
-
-The key insight: every feature in NeoGraph is a modifier on a node or a Construct nested in the node list. The pipeline itself is always a flat list:
-
-```python
-pipeline = Construct(
-    "full-verification",
+    description="End-to-end requirement verification",
     nodes=[decompose, enrich, cluster, verify, check_results, report],
 )
 ```
 
-Six entries in the list. The compiler reads modifiers on each entry and expands them into the appropriate LangGraph topology.
-
-### Oracle on decompose
+Register the scripted functions and the Operator condition:
 
 ```python
-decompose = Node(
-    name="decompose", mode="produce", output=Claims,
-    model="fast", prompt="decompose",
-    llm_config={"temperature": 0.8},
-) | Oracle(n=3, merge_fn="merge_claims")
+register_scripted("merge_claims", lambda variants, config: ...)   # Oracle merge
+register_scripted("lookup_context", lambda input_data, config: ...)
+register_scripted("score_claims", lambda input_data, config: ...)
+register_scripted("make_clusters", lambda input_data, config: ...)
+register_scripted("verify_cluster", lambda input_data, config: ...)
+register_scripted("check_passed", lambda input_data, config: ...)
+register_scripted("build_report", lambda input_data, config: ...)
+
+register_condition("needs_review", lambda state: (
+    {"issues": state.check_results.issues}
+    if state.check_results and not state.check_results.passed
+    else None
+))
 ```
 
-The `llm_config={"temperature": 0.8}` is passed through to the LLM factory. Each of the 3 generators gets the same config but a different `_generator_id`. Higher temperature encourages diverse outputs across generators.
-
-### Subgraph with enrich
+## Running the pipeline
 
 ```python
-enrich = Construct(
-    "enrich",
-    input=Claims,
-    output=ScoredClaims,
-    nodes=[
-        Node.scripted("lookup", fn="lookup_context", input=Claims, output=Context),
-        Node.scripted("score", fn="score_claims", input=Claims, output=ScoredClaims),
-    ],
-)
+# Checkpointer is required because Operator is in the pipeline
+graph = compile(pipeline, checkpointer=MemorySaver())
+config = {"configurable": {"thread_id": "full-001"}}
+
+result = run(graph, input={"node_id": "REQ-FULL-001"}, config=config)
+
+print(result["decompose"].items)
+# ['shall authenticate', 'shall log', 'shall encrypt']
+
+print(list(result["verify"].keys()))
+# ['security', 'observability']
 ```
 
-`input=Claims` and `output=ScoredClaims` declare the boundary. The sub-pipeline gets its own isolated state -- `lookup` and `score` do not pollute the parent state. The parent only sees the final `ScoredClaims` output written to `state.enrich`.
+## Handling the interrupt
 
-### Each on verify
+If `check_results` finds a failing cluster, the graph pauses:
 
 ```python
-verify = Node.scripted(
-    "verify", fn="verify_cluster", input=ClusterGroup, output=VerifyResult
-) | Each(over="cluster.groups", key="label")
+if "__interrupt__" in result:
+    print(result["__interrupt__"][0].value)
+    # {'issues': ['observability cluster failed']}
+
+    # Human reviews, approves, we resume
+    result = run(graph, resume={"approved": True}, config=config)
+    print(result["report"].text)
 ```
 
-Reads `state.cluster.groups` (the `Clusters` output from the previous node), fans out one `verify` call per `ClusterGroup`, collects results as `dict[str, VerifyResult]`.
+## What this demonstrates
 
-### Operator on check-results
+- **`@node` with Oracle kwargs** — `ensemble_n=3, merge_fn='merge_claims'` in one line, no pipe operator needed for the primary path
+- **Sub-constructs** — `Construct(input=X, output=Y)` creates an isolated state boundary; the parent treats it as a single typed node
+- **Each fan-out** — `| Each(over='cluster.groups', key='label')` runs `verify` once per cluster in parallel
+- **Operator interrupt** — `| Operator(when='needs_review')` pauses the graph when the condition payload is truthy
+- **Mixed @node + declarative** — both forms compose into one `Construct(nodes=[...])`; the compiler treats them uniformly
+- **Checkpointer requirement** — any pipeline with `Operator` must pass a checkpointer to `compile()`
+- **Observability** — every node emits structured logs; `call_count` tracking shows where the LLM/tools were called
 
-```python
-check_results = Node.scripted(
-    "check-results", fn="check_passed", output=ValidationResult
-) | Operator(when="needs_review")
-```
+## Three surfaces, one compiler
 
-If any cluster fails, the condition returns truthy, the graph pauses, and the human can review before the report is generated. The checkpointer (required by Operator) is passed at compile time.
+This pipeline uses two of the three NeoGraph API surfaces:
 
-## Expected output
+- `@node` for the LLM ensemble step (the clean, modern path)
+- `Node` + `Construct` + `|` for the sub-construct and scripted modifier chains (the IR-level path)
 
-```
-=== Running full pipeline ===
+Both produce the same internal representation and compile to the same LangGraph StateGraph. You can mix them freely within one pipeline. See [Runtime Construction](/runtime/programmatic/) for when an LLM or config system builds pipelines programmatically.
 
-Decompose: ['shall authenticate', 'shall log', 'shall encrypt']
-Enrich: ['high', 'medium', 'high']
-Verify clusters: ['security', 'observability']
-Validation: passed=False
-Search tool calls: 0
+---
 
-Paused for review: {'issues': ['observability cluster failed']}
-
-=== Resuming with approval ===
-
-Report: Verification complete. 1 cluster needs attention.
-```
-
-## Composition patterns
-
-| Feature | Applied to | Mechanism |
-|---------|-----------|-----------|
-| Oracle | `Node` or `Construct` | `\| Oracle(n=, merge_fn=)` |
-| Each | `Node` or `Construct` | `\| Each(over=, key=)` |
-| Operator | `Node` or `Construct` | `\| Operator(when=)` |
-| Subgraph | `Construct` in node list | `Construct("name", input=, output=, nodes=[...])` |
-| Tool budget | `Node` with gather/execute mode | `tools=[Tool(name=, budget=)]` |
-| LLM config | `Node` with produce/gather/execute | `llm_config={"temperature": 0.8}` |
-
-All of these are declarative. You describe what you want. The compiler figures out the LangGraph topology.
+Documentation © 2025-2026 Constantine Mirin, [mirin.pro](https://mirin.pro). Licensed under [CC BY-ND 4.0](https://creativecommons.org/licenses/by-nd/4.0/).

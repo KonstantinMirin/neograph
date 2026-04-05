@@ -7,12 +7,68 @@ The `Each` modifier takes a node and runs it once per item in a collection produ
 
 This is the map phase of map-reduce: discover a set of items, process each one in parallel, gather the results.
 
+With `@node`, the Each modifier is applied via kwargs: `map_over=` and `map_key=` on the decorator.
+
 ## What you will learn
 
 - Producing a collection from one node
-- Applying `Each(over=..., key=...)` to fan out over collection items
-- How each parallel instance receives its item as `input_data`
+- Applying fan-out via `@node` kwargs (`map_over=`, `map_key=`)
+- How each parallel instance receives a single collection item
 - Reading fan-out results as a keyed dictionary
+
+## Schemas
+
+```python
+from pydantic import BaseModel
+
+class ClusterGroup(BaseModel, frozen=True):
+    label: str
+    claim_ids: list[str]
+
+class Clusters(BaseModel, frozen=True):
+    groups: list[ClusterGroup]
+
+class VerifyResult(BaseModel, frozen=True):
+    cluster_label: str
+    coverage_pct: int
+    gaps: list[str]
+```
+
+## Nodes
+
+The `discover_clusters` node produces a `Clusters` model containing a list of `ClusterGroup` items. The `verify` node processes each group independently:
+
+```python
+from neograph import node
+
+@node(output=Clusters)
+def discover_clusters() -> Clusters:
+    """Simulate discovering requirement clusters from analysis."""
+    return Clusters(groups=[
+        ClusterGroup(label="authentication", claim_ids=["REQ-1", "REQ-2", "REQ-3"]),
+        ClusterGroup(label="logging", claim_ids=["REQ-4", "REQ-5"]),
+        ClusterGroup(label="performance", claim_ids=["REQ-6"]),
+    ])
+
+@node(output=VerifyResult, map_over="discover_clusters.groups", map_key="label")
+def verify(cluster: ClusterGroup) -> VerifyResult:
+    """Verify a single cluster -- check coverage against codebase."""
+    coverage = {"authentication": 85, "logging": 60, "performance": 100}
+    gaps_map = {
+        "authentication": ["MFA not implemented"],
+        "logging": ["no structured logging", "missing audit trail"],
+        "performance": [],
+    }
+    return VerifyResult(
+        cluster_label=cluster.label,
+        coverage_pct=coverage.get(cluster.label, 0),
+        gaps=gaps_map.get(cluster.label, ["unknown"]),
+    )
+```
+
+`map_over="discover_clusters.groups"` tells the compiler: iterate over `state.discover_clusters.groups`. `map_key="label"` tells it: use each item's `.label` as the dictionary key in the output.
+
+The `verify` function receives a single `ClusterGroup` as its `cluster` parameter -- one item per invocation. You write the function as if it processes one item; the framework handles the iteration.
 
 ## The complete pipeline
 
@@ -20,14 +76,16 @@ This is the map phase of map-reduce: discover a set of items, process each one i
 """Each Fan-Out: discover clusters, verify each in parallel.
 
 Run:
-    python each_fanout.py
+    python 04_each_fanout.py
 """
 
 from __future__ import annotations
 
+import sys
+
 from pydantic import BaseModel
 
-from neograph import Construct, Each, Node, compile, register_scripted, run
+from neograph import compile, construct_from_module, node, run
 
 
 # -- Schemas ----------------------------------------------------------------
@@ -45,9 +103,10 @@ class VerifyResult(BaseModel, frozen=True):
     gaps: list[str]
 
 
-# -- Functions --------------------------------------------------------------
+# -- Nodes ------------------------------------------------------------------
 
-def discover_clusters(input_data, config):
+@node(output=Clusters)
+def discover_clusters() -> Clusters:
     """Simulate discovering requirement clusters from analysis."""
     return Clusters(groups=[
         ClusterGroup(label="authentication", claim_ids=["REQ-1", "REQ-2", "REQ-3"]),
@@ -55,11 +114,9 @@ def discover_clusters(input_data, config):
         ClusterGroup(label="performance", claim_ids=["REQ-6"]),
     ])
 
-def verify_cluster(input_data, config):
-    """Verify a single cluster -- check coverage against codebase.
-
-    input_data is a ClusterGroup -- the specific item from the collection.
-    """
+@node(output=VerifyResult, map_over="discover_clusters.groups", map_key="label")
+def verify(cluster: ClusterGroup) -> VerifyResult:
+    """Verify a single cluster -- check coverage against codebase."""
     coverage = {"authentication": 85, "logging": 60, "performance": 100}
     gaps_map = {
         "authentication": ["MFA not implemented"],
@@ -67,24 +124,15 @@ def verify_cluster(input_data, config):
         "performance": [],
     }
     return VerifyResult(
-        cluster_label=input_data.label,
-        coverage_pct=coverage.get(input_data.label, 0),
-        gaps=gaps_map.get(input_data.label, ["unknown"]),
+        cluster_label=cluster.label,
+        coverage_pct=coverage.get(cluster.label, 0),
+        gaps=gaps_map.get(cluster.label, ["unknown"]),
     )
-
-register_scripted("discover_clusters", discover_clusters)
-register_scripted("verify_cluster", verify_cluster)
 
 
 # -- Build pipeline ---------------------------------------------------------
 
-discover = Node.scripted("discover", fn="discover_clusters", output=Clusters)
-
-verify = Node.scripted(
-    "verify", fn="verify_cluster", input=ClusterGroup, output=VerifyResult
-) | Each(over="discover.groups", key="label")
-
-pipeline = Construct("cluster-verification", nodes=[discover, verify])
+pipeline = construct_from_module(sys.modules[__name__])
 
 
 # -- Run --------------------------------------------------------------------
@@ -116,36 +164,28 @@ Verified 3 clusters:
   [PASS] performance: 100% coverage
 ```
 
-## The Each modifier
+## The map_over and map_key kwargs
 
 ```python
-verify = Node.scripted(
-    "verify", fn="verify_cluster", input=ClusterGroup, output=VerifyResult
-) | Each(over="discover.groups", key="label")
+@node(output=VerifyResult, map_over="discover_clusters.groups", map_key="label")
+def verify(cluster: ClusterGroup) -> VerifyResult: ...
 ```
 
-Two parameters:
+Two kwargs:
 
-- **`over`** -- dotted path to the collection in state. `"discover.groups"` means: look at `state.discover`, then access its `.groups` attribute. The collection must be iterable.
-- **`key`** -- field on each item used as the dictionary key for results. `"label"` means each `ClusterGroup`'s `.label` becomes the key in the output dict.
+- **`map_over`** -- dotted path to the collection in state. `"discover_clusters.groups"` means: look at `state.discover_clusters`, then access its `.groups` attribute. The collection must be iterable.
+- **`map_key`** -- field on each item used as the dictionary key for results. `"label"` means each `ClusterGroup`'s `.label` becomes the key in the output dict.
 
-## How each instance receives its item
-
-The `verify` node declares `input=ClusterGroup`. During fan-out, each parallel instance receives a single `ClusterGroup` as its `input_data` argument. You write your function as if it processes one item -- the framework handles the iteration.
+This is equivalent to the pipe-operator style:
 
 ```python
-def verify_cluster(input_data, config):
-    # input_data is a ClusterGroup -- one specific item
-    return VerifyResult(
-        cluster_label=input_data.label,
-        coverage_pct=compute_coverage(input_data),
-        gaps=find_gaps(input_data),
-    )
+verify = Node.scripted("verify", fn="verify_cluster", input=ClusterGroup, output=VerifyResult
+) | Each(over="discover_clusters.groups", key="label")
 ```
 
 ## Reading fan-out results
 
-The result for an `Each` node is a dictionary keyed by the `key` field:
+The result for a fan-out node is a dictionary keyed by the `map_key` field:
 
 ```python
 result["verify"]
@@ -156,14 +196,18 @@ result["verify"]
 # }
 ```
 
-Each key is the value of `input_data.label` for that item. Keys must be unique across the collection -- if two items share a key, the compiler raises an error.
+Keys must be unique across the collection -- if two items share a key, the compiler raises an error.
 
 ## What the compiler generates
 
-When it encounters `Each(over="discover.groups", key="label")`, the compiler expands the node into:
+When it encounters `map_over=` and `map_key=`, the compiler expands the node into:
 
-1. **Fan-out router** -- iterates over `state.discover.groups`, dispatches one `Send()` per item with the item set as `neo_each_item` in state
-2. **Worker node** -- runs once per item, extracts the item from state, passes it as `input_data`, wraps the result in `{key_value: result}`
+1. **Fan-out router** -- iterates over `state.discover_clusters.groups`, dispatches one `Send()` per item with the item set as `neo_each_item` in state
+2. **Worker node** -- runs once per item, extracts the item from state, passes it as the function argument, wraps the result in `{key_value: result}`
 3. **Barrier node** (`defer=True`) -- waits for all workers to complete, collects results via a dict-merge reducer
 
 The state field for the node uses an `Annotated` dict reducer that merges results additively. Duplicate keys raise an error.
+
+---
+
+Documentation &copy; 2025-2026 Constantine Mirin, [mirin.pro](https://mirin.pro). Licensed under [CC BY-ND 4.0](https://creativecommons.org/licenses/by-nd/4.0/).

@@ -7,12 +7,64 @@ An Oracle runs the same node multiple times in parallel -- each instance gets a 
 
 This is the ensemble pattern: multiple independent attempts at the same task, deduplicated or judged into one answer.
 
+With `@node`, the Oracle modifier is applied via kwargs: `ensemble_n=` and `merge_fn=` on the decorator. No `|` pipe operator needed.
+
 ## What you will learn
 
-- Applying the `Oracle` modifier with the `|` operator
-- Using `_generator_id` in config to vary each parallel instance
-- Choosing between `merge_fn` (scripted) and `merge_prompt` (LLM judge)
+- Applying the Oracle modifier via `@node` kwargs (`ensemble_n=`, `merge_fn=`)
+- Registering a scripted merge function with `register_scripted()`
+- Thread-safe generation across parallel instances
 - How the compiler expands Oracle into fan-out + barrier + merge
+
+## Schemas
+
+```python
+from pydantic import BaseModel
+
+class Topic(BaseModel, frozen=True):
+    text: str
+
+class Claims(BaseModel, frozen=True):
+    items: list[str]
+```
+
+## The Oracle node
+
+Adding `ensemble_n=3` and `merge_fn="merge_claims"` to `@node` tells the compiler to run this node 3 times in parallel, then merge the results:
+
+```python
+from neograph import node, register_scripted
+
+@node(output=Claims, ensemble_n=3, merge_fn="merge_claims")
+def decompose() -> Claims:
+    with _gen_counter_lock:
+        idx = _gen_counter[0] % len(_perspectives)
+        _gen_counter[0] += 1
+    return Claims(items=_perspectives[idx])
+```
+
+Each parallel instance calls the same function. A thread-safe counter rotates through perspectives so each generator returns different claims.
+
+## The merge function
+
+The merge function receives a list of all generator outputs and combines them:
+
+```python
+def merge_claims(variants, config):
+    """Merge N claim lists into one deduplicated list."""
+    seen = set()
+    merged = []
+    for variant in variants:
+        for claim in variant.items:
+            if claim not in seen:
+                seen.add(claim)
+                merged.append(claim)
+    return Claims(items=merged)
+
+register_scripted("merge_claims", merge_claims)
+```
+
+`variants` is `[Claims, Claims, Claims]` -- one per generator. The merge deduplicates by claim text.
 
 ## The complete pipeline
 
@@ -20,14 +72,17 @@ This is the ensemble pattern: multiple independent attempts at the same task, de
 """Oracle Ensemble: 3 parallel generators + scripted merge.
 
 Run:
-    python oracle_ensemble.py
+    python 03_oracle_ensemble.py
 """
 
 from __future__ import annotations
 
+import sys
+import threading
+
 from pydantic import BaseModel
 
-from neograph import Construct, Node, Oracle, compile, register_scripted, run
+from neograph import compile, construct_from_module, node, register_scripted, run
 
 
 # -- Schemas ----------------------------------------------------------------
@@ -39,22 +94,16 @@ class Claims(BaseModel, frozen=True):
     items: list[str]
 
 
-# -- Generator: each instance produces a different decomposition ------------
-# The generator receives _generator_id via config["configurable"] so each
-# parallel instance can vary its output.
+# -- Generator perspectives -------------------------------------------------
 
-variant_perspectives = {
-    "gen-0": ["security: must authenticate", "security: must encrypt"],
-    "gen-1": ["reliability: must handle failures", "reliability: must log errors"],
-    "gen-2": ["performance: must respond in 200ms", "security: must authenticate"],
-}
+_perspectives = [
+    ["security: must authenticate", "security: must encrypt"],
+    ["reliability: must handle failures", "reliability: must log errors"],
+    ["performance: must respond in 200ms", "security: must authenticate"],
+]
 
-def generate_decomposition(input_data, config):
-    gen_id = config.get("configurable", {}).get("_generator_id", "gen-0")
-    claims = variant_perspectives.get(gen_id, ["unknown perspective"])
-    return Claims(items=claims)
-
-register_scripted("generate_decomposition", generate_decomposition)
+_gen_counter_lock = threading.Lock()
+_gen_counter = [0]
 
 
 # -- Merge: combine and deduplicate claims from all generators --------------
@@ -74,18 +123,22 @@ register_scripted("merge_claims", merge_claims)
 
 
 # -- Build pipeline ---------------------------------------------------------
-# Oracle(n=3) runs the generator 3 times in parallel, merge_fn combines.
 
-decompose = Node.scripted(
-    "decompose", fn="generate_decomposition", output=Claims
-) | Oracle(n=3, merge_fn="merge_claims")
+@node(output=Claims, ensemble_n=3, merge_fn="merge_claims")
+def decompose() -> Claims:
+    with _gen_counter_lock:
+        idx = _gen_counter[0] % len(_perspectives)
+        _gen_counter[0] += 1
+    return Claims(items=_perspectives[idx])
 
-pipeline = Construct("oracle-demo", nodes=[decompose])
+
+pipeline = construct_from_module(sys.modules[__name__], name="oracle-demo")
 
 
 # -- Run --------------------------------------------------------------------
 
 if __name__ == "__main__":
+    _gen_counter[0] = 0  # reset for clean run
     graph = compile(pipeline)
     result = run(graph, input={"node_id": "REQ-001"})
 
@@ -93,8 +146,7 @@ if __name__ == "__main__":
     print(f"3 generators produced {len(merged.items)} unique claims:")
     for claim in merged.items:
         print(f"  - {claim}")
-    # "security: must authenticate" appears in gen-0 and gen-2
-    # but is deduplicated by the merge function
+    # "security: must authenticate" appears in gen-0 and gen-2 but is deduplicated
 ```
 
 ## Expected output
@@ -110,35 +162,24 @@ if __name__ == "__main__":
 
 Note that "security: must authenticate" appears in both gen-0 and gen-2, but the merge function deduplicates it.
 
-## The `|` operator
+## @node kwargs vs the `|` pipe operator
 
-Modifiers are applied using Python's pipe operator. This reads as "decompose, with Oracle":
-
-```python
-decompose = Node.scripted(
-    "decompose", fn="generate_decomposition", output=Claims
-) | Oracle(n=3, merge_fn="merge_claims")
-```
-
-You can chain multiple modifiers:
+The `@node` decorator accepts Oracle kwargs directly:
 
 ```python
-node | Oracle(n=3, merge_fn="merge") | Operator(when="needs_review")
+# @node style (this walkthrough)
+@node(output=Claims, ensemble_n=3, merge_fn="merge_claims")
+def decompose() -> Claims: ...
 ```
 
-## How generator_id works
-
-Each parallel instance receives a unique ID in `config["configurable"]["_generator_id"]`. The IDs follow the pattern `"gen-0"`, `"gen-1"`, ..., `"gen-{n-1}"`.
-
-Your function reads this to produce different output:
+This is equivalent to the pipe-operator style used in the Runtime/IR API:
 
 ```python
-def generate_decomposition(input_data, config):
-    gen_id = config.get("configurable", {}).get("_generator_id", "gen-0")
-    # Use gen_id to vary the perspective, prompt, or strategy
+# Pipe style (programmatic API)
+decompose = Node.scripted("decompose", fn="generate", output=Claims) | Oracle(n=3, merge_fn="merge_claims")
 ```
 
-For LLM nodes, the prompt compiler receives the same config, so you can build different prompts per generator.
+Both compile to the same topology. Use `@node` kwargs when writing pipelines as modules. Use the pipe operator when building pipelines programmatically.
 
 ## Scripted merge vs LLM merge
 
@@ -147,15 +188,8 @@ Oracle requires exactly one of `merge_fn` or `merge_prompt`.
 ### Scripted merge (deterministic)
 
 ```python
-Oracle(n=3, merge_fn="merge_claims")
-```
-
-The merge function receives the list of all generator outputs and the config:
-
-```python
-def merge_claims(variants: list[Claims], config) -> Claims:
-    # variants is [Claims, Claims, Claims] -- one per generator
-    ...
+@node(output=Claims, ensemble_n=3, merge_fn="merge_claims")
+def decompose() -> Claims: ...
 ```
 
 Use scripted merge when the combination logic is straightforward (deduplication, union, voting).
@@ -163,20 +197,24 @@ Use scripted merge when the combination logic is straightforward (deduplication,
 ### LLM merge (judge)
 
 ```python
-Oracle(n=3, merge_prompt="rw/decompose-merge", merge_model="reason")
+@node(output=Claims, prompt="decompose", model="reason",
+      ensemble_n=3, merge_prompt="rw/decompose-merge", merge_model="reason")
+def decompose() -> Claims: ...
 ```
 
 The framework passes all generator outputs to an LLM with the given prompt template. The LLM produces the final merged result as structured output. Use this when merging requires judgment (picking the best analysis, synthesizing contradictory results).
 
-`merge_model` defaults to `"reason"` but can be set to any tier your `llm_factory` supports.
-
 ## What the compiler generates
 
-When it encounters `Oracle(n=3, merge_fn="merge_claims")`, the compiler expands the single node into:
+When it encounters `ensemble_n=3, merge_fn="merge_claims"`, the compiler expands the single node into:
 
 1. **Fan-out router** -- dispatches 3 parallel `Send()` calls to the generator node, each with a different `neo_oracle_gen_id`
 2. **Generator node** -- runs 3 times in parallel, writes to a collector field with a list reducer
 3. **Merge barrier** (`defer=True`) -- waits for all 3 generators to complete, then runs the merge function
 4. **Consumer field** -- the merged result is written to `state.decompose` (the node's name), not the collector
 
-You never see this expansion. You write one node with `| Oracle(...)` and get the full topology.
+You never see this expansion. You write one `@node` with `ensemble_n=` and get the full topology.
+
+---
+
+Documentation &copy; 2025-2026 Constantine Mirin, [mirin.pro](https://mirin.pro). Licensed under [CC BY-ND 4.0](https://creativecommons.org/licenses/by-nd/4.0/).

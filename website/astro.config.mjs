@@ -6,7 +6,7 @@ export default defineConfig({
 	integrations: [
 		starlight({
 			title: 'NeoGraph',
-			description: 'Declarative LLM graph compiler. Define typed Nodes, compose into Constructs, compile to LangGraph.',
+			description: 'Write Python. Get a production graph. Declarative LLM graph compiler.',
 			social: [{ icon: 'github', label: 'GitHub', href: 'https://github.com/KonstantinMirin/neograph' }],
 			sidebar: [
 				{
@@ -18,14 +18,36 @@ export default defineConfig({
 					],
 				},
 				{
+					label: 'The @node API',
+					items: [
+						{ label: 'Functions as Nodes', slug: 'node-api/functions-as-nodes' },
+						{ label: 'Modifiers as Keywords', slug: 'node-api/modifier-kwargs' },
+						{ label: 'Non-node Parameters', slug: 'node-api/parameters' },
+						{ label: 'Organizing Pipelines', slug: 'node-api/organizing' },
+					],
+				},
+				{
+					label: 'ForwardConstruct',
+					items: [
+						{ label: 'Python Control Flow', slug: 'forward/control-flow' },
+						{ label: 'Branching & Loops', slug: 'forward/branching' },
+					],
+				},
+				{
 					label: 'Core Concepts',
 					items: [
-						{ label: 'Vocabulary', slug: 'concepts/vocabulary' },
 						{ label: 'Node Modes', slug: 'concepts/node-modes' },
-						{ label: 'Modifiers', slug: 'concepts/modifiers' },
 						{ label: 'Subgraphs', slug: 'concepts/subgraphs' },
 						{ label: 'Observability', slug: 'concepts/observability' },
 						{ label: 'LLM Configuration', slug: 'concepts/llm-configuration' },
+						{ label: 'Testing', slug: 'concepts/testing' },
+					],
+				},
+				{
+					label: 'Runtime Construction',
+					items: [
+						{ label: 'Programmatic API', slug: 'runtime/programmatic' },
+						{ label: 'LLM-Driven Pipelines', slug: 'runtime/llm-driven' },
 					],
 				},
 				{

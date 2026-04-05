@@ -1,0 +1,186 @@
+---
+title: The @node Decorator
+description: Turn Python functions into graph nodes — parameter names are edges, mode is inferred.
+---
+
+The `@node` decorator is the primary way to define a NeoGraph pipeline. Decorate a function, and it becomes a `Node`. Its parameter names wire the edges. Its annotations drive type checking. No registration, no YAML, no `add_edge`.
+
+## How it works
+
+```python
+from neograph import node, construct_from_module, compile, run
+import sys
+
+@node(output=Claims, prompt='rw/decompose', model='reason')
+def decompose(topic: RawText) -> Claims: ...
+
+@node(output=Classified, prompt='rw/classify', model='fast')
+def classify(decompose: Claims) -> Classified: ...
+
+@node(output=Report)
+def report(classify: Classified) -> Report:
+    return Report(summary=f"{len(classify.items)} claims processed")
+
+pipeline = construct_from_module(sys.modules[__name__])
+graph = compile(pipeline)
+result = run(graph, input={'node_id': 'doc-001'})
+```
+
+Three rules:
+
+1. **A function is a node.** The decorator returns a `Node` instance, not a wrapped function.
+2. **A parameter name is an edge.** `classify(decompose: Claims)` means "classify depends on decompose." Rename the upstream function, and downstream breaks at import time.
+3. **Fan-in is just more parameters.** `def report(claims, scores, verified)` wires three incoming edges.
+
+## Mode inference
+
+You can set `mode=` explicitly, but the decorator infers it when you don't:
+
+| You write | Inferred mode | What happens |
+|---|---|---|
+| `prompt=` and/or `model=` | `produce` | LLM call via the prompt template. Function body is ignored (a warning fires if it's non-trivial). |
+| Neither `prompt=` nor `model=` | `scripted` | Function body executes. Pure Python. |
+| `mode='raw'` | `scripted` (with `raw_fn`) | Escape hatch. Function receives `(state, config)` directly. |
+
+```python
+# Inferred as produce — prompt= triggers LLM mode
+@node(output=Claims, prompt='rw/decompose', model='reason')
+def decompose(topic: RawText) -> Claims: ...
+
+# Inferred as scripted — no prompt, no model
+@node(output=Report)
+def report(classify: Classified) -> Report:
+    return Report(summary=f"{len(classify.items)} claims processed")
+
+# Explicit raw — full LangGraph state access
+@node(mode='raw', input=Claims, output=FilteredClaims)
+def custom_filter(state, config):
+    claims = getattr(state, 'extract_claims', None)
+    kept = [c for c in claims.items if 'shall' in c]
+    return {'custom_filter': FilteredClaims(kept=kept)}
+```
+
+## construct_from_module
+
+After decorating your functions, call `construct_from_module` to assemble the DAG:
+
+```python
+import sys
+pipeline = construct_from_module(sys.modules[__name__], name="my-pipeline")
+```
+
+This function:
+
+1. **Walks `vars(mod)`** and collects every `Node` created by `@node` (plain `Node(...)` instances at module scope are ignored).
+2. **Builds adjacency** from parameter names. `classify(decompose: Claims)` adds an edge `decompose -> classify`.
+3. **Topological sorts** the graph via DFS. Deterministic order for the same module.
+4. **Detects cycles.** A parameter that creates a circular dependency raises `ConstructError`.
+5. **Detects collisions.** Two functions that resolve to the same node name raise `ConstructError`.
+6. **Validates types.** Every fan-in parameter's annotation is checked against the upstream node's `output` type.
+7. **Returns a `Construct`** — the same object you'd get from `Construct(name=..., nodes=[...])`.
+
+The name convention: function `foo_bar` becomes node name `'foo-bar'`. A downstream parameter `foo_bar: T` looks up the node via `name.replace("-", "_")`.
+
+## Example: 3-node scripted pipeline
+
+A deterministic pipeline with no LLM calls:
+
+```python
+from neograph import node, construct_from_module, compile, run
+import sys
+from pydantic import BaseModel
+
+class RawText(BaseModel, frozen=True):
+    text: str
+
+class Claims(BaseModel, frozen=True):
+    items: list[str]
+
+class ClassifiedClaims(BaseModel, frozen=True):
+    classified: list[dict[str, str]]
+
+@node(output=RawText)
+def extract() -> RawText:
+    return RawText(text="The system shall log access. The system shall validate input.")
+
+@node(output=Claims)
+def split(extract: RawText) -> Claims:
+    sentences = [s.strip() for s in extract.text.split(".") if s.strip()]
+    return Claims(items=sentences)
+
+@node(output=ClassifiedClaims)
+def classify(split: Claims) -> ClassifiedClaims:
+    classified = []
+    for claim in split.items:
+        cat = "security" if "access" in claim.lower() else "general"
+        classified.append({"claim": claim, "category": cat})
+    return ClassifiedClaims(classified=classified)
+
+pipeline = construct_from_module(sys.modules[__name__], name="doc-processor")
+graph = compile(pipeline)
+result = run(graph, input={"node_id": "doc-001"})
+```
+
+## Example: 3-node LLM pipeline
+
+An LLM decomposes a requirement, then a gather node researches with tools:
+
+```python
+from neograph import node, Tool, construct_from_module, compile, run
+import sys
+
+@node(output=Claims, model="fast", prompt="req/decompose")
+def decompose() -> Claims: ...
+
+@node(mode="gather", output=ResearchResult, model="reason",
+      prompt="req/research", tools=[Tool(name="search_codebase", budget=2)])
+def research(decompose: Claims) -> ResearchResult: ...
+
+@node(output=Report)
+def report(research: ResearchResult) -> Report:
+    return Report(summary="Analysis complete")
+
+pipeline = construct_from_module(sys.modules[__name__])
+```
+
+## Example: fan-in
+
+Four producers feed one consumer. Declaration order doesn't matter — `construct_from_module` topologically sorts:
+
+```python
+@node(output=Report)
+def report(
+    fetch_claims: Claims,
+    score_claims: Scores,
+    verify_claims: Verification,
+    gather_metadata: Metadata,
+) -> Report:
+    avg = sum(score_claims.ratings.values()) / len(score_claims.ratings)
+    return Report(summary=f"Claims: {len(fetch_claims.items)}, avg: {avg:.1f}")
+
+@node(output=Verification)
+def verify_claims(fetch_claims: Claims, score_claims: Scores) -> Verification:
+    passed = [c for c in fetch_claims.items if score_claims.ratings.get(c, 0) >= 0.5]
+    return Verification(passed=passed, failed=[])
+
+@node(output=Scores)
+def score_claims(fetch_claims: Claims) -> Scores:
+    return Scores(ratings={c: 0.8 for c in fetch_claims.items})
+
+@node(output=Claims)
+def fetch_claims() -> Claims:
+    return Claims(items=["shall authenticate", "shall log"])
+
+pipeline = construct_from_module(sys.modules[__name__], name="review")
+```
+
+## What's next
+
+- [Modifier keywords](/node-api/modifier-kwargs/) — fan-out, ensemble, and interrupt as `@node` kwargs
+- [Parameters](/node-api/parameters/) — `FromInput[T]`, `FromConfig[T]`, and default values
+- [ForwardConstruct](/forward/control-flow/) — `if`/`for` as graph topology via a class-based API
+- Runtime construction with the `|` pipe syntax (see the [README examples](/))
+
+---
+
+Documentation &copy; 2025-2026 Constantine Mirin, [mirin.pro](https://mirin.pro). Licensed under [CC BY-ND 4.0](https://creativecommons.org/licenses/by-nd/4.0/).

@@ -1,12 +1,12 @@
 ---
 title: NeoGraph
-description: Declarative LLM graph compiler. Define typed Nodes, compose into Constructs, compile to LangGraph.
+description: Write Python functions. Get a production LLM graph. NeoGraph compiles @node-decorated functions into LangGraph.
 template: splash
 hero:
-  tagline: Stop writing LangGraph boilerplate. Declare what your pipeline does, not how to wire it.
+  tagline: Write Python. Get a production graph.
   actions:
     - text: Get Started
-      link: /getting-started/what-is-neograph/
+      link: /getting-started/quick-start/
       icon: right-arrow
     - text: View on GitHub
       link: https://github.com/KonstantinMirin/neograph
@@ -20,7 +20,9 @@ import { Card, CardGrid, LinkCard } from '@astrojs/starlight/components';
 
 Every LangGraph pipeline repeats the same wiring: define a `TypedDict`, write node functions that read/write state dicts, call `add_node` for each node, call `add_edge` for each connection, and `compile`. A 3-node sequential pipeline takes ~35 lines of plumbing before you write any logic.
 
-NeoGraph eliminates this. You declare typed Nodes, compose them into a Construct, and call `compile`. The compiler generates the LangGraph graph for you.
+NeoGraph eliminates this. Define your pipeline as Python functions. The framework infers the topology from parameter names, validates types at assembly time, and compiles to LangGraph. No DSL. No YAML. No `add_node` / `add_edge`.
+
+**A function is a node. A parameter name is an edge. An `if` is a branch.**
 
 ## LangGraph: ~35 lines
 
@@ -60,32 +62,37 @@ graph.add_edge("summarize", END)
 app = graph.compile()
 ```
 
-## NeoGraph: ~8 lines
+## NeoGraph: ~10 lines
 
 ```python
-from neograph import Node, Construct, compile, run
+import sys
+from neograph import node, construct_from_module, compile, run
 
-decompose = Node(name="decompose", mode="produce", output=Claims, model="fast", prompt="decompose")
-classify  = Node(name="classify",  mode="produce", input=Claims, output=ClassifiedClaims, model="fast", prompt="classify")
-summarize = Node(name="summarize", mode="produce", input=ClassifiedClaims, output=Summary, model="fast", prompt="summarize")
+@node(output=Claims, prompt='decompose', model='fast')
+def decompose(topic: RawText) -> Claims: ...
 
-pipeline = Construct("analysis", nodes=[decompose, classify, summarize])
+@node(output=ClassifiedClaims, prompt='classify', model='fast')
+def classify(decompose: Claims) -> ClassifiedClaims: ...
+
+@node(output=Summary, prompt='summarize', model='fast')
+def summarize(classify: ClassifiedClaims) -> Summary: ...
+
+pipeline = construct_from_module(sys.modules[__name__])
 graph = compile(pipeline)
-result = run(graph, input={"node_id": "demo", "topic": "microservice authentication"})
+result = run(graph, input={'topic': 'microservice authentication'})
 ```
 
-Same LangGraph graph underneath. No `TypedDict`, no `add_node`, no `add_edge`. The compiler infers the state schema from your Node type annotations and wires the edges from the Construct's node order.
+Same LangGraph graph underneath. The parameter name IS the dependency -- `classify(decompose: Claims)` wires `classify` after `decompose` automatically. No `TypedDict`, no `add_node`, no `add_edge`. Types are validated at assembly time.
 
 ---
 
 <CardGrid>
-  <LinkCard title="What is NeoGraph?" href="/getting-started/what-is-neograph/" description="Architecture, vocabulary, and the compiler model." />
-  <LinkCard title="Quick Start" href="/getting-started/quick-start/" description="Install, configure, build a pipeline, run it." />
-  <LinkCard title="Why Not Just LangGraph?" href="/getting-started/why-neograph/" description="Pattern-by-pattern comparison with line counts." />
+  <LinkCard title="Quick Start" href="/getting-started/quick-start/" description="Install, configure, build a pipeline with @node, run it." />
+  <LinkCard title="Why NeoGraph?" href="/getting-started/why-neograph/" description="Pattern-by-pattern comparison. Define logic, not wiring." />
+  <LinkCard title="What is NeoGraph?" href="/getting-started/what-is-neograph/" description="Three API surfaces, one compiler. Architecture and vocabulary." />
+  <LinkCard title="Core Concepts" href="/concepts/vocabulary/" description="Node, Tool, Construct, Oracle, Each, Operator." />
 </CardGrid>
 
-<CardGrid>
-  <LinkCard title="Core Concepts" href="/concepts/vocabulary/" description="The 6 vocabulary terms: Node, Tool, Construct, Oracle, Each, Operator." />
-  <LinkCard title="Walkthrough" href="/walkthrough/scripted-pipeline/" description="6 progressively complex examples from scripted to full pipeline." />
-  <LinkCard title="API Reference" href="/reference/api/" description="Complete API surface for Node, Tool, Construct, compile, run." />
-</CardGrid>
+---
+
+Documentation &copy; 2025-2026 Constantine Mirin, [mirin.pro](https://mirin.pro). Licensed under [CC BY-ND 4.0](https://creativecommons.org/licenses/by-nd/4.0/).

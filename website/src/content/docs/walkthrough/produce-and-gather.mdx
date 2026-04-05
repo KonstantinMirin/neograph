@@ -5,15 +5,60 @@ description: "Use an LLM to decompose a requirement, then research it with tools
 
 This walkthrough introduces NeoGraph's two primary LLM modes: **produce** (single structured call) and **gather** (ReAct tool loop with budget enforcement). Together they form the most common two-step pattern: decompose a problem, then research it.
 
+The pipeline is built with `@node`-decorated functions and `construct_from_module`. Mode is inferred from the kwargs: `prompt=` + `model=` means LLM call. Add `tools=` and it becomes a gather loop.
+
 The example uses fake LLM and tool implementations so you can run it without API keys. Replace them with real ones for production.
 
 ## What you will learn
 
 - Configuring the LLM layer with `configure_llm()`
-- Using `mode="produce"` for structured LLM output
-- Using `mode="gather"` for ReAct tool loops
+- Using `@node` with `prompt=` and `model=` for LLM produce mode
+- Using `@node` with `mode="gather"` and `tools=` for ReAct tool loops
 - Declaring tools with `Tool(name, budget)`
 - Registering tool factories with `register_tool_factory()`
+- Parameter-name wiring between LLM nodes
+
+## Schemas
+
+```python
+from pydantic import BaseModel
+
+class Requirement(BaseModel, frozen=True):
+    text: str
+
+class Claims(BaseModel, frozen=True):
+    items: list[str]
+
+class ResearchResult(BaseModel, frozen=True):
+    findings: list[dict[str, str]]
+```
+
+## Nodes
+
+The `decompose` node has `prompt=` and `model=` but no `mode=` -- NeoGraph infers `mode="produce"` (single LLM call, structured output). The function body is `...` because the LLM handles execution.
+
+The `research` node explicitly sets `mode="gather"` and adds `tools=`. It runs a ReAct loop: call the LLM, execute tool calls, feed results back, repeat until the budget is exhausted.
+
+```python
+from neograph import node, Tool
+
+@node(output=Claims, model="fast", prompt="req/decompose")
+def decompose() -> Claims:
+    ...
+
+
+@node(
+    mode="gather",
+    output=ResearchResult,
+    model="reason",
+    prompt="req/research",
+    tools=[Tool(name="search_codebase", budget=2)],
+)
+def research(decompose: Claims) -> ResearchResult:
+    ...
+```
+
+The parameter name `decompose` on `research` wires it to the upstream `decompose` node.
 
 ## The complete pipeline
 
@@ -21,15 +66,17 @@ The example uses fake LLM and tool implementations so you can run it without API
 """Produce + Gather: decompose a requirement, then research with tools.
 
 Run:
-    python produce_and_gather.py
+    python 02_produce_and_gather.py
 """
 
 from __future__ import annotations
 
+import sys
+
 from langchain_core.messages import AIMessage
 from pydantic import BaseModel
 
-from neograph import Construct, Node, Tool, compile, configure_llm, register_tool_factory, run
+from neograph import Tool, compile, configure_llm, construct_from_module, node, register_tool_factory, run
 
 
 # -- Schemas ----------------------------------------------------------------
@@ -99,10 +146,7 @@ class FakeSearchTool:
         search_count["n"] += 1
         return f"Found 3 references for: {args.get('query', '?')}"
 
-register_tool_factory(
-    "search_codebase",
-    lambda config, tool_config: FakeSearchTool(),
-)
+register_tool_factory("search_codebase", lambda config, tool_config: FakeSearchTool())
 
 
 # -- Configure LLM layer ---------------------------------------------------
@@ -114,33 +158,29 @@ def llm_factory(tier):
 
 configure_llm(
     llm_factory=llm_factory,
-    prompt_compiler=lambda template, data: [
-        {"role": "user", "content": "analyze"}
-    ],
+    prompt_compiler=lambda template, data: [{"role": "user", "content": "analyze"}],
 )
 
 
-# -- Build pipeline ---------------------------------------------------------
+# -- Pipeline nodes ---------------------------------------------------------
 
-decompose = Node(
-    name="decompose",
-    mode="produce",        # single LLM call, structured JSON output
-    output=Claims,
-    model="fast",          # tier passed to llm_factory
-    prompt="req/decompose",
-)
+@node(output=Claims, model="fast", prompt="req/decompose")
+def decompose() -> Claims:
+    ...
 
-research = Node(
-    name="research",
-    mode="gather",         # ReAct tool loop
-    input=Claims,
+
+@node(
+    mode="gather",
     output=ResearchResult,
     model="reason",
     prompt="req/research",
-    tools=[Tool(name="search_codebase", budget=2)],  # max 2 searches
+    tools=[Tool(name="search_codebase", budget=2)],
 )
+def research(decompose: Claims) -> ResearchResult:
+    ...
 
-pipeline = Construct("requirement-analysis", nodes=[decompose, research])
+
+pipeline = construct_from_module(sys.modules[__name__], name="requirement-analysis")
 
 
 # -- Run --------------------------------------------------------------------
@@ -169,18 +209,26 @@ Search tool called 2 times (budget was 2)
 Research complete: True
 ```
 
+## Mode inference
+
+NeoGraph infers the execution mode from the kwargs you pass to `@node`:
+
+| Present kwargs | Inferred mode | Behavior |
+|---|---|---|
+| `prompt=` + `model=` | `produce` | Single LLM call, structured JSON output |
+| `prompt=` + `model=` + `tools=` | `gather` | ReAct tool loop |
+| Neither | `scripted` | Function body runs as-is |
+
+You can also set `mode=` explicitly, which is required for `gather` if you want to be explicit about the distinction from `produce`.
+
 ## Produce mode
 
 A **produce** node makes a single LLM call and expects structured JSON back. The framework calls `llm.with_structured_output(output_model)` and parses the response into your Pydantic schema automatically.
 
 ```python
-Node(
-    name="decompose",
-    mode="produce",
-    output=Claims,        # LLM must return valid Claims JSON
-    model="fast",         # tier name -> llm_factory("fast")
-    prompt="req/decompose", # template name -> prompt_compiler("req/decompose", input_data)
-)
+@node(output=Claims, model="fast", prompt="req/decompose")
+def decompose() -> Claims:
+    ...
 ```
 
 No tool loop. No message history management. One call, one typed result.
@@ -190,15 +238,15 @@ No tool loop. No message history management. One call, one typed result.
 A **gather** node runs a ReAct loop: call the LLM, if it requests tool calls execute them, feed results back, repeat. The loop continues until the LLM responds without tool calls, or all tool budgets are exhausted.
 
 ```python
-Node(
-    name="research",
+@node(
     mode="gather",
-    input=Claims,
     output=ResearchResult,
     model="reason",
     prompt="req/research",
     tools=[Tool(name="search_codebase", budget=2)],
 )
+def research(decompose: Claims) -> ResearchResult:
+    ...
 ```
 
 ### Tool budget enforcement
@@ -221,8 +269,6 @@ configure_llm(
 - **llm_factory** receives a tier string (`"fast"`, `"reason"`, etc.) and returns a LangChain chat model. In production, map tiers to real models (e.g., `"fast"` -> GPT-4o-mini, `"reason"` -> Claude Sonnet).
 - **prompt_compiler** receives a template name and the typed input data, and returns a message list. This is where you build your prompts.
 
-Both functions accept optional keyword arguments for advanced use (`node_name`, `llm_config`, `config`).
-
 ## register_tool_factory()
 
 Tool factories create tool instances at runtime. The factory receives the pipeline config and any per-tool config:
@@ -235,3 +281,7 @@ register_tool_factory(
 ```
 
 This lets you create tools that depend on runtime context (API keys, rate limiters, database connections) without hardcoding them.
+
+---
+
+Documentation &copy; 2025-2026 Constantine Mirin, [mirin.pro](https://mirin.pro). Licensed under [CC BY-ND 4.0](https://creativecommons.org/licenses/by-nd/4.0/).

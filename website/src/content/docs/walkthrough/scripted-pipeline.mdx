@@ -1,19 +1,79 @@
 ---
 title: "1. Scripted Pipeline"
-description: "Build a three-node deterministic pipeline with typed state flow -- no LLM required."
+description: "Build a three-node deterministic pipeline with @node and construct_from_module -- no LLM required."
 ---
 
-A scripted pipeline is the simplest thing you can build with NeoGraph. Every node is a plain Python function. No API keys, no model configuration, no network calls. Data flows through Pydantic models that enforce types at every boundary.
+A scripted pipeline is the simplest thing you can build with NeoGraph. Every node is a plain Python function decorated with `@node`. No API keys, no model configuration, no network calls. Data flows through Pydantic models that enforce types at every boundary.
 
 This walkthrough builds a document processor: **extract** raw text, **split** it into claims, **classify** each claim by category.
 
 ## What you will learn
 
 - Defining Pydantic schemas for typed state
-- Registering scripted functions with `register_scripted()`
-- Creating nodes with `Node.scripted()`
-- Composing nodes into a `Construct`
+- Using the `@node` decorator to turn functions into graph nodes
+- Parameter-name dependency inference (the parameter name IS the edge)
+- Auto-discovering nodes with `construct_from_module()`
 - Compiling and running the pipeline
+
+## Schemas
+
+Each schema is a frozen Pydantic model. Frozen ensures immutability -- once a node produces output, nothing can mutate it downstream.
+
+```python
+from pydantic import BaseModel
+
+class RawText(BaseModel, frozen=True):
+    text: str
+
+class Claims(BaseModel, frozen=True):
+    items: list[str]
+
+class ClassifiedClaims(BaseModel, frozen=True):
+    classified: list[dict[str, str]]
+```
+
+## Nodes
+
+Each `@node`-decorated function becomes a graph node. Dependencies are inferred from parameter names: if a parameter is named `extract`, it wires to the upstream node named `extract`.
+
+```python
+from neograph import node
+
+@node(output=RawText)
+def extract() -> RawText:
+    """Simulate extracting text from a document source."""
+    return RawText(text="The system shall log all access attempts. The system shall validate input.")
+
+
+@node(output=Claims)
+def split(extract: RawText) -> Claims:
+    """Split raw text into individual claims by sentence."""
+    sentences = [s.strip() for s in extract.text.split(".") if s.strip()]
+    return Claims(items=sentences)
+
+
+@node(output=ClassifiedClaims)
+def classify(split: Claims) -> ClassifiedClaims:
+    """Classify each claim by category based on keywords."""
+    classified = []
+    for claim in split.items:
+        category = "security" if "access" in claim.lower() or "validate" in claim.lower() else "general"
+        classified.append({"claim": claim, "category": category})
+    return ClassifiedClaims(classified=classified)
+```
+
+`split(extract: RawText)` -- the parameter name `extract` IS the dependency. It tells the compiler: "this node consumes the output of the `extract` node." Rename the upstream function, and this breaks at import time. No silent wiring bugs.
+
+## Building the pipeline
+
+No `nodes=[...]` list, no ordering, no edge wiring. `construct_from_module` walks the current module, finds all `@node`-decorated functions, and topologically sorts them into a `Construct`:
+
+```python
+import sys
+from neograph import construct_from_module
+
+pipeline = construct_from_module(sys.modules[__name__], name="doc-processor")
+```
 
 ## The complete pipeline
 
@@ -21,19 +81,19 @@ This walkthrough builds a document processor: **extract** raw text, **split** it
 """Scripted pipeline: extract -> split -> classify. No LLM needed.
 
 Run:
-    python scripted_pipeline.py
+    python 01_scripted_pipeline.py
 """
 
 from __future__ import annotations
 
+import sys
+
 from pydantic import BaseModel
 
-from neograph import Construct, Node, compile, register_scripted, run
+from neograph import compile, construct_from_module, node, run
 
 
 # -- Schemas ----------------------------------------------------------------
-# Each schema is a frozen Pydantic model. Frozen ensures immutability --
-# once a node produces output, nothing can mutate it downstream.
 
 class RawText(BaseModel, frozen=True):
     text: str
@@ -45,54 +105,35 @@ class ClassifiedClaims(BaseModel, frozen=True):
     classified: list[dict[str, str]]
 
 
-# -- Scripted functions -----------------------------------------------------
-# Each function receives (input_data, config).
-#   input_data: the typed output from the previous node, or None for the first.
-#   config:     LangGraph RunnableConfig with pipeline metadata.
+# -- Nodes ------------------------------------------------------------------
+# Parameter name = upstream node name. No manual edge wiring.
 
-def extract_text(input_data, config):
+@node(output=RawText)
+def extract() -> RawText:
     """Simulate extracting text from a document source."""
-    return RawText(
-        text="The system shall log all access attempts. "
-             "The system shall validate input."
-    )
+    return RawText(text="The system shall log all access attempts. The system shall validate input.")
 
-def split_claims(input_data, config):
+
+@node(output=Claims)
+def split(extract: RawText) -> Claims:
     """Split raw text into individual claims by sentence."""
-    sentences = [s.strip() for s in input_data.text.split(".") if s.strip()]
+    sentences = [s.strip() for s in extract.text.split(".") if s.strip()]
     return Claims(items=sentences)
 
-def classify_claims(input_data, config):
+
+@node(output=ClassifiedClaims)
+def classify(split: Claims) -> ClassifiedClaims:
     """Classify each claim by category based on keywords."""
     classified = []
-    for claim in input_data.items:
-        if "access" in claim.lower() or "validate" in claim.lower():
-            category = "security"
-        else:
-            category = "general"
+    for claim in split.items:
+        category = "security" if "access" in claim.lower() or "validate" in claim.lower() else "general"
         classified.append({"claim": claim, "category": category})
     return ClassifiedClaims(classified=classified)
 
 
-# -- Register functions -----------------------------------------------------
-# NeoGraph looks up scripted functions by name at compile time.
-# The name you pass here must match the fn= argument on Node.scripted().
-
-register_scripted("extract_text", extract_text)
-register_scripted("split_claims", split_claims)
-register_scripted("classify_claims", classify_claims)
-
-
 # -- Build pipeline ---------------------------------------------------------
-# Node.scripted() creates a deterministic node. The input= and output=
-# parameters declare the typed contract. The first node has no input
-# (it receives None). Each subsequent node declares the type it consumes.
 
-extract = Node.scripted("extract", fn="extract_text", output=RawText)
-split = Node.scripted("split", fn="split_claims", input=RawText, output=Claims)
-classify = Node.scripted("classify", fn="classify_claims", input=Claims, output=ClassifiedClaims)
-
-pipeline = Construct("doc-processor", nodes=[extract, split, classify])
+pipeline = construct_from_module(sys.modules[__name__], name="doc-processor")
 
 
 # -- Run --------------------------------------------------------------------
@@ -114,31 +155,27 @@ Claims found: 2
   [security] The system shall validate input
 ```
 
-## How typed state flow works
+## How parameter-name wiring works
 
-NeoGraph auto-generates a Pydantic state model from the union of all node I/O types. For this pipeline the generated state looks like:
+The `@node` decorator inspects each function's signature. Parameters whose type annotation matches a Pydantic model produced by another node are resolved as dependencies:
 
-```python
-class DocProcessorState(BaseModel):
-    node_id: str
-    extract: RawText | None = None
-    split: Claims | None = None
-    classify: ClassifiedClaims | None = None
-```
+1. `extract()` -- no parameters, so it runs first (root node)
+2. `split(extract: RawText)` -- parameter named `extract` resolves to the `extract` node's output
+3. `classify(split: Claims)` -- parameter named `split` resolves to the `split` node's output
 
-Each node writes to its own field. The next node reads from state by matching the declared `input` type. You never write state-wiring code -- the compiler handles it.
+Fan-in is just more parameters: `def report(claims: Claims, scores: Scores, verified: Verified)` depends on three upstream nodes.
 
-The flow:
+## Mode inference
 
-1. `extract` runs, writes `RawText` to `state.extract`
-2. `split` declares `input=RawText`, framework finds `state.extract`, passes it as `input_data`
-3. `classify` declares `input=Claims`, framework finds `state.split`, passes it as `input_data`
-
-If a type mismatch occurs (no field in state matches the declared input type), the node receives `None`.
+Neither `prompt=` nor `model=` is set on any of these nodes. The function body is present. NeoGraph infers `mode="scripted"` -- pure Python, no LLM. If you add `prompt=` and `model=`, the body becomes unused and the LLM handles execution.
 
 ## Key points
 
 - **No LLM required.** Scripted nodes are pure Python. Use them for parsing, formatting, validation, or any deterministic logic.
 - **Type safety at the boundary.** Pydantic validates every input and output. If your function returns the wrong shape, you get an error at runtime, not a silent corruption downstream.
-- **Nodes are ordered by list position.** The `nodes=` list in `Construct` determines execution order. No manual edge wiring.
-- **Field names come from node names.** A node named `"classify"` writes to `state.classify`. Hyphens become underscores: `"check-results"` becomes `state.check_results`.
+- **No explicit edges.** Parameter names are edges. The compiler infers topology from function signatures.
+- **No node list.** `construct_from_module` discovers `@node`-decorated functions automatically and topologically sorts them.
+
+---
+
+Documentation &copy; 2025-2026 Constantine Mirin, [mirin.pro](https://mirin.pro). Licensed under [CC BY-ND 4.0](https://creativecommons.org/licenses/by-nd/4.0/).

@@ -1,23 +1,21 @@
 ---
 title: Why Not Just LangGraph?
-description: Pattern-by-pattern comparison between raw LangGraph and NeoGraph, with line counts and code examples.
+description: Pattern-by-pattern comparison between raw LangGraph and NeoGraph. Define logic, not wiring.
 ---
 
-LangGraph is the runtime. NeoGraph is a compiler that targets it. The question is not "LangGraph or NeoGraph" -- it is "do you want to write the wiring by hand, or declare what you mean and let the compiler generate it?"
+LangGraph is the runtime. NeoGraph is a compiler that targets it. The question is not "LangGraph or NeoGraph" -- it is "do you want to write the wiring by hand, or define what you mean and let the compiler generate it?"
 
-This page compares the five most common LLM pipeline patterns. Every NeoGraph example compiles to a standard LangGraph graph. There is no magic runtime, no custom executor. The difference is authoring ergonomics.
+This page compares the five most common LLM pipeline patterns. Every NeoGraph example compiles to a standard LangGraph graph. There is no magic runtime, no custom executor. The difference is authoring: you define logic, not wiring.
 
 ## Summary
 
-| Pattern | LangGraph | NeoGraph | What NeoGraph eliminates |
-|---------|-----------|----------|--------------------------|
-| Sequential pipeline | ~35 lines | ~8 lines | TypedDict, add_node x3, add_edge x4 |
-| Tool-calling agent | ~40 lines | ~8 lines | Router function, conditional edges, tool loop cycle |
-| Map-reduce (fan-out/fan-in) | ~65 lines | ~15 lines | 2 state schemas, Send boilerplate, Annotated reducer |
-| Human-in-the-loop | ~50 lines | ~12 lines | Interrupt node, Command routing, two-phase invocation |
-| Subgraph composition | ~45 lines | ~12 lines | 2 StateGraphs, 2 TypedDicts, manual state mapping wrapper |
-
-Line counts are for the wiring and plumbing code only, excluding shared schemas and LLM setup.
+| Pattern | What NeoGraph eliminates |
+|---------|--------------------------|
+| Sequential pipeline | TypedDict, add_node x N, add_edge x N+1 |
+| Tool-calling agent | Router function, conditional edges, tool loop cycle |
+| Map-reduce (fan-out/fan-in) | 2 state schemas, Send boilerplate, Annotated reducer |
+| Human-in-the-loop | Interrupt node, Command routing, two-phase invocation |
+| Subgraph composition | 2 StateGraphs, 2 TypedDicts, manual state mapping wrapper |
 
 ## Pattern 1: Sequential Pipeline
 
@@ -66,18 +64,24 @@ The `TypedDict` must list every field. Every node is added individually. Every e
 ### NeoGraph
 
 ```python
-from neograph import Construct, Node, compile, run
+import sys
+from neograph import node, construct_from_module, compile, run
 
-decompose = Node(name="decompose", mode="produce", output=Claims, model="fast", prompt="decompose")
-classify  = Node(name="classify",  mode="produce", input=Claims, output=ClassifiedClaims, model="fast", prompt="classify")
-summarize = Node(name="summarize", mode="produce", input=ClassifiedClaims, output=Summary, model="fast", prompt="summarize")
+@node(output=Claims, prompt='decompose', model='fast')
+def decompose() -> Claims: ...
 
-pipeline = Construct("analysis", nodes=[decompose, classify, summarize])
+@node(output=ClassifiedClaims, prompt='classify', model='fast')
+def classify(decompose: Claims) -> ClassifiedClaims: ...
+
+@node(output=Summary, prompt='summarize', model='fast')
+def summarize(classify: ClassifiedClaims) -> Summary: ...
+
+pipeline = construct_from_module(sys.modules[__name__])
 graph = compile(pipeline)
-result = run(graph, input={"node_id": "demo", "topic": "microservice authentication"})
+result = run(graph, input={'topic': 'microservice authentication'})
 ```
 
-No TypedDict. No add_node. No add_edge. The compiler infers the state from the Node type annotations and wires edges from the Construct's list order.
+No TypedDict. No add_node. No add_edge. The parameter name `decompose` in `classify(decompose: Claims)` IS the edge. The compiler infers the state schema from type annotations and wires edges from the dependency graph.
 
 ## Pattern 2: Tool-Calling Agent
 
@@ -124,23 +128,20 @@ LangGraph also has no built-in concept of tool budgets. If you want to limit how
 ### NeoGraph
 
 ```python
-from neograph import Construct, Node, Tool, compile, run
+import sys
+from neograph import node, construct_from_module, compile, run
+from neograph import Tool
 
-research = Node(
-    name="research",
-    mode="gather",
-    output=ResearchResult,
-    model="fast",
-    prompt="research",
-    tools=[Tool("search_web", budget=3)],
-)
+@node(output=ResearchResult, prompt='research', model='fast',
+      tools=[Tool("search_web", budget=3)])
+def research() -> ResearchResult: ...
 
-pipeline = Construct("research", nodes=[research])
+pipeline = construct_from_module(sys.modules[__name__])
 graph = compile(pipeline)
-result = run(graph, input={"node_id": "demo"})
+result = run(graph, input={'query': 'latest AI research'})
 ```
 
-One Node. `mode="gather"` tells the compiler to generate the full ReAct loop: call LLM, check for tool calls, execute tools, loop back. The `budget=3` on the Tool enforces a hard limit -- after 3 calls, the tool is removed and the LLM is forced to produce a final structured response.
+One `@node` with `tools=`. The compiler infers `gather` mode from the presence of tools and generates the full ReAct loop: call LLM, check for tool calls, execute tools, loop back. The `budget=3` on the Tool enforces a hard limit -- after 3 calls, the tool is removed and the LLM is forced to produce a final structured response.
 
 ## Pattern 3: Map-Reduce (Fan-Out / Fan-In)
 
@@ -198,27 +199,26 @@ This requires two state schemas (parent and per-worker), an `Annotated` reducer 
 ### NeoGraph
 
 ```python
-from neograph import Construct, Node, Oracle, compile, run
+import sys
+from neograph import node, construct_from_module, compile, run
 
-generate = Node(
-    name="jokes",
-    mode="produce",
-    output=Jokes,
-    model="fast",
-    prompt="generate",
-) | Oracle(n=3, merge_prompt="pick-best")
+@node(output=Jokes, prompt='generate', model='fast',
+      ensemble_n=3, merge_prompt='pick-best')
+def generate() -> Jokes: ...
 
-pipeline = Construct("joke-contest", nodes=[generate])
+pipeline = construct_from_module(sys.modules[__name__])
 graph = compile(pipeline)
-result = run(graph, input={"node_id": "demo"})
+result = run(graph, input={'topic': 'programming'})
 ```
 
-`Oracle(n=3, merge_prompt="pick-best")` tells the compiler to: (1) fan out 3 parallel executions of the node via `Send()`, (2) collect results in a deferred barrier, (3) merge with an LLM judge call using the `"pick-best"` prompt template. One pipe operator replaces the two-schema, reducer, Send, conditional-edges setup.
+`ensemble_n=3` with `merge_prompt='pick-best'` tells the compiler to: (1) fan out 3 parallel executions of the node via `Send()`, (2) collect results in a deferred barrier, (3) merge with an LLM judge call using the `"pick-best"` prompt template. One keyword argument replaces the two-schema, reducer, Send, conditional-edges setup.
 
 For scripted merging instead of LLM judging, use `merge_fn` instead of `merge_prompt`:
 
 ```python
-node | Oracle(n=3, merge_fn="combine_variants")
+@node(output=Claims, prompt='decompose', model='reason',
+      ensemble_n=3, merge_fn='combine_variants')
+def decompose() -> Claims: ...
 ```
 
 ## Pattern 4: Human-in-the-Loop
@@ -281,32 +281,30 @@ You need a dedicated `review_gate` node just for the interrupt, a separate `rout
 ### NeoGraph
 
 ```python
-from langgraph.checkpoint.memory import MemorySaver
-from neograph import Construct, Node, Operator, compile, register_condition, run
+import sys
+from neograph import node, construct_from_module, compile, run
 
-register_condition("low_confidence", lambda state: (
-    {"message": f"Confidence {state.analyze.confidence:.0%} is low. Approve?"}
-    if state.analyze and state.analyze.confidence < 0.8
-    else None
-))
+@node(output=Analysis, prompt='analyze', model='fast',
+      interrupt_when=lambda s: (
+          {"message": f"Confidence {s.analyze.confidence:.0%} is low. Approve?"}
+          if s.analyze and s.analyze.confidence < 0.8
+          else None
+      ))
+def analyze() -> Analysis: ...
 
-analyze = Node(name="analyze", mode="produce", output=Analysis, model="fast", prompt="analyze")
-report  = Node(name="report",  mode="produce", input=Analysis, output=Report, model="fast", prompt="report")
+@node(output=Report, prompt='report', model='fast')
+def report(analyze: Analysis) -> Report: ...
 
-pipeline = Construct("review", nodes=[
-    analyze | Operator(when="low_confidence"),
-    report,
-])
-
+pipeline = construct_from_module(sys.modules[__name__])
 graph = compile(pipeline, checkpointer=MemorySaver())
 config = {"configurable": {"thread_id": "demo"}}
-result = run(graph, input={"node_id": "demo"}, config=config)
+result = run(graph, input={"topic": "microservice auth"}, config=config)
 
 # If interrupted, resume:
 # result = run(graph, resume={"approved": True}, config=config)
 ```
 
-`Operator(when="low_confidence")` tells the compiler to insert a check node after `analyze`. If `low_confidence` returns a truthy value, the graph interrupts. No dedicated gate node, no Command routing, no separate router function.
+`interrupt_when=` tells the compiler to insert a check node after `analyze`. If the lambda returns a truthy value, the graph interrupts. No dedicated gate node, no Command routing, no separate router function.
 
 ## Pattern 5: Subgraph Composition
 
@@ -372,8 +370,11 @@ Two `TypedDict` schemas, two `StateGraph` builds, two `compile()` calls, and a m
 ### NeoGraph
 
 ```python
-from neograph import Construct, Node, compile, run
+import sys
+from neograph import node, construct_from_module, compile, run
+from neograph import Construct, Node
 
+# Sub-construct with isolated state boundary
 enrich = Construct(
     "enrich",
     input=Claims,
@@ -381,17 +382,19 @@ enrich = Construct(
     nodes=[Node(name="score", mode="produce", input=Claims, output=ScoredClaims, model="fast", prompt="score")],
 )
 
-pipeline = Construct("analysis", nodes=[
-    Node(name="decompose", mode="produce", output=Claims, model="fast", prompt="decompose"),
-    enrich,
-    Node(name="report", mode="produce", input=ScoredClaims, output=Report, model="fast", prompt="report"),
-])
+@node(output=Claims, prompt='decompose', model='fast')
+def decompose() -> Claims: ...
 
+@node(output=Report, prompt='report', model='fast')
+def report(enrich: ScoredClaims) -> Report: ...
+
+# Mix @node functions with programmatic sub-constructs
+pipeline = Construct("analysis", nodes=[decompose, enrich, report])
 graph = compile(pipeline)
-result = run(graph, input={"node_id": "demo"})
+result = run(graph, input={'topic': 'microservice auth'})
 ```
 
-A Construct with `input`/`output` types becomes an isolated subgraph automatically. No wrapper function, no manual state mapping, no second StateGraph. The compiler handles the state boundary and type routing.
+A Construct with `input`/`output` types becomes an isolated subgraph automatically. No wrapper function, no manual state mapping, no second StateGraph. The compiler handles the state boundary and type routing. `@node` functions and programmatic sub-constructs compose freely.
 
 ## What You Keep
 
@@ -404,3 +407,7 @@ NeoGraph compiles to LangGraph. Everything LangGraph provides at runtime still w
 - **Callbacks** -- Langfuse, LangSmith, or any LangChain callback handler flows through via `config`
 
 NeoGraph removes the repetitive authoring. It does not change the runtime.
+
+---
+
+Documentation &copy; 2025-2026 Constantine Mirin, [mirin.pro](https://mirin.pro). Licensed under [CC BY-ND 4.0](https://creativecommons.org/licenses/by-nd/4.0/).

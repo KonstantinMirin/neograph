@@ -1,27 +1,25 @@
 ---
 title: "NeoGraph vs LangGraph"
-description: "Side-by-side comparison of five common patterns: same LangGraph underneath, less ceremony on top."
+description: "Side-by-side: five common pipeline patterns in raw LangGraph vs NeoGraph @node."
 ---
 
-NeoGraph compiles down to LangGraph. The runtime is identical -- same `StateGraph`, same `Send`, same `interrupt`, same checkpointer. The difference is how much wiring code you write to get there.
+NeoGraph compiles down to LangGraph. The runtime is identical — same `StateGraph`, same `Send`, same `interrupt`, same checkpointer. The difference is how much wiring you write to get there.
 
-These comparisons use the same task in both approaches. Line counts are approximate and exclude shared code (schemas, LLM setup).
+These comparisons use the same task in both approaches. Focus on the contrast between **declaring the logic** (NeoGraph) and **wiring the plumbing** (LangGraph).
 
-## Summary
+## What NeoGraph eliminates
 
-| Pattern | LangGraph | NeoGraph | Reduction |
-|---------|-----------|----------|-----------|
-| Sequential pipeline | ~35 lines | ~10 lines | 71% |
-| Tool-calling agent | ~40 lines | ~8 lines | 80% |
-| Map-reduce / fan-out | ~65 lines | ~15 lines | 77% |
-| Human-in-the-loop | ~50 lines | ~12 lines | 76% |
-| Subgraph composition | ~45 lines | ~12 lines | 73% |
+| You don't write | Because NeoGraph |
+|-----------------|-------------------|
+| `TypedDict` state schema | Infers the schema from your node output types |
+| `add_node` / `add_edge` calls | Reads dependencies from parameter names |
+| State dict reads and writes | Passes typed values directly to your functions |
+| Router functions for branches | Compiles Python `if` to conditional edges |
+| Fan-out scaffolding with `Send` | Compiles `@node(map_over=...)` to the same IR |
+| Oracle ensemble plumbing | Compiles `@node(ensemble_n=3, merge_fn=...)` to fan-out + barrier + merge |
+| Condition registries for interrupts | Accepts inline lambdas via `interrupt_when=` |
 
----
-
-## 1. Sequential Pipeline
-
-Three LLM steps in order: decompose, classify, summarize.
+## Pattern 1: Sequential pipeline
 
 ### LangGraph
 
@@ -33,354 +31,218 @@ class PipelineState(TypedDict):
     topic: str
     claims: Claims | None
     classified: ClassifiedClaims | None
-    summary: Summary | None
 
 def decompose(state: PipelineState):
     result = llm.with_structured_output(Claims).invoke(
-        f"Break this topic into 3-5 factual claims: {state['topic']}")
+        f"Break this into claims: {state['topic']}")
     return {"claims": result}
 
 def classify(state: PipelineState):
     result = llm.with_structured_output(ClassifiedClaims).invoke(
-        f"Classify each claim: {state['claims']}")
+        f"Classify: {state['claims']}")
     return {"classified": result}
-
-def summarize(state: PipelineState):
-    result = llm.with_structured_output(Summary).invoke(
-        f"Summarize: {state['classified']}")
-    return {"summary": result}
 
 graph = StateGraph(PipelineState)
 graph.add_node("decompose", decompose)
 graph.add_node("classify", classify)
-graph.add_node("summarize", summarize)
 graph.add_edge(START, "decompose")
 graph.add_edge("decompose", "classify")
-graph.add_edge("classify", "summarize")
-graph.add_edge("summarize", END)
+graph.add_edge("classify", END)
 app = graph.compile()
-
-result = app.invoke({"topic": "microservice authentication"})
 ```
-
-Every sequential pipeline has the same shape: define `TypedDict`, write N node functions that read/write state dicts, call `add_node` N times, call `add_edge` N+1 times. The structure is identical every time -- only the business logic changes.
 
 ### NeoGraph
 
 ```python
-from neograph import Construct, Node, compile, run
+import sys
+from neograph import node, construct_from_module, compile
 
-decompose = Node(name="decompose", mode="produce", output=Claims,
-                 model="fast", prompt="decompose")
-classify = Node(name="classify", mode="produce", input=Claims,
-                output=ClassifiedClaims, model="fast", prompt="classify")
-summarize = Node(name="summarize", mode="produce", input=ClassifiedClaims,
-                 output=Summary, model="fast", prompt="summarize")
+@node(output=Claims, prompt='decompose', model='fast')
+def decompose(topic: FromInput[str]) -> Claims: ...
 
-pipeline = Construct("analysis", nodes=[decompose, classify, summarize])
-graph = compile(pipeline)
-result = run(graph, input={"node_id": "demo", "topic": "microservice authentication"})
+@node(output=ClassifiedClaims, prompt='classify', model='fast')
+def classify(decompose: Claims) -> ClassifiedClaims: ...
+
+graph = compile(construct_from_module(sys.modules[__name__]))
 ```
 
-No `TypedDict`. No `add_node`. No `add_edge`. No `START`/`END`. State model is generated from the node I/O declarations. Edges are inferred from list order.
+The parameter `decompose` in `classify(decompose: Claims)` IS the edge. No state dict, no `add_node`, no `add_edge`.
 
----
-
-## 2. Tool-Calling Agent
-
-An LLM that calls a search tool in a ReAct loop.
+## Pattern 2: Tool-calling agent
 
 ### LangGraph
 
 ```python
-from typing import Annotated, TypedDict
-from langgraph.graph import END, START, StateGraph
-from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode
+from langgraph.graph import END, START, StateGraph, MessagesState
 
-class AgentState(TypedDict):
-    messages: Annotated[list, add_messages]
+def agent(state: MessagesState):
+    return {"messages": [llm.bind_tools(tools).invoke(state["messages"])]}
 
-tools = [search_web]
-llm_with_tools = base_llm.bind_tools(tools)
-tool_node = ToolNode(tools)
-
-def agent(state: AgentState):
-    return {"messages": [llm_with_tools.invoke(state["messages"])]}
-
-def should_continue(state: AgentState):
+def should_continue(state: MessagesState):
     last = state["messages"][-1]
-    if last.tool_calls:
-        return "tools"
-    return END
+    return "tools" if last.tool_calls else END
 
-graph = StateGraph(AgentState)
+graph = StateGraph(MessagesState)
 graph.add_node("agent", agent)
-graph.add_node("tools", tool_node)
+graph.add_node("tools", ToolNode(tools))
 graph.add_edge(START, "agent")
-graph.add_conditional_edges("agent", should_continue, ["tools", END])
+graph.add_conditional_edges("agent", should_continue)
 graph.add_edge("tools", "agent")
 app = graph.compile()
 ```
 
-The `should_continue` router function, the `ToolNode`, the cycle edge from tools back to agent -- this is identical in every ReAct agent. It also has no budget control: the LLM decides when to stop calling tools.
-
 ### NeoGraph
 
 ```python
-from neograph import Construct, Node, Tool, compile, run
+@node(output=Answer, mode='gather', prompt='research', model='reason',
+      tools=[Tool('search_web', budget=5)])
+def researcher() -> Answer: ...
 
-research = Node(
-    name="research",
-    mode="gather",
-    output=ResearchResult,
-    model="fast",
-    prompt="research",
-    tools=[Tool(name="search_web", budget=3)],
-)
-
-pipeline = Construct("research", nodes=[research])
-graph = compile(pipeline)
-result = run(graph, input={"node_id": "demo"})
+graph = compile(construct_from_module(sys.modules[__name__]))
 ```
 
-One node. `mode="gather"` means ReAct loop. `budget=3` means the tool can be called at most 3 times -- after that, the framework removes it from the LLM's available tools and forces a final response.
+`mode='gather'` is the ReAct tool loop. Budgets are enforced per tool. The LLM config, tool wiring, and termination logic are handled by the framework.
 
----
-
-## 3. Map-Reduce / Fan-Out
-
-Run N parallel workers, then combine results.
+## Pattern 3: Map-reduce fan-out
 
 ### LangGraph
 
 ```python
-import operator
-from typing import Annotated, TypedDict
-from langgraph.graph import END, START, StateGraph
-from langgraph.types import Send
+from langgraph.constants import Send
 
-class OverallState(TypedDict):
-    topic: str
-    subjects: list[str]
-    jokes: Annotated[list[str], operator.add]
-    best_joke: str
+def fan_out(state):
+    return [Send("process", {"item": item}) for item in state["items"]]
 
-class JokeState(TypedDict):
-    subject: str
+def process(state):
+    result = llm.invoke(f"Process {state['item']}")
+    return {"results": [result]}
 
-def generate_subjects(state: OverallState):
-    result = llm.with_structured_output(Jokes).invoke(
-        f"List 3 subtopics of: {state['topic']}")
-    return {"subjects": result.items}
+def reduce(state):
+    return {"summary": summarize(state["results"])}
 
-def generate_joke(state: JokeState):
-    result = llm.invoke(f"Write a joke about {state['subject']}")
-    return {"jokes": [result.content]}
-
-def fan_out_jokes(state: OverallState):
-    return [Send("generate_joke", {"subject": s}) for s in state["subjects"]]
-
-def pick_best(state: OverallState):
-    jokes_str = "\n".join(f"{i}: {j}" for i, j in enumerate(state["jokes"]))
-    result = llm.with_structured_output(BestJoke).invoke(
-        f"Pick the funniest:\n{jokes_str}")
-    return {"best_joke": state["jokes"][result.id]}
-
-graph = StateGraph(OverallState)
-graph.add_node("generate_subjects", generate_subjects)
-graph.add_node("generate_joke", generate_joke)
-graph.add_node("pick_best", pick_best)
-graph.add_edge(START, "generate_subjects")
-graph.add_conditional_edges("generate_subjects", fan_out_jokes, ["generate_joke"])
-graph.add_edge("generate_joke", "pick_best")
-graph.add_edge("pick_best", END)
+graph = StateGraph(State)
+graph.add_node("process", process)
+graph.add_node("reduce", reduce)
+graph.add_conditional_edges(START, fan_out, ["process"])
+graph.add_edge("process", "reduce")
+graph.add_edge("reduce", END)
 app = graph.compile()
 ```
 
-Two `TypedDict` schemas (parent and worker), an `Annotated` reducer, a manual `Send` function, `add_conditional_edges`. All of this is mechanical scaffolding for the fan-out pattern.
-
 ### NeoGraph
 
 ```python
-from neograph import Construct, Node, Oracle, compile, run
+@node(output=Items)
+def source() -> Items: ...
 
-generate = Node(
-    name="jokes",
-    mode="produce",
-    output=Jokes,
-    model="fast",
-    prompt="generate",
-) | Oracle(n=3, merge_prompt="pick-best")
+@node(output=ProcessResult, map_over='source.items', map_key='id')
+def process(item: Item) -> ProcessResult: ...
 
-pipeline = Construct("joke-contest", nodes=[generate])
-graph = compile(pipeline)
-result = run(graph, input={"node_id": "demo"})
+@node(output=Summary)
+def reduce(process: dict[str, ProcessResult]) -> Summary: ...
+
+graph = compile(construct_from_module(sys.modules[__name__]))
 ```
 
-`Oracle(n=3)` handles the fan-out, the barrier, and the merge. No `Send`, no reducer, no second state schema.
+`map_over='source.items'` compiles to `Send` fan-out. Results collect as `dict[str, ProcessResult]` keyed by `map_key`. The validator catches `process: dict[str, ProcessResult]` as the correct downstream shape.
 
----
-
-## 4. Human-in-the-Loop
-
-Pause for human approval, then resume.
+## Pattern 4: Human-in-the-loop
 
 ### LangGraph
 
 ```python
-from langgraph.checkpoint.memory import MemorySaver
-from langgraph.graph import END, START, StateGraph
-from langgraph.types import Command, interrupt
+from langgraph.types import interrupt
 
-class State(TypedDict):
-    topic: str
-    analysis: Analysis | None
-    human_approved: bool
-    report: str
+def validate(state):
+    result = check(state["claims"])
+    if not result.passed:
+        interrupt({"issues": result.issues})
+    return {"validation": result}
 
-def analyze(state: State):
-    result = llm.with_structured_output(Analysis).invoke(
-        f"Analyze '{state['topic']}'.")
-    return {"analysis": result}
-
-def review_gate(state: State):
-    if state["analysis"].confidence < 0.8:
-        decision = interrupt({
-            "message": f"Confidence {state['analysis'].confidence:.0%} is low.",
-            "claims": state["analysis"].claims,
-        })
-        return {"human_approved": decision.get("approved", False)}
-    return {"human_approved": True}
-
-def route_after_review(state: State) -> Command:
-    if state["human_approved"]:
-        return Command(goto="report")
-    return Command(goto=END)
-
-def report(state: State):
-    result = llm.with_structured_output(Report).invoke(
-        f"Report: {state['analysis']}")
-    return {"report": result.text}
-
-memory = MemorySaver()
 graph = StateGraph(State)
-graph.add_node("analyze", analyze)
-graph.add_node("review_gate", review_gate)
-graph.add_node("route", route_after_review)
-graph.add_node("report", report)
-graph.add_edge(START, "analyze")
-graph.add_edge("analyze", "review_gate")
-graph.add_edge("review_gate", "route")
-graph.add_edge("report", END)
-app = graph.compile(checkpointer=memory)
+graph.add_node("validate", validate)
+graph.add_edge(START, "validate")
+graph.add_edge("validate", END)
+app = graph.compile(checkpointer=MemorySaver())
 ```
-
-A dedicated `review_gate` node, a `route_after_review` node with `Command`, manual interrupt/resume wiring, and explicit `human_approved` state management.
 
 ### NeoGraph
 
 ```python
-from langgraph.checkpoint.memory import MemorySaver
-from neograph import Construct, Node, Operator, compile, run
-
-register_condition("low_confidence", lambda state: (
-    {"message": f"Confidence {state.analyze.confidence:.0%} is low."}
-    if state.analyze and state.analyze.confidence < 0.8
-    else None
-))
-
-analyze = Node(name="analyze", mode="produce", output=Analysis,
-               model="fast", prompt="analyze")
-report = Node(name="report", mode="produce", input=Analysis,
-              output=Report, model="fast", prompt="report")
-
-pipeline = Construct("review", nodes=[
-    analyze | Operator(when="low_confidence"),
-    report,
-])
+@node(output=ValidationResult,
+      interrupt_when=lambda s: {'issues': s.validate.issues}
+                               if not s.validate.passed else None)
+def validate(claims: Claims) -> ValidationResult: ...
 
 graph = compile(pipeline, checkpointer=MemorySaver())
 ```
 
-One condition function. One pipe operator. No gate node, no router node, no `Command`.
+The interrupt condition lives co-located with the node it guards. No manual `interrupt()` call inside the node body, no condition registry.
 
----
-
-## 5. Subgraph Composition
-
-A child pipeline with isolated state, nested in a parent.
+## Pattern 5: Subgraph composition
 
 ### LangGraph
 
 ```python
-from langgraph.graph import END, START, StateGraph
+# Build the inner graph
+inner = StateGraph(InnerState)
+inner.add_node("lookup", lookup_fn)
+inner.add_node("score", score_fn)
+inner.add_edge(START, "lookup")
+inner.add_edge("lookup", "score")
+inner.add_edge("score", END)
+inner_compiled = inner.compile()
 
-# Child graph -- separate state schema
-class EnrichState(TypedDict):
-    claims: Claims | None
-    scored: ScoredClaims | None
+# Wrap it in the outer graph
+def call_inner(state):
+    result = inner_compiled.invoke({"claims": state["claims"]})
+    return {"scored": result["score"]}
 
-def enrich_lookup(state: EnrichState):
-    result = llm.with_structured_output(ScoredClaims).invoke(
-        f"Score each claim: {state['claims']}")
-    return {"scored": result}
-
-child_graph = StateGraph(EnrichState)
-child_graph.add_node("lookup", enrich_lookup)
-child_graph.add_edge(START, "lookup")
-child_graph.add_edge("lookup", END)
-child = child_graph.compile()
-
-# Parent graph -- different state schema
-class ParentState(TypedDict):
-    topic: str
-    claims: Claims | None
-    enriched: ScoredClaims | None
-    report: str
-
-# Manual state mapping wrapper
-def enrich_wrapper(state: ParentState):
-    child_result = child.invoke({"claims": state["claims"]})
-    return {"enriched": child_result["scored"]}
-
-# ... decompose, report nodes, full wiring ...
+outer = StateGraph(OuterState)
+outer.add_node("decompose", decompose)
+outer.add_node("enrich", call_inner)
+outer.add_edge(START, "decompose")
+outer.add_edge("decompose", "enrich")
+outer.add_edge("enrich", END)
+app = outer.compile()
 ```
-
-Two `TypedDict` schemas, two `StateGraph` instances, a manual wrapper function that maps parent state to child state and back. The wrapper is boilerplate that exists solely because state schemas differ.
 
 ### NeoGraph
 
 ```python
-from neograph import Construct, Node, compile, run
-
+# The sub-construct gets its own typed boundary
 enrich = Construct(
     "enrich",
     input=Claims,
     output=ScoredClaims,
-    nodes=[
-        Node(name="score", mode="produce", input=Claims,
-             output=ScoredClaims, model="fast", prompt="score"),
-    ],
+    nodes=[lookup, score],
 )
 
-pipeline = Construct("analysis", nodes=[
-    Node(name="decompose", mode="produce", output=Claims,
-         model="fast", prompt="decompose"),
-    enrich,  # sub-pipeline, isolated state, no wrapper
-    Node(name="report", mode="produce", input=ScoredClaims,
-         output=Report, model="fast", prompt="report"),
-])
+@node(output=Claims, prompt='decompose', model='reason')
+def decompose() -> Claims: ...
 
+# Top-level @node + sub-construct compose into one pipeline
+pipeline = Construct("main", nodes=[decompose, enrich])
 graph = compile(pipeline)
 ```
 
-Declare `input=` and `output=` on the sub-`Construct`. Drop it into the parent's node list. The compiler handles state mapping automatically.
+Sub-constructs are the one place NeoGraph keeps the declarative form — the typed I/O boundary (`input=Claims, output=ScoredClaims`) is meaningful metadata that doesn't map cleanly to function signatures.
+
+## When NeoGraph doesn't help
+
+NeoGraph adds value when your pipeline is **typed, structured, and modular**. It adds less when:
+
+- You need LangGraph features NeoGraph hasn't wrapped yet (custom reducers beyond what `Each`/`Oracle` cover, advanced streaming modes)
+- Your pipeline is one-off glue code where the plumbing IS the logic
+- You're building a library that runs arbitrary user-provided graphs
+
+In those cases, use LangGraph directly. NeoGraph is a standard LangGraph graph underneath — you can always drop down to the raw API. The `Node(mode='raw', ...)` escape hatch exists exactly for this: a function with the standard `(state, config) -> dict` signature runs inside an otherwise @node-decorated pipeline.
+
+## Summary
+
+NeoGraph compiles to LangGraph, so you never lose access to the LangGraph ecosystem. What you gain is a shorter path from "I know what I want the pipeline to do" to "the graph exists and runs correctly". The compiler handles the mechanical wiring; you write the logic.
 
 ---
 
-## The principle
-
-NeoGraph does not replace LangGraph. It generates LangGraph. The five patterns above produce the same `StateGraph`, the same `Send` calls, the same `interrupt` mechanics. The difference is that you declare what you want instead of hand-wiring how to build it.
-
-When NeoGraph's abstractions do not cover your case, use `raw_node` to drop down to a plain LangGraph function. The framework wires edges and state around it; you write the body.
+Documentation © 2025-2026 Constantine Mirin, [mirin.pro](https://mirin.pro). Licensed under [CC BY-ND 4.0](https://creativecommons.org/licenses/by-nd/4.0/).
