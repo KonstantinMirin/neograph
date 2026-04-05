@@ -11,6 +11,7 @@ from typing import Annotated, Any
 from pydantic import BaseModel, create_model
 
 from neograph.construct import Construct
+from neograph.forward import _BranchNode
 from neograph.modifiers import Oracle, Each
 from neograph.node import Node
 
@@ -53,9 +54,16 @@ def compile_state_model(construct: Construct) -> type[BaseModel]:
 
     nodes_only = [n for n in construct.nodes if isinstance(n, Node)]
     sub_constructs = [n for n in construct.nodes if isinstance(n, Construct)]
+    branch_nodes = [n for n in construct.nodes if isinstance(n, _BranchNode)]
 
     for node in nodes_only:
         _add_output_field(node, fields)
+
+    # Branch arm nodes: add state fields for nodes inside branch arms
+    for branch in branch_nodes:
+        meta = branch._neo_branch_meta
+        for arm_node in meta.true_arm_nodes + meta.false_arm_nodes:
+            _add_output_field(arm_node, fields)
 
     # Sub-constructs: handle modifiers same as nodes
     for sub in sub_constructs:

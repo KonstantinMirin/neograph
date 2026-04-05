@@ -17,18 +17,47 @@ produces, so compile() works unchanged.
 
 Strategy: Symbolic Proxy — see `.claude/spikes/neograph-pub/design.md`.
 
-Straight-line only for v1. Branching (__bool__), looping (__iter__), and
-argument-to-producer wiring are future subtasks.
+Branching support (neograph-w5z):
+    `if` branches in forward() are handled via the **re-trace** strategy
+    (torch.fx pattern). The tracer intercepts Proxy.__bool__ to record
+    branch points, then re-runs forward() with alternate branch decisions
+    to discover both arms. The result is a node list annotated with
+    _BranchMeta that the compiler lowers to add_conditional_edges.
+
+    Design decision: re-trace (not AST inspection). Justification:
+    - Simple, proven (torch.fx does the same thing)
+    - Exponential cost (2^N traces) is acceptable for N <= 8 branches
+    - Avoids AST walking complexity
+    - Each trace is a normal Python execution — no special IR needed
+
+    Limitations (v1):
+    - Only comparisons against constants are supported (proxy.attr < 0.7)
+    - Arbitrary expressions in conditions are deferred
+    - Max 8 branches per forward() (raises ValueError beyond that)
 """
 
 from __future__ import annotations
 
+import dataclasses
+import operator as op_module
 from typing import Any
 
 from neograph.construct import Construct
 from neograph.node import Node
 
 __all__ = ["ForwardConstruct"]
+
+# Map comparison operator strings to callables for runtime evaluation
+_OP_MAP = {
+    "<": op_module.lt,
+    "<=": op_module.le,
+    ">": op_module.gt,
+    ">=": op_module.ge,
+    "==": op_module.eq,
+    "!=": op_module.ne,
+}
+
+_MAX_BRANCHES = 8
 
 
 class ForwardConstruct(Construct):
@@ -120,34 +149,207 @@ class ForwardConstruct(Construct):
 class _Proxy:
     """A stand-in for a real value during forward() tracing.
 
-    Carries the Node that produced it (or None for the initial input). For
-    the straight-line MVP, proxies only need to flow through calls — deeper
-    interception (__bool__, __getattr__, __iter__) lands with branching and
-    looping subtasks.
+    Carries the Node that produced it (or None for the initial input).
+    Supports attribute access (returns child proxies), comparison operators
+    (returns _ConditionProxy), and __bool__ (delegates to tracer for branch
+    recording).
     """
 
-    __slots__ = ("_neo_source", "_neo_name")
+    __slots__ = ("_neo_source", "_neo_name", "_neo_tracer")
 
-    def __init__(self, source_node: Node | None, name: str) -> None:
+    def __init__(
+        self,
+        source_node: Node | None,
+        name: str,
+        tracer: _Tracer | None = None,
+    ) -> None:
         self._neo_source = source_node
         self._neo_name = name
+        self._neo_tracer = tracer
+
+    def __getattr__(self, name: str) -> Any:
+        if name.startswith("_neo_"):
+            raise AttributeError(name)
+        # Return a child proxy for attribute access (e.g., classified.confidence)
+        return _Proxy(self._neo_source, f"{self._neo_name}.{name}", self._neo_tracer)
+
+    def __lt__(self, other: Any) -> _ConditionProxy:
+        return _ConditionProxy(self, "<", other)
+
+    def __le__(self, other: Any) -> _ConditionProxy:
+        return _ConditionProxy(self, "<=", other)
+
+    def __gt__(self, other: Any) -> _ConditionProxy:
+        return _ConditionProxy(self, ">", other)
+
+    def __ge__(self, other: Any) -> _ConditionProxy:
+        return _ConditionProxy(self, ">=", other)
+
+    def __eq__(self, other: Any) -> _ConditionProxy:
+        return _ConditionProxy(self, "==", other)
+
+    def __ne__(self, other: Any) -> _ConditionProxy:
+        return _ConditionProxy(self, "!=", other)
+
+    def __hash__(self) -> int:
+        # Required because we defined __eq__
+        return id(self)
+
+    def __bool__(self) -> bool:
+        tracer = self._neo_tracer
+        if tracer is None:
+            raise TypeError(
+                "Cannot use proxy in boolean context outside tracing"
+            )
+        return tracer.record_branch(self)
 
     def __repr__(self) -> str:
         src = self._neo_source.name if self._neo_source else "<input>"
         return f"_Proxy(from={src}, name={self._neo_name})"
 
 
+class _ConditionProxy:
+    """Records a comparison for branch lowering.
+
+    Created by _Proxy comparison operators (e.g., proxy.score < 0.7).
+    When used in a boolean context (if statement), delegates to the
+    tracer to record the branch point.
+    """
+
+    __slots__ = ("_left", "_op", "_right", "_neo_tracer")
+
+    def __init__(self, left: _Proxy, op: str, right: Any) -> None:
+        self._left = left
+        self._op = op
+        self._right = right
+        self._neo_tracer = getattr(left, "_neo_tracer", None)
+
+    def __bool__(self) -> bool:
+        tracer = self._neo_tracer
+        if tracer is None:
+            raise TypeError(
+                "Cannot use condition in boolean context outside tracing"
+            )
+        return tracer.record_branch(self)
+
+    def _build_runtime_condition(self) -> Any:
+        """Build a callable that evaluates this condition against live state.
+
+        Parses the attribute path on the left-hand proxy to determine which
+        state field + attribute chain to read at runtime.
+
+        Example: _Proxy(from=check, name="out_of_check.score") > 0.5
+        becomes: lambda state: getattr(state, "br_check").score > 0.5
+
+        Returns (source_node, attr_chain, op_fn, threshold) tuple that
+        the compiler uses to build the router function.
+        """
+        left = self._left
+        op_fn = _OP_MAP[self._op]
+        threshold = self._right
+
+        # Parse the proxy name to extract state field + attribute chain
+        # e.g., "out_of_br-check.score" → source "br-check", attrs ["score"]
+        source_node = left._neo_source
+        full_name = left._neo_name
+
+        # Extract attribute chain after the proxy name prefix
+        # The prefix is "out_of_<node_name>" for node outputs
+        if source_node is not None:
+            prefix = f"out_of_{source_node.name}"
+            if full_name.startswith(prefix):
+                remainder = full_name[len(prefix):]
+                # remainder is like ".score" or ".items.first.severity"
+                attr_chain = [p for p in remainder.split(".") if p]
+            else:
+                attr_chain = []
+        else:
+            attr_chain = []
+
+        return _ConditionSpec(
+            source_node=source_node,
+            attr_chain=attr_chain,
+            op_fn=op_fn,
+            op_str=self._op,
+            threshold=threshold,
+        )
+
+
+@dataclasses.dataclass(frozen=True)
+class _ConditionSpec:
+    """Parsed condition specification for compiler lowering."""
+    source_node: Node | None
+    attr_chain: list[str]
+    op_fn: Any  # operator callable
+    op_str: str  # e.g., "<", ">"
+    threshold: Any  # right-hand side constant
+
+
+@dataclasses.dataclass
+class _BranchPoint:
+    """A recorded branch point during tracing."""
+    branch_id: int
+    condition: _ConditionProxy | _Proxy
+    decision: bool
+
+
+@dataclasses.dataclass
+class _BranchTrace:
+    """Result of tracing both arms of a branch."""
+    branch: _BranchPoint
+    true_nodes: list[Node]
+    false_nodes: list[Node]
+
+
+@dataclasses.dataclass
+class _BranchMeta:
+    """Branch metadata attached to the node list for compiler consumption.
+
+    This is stored on a sentinel _BranchNode that the compiler recognizes
+    and lowers to add_conditional_edges.
+    """
+    condition_spec: _ConditionSpec
+    # Nodes that only appear in the true arm
+    true_arm_nodes: list[Node]
+    # Nodes that only appear in the false arm
+    false_arm_nodes: list[Node]
+
+
+class _BranchNode:
+    """Sentinel that carries _BranchMeta in the node list.
+
+    The compiler checks for this type and wires conditional edges instead
+    of adding a regular node. It carries a synthetic name for graph wiring.
+    """
+
+    def __init__(self, branch_meta: _BranchMeta, branch_id: int) -> None:
+        self._neo_branch_meta = branch_meta
+        self.name = f"__branch_{branch_id}"
+        # Satisfy Construct validation: pretend to be a Node-like
+        self.modifiers = []
+        self.output = None
+
+    def has_modifier(self, mod_type: type) -> bool:
+        return False
+
+    def get_modifier(self, mod_type: type) -> None:
+        return None
+
+
 class _Tracer:
     """Collects node invocations during a single forward() trace run.
 
     Deduplicates by identity (id(node)): repeated calls to the same Node
-    instance collapse into one entry. Loop unrolling is a future subtask —
-    for the straight-line MVP this is the correct behavior.
+    instance collapse into one entry. Supports branch recording for if/else
+    tracing via the re-trace strategy.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, branch_decisions: dict[int, bool] | None = None) -> None:
         self._ordered: list[Node] = []
         self._seen: set[int] = set()
+        self._branches: list[_BranchPoint] = []
+        self._branch_decisions = branch_decisions or {}
+        self._next_branch_id = 0
 
     def record(self, node: Node) -> None:
         key = id(node)
@@ -156,9 +358,43 @@ class _Tracer:
         self._seen.add(key)
         self._ordered.append(node)
 
+    def record_branch(self, condition: _ConditionProxy | _Proxy) -> bool:
+        """Record a branch point and return the decision for this trace pass.
+
+        Default decision is True (take the true arm). Pre-configured
+        decisions in self._branch_decisions override this.
+
+        Raises ValueError if more than _MAX_BRANCHES branches are encountered.
+        """
+        branch_id = self._next_branch_id
+        if branch_id >= _MAX_BRANCHES:
+            msg = (
+                f"Too many branches in forward(): {branch_id + 1} exceeds "
+                f"the limit of {_MAX_BRANCHES}. Simplify your forward() or "
+                "extract sub-pipelines."
+            )
+            raise ValueError(msg)
+        self._next_branch_id += 1
+
+        if branch_id in self._branch_decisions:
+            decision = self._branch_decisions[branch_id]
+        else:
+            decision = True
+
+        self._branches.append(_BranchPoint(
+            branch_id=branch_id,
+            condition=condition,
+            decision=decision,
+        ))
+        return decision
+
     @property
     def nodes(self) -> list[Node]:
         return list(self._ordered)
+
+    @property
+    def branches(self) -> list[_BranchPoint]:
+        return list(self._branches)
 
 
 class _NodeCall:
@@ -172,7 +408,11 @@ class _NodeCall:
 
     def __call__(self, *args: Any, **kwargs: Any) -> _Proxy:
         self._tracer.record(self._node)
-        return _Proxy(source_node=self._node, name=f"out_of_{self._node.name}")
+        return _Proxy(
+            source_node=self._node,
+            name=f"out_of_{self._node.name}",
+            tracer=self._tracer,
+        )
 
 
 class _ForwardSelf:
@@ -206,22 +446,208 @@ class _ForwardSelf:
         setattr(real, name, value)
 
 
+def _run_trace(
+    instance: ForwardConstruct,
+    node_attrs: dict[str, Node],
+    branch_decisions: dict[int, bool] | None = None,
+) -> tuple[_Tracer, list[Node]]:
+    """Run a single trace pass of forward() and return (tracer, nodes)."""
+    tracer = _Tracer(branch_decisions=branch_decisions)
+    shim = _ForwardSelf(node_attrs, tracer, real_self=instance)
+    seed = _Proxy(source_node=None, name="forward_input", tracer=tracer)
+    type(instance).forward(shim, seed)
+    return tracer, tracer.nodes
+
+
 def _trace_forward(
     instance: ForwardConstruct,
     node_attrs: dict[str, Node],
 ) -> list[Node]:
     """Trace forward() to discover node call order.
 
-    Builds a _ForwardSelf shim, invokes forward() with a seed _Proxy,
-    and returns the nodes in the order they were called.
+    For straight-line pipelines (no if/else), returns nodes in call order.
+
+    For branching pipelines, uses the re-trace strategy:
+    1. First trace: all branches take True arm → discover true-arm nodes
+    2. For each branch: re-trace with that branch flipped to False
+    3. Diff traces to identify true-only and false-only nodes
+    4. Build _BranchNode sentinels that the compiler lowers to conditional edges
     """
-    tracer = _Tracer()
-    shim = _ForwardSelf(node_attrs, tracer, real_self=instance)
+    # Pass 1: all branches True (default)
+    true_tracer, true_nodes = _run_trace(instance, node_attrs)
+    branches = true_tracer.branches
 
-    # Seed the call with a single proxy input
-    seed = _Proxy(source_node=None, name="forward_input")
+    if not branches:
+        # Straight-line pipeline — no branches, return as-is
+        return true_nodes
 
-    # Unbound call: shim plays self
-    type(instance).forward(shim, seed)
+    # Re-trace for each branch with that branch flipped to False
+    branch_traces: list[_BranchTrace] = []
+    for branch in branches:
+        false_tracer, false_nodes = _run_trace(
+            instance, node_attrs,
+            branch_decisions={branch.branch_id: False},
+        )
+        branch_traces.append(_BranchTrace(
+            branch=branch,
+            true_nodes=true_nodes,
+            false_nodes=false_nodes,
+        ))
 
-    return tracer.nodes
+    return _merge_branch_traces(true_nodes, branch_traces, branches)
+
+
+def _merge_branch_traces(
+    true_nodes: list[Node],
+    branch_traces: list[_BranchTrace],
+    branches: list[_BranchPoint],
+) -> list:
+    """Merge true and false trace results into a node list with branch metadata.
+
+    For each branch, identifies:
+    - Shared prefix: nodes that appear in both traces (before the divergence)
+    - True-only nodes: nodes unique to the true arm
+    - False-only nodes: nodes unique to the false arm
+    - Shared suffix: nodes that appear in both traces (after the convergence)
+
+    Returns a flat list containing Node instances for shared nodes and
+    _BranchNode sentinels for branches. The compiler recognizes _BranchNode
+    and emits conditional edges.
+    """
+    if len(branch_traces) == 1:
+        return _merge_single_branch(
+            branch_traces[0], branches[0],
+        )
+
+    # Multiple sequential branches: merge one at a time
+    # Each branch splits the linear flow; we process them in order
+    return _merge_sequential_branches(branch_traces, branches)
+
+
+def _merge_single_branch(
+    trace: _BranchTrace,
+    branch: _BranchPoint,
+) -> list:
+    """Merge a single branch into a node list with a _BranchNode sentinel."""
+    true_names = [n.name for n in trace.true_nodes]
+    false_names = [n.name for n in trace.false_nodes]
+
+    true_set = set(true_names)
+    false_set = set(false_names)
+
+    # Find shared prefix (nodes before the branch point)
+    shared_prefix = []
+    for node in trace.true_nodes:
+        if node.name in false_set:
+            shared_prefix.append(node)
+        else:
+            break
+
+    prefix_names = {n.name for n in shared_prefix}
+
+    # True-only and false-only nodes
+    true_only = [n for n in trace.true_nodes if n.name not in false_set]
+    false_only = [n for n in trace.false_nodes if n.name not in true_set]
+
+    # Build condition spec from the branch's condition
+    condition = branch.condition
+    if isinstance(condition, _ConditionProxy):
+        cond_spec = condition._build_runtime_condition()
+    else:
+        # Plain proxy used as bool — less common, create a truthy-check spec
+        cond_spec = _ConditionSpec(
+            source_node=condition._neo_source,
+            attr_chain=[],
+            op_fn=op_module.truth,
+            op_str="truthy",
+            threshold=None,
+        )
+
+    branch_meta = _BranchMeta(
+        condition_spec=cond_spec,
+        true_arm_nodes=true_only,
+        false_arm_nodes=false_only,
+    )
+
+    # Shared suffix: nodes in both traces that aren't in prefix or branch arms
+    branch_arm_names = {n.name for n in true_only} | {n.name for n in false_only}
+    shared_suffix = [
+        n for n in trace.true_nodes
+        if n.name not in prefix_names and n.name not in branch_arm_names
+    ]
+
+    # Build the result: prefix + branch sentinel + suffix
+    result: list = list(shared_prefix)
+    result.append(_BranchNode(branch_meta, branch.branch_id))
+    result.extend(shared_suffix)
+    return result
+
+
+def _merge_sequential_branches(
+    branch_traces: list[_BranchTrace],
+    branches: list[_BranchPoint],
+) -> list:
+    """Merge multiple sequential branches.
+
+    For sequential branches (not nested), each branch adds a _BranchNode
+    sentinel at the appropriate position in the node list.
+    """
+    # Use the first (all-true) trace as the base ordering
+    base_nodes = branch_traces[0].true_nodes
+
+    # For each branch, compute its true-only and false-only nodes
+    result: list = []
+    processed_names: set[str] = set()
+
+    for i, (trace, branch) in enumerate(zip(branch_traces, branches)):
+        true_names = {n.name for n in trace.true_nodes}
+        false_names = {n.name for n in trace.false_nodes}
+
+        # True-only nodes for this branch
+        true_only = [n for n in trace.true_nodes if n.name not in false_names]
+        false_only = [n for n in trace.false_nodes if n.name not in true_names]
+
+        # Build condition spec
+        condition = branch.condition
+        if isinstance(condition, _ConditionProxy):
+            cond_spec = condition._build_runtime_condition()
+        else:
+            cond_spec = _ConditionSpec(
+                source_node=condition._neo_source,
+                attr_chain=[],
+                op_fn=op_module.truth,
+                op_str="truthy",
+                threshold=None,
+            )
+
+        branch_meta = _BranchMeta(
+            condition_spec=cond_spec,
+            true_arm_nodes=true_only,
+            false_arm_nodes=false_only,
+        )
+
+        # Add shared nodes before this branch's divergence point
+        for node in base_nodes:
+            if node.name in processed_names:
+                continue
+            if node.name in {n.name for n in true_only}:
+                # Hit the divergence — insert branch sentinel
+                result.append(_BranchNode(branch_meta, branch.branch_id))
+                processed_names.update(n.name for n in true_only)
+                processed_names.update(n.name for n in false_only)
+                break
+            result.append(node)
+            processed_names.add(node.name)
+        else:
+            # Branch divergence not found in remaining base nodes — append sentinel
+            result.append(_BranchNode(branch_meta, branch.branch_id))
+            processed_names.update(n.name for n in true_only)
+            processed_names.update(n.name for n in false_only)
+
+    # Add any remaining shared nodes from the base
+    for node in base_nodes:
+        if node.name not in processed_names:
+            result.append(node)
+            processed_names.add(node.name)
+
+    return result

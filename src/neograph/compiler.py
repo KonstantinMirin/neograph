@@ -23,6 +23,7 @@ from neograph.factory import (
     make_oracle_redirect_fn,
     make_subgraph_fn,
 )
+from neograph.forward import _BranchNode
 from neograph.modifiers import Each, Operator, Oracle, split_each_path
 from neograph.node import Node
 from neograph.state import compile_state_model
@@ -66,7 +67,9 @@ def compile(construct: Construct, checkpointer: Any = None) -> Any:
     prev_node: str | None = None
 
     for item in construct.nodes:
-        if isinstance(item, Construct):
+        if isinstance(item, _BranchNode):
+            prev_node = _add_branch_to_graph(graph, item, prev_node)
+        elif isinstance(item, Construct):
             prev_node = _add_subgraph(graph, item, prev_node, checkpointer=checkpointer)
         else:
             prev_node = _add_node_to_graph(graph, item, prev_node)
@@ -289,6 +292,100 @@ def _wire_each(
     graph.add_edge([fan_name], barrier_name)
 
     return barrier_name
+
+
+def _add_branch_to_graph(
+    graph: StateGraph,
+    branch_node: _BranchNode,
+    prev_node: str | None,
+) -> str:
+    """Lower a _BranchNode into conditional edges in the graph.
+
+    Adds all nodes from both arms, then wires:
+        prev_node → conditional_edge → (true_arm_first | false_arm_first)
+        true_arm_last → join_node
+        false_arm_last → join_node
+
+    The router function evaluates the branch condition against live state
+    and returns the name of the first node in the appropriate arm.
+    """
+    meta = branch_node._neo_branch_meta
+    cond_spec = meta.condition_spec
+    true_nodes = meta.true_arm_nodes
+    false_nodes = meta.false_arm_nodes
+
+    # Add all arm nodes to the graph
+    for node in true_nodes:
+        node_fn = make_node_fn(node)
+        graph.add_node(node.name, node_fn)
+
+    for node in false_nodes:
+        node_fn = make_node_fn(node)
+        graph.add_node(node.name, node_fn)
+
+    # Wire sequential edges within each arm
+    for i in range(1, len(true_nodes)):
+        graph.add_edge(true_nodes[i - 1].name, true_nodes[i].name)
+
+    for i in range(1, len(false_nodes)):
+        graph.add_edge(false_nodes[i - 1].name, false_nodes[i].name)
+
+    # Build the router function
+    true_target = true_nodes[0].name if true_nodes else END
+    false_target = false_nodes[0].name if false_nodes else END
+
+    # Build a runtime condition evaluator from the condition spec
+    source_node = cond_spec.source_node
+    attr_chain = cond_spec.attr_chain
+    op_fn = cond_spec.op_fn
+    threshold = cond_spec.threshold
+
+    if source_node is not None:
+        field_name = source_node.name.replace("-", "_")
+    else:
+        field_name = None
+
+    def branch_router(state: Any) -> str:
+        """Evaluate the branch condition against live state and route."""
+        if field_name is not None:
+            value = getattr(state, field_name, None)
+            # Navigate attribute chain (e.g., .score, .items.first)
+            for attr in attr_chain:
+                if value is None:
+                    break
+                value = getattr(value, attr, None)
+        else:
+            value = None
+
+        if op_fn(value, threshold):
+            return true_target
+        return false_target
+
+    # Wire conditional edge from previous node
+    path_map = {true_target: true_target, false_target: false_target}
+    if prev_node:
+        graph.add_conditional_edges(prev_node, branch_router, path_map)
+    else:
+        graph.add_conditional_edges(START, branch_router, path_map)
+
+    # Create a join node that both arms converge to
+    join_name = f"__join_{branch_node.name}"
+
+    def join_fn(state: Any) -> dict:
+        return {}  # pass-through
+
+    graph.add_node(join_name, join_fn)
+
+    # Wire arm endings to join
+    true_last = true_nodes[-1].name if true_nodes else None
+    false_last = false_nodes[-1].name if false_nodes else None
+
+    if true_last:
+        graph.add_edge(true_last, join_name)
+    if false_last:
+        graph.add_edge(false_last, join_name)
+
+    return join_name
 
 
 def _add_operator_check(
