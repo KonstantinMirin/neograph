@@ -1,0 +1,36 @@
+/* Minimal typographic identity — monospace wordmark in the tradition
+   of mirin.pro's "const" logo. Same author, same aesthetic.
+   Site title is handled via the SiteTitle.astro component override;
+   this file styles the splash hero + badge row. */
+
+:root {
+  --neo-mono: ui-monospace, 'SF Mono', Menlo, Monaco, 'Cascadia Mono',
+              'Roboto Mono', Consolas, 'Courier New', monospace;
+}
+
+/* Splash hero on the landing page — mono title for wordmark feel,
+   regular tagline for readable contrast. */
+.hero h1 {
+  font-family: var(--neo-mono);
+  font-weight: 500;
+  letter-spacing: -0.02em;
+  text-transform: lowercase;
+}
+
+.hero .tagline {
+  font-weight: 400;
+  opacity: 0.88;
+}
+
+/* Badges row on landing page — render inline with tight spacing. */
+.sl-markdown-content p > a > img[src*="img.shields.io"] {
+  display: inline-block;
+  height: 20px;
+  vertical-align: middle;
+  margin: 0 0.15rem 0.25rem 0;
+}
+
+.sl-markdown-content p:has(> a > img[src*="img.shields.io"]) {
+  margin: 0.75rem 0 1.75rem;
+  line-height: 1.8;
+}

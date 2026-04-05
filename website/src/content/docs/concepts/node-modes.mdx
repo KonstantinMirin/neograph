@@ -65,7 +65,7 @@ The function body is not executed for `produce` nodes -- the LLM call provides t
 # WARNING: body is dead code for produce nodes
 @node(output=Claims, prompt='rw/decompose', model='reason')
 def decompose(topic: RawText) -> Claims:
-    print("This never runs")  # ⚠️ UserWarning at decoration time
+    print("This never runs")  # UserWarning raised at decoration time
 ```
 
 Use `...` as a placeholder body, or omit the body entirely.

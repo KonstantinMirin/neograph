@@ -1,0 +1,31 @@
+---
+// Site-wide sponsor banner. Renders above every page via Starlight's
+// Banner component override. Minimal, one line, non-annoying.
+---
+
+<div class="neo-banner">
+  Built by <a href="https://postindustria.com">Postindustria</a>.
+  We help teams build agentic production systems.
+</div>
+
+<style>
+  .neo-banner {
+    padding: 0.55rem 1rem;
+    text-align: center;
+    font-size: 0.85rem;
+    line-height: 1.4;
+    background: var(--sl-color-gray-7, #17191e);
+    border-bottom: 1px solid var(--sl-color-gray-5, #353a44);
+    color: var(--sl-color-gray-2, #c0c2c7);
+  }
+
+  .neo-banner a {
+    color: var(--sl-color-text-accent);
+    text-decoration: none;
+    font-weight: 500;
+  }
+
+  .neo-banner a:hover {
+    text-decoration: underline;
+  }
+</style>

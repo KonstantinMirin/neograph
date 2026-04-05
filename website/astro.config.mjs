@@ -5,9 +5,14 @@ import starlight from '@astrojs/starlight';
 export default defineConfig({
 	integrations: [
 		starlight({
-			title: 'NeoGraph',
+			title: 'neograph',
 			description: 'Write Python. Get a production graph. Declarative LLM graph compiler.',
 			social: [{ icon: 'github', label: 'GitHub', href: 'https://github.com/KonstantinMirin/neograph' }],
+			customCss: ['./src/styles/custom.css'],
+			components: {
+				SiteTitle: './src/components/SiteTitle.astro',
+				Banner: './src/components/Banner.astro',
+			},
 			sidebar: [
 				{
 					label: 'Getting Started',

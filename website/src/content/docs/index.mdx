@@ -1,8 +1,9 @@
 ---
-title: NeoGraph
-description: Write Python. Get a production LLM graph. NeoGraph is a declarative LLM graph compiler that turns @node-decorated Python functions into LangGraph state machines with type-safe topology inference.
+title: neograph
+description: Write Python. Get a production LLM graph. A declarative LLM graph compiler that turns @node-decorated Python functions into LangGraph state machines with type-safe topology inference.
 template: splash
 hero:
+  title: neograph
   tagline: Declaring — not wiring — LLM graphs.
   actions:
     - text: Quick Start
@@ -16,7 +17,7 @@ hero:
 
 import { Card, CardGrid, LinkCard } from '@astrojs/starlight/components';
 
-<p style="display: flex; gap: 0.5rem; flex-wrap: wrap; margin: 0.5rem 0 1.5rem;">
+<p>
   <a href="https://pypi.org/project/neograph/"><img src="https://img.shields.io/pypi/v/neograph.svg?color=%234A90E2" alt="PyPI version" /></a>
   <a href="https://pypi.org/project/neograph/"><img src="https://img.shields.io/pypi/pyversions/neograph.svg" alt="Python versions" /></a>
   <a href="https://pypi.org/project/neograph/"><img src="https://img.shields.io/pypi/dm/neograph.svg" alt="Monthly downloads" /></a>
@@ -25,16 +26,16 @@ import { Card, CardGrid, LinkCard } from '@astrojs/starlight/components';
   <a href="https://github.com/KonstantinMirin/neograph"><img src="https://img.shields.io/github/stars/KonstantinMirin/neograph?style=social" alt="GitHub stars" /></a>
 </p>
 
-**NeoGraph is a declarative LLM graph compiler for Python.** You define your pipeline as typed Python functions. NeoGraph reads your function signatures, infers the DAG from parameter names, validates types at assembly time, and compiles to [LangGraph](https://github.com/langchain-ai/langgraph) — with checkpointing, observability, and tool orchestration.
+**neograph is a declarative LLM graph compiler for Python.** You define your pipeline as typed Python functions. neograph reads your function signatures, infers the DAG from parameter names, validates types at assembly time, and compiles to [LangGraph](https://github.com/langchain-ai/langgraph) — with checkpointing, observability, and tool orchestration.
 
 The key features are:
 
-- 🐍 **Zero wiring.** A function is a node. A parameter name is an edge. An `if` is a branch. No `add_node`, no `add_edge`, no router functions.
-- 🛡️ **Type-safe.** Assembly-time validation catches mismatches before you run. Your IDE sees every dependency. Rename a function — downstream breaks at import time.
-- ⚡ **Production-ready.** Compiles to standard LangGraph. Full access to checkpointing, streaming, interrupts, and the LangGraph ecosystem.
-- 🔀 **Three APIs, one compiler.** `@node` for most pipelines. `ForwardConstruct` for Python `if`/`for`/`try` control flow. Programmatic `|` pipe for runtime construction.
-- 🧪 **Testable at every level.** `run_isolated()` for unit tests. Direct `forward()` call for debugging. Fake LLMs without mocking.
-- 🪝 **No lock-in.** Drop down to raw LangGraph whenever you need to. `mode='raw'` is a first-class escape hatch.
+- **Zero wiring.** A function is a node. A parameter name is an edge. An `if` is a branch. No `add_node`, no `add_edge`, no router functions.
+- **Type-safe.** Assembly-time validation catches mismatches before you run. Your IDE sees every dependency. Rename a function — downstream breaks at import time.
+- **Production-ready.** Compiles to standard LangGraph. Full access to checkpointing, streaming, interrupts, and the LangGraph ecosystem.
+- **Three APIs, one compiler.** `@node` for most pipelines. `ForwardConstruct` for Python `if`/`for`/`try` control flow. Programmatic `|` pipe for runtime construction.
+- **Testable at every level.** `run_isolated()` for unit tests. Direct `forward()` call for debugging. Fake LLMs without mocking.
+- **No lock-in.** Drop down to raw LangGraph whenever you need to. `mode='raw'` is a first-class escape hatch.
 
 ## Installation
 
