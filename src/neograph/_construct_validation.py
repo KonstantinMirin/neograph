@@ -178,11 +178,16 @@ def _check_fan_in_inputs(
       3. Check compatibility via ``_types_compatible``. Mismatch →
          ConstructError.
     """
+    # fan_out_param marks the Each fan-out receiver — it comes from
+    # state["neo_each_item"], not from an upstream producer. Skip it.
+    fan_out_key = getattr(item, "fan_out_param", None)
     producer_by_name: dict[str, tuple[Any, str]] = {
         field_name: (producer_type, label)
         for field_name, producer_type, label in producers
     }
     for upstream_name, expected_type in inputs_dict.items():
+        if upstream_name == fan_out_key:
+            continue
         if upstream_name not in producer_by_name:
             msg = (
                 f"Node '{item.name}' in construct '{construct.name}' "

@@ -947,144 +947,103 @@ def _build_construct_from_decorated(
     for field in decorated:
         visit(field)
 
-    # Strip non-upstream keys from n.inputs so the step-2 validator sees
-    # only real upstream names (neograph-kqd.4). At @node time we emit ALL
-    # typed params into inputs because we don't yet know which are Each
-    # receivers, DI params, or constant defaults. Here we have the full
-    # module context: anything not in `decorated` is a non-upstream param
-    # (fan-out receiver, FromInput, FromConfig, or default constant), and
-    # must be removed before the validator walks the dict.
+    # Clean up n.inputs: strip DI params and constants (non-upstream) but
+    # KEEP fan-out params (they need to be in the dict so
+    # factory._extract_input can route them to neo_each_item via
+    # node.fan_out_param). Set fan_out_param on Each nodes.
     for field, n in decorated.items():
         if not isinstance(n.inputs, dict):
             continue
+        skip = fan_out_params.get(field, set())
+        # Keep keys that are either upstream @nodes or fan-out receivers.
         filtered = {
             k: v for k, v in n.inputs.items()
-            if k in decorated and k != field  # keep only real upstream refs
+            if (k in decorated and k != field) or k in skip
         }
         if filtered != n.inputs:
             try:
                 n.inputs = filtered
             except (TypeError, ValueError):
-                pass  # frozen model — validator will surface an error
+                pass
+        # Mark the fan-out param on the Node so factory._extract_input and
+        # the validator know which key reads from neo_each_item.
+        if skip:
+            fan_out_name = next(iter(skip))  # typically one fan-out param
+            try:
+                n.fan_out_param = fan_out_name
+            except (TypeError, ValueError):
+                pass
 
-    # Install raw_fn adapters for scripted @node functions. This dispatches
-    # through factory._make_raw_wrapper; the factory logs mode=node.mode so
-    # the log line reports 'scripted' rather than 'raw' for this path
-    # (neograph-kqd.4).
+    # Register scripted shims for @node functions via register_scripted
+    # so they dispatch through factory._make_scripted_wrapper — one path
+    # for all scripted nodes (neograph-kqd.8).
     for n in ordered:
         if n.mode == "scripted" and n.raw_fn is None:
             field = n.name.replace("-", "_")
-            _attach_scripted_raw_fn(n, fan_out_params.get(field, set()))
+            _register_node_scripted(n, fan_out_params.get(field, set()))
 
     return Construct(name=construct_name, nodes=ordered, llm_config=llm_config or {})
 
 
-def _attach_scripted_raw_fn(n: Node, fan_out: set[str] | None = None) -> None:
-    """Wrap the original user function in a raw-node adapter that reads
-    upstream values from LangGraph state by parameter name.
+def _register_node_scripted(n: Node, fan_out: set[str] | None = None) -> None:
+    """Register a scripted shim for a @node-decorated function via
+    ``register_scripted`` so it dispatches through
+    ``factory._make_scripted_wrapper`` — the single path for all scripted
+    nodes (neograph-kqd.8).
 
-    The adapter reads each `param_name` from state (dict or BaseModel form),
-    calls the user function positionally, and returns a state update dict
-    keyed by this node's state-field name. If the user function produces
-    `None`, nothing is written — matching `factory._make_scripted_wrapper`
-    semantics.
+    The shim receives ``(input_data, config)`` from the factory wrapper:
+      - ``input_data`` is the dict returned by ``factory._extract_input``,
+        which reads upstream values from state by key and routes the
+        ``fan_out_param`` key to ``neo_each_item``.
+      - ``config`` is the LangGraph ``RunnableConfig``.
 
-    For fan-out params (``fan_out`` set), the value is read from
-    ``neo_each_item`` in state instead of looking up by parameter name.
+    The shim resolves DI params (``FromInput``/``FromConfig``/constant)
+    from ``config``, reads upstream values from ``input_data``, and calls
+    the user function with positional args in parameter order.
     """
+    from neograph.factory import register_scripted
+
     sidecar = _get_sidecar(n)
     if sidecar is None:
         return
     fn, param_names, _ = sidecar
     param_res = _get_param_resolutions(n)
-    field_name = n.name.replace("-", "_")
     _fan_out = fan_out or set()
-    each_mod = n.get_modifier(Each)
 
-    def raw_adapter(state: Any, config: Any) -> dict:
-        def _get(key: str) -> Any:
-            if isinstance(state, dict):
-                return state.get(key)
-            return getattr(state, key, None)
+    # Synthesize a unique name for the registered shim. Use id(n) so
+    # parallel pipelines with the same node names don't collide.
+    synthetic_name = f"_node_{n.name}_{id(n):x}"
 
-        def _get_configurable(key: str) -> Any:
-            cfg = config or {}
-            if isinstance(cfg, dict):
-                return cfg.get("configurable", {}).get(key)
-            # RunnableConfig object
-            return getattr(cfg, "configurable", {}).get(key)
-
+    def scripted_shim(input_data: Any, config: Any) -> Any:
+        """Adapter: (input_data, config) → fn(*positional_args)."""
         args = []
         for pname in param_names:
             resolution = param_res.get(pname)
             if resolution is not None:
                 kind, payload = resolution
-                if kind in ("from_input", "from_config"):
-                    # Read from config["configurable"] (run() injects all
-                    # input fields there via _inject_input_to_config).
-                    args.append(_get_configurable(pname))
-                elif kind in ("from_input_model", "from_config_model"):
-                    # Bundle resolution: build the Pydantic model by pulling
-                    # each of its declared fields from config["configurable"].
-                    # Missing fields fall through to the model's own default
-                    # or None — Pydantic handles the rest.
-                    model_cls = payload
-                    field_values: dict[str, Any] = {}
-                    for fname in model_cls.model_fields:
-                        val = _get_configurable(fname)
-                        if val is not None:
-                            field_values[fname] = val
-                    try:
-                        args.append(model_cls(**field_values))
-                    except Exception:
-                        # Validation failure (required field missing, type
-                        # coercion error) — pass None so the user code can
-                        # handle it rather than crashing the whole run.
-                        args.append(None)
-                elif kind == "constant":
-                    args.append(payload)
-                else:
-                    args.append(_get(pname))
+                args.append(_resolve_di_value(kind, payload, pname, config))
             elif pname in _fan_out:
-                # Fan-out param: value comes from neo_each_item (set by Send)
-                args.append(_get("neo_each_item"))
+                # Fan-out param: factory._extract_input routes this via
+                # node.fan_out_param → neo_each_item, so it's already in
+                # input_data under the param name.
+                args.append(
+                    input_data.get(pname)
+                    if isinstance(input_data, dict)
+                    else input_data
+                )
             else:
-                # Upstream @node: read from state by param name. If the
-                # consumer's annotation is list[X] and the state holds a
-                # dict (Each fan-out output), unwrap via list(values())
-                # (neograph-kqd.5). Mirrors factory._extract_input.
-                value = _get(pname)
-                if isinstance(n.inputs, dict):
-                    expected_type = n.inputs.get(pname)
-                    if (
-                        value is not None
-                        and expected_type is not None
-                        and get_origin(expected_type) is list
-                        and isinstance(value, dict)
-                    ):
-                        value = list(value.values())
-                args.append(value)
-        result = fn(*args)
+                # Upstream @node value — already extracted by
+                # factory._extract_input into input_data[pname].
+                args.append(
+                    input_data.get(pname)
+                    if isinstance(input_data, dict)
+                    else input_data
+                )
+        return fn(*args)
 
-        if result is None:
-            return {}
-
-        # Each fan-out: wrap result in dict keyed by item's key field
-        if each_mod and _fan_out:
-            each_item = _get("neo_each_item")
-            if each_item is not None:
-                key_val = getattr(each_item, each_mod.key, str(each_item))
-                return {field_name: {key_val: result}}
-
-        return {field_name: result}
-
-    raw_adapter.__name__ = field_name
-
-    # Node is a pydantic v2 BaseModel without `frozen=True`, so direct
-    # attribute assignment is supported. `raw_fn` is a declared field on
-    # Node (used by the existing @raw_node decorator) so assigning it does
-    # not mutate the schema — only the field value.
-    n.raw_fn = raw_adapter
+    scripted_shim.__name__ = n.name.replace("-", "_")
+    register_scripted(synthetic_name, scripted_shim)
+    n.scripted_fn = synthetic_name
 
 
 # _validate_fan_in_types was deleted in neograph-kqd.4. Fan-in validation

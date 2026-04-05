@@ -104,16 +104,15 @@ def make_node_fn(node: Node) -> Callable:
 def _make_raw_wrapper(node: Node) -> Callable:
     """Wrap a raw_fn dispatch with observability (node_start/node_complete).
 
-    The log's ``mode`` field comes from ``node.mode`` rather than a hardcoded
-    'raw' string so scripted @node nodes — which the decorator dispatches
-    via raw_fn but conceptually remain scripted — report their actual mode
-    in logs (neograph-kqd.4).
+    Only used for explicit ``mode='raw'`` escape-hatch nodes. Scripted
+    ``@node`` functions route through ``_make_scripted_wrapper`` via
+    ``register_scripted`` since neograph-kqd.8.
     """
     raw_fn = node.raw_fn
     field_name = node.name.replace("-", "_")
 
     def raw_node_wrapper(state: BaseModel, config: RunnableConfig) -> dict[str, Any]:
-        node_log = log.bind(node=node.name, mode=node.mode)
+        node_log = log.bind(node=node.name, mode="raw")
         node_log.info("node_start", input_type=_type_name(node.inputs), output_type=_type_name(node.output))
         t0 = time.monotonic()
 
@@ -326,23 +325,25 @@ def _extract_input(state: Any, node: Node) -> Any:
         return replicate_item
 
     # Fan-in dict: inputs={'upstream_name': expected_type, ...}. Read each
-    # named state field by key; when the consumer expects list[X] and the
-    # state value is a dict (Each-fanned-out result), unwrap via
-    # list(values()). Ordering is dict insertion order = LangGraph barrier
-    # arrival order (neograph-kqd.3).
+    # named state field by key. Special cases:
+    #   - fan_out_param key → read from state["neo_each_item"] (neograph-kqd.8)
+    #   - list[X] consumer over dict state → unwrap via list(values()) (kqd.3)
     if isinstance(node.inputs, dict):
         from typing import get_origin as _get_origin
 
         result = {}
         for field_name, expected_type in node.inputs.items():
-            state_key = field_name.replace("-", "_")
-            value = _get(state_key)
-            if (
-                value is not None
-                and _get_origin(expected_type) is list
-                and isinstance(value, dict)
-            ):
-                value = list(value.values())
+            if field_name == node.fan_out_param:
+                value = _get("neo_each_item")
+            else:
+                state_key = field_name.replace("-", "_")
+                value = _get(state_key)
+                if (
+                    value is not None
+                    and _get_origin(expected_type) is list
+                    and isinstance(value, dict)
+                ):
+                    value = list(value.values())
             result[field_name] = value
         return result
 

@@ -201,7 +201,9 @@ This was the cause of `neograph-jyw` before the fix. Any new modifier kwarg you 
 
 **Dead-body warning**: LLM modes emit a `UserWarning` at decoration time if the function body is non-trivial (not `...`, `pass`, or a bare return). AST-based check — handles common false positives.
 
-**Scripted `@node` dispatches via `raw_fn`.** A custom adapter (built by `_attach_scripted_raw_fn` in `decorators.py`) reads each upstream value from state by parameter name, resolves `FromInput`/`FromConfig`/constant params from config, handles `Each` fan-out items, and applies the `list[X]`-over-`dict[str, X]` merge-after-fanout unwrap. The adapter is installed on the Node's `raw_fn` field; `factory._make_raw_wrapper` picks it up and logs `mode=node.mode` (so fan-in `@node` nodes correctly report `mode='scripted'` in observability). Full unification with `_make_scripted_wrapper` is tracked in `neograph-kqd.8` (`kqd.4b`) and deferred — the current path delivers correct semantics and log output; the follow-up is structural cleanup.
+**Scripted `@node` dispatches via `register_scripted`.** At construct-assembly time, `_register_node_scripted` in `decorators.py` builds a shim closure that resolves `FromInput`/`FromConfig`/constant params from `config`, reads upstream values from `input_data` (the dict returned by `factory._extract_input`), and calls the user function with positional args. The shim is registered via `register_scripted` under a synthesized name, and `node.scripted_fn` points to it. The factory's `_make_scripted_wrapper` picks it up — **one dispatch path for all scripted nodes**, no more `raw_fn` workaround.
+
+`Node.fan_out_param` tells `_extract_input` which `inputs` key should read from `state["neo_each_item"]` instead of from a named upstream field. This is the only IR-level concession to the `@node` layer — it applies equally to programmatic `Each` nodes with dict-form inputs.
 
 ---
 

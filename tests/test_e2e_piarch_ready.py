@@ -5231,8 +5231,9 @@ class TestNodeDecoratorDictInputs:
             "produce_c": ClusterGroup,
         }
 
-    def test_node_decorator_fan_out_param_stripped_from_inputs(self):
-        """Each fan-out param is NOT in the emitted inputs dict."""
+    def test_node_decorator_fan_out_param_in_inputs_with_marker(self):
+        """Each fan-out param stays in inputs dict and node.fan_out_param
+        marks it so factory._extract_input routes it to neo_each_item."""
         from neograph import node
         from neograph.decorators import construct_from_functions
 
@@ -5249,12 +5250,10 @@ class TestNodeDecoratorDictInputs:
             return MatchResult(cluster_label=cluster.label, matched=[])
 
         construct_from_functions("p", [make_clusters, verify])
-        # verify has Each modifier; 'cluster' is the fan-out receiver, not an
-        # upstream. After construct assembly, it should be stripped from inputs.
         assert isinstance(verify.inputs, dict)
-        assert "cluster" not in verify.inputs
-        # No other upstream for this node — inputs should be empty dict.
-        assert verify.inputs == {}
+        assert "cluster" in verify.inputs
+        assert verify.inputs["cluster"] is ClusterGroup
+        assert verify.fan_out_param == "cluster"
 
     def test_node_decorator_fan_in_type_mismatch_caught_by_validator(self):
         """Step-2's validator catches @node fan-in type mismatches via
@@ -5586,6 +5585,73 @@ class TestNodeInputsEpicAcceptance:
         pipeline = Construct("zero-upstream", nodes=[seed])
         assert len(pipeline.nodes) == 1
         assert pipeline.nodes[0].inputs is None
+
+    def test_node_decorator_mixed_upstream_and_fanout_e2e(self):
+        """@node with BOTH upstream params AND a fan-out param (Each)
+        runs end-to-end — the critical path for kqd.8 unification."""
+        from neograph import compile, run, node
+        from neograph.decorators import construct_from_functions
+
+        @node(output=RawText)
+        def context_source() -> RawText:
+            return RawText(text="shared-context")
+
+        @node(output=Clusters)
+        def make_clusters() -> Clusters:
+            return Clusters(groups=[
+                ClusterGroup(label="a", claim_ids=["1"]),
+                ClusterGroup(label="b", claim_ids=["2"]),
+            ])
+
+        @node(
+            output=MatchResult,
+            map_over="make_clusters.groups",
+            map_key="label",
+        )
+        def verify(context_source: RawText, cluster: ClusterGroup) -> MatchResult:
+            return MatchResult(
+                cluster_label=cluster.label,
+                matched=[f"{context_source.text}-{cluster.label}"],
+            )
+
+        pipeline = construct_from_functions(
+            "mixed-e2e", [context_source, make_clusters, verify],
+        )
+        graph = compile(pipeline)
+        result = run(graph, input={"node_id": "kqd8"})
+        # verify is Each-modified → result is dict[str, MatchResult]
+        assert isinstance(result["verify"], dict)
+        assert sorted(result["verify"].keys()) == ["a", "b"]
+        assert result["verify"]["a"].matched == ["shared-context-a"]
+        assert result["verify"]["b"].matched == ["shared-context-b"]
+
+    def test_attach_scripted_raw_fn_deleted(self):
+        """_attach_scripted_raw_fn no longer exists — all scripted @node
+        routes through register_scripted + _make_scripted_wrapper."""
+        import neograph.decorators as dec
+        assert not hasattr(dec, "_attach_scripted_raw_fn"), (
+            "_attach_scripted_raw_fn still exists — kqd.8 is incomplete"
+        )
+
+    def test_scripted_node_raw_fn_not_set(self):
+        """Scripted @node nodes no longer have raw_fn set — they use
+        scripted_fn + register_scripted instead."""
+        from neograph import node
+        from neograph.decorators import construct_from_functions
+
+        @node(output=Claims)
+        def produce() -> Claims:
+            return Claims(items=["x"])
+
+        @node(output=MergedResult)
+        def consume(produce: Claims) -> MergedResult:
+            return MergedResult(final_text=produce.items[0])
+
+        construct_from_functions("raw-fn-check", [produce, consume])
+        assert produce.raw_fn is None, "scripted @node should not set raw_fn"
+        assert consume.raw_fn is None, "scripted @node should not set raw_fn"
+        assert produce.scripted_fn is not None
+        assert consume.scripted_fn is not None
 
     def test_programmatic_fan_in_via_pipe(self):
         """Programmatic Node(inputs={...}) + modifier pipe works end-to-end."""

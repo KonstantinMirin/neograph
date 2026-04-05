@@ -58,8 +58,14 @@ class Node(Modifiable, BaseModel):
     # Deterministic implementation (scripted mode only)
     scripted_fn: str | None = None
 
-    # Raw node function (mode='raw' or scripted @node dispatch)
+    # Raw node function — explicit mode='raw' escape hatch only.
     raw_fn: Callable | None = None
+
+    # Which inputs key receives the Each fan-out item (neo_each_item) instead
+    # of reading from the named upstream state field. Set by @node decoration
+    # when map_over= is used. Used by factory._extract_input and by the
+    # validator to skip upstream-name validation for this key.
+    fan_out_param: str | None = None
 
     # Modifiers applied via | operator
     modifiers: list[Modifier] = []
