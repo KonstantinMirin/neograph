@@ -101,6 +101,15 @@ The validator (`_types_compatible`) accepts `list[X]` against a `dict[str, X]` p
 
 **Ordering caveat**: `dict.values()` preserves insertion order, but Each's barrier collects `Send()` results in arrival order, not `each.over` collection order. Use `list[X]` for order-independent reductions (counts, aggregates, summaries). If you need deterministic ordering, consume as `dict[str, X]` and sort explicitly on the key.
 
+### `Node.inputs` (plural) vs `Construct.input` (singular)
+
+These are different fields with different roles — the naming is intentional, not a typo:
+
+- **`Node.inputs`** (plural, `dict[str, type] | type | None`) — declares what a node *consumes* from the state bus. Dict form enables fan-in (multiple upstream producers); single-type form is a convenience shorthand.
+- **`Construct.input`** (singular, `type[BaseModel] | None`) — declares the *boundary port* when a Construct is used as a sub-construct inside another Construct. It defines the isolated state the sub-pipeline receives, not a fan-in mapping.
+
+The plural/singular split reflects the structural difference: a Node can consume from many upstream producers (hence a dict of inputs), while a sub-construct has exactly one typed entry point (hence a single input type).
+
 ---
 
 ## Layer discipline

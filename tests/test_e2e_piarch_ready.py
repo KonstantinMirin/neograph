@@ -1856,7 +1856,7 @@ class TestConstructValidation:
         with pytest.raises(ConstructError) as exc_info:
             Construct("bad", nodes=[a, b])
         msg = str(exc_info.value)
-        assert "declares input=Claims" in msg
+        assert "declares inputs=Claims" in msg
         # Pin the producer listing, not just the header
         assert "node 'a': RawText" in msg
 
@@ -3321,7 +3321,7 @@ class TestNodeDecoratorFanout:
         # The sidecar survived the model_copy from | Each(...)
         sidecar = _get_sidecar(verify)
         assert sidecar is not None
-        fn, param_names, _fan_out = sidecar
+        fn, param_names = sidecar
         assert param_names == ("cluster",)
 
     def test_node_decorator_map_over_fanout_param_skipped_in_adjacency(self):
@@ -5051,6 +5051,10 @@ class TestFanInValidation:
         )
         pipeline = Construct("fan-in-ok", nodes=[a, b, c, consumer])
         assert len(pipeline.nodes) == 4
+        # Verify the consumer's dict-form inputs survived assembly unchanged
+        resolved = pipeline.nodes[3]
+        assert resolved.inputs == {"a": Claims, "b": RawText, "c": ClusterGroup}
+        assert resolved.output is MatchResult
 
     def test_fan_in_dict_unknown_upstream_rejected(self):
         """Consumer declaring inputs['nonexistent'] raises ConstructError
@@ -5083,6 +5087,18 @@ class TestFanInValidation:
         assert "'b'" in msg
         assert "Claims" in msg
         assert "RawText" in msg
+
+    def test_empty_dict_inputs_assembles_cleanly(self):
+        """inputs={} (empty dict) is treated as 'no upstream needed' —
+        _check_fan_in_inputs iterates zero times and returns without error.
+        The node assembles even when upstream producers exist."""
+        a = _producer("a", Claims)
+        seed = Node.scripted("seed", fn="f", inputs={}, output=RawText)
+        # With an upstream present — the empty dict should not attempt to
+        # match any producer, so no validation error.
+        pipeline = Construct("empty-inputs", nodes=[a, seed])
+        assert len(pipeline.nodes) == 2
+        assert pipeline.nodes[1].inputs == {}
 
 
 class TestTypesCompatibleListOverDict:
@@ -5275,7 +5291,7 @@ class TestNodeDecoratorDictInputs:
         assert "'upstream'" in msg
         assert "Claims" in msg or "RawText" in msg
 
-    def test_scripted_fan_in_log_mode_is_scripted(self, caplog):
+    def test_scripted_fan_in_log_mode_is_scripted(self):
         """@node fan-in execution logs mode='scripted', not 'raw'
         (neograph-kqd.4 criterion 9)."""
         import logging
@@ -5585,6 +5601,8 @@ class TestNodeInputsEpicAcceptance:
         pipeline = Construct("zero-upstream", nodes=[seed])
         assert len(pipeline.nodes) == 1
         assert pipeline.nodes[0].inputs is None
+        assert pipeline.nodes[0].output is Claims
+        assert pipeline.nodes[0].name == "seed"
 
     def test_node_decorator_mixed_upstream_and_fanout_e2e(self):
         """@node with BOTH upstream params AND a fan-out param (Each)

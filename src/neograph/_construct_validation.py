@@ -40,10 +40,10 @@ def effective_producer_type(item: Any) -> Any:
     for modifiers.
 
     This is the **single source of truth** for the "producer side" of
-    type compatibility. Both validator walkers (``_validate_node_chain``
-    here and ``_validate_fan_in_types`` in ``decorators.py``) consult it,
-    so a new modifier that reshapes state only needs to teach this one
-    function about the new rule — both walkers pick up the change.
+    type compatibility. The sole validator walker
+    (``_validate_node_chain``) consults it, so a new modifier that
+    reshapes state only needs to teach this one function about the new
+    rule — the walker picks up the change automatically.
 
     Current rules:
       - ``Each`` modifier → ``dict[str, raw_output]`` (aggregated fan-out
@@ -80,11 +80,14 @@ def _validate_node_chain(construct: Any) -> None:
         ))
 
     for item in construct.nodes:
-        # Node has `inputs` (plural) since neograph-kqd.1. Construct still has
-        # `input` (sub-construct boundary port) — that's handled above via
-        # construct.input, not here.
-        input_type = getattr(item, "inputs", None)
-        if input_type is None:
+        # Node has `inputs` (plural) since neograph-kqd.1. Construct still
+        # uses `input` (singular) as its sub-construct boundary port —
+        # that's handled above via construct.input, not here. The
+        # isinstance check makes the two-field contract explicit.
+        if isinstance(item, Node):
+            input_type = getattr(item, "inputs", None)
+        else:
+            # Construct items use .input (singular boundary port).
             input_type = getattr(item, "input", None)
         if input_type is not None:
             _check_item_input(construct, item, input_type, producers)
@@ -110,7 +113,7 @@ def _check_item_input(
     input_type: Any,
     producers: list[tuple[str, Any, str]],
 ) -> None:
-    """Validate that `item.input` is satisfied by some upstream producer.
+    """Validate that `item.inputs` is satisfied by some upstream producer.
 
     Static validation only fires when there's enough evidence to make a
     definite call. Cases that defer to runtime isinstance-scanning:
@@ -172,9 +175,9 @@ def _check_fan_in_inputs(
     For each (upstream_name, expected_type) pair:
       1. Look up a producer whose state-field name matches ``upstream_name``.
          No match → ConstructError (unknown upstream).
-      2. Compute the producer's effective state-bus type via
-         ``effective_producer_type`` (shared helper — do NOT inline
-         modifier rules here).
+      2. The producer's effective state-bus type was already computed
+         by the caller (via ``effective_producer_type``) — do NOT
+         re-compute or inline modifier rules here.
       3. Check compatibility via ``_types_compatible``. Mismatch →
          ConstructError.
     """
@@ -262,7 +265,8 @@ def _check_each_path(
     if not _types_compatible(element_type, input_type):
         msg = (
             f"Node '{item.name}' in construct '{construct.name}' declares "
-            f"input={_fmt_type(input_type)} with Each(over='{each.over}'), "
+            f"{'inputs' if isinstance(item, Node) else 'input'}="
+            f"{_fmt_type(input_type)} with Each(over='{each.over}'), "
             f"but the path resolves to list[{_fmt_type(element_type)}].\n"
             f"{_location_suffix()}"
         )
@@ -388,7 +392,8 @@ def _format_no_producer_error(
 
     return (
         f"Node '{item.name}' in construct '{construct.name}' declares "
-        f"input={_fmt_type(input_type)} but no upstream produces a "
+        f"{'inputs' if isinstance(item, Node) else 'input'}="
+        f"{_fmt_type(input_type)} but no upstream produces a "
         f"compatible value.\n"
         f"  upstream producers:\n{producer_summary}\n"
         f"{hint_line}"

@@ -25,14 +25,15 @@ Design notes
   a pydantic BaseModel and is not mutated to add sidecar fields — the beads
   brief explicitly forbids editing `node.py`.
 
-* Scripted @node functions are dispatched via the existing `raw_fn` field on
-  `Node` (which the `factory._make_raw_wrapper` branch already supports for
-  `raw_node`). Using the raw-fn path — rather than `register_scripted` — lets
-  us pass the full state to a closure that reads N upstream values by name,
-  without editing `factory.py` (which is out of scope per the brief). Non-
-  scripted modes (produce / gather / execute) never see the raw_fn path and
-  keep their existing LLM dispatch; their parameter annotations only drive
-  topology + type inference.
+* Scripted @node functions are dispatched via `register_scripted` — at
+  `_build_construct_from_decorated` time a shim closure is synthesized for
+  each scripted node and registered under a unique name. The shim reads N
+  upstream values by parameter name from `input_data`, resolves DI params
+  (FromInput/FromConfig/constant) from `config`, and calls the user
+  function with positional args. `factory._make_scripted_wrapper` picks up
+  the registered shim via `Node.scripted_fn`. Non-scripted modes (produce /
+  gather / execute) keep their existing LLM dispatch; their parameter
+  annotations only drive topology + type inference.
 
 * `construct_from_module` walks `vars(mod)` once, keeps only Node instances
   that appear in the sidecar (so plain `Node(...)` at module scope is
@@ -60,6 +61,8 @@ import textwrap
 import warnings
 import weakref
 from typing import Annotated, Any, Callable, Literal, get_args, get_origin
+
+import structlog
 
 
 class FromInput:
@@ -127,23 +130,21 @@ from neograph.tool import Tool
 # model class (for '*_model' kinds) OR None.
 ParamResolution = dict[str, tuple[str, Any]]
 
-# Sidecar: id(Node) -> (original_fn, param_names_tuple, fan_out_param).
+# Sidecar: id(Node) -> (original_fn, param_names_tuple).
 # Keyed by id() so `Node` is not mutated. A `weakref.finalize` callback evicts
 # entries when the Node is garbage-collected, so the dict cannot leak.
-# fan_out_param is the parameter name that receives Each items (None if no fan-out).
-_node_sidecar: dict[int, tuple[Callable, tuple[str, ...], str | None]] = {}
+_node_sidecar: dict[int, tuple[Callable, tuple[str, ...]]] = {}
 
 # Separate storage for param resolutions — keyed by id(Node), same lifecycle
-# as _node_sidecar. Kept separate to preserve the 3-element sidecar tuple
-# contract that existing code depends on.
+# as _node_sidecar.
 _param_resolutions: dict[int, ParamResolution] = {}
 
 
 def _register_sidecar(
-    n: Node, fn: Callable, param_names: tuple[str, ...], fan_out_param: str | None = None,
+    n: Node, fn: Callable, param_names: tuple[str, ...],
 ) -> None:
     node_id = id(n)
-    _node_sidecar[node_id] = (fn, param_names, fan_out_param)
+    _node_sidecar[node_id] = (fn, param_names)
     weakref.finalize(n, _node_sidecar.pop, node_id, None)
 
 
@@ -159,8 +160,52 @@ def _get_param_resolutions(n: Node) -> ParamResolution:
     return _param_resolutions.get(id(n), {})
 
 
-def _get_sidecar(n: Node) -> tuple[Callable, tuple[str, ...], str | None] | None:
+def _get_sidecar(n: Node) -> tuple[Callable, tuple[str, ...]] | None:
     return _node_sidecar.get(id(n))
+
+
+def _build_annotation_namespace(
+    f: Callable,
+    frame_depth: int = 2,
+) -> dict[str, Any]:
+    """Build a namespace dict for resolving string annotations on *f*.
+
+    Collects DI markers (``FromInput``, ``FromConfig``, ``Annotated``),
+    the function's closure variables, and locals walked up the caller's
+    frame stack (up to 8 hops). The returned dict is suitable as the
+    ``localns`` argument to ``typing.get_type_hints``.
+
+    Under ``from __future__ import annotations`` all annotations arrive as
+    strings, so we need a namespace that includes locally-defined classes
+    (e.g. ``class RunCtx`` inside a test method) that aren't in the
+    function's globals or closure. This is the same technique Pydantic
+    uses for forward-ref resolution.
+
+    *frame_depth* counts from **this helper** to the user's call site.
+    """
+    ns: dict[str, Any] = {
+        "FromInput": FromInput,
+        "FromConfig": FromConfig,
+        "Annotated": Annotated,
+    }
+    try:
+        cv = inspect.getclosurevars(f)
+        ns.update(cv.globals)
+        ns.update(cv.nonlocals)
+    except (TypeError, ValueError):
+        pass
+    try:
+        caller = sys._getframe(frame_depth)  # noqa: SLF001
+        hops = 0
+        while caller is not None and hops < 8:
+            for k, v in caller.f_locals.items():
+                if not k.startswith("_") and k not in ns:
+                    ns[k] = v
+            caller = caller.f_back
+            hops += 1
+    except Exception:
+        pass
+    return ns
 
 
 def _classify_di_params(
@@ -179,41 +224,14 @@ def _classify_di_params(
         ctx:   Annotated[RunCtx, FromInput]         # bundle from BaseModel fields
         limit: Annotated[RateLimiter, FromConfig]   # shared resource per-param
 
-    Under ``from __future__ import annotations`` the annotation arrives as
-    a string, so we walk the caller's frame stack at decoration time to
-    capture locally-defined classes (e.g. ``class RunCtx`` inside a test
-    method) that aren't in the function's globals or closure. This is the
-    same technique Pydantic uses for forward-ref resolution.
-
     frame_depth: how many frames up from this helper to the user's call
     site. For @node's ``decorator(f)`` → ``_classify_di_params(...)``
     chain, that's 2. @merge_fn is the same.
     """
     from pydantic import BaseModel as _BaseModel
 
-    # Build a resolution namespace: markers, function closure, caller locals.
-    extra_locals: dict[str, Any] = {
-        "FromInput": FromInput,
-        "FromConfig": FromConfig,
-        "Annotated": Annotated,
-    }
-    try:
-        cv = inspect.getclosurevars(f)
-        extra_locals.update(cv.globals)
-        extra_locals.update(cv.nonlocals)
-    except (TypeError, ValueError):
-        pass
-    try:
-        caller = sys._getframe(frame_depth)  # noqa: SLF001
-        hops = 0
-        while caller is not None and hops < 8:
-            for k, v in caller.f_locals.items():
-                if not k.startswith("_") and k not in extra_locals:
-                    extra_locals[k] = v
-            caller = caller.f_back
-            hops += 1
-    except Exception:
-        pass
+    # +1 because _build_annotation_namespace is one frame deeper.
+    extra_locals = _build_annotation_namespace(f, frame_depth=frame_depth + 1)
 
     try:
         import typing as _typing
@@ -289,6 +307,13 @@ def _resolve_di_value(
         try:
             return model_cls(**field_values)
         except Exception:
+            log = structlog.get_logger(__name__)
+            log.warning(
+                "DI model construction failed, returning None",
+                model=model_cls.__name__,
+                param=pname,
+                fields=field_values,
+            )
             return None
     if kind == "constant":
         return payload
@@ -367,9 +392,10 @@ def node(
     ``Operator(when=...)``. The value can be a string (registered condition
     name) or a callable (auto-registered under a synthesized name).
 
-    For `mode='scripted'`, the function is executed via `Node.raw_fn` set at
-    `construct_from_module` time — this keeps `factory.py` untouched and
-    supports fan-in (>1 parameter) nodes uniformly.
+    For `mode='scripted'`, a shim is registered via `register_scripted` at
+    `_build_construct_from_decorated` time and dispatched through
+    `factory._make_scripted_wrapper`. Supports fan-in (>1 parameter) nodes
+    uniformly.
     """
 
     def decorator(f: Callable) -> Node:
@@ -521,30 +547,9 @@ def node(
             resolved_hints: dict[str, Any] = {}
             try:
                 import typing as _typing
-                extra_ns: dict[str, Any] = {
-                    "FromInput": FromInput,
-                    "FromConfig": FromConfig,
-                    "Annotated": Annotated,
-                }
-                try:
-                    _cv = inspect.getclosurevars(f)
-                    extra_ns.update(_cv.globals)
-                    extra_ns.update(_cv.nonlocals)
-                except (TypeError, ValueError):
-                    pass
-                try:
-                    # Frame 0: this inline block inside decorator(f).
-                    # Frame 1: the user scope applying @node to a function.
-                    caller_frame = sys._getframe(1)  # noqa: SLF001
-                    _hops = 0
-                    while caller_frame is not None and _hops < 8:
-                        for _k, _v in caller_frame.f_locals.items():
-                            if not _k.startswith("_") and _k not in extra_ns:
-                                extra_ns[_k] = _v
-                        caller_frame = caller_frame.f_back
-                        _hops += 1
-                except Exception:
-                    pass
+                # frame_depth=2: frame 0 = _build_annotation_namespace,
+                # frame 1 = decorator(f) here, frame 2 = user call site.
+                extra_ns = _build_annotation_namespace(f, frame_depth=2)
                 resolved_hints = _typing.get_type_hints(
                     f, localns=extra_ns, include_extras=False,
                 )
@@ -760,25 +765,15 @@ def construct_from_module(
         llm_config: Default LLM config inherited by every node. Per-node
             llm_config merges over this (node wins on conflicts).
     """
-    decorated: dict[str, Node] = {}
+    nodes: list[Node] = []
     source_label = f"module '{mod.__name__}'"
     for attr in vars(mod).values():
         if isinstance(attr, Node) and _get_sidecar(attr) is not None:
-            field_name = attr.name.replace("-", "_")
-            if field_name in decorated:
-                existing = decorated[field_name]
-                msg = (
-                    f"@node name collision: two nodes resolve to field name "
-                    f"'{field_name}' in {source_label}. "
-                    f"One is '{existing.name}', another is '{attr.name}'. "
-                    f"Fix: pass explicit name= to @node on one of them."
-                )
-                raise ConstructError(msg)
-            decorated[field_name] = attr
+            nodes.append(attr)
 
     construct_name = name or mod.__name__.split(".")[-1]
     return _build_construct_from_decorated(
-        decorated, construct_name, source_label, llm_config
+        nodes, construct_name, source_label, llm_config
     )
 
 
@@ -808,8 +803,8 @@ def construct_from_functions(
         llm_config: Default LLM config inherited by every node. Per-node
             llm_config merges over this (node wins on conflicts).
     """
-    decorated: dict[str, Node] = {}
     source_label = f"construct '{name}'"
+    nodes: list[Node] = []
     for item in functions:
         if not isinstance(item, Node) or _get_sidecar(item) is None:
             got = type(item).__name__
@@ -819,35 +814,41 @@ def construct_from_functions(
                 f"be a function decorated with @node."
             )
             raise ConstructError(msg)
-        field_name = item.name.replace("-", "_")
-        if field_name in decorated:
-            existing = decorated[field_name]
-            msg = (
-                f"@node name collision: two nodes resolve to field name "
-                f"'{field_name}' in {source_label}. "
-                f"One is '{existing.name}', another is '{item.name}'. "
-                f"Fix: pass explicit name= to @node on one of them."
-            )
-            raise ConstructError(msg)
-        decorated[field_name] = item
+        nodes.append(item)
 
     return _build_construct_from_decorated(
-        decorated, name, source_label, llm_config
+        nodes, name, source_label, llm_config
     )
 
 
 def _build_construct_from_decorated(
-    decorated: dict[str, Node],
+    nodes: list[Node],
     construct_name: str,
     source_label: str,
     llm_config: dict[str, Any] | None,
 ) -> Construct:
     """Core pipeline builder shared by construct_from_module and
-    construct_from_functions. Takes the already-discovered {field_name: Node}
-    dict and runs adjacency + topo sort + validation + raw_fn attach.
+    construct_from_functions. Builds {field_name: Node} with collision
+    checking, then runs adjacency + topo sort + validation + scripted shim
+    registration.
     """
-    if not decorated:
+    if not nodes:
         return Construct(name=construct_name, nodes=[], llm_config=llm_config or {})
+
+    # Build field_name → Node dict with collision detection.
+    decorated: dict[str, Node] = {}
+    for n in nodes:
+        field_name = n.name.replace("-", "_")
+        if field_name in decorated:
+            existing = decorated[field_name]
+            msg = (
+                f"@node name collision: two nodes resolve to field name "
+                f"'{field_name}' in {source_label}. "
+                f"One is '{existing.name}', another is '{n.name}'. "
+                f"Fix: pass explicit name= to @node on one of them."
+            )
+            raise ConstructError(msg)
+        decorated[field_name] = n
 
     # Build adjacency: for each node, which other nodes does it depend on?
     # Identify fan-out parameters: for nodes with Each modifier, params that
@@ -858,7 +859,7 @@ def _build_construct_from_decorated(
         if n.has_modifier(Each):
             sidecar = _get_sidecar(n)
             assert sidecar is not None
-            _, pnames, _ = sidecar
+            _, pnames = sidecar
             fan_out_params[field_name] = {p for p in pnames if p not in decorated}
 
     # Classify default-value constants: params with defaults that don't match
@@ -866,7 +867,7 @@ def _build_construct_from_decorated(
     for field_name, n in decorated.items():
         sidecar = _get_sidecar(n)
         assert sidecar is not None
-        fn, pnames, _ = sidecar
+        fn, pnames = sidecar
         param_res = _get_param_resolutions(n)
         sig = inspect.signature(fn)
         updated = False
@@ -887,7 +888,7 @@ def _build_construct_from_decorated(
     for field_name, n in decorated.items():
         sidecar = _get_sidecar(n)
         assert sidecar is not None
-        _, param_names, _ = sidecar
+        _, param_names = sidecar
         param_res = _get_param_resolutions(n)
         skip = fan_out_params.get(field_name, set())
         seen_deps: set[str] = set()
@@ -961,18 +962,12 @@ def _build_construct_from_decorated(
             if (k in decorated and k != field) or k in skip
         }
         if filtered != n.inputs:
-            try:
-                n.inputs = filtered
-            except (TypeError, ValueError):
-                pass
+            n.inputs = filtered
         # Mark the fan-out param on the Node so factory._extract_input and
         # the validator know which key reads from neo_each_item.
         if skip:
             fan_out_name = next(iter(skip))  # typically one fan-out param
-            try:
-                n.fan_out_param = fan_out_name
-            except (TypeError, ValueError):
-                pass
+            n.fan_out_param = fan_out_name
 
     # Register scripted shims for @node functions via register_scripted
     # so they dispatch through factory._make_scripted_wrapper — one path
@@ -1006,7 +1001,7 @@ def _register_node_scripted(n: Node, fan_out: set[str] | None = None) -> None:
     sidecar = _get_sidecar(n)
     if sidecar is None:
         return
-    fn, param_names, _ = sidecar
+    fn, param_names = sidecar
     param_res = _get_param_resolutions(n)
     _fan_out = fan_out or set()
 
@@ -1022,18 +1017,11 @@ def _register_node_scripted(n: Node, fan_out: set[str] | None = None) -> None:
             if resolution is not None:
                 kind, payload = resolution
                 args.append(_resolve_di_value(kind, payload, pname, config))
-            elif pname in _fan_out:
-                # Fan-out param: factory._extract_input routes this via
-                # node.fan_out_param → neo_each_item, so it's already in
-                # input_data under the param name.
-                args.append(
-                    input_data.get(pname)
-                    if isinstance(input_data, dict)
-                    else input_data
-                )
             else:
-                # Upstream @node value — already extracted by
-                # factory._extract_input into input_data[pname].
+                # Fan-out or upstream param — both are already in
+                # input_data under the param name (fan-out via
+                # node.fan_out_param → neo_each_item, upstream via
+                # factory._extract_input).
                 args.append(
                     input_data.get(pname)
                     if isinstance(input_data, dict)
