@@ -5,6 +5,10 @@
 **Docs & guides: [neograph.pro](https://neograph.pro)** — full documentation site with tutorials, API reference, and side-by-side LangGraph comparisons.
 
 ```bash
+# uv (recommended)
+uv add neograph
+
+# pip
 pip install neograph
 ```
 
