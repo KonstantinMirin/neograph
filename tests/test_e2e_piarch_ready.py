@@ -6,7 +6,7 @@ All LLM calls use fakes — no API keys needed.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Annotated, Any
 
 import pytest
 from pydantic import BaseModel
@@ -3792,8 +3792,8 @@ class TestNodeDecoratorOperator:
 #
 # Not every @node parameter must name an upstream @node. Three additional
 # parameter resolution mechanisms:
-#   1. FromInput[T]  — value from run(input={param: ...})
-#   2. FromConfig[T] — value from config["configurable"][param]
+#   1. Annotated[T, FromInput]  — value from run(input={param: ...})
+#   2. Annotated[T, FromConfig] — value from config["configurable"][param]
 #   3. default value  — compile-time constant, no upstream needed
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -3801,7 +3801,7 @@ class TestNodeDecoratorParams:
     """Scalar parameter support: FromInput, FromConfig, default constants."""
 
     def test_from_input_param(self):
-        """FromInput[str] param is delivered via run(input={'topic': 'x'})."""
+        """Annotated[str, FromInput] param is delivered via run(input={'topic': 'x'})."""
         import types as _types
 
         from neograph import FromInput, compile, construct_from_module, node, run
@@ -3809,7 +3809,7 @@ class TestNodeDecoratorParams:
         mod = _types.ModuleType("test_from_input_mod")
 
         @node(mode="scripted", output=RawText)
-        def greet(topic: FromInput[str]) -> RawText:
+        def greet(topic: Annotated[str, FromInput]) -> RawText:
             return RawText(text=f"Hello, {topic}!")
 
         mod.greet = greet
@@ -3821,7 +3821,7 @@ class TestNodeDecoratorParams:
         assert result["greet"] == RawText(text="Hello, world!")
 
     def test_from_config_param(self):
-        """FromConfig[RateLimiter] param is delivered via config['configurable']."""
+        """Annotated[RateLimiter, FromConfig] param is delivered via config['configurable']."""
         import types as _types
 
         from neograph import FromConfig, compile, construct_from_module, node, run
@@ -3838,7 +3838,7 @@ class TestNodeDecoratorParams:
         limiter = FakeRateLimiter()
 
         @node(mode="scripted", output=Claims)
-        def process(rate_limiter: FromConfig[FakeRateLimiter]) -> Claims:
+        def process(rate_limiter: Annotated[FakeRateLimiter, FromConfig]) -> Claims:
             rate_limiter.call()
             return Claims(items=[f"calls={rate_limiter.calls}"])
 
@@ -3899,8 +3899,8 @@ class TestNodeDecoratorParams:
         @node(mode="scripted", output=Claims)
         def combine(
             seed: RawText,
-            topic: FromInput[str],
-            logger: FromConfig[FakeLogger],
+            topic: Annotated[str, FromInput],
+            logger: Annotated[FakeLogger, FromConfig],
             separator: str = " | ",
         ) -> Claims:
             logger.log(f"combining {seed.text} with {topic}")
@@ -3930,7 +3930,7 @@ class TestNodeDecoratorParams:
         mod = _types.ModuleType("test_from_input_missing_mod")
 
         @node(mode="scripted", output=RawText)
-        def greet(topic: FromInput[str]) -> RawText:
+        def greet(topic: Annotated[str, FromInput]) -> RawText:
             if topic is None:
                 return RawText(text="no topic")
             return RawText(text=f"Hello, {topic}!")
@@ -4715,10 +4715,10 @@ class TestNodeDecoratorFanInEachInterop:
 
 
 class TestFromInputPydanticModel:
-    """neograph-6jd — FromInput[PydanticModel] bundles multiple config fields."""
+    """neograph-6jd — Annotated[PydanticModel, FromInput] bundles multiple config fields."""
 
     def test_from_input_bundle_basic(self):
-        """FromInput[RunCtx] populates each field from config['configurable']."""
+        """Annotated[RunCtx, FromInput] populates each field from config['configurable']."""
         from neograph import FromInput, compile, construct_from_functions, node, run
 
         class RunCtx(BaseModel):
@@ -4726,7 +4726,7 @@ class TestFromInputPydanticModel:
             project_root: str
 
         @node(output=RawText)
-        def fipb_produce(ctx: FromInput[RunCtx]) -> RawText:
+        def fipb_produce(ctx: Annotated[RunCtx, FromInput]) -> RawText:
             return RawText(text=f"{ctx.node_id}|{ctx.project_root}")
 
         pipeline = construct_from_functions("fipb", [fipb_produce])
@@ -4738,7 +4738,7 @@ class TestFromInputPydanticModel:
         assert result["fipb_produce"].text == "REQ-001|/tmp/repo"
 
     def test_from_input_bundle_with_upstream(self):
-        """FromInput[PydanticModel] composes with an upstream @node parameter."""
+        """Annotated[PydanticModel, FromInput] composes with an upstream @node parameter."""
         from neograph import FromInput, compile, construct_from_functions, node, run
 
         class RunCtx(BaseModel):
@@ -4749,7 +4749,7 @@ class TestFromInputPydanticModel:
             return Claims(items=["a", "b"])
 
         @node(output=RawText)
-        def fipb2_join(fipb2_source: Claims, ctx: FromInput[RunCtx]) -> RawText:
+        def fipb2_join(fipb2_source: Claims, ctx: Annotated[RunCtx, FromInput]) -> RawText:
             return RawText(text=f"{ctx.node_id}: {','.join(fipb2_source.items)}")
 
         pipeline = construct_from_functions("fipb2", [fipb2_source, fipb2_join])
@@ -4766,7 +4766,7 @@ class TestFromInputPydanticModel:
             project_root: str | None = None
 
         @node(output=RawText)
-        def fipbm_read(ctx: FromInput[PartialCtx]) -> RawText:
+        def fipbm_read(ctx: Annotated[PartialCtx, FromInput]) -> RawText:
             return RawText(text=f"id={ctx.node_id!r},root={ctx.project_root!r}")
 
         pipeline = construct_from_functions("fipbm", [fipbm_read])
@@ -4775,7 +4775,7 @@ class TestFromInputPydanticModel:
         assert result["fipbm_read"].text == "id='only-this',root=None"
 
     def test_from_config_bundle_with_shared_resource(self):
-        """FromConfig[PydanticModel] pulls every field from configurable as well."""
+        """Annotated[PydanticModel, FromConfig] pulls every field from configurable as well."""
         from neograph import FromConfig, compile, construct_from_functions, node, run
 
         class Shared(BaseModel):
@@ -4784,7 +4784,7 @@ class TestFromInputPydanticModel:
             max_items: int
 
         @node(output=RawText)
-        def fcb_read(shared: FromConfig[Shared]) -> RawText:
+        def fcb_read(shared: Annotated[Shared, FromConfig]) -> RawText:
             return RawText(text=f"{shared.tenant}:{shared.max_items}")
 
         pipeline = construct_from_functions("fcb", [fcb_read])
@@ -4801,7 +4801,7 @@ class TestOracleMergeFnDI:
     """neograph-9zj — @merge_fn decorator with FromInput/FromConfig DI."""
 
     def test_merge_fn_decorator_with_from_config_bundle(self):
-        """@merge_fn function can receive a bundled FromConfig[PydanticModel]
+        """@merge_fn function can receive a bundled Annotated[PydanticModel, FromConfig]
         whose fields are resolved from config['configurable'] keys."""
         from neograph import (
             Construct, FromConfig, Node, Oracle, compile,
@@ -4814,7 +4814,7 @@ class TestOracleMergeFnDI:
         @merge_fn
         def combine_with_prefix(
             variants: list[Claims],
-            shared: FromConfig[SharedResources],
+            shared: Annotated[SharedResources, FromConfig],
         ) -> Claims:
             # Collect all unique items, prepend the shared prefix.
             seen: list[str] = []
@@ -4847,7 +4847,7 @@ class TestOracleMergeFnDI:
         assert result["omfd_gen"].items == ["tag:alpha", "tag:beta"]
 
     def test_merge_fn_decorator_with_from_input(self):
-        """@merge_fn can also receive FromInput[T] values from run(input=...)."""
+        """@merge_fn can also receive Annotated[T, FromInput] values from run(input=...)."""
         from neograph import (
             Construct, FromInput, Node, Oracle, compile,
             merge_fn, register_scripted, run,
@@ -4856,7 +4856,7 @@ class TestOracleMergeFnDI:
         @merge_fn
         def tagged_merge(
             variants: list[Claims],
-            node_id: FromInput[str],
+            node_id: Annotated[str, FromInput],
         ) -> Claims:
             all_items = []
             for v in variants:

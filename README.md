@@ -82,12 +82,15 @@ def decompose() -> Claims: ...
 def validate(claims: Claims) -> ValidationResult: ...
 
 # Non-node parameters: runtime input, config, constants
+from typing import Annotated
+from neograph import FromInput, FromConfig
+
 @node(output=Report)
 def summarize(
-    claims: Claims,                        # upstream node
-    topic: FromInput[str],                 # from run(input={...})
-    rate_limiter: FromConfig[RateLimiter], # from config
-    max_items: int = 10,                   # constant
+    claims: Claims,                                   # upstream node
+    topic: Annotated[str, FromInput],                 # from run(input={...})
+    rate_limiter: Annotated[RateLimiter, FromConfig], # from config
+    max_items: int = 10,                              # constant
 ) -> Report: ...
 ```
 
@@ -110,7 +113,7 @@ Types are validated at assembly time — when you define the pipeline, not when 
 
 **Isolate with sub-constructs.** Typed I/O boundaries for sub-pipelines: `Construct("enrich", input=Claims, output=ScoredClaims, nodes=[...])`.
 
-**Observe everything.** Structured logs on every node. Pass trace providers and shared resources via `FromConfig[T]`.
+**Observe everything.** Structured logs on every node. Pass trace providers and shared resources via `Annotated[T, FromConfig]`.
 
 **Test at every level.** `node.run_isolated()` for unit tests. `compile()` + `run()` for integration. `forward()` direct-call for debugging.
 

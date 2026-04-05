@@ -177,7 +177,7 @@ pipeline = construct_from_module(sys.modules[__name__], name="review")
 ## What's next
 
 - [Modifier keywords](/node-api/modifier-kwargs/) — fan-out, ensemble, and interrupt as `@node` kwargs
-- [Parameters](/node-api/parameters/) — `FromInput[T]`, `FromConfig[T]`, and default values
+- [Parameters](/node-api/parameters/) — `Annotated[T, FromInput]`, `Annotated[T, FromConfig]`, and default values
 - [ForwardConstruct](/forward/control-flow/) — `if`/`for` as graph topology via a class-based API
 - Runtime construction with the `|` pipe syntax (see the [README examples](/))
 

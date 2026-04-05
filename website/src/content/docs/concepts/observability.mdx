@@ -1,6 +1,6 @@
 ---
 title: Observability
-description: Structured logging on every node, FromConfig[T] for trace providers, and opt-in LLM tracing via callbacks.
+description: Structured logging on every node, Annotated[T, FromConfig] for trace providers, and opt-in LLM tracing via callbacks.
 ---
 
 NeoGraph provides observability at two layers. The framework layer (structlog) is always on and captures every node execution, LLM call, tool invocation, and budget event. The tracing layer (Langfuse or any LangChain callback) is opt-in and provides deep LLM call traces with token-level detail.
@@ -115,15 +115,16 @@ If you do not configure structlog, it uses its defaults (which are reasonable fo
 
 ## Injecting trace providers via FromConfig
 
-Use `FromConfig[T]` to inject trace providers, span managers, or any shared observability resource into scripted nodes without threading them through state:
+Use `Annotated[T, FromConfig]` to inject trace providers, span managers, or any shared observability resource into scripted nodes without threading them through state:
 
 ```python
+from typing import Annotated
 from neograph import node, FromConfig
 
 @node(output=Report)
 def summarize(
     claims: Claims,
-    tracer: FromConfig[LangfuseTracer],
+    tracer: Annotated[LangfuseTracer, FromConfig],
 ) -> Report:
     with tracer.span("summarize-claims"):
         result = Report(summary=f"{len(claims.items)} claims")
@@ -145,7 +146,7 @@ result = run(
 )
 ```
 
-This pattern works for any shared resource -- rate limiters, database pools, metrics collectors -- not just tracing. The key is that `FromConfig[T]` reads from `config["configurable"]`, which is propagated to every node by the LangGraph runtime.
+This pattern works for any shared resource -- rate limiters, database pools, metrics collectors -- not just tracing. The key is that `Annotated[T, FromConfig]` reads from `config["configurable"]`, which is propagated to every node by the LangGraph runtime.
 
 ## The config\["configurable"\] pattern
 

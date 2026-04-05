@@ -5,37 +5,68 @@ description: FromInput, FromConfig, and default values — how to pass runtime i
 
 Not every parameter in a `@node` function is an upstream dependency. NeoGraph recognizes four kinds of parameters and resolves each one differently at runtime.
 
+The DI surface uses `typing.Annotated` with `FromInput` / `FromConfig` as markers — the same FastAPI-style pattern `Annotated[User, Depends(...)]` uses. The primary annotation is the real type; the marker tells neograph where the value comes from.
+
 ## The four kinds
 
 | Kind | Annotation | Resolved from | Example |
 |---|---|---|---|
 | Upstream node | Plain type (`Claims`) | Graph state, by parameter name | `decompose: Claims` |
-| Runtime input | `FromInput[T]` | `run(input={...})` | `topic: FromInput[str]` |
-| Shared resource | `FromConfig[T]` | `config['configurable']` | `limiter: FromConfig[RateLimiter]` |
+| Runtime input | `Annotated[T, FromInput]` | `run(input={...})` | `topic: Annotated[str, FromInput]` |
+| Shared resource | `Annotated[T, FromConfig]` | `config['configurable']` | `limiter: Annotated[RateLimiter, FromConfig]` |
 | Constant | Default value | Compile-time default | `max_items: int = 10` |
 
 The framework classifies parameters at decoration time (for `FromInput` and `FromConfig`) and at `construct_from_module` time (for constants — because it needs the full set of decorated names to distinguish "unknown upstream" from "has a default").
 
-## FromInput[T]
+## Annotated[T, FromInput]
 
 Values injected from `run(input={...})`. Use this for data that varies per execution — user queries, document IDs, configuration overrides.
 
 ```python
+from typing import Annotated
 from neograph import node, FromInput
 
 @node(output=RawText)
-def fetch(doc_id: FromInput[str]) -> RawText:
+def fetch(doc_id: Annotated[str, FromInput]) -> RawText:
     # doc_id comes from run(graph, input={"doc_id": "DOC-42"})
     return RawText(text=f"Contents of {doc_id}")
 ```
 
 At runtime, `run()` injects all `input` fields into `config["configurable"]`. The framework reads `config["configurable"]["doc_id"]` and passes it to the function. If the key is absent, `None` is passed.
 
-## FromConfig[T]
+### Bundling fields into a context model
+
+When the same parameter is used by many nodes (pipeline metadata, tenant info, user context), declare a Pydantic model once and annotate the parameter with it. neograph constructs the model by pulling each of its fields from `config["configurable"]`:
+
+```python
+from typing import Annotated
+from pydantic import BaseModel
+from neograph import node, FromInput
+
+class RunCtx(BaseModel):
+    node_id: str
+    project_root: str
+
+@node(output=Report)
+def analyze(upstream: Claims, ctx: Annotated[RunCtx, FromInput]) -> Report:
+    log(ctx.node_id, ctx.project_root)
+    ...
+
+result = run(graph, input={
+    "node_id": "REQ-001",
+    "project_root": "/tmp/repo",
+    ...
+})
+```
+
+Every `@node` that needs the context annotates one parameter with `Annotated[RunCtx, FromInput]` — the framework handles reconstruction. One line per node instead of three.
+
+## Annotated[T, FromConfig]
 
 Shared resources injected via `config['configurable']`. Use this for objects that live across the entire pipeline — rate limiters, database connections, API clients.
 
 ```python
+from typing import Annotated
 from neograph import node, FromConfig
 
 class RateLimiter:
@@ -43,10 +74,21 @@ class RateLimiter:
         return True
 
 @node(output=Result)
-def process(data: UpstreamData, limiter: FromConfig[RateLimiter]) -> Result:
+def process(data: UpstreamData, limiter: Annotated[RateLimiter, FromConfig]) -> Result:
     if not limiter.check():
         return Result(status="rate_limited")
     return Result(status="ok")
+```
+
+`FromConfig` bundles work the same way as `FromInput` bundles — pass a Pydantic model as the inner type and every field is pulled from `config["configurable"]`:
+
+```python
+class Shared(BaseModel):
+    tenant: str
+    api_key: str
+
+@node(output=Result)
+def process(data: Data, shared: Annotated[Shared, FromConfig]) -> Result: ...
 ```
 
 Pass the resource when running:
@@ -80,6 +122,7 @@ The default is captured at decoration time and passed to every invocation. Const
 A single function can use all four kinds:
 
 ```python
+from typing import Annotated
 from neograph import node, FromInput, FromConfig
 from pydantic import BaseModel
 
@@ -99,8 +142,8 @@ class RateLimiter:
 def summarize(
     claims: Claims,                        # upstream node — wired by parameter name
     scores: Scores,                        # upstream node — fan-in, second edge
-    topic: FromInput[str],                 # from run(input={"topic": "security"})
-    rate_limiter: FromConfig[RateLimiter], # from config["configurable"]["rate_limiter"]
+    topic: Annotated[str, FromInput],                 # from run(input={"topic": "security"})
+    rate_limiter: Annotated[RateLimiter, FromConfig], # from config["configurable"]["rate_limiter"]
     max_items: int = 10,                   # compile-time constant
 ) -> Report:
     rate_limiter.wait()
@@ -130,8 +173,8 @@ result = run(graph, input={
 
 When `construct_from_module` processes a parameter:
 
-1. If annotated `FromInput[T]` — classified as runtime input.
-2. If annotated `FromConfig[T]` — classified as shared resource.
+1. If annotated `Annotated[T, FromInput]` — classified as runtime input.
+2. If annotated `Annotated[T, FromConfig]` — classified as shared resource.
 3. If the name matches a decorated `@node` in the module — classified as upstream dependency (creates an edge).
 4. If the parameter has a default value — classified as constant.
 5. Otherwise — `ConstructError` with a message listing available `@node` names.

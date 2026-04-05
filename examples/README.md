@@ -3,7 +3,7 @@
 All examples use `@node` as the primary construction API unless noted.
 Examples marked "declarative" use `Node`/`Construct` directly — either because they
 demonstrate sub-constructs (which require explicit I/O boundaries) or because they
-exercise config-injection patterns not yet ported to `FromConfig[T]`.
+exercise config-injection patterns not yet ported to `Annotated[T, FromConfig]`.
 
 ## Core examples
 
@@ -27,7 +27,7 @@ exercise config-injection patterns not yet ported to `FromConfig[T]`.
 
 - **Example 05** — sub-constructs use `Construct(input=X, output=Y, nodes=[...])` for isolation boundaries. `construct_from_module` produces one Construct per module; sub-constructs need explicit typing.
 - **Example 10** — the `enrich` sub-construct requires declarative `Construct(input=..., output=...)`. The top-level producer uses `@node`.
-- **Example 11** — uses `config['configurable']` in scripted nodes. Migrating requires `FromConfig[T]` annotation on the decorated function.
+- **Example 11** — uses `config['configurable']` in scripted nodes. Migrating requires `Annotated[T, FromConfig]` annotation on the decorated function.
 
 ## `vs_langgraph/`
 

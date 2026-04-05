@@ -32,7 +32,7 @@ It's for real-world execution — not vibes. Every edge in your graph is a typed
 
 - **Typed end to end.** Inputs and outputs are Pydantic models. Parameter names are dependencies. Type mismatches fail at assembly time, not in production at 2 a.m.
 - **Durable by default.** Compiles to standard LangGraph — you get checkpointing, interrupts, streaming, and resume-from-failure for free.
-- **Observable out of the box.** Structured logs on every node. Trace providers and shared resources flow through `FromConfig[T]` without polluting signatures.
+- **Observable out of the box.** Structured logs on every node. Trace providers and shared resources flow through `Annotated[T, FromConfig]` without polluting signatures.
 - **No wiring.** A function is a node. A parameter name is an edge. An `if` is a branch. You write the logic; the graph assembles itself.
 - **Three APIs, one compiler.** `@node` for most agents. `ForwardConstruct` for Python `if`/`for`/`try` control flow. Programmatic `|` pipe for runtime construction.
 - **No lock-in.** `mode='raw'` is a first-class escape hatch to raw LangGraph.

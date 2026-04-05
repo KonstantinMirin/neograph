@@ -5,6 +5,74 @@ All notable changes to NeoGraph will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] — 0.2.0.dev (develop branch)
+
+### Changed — BREAKING
+
+**Dependency-injection surface switched from `FromInput[T]` to `Annotated[T, FromInput]`.**
+The previous form used `FromInput` / `FromConfig` as `typing.Generic` subscriptions,
+which had a hidden rule: `FromInput[str]` meant "pull the parameter by name" but
+`FromInput[SomePydanticModel]` silently meant "bundle — pull every field of the
+model". Same syntax, two different resolution strategies based on whether the inner
+type happened to be a `BaseModel`.
+
+The 0.2 surface uses `typing.Annotated` with `FromInput` / `FromConfig` as
+markers — the FastAPI dependency-injection pattern (`Annotated[User, Depends(...)]`).
+The primary annotation is the real type; the marker tells neograph where the value
+comes from:
+
+```python
+from typing import Annotated
+from neograph import node, FromInput, FromConfig
+
+# Before (0.1.x):
+def my_node(topic: FromInput[str]) -> ...: ...
+def my_node(ctx: FromInput[RunCtx]) -> ...: ...         # bundled (silently different)
+
+# After (0.2.x):
+def my_node(topic: Annotated[str, FromInput]) -> ...: ...
+def my_node(ctx: Annotated[RunCtx, FromInput]) -> ...: ...  # bundled (same syntax)
+```
+
+**Why:** one resolution path, no hidden BaseModel rule, primary annotation is the
+real type (IDE autocomplete sees `ctx: RunCtx` directly), standard typing semantics,
+matches the FastAPI pattern Python developers already know. The internal
+classifier is simpler and has fewer failure modes.
+
+**Migration:** mechanical — wrap every existing `FromInput[T]` or `FromConfig[T]`
+in `Annotated[T, FromInput]` / `Annotated[T, FromConfig]`. The old Generic-
+subscription form is removed entirely (no deprecation shim — we are at 0.2).
+Attempting `FromInput[str]` now raises `TypeError: type 'FromInput' is not
+subscriptable`.
+
+### Added
+
+- **`@merge_fn` decorator** for Oracle merge functions with `FromInput` /
+  `FromConfig` dependency injection. The first parameter receives the list of
+  variants; subsequent parameters are resolved the same way as `@node`
+  parameters. Legacy `(variants, config) -> output` merge functions still work
+  unchanged. See `TestOracleMergeFnDI` for end-to-end examples.
+- **`FromInput[PydanticModel]` bundles** (via the new `Annotated` surface) —
+  constructs the model by pulling each of its declared fields from
+  `config['configurable']` under the field's name. Eliminates per-field
+  boilerplate for pipeline metadata (`node_id`, `project_root`, tenant
+  context, etc.).
+- **Frame-walking classifier** — handles locally-defined Pydantic model classes
+  (e.g. `class RunCtx` inside a test method) by walking the caller's frame
+  stack at decoration time. Needed because `from __future__ import annotations`
+  strips closure references, the same technique Pydantic uses for forward-ref
+  resolution.
+
+### Fixed
+
+- **`_validate_fan_in_types` unwraps Each-modified upstream outputs as
+  `dict[str, output]`** before the type-compatibility check (`neograph-ayq`).
+  Previously, a downstream `@node` parameter annotated `dict[str, MatchResult]`
+  against an upstream with `.map()` would raise a false-positive rejection
+  because the fan-in walker ignored the modifier. The `_construct_validation`
+  walker already had this rule (fixed in 0.1.0 via `neograph-8k3`); this brings
+  the `@node` walker in line.
+
 ## [0.1.0] - 2026-04-05
 
 Initial public release.

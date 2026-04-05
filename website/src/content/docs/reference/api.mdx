@@ -79,27 +79,37 @@ pipeline = construct_from_module(sys.modules[__name__], name="my-pipeline")
 
 Raises `ConstructError` for unknown parameters, cycles, self-dependencies, and name collisions. Fan-in type validation runs across all parameters.
 
-### `FromInput[T]`
+### `FromInput`
 
-Annotation wrapper for parameters that come from `run(input={...})`:
+Dependency-injection marker used inside `typing.Annotated`. Parameters annotated with `Annotated[T, FromInput]` are resolved from `run(input={...})` at runtime (runtime-variable data — user queries, document IDs, per-call configuration).
 
 ```python
+from typing import Annotated
+from neograph import node, FromInput
+
 @node(output=Report)
-def summarize(claims: Claims, topic: FromInput[str]) -> Report: ...
+def summarize(claims: Claims, topic: Annotated[str, FromInput]) -> Report: ...
 
 run(graph, input={'topic': 'security', 'node_id': 'demo'})
 ```
 
-### `FromConfig[T]`
+If the inner type `T` is a Pydantic `BaseModel` subclass, `FromInput` bundles: it constructs an instance by pulling each of the model's declared fields from `config['configurable']`. Use this to inject a typed context object into many nodes without repeating per-field parameters.
 
-Annotation wrapper for parameters that come from `config['configurable']`:
+### `FromConfig`
+
+Dependency-injection marker used inside `typing.Annotated`. Parameters annotated with `Annotated[T, FromConfig]` are resolved from `config['configurable']` at runtime (shared infrastructure — rate limiters, database connections, trace providers).
 
 ```python
+from typing import Annotated
+from neograph import node, FromConfig
+
 @node(output=Result)
-def process(data: Data, tracer: FromConfig[Tracer]) -> Result: ...
+def process(data: Data, tracer: Annotated[Tracer, FromConfig]) -> Result: ...
 
 run(graph, input={...}, config={'configurable': {'tracer': my_tracer}})
 ```
+
+`FromConfig` also bundles for Pydantic models — `Annotated[Shared, FromConfig]` constructs a `Shared` instance from per-field `configurable` entries.
 
 ---
 

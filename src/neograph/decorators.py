@@ -59,34 +59,53 @@ import sys
 import textwrap
 import warnings
 import weakref
-from typing import Any, Callable, Generic, Literal, TypeVar, get_origin
-
-T = TypeVar("T")
+from typing import Annotated, Any, Callable, Literal, get_args, get_origin
 
 
-class FromInput(Generic[T]):
-    """Annotation wrapper: parameter value comes from run(input={param: ...}).
+class FromInput:
+    """Dependency-injection marker: parameter value comes from ``run(input=...)``.
 
-    Usage::
+    Use as a marker inside ``typing.Annotated``. The primary annotation is
+    the real type of the parameter; ``FromInput`` tells neograph where the
+    value comes from at runtime::
 
-        @node(mode="scripted", output=RawText)
-        def greet(topic: FromInput[str]) -> RawText: ...
+        from typing import Annotated
+        from neograph import node, FromInput
 
-    At runtime, ``topic`` is resolved from ``config["configurable"][param_name]``
-    (run() injects all input fields into configurable). If absent, None is passed.
+        @node(output=Result)
+        def my_node(topic: Annotated[str, FromInput]) -> Result: ...
+
+    ``topic`` is resolved from ``config["configurable"]["topic"]`` — ``run()``
+    injects every key of ``input=`` into ``configurable`` for you. If the
+    key is absent, ``None`` is passed.
+
+    Pydantic models work the same way: ``Annotated[MyModel, FromInput]``
+    constructs an instance by pulling each of the model's declared fields
+    from ``config["configurable"]`` under that field's name. This is how
+    you bundle pipeline metadata (``node_id``, ``project_root``, ...) into
+    a single typed context argument.
     """
 
 
-class FromConfig(Generic[T]):
-    """Annotation wrapper: parameter value comes from config["configurable"].
+class FromConfig:
+    """Dependency-injection marker: parameter value comes from ``config['configurable']``.
 
-    Usage::
+    Use as a marker inside ``typing.Annotated``::
 
-        @node(mode="scripted", output=Claims)
-        def process(rate_limiter: FromConfig[RateLimiter]) -> Claims: ...
+        from typing import Annotated
+        from neograph import node, FromConfig
 
-    At runtime, ``rate_limiter`` is resolved from
-    ``config["configurable"]["rate_limiter"]``. If absent, None is passed.
+        @node(output=Result)
+        def my_node(limiter: Annotated[RateLimiter, FromConfig]) -> Result: ...
+
+    ``limiter`` is resolved from ``config["configurable"]["limiter"]`` at
+    runtime. This is the standard path for shared infrastructure (rate
+    limiters, trace providers, DB connections) that you pass in via
+    ``run(graph, config={"configurable": {...}})``.
+
+    Pydantic models work the same way: ``Annotated[Shared, FromConfig]``
+    constructs an instance from per-field ``configurable`` entries. Use
+    this when your shared resources are a typed bundle.
     """
 
 from neograph._construct_validation import ConstructError, _fmt_type, _types_compatible
@@ -149,24 +168,34 @@ def _classify_di_params(
     sig: inspect.Signature,
     frame_depth: int = 2,
 ) -> ParamResolution:
-    """Classify a function's parameters into FromInput/FromConfig resolution
-    kinds. Shared between @node and @merge_fn.
+    """Classify a function's parameters by FromInput/FromConfig markers.
 
-    Frame walking: we look up string annotations (under `from __future__
-    import annotations`) by peeking at the caller's frame locals, because
-    annotations in that mode are plain strings and don't create closure
-    references to locally-defined classes.
+    The DI surface uses ``typing.Annotated`` with ``FromInput`` /
+    ``FromConfig`` as markers — the FastAPI dependency-injection pattern.
+    The primary annotation is the real type; the marker tells neograph
+    where the value comes from at runtime::
 
-    frame_depth: how many frames up from this function the actual
-    decorator-call frame lives. For @node with a call via ``decorator(f)``
-    inside ``node()``, that's 2. @merge_fn is similar.
+        topic: Annotated[str, FromInput]            # scalar per-param
+        ctx:   Annotated[RunCtx, FromInput]         # bundle from BaseModel fields
+        limit: Annotated[RateLimiter, FromConfig]   # shared resource per-param
+
+    Under ``from __future__ import annotations`` the annotation arrives as
+    a string, so we walk the caller's frame stack at decoration time to
+    capture locally-defined classes (e.g. ``class RunCtx`` inside a test
+    method) that aren't in the function's globals or closure. This is the
+    same technique Pydantic uses for forward-ref resolution.
+
+    frame_depth: how many frames up from this helper to the user's call
+    site. For @node's ``decorator(f)`` → ``_classify_di_params(...)``
+    chain, that's 2. @merge_fn is the same.
     """
-    from typing import get_args as _get_args
     from pydantic import BaseModel as _BaseModel
 
+    # Build a resolution namespace: markers, function closure, caller locals.
     extra_locals: dict[str, Any] = {
         "FromInput": FromInput,
         "FromConfig": FromConfig,
+        "Annotated": Annotated,
     }
     try:
         cv = inspect.getclosurevars(f)
@@ -174,7 +203,6 @@ def _classify_di_params(
         extra_locals.update(cv.nonlocals)
     except (TypeError, ValueError):
         pass
-    # Walk up the call stack to capture locally-defined classes.
     try:
         caller = sys._getframe(frame_depth)  # noqa: SLF001
         hops = 0
@@ -189,61 +217,45 @@ def _classify_di_params(
 
     try:
         import typing as _typing
-        resolved = _typing.get_type_hints(f, localns=extra_locals)
+        # include_extras=True preserves the Annotated marker metadata.
+        resolved = _typing.get_type_hints(
+            f, localns=extra_locals, include_extras=True,
+        )
     except Exception:
         resolved = {}
 
-    def _extract_bundle_model(ann: Any) -> Any | None:
-        args = _get_args(ann)
-        if not args:
-            return None
-        inner = args[0]
-        if isinstance(inner, type) and issubclass(inner, _BaseModel):
-            return inner
-        return None
-
-    def _try_resolve_string_inner(ann_str: str, prefix: str) -> Any | None:
-        if not ann_str.startswith(prefix + "["):
-            return None
-        inner_name = ann_str[len(prefix) + 1:].rstrip("]").strip()
-        if inner_name and inner_name[0] in ("'", '"'):
-            inner_name = inner_name.strip("'\"")
-        cls_obj = extra_locals.get(inner_name)
-        if isinstance(cls_obj, type) and issubclass(cls_obj, _BaseModel):
-            return cls_obj
-        return None
-
     param_res: ParamResolution = {}
     for p in sig.parameters.values():
-        ann = resolved.get(p.name, p.annotation)
-        if ann is inspect.Parameter.empty:
+        ann = resolved.get(p.name)
+        if ann is None or ann is inspect.Parameter.empty:
             continue
-        origin = get_origin(ann)
-        if origin is FromInput:
-            model_cls = _extract_bundle_model(ann)
-            if model_cls is not None:
-                param_res[p.name] = ("from_input_model", model_cls)
-            else:
-                param_res[p.name] = ("from_input", None)
-        elif origin is FromConfig:
-            model_cls = _extract_bundle_model(ann)
-            if model_cls is not None:
-                param_res[p.name] = ("from_config_model", model_cls)
-            else:
-                param_res[p.name] = ("from_config", None)
-        elif isinstance(ann, str):
-            if ann.startswith("FromInput[") or ann.startswith("FromInput "):
-                model_cls = _try_resolve_string_inner(ann, "FromInput")
-                if model_cls is not None:
-                    param_res[p.name] = ("from_input_model", model_cls)
-                else:
-                    param_res[p.name] = ("from_input", None)
-            elif ann.startswith("FromConfig[") or ann.startswith("FromConfig "):
-                model_cls = _try_resolve_string_inner(ann, "FromConfig")
-                if model_cls is not None:
-                    param_res[p.name] = ("from_config_model", model_cls)
-                else:
-                    param_res[p.name] = ("from_config", None)
+        if get_origin(ann) is not Annotated:
+            continue
+        args = get_args(ann)
+        if len(args) < 2:
+            continue
+        inner_type, *markers = args
+
+        # Match the first FromInput/FromConfig marker we find. Users can
+        # stack other Annotated metadata (docs, validators) alongside —
+        # we only care about DI markers.
+        kind_base: str | None = None
+        for marker in markers:
+            if marker is FromInput:
+                kind_base = "from_input"
+                break
+            if marker is FromConfig:
+                kind_base = "from_config"
+                break
+        if kind_base is None:
+            continue
+
+        # Pydantic BaseModel → bundled form (build instance from scattered
+        # fields). Everything else → per-parameter lookup by name.
+        if isinstance(inner_type, type) and issubclass(inner_type, _BaseModel):
+            param_res[p.name] = (f"{kind_base}_model", inner_type)
+        else:
+            param_res[p.name] = (kind_base, None)
 
     return param_res
 

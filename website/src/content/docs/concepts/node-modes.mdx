@@ -140,14 +140,15 @@ def report(claims: Claims, scores: ScoredClaims, verified: VerifiedClaims) -> Re
 Not every parameter needs to be an upstream node. Use type annotations to declare where each value comes from:
 
 ```python
+from typing import Annotated
 from neograph import node, FromInput, FromConfig
 
 @node(output=Report)
 def summarize(
-    claims: Claims,                        # upstream node
-    topic: FromInput[str],                 # from run(input={...})
-    rate_limiter: FromConfig[RateLimiter], # from config['configurable']
-    max_items: int = 10,                   # constant (default value)
+    claims: Claims,                                   # upstream node
+    topic: Annotated[str, FromInput],                 # from run(input={...})
+    rate_limiter: Annotated[RateLimiter, FromConfig], # from config['configurable']
+    max_items: int = 10,                              # constant (default value)
 ) -> Report:
     rate_limiter.acquire()
     items = claims.items[:max_items]
