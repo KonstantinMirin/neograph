@@ -12,6 +12,11 @@ Pipeline:
 This combines: produce, scripted, Oracle, Each, Operator, subgraph,
 per-node LLM config, tool budgets, checkpointer, and observability.
 
+The decompose node uses the @node decorator with Oracle kwargs for a
+concise LLM-mode declaration. Scripted nodes use register_scripted +
+Node.scripted because the pipeline includes a Construct subgraph that
+requires manual assembly (construct_from_module cannot inline subgraphs).
+
 Run (with fakes):
     python examples/10_full_pipeline.py
 """
@@ -24,7 +29,7 @@ from pydantic import BaseModel
 
 from neograph import (
     Construct, Each, Node, Operator, Oracle, Tool,
-    compile, configure_llm, run,
+    compile, configure_llm, node, run,
     register_condition, register_scripted, register_tool_factory,
 )
 
@@ -167,7 +172,6 @@ def verify_cluster(input_data, config):
     )
 
 def check_all_passed(input_data, config):
-    # In a real pipeline, this would read verify results from state
     return ValidationResult(passed=False, issues=["observability cluster failed"])
 
 def build_report(input_data, config):
@@ -199,15 +203,11 @@ register_condition("needs_review", needs_review)
 # PIPELINE ASSEMBLY
 # ══════════════════════════════════════════════════════════════════════════
 
-# Step 1: Decompose requirement into claims — 3 generators, merge
-decompose = Node(
-    name="decompose",
-    mode="produce",
-    output=Claims,
-    model="fast",
-    prompt="decompose",
-    llm_config={"temperature": 0.8},
-) | Oracle(n=3, merge_fn="merge_claims")
+# Step 1: Decompose — @node with Oracle kwargs (LLM mode, no register_scripted needed)
+@node(output=Claims, prompt="decompose", model="fast",
+      llm_config={"temperature": 0.8},
+      ensemble_n=3, merge_fn="merge_claims")
+def decompose() -> Claims: ...
 
 # Step 2: Enrich — sub-pipeline with isolated state
 enrich = Construct(

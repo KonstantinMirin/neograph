@@ -500,25 +500,29 @@ class TestNodeMap:
 class TestOperator:
     def test_interrupt_on_failure(self):
         """Graph pauses when Operator condition is met."""
+        import types as _types
+
         from langgraph.checkpoint.memory import MemorySaver
-        from langgraph.types import interrupt
 
-        from neograph.factory import register_condition, register_scripted
+        from neograph import construct_from_module, node
 
-        register_scripted("validate", lambda input_data, config: ValidationResult(
-            passed=False,
-            issues=["missing stakeholder coverage"],
-        ))
+        mod = _types.ModuleType("test_operator_mod")
 
-        register_condition("validation_failed", lambda state: (
-            {"issues": state.validate.issues} if state.validate and not state.validate.passed else None
-        ))
+        @node(
+            mode="scripted",
+            output=ValidationResult,
+            interrupt_when=lambda state: (
+                {"issues": state.validate.issues}
+                if state.validate and not state.validate.passed
+                else None
+            ),
+        )
+        def validate() -> ValidationResult:
+            return ValidationResult(passed=False, issues=["missing stakeholder coverage"])
 
-        validate = Node.scripted(
-            "validate", fn="validate", output=ValidationResult
-        ) | Operator(when="validation_failed")
+        mod.validate = validate
 
-        pipeline = Construct("test-operator", nodes=[validate])
+        pipeline = construct_from_module(mod, name="test-operator")
         graph = compile(pipeline, checkpointer=MemorySaver())
 
         # Run — with checkpointer, interrupt returns result with __interrupt__
@@ -689,21 +693,25 @@ class TestOperatorContinues:
 
     def test_operator_passes_when_condition_falsy(self):
         """Graph runs through Operator without pausing when condition returns None."""
-        from neograph.factory import register_condition, register_scripted
-
-        register_scripted("check_quality", lambda input_data, config: ValidationResult(
-            passed=True, issues=[],
-        ))
-
-        register_condition("validation_failed", lambda state: None)  # always falsy
-
-        validate = Node.scripted(
-            "validate", fn="check_quality", output=ValidationResult
-        ) | Operator(when="validation_failed")
+        import types as _types
 
         from langgraph.checkpoint.memory import MemorySaver
 
-        pipeline = Construct("test-operator-pass", nodes=[validate])
+        from neograph import construct_from_module, node
+
+        mod = _types.ModuleType("test_operator_continues_mod")
+
+        @node(
+            mode="scripted",
+            output=ValidationResult,
+            interrupt_when=lambda state: None,  # always falsy
+        )
+        def validate() -> ValidationResult:
+            return ValidationResult(passed=True, issues=[])
+
+        mod.validate = validate
+
+        pipeline = construct_from_module(mod, name="test-operator-pass")
         graph = compile(pipeline, checkpointer=MemorySaver())
         result = run(graph, input={"node_id": "test-001"}, config={"configurable": {"thread_id": "pass-test"}})
 
@@ -716,25 +724,30 @@ class TestOperatorResume:
 
     def test_interrupt_then_resume(self):
         """Graph pauses at interrupt, resumes with human feedback via run()."""
+        import types as _types
+
         from langgraph.checkpoint.memory import MemorySaver
 
-        from neograph.factory import register_condition, register_scripted
+        from neograph import construct_from_module, node
 
-        register_scripted("validate_thing", lambda input_data, config: ValidationResult(
-            passed=False, issues=["bad coverage"],
-        ))
+        mod = _types.ModuleType("test_operator_resume_mod")
 
-        register_condition("needs_review", lambda state: (
-            {"issues": state.validate_thing.issues}
-            if state.validate_thing and not state.validate_thing.passed
-            else None
-        ))
+        @node(
+            mode="scripted",
+            output=ValidationResult,
+            name="validate-thing",
+            interrupt_when=lambda state: (
+                {"issues": state.validate_thing.issues}
+                if state.validate_thing and not state.validate_thing.passed
+                else None
+            ),
+        )
+        def validate_thing() -> ValidationResult:
+            return ValidationResult(passed=False, issues=["bad coverage"])
 
-        validate = Node.scripted(
-            "validate-thing", fn="validate_thing", output=ValidationResult
-        ) | Operator(when="needs_review")
+        mod.validate_thing = validate_thing
 
-        pipeline = Construct("test-resume", nodes=[validate])
+        pipeline = construct_from_module(mod, name="test-resume")
         graph = compile(pipeline, checkpointer=MemorySaver())
 
         config = {"configurable": {"thread_id": "resume-test"}}

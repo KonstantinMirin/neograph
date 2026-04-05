@@ -4,10 +4,10 @@ Scenario: A document processing pipeline that extracts text from a source,
 splits it into individual claims, then classifies each claim by category.
 All logic is pure Python — no API keys needed.
 
-This is the simplest NeoGraph pipeline: three scripted nodes connected
-sequentially. Data flows through typed state: extract produces RawText,
-split consumes RawText and produces Claims, classify consumes Claims
-and produces ClassifiedClaims.
+The pipeline is built from @node-decorated functions with parameter-name
+dependency inference. No explicit `nodes=[...]` list; `construct_from_module`
+walks this module and topologically sorts the decorated functions into a
+Construct.
 
 Run:
     python examples/01_scripted_pipeline.py
@@ -15,9 +15,11 @@ Run:
 
 from __future__ import annotations
 
+import sys
+
 from pydantic import BaseModel
 
-from neograph import Construct, Node, compile, register_scripted, run
+from neograph import compile, construct_from_module, node, run
 
 
 # ── Schemas ──────────────────────────────────────────────────────────────
@@ -32,42 +34,37 @@ class ClassifiedClaims(BaseModel, frozen=True):
     classified: list[dict[str, str]]
 
 
-# ── Scripted functions ───────────────────────────────────────────────────
-# Each function receives (input_data, config) where input_data is the
-# typed output from a previous node, or None for the first node.
+# ── Nodes ────────────────────────────────────────────────────────────────
+# Each @node-decorated function becomes a Node whose dependencies are
+# inferred from its parameter names. Parameter name = upstream node name
+# in Python-identifier form (hyphens are underscores).
 
-def extract_text(input_data, config):
+@node(output=RawText)
+def extract() -> RawText:
     """Simulate extracting text from a document source."""
     return RawText(text="The system shall log all access attempts. The system shall validate input.")
 
-def split_claims(input_data, config):
+
+@node(output=Claims)
+def split(extract: RawText) -> Claims:
     """Split raw text into individual claims by sentence."""
-    sentences = [s.strip() for s in input_data.text.split(".") if s.strip()]
+    sentences = [s.strip() for s in extract.text.split(".") if s.strip()]
     return Claims(items=sentences)
 
-def classify_claims(input_data, config):
+
+@node(output=ClassifiedClaims)
+def classify(split: Claims) -> ClassifiedClaims:
     """Classify each claim by category based on keywords."""
     classified = []
-    for claim in input_data.items:
+    for claim in split.items:
         category = "security" if "access" in claim.lower() or "validate" in claim.lower() else "general"
         classified.append({"claim": claim, "category": category})
     return ClassifiedClaims(classified=classified)
 
 
-# ── Register functions ───────────────────────────────────────────────────
+# ── Build pipeline — no nodes=[...] list, no order maintenance ───────────
 
-register_scripted("extract_text", extract_text)
-register_scripted("split_claims", split_claims)
-register_scripted("classify_claims", classify_claims)
-
-
-# ── Build pipeline ───────────────────────────────────────────────────────
-
-extract = Node.scripted("extract", fn="extract_text", output=RawText)
-split = Node.scripted("split", fn="split_claims", input=RawText, output=Claims)
-classify = Node.scripted("classify", fn="classify_claims", input=Claims, output=ClassifiedClaims)
-
-pipeline = Construct("doc-processor", nodes=[extract, split, classify])
+pipeline = construct_from_module(sys.modules[__name__], name="doc-processor")
 
 
 # ── Run ──────────────────────────────────────────────────────────────────

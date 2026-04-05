@@ -13,6 +13,7 @@ Run:
 from __future__ import annotations
 
 import os
+import sys
 
 import structlog
 from dotenv import load_dotenv
@@ -23,7 +24,7 @@ from langchain_openai import ChatOpenAI
 from langfuse.langchain import CallbackHandler
 from pydantic import BaseModel
 
-from neograph import Construct, Node, Oracle, compile, configure_llm, register_scripted, run
+from neograph import compile, configure_llm, construct_from_module, node, run
 
 # ── Structlog: human-readable for this example ──────────────────────────
 
@@ -85,31 +86,21 @@ def prompt_compiler(template: str, input_data) -> list[dict]:
 
 configure_llm(llm_factory=llm_factory, prompt_compiler=prompt_compiler)
 
-# ── Scripted node: format output ─────────────────────────────────────────
-
-
-def format_report(input_data, config):
-    return Topic(text="Final report:\n" + "\n".join(f"  - {c}" for c in input_data.items))
-
-
-register_scripted("format_report", format_report)
-
 # ── Pipeline ─────────────────────────────────────────────────────────────
 
 # produce: LLM decomposes topic into claims (3 variants via Oracle, LLM merge)
-decompose = Node(
-    name="decompose",
-    mode="produce",
-    input=Topic,
-    output=Claims,
-    model="fast",
-    prompt="decompose",
-) | Oracle(n=3, merge_prompt="merge-claims")
+@node(input=Topic, output=Claims, prompt="decompose", model="fast",
+      ensemble_n=3, merge_prompt="merge-claims")
+def decompose(topic: Topic) -> Claims: ...
+
 
 # scripted: format the merged result
-report = Node.scripted("report", fn="format_report", input=Claims, output=Topic)
+@node(output=Topic)
+def report(decompose: Claims) -> Topic:
+    return Topic(text="Final report:\n" + "\n".join(f"  - {c}" for c in decompose.items))
 
-pipeline = Construct("observable-demo", nodes=[decompose, report])
+
+pipeline = construct_from_module(sys.modules[__name__], name="observable-demo")
 
 # ── Run with Langfuse callback ───────────────────────────────────────────
 

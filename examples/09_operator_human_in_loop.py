@@ -5,7 +5,7 @@ the graph pauses and waits for human review. The human approves or provides
 corrections, then the graph resumes from where it stopped.
 
 This demonstrates:
-  - Operator modifier: pause graph when a condition is truthy
+  - @node(interrupt_when=...) — inline callable form for human-in-the-loop
   - Checkpointer: required for interrupt/resume (state must be persisted)
   - run() with resume: continue after human feedback
 
@@ -15,10 +15,12 @@ Run:
 
 from __future__ import annotations
 
+import sys
+
 from langgraph.checkpoint.memory import MemorySaver
 from pydantic import BaseModel
 
-from neograph import Construct, Node, Operator, compile, register_condition, register_scripted, run
+from neograph import compile, construct_from_module, node, run
 
 
 # ── Schemas ──────────────────────────────────────────────────────────────
@@ -35,53 +37,38 @@ class FinalReport(BaseModel, frozen=True):
     text: str
 
 
-# ── Functions ────────────────────────────────────────────────────────────
+# ── Pipeline (declarative @node) ────────────────────────────────────────
 
-def analyze_requirement(input_data, config):
+@node(mode="scripted", output=Analysis)
+def analyze() -> Analysis:
     return Analysis(claims=["auth", "logging", "encryption"], coverage_pct=55)
 
-def validate_analysis(input_data, config):
+
+@node(
+    mode="scripted",
+    output=ValidationResult,
+    interrupt_when=lambda state: (
+        {"issues": state.check.issues, "message": "Please review and approve"}
+        if state.check and not state.check.passed
+        else None
+    ),
+)
+def check(analyze: Analysis) -> ValidationResult:
     """Check if analysis meets quality bar."""
-    if input_data.coverage_pct < 80:
+    if analyze.coverage_pct < 80:
         return ValidationResult(
             passed=False,
-            issues=[f"Coverage {input_data.coverage_pct}% is below 80% threshold"],
+            issues=[f"Coverage {analyze.coverage_pct}% is below 80% threshold"],
         )
     return ValidationResult(passed=True, issues=[])
 
-def build_report(input_data, config):
-    return FinalReport(text=f"Report: {input_data.claims}, coverage: {input_data.coverage_pct}%")
 
-register_scripted("analyze", analyze_requirement)
-register_scripted("validate", validate_analysis)
-register_scripted("report", build_report)
+@node(mode="scripted", output=FinalReport)
+def report(analyze: Analysis) -> FinalReport:
+    return FinalReport(text=f"Report: {analyze.claims}, coverage: {analyze.coverage_pct}%")
 
 
-# ── Condition: when should the graph pause? ──────────────────────────────
-# The condition function receives the full state. If it returns a truthy
-# value, interrupt() is called with that value as the payload.
-# If it returns None/falsy, the graph continues.
-
-def check_validation(state):
-    val = state.check  # field name matches the node name "check"
-    if val and not val.passed:
-        return {"issues": val.issues, "message": "Please review and approve"}
-    return None
-
-register_condition("needs_human_review", check_validation)
-
-
-# ── Pipeline ─────────────────────────────────────────────────────────────
-
-analyze = Node.scripted("analyze", fn="analyze", output=Analysis)
-
-check = Node.scripted(
-    "check", fn="validate", input=Analysis, output=ValidationResult
-) | Operator(when="needs_human_review")  # ← pauses here if validation fails
-
-report = Node.scripted("report", fn="report", input=Analysis, output=FinalReport)
-
-pipeline = Construct("review-pipeline", nodes=[analyze, check, report])
+pipeline = construct_from_module(sys.modules[__name__], name="review-pipeline")
 
 
 # ── Run with checkpointer (required for interrupt/resume) ────────────────

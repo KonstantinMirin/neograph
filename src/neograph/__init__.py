@@ -1,8 +1,21 @@
 """NeoGraph — Declarative LLM Graph Compiler.
 
-Define typed Nodes, compose them into Constructs, compile to LangGraph.
+Declare pipeline nodes with @node and assemble from function signatures:
 
-    from neograph import Node, Tool, Construct, Oracle, Each, Operator, compile, run
+    from neograph import node, construct_from_module, compile, run
+
+    @node(output=Claims, prompt='rw/decompose', model='reason')
+    def decompose(topic: RawText) -> Claims: ...
+
+    @node(output=Classified, prompt='rw/classify', model='fast')
+    def classify(decompose: Claims) -> Classified: ...
+
+    pipeline = construct_from_module(sys.modules[__name__])
+    graph = compile(pipeline)
+    result = run(graph, input={'node_id': 'doc-001'})
+
+For advanced use (IR-level tests, programmatic construction from config,
+sub-constructs), see Node and Construct directly.
 """
 
 from neograph._llm import configure_llm
@@ -16,20 +29,24 @@ from neograph.runner import run
 from neograph.tool import Tool, tool
 
 __all__ = [
-    "Node",
-    "Tool",
-    "Construct",
-    "ConstructError",
-    "Oracle",
-    "Each",
-    "Operator",
+    # Primary API — @node decorator + module assembly
+    "node",
+    "construct_from_module",
     "FromInput",
     "FromConfig",
     "compile",
     "run",
     "tool",
-    "node",
-    "construct_from_module",
+    # Modifiers (used as @node kwargs; also available standalone)
+    "Oracle",
+    "Each",
+    "Operator",
+    # Low-level IR (advanced use: programmatic construction, IR tests)
+    "Node",
+    "Tool",
+    "Construct",
+    "ConstructError",
+    # Configuration
     "configure_llm",
     "register_scripted",
     "register_condition",
