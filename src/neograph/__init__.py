@@ -21,7 +21,13 @@ sub-constructs), see Node and Construct directly.
 from neograph._llm import configure_llm
 from neograph.compiler import compile
 from neograph.construct import Construct, ConstructError
-from neograph.decorators import FromConfig, FromInput, construct_from_module, node
+from neograph.decorators import (
+    FromConfig,
+    FromInput,
+    construct_from_functions,
+    construct_from_module,
+    node,
+)
 from neograph.forward import ForwardConstruct
 from neograph.factory import register_condition, register_scripted, register_tool_factory
 from neograph.modifiers import Operator, Oracle, Each
@@ -33,6 +39,7 @@ __all__ = [
     # Primary API — @node decorator + module assembly
     "node",
     "construct_from_module",
+    "construct_from_functions",
     "FromInput",
     "FromConfig",
     "compile",

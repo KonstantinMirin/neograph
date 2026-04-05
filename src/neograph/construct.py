@@ -64,6 +64,12 @@ class Construct(Modifiable, BaseModel):
     input: type[BaseModel] | None = None
     output: type[BaseModel] | None = None
 
+    # Default LLM config inherited by every node. Per-node llm_config merges
+    # over this (node wins on conflicts). Common use: setting
+    # output_strategy="json_mode" once for a whole pipeline instead of on
+    # every produce node.
+    llm_config: dict[str, Any] = Field(default_factory=dict)
+
     # Modifiers applied via | operator
     modifiers: list[Modifier] = Field(default_factory=list)
 
@@ -73,6 +79,21 @@ class Construct(Modifiable, BaseModel):
         if name_ is not None:
             kwargs["name"] = name_
         super().__init__(**kwargs)
+        # Propagate default llm_config to child nodes BEFORE validation so
+        # downstream compile() sees the merged config. Per-node llm_config
+        # merges over the Construct default (node wins on conflicts).
+        if self.llm_config:
+            for item in self.nodes:
+                if hasattr(item, "llm_config"):
+                    merged = {**self.llm_config, **item.llm_config}
+                    # Node is a frozen-ish pydantic model — use model_copy
+                    # to produce the merged version, then replace in-place.
+                    try:
+                        item.llm_config = merged
+                    except (TypeError, ValueError):
+                        # Frozen model — skip. Sub-constructs inherit via
+                        # their own __init__ merging.
+                        pass
         # Validate after pydantic finishes so ConstructError escapes cleanly
         # rather than being wrapped in a pydantic ValidationError. Nested
         # constructs self-validate during their own __init__.

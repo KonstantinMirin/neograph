@@ -455,7 +455,12 @@ def node(
     return decorator
 
 
-def construct_from_module(mod: Any, name: str | None = None) -> Construct:
+def construct_from_module(
+    mod: Any,
+    name: str | None = None,
+    *,
+    llm_config: dict[str, Any] | None = None,
+) -> Construct:
     """Walk a module's @node-built Nodes, sort topologically, return a Construct.
 
     Walks `vars(mod)`, keeping only Node instances that appear in the @node
@@ -468,8 +473,15 @@ def construct_from_module(mod: Any, name: str | None = None) -> Construct:
     The returned Construct is a regular Construct — compile/run operate on it
     unchanged. The existing `_validate_node_chain` walker runs via
     `Construct.__init__`, so type-compatibility is enforced as usual.
+
+    Args:
+        mod: The module to walk.
+        name: Construct name. Default: module's short name.
+        llm_config: Default LLM config inherited by every node. Per-node
+            llm_config merges over this (node wins on conflicts).
     """
     decorated: dict[str, Node] = {}
+    source_label = f"module '{mod.__name__}'"
     for attr in vars(mod).values():
         if isinstance(attr, Node) and _get_sidecar(attr) is not None:
             field_name = attr.name.replace("-", "_")
@@ -477,22 +489,91 @@ def construct_from_module(mod: Any, name: str | None = None) -> Construct:
                 existing = decorated[field_name]
                 msg = (
                     f"@node name collision: two nodes resolve to field name "
-                    f"'{field_name}' in module '{mod.__name__}'. "
+                    f"'{field_name}' in {source_label}. "
                     f"One is '{existing.name}', another is '{attr.name}'. "
                     f"Fix: pass explicit name= to @node on one of them."
                 )
                 raise ConstructError(msg)
             decorated[field_name] = attr
 
+    construct_name = name or mod.__name__.split(".")[-1]
+    return _build_construct_from_decorated(
+        decorated, construct_name, source_label, llm_config
+    )
+
+
+def construct_from_functions(
+    name: str,
+    functions: list[Any],
+    *,
+    llm_config: dict[str, Any] | None = None,
+) -> Construct:
+    """Build a Construct from an explicit list of @node-decorated functions.
+
+    Use this when multiple pipelines share a file — `construct_from_module()`
+    walks the whole module and cannot partition @nodes into separate
+    Constructs. Pass the subset explicitly:
+
+        pipelineA = construct_from_functions("A", [fn1, fn2, fn3])
+        pipelineB = construct_from_functions("B", [fn4, fn5])
+
+    Same topological sort, validation, and error messages as
+    `construct_from_module()`. The returned Construct is a regular Construct.
+
+    Args:
+        name: Construct name.
+        functions: List of @node-decorated functions (in any order —
+            topological sort handles ordering). Each element must be a Node
+            instance returned by @node; plain callables raise ConstructError.
+        llm_config: Default LLM config inherited by every node. Per-node
+            llm_config merges over this (node wins on conflicts).
+    """
+    decorated: dict[str, Node] = {}
+    source_label = f"construct '{name}'"
+    for item in functions:
+        if not isinstance(item, Node) or _get_sidecar(item) is None:
+            got = type(item).__name__
+            msg = (
+                f"construct_from_functions('{name}'): argument is not "
+                f"decorated with @node (got {got}). Every list element must "
+                f"be a function decorated with @node."
+            )
+            raise ConstructError(msg)
+        field_name = item.name.replace("-", "_")
+        if field_name in decorated:
+            existing = decorated[field_name]
+            msg = (
+                f"@node name collision: two nodes resolve to field name "
+                f"'{field_name}' in {source_label}. "
+                f"One is '{existing.name}', another is '{item.name}'. "
+                f"Fix: pass explicit name= to @node on one of them."
+            )
+            raise ConstructError(msg)
+        decorated[field_name] = item
+
+    return _build_construct_from_decorated(
+        decorated, name, source_label, llm_config
+    )
+
+
+def _build_construct_from_decorated(
+    decorated: dict[str, Node],
+    construct_name: str,
+    source_label: str,
+    llm_config: dict[str, Any] | None,
+) -> Construct:
+    """Core pipeline builder shared by construct_from_module and
+    construct_from_functions. Takes the already-discovered {field_name: Node}
+    dict and runs adjacency + topo sort + validation + raw_fn attach.
+    """
     if not decorated:
-        construct_name = name or mod.__name__.split(".")[-1]
-        return Construct(name=construct_name, nodes=[])
+        return Construct(name=construct_name, nodes=[], llm_config=llm_config or {})
 
     # Build adjacency: for each node, which other nodes does it depend on?
     # Identify fan-out parameters: for nodes with Each modifier, params that
     # don't match any @node name are Each item receivers (fan-out params) and
     # must be skipped in adjacency wiring.
-    fan_out_params: dict[str, set[str]] = {}  # field_name -> set of fan-out param names
+    fan_out_params: dict[str, set[str]] = {}
     for field_name, n in decorated.items():
         if n.has_modifier(Each):
             sidecar = _get_sidecar(n)
@@ -502,8 +583,6 @@ def construct_from_module(mod: Any, name: str | None = None) -> Construct:
 
     # Classify default-value constants: params with defaults that don't match
     # any decorated @node and aren't already classified as from_input/from_config.
-    # This must happen here (not at decoration time) because we need the full
-    # set of decorated names.
     for field_name, n in decorated.items():
         sidecar = _get_sidecar(n)
         assert sidecar is not None
@@ -513,11 +592,10 @@ def construct_from_module(mod: Any, name: str | None = None) -> Construct:
         updated = False
         for pname in pnames:
             if pname in param_res:
-                continue  # already classified (from_input / from_config)
+                continue
             if pname in fan_out_params.get(field_name, set()):
-                continue  # fan-out item receiver
+                continue
             if pname not in decorated:
-                # Not an upstream @node — check for default value
                 p = sig.parameters.get(pname)
                 if p is not None and p.default is not inspect.Parameter.empty:
                     param_res[pname] = ("constant", p.default)
@@ -528,22 +606,22 @@ def construct_from_module(mod: Any, name: str | None = None) -> Construct:
     adjacency: dict[str, list[str]] = {k: [] for k in decorated}
     for field_name, n in decorated.items():
         sidecar = _get_sidecar(n)
-        assert sidecar is not None  # filtered above
+        assert sidecar is not None
         _, param_names, _ = sidecar
         param_res = _get_param_resolutions(n)
         skip = fan_out_params.get(field_name, set())
         seen_deps: set[str] = set()
         for pname in param_names:
             if pname in skip:
-                continue  # fan-out item receiver — not an upstream dependency
+                continue
             if pname in param_res:
-                continue  # from_input, from_config, or constant — not topology
+                continue
             if pname not in decorated:
                 src = _get_node_source(n)
                 src_suffix = f"\n  @node defined at {src}" if src else ""
                 msg = (
                     f"@node '{n.name}' parameter '{pname}' does not match any "
-                    f"@node in module '{mod.__name__}'. All parameters must "
+                    f"@node in {source_label}. All parameters must "
                     f"name an upstream @node, use FromInput/FromConfig annotation, "
                     f"or have a default value.\n"
                     f"  available @nodes: {sorted(decorated.keys())}"
@@ -564,10 +642,8 @@ def construct_from_module(mod: Any, name: str | None = None) -> Construct:
                 seen_deps.add(pname)
 
     # Topological sort via DFS with a visiting set for cycle detection.
-    # Dict insertion order is preserved, giving deterministic output for
-    # the same module.
     ordered: list[Node] = []
-    marks: dict[str, str] = {}  # missing=white, "gray"=visiting, "black"=done
+    marks: dict[str, str] = {}
 
     def visit(field: str) -> None:
         state = marks.get(field)
@@ -577,7 +653,7 @@ def construct_from_module(mod: Any, name: str | None = None) -> Construct:
             src = _get_node_source(decorated[field])
             src_suffix = f"\n  @node defined at {src}" if src else ""
             msg = (
-                f"@node cycle detected in module involving '{field}'. "
+                f"@node cycle detected in {source_label} involving '{field}'. "
                 f"Cyclical parameter-name dependencies are not allowed."
                 f"{src_suffix}"
             )
@@ -591,24 +667,16 @@ def construct_from_module(mod: Any, name: str | None = None) -> Construct:
     for field in decorated:
         visit(field)
 
-    # Validate that every fan-in parameter's annotation matches the upstream
-    # node's output type. The existing _validate_node_chain only checks
-    # Node.input (a single type derived from the first annotated param);
-    # this pass covers ALL parameters.
+    # Validate fan-in parameter types.
     _validate_fan_in_types(decorated)
 
-    # Install the execution dispatch for scripted nodes. We use Node.raw_fn
-    # (which factory._make_raw_wrapper already handles) rather than
-    # register_scripted, because raw_fn receives the full LangGraph state
-    # and can read N upstream values by name — the only v1 way to support
-    # fan-in without editing factory.py.
+    # Install raw_fn adapters for scripted @node functions.
     for n in ordered:
         if n.mode == "scripted" and n.raw_fn is None:
             field = n.name.replace("-", "_")
             _attach_scripted_raw_fn(n, fan_out_params.get(field, set()))
 
-    construct_name = name or mod.__name__.split(".")[-1]
-    return Construct(name=construct_name, nodes=ordered)
+    return Construct(name=construct_name, nodes=ordered, llm_config=llm_config or {})
 
 
 def _attach_scripted_raw_fn(n: Node, fan_out: set[str] | None = None) -> None:

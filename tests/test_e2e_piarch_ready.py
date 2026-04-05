@@ -4320,3 +4320,232 @@ class TestForwardConstructCompile:
         assert result_decl["fc_equiv_b"] == result_fwd["fc_equiv_b"]
         assert isinstance(result_fwd["fc_equiv_a"], RawText)
         assert isinstance(result_fwd["fc_equiv_b"], Claims)
+
+
+class TestConstructFromFunctions:
+    """construct_from_functions() — explicit function list for multi-pipeline files."""
+
+    def test_basic_chain(self):
+        """Two @node functions wired by parameter name via explicit list."""
+        from neograph import compile, construct_from_functions, node, run
+
+        @node(output=RawText)
+        def cff_seed() -> RawText:
+            return RawText(text="hello world")
+
+        @node(output=Claims)
+        def cff_split(cff_seed: RawText) -> Claims:
+            return Claims(items=[w for w in cff_seed.text.split() if w])
+
+        pipeline = construct_from_functions("explicit", [cff_seed, cff_split])
+        assert isinstance(pipeline, Construct)
+        assert pipeline.name == "explicit"
+        assert [n.name for n in pipeline.nodes] == ["cff-seed", "cff-split"]
+
+        graph = compile(pipeline)
+        result = run(graph, input={"node_id": "cff-001"})
+        assert result["cff_split"].items == ["hello", "world"]
+
+    def test_topological_sort_with_explicit_list(self):
+        """Explicit list in non-topological order still sorts correctly."""
+        from neograph import compile, construct_from_functions, node, run
+
+        @node(output=RawText)
+        def cff_topo_seed() -> RawText:
+            return RawText(text="a b c")
+
+        @node(output=Claims)
+        def cff_topo_split(cff_topo_seed: RawText) -> Claims:
+            return Claims(items=cff_topo_seed.text.split())
+
+        @node(output=ClassifiedClaims)
+        def cff_topo_report(cff_topo_split: Claims) -> ClassifiedClaims:
+            return ClassifiedClaims(
+                classified=[{"claim": c, "category": "x"} for c in cff_topo_split.items]
+            )
+
+        # Pass in SHUFFLED order — report first, then seed, then split
+        pipeline = construct_from_functions(
+            "topo", [cff_topo_report, cff_topo_seed, cff_topo_split]
+        )
+        names = [n.name for n in pipeline.nodes]
+        assert names == ["cff-topo-seed", "cff-topo-split", "cff-topo-report"]
+
+    def test_two_pipelines_in_same_file(self):
+        """Two independent pipelines in the same module — the killer use case."""
+        from neograph import compile, construct_from_functions, node, run
+
+        # Pipeline A
+        @node(output=RawText)
+        def pipeA_start() -> RawText:
+            return RawText(text="pipeline A")
+
+        @node(output=RawText)
+        def pipeA_end(pipeA_start: RawText) -> RawText:
+            return RawText(text=f"A: {pipeA_start.text}")
+
+        # Pipeline B (same file, different nodes)
+        @node(output=Claims)
+        def pipeB_start() -> Claims:
+            return Claims(items=["pipeline", "B"])
+
+        @node(output=Claims)
+        def pipeB_end(pipeB_start: Claims) -> Claims:
+            return Claims(items=[f"B:{s}" for s in pipeB_start.items])
+
+        pipeA = construct_from_functions("A", [pipeA_start, pipeA_end])
+        pipeB = construct_from_functions("B", [pipeB_start, pipeB_end])
+
+        gA = compile(pipeA)
+        gB = compile(pipeB)
+        rA = run(gA, input={"node_id": "A-001"})
+        rB = run(gB, input={"node_id": "B-001"})
+
+        assert rA["pipeA_end"].text == "A: pipeline A"
+        assert rB["pipeB_end"].items == ["B:pipeline", "B:B"]
+
+    def test_rejects_non_decorated_function(self):
+        """A plain function without @node raises a clear error."""
+        from neograph import ConstructError, construct_from_functions, node
+
+        @node(output=RawText)
+        def cff_ok() -> RawText:
+            return RawText(text="ok")
+
+        def not_a_node(x: RawText) -> Claims:  # missing @node
+            return Claims(items=[x.text])
+
+        with pytest.raises(ConstructError, match="not decorated with @node"):
+            construct_from_functions("bad", [cff_ok, not_a_node])
+
+    def test_rejects_non_callable(self):
+        """Passing a non-callable raises."""
+        from neograph import ConstructError, construct_from_functions, node
+
+        @node(output=RawText)
+        def cff_ok2() -> RawText:
+            return RawText(text="ok")
+
+        with pytest.raises(ConstructError, match="not decorated with @node"):
+            construct_from_functions("bad", [cff_ok2, "not a function"])
+
+    def test_name_collision_raises(self):
+        """Two functions whose node names collide raise ConstructError."""
+        from neograph import ConstructError, construct_from_functions, node
+
+        @node(output=RawText, name="shared")
+        def first() -> RawText:
+            return RawText(text="first")
+
+        @node(output=RawText, name="shared")
+        def second() -> RawText:
+            return RawText(text="second")
+
+        with pytest.raises(ConstructError, match="name collision"):
+            construct_from_functions("collision", [first, second])
+
+
+class TestConstructLlmConfigDefault:
+    """Construct-level default llm_config inherited by produce/gather/execute nodes."""
+
+    def test_default_inherited_by_nodes_without_explicit(self):
+        """Produce nodes without explicit llm_config inherit the Construct default."""
+        from neograph import Construct, Node
+
+        configure_fake_llm(lambda tier: StructuredFake(lambda m: m(items=["x"])))
+
+        # Build via declarative API — Construct carries the default
+        a = Node("a", mode="produce", output=Claims, model="fast", prompt="p")
+        b = Node("b", mode="produce", input=Claims, output=Claims, model="fast", prompt="p")
+
+        pipeline = Construct(
+            "with-default",
+            llm_config={"output_strategy": "json_mode", "temperature": 0.5},
+            nodes=[a, b],
+        )
+
+        # Both nodes should have inherited the Construct default
+        assert pipeline.nodes[0].llm_config == {
+            "output_strategy": "json_mode",
+            "temperature": 0.5,
+        }
+        assert pipeline.nodes[1].llm_config == {
+            "output_strategy": "json_mode",
+            "temperature": 0.5,
+        }
+
+    def test_explicit_node_config_merges_over_default(self):
+        """Per-node llm_config merges with Construct default; node wins on conflicts."""
+        from neograph import Construct, Node
+
+        a = Node("a", mode="produce", output=Claims, model="fast", prompt="p",
+                 llm_config={"temperature": 0.9, "max_tokens": 1000})
+
+        pipeline = Construct(
+            "merged",
+            llm_config={"output_strategy": "json_mode", "temperature": 0.2},
+            nodes=[a],
+        )
+
+        # Construct default provides output_strategy.
+        # Node explicit temperature (0.9) overrides construct default (0.2).
+        # Node max_tokens passes through.
+        assert pipeline.nodes[0].llm_config == {
+            "output_strategy": "json_mode",
+            "temperature": 0.9,
+            "max_tokens": 1000,
+        }
+
+    def test_scripted_nodes_not_affected(self):
+        """Scripted nodes don't get llm_config inheritance (they don't use it)."""
+        from neograph import Construct, Node
+        from neograph.factory import register_scripted
+
+        register_scripted("noop_k7k", lambda input_data, config: Claims(items=["x"]))
+        a = Node.scripted("a-k7k", fn="noop_k7k", output=Claims)
+
+        pipeline = Construct(
+            "scripted-default",
+            llm_config={"output_strategy": "json_mode"},
+            nodes=[a],
+        )
+
+        # Scripted nodes get the default applied (harmless — they don't use it)
+        # but the propagation is uniform to keep the merge logic simple.
+        assert pipeline.nodes[0].llm_config == {"output_strategy": "json_mode"}
+
+    def test_no_construct_default_nodes_keep_their_config(self):
+        """When Construct has no llm_config, nodes keep their original config unchanged."""
+        from neograph import Construct, Node
+
+        a = Node("a", mode="produce", output=Claims, model="fast", prompt="p",
+                 llm_config={"temperature": 0.7})
+
+        pipeline = Construct("no-default", nodes=[a])
+
+        assert pipeline.nodes[0].llm_config == {"temperature": 0.7}
+
+    def test_node_decorator_inherits_construct_default(self):
+        """@node functions inherit the Construct default via construct_from_functions."""
+        from neograph import construct_from_functions, node
+
+        @node(output=Claims, prompt="p", model="fast")
+        def cff_default_a() -> Claims: ...
+
+        @node(output=Claims, prompt="p", model="fast",
+              llm_config={"temperature": 0.9})
+        def cff_default_b(cff_default_a: Claims) -> Claims: ...
+
+        pipeline = construct_from_functions(
+            "default-cff",
+            [cff_default_a, cff_default_b],
+            llm_config={"output_strategy": "json_mode", "temperature": 0.2},
+        )
+
+        # cff_default_a inherits both fields
+        a_node = pipeline.nodes[0]
+        assert a_node.llm_config == {"output_strategy": "json_mode", "temperature": 0.2}
+
+        # cff_default_b inherits output_strategy, overrides temperature
+        b_node = pipeline.nodes[1]
+        assert b_node.llm_config == {"output_strategy": "json_mode", "temperature": 0.9}
