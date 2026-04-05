@@ -11,7 +11,7 @@ from typing import Any
 import pytest
 from pydantic import BaseModel
 
-from neograph import ForwardConstruct, Node, compile, run
+from neograph import Each, ForwardConstruct, Node, compile, run
 from neograph.factory import register_scripted
 
 
@@ -373,3 +373,292 @@ class TestProxyAttributeChains:
         assert cond._left._neo_name == "out_of_classify.items.first.severity"
         assert cond._op == "<"
         assert cond._right == 3
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Part 7: For-loop support (Proxy.__iter__ → Each fan-out)
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class Clusters(BaseModel, frozen=True):
+    groups: list[str]
+
+
+class MatchResult(BaseModel, frozen=True):
+    label: str
+
+
+class Report(BaseModel, frozen=True):
+    summary: str
+
+
+class TestForwardConstructLoops:
+    """For-loop over a proxy attribute lowers to Each fan-out modifier."""
+
+    def test_for_loop_over_proxy_attr(self):
+        """for item in clusters.groups: self.verify(item) traces verify with Each."""
+        register_scripted(
+            "loop_make",
+            lambda input_data, config: Clusters(groups=["a", "b"]),
+        )
+        register_scripted(
+            "loop_verify",
+            lambda input_data, config: MatchResult(label="ok"),
+        )
+        register_scripted(
+            "loop_report",
+            lambda input_data, config: Report(summary="done"),
+        )
+
+        class LoopPipeline(ForwardConstruct):
+            make = Node.scripted("loop-make", fn="loop_make", output=Clusters)
+            verify = Node.scripted("loop-verify", fn="loop_verify", output=MatchResult)
+            report = Node.scripted("loop-report", fn="loop_report", output=Report)
+
+            def forward(self, topic):
+                clusters = self.make(topic)
+                for cluster in clusters.groups:
+                    self.verify(cluster)
+                return self.report(clusters)
+
+        pipeline = LoopPipeline()
+        graph = compile(pipeline)
+        assert graph is not None
+
+    def test_for_loop_literal_range_unrolls(self):
+        """for i in range(3): self.step(x) traces step once (dedup). No Each."""
+        register_scripted(
+            "range_step",
+            lambda input_data, config: RawText(text="stepped"),
+        )
+
+        class RangePipeline(ForwardConstruct):
+            step = Node.scripted("range-step", fn="range_step", output=RawText)
+
+            def forward(self, topic):
+                for i in range(3):
+                    self.step(topic)
+                return topic
+
+        pipeline = RangePipeline()
+        # step should appear once (dedup), and should NOT have Each modifier
+        step_node = [n for n in pipeline.nodes if isinstance(n, Node) and n.name == "range-step"]
+        assert len(step_node) == 1
+        assert not step_node[0].has_modifier(Each)
+
+    def test_for_loop_each_modifier_attached(self):
+        """Loop-body node has Each modifier with correct over path."""
+        register_scripted(
+            "each_make",
+            lambda input_data, config: Clusters(groups=["x", "y"]),
+        )
+        register_scripted(
+            "each_verify",
+            lambda input_data, config: MatchResult(label="checked"),
+        )
+
+        class EachCheckPipeline(ForwardConstruct):
+            make = Node.scripted("each-make", fn="each_make", output=Clusters)
+            verify = Node.scripted("each-verify", fn="each_verify", output=MatchResult)
+
+            def forward(self, topic):
+                clusters = self.make(topic)
+                for cluster in clusters.groups:
+                    self.verify(cluster)
+                return clusters
+
+        pipeline = EachCheckPipeline()
+        verify_node = [n for n in pipeline.nodes if isinstance(n, Node) and n.name == "each-verify"]
+        assert len(verify_node) == 1
+        assert verify_node[0].has_modifier(Each)
+        each_mod = verify_node[0].get_modifier(Each)
+        assert each_mod.over == "each_make.groups"
+
+    def test_for_loop_with_post_loop_node(self):
+        """Nodes after the for loop are NOT wrapped with Each."""
+        register_scripted(
+            "post_make",
+            lambda input_data, config: Clusters(groups=["a"]),
+        )
+        register_scripted(
+            "post_verify",
+            lambda input_data, config: MatchResult(label="ok"),
+        )
+        register_scripted(
+            "post_report",
+            lambda input_data, config: Report(summary="final"),
+        )
+
+        class PostLoopPipeline(ForwardConstruct):
+            make = Node.scripted("post-make", fn="post_make", output=Clusters)
+            verify = Node.scripted("post-verify", fn="post_verify", output=MatchResult)
+            report = Node.scripted("post-report", fn="post_report", output=Report)
+
+            def forward(self, topic):
+                clusters = self.make(topic)
+                for cluster in clusters.groups:
+                    self.verify(cluster)
+                return self.report(clusters)
+
+        pipeline = PostLoopPipeline()
+        report_node = [n for n in pipeline.nodes if isinstance(n, Node) and n.name == "post-report"]
+        assert len(report_node) == 1
+        assert not report_node[0].has_modifier(Each)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Part 8: try/except in forward() — v1 behavior
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class ErrorResult(BaseModel, frozen=True):
+    message: str
+
+
+class TestForwardConstructExceptions:
+    """try/except in forward() — v1 traces the try body; except is dead code.
+
+    In v1, proxy operations in the try block never raise (they are symbolic),
+    so the except block is unreachable during tracing. Only real Python errors
+    (e.g., division by zero) before any node call can route tracing into the
+    except block.
+
+    This is a documented limitation: try/except does not compile to a
+    fallback graph. The except block only runs if tracing itself fails.
+    """
+
+    def test_try_block_traces_normally(self):
+        """try body with node calls, no exception -> nodes recorded correctly."""
+        register_scripted(
+            "te_extract",
+            lambda input_data, config: RawText(text="extracted"),
+        )
+        register_scripted(
+            "te_classify",
+            lambda input_data, config: Confidence(score=0.8),
+        )
+
+        class TryPipeline(ForwardConstruct):
+            extract = Node.scripted("te-extract", fn="te_extract", output=RawText)
+            classify = Node.scripted("te-classify", fn="te_classify", output=Confidence)
+
+            def forward(self, topic):
+                try:
+                    raw = self.extract(topic)
+                    result = self.classify(raw)
+                except Exception:
+                    result = self.classify(topic)
+                return result
+
+        pipeline = TryPipeline()
+        node_names = [n.name for n in pipeline.nodes]
+        assert "te-extract" in node_names
+        assert "te-classify" in node_names
+        assert len(node_names) == 2
+
+    def test_except_block_catches_tracing_error(self):
+        """try body raises a real Python error (division by zero) before a
+        node call -> except body calls a fallback node -> fallback is recorded."""
+        register_scripted(
+            "te_fallback",
+            lambda input_data, config: ErrorResult(message="fallback"),
+        )
+
+        class FallbackPipeline(ForwardConstruct):
+            fallback = Node.scripted(
+                "te-fallback", fn="te_fallback", output=ErrorResult,
+            )
+
+            def forward(self, topic):
+                try:
+                    _ = 1 / 0  # real Python error before any node call
+                    return self.fallback(topic)  # never reached
+                except ZeroDivisionError:
+                    return self.fallback(topic)
+
+        pipeline = FallbackPipeline()
+        node_names = [n.name for n in pipeline.nodes]
+        assert "te-fallback" in node_names
+        assert len(node_names) == 1
+
+    def test_try_except_with_proxy_operations(self):
+        """Proxy operations in try block don't raise -> try-body nodes
+        are recorded, except body is skipped."""
+        register_scripted(
+            "te_primary",
+            lambda input_data, config: RawText(text="primary"),
+        )
+        register_scripted(
+            "te_backup",
+            lambda input_data, config: RawText(text="backup"),
+        )
+        register_scripted(
+            "te_report",
+            lambda input_data, config: FinalResult(summary="done"),
+        )
+
+        class ProxyTryPipeline(ForwardConstruct):
+            primary = Node.scripted("te-primary", fn="te_primary", output=RawText)
+            backup = Node.scripted("te-backup", fn="te_backup", output=RawText)
+            report = Node.scripted("te-report", fn="te_report", output=FinalResult)
+
+            def forward(self, topic):
+                try:
+                    result = self.primary(topic)
+                except Exception:
+                    result = self.backup(topic)
+                return self.report(result)
+
+        pipeline = ProxyTryPipeline()
+        node_names = [n.name for n in pipeline.nodes]
+        # primary is traced (try body runs), backup is NOT (except is dead code)
+        assert "te-primary" in node_names
+        assert "te-backup" not in node_names
+        assert "te-report" in node_names
+        assert len(node_names) == 2
+
+    def test_try_except_documented_limitation(self):
+        """If both try and except call nodes, only try-body nodes appear
+        in the trace. The except block is dead code during tracing.
+
+        This documents expected v1 behavior — try/except does not compile
+        to a fallback graph.
+        """
+        register_scripted(
+            "te_main",
+            lambda input_data, config: RawText(text="main"),
+        )
+        register_scripted(
+            "te_rescue",
+            lambda input_data, config: RawText(text="rescue"),
+        )
+        register_scripted(
+            "te_final",
+            lambda input_data, config: FinalResult(summary="final"),
+        )
+
+        class LimitationPipeline(ForwardConstruct):
+            main = Node.scripted("te-main", fn="te_main", output=RawText)
+            rescue = Node.scripted("te-rescue", fn="te_rescue", output=RawText)
+            final = Node.scripted("te-final", fn="te_final", output=FinalResult)
+
+            def forward(self, topic):
+                try:
+                    result = self.main(topic)
+                except Exception:
+                    result = self.rescue(topic)
+                return self.final(result)
+
+        pipeline = LimitationPipeline()
+        node_names = [n.name for n in pipeline.nodes]
+
+        # v1 limitation: only try-body nodes are traced
+        assert "te-main" in node_names, "try-body node must be traced"
+        assert "te-rescue" not in node_names, (
+            "v1 limitation: except-body nodes are dead code during tracing"
+        )
+        assert "te-final" in node_names, "post-try/except nodes must be traced"
+
+        # The pipeline should still compile successfully
+        graph = compile(pipeline)
+        assert graph is not None

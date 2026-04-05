@@ -34,6 +34,17 @@ Branching support (neograph-w5z):
     - Only comparisons against constants are supported (proxy.attr < 0.7)
     - Arbitrary expressions in conditions are deferred
     - Max 8 branches per forward() (raises ValueError beyond that)
+
+try/except support (neograph-xi0, v1):
+    try/except in forward() does NOT compile to a fallback graph. During
+    tracing, proxy operations (node calls) never raise — they are symbolic
+    recordings — so the except block is unreachable dead code. Only real
+    Python errors (e.g., ``1/0``) before or between node calls can route
+    tracing into the except block.
+
+    Consequence: if both try and except arms call nodes, only the try-body
+    nodes appear in the compiled graph. For retry/fallback patterns, use
+    the declarative API or a future mechanism (see design.md, P3).
 """
 
 from __future__ import annotations
@@ -43,6 +54,7 @@ import operator as op_module
 from typing import Any
 
 from neograph.construct import Construct
+from neograph.modifiers import Each
 from neograph.node import Node
 
 __all__ = ["ForwardConstruct"]
@@ -79,6 +91,12 @@ class ForwardConstruct(Construct):
 
         pipeline = MyPipeline()
         graph = compile(pipeline)
+
+    Note on try/except (v1):
+        try/except blocks in forward() are valid Python and do not break
+        tracing, but the except block is dead code during tracing because
+        proxy operations never raise. Only the try-body nodes are recorded.
+        try/except does not compile to a fallback graph in v1.
     """
 
     # Tell Pydantic to ignore Node instances as class attributes — they are
@@ -202,6 +220,12 @@ class _Proxy:
                 "Cannot use proxy in boolean context outside tracing"
             )
         return tracer.record_branch(self)
+
+    def __iter__(self):
+        tracer = self._neo_tracer
+        if tracer is None:
+            raise TypeError("Cannot iterate proxy outside tracing")
+        return tracer.record_iteration(self)
 
     def __repr__(self) -> str:
         src = self._neo_source.name if self._neo_source else "<input>"
@@ -350,6 +374,9 @@ class _Tracer:
         self._branches: list[_BranchPoint] = []
         self._branch_decisions = branch_decisions or {}
         self._next_branch_id = 0
+        # Loop-mode tracking: maps node id → Each over-path for nodes in loop body
+        self._loop_stack: list[str] = []  # stack of over-paths (for nested detection)
+        self._loop_body_nodes: dict[int, str] = {}  # id(node) → over-path
 
     def record(self, node: Node) -> None:
         key = id(node)
@@ -357,6 +384,49 @@ class _Tracer:
             return
         self._seen.add(key)
         self._ordered.append(node)
+        # If we're inside a loop body, tag this node for Each wrapping
+        if self._loop_stack:
+            self._loop_body_nodes[key] = self._loop_stack[-1]
+
+    def record_iteration(self, proxy: _Proxy) -> iter:
+        """Record a for-loop iteration over a proxy attribute.
+
+        Enters loop mode: nodes recorded while in this mode get tagged
+        with an Each modifier. Yields a single proxy item (enough for
+        tracing — the loop body runs once to discover node calls).
+        """
+        # Build the Each over-path from the proxy's attribute chain
+        # e.g., _Proxy(source=make, name="out_of_make.groups") → "make.groups"
+        source_node = proxy._neo_source
+        full_name = proxy._neo_name
+
+        if source_node is not None:
+            prefix = f"out_of_{source_node.name}"
+            field_name = source_node.name.replace("-", "_")
+            if full_name.startswith(prefix):
+                remainder = full_name[len(prefix):]
+                attr_parts = [p for p in remainder.split(".") if p]
+                over_path = ".".join([field_name] + attr_parts)
+            else:
+                over_path = field_name
+        else:
+            over_path = full_name
+
+        self._loop_stack.append(over_path)
+        # Yield a single proxy item — enough for tracing the loop body once
+        item_proxy = _Proxy(
+            source_node=source_node,
+            name=f"{full_name}.__item__",
+            tracer=self,
+        )
+
+        def _iter():
+            try:
+                yield item_proxy
+            finally:
+                self._loop_stack.pop()
+
+        return _iter()
 
     def record_branch(self, condition: _ConditionProxy | _Proxy) -> bool:
         """Record a branch point and return the decision for this trace pass.
@@ -456,7 +526,27 @@ def _run_trace(
     shim = _ForwardSelf(node_attrs, tracer, real_self=instance)
     seed = _Proxy(source_node=None, name="forward_input", tracer=tracer)
     type(instance).forward(shim, seed)
-    return tracer, tracer.nodes
+    nodes = _apply_loop_modifiers(tracer)
+    return tracer, nodes
+
+
+def _apply_loop_modifiers(tracer: _Tracer) -> list[Node]:
+    """Replace loop-body nodes with Each-modified copies.
+
+    Nodes recorded during a for-loop iteration over a proxy get an
+    Each modifier attached. Non-loop nodes pass through unchanged.
+    """
+    if not tracer._loop_body_nodes:
+        return tracer.nodes
+
+    result = []
+    for node in tracer._ordered:
+        key = id(node)
+        if key in tracer._loop_body_nodes:
+            over_path = tracer._loop_body_nodes[key]
+            node = node | Each(over=over_path, key="label")
+        result.append(node)
+    return result
 
 
 def _trace_forward(
