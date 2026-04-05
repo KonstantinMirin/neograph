@@ -80,7 +80,12 @@ def _validate_node_chain(construct: Any) -> None:
         ))
 
     for item in construct.nodes:
-        input_type = getattr(item, "input", None)
+        # Node has `inputs` (plural) since neograph-kqd.1. Construct still has
+        # `input` (sub-construct boundary port) — that's handled above via
+        # construct.input, not here.
+        input_type = getattr(item, "inputs", None)
+        if input_type is None:
+            input_type = getattr(item, "input", None)
         if input_type is not None:
             _check_item_input(construct, item, input_type, producers)
 

@@ -133,7 +133,7 @@ def run_neograph():
 
     # Pipeline — Operator modifier handles the interrupt
     analyze = Node(name="analyze", mode="produce", output=Analysis, model="fast", prompt="analyze")
-    report = Node(name="report", mode="produce", input=Analysis, output=Report, model="fast", prompt="report")
+    report = Node(name="report", mode="produce", inputs=Analysis, output=Report, model="fast", prompt="report")
 
     pipeline = Construct("review", nodes=[
         analyze | Operator(when="low_confidence"),  # ← one pipe

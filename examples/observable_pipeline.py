@@ -89,7 +89,7 @@ configure_llm(llm_factory=llm_factory, prompt_compiler=prompt_compiler)
 # ── Pipeline ─────────────────────────────────────────────────────────────
 
 # produce: LLM decomposes topic into claims (3 variants via Oracle, LLM merge)
-@node(input=Topic, output=Claims, prompt="decompose", model="fast",
+@node(inputs=Topic, output=Claims, prompt="decompose", model="fast",
       ensemble_n=3, merge_prompt="merge-claims")
 def decompose(topic: Topic) -> Claims: ...
 

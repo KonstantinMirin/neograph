@@ -108,7 +108,7 @@ def _make_raw_wrapper(node: Node) -> Callable:
 
     def raw_node_wrapper(state: BaseModel, config: RunnableConfig) -> dict[str, Any]:
         node_log = log.bind(node=node.name, mode="raw")
-        node_log.info("node_start", input_type=_type_name(node.input), output_type=_type_name(node.output))
+        node_log.info("node_start", input_type=_type_name(node.inputs), output_type=_type_name(node.output))
         t0 = time.monotonic()
 
         result = raw_fn(state, config)
@@ -128,7 +128,7 @@ def _make_scripted_wrapper(node: Node) -> Callable:
 
     def scripted_node(state: BaseModel, config: RunnableConfig) -> dict[str, Any]:
         node_log = log.bind(node=node.name, mode="scripted", fn=node.scripted_fn)
-        node_log.info("node_start", input_type=_type_name(node.input), output_type=_type_name(node.output))
+        node_log.info("node_start", input_type=_type_name(node.inputs), output_type=_type_name(node.output))
 
         t0 = time.monotonic()
 
@@ -176,7 +176,7 @@ def _make_produce_fn(node: Node) -> Callable:
         from neograph._llm import invoke_structured
 
         node_log = log.bind(node=node.name, mode="produce", model=node.model, prompt=node.prompt)
-        node_log.info("node_start", input_type=_type_name(node.input), output_type=_type_name(node.output))
+        node_log.info("node_start", input_type=_type_name(node.inputs), output_type=_type_name(node.output))
 
         t0 = time.monotonic()
         input_data = _extract_input(state, node)
@@ -211,7 +211,7 @@ def _make_gather_fn(node: Node) -> Callable:
 
         node_log = log.bind(node=node.name, mode="gather", model=node.model, prompt=node.prompt)
         node_log.info("node_start",
-                      input_type=_type_name(node.input), output_type=_type_name(node.output),
+                      input_type=_type_name(node.inputs), output_type=_type_name(node.output),
                       tools=[t.name for t in node.tools],
                       budgets={t.name: t.budget for t in node.tools})
 
@@ -252,7 +252,7 @@ def _make_execute_fn(node: Node) -> Callable:
 
         node_log = log.bind(node=node.name, mode="execute", model=node.model, prompt=node.prompt)
         node_log.info("node_start",
-                      input_type=_type_name(node.input), output_type=_type_name(node.output),
+                      input_type=_type_name(node.inputs), output_type=_type_name(node.output),
                       tools=[t.name for t in node.tools],
                       budgets={t.name: t.budget for t in node.tools})
 
@@ -299,8 +299,8 @@ def _is_instance_safe(val: Any, type_spec: Any) -> bool:
 
 
 def _extract_input(state: Any, node: Node) -> Any:
-    """Extract typed input from state based on node's input spec."""
-    if node.input is None:
+    """Extract typed input from state based on node's inputs spec."""
+    if node.inputs is None:
         return None
 
     # Handle both Pydantic model and dict states (Send passes dicts)
@@ -316,13 +316,13 @@ def _extract_input(state: Any, node: Node) -> Any:
 
     # Each fan-out: item is passed via neo_each_item
     replicate_item = _get("neo_each_item")
-    if replicate_item is not None and _is_instance_safe(replicate_item, node.input):
+    if replicate_item is not None and _is_instance_safe(replicate_item, node.inputs):
         return replicate_item
 
     # dict[str, type] — multiple fields from state
-    if isinstance(node.input, dict):
+    if isinstance(node.inputs, dict):
         result = {}
-        for field_name, _field_type in node.input.items():
+        for field_name, _field_type in node.inputs.items():
             state_key = field_name.replace("-", "_")
             result[field_name] = _get(state_key)
         return result
@@ -330,7 +330,7 @@ def _extract_input(state: Any, node: Node) -> Any:
     # Single type — find matching field in state by type or name
     for attr_name in _fields():
         val = _get(attr_name)
-        if val is not None and _is_instance_safe(val, node.input):
+        if val is not None and _is_instance_safe(val, node.inputs):
             return val
 
     return None

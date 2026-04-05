@@ -215,15 +215,15 @@ enrich = Construct(
     input=Claims,
     output=ScoredClaims,
     nodes=[
-        Node.scripted("lookup", fn="lookup_context", input=Claims, output=Context),
-        Node.scripted("score", fn="score_claims", input=Claims, output=ScoredClaims),
+        Node.scripted("lookup", fn="lookup_context", inputs=Claims, output=Context),
+        Node.scripted("score", fn="score_claims", inputs=Claims, output=ScoredClaims),
     ],
 )
 
 # Step 3: Cluster and verify — Each fan-out
 cluster = Node.scripted("cluster", fn="make_clusters", output=Clusters)
 verify = Node.scripted(
-    "verify", fn="verify_cluster", input=ClusterGroup, output=VerifyResult
+    "verify", fn="verify_cluster", inputs=ClusterGroup, output=VerifyResult
 ) | Each(over="cluster.groups", key="label")
 
 # Step 4: Validate — Operator pauses if not all clusters pass

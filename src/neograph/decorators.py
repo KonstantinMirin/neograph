@@ -318,7 +318,7 @@ def node(
     fn: Callable | None = None,
     *,
     mode: Literal["produce", "gather", "execute", "scripted", "raw"] | None = None,
-    input: Any = None,
+    inputs: Any = None,
     output: Any = None,
     model: str | None = None,
     prompt: str | None = None,
@@ -338,7 +338,7 @@ def node(
     Inference rules — explicit kwargs always win over annotations:
         * `name`   ← kwarg, else `fn.__name__.replace("_", "-")`
         * `output` ← kwarg, else function return annotation
-        * `input`  ← kwarg, else annotation of the first annotated parameter
+        * `inputs` ← kwarg, else annotation of the first annotated parameter
 
     Fan-out via Each::
 
@@ -504,25 +504,26 @@ def node(
             if ret is not inspect.Signature.empty:
                 inferred_output = ret
 
-        # Input inference: explicit kwarg wins. Otherwise use the annotation
+        # Inputs inference: explicit kwarg wins. Otherwise use the annotation
         # of the first annotated parameter that is an upstream dependency
-        # (skip FromInput/FromConfig/constant params). The per-node `.input`
-        # field only tracks a single type (matches the existing Node contract);
-        # fan-in still drives topology via param names, only the first
-        # annotated upstream param feeds `.input`.
-        inferred_input = input
-        if inferred_input is None:
+        # (skip FromInput/FromConfig/constant params). The per-node `.inputs`
+        # field only tracks a single type here (matches the existing Node
+        # contract for step 1 of neograph-kqd); fan-in still drives topology
+        # via param names, only the first annotated upstream param feeds
+        # `.inputs`. Dict-only shape is introduced in later subtasks.
+        inferred_inputs = inputs
+        if inferred_inputs is None:
             for p in sig.parameters.values():
                 if p.name in param_res:
                     continue  # skip from_input / from_config params
                 if p.annotation is not inspect.Parameter.empty:
-                    inferred_input = p.annotation
+                    inferred_inputs = p.annotation
                     break
 
         n = Node(
             name=node_label,
             mode="scripted" if effective_mode == "raw" else effective_mode,
-            input=inferred_input,
+            inputs=inferred_inputs,
             output=inferred_output,
             model=model,
             prompt=prompt,
@@ -1028,7 +1029,7 @@ def _validate_fan_in_types(decorated: dict[str, Node]) -> None:
     # function's __globals__ (e.g. types defined in a local scope).
     localns: dict[str, Any] = {}
     for nd in decorated.values():
-        for tp in (nd.output, nd.input):
+        for tp in (nd.output, nd.inputs):
             if isinstance(tp, type) and hasattr(tp, "__name__"):
                 localns.setdefault(tp.__name__, tp)
 

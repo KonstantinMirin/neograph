@@ -4,7 +4,7 @@
     classify = Node(
         "classify",
         mode="produce",
-        input=DecompositionResult,
+        inputs=DecompositionResult,
         output=ClassificationResult,
         model="reason",
         prompt="rw/classify",
@@ -14,7 +14,7 @@
     build_catalog = Node.scripted("build-catalog", fn="build_catalog", output=str)
 
     # Raw: classic LangGraph escape hatch
-    @node(mode='raw', input=SomeInput, output=SomeOutput)
+    @node(mode='raw', inputs=SomeInput, output=SomeOutput)
     def custom_logic(state, config):
         ...
 """
@@ -44,7 +44,7 @@ class Node(Modifiable, BaseModel):
     mode: Literal["produce", "gather", "execute", "scripted"] = "produce"
 
     # Typed contracts — specific Pydantic models, not BaseModel
-    input: Any = None   # type[BaseModel] | dict[str, type] | None
+    inputs: Any = None   # type[BaseModel] | dict[str, type] | None
     output: Any = None  # type[BaseModel] | None
 
     # LLM configuration
@@ -77,7 +77,7 @@ class Node(Modifiable, BaseModel):
         cls,
         name: str,
         fn: str,
-        input: Any = None,
+        inputs: Any = None,
         output: Any = None,
     ) -> Node:
         """Create a deterministic node — pure Python, no LLM.
@@ -88,7 +88,7 @@ class Node(Modifiable, BaseModel):
         return cls(
             name=name,
             mode="scripted",
-            input=input,
+            inputs=inputs,
             output=output,
             scripted_fn=fn,
         )

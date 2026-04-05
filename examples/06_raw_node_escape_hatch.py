@@ -55,7 +55,7 @@ def extract_claims() -> Claims:
 # This is the escape hatch. The function receives the full Pydantic state
 # and returns a dict of field updates. NeoGraph wires the edges.
 
-@node(mode="raw", input=Claims, output=FilteredClaims)
+@node(mode="raw", inputs=Claims, output=FilteredClaims)
 def filter_non_functional(state, config):
     """Drop claims that aren't real requirements (e.g., cosmetic wishes).
 

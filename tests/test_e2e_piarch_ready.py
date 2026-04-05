@@ -377,7 +377,7 @@ class TestNodeMap:
 
     def test_map_with_lambda_resolves_path(self):
         """A lambda `s.foo.bar` resolves to the same Each(over='foo.bar', ...)."""
-        node = Node.scripted("verify", fn="noop", input=ClusterGroup, output=MatchResult)
+        node = Node.scripted("verify", fn="noop", inputs=ClusterGroup, output=MatchResult)
         mapped = node.map(lambda s: s.make_clusters.groups, key="label")
 
         each = mapped.get_modifier(Each)
@@ -387,7 +387,7 @@ class TestNodeMap:
 
     def test_map_with_string_path(self):
         """A string source is passed straight through to Each.over."""
-        node = Node.scripted("verify", fn="noop", input=ClusterGroup, output=MatchResult)
+        node = Node.scripted("verify", fn="noop", inputs=ClusterGroup, output=MatchResult)
         mapped = node.map("make_clusters.groups", key="label")
 
         each = mapped.get_modifier(Each)
@@ -397,7 +397,7 @@ class TestNodeMap:
 
     def test_map_equivalent_to_pipe_each(self):
         """node.map(...) and node | Each(...) produce structurally identical nodes."""
-        base = Node.scripted("verify", fn="noop", input=ClusterGroup, output=MatchResult)
+        base = Node.scripted("verify", fn="noop", inputs=ClusterGroup, output=MatchResult)
 
         via_map = base.map(lambda s: s.make_clusters.groups, key="label")
         via_pipe = base | Each(over="make_clusters.groups", key="label")
@@ -421,7 +421,7 @@ class TestNodeMap:
 
         make = Node.scripted("make-clusters", fn="make_clusters", output=Clusters)
         verify = Node.scripted(
-            "verify", fn="verify_cluster", input=ClusterGroup, output=MatchResult
+            "verify", fn="verify_cluster", inputs=ClusterGroup, output=MatchResult
         ).map(lambda s: s.make_clusters.groups, key="label")
 
         pipeline = Construct("test-map", nodes=[make, verify])
@@ -454,19 +454,19 @@ class TestNodeMap:
 
     def test_map_rejects_dunder_attribute_access(self):
         """`lambda s: s.__dict__.foo` must not silently produce Each(over='__dict__.foo')."""
-        node = Node.scripted("verify", fn="noop", input=ClusterGroup, output=MatchResult)
+        node = Node.scripted("verify", fn="noop", inputs=ClusterGroup, output=MatchResult)
         with pytest.raises(TypeError, match="pure attribute-access chain"):
             node.map(lambda s: s.__dict__.foo, key="label")
 
     def test_map_rejects_leading_underscore_attribute(self):
         """Reject `lambda s: s._private.field` — underscores are a footgun trapdoor."""
-        node = Node.scripted("verify", fn="noop", input=ClusterGroup, output=MatchResult)
+        node = Node.scripted("verify", fn="noop", inputs=ClusterGroup, output=MatchResult)
         with pytest.raises(TypeError, match="pure attribute-access chain"):
             node.map(lambda s: s._private.x, key="label")
 
     def test_map_user_exception_propagates_unchanged(self):
         """Non-attribute errors (e.g. ZeroDivisionError) propagate with their own type."""
-        node = Node.scripted("verify", fn="noop", input=ClusterGroup, output=MatchResult)
+        node = Node.scripted("verify", fn="noop", inputs=ClusterGroup, output=MatchResult)
         with pytest.raises(ZeroDivisionError):
             node.map(lambda s: 1 / 0 and s.x, key="label")
 
@@ -478,7 +478,7 @@ class TestNodeMap:
 
     def test_map_on_construct(self):
         """Construct also gets .map() via Modifiable — sub-construct fan-out."""
-        inner = Node.scripted("inner", fn="noop", input=ClusterGroup, output=MatchResult)
+        inner = Node.scripted("inner", fn="noop", inputs=ClusterGroup, output=MatchResult)
         sub = Construct("sub", input=ClusterGroup, output=MatchResult, nodes=[inner])
         mapped = sub.map(lambda s: s.upstream.items, key="label")
 
@@ -555,7 +555,7 @@ class TestRawNode:
         def make_claims() -> Claims:
             return Claims(items=["a", "b", "c"])
 
-        @node(mode="raw", input=Claims, output=Claims)
+        @node(mode="raw", inputs=Claims, output=Claims)
         def filter_claims(state, config):
             """Raw node: custom filtering logic."""
             claims = None
@@ -958,7 +958,7 @@ class TestModifierAsFirstNode:
         ))
 
         process = Node.scripted(
-            "process", fn="process_item", input=ClusterGroup, output=MatchResult
+            "process", fn="process_item", inputs=ClusterGroup, output=MatchResult
         ) | Each(over="make_items.groups", key="label")
 
         pipeline = Construct("test-each-start", nodes=[process])
@@ -991,7 +991,7 @@ class TestMultiFieldInput:
         step_b = Node.scripted("step-b", fn="make_raw", output=RawText)
         step_c = Node.scripted(
             "step-c", fn="combine",
-            input={"step_a": Claims, "step_b": RawText},
+            inputs={"step_a": Claims, "step_b": RawText},
             output=RawText,
         )
 
@@ -1078,7 +1078,7 @@ class TestStateHygiene:
 
         make = Node.scripted("make", fn="make", output=Clusters)
         proc = Node.scripted(
-            "proc", fn="proc", input=ClusterGroup, output=MatchResult
+            "proc", fn="proc", inputs=ClusterGroup, output=MatchResult
         ) | Each(over="make.groups", key="label")
 
         pipeline = Construct("test-hygiene-each", nodes=[make, proc])
@@ -1107,7 +1107,7 @@ class TestStateHygiene:
 
         make = Node.scripted("make-dupes", fn="make_dupes", output=Clusters)
         proc = Node.scripted(
-            "proc-dupe", fn="proc_dupe", input=ClusterGroup, output=MatchResult
+            "proc-dupe", fn="proc_dupe", inputs=ClusterGroup, output=MatchResult
         ) | Each(over="make_dupes.groups", key="label")
 
         pipeline = Construct("test-dupe-key", nodes=[make, proc])
@@ -1156,8 +1156,8 @@ class TestSubgraph:
             input=EnrichInput,
             output=EnrichOutput,
             nodes=[
-                Node.scripted("lookup", fn="lookup", input=EnrichInput, output=RawText),
-                Node.scripted("score", fn="score", input=EnrichInput, output=EnrichOutput),
+                Node.scripted("lookup", fn="lookup", inputs=EnrichInput, output=RawText),
+                Node.scripted("score", fn="score", inputs=EnrichInput, output=EnrichOutput),
             ],
         )
 
@@ -1190,7 +1190,7 @@ class TestSubgraph:
             input=Claims,
             output=RawText,
             nodes=[
-                Node.scripted("process", fn="sub_process", input=Claims, output=RawText),
+                Node.scripted("process", fn="sub_process", inputs=Claims, output=RawText),
             ],
         )
 
@@ -1290,7 +1290,7 @@ class TestSubgraph:
             input=Clusters,
             output=RawText,
             nodes=[
-                Node.scripted("verify", fn="sub_verify", input=ClusterGroup, output=MatchResult)
+                Node.scripted("verify", fn="sub_verify", inputs=ClusterGroup, output=MatchResult)
                 | Each(over="neo_subgraph_input.groups", key="label"),
                 Node.scripted("collect", fn="sub_collect", output=RawText),
             ],
@@ -1320,7 +1320,7 @@ class TestSubgraph:
             "level2",
             input=Claims,
             output=RawText,
-            nodes=[Node.scripted("detail", fn="l2_detail", input=Claims, output=RawText)],
+            nodes=[Node.scripted("detail", fn="l2_detail", inputs=Claims, output=RawText)],
         )
 
         # Level1: Claims → RawText (via level2)
@@ -1329,7 +1329,7 @@ class TestSubgraph:
             input=Claims,
             output=RawText,
             nodes=[
-                Node.scripted("process", fn="l1_process", input=Claims, output=Claims),
+                Node.scripted("process", fn="l1_process", inputs=Claims, output=Claims),
                 level2,
             ],
         )
@@ -1337,7 +1337,7 @@ class TestSubgraph:
         parent = Construct("root", nodes=[
             Node.scripted("start", fn="l0_start", output=Claims),
             level1,
-            Node.scripted("finish", fn="l0_finish", input=RawText, output=RawText),
+            Node.scripted("finish", fn="l0_finish", inputs=RawText, output=RawText),
         ])
 
         graph = compile(parent)
@@ -1363,14 +1363,14 @@ class TestSubgraph:
             "enrich",
             input=Claims,
             output=RawText,
-            nodes=[Node.scripted("e", fn="enrich_fn", input=Claims, output=RawText)],
+            nodes=[Node.scripted("e", fn="enrich_fn", inputs=Claims, output=RawText)],
         )
 
         validate_sub = Construct(
             "check",
             input=RawText,
             output=ValidationResult,
-            nodes=[Node.scripted("v", fn="validate_fn", input=RawText, output=ValidationResult)],
+            nodes=[Node.scripted("v", fn="validate_fn", inputs=RawText, output=ValidationResult)],
         )
 
         parent = Construct("parent", nodes=[
@@ -1430,7 +1430,7 @@ class TestConstructOracle:
             output=RawText,
             nodes=[
                 Node.scripted("step-a", fn="sub_step_a", output=Claims),
-                Node.scripted("step-b", fn="sub_step_b", input=Claims, output=RawText),
+                Node.scripted("step-b", fn="sub_step_b", inputs=Claims, output=RawText),
             ],
         ) | Oracle(n=3, merge_fn="merge_sub")
 
@@ -1501,8 +1501,8 @@ class TestConstructEach:
             input=ClusterGroup,
             output=MatchResult,
             nodes=[
-                Node.scripted("analyze", fn="sub_analyze", input=ClusterGroup, output=RawText),
-                Node.scripted("score", fn="sub_score", input=RawText, output=MatchResult),
+                Node.scripted("analyze", fn="sub_analyze", inputs=ClusterGroup, output=RawText),
+                Node.scripted("score", fn="sub_score", inputs=RawText, output=MatchResult),
             ],
         ) | Each(over="make_clusters.groups", key="label")
 
@@ -1676,7 +1676,7 @@ class TestDeepCompositions:
                 Node(
                     name="search",
                     mode="gather",
-                    input=Claims,
+                    inputs=Claims,
                     output=RawText,
                     model="fast",
                     prompt="test/search",
@@ -1831,7 +1831,7 @@ def _producer(name: str, out: type) -> Node:
 
 
 def _consumer(name: str, in_: type, out: type) -> Node:
-    return Node.scripted(name, fn="f", input=in_, output=out)
+    return Node.scripted(name, fn="f", inputs=in_, output=out)
 
 
 class TestConstructValidation:
@@ -1929,7 +1929,7 @@ class TestConstructValidation:
         b = _consumer("b", Claims, ClassifiedClaims)
         pipeline = Construct("top-level", nodes=[b])
         assert len(pipeline.nodes) == 1
-        assert pipeline.nodes[0].input is Claims
+        assert pipeline.nodes[0].inputs is Claims
 
     def test_top_level_each_deferred_to_runtime(self):
         """Each at position 0 whose root isn't a known producer defers cleanly.
@@ -1996,12 +1996,12 @@ class TestConstructValidation:
         step_b = _producer("step-b", RawText)
         step_c = Node.scripted(
             "step-c", fn="f",
-            input={"step_a": Claims, "step_b": RawText},
+            inputs={"step_a": Claims, "step_b": RawText},
             output=RawText,
         )
         pipeline = Construct("multi-input", nodes=[step_a, step_b, step_c])
         assert len(pipeline.nodes) == 3
-        assert isinstance(pipeline.nodes[2].input, dict)
+        assert isinstance(pipeline.nodes[2].inputs, dict)
 
     def test_dict_class_input_deferred(self):
         """input=dict (raw class) defers to runtime isinstance scan.
@@ -2011,10 +2011,10 @@ class TestConstructValidation:
         upstream producer's output is a dict subclass.
         """
         a = _producer("a", RawText)
-        b = Node.scripted("b", fn="f", input=dict, output=Claims)
+        b = Node.scripted("b", fn="f", inputs=dict, output=Claims)
         pipeline = Construct("dict-class", nodes=[a, b])
         assert len(pipeline.nodes) == 2
-        assert pipeline.nodes[1].input is dict
+        assert pipeline.nodes[1].inputs is dict
 
     def test_dict_generic_input_deferred(self):
         """input=dict[str, X] (parameterized generic) defers to runtime.
@@ -2023,10 +2023,10 @@ class TestConstructValidation:
         then isinstance(val, dict); the validator must accept this shape too.
         """
         a = _producer("a", RawText)
-        b = Node.scripted("b", fn="f", input=dict[str, Claims], output=Claims)
+        b = Node.scripted("b", fn="f", inputs=dict[str, Claims], output=Claims)
         pipeline = Construct("dict-generic", nodes=[a, b])
         assert len(pipeline.nodes) == 2
-        assert pipeline.nodes[1].input == dict[str, Claims]
+        assert pipeline.nodes[1].inputs == dict[str, Claims]
 
     # -- Each downstream type tracking (neograph-8k3) ----------------------
 
@@ -2047,7 +2047,7 @@ class TestConstructValidation:
         verify = _consumer("verify", ClusterGroup, MatchResult).map(
             lambda s: s.make.groups, key="label"
         )
-        summarize = Node.scripted("summarize", fn="f", input=dict, output=MergedResult)
+        summarize = Node.scripted("summarize", fn="f", inputs=dict, output=MergedResult)
         pipeline = Construct("good-dict", nodes=[make, verify, summarize])
         assert len(pipeline.nodes) == 3
 
@@ -2059,7 +2059,7 @@ class TestConstructValidation:
         )
         summarize = Node.scripted(
             "summarize", fn="f",
-            input=dict[str, MatchResult], output=MergedResult,
+            inputs=dict[str, MatchResult], output=MergedResult,
         )
         pipeline = Construct("good-typed-dict", nodes=[make, verify, summarize])
         assert len(pipeline.nodes) == 3
@@ -2072,7 +2072,7 @@ class TestConstructValidation:
         )
         summarize = Node.scripted(
             "summarize", fn="f",
-            input=dict[str, ValidationResult], output=MergedResult,
+            inputs=dict[str, ValidationResult], output=MergedResult,
         )
         with pytest.raises(ConstructError):
             Construct("bad-element", nodes=[make, verify, summarize])
@@ -2327,7 +2327,7 @@ class TestRunIsolated:
             text=input_data.text.upper() if input_data else "NONE"
         ))
 
-        upper_node = Node.scripted("upper", fn="upper", input=RawText, output=RawText)
+        upper_node = Node.scripted("upper", fn="upper", inputs=RawText, output=RawText)
 
         # Direct invocation — no pipeline, no compile, no run
         result = upper_node.run_isolated(input=RawText(text="hello"))
@@ -2500,7 +2500,7 @@ class TestConfigInjectionPatterns:
 
         make = Node.scripted("make", fn="make_groups", output=Clusters)
         verify = Node.scripted(
-            "verify", fn="verify_cfg", input=ClusterGroup, output=MatchResult
+            "verify", fn="verify_cfg", inputs=ClusterGroup, output=MatchResult
         ) | Each(over="make.groups", key="label")
 
         pipeline = Construct("test-each-config", nodes=[make, verify])
@@ -3524,7 +3524,7 @@ class TestNodeDecoratorRawMode:
 
         make = Node.scripted("make-claims", fn="make_claims", output=Claims)
 
-        @node(mode="raw", input=Claims, output=Claims)
+        @node(mode="raw", inputs=Claims, output=Claims)
         def filter_claims(state, config):
             claims = None
             for field_name in state.__class__.model_fields:
@@ -3553,19 +3553,19 @@ class TestNodeDecoratorRawMode:
 
         # Three parameters — too many
         with pytest.raises(ConstructError, match="exactly two parameters"):
-            @node(mode="raw", input=Claims, output=Claims)
+            @node(mode="raw", inputs=Claims, output=Claims)
             def bad_three(state, config, extra):
                 pass
 
         # Wrong parameter names
         with pytest.raises(ConstructError, match="named 'state' and 'config'"):
-            @node(mode="raw", input=Claims, output=Claims)
+            @node(mode="raw", inputs=Claims, output=Claims)
             def bad_names(s, c):
                 pass
 
         # One parameter — too few
         with pytest.raises(ConstructError, match="exactly two parameters"):
-            @node(mode="raw", input=Claims, output=Claims)
+            @node(mode="raw", inputs=Claims, output=Claims)
             def bad_one(state):
                 pass
 
@@ -3575,7 +3575,7 @@ class TestNodeDecoratorRawMode:
 
         mod = self._fresh_module("test_raw_downstream")
 
-        @node(mode="raw", input=Claims, output=Claims)
+        @node(mode="raw", inputs=Claims, output=Claims)
         def produce_claims(state, config):
             return {"produce_claims": Claims(items=["x", "y"])}
 
@@ -3604,7 +3604,7 @@ class TestNodeDecoratorRawMode:
         def extract() -> RawText:
             return RawText(text="hello world")
 
-        @node(mode="raw", input=RawText, output=Claims)
+        @node(mode="raw", inputs=RawText, output=Claims)
         def process(state, config):
             return {"process": Claims(items=["from-raw"])}
 
@@ -4456,7 +4456,7 @@ class TestConstructLlmConfigDefault:
 
         # Build via declarative API — Construct carries the default
         a = Node("a", mode="produce", output=Claims, model="fast", prompt="p")
-        b = Node("b", mode="produce", input=Claims, output=Claims, model="fast", prompt="p")
+        b = Node("b", mode="produce", inputs=Claims, output=Claims, model="fast", prompt="p")
 
         pipeline = Construct(
             "with-default",
@@ -4928,7 +4928,7 @@ class TestEffectiveProducerType:
         from neograph._construct_validation import effective_producer_type
 
         n = Node.scripted(
-            "each-node", fn="_x_each", input=ClusterGroup, output=MatchResult
+            "each-node", fn="_x_each", inputs=ClusterGroup, output=MatchResult
         ) | Each(over="upstream.items", key="label")
         effective = effective_producer_type(n)
         assert effective == dict[str, MatchResult]
@@ -4960,7 +4960,7 @@ class TestEffectiveProducerType:
         from neograph._construct_validation import effective_producer_type
 
         inner = Node.scripted(
-            "inner", fn="_x_inner", input=Claims, output=Claims
+            "inner", fn="_x_inner", inputs=Claims, output=Claims
         )
         sub = Construct(
             "sub", input=Claims, output=Claims, nodes=[inner]
@@ -4983,3 +4983,47 @@ class TestEffectiveProducerType:
                 return None
 
         assert effective_producer_type(OutputlessStub()) is None
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# TestNodeInputsFieldRename (neograph-kqd.1)
+#
+# Step 1 of the Node.inputs refactor is a pure field rename:
+# Node.input → Node.inputs. Field type stays Any and keeps the same shape
+# acceptance (None | type | dict). Runtime behavior is unchanged. These
+# tests fail before the rename (Node has no `inputs` field) and pass after.
+# ═══════════════════════════════════════════════════════════════════════════
+
+class TestNodeInputsFieldRename:
+    def test_node_accepts_inputs_kwarg_single_type(self):
+        """Node(inputs=SomeType) creates a node with .inputs == SomeType."""
+        n = Node("t", mode="scripted", inputs=Claims, output=RawText)
+        assert n.inputs == Claims
+
+    def test_node_accepts_inputs_kwarg_dict_form(self):
+        """Node(inputs={'a': A, 'b': B}) stores the dict on .inputs."""
+        n = Node(
+            "t",
+            mode="scripted",
+            inputs={"claims": Claims, "clusters": Clusters},
+            output=MatchResult,
+        )
+        assert n.inputs == {"claims": Claims, "clusters": Clusters}
+
+    def test_node_accepts_inputs_none_default(self):
+        """Node with no inputs kwarg keeps the default (None)."""
+        n = Node("t", mode="scripted", output=RawText)
+        assert n.inputs is None
+
+    def test_node_scripted_classmethod_accepts_inputs_kwarg(self):
+        """Node.scripted(..., inputs=X) propagates to .inputs."""
+        n = Node.scripted("verify", fn="noop", inputs=ClusterGroup, output=MatchResult)
+        assert n.inputs == ClusterGroup
+        assert n.mode == "scripted"
+
+    def test_node_has_no_legacy_input_attribute(self):
+        """.input attribute no longer exists on Node instances."""
+        n = Node("t", mode="scripted", inputs=Claims, output=RawText)
+        assert not hasattr(n, "input"), (
+            "Node still exposes legacy .input attribute — rename is incomplete."
+        )

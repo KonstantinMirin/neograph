@@ -165,7 +165,7 @@ decompose = Node(
     prompt="decompose",
 )
 
-report = Node.scripted("report", fn="build_report", input=Claims, output=Report)
+report = Node.scripted("report", fn="build_report", inputs=Claims, output=Report)
 
 pipeline = Construct("metadata-demo", nodes=[decompose, report])
 
