@@ -4549,3 +4549,166 @@ class TestConstructLlmConfigDefault:
         # cff_default_b inherits output_strategy, overrides temperature
         b_node = pipeline.nodes[1]
         assert b_node.llm_config == {"output_strategy": "json_mode", "temperature": 0.9}
+
+
+class TestNodeDecoratorFanInEachInterop:
+    """Regression — _validate_fan_in_types must unwrap Each output as dict[key, item].
+
+    neograph-8k3 fixed Each downstream dict tracking in
+    _construct_validation.py::_validate_node_chain, but @node-based pipelines
+    use the separate _validate_fan_in_types walker in decorators.py which
+    was not updated. Before the fix, a downstream @node annotated
+    ``param: dict[str, X]`` against an upstream with map_over= would raise
+    "expects dict[str, X] but upstream produces X".
+    """
+
+    def test_fan_in_consumes_each_result_as_dict(self):
+        """Downstream @node parameter `dict[str, UpstreamOut]` is compatible
+        with an Each-modified upstream producing UpstreamOut per item."""
+        from neograph import compile, construct_from_functions, node, run
+
+        @node(output=Clusters)
+        def fie_source() -> Clusters:
+            return Clusters(
+                groups=[
+                    ClusterGroup(label="alpha", claim_ids=["c1"]),
+                    ClusterGroup(label="beta", claim_ids=["c2"]),
+                ]
+            )
+
+        @node(
+            output=MatchResult,
+            map_over="fie_source.groups",
+            map_key="label",
+        )
+        def fie_verify(cluster: ClusterGroup) -> MatchResult:
+            return MatchResult(
+                cluster_label=cluster.label,
+                matched=[f"m-{cluster.label}"],
+            )
+
+        @node(output=ClassifiedClaims)
+        def fie_summarize(fie_verify: dict[str, MatchResult]) -> ClassifiedClaims:
+            # Consumes the full Each-collected dict keyed by cluster label
+            return ClassifiedClaims(
+                classified=[
+                    {"claim": label, "category": result.cluster_label}
+                    for label, result in fie_verify.items()
+                ]
+            )
+
+        # Before the fix, this raised:
+        #   ConstructError: @node 'fie-summarize' parameter 'fie_verify'
+        #   expects dict[str, MatchResult] but upstream 'fie-verify' produces
+        #   MatchResult.
+        pipeline = construct_from_functions(
+            "fie-pipeline", [fie_source, fie_verify, fie_summarize]
+        )
+        assert [n.name for n in pipeline.nodes] == [
+            "fie-source",
+            "fie-verify",
+            "fie-summarize",
+        ]
+
+        graph = compile(pipeline)
+        result = run(graph, input={"node_id": "fie-001"})
+
+        assert isinstance(result["fie_summarize"], ClassifiedClaims)
+        categories = {c["category"] for c in result["fie_summarize"].classified}
+        assert categories == {"alpha", "beta"}
+
+    def test_fan_in_consumes_each_result_as_raw_dict(self):
+        """Downstream parameter typed as plain `dict` (unparameterized) is
+        also compatible with an Each-modified upstream — accepting the whole
+        collected mapping without committing to the value type."""
+        from neograph import construct_from_functions, node
+
+        @node(output=Clusters)
+        def fier_source() -> Clusters:
+            return Clusters(
+                groups=[ClusterGroup(label="alpha", claim_ids=["c1"])]
+            )
+
+        @node(
+            output=MatchResult,
+            map_over="fier_source.groups",
+            map_key="label",
+        )
+        def fier_verify(cluster: ClusterGroup) -> MatchResult:
+            return MatchResult(cluster_label=cluster.label, matched=["m"])
+
+        @node(output=ClassifiedClaims)
+        def fier_summarize(fier_verify: dict) -> ClassifiedClaims:
+            return ClassifiedClaims(classified=[])
+
+        # Must not raise — plain `dict` accepts the Each-wrapped dict[str, X].
+        construct_from_functions(
+            "fier-pipeline", [fier_source, fier_verify, fier_summarize]
+        )
+
+    def test_fan_in_raw_upstream_type_rejected_with_each(self):
+        """Regression-guard for the OTHER direction: if a downstream param
+        is annotated as the raw upstream output type (NOT wrapped in dict),
+        it must still be rejected when the upstream has Each — because the
+        state field is actually a dict, not a raw item."""
+        from neograph import ConstructError, construct_from_functions, node
+
+        @node(output=Clusters)
+        def fieraw_source() -> Clusters:
+            return Clusters(
+                groups=[ClusterGroup(label="alpha", claim_ids=["c1"])]
+            )
+
+        @node(
+            output=MatchResult,
+            map_over="fieraw_source.groups",
+            map_key="label",
+        )
+        def fieraw_verify(cluster: ClusterGroup) -> MatchResult:
+            return MatchResult(cluster_label=cluster.label, matched=["m"])
+
+        @node(output=ClassifiedClaims)
+        def fieraw_summarize(fieraw_verify: MatchResult) -> ClassifiedClaims:
+            # WRONG: the state field is dict[str, MatchResult], not MatchResult.
+            return ClassifiedClaims(classified=[])
+
+        with pytest.raises(ConstructError) as exc_info:
+            construct_from_functions(
+                "fieraw-pipeline",
+                [fieraw_source, fieraw_verify, fieraw_summarize],
+            )
+        msg = str(exc_info.value)
+        # The error should point at the parameter and mention the dict shape
+        assert "fieraw_verify" in msg
+        assert "dict[str, MatchResult]" in msg or "dict" in msg
+
+    def test_fan_in_wrong_dict_element_type_rejected(self):
+        """Downstream annotated `dict[str, WrongType]` against an Each upstream
+        producing `RightType` must still be rejected."""
+        from neograph import ConstructError, construct_from_functions, node
+
+        @node(output=Clusters)
+        def fiew_source() -> Clusters:
+            return Clusters(
+                groups=[ClusterGroup(label="alpha", claim_ids=["c1"])]
+            )
+
+        @node(
+            output=MatchResult,
+            map_over="fiew_source.groups",
+            map_key="label",
+        )
+        def fiew_verify(cluster: ClusterGroup) -> MatchResult:
+            return MatchResult(cluster_label=cluster.label, matched=["m"])
+
+        @node(output=ClassifiedClaims)
+        def fiew_summarize(fiew_verify: dict[str, RawText]) -> ClassifiedClaims:
+            # WRONG: upstream produces MatchResult per item, not RawText.
+            return ClassifiedClaims(classified=[])
+
+        with pytest.raises(ConstructError) as exc_info:
+            construct_from_functions(
+                "fiew-pipeline",
+                [fiew_source, fiew_verify, fiew_summarize],
+            )
+        assert "fiew_verify" in str(exc_info.value)

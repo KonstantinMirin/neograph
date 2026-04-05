@@ -815,7 +815,16 @@ def _validate_fan_in_types(decorated: dict[str, Node]) -> None:
             if upstream.output is None:
                 continue
 
-            actual = upstream.output
+            # If the upstream has an Each modifier, its effective state-bus
+            # type is dict[str, upstream.output] — not upstream.output itself.
+            # See state.py:_add_output_field for the Each dict wrapping, and
+            # _construct_validation.py:_validate_node_chain which applies the
+            # same rule (neograph-8k3). This walker must mirror it.
+            if upstream.has_modifier(Each):
+                actual: Any = dict[str, upstream.output]
+            else:
+                actual = upstream.output
+
             if not _types_compatible(actual, expected):
                 src = _get_node_source(n)
                 src_suffix = f"\n  @node defined at {src}" if src else ""
