@@ -26,6 +26,7 @@ from neograph.decorators import (
     FromInput,
     construct_from_functions,
     construct_from_module,
+    merge_fn,
     node,
 )
 from neograph.forward import ForwardConstruct
@@ -45,6 +46,7 @@ __all__ = [
     "compile",
     "run",
     "tool",
+    "merge_fn",
     # Modifiers (used as @node kwargs; also available standalone)
     "Oracle",
     "Each",

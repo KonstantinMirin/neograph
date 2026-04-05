@@ -55,6 +55,7 @@ from __future__ import annotations
 import ast
 import inspect
 import os
+import sys
 import textwrap
 import warnings
 import weakref
@@ -96,11 +97,16 @@ from neograph.tool import Tool
 
 
 # Param resolution: how each parameter gets its value at runtime.
-# 'upstream'    — read from state by param name (existing @node output)
-# 'from_input'  — read from config["configurable"][param_name]  (run input kwarg)
-# 'from_config' — read from config["configurable"][param_name]  (shared resource)
-# 'constant'    — use the captured default value
-ParamResolution = dict[str, tuple[str, Any]]  # param_name -> (kind, default_or_None)
+# 'upstream'          — read from state by param name (existing @node output)
+# 'from_input'        — read from config["configurable"][param_name]  (run input kwarg)
+# 'from_config'       — read from config["configurable"][param_name]  (shared resource)
+# 'from_input_model'  — FromInput[PydanticModel]: construct the model by pulling
+#                       each model field name from config["configurable"][field_name]
+# 'from_config_model' — FromConfig[PydanticModel]: same mechanic, different semantic
+# 'constant'          — use the captured default value
+# Second tuple element carries the default (for 'constant') OR the Pydantic
+# model class (for '*_model' kinds) OR None.
+ParamResolution = dict[str, tuple[str, Any]]
 
 # Sidecar: id(Node) -> (original_fn, param_names_tuple, fan_out_param).
 # Keyed by id() so `Node` is not mutated. A `weakref.finalize` callback evicts
@@ -136,6 +142,145 @@ def _get_param_resolutions(n: Node) -> ParamResolution:
 
 def _get_sidecar(n: Node) -> tuple[Callable, tuple[str, ...], str | None] | None:
     return _node_sidecar.get(id(n))
+
+
+def _classify_di_params(
+    f: Callable,
+    sig: inspect.Signature,
+    frame_depth: int = 2,
+) -> ParamResolution:
+    """Classify a function's parameters into FromInput/FromConfig resolution
+    kinds. Shared between @node and @merge_fn.
+
+    Frame walking: we look up string annotations (under `from __future__
+    import annotations`) by peeking at the caller's frame locals, because
+    annotations in that mode are plain strings and don't create closure
+    references to locally-defined classes.
+
+    frame_depth: how many frames up from this function the actual
+    decorator-call frame lives. For @node with a call via ``decorator(f)``
+    inside ``node()``, that's 2. @merge_fn is similar.
+    """
+    from typing import get_args as _get_args
+    from pydantic import BaseModel as _BaseModel
+
+    extra_locals: dict[str, Any] = {
+        "FromInput": FromInput,
+        "FromConfig": FromConfig,
+    }
+    try:
+        cv = inspect.getclosurevars(f)
+        extra_locals.update(cv.globals)
+        extra_locals.update(cv.nonlocals)
+    except (TypeError, ValueError):
+        pass
+    # Walk up the call stack to capture locally-defined classes.
+    try:
+        caller = sys._getframe(frame_depth)  # noqa: SLF001
+        hops = 0
+        while caller is not None and hops < 8:
+            for k, v in caller.f_locals.items():
+                if not k.startswith("_") and k not in extra_locals:
+                    extra_locals[k] = v
+            caller = caller.f_back
+            hops += 1
+    except Exception:
+        pass
+
+    try:
+        import typing as _typing
+        resolved = _typing.get_type_hints(f, localns=extra_locals)
+    except Exception:
+        resolved = {}
+
+    def _extract_bundle_model(ann: Any) -> Any | None:
+        args = _get_args(ann)
+        if not args:
+            return None
+        inner = args[0]
+        if isinstance(inner, type) and issubclass(inner, _BaseModel):
+            return inner
+        return None
+
+    def _try_resolve_string_inner(ann_str: str, prefix: str) -> Any | None:
+        if not ann_str.startswith(prefix + "["):
+            return None
+        inner_name = ann_str[len(prefix) + 1:].rstrip("]").strip()
+        if inner_name and inner_name[0] in ("'", '"'):
+            inner_name = inner_name.strip("'\"")
+        cls_obj = extra_locals.get(inner_name)
+        if isinstance(cls_obj, type) and issubclass(cls_obj, _BaseModel):
+            return cls_obj
+        return None
+
+    param_res: ParamResolution = {}
+    for p in sig.parameters.values():
+        ann = resolved.get(p.name, p.annotation)
+        if ann is inspect.Parameter.empty:
+            continue
+        origin = get_origin(ann)
+        if origin is FromInput:
+            model_cls = _extract_bundle_model(ann)
+            if model_cls is not None:
+                param_res[p.name] = ("from_input_model", model_cls)
+            else:
+                param_res[p.name] = ("from_input", None)
+        elif origin is FromConfig:
+            model_cls = _extract_bundle_model(ann)
+            if model_cls is not None:
+                param_res[p.name] = ("from_config_model", model_cls)
+            else:
+                param_res[p.name] = ("from_config", None)
+        elif isinstance(ann, str):
+            if ann.startswith("FromInput[") or ann.startswith("FromInput "):
+                model_cls = _try_resolve_string_inner(ann, "FromInput")
+                if model_cls is not None:
+                    param_res[p.name] = ("from_input_model", model_cls)
+                else:
+                    param_res[p.name] = ("from_input", None)
+            elif ann.startswith("FromConfig[") or ann.startswith("FromConfig "):
+                model_cls = _try_resolve_string_inner(ann, "FromConfig")
+                if model_cls is not None:
+                    param_res[p.name] = ("from_config_model", model_cls)
+                else:
+                    param_res[p.name] = ("from_config", None)
+
+    return param_res
+
+
+def _resolve_di_value(
+    kind: str,
+    payload: Any,
+    pname: str,
+    config: Any,
+) -> Any:
+    """Resolve a single DI-classified parameter value from a runtime config.
+    Shared between @node raw_adapter and @merge_fn wrapper.
+
+    Returns the value to pass into the user function (or None on failure).
+    """
+    def _get_configurable(key: str) -> Any:
+        cfg = config or {}
+        if isinstance(cfg, dict):
+            return cfg.get("configurable", {}).get(key)
+        return getattr(cfg, "configurable", {}).get(key)
+
+    if kind in ("from_input", "from_config"):
+        return _get_configurable(pname)
+    if kind in ("from_input_model", "from_config_model"):
+        model_cls = payload
+        field_values: dict[str, Any] = {}
+        for fname in model_cls.model_fields:
+            val = _get_configurable(fname)
+            if val is not None:
+                field_values[fname] = val
+        try:
+            return model_cls(**field_values)
+        except Exception:
+            return None
+    if kind == "constant":
+        return payload
+    return None
 
 
 def _get_node_source(n: Node) -> str | None:
@@ -322,38 +467,18 @@ def node(
 
             param_names = tuple(p.name for p in sig.parameters.values())
 
-        # Classify non-upstream params at decoration time.
-        # FromInput[T] / FromConfig[T] are detectable from annotations now.
-        # Default-value constants are deferred to construct_from_module (we
-        # don't yet know which names map to @node upstreams).
+        # Classify non-upstream params at decoration time via the shared
+        # DI classifier. Handles FromInput[T] / FromConfig[T] including the
+        # bundled form FromInput[PydanticModel]. Default-value constants
+        # are deferred to construct_from_module (we don't know which param
+        # names map to @node upstreams until then).
         param_res: ParamResolution = {}
         if effective_mode != "raw":
-            # Try to resolve string annotations (from __future__ import annotations).
-            # If get_type_hints fails (e.g. local types not in globals), fall back
-            # to string-prefix matching on the raw annotation.
-            try:
-                import typing as _typing
-                resolved = _typing.get_type_hints(
-                    f, localns={"FromInput": FromInput, "FromConfig": FromConfig},
-                )
-            except Exception:
-                resolved = {}
-            for p in sig.parameters.values():
-                ann = resolved.get(p.name, p.annotation)
-                if ann is inspect.Parameter.empty:
-                    continue
-                origin = get_origin(ann)
-                if origin is FromInput:
-                    param_res[p.name] = ("from_input", None)
-                elif origin is FromConfig:
-                    param_res[p.name] = ("from_config", None)
-                elif isinstance(ann, str):
-                    # Fallback for string annotations where get_type_hints failed
-                    # (e.g. FromConfig[LocalClass] where LocalClass isn't in globals)
-                    if ann.startswith("FromInput[") or ann.startswith("FromInput "):
-                        param_res[p.name] = ("from_input", None)
-                    elif ann.startswith("FromConfig[") or ann.startswith("FromConfig "):
-                        param_res[p.name] = ("from_config", None)
+            # frame_depth=2: from inside _classify_di_params, frame 0 is the
+            # helper itself, frame 1 is decorator(f) here, and frame 2 is
+            # the user code applying @node. We walk up from there to pick
+            # up locally-defined classes in the enclosing scope.
+            param_res = _classify_di_params(f, sig, frame_depth=2)
 
         # Output inference: explicit kwarg wins; fall back to return annotation.
         inferred_output = output
@@ -450,6 +575,101 @@ def node(
         return n
 
     # Support both @node and @node(...) forms (see tool.py:130-132).
+    if fn is not None:
+        return decorator(fn)
+    return decorator
+
+
+# ──────────────────────────── @merge_fn (neograph-9zj) ───────────────────────
+#
+# Registry keyed by the function name that Oracle.merge_fn references. Maps
+# to (original_fn, param_resolutions). factory.make_oracle_merge_fn consults
+# this dict: if a lookup_scripted result is also in _merge_fn_registry, the
+# factory uses the DI-aware call path (variants + resolved DI params)
+# instead of the plain (variants, config) legacy signature.
+_merge_fn_registry: dict[str, tuple[Callable, ParamResolution]] = {}
+
+
+def get_merge_fn_metadata(name: str) -> tuple[Callable, ParamResolution] | None:
+    """Public lookup used by neograph.factory to detect @merge_fn-decorated
+    merge functions and resolve their DI parameters at runtime."""
+    return _merge_fn_registry.get(name)
+
+
+def merge_fn(
+    fn: Callable | None = None,
+    *,
+    name: str | None = None,
+) -> Any:
+    """Decorator for Oracle merge functions with FromInput/FromConfig DI.
+
+    Usage::
+
+        @merge_fn
+        def combine(
+            variants: list[Claims],
+            shared: FromConfig[SharedResources],
+            node_id: FromInput[str],
+        ) -> Claims:
+            ...
+
+        node | Oracle(n=3, merge_fn="combine")
+
+    The decorated function is auto-registered via ``register_scripted`` so
+    existing ``Oracle(merge_fn="combine")`` lookups still work. At runtime,
+    ``neograph.factory.make_oracle_merge_fn`` detects the decorator's
+    metadata and calls the function with resolved DI parameters. Functions
+    without this decorator (plain ``(variants, config) -> X`` signatures)
+    continue to work unchanged.
+
+    The first parameter of a merge function always receives the list of
+    variants produced by the Oracle generators; every subsequent parameter
+    must be annotated with ``FromInput[T]`` or ``FromConfig[T]``. Positional
+    defaults are not supported.
+    """
+
+    def decorator(f: Callable) -> Callable:
+        sig = inspect.signature(f)
+        params = list(sig.parameters.values())
+        if not params:
+            msg = (
+                f"@merge_fn '{f.__name__}' must accept at least one parameter "
+                f"(the variants list)."
+            )
+            raise ConstructError(msg)
+
+        # Skip the first parameter (variants); classify the rest for DI.
+        rest_params = params[1:]
+        rest_sig = sig.replace(parameters=rest_params)
+        # frame_depth=2: inside decorator(f), the caller is the user's @merge_fn
+        # site. Same rationale as @node.
+        param_res = _classify_di_params(f, rest_sig, frame_depth=2)
+
+        fn_name = name or f.__name__
+        _merge_fn_registry[fn_name] = (f, param_res)
+
+        # Auto-register via register_scripted so Oracle's existing string
+        # lookup path finds the function. The factory wrapper we return
+        # here is a legacy-compatible (variants, config) shim that falls
+        # back to calling the user function with positional args if the
+        # factory hasn't hooked into the DI path. In practice the factory
+        # always checks _merge_fn_registry first (see
+        # factory.make_oracle_merge_fn) so this shim is rarely invoked.
+        from neograph.factory import register_scripted
+
+        def legacy_shim(variants: Any, config: Any) -> Any:
+            resolved_args = [variants]
+            for pname, (kind, payload) in param_res.items():
+                resolved_args.append(
+                    _resolve_di_value(kind, payload, pname, config)
+                )
+            return f(*resolved_args)
+
+        legacy_shim.__name__ = fn_name
+        register_scripted(fn_name, legacy_shim)
+
+        return f
+
     if fn is not None:
         return decorator(fn)
     return decorator
@@ -718,17 +938,31 @@ def _attach_scripted_raw_fn(n: Node, fan_out: set[str] | None = None) -> None:
         for pname in param_names:
             resolution = param_res.get(pname)
             if resolution is not None:
-                kind, default_val = resolution
-                if kind == "from_input":
-                    # FromInput: read from config["configurable"] (run() injects
-                    # all input fields there via _inject_input_to_config)
+                kind, payload = resolution
+                if kind in ("from_input", "from_config"):
+                    # Read from config["configurable"] (run() injects all
+                    # input fields there via _inject_input_to_config).
                     args.append(_get_configurable(pname))
-                elif kind == "from_config":
-                    # FromConfig: read from config["configurable"]
-                    args.append(_get_configurable(pname))
+                elif kind in ("from_input_model", "from_config_model"):
+                    # Bundle resolution: build the Pydantic model by pulling
+                    # each of its declared fields from config["configurable"].
+                    # Missing fields fall through to the model's own default
+                    # or None — Pydantic handles the rest.
+                    model_cls = payload
+                    field_values: dict[str, Any] = {}
+                    for fname in model_cls.model_fields:
+                        val = _get_configurable(fname)
+                        if val is not None:
+                            field_values[fname] = val
+                    try:
+                        args.append(model_cls(**field_values))
+                    except Exception:
+                        # Validation failure (required field missing, type
+                        # coercion error) — pass None so the user code can
+                        # handle it rather than crashing the whole run.
+                        args.append(None)
                 elif kind == "constant":
-                    # Default value constant
-                    args.append(default_val)
+                    args.append(payload)
                 else:
                     args.append(_get(pname))
             elif pname in _fan_out:

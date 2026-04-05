@@ -366,7 +366,8 @@ def make_oracle_merge_fn(
     """Create the merge barrier function for Oracle.
 
     If oracle.merge_prompt, calls invoke_structured (LLM judge).
-    If oracle.merge_fn, calls the registered scripted function.
+    If oracle.merge_fn, calls the registered scripted function — with
+    FromInput/FromConfig DI if it was declared via ``@merge_fn``.
     Reads from collector_field, writes to field_name.
     """
     if oracle.merge_prompt:
@@ -382,11 +383,27 @@ def make_oracle_merge_fn(
                 config=config,
             )}
     else:
-        scripted_merge = lookup_scripted(oracle.merge_fn)
+        # Check for @merge_fn DI metadata first. If present, call the
+        # original user function with resolved DI parameters. Otherwise
+        # fall back to the legacy (variants, config) scripted signature.
+        from neograph.decorators import get_merge_fn_metadata, _resolve_di_value
 
-        def merge_fn(state: Any, config: RunnableConfig) -> dict:
-            results = getattr(state, collector_field, [])
-            return {field_name: scripted_merge(results, config)}
+        metadata = get_merge_fn_metadata(oracle.merge_fn)
+        if metadata is not None:
+            user_fn, param_res = metadata
+
+            def merge_fn(state: Any, config: RunnableConfig) -> dict:
+                results = getattr(state, collector_field, [])
+                args: list[Any] = [results]
+                for pname, (kind, payload) in param_res.items():
+                    args.append(_resolve_di_value(kind, payload, pname, config))
+                return {field_name: user_fn(*args)}
+        else:
+            scripted_merge = lookup_scripted(oracle.merge_fn)
+
+            def merge_fn(state: Any, config: RunnableConfig) -> dict:
+                results = getattr(state, collector_field, [])
+                return {field_name: scripted_merge(results, config)}
 
     return merge_fn
 

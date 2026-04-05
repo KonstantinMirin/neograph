@@ -4712,3 +4712,194 @@ class TestNodeDecoratorFanInEachInterop:
                 [fiew_source, fiew_verify, fiew_summarize],
             )
         assert "fiew_verify" in str(exc_info.value)
+
+
+class TestFromInputPydanticModel:
+    """neograph-6jd — FromInput[PydanticModel] bundles multiple config fields."""
+
+    def test_from_input_bundle_basic(self):
+        """FromInput[RunCtx] populates each field from config['configurable']."""
+        from neograph import FromInput, compile, construct_from_functions, node, run
+
+        class RunCtx(BaseModel):
+            node_id: str
+            project_root: str
+
+        @node(output=RawText)
+        def fipb_produce(ctx: FromInput[RunCtx]) -> RawText:
+            return RawText(text=f"{ctx.node_id}|{ctx.project_root}")
+
+        pipeline = construct_from_functions("fipb", [fipb_produce])
+        graph = compile(pipeline)
+        result = run(
+            graph,
+            input={"node_id": "REQ-001", "project_root": "/tmp/repo"},
+        )
+        assert result["fipb_produce"].text == "REQ-001|/tmp/repo"
+
+    def test_from_input_bundle_with_upstream(self):
+        """FromInput[PydanticModel] composes with an upstream @node parameter."""
+        from neograph import FromInput, compile, construct_from_functions, node, run
+
+        class RunCtx(BaseModel):
+            node_id: str
+
+        @node(output=Claims)
+        def fipb2_source() -> Claims:
+            return Claims(items=["a", "b"])
+
+        @node(output=RawText)
+        def fipb2_join(fipb2_source: Claims, ctx: FromInput[RunCtx]) -> RawText:
+            return RawText(text=f"{ctx.node_id}: {','.join(fipb2_source.items)}")
+
+        pipeline = construct_from_functions("fipb2", [fipb2_source, fipb2_join])
+        graph = compile(pipeline)
+        result = run(graph, input={"node_id": "X-42"})
+        assert result["fipb2_join"].text == "X-42: a,b"
+
+    def test_from_input_bundle_missing_field_is_none(self):
+        """A missing field in config['configurable'] is passed as None."""
+        from neograph import FromInput, compile, construct_from_functions, node, run
+
+        class PartialCtx(BaseModel):
+            node_id: str | None = None
+            project_root: str | None = None
+
+        @node(output=RawText)
+        def fipbm_read(ctx: FromInput[PartialCtx]) -> RawText:
+            return RawText(text=f"id={ctx.node_id!r},root={ctx.project_root!r}")
+
+        pipeline = construct_from_functions("fipbm", [fipbm_read])
+        graph = compile(pipeline)
+        result = run(graph, input={"node_id": "only-this"})
+        assert result["fipbm_read"].text == "id='only-this',root=None"
+
+    def test_from_config_bundle_with_shared_resource(self):
+        """FromConfig[PydanticModel] pulls every field from configurable as well."""
+        from neograph import FromConfig, compile, construct_from_functions, node, run
+
+        class Shared(BaseModel):
+            model_config = {"arbitrary_types_allowed": True}
+            tenant: str
+            max_items: int
+
+        @node(output=RawText)
+        def fcb_read(shared: FromConfig[Shared]) -> RawText:
+            return RawText(text=f"{shared.tenant}:{shared.max_items}")
+
+        pipeline = construct_from_functions("fcb", [fcb_read])
+        graph = compile(pipeline)
+        result = run(
+            graph,
+            input={"node_id": "x"},
+            config={"configurable": {"tenant": "acme", "max_items": 7}},
+        )
+        assert result["fcb_read"].text == "acme:7"
+
+
+class TestOracleMergeFnDI:
+    """neograph-9zj — @merge_fn decorator with FromInput/FromConfig DI."""
+
+    def test_merge_fn_decorator_with_from_config_bundle(self):
+        """@merge_fn function can receive a bundled FromConfig[PydanticModel]
+        whose fields are resolved from config['configurable'] keys."""
+        from neograph import (
+            Construct, FromConfig, Node, Oracle, compile,
+            merge_fn, register_scripted, run,
+        )
+
+        class SharedResources(BaseModel):
+            prefix: str
+
+        @merge_fn
+        def combine_with_prefix(
+            variants: list[Claims],
+            shared: FromConfig[SharedResources],
+        ) -> Claims:
+            # Collect all unique items, prepend the shared prefix.
+            seen: list[str] = []
+            for v in variants:
+                for it in v.items:
+                    if it not in seen:
+                        seen.append(it)
+            return Claims(items=[f"{shared.prefix}:{x}" for x in seen])
+
+        # Register a scripted generator that produces a Claims variant.
+        def gen_fn(input_data, config):
+            return Claims(items=["alpha", "beta"])
+        register_scripted("omfd_gen_fn", gen_fn)
+
+        gen = Node.scripted("omfd-gen", fn="omfd_gen_fn", output=Claims) | Oracle(
+            n=2, merge_fn="combine_with_prefix"
+        )
+
+        pipeline = Construct("omfd-test", nodes=[gen])
+        graph = compile(pipeline)
+        # Bundled form: SharedResources has a single field `prefix`, so we
+        # provide it directly in configurable under that key name.
+        result = run(
+            graph,
+            input={"node_id": "omfd-001"},
+            config={"configurable": {"prefix": "tag"}},
+        )
+
+        # Both Oracle generators produce ["alpha", "beta"], merge dedups, prefixes.
+        assert result["omfd_gen"].items == ["tag:alpha", "tag:beta"]
+
+    def test_merge_fn_decorator_with_from_input(self):
+        """@merge_fn can also receive FromInput[T] values from run(input=...)."""
+        from neograph import (
+            Construct, FromInput, Node, Oracle, compile,
+            merge_fn, register_scripted, run,
+        )
+
+        @merge_fn
+        def tagged_merge(
+            variants: list[Claims],
+            node_id: FromInput[str],
+        ) -> Claims:
+            all_items = []
+            for v in variants:
+                all_items.extend(v.items)
+            return Claims(items=[f"{node_id}:{it}" for it in dict.fromkeys(all_items)])
+
+        def gen_fn2(input_data, config):
+            return Claims(items=["x"])
+        register_scripted("omfdi_gen_fn", gen_fn2)
+
+        gen = Node.scripted("omfdi-gen", fn="omfdi_gen_fn", output=Claims) | Oracle(
+            n=2, merge_fn="tagged_merge"
+        )
+
+        pipeline = Construct("omfdi-test", nodes=[gen])
+        graph = compile(pipeline)
+        result = run(graph, input={"node_id": "REQ-99"})
+
+        assert result["omfdi_gen"].items == ["REQ-99:x"]
+
+    def test_plain_merge_fn_still_works(self):
+        """Back-compat: plain (variants, config) merge_fn still works."""
+        from neograph import (
+            Construct, Node, Oracle, compile, register_scripted, run,
+        )
+
+        def plain_merge(variants, config):
+            # Old-style signature — two positional args, no decorator.
+            all_items = []
+            for v in variants:
+                all_items.extend(v.items)
+            return Claims(items=list(dict.fromkeys(all_items)))
+        register_scripted("plain_merge_backcompat", plain_merge)
+
+        def pmg_gen(input_data, config):
+            return Claims(items=["one", "two"])
+        register_scripted("pmg_gen_fn", pmg_gen)
+
+        gen = Node.scripted("pmg-gen", fn="pmg_gen_fn", output=Claims) | Oracle(
+            n=2, merge_fn="plain_merge_backcompat"
+        )
+
+        pipeline = Construct("pmg-test", nodes=[gen])
+        graph = compile(pipeline)
+        result = run(graph, input={"node_id": "pmg-001"})
+        assert result["pmg_gen"].items == ["one", "two"]
