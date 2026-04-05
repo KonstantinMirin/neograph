@@ -68,24 +68,38 @@ This is the most important architectural fact. All three produce the same intern
 
 ---
 
-## Two validator walkers, one shared producer-type helper
+## `Node.inputs`: fan-in shape for all three API surfaces
 
-There are two walkers that check input/output type compatibility. They operate on structurally different input data so they can't be merged into one function:
+`Node.inputs` is a `dict[str, type]` mapping upstream-name → expected-type. Every API surface — declarative, `@node`, and programmatic/runtime — produces the same dict shape, so a single validator walks all three:
 
-| Walker | Lives in | Runs for | Consumer-side data |
-|---|---|---|---|
-| `_validate_node_chain` | `src/neograph/_construct_validation.py` | Declarative `Construct(nodes=[...])`, runtime programmatic API | `node.input` (one type per node) |
-| `_validate_fan_in_types` | `src/neograph/decorators.py` | `@node` pipelines via `construct_from_module` / `construct_from_functions` | Function-signature annotations (N types per node, one per parameter) |
+| Surface | How it produces `inputs` |
+|---|---|
+| Declarative `Node(...)` | Author writes `inputs={'claims': Claims, 'scores': Scores}` (or a single type for backward-compat; the single-type form skips fan-in validation and defers to runtime isinstance scan). |
+| `@node` decorator | Decoration walks the function signature and emits `inputs={param_name: annotation}` for every typed upstream param. Fan-out (`map_over`) receivers, DI params (`FromInput`/`FromConfig`), and default-value constants are stripped at construct-assembly time. |
+| Programmatic / runtime | Same dict shape as declarative. LLM-driven pipelines serialize to JSON with string type names and resolve them via a type registry. |
 
-**The producer side is shared.** Both walkers call `effective_producer_type(item)` in `_construct_validation.py` to compute "what type does this node write to the state bus, accounting for modifiers". That helper is the single source of truth for modifier-aware type effects.
+**One validator walker, not two.** `_validate_node_chain` in `_construct_validation.py` handles every surface. When `item.inputs` is a dict instance, `_check_fan_in_inputs` walks each `(upstream_name, expected_type)` pair and looks up the producer by `field_name`. Mismatches raise `ConstructError` with the specific key that failed and the type it saw vs expected.
 
-**Rule for new modifiers that reshape state**: teach `effective_producer_type` about the new rule. Both walkers pick it up automatically. Do NOT re-inline modifier checks in either walker — we had two bugs (`neograph-8k3`, `neograph-ayq`) from exactly that kind of drift and introduced the helper to stop it.
+**The producer side is shared.** `effective_producer_type(item)` in `_construct_validation.py` computes "what type does this node write to the state bus, accounting for modifiers". It's the single source of truth for modifier-aware type effects.
+
+**Rule for new modifiers that reshape state**: teach `effective_producer_type` about the new rule. The validator picks it up automatically. Do NOT re-inline modifier checks elsewhere — prior drift caused `neograph-8k3` and `neograph-ayq` before this helper existed.
 
 Current rules encoded in `effective_producer_type`:
 - `Each` modifier → `dict[str, output]` (see `state.py:_add_output_field` for the state builder side of the same rule)
 - Anything else → raw `output` unchanged
 
-Consumer-side concerns stay in each walker (they genuinely differ: declarative walks a single `.input` type; `@node` walks function parameter annotations with `FromInput` / `FromConfig` resolution). That's fine.
+### `list[X]` consumers of `Each` producers (merge-after-fan-out)
+
+A downstream node can consume an Each-modified upstream's fanned-out results as a `list[X]`:
+
+```python
+@node(output=Summary)
+def summarize(verify: list[MatchResult]) -> Summary: ...
+```
+
+The validator (`_types_compatible`) accepts `list[X]` against a `dict[str, X]` producer when element types are compatible. At runtime, `factory._extract_input` (and the `@node` raw adapter for scripted @nodes) unwraps via `list(values())` before passing the list to the consumer.
+
+**Ordering caveat**: `dict.values()` preserves insertion order, but Each's barrier collects `Send()` results in arrival order, not `each.over` collection order. Use `list[X]` for order-independent reductions (counts, aggregates, summaries). If you need deterministic ordering, consume as `dict[str, X]` and sort explicitly on the key.
 
 ---
 
@@ -187,7 +201,7 @@ This was the cause of `neograph-jyw` before the fix. Any new modifier kwarg you 
 
 **Dead-body warning**: LLM modes emit a `UserWarning` at decoration time if the function body is non-trivial (not `...`, `pass`, or a bare return). AST-based check — handles common false positives.
 
-**Scripted `@node` routes through `raw_fn`, not `register_scripted`.** This is a deliberate deviation from the original brief. The reason: `factory._make_scripted_wrapper` calls `_extract_input(state, node)` which returns **one** typed value by isinstance-scanning state fields. That can't support fan-in (`def report(alpha: A, beta: B, gamma: C)`). Setting `raw_fn` on the Node lets a custom adapter read N upstream values by parameter name. The side effect: scripted `@node` execution logs show `mode=raw` instead of `mode=scripted`. Functional behavior is identical.
+**Scripted `@node` dispatches via `raw_fn`.** A custom adapter (built by `_attach_scripted_raw_fn` in `decorators.py`) reads each upstream value from state by parameter name, resolves `FromInput`/`FromConfig`/constant params from config, handles `Each` fan-out items, and applies the `list[X]`-over-`dict[str, X]` merge-after-fanout unwrap. The adapter is installed on the Node's `raw_fn` field; `factory._make_raw_wrapper` picks it up and logs `mode=node.mode` (so fan-in `@node` nodes correctly report `mode='scripted'` in observability). Full unification with `_make_scripted_wrapper` is tracked in `neograph-kqd.8` (`kqd.4b`) and deferred — the current path delivers correct semantics and log output; the follow-up is structural cleanup.
 
 ---
 

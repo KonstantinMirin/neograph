@@ -53,7 +53,7 @@ def report(classify: Classified) -> Report:
     return Report(summary=f"{len(classify.items)} claims processed")
 
 # Explicit raw — full LangGraph state access
-@node(mode='raw', input=Claims, output=FilteredClaims)
+@node(mode='raw', inputs=Claims, output=FilteredClaims)
 def custom_filter(state, config):
     claims = getattr(state, 'extract_claims', None)
     kept = [c for c in claims.items if 'shall' in c]

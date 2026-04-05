@@ -22,7 +22,7 @@ from neograph import Node
 decompose = Node(
     "decompose",
     mode="produce",
-    input=RawText,
+    inputs=RawText,
     output=Claims,
     model="reason",
     prompt="rw/decompose",
@@ -31,7 +31,7 @@ decompose = Node(
 classify = Node(
     "classify",
     mode="produce",
-    input=Claims,
+    inputs=Claims,
     output=ClassifiedClaims,
     model="fast",
     prompt="rw/classify",
@@ -107,7 +107,7 @@ The programmatic API is not an escape hatch from validation. When you instantiat
 # but decompose produces Claims
 pipeline = Construct("broken", nodes=[
     Node("decompose", mode="produce", output=Claims, ...),
-    Node("verify", mode="produce", input=ClusterGroup, output=MatchResult, ...),
+    Node("verify", mode="produce", inputs=ClusterGroup, output=MatchResult, ...),
 ])
 # ConstructError: Node 'verify' in construct 'broken' declares
 #   input=ClusterGroup but no upstream produces a compatible value.
@@ -142,7 +142,7 @@ def build_from_config(config_path: str) -> Construct:
         n = Node(
             node_spec["name"],
             mode=node_spec["mode"],
-            input=resolve_type(node_spec.get("input")),
+            inputs=resolve_type(node_spec.get("input")),
             output=resolve_type(node_spec["output"]),
             model=node_spec.get("model"),
             prompt=node_spec.get("prompt"),

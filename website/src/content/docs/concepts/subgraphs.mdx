@@ -28,12 +28,12 @@ class ScoredClaims(BaseModel):
     scored: list[dict]
 
 # Internal nodes use the declarative Node(...) form
-lookup = Node("lookup", mode="gather", input=Claims, output=LookupResults,
+lookup = Node("lookup", mode="gather", inputs=Claims, output=LookupResults,
               model="reason", prompt="rw/lookup",
               tools=[Tool("search", budget=5)])
-verify = Node("verify", mode="produce", input=LookupResults, output=VerifiedClaims,
+verify = Node("verify", mode="produce", inputs=LookupResults, output=VerifiedClaims,
               model="fast", prompt="rw/verify")
-score  = Node("score", mode="produce", input=VerifiedClaims, output=ScoredClaims,
+score  = Node("score", mode="produce", inputs=VerifiedClaims, output=ScoredClaims,
               model="fast", prompt="rw/score")
 
 # Sub-construct with I/O boundary

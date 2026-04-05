@@ -179,7 +179,7 @@ Two kwargs:
 This is equivalent to the pipe-operator style:
 
 ```python
-verify = Node.scripted("verify", fn="verify_cluster", input=ClusterGroup, output=VerifyResult
+verify = Node.scripted("verify", fn="verify_cluster", inputs=ClusterGroup, output=VerifyResult
 ) | Each(over="discover_clusters.groups", key="label")
 ```
 

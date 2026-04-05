@@ -97,7 +97,7 @@ def summarize(
 ## Catches mistakes before you run
 
 ```
-ConstructError: Node 'verify' declares input=ClusterGroup but no upstream
+ConstructError: Node 'verify' declares inputs=ClusterGroup but no upstream
   produces a compatible value.
   upstream producers:
     • node 'cluster': Clusters

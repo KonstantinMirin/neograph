@@ -9,6 +9,80 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed — BREAKING
 
+**`Node.input` → `Node.inputs: dict[str, type]`** (`neograph-kqd`).
+
+`Node` now carries a plural `inputs` field keyed by upstream name, matching
+the same shape across all three API surfaces (declarative, `@node`, and
+programmatic/runtime). First-class fan-in validation lands for every surface,
+not just `@node`:
+
+```python
+# Before (0.1.x):
+report = Node("report", input=Claims, output=Report)
+# Fan-in was impossible to validate statically with a single type.
+
+# After (0.2.x):
+report = Node(
+    "report",
+    inputs={"claims": Claims, "scores": Scores, "verified": VerifyResult},
+    output=Report,
+)
+```
+
+`@node`-decorated functions are unchanged at the user-visible layer —
+parameter annotations become the `inputs` dict automatically.
+`Node.scripted(...)` renamed the kwarg from `input=` to `inputs=`. Sub-construct
+boundaries (`Construct(input=Claims, output=...)`) and runtime state seeds
+(`run(graph, input={...})`) stay as-is — they're distinct concepts.
+
+**New: `list[X]` consumers of `Each`-modified upstreams** (merge-after-fanout).
+
+A downstream node can consume a fanned-out result as a `list[X]` instead of
+`dict[str, X]`. The validator accepts the compatibility via a new rule in
+`_types_compatible`, and the factory/@node raw adapter unwrap via
+`list(values())` at runtime:
+
+```python
+@node(output=Clusters)
+def make_clusters() -> Clusters: ...
+
+@node(output=MatchResult, map_over="make_clusters.groups", map_key="label")
+def verify(cluster: ClusterGroup) -> MatchResult: ...
+
+@node(output=Summary)
+def summarize(verify: list[MatchResult]) -> Summary:
+    return Summary(count=len(verify))
+```
+
+Ordering is `dict.values()` insertion order — LangGraph barrier arrival
+order, not `each.over` collection order. Use this form for order-
+independent reductions; if you need deterministic order, keep the
+`dict[str, X]` form and sort on the key.
+
+**Why:** Single source of truth for fan-in type compatibility. Declarative
+pipelines and LLM-driven runtime specs now get the same assembly-time type
+checking that `@node` has always had. Validator collapses from two walkers
+to one (`_validate_fan_in_types` in `decorators.py` is gone). The
+`mode=raw` log-line quirk for scripted fan-in `@node` nodes is gone —
+`factory._make_raw_wrapper` now logs `mode=node.mode` so scripted @node
+dispatch reports `mode='scripted'` correctly.
+
+**Migration (for piarch and other direct consumers):**
+- `Node(..., input=X, ...)` → `Node(..., inputs=X, ...)` (single-type form
+  still accepted for backward compat with isinstance-scan semantics).
+- `Node.scripted(..., input=X, ...)` → `Node.scripted(..., inputs=X, ...)`.
+- `@node(..., input=X, ...)` → `@node(..., inputs=X, ...)` (the decorator
+  kwarg was renamed too).
+- `Construct(input=X, output=Y, ...)` unchanged (sub-construct boundary).
+- `run(graph, input={...})` unchanged (runtime state seed).
+
+Follow-up: `_attach_scripted_raw_fn` still dispatches scripted @node via
+`raw_fn`; full unification with `_make_scripted_wrapper` is tracked in
+`neograph-kqd.8` and deferred — it's a pure structural cleanup with no
+user-visible change.
+
+---
+
 **Dependency-injection surface switched from `FromInput[T]` to `Annotated[T, FromInput]`.**
 The previous form used `FromInput` / `FromConfig` as `typing.Generic` subscriptions,
 which had a hidden rule: `FromInput[str]` meant "pull the parameter by name" but

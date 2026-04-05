@@ -80,8 +80,8 @@ enrich = Construct(
     input=Claims,
     output=ScoredClaims,
     nodes=[
-        Node.scripted("lookup", fn="lookup_context", input=Claims, output=Context),
-        Node.scripted("score", fn="score_claims", input=Claims, output=ScoredClaims),
+        Node.scripted("lookup", fn="lookup_context", inputs=Claims, output=Context),
+        Node.scripted("score", fn="score_claims", inputs=Claims, output=ScoredClaims),
     ],
 )
 ```

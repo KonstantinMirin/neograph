@@ -143,7 +143,7 @@ For testing, call `forward()` directly — it runs real Python with real values.
 
 ## Programmatic IR
 
-### `Node(name, *, mode, output, input=None, prompt=None, model=None, tools=None, llm_config=None)`
+### `Node(name, *, mode, output, inputs=None, prompt=None, model=None, tools=None, llm_config=None)`
 
 The Node IR class. Used directly for runtime construction, programmatic pipeline generation, and sub-constructs.
 
@@ -152,7 +152,7 @@ decompose = Node("decompose", mode="produce", output=Claims,
                  prompt="rw/decompose", model="reason")
 ```
 
-### `Node.scripted(name, fn, input=None, output=None)`
+### `Node.scripted(name, fn, inputs=None, output=None)`
 
 Convenience constructor for scripted nodes registered via `register_scripted`:
 
