@@ -35,6 +35,36 @@ class ConstructError(ValueError):
     """
 
 
+def effective_producer_type(item: Any) -> Any:
+    """Return the type this producer writes to the state bus, accounting
+    for modifiers.
+
+    This is the **single source of truth** for the "producer side" of
+    type compatibility. Both validator walkers (``_validate_node_chain``
+    here and ``_validate_fan_in_types`` in ``decorators.py``) consult it,
+    so a new modifier that reshapes state only needs to teach this one
+    function about the new rule — both walkers pick up the change.
+
+    Current rules:
+      - ``Each`` modifier → ``dict[str, raw_output]`` (aggregated fan-out
+        results land as a dict keyed by ``each.key``; see
+        ``state.py:_add_output_field`` for the state builder side of
+        this rule).
+      - Everything else → the item's declared ``.output`` unchanged.
+
+    Returns ``None`` when the item has no declared output.
+    """
+    output = getattr(item, "output", None)
+    if output is None:
+        return None
+    get_mod = getattr(item, "has_modifier", None)
+    if get_mod is None:
+        return output
+    if get_mod(Each):
+        return dict[str, output]
+    return output
+
+
 def _validate_node_chain(construct: Any) -> None:
     """Walk the node list, verifying each input has a compatible producer."""
     # Producers: (state_field_name, output_type, human_label)
@@ -63,13 +93,10 @@ def _validate_node_chain(construct: Any) -> None:
                 if isinstance(item, Node)
                 else f"sub-construct '{name}'"
             )
-            # Each modifier aggregates results as dict[str, output_type] —
-            # match the effective state shape (see state.py:119-124).
-            effective_output = output_type
-            get_mod = getattr(item, "get_modifier", None)
-            if get_mod and get_mod(Each) is not None:
-                effective_output = dict[str, output_type]
-            producers.append((field_name, effective_output, label))
+            # Shared helper decides the modifier-adjusted state-bus type.
+            # Never compute this inline here or in the @node walker —
+            # both walkers must stay in sync through this single call.
+            producers.append((field_name, effective_producer_type(item), label))
 
 
 def _check_item_input(

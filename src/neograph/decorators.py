@@ -108,7 +108,12 @@ class FromConfig:
     this when your shared resources are a typed bundle.
     """
 
-from neograph._construct_validation import ConstructError, _fmt_type, _types_compatible
+from neograph._construct_validation import (
+    ConstructError,
+    _fmt_type,
+    _types_compatible,
+    effective_producer_type,
+)
 from neograph.construct import Construct
 from neograph.modifiers import Each, Operator, Oracle
 from neograph.node import Node
@@ -1058,18 +1063,13 @@ def _validate_fan_in_types(decorated: dict[str, Node]) -> None:
                 continue  # unresolvable ForwardRef — skip
 
             upstream = decorated[pname]
-            if upstream.output is None:
+            # Shared helper from _construct_validation.py — single source
+            # of truth for modifier-aware producer types. Handles Each
+            # dict[str, X] wrapping and any future modifier that reshapes
+            # state. Do NOT inline modifier checks here.
+            actual = effective_producer_type(upstream)
+            if actual is None:
                 continue
-
-            # If the upstream has an Each modifier, its effective state-bus
-            # type is dict[str, upstream.output] — not upstream.output itself.
-            # See state.py:_add_output_field for the Each dict wrapping, and
-            # _construct_validation.py:_validate_node_chain which applies the
-            # same rule (neograph-8k3). This walker must mirror it.
-            if upstream.has_modifier(Each):
-                actual: Any = dict[str, upstream.output]
-            else:
-                actual = upstream.output
 
             if not _types_compatible(actual, expected):
                 src = _get_node_source(n)

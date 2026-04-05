@@ -4903,3 +4903,83 @@ class TestOracleMergeFnDI:
         graph = compile(pipeline)
         result = run(graph, input={"node_id": "pmg-001"})
         assert result["pmg_gen"].items == ["one", "two"]
+
+
+class TestEffectiveProducerType:
+    """Single source of truth for 'what type does this producer write to
+    the state bus, accounting for modifiers'. Both validator walkers
+    (_validate_node_chain in _construct_validation.py and
+    _validate_fan_in_types in decorators.py) must consult this helper,
+    so when a new modifier affects state shape only one place needs to
+    update."""
+
+    def test_plain_node_returns_declared_output(self):
+        """A node without any modifier has its raw output type as the
+        effective producer type."""
+        from neograph._construct_validation import effective_producer_type
+
+        n = Node.scripted("plain", fn="_x_plain", output=Claims)
+        assert effective_producer_type(n) is Claims
+
+    def test_each_node_wraps_as_dict_str_output(self):
+        """A node with an Each modifier writes dict[str, output] to the
+        state bus (not the raw output). This is the neograph-8k3 /
+        neograph-ayq fix expressed as a shared helper."""
+        from neograph._construct_validation import effective_producer_type
+
+        n = Node.scripted(
+            "each-node", fn="_x_each", input=ClusterGroup, output=MatchResult
+        ) | Each(over="upstream.items", key="label")
+        effective = effective_producer_type(n)
+        assert effective == dict[str, MatchResult]
+
+    def test_oracle_node_keeps_raw_output(self):
+        """Oracle merges N variants into ONE output. The effective state
+        type is the same as the raw output (Oracle doesn't reshape)."""
+        from neograph._construct_validation import effective_producer_type
+
+        n = Node.scripted("ens", fn="_x_ens", output=Claims) | Oracle(
+            n=3, merge_fn="nonexistent_ok_for_this_test"
+        )
+        assert effective_producer_type(n) is Claims
+
+    def test_operator_node_keeps_raw_output(self):
+        """Operator is an interrupt modifier — it doesn't reshape state
+        either. Effective type equals raw output."""
+        from neograph._construct_validation import effective_producer_type
+
+        n = Node.scripted("op", fn="_x_op", output=Claims) | Operator(
+            when="_nonexistent_for_helper_test"
+        )
+        assert effective_producer_type(n) is Claims
+
+    def test_sub_construct_each_wraps_as_dict(self):
+        """An Each modifier on a sub-Construct wraps its output the same
+        way as on a Node — the helper doesn't care about the type of
+        producer."""
+        from neograph._construct_validation import effective_producer_type
+
+        inner = Node.scripted(
+            "inner", fn="_x_inner", input=Claims, output=Claims
+        )
+        sub = Construct(
+            "sub", input=Claims, output=Claims, nodes=[inner]
+        ) | Each(over="upstream.items", key="label")
+        assert effective_producer_type(sub) == dict[str, Claims]
+
+    def test_none_output_returns_none(self):
+        """A node with no declared output returns None — the helper is
+        total."""
+        from neograph._construct_validation import effective_producer_type
+
+        class OutputlessStub:
+            output = None
+            modifiers: list = []
+
+            def has_modifier(self, _):
+                return False
+
+            def get_modifier(self, _):
+                return None
+
+        assert effective_producer_type(OutputlessStub()) is None

@@ -68,20 +68,24 @@ This is the most important architectural fact. All three produce the same intern
 
 ---
 
-## The two-validator problem (DON'T FORGET)
+## Two validator walkers, one shared producer-type helper
 
-There are **two parallel walkers** that check input/output type compatibility. They must stay in sync. We've had two bugs from drift between them:
+There are two walkers that check input/output type compatibility. They operate on structurally different input data so they can't be merged into one function:
 
-| Walker | Lives in | Runs for |
-|---|---|---|
-| `_validate_node_chain` | `src/neograph/_construct_validation.py` | Declarative `Construct(nodes=[...])`, runtime programmatic API |
-| `_validate_fan_in_types` | `src/neograph/decorators.py` | `@node` pipelines via `construct_from_module` / `construct_from_functions` |
+| Walker | Lives in | Runs for | Consumer-side data |
+|---|---|---|---|
+| `_validate_node_chain` | `src/neograph/_construct_validation.py` | Declarative `Construct(nodes=[...])`, runtime programmatic API | `node.input` (one type per node) |
+| `_validate_fan_in_types` | `src/neograph/decorators.py` | `@node` pipelines via `construct_from_module` / `construct_from_functions` | Function-signature annotations (N types per node, one per parameter) |
 
-**Rule**: whenever you change type-compatibility behavior in one, check the other. Specifically:
-- Each-modified outputs must be tracked as `dict[str, output_type]` on the producer side in both walkers (see `neograph-8k3` in `_construct_validation.py` and `neograph-ayq` for the same fix in `decorators.py`).
-- Both walkers must handle `FromInput` / `FromConfig` annotated parameters as non-upstream (skip them in adjacency + type checks).
+**The producer side is shared.** Both walkers call `effective_producer_type(item)` in `_construct_validation.py` to compute "what type does this node write to the state bus, accounting for modifiers". That helper is the single source of truth for modifier-aware type effects.
 
-If you add a new modifier that changes the effective state shape of a producer, both walkers need to know.
+**Rule for new modifiers that reshape state**: teach `effective_producer_type` about the new rule. Both walkers pick it up automatically. Do NOT re-inline modifier checks in either walker — we had two bugs (`neograph-8k3`, `neograph-ayq`) from exactly that kind of drift and introduced the helper to stop it.
+
+Current rules encoded in `effective_producer_type`:
+- `Each` modifier → `dict[str, output]` (see `state.py:_add_output_field` for the state builder side of the same rule)
+- Anything else → raw `output` unchanged
+
+Consumer-side concerns stay in each walker (they genuinely differ: declarative walks a single `.input` type; `@node` walks function parameter annotations with `FromInput` / `FromConfig` resolution). That's fine.
 
 ---
 
@@ -249,7 +253,6 @@ Both are Starlight slot overrides configured in `website/astro.config.mjs` under
 
 These aren't bugs, just things worth considering for future sessions:
 
-- The `_validate_fan_in_types` walker in `decorators.py` and the `_validate_node_chain` walker in `_construct_validation.py` duplicate logic. A future refactor might extract a shared walker. Don't do it speculatively — wait until the next drift bug.
 - `@merge_fn` uses a function-name-keyed registry (`_merge_fn_registry` in `decorators.py`). Parallel to the `@node` id-keyed sidecar. Both patterns work; the name-keyed form is cleaner for merge_fn because Oracle references them by string name anyway. If you add another decorator that's referenced by string name, copy that pattern.
 - The sponsor banner on neograph.pro is hardcoded in a component. If we ever add more sponsors or commercial positioning, it should probably move to config.
 
