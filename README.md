@@ -251,19 +251,50 @@ Validation runs at `Construct(nodes=[...])` time and at `construct_from_module()
 
 See [`examples/`](examples/) for 13 runnable pipelines covering every feature, plus 5 LangGraph comparison scripts.
 
-## Advanced: low-level IR
+## Runtime graph construction
 
-For programmatic construction, IR-level testing, or sub-constructs, use `Node` and `Construct` directly:
+The `@node` decorator and `ForwardConstruct` are for humans writing pipelines in source code. But pipelines can also be assembled at runtime — by an LLM, a config file, or a routing layer. This is where the Node/Construct API and the `|` pipe syntax shine:
 
 ```python
-from neograph import Node, Construct, compile, run
+from neograph import Node, Tool, Construct, Oracle, Each, Operator, compile, run
 
-a = Node.scripted("extract", fn="extract_fn", output=RawText)
-b = Node("classify", mode="produce", output=Claims, prompt="rw/classify", model="fast")
-pipeline = Construct("my-pipeline", nodes=[a, b])
+# An LLM emits this as structured output (tool call or config):
+spec = {
+    "nodes": [
+        {"name": "decompose", "mode": "produce", "output": "Claims",
+         "prompt": "rw/decompose", "model": "reason",
+         "modifiers": [{"type": "Oracle", "n": 3, "merge_fn": "merge_claims"}]},
+        {"name": "verify", "mode": "gather", "output": "MatchResult",
+         "prompt": "match/verify", "model": "fast", "tools": ["search"],
+         "modifiers": [{"type": "Each", "over": "decompose.items", "key": "label"}]},
+        {"name": "report", "mode": "produce", "output": "Report",
+         "prompt": "rw/report", "model": "fast"},
+    ]
+}
+
+# Your runtime builds the graph from the spec:
+nodes = []
+for s in spec["nodes"]:
+    n = Node(s["name"], mode=s["mode"], output=resolve_type(s["output"]),
+             prompt=s.get("prompt"), model=s.get("model"),
+             tools=[lookup_tool(t) for t in s.get("tools", [])])
+    for mod in s.get("modifiers", []):
+        if mod["type"] == "Oracle":
+            n = n | Oracle(n=mod["n"], merge_fn=mod.get("merge_fn"))
+        elif mod["type"] == "Each":
+            n = n | Each(over=mod["over"], key=mod["key"])
+        elif mod["type"] == "Operator":
+            n = n | Operator(when=mod["when"])
+    nodes.append(n)
+
+pipeline = Construct("llm-defined-pipeline", nodes=nodes)
+graph = compile(pipeline)
+result = run(graph, input={"node_id": "dynamic-001"})
 ```
 
-This is the same IR that `@node` and `ForwardConstruct` compile to internally.
+The `|` pipe syntax composes at runtime without modules, function signatures, or class definitions — the LLM just emits a JSON spec and the system builds, validates, compiles, and runs it. Assembly-time validation (`ConstructError`) catches malformed specs before execution starts.
+
+This is the same IR that `@node` and `ForwardConstruct` compile to internally. Three surfaces, one compiler.
 
 ## Install
 
