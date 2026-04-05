@@ -120,14 +120,15 @@ def _check_item_input(
     """
     if not producers:
         return
-    # dict-shaped inputs defer to runtime isinstance scanning
-    # (factory._extract_input / _is_instance_safe) except parameterized
-    # generics (dict[str, X]) which can be validated against upstream
-    # Each-modified producers.
-    #   - dict instance: multi-field extraction, e.g. input={"a": X, "b": Y}
-    #   - raw dict class: input=dict (isinstance match on any dict state field)
+    # Fan-in dict instance: inputs={"a": A, "b": B, ...} — validate each
+    # (upstream_name, expected_type) pair against the upstream named by the
+    # key (neograph-kqd.2). This was a bypass pre-kqd; it is now a positive
+    # check.
     if isinstance(input_type, dict):
+        _check_fan_in_inputs(construct, item, input_type, producers)
         return
+    # Raw dict class: inputs=dict — multi-field isinstance extraction,
+    # defers to runtime.
     if input_type is dict:
         return
     # Parameterized generic dict[str, X]: validate against producers if any
@@ -157,6 +158,50 @@ def _check_item_input(
 
     msg = _format_no_producer_error(construct, item, input_type, producers)
     raise ConstructError(msg)
+
+
+def _check_fan_in_inputs(
+    construct: Any,
+    item: Any,
+    inputs_dict: dict[str, Any],
+    producers: list[tuple[str, Any, str]],
+) -> None:
+    """Validate a fan-in ``inputs={'name': Type, ...}`` spec against the
+    producer list by upstream name (neograph-kqd.2).
+
+    For each (upstream_name, expected_type) pair:
+      1. Look up a producer whose state-field name matches ``upstream_name``.
+         No match → ConstructError (unknown upstream).
+      2. Compute the producer's effective state-bus type via
+         ``effective_producer_type`` (shared helper — do NOT inline
+         modifier rules here).
+      3. Check compatibility via ``_types_compatible``. Mismatch →
+         ConstructError.
+    """
+    producer_by_name: dict[str, tuple[Any, str]] = {
+        field_name: (producer_type, label)
+        for field_name, producer_type, label in producers
+    }
+    for upstream_name, expected_type in inputs_dict.items():
+        if upstream_name not in producer_by_name:
+            msg = (
+                f"Node '{item.name}' in construct '{construct.name}' "
+                f"declares inputs['{upstream_name}']={_fmt_type(expected_type)} "
+                f"but no upstream node named '{upstream_name}' exists.\n"
+                f"  available upstreams: {sorted(producer_by_name.keys())}\n"
+                f"{_location_suffix()}"
+            )
+            raise ConstructError(msg)
+        producer_type, _label = producer_by_name[upstream_name]
+        if not _types_compatible(producer_type, expected_type):
+            msg = (
+                f"Node '{item.name}' in construct '{construct.name}' "
+                f"declares inputs['{upstream_name}']={_fmt_type(expected_type)} "
+                f"but upstream '{upstream_name}' produces "
+                f"{_fmt_type(producer_type)}.\n"
+                f"{_location_suffix()}"
+            )
+            raise ConstructError(msg)
 
 
 def _check_each_path(
@@ -267,6 +312,16 @@ def _types_compatible(producer: Any, target: Any) -> bool:
         # dict[str, X] vs dict[str, X] → compare origin + args
         if target_origin is not None and producer_origin is target_origin:
             return get_args(producer) == get_args(target)
+        # dict[str, X] producer ↔ list[Y] consumer — merge-after-fanout
+        # (neograph-kqd.2). A downstream node consuming an Each-fanned-out
+        # result as list[Y] gets the runtime unwrap via dict.values() in
+        # step 5 (factory._extract_input). Element-type compatibility is
+        # checked recursively so subclass rules apply consistently.
+        if producer_origin is dict and target_origin is list:
+            prod_args = get_args(producer)     # (str, X)
+            target_args = get_args(target)     # (Y,)
+            if len(prod_args) == 2 and len(target_args) == 1:
+                return _types_compatible(prod_args[1], target_args[0])
         return False
     if not (isinstance(producer, type) and isinstance(target, type)):
         return False

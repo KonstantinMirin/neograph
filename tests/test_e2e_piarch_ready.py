@@ -5027,3 +5027,88 @@ class TestNodeInputsFieldRename:
         assert not hasattr(n, "input"), (
             "Node still exposes legacy .input attribute — rename is incomplete."
         )
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# TestFanInValidation (neograph-kqd.2)
+#
+# Step 2 rewrites _validate_node_chain to validate dict-instance fan-in by
+# upstream name, and adds the list[X] ↔ dict[str, X] rule to
+# _types_compatible. Tests are TDD-red before the implementation lands.
+# ═══════════════════════════════════════════════════════════════════════════
+
+class TestFanInValidation:
+    def test_fan_in_dict_matching_upstreams_passes(self):
+        """Consumer with inputs={'a': A, 'b': B, 'c': C} validates against
+        three upstream producers by name."""
+        a = _producer("a", Claims)
+        b = _producer("b", RawText)
+        c = _producer("c", ClusterGroup)
+        consumer = Node.scripted(
+            "consumer", fn="f",
+            inputs={"a": Claims, "b": RawText, "c": ClusterGroup},
+            output=MatchResult,
+        )
+        pipeline = Construct("fan-in-ok", nodes=[a, b, c, consumer])
+        assert len(pipeline.nodes) == 4
+
+    def test_fan_in_dict_unknown_upstream_rejected(self):
+        """Consumer declaring inputs['nonexistent'] raises ConstructError
+        that names the bad key."""
+        a = _producer("a", Claims)
+        consumer = Node.scripted(
+            "consumer", fn="f",
+            inputs={"a": Claims, "nonexistent": RawText},
+            output=MatchResult,
+        )
+        with pytest.raises(ConstructError) as exc_info:
+            Construct("bad-name", nodes=[a, consumer])
+        msg = str(exc_info.value)
+        assert "'nonexistent'" in msg
+        assert "no upstream node" in msg
+
+    def test_fan_in_dict_type_mismatch_rejected(self):
+        """Consumer with matching upstream name but wrong type raises
+        ConstructError that names the mismatched edge."""
+        a = _producer("a", Claims)
+        b = _producer("b", RawText)
+        consumer = Node.scripted(
+            "consumer", fn="f",
+            inputs={"a": Claims, "b": Claims},  # b produces RawText, not Claims
+            output=MatchResult,
+        )
+        with pytest.raises(ConstructError) as exc_info:
+            Construct("bad-type", nodes=[a, b, consumer])
+        msg = str(exc_info.value)
+        assert "'b'" in msg
+        assert "Claims" in msg
+        assert "RawText" in msg
+
+
+class TestTypesCompatibleListOverDict:
+    """The list[X] ↔ dict[str, X] compatibility rule (neograph-kqd.2)."""
+
+    def test_list_consumer_accepts_dict_producer_with_matching_element(self):
+        """dict[str, MatchResult] producer satisfies list[MatchResult] consumer."""
+        from neograph._construct_validation import _types_compatible
+
+        assert _types_compatible(dict[str, MatchResult], list[MatchResult]) is True
+
+    def test_list_consumer_rejects_dict_producer_with_wrong_element(self):
+        """dict[str, MatchResult] producer does NOT satisfy list[Claims]."""
+        from neograph._construct_validation import _types_compatible
+
+        assert _types_compatible(dict[str, MatchResult], list[Claims]) is False
+
+    def test_list_consumer_accepts_dict_producer_via_subclass(self):
+        """dict[str, MatchResult] producer satisfies list[BaseModel] — subclass ok."""
+        from neograph._construct_validation import _types_compatible
+
+        assert _types_compatible(dict[str, MatchResult], list[BaseModel]) is True
+
+    def test_non_dict_producer_list_consumer_not_matched_by_rule(self):
+        """A plain-class (non-dict) producer does NOT match list[X] via this rule."""
+        from neograph._construct_validation import _types_compatible
+
+        # list[Claims] vs Claims (plain class) — existing rules reject this.
+        assert _types_compatible(Claims, list[Claims]) is False
