@@ -14,7 +14,7 @@
     build_catalog = Node.scripted("build-catalog", fn="build_catalog", output=str)
 
     # Raw: classic LangGraph escape hatch
-    @raw_node(input=SomeInput, output=SomeOutput)
+    @node(mode='raw', input=SomeInput, output=SomeOutput)
     def custom_logic(state, config):
         ...
 """
@@ -58,7 +58,7 @@ class Node(Modifiable, BaseModel):
     # Deterministic implementation (scripted mode only)
     scripted_fn: str | None = None
 
-    # Raw node function (raw_node only)
+    # Raw node function (mode='raw' or scripted @node dispatch)
     raw_fn: Callable | None = None
 
     # Modifiers applied via | operator
@@ -146,30 +146,3 @@ class Node(Modifiable, BaseModel):
         # node_fn returns a state update dict — extract the output field
         field_name = self.name.replace("-", "_")
         return result.get(field_name)
-
-
-def raw_node(
-    input: Any = None,
-    output: Any = None,
-) -> Callable:
-    """Decorator: register a classic LangGraph function as a NeoGraph node.
-
-    The framework wires edges, observability, and state around it,
-    but the function body is yours — full control.
-
-    Usage:
-        @raw_node(input=ConsolidatedDisposition, output=ConsolidatedDisposition)
-        def custom_resolution(state, config):
-            ...
-    """
-
-    def decorator(fn: Callable) -> Node:
-        return Node(
-            name=fn.__name__.replace("_", "-"),
-            mode="scripted",  # raw nodes are dispatched directly
-            input=input,
-            output=output,
-            raw_fn=fn,
-        )
-
-    return decorator

@@ -11,7 +11,7 @@ from typing import Any
 import pytest
 from pydantic import BaseModel
 
-from neograph import Construct, ConstructError, Node, Operator, Oracle, Each, Tool, compile, raw_node, run, tool
+from neograph import Construct, ConstructError, Node, Operator, Oracle, Each, Tool, compile, run, tool
 from tests.fakes import FakeTool, ReActFake, StructuredFake, TextFake, configure_fake_llm
 
 
@@ -533,19 +533,25 @@ class TestOperator:
 # ═══════════════════════════════════════════════════════════════════════════
 # TEST 7: Raw node alongside declarative nodes
 #
-# A @raw_node function mixed with Node() declarations in the same Construct.
+# A @node(mode='raw') function mixed with @node declarations in the same Construct.
 # This proves: raw escape hatch works, framework wires edges around it,
 # data flows through raw node like any other.
 # ═══════════════════════════════════════════════════════════════════════════
 
 class TestRawNode:
     def test_raw_node_in_pipeline(self):
-        """@raw_node works alongside declarative nodes."""
-        from neograph.factory import register_scripted
+        """@node(mode='raw') works alongside declarative nodes."""
+        import types as _types
 
-        register_scripted("make_claims", lambda input_data, config: Claims(items=["a", "b", "c"]))
+        from neograph import construct_from_module, node
 
-        @raw_node(input=Claims, output=Claims)
+        mod = _types.ModuleType("test_raw_node_mod")
+
+        @node(mode="scripted", output=Claims)
+        def make_claims() -> Claims:
+            return Claims(items=["a", "b", "c"])
+
+        @node(mode="raw", input=Claims, output=Claims)
         def filter_claims(state, config):
             """Raw node: custom filtering logic."""
             claims = None
@@ -559,9 +565,10 @@ class TestRawNode:
             filtered = Claims(items=[c for c in claims.items if c != "b"])
             return {"filter_claims": filtered}
 
-        make = Node.scripted("make-claims", fn="make_claims", output=Claims)
+        mod.make_claims = make_claims
+        mod.filter_claims = filter_claims
 
-        pipeline = Construct("test-raw", nodes=[make, filter_claims])
+        pipeline = construct_from_module(mod, name="test-raw")
         graph = compile(pipeline)
         result = run(graph, input={"node_id": "test-001"})
 
@@ -3922,3 +3929,158 @@ class TestNodeDecoratorParams:
         result = run(graph, input={"node_id": "t-005"})
 
         assert result["greet"] == RawText(text="no topic")
+
+
+class TestNodeDecoratorErrorLocation:
+    """@node errors include the decorated function's source file:line."""
+
+    @staticmethod
+    def _fresh_module(name: str):
+        import types as _types
+        return _types.ModuleType(name)
+
+    def test_error_includes_node_source_location(self):
+        """Unknown-param error includes 'test_e2e_piarch_ready.py:<line>'
+        pointing at the decorated function definition."""
+        from neograph import ConstructError, construct_from_module, node
+
+        mod = self._fresh_module("test_src_loc_mod")
+
+        @node(mode="scripted", output=Claims)
+        def orphan(ghost: RawText) -> Claims:
+            return Claims(items=["x"])
+
+        mod.orphan = orphan
+
+        with pytest.raises(ConstructError) as exc_info:
+            construct_from_module(mod)
+        msg = str(exc_info.value)
+        assert "test_e2e_piarch_ready.py:" in msg
+
+    def test_cycle_error_includes_source_location(self):
+        """Cycle error includes source locations for the involved nodes."""
+        from neograph import ConstructError, construct_from_module, node
+
+        mod = self._fresh_module("test_cycle_loc_mod")
+
+        @node(mode="scripted", output=RawText)
+        def ping(pong: Claims) -> RawText:
+            return RawText(text="p")
+
+        @node(mode="scripted", output=Claims)
+        def pong(ping: RawText) -> Claims:
+            return Claims(items=["q"])
+
+        mod.ping = ping
+        mod.pong = pong
+
+        with pytest.raises(ConstructError) as exc_info:
+            construct_from_module(mod)
+        msg = str(exc_info.value)
+        assert "test_e2e_piarch_ready.py:" in msg
+
+    def test_error_filename_is_basename(self):
+        """Source location uses basename, not the full absolute path."""
+        from neograph import ConstructError, construct_from_module, node
+
+        mod = self._fresh_module("test_basename_mod")
+
+        @node(mode="scripted", output=Claims)
+        def orphan(ghost: RawText) -> Claims:
+            return Claims(items=["x"])
+
+        mod.orphan = orphan
+
+        with pytest.raises(ConstructError) as exc_info:
+            construct_from_module(mod)
+        msg = str(exc_info.value)
+        # Must contain basename, not an absolute path with directory separators
+        assert "test_e2e_piarch_ready.py:" in msg
+        assert "/tests/test_e2e_piarch_ready.py:" not in msg
+
+
+class TestNodeDecoratorCrossModule:
+    """Cross-module composition and name-collision detection."""
+
+    @staticmethod
+    def _fresh_module(name: str):
+        import types as _types
+        return _types.ModuleType(name)
+
+    def test_cross_module_composition(self):
+        """@node from module A imported into module B: construct_from_module(B)
+        finds both, wires topology correctly, compile+run end-to-end."""
+        from neograph import compile, construct_from_module, node, run
+
+        # Module A: defines an upstream @node
+        mod_a = self._fresh_module("cross_mod_a")
+
+        @node(mode="scripted", output=RawText)
+        def fetch() -> RawText:
+            return RawText(text="fetched data")
+
+        mod_a.fetch = fetch
+
+        # Module B: imports fetch from A, defines a downstream @node
+        mod_b = self._fresh_module("cross_mod_b")
+        mod_b.fetch = fetch  # simulates `from cross_mod_a import fetch`
+
+        @node(mode="scripted", output=Claims)
+        def process(fetch: RawText) -> Claims:
+            return Claims(items=[fetch.text.upper()])
+
+        mod_b.process = process
+
+        pipeline = construct_from_module(mod_b, name="cross-module")
+        assert [n.name for n in pipeline.nodes] == ["fetch", "process"]
+
+        graph = compile(pipeline)
+        result = run(graph, input={"node_id": "cross-mod-001"})
+
+        assert result["process"] == Claims(items=["FETCHED DATA"])
+
+    def test_name_collision_raises(self):
+        """Two @node functions with the same fn.__name__ in one module
+        raises ConstructError listing both colliding names."""
+        from neograph import ConstructError, construct_from_module, node
+
+        mod = self._fresh_module("collision_mod")
+
+        @node(mode="scripted", output=RawText)
+        def compute() -> RawText:
+            return RawText(text="first")
+
+        # Second node: different lambda but explicit name='compute' → same field_name
+        second_compute = node(mode="scripted", output=Claims, name="compute")(
+            lambda: Claims(items=["second"])
+        )
+
+        mod.metrics_compute = compute
+        mod.stats_compute = second_compute
+
+        with pytest.raises(ConstructError, match="name collision"):
+            construct_from_module(mod)
+
+    def test_collision_resolved_by_explicit_name(self):
+        """Same setup as collision test but one has @node(name='unique') —
+        no error, assembly succeeds."""
+        from neograph import construct_from_module, node
+
+        mod = self._fresh_module("collision_resolved_mod")
+
+        @node(mode="scripted", output=RawText)
+        def compute() -> RawText:
+            return RawText(text="first")
+
+        # Second node: explicit name= avoids collision
+        resolved = node(mode="scripted", output=Claims, name="stats_compute")(
+            lambda: Claims(items=["second"])
+        )
+
+        mod.metrics_compute = compute
+        mod.stats_compute = resolved
+
+        pipeline = construct_from_module(mod)
+        names = {n.name for n in pipeline.nodes}
+        assert "compute" in names
+        assert "stats-compute" in names

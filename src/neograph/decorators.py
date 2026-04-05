@@ -54,6 +54,7 @@ from __future__ import annotations
 
 import ast
 import inspect
+import os
 import textwrap
 import warnings
 import weakref
@@ -135,6 +136,20 @@ def _get_param_resolutions(n: Node) -> ParamResolution:
 
 def _get_sidecar(n: Node) -> tuple[Callable, tuple[str, ...], str | None] | None:
     return _node_sidecar.get(id(n))
+
+
+def _get_node_source(n: Node) -> str | None:
+    """Return 'basename.py:lineno' for the @node-decorated function, or None."""
+    sidecar = _get_sidecar(n)
+    if sidecar is None:
+        return None
+    fn = sidecar[0]
+    try:
+        fname = os.path.basename(fn.__code__.co_filename)
+        lineno = fn.__code__.co_firstlineno
+        return f"{fname}:{lineno}"
+    except (AttributeError, TypeError):
+        return None
 
 
 def node(
@@ -458,6 +473,15 @@ def construct_from_module(mod: Any, name: str | None = None) -> Construct:
     for attr in vars(mod).values():
         if isinstance(attr, Node) and _get_sidecar(attr) is not None:
             field_name = attr.name.replace("-", "_")
+            if field_name in decorated:
+                existing = decorated[field_name]
+                msg = (
+                    f"@node name collision: two nodes resolve to field name "
+                    f"'{field_name}' in module '{mod.__name__}'. "
+                    f"One is '{existing.name}', another is '{attr.name}'. "
+                    f"Fix: pass explicit name= to @node on one of them."
+                )
+                raise ConstructError(msg)
             decorated[field_name] = attr
 
     if not decorated:
@@ -515,18 +539,24 @@ def construct_from_module(mod: Any, name: str | None = None) -> Construct:
             if pname in param_res:
                 continue  # from_input, from_config, or constant — not topology
             if pname not in decorated:
+                src = _get_node_source(n)
+                src_suffix = f"\n  @node defined at {src}" if src else ""
                 msg = (
                     f"@node '{n.name}' parameter '{pname}' does not match any "
                     f"@node in module '{mod.__name__}'. All parameters must "
                     f"name an upstream @node, use FromInput/FromConfig annotation, "
                     f"or have a default value.\n"
                     f"  available @nodes: {sorted(decorated.keys())}"
+                    f"{src_suffix}"
                 )
                 raise ConstructError(msg)
             if pname == field_name:
+                src = _get_node_source(n)
+                src_suffix = f"\n  @node defined at {src}" if src else ""
                 msg = (
                     f"@node '{n.name}' has a parameter '{pname}' that refers "
                     f"to itself — self-dependency is not allowed."
+                    f"{src_suffix}"
                 )
                 raise ConstructError(msg)
             if pname not in seen_deps:
@@ -544,9 +574,12 @@ def construct_from_module(mod: Any, name: str | None = None) -> Construct:
         if state == "black":
             return
         if state == "gray":
+            src = _get_node_source(decorated[field])
+            src_suffix = f"\n  @node defined at {src}" if src else ""
             msg = (
                 f"@node cycle detected in module involving '{field}'. "
                 f"Cyclical parameter-name dependencies are not allowed."
+                f"{src_suffix}"
             )
             raise ConstructError(msg)
         marks[field] = "gray"
@@ -716,9 +749,12 @@ def _validate_fan_in_types(decorated: dict[str, Node]) -> None:
 
             actual = upstream.output
             if not _types_compatible(actual, expected):
+                src = _get_node_source(n)
+                src_suffix = f"\n  @node defined at {src}" if src else ""
                 msg = (
                     f"@node '{n.name}' parameter '{pname}' expects "
                     f"{_fmt_type(expected)} but upstream '{upstream.name}' "
                     f"produces {_fmt_type(actual)}."
+                    f"{src_suffix}"
                 )
                 raise ConstructError(msg)

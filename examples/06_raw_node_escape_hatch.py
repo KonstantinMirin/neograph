@@ -2,7 +2,7 @@
 
 Scenario: A pipeline that mostly uses declarative nodes, but one step
 needs custom logic that doesn't fit produce/gather/scripted modes.
-The @raw_node decorator lets you write a classic LangGraph function
+The @node(mode='raw') decorator lets you write a classic LangGraph function
 while NeoGraph handles edges, state wiring, and observability around it.
 
 Use cases for raw nodes:
@@ -20,9 +20,11 @@ Run:
 
 from __future__ import annotations
 
+import sys
+
 from pydantic import BaseModel
 
-from neograph import Construct, Node, compile, raw_node, register_scripted, run
+from neograph import compile, construct_from_module, node, run
 
 
 # ── Schemas ──────────────────────────────────────────────────────────────
@@ -38,7 +40,8 @@ class FilteredClaims(BaseModel, frozen=True):
 
 # ── Scripted: produce initial claims ─────────────────────────────────────
 
-def extract_claims(input_data, config):
+@node(mode="scripted", output=Claims)
+def extract_claims() -> Claims:
     return Claims(items=[
         "system shall authenticate users via SSO",
         "system shall support dark mode",
@@ -47,14 +50,12 @@ def extract_claims(input_data, config):
         "system shall rate-limit API calls",
     ])
 
-register_scripted("extract_claims", extract_claims)
-
 
 # ── Raw node: custom filtering logic ────────────────────────────────────
 # This is the escape hatch. The function receives the full Pydantic state
 # and returns a dict of field updates. NeoGraph wires the edges.
 
-@raw_node(input=Claims, output=FilteredClaims)
+@node(mode="raw", input=Claims, output=FilteredClaims)
 def filter_non_functional(state, config):
     """Drop claims that aren't real requirements (e.g., cosmetic wishes).
 
@@ -92,19 +93,14 @@ def filter_non_functional(state, config):
     )}
 
 
-# ── Build pipeline: scripted → raw ��� scripted ───────────────────────────
+# ── Build pipeline: scripted → raw → scripted ────────────────────────────
 
-def summarize(input_data, config):
+@node(mode="scripted", output=Claims)
+def summarize(filter_non_functional: FilteredClaims) -> Claims:
     """Summarize what was kept."""
-    return Claims(items=input_data.kept)
+    return Claims(items=filter_non_functional.kept)
 
-register_scripted("summarize", summarize)
-
-pipeline = Construct("filter-pipeline", nodes=[
-    Node.scripted("extract", fn="extract_claims", output=Claims),
-    filter_non_functional,  # raw node — mixed in with declarative nodes
-    Node.scripted("summarize", fn="summarize", input=FilteredClaims, output=Claims),
-])
+pipeline = construct_from_module(sys.modules[__name__], name="filter-pipeline")
 
 
 # ── Run ──────────────────────────────────────────────────────────────────

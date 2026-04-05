@@ -11,7 +11,7 @@ from neograph.construct import Construct, ConstructError
 from neograph.decorators import FromConfig, FromInput, construct_from_module, node
 from neograph.factory import register_condition, register_scripted, register_tool_factory
 from neograph.modifiers import Operator, Oracle, Each
-from neograph.node import Node, raw_node
+from neograph.node import Node
 from neograph.runner import run
 from neograph.tool import Tool, tool
 
@@ -27,7 +27,6 @@ __all__ = [
     "FromConfig",
     "compile",
     "run",
-    "raw_node",
     "tool",
     "node",
     "construct_from_module",
