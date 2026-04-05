@@ -1,13 +1,15 @@
 [project]
 name = "neograph"
 version = "0.1.0"
-description = "Declarative LLM graph compiler. Define typed Nodes, compose into Constructs, compile to LangGraph."
+description = "Write Python. Get a production LLM graph. Declarative LLM graph compiler that compiles @node-decorated functions into LangGraph."
+readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
+license-files = ["LICENSE"]
 authors = [
-    {name = "Konstantin Mirin"},
+    {name = "Konstantin Mirin", email = "konstantin@mirin.pro"},
 ]
-keywords = ["llm", "langgraph", "declarative", "typed", "pipeline", "graph", "compiler"]
+keywords = ["llm", "langgraph", "declarative", "typed", "pipeline", "graph", "compiler", "ai", "agent"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
@@ -36,7 +38,10 @@ dev = [
 
 [project.urls]
 Homepage = "https://neograph.pro"
+Documentation = "https://neograph.pro"
 Repository = "https://github.com/KonstantinMirin/neograph"
+Issues = "https://github.com/KonstantinMirin/neograph/issues"
+Changelog = "https://github.com/KonstantinMirin/neograph/blob/main/CHANGELOG.md"
 
 [build-system]
 requires = ["hatchling"]
@@ -44,6 +49,23 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/neograph"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "src/neograph",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md",
+    "pyproject.toml",
+]
+exclude = [
+    "tests",
+    "examples",
+    "website",
+    ".claude",
+    ".beads",
+    "docs",
+]
 
 [tool.ruff]
 line-length = 120
