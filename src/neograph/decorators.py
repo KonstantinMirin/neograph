@@ -320,6 +320,17 @@ def _resolve_di_value(
     return None
 
 
+def _resolve_di_args(param_res: ParamResolution, config: Any) -> list[Any]:
+    """Resolve all DI-classified parameters into a positional args list.
+
+    Shared between the @merge_fn legacy shim and factory.make_oracle_merge_fn.
+    """
+    return [
+        _resolve_di_value(kind, payload, pname, config)
+        for pname, (kind, payload) in param_res.items()
+    ]
+
+
 def _get_node_source(n: Node) -> str | None:
     """Return 'basename.py:lineno' for the @node-decorated function, or None."""
     sidecar = _get_sidecar(n)
@@ -723,12 +734,7 @@ def merge_fn(
         from neograph.factory import register_scripted
 
         def legacy_shim(variants: Any, config: Any) -> Any:
-            resolved_args = [variants]
-            for pname, (kind, payload) in param_res.items():
-                resolved_args.append(
-                    _resolve_di_value(kind, payload, pname, config)
-                )
-            return f(*resolved_args)
+            return f(variants, *_resolve_di_args(param_res, config))
 
         legacy_shim.__name__ = fn_name
         register_scripted(fn_name, legacy_shim)

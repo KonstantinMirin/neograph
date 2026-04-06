@@ -360,7 +360,7 @@ def make_oracle_merge_fn(
         # Check for @merge_fn DI metadata first. If present, call the
         # original user function with resolved DI parameters. Otherwise
         # fall back to the legacy (variants, config) scripted signature.
-        from neograph.decorators import get_merge_fn_metadata, _resolve_di_value
+        from neograph.decorators import get_merge_fn_metadata, _resolve_di_args
 
         metadata = get_merge_fn_metadata(oracle.merge_fn)
         if metadata is not None:
@@ -368,10 +368,7 @@ def make_oracle_merge_fn(
 
             def merge_fn(state: Any, config: RunnableConfig) -> dict:
                 results = getattr(state, collector_field, [])
-                args: list[Any] = [results]
-                for pname, (kind, payload) in param_res.items():
-                    args.append(_resolve_di_value(kind, payload, pname, config))
-                return {field_name: user_fn(*args)}
+                return {field_name: user_fn(results, *_resolve_di_args(param_res, config))}
         else:
             scripted_merge = lookup_scripted(oracle.merge_fn)
 
