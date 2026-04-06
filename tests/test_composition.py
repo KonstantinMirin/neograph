@@ -1386,6 +1386,55 @@ class TestMixedNodeAndConstruct:
         assert isinstance(result["decompose"], PostMerge)
         assert result["decompose"].grouped == {"all": ["claim-1", "claim-1"]}
 
+    def test_oracle_gen_type_inferred_when_merge_fn_defined_after_node(self):
+        """oracle_gen_type must be inferred even when @merge_fn is defined
+        AFTER @node in the source file (neograph-b9p). Inference must happen
+        at construct assembly time, not decoration time."""
+        from tests.fakes import StructuredFakeWithRaw, configure_fake_llm
+
+        class GenType(BaseModel, frozen=True):
+            raw: list[str]
+
+        class MergedType(BaseModel, frozen=True):
+            combined: str
+
+        requested_types: list[type] = []
+
+        def tracking_factory(model):
+            requested_types.append(model)
+            return GenType(raw=["x"])
+
+        configure_fake_llm(lambda tier: StructuredFakeWithRaw(tracking_factory))
+
+        # KEY: @node BEFORE @merge_fn — simulates the file ordering bug
+        @node(outputs=MergedType, model="fast", prompt="gen",
+              ensemble_n=2, merge_fn="late_merge")
+        def generate() -> MergedType: ...
+
+        # This runs AFTER @node — merge_fn wasn't registered at decoration time
+        @merge_fn
+        def late_merge(variants: list[GenType]) -> MergedType:
+            return MergedType(combined=",".join(v.raw[0] for v in variants))
+
+        import types as t
+        mod = t.ModuleType("test_late_merge_mod")
+        mod.generate = generate
+        pipeline = construct_from_module(mod)
+
+        # At this point, oracle_gen_type should be set (resolved at assembly time)
+        gen_node = pipeline.nodes[0]
+        assert gen_node.oracle_gen_type is GenType, (
+            f"oracle_gen_type should be GenType, got {gen_node.oracle_gen_type}"
+        )
+
+        graph = compile(pipeline)
+        result = run(graph, input={"node_id": "b9p"})
+
+        assert all(rt is GenType for rt in requested_types), (
+            f"Generators asked for {[t.__name__ for t in requested_types]}, expected GenType"
+        )
+        assert result["generate"].combined == "x,x"
+
     def test_oracle_merge_fires_when_sub_construct_is_first_failure_mode(self):
         """Variant: sub-construct comes BEFORE the Oracle node in the list.
         Tests the second failure mode from the consumer report."""

@@ -1224,6 +1224,18 @@ def _build_construct_from_decorated(
                 port_param_map={p: "neo_subgraph_input" for p in port_params.get(field, set())},
             )
 
+    # Deferred oracle_gen_type inference: at decoration time, the merge_fn
+    # may not be registered yet (defined below @node in the file). Retry
+    # inference here — all @merge_fn decorators have run by construct assembly.
+    from neograph.modifiers import Oracle as _Oracle
+    for n in ordered:
+        if isinstance(n, Node) and n.has_modifier(_Oracle) and n.oracle_gen_type is None:
+            oracle_mod = next((m for m in n.modifiers if isinstance(m, _Oracle)), None)
+            if oracle_mod is not None and oracle_mod.merge_fn is not None:
+                gen_type = infer_oracle_gen_type(oracle_mod.merge_fn)
+                if gen_type is not None and gen_type is not n.outputs:
+                    n.oracle_gen_type = gen_type
+
     return Construct(
         name=construct_name,
         nodes=ordered,
