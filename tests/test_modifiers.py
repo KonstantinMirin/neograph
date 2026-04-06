@@ -1469,6 +1469,52 @@ class TestEachDuplicateKeyGuard:
             run(graph, input={"node_id": "dup-prog"})
 
 
+class TestSkipWhenWithEach:
+    """skip_when + Each: skipped items must produce {dispatch_key: value} dicts
+    just like non-skipped items (neograph-gpn)."""
+
+    def test_skip_value_wrapped_in_each_key_when_skip_fires(self):
+        """skip_when fires for some items, skip_value result is wrapped with
+        the Each dispatch key so the reducer can merge it with non-skipped results."""
+        from neograph import compile, run, node, construct_from_functions
+
+        # LLM-mode node with skip_when + Each. Skip fires for single-claim
+        # groups. Non-skipped groups go through the LLM (StructuredFake).
+        configure_fake_llm(lambda tier: StructuredFake(
+            lambda m: m(cluster_label="processed", matched=["llm-result"]),
+        ))
+
+        @node(outputs=Clusters)
+        def make() -> Clusters:
+            return Clusters(groups=[
+                ClusterGroup(label="a", claim_ids=["c1"]),          # skip: len==1
+                ClusterGroup(label="b", claim_ids=["c2", "c3"]),    # LLM processes
+                ClusterGroup(label="c", claim_ids=["c4"]),          # skip: len==1
+            ])
+
+        @node(
+            outputs=MatchResult,
+            model="fast",
+            prompt="verify",
+            map_over="make.groups",
+            map_key="label",
+            skip_when=lambda g: len(g.claim_ids) == 1,
+            skip_value=lambda g: MatchResult(cluster_label=g.label, matched=["skipped"]),
+        )
+        def verify(group: ClusterGroup) -> MatchResult: ...
+
+        pipeline = construct_from_functions("skip-each", [make, verify])
+        graph = compile(pipeline)
+        result = run(graph, input={"node_id": "gpn"})
+
+        proc = result["verify"]
+        assert isinstance(proc, dict), f"Expected dict, got {type(proc)}"
+        assert sorted(proc.keys()) == ["a", "b", "c"]
+        assert proc["a"].matched == ["skipped"]
+        assert proc["b"].matched == ["llm-result"]
+        assert proc["c"].matched == ["skipped"]
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # TestOracleOperatorCombo (neograph-l84)
 #

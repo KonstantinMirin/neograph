@@ -93,6 +93,7 @@ def _apply_skip_when(
     field_name: str,
     t0: float,
     node_log: Any,
+    state: Any = None,
 ) -> dict[str, Any] | None:
     """Check skip_when predicate and return early state update if skipped.
 
@@ -100,6 +101,10 @@ def _apply_skip_when(
     execution should continue.  Unwraps single-key dicts so skip_when
     receives a typed value for single-upstream nodes (consistent across
     @node and Node() surfaces).
+
+    When the node has an Each modifier, the skip_value result is routed
+    through ``_build_state_update`` so it gets wrapped in the dispatch key
+    dict (``{key: value}``) that the ``_merge_dicts`` reducer expects.
     """
     if node.skip_when is None:
         return None
@@ -111,7 +116,8 @@ def _apply_skip_when(
     elapsed = time.monotonic() - t0
     node_log.info("node_skipped", reason="skip_when", duration_s=round(elapsed, 3))
     if node.skip_value is not None:
-        return {field_name: node.skip_value(skip_input)}
+        result = node.skip_value(skip_input)
+        return _build_state_update(node, field_name, result, state)
     return {}
 
 
@@ -290,7 +296,7 @@ def _make_produce_fn(node: Node) -> Callable:
         t0 = time.monotonic()
         input_data = _extract_input(state, node)
 
-        skip_result = _apply_skip_when(node, input_data, field_name, t0, node_log)
+        skip_result = _apply_skip_when(node, input_data, field_name, t0, node_log, state)
         if skip_result is not None:
             return skip_result
 
@@ -337,7 +343,7 @@ def _make_tool_fn(node: Node) -> Callable:
         t0 = time.monotonic()
         input_data = _extract_input(state, node)
 
-        skip_result = _apply_skip_when(node, input_data, field_name, t0, node_log)
+        skip_result = _apply_skip_when(node, input_data, field_name, t0, node_log, state)
         if skip_result is not None:
             return skip_result
 
