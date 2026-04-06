@@ -1216,7 +1216,7 @@ class TestGatherToolCollection:
 
 class TestToolRegistrationError:
     def test_clear_error_raised_when_tool_not_registered(self):
-        """Gather node with unregistered tool raises ValueError naming the tool."""
+        """Gather node with unregistered tool raises ConfigurationError naming the tool."""
         import types as _types
 
         from neograph import construct_from_module, node
