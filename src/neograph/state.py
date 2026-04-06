@@ -115,31 +115,48 @@ def compile_state_model(construct: Construct) -> type[BaseModel]:
 
 
 def _add_output_field(node: Node, fields: dict[str, Any]) -> None:
-    """Add a node's output type as a field on the state model."""
+    """Add a node's output type(s) as field(s) on the state model.
+
+    When outputs is a dict (multi-output), creates one field per key:
+    ``{node_name}_{output_key}``. Each/Oracle modifiers apply per key.
+    When outputs is a single type (backward compat), creates ``{node_name}``.
+    """
     if node.outputs is None:
         msg = f"Node '{node.name}' has no output type. Every node must declare outputs=SomeModel."
         raise ValueError(msg)
 
     field_name = node.name.replace("-", "_")
-    output_type = node.outputs
 
-    # Fan-out nodes (Each) produce dict[key, output_type]
+    # Dict-form outputs: one state field per key (neograph-1bp.2).
+    if isinstance(node.outputs, dict):
+        for output_key, output_type in node.outputs.items():
+            key_field = f"{field_name}_{output_key}"
+            _add_single_output_field(node, key_field, output_type, fields)
+        return
+
+    # Single-type outputs (backward compat): one field named after the node.
+    _add_single_output_field(node, field_name, node.outputs, fields)
+
+
+def _add_single_output_field(
+    node: Node,
+    field_name: str,
+    output_type: Any,
+    fields: dict[str, Any],
+) -> None:
+    """Add one output field to the state model, applying modifier wrapping."""
     if node.has_modifier(Each):
         field_type = dict[str, output_type] | None
         fields[field_name] = (
             Annotated[field_type, _merge_dicts],
             None,
         )
-    # Ensemble nodes (Oracle): internal collector + consumer-facing merge result
     elif node.has_modifier(Oracle):
-        # Internal: collects N generator outputs
         collector_field = f"neo_oracle_{field_name}"
         fields[collector_field] = (
             Annotated[list[output_type], _collect_oracle_results],
             [],
         )
-        # Consumer-facing: the merged result, named after the node
         fields[field_name] = (output_type | None, None)
-    # Sequential nodes — simple last-write-wins
     else:
         fields[field_name] = (output_type | None, None)

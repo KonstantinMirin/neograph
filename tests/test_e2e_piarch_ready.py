@@ -6793,3 +6793,37 @@ class TestNodeOutputsRename:
         state_model = compile_state_model(c)
         # The state field should have the right type annotation
         assert "extract" in state_model.model_fields
+
+
+class TestDictOutputsStateModel:
+    """Dict-form outputs emit per-key state fields (neograph-1bp.2)."""
+
+    def test_dict_outputs_emits_per_key_fields(self):
+        """outputs={'result': X, 'log': Y} → state has node_result + node_log."""
+        from neograph.state import compile_state_model
+        n = Node("explore", outputs={"result": RawText, "tool_log": Claims})
+        c = Construct("p", nodes=[n])
+        state_model = compile_state_model(c)
+        assert "explore_result" in state_model.model_fields
+        assert "explore_tool_log" in state_model.model_fields
+        # The old single-name field should NOT exist
+        assert "explore" not in state_model.model_fields
+
+    def test_single_type_outputs_backward_compat(self):
+        """Single-type outputs= still emits {node_name} field."""
+        from neograph.state import compile_state_model
+        n = Node.scripted("extract", fn="f", outputs=RawText)
+        c = Construct("p", nodes=[n])
+        state_model = compile_state_model(c)
+        assert "extract" in state_model.model_fields
+
+    def test_dict_outputs_with_each_modifier(self):
+        """Each modifier wraps each dict-output key in dict[str, T]."""
+        from neograph.state import compile_state_model
+        n = Node(
+            "verify", outputs={"result": RawText, "meta": Claims},
+        ) | Each(over="items", key="label")
+        c = Construct("p", nodes=[n])
+        state_model = compile_state_model(c)
+        assert "verify_result" in state_model.model_fields
+        assert "verify_meta" in state_model.model_fields
