@@ -1375,6 +1375,148 @@ class TestGatherToolCollection:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# TEST: @node context= verbatim state injection (neograph-p4hw)
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TestNodeContext:
+    """@node context= injects verbatim state fields into prompt (neograph-p4hw)."""
+
+    def test_context_passed_to_prompt_compiler_when_declared(self):
+        """Prompt compiler receives context dict with raw state values. E2E."""
+        from neograph import node, construct_from_module, compile, run
+        from neograph.factory import register_scripted
+        from tests.fakes import StructuredFake, configure_fake_llm
+        import types
+
+        configure_fake_llm(
+            lambda tier: StructuredFake(lambda m: m(items=["done"])),
+        )
+
+        captured = {}
+
+        def capturing_compiler(template, data, **kw):
+            captured[template] = {"data": data, "kw": kw}
+            return [{"role": "user", "content": "test"}]
+
+        from neograph import configure_llm
+        configure_llm(
+            llm_factory=lambda tier: StructuredFake(lambda m: m(items=["done"])),
+            prompt_compiler=capturing_compiler,
+        )
+
+        mod = types.ModuleType("test_context_mod")
+
+        @node(outputs=RawText)
+        def build_catalog() -> RawText:
+            return RawText(text="<catalog>UC-001,UC-002,UC-003</catalog>")
+
+        @node(
+            outputs=Claims,
+            mode="think",
+            model="fast",
+            prompt="with-context",
+            context=["build_catalog"],
+        )
+        def analyze(build_catalog: RawText) -> Claims: ...
+
+        mod.build_catalog = build_catalog
+        mod.analyze = analyze
+        pipeline = construct_from_module(mod)
+        graph = compile(pipeline)
+        run(graph, input={"node_id": "ctx-test"})
+
+        assert "with-context" in captured
+        kw = captured["with-context"]["kw"]
+        assert "context" in kw, f"Expected 'context' in prompt compiler kwargs, got: {list(kw.keys())}"
+        assert "build_catalog" in kw["context"]
+        # Verbatim — the raw RawText, not BAML-rendered
+        ctx_val = kw["context"]["build_catalog"]
+        assert hasattr(ctx_val, "text"), f"Expected raw RawText model, got {type(ctx_val)}"
+        assert ctx_val.text == "<catalog>UC-001,UC-002,UC-003</catalog>"
+
+    def test_no_context_kwarg_when_node_has_no_context(self):
+        """Prompt compiler does NOT receive context when node doesn't declare it."""
+        from neograph import node, construct_from_module, compile, run
+        from tests.fakes import StructuredFake
+        import types
+
+        captured = {}
+
+        def capturing_compiler(template, data, **kw):
+            captured[template] = kw
+            return [{"role": "user", "content": "test"}]
+
+        from neograph import configure_llm
+        configure_llm(
+            llm_factory=lambda tier: StructuredFake(lambda m: m(items=["x"])),
+            prompt_compiler=capturing_compiler,
+        )
+
+        mod = types.ModuleType("test_no_ctx_mod")
+
+        @node(outputs=Claims, mode="think", model="fast", prompt="no-context")
+        def simple() -> Claims: ...
+
+        mod.simple = simple
+        pipeline = construct_from_module(mod)
+        graph = compile(pipeline)
+        run(graph, input={})
+
+        assert "no-context" in captured
+        assert "context" not in captured["no-context"]
+
+    def test_context_works_with_agent_mode(self):
+        """Agent node with context= alongside tools. E2E."""
+        from neograph import node, construct_from_module, compile, run, ToolInteraction
+        from neograph.factory import register_tool_factory
+        from tests.fakes import FakeTool, ReActFake
+        import types
+
+        captured = {}
+
+        def capturing_compiler(template, data, **kw):
+            captured[template] = {"data": data, "kw": kw}
+            return [{"role": "user", "content": "test"}]
+
+        from neograph import configure_llm
+        configure_llm(
+            llm_factory=lambda tier: ReActFake(
+                tool_calls=[[{"name": "ctx_tool", "args": {}, "id": "t1"}], []],
+                final=lambda m: m(items=["found"]),
+            ),
+            prompt_compiler=capturing_compiler,
+        )
+        register_tool_factory("ctx_tool", lambda cfg, tc: FakeTool("ctx_tool", response="ok"))
+
+        mod = types.ModuleType("test_agent_ctx_mod")
+
+        @node(outputs=RawText)
+        def catalog() -> RawText:
+            return RawText(text="graph-catalog-data")
+
+        @node(
+            mode="agent",
+            outputs={"result": Claims, "tool_log": list[ToolInteraction]},
+            model="fast", prompt="agent-with-ctx",
+            tools=[Tool("ctx_tool", budget=2)],
+            context=["catalog"],
+        )
+        def explore(catalog: RawText) -> Claims: ...
+
+        mod.catalog = catalog
+        mod.explore = explore
+        pipeline = construct_from_module(mod)
+        graph = compile(pipeline)
+        run(graph, input={})
+
+        assert "agent-with-ctx" in captured
+        kw = captured["agent-with-ctx"]["kw"]
+        assert "context" in kw, f"Expected 'context' kwarg, got: {list(kw.keys())}"
+        assert kw["context"]["catalog"].text == "graph-catalog-data"
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # TEST: Tool registration error in invoke_with_tools (neograph-rdu.2)
 #
 # When a gather/execute node references a tool name that has no registered
