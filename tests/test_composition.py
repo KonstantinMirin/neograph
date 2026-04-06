@@ -1693,6 +1693,81 @@ class TestGatherProduceSubConstruct:
         assert isinstance(result["explore_only"], ExplorationResult)
         assert result["explore_only"].evidence == ["auth.py:42"]
 
+    def test_typed_result_flows_to_downstream_when_gather_produce_chain(self):
+        """Typed tool result flows from gather node through sub-construct to
+        downstream produce node's prompt compiler. E2E: compile + run.
+        neograph-uihu: the downstream sees typed_result, not just str."""
+        from neograph import ToolInteraction
+        from neograph.factory import register_tool_factory
+        from tests.fakes import ReActFake, StructuredFakeWithRaw, configure_fake_llm
+        from pydantic import BaseModel
+
+        class EvidenceHit(BaseModel, frozen=True):
+            ref: str
+            confidence: float
+
+        class TypedEvidenceTool:
+            name = "find_evidence"
+            def invoke(self, args):
+                return EvidenceHit(ref="auth.py:42", confidence=0.9)
+
+        register_tool_factory("find_evidence", lambda cfg, tc: TypedEvidenceTool())
+
+        captured = {}
+
+        def capturing_compiler(template, data, **kw):
+            captured[template] = data
+            return [{"role": "user", "content": "test"}]
+
+        configure_fake_llm(
+            lambda tier: (
+                ReActFake(
+                    tool_calls=[[{"name": "find_evidence", "args": {}, "id": "t1"}], []],
+                    final=lambda m: m(evidence=["ref1"], summary="ok"),
+                ) if tier == "research" else
+                StructuredFakeWithRaw(
+                    lambda m: m(claim_id="c1", disposition="confirmed"),
+                )
+            ),
+            prompt_compiler=capturing_compiler,
+        )
+
+        @node(
+            mode="agent",
+            outputs={"result": ExplorationResult, "tool_log": list[ToolInteraction]},
+            model="research", prompt="v/explore",
+            tools=[Tool("find_evidence", budget=3)],
+        )
+        def explore(claim: VerifyClaim) -> ExplorationResult: ...
+
+        @node(mode="think", outputs=ClaimVerdict, model="judge", prompt="v/score")
+        def score(explore_result: ExplorationResult, explore_tool_log: list[ToolInteraction]) -> ClaimVerdict: ...
+
+        sub = construct_from_functions(
+            "verify", [explore, score],
+            input=VerifyClaim, output=ClaimVerdict,
+        )
+        register_scripted("uihu_seed", lambda _in, _cfg: VerifyClaim(
+            claim_id="c1", text="test claim",
+        ))
+        parent = Construct("parent", nodes=[
+            Node.scripted("seed", fn="uihu_seed", outputs=VerifyClaim),
+            sub,
+        ])
+        graph = compile(parent)
+        run(graph, input={"node_id": "uihu"})
+
+        # The downstream score node received tool_log with typed_result
+        assert "v/score" in captured
+        score_data = captured["v/score"]
+        assert "explore_tool_log" in score_data
+        tool_log = score_data["explore_tool_log"]
+        assert len(tool_log) >= 1
+        assert tool_log[0].typed_result is not None, "typed_result should not be None"
+        assert isinstance(tool_log[0].typed_result, EvidenceHit)
+        assert tool_log[0].typed_result.ref == "auth.py:42"
+        assert tool_log[0].typed_result.confidence == 0.9
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 # RENDERERS — XmlRenderer, DelimitedRenderer, JsonRenderer

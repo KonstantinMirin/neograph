@@ -1206,6 +1206,104 @@ class TestGatherToolCollection:
         assert tool_log[0].tool_name == "search"
         assert tool_log[0].result == "found it"
 
+    def test_typed_result_preserved_when_tool_returns_pydantic_model(self):
+        """Tool returns a Pydantic model. typed_result preserves it,
+        result has JSON rendering (not repr). E2E: compile + run."""
+        from pydantic import BaseModel
+        from neograph import node, construct_from_module, compile, run, ToolInteraction
+        from neograph.factory import register_tool_factory
+        from tests.fakes import ReActFake, configure_fake_llm
+        import types
+
+        class SearchHit(BaseModel, frozen=True):
+            node_id: str
+            score: float
+
+        # FakeTool that returns a TYPED model, not a string
+        class TypedFakeTool:
+            name = "typed_search"
+            def invoke(self, args):
+                return SearchHit(node_id="UC-001", score=0.95)
+
+        configure_fake_llm(
+            lambda tier: ReActFake(
+                tool_calls=[
+                    [{"name": "typed_search", "args": {"q": "test"}, "id": "tc1"}],
+                    [],
+                ],
+                final=lambda m: Claims(items=["found"]),
+            )
+        )
+        register_tool_factory("typed_search", lambda cfg, tc: TypedFakeTool())
+
+        mod = types.ModuleType("test_typed_tool_mod")
+
+        @node(
+            mode="agent",
+            outputs={"result": Claims, "tool_log": list[ToolInteraction]},
+            model="fast", prompt="test",
+            tools=[Tool("typed_search", budget=3)],
+        )
+        def explore() -> Claims: ...
+
+        mod.explore = explore
+        pipeline = construct_from_module(mod)
+        graph = compile(pipeline)
+        result = run(graph, input={})
+
+        tool_log = result.get("explore_tool_log")
+        assert tool_log is not None
+        assert len(tool_log) == 1
+        # typed_result preserves the original Pydantic model
+        assert tool_log[0].typed_result is not None, "typed_result should not be None"
+        assert isinstance(tool_log[0].typed_result, SearchHit)
+        assert tool_log[0].typed_result.node_id == "UC-001"
+        assert tool_log[0].typed_result.score == 0.95
+        # result is JSON-rendered, not repr
+        assert '"node_id"' in tool_log[0].result, (
+            f"Expected JSON in result, got: {tool_log[0].result}"
+        )
+
+    def test_typed_result_holds_string_when_tool_returns_string(self):
+        """Tool returns plain string. typed_result holds the string itself
+        (not None). Backward compat. E2E: compile + run."""
+        from neograph import node, construct_from_module, compile, run, ToolInteraction
+        from neograph.factory import register_tool_factory
+        from tests.fakes import FakeTool, ReActFake, configure_fake_llm
+        import types
+
+        configure_fake_llm(
+            lambda tier: ReActFake(
+                tool_calls=[
+                    [{"name": "str_tool", "args": {}, "id": "tc1"}],
+                    [],
+                ],
+                final=lambda m: Claims(items=["done"]),
+            )
+        )
+        register_tool_factory("str_tool", lambda cfg, tc: FakeTool("str_tool", response="plain text"))
+
+        mod = types.ModuleType("test_str_tool_mod")
+
+        @node(
+            mode="agent",
+            outputs={"result": Claims, "tool_log": list[ToolInteraction]},
+            model="fast", prompt="test",
+            tools=[Tool("str_tool", budget=2)],
+        )
+        def gather() -> Claims: ...
+
+        mod.gather = gather
+        pipeline = construct_from_module(mod)
+        graph = compile(pipeline)
+        result = run(graph, input={})
+
+        tool_log = result.get("gather_tool_log")
+        assert tool_log is not None
+        assert len(tool_log) == 1
+        assert tool_log[0].typed_result == "plain text"
+        assert tool_log[0].result == "plain text"
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 # TEST: Tool registration error in invoke_with_tools (neograph-rdu.2)
