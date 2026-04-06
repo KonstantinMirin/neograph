@@ -83,8 +83,8 @@ class TestStructuredFakeWithRaw:
         assert usage["input_tokens"] == 10
         assert usage["output_tokens"] == 20
 
-    def test_invoke_structured_logs_usage(self):
-        """End-to-end: invoke_structured with StructuredFakeWithRaw extracts usage."""
+    def test_invoke_structured_returns_correct_model_when_fake_with_raw(self):
+        """invoke_structured returns the parsed model when using StructuredFakeWithRaw."""
         from neograph._llm import invoke_structured
 
         fake = StructuredFakeWithRaw(
