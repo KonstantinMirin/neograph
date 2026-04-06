@@ -167,7 +167,7 @@ Concrete rules derived from this:
 
 - **`node.py`, `construct.py`, `_construct_validation.py`, `factory.py`, `modifiers.py` are off-limits for @node-layer features.** The @node decorator is sugar over the IR; it must produce instances those modules already accept. This was a hard rule during the @node production-readiness epic and it paid off — every gap got fixed in `decorators.py` without touching the IR.
 - **The only exception**: when a genuinely new IR capability is needed (e.g., `ForwardConstruct` needed `_BranchNode` sentinel support in `compiler.py` + `state.py`). Adding those was deliberate and documented.
-- **Sub-constructs stay declarative.** `Construct(input=X, output=Y, nodes=[...])` is the explicit boundary for isolated sub-pipelines. `construct_from_module` produces one `Construct` per module; it does not inline sub-pipelines. Example 05 and example 10 deliberately keep the declarative form for this reason.
+- **Sub-constructs can be @node or declarative.** `construct_from_functions("verify", [explore, score], input=VerifyClaim, output=ClaimResult)` builds a sub-construct from `@node` functions. Params whose type matches `input=` are port params — they read from `neo_subgraph_input` instead of a peer `@node`. The declarative form `Construct(input=X, output=Y, nodes=[...])` also works. Both produce the same IR.
 
 ---
 
@@ -267,7 +267,7 @@ This was the cause of `neograph-jyw` before the fix. Any new modifier kwarg you 
 | `test_renderers.py` | `XmlRenderer`, `DelimitedRenderer`, `JsonRenderer`, `describe_type`, render dispatch, json_mode output schema, `render_prompt` | ~54 |
 | `test_forward.py` | `ForwardConstruct` base class, tracer, compilation, branching, loops | ~36 |
 | `test_modifiers.py` | Oracle, Each, Operator, `map()`, deep compositions, Construct-level modifiers, list-over-Each | ~34 |
-| `test_composition.py` | Sub-constructs, multi-field input, state hygiene, reducers, dict-form output state/factory | ~29 |
+| `test_composition.py` | Sub-constructs, @node sub-constructs, multi-field input, state hygiene, reducers, dict-form output state/factory | ~36 |
 
 Supporting files: `conftest.py` (registry cleanup fixture), `schemas.py` (shared Pydantic models + `_producer`/`_consumer` helpers), `fakes.py` (LLM fakes).
 
@@ -282,7 +282,7 @@ Supporting files: `conftest.py` (registry cleanup fixture), `schemas.py` (shared
 
 ## Examples
 
-13 runnable examples in `examples/`, each narrated as a walkthrough on neograph.pro. Most use `@node` except three that stay declarative (example 05 sub-constructs, example 10 mixed, example 11 config injection).
+13 runnable examples in `examples/`, each narrated as a walkthrough on neograph.pro. Most use `@node` except two that stay declarative (example 10 mixed, example 11 config injection). Sub-constructs (example 05) can now use either `@node` with `construct_from_functions(input=, output=)` or declarative `Construct(input=, output=, nodes=[...])`.
 
 **Examples must run end-to-end.** Breaking one is a regression. When you change an API surface, run every example that doesn't require real API keys (01, 01c, 02, 03, 04, 05, 06, 08, 09, 10). Examples 07 and 11 hit real OpenRouter/OpenAI — example 07 has a pre-existing known failure that predates anything in this session, document any new failures separately.
 
