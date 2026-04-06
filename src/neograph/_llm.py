@@ -138,6 +138,7 @@ def _compile_prompt(
     output_model: type[BaseModel] | None = None,
     llm_config: dict | None = None,
     output_schema: str | None = None,
+    context: dict[str, Any] | None = None,
 ) -> list:
     all_kwargs = {
         "node_name": node_name,
@@ -146,6 +147,8 @@ def _compile_prompt(
         "llm_config": llm_config,
         "output_schema": output_schema,
     }
+    if context is not None:
+        all_kwargs["context"] = context
     # Only pass kwargs the compiler accepts — inspected at configure_llm() time
     if _prompt_compiler_params is _ACCEPT_ALL:
         kwargs = all_kwargs
@@ -225,6 +228,7 @@ def invoke_structured(
     config: RunnableConfig,
     node_name: str = "",
     llm_config: dict | None = None,
+    context: dict[str, Any] | None = None,
 ) -> BaseModel:
     """Single LLM call with structured JSON output. Mode: produce.
 
@@ -249,6 +253,7 @@ def invoke_structured(
         node_name=node_name, config=config,
         output_model=output_model, llm_config=llm_config,
         output_schema=output_schema,
+        context=context,
     )
 
     t0 = time.monotonic()
@@ -297,6 +302,7 @@ def invoke_with_tools(
     node_name: str = "",
     llm_config: dict | None = None,
     renderer: Any = None,
+    context: dict[str, Any] | None = None,
 ) -> tuple[BaseModel | None, list]:
     """ReAct tool loop with per-tool budget enforcement. Mode: agent/act.
 
@@ -323,6 +329,7 @@ def invoke_with_tools(
         prompt_template, input_data,
         node_name=node_name, config=config,
         output_model=output_model, llm_config=llm_config,
+        context=context,
     ))  # copy — the loop appends to this list
 
     # Create tool instances from registered factories

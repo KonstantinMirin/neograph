@@ -303,6 +303,14 @@ def _make_produce_fn(node: Node) -> Callable:
         input_data = _render_input(node, input_data)
         output_model, primary_key = _resolve_primary_output(node)
 
+        # Extract verbatim context fields from state
+        context_data = None
+        if node.context:
+            context_data = {
+                name: _state_get(state, name.replace("-", "_"))
+                for name in node.context
+            }
+
         result = invoke_structured(
             model_tier=node.model,
             prompt_template=node.prompt,
@@ -311,6 +319,7 @@ def _make_produce_fn(node: Node) -> Callable:
             config=config,
             node_name=node.name,
             llm_config=node.llm_config,
+            context=context_data,
         )
 
         if primary_key is not None and result is not None:
@@ -359,6 +368,14 @@ def _make_tool_fn(node: Node) -> Callable:
         except (ImportError, AttributeError):
             effective_renderer = node.renderer
 
+        # Extract verbatim context fields from state
+        context_data = None
+        if node.context:
+            context_data = {
+                name: _state_get(state, name.replace("-", "_"))
+                for name in node.context
+            }
+
         result, tool_interactions = invoke_with_tools(
             model_tier=node.model,
             prompt_template=node.prompt,
@@ -370,6 +387,7 @@ def _make_tool_fn(node: Node) -> Callable:
             node_name=node.name,
             llm_config=node.llm_config,
             renderer=effective_renderer,
+            context=context_data,
         )
 
         if primary_key is not None and result is not None:
