@@ -86,6 +86,65 @@ def _type_name(t: Any) -> str | None:
     return getattr(t, '__name__', str(t))
 
 
+def _apply_skip_when(
+    node: Node,
+    input_data: Any,
+    field_name: str,
+    t0: float,
+    node_log: Any,
+) -> dict[str, Any] | None:
+    """Check skip_when predicate and return early state update if skipped.
+
+    Returns a state-update dict if the node should be skipped, or None if
+    execution should continue.  Unwraps single-key dicts so skip_when
+    receives a typed value for single-upstream nodes (consistent across
+    @node and Node() surfaces).
+    """
+    if node.skip_when is None:
+        return None
+    skip_input = input_data
+    if isinstance(input_data, dict) and len(input_data) == 1:
+        skip_input = next(iter(input_data.values()))
+    if not node.skip_when(skip_input):
+        return None
+    elapsed = time.monotonic() - t0
+    node_log.info("node_skipped", reason="skip_when", duration_s=round(elapsed, 3))
+    if node.skip_value is not None:
+        return {field_name: node.skip_value(skip_input)}
+    return {}
+
+
+def _render_input(node: Node, input_data: Any) -> Any:
+    """Apply renderer dispatch chain: node renderer > global renderer.
+
+    Returns rendered input_data, or the original if no renderer is active.
+    """
+    from neograph.renderers import render_input
+    try:
+        from neograph._llm import _get_global_renderer
+        effective_renderer = node.renderer or _get_global_renderer()
+    except ImportError:
+        effective_renderer = node.renderer
+    if effective_renderer is not None:
+        return render_input(input_data, renderer=effective_renderer)
+    return input_data
+
+
+def _resolve_primary_output(node: Node) -> tuple[Any, str | None]:
+    """Resolve the LLM output model and primary key for dict-form outputs.
+
+    For dict-form outputs, the LLM produces the primary type (first key).
+    Secondary outputs (e.g. tool_log) are framework-collected.
+
+    Returns (output_model, primary_key) where primary_key is None for
+    single-type outputs.
+    """
+    if isinstance(node.outputs, dict):
+        primary_key = next(iter(node.outputs))
+        return node.outputs[primary_key], primary_key
+    return node.outputs, None
+
+
 def _build_state_update(
     node: Node,
     field_name: str,
@@ -222,37 +281,12 @@ def _make_produce_fn(node: Node) -> Callable:
         t0 = time.monotonic()
         input_data = _extract_input(state, node)
 
-        # Conditional produce: skip LLM when predicate is true (neograph-s14).
-        # Unwrap single-key dicts so skip_when receives a typed value for
-        # single-upstream nodes (consistent across @node and Node() surfaces).
-        if node.skip_when is not None:
-            skip_input = input_data
-            if isinstance(input_data, dict) and len(input_data) == 1:
-                skip_input = next(iter(input_data.values()))
-            if node.skip_when(skip_input):
-                elapsed = time.monotonic() - t0
-                node_log.info("node_skipped", reason="skip_when", duration_s=round(elapsed, 3))
-                if node.skip_value is not None:
-                    return {field_name: node.skip_value(skip_input)}
-                return {}
+        skip_result = _apply_skip_when(node, input_data, field_name, t0, node_log)
+        if skip_result is not None:
+            return skip_result
 
-        # Apply renderer dispatch chain (neograph-ni6)
-        from neograph.renderers import render_input
-        try:
-            from neograph._llm import _get_global_renderer
-            effective_renderer = node.renderer or _get_global_renderer()
-        except ImportError:
-            effective_renderer = node.renderer
-        if effective_renderer is not None:
-            input_data = render_input(input_data, renderer=effective_renderer)
-
-        # For dict-form outputs, the LLM produces the primary type (first key).
-        # Secondary outputs (e.g. tool_log) are framework-collected (1bp.6).
-        output_model = node.outputs
-        primary_key: str | None = None
-        if isinstance(node.outputs, dict):
-            primary_key = next(iter(node.outputs))
-            output_model = node.outputs[primary_key]
+        input_data = _render_input(node, input_data)
+        output_model, primary_key = _resolve_primary_output(node)
 
         result = invoke_structured(
             model_tier=node.model,
@@ -294,34 +328,12 @@ def _make_tool_fn(node: Node) -> Callable:
         t0 = time.monotonic()
         input_data = _extract_input(state, node)
 
-        # Conditional produce: skip LLM when predicate is true (neograph-s14).
-        if node.skip_when is not None:
-            skip_input = input_data
-            if isinstance(input_data, dict) and len(input_data) == 1:
-                skip_input = next(iter(input_data.values()))
-            if node.skip_when(skip_input):
-                elapsed = time.monotonic() - t0
-                node_log.info("node_skipped", reason="skip_when", duration_s=round(elapsed, 3))
-                if node.skip_value is not None:
-                    return {field_name: node.skip_value(skip_input)}
-                return {}
+        skip_result = _apply_skip_when(node, input_data, field_name, t0, node_log)
+        if skip_result is not None:
+            return skip_result
 
-        # Apply renderer dispatch chain (neograph-ni6)
-        from neograph.renderers import render_input
-        try:
-            from neograph._llm import _get_global_renderer
-            effective_renderer = node.renderer or _get_global_renderer()
-        except ImportError:
-            effective_renderer = node.renderer
-        if effective_renderer is not None:
-            input_data = render_input(input_data, renderer=effective_renderer)
-
-        # For dict-form outputs, the LLM produces the primary type (first key).
-        output_model = node.outputs
-        primary_key: str | None = None
-        if isinstance(node.outputs, dict):
-            primary_key = next(iter(node.outputs))
-            output_model = node.outputs[primary_key]
+        input_data = _render_input(node, input_data)
+        output_model, primary_key = _resolve_primary_output(node)
 
         budget_tracker = ToolBudgetTracker(node.tools)
 
