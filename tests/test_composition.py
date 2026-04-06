@@ -1015,6 +1015,51 @@ class TestNodeSubConstruct:
         assert prog_result["prog_sub"].claim_id == decl_result["decl_sub"].claim_id
         assert prog_result["prog_sub"].disposition == decl_result["decl_sub"].disposition
 
+    def test_prompt_compiler_receives_port_input_when_produce_node_inside_sub_construct(self):
+        """LLM-mode @node as the first node in a sub-construct receives
+        neo_subgraph_input in its prompt compiler input_data (neograph-jc3)."""
+        from tests.fakes import StructuredFakeWithRaw, configure_fake_llm
+
+        captured = {}
+
+        def capturing_compiler(template, data, **kw):
+            captured[template] = data
+            return [{"role": "user", "content": "test"}]
+
+        configure_fake_llm(
+            lambda tier: StructuredFakeWithRaw(
+                lambda model: model(claim_id="c1", disposition="llm-scored"),
+            ),
+            prompt_compiler=capturing_compiler,
+        )
+
+        @node(mode="produce", outputs=ClaimResult, model="default", prompt="jc3/score")
+        def llm_score(claim: VerifyClaim) -> ClaimResult: ...
+
+        sub = construct_from_functions(
+            "llm-sub", [llm_score],
+            input=VerifyClaim, output=ClaimResult,
+        )
+
+        register_scripted("jc3_seed", lambda _in, _cfg: VerifyClaim(
+            claim_id="jc3", text="LLM mode port test",
+        ))
+        parent = Construct("parent", nodes=[
+            Node.scripted("seed", fn="jc3_seed", outputs=VerifyClaim),
+            sub,
+        ])
+        graph = compile(parent)
+        result = run(graph, input={"node_id": "jc3"})
+
+        # Result surfaces correctly
+        assert result["llm_sub"].disposition == "llm-scored"
+        # Prompt compiler received the port input
+        assert "jc3/score" in captured
+        score_data = captured["jc3/score"]
+        assert "neo_subgraph_input" in score_data
+        assert isinstance(score_data["neo_subgraph_input"], VerifyClaim)
+        assert score_data["neo_subgraph_input"].claim_id == "jc3"
+
 
 class TestPortParamErrors:
     """Error cases for port param resolution (neograph-vih)."""
