@@ -995,6 +995,228 @@ class TestNodeSubConstruct:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# GATHER → PRODUCE INSIDE SUB-CONSTRUCT (neograph-dp5)
+#
+# The core "agent explores then judges" topology: a gather node with
+# tools + dict-form outputs (result + tool_log) feeds a produce node
+# that consumes both, all inside a construct_from_functions sub-construct.
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class ExplorationResult(BaseModel, frozen=True):
+    evidence: list[str]
+    summary: str
+
+
+class ClaimVerdict(BaseModel, frozen=True):
+    claim_id: str
+    disposition: str
+
+
+class TestGatherProduceSubConstruct:
+    """Gather→produce with tool_log inside a @node sub-construct (neograph-dp5).
+
+    The motivating pattern from neograph-4a7: an explore node gathers evidence
+    with tools, then a score node judges in a fresh conversation using the
+    exploration result AND the tool interaction log as context.
+    """
+
+    def _setup_fakes(self, *, capture_prompt=None):
+        """Wire up tier-based fakes: 'research' → ReActFake, 'judge' → StructuredFakeWithRaw."""
+        from neograph import ToolInteraction
+        from neograph.factory import register_tool_factory
+        from tests.fakes import FakeTool, ReActFake, StructuredFakeWithRaw, configure_fake_llm
+
+        fake_tool = FakeTool("search_evidence", response="evidence found: auth.py:42")
+        register_tool_factory("search_evidence", lambda config, tool_config: fake_tool)
+
+        def llm_factory(tier):
+            if tier == "research":
+                return ReActFake(
+                    tool_calls=[
+                        [{"name": "search_evidence", "args": {"q": "verify"}, "id": "tc1"}],
+                        [],  # final: no more tool calls
+                    ],
+                    final=lambda m: m(evidence=["auth.py:42"], summary="found evidence"),
+                )
+            # "judge" tier — produce node
+            return StructuredFakeWithRaw(
+                lambda model: model(claim_id="c1", disposition="confirmed"),
+            )
+
+        compiler = capture_prompt if capture_prompt else None
+        configure_fake_llm(llm_factory, prompt_compiler=compiler)
+        return fake_tool
+
+    def _build_sub_construct(self):
+        """Build the explore→score sub-construct from @node functions."""
+        from neograph import Tool, ToolInteraction, node, construct_from_functions
+
+        @node(
+            mode="gather",
+            outputs={"result": ExplorationResult, "tool_log": list[ToolInteraction]},
+            model="research",
+            prompt="verify/explore",
+            tools=[Tool("search_evidence", budget=3)],
+        )
+        def explore(claim: VerifyClaim) -> ExplorationResult: ...
+
+        @node(
+            mode="produce",
+            outputs=ClaimVerdict,
+            model="judge",
+            prompt="verify/score",
+        )
+        def score(explore_result: ExplorationResult, explore_tool_log: list[ToolInteraction]) -> ClaimVerdict: ...
+
+        return construct_from_functions(
+            "verify", [explore, score],
+            input=VerifyClaim, output=ClaimVerdict,
+        )
+
+    def test_result_surfaces_when_gather_feeds_produce_inside_sub_construct(self):
+        """Gather→produce chain inside @node sub-construct: result surfaces to parent."""
+        self._setup_fakes()
+        sub = self._build_sub_construct()
+
+        register_scripted("dp5_seed", lambda _in, _cfg: VerifyClaim(
+            claim_id="c1", text="system shall authenticate",
+        ))
+        parent = Construct("parent", nodes=[
+            Node.scripted("seed", fn="dp5_seed", outputs=VerifyClaim),
+            sub,
+        ])
+        graph = compile(parent)
+        result = run(graph, input={"node_id": "dp5-test"})
+
+        # Sub-construct output surfaces
+        assert result["verify"] is not None
+        assert isinstance(result["verify"], ClaimVerdict)
+        assert result["verify"].disposition == "confirmed"
+        # No framework internals leak
+        assert not any(k.startswith("neo_") for k in result)
+
+    def test_tool_log_received_when_produce_consumes_gather_output_inside_sub_construct(self):
+        """Score node's prompt compiler receives tool_log with real ToolInteraction data."""
+        from neograph import ToolInteraction
+
+        captured = {}
+
+        def capturing_compiler(template, data, **kw):
+            # Record what each node's prompt compiler receives
+            captured[template] = data
+            return [{"role": "user", "content": "test"}]
+
+        self._setup_fakes(capture_prompt=capturing_compiler)
+        sub = self._build_sub_construct()
+
+        register_scripted("dp5_seed2", lambda _in, _cfg: VerifyClaim(
+            claim_id="c1", text="test claim",
+        ))
+        parent = Construct("parent", nodes=[
+            Node.scripted("seed", fn="dp5_seed2", outputs=VerifyClaim),
+            sub,
+        ])
+        graph = compile(parent)
+        run(graph, input={"node_id": "dp5-capture"})
+
+        # The score node (prompt="verify/score") should have received tool_log
+        assert "verify/score" in captured, f"Expected verify/score in captured, got: {list(captured.keys())}"
+        score_input = captured["verify/score"]
+        assert "explore_tool_log" in score_input
+        tool_log = score_input["explore_tool_log"]
+        assert isinstance(tool_log, list)
+        assert len(tool_log) >= 1
+        assert isinstance(tool_log[0], ToolInteraction)
+        assert tool_log[0].tool_name == "search_evidence"
+        assert "evidence found" in tool_log[0].result
+        # Also verify explore_result was passed
+        assert "explore_result" in score_input
+        assert isinstance(score_input["explore_result"], ExplorationResult)
+
+    def test_each_fans_out_when_gather_produce_sub_construct_mapped(self):
+        """Sub-construct with gather→produce fanned out via .map() over claims."""
+        self._setup_fakes()
+
+        # Need fresh @node definitions for this test (avoid sidecar collisions)
+        from neograph import Tool, ToolInteraction, node, construct_from_functions
+
+        @node(
+            mode="gather",
+            outputs={"result": ExplorationResult, "tool_log": list[ToolInteraction]},
+            model="research",
+            prompt="verify/explore",
+            tools=[Tool("search_evidence", budget=3)],
+        )
+        def explore_each(claim: VerifyClaim) -> ExplorationResult: ...
+
+        @node(
+            mode="produce",
+            outputs=ClaimVerdict,
+            model="judge",
+            prompt="verify/score",
+        )
+        def score_each(explore_each_result: ExplorationResult, explore_each_tool_log: list[ToolInteraction]) -> ClaimVerdict: ...
+
+        sub = construct_from_functions(
+            "verify", [explore_each, score_each],
+            input=VerifyClaim, output=ClaimVerdict,
+        ).map("seed.claims", key="claim_id")
+
+        class ClaimBatch(BaseModel, frozen=True):
+            claims: list[VerifyClaim]
+
+        register_scripted("dp5_batch", lambda _in, _cfg: ClaimBatch(claims=[
+            VerifyClaim(claim_id="c1", text="first claim"),
+            VerifyClaim(claim_id="c2", text="second claim"),
+        ]))
+        parent = Construct("parent", nodes=[
+            Node.scripted("seed", fn="dp5_batch", outputs=ClaimBatch),
+            sub,
+        ])
+        graph = compile(parent)
+        result = run(graph, input={"node_id": "dp5-each"})
+
+        assert isinstance(result["verify"], dict)
+        assert sorted(result["verify"].keys()) == ["c1", "c2"]
+        assert all(isinstance(v, ClaimVerdict) for v in result["verify"].values())
+
+    def test_gather_dict_outputs_written_when_inside_sub_construct(self):
+        """Gather node with dict outputs works inside a sub-construct (base case)."""
+        self._setup_fakes()
+
+        from neograph import Tool, ToolInteraction, node, construct_from_functions
+
+        @node(
+            mode="gather",
+            outputs={"result": ExplorationResult, "tool_log": list[ToolInteraction]},
+            model="research",
+            prompt="verify/explore",
+            tools=[Tool("search_evidence", budget=3)],
+        )
+        def explore_only(claim: VerifyClaim) -> ExplorationResult: ...
+
+        sub = construct_from_functions(
+            "explore-only", [explore_only],
+            input=VerifyClaim, output=ExplorationResult,
+        )
+
+        register_scripted("dp5_seed_base", lambda _in, _cfg: VerifyClaim(
+            claim_id="c1", text="base case",
+        ))
+        parent = Construct("parent", nodes=[
+            Node.scripted("seed", fn="dp5_seed_base", outputs=VerifyClaim),
+            sub,
+        ])
+        graph = compile(parent)
+        result = run(graph, input={"node_id": "dp5-base"})
+
+        assert result["explore_only"] is not None
+        assert isinstance(result["explore_only"], ExplorationResult)
+        assert result["explore_only"].evidence == ["auth.py:42"]
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # RENDERERS — XmlRenderer, DelimitedRenderer, JsonRenderer
 # ═══════════════════════════════════════════════════════════════════════════
 

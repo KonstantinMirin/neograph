@@ -21,11 +21,13 @@ exercise config-injection patterns not yet ported to `Annotated[T, FromConfig]`.
 | 09 | `09_operator_human_in_loop.py` | Human-in-the-loop interrupt + resume via `interrupt_when=` | @node |
 | 10 | `10_full_pipeline.py` | Every feature in one scenario (Oracle + Each + Operator + sub-construct) | mixed |
 | 11 | `11_pipeline_metadata_and_prompts.py` | Pipeline metadata + config injection via `config['configurable']` | declarative |
+| 12 | `12_input_rendering.py` | Pluggable input rendering (XML, delimited, JSON) | @node |
+| 13 | `13_gather_produce_subconstruct.py` | Gather+produce inside a sub-construct with tool_log flow + Each fan-out | @node + sub-construct |
 | -- | `observable_pipeline.py` | Observable LLM pipeline with Langfuse tracing | @node |
 
 ### Why some examples stay declarative
 
-- **Example 05** — sub-constructs use `Construct(input=X, output=Y, nodes=[...])` for isolation boundaries. `construct_from_module` produces one Construct per module; sub-constructs need explicit typing.
+- **Example 05** — sub-constructs use `Construct(input=X, output=Y, nodes=[...])` for isolation boundaries. Can also use `construct_from_functions(input=, output=)` with @node (see example 13).
 - **Example 10** — the `enrich` sub-construct requires declarative `Construct(input=..., output=...)`. The top-level producer uses `@node`.
 - **Example 11** — uses `config['configurable']` in scripted nodes. Migrating requires `Annotated[T, FromConfig]` annotation on the decorated function.
 
