@@ -931,6 +931,14 @@ def _build_construct_from_decorated(
                         ports.add(pname)
                 except TypeError:
                     pass  # generic types fail issubclass — skip
+            if len(ports) > 1:
+                msg = (
+                    f"@node '{n.name}' has {len(ports)} parameters matching "
+                    f"construct input type {construct_input.__name__}: "
+                    f"{sorted(ports)}. Ambiguous — only one port param is "
+                    f"allowed per node. Rename one or use FromInput annotation."
+                )
+                raise ConstructError(msg)
             if ports:
                 port_params[field_name] = ports
 

@@ -994,6 +994,44 @@ class TestNodeSubConstruct:
         assert decl_result["decl_sub"].disposition == node_result["node_sub"].disposition
 
 
+class TestPortParamErrors:
+    """Error cases for port param resolution (neograph-vih)."""
+
+    def test_raises_when_multiple_params_match_construct_input(self):
+        """Two params of the same type as construct_input should raise ConstructError,
+        not silently drop one."""
+        @node(outputs=ClaimResult)
+        def ambiguous(first: VerifyClaim, second: VerifyClaim) -> ClaimResult:
+            return ClaimResult(claim_id=first.claim_id, disposition="ok")
+
+        with pytest.raises(ConstructError, match="ambiguous.*port"):
+            construct_from_functions(
+                "bad", [ambiguous], input=VerifyClaim, output=ClaimResult,
+            )
+
+    def test_peer_priority_when_param_name_matches_node_and_type_matches_input(self):
+        """A param that names a peer @node takes priority over port matching,
+        even if its type also matches construct_input."""
+        @node(outputs=VerifyClaim)
+        def upstream() -> VerifyClaim:
+            return VerifyClaim(claim_id="u1", text="from upstream")
+
+        @node(outputs=ClaimResult)
+        def consumer(upstream: VerifyClaim) -> ClaimResult:
+            return ClaimResult(claim_id=upstream.claim_id, disposition="peer")
+
+        # upstream's type matches construct_input, but it's a peer @node name —
+        # should wire as peer dependency, not port param.
+        sub = construct_from_functions(
+            "peer-priority", [upstream, consumer],
+            input=VerifyClaim, output=ClaimResult,
+        )
+        consumer_node = [n for n in sub.nodes if n.name == "consumer"][0]
+        # "upstream" should be a peer dep, NOT rewritten to neo_subgraph_input
+        assert "upstream" in consumer_node.inputs
+        assert "neo_subgraph_input" not in consumer_node.inputs
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # GATHER → PRODUCE INSIDE SUB-CONSTRUCT (neograph-dp5)
 #
