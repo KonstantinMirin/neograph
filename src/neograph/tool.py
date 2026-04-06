@@ -46,12 +46,18 @@ class ToolInteraction(BaseModel, frozen=True):
     """Record of a single tool call during a ReAct loop.
 
     Collected by invoke_with_tools and exposed as a secondary output
-    when the gather/execute node declares it in dict-form outputs.
+    when the agent/act node declares it in dict-form outputs.
+
+    ``result`` is the rendered string form (backward compat — existing code
+    reads this). ``typed_result`` holds the original object returned by the
+    tool (Pydantic model, list, dict, etc.) so downstream nodes receive
+    structured data, not repr strings.
     """
 
     tool_name: str
     args: dict[str, Any] = Field(default_factory=dict)
     result: str = ""
+    typed_result: Any = None
     duration_ms: int = 0
 
 
