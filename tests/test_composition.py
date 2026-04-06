@@ -10,7 +10,7 @@ import pytest
 from pydantic import BaseModel
 
 from neograph import (
-    Construct, ConstructError, Node, Each, Oracle, Operator,
+    Construct, ConstructError, Node, Each, Oracle, Operator, Tool, ToolInteraction,
     compile, construct_from_functions, construct_from_module,
     merge_fn, node, run, tool,
     CompileError, ConfigurationError, ExecutionError,
@@ -1210,6 +1210,79 @@ class TestMixedNodeAndConstruct:
         names = [n.name for n in pipeline.nodes]
         assert names.index("verify") < names.index("consume")
         assert names.index("make") < names.index("verify")
+
+    def test_piarch_pattern_when_node_sub_construct_with_each_in_parent(self):
+        """The piarch consumer pattern: @node functions + sub-construct.map()
+        inside construct_from_functions. Downstream @node consumes the Each
+        result as dict[str, ClaimVerdict].
+
+        This is the EXACT pattern from the neograph-dqe bug report:
+          flatten_claims → verify_claim.map(...) → deterministic_merge
+        all assembled via construct_from_functions.
+        """
+        from neograph import ToolInteraction
+        from neograph.factory import register_tool_factory
+        from tests.fakes import FakeTool, ReActFake, StructuredFakeWithRaw, configure_fake_llm
+
+        # -- Fake LLMs: "research" → ReActFake, "judge" → StructuredFakeWithRaw
+        fake_tool = FakeTool("search", response="found ref")
+        register_tool_factory("search", lambda cfg, tc: fake_tool)
+
+        configure_fake_llm(lambda tier: (
+            ReActFake(
+                tool_calls=[[{"name": "search", "args": {"q": "x"}, "id": "t1"}], []],
+                final=lambda m: m(evidence=["ref1"], summary="ok"),
+            ) if tier == "research" else
+            StructuredFakeWithRaw(
+                lambda m: m(claim_id="scored", disposition="confirmed"),
+            )
+        ))
+
+        # -- Sub-construct: explore→score (gather→produce with tool_log)
+        @node(
+            mode="gather",
+            outputs={"result": ExplorationResult, "tool_log": list[ToolInteraction]},
+            model="research", prompt="v/explore",
+            tools=[Tool("search", budget=3)],
+        )
+        def explore(claim: VerifyClaim) -> ExplorationResult: ...
+
+        @node(mode="produce", outputs=ClaimVerdict, model="judge", prompt="v/score")
+        def score(explore_result: ExplorationResult, explore_tool_log: list[ToolInteraction]) -> ClaimVerdict: ...
+
+        verify_claim = construct_from_functions(
+            "verify-claim", [explore, score],
+            input=VerifyClaim, output=ClaimVerdict,
+        ).map("flatten_claims.claims", key="claim_id")
+
+        # -- Parent @node functions
+        class ClaimBatch(BaseModel, frozen=True):
+            claims: list[VerifyClaim]
+
+        @node(outputs=ClaimBatch)
+        def flatten_claims() -> ClaimBatch:
+            return ClaimBatch(claims=[
+                VerifyClaim(claim_id="c1", text="shall authenticate"),
+                VerifyClaim(claim_id="c2", text="shall encrypt"),
+            ])
+
+        @node(outputs=RawText)
+        def deterministic_merge(verify_claim: dict[str, ClaimVerdict]) -> RawText:
+            verdicts = [f"{k}={v.disposition}" for k, v in sorted(verify_claim.items())]
+            return RawText(text="; ".join(verdicts))
+
+        # -- Assemble parent via construct_from_functions: @node + sub-construct
+        pipeline = construct_from_functions(
+            "rw-ingestion", [flatten_claims, verify_claim, deterministic_merge],
+        )
+        graph = compile(pipeline)
+        result = run(graph, input={"node_id": "piarch-rw"})
+
+        # Sub-construct fanned out over 2 claims, merged by deterministic_merge
+        assert isinstance(result["verify_claim"], dict)
+        assert sorted(result["verify_claim"].keys()) == ["c1", "c2"]
+        assert all(isinstance(v, ClaimVerdict) for v in result["verify_claim"].values())
+        assert result["deterministic_merge"].text == "c1=confirmed; c2=confirmed"
 
 
 # ═══════════════════════════════════════════════════════════════════════════

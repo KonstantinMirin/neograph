@@ -194,26 +194,45 @@ verify_claim = construct_from_functions(
 
 
 # -- Parent pipeline ----------------------------------------------------------
-# seed is declarative (Node.scripted) because the parent mixes it with
-# the sub-Construct. @node + Construct in one Construct() call requires
-# the programmatic form for the non-sub-construct nodes.
+# ALL @node functions + the sub-construct assembled via construct_from_functions.
+# No Construct(nodes=[...]) workaround, no Node.scripted -- pure @node + sub-construct.
 
-register_scripted("seed_claims", lambda _in, _cfg: ClaimBatch(claims=[
-    VerifyClaim(claim_id="REQ-1", text="system shall authenticate users via SSO"),
-    VerifyClaim(claim_id="REQ-2", text="system shall encrypt data at rest"),
-    VerifyClaim(claim_id="REQ-3", text="system shall log all access attempts"),
-]))
+class FinalReport(BaseModel, frozen=True):
+    summary: str
+    claim_count: int
 
-parent = Construct("verification-pipeline", nodes=[
-    Node.scripted("seed", fn="seed_claims", outputs=ClaimBatch),
-    verify_claim.map("seed.claims", key="claim_id"),
-])
+
+@node(outputs=ClaimBatch)
+def flatten_claims() -> ClaimBatch:
+    return ClaimBatch(claims=[
+        VerifyClaim(claim_id="REQ-1", text="system shall authenticate users via SSO"),
+        VerifyClaim(claim_id="REQ-2", text="system shall encrypt data at rest"),
+        VerifyClaim(claim_id="REQ-3", text="system shall log all access attempts"),
+    ])
+
+
+@node(outputs=FinalReport)
+def deterministic_merge(verify_claim: dict[str, ClaimVerdict]) -> FinalReport:
+    """Consume the Each-fanned-out sub-construct results as dict[str, ClaimVerdict]."""
+    verdicts = [f"{k}: {v.disposition}" for k, v in sorted(verify_claim.items())]
+    return FinalReport(
+        summary="\n".join(verdicts),
+        claim_count=len(verify_claim),
+    )
+
+
+# construct_from_functions: @node functions + sub-construct.map() in one call.
+# flatten_claims → verify_claim.map(Each fan-out) → deterministic_merge
+pipeline = construct_from_functions(
+    "verification-pipeline",
+    [flatten_claims, verify_claim.map("flatten_claims.claims", key="claim_id"), deterministic_merge],
+)
 
 
 # -- Run ----------------------------------------------------------------------
 
 if __name__ == "__main__":
-    graph = compile(parent)
+    graph = compile(pipeline)
     result = run(graph, input={"node_id": "VERIFY-001"})
 
     verdicts = result["verify_claim"]
@@ -221,5 +240,8 @@ if __name__ == "__main__":
     for claim_id, verdict in sorted(verdicts.items()):
         print(f"  {claim_id}: {verdict.disposition}")
         print(f"    reasoning: {verdict.reasoning}")
-    print(f"\nResult keys: {sorted(result.keys())}")
-    print("Note: explore/score internals are NOT in the result -- only verify_claim")
+
+    print(f"\n{result['deterministic_merge'].summary}")
+    print(f"\nTotal claims: {result['deterministic_merge'].claim_count}")
+    print(f"Result keys: {sorted(result.keys())}")
+    print("Note: explore/score internals are NOT in the result")
