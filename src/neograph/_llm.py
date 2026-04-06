@@ -32,6 +32,14 @@ _llm_factory_params: set[str] = set()
 _prompt_compiler: Callable[[str, Any], list] | None = None
 _prompt_compiler_params: set[str] = set()
 
+# Consumer-provided renderer (set via configure_llm(renderer=...))
+_global_renderer: Any = None
+
+
+def _get_global_renderer() -> Any:
+    """Return the globally configured renderer, or None."""
+    return _global_renderer
+
 
 _ACCEPT_ALL = frozenset({"__all__"})  # sentinel for **kwargs functions
 
@@ -55,6 +63,8 @@ def _accepted_params(fn: Callable) -> set[str]:
 def configure_llm(
     llm_factory: Callable,
     prompt_compiler: Callable,
+    *,
+    renderer: Any = None,
 ) -> None:
     """Configure NeoGraph's LLM layer.
 
@@ -68,6 +78,9 @@ def configure_llm(
             Advanced: (template, input_data, node_name=, config=) → list[BaseMessage]
             The config contains everything from run()'s input + config["configurable"],
             so the compiler can access node_id, project_root, shared resources, etc.
+
+        renderer: Global renderer for input data. Lowest priority in the
+            dispatch hierarchy (model method > node.renderer > global).
 
     Usage:
         # Simple
@@ -95,11 +108,12 @@ def configure_llm(
 
         configure_llm(llm_factory=my_factory, prompt_compiler=my_compiler)
     """
-    global _llm_factory, _prompt_compiler, _llm_factory_params, _prompt_compiler_params  # noqa: PLW0603
+    global _llm_factory, _prompt_compiler, _llm_factory_params, _prompt_compiler_params, _global_renderer  # noqa: PLW0603
     _llm_factory = llm_factory
     _llm_factory_params = _accepted_params(llm_factory)
     _prompt_compiler = prompt_compiler
     _prompt_compiler_params = _accepted_params(prompt_compiler)
+    _global_renderer = renderer
 
 
 def _get_llm(tier: str, node_name: str = "", llm_config: dict | None = None) -> Any:
@@ -122,12 +136,14 @@ def _compile_prompt(
     config: dict | None = None,
     output_model: type[BaseModel] | None = None,
     llm_config: dict | None = None,
+    output_schema: str | None = None,
 ) -> list:
     all_kwargs = {
         "node_name": node_name,
         "config": config,
         "output_model": output_model,
         "llm_config": llm_config,
+        "output_schema": output_schema,
     }
     # Only pass kwargs the compiler accepts — inspected at configure_llm() time
     if _prompt_compiler_params is _ACCEPT_ALL:
@@ -220,11 +236,18 @@ def invoke_structured(
     strategy = llm_config.get("output_strategy", "structured")
     llm_log = log.bind(tier=model_tier, prompt=prompt_template, output=output_model.__name__, strategy=strategy)
 
+    output_schema = None
+    if strategy == "json_mode":
+        from neograph.describe_type import describe_type
+
+        output_schema = describe_type(output_model)
+
     llm = _get_llm(model_tier, node_name=node_name, llm_config=llm_config)
     messages = _compile_prompt(
         prompt_template, input_data,
         node_name=node_name, config=config,
         output_model=output_model, llm_config=llm_config,
+        output_schema=output_schema,
     )
 
     t0 = time.monotonic()
@@ -396,3 +419,69 @@ def invoke_with_tools(
         **usage_info,
     )
     return parse_result
+
+
+def render_prompt(
+    node: Any,
+    input_data: Any,
+    *,
+    config: dict | None = None,
+) -> str:
+    """Render the exact prompt a node would send to the LLM, without calling it.
+
+    Applies the renderer dispatch hierarchy (node.renderer > global > None),
+    compiles via the registered prompt_compiler, and formats messages as a
+    readable string. Useful for prompt engineering and debugging.
+
+    Args:
+        node: A Node instance with prompt, model, and output fields.
+        input_data: The input data (Pydantic model, dict, or primitive).
+        config: Optional RunnableConfig-style dict for the prompt compiler.
+
+    Returns:
+        A human-readable string of the compiled messages.
+    """
+    if _prompt_compiler is None:
+        msg = "Prompt compiler not configured. Call neograph.configure_llm() first."
+        raise ValueError(msg)
+
+    # Apply renderer dispatch: node.renderer > global > None
+    effective_renderer = getattr(node, "renderer", None) or _global_renderer
+    if effective_renderer is not None:
+        from neograph.renderers import render_input
+
+        input_data = render_input(input_data, renderer=effective_renderer)
+
+    # Generate output_schema for json_mode
+    output_schema = None
+    llm_config = getattr(node, "llm_config", None) or {}
+    strategy = llm_config.get("output_strategy", "structured")
+    output_model = getattr(node, "output", None)
+    if strategy == "json_mode" and output_model is not None:
+        from neograph.describe_type import describe_type
+
+        output_schema = describe_type(output_model)
+
+    messages = _compile_prompt(
+        getattr(node, "prompt", "") or "",
+        input_data,
+        node_name=getattr(node, "name", ""),
+        config=config,
+        output_model=output_model,
+        llm_config=llm_config,
+        output_schema=output_schema,
+    )
+
+    # Format messages as a readable string (supports both LangChain message
+    # objects and plain dicts from simple prompt_compilers).
+    parts: list[str] = []
+    for msg in messages:
+        if isinstance(msg, dict):
+            role = msg.get("role", "unknown")
+            content = msg.get("content", str(msg))
+        else:
+            role = getattr(msg, "type", "unknown")
+            content = getattr(msg, "content", str(msg))
+        parts.append(f"[{role}]\n{content}")
+
+    return "\n\n".join(parts)

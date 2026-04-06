@@ -18,7 +18,7 @@ For advanced use (IR-level tests, programmatic construction from config,
 sub-constructs), see Node and Construct directly.
 """
 
-from neograph._llm import configure_llm
+from neograph._llm import configure_llm, render_prompt
 from neograph.describe_type import describe_type
 from neograph.compiler import compile
 from neograph.construct import Construct, ConstructError
@@ -34,6 +34,12 @@ from neograph.forward import ForwardConstruct
 from neograph.factory import register_condition, register_scripted, register_tool_factory
 from neograph.modifiers import Operator, Oracle, Each
 from neograph.node import Node
+from neograph.renderers import (
+    DelimitedRenderer,
+    JsonRenderer,
+    Renderer,
+    XmlRenderer,
+)
 from neograph.runner import run
 from neograph.tool import Tool, tool
 
@@ -62,6 +68,13 @@ __all__ = [
     "configure_llm",
     # Schema rendering
     "describe_type",
+    # Prompt inspection
+    "render_prompt",
+    # Renderers
+    "Renderer",
+    "XmlRenderer",
+    "DelimitedRenderer",
+    "JsonRenderer",
     "register_scripted",
     "register_condition",
     "register_tool_factory",

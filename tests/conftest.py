@@ -15,4 +15,5 @@ def _clean_registries():
     _llm._llm_factory_params = set()
     _llm._prompt_compiler = None
     _llm._prompt_compiler_params = set()
+    _llm._global_renderer = None
     yield

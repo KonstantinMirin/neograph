@@ -67,6 +67,11 @@ class Node(Modifiable, BaseModel):
     # validator to skip upstream-name validation for this key.
     fan_out_param: str | None = None
 
+    # Pluggable prompt-input renderer. When set, the factory layer renders
+    # input data through this renderer before prompt insertion. Dispatch
+    # hierarchy: model.render_for_prompt() > node.renderer > global > None.
+    renderer: Any = None
+
     # Modifiers applied via | operator
     modifiers: list[Modifier] = []
 

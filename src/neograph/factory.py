@@ -188,6 +188,17 @@ def _make_produce_fn(node: Node) -> Callable:
 
         t0 = time.monotonic()
         input_data = _extract_input(state, node)
+
+        # Apply renderer dispatch chain (neograph-ni6)
+        from neograph.renderers import render_input
+        try:
+            from neograph._llm import _get_global_renderer
+            effective_renderer = node.renderer or _get_global_renderer()
+        except ImportError:
+            effective_renderer = node.renderer
+        if effective_renderer is not None:
+            input_data = render_input(input_data, renderer=effective_renderer)
+
         result = invoke_structured(
             model_tier=node.model,
             prompt_template=node.prompt,
@@ -225,6 +236,17 @@ def _make_tool_fn(node: Node) -> Callable:
 
         t0 = time.monotonic()
         input_data = _extract_input(state, node)
+
+        # Apply renderer dispatch chain (neograph-ni6)
+        from neograph.renderers import render_input
+        try:
+            from neograph._llm import _get_global_renderer
+            effective_renderer = node.renderer or _get_global_renderer()
+        except ImportError:
+            effective_renderer = node.renderer
+        if effective_renderer is not None:
+            input_data = render_input(input_data, renderer=effective_renderer)
+
         budget_tracker = ToolBudgetTracker(node.tools)
 
         result = invoke_with_tools(

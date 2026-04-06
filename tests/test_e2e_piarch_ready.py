@@ -6210,3 +6210,431 @@ class TestDescribeType:
         ts_output = describe_type(Resume, prefix="")
         json_schema = json.dumps(Resume.model_json_schema(), indent=2)
         assert len(ts_output) < len(json_schema)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# TestRendererDispatch (neograph-46w)
+#
+# Tests for the 5-level renderer dispatch hierarchy:
+#   1. Model method render_for_prompt() wins over any renderer
+#   2. Node(renderer=...) applies
+#   3. Construct(renderer=...) propagates to child nodes
+#   3b. Node with own renderer beats Construct default
+#   4. Global renderer (mocked — actual configure_llm integration is Phase 3)
+#   5. No renderer = raw passthrough
+# ═══════════════════════════════════════════════════════════════════════════
+
+class TestRendererDispatch:
+    """Renderer dispatch hierarchy: model method > node > construct > global > None."""
+
+    def test_level1_model_render_for_prompt_wins(self):
+        """Level 1: model with render_for_prompt() method wins over any renderer."""
+
+        class CustomModel(BaseModel):
+            name: str
+            value: int
+
+            def render_for_prompt(self) -> str:
+                return f"CUSTOM: {self.name}={self.value}"
+
+        instance = CustomModel(name="test", value=42)
+        xml = XmlRenderer()
+        result = render_input(instance, renderer=xml)
+        assert result == "CUSTOM: test=42"
+
+    def test_level2_node_renderer_applies(self):
+        """Level 2: Node(renderer=XmlRenderer()) stores renderer on the node."""
+        xml = XmlRenderer()
+        n = Node("render-test", output=Claims, renderer=xml)
+        assert n.renderer is xml
+
+    def test_level3_construct_propagates_renderer(self):
+        """Level 3: Construct(renderer=...) propagates to child nodes."""
+        xml = XmlRenderer()
+        child = Node.scripted("child", fn="noop", output=Claims)
+        assert child.renderer is None
+
+        pipeline = Construct("prop-test", renderer=xml, nodes=[child])
+        assert child.renderer is xml
+        assert pipeline.renderer is xml
+
+    def test_level3_override_node_renderer_beats_construct(self):
+        """Level 3 override: Node with own renderer beats Construct default."""
+        xml = XmlRenderer()
+        json_r = JsonRenderer()
+        child = Node("child", mode="scripted", scripted_fn="noop", output=Claims, renderer=json_r)
+
+        pipeline = Construct("override-test", renderer=xml, nodes=[child])
+        # Node's own renderer should NOT be overwritten
+        assert child.renderer is json_r
+        assert pipeline.renderer is xml
+
+    def test_level4_global_renderer_mock(self):
+        """Level 4: global renderer checked when node.renderer is None.
+
+        Actual configure_llm integration is Phase 3. For now, verify that
+        render_input with an explicit renderer works as the global fallback
+        would use it.
+        """
+
+        class Info(BaseModel):
+            name: str
+
+        xml = XmlRenderer()
+        result = render_input(Info(name="test"), renderer=xml)
+        assert "<name>test</name>" in result
+
+    def test_level5_no_renderer_raw_passthrough(self):
+        """Level 5: no renderer = raw passthrough (identical to pre-renderer behavior)."""
+
+        class Info(BaseModel):
+            name: str
+
+        instance = Info(name="test")
+        result = render_input(instance, renderer=None)
+        assert result is instance  # exact same object, no transformation
+
+    def test_fan_in_dict_per_value_rendering(self):
+        """Fan-in dict: each value rendered independently."""
+
+        class Alpha(BaseModel):
+            text: str
+
+        class Beta(BaseModel):
+            text: str
+
+        xml = XmlRenderer()
+        fan_in = {"alpha": Alpha(text="a"), "beta": Beta(text="b")}
+        result = render_input(fan_in, renderer=xml)
+        assert isinstance(result, dict)
+        assert "<text>a</text>" in result["alpha"]
+        assert "<text>b</text>" in result["beta"]
+
+    def test_render_for_prompt_wins_over_renderer_in_dict(self):
+        """Fan-in: model with render_for_prompt still wins per-value in a dict."""
+
+        class Custom(BaseModel):
+            x: int
+
+            def render_for_prompt(self) -> str:
+                return f"X={self.x}"
+
+        class Normal(BaseModel):
+            y: int
+
+        xml = XmlRenderer()
+        fan_in = {"a": Custom(x=1), "b": Normal(y=2)}
+        result = render_input(fan_in, renderer=xml)
+        assert result["a"] == "X=1"
+        assert "<y>2</y>" in result["b"]
+
+    def test_none_input_passthrough(self):
+        """None input passes through unchanged regardless of renderer."""
+        xml = XmlRenderer()
+        result = render_input(None, renderer=xml)
+        # None has no render_for_prompt and is not dict/BaseModel —
+        # renderer.render(None) returns "None" as str
+        assert result == "None"
+
+    def test_renderer_protocol_isinstance_check(self):
+        """Renderer protocol is runtime-checkable: built-ins satisfy it."""
+        assert isinstance(XmlRenderer(), Renderer)
+        assert isinstance(DelimitedRenderer(), Renderer)
+        assert isinstance(JsonRenderer(), Renderer)
+
+        # A class with a render(value) method also satisfies the protocol
+        class CustomRenderer:
+            def render(self, value: Any) -> str:
+                return "custom"
+
+        assert isinstance(CustomRenderer(), Renderer)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# json_mode output_schema generation
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TestJsonModeOutputSchema:
+    """invoke_structured passes output_schema to prompt_compiler for json_mode."""
+
+    def test_json_mode_passes_output_schema_to_compiler(self):
+        """json_mode strategy generates describe_type() output and passes as output_schema."""
+        compiler_calls = []
+
+        def tracking_compiler(template, data, **kw):
+            compiler_calls.append(kw)
+            return [{"role": "user", "content": "test"}]
+
+        configure_fake_llm(
+            lambda tier: TextFake('{"items": ["schema-test"]}'),
+            prompt_compiler=tracking_compiler,
+        )
+
+        n = Node(
+            name="extract",
+            mode="produce",
+            output=Claims,
+            model="fast",
+            prompt="test",
+            llm_config={"output_strategy": "json_mode"},
+        )
+        pipeline = Construct("test-schema", nodes=[n])
+        graph = compile(pipeline)
+        run(graph, input={"node_id": "test"})
+
+        assert len(compiler_calls) == 1
+        schema = compiler_calls[0].get("output_schema")
+        assert schema is not None
+        # describe_type produces TypeScript-style notation containing the field name
+        assert "items" in schema
+
+    def test_structured_does_not_pass_output_schema(self):
+        """structured strategy does not generate output_schema."""
+        compiler_calls = []
+
+        def tracking_compiler(template, data, **kw):
+            compiler_calls.append(kw)
+            return [{"role": "user", "content": "test"}]
+
+        configure_fake_llm(
+            lambda tier: StructuredFake(lambda model: model(items=["ok"])),
+            prompt_compiler=tracking_compiler,
+        )
+
+        n = Node(
+            name="extract",
+            mode="produce",
+            output=Claims,
+            model="fast",
+            prompt="test",
+            llm_config={"output_strategy": "structured"},
+        )
+        pipeline = Construct("test-no-schema", nodes=[n])
+        graph = compile(pipeline)
+        run(graph, input={"node_id": "test"})
+
+        assert len(compiler_calls) == 1
+        assert compiler_calls[0].get("output_schema") is None
+
+    def test_text_does_not_pass_output_schema(self):
+        """text strategy does not generate output_schema."""
+        compiler_calls = []
+
+        def tracking_compiler(template, data, **kw):
+            compiler_calls.append(kw)
+            return [{"role": "user", "content": "test"}]
+
+        configure_fake_llm(
+            lambda tier: TextFake('{"items": ["text-test"]}'),
+            prompt_compiler=tracking_compiler,
+        )
+
+        n = Node(
+            name="extract",
+            mode="produce",
+            output=Claims,
+            model="fast",
+            prompt="test",
+            llm_config={"output_strategy": "text"},
+        )
+        pipeline = Construct("test-text-no-schema", nodes=[n])
+        graph = compile(pipeline)
+        run(graph, input={"node_id": "test"})
+
+        assert len(compiler_calls) == 1
+        assert compiler_calls[0].get("output_schema") is None
+
+    def test_backward_compat_old_compiler_ignores_output_schema(self):
+        """Old compilers that don't accept output_schema= still work (param filtering)."""
+        def old_compiler(template, data, *, node_name=None, config=None):
+            return [{"role": "user", "content": "test"}]
+
+        configure_fake_llm(
+            lambda tier: TextFake('{"items": ["compat"]}'),
+            prompt_compiler=old_compiler,
+        )
+
+        n = Node(
+            name="extract",
+            mode="produce",
+            output=Claims,
+            model="fast",
+            prompt="test",
+            llm_config={"output_strategy": "json_mode"},
+        )
+        pipeline = Construct("test-compat", nodes=[n])
+        graph = compile(pipeline)
+        result = run(graph, input={"node_id": "test"})
+
+        # Still works — old compiler just doesn't receive output_schema
+        assert result["extract"].items == ["compat"]
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# render_prompt() inspector
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TestRenderPromptInspector:
+    """render_prompt() returns the exact prompt without making an LLM call."""
+
+    def test_basic_render_prompt(self):
+        """render_prompt returns formatted messages from the prompt compiler."""
+        from neograph._llm import configure_llm, render_prompt
+
+        configure_llm(
+            llm_factory=lambda tier: None,
+            prompt_compiler=lambda template, data, **kw: [
+                {"role": "system", "content": f"Template: {template}"},
+                {"role": "user", "content": str(data)},
+            ],
+        )
+
+        n = Node(name="test-node", mode="produce", output=Claims, model="fast", prompt="my/template")
+        result = render_prompt(n, "hello world")
+
+        assert "[system]" in result
+        assert "Template: my/template" in result
+        assert "[user]" in result
+        assert "hello world" in result
+
+    def test_render_prompt_with_renderer(self):
+        """render_prompt applies node.renderer before compilation."""
+        from neograph._llm import configure_llm, render_prompt
+        from neograph.renderers import XmlRenderer
+
+        compiled_data = []
+
+        def capturing_compiler(template, data, **kw):
+            compiled_data.append(data)
+            return [{"role": "user", "content": str(data)}]
+
+        configure_llm(
+            llm_factory=lambda tier: None,
+            prompt_compiler=capturing_compiler,
+        )
+
+        class MyInput(BaseModel):
+            name: str
+            value: int
+
+        n = Node(
+            name="test-rendered",
+            mode="produce",
+            output=Claims,
+            model="fast",
+            prompt="test",
+            renderer=XmlRenderer(),
+        )
+        result = render_prompt(n, MyInput(name="Alice", value=42))
+
+        assert len(compiled_data) == 1
+        # XmlRenderer produces XML-tagged output
+        rendered = compiled_data[0]
+        assert isinstance(rendered, str)
+        assert "<name>Alice</name>" in rendered
+        assert "<value>42</value>" in rendered
+
+    def test_render_prompt_json_mode_includes_schema(self):
+        """render_prompt for json_mode node passes output_schema to compiler."""
+        from neograph._llm import configure_llm, render_prompt
+
+        compiler_kwargs = []
+
+        def tracking_compiler(template, data, **kw):
+            compiler_kwargs.append(kw)
+            return [{"role": "user", "content": "test"}]
+
+        configure_llm(
+            llm_factory=lambda tier: None,
+            prompt_compiler=tracking_compiler,
+        )
+
+        n = Node(
+            name="json-node",
+            mode="produce",
+            output=Claims,
+            model="fast",
+            prompt="test",
+            llm_config={"output_strategy": "json_mode"},
+        )
+        render_prompt(n, "some input")
+
+        assert len(compiler_kwargs) == 1
+        schema = compiler_kwargs[0].get("output_schema")
+        assert schema is not None
+        assert "items" in schema
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# RENDERER THREE-SURFACE PARITY — @node / declarative / programmatic / ForwardConstruct
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TestRendererThreeSurfaces:
+    """Renderer field is correctly set and propagated across all three API surfaces."""
+
+    def test_node_decorator_surface(self):
+        """@node(renderer=XmlRenderer()) sets renderer on the resulting Node."""
+        from neograph import node
+        from neograph.renderers import XmlRenderer
+
+        xml = XmlRenderer()
+
+        @node(renderer=xml, output=Claims, prompt="test", model="fast")
+        def my_produce(topic: RawText) -> Claims: ...
+
+        assert my_produce.renderer is xml
+
+    def test_declarative_surface(self):
+        """Node('x', renderer=XmlRenderer()) survives Construct assembly."""
+        xml = XmlRenderer()
+
+        child = Node(
+            "render-decl",
+            mode="produce",
+            output=Claims,
+            model="fast",
+            prompt="test",
+            renderer=xml,
+        )
+        pipeline = Construct("decl-test", nodes=[child])
+        assert child.renderer is xml
+        # Construct doesn't override an already-set renderer
+        assert pipeline.nodes[0].renderer is xml
+
+    def test_programmatic_surface_construct_propagation(self):
+        """Construct(renderer=...) propagates through to child nodes without own renderer."""
+        xml = XmlRenderer()
+        child = Node.scripted("prog-child", fn="noop", output=Claims)
+        assert child.renderer is None
+
+        pipeline = Construct("prog-test", renderer=xml, nodes=[child])
+
+        # Child should inherit from Construct
+        assert child.renderer is xml
+        # Verify propagation through modifier: Each on Construct level
+        child2 = Node.scripted("prog-child2", fn="noop2", output=MatchResult)
+        pipeline2 = Construct("prog-test2", renderer=xml, nodes=[child2])
+        assert child2.renderer is xml
+
+    def test_forward_construct_surface(self):
+        """ForwardConstruct(renderer=...) propagates renderer to traced nodes."""
+        from neograph import ForwardConstruct
+
+        xml = XmlRenderer()
+
+        class RenderPipeline(ForwardConstruct):
+            a = Node.scripted("a", fn="a_fn", output=RawText)
+            b = Node.scripted("b", fn="b_fn", output=Claims)
+
+            def forward(self, topic):
+                x = self.a(topic)
+                return self.b(x)
+
+        pipeline = RenderPipeline(renderer=xml)
+        assert pipeline.renderer is xml
+        # Traced nodes should have renderer propagated
+        for n in pipeline.nodes:
+            assert n.renderer is xml

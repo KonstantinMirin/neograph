@@ -362,6 +362,7 @@ def node(
     merge_fn: str | None = None,
     merge_prompt: str | None = None,
     interrupt_when: str | Callable | None = None,
+    renderer: Any = None,
 ) -> Any:
     """Decorator that turns a function into a Node spec with signature-inferred
     dependencies. Supports both `@node` and `@node(...)` call forms.
@@ -588,6 +589,7 @@ def node(
             llm_config=llm_config or {},
             tools=tools or [],
             raw_fn=f if effective_mode == "raw" else None,
+            renderer=renderer,
         )
 
         # -- Fan-out via Each when map_over is set ---------------------------

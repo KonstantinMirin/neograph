@@ -70,6 +70,11 @@ class Construct(Modifiable, BaseModel):
     # every produce node.
     llm_config: dict[str, Any] = Field(default_factory=dict)
 
+    # Default renderer for all child nodes. Propagated to children that don't
+    # have their own renderer set. Dispatch hierarchy:
+    # model.render_for_prompt() > node.renderer > construct.renderer > global > None.
+    renderer: Any = None
+
     # Modifiers applied via | operator
     modifiers: list[Modifier] = Field(default_factory=list)
 
@@ -93,6 +98,14 @@ class Construct(Modifiable, BaseModel):
                     except (TypeError, ValueError):
                         # Frozen model — skip. Sub-constructs inherit via
                         # their own __init__ merging.
+                        pass
+        # Propagate renderer to child nodes that don't have their own.
+        if self.renderer is not None:
+            for item in self.nodes:
+                if hasattr(item, "renderer") and getattr(item, "renderer", None) is None:
+                    try:
+                        item.renderer = self.renderer
+                    except (TypeError, ValueError):
                         pass
         # Validate after pydantic finishes so ConstructError escapes cleanly
         # rather than being wrapped in a pydantic ValidationError. Nested
