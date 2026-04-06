@@ -181,9 +181,17 @@ def _check_fan_in_inputs(
       3. Check compatibility via ``_types_compatible``. Mismatch →
          ConstructError.
     """
-    # fan_out_param marks the Each fan-out receiver — it comes from
-    # state["neo_each_item"], not from an upstream producer. Skip it.
+    # Determine which keys are fan-out receivers (not upstream producers).
+    # Two sources:
+    #   1. fan_out_param set by @node decoration (via _build_construct_from_decorated)
+    #   2. Each modifier present + key not in producers (programmatic API)
+    # Both must be handled so the programmatic `Node(inputs=...) | Each(...)`
+    # path works without requiring fan_out_param to be set (neograph-ts7).
     fan_out_key = getattr(item, "fan_out_param", None)
+    has_each = False
+    get_mod = getattr(item, "has_modifier", None)
+    if get_mod is not None:
+        has_each = get_mod(Each)
     producer_by_name: dict[str, tuple[Any, str]] = {
         field_name: (producer_type, label)
         for field_name, producer_type, label in producers
@@ -192,6 +200,11 @@ def _check_fan_in_inputs(
         if upstream_name == fan_out_key:
             continue
         if upstream_name not in producer_by_name:
+            # If the node has an Each modifier, an unmatched key is the
+            # fan-out item receiver — skip it rather than rejecting.
+            # This handles the programmatic API where fan_out_param isn't set.
+            if has_each:
+                continue
             msg = (
                 f"Node '{item.name}' in construct '{construct.name}' "
                 f"declares inputs['{upstream_name}']={_fmt_type(expected_type)} "

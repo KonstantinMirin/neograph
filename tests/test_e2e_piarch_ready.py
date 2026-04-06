@@ -5088,6 +5088,40 @@ class TestFanInValidation:
         assert "Claims" in msg
         assert "RawText" in msg
 
+    def test_programmatic_each_with_dict_inputs_fan_out_key(self):
+        """Programmatic Node(inputs={...}) | Each(...) must NOT reject the
+        fan-out key as an unknown upstream (neograph-ts7).
+
+        The fan-out receiver key doesn't name an upstream producer — it
+        receives neo_each_item at runtime. The validator must infer this
+        from the Each modifier + the fact that the key doesn't match any
+        producer, rather than relying on fan_out_param (which is only
+        set by the @node decorator path)."""
+        make = _producer("make", Clusters)
+        canonicalize = Node.scripted(
+            "canonicalize", fn="f",
+            inputs={"group": ClusterGroup},
+            output=MatchResult,
+        ) | Each(over="make.groups", key="label")
+        # This must NOT raise ConstructError for the "group" key.
+        pipeline = Construct("ts7", nodes=[make, canonicalize])
+        assert len(pipeline.nodes) == 2
+        each = pipeline.nodes[1].get_modifier(Each)
+        assert each is not None
+
+    def test_programmatic_each_with_mixed_upstream_and_fan_out(self):
+        """Programmatic fan-in + fan-out: upstream keys validate, fan-out
+        key is skipped (neograph-ts7)."""
+        a = _producer("a", RawText)
+        make = _producer("make", Clusters)
+        process = Node.scripted(
+            "process", fn="f",
+            inputs={"a": RawText, "group": ClusterGroup},
+            output=MatchResult,
+        ) | Each(over="make.groups", key="label")
+        pipeline = Construct("ts7-mixed", nodes=[a, make, process])
+        assert len(pipeline.nodes) == 3
+
     def test_empty_dict_inputs_assembles_cleanly(self):
         """inputs={} (empty dict) is treated as 'no upstream needed' —
         _check_fan_in_inputs iterates zero times and returns without error.
