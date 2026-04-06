@@ -5733,3 +5733,480 @@ class TestNodeInputsEpicAcceptance:
         graph = compile(pipeline)
         result = run(graph, input={"node_id": "l7"})
         assert result["merger"].final_text == "a1-b1"
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# RENDERERS — XmlRenderer, DelimitedRenderer, JsonRenderer
+# ═══════════════════════════════════════════════════════════════════════════
+
+from pydantic import Field as PydanticField
+
+from neograph.renderers import (
+    DelimitedRenderer,
+    JsonRenderer,
+    Renderer,
+    XmlRenderer,
+    render_input,
+)
+
+
+class TestXmlRenderer:
+    """XmlRenderer: Pydantic AI format_as_xml style."""
+
+    def test_flat_model(self):
+        """Flat model fields become XML elements."""
+
+        class Info(BaseModel):
+            name: str
+            age: int
+
+        r = XmlRenderer()
+        result = r.render(Info(name="Alice", age=30))
+        assert "<name>Alice</name>" in result
+        assert "<age>30</age>" in result
+
+    def test_nested_model(self):
+        """Nested BaseModel becomes nested XML."""
+
+        class Address(BaseModel):
+            city: str
+
+        class Person(BaseModel):
+            name: str
+            address: Address
+
+        r = XmlRenderer()
+        result = r.render(Person(name="Bob", address=Address(city="NYC")))
+        assert "<address>" in result
+        assert "<city>NYC</city>" in result
+        assert "</address>" in result
+
+    def test_list_field(self):
+        """List fields produce repeated <item> elements."""
+
+        class Tags(BaseModel):
+            values: list[str]
+
+        r = XmlRenderer()
+        result = r.render(Tags(values=["a", "b", "c"]))
+        assert result.count("<item>") == 3
+        assert "<item>a</item>" in result
+        assert "<item>b</item>" in result
+        assert "<item>c</item>" in result
+
+    def test_include_field_info_once(self):
+        """include_field_info='once' emits description attribute on first occurrence only."""
+
+        class Doc(BaseModel):
+            title: str = PydanticField(description="The document title")
+            title2: str = PydanticField(description="Another title")
+
+        r = XmlRenderer(include_field_info="once")
+        result = r.render(Doc(title="Hello", title2="World"))
+        assert 'description="The document title"' in result
+        assert 'description="Another title"' in result
+
+    def test_include_field_info_always(self):
+        """include_field_info='always' emits description every time."""
+
+        class Repeated(BaseModel):
+            name: str = PydanticField(description="A name")
+
+        r = XmlRenderer(include_field_info="always")
+        result = r.render(Repeated(name="x"))
+        assert 'description="A name"' in result
+
+    def test_include_field_info_never(self):
+        """include_field_info='never' suppresses descriptions."""
+
+        class Described(BaseModel):
+            name: str = PydanticField(description="Should not appear")
+
+        r = XmlRenderer(include_field_info="never")
+        result = r.render(Described(name="x"))
+        assert "description=" not in result
+
+    def test_prose_no_escaping(self):
+        r"""Multi-line prose is NOT JSON-escaped (no literal backslash-n)."""
+
+        class Article(BaseModel):
+            body: str
+
+        prose = "Line one.\nLine two.\nLine three."
+        r = XmlRenderer()
+        result = r.render(Article(body=prose))
+        # The literal text \n should NOT appear — real newlines should
+        assert "\\n" not in result
+        assert "Line one.\nLine two.\nLine three." in result
+
+
+class TestDelimitedRenderer:
+    """DelimitedRenderer: DSPy-style [[ ## field ## ]] headers."""
+
+    def test_flat_model(self):
+        """Flat model fields get delimited headers."""
+
+        class Info(BaseModel):
+            name: str
+            age: int
+
+        r = DelimitedRenderer()
+        result = r.render(Info(name="Alice", age=30))
+        assert "[[ ## name ## ]]" in result
+        assert "Alice" in result
+        assert "[[ ## age ## ]]" in result
+        assert "30" in result
+
+    def test_nested_model(self):
+        """Nested models use dotted header prefixes."""
+
+        class Address(BaseModel):
+            city: str
+
+        class Person(BaseModel):
+            name: str
+            address: Address
+
+        r = DelimitedRenderer()
+        result = r.render(Person(name="Bob", address=Address(city="NYC")))
+        assert "[[ ## name ## ]]" in result
+        assert "[[ ## address.city ## ]]" in result
+
+    def test_list_field(self):
+        """Lists use bullet-point format."""
+
+        class Tags(BaseModel):
+            values: list[str]
+
+        r = DelimitedRenderer()
+        result = r.render(Tags(values=["a", "b"]))
+        assert "[[ ## values ## ]]" in result
+        assert "- a" in result
+        assert "- b" in result
+
+
+class TestJsonRenderer:
+    """JsonRenderer: explicit opt-in backward compat."""
+
+    def test_model_dump_json(self):
+        """BaseModel rendered via model_dump_json."""
+
+        class Info(BaseModel):
+            name: str
+            age: int
+
+        r = JsonRenderer()
+        result = r.render(Info(name="Alice", age=30))
+        import json as _json
+
+        parsed = _json.loads(result)
+        assert parsed == {"name": "Alice", "age": 30}
+
+    def test_custom_indent(self):
+        """Custom indent parameter is respected."""
+
+        class Info(BaseModel):
+            name: str
+
+        r = JsonRenderer(indent=4)
+        result = r.render(Info(name="X"))
+        # indent=4 produces 4-space indentation
+        assert "    " in result
+
+
+class TestRenderInput:
+    """render_input() dispatch helper."""
+
+    def test_none_renderer_passthrough(self):
+        """When renderer is None, raw value returned unchanged."""
+
+        class Info(BaseModel):
+            name: str
+
+        obj = Info(name="raw")
+        result = render_input(obj, renderer=None)
+        assert result is obj
+
+    def test_dict_fan_in_renders_each_value(self):
+        """Dict input (fan-in) renders each value independently."""
+
+        class A(BaseModel):
+            x: str
+
+        class B(BaseModel):
+            y: str
+
+        r = XmlRenderer()
+        result = render_input({"a": A(x="hello"), "b": B(y="world")}, renderer=r)
+        assert isinstance(result, dict)
+        assert "<x>hello</x>" in result["a"]
+        assert "<y>world</y>" in result["b"]
+
+    def test_render_for_prompt_method_wins(self):
+        """Model with render_for_prompt() method takes precedence over renderer."""
+
+        class Custom(BaseModel):
+            name: str
+
+            def render_for_prompt(self) -> str:
+                return f"CUSTOM: {self.name}"
+
+        r = XmlRenderer()
+        result = render_input(Custom(name="test"), renderer=r)
+        assert result == "CUSTOM: test"
+
+    def test_renderer_protocol_check(self):
+        """Any object with render(value) -> str satisfies the Renderer protocol."""
+
+        class MyRenderer:
+            def render(self, value: Any) -> str:
+                return f"RENDERED: {value}"
+
+        assert isinstance(MyRenderer(), Renderer)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# TestDescribeType — TypeScript-style schema emitter
+# ═══════════════════════════════════════════════════════════════════════════
+
+class TestDescribeType:
+    """Tests for describe_type() — two-pass Pydantic model walker that emits
+    TypeScript-style schema notation."""
+
+    def test_primitive_fields(self):
+        """Primitive types map to their TypeScript-style names."""
+        from neograph import describe_type
+
+        class Prims(BaseModel):
+            name: str
+            age: int
+            score: float
+            active: bool
+
+        result = describe_type(Prims, prefix="")
+        assert "name: string" in result
+        assert "age: int" in result
+        assert "score: float" in result
+        assert "active: bool" in result
+
+    def test_list_field(self):
+        """list[X] renders as [X]."""
+        from neograph import describe_type
+
+        class WithList(BaseModel):
+            tags: list[str]
+
+        result = describe_type(WithList, prefix="")
+        assert "tags: [string]" in result
+
+    def test_dict_field(self):
+        """dict[K, V] renders as object<K, V>."""
+        from neograph import describe_type
+
+        class WithDict(BaseModel):
+            metadata: dict[str, int]
+
+        result = describe_type(WithDict, prefix="")
+        assert "metadata: object<string, int>" in result
+
+    def test_optional_field(self):
+        """Optional fields (with default None) get ' or null' suffix."""
+        from typing import Optional
+        from neograph import describe_type
+
+        class WithOptional(BaseModel):
+            name: str
+            nickname: Optional[str] = None
+
+        result = describe_type(WithOptional, prefix="")
+        assert "nickname: string or null" in result
+        # name should NOT have 'or null'
+        lines = [l.strip() for l in result.splitlines()]
+        name_line = [l for l in lines if l.startswith("name:")][0]
+        assert "null" not in name_line
+
+    def test_union_field(self):
+        """Union[A, B] renders with or_splitter."""
+        from typing import Union
+        from neograph import describe_type
+
+        class WithUnion(BaseModel):
+            value: Union[str, int]
+
+        result = describe_type(WithUnion, prefix="", or_splitter=" or ")
+        assert "value: string or int" in result
+
+    def test_literal_field(self):
+        """Literal types render as quoted strings joined by or_splitter."""
+        from typing import Literal
+        from neograph import describe_type
+
+        class WithLiteral(BaseModel):
+            status: Literal["active", "inactive", "pending"]
+
+        result = describe_type(WithLiteral, prefix="")
+        assert '"active" or "inactive" or "pending"' in result
+
+    def test_nested_model_inline(self):
+        """Nested BaseModel renders inline when it appears once."""
+        from neograph import describe_type
+
+        class Inner(BaseModel):
+            value: int
+
+        class Outer(BaseModel):
+            child: Inner
+
+        result = describe_type(Outer, prefix="")
+        # Inner appears only once, so it should be inlined, not hoisted
+        assert "type Inner" not in result
+        assert "child:" in result
+        assert "value: int" in result
+
+    def test_field_description_comment(self):
+        """Field(description=...) renders as an inline // comment."""
+        from pydantic import Field
+        from neograph import describe_type
+
+        class Documented(BaseModel):
+            name: str = Field(description="the person name")
+            age: int = Field(description="years old")
+
+        result = describe_type(Documented, prefix="")
+        assert "// the person name" in result
+        assert "// years old" in result
+
+    def test_hoist_auto_repeated_class(self):
+        """hoist_classes='auto' hoists classes that appear 2+ times."""
+        from neograph import describe_type
+
+        class Shared(BaseModel):
+            x: int
+
+        class Root(BaseModel):
+            a: Shared
+            b: Shared
+
+        result = describe_type(Root, prefix="")
+        assert "type Shared = {" in result
+        # Both fields should reference Shared by name, not inline it
+        lines = result.splitlines()
+        body_lines = [l.strip() for l in lines if l.strip().startswith(("a:", "b:"))]
+        for line in body_lines:
+            assert "Shared" in line
+
+    def test_hoist_all(self):
+        """hoist_classes='all' hoists every nested BaseModel."""
+        from neograph import describe_type
+
+        class Once(BaseModel):
+            v: str
+
+        class Container(BaseModel):
+            only: Once
+
+        result = describe_type(Container, prefix="", hoist_classes="all")
+        assert "type Once = {" in result
+
+    def test_hoist_explicit_list(self):
+        """hoist_classes=['Foo'] hoists only named classes."""
+        from neograph import describe_type
+
+        class Foo(BaseModel):
+            a: int
+
+        class Bar(BaseModel):
+            b: str
+
+        class Root(BaseModel):
+            f: Foo
+            g: Bar
+
+        result = describe_type(Root, prefix="", hoist_classes=["Foo"])
+        assert "type Foo = {" in result
+        assert "type Bar" not in result
+
+    def test_enum_field(self):
+        """Enum types render as inlined quoted values."""
+        import enum
+        from neograph import describe_type
+
+        class Color(enum.Enum):
+            RED = "red"
+            GREEN = "green"
+            BLUE = "blue"
+
+        class WithEnum(BaseModel):
+            color: Color
+
+        result = describe_type(
+            WithEnum, prefix="", always_hoist_enums=False,
+        )
+        assert '"red"' in result
+        assert '"green"' in result
+
+    def test_enum_always_hoisted(self):
+        """always_hoist_enums=True hoists Enum as 'enum Foo { ... }' declaration."""
+        import enum
+        from neograph import describe_type
+
+        class Status(enum.Enum):
+            ACTIVE = "active"
+            INACTIVE = "inactive"
+
+        class WithStatus(BaseModel):
+            status: Status
+
+        result = describe_type(WithStatus, prefix="", always_hoist_enums=True)
+        assert 'enum Status { "active", "inactive" }' in result
+
+    def test_circular_model(self):
+        """Circular model references don't cause infinite recursion."""
+        from neograph import describe_type
+
+        class TreeNode(BaseModel):
+            name: str
+            children: list["TreeNode"] = []
+
+        TreeNode.model_rebuild()
+
+        result = describe_type(TreeNode, prefix="")
+        assert "name: string" in result
+        # Should terminate without RecursionError
+
+    def test_empty_model(self):
+        """Empty model renders as {}."""
+        from neograph import describe_type
+
+        class Empty(BaseModel):
+            pass
+
+        result = describe_type(Empty, prefix="")
+        assert "{}" in result
+
+    def test_prefix(self):
+        """Custom prefix appears at the start of output."""
+        from neograph import describe_type
+
+        class Simple(BaseModel):
+            x: int
+
+        result = describe_type(Simple, prefix="Return JSON:")
+        assert result.startswith("Return JSON:")
+
+    def test_token_reduction_vs_json_schema(self):
+        """describe_type output is significantly shorter than JSON Schema."""
+        import json
+        from neograph import describe_type
+
+        class Education(BaseModel):
+            school: str
+            graduation_year: int
+
+        class Resume(BaseModel):
+            name: str
+            education: list[Education]
+
+        ts_output = describe_type(Resume, prefix="")
+        json_schema = json.dumps(Resume.model_json_schema(), indent=2)
+        assert len(ts_output) < len(json_schema)

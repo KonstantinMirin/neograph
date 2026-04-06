@@ -19,6 +19,7 @@ sub-constructs), see Node and Construct directly.
 """
 
 from neograph._llm import configure_llm
+from neograph.describe_type import describe_type
 from neograph.compiler import compile
 from neograph.construct import Construct, ConstructError
 from neograph.decorators import (
@@ -59,6 +60,8 @@ __all__ = [
     "ForwardConstruct",
     # Configuration
     "configure_llm",
+    # Schema rendering
+    "describe_type",
     "register_scripted",
     "register_condition",
     "register_tool_factory",
