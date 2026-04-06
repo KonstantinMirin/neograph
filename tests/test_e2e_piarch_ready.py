@@ -6867,3 +6867,27 @@ class TestDictOutputsFactory:
         graph = compile(pipeline)
         result = run(graph, input={})
         assert result["extract"] == RawText(text="world")
+
+
+class TestDictOutputsValidator:
+    """Validator resolves dict-form outputs as per-key producers (neograph-1bp.4)."""
+
+    def test_downstream_can_reference_dict_output_key(self):
+        """A downstream node can consume a specific output key via inputs dict."""
+        upstream = Node("explore", outputs={"result": RawText, "meta": Claims})
+        downstream = Node("score", inputs={"explore_result": RawText}, outputs=ClassifiedClaims)
+        # Should NOT raise — explore_result matches upstream's 'result' key
+        Construct("p", nodes=[upstream, downstream])
+
+    def test_downstream_unknown_output_key_raises(self):
+        """Referencing a non-existent output key raises ConstructError."""
+        upstream = Node("explore", outputs={"result": RawText})
+        downstream = Node("score", inputs={"explore_bogus": RawText}, outputs=ClassifiedClaims)
+        with pytest.raises(ConstructError):
+            Construct("p", nodes=[upstream, downstream])
+
+    def test_single_type_outputs_still_validates(self):
+        """Single-type outputs still produce {node_name} as upstream name."""
+        upstream = Node("extract", outputs=RawText)
+        downstream = Node("score", inputs={"extract": RawText}, outputs=ClassifiedClaims)
+        Construct("p", nodes=[upstream, downstream])

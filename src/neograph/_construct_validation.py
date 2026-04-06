@@ -99,15 +99,24 @@ def _validate_node_chain(construct: Any) -> None:
         name = getattr(item, "name", None)
         if output_type is not None and name is not None:
             field_name = name.replace("-", "_")
-            label = (
-                f"node '{name}'"
-                if isinstance(item, Node)
-                else f"sub-construct '{name}'"
-            )
-            # Shared helper decides the modifier-adjusted state-bus type.
-            # Never compute this inline here or in the @node walker —
-            # both walkers must stay in sync through this single call.
-            producers.append((field_name, effective_producer_type(item), label))
+
+            # Dict-form outputs (neograph-1bp.4): register one producer per
+            # output key, with modifier wrapping applied independently per key.
+            if isinstance(item, Node) and isinstance(output_type, dict):
+                has_each = item.has_modifier(Each)
+                for output_key, key_type in output_type.items():
+                    key_field = f"{field_name}_{output_key}"
+                    key_label = f"node '{name}' output '{output_key}'"
+                    producer_type = dict[str, key_type] if has_each else key_type
+                    producers.append((key_field, producer_type, key_label))
+            else:
+                label = (
+                    f"node '{name}'"
+                    if isinstance(item, Node)
+                    else f"sub-construct '{name}'"
+                )
+                # Shared helper decides the modifier-adjusted state-bus type.
+                producers.append((field_name, effective_producer_type(item), label))
 
 
 def _check_item_input(
