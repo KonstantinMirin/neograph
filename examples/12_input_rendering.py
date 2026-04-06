@@ -84,7 +84,7 @@ configure_llm(
 analyze = Node(
     "analyze",
     mode="produce",
-    output=Analysis,
+    outputs=Analysis,
     model="fast",
     prompt="analyze",
     renderer=DelimitedRenderer(),  # Level 2: node-level override
@@ -115,7 +115,7 @@ if __name__ == "__main__":
     print()
 
     # Level 3: global renderer (XmlRenderer via configure_llm)
-    plain_node = Node("plain", mode="produce", output=Analysis, model="fast", prompt="p")
+    plain_node = Node("plain", mode="produce", outputs=Analysis, model="fast", prompt="p")
     print("Level 3 (global renderer) via render_prompt inspector:")
     print(render_prompt(plain_node, doc))
     print()

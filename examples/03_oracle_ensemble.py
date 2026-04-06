@@ -65,7 +65,7 @@ register_scripted("merge_claims", merge_claims)
 # ── Build pipeline ───────────────────────────────────────────────────────
 # @node with ensemble_n=3 and merge_fn= attaches the Oracle modifier.
 
-@node(output=Claims, ensemble_n=3, merge_fn="merge_claims")
+@node(outputs=Claims, ensemble_n=3, merge_fn="merge_claims")
 def decompose() -> Claims:
     with _gen_counter_lock:
         idx = _gen_counter[0] % len(_perspectives)

@@ -38,7 +38,7 @@ class VerifyResult(BaseModel, frozen=True):
 
 # ── Nodes ───────────────────────────────────────────────────────────────
 
-@node(output=Clusters)
+@node(outputs=Clusters)
 def discover_clusters() -> Clusters:
     """Simulate discovering requirement clusters from analysis."""
     return Clusters(groups=[
@@ -47,7 +47,7 @@ def discover_clusters() -> Clusters:
         ClusterGroup(label="performance", claim_ids=["REQ-6"]),
     ])
 
-@node(output=VerifyResult, map_over="discover_clusters.groups", map_key="label")
+@node(outputs=VerifyResult, map_over="discover_clusters.groups", map_key="label")
 def verify(cluster: ClusterGroup) -> VerifyResult:
     """Verify a single cluster — check coverage against codebase."""
     coverage = {"authentication": 85, "logging": 60, "performance": 100}

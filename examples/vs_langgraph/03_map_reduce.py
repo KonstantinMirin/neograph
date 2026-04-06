@@ -117,7 +117,7 @@ def run_neograph():
     generate = Node(
         name="jokes",
         mode="produce",
-        output=Jokes,
+        outputs=Jokes,
         model="fast",
         prompt="generate",
     ) | Oracle(n=3, merge_prompt="pick-best")

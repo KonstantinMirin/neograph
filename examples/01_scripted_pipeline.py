@@ -39,20 +39,20 @@ class ClassifiedClaims(BaseModel, frozen=True):
 # inferred from its parameter names. Parameter name = upstream node name
 # in Python-identifier form (hyphens are underscores).
 
-@node(output=RawText)
+@node(outputs=RawText)
 def extract() -> RawText:
     """Simulate extracting text from a document source."""
     return RawText(text="The system shall log all access attempts. The system shall validate input.")
 
 
-@node(output=Claims)
+@node(outputs=Claims)
 def split(extract: RawText) -> Claims:
     """Split raw text into individual claims by sentence."""
     sentences = [s.strip() for s in extract.text.split(".") if s.strip()]
     return Claims(items=sentences)
 
 
-@node(output=ClassifiedClaims)
+@node(outputs=ClassifiedClaims)
 def classify(split: Claims) -> ClassifiedClaims:
     """Classify each claim by category based on keywords."""
     classified = []

@@ -104,9 +104,9 @@ def run_neograph():
     )
 
     # 3 nodes, ordered. No add_edge, no add_node, no StateGraph.
-    decompose = Node(name="decompose", mode="produce", output=Claims, model="fast", prompt="decompose")
-    classify = Node(name="classify", mode="produce", inputs=Claims, output=ClassifiedClaims, model="fast", prompt="classify")
-    summarize = Node(name="summarize", mode="produce", inputs=ClassifiedClaims, output=Summary, model="fast", prompt="summarize")
+    decompose = Node(name="decompose", mode="produce", outputs=Claims, model="fast", prompt="decompose")
+    classify = Node(name="classify", mode="produce", inputs=Claims, outputs=ClassifiedClaims, model="fast", prompt="classify")
+    summarize = Node(name="summarize", mode="produce", inputs=ClassifiedClaims, outputs=Summary, model="fast", prompt="summarize")
 
     pipeline = Construct("analysis", nodes=[decompose, classify, summarize])
     graph = compile(pipeline)

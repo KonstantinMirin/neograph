@@ -3,10 +3,10 @@
 Ergonomic front-end on top of Node + Construct: the function signature IS the
 dependency graph.
 
-    @node(mode="scripted", output=Claims)
+    @node(mode="scripted", outputs=Claims)
     def decompose(topic: RawText) -> Claims: ...
 
-    @node(mode="scripted", output=Classified)
+    @node(mode="scripted", outputs=Classified)
     def classify(decompose: Claims) -> Classified: ...
     # parameter name 'decompose' matches upstream node 'decompose' → auto-wires
 
@@ -75,7 +75,7 @@ class FromInput:
         from typing import Annotated
         from neograph import node, FromInput
 
-        @node(output=Result)
+        @node(outputs=Result)
         def my_node(topic: Annotated[str, FromInput]) -> Result: ...
 
     ``topic`` is resolved from ``config["configurable"]["topic"]`` — ``run()``
@@ -98,7 +98,7 @@ class FromConfig:
         from typing import Annotated
         from neograph import node, FromConfig
 
-        @node(output=Result)
+        @node(outputs=Result)
         def my_node(limiter: Annotated[RateLimiter, FromConfig]) -> Result: ...
 
     ``limiter`` is resolved from ``config["configurable"]["limiter"]`` at
@@ -350,7 +350,7 @@ def node(
     *,
     mode: Literal["produce", "gather", "execute", "scripted", "raw"] | None = None,
     inputs: Any = None,
-    output: Any = None,
+    outputs: Any = None,
     model: str | None = None,
     prompt: str | None = None,
     llm_config: dict[str, Any] | None = None,
@@ -371,12 +371,12 @@ def node(
 
     Inference rules — explicit kwargs always win over annotations:
         * `name`   ← kwarg, else `fn.__name__.replace("_", "-")`
-        * `output` ← kwarg, else function return annotation
+        * `outputs` ← kwarg, else function return annotation
         * `inputs` ← kwarg, else annotation of the first annotated parameter
 
     Fan-out via Each::
 
-        @node(mode='scripted', output=MatchResult,
+        @node(mode='scripted', outputs=MatchResult,
               map_over='make_clusters.groups', map_key='label')
         def verify(cluster: ClusterGroup) -> MatchResult: ...
 
@@ -387,7 +387,7 @@ def node(
 
     Oracle ensemble::
 
-        @node(mode='produce', output=Claims, prompt='rw/decompose', model='reason',
+        @node(mode='produce', outputs=Claims, prompt='rw/decompose', model='reason',
               ensemble_n=3, merge_prompt='rw/decompose-merge')
         def decompose(topic: RawText) -> Claims: ...
 
@@ -398,7 +398,7 @@ def node(
 
     Human-in-the-loop via Operator::
 
-        @node(mode='scripted', output=ValidationResult,
+        @node(mode='scripted', outputs=ValidationResult,
               interrupt_when='validation_failed')
         def validate(claims: Claims) -> ValidationResult: ...
 
@@ -533,7 +533,7 @@ def node(
             param_res = _classify_di_params(f, sig, frame_depth=2)
 
         # Output inference: explicit kwarg wins; fall back to return annotation.
-        inferred_output = output
+        inferred_output = outputs
         if inferred_output is None:
             ret = sig.return_annotation
             if ret is not inspect.Signature.empty:
@@ -585,7 +585,7 @@ def node(
             name=node_label,
             mode="scripted" if effective_mode == "raw" else effective_mode,
             inputs=inferred_inputs,
-            output=inferred_output,
+            outputs=inferred_output,
             model=model,
             prompt=prompt,
             llm_config=llm_config or {},

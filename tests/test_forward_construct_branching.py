@@ -190,9 +190,9 @@ class TestIfBranchSimple:
         )
 
         class BranchPipeline(ForwardConstruct):
-            check = Node.scripted("br-check", fn="br_check", output=Confidence)
-            high_path = Node.scripted("br-high", fn="br_high", output=HighResult)
-            low_path = Node.scripted("br-low", fn="br_low", output=LowResult)
+            check = Node.scripted("br-check", fn="br_check", outputs=Confidence)
+            high_path = Node.scripted("br-high", fn="br_high", outputs=HighResult)
+            low_path = Node.scripted("br-low", fn="br_low", outputs=LowResult)
 
             def forward(self, topic):
                 result = self.check(topic)
@@ -283,12 +283,12 @@ class TestSequentialBranches:
         )
 
         class TwoBranch(ForwardConstruct):
-            check1 = Node.scripted("seq-check1", fn="seq_check1", output=Confidence)
-            check2 = Node.scripted("seq-check2", fn="seq_check2", output=Confidence)
-            a = Node.scripted("seq-a", fn="seq_a", output=HighResult)
-            b = Node.scripted("seq-b", fn="seq_b", output=LowResult)
-            c = Node.scripted("seq-c", fn="seq_c", output=HighResult)
-            d = Node.scripted("seq-d", fn="seq_d", output=LowResult)
+            check1 = Node.scripted("seq-check1", fn="seq_check1", outputs=Confidence)
+            check2 = Node.scripted("seq-check2", fn="seq_check2", outputs=Confidence)
+            a = Node.scripted("seq-a", fn="seq_a", outputs=HighResult)
+            b = Node.scripted("seq-b", fn="seq_b", outputs=LowResult)
+            c = Node.scripted("seq-c", fn="seq_c", outputs=HighResult)
+            d = Node.scripted("seq-d", fn="seq_d", outputs=LowResult)
 
             def forward(self, topic):
                 r1 = self.check1(topic)
@@ -411,9 +411,9 @@ class TestForwardConstructLoops:
         )
 
         class LoopPipeline(ForwardConstruct):
-            make = Node.scripted("loop-make", fn="loop_make", output=Clusters)
-            verify = Node.scripted("loop-verify", fn="loop_verify", output=MatchResult)
-            report = Node.scripted("loop-report", fn="loop_report", output=Report)
+            make = Node.scripted("loop-make", fn="loop_make", outputs=Clusters)
+            verify = Node.scripted("loop-verify", fn="loop_verify", outputs=MatchResult)
+            report = Node.scripted("loop-report", fn="loop_report", outputs=Report)
 
             def forward(self, topic):
                 clusters = self.make(topic)
@@ -433,7 +433,7 @@ class TestForwardConstructLoops:
         )
 
         class RangePipeline(ForwardConstruct):
-            step = Node.scripted("range-step", fn="range_step", output=RawText)
+            step = Node.scripted("range-step", fn="range_step", outputs=RawText)
 
             def forward(self, topic):
                 for i in range(3):
@@ -458,8 +458,8 @@ class TestForwardConstructLoops:
         )
 
         class EachCheckPipeline(ForwardConstruct):
-            make = Node.scripted("each-make", fn="each_make", output=Clusters)
-            verify = Node.scripted("each-verify", fn="each_verify", output=MatchResult)
+            make = Node.scripted("each-make", fn="each_make", outputs=Clusters)
+            verify = Node.scripted("each-verify", fn="each_verify", outputs=MatchResult)
 
             def forward(self, topic):
                 clusters = self.make(topic)
@@ -490,9 +490,9 @@ class TestForwardConstructLoops:
         )
 
         class PostLoopPipeline(ForwardConstruct):
-            make = Node.scripted("post-make", fn="post_make", output=Clusters)
-            verify = Node.scripted("post-verify", fn="post_verify", output=MatchResult)
-            report = Node.scripted("post-report", fn="post_report", output=Report)
+            make = Node.scripted("post-make", fn="post_make", outputs=Clusters)
+            verify = Node.scripted("post-verify", fn="post_verify", outputs=MatchResult)
+            report = Node.scripted("post-report", fn="post_report", outputs=Report)
 
             def forward(self, topic):
                 clusters = self.make(topic)
@@ -539,8 +539,8 @@ class TestForwardConstructExceptions:
         )
 
         class TryPipeline(ForwardConstruct):
-            extract = Node.scripted("te-extract", fn="te_extract", output=RawText)
-            classify = Node.scripted("te-classify", fn="te_classify", output=Confidence)
+            extract = Node.scripted("te-extract", fn="te_extract", outputs=RawText)
+            classify = Node.scripted("te-classify", fn="te_classify", outputs=Confidence)
 
             def forward(self, topic):
                 try:
@@ -566,7 +566,7 @@ class TestForwardConstructExceptions:
 
         class FallbackPipeline(ForwardConstruct):
             fallback = Node.scripted(
-                "te-fallback", fn="te_fallback", output=ErrorResult,
+                "te-fallback", fn="te_fallback", outputs=ErrorResult,
             )
 
             def forward(self, topic):
@@ -598,9 +598,9 @@ class TestForwardConstructExceptions:
         )
 
         class ProxyTryPipeline(ForwardConstruct):
-            primary = Node.scripted("te-primary", fn="te_primary", output=RawText)
-            backup = Node.scripted("te-backup", fn="te_backup", output=RawText)
-            report = Node.scripted("te-report", fn="te_report", output=FinalResult)
+            primary = Node.scripted("te-primary", fn="te_primary", outputs=RawText)
+            backup = Node.scripted("te-backup", fn="te_backup", outputs=RawText)
+            report = Node.scripted("te-report", fn="te_report", outputs=FinalResult)
 
             def forward(self, topic):
                 try:
@@ -638,9 +638,9 @@ class TestForwardConstructExceptions:
         )
 
         class LimitationPipeline(ForwardConstruct):
-            main = Node.scripted("te-main", fn="te_main", output=RawText)
-            rescue = Node.scripted("te-rescue", fn="te_rescue", output=RawText)
-            final = Node.scripted("te-final", fn="te_final", output=FinalResult)
+            main = Node.scripted("te-main", fn="te_main", outputs=RawText)
+            rescue = Node.scripted("te-rescue", fn="te_rescue", outputs=RawText)
+            final = Node.scripted("te-final", fn="te_final", outputs=FinalResult)
 
             def forward(self, topic):
                 try:

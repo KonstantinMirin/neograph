@@ -119,7 +119,7 @@ configure_llm(
 # Creative decomposition: high temperature, more tokens
 @node(
     mode="produce",
-    output=Claims,
+    outputs=Claims,
     model="reason",          # uses the "reason" tier (more capable model)
     prompt="decompose",
     llm_config={
@@ -135,7 +135,7 @@ def decompose() -> Claims:
 # Precise classification: zero temperature, fewer tokens
 @node(
     mode="produce",
-    output=ClassifiedClaims,
+    outputs=ClassifiedClaims,
     model="fast",            # uses the "fast" tier (cheaper model)
     prompt="classify",
     llm_config={

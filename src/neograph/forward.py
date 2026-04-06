@@ -1,8 +1,8 @@
 """ForwardConstruct — class-based pipeline definition with forward() tracing.
 
     class MyPipeline(ForwardConstruct):
-        extract = Node.scripted("extract", fn="extract_fn", output=RawText)
-        classify = Node(mode="produce", output=Claims, prompt="rw/classify", model="fast")
+        extract = Node.scripted("extract", fn="extract_fn", outputs=RawText)
+        classify = Node(mode="produce", outputs=Claims, prompt="rw/classify", model="fast")
 
         def forward(self, topic):
             raw = self.extract(topic)
@@ -82,8 +82,8 @@ class ForwardConstruct(Construct):
     Usage::
 
         class MyPipeline(ForwardConstruct):
-            a = Node.scripted("a", fn="a_fn", output=RawText)
-            b = Node.scripted("b", fn="b_fn", output=Claims)
+            a = Node.scripted("a", fn="a_fn", outputs=RawText)
+            b = Node.scripted("b", fn="b_fn", outputs=Claims)
 
             def forward(self, topic):
                 raw = self.a(topic)

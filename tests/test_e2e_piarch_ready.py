@@ -64,15 +64,15 @@ class TestScriptedPipeline:
 
         mod = _types.ModuleType("test_scripted_pipeline_mod")
 
-        @node(mode="scripted", output=RawText)
+        @node(mode="scripted", outputs=RawText)
         def extract() -> RawText:
             return RawText(text="hello world")
 
-        @node(mode="scripted", output=Claims)
+        @node(mode="scripted", outputs=Claims)
         def split(extract: RawText) -> Claims:
             return Claims(items=["claim-1", "claim-2"])
 
-        @node(mode="scripted", output=ClassifiedClaims)
+        @node(mode="scripted", outputs=ClassifiedClaims)
         def classify(split: Claims) -> ClassifiedClaims:
             return ClassifiedClaims(
                 classified=[{"claim": c, "category": "fact"} for c in split.items]
@@ -116,7 +116,7 @@ class TestProduceMode:
 
         mod = _types.ModuleType("test_produce_mode_mod")
 
-        @node(mode="produce", output=Claims, model="fast", prompt="test/extract")
+        @node(mode="produce", outputs=Claims, model="fast", prompt="test/extract")
         def extract() -> Claims: ...
 
         mod.extract = extract
@@ -165,7 +165,7 @@ class TestGatherMode:
 
         @node(
             mode="gather",
-            output=Claims,
+            outputs=Claims,
             model="reason",
             prompt="test/explore",
             tools=[Tool(name="search_nodes", budget=2)],
@@ -208,7 +208,7 @@ class TestGatherMode:
 
         @node(
             mode="gather",
-            output=Claims,
+            outputs=Claims,
             model="fast",
             prompt="test/scan",
             tools=[Tool(name="lookup", budget=0)],  # unlimited
@@ -257,7 +257,7 @@ class TestOracle:
 
         register_scripted("combine_variants", combine_variants)
 
-        @node(output=Claims, ensemble_n=3, merge_fn="combine_variants")
+        @node(outputs=Claims, ensemble_n=3, merge_fn="combine_variants")
         def generate() -> Claims:
             gen_call_count[0] += 1
             return Claims(items=[f"variant-{gen_call_count[0]}"])
@@ -287,7 +287,7 @@ class TestOracle:
 
         configure_fake_llm(lambda tier: StructuredFake(lambda m: m(items=["merged-consensus"])))
 
-        @node(output=Claims, ensemble_n=2, merge_prompt="test/merge")
+        @node(outputs=Claims, ensemble_n=2, merge_prompt="test/merge")
         def generate() -> Claims:
             return Claims(items=["v1"])
 
@@ -330,7 +330,7 @@ class TestEach:
 
         mod = _types.ModuleType("test_each_fanout")
 
-        @node(mode="scripted", output=Clusters)
+        @node(mode="scripted", outputs=Clusters)
         def make_clusters() -> Clusters:
             return Clusters(groups=[
                 ClusterGroup(label="alpha", claim_ids=["c1", "c2"]),
@@ -339,7 +339,7 @@ class TestEach:
 
         @node(
             mode="scripted",
-            output=MatchResult,
+            outputs=MatchResult,
             map_over="make_clusters.groups",
             map_key="label",
         )
@@ -377,7 +377,7 @@ class TestNodeMap:
 
     def test_map_with_lambda_resolves_path(self):
         """A lambda `s.foo.bar` resolves to the same Each(over='foo.bar', ...)."""
-        node = Node.scripted("verify", fn="noop", inputs=ClusterGroup, output=MatchResult)
+        node = Node.scripted("verify", fn="noop", inputs=ClusterGroup, outputs=MatchResult)
         mapped = node.map(lambda s: s.make_clusters.groups, key="label")
 
         each = mapped.get_modifier(Each)
@@ -387,7 +387,7 @@ class TestNodeMap:
 
     def test_map_with_string_path(self):
         """A string source is passed straight through to Each.over."""
-        node = Node.scripted("verify", fn="noop", inputs=ClusterGroup, output=MatchResult)
+        node = Node.scripted("verify", fn="noop", inputs=ClusterGroup, outputs=MatchResult)
         mapped = node.map("make_clusters.groups", key="label")
 
         each = mapped.get_modifier(Each)
@@ -397,7 +397,7 @@ class TestNodeMap:
 
     def test_map_equivalent_to_pipe_each(self):
         """node.map(...) and node | Each(...) produce structurally identical nodes."""
-        base = Node.scripted("verify", fn="noop", inputs=ClusterGroup, output=MatchResult)
+        base = Node.scripted("verify", fn="noop", inputs=ClusterGroup, outputs=MatchResult)
 
         via_map = base.map(lambda s: s.make_clusters.groups, key="label")
         via_pipe = base | Each(over="make_clusters.groups", key="label")
@@ -419,9 +419,9 @@ class TestNodeMap:
             matched=["match-1"],
         ))
 
-        make = Node.scripted("make-clusters", fn="make_clusters", output=Clusters)
+        make = Node.scripted("make-clusters", fn="make_clusters", outputs=Clusters)
         verify = Node.scripted(
-            "verify", fn="verify_cluster", inputs=ClusterGroup, output=MatchResult
+            "verify", fn="verify_cluster", inputs=ClusterGroup, outputs=MatchResult
         ).map(lambda s: s.make_clusters.groups, key="label")
 
         pipeline = Construct("test-map", nodes=[make, verify])
@@ -436,49 +436,49 @@ class TestNodeMap:
 
     def test_map_lambda_with_no_attrs_raises(self):
         """`lambda s: s` has no path — clear error."""
-        node = Node.scripted("verify", fn="noop", output=MatchResult)
+        node = Node.scripted("verify", fn="noop", outputs=MatchResult)
         with pytest.raises(TypeError, match="at least one attribute"):
             node.map(lambda s: s, key="label")
 
     def test_map_lambda_returning_scalar_raises(self):
         """`lambda s: 42` — clear error, not a silent Each."""
-        node = Node.scripted("verify", fn="noop", output=MatchResult)
+        node = Node.scripted("verify", fn="noop", outputs=MatchResult)
         with pytest.raises(TypeError, match="attribute-access chain"):
             node.map(lambda s: 42, key="label")
 
     def test_map_lambda_that_errors_raises_typeerror(self):
         """A lambda that does something illegal (e.g. indexing) reports cleanly."""
-        node = Node.scripted("verify", fn="noop", output=MatchResult)
+        node = Node.scripted("verify", fn="noop", outputs=MatchResult)
         with pytest.raises(TypeError, match="pure attribute-access chain"):
             node.map(lambda s: s.items[0], key="label")  # __getitem__ on recorder
 
     def test_map_rejects_dunder_attribute_access(self):
         """`lambda s: s.__dict__.foo` must not silently produce Each(over='__dict__.foo')."""
-        node = Node.scripted("verify", fn="noop", inputs=ClusterGroup, output=MatchResult)
+        node = Node.scripted("verify", fn="noop", inputs=ClusterGroup, outputs=MatchResult)
         with pytest.raises(TypeError, match="pure attribute-access chain"):
             node.map(lambda s: s.__dict__.foo, key="label")
 
     def test_map_rejects_leading_underscore_attribute(self):
         """Reject `lambda s: s._private.field` — underscores are a footgun trapdoor."""
-        node = Node.scripted("verify", fn="noop", inputs=ClusterGroup, output=MatchResult)
+        node = Node.scripted("verify", fn="noop", inputs=ClusterGroup, outputs=MatchResult)
         with pytest.raises(TypeError, match="pure attribute-access chain"):
             node.map(lambda s: s._private.x, key="label")
 
     def test_map_user_exception_propagates_unchanged(self):
         """Non-attribute errors (e.g. ZeroDivisionError) propagate with their own type."""
-        node = Node.scripted("verify", fn="noop", inputs=ClusterGroup, output=MatchResult)
+        node = Node.scripted("verify", fn="noop", inputs=ClusterGroup, outputs=MatchResult)
         with pytest.raises(ZeroDivisionError):
             node.map(lambda s: 1 / 0 and s.x, key="label")
 
     def test_map_rejects_non_string_non_callable(self):
         """Passing an int or other non-source type raises immediately."""
-        node = Node.scripted("verify", fn="noop", output=MatchResult)
+        node = Node.scripted("verify", fn="noop", outputs=MatchResult)
         with pytest.raises(TypeError, match="string path or a lambda"):
             node.map(42, key="label")  # type: ignore[arg-type]
 
     def test_map_on_construct(self):
         """Construct also gets .map() via Modifiable — sub-construct fan-out."""
-        inner = Node.scripted("inner", fn="noop", inputs=ClusterGroup, output=MatchResult)
+        inner = Node.scripted("inner", fn="noop", inputs=ClusterGroup, outputs=MatchResult)
         sub = Construct("sub", input=ClusterGroup, output=MatchResult, nodes=[inner])
         mapped = sub.map(lambda s: s.upstream.items, key="label")
 
@@ -510,7 +510,7 @@ class TestOperator:
 
         @node(
             mode="scripted",
-            output=ValidationResult,
+            outputs=ValidationResult,
             interrupt_when=lambda state: (
                 {"issues": state.validate.issues}
                 if state.validate and not state.validate.passed
@@ -551,11 +551,11 @@ class TestRawNode:
 
         mod = _types.ModuleType("test_raw_node_mod")
 
-        @node(mode="scripted", output=Claims)
+        @node(mode="scripted", outputs=Claims)
         def make_claims() -> Claims:
             return Claims(items=["a", "b", "c"])
 
-        @node(mode="raw", inputs=Claims, output=Claims)
+        @node(mode="raw", inputs=Claims, outputs=Claims)
         def filter_claims(state, config):
             """Raw node: custom filtering logic."""
             claims = None
@@ -613,13 +613,13 @@ class TestMiniRWPipeline:
 
         mod = _types.ModuleType("test_mini_rw_mod")
 
-        @node(mode="produce", output=Claims, model="reason", prompt="rw/decompose")
+        @node(mode="produce", outputs=Claims, model="reason", prompt="rw/decompose")
         def decompose() -> Claims: ...
 
-        @node(mode="produce", output=ClassifiedClaims, model="fast", prompt="rw/classify")
+        @node(mode="produce", outputs=ClassifiedClaims, model="fast", prompt="rw/classify")
         def classify(decompose: Claims) -> ClassifiedClaims: ...
 
-        @node(mode="scripted", output=RawText)
+        @node(mode="scripted", outputs=RawText)
         def catalog() -> RawText:
             return RawText(text="node catalog: 42 nodes")
 
@@ -671,7 +671,7 @@ class TestExecuteMode:
 
         @node(
             mode="execute",
-            output=RawText,
+            outputs=RawText,
             model="fast",
             prompt="test/write",
             tools=[Tool(name="write_file", budget=1)],
@@ -703,7 +703,7 @@ class TestOperatorContinues:
 
         @node(
             mode="scripted",
-            output=ValidationResult,
+            outputs=ValidationResult,
             interrupt_when=lambda state: None,  # always falsy
         )
         def validate() -> ValidationResult:
@@ -734,7 +734,7 @@ class TestOperatorResume:
 
         @node(
             mode="scripted",
-            output=ValidationResult,
+            outputs=ValidationResult,
             name="validate-thing",
             interrupt_when=lambda state: (
                 {"issues": state.validate_thing.issues}
@@ -768,7 +768,7 @@ class TestErrorPaths:
 
     def test_produce_without_configure_llm(self):
         """Produce node without configure_llm() raises RuntimeError."""
-        node = Node(name="fail", mode="produce", output=Claims, model="fast", prompt="x")
+        node = Node(name="fail", mode="produce", outputs=Claims, model="fast", prompt="x")
         pipeline = Construct("test-no-llm", nodes=[node])
         graph = compile(pipeline)
 
@@ -777,7 +777,7 @@ class TestErrorPaths:
 
     def test_unregistered_scripted_fn(self):
         """Referencing unregistered scripted function raises ValueError."""
-        node = Node.scripted("bad", fn="nonexistent_fn", output=Claims)
+        node = Node.scripted("bad", fn="nonexistent_fn", outputs=Claims)
         pipeline = Construct("test-bad-fn", nodes=[node])
 
         with pytest.raises(ValueError, match="not registered"):
@@ -790,7 +790,7 @@ class TestErrorPaths:
         register_scripted("gen", lambda input_data, config: Claims(items=["x"]))
 
         node = Node.scripted(
-            "gen", fn="gen", output=Claims
+            "gen", fn="gen", outputs=Claims
         ) | Oracle(n=2, merge_fn="nonexistent_merge")
 
         pipeline = Construct("test-bad-merge", nodes=[node])
@@ -807,7 +807,7 @@ class TestErrorPaths:
         register_scripted("something", lambda input_data, config: Claims(items=[]))
 
         node = Node.scripted(
-            "something", fn="something", output=Claims
+            "something", fn="something", outputs=Claims
         ) | Operator(when="nonexistent_condition")
 
         pipeline = Construct("test-bad-condition", nodes=[node])
@@ -822,7 +822,7 @@ class TestErrorPaths:
         node = Node(
             name="explore",
             mode="gather",
-            output=Claims,
+            outputs=Claims,
             model="fast",
             prompt="x",
             tools=[Tool(name="ghost_tool", budget=1)],
@@ -839,7 +839,7 @@ class TestErrorPaths:
         from neograph.factory import register_scripted
 
         register_scripted("noop", lambda input_data, config: Claims(items=[]))
-        node = Node.scripted("noop", fn="noop", output=Claims)
+        node = Node.scripted("noop", fn="noop", outputs=Claims)
         pipeline = Construct("test-no-args", nodes=[node])
         graph = compile(pipeline)
 
@@ -902,7 +902,7 @@ class TestLLMUnknownToolCall:
         node = Node(
             name="explore",
             mode="gather",
-            output=Claims,
+            outputs=Claims,
             model="fast",
             prompt="test/explore",
             tools=[Tool(name="search", budget=5)],
@@ -934,7 +934,7 @@ class TestModifierAsFirstNode:
         register_scripted("merge_start", merge_start)
 
         node = Node.scripted(
-            "gen", fn="gen_start", output=Claims
+            "gen", fn="gen_start", outputs=Claims
         ) | Oracle(n=2, merge_fn="merge_start")
 
         pipeline = Construct("test-oracle-start", nodes=[node])
@@ -958,7 +958,7 @@ class TestModifierAsFirstNode:
         ))
 
         process = Node.scripted(
-            "process", fn="process_item", inputs=ClusterGroup, output=MatchResult
+            "process", fn="process_item", inputs=ClusterGroup, outputs=MatchResult
         ) | Each(over="make_items.groups", key="label")
 
         pipeline = Construct("test-each-start", nodes=[process])
@@ -987,12 +987,12 @@ class TestMultiFieldInput:
 
         register_scripted("combine", combine)
 
-        step_a = Node.scripted("step-a", fn="make_claims", output=Claims)
-        step_b = Node.scripted("step-b", fn="make_raw", output=RawText)
+        step_a = Node.scripted("step-a", fn="make_claims", outputs=Claims)
+        step_b = Node.scripted("step-b", fn="make_raw", outputs=RawText)
         step_c = Node.scripted(
             "step-c", fn="combine",
             inputs={"step_a": Claims, "step_b": RawText},
-            output=RawText,
+            outputs=RawText,
         )
 
         pipeline = Construct("test-multi-input", nodes=[step_a, step_b, step_c])
@@ -1055,7 +1055,7 @@ class TestStateHygiene:
         register_scripted("g", lambda input_data, config: Claims(items=["x"]))
         register_scripted("m", lambda variants, config: Claims(items=["merged"]))
 
-        node = Node.scripted("gen", fn="g", output=Claims) | Oracle(n=2, merge_fn="m")
+        node = Node.scripted("gen", fn="g", outputs=Claims) | Oracle(n=2, merge_fn="m")
         pipeline = Construct("test-hygiene-oracle", nodes=[node])
         graph = compile(pipeline)
         result = run(graph, input={"node_id": "test-001"})
@@ -1076,9 +1076,9 @@ class TestStateHygiene:
             cluster_label=input_data.label, matched=["done"],
         ))
 
-        make = Node.scripted("make", fn="make", output=Clusters)
+        make = Node.scripted("make", fn="make", outputs=Clusters)
         proc = Node.scripted(
-            "proc", fn="proc", inputs=ClusterGroup, output=MatchResult
+            "proc", fn="proc", inputs=ClusterGroup, outputs=MatchResult
         ) | Each(over="make.groups", key="label")
 
         pipeline = Construct("test-hygiene-each", nodes=[make, proc])
@@ -1105,9 +1105,9 @@ class TestStateHygiene:
             cluster_label=input_data.label, matched=["done"],
         ))
 
-        make = Node.scripted("make-dupes", fn="make_dupes", output=Clusters)
+        make = Node.scripted("make-dupes", fn="make_dupes", outputs=Clusters)
         proc = Node.scripted(
-            "proc-dupe", fn="proc_dupe", inputs=ClusterGroup, output=MatchResult
+            "proc-dupe", fn="proc_dupe", inputs=ClusterGroup, outputs=MatchResult
         ) | Each(over="make_dupes.groups", key="label")
 
         pipeline = Construct("test-dupe-key", nodes=[make, proc])
@@ -1156,13 +1156,13 @@ class TestSubgraph:
             input=EnrichInput,
             output=EnrichOutput,
             nodes=[
-                Node.scripted("lookup", fn="lookup", inputs=EnrichInput, output=RawText),
-                Node.scripted("score", fn="score", inputs=EnrichInput, output=EnrichOutput),
+                Node.scripted("lookup", fn="lookup", inputs=EnrichInput, outputs=RawText),
+                Node.scripted("score", fn="score", inputs=EnrichInput, outputs=EnrichOutput),
             ],
         )
 
         # Parent pipeline
-        decompose = Node.scripted("decompose", fn="decompose", output=EnrichInput)
+        decompose = Node.scripted("decompose", fn="decompose", outputs=EnrichInput)
         parent = Construct("parent", nodes=[decompose, enrich])
         graph = compile(parent)
         result = run(graph, input={"node_id": "test-001"})
@@ -1190,12 +1190,12 @@ class TestSubgraph:
             input=Claims,
             output=RawText,
             nodes=[
-                Node.scripted("process", fn="sub_process", inputs=Claims, output=RawText),
+                Node.scripted("process", fn="sub_process", inputs=Claims, outputs=RawText),
             ],
         )
 
         parent = Construct("parent", nodes=[
-            Node.scripted("process", fn="parent_process", output=Claims),
+            Node.scripted("process", fn="parent_process", outputs=Claims),
             sub,
         ])
         graph = compile(parent)
@@ -1213,7 +1213,7 @@ class TestSubgraph:
         register_scripted("noop", lambda input_data, config: Claims(items=[]))
 
         sub = Construct("bad-sub", output=Claims, nodes=[
-            Node.scripted("noop", fn="noop", output=Claims),
+            Node.scripted("noop", fn="noop", outputs=Claims),
         ])
 
         parent = Construct("parent", nodes=[sub])
@@ -1228,7 +1228,7 @@ class TestSubgraph:
         register_scripted("noop", lambda input_data, config: Claims(items=[]))
 
         sub = Construct("bad-sub", input=Claims, nodes=[
-            Node.scripted("noop", fn="noop", output=Claims),
+            Node.scripted("noop", fn="noop", outputs=Claims),
         ])
 
         parent = Construct("parent", nodes=[sub])
@@ -1253,12 +1253,12 @@ class TestSubgraph:
             input=Claims,
             output=RawText,
             nodes=[
-                Node.scripted("gen", fn="sub_gen", output=RawText) | Oracle(n=3, merge_fn="sub_merge"),
+                Node.scripted("gen", fn="sub_gen", outputs=RawText) | Oracle(n=3, merge_fn="sub_merge"),
             ],
         )
 
         parent = Construct("parent", nodes=[
-            Node.scripted("prep", fn="parent_prep", output=Claims),
+            Node.scripted("prep", fn="parent_prep", outputs=Claims),
             sub,
         ])
         graph = compile(parent)
@@ -1290,14 +1290,14 @@ class TestSubgraph:
             input=Clusters,
             output=RawText,
             nodes=[
-                Node.scripted("verify", fn="sub_verify", inputs=ClusterGroup, output=MatchResult)
+                Node.scripted("verify", fn="sub_verify", inputs=ClusterGroup, outputs=MatchResult)
                 | Each(over="neo_subgraph_input.groups", key="label"),
-                Node.scripted("collect", fn="sub_collect", output=RawText),
+                Node.scripted("collect", fn="sub_collect", outputs=RawText),
             ],
         )
 
         parent = Construct("parent", nodes=[
-            Node.scripted("make-clusters", fn="parent_clusters", output=Clusters),
+            Node.scripted("make-clusters", fn="parent_clusters", outputs=Clusters),
             sub,
         ])
         graph = compile(parent)
@@ -1320,7 +1320,7 @@ class TestSubgraph:
             "level2",
             input=Claims,
             output=RawText,
-            nodes=[Node.scripted("detail", fn="l2_detail", inputs=Claims, output=RawText)],
+            nodes=[Node.scripted("detail", fn="l2_detail", inputs=Claims, outputs=RawText)],
         )
 
         # Level1: Claims → RawText (via level2)
@@ -1329,15 +1329,15 @@ class TestSubgraph:
             input=Claims,
             output=RawText,
             nodes=[
-                Node.scripted("process", fn="l1_process", inputs=Claims, output=Claims),
+                Node.scripted("process", fn="l1_process", inputs=Claims, outputs=Claims),
                 level2,
             ],
         )
 
         parent = Construct("root", nodes=[
-            Node.scripted("start", fn="l0_start", output=Claims),
+            Node.scripted("start", fn="l0_start", outputs=Claims),
             level1,
-            Node.scripted("finish", fn="l0_finish", inputs=RawText, output=RawText),
+            Node.scripted("finish", fn="l0_finish", inputs=RawText, outputs=RawText),
         ])
 
         graph = compile(parent)
@@ -1363,18 +1363,18 @@ class TestSubgraph:
             "enrich",
             input=Claims,
             output=RawText,
-            nodes=[Node.scripted("e", fn="enrich_fn", inputs=Claims, output=RawText)],
+            nodes=[Node.scripted("e", fn="enrich_fn", inputs=Claims, outputs=RawText)],
         )
 
         validate_sub = Construct(
             "check",
             input=RawText,
             output=ValidationResult,
-            nodes=[Node.scripted("v", fn="validate_fn", inputs=RawText, output=ValidationResult)],
+            nodes=[Node.scripted("v", fn="validate_fn", inputs=RawText, outputs=ValidationResult)],
         )
 
         parent = Construct("parent", nodes=[
-            Node.scripted("start", fn="make_input", output=Claims),
+            Node.scripted("start", fn="make_input", outputs=Claims),
             enrich_sub,
             validate_sub,
         ])
@@ -1392,7 +1392,7 @@ class TestSubgraph:
         register_scripted("x", lambda input_data, config: Claims(items=[]))
         register_condition("always", lambda state: True)
 
-        node = Node.scripted("x", fn="x", output=Claims) | Operator(when="always")
+        node = Node.scripted("x", fn="x", outputs=Claims) | Operator(when="always")
         pipeline = Construct("test-no-cp", nodes=[node])
 
         with pytest.raises(ValueError, match="checkpointer"):
@@ -1429,15 +1429,15 @@ class TestConstructOracle:
             input=Claims,
             output=RawText,
             nodes=[
-                Node.scripted("step-a", fn="sub_step_a", output=Claims),
-                Node.scripted("step-b", fn="sub_step_b", inputs=Claims, output=RawText),
+                Node.scripted("step-a", fn="sub_step_a", outputs=Claims),
+                Node.scripted("step-b", fn="sub_step_b", inputs=Claims, outputs=RawText),
             ],
         ) | Oracle(n=3, merge_fn="merge_sub")
 
         register_scripted("make_input", lambda input_data, config: Claims(items=["raw"]))
 
         parent = Construct("parent", nodes=[
-            Node.scripted("start", fn="make_input", output=Claims),
+            Node.scripted("start", fn="make_input", outputs=Claims),
             sub,
         ])
         graph = compile(parent)
@@ -1459,13 +1459,13 @@ class TestConstructOracle:
             "gen-pipeline",
             input=Claims,
             output=Claims,
-            nodes=[Node.scripted("gen", fn="gen_claim", output=Claims)],
+            nodes=[Node.scripted("gen", fn="gen_claim", outputs=Claims)],
         ) | Oracle(n=2, merge_prompt="test/merge")
 
         register_scripted("seed", lambda input_data, config: Claims(items=["seed"]))
 
         parent = Construct("parent", nodes=[
-            Node.scripted("seed", fn="seed", output=Claims),
+            Node.scripted("seed", fn="seed", outputs=Claims),
             sub,
         ])
         graph = compile(parent)
@@ -1501,13 +1501,13 @@ class TestConstructEach:
             input=ClusterGroup,
             output=MatchResult,
             nodes=[
-                Node.scripted("analyze", fn="sub_analyze", inputs=ClusterGroup, output=RawText),
-                Node.scripted("score", fn="sub_score", inputs=RawText, output=MatchResult),
+                Node.scripted("analyze", fn="sub_analyze", inputs=ClusterGroup, outputs=RawText),
+                Node.scripted("score", fn="sub_score", inputs=RawText, outputs=MatchResult),
             ],
         ) | Each(over="make_clusters.groups", key="label")
 
         parent = Construct("parent", nodes=[
-            Node.scripted("make-clusters", fn="make_clusters", output=Clusters),
+            Node.scripted("make-clusters", fn="make_clusters", outputs=Clusters),
             sub,
         ])
         graph = compile(parent)
@@ -1542,13 +1542,13 @@ class TestConstructOperator:
             "enrich",
             input=Claims,
             output=ValidationResult,
-            nodes=[Node.scripted("val", fn="sub_validate", output=ValidationResult)],
+            nodes=[Node.scripted("val", fn="sub_validate", outputs=ValidationResult)],
         ) | Operator(when="sub_failed")
 
         register_scripted("seed", lambda input_data, config: Claims(items=["data"]))
 
         parent = Construct("parent", nodes=[
-            Node.scripted("seed", fn="seed", output=Claims),
+            Node.scripted("seed", fn="seed", outputs=Claims),
             sub,
         ])
         graph = compile(parent, checkpointer=MemorySaver())
@@ -1578,16 +1578,16 @@ class TestConstructOperator:
             "check",
             input=Claims,
             output=ValidationResult,
-            nodes=[Node.scripted("ok", fn="sub_ok", output=ValidationResult)],
+            nodes=[Node.scripted("ok", fn="sub_ok", outputs=ValidationResult)],
         ) | Operator(when="sub_check")
 
         register_scripted("seed2", lambda input_data, config: Claims(items=["ok"]))
         register_scripted("done", lambda input_data, config: RawText(text="complete"))
 
         parent = Construct("parent", nodes=[
-            Node.scripted("seed", fn="seed2", output=Claims),
+            Node.scripted("seed", fn="seed2", outputs=Claims),
             sub,
-            Node.scripted("done", fn="done", output=RawText),
+            Node.scripted("done", fn="done", outputs=RawText),
         ])
         graph = compile(parent, checkpointer=MemorySaver())
         config = {"configurable": {"thread_id": "construct-op-pass"}}
@@ -1626,7 +1626,7 @@ class TestDeepCompositions:
             input=ClusterGroup,
             output=RawText,
             nodes=[
-                Node.scripted("gen", fn="gen_v", output=RawText)
+                Node.scripted("gen", fn="gen_v", outputs=RawText)
                 | Oracle(n=2, merge_fn="merge_v"),
             ],
         )
@@ -1634,7 +1634,7 @@ class TestDeepCompositions:
         # Outer: Each over clusters, each runs the Oracle sub-pipeline
         # This means: 2 clusters × 2 Oracle variants = 4 generator calls + 2 merges
         parent = Construct("parent", nodes=[
-            Node.scripted("make", fn="make_items", output=Clusters),
+            Node.scripted("make", fn="make_items", outputs=Clusters),
             inner | Each(over="make.groups", key="label"),
         ])
 
@@ -1677,7 +1677,7 @@ class TestDeepCompositions:
                     name="search",
                     mode="gather",
                     inputs=Claims,
-                    output=RawText,
+                    outputs=RawText,
                     model="fast",
                     prompt="test/search",
                     tools=[Tool(name="deep_search", budget=3)],
@@ -1686,7 +1686,7 @@ class TestDeepCompositions:
         )
 
         parent = Construct("parent", nodes=[
-            Node.scripted("prep", fn="prep_search", output=Claims),
+            Node.scripted("prep", fn="prep_search", outputs=Claims),
             sub,
         ])
         graph = compile(parent)
@@ -1718,7 +1718,7 @@ class TestDeepCompositions:
             input=Claims,
             output=ValidationResult,
             nodes=[
-                Node.scripted("check", fn="sub_check", output=ValidationResult)
+                Node.scripted("check", fn="sub_check", outputs=ValidationResult)
                 | Operator(when="inner_failed"),
             ],
         )
@@ -1727,9 +1727,9 @@ class TestDeepCompositions:
         register_scripted("after_fn", lambda input_data, config: RawText(text="should not reach"))
 
         parent = Construct("parent", nodes=[
-            Node.scripted("start", fn="start_fn", output=Claims),
+            Node.scripted("start", fn="start_fn", outputs=Claims),
             sub,
-            Node.scripted("after", fn="after_fn", output=RawText),
+            Node.scripted("after", fn="after_fn", outputs=RawText),
         ])
 
         # Operator lives inside sub-construct — parent needs checkpointer
@@ -1763,7 +1763,7 @@ class TestFirstNodeEdgeCases:
             "first-sub",
             input=Claims,
             output=Claims,
-            nodes=[Node.scripted("seed", fn="self_seed", output=Claims)],
+            nodes=[Node.scripted("seed", fn="self_seed", outputs=Claims)],
         )
 
         # Sub-construct is the ONLY node — wired from START
@@ -1788,7 +1788,7 @@ class TestFirstNodeEdgeCases:
             "oracle-first",
             input=Claims,
             output=Claims,
-            nodes=[Node.scripted("g", fn="gen_first", output=Claims)],
+            nodes=[Node.scripted("g", fn="gen_first", outputs=Claims)],
         ) | Oracle(n=2, merge_fn="merge_first")
 
         parent = Construct("parent", nodes=[sub])
@@ -1811,7 +1811,7 @@ class TestFirstNodeEdgeCases:
             "each-first",
             input=ClusterGroup,
             output=RawText,
-            nodes=[Node.scripted("p", fn="proc_first", output=RawText)],
+            nodes=[Node.scripted("p", fn="proc_first", outputs=RawText)],
         ) | Each(over="data.items", key="label")
 
         parent = Construct("parent", nodes=[sub])
@@ -1827,11 +1827,11 @@ class TestFirstNodeEdgeCases:
 # about input/output type flow, not scripted function names, so the `fn="f"`
 # placeholder is noise that the helpers strip.
 def _producer(name: str, out: type) -> Node:
-    return Node.scripted(name, fn="f", output=out)
+    return Node.scripted(name, fn="f", outputs=out)
 
 
 def _consumer(name: str, in_: type, out: type) -> Node:
-    return Node.scripted(name, fn="f", inputs=in_, output=out)
+    return Node.scripted(name, fn="f", inputs=in_, outputs=out)
 
 
 class TestConstructValidation:
@@ -1997,7 +1997,7 @@ class TestConstructValidation:
         step_c = Node.scripted(
             "step-c", fn="f",
             inputs={"step_a": Claims, "step_b": RawText},
-            output=RawText,
+            outputs=RawText,
         )
         pipeline = Construct("multi-input", nodes=[step_a, step_b, step_c])
         assert len(pipeline.nodes) == 3
@@ -2011,7 +2011,7 @@ class TestConstructValidation:
         upstream producer's output is a dict subclass.
         """
         a = _producer("a", RawText)
-        b = Node.scripted("b", fn="f", inputs=dict, output=Claims)
+        b = Node.scripted("b", fn="f", inputs=dict, outputs=Claims)
         pipeline = Construct("dict-class", nodes=[a, b])
         assert len(pipeline.nodes) == 2
         assert pipeline.nodes[1].inputs is dict
@@ -2023,7 +2023,7 @@ class TestConstructValidation:
         then isinstance(val, dict); the validator must accept this shape too.
         """
         a = _producer("a", RawText)
-        b = Node.scripted("b", fn="f", inputs=dict[str, Claims], output=Claims)
+        b = Node.scripted("b", fn="f", inputs=dict[str, Claims], outputs=Claims)
         pipeline = Construct("dict-generic", nodes=[a, b])
         assert len(pipeline.nodes) == 2
         assert pipeline.nodes[1].inputs == dict[str, Claims]
@@ -2047,7 +2047,7 @@ class TestConstructValidation:
         verify = _consumer("verify", ClusterGroup, MatchResult).map(
             lambda s: s.make.groups, key="label"
         )
-        summarize = Node.scripted("summarize", fn="f", inputs=dict, output=MergedResult)
+        summarize = Node.scripted("summarize", fn="f", inputs=dict, outputs=MergedResult)
         pipeline = Construct("good-dict", nodes=[make, verify, summarize])
         assert len(pipeline.nodes) == 3
 
@@ -2059,7 +2059,7 @@ class TestConstructValidation:
         )
         summarize = Node.scripted(
             "summarize", fn="f",
-            inputs=dict[str, MatchResult], output=MergedResult,
+            inputs=dict[str, MatchResult], outputs=MergedResult,
         )
         pipeline = Construct("good-typed-dict", nodes=[make, verify, summarize])
         assert len(pipeline.nodes) == 3
@@ -2072,7 +2072,7 @@ class TestConstructValidation:
         )
         summarize = Node.scripted(
             "summarize", fn="f",
-            inputs=dict[str, ValidationResult], output=MergedResult,
+            inputs=dict[str, ValidationResult], outputs=MergedResult,
         )
         with pytest.raises(ConstructError):
             Construct("bad-element", nodes=[make, verify, summarize])
@@ -2105,7 +2105,7 @@ class TestConstructOracleErrors:
             "bad-oracle-sub",
             input=Claims,
             output=Claims,
-            nodes=[Node.scripted("g", fn="gen_err", output=Claims)],
+            nodes=[Node.scripted("g", fn="gen_err", outputs=Claims)],
         ) | Oracle(n=2, merge_fn="nonexistent_merge_fn")
 
         parent = Construct("parent", nodes=[sub])
@@ -2147,7 +2147,7 @@ class TestLLMConfig:
         node = Node(
             name="custom-llm",
             mode="produce",
-            output=Claims,
+            outputs=Claims,
             model="reason",
             prompt="test",
             llm_config={"temperature": 0.9, "max_tokens": 2000},
@@ -2172,7 +2172,7 @@ class TestLLMConfig:
         node = Node(
             name="old-style",
             mode="produce",
-            output=Claims,
+            outputs=Claims,
             model="fast",
             prompt="test",
             llm_config={"temperature": 0.5},  # this won't crash old factory
@@ -2199,7 +2199,7 @@ class TestLLMConfig:
 
         register_scripted("capture", capture_config)
 
-        node = Node.scripted("capture", fn="capture", output=Claims)
+        node = Node.scripted("capture", fn="capture", outputs=Claims)
         pipeline = Construct("test-config-inject", nodes=[node])
         graph = compile(pipeline)
 
@@ -2230,7 +2230,7 @@ class TestLLMConfig:
             prompt_compiler=tracking_compiler,
         )
 
-        node = Node(name="analyze", mode="produce", output=Claims, model="fast", prompt="rw/analyze")
+        node = Node(name="analyze", mode="produce", outputs=Claims, model="fast", prompt="rw/analyze")
         pipeline = Construct("test-prompt-ctx", nodes=[node])
         graph = compile(pipeline)
         run(graph, input={"node_id": "BR-001", "project_root": "/proj"})
@@ -2290,7 +2290,7 @@ class TestToolDecorator:
         researcher = Node(
             name="research",
             mode="gather",
-            output=Claims,
+            outputs=Claims,
             model="fast",
             prompt="test",
             tools=[search_codebase],  # decorator output used directly
@@ -2327,7 +2327,7 @@ class TestRunIsolated:
             text=input_data.text.upper() if input_data else "NONE"
         ))
 
-        upper_node = Node.scripted("upper", fn="upper", inputs=RawText, output=RawText)
+        upper_node = Node.scripted("upper", fn="upper", inputs=RawText, outputs=RawText)
 
         # Direct invocation — no pipeline, no compile, no run
         result = upper_node.run_isolated(input=RawText(text="hello"))
@@ -2342,7 +2342,7 @@ class TestRunIsolated:
         ))
 
         decompose = Node(
-            "decompose", mode="produce", output=Claims, model="fast", prompt="test"
+            "decompose", mode="produce", outputs=Claims, model="fast", prompt="test"
         )
 
         result = decompose.run_isolated()
@@ -2360,7 +2360,7 @@ class TestRunIsolated:
             return Claims(items=["ok"])
 
         register_scripted("cfg_test", fn)
-        node = Node.scripted("cfg-test", fn="cfg_test", output=Claims)
+        node = Node.scripted("cfg-test", fn="cfg_test", outputs=Claims)
 
         result = node.run_isolated(
             config={"configurable": {"node_id": "TEST-001", "env": "staging"}}
@@ -2395,7 +2395,7 @@ class TestConfigInjectionPatterns:
         register_scripted("resourced", node_with_resources)
 
         pipeline = Construct("test-resources", nodes=[
-            Node.scripted("step", fn="resourced", output=Claims),
+            Node.scripted("step", fn="resourced", outputs=Claims),
         ])
         graph = compile(pipeline)
         result = run(
@@ -2425,11 +2425,11 @@ class TestConfigInjectionPatterns:
             "sub",
             input=Claims,
             output=RawText,
-            nodes=[Node.scripted("inner", fn="sub_node", output=RawText)],
+            nodes=[Node.scripted("inner", fn="sub_node", outputs=RawText)],
         )
 
         parent = Construct("parent", nodes=[
-            Node.scripted("seed", fn="parent_seed", output=Claims),
+            Node.scripted("seed", fn="parent_seed", outputs=Claims),
             sub,
         ])
         graph = compile(parent)
@@ -2462,7 +2462,7 @@ class TestConfigInjectionPatterns:
         register_scripted("cfg_merge", merge_fn)
 
         node = Node.scripted(
-            "gen", fn="cfg_gen", output=Claims
+            "gen", fn="cfg_gen", outputs=Claims
         ) | Oracle(n=3, merge_fn="cfg_merge")
 
         pipeline = Construct("test-oracle-config", nodes=[node])
@@ -2498,9 +2498,9 @@ class TestConfigInjectionPatterns:
 
         register_scripted("verify_cfg", verify_with_config)
 
-        make = Node.scripted("make", fn="make_groups", output=Clusters)
+        make = Node.scripted("make", fn="make_groups", outputs=Clusters)
         verify = Node.scripted(
-            "verify", fn="verify_cfg", inputs=ClusterGroup, output=MatchResult
+            "verify", fn="verify_cfg", inputs=ClusterGroup, outputs=MatchResult
         ) | Each(over="make.groups", key="label")
 
         pipeline = Construct("test-each-config", nodes=[make, verify])
@@ -2531,9 +2531,9 @@ class TestConfigInjectionPatterns:
         register_scripted("track_c", tracking_fn)
 
         pipeline = Construct("test-all-config", nodes=[
-            Node.scripted("a", fn="track_a", output=Claims),
-            Node.scripted("b", fn="track_b", output=Claims),
-            Node.scripted("c", fn="track_c", output=Claims),
+            Node.scripted("a", fn="track_a", outputs=Claims),
+            Node.scripted("b", fn="track_b", outputs=Claims),
+            Node.scripted("c", fn="track_c", outputs=Claims),
         ])
         graph = compile(pipeline)
         run(graph,
@@ -2558,7 +2558,7 @@ class TestOutputStrategyStructured:
         """Produce node uses with_structured_output by default."""
         configure_fake_llm(lambda tier: StructuredFake(lambda m: m(items=["via-structured"])))
 
-        node = Node(name="extract", mode="produce", output=Claims, model="fast", prompt="test")
+        node = Node(name="extract", mode="produce", outputs=Claims, model="fast", prompt="test")
         pipeline = Construct("test-structured", nodes=[node])
         graph = compile(pipeline)
         result = run(graph, input={"node_id": "test"})
@@ -2585,7 +2585,7 @@ class TestOutputStrategyJsonMode:
         node = Node(
             name="extract",
             mode="produce",
-            output=Claims,
+            outputs=Claims,
             model="fast",
             prompt="test",
             llm_config={"output_strategy": "json_mode"},
@@ -2604,7 +2604,7 @@ class TestOutputStrategyJsonMode:
         node = Node(
             name="extract",
             mode="produce",
-            output=Claims,
+            outputs=Claims,
             model="fast",
             prompt="test",
             llm_config={"output_strategy": "json_mode"},
@@ -2628,7 +2628,7 @@ class TestOutputStrategyText:
         node = Node(
             name="extract",
             mode="produce",
-            output=Claims,
+            outputs=Claims,
             model="fast",
             prompt="test",
             llm_config={"output_strategy": "text"},
@@ -2677,7 +2677,7 @@ class TestOutputStrategyOnGather:
         node = Node(
             name="research",
             mode="gather",
-            output=Claims,
+            outputs=Claims,
             model="fast",
             prompt="test",
             tools=[Tool(name="lookup", budget=1)],
@@ -2706,7 +2706,7 @@ class TestPromptCompilerReceivesOutputModel:
             prompt_compiler=tracking_compiler,
         )
 
-        node = Node(name="x", mode="produce", output=Claims, model="fast", prompt="test")
+        node = Node(name="x", mode="produce", outputs=Claims, model="fast", prompt="test")
         pipeline = Construct("test", nodes=[node])
         graph = compile(pipeline)
         run(graph, input={"node_id": "test"})
@@ -2728,7 +2728,7 @@ class TestPromptCompilerReceivesOutputModel:
         )
 
         node = Node(
-            name="x", mode="produce", output=Claims, model="fast", prompt="test",
+            name="x", mode="produce", outputs=Claims, model="fast", prompt="test",
             llm_config={"output_strategy": "json_mode", "temperature": 0.5},
         )
         pipeline = Construct("test", nodes=[node])
@@ -2764,7 +2764,7 @@ class TestPromptCompilerReceivesOutputModel:
         )
 
         node = Node(
-            name="x", mode="produce", output=Claims, model="fast", prompt="decompose",
+            name="x", mode="produce", outputs=Claims, model="fast", prompt="decompose",
             llm_config={"output_strategy": "json_mode"},
         )
         pipeline = Construct("test", nodes=[node])
@@ -2802,11 +2802,11 @@ class TestNodeDecorator:
 
         mod = self._fresh_module("test_basic_chain_mod")
 
-        @node(mode="scripted", output=RawText)
+        @node(mode="scripted", outputs=RawText)
         def seed() -> RawText:
             return RawText(text="hello world")
 
-        @node(mode="scripted", output=Claims)
+        @node(mode="scripted", outputs=Claims)
         def split(seed: RawText) -> Claims:
             return Claims(items=[w for w in seed.text.split() if w])
 
@@ -2844,19 +2844,19 @@ class TestNodeDecorator:
 
         mod = self._fresh_module("test_fan_in_mod")
 
-        @node(mode="scripted", output=A)
+        @node(mode="scripted", outputs=A)
         def alpha() -> A:
             return A(value="a")
 
-        @node(mode="scripted", output=B)
+        @node(mode="scripted", outputs=B)
         def beta() -> B:
             return B(value="b")
 
-        @node(mode="scripted", output=C)
+        @node(mode="scripted", outputs=C)
         def gamma() -> C:
             return C(value="c")
 
-        @node(mode="scripted", output=Report)
+        @node(mode="scripted", outputs=Report)
         def report(alpha: A, beta: B, gamma: C) -> Report:
             return Report(summary=f"{alpha.value}-{beta.value}-{gamma.value}")
 
@@ -2880,7 +2880,7 @@ class TestNodeDecorator:
         assert result["report"].summary == "a-b-c"
 
     def test_node_decorator_explicit_kwargs_override_annotations(self):
-        """Explicit @node(output=X) beats the function's return annotation."""
+        """Explicit @node(outputs=X) beats the function's return annotation."""
         from neograph import construct_from_module, node
 
         class Bogus(BaseModel, frozen=True):
@@ -2888,7 +2888,7 @@ class TestNodeDecorator:
 
         mod = self._fresh_module("test_kwargs_override_mod")
 
-        @node(mode="scripted", output=Claims)  # explicit output overrides `-> Bogus`
+        @node(mode="scripted", outputs=Claims)  # explicit output overrides `-> Bogus`
         def producer() -> Bogus:  # intentional mismatch
             return Claims(items=["overridden"])
 
@@ -2896,8 +2896,8 @@ class TestNodeDecorator:
 
         pipeline = construct_from_module(mod)
         (only_node,) = pipeline.nodes
-        assert only_node.output is Claims
-        assert only_node.output is not Bogus
+        assert only_node.outputs is Claims
+        assert only_node.outputs is not Bogus
 
     def test_node_decorator_unknown_param_raises(self):
         """A parameter that doesn't name any @node in the module raises
@@ -2906,7 +2906,7 @@ class TestNodeDecorator:
 
         mod = self._fresh_module("test_unknown_param_mod")
 
-        @node(mode="scripted", output=Claims)
+        @node(mode="scripted", outputs=Claims)
         def orphan(ghost: RawText) -> Claims:
             return Claims(items=["x"])
 
@@ -2928,17 +2928,17 @@ class TestNodeDecorator:
         # Declaration order inside the function body is also shuffled: the
         # downstream-most node is declared first.
 
-        @node(mode="scripted", output=ClassifiedClaims)
+        @node(mode="scripted", outputs=ClassifiedClaims)
         def report(split: Claims) -> ClassifiedClaims:
             return ClassifiedClaims(
                 classified=[{"claim": c, "category": "x"} for c in split.items],
             )
 
-        @node(mode="scripted", output=RawText)
+        @node(mode="scripted", outputs=RawText)
         def seed() -> RawText:
             return RawText(text="a b c")
 
-        @node(mode="scripted", output=Claims)
+        @node(mode="scripted", outputs=Claims)
         def split(seed: RawText) -> Claims:
             return Claims(items=seed.text.split())
 
@@ -2964,17 +2964,17 @@ class TestNodeDecorator:
 
         mod = self._fresh_module("test_name_convention_mod")
 
-        @node(mode="scripted", output=Claims)
+        @node(mode="scripted", outputs=Claims)
         def seed_text() -> Claims:
             return Claims(items=["one", "two"])
 
-        @node(mode="scripted", output=Clusters)
+        @node(mode="scripted", outputs=Clusters)
         def make_clusters(seed_text: Claims) -> Clusters:
             return Clusters(
                 groups=[ClusterGroup(label="g", claim_ids=list(seed_text.items))],
             )
 
-        @node(mode="scripted", output=ClassifiedClaims)
+        @node(mode="scripted", outputs=ClassifiedClaims)
         def summarize(make_clusters: Clusters) -> ClassifiedClaims:
             return ClassifiedClaims(
                 classified=[
@@ -3011,40 +3011,40 @@ class TestNodeDecoratorModeInference:
     """@node mode inference: mode=None infers from prompt/model presence."""
 
     def test_default_mode_infers_scripted_when_no_prompt(self):
-        """@node(output=X) with no prompt/model infers mode='scripted'."""
+        """@node(outputs=X) with no prompt/model infers mode='scripted'."""
         from neograph import node
 
-        @node(output=RawText)
+        @node(outputs=RawText)
         def seed() -> RawText:
             return RawText(text="hello")
 
         assert seed.mode == "scripted"
 
     def test_default_mode_infers_produce_when_prompt_present(self):
-        """@node(output=X, prompt='...', model='...') infers mode='produce'."""
+        """@node(outputs=X, prompt='...', model='...') infers mode='produce'."""
         from neograph import node
 
-        @node(output=Claims, prompt="rw/decompose", model="reason")
+        @node(outputs=Claims, prompt="rw/decompose", model="reason")
         def decompose(topic: RawText) -> Claims: ...
 
         assert decompose.mode == "produce"
 
     def test_produce_without_prompt_raises(self):
-        """@node(mode='produce', output=X, model='reason') with no prompt raises at decoration time."""
+        """@node(mode='produce', outputs=X, model='reason') with no prompt raises at decoration time."""
         from neograph import ConstructError, node
 
         with pytest.raises(ConstructError, match="requires prompt="):
 
-            @node(mode="produce", output=Claims, model="reason")
+            @node(mode="produce", outputs=Claims, model="reason")
             def decompose(topic: RawText) -> Claims: ...
 
     def test_gather_without_model_raises(self):
-        """@node(mode='gather', output=X, prompt='...') with no model raises at decoration time."""
+        """@node(mode='gather', outputs=X, prompt='...') with no model raises at decoration time."""
         from neograph import ConstructError, node
 
         with pytest.raises(ConstructError, match="requires model="):
 
-            @node(mode="gather", output=Claims, prompt="rw/decompose")
+            @node(mode="gather", outputs=Claims, prompt="rw/decompose")
             def decompose(topic: RawText) -> Claims: ...
 
     def test_produce_with_nontrivial_body_warns(self):
@@ -3055,7 +3055,7 @@ class TestNodeDecoratorModeInference:
 
         with pytest.warns(UserWarning, match="body.*not executed"):
 
-            @node(mode="produce", output=Claims, prompt="rw/decompose", model="reason")
+            @node(mode="produce", outputs=Claims, prompt="rw/decompose", model="reason")
             def decompose(topic: RawText) -> Claims:
                 return Claims(items=topic.text.split("."))
 
@@ -3068,7 +3068,7 @@ class TestNodeDecoratorModeInference:
         with _warnings.catch_warnings():
             _warnings.simplefilter("error")
 
-            @node(mode="produce", output=Claims, prompt="rw/decompose", model="reason")
+            @node(mode="produce", outputs=Claims, prompt="rw/decompose", model="reason")
             def decompose(topic: RawText) -> Claims: ...
 
 
@@ -3094,20 +3094,20 @@ class TestNodeDecoratorFanInValidation:
         # gamma produces ClassifiedClaims.
         mod = self._fresh_module("test_fan_in_mismatch_2nd")
 
-        @node(mode="scripted", output=RawText)
+        @node(mode="scripted", outputs=RawText)
         def alpha() -> RawText:
             return RawText(text="a")
 
         # beta produces RawText, but report expects Claims for param 'beta'
-        @node(mode="scripted", output=RawText)
+        @node(mode="scripted", outputs=RawText)
         def beta() -> RawText:
             return RawText(text="wrong-type")
 
-        @node(mode="scripted", output=ClassifiedClaims)
+        @node(mode="scripted", outputs=ClassifiedClaims)
         def gamma() -> ClassifiedClaims:
             return ClassifiedClaims(classified=[])
 
-        @node(mode="scripted", output=MergedResult)
+        @node(mode="scripted", outputs=MergedResult)
         def report(alpha: RawText, beta: Claims, gamma: ClassifiedClaims) -> MergedResult:
             return MergedResult(final_text="unreachable")
 
@@ -3133,24 +3133,24 @@ class TestNodeDecoratorFanInValidation:
         # The last param (d_src) expects Clusters but upstream produces RawText.
         mod = self._fresh_module("test_fan_in_mismatch_last")
 
-        @node(mode="scripted", output=RawText)
+        @node(mode="scripted", outputs=RawText)
         def a_src() -> RawText:
             return RawText(text="a")
 
-        @node(mode="scripted", output=Claims)
+        @node(mode="scripted", outputs=Claims)
         def b_src() -> Claims:
             return Claims(items=["b"])
 
-        @node(mode="scripted", output=ClassifiedClaims)
+        @node(mode="scripted", outputs=ClassifiedClaims)
         def c_src() -> ClassifiedClaims:
             return ClassifiedClaims(classified=[])
 
         # d_src produces RawText, but sink expects Clusters for param 'd_src'
-        @node(mode="scripted", output=RawText)
+        @node(mode="scripted", outputs=RawText)
         def d_src() -> RawText:
             return RawText(text="wrong")
 
-        @node(mode="scripted", output=MergedResult)
+        @node(mode="scripted", outputs=MergedResult)
         def sink(a_src: RawText, b_src: Claims, c_src: ClassifiedClaims, d_src: Clusters) -> MergedResult:
             return MergedResult(final_text="unreachable")
 
@@ -3174,19 +3174,19 @@ class TestNodeDecoratorFanInValidation:
 
         mod = self._fresh_module("test_fan_in_match")
 
-        @node(mode="scripted", output=RawText)
+        @node(mode="scripted", outputs=RawText)
         def alpha() -> RawText:
             return RawText(text="a")
 
-        @node(mode="scripted", output=Claims)
+        @node(mode="scripted", outputs=Claims)
         def beta() -> Claims:
             return Claims(items=["b"])
 
-        @node(mode="scripted", output=ClassifiedClaims)
+        @node(mode="scripted", outputs=ClassifiedClaims)
         def gamma() -> ClassifiedClaims:
             return ClassifiedClaims(classified=[])
 
-        @node(mode="scripted", output=MergedResult)
+        @node(mode="scripted", outputs=MergedResult)
         def report(alpha: RawText, beta: Claims, gamma: ClassifiedClaims) -> MergedResult:
             return MergedResult(final_text="ok")
 
@@ -3205,18 +3205,18 @@ class TestNodeDecoratorFanInValidation:
 
         mod = self._fresh_module("test_fan_in_unannotated")
 
-        @node(mode="scripted", output=RawText)
+        @node(mode="scripted", outputs=RawText)
         def alpha() -> RawText:
             return RawText(text="a")
 
         # beta produces Claims
-        @node(mode="scripted", output=Claims)
+        @node(mode="scripted", outputs=Claims)
         def beta() -> Claims:
             return Claims(items=["b"])
 
         # 'beta' has no annotation — should be skipped, not cause a type error
         # even though beta's output (Claims) != RawText
-        @node(mode="scripted", output=MergedResult)
+        @node(mode="scripted", outputs=MergedResult)
         def report(alpha: RawText, beta) -> MergedResult:
             return MergedResult(final_text="ok")
 
@@ -3244,7 +3244,7 @@ class TestNodeDecoratorFanout:
 
         mod = self._fresh_module("test_fanout_e2e")
 
-        @node(mode="scripted", output=Clusters)
+        @node(mode="scripted", outputs=Clusters)
         def make_clusters() -> Clusters:
             return Clusters(groups=[
                 ClusterGroup(label="alpha", claim_ids=["c1", "c2"]),
@@ -3253,7 +3253,7 @@ class TestNodeDecoratorFanout:
 
         @node(
             mode="scripted",
-            output=MatchResult,
+            outputs=MatchResult,
             map_over="make_clusters.groups",
             map_key="label",
         )
@@ -3287,7 +3287,7 @@ class TestNodeDecoratorFanout:
         from neograph import ConstructError, node
 
         with pytest.raises(ConstructError, match="map_key"):
-            @node(mode="scripted", output=MatchResult, map_over="make_clusters.groups")
+            @node(mode="scripted", outputs=MatchResult, map_over="make_clusters.groups")
             def verify(cluster: ClusterGroup) -> MatchResult:
                 ...
 
@@ -3296,7 +3296,7 @@ class TestNodeDecoratorFanout:
         from neograph import ConstructError, node
 
         with pytest.raises(ConstructError, match="map_over"):
-            @node(mode="scripted", output=MatchResult, map_key="label")
+            @node(mode="scripted", outputs=MatchResult, map_key="label")
             def verify(cluster: ClusterGroup) -> MatchResult:
                 ...
 
@@ -3308,7 +3308,7 @@ class TestNodeDecoratorFanout:
 
         @node(
             mode="scripted",
-            output=MatchResult,
+            outputs=MatchResult,
             map_over="make_clusters.groups",
             map_key="label",
         )
@@ -3331,13 +3331,13 @@ class TestNodeDecoratorFanout:
 
         mod = self._fresh_module("test_fanout_skip_adj")
 
-        @node(mode="scripted", output=Clusters)
+        @node(mode="scripted", outputs=Clusters)
         def make_clusters() -> Clusters:
             return Clusters(groups=[])
 
         @node(
             mode="scripted",
-            output=MatchResult,
+            outputs=MatchResult,
             map_over="make_clusters.groups",
             map_key="label",
         )
@@ -3358,17 +3358,17 @@ class TestNodeDecoratorFanout:
 
         mod = self._fresh_module("test_fanout_mixed")
 
-        @node(mode="scripted", output=RawText)
+        @node(mode="scripted", outputs=RawText)
         def context() -> RawText:
             return RawText(text="ctx")
 
-        @node(mode="scripted", output=Clusters)
+        @node(mode="scripted", outputs=Clusters)
         def make_clusters() -> Clusters:
             return Clusters(groups=[])
 
         @node(
             mode="scripted",
-            output=MatchResult,
+            outputs=MatchResult,
             map_over="make_clusters.groups",
             map_key="label",
         )
@@ -3426,7 +3426,7 @@ class TestNodeDecoratorOracle:
 
         mod = self._fresh_module("test_oracle_merge_fn")
 
-        @node(mode="produce", output=Claims, prompt="rw/decompose", model="reason",
+        @node(mode="produce", outputs=Claims, prompt="rw/decompose", model="reason",
               ensemble_n=3, merge_fn="combine_dec")
         def decompose(topic: RawText) -> Claims: ...
 
@@ -3444,7 +3444,7 @@ class TestNodeDecoratorOracle:
         attached with merge_prompt for LLM judge."""
         from neograph import node
 
-        @node(mode="produce", output=Claims, prompt="rw/decompose", model="reason",
+        @node(mode="produce", outputs=Claims, prompt="rw/decompose", model="reason",
               ensemble_n=2, merge_prompt="rw/decompose-merge")
         def decompose(topic: RawText) -> Claims: ...
 
@@ -3458,7 +3458,7 @@ class TestNodeDecoratorOracle:
         """merge_fn without ensemble_n defaults to n=3."""
         from neograph import node
 
-        @node(mode="produce", output=Claims, prompt="rw/decompose", model="reason",
+        @node(mode="produce", outputs=Claims, prompt="rw/decompose", model="reason",
               merge_fn="combine")
         def decompose(topic: RawText) -> Claims: ...
 
@@ -3472,7 +3472,7 @@ class TestNodeDecoratorOracle:
         from neograph import node
 
         with pytest.raises(ConstructError, match="neither merge_fn nor merge_prompt"):
-            @node(mode="produce", output=Claims, prompt="rw/decompose", model="reason",
+            @node(mode="produce", outputs=Claims, prompt="rw/decompose", model="reason",
                   ensemble_n=3)
             def decompose(topic: RawText) -> Claims: ...
 
@@ -3481,7 +3481,7 @@ class TestNodeDecoratorOracle:
         from neograph import node
 
         with pytest.raises(ConstructError, match="both merge_fn and merge_prompt"):
-            @node(mode="produce", output=Claims, prompt="rw/decompose", model="reason",
+            @node(mode="produce", outputs=Claims, prompt="rw/decompose", model="reason",
                   ensemble_n=3, merge_fn="combine", merge_prompt="rw/merge")
             def decompose(topic: RawText) -> Claims: ...
 
@@ -3490,7 +3490,7 @@ class TestNodeDecoratorOracle:
         from neograph import node
 
         with pytest.raises(ConstructError, match="ensemble_n must be >= 2"):
-            @node(mode="produce", output=Claims, prompt="rw/decompose", model="reason",
+            @node(mode="produce", outputs=Claims, prompt="rw/decompose", model="reason",
                   ensemble_n=1, merge_fn="combine")
             def decompose(topic: RawText) -> Claims: ...
 
@@ -3522,9 +3522,9 @@ class TestNodeDecoratorRawMode:
 
         mod = self._fresh_module("test_raw_mode_basic")
 
-        make = Node.scripted("make-claims", fn="make_claims", output=Claims)
+        make = Node.scripted("make-claims", fn="make_claims", outputs=Claims)
 
-        @node(mode="raw", inputs=Claims, output=Claims)
+        @node(mode="raw", inputs=Claims, outputs=Claims)
         def filter_claims(state, config):
             claims = None
             for field_name in state.__class__.model_fields:
@@ -3553,19 +3553,19 @@ class TestNodeDecoratorRawMode:
 
         # Three parameters — too many
         with pytest.raises(ConstructError, match="exactly two parameters"):
-            @node(mode="raw", inputs=Claims, output=Claims)
+            @node(mode="raw", inputs=Claims, outputs=Claims)
             def bad_three(state, config, extra):
                 pass
 
         # Wrong parameter names
         with pytest.raises(ConstructError, match="named 'state' and 'config'"):
-            @node(mode="raw", inputs=Claims, output=Claims)
+            @node(mode="raw", inputs=Claims, outputs=Claims)
             def bad_names(s, c):
                 pass
 
         # One parameter — too few
         with pytest.raises(ConstructError, match="exactly two parameters"):
-            @node(mode="raw", inputs=Claims, output=Claims)
+            @node(mode="raw", inputs=Claims, outputs=Claims)
             def bad_one(state):
                 pass
 
@@ -3575,11 +3575,11 @@ class TestNodeDecoratorRawMode:
 
         mod = self._fresh_module("test_raw_downstream")
 
-        @node(mode="raw", inputs=Claims, output=Claims)
+        @node(mode="raw", inputs=Claims, outputs=Claims)
         def produce_claims(state, config):
             return {"produce_claims": Claims(items=["x", "y"])}
 
-        @node(mode="scripted", output=RawText)
+        @node(mode="scripted", outputs=RawText)
         def summarize(produce_claims: Claims) -> RawText:
             return RawText(text=f"count={len(produce_claims.items)}")
 
@@ -3600,15 +3600,15 @@ class TestNodeDecoratorRawMode:
 
         mod = self._fresh_module("test_mixed_raw_scripted")
 
-        @node(mode="scripted", output=RawText)
+        @node(mode="scripted", outputs=RawText)
         def extract() -> RawText:
             return RawText(text="hello world")
 
-        @node(mode="raw", inputs=RawText, output=Claims)
+        @node(mode="raw", inputs=RawText, outputs=Claims)
         def process(state, config):
             return {"process": Claims(items=["from-raw"])}
 
-        @node(mode="scripted", output=ClassifiedClaims)
+        @node(mode="scripted", outputs=ClassifiedClaims)
         def classify(process: Claims) -> ClassifiedClaims:
             return ClassifiedClaims(
                 classified=[{"claim": c, "category": "raw"} for c in process.items]
@@ -3657,7 +3657,7 @@ class TestNodeDecoratorOperator:
 
         validate = node(
             mode="scripted",
-            output=ValidationResult,
+            outputs=ValidationResult,
             interrupt_when="validation_failed",
         )(lambda: ValidationResult(passed=False, issues=["missing stakeholder coverage"]))
         # Override: use a Node.scripted approach instead — @node scripted with
@@ -3665,7 +3665,7 @@ class TestNodeDecoratorOperator:
         # for the factory. Build the node directly via the decorator.
 
         n = Node.scripted(
-            "validate", fn="scripted_validate", output=ValidationResult,
+            "validate", fn="scripted_validate", outputs=ValidationResult,
         ) | Operator(when="validation_failed")
 
         pipeline = Construct("test-node-op-string", nodes=[n])
@@ -3684,7 +3684,7 @@ class TestNodeDecoratorOperator:
 
         register_condition("some_check", lambda state: None)
 
-        @node(mode="scripted", output=ValidationResult, interrupt_when="some_check")
+        @node(mode="scripted", outputs=ValidationResult, interrupt_when="some_check")
         def check_things() -> ValidationResult:
             return ValidationResult(passed=True, issues=[])
 
@@ -3699,7 +3699,7 @@ class TestNodeDecoratorOperator:
 
         cond_fn = lambda state: {"flag": True} if getattr(state, "validate", None) else None
 
-        @node(mode="scripted", output=ValidationResult, interrupt_when=cond_fn)
+        @node(mode="scripted", outputs=ValidationResult, interrupt_when=cond_fn)
         def validate() -> ValidationResult:
             return ValidationResult(passed=False, issues=["x"])
 
@@ -3732,7 +3732,7 @@ class TestNodeDecoratorOperator:
         ))
 
         n = Node.scripted(
-            "validate-resume", fn="validate_resume_test", output=ValidationResult,
+            "validate-resume", fn="validate_resume_test", outputs=ValidationResult,
         ) | Operator(when="needs_review_deco")
 
         pipeline = Construct("test-node-op-resume", nodes=[n])
@@ -3763,7 +3763,7 @@ class TestNodeDecoratorOperator:
         register_condition("always_falsy", lambda state: None)
 
         n = Node.scripted(
-            "validate", fn="quality_ok", output=ValidationResult,
+            "validate", fn="quality_ok", outputs=ValidationResult,
         ) | Operator(when="always_falsy")
 
         pipeline = Construct("test-node-op-pass", nodes=[n])
@@ -3782,7 +3782,7 @@ class TestNodeDecoratorOperator:
         from neograph import node
 
         with pytest.raises(ConstructError, match="interrupt_when must be a string"):
-            @node(mode="scripted", output=ValidationResult, interrupt_when=42)
+            @node(mode="scripted", outputs=ValidationResult, interrupt_when=42)
             def bad_node() -> ValidationResult:
                 return ValidationResult(passed=True, issues=[])
 
@@ -3808,7 +3808,7 @@ class TestNodeDecoratorParams:
 
         mod = _types.ModuleType("test_from_input_mod")
 
-        @node(mode="scripted", output=RawText)
+        @node(mode="scripted", outputs=RawText)
         def greet(topic: Annotated[str, FromInput]) -> RawText:
             return RawText(text=f"Hello, {topic}!")
 
@@ -3837,7 +3837,7 @@ class TestNodeDecoratorParams:
 
         limiter = FakeRateLimiter()
 
-        @node(mode="scripted", output=Claims)
+        @node(mode="scripted", outputs=Claims)
         def process(rate_limiter: Annotated[FakeRateLimiter, FromConfig]) -> Claims:
             rate_limiter.call()
             return Claims(items=[f"calls={rate_limiter.calls}"])
@@ -3863,7 +3863,7 @@ class TestNodeDecoratorParams:
 
         mod = _types.ModuleType("test_default_const_mod")
 
-        @node(mode="scripted", output=RawText)
+        @node(mode="scripted", outputs=RawText)
         def greet(greeting: str = "Hi") -> RawText:
             return RawText(text=f"{greeting}, friend!")
 
@@ -3892,11 +3892,11 @@ class TestNodeDecoratorParams:
 
         logger = FakeLogger()
 
-        @node(mode="scripted", output=RawText)
+        @node(mode="scripted", outputs=RawText)
         def seed() -> RawText:
             return RawText(text="base")
 
-        @node(mode="scripted", output=Claims)
+        @node(mode="scripted", outputs=Claims)
         def combine(
             seed: RawText,
             topic: Annotated[str, FromInput],
@@ -3929,7 +3929,7 @@ class TestNodeDecoratorParams:
 
         mod = _types.ModuleType("test_from_input_missing_mod")
 
-        @node(mode="scripted", output=RawText)
+        @node(mode="scripted", outputs=RawText)
         def greet(topic: Annotated[str, FromInput]) -> RawText:
             if topic is None:
                 return RawText(text="no topic")
@@ -3959,7 +3959,7 @@ class TestNodeDecoratorErrorLocation:
 
         mod = self._fresh_module("test_src_loc_mod")
 
-        @node(mode="scripted", output=Claims)
+        @node(mode="scripted", outputs=Claims)
         def orphan(ghost: RawText) -> Claims:
             return Claims(items=["x"])
 
@@ -3976,11 +3976,11 @@ class TestNodeDecoratorErrorLocation:
 
         mod = self._fresh_module("test_cycle_loc_mod")
 
-        @node(mode="scripted", output=RawText)
+        @node(mode="scripted", outputs=RawText)
         def ping(pong: Claims) -> RawText:
             return RawText(text="p")
 
-        @node(mode="scripted", output=Claims)
+        @node(mode="scripted", outputs=Claims)
         def pong(ping: RawText) -> Claims:
             return Claims(items=["q"])
 
@@ -3998,7 +3998,7 @@ class TestNodeDecoratorErrorLocation:
 
         mod = self._fresh_module("test_basename_mod")
 
-        @node(mode="scripted", output=Claims)
+        @node(mode="scripted", outputs=Claims)
         def orphan(ghost: RawText) -> Claims:
             return Claims(items=["x"])
 
@@ -4028,7 +4028,7 @@ class TestNodeDecoratorCrossModule:
         # Module A: defines an upstream @node
         mod_a = self._fresh_module("cross_mod_a")
 
-        @node(mode="scripted", output=RawText)
+        @node(mode="scripted", outputs=RawText)
         def fetch() -> RawText:
             return RawText(text="fetched data")
 
@@ -4038,7 +4038,7 @@ class TestNodeDecoratorCrossModule:
         mod_b = self._fresh_module("cross_mod_b")
         mod_b.fetch = fetch  # simulates `from cross_mod_a import fetch`
 
-        @node(mode="scripted", output=Claims)
+        @node(mode="scripted", outputs=Claims)
         def process(fetch: RawText) -> Claims:
             return Claims(items=[fetch.text.upper()])
 
@@ -4059,12 +4059,12 @@ class TestNodeDecoratorCrossModule:
 
         mod = self._fresh_module("collision_mod")
 
-        @node(mode="scripted", output=RawText)
+        @node(mode="scripted", outputs=RawText)
         def compute() -> RawText:
             return RawText(text="first")
 
         # Second node: different lambda but explicit name='compute' → same field_name
-        second_compute = node(mode="scripted", output=Claims, name="compute")(
+        second_compute = node(mode="scripted", outputs=Claims, name="compute")(
             lambda: Claims(items=["second"])
         )
 
@@ -4081,12 +4081,12 @@ class TestNodeDecoratorCrossModule:
 
         mod = self._fresh_module("collision_resolved_mod")
 
-        @node(mode="scripted", output=RawText)
+        @node(mode="scripted", outputs=RawText)
         def compute() -> RawText:
             return RawText(text="first")
 
         # Second node: explicit name= avoids collision
-        resolved = node(mode="scripted", output=Claims, name="stats_compute")(
+        resolved = node(mode="scripted", outputs=Claims, name="stats_compute")(
             lambda: Claims(items=["second"])
         )
 
@@ -4112,9 +4112,9 @@ class TestForwardConstructBase:
         from neograph import ForwardConstruct, Node
 
         class Triple(ForwardConstruct):
-            a = Node.scripted("a", fn="a_fn", output=RawText)
-            b = Node.scripted("b", fn="b_fn", output=Claims)
-            c = Node.scripted("c", fn="c_fn", output=ClassifiedClaims)
+            a = Node.scripted("a", fn="a_fn", outputs=RawText)
+            b = Node.scripted("b", fn="b_fn", outputs=Claims)
+            c = Node.scripted("c", fn="c_fn", outputs=ClassifiedClaims)
 
             def forward(self, topic):
                 x = self.a(topic)
@@ -4132,7 +4132,7 @@ class TestForwardConstructBase:
         from neograph import Construct, ForwardConstruct, Node
 
         class Simple(ForwardConstruct):
-            a = Node.scripted("a", fn="a_fn", output=RawText)
+            a = Node.scripted("a", fn="a_fn", outputs=RawText)
 
             def forward(self, topic):
                 return self.a(topic)
@@ -4146,7 +4146,7 @@ class TestForwardConstructBase:
         from neograph import ForwardConstruct, Node
 
         class NoForward(ForwardConstruct):
-            a = Node.scripted("a", fn="a_fn", output=RawText)
+            a = Node.scripted("a", fn="a_fn", outputs=RawText)
 
         with pytest.raises(TypeError, match="must override forward"):
             NoForward()
@@ -4165,8 +4165,8 @@ class TestForwardConstructTracer:
         from neograph import ForwardConstruct, Node
 
         class TwoStep(ForwardConstruct):
-            extract = Node.scripted("extract", fn="extract_fn", output=RawText)
-            classify = Node.scripted("classify", fn="classify_fn", output=Claims)
+            extract = Node.scripted("extract", fn="extract_fn", outputs=RawText)
+            classify = Node.scripted("classify", fn="classify_fn", outputs=Claims)
 
             def forward(self, topic):
                 raw = self.extract(topic)
@@ -4182,9 +4182,9 @@ class TestForwardConstructTracer:
         from neograph import ForwardConstruct, Node
 
         class ThreeChain(ForwardConstruct):
-            a = Node.scripted("a", fn="a_fn", output=RawText)
-            b = Node.scripted("b", fn="b_fn", output=Claims)
-            c = Node.scripted("c", fn="c_fn", output=ClassifiedClaims)
+            a = Node.scripted("a", fn="a_fn", outputs=RawText)
+            b = Node.scripted("b", fn="b_fn", outputs=Claims)
+            c = Node.scripted("c", fn="c_fn", outputs=ClassifiedClaims)
 
             def forward(self, topic):
                 x = self.a(topic)
@@ -4199,8 +4199,8 @@ class TestForwardConstructTracer:
         from neograph import ForwardConstruct, Node
 
         class Identity(ForwardConstruct):
-            extract = Node.scripted("extract", fn="extract_fn", output=RawText)
-            classify = Node.scripted("classify", fn="classify_fn", output=Claims)
+            extract = Node.scripted("extract", fn="extract_fn", outputs=RawText)
+            classify = Node.scripted("classify", fn="classify_fn", outputs=Claims)
 
             def forward(self, topic):
                 raw = self.extract(topic)
@@ -4215,9 +4215,9 @@ class TestForwardConstructTracer:
         from neograph import ForwardConstruct, Node
 
         class PartialUse(ForwardConstruct):
-            a = Node.scripted("a", fn="a_fn", output=RawText)
-            b = Node.scripted("b", fn="b_fn", output=Claims)
-            unused = Node.scripted("unused", fn="unused_fn", output=ClassifiedClaims)
+            a = Node.scripted("a", fn="a_fn", outputs=RawText)
+            b = Node.scripted("b", fn="b_fn", outputs=Claims)
+            unused = Node.scripted("unused", fn="unused_fn", outputs=ClassifiedClaims)
 
             def forward(self, topic):
                 x = self.a(topic)
@@ -4245,8 +4245,8 @@ class TestForwardConstructCompile:
         register_scripted("fc_split", lambda input_data, config: Claims(items=["claim-1", "claim-2"]))
 
         class ScriptedPipeline(ForwardConstruct):
-            extract = Node.scripted("fc-extract", fn="fc_extract", output=RawText)
-            split = Node.scripted("fc-split", fn="fc_split", output=Claims)
+            extract = Node.scripted("fc-extract", fn="fc_extract", outputs=RawText)
+            split = Node.scripted("fc-split", fn="fc_split", outputs=Claims)
 
             def forward(self, topic):
                 raw = self.extract(topic)
@@ -4272,8 +4272,8 @@ class TestForwardConstructCompile:
         configure_fake_llm(lambda tier: fake)
 
         class ProducePipeline(ForwardConstruct):
-            prep = Node.scripted("fc-prep", fn="fc_prep", output=RawText)
-            classify = Node("fc-classify", mode="produce", output=Claims, prompt="rw/classify", model="fast")
+            prep = Node.scripted("fc-prep", fn="fc_prep", outputs=RawText)
+            classify = Node("fc-classify", mode="produce", outputs=Claims, prompt="rw/classify", model="fast")
 
             def forward(self, topic):
                 raw = self.prep(topic)
@@ -4294,8 +4294,8 @@ class TestForwardConstructCompile:
         register_scripted("fc_equiv_a", lambda input_data, config: RawText(text="extracted"))
         register_scripted("fc_equiv_b", lambda input_data, config: Claims(items=["x", "y"]))
 
-        node_a = Node.scripted("fc-equiv-a", fn="fc_equiv_a", output=RawText)
-        node_b = Node.scripted("fc-equiv-b", fn="fc_equiv_b", output=Claims)
+        node_a = Node.scripted("fc-equiv-a", fn="fc_equiv_a", outputs=RawText)
+        node_b = Node.scripted("fc-equiv-b", fn="fc_equiv_b", outputs=Claims)
 
         # Declarative
         declarative = Construct("fc-equiv-test", nodes=[node_a, node_b])
@@ -4329,11 +4329,11 @@ class TestConstructFromFunctions:
         """Two @node functions wired by parameter name via explicit list."""
         from neograph import compile, construct_from_functions, node, run
 
-        @node(output=RawText)
+        @node(outputs=RawText)
         def cff_seed() -> RawText:
             return RawText(text="hello world")
 
-        @node(output=Claims)
+        @node(outputs=Claims)
         def cff_split(cff_seed: RawText) -> Claims:
             return Claims(items=[w for w in cff_seed.text.split() if w])
 
@@ -4350,15 +4350,15 @@ class TestConstructFromFunctions:
         """Explicit list in non-topological order still sorts correctly."""
         from neograph import compile, construct_from_functions, node, run
 
-        @node(output=RawText)
+        @node(outputs=RawText)
         def cff_topo_seed() -> RawText:
             return RawText(text="a b c")
 
-        @node(output=Claims)
+        @node(outputs=Claims)
         def cff_topo_split(cff_topo_seed: RawText) -> Claims:
             return Claims(items=cff_topo_seed.text.split())
 
-        @node(output=ClassifiedClaims)
+        @node(outputs=ClassifiedClaims)
         def cff_topo_report(cff_topo_split: Claims) -> ClassifiedClaims:
             return ClassifiedClaims(
                 classified=[{"claim": c, "category": "x"} for c in cff_topo_split.items]
@@ -4376,20 +4376,20 @@ class TestConstructFromFunctions:
         from neograph import compile, construct_from_functions, node, run
 
         # Pipeline A
-        @node(output=RawText)
+        @node(outputs=RawText)
         def pipeA_start() -> RawText:
             return RawText(text="pipeline A")
 
-        @node(output=RawText)
+        @node(outputs=RawText)
         def pipeA_end(pipeA_start: RawText) -> RawText:
             return RawText(text=f"A: {pipeA_start.text}")
 
         # Pipeline B (same file, different nodes)
-        @node(output=Claims)
+        @node(outputs=Claims)
         def pipeB_start() -> Claims:
             return Claims(items=["pipeline", "B"])
 
-        @node(output=Claims)
+        @node(outputs=Claims)
         def pipeB_end(pipeB_start: Claims) -> Claims:
             return Claims(items=[f"B:{s}" for s in pipeB_start.items])
 
@@ -4408,7 +4408,7 @@ class TestConstructFromFunctions:
         """A plain function without @node raises a clear error."""
         from neograph import ConstructError, construct_from_functions, node
 
-        @node(output=RawText)
+        @node(outputs=RawText)
         def cff_ok() -> RawText:
             return RawText(text="ok")
 
@@ -4422,7 +4422,7 @@ class TestConstructFromFunctions:
         """Passing a non-callable raises."""
         from neograph import ConstructError, construct_from_functions, node
 
-        @node(output=RawText)
+        @node(outputs=RawText)
         def cff_ok2() -> RawText:
             return RawText(text="ok")
 
@@ -4433,11 +4433,11 @@ class TestConstructFromFunctions:
         """Two functions whose node names collide raise ConstructError."""
         from neograph import ConstructError, construct_from_functions, node
 
-        @node(output=RawText, name="shared")
+        @node(outputs=RawText, name="shared")
         def first() -> RawText:
             return RawText(text="first")
 
-        @node(output=RawText, name="shared")
+        @node(outputs=RawText, name="shared")
         def second() -> RawText:
             return RawText(text="second")
 
@@ -4455,8 +4455,8 @@ class TestConstructLlmConfigDefault:
         configure_fake_llm(lambda tier: StructuredFake(lambda m: m(items=["x"])))
 
         # Build via declarative API — Construct carries the default
-        a = Node("a", mode="produce", output=Claims, model="fast", prompt="p")
-        b = Node("b", mode="produce", inputs=Claims, output=Claims, model="fast", prompt="p")
+        a = Node("a", mode="produce", outputs=Claims, model="fast", prompt="p")
+        b = Node("b", mode="produce", inputs=Claims, outputs=Claims, model="fast", prompt="p")
 
         pipeline = Construct(
             "with-default",
@@ -4478,7 +4478,7 @@ class TestConstructLlmConfigDefault:
         """Per-node llm_config merges with Construct default; node wins on conflicts."""
         from neograph import Construct, Node
 
-        a = Node("a", mode="produce", output=Claims, model="fast", prompt="p",
+        a = Node("a", mode="produce", outputs=Claims, model="fast", prompt="p",
                  llm_config={"temperature": 0.9, "max_tokens": 1000})
 
         pipeline = Construct(
@@ -4502,7 +4502,7 @@ class TestConstructLlmConfigDefault:
         from neograph.factory import register_scripted
 
         register_scripted("noop_k7k", lambda input_data, config: Claims(items=["x"]))
-        a = Node.scripted("a-k7k", fn="noop_k7k", output=Claims)
+        a = Node.scripted("a-k7k", fn="noop_k7k", outputs=Claims)
 
         pipeline = Construct(
             "scripted-default",
@@ -4518,7 +4518,7 @@ class TestConstructLlmConfigDefault:
         """When Construct has no llm_config, nodes keep their original config unchanged."""
         from neograph import Construct, Node
 
-        a = Node("a", mode="produce", output=Claims, model="fast", prompt="p",
+        a = Node("a", mode="produce", outputs=Claims, model="fast", prompt="p",
                  llm_config={"temperature": 0.7})
 
         pipeline = Construct("no-default", nodes=[a])
@@ -4529,10 +4529,10 @@ class TestConstructLlmConfigDefault:
         """@node functions inherit the Construct default via construct_from_functions."""
         from neograph import construct_from_functions, node
 
-        @node(output=Claims, prompt="p", model="fast")
+        @node(outputs=Claims, prompt="p", model="fast")
         def cff_default_a() -> Claims: ...
 
-        @node(output=Claims, prompt="p", model="fast",
+        @node(outputs=Claims, prompt="p", model="fast",
               llm_config={"temperature": 0.9})
         def cff_default_b(cff_default_a: Claims) -> Claims: ...
 
@@ -4567,7 +4567,7 @@ class TestNodeDecoratorFanInEachInterop:
         with an Each-modified upstream producing UpstreamOut per item."""
         from neograph import compile, construct_from_functions, node, run
 
-        @node(output=Clusters)
+        @node(outputs=Clusters)
         def fie_source() -> Clusters:
             return Clusters(
                 groups=[
@@ -4577,7 +4577,7 @@ class TestNodeDecoratorFanInEachInterop:
             )
 
         @node(
-            output=MatchResult,
+            outputs=MatchResult,
             map_over="fie_source.groups",
             map_key="label",
         )
@@ -4587,7 +4587,7 @@ class TestNodeDecoratorFanInEachInterop:
                 matched=[f"m-{cluster.label}"],
             )
 
-        @node(output=ClassifiedClaims)
+        @node(outputs=ClassifiedClaims)
         def fie_summarize(fie_verify: dict[str, MatchResult]) -> ClassifiedClaims:
             # Consumes the full Each-collected dict keyed by cluster label
             return ClassifiedClaims(
@@ -4623,21 +4623,21 @@ class TestNodeDecoratorFanInEachInterop:
         collected mapping without committing to the value type."""
         from neograph import construct_from_functions, node
 
-        @node(output=Clusters)
+        @node(outputs=Clusters)
         def fier_source() -> Clusters:
             return Clusters(
                 groups=[ClusterGroup(label="alpha", claim_ids=["c1"])]
             )
 
         @node(
-            output=MatchResult,
+            outputs=MatchResult,
             map_over="fier_source.groups",
             map_key="label",
         )
         def fier_verify(cluster: ClusterGroup) -> MatchResult:
             return MatchResult(cluster_label=cluster.label, matched=["m"])
 
-        @node(output=ClassifiedClaims)
+        @node(outputs=ClassifiedClaims)
         def fier_summarize(fier_verify: dict) -> ClassifiedClaims:
             return ClassifiedClaims(classified=[])
 
@@ -4653,21 +4653,21 @@ class TestNodeDecoratorFanInEachInterop:
         state field is actually a dict, not a raw item."""
         from neograph import ConstructError, construct_from_functions, node
 
-        @node(output=Clusters)
+        @node(outputs=Clusters)
         def fieraw_source() -> Clusters:
             return Clusters(
                 groups=[ClusterGroup(label="alpha", claim_ids=["c1"])]
             )
 
         @node(
-            output=MatchResult,
+            outputs=MatchResult,
             map_over="fieraw_source.groups",
             map_key="label",
         )
         def fieraw_verify(cluster: ClusterGroup) -> MatchResult:
             return MatchResult(cluster_label=cluster.label, matched=["m"])
 
-        @node(output=ClassifiedClaims)
+        @node(outputs=ClassifiedClaims)
         def fieraw_summarize(fieraw_verify: MatchResult) -> ClassifiedClaims:
             # WRONG: the state field is dict[str, MatchResult], not MatchResult.
             return ClassifiedClaims(classified=[])
@@ -4687,21 +4687,21 @@ class TestNodeDecoratorFanInEachInterop:
         producing `RightType` must still be rejected."""
         from neograph import ConstructError, construct_from_functions, node
 
-        @node(output=Clusters)
+        @node(outputs=Clusters)
         def fiew_source() -> Clusters:
             return Clusters(
                 groups=[ClusterGroup(label="alpha", claim_ids=["c1"])]
             )
 
         @node(
-            output=MatchResult,
+            outputs=MatchResult,
             map_over="fiew_source.groups",
             map_key="label",
         )
         def fiew_verify(cluster: ClusterGroup) -> MatchResult:
             return MatchResult(cluster_label=cluster.label, matched=["m"])
 
-        @node(output=ClassifiedClaims)
+        @node(outputs=ClassifiedClaims)
         def fiew_summarize(fiew_verify: dict[str, RawText]) -> ClassifiedClaims:
             # WRONG: upstream produces MatchResult per item, not RawText.
             return ClassifiedClaims(classified=[])
@@ -4725,7 +4725,7 @@ class TestFromInputPydanticModel:
             node_id: str
             project_root: str
 
-        @node(output=RawText)
+        @node(outputs=RawText)
         def fipb_produce(ctx: Annotated[RunCtx, FromInput]) -> RawText:
             return RawText(text=f"{ctx.node_id}|{ctx.project_root}")
 
@@ -4744,11 +4744,11 @@ class TestFromInputPydanticModel:
         class RunCtx(BaseModel):
             node_id: str
 
-        @node(output=Claims)
+        @node(outputs=Claims)
         def fipb2_source() -> Claims:
             return Claims(items=["a", "b"])
 
-        @node(output=RawText)
+        @node(outputs=RawText)
         def fipb2_join(fipb2_source: Claims, ctx: Annotated[RunCtx, FromInput]) -> RawText:
             return RawText(text=f"{ctx.node_id}: {','.join(fipb2_source.items)}")
 
@@ -4765,7 +4765,7 @@ class TestFromInputPydanticModel:
             node_id: str | None = None
             project_root: str | None = None
 
-        @node(output=RawText)
+        @node(outputs=RawText)
         def fipbm_read(ctx: Annotated[PartialCtx, FromInput]) -> RawText:
             return RawText(text=f"id={ctx.node_id!r},root={ctx.project_root!r}")
 
@@ -4783,7 +4783,7 @@ class TestFromInputPydanticModel:
             tenant: str
             max_items: int
 
-        @node(output=RawText)
+        @node(outputs=RawText)
         def fcb_read(shared: Annotated[Shared, FromConfig]) -> RawText:
             return RawText(text=f"{shared.tenant}:{shared.max_items}")
 
@@ -4829,7 +4829,7 @@ class TestOracleMergeFnDI:
             return Claims(items=["alpha", "beta"])
         register_scripted("omfd_gen_fn", gen_fn)
 
-        gen = Node.scripted("omfd-gen", fn="omfd_gen_fn", output=Claims) | Oracle(
+        gen = Node.scripted("omfd-gen", fn="omfd_gen_fn", outputs=Claims) | Oracle(
             n=2, merge_fn="combine_with_prefix"
         )
 
@@ -4867,7 +4867,7 @@ class TestOracleMergeFnDI:
             return Claims(items=["x"])
         register_scripted("omfdi_gen_fn", gen_fn2)
 
-        gen = Node.scripted("omfdi-gen", fn="omfdi_gen_fn", output=Claims) | Oracle(
+        gen = Node.scripted("omfdi-gen", fn="omfdi_gen_fn", outputs=Claims) | Oracle(
             n=2, merge_fn="tagged_merge"
         )
 
@@ -4895,7 +4895,7 @@ class TestOracleMergeFnDI:
             return Claims(items=["one", "two"])
         register_scripted("pmg_gen_fn", pmg_gen)
 
-        gen = Node.scripted("pmg-gen", fn="pmg_gen_fn", output=Claims) | Oracle(
+        gen = Node.scripted("pmg-gen", fn="pmg_gen_fn", outputs=Claims) | Oracle(
             n=2, merge_fn="plain_merge_backcompat"
         )
 
@@ -4918,7 +4918,7 @@ class TestEffectiveProducerType:
         effective producer type."""
         from neograph._construct_validation import effective_producer_type
 
-        n = Node.scripted("plain", fn="_x_plain", output=Claims)
+        n = Node.scripted("plain", fn="_x_plain", outputs=Claims)
         assert effective_producer_type(n) is Claims
 
     def test_each_node_wraps_as_dict_str_output(self):
@@ -4928,7 +4928,7 @@ class TestEffectiveProducerType:
         from neograph._construct_validation import effective_producer_type
 
         n = Node.scripted(
-            "each-node", fn="_x_each", inputs=ClusterGroup, output=MatchResult
+            "each-node", fn="_x_each", inputs=ClusterGroup, outputs=MatchResult
         ) | Each(over="upstream.items", key="label")
         effective = effective_producer_type(n)
         assert effective == dict[str, MatchResult]
@@ -4938,7 +4938,7 @@ class TestEffectiveProducerType:
         type is the same as the raw output (Oracle doesn't reshape)."""
         from neograph._construct_validation import effective_producer_type
 
-        n = Node.scripted("ens", fn="_x_ens", output=Claims) | Oracle(
+        n = Node.scripted("ens", fn="_x_ens", outputs=Claims) | Oracle(
             n=3, merge_fn="nonexistent_ok_for_this_test"
         )
         assert effective_producer_type(n) is Claims
@@ -4948,7 +4948,7 @@ class TestEffectiveProducerType:
         either. Effective type equals raw output."""
         from neograph._construct_validation import effective_producer_type
 
-        n = Node.scripted("op", fn="_x_op", output=Claims) | Operator(
+        n = Node.scripted("op", fn="_x_op", outputs=Claims) | Operator(
             when="_nonexistent_for_helper_test"
         )
         assert effective_producer_type(n) is Claims
@@ -4960,7 +4960,7 @@ class TestEffectiveProducerType:
         from neograph._construct_validation import effective_producer_type
 
         inner = Node.scripted(
-            "inner", fn="_x_inner", inputs=Claims, output=Claims
+            "inner", fn="_x_inner", inputs=Claims, outputs=Claims
         )
         sub = Construct(
             "sub", input=Claims, output=Claims, nodes=[inner]
@@ -4997,7 +4997,7 @@ class TestEffectiveProducerType:
 class TestNodeInputsFieldRename:
     def test_node_accepts_inputs_kwarg_single_type(self):
         """Node(inputs=SomeType) creates a node with .inputs == SomeType."""
-        n = Node("t", mode="scripted", inputs=Claims, output=RawText)
+        n = Node("t", mode="scripted", inputs=Claims, outputs=RawText)
         assert n.inputs == Claims
 
     def test_node_accepts_inputs_kwarg_dict_form(self):
@@ -5006,24 +5006,24 @@ class TestNodeInputsFieldRename:
             "t",
             mode="scripted",
             inputs={"claims": Claims, "clusters": Clusters},
-            output=MatchResult,
+            outputs=MatchResult,
         )
         assert n.inputs == {"claims": Claims, "clusters": Clusters}
 
     def test_node_accepts_inputs_none_default(self):
         """Node with no inputs kwarg keeps the default (None)."""
-        n = Node("t", mode="scripted", output=RawText)
+        n = Node("t", mode="scripted", outputs=RawText)
         assert n.inputs is None
 
     def test_node_scripted_classmethod_accepts_inputs_kwarg(self):
         """Node.scripted(..., inputs=X) propagates to .inputs."""
-        n = Node.scripted("verify", fn="noop", inputs=ClusterGroup, output=MatchResult)
+        n = Node.scripted("verify", fn="noop", inputs=ClusterGroup, outputs=MatchResult)
         assert n.inputs == ClusterGroup
         assert n.mode == "scripted"
 
     def test_node_has_no_legacy_input_attribute(self):
         """.input attribute no longer exists on Node instances."""
-        n = Node("t", mode="scripted", inputs=Claims, output=RawText)
+        n = Node("t", mode="scripted", inputs=Claims, outputs=RawText)
         assert not hasattr(n, "input"), (
             "Node still exposes legacy .input attribute — rename is incomplete."
         )
@@ -5047,14 +5047,14 @@ class TestFanInValidation:
         consumer = Node.scripted(
             "consumer", fn="f",
             inputs={"a": Claims, "b": RawText, "c": ClusterGroup},
-            output=MatchResult,
+            outputs=MatchResult,
         )
         pipeline = Construct("fan-in-ok", nodes=[a, b, c, consumer])
         assert len(pipeline.nodes) == 4
         # Verify the consumer's dict-form inputs survived assembly unchanged
         resolved = pipeline.nodes[3]
         assert resolved.inputs == {"a": Claims, "b": RawText, "c": ClusterGroup}
-        assert resolved.output is MatchResult
+        assert resolved.outputs is MatchResult
 
     def test_fan_in_dict_unknown_upstream_rejected(self):
         """Consumer declaring inputs['nonexistent'] raises ConstructError
@@ -5063,7 +5063,7 @@ class TestFanInValidation:
         consumer = Node.scripted(
             "consumer", fn="f",
             inputs={"a": Claims, "nonexistent": RawText},
-            output=MatchResult,
+            outputs=MatchResult,
         )
         with pytest.raises(ConstructError) as exc_info:
             Construct("bad-name", nodes=[a, consumer])
@@ -5079,7 +5079,7 @@ class TestFanInValidation:
         consumer = Node.scripted(
             "consumer", fn="f",
             inputs={"a": Claims, "b": Claims},  # b produces RawText, not Claims
-            output=MatchResult,
+            outputs=MatchResult,
         )
         with pytest.raises(ConstructError) as exc_info:
             Construct("bad-type", nodes=[a, b, consumer])
@@ -5101,7 +5101,7 @@ class TestFanInValidation:
         canonicalize = Node.scripted(
             "canonicalize", fn="f",
             inputs={"group": ClusterGroup},
-            output=MatchResult,
+            outputs=MatchResult,
         ) | Each(over="make.groups", key="label")
         # This must NOT raise ConstructError for the "group" key.
         pipeline = Construct("ts7", nodes=[make, canonicalize])
@@ -5117,7 +5117,7 @@ class TestFanInValidation:
         process = Node.scripted(
             "process", fn="f",
             inputs={"a": RawText, "group": ClusterGroup},
-            output=MatchResult,
+            outputs=MatchResult,
         ) | Each(over="make.groups", key="label")
         pipeline = Construct("ts7-mixed", nodes=[a, make, process])
         assert len(pipeline.nodes) == 3
@@ -5127,7 +5127,7 @@ class TestFanInValidation:
         _check_fan_in_inputs iterates zero times and returns without error.
         The node assembles even when upstream producers exist."""
         a = _producer("a", Claims)
-        seed = Node.scripted("seed", fn="f", inputs={}, output=RawText)
+        seed = Node.scripted("seed", fn="f", inputs={}, outputs=RawText)
         # With an upstream present — the empty dict should not attempt to
         # match any producer, so no validation error.
         pipeline = Construct("empty-inputs", nodes=[a, seed])
@@ -5181,7 +5181,7 @@ class TestExtractInputListUnwrap:
         consumer = Node.scripted(
             "consumer", fn="f",
             inputs={"make_clusters": list[MatchResult]},
-            output=MergedResult,
+            outputs=MergedResult,
         )
         mr1 = MatchResult(cluster_label="a", matched=["x"])
         mr2 = MatchResult(cluster_label="b", matched=["y"])
@@ -5199,7 +5199,7 @@ class TestExtractInputListUnwrap:
         consumer = Node.scripted(
             "consumer", fn="f",
             inputs={"make_clusters": dict[str, MatchResult]},
-            output=MergedResult,
+            outputs=MergedResult,
         )
         mr1 = MatchResult(cluster_label="a", matched=["x"])
         mr2 = MatchResult(cluster_label="b", matched=["y"])
@@ -5214,7 +5214,7 @@ class TestExtractInputListUnwrap:
         consumer = Node.scripted(
             "consumer", fn="f",
             inputs={"make_clusters": list[MatchResult]},
-            output=MergedResult,
+            outputs=MergedResult,
         )
         state = {}  # no make_clusters field
         result = _extract_input(state, consumer)
@@ -5236,11 +5236,11 @@ class TestNodeDecoratorDictInputs:
         from neograph import node
         from neograph.decorators import construct_from_functions
 
-        @node(output=Claims)
+        @node(outputs=Claims)
         def produce() -> Claims:
             return Claims(items=["a"])
 
-        @node(output=MergedResult)
+        @node(outputs=MergedResult)
         def consume(produce: Claims) -> MergedResult:
             return MergedResult(final_text=",".join(produce.items))
 
@@ -5253,19 +5253,19 @@ class TestNodeDecoratorDictInputs:
         from neograph import node
         from neograph.decorators import construct_from_functions
 
-        @node(output=Claims)
+        @node(outputs=Claims)
         def produce_a() -> Claims:
             return Claims(items=["a"])
 
-        @node(output=RawText)
+        @node(outputs=RawText)
         def produce_b() -> RawText:
             return RawText(text="b")
 
-        @node(output=ClusterGroup)
+        @node(outputs=ClusterGroup)
         def produce_c() -> ClusterGroup:
             return ClusterGroup(label="c", claim_ids=[])
 
-        @node(output=MergedResult)
+        @node(outputs=MergedResult)
         def consume(
             produce_a: Claims,
             produce_b: RawText,
@@ -5287,12 +5287,12 @@ class TestNodeDecoratorDictInputs:
         from neograph import node
         from neograph.decorators import construct_from_functions
 
-        @node(output=Clusters)
+        @node(outputs=Clusters)
         def make_clusters() -> Clusters:
             return Clusters(groups=[])
 
         @node(
-            output=MatchResult,
+            outputs=MatchResult,
             map_over="make_clusters.groups",
             map_key="label",
         )
@@ -5311,11 +5311,11 @@ class TestNodeDecoratorDictInputs:
         from neograph import node
         from neograph.decorators import construct_from_functions
 
-        @node(output=Claims)
+        @node(outputs=Claims)
         def upstream() -> Claims:
             return Claims(items=["x"])
 
-        @node(output=MergedResult)
+        @node(outputs=MergedResult)
         def consume(upstream: RawText) -> MergedResult:  # WRONG TYPE
             return MergedResult(final_text="x")
 
@@ -5333,15 +5333,15 @@ class TestNodeDecoratorDictInputs:
         from neograph.factory import register_scripted
         from neograph.decorators import construct_from_functions
 
-        @node(output=Claims)
+        @node(outputs=Claims)
         def produce_claims() -> Claims:
             return Claims(items=["a", "b"])
 
-        @node(output=RawText)
+        @node(outputs=RawText)
         def produce_text() -> RawText:
             return RawText(text="hello")
 
-        @node(output=MergedResult)
+        @node(outputs=MergedResult)
         def combine(produce_claims: Claims, produce_text: RawText) -> MergedResult:
             return MergedResult(final_text=produce_text.text + ":" + ",".join(produce_claims.items))
 
@@ -5410,15 +5410,15 @@ class TestListOverEachEndToEnd:
 
         register_scripted("summarize_l5", summarize_fn)
 
-        make = Node.scripted("make-clusters", fn="make_clusters_l5", output=Clusters)
+        make = Node.scripted("make-clusters", fn="make_clusters_l5", outputs=Clusters)
         verify = (
-            Node.scripted("verify", fn="verify_cluster_l5", inputs=ClusterGroup, output=MatchResult)
+            Node.scripted("verify", fn="verify_cluster_l5", inputs=ClusterGroup, outputs=MatchResult)
             .map(lambda s: s.make_clusters.groups, key="label")
         )
         summarize = Node.scripted(
             "summarize", fn="summarize_l5",
             inputs={"verify": list[MatchResult]},
-            output=MergedResult,
+            outputs=MergedResult,
         )
         pipeline = Construct("l5-decl", nodes=[make, verify, summarize])
         graph = compile(pipeline)
@@ -5430,7 +5430,7 @@ class TestListOverEachEndToEnd:
         from neograph import compile, run, node
         from neograph.decorators import construct_from_functions
 
-        @node(mode="scripted", output=Clusters)
+        @node(mode="scripted", outputs=Clusters)
         def gen_clusters() -> Clusters:
             return Clusters(groups=[
                 ClusterGroup(label="alpha", claim_ids=["1"]),
@@ -5439,14 +5439,14 @@ class TestListOverEachEndToEnd:
 
         @node(
             mode="scripted",
-            output=MatchResult,
+            outputs=MatchResult,
             map_over="gen_clusters.groups",
             map_key="label",
         )
         def verify(cluster: ClusterGroup) -> MatchResult:
             return MatchResult(cluster_label=cluster.label, matched=[f"m-{cluster.label}"])
 
-        @node(mode="scripted", output=MergedResult)
+        @node(mode="scripted", outputs=MergedResult)
         def summarize(verify: list[MatchResult]) -> MergedResult:
             assert isinstance(verify, list), f"expected list, got {type(verify).__name__}"
             return MergedResult(
@@ -5467,7 +5467,7 @@ class TestListOverEachEndToEnd:
         summarize = Node.scripted(
             "summarize", fn="f",
             inputs={"verify": list[Claims]},  # WRONG: Each emits MatchResult
-            output=MergedResult,
+            outputs=MergedResult,
         )
         with pytest.raises(ConstructError) as exc_info:
             Construct("bad-list-type", nodes=[make, verify, summarize])
@@ -5498,15 +5498,15 @@ class TestListOverEachEndToEnd:
 
         register_scripted("summarize_l5b", summarize_dict_fn)
 
-        make = Node.scripted("make-clusters", fn="make_clusters_l5b", output=Clusters)
+        make = Node.scripted("make-clusters", fn="make_clusters_l5b", outputs=Clusters)
         verify = (
-            Node.scripted("verify", fn="verify_cluster_l5b", inputs=ClusterGroup, output=MatchResult)
+            Node.scripted("verify", fn="verify_cluster_l5b", inputs=ClusterGroup, outputs=MatchResult)
             .map(lambda s: s.make_clusters.groups, key="label")
         )
         summarize = Node.scripted(
             "summarize", fn="summarize_l5b",
             inputs={"verify": dict[str, MatchResult]},
-            output=MergedResult,
+            outputs=MergedResult,
         )
         pipeline = Construct("l5-dict", nodes=[make, verify, summarize])
         graph = compile(pipeline)
@@ -5584,7 +5584,7 @@ class TestNodeInputsEpicAcceptance:
                 inputs = type_registry[inputs]
             return Node.scripted(
                 entry["name"], fn=entry["fn"],
-                inputs=inputs, output=output,
+                inputs=inputs, outputs=output,
             )
 
         nodes = [build_node(e) for e in spec]
@@ -5620,7 +5620,7 @@ class TestNodeInputsEpicAcceptance:
                 inputs = {k: type_registry[v] for k, v in inputs.items()}
             return Node.scripted(
                 entry["name"], fn=entry["fn"],
-                inputs=inputs, output=output,
+                inputs=inputs, outputs=output,
             )
 
         nodes = [build_node(e) for e in spec]
@@ -5631,11 +5631,11 @@ class TestNodeInputsEpicAcceptance:
 
     def test_zero_upstream_node_inputs_none(self):
         """Nodes with no upstreams use inputs=None and assemble cleanly."""
-        seed = Node.scripted("seed", fn="f", inputs=None, output=Claims)
+        seed = Node.scripted("seed", fn="f", inputs=None, outputs=Claims)
         pipeline = Construct("zero-upstream", nodes=[seed])
         assert len(pipeline.nodes) == 1
         assert pipeline.nodes[0].inputs is None
-        assert pipeline.nodes[0].output is Claims
+        assert pipeline.nodes[0].outputs is Claims
         assert pipeline.nodes[0].name == "seed"
 
     def test_node_decorator_mixed_upstream_and_fanout_e2e(self):
@@ -5644,11 +5644,11 @@ class TestNodeInputsEpicAcceptance:
         from neograph import compile, run, node
         from neograph.decorators import construct_from_functions
 
-        @node(output=RawText)
+        @node(outputs=RawText)
         def context_source() -> RawText:
             return RawText(text="shared-context")
 
-        @node(output=Clusters)
+        @node(outputs=Clusters)
         def make_clusters() -> Clusters:
             return Clusters(groups=[
                 ClusterGroup(label="a", claim_ids=["1"]),
@@ -5656,7 +5656,7 @@ class TestNodeInputsEpicAcceptance:
             ])
 
         @node(
-            output=MatchResult,
+            outputs=MatchResult,
             map_over="make_clusters.groups",
             map_key="label",
         )
@@ -5691,11 +5691,11 @@ class TestNodeInputsEpicAcceptance:
         from neograph import node
         from neograph.decorators import construct_from_functions
 
-        @node(output=Claims)
+        @node(outputs=Claims)
         def produce() -> Claims:
             return Claims(items=["x"])
 
-        @node(output=MergedResult)
+        @node(outputs=MergedResult)
         def consume(produce: Claims) -> MergedResult:
             return MergedResult(final_text=produce.items[0])
 
@@ -5720,12 +5720,12 @@ class TestNodeInputsEpicAcceptance:
 
         register_scripted("l7_merge", merge_fn)
 
-        a = Node.scripted("a", fn="l7_a", output=Claims)
-        b = Node.scripted("b", fn="l7_b", output=RawText)
+        a = Node.scripted("a", fn="l7_a", outputs=Claims)
+        b = Node.scripted("b", fn="l7_b", outputs=RawText)
         merger = Node.scripted(
             "merger", fn="l7_merge",
             inputs={"a": Claims, "b": RawText},
-            output=MergedResult,
+            outputs=MergedResult,
         )
         # Piping a modifier onto the merger should preserve the inputs shape
         # (Oracle on a fan-in merger is unusual but validates the path).
@@ -6245,13 +6245,13 @@ class TestRendererDispatch:
     def test_level2_node_renderer_applies(self):
         """Level 2: Node(renderer=XmlRenderer()) stores renderer on the node."""
         xml = XmlRenderer()
-        n = Node("render-test", output=Claims, renderer=xml)
+        n = Node("render-test", outputs=Claims, renderer=xml)
         assert n.renderer is xml
 
     def test_level3_construct_propagates_renderer(self):
         """Level 3: Construct(renderer=...) propagates to child nodes."""
         xml = XmlRenderer()
-        child = Node.scripted("child", fn="noop", output=Claims)
+        child = Node.scripted("child", fn="noop", outputs=Claims)
         assert child.renderer is None
 
         pipeline = Construct("prop-test", renderer=xml, nodes=[child])
@@ -6262,7 +6262,7 @@ class TestRendererDispatch:
         """Level 3 override: Node with own renderer beats Construct default."""
         xml = XmlRenderer()
         json_r = JsonRenderer()
-        child = Node("child", mode="scripted", scripted_fn="noop", output=Claims, renderer=json_r)
+        child = Node("child", mode="scripted", scripted_fn="noop", outputs=Claims, renderer=json_r)
 
         pipeline = Construct("override-test", renderer=xml, nodes=[child])
         # Node's own renderer should NOT be overwritten
@@ -6374,7 +6374,7 @@ class TestJsonModeOutputSchema:
         n = Node(
             name="extract",
             mode="produce",
-            output=Claims,
+            outputs=Claims,
             model="fast",
             prompt="test",
             llm_config={"output_strategy": "json_mode"},
@@ -6405,7 +6405,7 @@ class TestJsonModeOutputSchema:
         n = Node(
             name="extract",
             mode="produce",
-            output=Claims,
+            outputs=Claims,
             model="fast",
             prompt="test",
             llm_config={"output_strategy": "structured"},
@@ -6433,7 +6433,7 @@ class TestJsonModeOutputSchema:
         n = Node(
             name="extract",
             mode="produce",
-            output=Claims,
+            outputs=Claims,
             model="fast",
             prompt="test",
             llm_config={"output_strategy": "text"},
@@ -6458,7 +6458,7 @@ class TestJsonModeOutputSchema:
         n = Node(
             name="extract",
             mode="produce",
-            output=Claims,
+            outputs=Claims,
             model="fast",
             prompt="test",
             llm_config={"output_strategy": "json_mode"},
@@ -6491,7 +6491,7 @@ class TestRenderPromptInspector:
             ],
         )
 
-        n = Node(name="test-node", mode="produce", output=Claims, model="fast", prompt="my/template")
+        n = Node(name="test-node", mode="produce", outputs=Claims, model="fast", prompt="my/template")
         result = render_prompt(n, "hello world")
 
         assert "[system]" in result
@@ -6522,7 +6522,7 @@ class TestRenderPromptInspector:
         n = Node(
             name="test-rendered",
             mode="produce",
-            output=Claims,
+            outputs=Claims,
             model="fast",
             prompt="test",
             renderer=XmlRenderer(),
@@ -6554,7 +6554,7 @@ class TestRenderPromptInspector:
         n = Node(
             name="json-node",
             mode="produce",
-            output=Claims,
+            outputs=Claims,
             model="fast",
             prompt="test",
             llm_config={"output_strategy": "json_mode"},
@@ -6582,7 +6582,7 @@ class TestRendererThreeSurfaces:
 
         xml = XmlRenderer()
 
-        @node(renderer=xml, output=Claims, prompt="test", model="fast")
+        @node(renderer=xml, outputs=Claims, prompt="test", model="fast")
         def my_produce(topic: RawText) -> Claims: ...
 
         assert my_produce.renderer is xml
@@ -6594,7 +6594,7 @@ class TestRendererThreeSurfaces:
         child = Node(
             "render-decl",
             mode="produce",
-            output=Claims,
+            outputs=Claims,
             model="fast",
             prompt="test",
             renderer=xml,
@@ -6607,7 +6607,7 @@ class TestRendererThreeSurfaces:
     def test_programmatic_surface_construct_propagation(self):
         """Construct(renderer=...) propagates through to child nodes without own renderer."""
         xml = XmlRenderer()
-        child = Node.scripted("prog-child", fn="noop", output=Claims)
+        child = Node.scripted("prog-child", fn="noop", outputs=Claims)
         assert child.renderer is None
 
         pipeline = Construct("prog-test", renderer=xml, nodes=[child])
@@ -6615,7 +6615,7 @@ class TestRendererThreeSurfaces:
         # Child should inherit from Construct
         assert child.renderer is xml
         # Verify propagation through modifier: Each on Construct level
-        child2 = Node.scripted("prog-child2", fn="noop2", output=MatchResult)
+        child2 = Node.scripted("prog-child2", fn="noop2", outputs=MatchResult)
         pipeline2 = Construct("prog-test2", renderer=xml, nodes=[child2])
         assert child2.renderer is xml
 
@@ -6626,8 +6626,8 @@ class TestRendererThreeSurfaces:
         xml = XmlRenderer()
 
         class RenderPipeline(ForwardConstruct):
-            a = Node.scripted("a", fn="a_fn", output=RawText)
-            b = Node.scripted("b", fn="b_fn", output=Claims)
+            a = Node.scripted("a", fn="a_fn", outputs=RawText)
+            b = Node.scripted("b", fn="b_fn", outputs=Claims)
 
             def forward(self, topic):
                 x = self.a(topic)
@@ -6654,12 +6654,12 @@ class TestConditionalProduce:
         from neograph import compile, run, node
         from neograph.decorators import construct_from_functions
 
-        @node(output=Claims)
+        @node(outputs=Claims)
         def seed() -> Claims:
             return Claims(items=["single"])
 
         @node(
-            output=MergedResult,
+            outputs=MergedResult,
             mode="produce",
             model="fast",
             prompt="p",
@@ -6683,12 +6683,12 @@ class TestConditionalProduce:
             lambda tier: StructuredFake(lambda m: MergedResult(final_text="llm-result")),
         )
 
-        @node(output=Claims)
+        @node(outputs=Claims)
         def seed() -> Claims:
             return Claims(items=["a", "b"])
 
         @node(
-            output=MergedResult,
+            outputs=MergedResult,
             mode="produce",
             model="fast",
             prompt="p",
@@ -6707,7 +6707,7 @@ class TestConditionalProduce:
         pred = lambda x: True
         val = lambda x: x
         n = Node(
-            "t", mode="produce", inputs=Claims, output=MergedResult,
+            "t", mode="produce", inputs=Claims, outputs=MergedResult,
             model="fast", prompt="p",
             skip_when=pred, skip_value=val,
         )
@@ -6716,7 +6716,7 @@ class TestConditionalProduce:
 
     def test_skip_when_default_none(self):
         """Nodes without skip_when have it as None (backward compat)."""
-        n = Node("t", mode="produce", inputs=Claims, output=MergedResult,
+        n = Node("t", mode="produce", inputs=Claims, outputs=MergedResult,
                  model="fast", prompt="p")
         assert n.skip_when is None
         assert n.skip_value is None
@@ -6726,7 +6726,7 @@ class TestConditionalProduce:
         from neograph import node
 
         @node(
-            output=MergedResult, mode="produce", model="fast", prompt="p",
+            outputs=MergedResult, mode="produce", model="fast", prompt="p",
             skip_when=lambda x: True,
             skip_value=lambda x: MergedResult(final_text="skipped"),
         )
@@ -6734,3 +6734,62 @@ class TestConditionalProduce:
 
         assert my_node.skip_when is not None
         assert my_node.skip_value is not None
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# NODE.OUTPUTS RENAME (neograph-1bp.1)
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TestNodeOutputsRename:
+    """Node.output → Node.outputs rename (neograph-1bp.1).
+
+    The field on Node becomes `outputs` (plural), mirroring `inputs`.
+    Construct.output stays singular — different semantics (boundary port).
+    """
+
+    def test_node_constructor_outputs_kwarg(self):
+        """Node(..., outputs=X) sets the field."""
+        n = Node("a", mode="produce", outputs=Claims, model="fast", prompt="p")
+        assert n.outputs is Claims
+
+    def test_node_scripted_outputs_kwarg(self):
+        """Node.scripted(..., outputs=X) sets the field."""
+        n = Node.scripted("a", fn="f", outputs=Claims)
+        assert n.outputs is Claims
+
+    def test_node_outputs_field_access(self):
+        """node.outputs returns the declared output type."""
+        n = Node("a", outputs=RawText, model="fast", prompt="p")
+        assert n.outputs is RawText
+
+    def test_decorator_outputs_kwarg(self):
+        """@node(outputs=X) passes through to Node.outputs."""
+        from neograph import node
+
+        @node(outputs=Claims, mode="produce", model="fast", prompt="p")
+        def my_node(seed: RawText) -> Claims: ...
+
+        assert my_node.outputs is Claims
+
+    def test_construct_output_stays_singular(self):
+        """Construct.output stays as 'output' (singular), not renamed."""
+        c = Construct("p", output=Claims, input=RawText, nodes=[
+            Node.scripted("a", fn="f", outputs=Claims),
+        ])
+        assert c.output is Claims
+
+    def test_effective_producer_type_reads_outputs(self):
+        """effective_producer_type reads .outputs from Node items."""
+        from neograph._construct_validation import effective_producer_type
+        n = Node("a", outputs=Claims)
+        assert effective_producer_type(n) is Claims
+
+    def test_state_compiler_reads_outputs(self):
+        """compile_state_model reads node.outputs for state field types."""
+        from neograph.state import compile_state_model
+        n = Node.scripted("extract", fn="f", outputs=RawText)
+        c = Construct("p", nodes=[n])
+        state_model = compile_state_model(c)
+        # The state field should have the right type annotation
+        assert "extract" in state_model.model_fields

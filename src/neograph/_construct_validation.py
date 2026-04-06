@@ -50,11 +50,13 @@ def effective_producer_type(item: Any) -> Any:
         results land as a dict keyed by ``each.key``; see
         ``state.py:_add_output_field`` for the state builder side of
         this rule).
-      - Everything else → the item's declared ``.output`` unchanged.
+      - Everything else → the item's declared output (Node ``.outputs``,
+        Construct ``.output``) unchanged.
 
     Returns ``None`` when the item has no declared output.
     """
-    output = getattr(item, "output", None)
+    # Node uses .outputs (plural); Construct uses .output (singular).
+    output = item.outputs if isinstance(item, Node) else getattr(item, "output", None)
     if output is None:
         return None
     get_mod = getattr(item, "has_modifier", None)
@@ -92,7 +94,8 @@ def _validate_node_chain(construct: Any) -> None:
         if input_type is not None:
             _check_item_input(construct, item, input_type, producers)
 
-        output_type = getattr(item, "output", None)
+        # Node uses .outputs (plural); Construct / _BranchNode use .output (singular).
+        output_type = item.outputs if isinstance(item, Node) else getattr(item, "output", None)
         name = getattr(item, "name", None)
         if output_type is not None and name is not None:
             field_name = name.replace("-", "_")

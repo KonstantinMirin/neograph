@@ -40,7 +40,7 @@ class FilteredClaims(BaseModel, frozen=True):
 
 # ── Scripted: produce initial claims ─────────────────────────────────────
 
-@node(mode="scripted", output=Claims)
+@node(mode="scripted", outputs=Claims)
 def extract_claims() -> Claims:
     return Claims(items=[
         "system shall authenticate users via SSO",
@@ -55,7 +55,7 @@ def extract_claims() -> Claims:
 # This is the escape hatch. The function receives the full Pydantic state
 # and returns a dict of field updates. NeoGraph wires the edges.
 
-@node(mode="raw", inputs=Claims, output=FilteredClaims)
+@node(mode="raw", inputs=Claims, outputs=FilteredClaims)
 def filter_non_functional(state, config):
     """Drop claims that aren't real requirements (e.g., cosmetic wishes).
 
@@ -95,7 +95,7 @@ def filter_non_functional(state, config):
 
 # ── Build pipeline: scripted → raw → scripted ────────────────────────────
 
-@node(mode="scripted", output=Claims)
+@node(mode="scripted", outputs=Claims)
 def summarize(filter_non_functional: FilteredClaims) -> Claims:
     """Summarize what was kept."""
     return Claims(items=filter_non_functional.kept)

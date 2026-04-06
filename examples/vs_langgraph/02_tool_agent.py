@@ -120,7 +120,7 @@ def run_neograph():
     research = Node(
         name="research",
         mode="gather",
-        output=ResearchResult,
+        outputs=ResearchResult,
         model="fast",
         prompt="research",
         tools=[Tool(name="search_web", budget=3)],

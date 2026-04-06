@@ -456,7 +456,7 @@ def render_prompt(
     output_schema = None
     llm_config = getattr(node, "llm_config", None) or {}
     strategy = llm_config.get("output_strategy", "structured")
-    output_model = getattr(node, "output", None)
+    output_model = getattr(node, "outputs", None)
     if strategy == "json_mode" and output_model is not None:
         from neograph.describe_type import describe_type
 

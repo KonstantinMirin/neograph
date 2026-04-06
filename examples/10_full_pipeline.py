@@ -204,7 +204,7 @@ register_condition("needs_review", needs_review)
 # ══════════════════════════════════════════════════════════════════════════
 
 # Step 1: Decompose — @node with Oracle kwargs (LLM mode, no register_scripted needed)
-@node(output=Claims, prompt="decompose", model="fast",
+@node(outputs=Claims, prompt="decompose", model="fast",
       llm_config={"temperature": 0.8},
       ensemble_n=3, merge_fn="merge_claims")
 def decompose() -> Claims: ...
@@ -215,24 +215,24 @@ enrich = Construct(
     input=Claims,
     output=ScoredClaims,
     nodes=[
-        Node.scripted("lookup", fn="lookup_context", inputs=Claims, output=Context),
-        Node.scripted("score", fn="score_claims", inputs=Claims, output=ScoredClaims),
+        Node.scripted("lookup", fn="lookup_context", inputs=Claims, outputs=Context),
+        Node.scripted("score", fn="score_claims", inputs=Claims, outputs=ScoredClaims),
     ],
 )
 
 # Step 3: Cluster and verify — Each fan-out
-cluster = Node.scripted("cluster", fn="make_clusters", output=Clusters)
+cluster = Node.scripted("cluster", fn="make_clusters", outputs=Clusters)
 verify = Node.scripted(
-    "verify", fn="verify_cluster", inputs=ClusterGroup, output=VerifyResult
+    "verify", fn="verify_cluster", inputs=ClusterGroup, outputs=VerifyResult
 ) | Each(over="cluster.groups", key="label")
 
 # Step 4: Validate — Operator pauses if not all clusters pass
 check_results = Node.scripted(
-    "check-results", fn="check_passed", output=ValidationResult
+    "check-results", fn="check_passed", outputs=ValidationResult
 ) | Operator(when="needs_review")
 
 # Step 5: Report
-report = Node.scripted("report", fn="build_report", output=Report)
+report = Node.scripted("report", fn="build_report", outputs=Report)
 
 # Assemble
 pipeline = Construct(

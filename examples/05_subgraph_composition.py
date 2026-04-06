@@ -85,17 +85,17 @@ enrich = Construct(
     input=Claims,
     output=ScoredClaims,
     nodes=[
-        Node.scripted("lookup", fn="lookup_context", inputs=Claims, output=Context),
-        Node.scripted("score", fn="score_claims", inputs=Claims, output=ScoredClaims),
+        Node.scripted("lookup", fn="lookup_context", inputs=Claims, outputs=Context),
+        Node.scripted("score", fn="score_claims", inputs=Claims, outputs=ScoredClaims),
     ],
 )
 
 # ── Build parent pipeline ────────────────────────────────────────────────
 
 pipeline = Construct("req-analysis", nodes=[
-    Node.scripted("decompose", fn="decompose_req", output=Claims),
+    Node.scripted("decompose", fn="decompose_req", outputs=Claims),
     enrich,  # sub-pipeline: Claims → ScoredClaims (isolated state)
-    Node.scripted("report", fn="format_report", inputs=ScoredClaims, output=Report),
+    Node.scripted("report", fn="format_report", inputs=ScoredClaims, outputs=Report),
 ])
 
 
@@ -133,15 +133,15 @@ enrich_oracle = Construct(
     input=Claims,
     output=ScoredClaims,
     nodes=[
-        Node.scripted("lookup", fn="lookup_context", inputs=Claims, output=Context),
-        Node.scripted("score", fn="score_claims", inputs=Claims, output=ScoredClaims),
+        Node.scripted("lookup", fn="lookup_context", inputs=Claims, outputs=Context),
+        Node.scripted("score", fn="score_claims", inputs=Claims, outputs=ScoredClaims),
     ],
 ) | Oracle(n=3, merge_fn="merge_scored")
 
 pipeline_oracle = Construct("req-analysis-oracle", nodes=[
-    Node.scripted("decompose", fn="decompose_req", output=Claims),
+    Node.scripted("decompose", fn="decompose_req", outputs=Claims),
     enrich_oracle,
-    Node.scripted("report", fn="format_report", inputs=ScoredClaims, output=Report),
+    Node.scripted("report", fn="format_report", inputs=ScoredClaims, outputs=Report),
 ])
 
 # Uncomment to run the Oracle variant:

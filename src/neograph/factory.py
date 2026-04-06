@@ -122,7 +122,7 @@ def _make_raw_wrapper(node: Node) -> Callable:
 
     def raw_node_wrapper(state: BaseModel, config: RunnableConfig) -> dict[str, Any]:
         node_log = log.bind(node=node.name, mode="raw")
-        node_log.info("node_start", input_type=_type_name(node.inputs), output_type=_type_name(node.output))
+        node_log.info("node_start", input_type=_type_name(node.inputs), output_type=_type_name(node.outputs))
         t0 = time.monotonic()
 
         result = raw_fn(state, config)
@@ -142,7 +142,7 @@ def _make_scripted_wrapper(node: Node) -> Callable:
 
     def scripted_node(state: BaseModel, config: RunnableConfig) -> dict[str, Any]:
         node_log = log.bind(node=node.name, mode="scripted", fn=node.scripted_fn)
-        node_log.info("node_start", input_type=_type_name(node.inputs), output_type=_type_name(node.output))
+        node_log.info("node_start", input_type=_type_name(node.inputs), output_type=_type_name(node.outputs))
 
         t0 = time.monotonic()
 
@@ -157,7 +157,7 @@ def _make_scripted_wrapper(node: Node) -> Callable:
         result = fn(input_data, config)
 
         update: dict[str, Any] = {}
-        if node.output is not None and result is not None:
+        if node.outputs is not None and result is not None:
             # Each fan-out: wrap result in dict keyed by item's key field
             each_mod = node.get_modifier(Each)
             each_item = _state_get(state, "neo_each_item")
@@ -184,7 +184,7 @@ def _make_produce_fn(node: Node) -> Callable:
         from neograph._llm import invoke_structured
 
         node_log = log.bind(node=node.name, mode="produce", model=node.model, prompt=node.prompt)
-        node_log.info("node_start", input_type=_type_name(node.inputs), output_type=_type_name(node.output))
+        node_log.info("node_start", input_type=_type_name(node.inputs), output_type=_type_name(node.outputs))
 
         t0 = time.monotonic()
         input_data = _extract_input(state, node)
@@ -217,7 +217,7 @@ def _make_produce_fn(node: Node) -> Callable:
             model_tier=node.model,
             prompt_template=node.prompt,
             input_data=input_data,
-            output_model=node.output,
+            output_model=node.outputs,
             config=config,
             node_name=node.name,
             llm_config=node.llm_config,
@@ -244,7 +244,7 @@ def _make_tool_fn(node: Node) -> Callable:
 
         node_log = log.bind(node=node.name, mode=node.mode, model=node.model, prompt=node.prompt)
         node_log.info("node_start",
-                      input_type=_type_name(node.inputs), output_type=_type_name(node.output),
+                      input_type=_type_name(node.inputs), output_type=_type_name(node.outputs),
                       tools=[t.name for t in node.tools],
                       budgets={t.name: t.budget for t in node.tools})
 
@@ -279,7 +279,7 @@ def _make_tool_fn(node: Node) -> Callable:
             model_tier=node.model,
             prompt_template=node.prompt,
             input_data=input_data,
-            output_model=node.output,
+            output_model=node.outputs,
             tools=node.tools,
             budget_tracker=budget_tracker,
             config=config,

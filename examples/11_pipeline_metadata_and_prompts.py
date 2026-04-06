@@ -160,12 +160,12 @@ register_scripted("build_report", build_report)
 decompose = Node(
     name="decompose",
     mode="produce",
-    output=Claims,
+    outputs=Claims,
     model="fast",
     prompt="decompose",
 )
 
-report = Node.scripted("report", fn="build_report", inputs=Claims, output=Report)
+report = Node.scripted("report", fn="build_report", inputs=Claims, outputs=Report)
 
 pipeline = Construct("metadata-demo", nodes=[decompose, report])
 

@@ -116,12 +116,12 @@ def compile_state_model(construct: Construct) -> type[BaseModel]:
 
 def _add_output_field(node: Node, fields: dict[str, Any]) -> None:
     """Add a node's output type as a field on the state model."""
-    if node.output is None:
-        msg = f"Node '{node.name}' has no output type. Every node must declare output=SomeModel."
+    if node.outputs is None:
+        msg = f"Node '{node.name}' has no output type. Every node must declare outputs=SomeModel."
         raise ValueError(msg)
 
     field_name = node.name.replace("-", "_")
-    output_type = node.output
+    output_type = node.outputs
 
     # Fan-out nodes (Each) produce dict[key, output_type]
     if node.has_modifier(Each):

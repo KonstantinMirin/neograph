@@ -4,10 +4,10 @@ Declare pipeline nodes with @node and assemble from function signatures:
 
     from neograph import node, construct_from_module, compile, run
 
-    @node(output=Claims, prompt='rw/decompose', model='reason')
+    @node(outputs=Claims, prompt='rw/decompose', model='reason')
     def decompose(topic: RawText) -> Claims: ...
 
-    @node(output=Classified, prompt='rw/classify', model='fast')
+    @node(outputs=Classified, prompt='rw/classify', model='fast')
     def classify(decompose: Claims) -> Classified: ...
 
     pipeline = construct_from_module(sys.modules[__name__])

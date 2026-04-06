@@ -32,7 +32,7 @@ class Report(BaseModel, frozen=True):
 # ── Nodes — deliberately out of order to prove topo-sort works ──────────
 # report is defined FIRST, before any of its dependencies.
 
-@node(mode="scripted", output=Report)
+@node(mode="scripted", outputs=Report)
 def report(
     fetch_claims: Claims, score_claims: Scores,
     verify_claims: Verification, gather_metadata: Metadata,
@@ -49,22 +49,22 @@ def report(
         f"Failed: {failed}",
     ]))
 
-@node(mode="scripted", output=Verification)
+@node(mode="scripted", outputs=Verification)
 def verify_claims(fetch_claims: Claims, score_claims: Scores) -> Verification:
     passed = [c for c in fetch_claims.items if score_claims.ratings.get(c, 0) >= 0.5]
     failed = [c for c in fetch_claims.items if score_claims.ratings.get(c, 0) < 0.5]
     return Verification(passed=passed, failed=failed)
 
-@node(mode="scripted", output=Metadata)
+@node(mode="scripted", outputs=Metadata)
 def gather_metadata() -> Metadata:
     return Metadata(source="requirements-doc", version="2.1")
 
-@node(mode="scripted", output=Scores)
+@node(mode="scripted", outputs=Scores)
 def score_claims(fetch_claims: Claims) -> Scores:
     ratings = {c: (0.8 if "shall" in c.lower() else 0.3) for c in fetch_claims.items}
     return Scores(ratings=ratings)
 
-@node(mode="scripted", output=Claims)
+@node(mode="scripted", outputs=Claims)
 def fetch_claims() -> Claims:
     return Claims(items=[
         "The system shall log all access attempts",

@@ -99,7 +99,7 @@ configure_llm(
 # ══════════════════════════════════════════════════════════════════════════
 
 # Strategy 1: structured (default) — model supports with_structured_output
-@node(output=Claims, model="fast", prompt="extract")
+@node(outputs=Claims, model="fast", prompt="extract")
 def structured() -> Claims:
     # body unused for mode='produce' — LLM handles execution via prompt=
     # No output_strategy in llm_config — defaults to "structured"
@@ -108,7 +108,7 @@ def structured() -> Claims:
 
 # Strategy 2: json_mode — model returns JSON in fences, framework parses
 @node(
-    output=Claims,
+    outputs=Claims,
     model="fast",
     prompt="extract",
     llm_config={"output_strategy": "json_mode"},
@@ -121,7 +121,7 @@ def json_mode() -> Claims:
 
 # Strategy 3: text — model returns prose with embedded JSON, framework extracts
 @node(
-    output=Claims,
+    outputs=Claims,
     model="fast",
     prompt="extract",
     llm_config={"output_strategy": "text"},
@@ -152,6 +152,6 @@ if __name__ == "__main__":
     print("The consumer writes zero parsing code — NeoGraph handles it.")
     print()
     print("Production pattern:")
-    print('  @node(output=Claims, model="reason", prompt="decompose",')
+    print('  @node(outputs=Claims, model="reason", prompt="decompose",')
     print('        llm_config={"output_strategy": "json_mode"})  # <-- one line')
     print('  def decompose() -> Claims: ...')
