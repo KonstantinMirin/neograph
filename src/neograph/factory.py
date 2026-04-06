@@ -352,6 +352,13 @@ def _make_tool_fn(node: Node) -> Callable:
 
         budget_tracker = ToolBudgetTracker(node.tools)
 
+        # Resolve renderer for tool result rendering in ToolMessage
+        try:
+            from neograph._llm import _get_global_renderer
+            effective_renderer = node.renderer or _get_global_renderer()
+        except (ImportError, AttributeError):
+            effective_renderer = node.renderer
+
         result, tool_interactions = invoke_with_tools(
             model_tier=node.model,
             prompt_template=node.prompt,
@@ -362,6 +369,7 @@ def _make_tool_fn(node: Node) -> Callable:
             config=config,
             node_name=node.name,
             llm_config=node.llm_config,
+            renderer=effective_renderer,
         )
 
         if primary_key is not None and result is not None:

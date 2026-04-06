@@ -1304,6 +1304,75 @@ class TestGatherToolCollection:
         assert tool_log[0].typed_result == "plain text"
         assert tool_log[0].result == "plain text"
 
+    def test_tool_result_rendered_with_schema_when_pydantic_model(self):
+        """Typed tool result in ToolMessage uses describe_type schema header +
+        renderer instance, not raw model_dump_json. E2E: compile + run.
+        neograph-oky0."""
+        from pydantic import BaseModel, Field
+        from neograph import node, construct_from_module, compile, run, ToolInteraction, XmlRenderer
+        from neograph.factory import register_tool_factory
+        from tests.fakes import ReActFake
+        import types
+
+        class SearchHit(BaseModel, frozen=True):
+            node_id: str = Field(description="Graph node identifier")
+            score: float = Field(description="Relevance score 0-1")
+
+        class TypedTool:
+            name = "schema_search"
+            def invoke(self, args):
+                return SearchHit(node_id="UC-042", score=0.9)
+
+        # Capture what the LLM sees in the ToolMessage
+        tool_messages_seen: list[str] = []
+
+        class CapturingReActFake(ReActFake):
+            def invoke(self, messages, **kwargs):
+                # Capture ToolMessage contents
+                for m in messages:
+                    if hasattr(m, 'tool_call_id'):
+                        tool_messages_seen.append(m.content)
+                return super().invoke(messages, **kwargs)
+
+        from neograph import configure_llm
+        configure_llm(
+            llm_factory=lambda tier: CapturingReActFake(
+                tool_calls=[[{"name": "schema_search", "args": {}, "id": "t1"}], []],
+                final=lambda m: Claims(items=["done"]),
+            ),
+            prompt_compiler=lambda t, d, **kw: [{"role": "user", "content": "test"}],
+        )
+        register_tool_factory("schema_search", lambda cfg, tc: TypedTool())
+
+        mod = types.ModuleType("test_schema_render_mod")
+
+        @node(
+            mode="agent",
+            outputs={"result": Claims, "tool_log": list[ToolInteraction]},
+            model="fast", prompt="test",
+            tools=[Tool("schema_search", budget=2)],
+            renderer=XmlRenderer(),
+        )
+        def explore() -> Claims: ...
+
+        mod.explore = explore
+        pipeline = construct_from_module(mod)
+        graph = compile(pipeline)
+        run(graph, input={})
+
+        # The ToolMessage content should have describe_type schema + rendered instance
+        assert len(tool_messages_seen) >= 1, "No ToolMessage captured"
+        content = tool_messages_seen[0]
+        # Schema header from describe_type: field descriptions as comments
+        assert "node_id" in content
+        assert "score" in content
+        # describe_type produces "// Graph node identifier" style comments
+        assert "Graph node identifier" in content, (
+            f"Expected describe_type schema with field descriptions, got:\n{content}"
+        )
+        # Rendered instance (not raw JSON dump)
+        assert "UC-042" in content
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 # TEST: Tool registration error in invoke_with_tools (neograph-rdu.2)

@@ -267,6 +267,37 @@ def invoke_structured(
     return result
 
 
+def _render_tool_result_for_llm(result: Any, renderer: Any = None) -> str:
+    """Render a typed tool result for the LLM's ToolMessage content.
+
+    For Pydantic models: describe_type schema header + rendered instance.
+    For lists of models: schema header (of element type) + rendered list.
+    Falls back to model_dump_json when no renderer is configured.
+    """
+    from pydantic import BaseModel as _BM
+    from neograph.describe_type import describe_type
+
+    if isinstance(result, _BM):
+        schema = describe_type(type(result), prefix="Tool result schema:")
+        if renderer is not None and hasattr(renderer, "render"):
+            instance = renderer.render(result)
+        else:
+            instance = result.model_dump_json(indent=2)
+        return f"{schema}\n\n{instance}"
+
+    if isinstance(result, list) and result and isinstance(result[0], _BM):
+        element_type = type(result[0])
+        schema = describe_type(element_type, prefix="Tool result schema (per item):")
+        if renderer is not None and hasattr(renderer, "render"):
+            instance = renderer.render(result)
+        else:
+            import json as _json
+            instance = _json.dumps([r.model_dump() for r in result], indent=2)
+        return f"{schema}\n\n{instance}"
+
+    return str(result)
+
+
 def invoke_with_tools(
     model_tier: str,
     prompt_template: str,
@@ -277,11 +308,16 @@ def invoke_with_tools(
     config: RunnableConfig,
     node_name: str = "",
     llm_config: dict | None = None,
+    renderer: Any = None,
 ) -> tuple[BaseModel | None, list]:
-    """ReAct tool loop with per-tool budget enforcement. Mode: gather/execute.
+    """ReAct tool loop with per-tool budget enforcement. Mode: agent/act.
 
     Returns (parsed_result, tool_interactions) where tool_interactions is a
     list of ToolInteraction records from the ReAct loop.
+
+    When ``renderer`` is set, typed tool results (Pydantic models) are
+    rendered using ``describe_type`` (schema header) + the renderer
+    (instance) instead of raw ``model_dump_json``.
     """
     from langchain_core.messages import ToolMessage
 
@@ -361,13 +397,13 @@ def invoke_with_tools(
                 duration_s=round(tool_elapsed, 3),
             )
 
-            # Render for LLM: Pydantic → JSON, else str()
+            # Render for LLM: Pydantic → describe_type schema + renderer,
+            # list[Pydantic] → schema + rendered items, else str()
             from pydantic import BaseModel as _BM
             if isinstance(result, _BM):
-                rendered = result.model_dump_json(indent=2)
+                rendered = _render_tool_result_for_llm(result, renderer)
             elif isinstance(result, list) and result and isinstance(result[0], _BM):
-                import json as _json
-                rendered = _json.dumps([r.model_dump() for r in result], indent=2)
+                rendered = _render_tool_result_for_llm(result, renderer)
             else:
                 rendered = str(result)
 
