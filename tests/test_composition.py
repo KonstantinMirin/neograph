@@ -849,6 +849,150 @@ class TestNodeSubConstruct:
         assert "neo_subgraph_input" in explore_node.inputs
         assert "explore" in decide_node.inputs
 
+    def test_dict_outputs_flow_when_two_nodes_inside_sub_construct(self):
+        """Dict-form outputs work between @nodes inside a @node sub-construct."""
+        @node(outputs={"evidence": RawText, "confidence": Claims})
+        def research(claim: VerifyClaim) -> dict:
+            return {
+                "evidence": RawText(text=f"found for {claim.claim_id}"),
+                "confidence": Claims(items=["high"]),
+            }
+
+        @node(outputs=ClaimResult)
+        def evaluate(research_evidence: RawText, research_confidence: Claims) -> ClaimResult:
+            return ClaimResult(
+                claim_id="c1",
+                disposition=f"{research_evidence.text} ({research_confidence.items[0]})",
+            )
+
+        sub = construct_from_functions(
+            "eval-sub", [research, evaluate],
+            input=VerifyClaim, output=ClaimResult,
+        )
+
+        register_scripted("seed_claim", lambda _in, _cfg: VerifyClaim(
+            claim_id="c1", text="test claim",
+        ))
+        parent = Construct("parent", nodes=[
+            Node.scripted("seed-claim", fn="seed_claim", outputs=VerifyClaim),
+            sub,
+        ])
+        graph = compile(parent)
+        result = run(graph, input={"node_id": "dict-out-sub"})
+
+        assert result["eval_sub"].disposition == "found for c1 (high)"
+
+    def test_sub_construct_fans_out_when_each_applied_via_construct_from_functions(self):
+        """Sub-construct built from @node functions works with .map() (Each)."""
+        @node(outputs=ClaimResult)
+        def verify_one(claim: VerifyClaim) -> ClaimResult:
+            return ClaimResult(claim_id=claim.claim_id, disposition="ok")
+
+        sub = construct_from_functions(
+            "verify", [verify_one],
+            input=VerifyClaim, output=ClaimResult,
+        ).map("make_claims.claims", key="claim_id")
+
+        class ClaimBatch(BaseModel, frozen=True):
+            claims: list[VerifyClaim]
+
+        register_scripted("make_batch", lambda _in, _cfg: ClaimBatch(
+            claims=[
+                VerifyClaim(claim_id="c1", text="first"),
+                VerifyClaim(claim_id="c2", text="second"),
+            ],
+        ))
+        parent = Construct("parent", nodes=[
+            Node.scripted("make-claims", fn="make_batch", outputs=ClaimBatch),
+            sub,
+        ])
+        graph = compile(parent)
+        result = run(graph, input={"node_id": "each-sub"})
+
+        assert isinstance(result["verify"], dict)
+        assert sorted(result["verify"].keys()) == ["c1", "c2"]
+        assert result["verify"]["c1"].disposition == "ok"
+
+    def test_sub_construct_merges_when_oracle_applied_via_construct_from_functions(self):
+        """Sub-construct built from @node functions works with Oracle."""
+        @node(outputs=ClaimResult)
+        def assess(claim: VerifyClaim) -> ClaimResult:
+            return ClaimResult(claim_id=claim.claim_id, disposition="variant")
+
+        def merge_assessments(variants, config):
+            return ClaimResult(
+                claim_id=variants[0].claim_id,
+                disposition=f"merged {len(variants)} variants",
+            )
+
+        register_scripted("merge_assess", merge_assessments)
+
+        sub = construct_from_functions(
+            "assess-sub", [assess],
+            input=VerifyClaim, output=ClaimResult,
+        )
+        sub = sub | Oracle(n=3, merge_fn="merge_assess")
+
+        register_scripted("make_one_claim", lambda _in, _cfg: VerifyClaim(
+            claim_id="c1", text="test",
+        ))
+        parent = Construct("parent", nodes=[
+            Node.scripted("make-one-claim", fn="make_one_claim", outputs=VerifyClaim),
+            sub,
+        ])
+        graph = compile(parent)
+        result = run(graph, input={"node_id": "oracle-sub"})
+
+        assert result["assess_sub"].disposition == "merged 3 variants"
+
+    def test_parity_when_declarative_vs_node_sub_construct(self):
+        """Same topology produces same result via declarative Node() vs @node."""
+        # --- Declarative path ---
+        # With dict-form inputs, _extract_input returns a dict. The scripted
+        # fn must unwrap it.
+        def parity_score_fn(_in, _cfg):
+            claim = _in["neo_subgraph_input"] if isinstance(_in, dict) else _in
+            return ClaimResult(claim_id=claim.claim_id, disposition="scored")
+
+        register_scripted("parity_score", parity_score_fn)
+        decl_sub = Construct(
+            "decl-sub",
+            input=VerifyClaim, output=ClaimResult,
+            nodes=[Node.scripted("score", fn="parity_score",
+                                 inputs={"neo_subgraph_input": VerifyClaim},
+                                 outputs=ClaimResult)],
+        )
+
+        register_scripted("parity_seed", lambda _in, _cfg: VerifyClaim(
+            claim_id="p1", text="parity test",
+        ))
+        decl_parent = Construct("decl-parent", nodes=[
+            Node.scripted("seed", fn="parity_seed", outputs=VerifyClaim),
+            decl_sub,
+        ])
+        decl_graph = compile(decl_parent)
+        decl_result = run(decl_graph, input={"node_id": "parity"})
+
+        # --- @node path ---
+        @node(outputs=ClaimResult)
+        def score_fn(claim: VerifyClaim) -> ClaimResult:
+            return ClaimResult(claim_id=claim.claim_id, disposition="scored")
+
+        node_sub = construct_from_functions(
+            "node-sub", [score_fn],
+            input=VerifyClaim, output=ClaimResult,
+        )
+        node_parent = Construct("node-parent", nodes=[
+            Node.scripted("seed", fn="parity_seed", outputs=VerifyClaim),
+            node_sub,
+        ])
+        node_graph = compile(node_parent)
+        node_result = run(node_graph, input={"node_id": "parity"})
+
+        # Both produce identical results
+        assert decl_result["decl_sub"].claim_id == node_result["node_sub"].claim_id
+        assert decl_result["decl_sub"].disposition == node_result["node_sub"].disposition
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 # RENDERERS — XmlRenderer, DelimitedRenderer, JsonRenderer
