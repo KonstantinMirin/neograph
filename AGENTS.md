@@ -112,7 +112,7 @@ The plural/singular split reflects the structural difference: a Node can consume
 
 ---
 
-## `Node.outputs`: N named outputs + gather tool context
+## `Node.outputs`: N named outputs + agent tool context
 
 `Node.outputs` mirrors `Node.inputs`. It is `dict[str, type] | type | None`:
 
@@ -229,12 +229,12 @@ This was the cause of `neograph-jyw` before the fix. Any new modifier kwarg you 
 | Mode | When | Body runs? | Dispatch |
 |---|---|---|---|
 | `scripted` | No `prompt=`/`model=` | ✓ | `factory._make_scripted_wrapper` via `raw_fn` |
-| `produce` | `prompt=` + `model=` present | ✗ (dead code) | `factory._make_produce_wrapper` |
-| `gather` | Same + `tools=` (read-only) | ✗ | `factory._make_gather_wrapper` |
-| `execute` | Same + `tools=` (mutations) | ✗ | `factory._make_execute_wrapper` |
+| `think` | `prompt=` + `model=` present | ✗ (dead code) | `factory._make_produce_wrapper` |
+| `agent` | Same + `tools=` (read-only) | ✗ | `factory._make_gather_wrapper` |
+| `act` | Same + `tools=` (mutations) | ✗ | `factory._make_execute_wrapper` |
 | `raw` | Explicit `mode='raw'` | ✓ | `factory._make_raw_wrapper` via `raw_fn` |
 
-**Mode inference**: if `mode=` is not passed, the decorator looks at other kwargs — `prompt=` + `model=` → `produce`; neither → `scripted`. Mode `raw` always requires explicit opt-in (enforces the `(state, config)` signature).
+**Mode inference**: if `mode=` is not passed, the decorator looks at other kwargs — `prompt=` + `model=` → `think`; neither → `scripted`. Mode `raw` always requires explicit opt-in (enforces the `(state, config)` signature).
 
 **Dead-body warning**: LLM modes emit a `UserWarning` at decoration time if the function body is non-trivial (not `...`, `pass`, or a bare return). AST-based check — handles common false positives.
 
@@ -261,7 +261,7 @@ This was the cause of `neograph-jyw` before the fix. Any new modifier kwarg you 
 
 | File | Scope | Tests |
 |------|-------|-------|
-| `test_pipeline_modes.py` | Scripted, produce, gather, execute, raw modes; output strategies; LLM config; config injection; error paths | ~40 |
+| `test_pipeline_modes.py` | Scripted, think, agent, act, raw modes; output strategies; LLM config; config injection; error paths | ~40 |
 | `test_node_decorator.py` | `@node`, `@tool`, `@merge_fn` decorators; mode inference; fan-out/Oracle/Operator interop; DI; `construct_from_functions`/`construct_from_module` | ~78 |
 | `test_validation.py` | Assembly-time type checking; fan-in validation; `effective_producer_type`; list/dict compat; dict-form outputs; Oracle errors | ~50 |
 | `test_renderers.py` | `XmlRenderer`, `DelimitedRenderer`, `JsonRenderer`, `describe_type`, render dispatch, json_mode output schema, `render_prompt` | ~54 |
