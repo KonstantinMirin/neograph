@@ -914,6 +914,26 @@ def _build_construct_from_decorated(
             raise ConstructError(msg)
         decorated[field_name] = n
 
+    # Port param identification: when construct_input is set, params whose
+    # type matches it are "port params" — they read from neo_subgraph_input,
+    # not from a peer @node. Identified before fan-out/constant/adjacency.
+    port_params: dict[str, set[str]] = {}  # field_name → {param_names}
+    if construct_input is not None:
+        for field_name, n in decorated.items():
+            if not isinstance(n.inputs, dict):
+                continue
+            ports: set[str] = set()
+            for pname, ptype in n.inputs.items():
+                if pname in decorated:
+                    continue  # peer @node takes priority
+                try:
+                    if isinstance(ptype, type) and issubclass(ptype, construct_input):
+                        ports.add(pname)
+                except TypeError:
+                    pass  # generic types fail issubclass — skip
+            if ports:
+                port_params[field_name] = ports
+
     # Build adjacency: for each node, which other nodes does it depend on?
     # Identify fan-out parameters: for nodes with Each modifier, params that
     # don't match any @node name are Each item receivers (fan-out params) and
@@ -930,7 +950,8 @@ def _build_construct_from_decorated(
                 )
             _, pnames = sidecar
             di_params = set(_get_param_resolutions(n))
-            fan_out_params[field_name] = {p for p in pnames if p not in decorated and p not in di_params}
+            _ports = port_params.get(field_name, set())
+            fan_out_params[field_name] = {p for p in pnames if p not in decorated and p not in di_params and p not in _ports}
 
     # Classify default-value constants: params with defaults that don't match
     # any decorated @node and aren't already classified as from_input/from_config.
@@ -950,6 +971,8 @@ def _build_construct_from_decorated(
             if pname in param_res:
                 continue
             if pname in fan_out_params.get(field_name, set()):
+                continue
+            if pname in port_params.get(field_name, set()):
                 continue
             if pname not in decorated:
                 p = sig.parameters.get(pname)
@@ -971,12 +994,15 @@ def _build_construct_from_decorated(
         _, param_names = sidecar
         param_res = _get_param_resolutions(n)
         skip = fan_out_params.get(field_name, set())
+        _ports = port_params.get(field_name, set())
         seen_deps: set[str] = set()
         for pname in param_names:
             if pname in skip:
                 continue
             if pname in param_res:
                 continue
+            if pname in _ports:
+                continue  # port param — reads from neo_subgraph_input, not a peer
             if pname not in decorated:
                 # Check if pname matches {upstream}_{output_key} for a dict-output
                 # upstream (neograph-1bp.5). E.g. "analyze_summary" matches upstream
@@ -1040,19 +1066,27 @@ def _build_construct_from_decorated(
     # Clean up n.inputs: strip DI params and constants (non-upstream) but
     # KEEP fan-out params (they need to be in the dict so
     # factory._extract_input can route them to neo_each_item via
-    # node.fan_out_param). Set fan_out_param on Each nodes.
+    # node.fan_out_param). KEEP port params (rewritten to neo_subgraph_input).
+    # Set fan_out_param on Each nodes.
     for field, n in decorated.items():
         if not isinstance(n.inputs, dict):
             continue
         skip = fan_out_params.get(field, set())
-        # Keep keys that are upstream @nodes, fan-out receivers, or
-        # dict-output references ({upstream}_{output_key}, neograph-1bp.5).
-        filtered = {
-            k: v for k, v in n.inputs.items()
-            if (k in decorated and k != field)
-            or k in skip
-            or _resolve_dict_output_param(k, decorated) is not None
-        }
+        _ports = port_params.get(field, set())
+        # Keep keys that are upstream @nodes, fan-out receivers, port params,
+        # or dict-output references ({upstream}_{output_key}, neograph-1bp.5).
+        filtered: dict[str, Any] = {}
+        for k, v in n.inputs.items():
+            if k in _ports:
+                # Port param: rewrite key to neo_subgraph_input so
+                # factory._extract_input reads from the right state field.
+                filtered["neo_subgraph_input"] = v
+            elif (
+                (k in decorated and k != field)
+                or k in skip
+                or _resolve_dict_output_param(k, decorated) is not None
+            ):
+                filtered[k] = v
         if filtered != n.inputs:
             n.inputs = filtered
         # Mark the fan-out param on the Node so factory._extract_input and
@@ -1067,7 +1101,10 @@ def _build_construct_from_decorated(
     for n in ordered:
         if n.mode == "scripted" and n.raw_fn is None:
             field = n.name.replace("-", "_")
-            _register_node_scripted(n, fan_out_params.get(field, set()))
+            _register_node_scripted(
+                n, fan_out_params.get(field, set()),
+                port_param_map={p: "neo_subgraph_input" for p in port_params.get(field, set())},
+            )
 
     return Construct(
         name=construct_name,
@@ -1078,7 +1115,11 @@ def _build_construct_from_decorated(
     )
 
 
-def _register_node_scripted(n: Node, fan_out: set[str] | None = None) -> None:
+def _register_node_scripted(
+    n: Node,
+    fan_out: set[str] | None = None,
+    port_param_map: dict[str, str] | None = None,
+) -> None:
     """Register a scripted shim for a @node-decorated function via
     ``register_scripted`` so it dispatches through
     ``factory._make_scripted_wrapper`` — the single path for all scripted
@@ -1093,6 +1134,10 @@ def _register_node_scripted(n: Node, fan_out: set[str] | None = None) -> None:
     The shim resolves DI params (``FromInput``/``FromConfig``/constant)
     from ``config``, reads upstream values from ``input_data``, and calls
     the user function with positional args in parameter order.
+
+    When ``port_param_map`` is set, port params (whose keys were rewritten
+    in ``n.inputs`` to ``neo_subgraph_input``) are looked up under the
+    rewritten key in ``input_data``.
     """
     from neograph.factory import register_scripted
 
@@ -1102,6 +1147,7 @@ def _register_node_scripted(n: Node, fan_out: set[str] | None = None) -> None:
     fn, param_names = sidecar
     param_res = _get_param_resolutions(n)
     _fan_out = fan_out or set()
+    _port_map = port_param_map or {}
 
     # Synthesize a unique name for the registered shim. Use id(n) so
     # parallel pipelines with the same node names don't collide.
@@ -1116,12 +1162,15 @@ def _register_node_scripted(n: Node, fan_out: set[str] | None = None) -> None:
                 kind, payload = resolution
                 args.append(_resolve_di_value(kind, payload, pname, config))
             else:
+                # Port param: key was rewritten (e.g. "claim" →
+                # "neo_subgraph_input"). Look up the rewritten key.
+                lookup_key = _port_map.get(pname, pname)
                 # Fan-out or upstream param — both are already in
                 # input_data under the param name (fan-out via
                 # node.fan_out_param → neo_each_item, upstream via
                 # factory._extract_input).
                 args.append(
-                    input_data.get(pname)
+                    input_data.get(lookup_key)
                     if isinstance(input_data, dict)
                     else input_data
                 )

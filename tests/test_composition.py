@@ -763,6 +763,94 @@ class TestNodeInputsEpicAcceptance:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# @NODE SUB-CONSTRUCT — construct_from_functions with input=/output=
+#
+# Port param resolution: @node function params whose type matches
+# construct_input read from neo_subgraph_input instead of a peer @node.
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class VerifyClaim(BaseModel, frozen=True):
+    claim_id: str
+    text: str
+
+
+class ClaimResult(BaseModel, frozen=True):
+    claim_id: str
+    disposition: str
+
+
+class TestNodeSubConstruct:
+    """construct_from_functions with input=/output= builds a sub-construct
+    from @node functions. Port params read from the construct input port."""
+
+    def test_scripted_node_reads_port_when_param_type_matches_construct_input(self):
+        """A scripted @node inside a sub-construct reads its input from
+        neo_subgraph_input when the param type matches construct_input."""
+        @node(outputs=ClaimResult)
+        def score(claim: VerifyClaim) -> ClaimResult:
+            return ClaimResult(claim_id=claim.claim_id, disposition="confirmed")
+
+        sub = construct_from_functions(
+            "verify", [score], input=VerifyClaim, output=ClaimResult,
+        )
+        # sub should be a valid Construct with input/output ports
+        assert sub.input is VerifyClaim
+        assert sub.output is ClaimResult
+        # The node's inputs should have neo_subgraph_input, not 'claim'
+        score_node = sub.nodes[0]
+        assert isinstance(score_node.inputs, dict)
+        assert "neo_subgraph_input" in score_node.inputs
+
+    def test_sub_construct_runs_when_embedded_in_parent(self):
+        """Sub-construct built from @node functions runs inside a parent pipeline."""
+        @node(outputs=ClaimResult)
+        def judge(claim: VerifyClaim) -> ClaimResult:
+            return ClaimResult(claim_id=claim.claim_id, disposition="valid")
+
+        sub = construct_from_functions(
+            "judge-sub", [judge], input=VerifyClaim, output=ClaimResult,
+        )
+
+        # Parent pipeline feeds the sub-construct
+        register_scripted("make_claim", lambda _in, _cfg: VerifyClaim(
+            claim_id="c1", text="The sky is blue",
+        ))
+        parent = Construct("parent", nodes=[
+            Node.scripted("make-claim", fn="make_claim", outputs=VerifyClaim),
+            sub,
+        ])
+        graph = compile(parent)
+        result = run(graph, input={"node_id": "test-port"})
+
+        assert result["judge_sub"].disposition == "valid"
+        assert result["judge_sub"].claim_id == "c1"
+
+    def test_two_node_chain_inside_sub_construct_from_functions(self):
+        """Two @node functions chained inside a sub-construct: first reads
+        from port, second reads from first."""
+        @node(outputs=RawText)
+        def explore(claim: VerifyClaim) -> RawText:
+            return RawText(text=f"evidence for {claim.claim_id}")
+
+        @node(outputs=ClaimResult)
+        def decide(explore: RawText) -> ClaimResult:
+            return ClaimResult(claim_id="c1", disposition=f"based on: {explore.text}")
+
+        sub = construct_from_functions(
+            "verify-chain", [explore, decide],
+            input=VerifyClaim, output=ClaimResult,
+        )
+        assert sub.input is VerifyClaim
+        assert sub.output is ClaimResult
+        # explore reads from port, decide reads from explore (peer @node)
+        explore_node = [n for n in sub.nodes if n.name == "explore"][0]
+        decide_node = [n for n in sub.nodes if n.name == "decide"][0]
+        assert "neo_subgraph_input" in explore_node.inputs
+        assert "explore" in decide_node.inputs
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # RENDERERS — XmlRenderer, DelimitedRenderer, JsonRenderer
 # ═══════════════════════════════════════════════════════════════════════════
 
