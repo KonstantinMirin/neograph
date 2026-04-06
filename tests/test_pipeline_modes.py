@@ -1,7 +1,6 @@
-"""End-to-end acceptance tests: what must pass for NeoGraph to be useful for piarch.
-
-Each test proves a real capability, not just data structure correctness.
-All LLM calls use fakes — no API keys needed.
+"""Pipeline mode tests — scripted, produce, gather, execute, raw modes,
+output strategies, LLM config, config injection, error paths, and
+migration-era rename tests (pending deletion in P7).
 """
 
 from __future__ import annotations
@@ -604,17 +603,6 @@ class TestFirstNodeEdgeCases:
 # ═══════════════════════════════════════════════════════════════════════════
 # Assembly-time type validation — compile errors surface at Construct(...)
 # ═══════════════════════════════════════════════════════════════════════════
-
-# Tiny factory helpers for the validation tests below — each test cares
-# about input/output type flow, not scripted function names, so the `fn="f"`
-# placeholder is noise that the helpers strip.
-def _producer(name: str, out: type) -> Node:
-    return Node.scripted(name, fn="f", outputs=out)
-
-
-def _consumer(name: str, in_: type, out: type) -> Node:
-    return Node.scripted(name, fn="f", inputs=in_, outputs=out)
-
 
 class TestLLMConfig:
     """Per-node LLM configuration flows through to the factory."""
