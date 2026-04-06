@@ -363,6 +363,8 @@ def node(
     merge_prompt: str | None = None,
     interrupt_when: str | Callable | None = None,
     renderer: Any = None,
+    skip_when: Callable | None = None,
+    skip_value: Callable | None = None,
 ) -> Any:
     """Decorator that turns a function into a Node spec with signature-inferred
     dependencies. Supports both `@node` and `@node(...)` call forms.
@@ -590,6 +592,8 @@ def node(
             tools=tools or [],
             raw_fn=f if effective_mode == "raw" else None,
             renderer=renderer,
+            skip_when=skip_when,
+            skip_value=skip_value,
         )
 
         # -- Fan-out via Each when map_over is set ---------------------------

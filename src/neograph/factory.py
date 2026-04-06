@@ -189,6 +189,20 @@ def _make_produce_fn(node: Node) -> Callable:
         t0 = time.monotonic()
         input_data = _extract_input(state, node)
 
+        # Conditional produce: skip LLM when predicate is true (neograph-s14).
+        # Unwrap single-key dicts so skip_when receives a typed value for
+        # single-upstream nodes (consistent across @node and Node() surfaces).
+        if node.skip_when is not None:
+            skip_input = input_data
+            if isinstance(input_data, dict) and len(input_data) == 1:
+                skip_input = next(iter(input_data.values()))
+            if node.skip_when(skip_input):
+                elapsed = time.monotonic() - t0
+                node_log.info("node_skipped", reason="skip_when", duration_s=round(elapsed, 3))
+                if node.skip_value is not None:
+                    return {field_name: node.skip_value(skip_input)}
+                return {}
+
         # Apply renderer dispatch chain (neograph-ni6)
         from neograph.renderers import render_input
         try:
@@ -236,6 +250,18 @@ def _make_tool_fn(node: Node) -> Callable:
 
         t0 = time.monotonic()
         input_data = _extract_input(state, node)
+
+        # Conditional produce: skip LLM when predicate is true (neograph-s14).
+        if node.skip_when is not None:
+            skip_input = input_data
+            if isinstance(input_data, dict) and len(input_data) == 1:
+                skip_input = next(iter(input_data.values()))
+            if node.skip_when(skip_input):
+                elapsed = time.monotonic() - t0
+                node_log.info("node_skipped", reason="skip_when", duration_s=round(elapsed, 3))
+                if node.skip_value is not None:
+                    return {field_name: node.skip_value(skip_input)}
+                return {}
 
         # Apply renderer dispatch chain (neograph-ni6)
         from neograph.renderers import render_input

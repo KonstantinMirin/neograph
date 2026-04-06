@@ -72,6 +72,13 @@ class Node(Modifiable, BaseModel):
     # hierarchy: model.render_for_prompt() > node.renderer > global > None.
     renderer: Any = None
 
+    # Conditional produce: skip the LLM call when the predicate returns True.
+    # skip_when receives the extracted input_data (after _extract_input, before
+    # renderer). skip_value produces the output when skipped; if None, the node
+    # returns an empty state update.
+    skip_when: Callable | None = None
+    skip_value: Callable | None = None
+
     # Modifiers applied via | operator
     modifiers: list[Modifier] = []
 

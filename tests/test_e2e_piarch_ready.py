@@ -6638,3 +6638,99 @@ class TestRendererThreeSurfaces:
         # Traced nodes should have renderer propagated
         for n in pipeline.nodes:
             assert n.renderer is xml
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# TestConditionalProduce (neograph-s14)
+#
+# skip_when= predicate bypasses LLM call. skip_value= provides the output.
+# Zero LLM tokens consumed when skip fires.
+# ═══════════════════════════════════════════════════════════════════════════
+
+class TestConditionalProduce:
+    def test_skip_when_true_returns_skip_value(self):
+        """When skip_when returns True, the node returns skip_value
+        without any LLM call."""
+        from neograph import compile, run, node
+        from neograph.decorators import construct_from_functions
+
+        @node(output=Claims)
+        def seed() -> Claims:
+            return Claims(items=["single"])
+
+        @node(
+            output=MergedResult,
+            mode="produce",
+            model="fast",
+            prompt="p",
+            skip_when=lambda inp: len(inp.items) == 1,
+            skip_value=lambda inp: MergedResult(final_text=inp.items[0]),
+        )
+        def maybe_merge(seed: Claims) -> MergedResult: ...
+
+        pipeline = construct_from_functions("skip-test", [seed, maybe_merge])
+        graph = compile(pipeline)
+        result = run(graph, input={"node_id": "t"})
+        assert result["maybe_merge"].final_text == "single"
+
+    def test_skip_when_false_calls_llm(self):
+        """When skip_when returns False, the normal LLM path runs."""
+        from neograph import compile, run, node
+        from neograph.decorators import construct_from_functions
+        from tests.fakes import StructuredFake, configure_fake_llm
+
+        configure_fake_llm(
+            lambda tier: StructuredFake(lambda m: MergedResult(final_text="llm-result")),
+        )
+
+        @node(output=Claims)
+        def seed() -> Claims:
+            return Claims(items=["a", "b"])
+
+        @node(
+            output=MergedResult,
+            mode="produce",
+            model="fast",
+            prompt="p",
+            skip_when=lambda inp: len(inp.items) == 1,
+            skip_value=lambda inp: MergedResult(final_text=inp.items[0]),
+        )
+        def maybe_merge(seed: Claims) -> MergedResult: ...
+
+        pipeline = construct_from_functions("no-skip", [seed, maybe_merge])
+        graph = compile(pipeline)
+        result = run(graph, input={"node_id": "t"})
+        assert result["maybe_merge"].final_text == "llm-result"
+
+    def test_skip_when_on_node_field(self):
+        """skip_when and skip_value are proper Node fields."""
+        pred = lambda x: True
+        val = lambda x: x
+        n = Node(
+            "t", mode="produce", inputs=Claims, output=MergedResult,
+            model="fast", prompt="p",
+            skip_when=pred, skip_value=val,
+        )
+        assert n.skip_when is pred
+        assert n.skip_value is val
+
+    def test_skip_when_default_none(self):
+        """Nodes without skip_when have it as None (backward compat)."""
+        n = Node("t", mode="produce", inputs=Claims, output=MergedResult,
+                 model="fast", prompt="p")
+        assert n.skip_when is None
+        assert n.skip_value is None
+
+    def test_skip_when_decorator_kwarg(self):
+        """@node(skip_when=...) passes through to Node."""
+        from neograph import node
+
+        @node(
+            output=MergedResult, mode="produce", model="fast", prompt="p",
+            skip_when=lambda x: True,
+            skip_value=lambda x: MergedResult(final_text="skipped"),
+        )
+        def my_node(seed: Claims) -> MergedResult: ...
+
+        assert my_node.skip_when is not None
+        assert my_node.skip_value is not None
