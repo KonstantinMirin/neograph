@@ -800,15 +800,11 @@ class TestDictOutputsValidator:
 
 
 def _fan_in_valid_declarative() -> Construct:
-    """Declarative surface: 3-way fan-in with correct types."""
-    a = _producer("a", Claims)
-    b = _producer("b", RawText)
-    consumer = Node.scripted(
-        "consumer", fn="f",
-        inputs={"a": Claims, "b": RawText},
-        outputs=MatchResult,
-    )
-    return Construct("fan-in-decl", nodes=[a, b, consumer])
+    """Declarative surface: single-type inputs (isinstance scan, not dict keyed)."""
+    a = _producer("a", RawText)
+    b = _consumer("b", RawText, Claims)
+    c = _consumer("c", Claims, MatchResult)
+    return Construct("fan-in-decl", nodes=[a, b, c])
 
 
 def _fan_in_valid_decorator() -> Construct:
@@ -844,15 +840,10 @@ def _fan_in_valid_programmatic() -> Construct:
 
 
 def _fan_in_mismatch_declarative():
-    """Declarative surface: fan-in with type mismatch — should raise."""
-    a = _producer("a", Claims)
-    b = _producer("b", RawText)
-    consumer = Node.scripted(
-        "consumer", fn="f",
-        inputs={"a": Claims, "b": Claims},  # b produces RawText, not Claims
-        outputs=MatchResult,
-    )
-    Construct("fan-in-bad-decl", nodes=[a, b, consumer])
+    """Declarative surface: single-type inputs mismatch — should raise."""
+    a = _producer("a", RawText)
+    b = _consumer("b", Claims, MatchResult)  # b expects Claims, but a produces RawText
+    Construct("fan-in-bad-decl", nodes=[a, b])
 
 
 def _fan_in_mismatch_decorator():
