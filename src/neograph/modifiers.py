@@ -11,6 +11,8 @@ from typing import Any, Self
 
 from pydantic import BaseModel
 
+from neograph.errors import ConfigurationError
+
 
 class Modifier(BaseModel, frozen=True):
     """Base class for node modifiers. Applied via Node.__or__."""
@@ -173,10 +175,10 @@ class Oracle(Modifier):
     def model_post_init(self, __context: Any) -> None:
         if not self.merge_prompt and not self.merge_fn:
             msg = "Oracle requires either merge_prompt (LLM judge) or merge_fn (scripted function)."
-            raise ValueError(msg)
+            raise ConfigurationError(msg)
         if self.merge_prompt and self.merge_fn:
             msg = "Oracle accepts merge_prompt or merge_fn, not both."
-            raise ValueError(msg)
+            raise ConfigurationError(msg)
 
 
 class Each(Modifier):

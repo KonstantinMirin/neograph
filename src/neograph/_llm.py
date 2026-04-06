@@ -20,6 +20,7 @@ import structlog
 from langchain_core.runnables import RunnableConfig
 from pydantic import BaseModel
 
+from neograph.errors import ConfigurationError, ExecutionError
 from neograph.tool import Tool, ToolBudgetTracker
 
 log = structlog.get_logger()
@@ -119,7 +120,7 @@ def configure_llm(
 def _get_llm(tier: str, node_name: str = "", llm_config: dict | None = None) -> Any:
     if _llm_factory is None:
         msg = "LLM not configured. Call neograph.configure_llm() first."
-        raise ValueError(msg)
+        raise ConfigurationError(msg)
     all_kwargs = {"node_name": node_name, "llm_config": llm_config or {}}
     if _llm_factory_params is _ACCEPT_ALL:
         kwargs = all_kwargs
@@ -211,7 +212,7 @@ def _call_structured(
 
     else:
         msg = f"Unknown output_strategy: {strategy}. Use 'structured', 'json_mode', or 'text'."
-        raise ValueError(msg)
+        raise ExecutionError(msg)
 
     return result, usage
 
@@ -305,7 +306,7 @@ def invoke_with_tools(
     for tool_spec in tools:
         if tool_spec.name not in _tool_factory_registry:
             msg = f"Tool '{tool_spec.name}' not registered. Use register_tool_factory()."
-            raise ValueError(msg)
+            raise ConfigurationError(msg)
         factory = _tool_factory_registry[tool_spec.name]
         tool_instances[tool_spec.name] = factory(config, tool_spec.config)
 
@@ -457,7 +458,7 @@ def render_prompt(
     """
     if _prompt_compiler is None:
         msg = "Prompt compiler not configured. Call neograph.configure_llm() first."
-        raise ValueError(msg)
+        raise ConfigurationError(msg)
 
     # Apply renderer dispatch: node.renderer > global > None
     effective_renderer = getattr(node, "renderer", None) or _global_renderer

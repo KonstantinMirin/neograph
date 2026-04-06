@@ -13,6 +13,7 @@ from neograph import (
     Construct, ConstructError, Node, Each, Oracle, Operator,
     compile, construct_from_functions, construct_from_module,
     merge_fn, node, run, tool,
+    CompileError, ConfigurationError, ExecutionError,
 )
 from neograph.factory import register_scripted
 from tests.schemas import RawText, Claims, ClassifiedClaims, ClusterGroup, Clusters, MatchResult, MergedResult, ValidationResult
@@ -106,7 +107,7 @@ class TestSubgraph:
 
         parent = Construct("parent", nodes=[sub])
 
-        with pytest.raises(ValueError, match="has no input type"):
+        with pytest.raises(CompileError, match="has no input type"):
             compile(parent)
 
     def test_compile_raises_when_sub_construct_missing_output(self):
@@ -121,7 +122,7 @@ class TestSubgraph:
 
         parent = Construct("parent", nodes=[sub])
 
-        with pytest.raises(ValueError, match="has no output type"):
+        with pytest.raises(CompileError, match="has no output type"):
             compile(parent)
 
     def test_oracle_merges_when_inside_sub_construct(self):
@@ -283,7 +284,7 @@ class TestSubgraph:
         node = Node.scripted("x", fn="x", outputs=Claims) | Operator(when="always")
         pipeline = Construct("test-no-cp", nodes=[node])
 
-        with pytest.raises(ValueError, match="checkpointer"):
+        with pytest.raises(CompileError, match="checkpointer"):
             compile(pipeline)
 
 
@@ -356,7 +357,7 @@ class TestReducerEdgeCases:
         assert result == {"a": 1, "b": 2}
 
         # Duplicate key raises
-        with pytest.raises(ValueError, match="duplicate key"):
+        with pytest.raises(ExecutionError, match="duplicate key"):
             _merge_dicts({"a": 1}, {"a": 99})
 
     def test_new_value_replaces_when_last_write_wins(self):

@@ -11,6 +11,7 @@ from typing import Annotated, Any
 from pydantic import BaseModel, create_model
 
 from neograph.construct import Construct
+from neograph.errors import CompileError, ExecutionError
 from neograph.forward import _BranchNode
 from neograph.modifiers import Oracle, Each
 from neograph.node import Node
@@ -39,7 +40,7 @@ def _merge_dicts(existing: Any, new: dict) -> dict:
     for key, val in new.items():
         if key in merged:
             msg = f"Each fan-out: duplicate key '{key}'. Two items produced the same dispatch key."
-            raise ValueError(msg)
+            raise ExecutionError(msg)
         merged[key] = val
     return merged
 
@@ -69,7 +70,7 @@ def compile_state_model(construct: Construct) -> type[BaseModel]:
     for sub in sub_constructs:
         if sub.output is None:
             msg = f"Sub-construct '{sub.name}' has no output type. Declare output=SomeModel."
-            raise ValueError(msg)
+            raise CompileError(msg)
         field_name = sub.name.replace("-", "_")
 
         if sub.has_modifier(Oracle):
@@ -123,7 +124,7 @@ def _add_output_field(node: Node, fields: dict[str, Any]) -> None:
     """
     if node.outputs is None:
         msg = f"Node '{node.name}' has no output type. Every node must declare outputs=SomeModel."
-        raise ValueError(msg)
+        raise CompileError(msg)
 
     field_name = node.name.replace("-", "_")
 

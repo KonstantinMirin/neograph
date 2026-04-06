@@ -22,17 +22,9 @@ import sys
 import types
 from typing import Any, ForwardRef, Union, get_args, get_origin, get_type_hints
 
+from neograph.errors import ConstructError
 from neograph.modifiers import Each, split_each_path
 from neograph.node import Node
-
-
-class ConstructError(ValueError):
-    """Raised when Construct assembly fails type/topology validation.
-
-    Subclasses ValueError so existing `pytest.raises(ValueError)` patterns
-    still catch it, while allowing callers that want finer-grained handling
-    to catch the specific type.
-    """
 
 
 def effective_producer_type(item: Any) -> Any:

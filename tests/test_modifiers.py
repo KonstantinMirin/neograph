@@ -12,6 +12,7 @@ from neograph import (
     Construct, ConstructError, Node, Each, Oracle, Operator, Tool,
     compile, construct_from_functions, construct_from_module,
     merge_fn, node, run, tool,
+    ConfigurationError, ExecutionError,
 )
 from neograph.factory import register_scripted, register_tool_factory
 from tests.fakes import FakeTool, ReActFake, StructuredFake, configure_fake_llm
@@ -106,13 +107,13 @@ class TestOracle:
         assert merged.items == ["merged-consensus"]
 
     def test_oracle_raises_when_no_merge_option_given(self):
-        """Oracle without merge_prompt or merge_fn is a ValueError."""
-        with pytest.raises(ValueError, match="merge_prompt.*merge_fn"):
+        """Oracle without merge_prompt or merge_fn is a ConfigurationError."""
+        with pytest.raises(ConfigurationError, match="merge_prompt.*merge_fn"):
             Oracle(n=3)
 
     def test_oracle_raises_when_both_merge_options_given(self):
-        """Oracle with both merge_prompt and merge_fn is a ValueError."""
-        with pytest.raises(ValueError, match="not both"):
+        """Oracle with both merge_prompt and merge_fn is a ConfigurationError."""
+        with pytest.raises(ConfigurationError, match="not both"):
             Oracle(n=3, merge_prompt="x", merge_fn="y")
 
 
@@ -1387,11 +1388,11 @@ class TestEachDuplicateKeyGuard:
         pipeline = construct_from_module(mod)
         graph = compile(pipeline)
 
-        with pytest.raises(ValueError, match=r"duplicate key 'dup'"):
+        with pytest.raises(ExecutionError, match=r"duplicate key 'dup'"):
             run(graph, input={"node_id": "dup-test"})
 
     def test_raises_clear_error_when_each_collection_has_duplicate_keys_programmatic(self):
-        """Programmatic API: duplicate key in Each collection raises ValueError."""
+        """Programmatic API: duplicate key in Each collection raises ExecutionError."""
         from neograph import compile, run
 
         def make_fn(input_data, config):
@@ -1417,7 +1418,7 @@ class TestEachDuplicateKeyGuard:
         pipeline = Construct("test-dup-each", nodes=[make, proc])
         graph = compile(pipeline)
 
-        with pytest.raises(ValueError, match=r"duplicate key 'same'"):
+        with pytest.raises(ExecutionError, match=r"duplicate key 'same'"):
             run(graph, input={"node_id": "dup-prog"})
 
 

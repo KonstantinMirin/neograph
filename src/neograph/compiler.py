@@ -15,6 +15,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.types import Send, interrupt
 
 from neograph.construct import Construct
+from neograph.errors import CompileError, ExecutionError
 from neograph.factory import (
     lookup_condition,
     make_each_redirect_fn,
@@ -56,7 +57,7 @@ def compile(construct: Construct, checkpointer: Any = None) -> Any:
             f"Construct '{construct.name}' uses Operator (interrupt/resume) "
             "but no checkpointer provided. Pass checkpointer= to compile()."
         )
-        raise ValueError(msg)
+        raise CompileError(msg)
 
     # 1. Generate state model from node I/O
     state_model = compile_state_model(construct)
@@ -93,7 +94,7 @@ def _add_subgraph(
     """Compile a sub-Construct as an isolated subgraph node, with modifier support."""
     if sub.input is None:
         msg = f"Sub-construct '{sub.name}' has no input type. Declare input=SomeModel."
-        raise ValueError(msg)
+        raise CompileError(msg)
 
     sub_log = log.bind(subgraph=sub.name)
     sub_log.info("subgraph_compile", input=sub.input.__name__, output=sub.output.__name__)
@@ -287,7 +288,7 @@ def _wire_each(
                     f"(items at index {seen_keys[key_val]} and {idx}). "
                     f"Each item's '{each.key}' must be unique."
                 )
-                raise ValueError(msg)
+                raise ExecutionError(msg)
             seen_keys[key_val] = idx
 
         state_dict = {

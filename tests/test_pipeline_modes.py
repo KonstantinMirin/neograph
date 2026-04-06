@@ -10,6 +10,7 @@ from typing import Annotated, Any
 import pytest
 
 from neograph import Construct, ConstructError, Node, Operator, Oracle, Each, Tool, compile, run, tool
+from neograph import CompileError, ConfigurationError, ExecutionError
 from tests.fakes import FakeTool, ReActFake, StructuredFake, TextFake, configure_fake_llm
 from tests.schemas import RawText, Claims, ClassifiedClaims, ClusterGroup, Clusters, MatchResult, MergedResult, ValidationResult
 
@@ -355,19 +356,19 @@ class TestErrorPaths:
         pipeline = Construct("test-no-llm", nodes=[node])
         graph = compile(pipeline)
 
-        with pytest.raises(ValueError, match="LLM not configured"):
+        with pytest.raises(ConfigurationError, match="LLM not configured"):
             run(graph, input={"node_id": "test-001"})
 
     def test_compile_raises_when_scripted_fn_not_registered(self):
-        """Referencing unregistered scripted function raises ValueError."""
+        """Referencing unregistered scripted function raises ConfigurationError."""
         node = Node.scripted("bad", fn="nonexistent_fn", outputs=Claims)
         pipeline = Construct("test-bad-fn", nodes=[node])
 
-        with pytest.raises(ValueError, match="not registered"):
+        with pytest.raises(ConfigurationError, match="not registered"):
             compile(pipeline)
 
     def test_compile_raises_when_oracle_merge_fn_not_registered(self):
-        """Oracle with unregistered merge_fn raises ValueError at compile."""
+        """Oracle with unregistered merge_fn raises ConfigurationError at compile."""
         from neograph.factory import register_scripted
 
         register_scripted("gen", lambda input_data, config: Claims(items=["x"]))
@@ -378,11 +379,11 @@ class TestErrorPaths:
 
         pipeline = Construct("test-bad-merge", nodes=[node])
 
-        with pytest.raises(ValueError, match="not registered"):
+        with pytest.raises(ConfigurationError, match="not registered"):
             compile(pipeline)
 
     def test_compile_raises_when_operator_condition_not_registered(self):
-        """Operator with unregistered condition raises ValueError at compile."""
+        """Operator with unregistered condition raises ConfigurationError at compile."""
         from langgraph.checkpoint.memory import MemorySaver
 
         from neograph.factory import register_scripted
@@ -395,11 +396,11 @@ class TestErrorPaths:
 
         pipeline = Construct("test-bad-condition", nodes=[node])
 
-        with pytest.raises(ValueError, match="not registered"):
+        with pytest.raises(ConfigurationError, match="not registered"):
             compile(pipeline, checkpointer=MemorySaver())
 
     def test_runtime_raises_when_tool_factory_not_registered(self):
-        """Gather node with unregistered tool factory raises ValueError."""
+        """Gather node with unregistered tool factory raises ConfigurationError."""
         configure_fake_llm(lambda tier: ReActFake(tool_calls=[[]]))
 
         node = Node(
@@ -414,7 +415,7 @@ class TestErrorPaths:
         pipeline = Construct("test-bad-tool", nodes=[node])
         graph = compile(pipeline)
 
-        with pytest.raises(ValueError, match="not registered"):
+        with pytest.raises(ConfigurationError, match="not registered"):
             run(graph, input={"node_id": "test-001"})
 
     def test_run_raises_when_neither_input_nor_resume(self):
@@ -430,11 +431,11 @@ class TestErrorPaths:
             run(graph)
 
     def test_compile_raises_when_node_missing_output_type(self):
-        """Node with no output type raises ValueError at compile."""
+        """Node with no output type raises CompileError at compile."""
         node = Node(name="bad-node", mode="produce", model="fast", prompt="x")
         pipeline = Construct("test-no-output", nodes=[node])
 
-        with pytest.raises(ValueError, match="no output type"):
+        with pytest.raises(CompileError, match="no output type"):
             compile(pipeline)
 
 
@@ -1243,11 +1244,11 @@ class TestToolRegistrationError:
         pipeline = construct_from_module(mod, name="test-unreg-tool")
         graph = compile(pipeline)
 
-        with pytest.raises(ValueError, match="nonexistent_tool"):
+        with pytest.raises(ConfigurationError, match="nonexistent_tool"):
             run(graph, input={})
 
     def test_clear_error_raised_when_execute_tool_not_registered(self):
-        """Execute node with unregistered tool also raises ValueError."""
+        """Execute node with unregistered tool also raises ConfigurationError."""
         import types as _types
 
         from neograph import construct_from_module, node
@@ -1274,7 +1275,7 @@ class TestToolRegistrationError:
         pipeline = construct_from_module(mod, name="test-unreg-exec")
         graph = compile(pipeline)
 
-        with pytest.raises(ValueError, match="missing_exec_tool"):
+        with pytest.raises(ConfigurationError, match="missing_exec_tool"):
             run(graph, input={})
 
 

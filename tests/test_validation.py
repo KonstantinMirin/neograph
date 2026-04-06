@@ -17,6 +17,7 @@ from tests.schemas import (
 from neograph import (
     Construct, ConstructError, Node, Each, Oracle, Operator,
     compile, run,
+    ConfigurationError,
 )
 
 
@@ -275,7 +276,7 @@ class TestConstructOracleErrors:
 
         parent = Construct("parent", nodes=[sub])
 
-        with pytest.raises(ValueError, match="not registered"):
+        with pytest.raises(ConfigurationError, match="not registered"):
             compile(parent)
 
 

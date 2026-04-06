@@ -21,6 +21,7 @@ import structlog
 from langchain_core.runnables import RunnableConfig
 from pydantic import BaseModel
 
+from neograph.errors import ConfigurationError
 from neograph.modifiers import Each, Oracle
 from neograph.node import Node
 from neograph.tool import ToolBudgetTracker
@@ -57,20 +58,20 @@ def register_tool_factory(name: str, fn: Callable) -> None:
 
 
 def lookup_condition(name: str) -> Callable:
-    """Look up a registered condition function by name. Raises ValueError if missing."""
+    """Look up a registered condition function by name. Raises ConfigurationError if missing."""
     fn = _condition_registry.get(name)
     if fn is None:
         msg = f"Condition '{name}' not registered. Use register_condition()."
-        raise ValueError(msg)
+        raise ConfigurationError(msg)
     return fn
 
 
 def lookup_scripted(name: str) -> Callable:
-    """Look up a registered scripted function by name. Raises ValueError if missing."""
+    """Look up a registered scripted function by name. Raises ConfigurationError if missing."""
     fn = _scripted_registry.get(name)
     if fn is None:
         msg = f"Scripted function '{name}' not registered. Use register_scripted()."
-        raise ValueError(msg)
+        raise ConfigurationError(msg)
     return fn
 
 
@@ -202,7 +203,7 @@ def make_node_fn(node: Node) -> Callable:
     if node.mode == "scripted":
         if node.scripted_fn not in _scripted_registry:
             msg = f"Scripted function '{node.scripted_fn}' not registered. Use register_scripted()."
-            raise ValueError(msg)
+            raise ConfigurationError(msg)
         return _make_scripted_wrapper(node)
 
     # LLM nodes — dispatch by mode

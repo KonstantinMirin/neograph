@@ -21,7 +21,14 @@ sub-constructs), see Node and Construct directly.
 from neograph._llm import configure_llm, render_prompt
 from neograph.describe_type import describe_type
 from neograph.compiler import compile
-from neograph.construct import Construct, ConstructError
+from neograph.construct import Construct
+from neograph.errors import (
+    CompileError,
+    ConfigurationError,
+    ConstructError,
+    ExecutionError,
+    NeographError,
+)
 from neograph.decorators import (
     FromConfig,
     FromInput,
@@ -62,8 +69,13 @@ __all__ = [
     "Node",
     "Tool",
     "Construct",
-    "ConstructError",
     "ForwardConstruct",
+    # Error hierarchy
+    "NeographError",
+    "ConstructError",
+    "CompileError",
+    "ConfigurationError",
+    "ExecutionError",
     # Configuration
     "configure_llm",
     # Schema rendering

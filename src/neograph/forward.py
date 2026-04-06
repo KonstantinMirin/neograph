@@ -54,6 +54,7 @@ import operator as op_module
 from typing import Any
 
 from neograph.construct import Construct
+from neograph.errors import ConstructError
 from neograph.modifiers import Each
 from neograph.node import Node
 
@@ -434,7 +435,7 @@ class _Tracer:
         Default decision is True (take the true arm). Pre-configured
         decisions in self._branch_decisions override this.
 
-        Raises ValueError if more than _MAX_BRANCHES branches are encountered.
+        Raises ConstructError if more than _MAX_BRANCHES branches are encountered.
         """
         branch_id = self._next_branch_id
         if branch_id >= _MAX_BRANCHES:
@@ -443,7 +444,7 @@ class _Tracer:
                 f"the limit of {_MAX_BRANCHES}. Simplify your forward() or "
                 "extract sub-pipelines."
             )
-            raise ValueError(msg)
+            raise ConstructError(msg)
         self._next_branch_id += 1
 
         if branch_id in self._branch_decisions:
