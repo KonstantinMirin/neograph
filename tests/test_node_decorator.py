@@ -23,7 +23,7 @@ from tests.schemas import RawText, Claims, ClassifiedClaims, ClusterGroup, Clust
 class TestToolDecorator:
     """@tool decorator: signature-inferred tool schemas."""
 
-    def test_tool_decorator_auto_registers(self):
+    def test_tool_registers_and_invokes_when_decorated_with_budget(self):
         """@tool wraps a function, auto-registers the factory, returns a Tool spec."""
         from langchain_core.messages import AIMessage
 
@@ -82,7 +82,7 @@ class TestToolDecorator:
         assert len(call_log) == 2
         assert call_log == ["q1", "q2"]
 
-    def test_tool_decorator_without_args(self):
+    def test_tool_returns_spec_when_decorated_without_parens(self):
         """@tool (no parens) also works."""
         @tool
         def noop(x: str) -> str:
@@ -112,7 +112,7 @@ class TestNodeDecorator:
         import types as _types
         return _types.ModuleType(name)
 
-    def test_node_decorator_basic_chain(self):
+    def test_chain_compiles_and_runs_when_two_nodes_wired_by_param_name(self):
         """Two @node-decorated scripted functions wired by parameter name,
         assembled via construct_from_module, compile and run end-to-end."""
         from neograph import compile, construct_from_module, node, run
@@ -142,7 +142,7 @@ class TestNodeDecorator:
         assert isinstance(result["split"], Claims)
         assert result["split"].items == ["hello", "world"]
 
-    def test_node_decorator_fan_in_three_upstreams(self):
+    def test_fan_in_produces_result_when_three_upstreams_wired(self):
         """A node with three parameters gets wired to three upstream nodes,
         and topological sort puts all upstreams before the fan-in."""
         from neograph import construct_from_module, node
@@ -196,7 +196,7 @@ class TestNodeDecorator:
         result = run(graph, input={"node_id": "fan-in"})
         assert result["report"].summary == "a-b-c"
 
-    def test_node_decorator_explicit_kwargs_override_annotations(self):
+    def test_explicit_outputs_override_when_return_annotation_differs(self):
         """Explicit @node(outputs=X) beats the function's return annotation."""
         from neograph import construct_from_module, node
 
@@ -216,7 +216,7 @@ class TestNodeDecorator:
         assert only_node.outputs is Claims
         assert only_node.outputs is not Bogus
 
-    def test_node_decorator_unknown_param_raises(self):
+    def test_construct_raises_when_param_names_unknown_node(self):
         """A parameter that doesn't name any @node in the module raises
         ConstructError with a helpful message."""
         from neograph import ConstructError, construct_from_module, node
@@ -235,7 +235,7 @@ class TestNodeDecorator:
         assert "ghost" in msg
         assert "orphan" in msg
 
-    def test_node_decorator_topological_ordering(self):
+    def test_topo_sort_orders_correctly_when_declared_out_of_order(self):
         """Out-of-declaration-order dependencies get sorted correctly."""
         from neograph import construct_from_module, node
 
@@ -274,7 +274,7 @@ class TestNodeDecorator:
         result = run(graph, input={"node_id": "topo"})
         assert [c["claim"] for c in result["report"].classified] == ["a", "b", "c"]
 
-    def test_node_decorator_name_underscore_to_hyphen(self):
+    def test_node_name_hyphenated_when_function_uses_underscores(self):
         """Function `make_clusters` becomes node 'make-clusters'; downstream
         parameter `make_clusters` resolves to it."""
         from neograph import compile, construct_from_module, node, run
@@ -327,7 +327,7 @@ class TestNodeDecorator:
 class TestNodeDecoratorModeInference:
     """@node mode inference: mode=None infers from prompt/model presence."""
 
-    def test_default_mode_infers_scripted_when_no_prompt(self):
+    def test_mode_infers_scripted_when_no_prompt_or_model(self):
         """@node(outputs=X) with no prompt/model infers mode='scripted'."""
         from neograph import node
 
@@ -337,7 +337,7 @@ class TestNodeDecoratorModeInference:
 
         assert seed.mode == "scripted"
 
-    def test_default_mode_infers_produce_when_prompt_present(self):
+    def test_mode_infers_produce_when_prompt_and_model_present(self):
         """@node(outputs=X, prompt='...', model='...') infers mode='produce'."""
         from neograph import node
 
@@ -346,7 +346,7 @@ class TestNodeDecoratorModeInference:
 
         assert decompose.mode == "produce"
 
-    def test_produce_without_prompt_raises(self):
+    def test_decoration_raises_when_produce_mode_missing_prompt(self):
         """@node(mode='produce', outputs=X, model='reason') with no prompt raises at decoration time."""
         from neograph import ConstructError, node
 
@@ -355,7 +355,7 @@ class TestNodeDecoratorModeInference:
             @node(mode="produce", outputs=Claims, model="reason")
             def decompose(topic: RawText) -> Claims: ...
 
-    def test_gather_without_model_raises(self):
+    def test_decoration_raises_when_gather_mode_missing_model(self):
         """@node(mode='gather', outputs=X, prompt='...') with no model raises at decoration time."""
         from neograph import ConstructError, node
 
@@ -364,7 +364,7 @@ class TestNodeDecoratorModeInference:
             @node(mode="gather", outputs=Claims, prompt="rw/decompose")
             def decompose(topic: RawText) -> Claims: ...
 
-    def test_produce_with_nontrivial_body_warns(self):
+    def test_warning_emitted_when_produce_mode_has_nontrivial_body(self):
         """@node(mode='produce', ...) with a real function body emits UserWarning."""
         import warnings as _warnings
 
@@ -376,7 +376,7 @@ class TestNodeDecoratorModeInference:
             def decompose(topic: RawText) -> Claims:
                 return Claims(items=topic.text.split("."))
 
-    def test_produce_with_ellipsis_body_no_warn(self):
+    def test_no_warning_when_produce_mode_has_ellipsis_body(self):
         """@node(mode='produce', ...) with `...` body does NOT warn."""
         import warnings as _warnings
 
@@ -397,7 +397,7 @@ class TestNodeDecoratorFanout:
         import types as _types
         return _types.ModuleType(name)
 
-    def test_node_decorator_with_map_over(self):
+    def test_fanout_produces_dict_when_map_over_and_map_key_set(self):
         """Full chain: producer → fan-out consumer via map_over= compiles, runs
         end-to-end, and produces a dict keyed by cluster label."""
         from neograph import compile, construct_from_module, node, run
@@ -442,7 +442,7 @@ class TestNodeDecoratorFanout:
         assert verify_results["beta"].cluster_label == "beta"
         assert verify_results["alpha"].matched == ["c1", "c2"]
 
-    def test_node_decorator_map_over_requires_key(self):
+    def test_decoration_raises_when_map_over_without_map_key(self):
         """map_over= without map_key= raises ConstructError at decoration time."""
         from neograph import ConstructError, node
 
@@ -451,7 +451,7 @@ class TestNodeDecoratorFanout:
             def verify(cluster: ClusterGroup) -> MatchResult:
                 ...
 
-    def test_node_decorator_map_key_without_map_over_raises(self):
+    def test_decoration_raises_when_map_key_without_map_over(self):
         """map_key= without map_over= raises ConstructError at decoration time."""
         from neograph import ConstructError, node
 
@@ -460,7 +460,7 @@ class TestNodeDecoratorFanout:
             def verify(cluster: ClusterGroup) -> MatchResult:
                 ...
 
-    def test_node_decorator_map_over_sidecar_propagates(self):
+    def test_sidecar_survives_when_each_modifier_applied(self):
         """The Each-modified Node copy retains its sidecar entry so
         construct_from_module picks it up."""
         from neograph.decorators import _get_sidecar
@@ -484,7 +484,7 @@ class TestNodeDecoratorFanout:
         fn, param_names = sidecar
         assert param_names == ("cluster",)
 
-    def test_node_decorator_map_over_fanout_param_skipped_in_adjacency(self):
+    def test_fanout_param_skipped_when_resolving_upstream_adjacency(self):
         """The fan-out parameter is NOT looked up as an upstream @node,
         so it doesn't cause 'does not match any @node' ConstructError."""
         from neograph import construct_from_module, node
@@ -511,7 +511,7 @@ class TestNodeDecoratorFanout:
         pipeline = construct_from_module(mod)
         assert len(pipeline.nodes) == 2
 
-    def test_node_decorator_map_over_mixed_params_only_fanout_skipped(self):
+    def test_upstream_params_wire_when_mixed_with_fanout_param(self):
         """A node with both upstream params and a fan-out param: only the
         fan-out param is skipped in adjacency; upstream params still wire."""
         from neograph import construct_from_module, node
@@ -569,7 +569,7 @@ class TestNodeDecoratorOracle:
         import types as _types
         return _types.ModuleType(name)
 
-    def test_node_decorator_oracle_with_merge_fn(self):
+    def test_oracle_attaches_when_ensemble_n_and_merge_fn_set(self):
         """@node with ensemble_n + merge_fn end-to-end: Oracle modifier attached,
         pipeline compiles and runs, merge function combines variants."""
         from neograph.factory import register_scripted
@@ -607,7 +607,7 @@ class TestNodeDecoratorOracle:
         assert oracle_mod.merge_fn == "combine_dec"
         assert oracle_mod.merge_prompt is None
 
-    def test_node_decorator_oracle_with_merge_prompt(self):
+    def test_oracle_attaches_when_ensemble_n_and_merge_prompt_set(self):
         """@node with ensemble_n + merge_prompt end-to-end: Oracle modifier
         attached with merge_prompt for LLM judge."""
         from neograph import node
@@ -622,7 +622,7 @@ class TestNodeDecoratorOracle:
         assert oracle_mod.merge_prompt == "rw/decompose-merge"
         assert oracle_mod.merge_fn is None
 
-    def test_node_decorator_oracle_default_n(self):
+    def test_oracle_defaults_n_to_3_when_merge_fn_without_ensemble_n(self):
         """merge_fn without ensemble_n defaults to n=3."""
         from neograph import node
 
@@ -635,7 +635,7 @@ class TestNodeDecoratorOracle:
         assert oracle_mod.n == 3
         assert oracle_mod.merge_fn == "combine"
 
-    def test_node_decorator_oracle_no_merge_raises(self):
+    def test_decoration_raises_when_ensemble_n_without_merge(self):
         """ensemble_n without merge_fn or merge_prompt raises ConstructError."""
         from neograph import node
 
@@ -644,7 +644,7 @@ class TestNodeDecoratorOracle:
                   ensemble_n=3)
             def decompose(topic: RawText) -> Claims: ...
 
-    def test_node_decorator_oracle_both_merge_raises(self):
+    def test_decoration_raises_when_both_merge_fn_and_merge_prompt(self):
         """Both merge_fn and merge_prompt raises ConstructError."""
         from neograph import node
 
@@ -653,7 +653,7 @@ class TestNodeDecoratorOracle:
                   ensemble_n=3, merge_fn="combine", merge_prompt="rw/merge")
             def decompose(topic: RawText) -> Claims: ...
 
-    def test_node_decorator_oracle_n_too_small_raises(self):
+    def test_decoration_raises_when_ensemble_n_less_than_2(self):
         """ensemble_n=1 raises ConstructError."""
         from neograph import node
 
@@ -688,7 +688,7 @@ class TestNodeDecoratorRawMode:
         import types as _types
         return _types.ModuleType(name)
 
-    def test_node_decorator_raw_mode_basic(self):
+    def test_raw_mode_filters_state_when_reading_and_writing(self):
         """@node(mode='raw') reads state and returns a filtered update dict."""
         from neograph import compile, construct_from_module, node, run
         from neograph.factory import register_scripted
@@ -725,7 +725,7 @@ class TestNodeDecoratorRawMode:
         assert "a" in filtered.items
         assert "c" in filtered.items
 
-    def test_node_decorator_raw_mode_wrong_signature_raises(self):
+    def test_raw_mode_raises_when_signature_invalid(self):
         """@node(mode='raw') rejects functions with wrong parameter count or names."""
         from neograph import node
 
@@ -747,7 +747,7 @@ class TestNodeDecoratorRawMode:
             def bad_one(state):
                 pass
 
-    def test_node_decorator_raw_mode_with_downstream(self):
+    def test_downstream_consumes_when_raw_node_produces_output(self):
         """Raw node output is consumed by a downstream scripted @node via param name."""
         from neograph import compile, construct_from_module, node, run
 
@@ -772,7 +772,7 @@ class TestNodeDecoratorRawMode:
         assert summary is not None
         assert summary.text == "count=2"
 
-    def test_node_decorator_mixed_raw_and_scripted(self):
+    def test_pipeline_runs_when_raw_and_scripted_mixed(self):
         """Pipeline with both raw and scripted @nodes in the same module."""
         from neograph import compile, construct_from_module, node, run
 
@@ -823,7 +823,7 @@ class TestNodeDecoratorRawMode:
 
 class TestNodeDecoratorOperator:
 
-    def test_node_decorator_interrupt_with_string_name(self):
+    def test_interrupt_fires_when_string_condition_truthy(self):
         """@node(interrupt_when='name') attaches Operator and interrupt fires end-to-end."""
         from langgraph.checkpoint.memory import MemorySaver
 
@@ -863,7 +863,7 @@ class TestNodeDecoratorOperator:
         assert "__interrupt__" in result
         assert result["validate"].passed is False
 
-    def test_node_decorator_interrupt_with_string_has_modifier(self):
+    def test_operator_modifier_attached_when_interrupt_when_string(self):
         """@node(interrupt_when='name') results in a node with Operator modifier."""
         from neograph import node
         from neograph.factory import register_condition
@@ -879,7 +879,7 @@ class TestNodeDecoratorOperator:
         assert op is not None
         assert op.when == "some_check"
 
-    def test_node_decorator_interrupt_with_callable(self):
+    def test_condition_auto_registered_when_interrupt_when_callable(self):
         """@node(interrupt_when=<callable>) auto-registers condition and attaches Operator."""
         from neograph import node
 
@@ -900,7 +900,7 @@ class TestNodeDecoratorOperator:
         resolved = lookup_condition(op.when)
         assert resolved is cond_fn
 
-    def test_node_decorator_interrupt_resume(self):
+    def test_graph_resumes_when_interrupt_followed_by_feedback(self):
         """@node interrupt + resume flow: graph pauses then resumes with feedback."""
         from langgraph.checkpoint.memory import MemorySaver
 
@@ -935,7 +935,7 @@ class TestNodeDecoratorOperator:
         assert result["validate_resume"].passed is False
         assert result["human_feedback"] == {"approved": True}
 
-    def test_node_decorator_interrupt_when_falsy_continues(self):
+    def test_graph_continues_when_interrupt_condition_falsy(self):
         """Condition returns None — graph runs through without interrupt."""
         from langgraph.checkpoint.memory import MemorySaver
 
@@ -963,7 +963,7 @@ class TestNodeDecoratorOperator:
         assert result["validate"].passed is True
         assert result.get("human_feedback") is None
 
-    def test_node_decorator_interrupt_when_wrong_type_raises(self):
+    def test_decoration_raises_when_interrupt_when_wrong_type(self):
         """Passing a non-string, non-callable interrupt_when raises ConstructError."""
         from neograph import node
 
@@ -997,7 +997,7 @@ class TestNodeDecoratorOperator:
 class TestNodeDecoratorParams:
     """Scalar parameter support: FromInput, FromConfig, default constants."""
 
-    def test_from_input_param(self):
+    def test_from_input_delivers_value_when_present_in_run_input(self):
         """Annotated[str, FromInput] param is delivered via run(input={'topic': 'x'})."""
         import types as _types
 
@@ -1017,7 +1017,7 @@ class TestNodeDecoratorParams:
 
         assert result["greet"] == RawText(text="Hello, world!")
 
-    def test_from_config_param(self):
+    def test_from_config_delivers_resource_when_present_in_configurable(self):
         """Annotated[RateLimiter, FromConfig] param is delivered via config['configurable']."""
         import types as _types
 
@@ -1052,7 +1052,7 @@ class TestNodeDecoratorParams:
         assert limiter.calls == 1
         assert result["process"] == Claims(items=["calls=1"])
 
-    def test_default_value_constant(self):
+    def test_default_used_when_param_has_default_value(self):
         """Param with default value not matching any @node is used as compile-time constant."""
         import types as _types
 
@@ -1072,7 +1072,7 @@ class TestNodeDecoratorParams:
 
         assert result["greet"] == RawText(text="Hi, friend!")
 
-    def test_mixed_params(self):
+    def test_all_param_types_resolve_when_mixed_in_one_function(self):
         """One function with upstream + FromInput + FromConfig + default."""
         import types as _types
 
@@ -1118,7 +1118,7 @@ class TestNodeDecoratorParams:
         assert len(logger.logged) == 1
         assert "combining base with science" in logger.logged[0]
 
-    def test_from_input_missing_returns_none(self):
+    def test_none_returned_when_from_input_key_missing(self):
         """FromInput param not in run(input=...) returns None (not an error)."""
         import types as _types
 
@@ -1149,7 +1149,7 @@ class TestNodeDecoratorErrorLocation:
         import types as _types
         return _types.ModuleType(name)
 
-    def test_error_includes_node_source_location(self):
+    def test_error_message_includes_source_location_when_param_unknown(self):
         """Unknown-param error includes 'test_node_decorator.py:<line>'
         pointing at the decorated function definition."""
         from neograph import ConstructError, construct_from_module, node
@@ -1167,7 +1167,7 @@ class TestNodeDecoratorErrorLocation:
         msg = str(exc_info.value)
         assert "test_node_decorator.py:" in msg
 
-    def test_cycle_error_includes_source_location(self):
+    def test_error_message_includes_source_location_when_cycle_detected(self):
         """Cycle error includes source locations for the involved nodes."""
         from neograph import ConstructError, construct_from_module, node
 
@@ -1189,7 +1189,7 @@ class TestNodeDecoratorErrorLocation:
         msg = str(exc_info.value)
         assert "test_node_decorator.py:" in msg
 
-    def test_error_filename_is_basename(self):
+    def test_source_location_uses_basename_when_reporting_errors(self):
         """Source location uses basename, not the full absolute path."""
         from neograph import ConstructError, construct_from_module, node
 
@@ -1217,7 +1217,7 @@ class TestNodeDecoratorCrossModule:
         import types as _types
         return _types.ModuleType(name)
 
-    def test_cross_module_composition(self):
+    def test_pipeline_assembles_when_node_imported_from_another_module(self):
         """@node from module A imported into module B: construct_from_module(B)
         finds both, wires topology correctly, compile+run end-to-end."""
         from neograph import compile, construct_from_module, node, run
@@ -1249,7 +1249,7 @@ class TestNodeDecoratorCrossModule:
 
         assert result["process"] == Claims(items=["FETCHED DATA"])
 
-    def test_name_collision_raises(self):
+    def test_construct_raises_when_node_names_collide(self):
         """Two @node functions with the same fn.__name__ in one module
         raises ConstructError listing both colliding names."""
         from neograph import ConstructError, construct_from_module, node
@@ -1271,7 +1271,7 @@ class TestNodeDecoratorCrossModule:
         with pytest.raises(ConstructError, match="name collision"):
             construct_from_module(mod)
 
-    def test_collision_resolved_by_explicit_name(self):
+    def test_assembly_succeeds_when_collision_resolved_by_explicit_name(self):
         """Same setup as collision test but one has @node(name='unique') —
         no error, assembly succeeds."""
         from neograph import construct_from_module, node
@@ -1309,7 +1309,7 @@ class TestNodeDecoratorCrossModule:
 class TestConstructFromFunctions:
     """construct_from_functions() — explicit function list for multi-pipeline files."""
 
-    def test_basic_chain(self):
+    def test_chain_compiles_when_two_functions_wired_by_param_name(self):
         """Two @node functions wired by parameter name via explicit list."""
         from neograph import compile, construct_from_functions, node, run
 
@@ -1330,7 +1330,7 @@ class TestConstructFromFunctions:
         result = run(graph, input={"node_id": "cff-001"})
         assert result["cff_split"].items == ["hello", "world"]
 
-    def test_topological_sort_with_explicit_list(self):
+    def test_topo_sort_works_when_list_order_differs_from_dag(self):
         """Explicit list in non-topological order still sorts correctly."""
         from neograph import compile, construct_from_functions, node, run
 
@@ -1355,7 +1355,7 @@ class TestConstructFromFunctions:
         names = [n.name for n in pipeline.nodes]
         assert names == ["cff-topo-seed", "cff-topo-split", "cff-topo-report"]
 
-    def test_two_pipelines_in_same_file(self):
+    def test_two_pipelines_coexist_when_built_from_separate_lists(self):
         """Two independent pipelines in the same module — the killer use case."""
         from neograph import compile, construct_from_functions, node, run
 
@@ -1388,7 +1388,7 @@ class TestConstructFromFunctions:
         assert rA["pipeA_end"].text == "A: pipeline A"
         assert rB["pipeB_end"].items == ["B:pipeline", "B:B"]
 
-    def test_rejects_non_decorated_function(self):
+    def test_construct_raises_when_function_not_decorated(self):
         """A plain function without @node raises a clear error."""
         from neograph import ConstructError, construct_from_functions, node
 
@@ -1402,7 +1402,7 @@ class TestConstructFromFunctions:
         with pytest.raises(ConstructError, match="not decorated with @node"):
             construct_from_functions("bad", [cff_ok, not_a_node])
 
-    def test_rejects_non_callable(self):
+    def test_construct_raises_when_non_callable_passed(self):
         """Passing a non-callable raises."""
         from neograph import ConstructError, construct_from_functions, node
 
@@ -1413,7 +1413,7 @@ class TestConstructFromFunctions:
         with pytest.raises(ConstructError, match="not decorated with @node"):
             construct_from_functions("bad", [cff_ok2, "not a function"])
 
-    def test_name_collision_raises(self):
+    def test_construct_raises_when_function_names_collide(self):
         """Two functions whose node names collide raise ConstructError."""
         from neograph import ConstructError, construct_from_functions, node
 
@@ -1432,7 +1432,7 @@ class TestConstructFromFunctions:
 class TestConstructLlmConfigDefault:
     """Construct-level default llm_config inherited by produce/gather/execute nodes."""
 
-    def test_default_inherited_by_nodes_without_explicit(self):
+    def test_nodes_inherit_config_when_construct_has_default(self):
         """Produce nodes without explicit llm_config inherit the Construct default."""
         from neograph import Construct, Node
 
@@ -1458,7 +1458,7 @@ class TestConstructLlmConfigDefault:
             "temperature": 0.5,
         }
 
-    def test_explicit_node_config_merges_over_default(self):
+    def test_node_config_wins_when_merging_with_construct_default(self):
         """Per-node llm_config merges with Construct default; node wins on conflicts."""
         from neograph import Construct, Node
 
@@ -1480,7 +1480,7 @@ class TestConstructLlmConfigDefault:
             "max_tokens": 1000,
         }
 
-    def test_scripted_nodes_not_affected(self):
+    def test_scripted_nodes_get_config_when_construct_has_default(self):
         """Scripted nodes don't get llm_config inheritance (they don't use it)."""
         from neograph import Construct, Node
         from neograph.factory import register_scripted
@@ -1498,7 +1498,7 @@ class TestConstructLlmConfigDefault:
         # but the propagation is uniform to keep the merge logic simple.
         assert pipeline.nodes[0].llm_config == {"output_strategy": "json_mode"}
 
-    def test_no_construct_default_nodes_keep_their_config(self):
+    def test_node_config_unchanged_when_no_construct_default(self):
         """When Construct has no llm_config, nodes keep their original config unchanged."""
         from neograph import Construct, Node
 
@@ -1509,7 +1509,7 @@ class TestConstructLlmConfigDefault:
 
         assert pipeline.nodes[0].llm_config == {"temperature": 0.7}
 
-    def test_node_decorator_inherits_construct_default(self):
+    def test_decorator_inherits_config_when_using_construct_from_functions(self):
         """@node functions inherit the Construct default via construct_from_functions."""
         from neograph import construct_from_functions, node
 
@@ -1538,7 +1538,7 @@ class TestConstructLlmConfigDefault:
 class TestFromInputPydanticModel:
     """neograph-6jd — Annotated[PydanticModel, FromInput] bundles multiple config fields."""
 
-    def test_from_input_bundle_basic(self):
+    def test_bundle_populates_when_all_fields_in_run_input(self):
         """Annotated[RunCtx, FromInput] populates each field from config['configurable']."""
         from neograph import FromInput, compile, construct_from_functions, node, run
 
@@ -1558,7 +1558,7 @@ class TestFromInputPydanticModel:
         )
         assert result["fipb_produce"].text == "REQ-001|/tmp/repo"
 
-    def test_from_input_bundle_with_upstream(self):
+    def test_bundle_composes_when_mixed_with_upstream_param(self):
         """Annotated[PydanticModel, FromInput] composes with an upstream @node parameter."""
         from neograph import FromInput, compile, construct_from_functions, node, run
 
@@ -1578,7 +1578,7 @@ class TestFromInputPydanticModel:
         result = run(graph, input={"node_id": "X-42"})
         assert result["fipb2_join"].text == "X-42: a,b"
 
-    def test_from_input_bundle_missing_field_is_none(self):
+    def test_bundle_field_none_when_missing_from_configurable(self):
         """A missing field in config['configurable'] is passed as None."""
         from neograph import FromInput, compile, construct_from_functions, node, run
 
@@ -1595,7 +1595,7 @@ class TestFromInputPydanticModel:
         result = run(graph, input={"node_id": "only-this"})
         assert result["fipbm_read"].text == "id='only-this',root=None"
 
-    def test_from_config_bundle_with_shared_resource(self):
+    def test_from_config_bundle_populates_when_fields_in_configurable(self):
         """Annotated[PydanticModel, FromConfig] pulls every field from configurable as well."""
         from neograph import FromConfig, compile, construct_from_functions, node, run
 
@@ -1621,7 +1621,7 @@ class TestFromInputPydanticModel:
 class TestOracleMergeFnDI:
     """neograph-9zj — @merge_fn decorator with FromInput/FromConfig DI."""
 
-    def test_merge_fn_decorator_with_from_config_bundle(self):
+    def test_merge_fn_receives_bundle_when_annotated_with_from_config(self):
         """@merge_fn function can receive a bundled Annotated[PydanticModel, FromConfig]
         whose fields are resolved from config['configurable'] keys."""
         from neograph import (
@@ -1667,7 +1667,7 @@ class TestOracleMergeFnDI:
         # Both Oracle generators produce ["alpha", "beta"], merge dedups, prefixes.
         assert result["omfd_gen"].items == ["tag:alpha", "tag:beta"]
 
-    def test_merge_fn_decorator_with_from_input(self):
+    def test_merge_fn_receives_value_when_annotated_with_from_input(self):
         """@merge_fn can also receive Annotated[T, FromInput] values from run(input=...)."""
         from neograph import (
             Construct, FromInput, Node, Oracle, compile,
@@ -1698,7 +1698,7 @@ class TestOracleMergeFnDI:
 
         assert result["omfdi_gen"].items == ["REQ-99:x"]
 
-    def test_plain_merge_fn_still_works(self):
+    def test_plain_merge_fn_works_when_no_decorator(self):
         """Back-compat: plain (variants, config) merge_fn still works."""
         from neograph import (
             Construct, Node, Oracle, compile, register_scripted, run,
@@ -1746,7 +1746,7 @@ class TestOracleMergeFnDI:
 # ═══════════════════════════════════════════════════════════════════════════
 
 class TestNodeDecoratorDictInputs:
-    def test_node_decorator_emits_dict_form_inputs_single_upstream(self):
+    def test_dict_inputs_emitted_when_single_upstream_typed(self):
         """@node with one typed upstream param emits dict form."""
         from neograph import node
         from neograph.decorators import construct_from_functions
@@ -1763,7 +1763,7 @@ class TestNodeDecoratorDictInputs:
         assert isinstance(consume.inputs, dict)
         assert consume.inputs == {"produce": Claims}
 
-    def test_node_decorator_emits_dict_form_inputs_fan_in(self):
+    def test_dict_inputs_emitted_when_three_upstreams_typed(self):
         """@node with three typed upstreams emits a 3-key dict."""
         from neograph import node
         from neograph.decorators import construct_from_functions
@@ -1796,7 +1796,7 @@ class TestNodeDecoratorDictInputs:
             "produce_c": ClusterGroup,
         }
 
-    def test_node_decorator_fan_out_param_in_inputs_with_marker(self):
+    def test_fan_out_param_marked_when_map_over_set(self):
         """Each fan-out param stays in inputs dict and node.fan_out_param
         marks it so factory._extract_input routes it to neo_each_item."""
         from neograph import node
@@ -1820,7 +1820,7 @@ class TestNodeDecoratorDictInputs:
         assert verify.inputs["cluster"] is ClusterGroup
         assert verify.fan_out_param == "cluster"
 
-    def test_node_decorator_fan_in_type_mismatch_caught_by_validator(self):
+    def test_validator_catches_mismatch_when_fan_in_types_wrong(self):
         """Step-2's validator catches @node fan-in type mismatches via
         dict-form inputs (no more two-walker setup)."""
         from neograph import node
@@ -1840,7 +1840,7 @@ class TestNodeDecoratorDictInputs:
         assert "'upstream'" in msg
         assert "Claims" in msg or "RawText" in msg
 
-    def test_scripted_fan_in_log_mode_is_scripted(self):
+    def test_log_shows_scripted_mode_when_fan_in_executes(self):
         """@node fan-in execution logs mode='scripted', not 'raw'
         (neograph-kqd.4 criterion 9)."""
         import logging
@@ -1902,7 +1902,7 @@ class TestNodeDecoratorDictInputs:
 # ═══════════════════════════════════════════════════════════════════════════
 
 class TestConditionalProduce:
-    def test_skip_when_true_returns_skip_value(self):
+    def test_skip_value_returned_when_skip_when_true(self):
         """When skip_when returns True, the node returns skip_value
         without any LLM call."""
         from neograph import compile, run, node
@@ -1927,7 +1927,7 @@ class TestConditionalProduce:
         result = run(graph, input={"node_id": "t"})
         assert result["maybe_merge"].final_text == "single"
 
-    def test_skip_when_false_calls_llm(self):
+    def test_llm_called_when_skip_when_false(self):
         """When skip_when returns False, the normal LLM path runs."""
         from neograph import compile, run, node
         from neograph.decorators import construct_from_functions
@@ -1956,7 +1956,7 @@ class TestConditionalProduce:
         result = run(graph, input={"node_id": "t"})
         assert result["maybe_merge"].final_text == "llm-result"
 
-    def test_skip_when_on_node_field(self):
+    def test_skip_fields_stored_when_set_on_node(self):
         """skip_when and skip_value are proper Node fields."""
         pred = lambda x: True
         val = lambda x: x
@@ -1968,14 +1968,14 @@ class TestConditionalProduce:
         assert n.skip_when is pred
         assert n.skip_value is val
 
-    def test_skip_when_default_none(self):
+    def test_skip_fields_none_when_not_set(self):
         """Nodes without skip_when have it as None (backward compat)."""
         n = Node("t", mode="produce", inputs=Claims, outputs=MergedResult,
                  model="fast", prompt="p")
         assert n.skip_when is None
         assert n.skip_value is None
 
-    def test_skip_when_decorator_kwarg(self):
+    def test_skip_fields_passed_when_set_via_decorator(self):
         """@node(skip_when=...) passes through to Node."""
         from neograph import node
 
@@ -1998,7 +1998,7 @@ class TestConditionalProduce:
 class TestDecoratorDictOutputs:
     """@node decorator with dict-form outputs (neograph-1bp.5)."""
 
-    def test_decorator_dict_outputs_e2e(self):
+    def test_per_key_fields_written_when_dict_outputs_declared(self):
         """@node(outputs={'a': X, 'b': Y}) scripted → writes per-key fields."""
         from neograph import node, construct_from_module, compile, run
         import types
@@ -2020,7 +2020,7 @@ class TestDecoratorDictOutputs:
         result = run(graph, input={})
         assert result["classify"] == ClassifiedClaims(classified=[{"claim": "hello", "category": "ok"}])
 
-    def test_decorator_single_output_backward_compat(self):
+    def test_single_type_works_when_outputs_is_type(self):
         """@node(outputs=X) still works with single type."""
         from neograph import node
 
@@ -2030,7 +2030,7 @@ class TestDecoratorDictOutputs:
 
         assert extract.outputs is RawText
 
-    def test_decorator_return_annotation_inference(self):
+    def test_outputs_inferred_when_return_annotation_present(self):
         """Return annotation → outputs= when explicit kwarg not set."""
         from neograph import node
 

@@ -788,3 +788,127 @@ class TestDictOutputsValidator:
         upstream = Node("extract", outputs=RawText)
         downstream = Node("score", inputs={"extract": RawText}, outputs=ClassifiedClaims)
         Construct("p", nodes=[upstream, downstream])
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Three-surface parity: fan-in type validation
+#
+# Assembly-time type checking must reject mismatches identically regardless
+# of which API surface builds the pipeline.
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def _fan_in_valid_declarative() -> Construct:
+    """Declarative surface: 3-way fan-in with correct types."""
+    a = _producer("a", Claims)
+    b = _producer("b", RawText)
+    consumer = Node.scripted(
+        "consumer", fn="f",
+        inputs={"a": Claims, "b": RawText},
+        outputs=MatchResult,
+    )
+    return Construct("fan-in-decl", nodes=[a, b, consumer])
+
+
+def _fan_in_valid_decorator() -> Construct:
+    """@node decorator surface: 3-way fan-in with correct types."""
+    from neograph import node
+    from neograph.decorators import construct_from_functions
+
+    @node(mode="scripted", outputs=Claims)
+    def a() -> Claims:
+        return Claims(items=["claim"])
+
+    @node(mode="scripted", outputs=RawText)
+    def b() -> RawText:
+        return RawText(text="raw")
+
+    @node(mode="scripted", outputs=MatchResult)
+    def consumer(a: Claims, b: RawText) -> MatchResult:
+        return MatchResult(cluster_label="ok", matched=[])
+
+    return construct_from_functions("fan-in-dec", [a, b, consumer])
+
+
+def _fan_in_valid_programmatic() -> Construct:
+    """Programmatic surface: 3-way fan-in with correct types."""
+    a = _producer("a", Claims)
+    b = _producer("b", RawText)
+    consumer = Node.scripted(
+        "consumer", fn="f",
+        inputs={"a": Claims, "b": RawText},
+        outputs=MatchResult,
+    )
+    return Construct("fan-in-prog", nodes=[a, b, consumer])
+
+
+def _fan_in_mismatch_declarative():
+    """Declarative surface: fan-in with type mismatch — should raise."""
+    a = _producer("a", Claims)
+    b = _producer("b", RawText)
+    consumer = Node.scripted(
+        "consumer", fn="f",
+        inputs={"a": Claims, "b": Claims},  # b produces RawText, not Claims
+        outputs=MatchResult,
+    )
+    Construct("fan-in-bad-decl", nodes=[a, b, consumer])
+
+
+def _fan_in_mismatch_decorator():
+    """@node decorator surface: fan-in with type mismatch — should raise."""
+    from neograph import node
+    from neograph.decorators import construct_from_functions
+
+    @node(mode="scripted", outputs=Claims)
+    def a() -> Claims:
+        return Claims(items=["claim"])
+
+    @node(mode="scripted", outputs=RawText)
+    def b() -> RawText:
+        return RawText(text="raw")
+
+    @node(mode="scripted", outputs=MatchResult)
+    def consumer(a: Claims, b: Claims) -> MatchResult:  # b produces RawText
+        return MatchResult(cluster_label="bad", matched=[])
+
+    construct_from_functions("fan-in-bad-dec", [a, b, consumer])
+
+
+def _fan_in_mismatch_programmatic():
+    """Programmatic surface: fan-in with type mismatch — should raise."""
+    a = _producer("a", Claims)
+    b = _producer("b", RawText)
+    consumer = Node.scripted(
+        "consumer", fn="f",
+        inputs={"a": Claims, "b": Claims},  # b produces RawText, not Claims
+        outputs=MatchResult,
+    )
+    Construct("fan-in-bad-prog", nodes=[a, b, consumer])
+
+
+class TestThreeSurfaceFanInParity:
+    """Fan-in type validation tested identically across declarative, @node,
+    and programmatic API surfaces. Template pattern for future parity tests."""
+
+    @pytest.mark.parametrize("build", [
+        _fan_in_valid_declarative,
+        _fan_in_valid_decorator,
+        _fan_in_valid_programmatic,
+    ], ids=["declarative", "decorator", "programmatic"])
+    def test_fan_in_assembles_when_types_correct(self, build):
+        """Fan-in with matching types assembles without error across surfaces."""
+        pipeline = build()
+        assert len(pipeline.nodes) == 3
+
+    @pytest.mark.parametrize("build", [
+        _fan_in_mismatch_declarative,
+        _fan_in_mismatch_decorator,
+        _fan_in_mismatch_programmatic,
+    ], ids=["declarative", "decorator", "programmatic"])
+    def test_fan_in_rejects_when_type_mismatches(self, build):
+        """Fan-in with mismatched types raises ConstructError across surfaces."""
+        with pytest.raises(ConstructError) as exc_info:
+            build()
+        msg = str(exc_info.value)
+        assert "b" in msg
+        assert "Claims" in msg

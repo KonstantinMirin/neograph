@@ -21,7 +21,7 @@ from tests.schemas import RawText, Claims, ClassifiedClaims, ClusterGroup, Clust
 class TestSubgraph:
     """Sub-construct with isolated state inside a parent pipeline."""
 
-    def test_subgraph_basic(self):
+    def test_output_surfaces_when_sub_construct_runs_with_isolated_state(self):
         """Sub-construct runs with isolated state, only output surfaces."""
         from neograph.factory import register_scripted
 
@@ -64,7 +64,7 @@ class TestSubgraph:
         assert "lookup" not in result
         assert "score" not in result
 
-    def test_subgraph_state_isolation(self):
+    def test_no_collision_when_parent_and_sub_share_node_name(self):
         """Sub-construct's internal fields don't collide with parent fields."""
         from neograph.factory import register_scripted
 
@@ -94,7 +94,7 @@ class TestSubgraph:
         # Sub-construct output (no collision)
         assert result["sub"].text == "sub-result"
 
-    def test_subgraph_without_input_raises(self):
+    def test_compile_raises_when_sub_construct_missing_input(self):
         """Sub-construct without declared input raises at compile."""
         from neograph.factory import register_scripted
 
@@ -109,7 +109,7 @@ class TestSubgraph:
         with pytest.raises(ValueError, match="has no input type"):
             compile(parent)
 
-    def test_subgraph_without_output_raises(self):
+    def test_compile_raises_when_sub_construct_missing_output(self):
         """Sub-construct without declared output raises at compile."""
         from neograph.factory import register_scripted
 
@@ -124,7 +124,7 @@ class TestSubgraph:
         with pytest.raises(ValueError, match="has no output type"):
             compile(parent)
 
-    def test_subgraph_with_oracle_inside(self):
+    def test_oracle_merges_when_inside_sub_construct(self):
         """Oracle inside a sub-construct — fan-out happens in isolated state."""
         from neograph.factory import register_scripted
 
@@ -156,7 +156,7 @@ class TestSubgraph:
         # Oracle internals from sub don't leak
         assert not any("neo_oracle" in k for k in result)
 
-    def test_subgraph_with_each_inside(self):
+    def test_each_fans_out_when_inside_sub_construct(self):
         """Each inside a sub-construct — fan-out in isolated state."""
         from neograph.factory import register_scripted
 
@@ -194,7 +194,7 @@ class TestSubgraph:
         assert result["verify_sub"] is not None
         assert "verified" in result["verify_sub"].text
 
-    def test_nested_subgraphs(self):
+    def test_output_bubbles_when_two_levels_deep(self):
         """Construct inside Construct inside Construct — two levels deep."""
         from neograph.factory import register_scripted
 
@@ -239,7 +239,7 @@ class TestSubgraph:
         assert "detail" not in result
         assert "process" not in result
 
-    def test_multiple_subgraphs_in_parent(self):
+    def test_both_outputs_surface_when_two_sub_constructs_in_parent(self):
         """Two sub-constructs in the same parent pipeline."""
         from neograph.factory import register_scripted
 
@@ -273,7 +273,7 @@ class TestSubgraph:
         assert result["enrich"].text == "enriched"
         assert result["check"].passed is True
 
-    def test_operator_without_checkpointer_raises(self):
+    def test_compile_raises_when_operator_without_checkpointer(self):
         """Operator node without checkpointer raises ValueError at compile."""
         from neograph.factory import register_condition, register_scripted
 
@@ -297,7 +297,7 @@ class TestSubgraph:
 class TestMultiFieldInput:
     """Node with dict[str, type] input spec extracts multiple fields."""
 
-    def test_dict_input_extraction(self):
+    def test_node_receives_multiple_fields_when_dict_inputs_declared(self):
         """Node receives multiple typed fields from state."""
         from neograph.factory import register_scripted
 
@@ -329,7 +329,7 @@ class TestMultiFieldInput:
 class TestReducerEdgeCases:
     """Reducer functions handle None and unexpected inputs correctly."""
 
-    def test_oracle_results_collected_from_empty(self):
+    def test_oracle_reducer_builds_list_when_initial_none(self):
         """Oracle reducer builds list from None initial state."""
         from neograph.state import _collect_oracle_results
 
@@ -345,7 +345,7 @@ class TestReducerEdgeCases:
         result = _collect_oracle_results(["a"], ["b", "c"])
         assert result == ["a", "b", "c"]
 
-    def test_merge_dicts_from_none(self):
+    def test_dict_reducer_starts_when_initial_none(self):
         """Dict merge reducer starts from None."""
         from neograph.state import _merge_dicts
 
@@ -359,7 +359,7 @@ class TestReducerEdgeCases:
         with pytest.raises(ValueError, match="duplicate key"):
             _merge_dicts({"a": 1}, {"a": 99})
 
-    def test_last_write_wins(self):
+    def test_new_value_replaces_when_last_write_wins(self):
         """Last-write-wins reducer always returns new value."""
         from neograph.state import _last_write_wins
 
@@ -371,7 +371,7 @@ class TestReducerEdgeCases:
 class TestStateHygiene:
     """Framework internals never leak to the consumer."""
 
-    def test_oracle_internals_stripped(self):
+    def test_neo_keys_absent_when_oracle_pipeline_completes(self):
         """Oracle collector and gen_id are not in the result."""
         from neograph.factory import register_scripted
 
@@ -388,7 +388,7 @@ class TestStateHygiene:
         # Internals stripped
         assert not any(k.startswith("neo_") for k in result)
 
-    def test_each_internals_stripped(self):
+    def test_neo_keys_absent_when_each_pipeline_completes(self):
         """Each item plumbing is not in the result."""
         from neograph.factory import register_scripted
 
@@ -413,7 +413,7 @@ class TestStateHygiene:
         # Internals stripped
         assert not any(k.startswith("neo_") for k in result)
 
-    def test_each_duplicate_key_raises(self):
+    def test_reducer_raises_when_each_keys_duplicate(self):
         """Each fan-out with duplicate dispatch keys raises, not silently overwrites."""
         from neograph.factory import register_scripted
 
@@ -456,7 +456,7 @@ class EnrichOutput(BaseModel, frozen=True):
 class TestStripInternalsEdge:
     """Edge case: _strip_internals when result is not a dict."""
 
-    def test_strip_non_dict(self):
+    def test_value_passes_through_when_result_not_dict(self):
         """Non-dict results pass through unchanged."""
         from neograph.runner import _strip_internals
 
@@ -469,7 +469,7 @@ class TestStripInternalsEdge:
 class TestDictOutputsStateModel:
     """Dict-form outputs emit per-key state fields (neograph-1bp.2)."""
 
-    def test_dict_outputs_emits_per_key_fields(self):
+    def test_state_has_per_key_fields_when_dict_outputs_declared(self):
         """outputs={'result': X, 'log': Y} → state has node_result + node_log."""
         from neograph.state import compile_state_model
         n = Node("explore", outputs={"result": RawText, "tool_log": Claims})
@@ -480,7 +480,7 @@ class TestDictOutputsStateModel:
         # The old single-name field should NOT exist
         assert "explore" not in state_model.model_fields
 
-    def test_single_type_outputs_backward_compat(self):
+    def test_state_has_node_name_field_when_single_type_outputs(self):
         """Single-type outputs= still emits {node_name} field."""
         from neograph.state import compile_state_model
         n = Node.scripted("extract", fn="f", outputs=RawText)
@@ -488,7 +488,7 @@ class TestDictOutputsStateModel:
         state_model = compile_state_model(c)
         assert "extract" in state_model.model_fields
 
-    def test_dict_outputs_with_each_modifier(self):
+    def test_each_wraps_per_key_when_dict_outputs_with_each(self):
         """Each modifier wraps each dict-output key in dict[str, T]."""
         from neograph.state import compile_state_model
         n = Node(
@@ -503,7 +503,7 @@ class TestDictOutputsStateModel:
 class TestDictOutputsFactory:
     """Factory writes dict-form outputs to per-key state fields (neograph-1bp.3)."""
 
-    def test_scripted_dict_outputs_writes_per_key(self):
+    def test_per_key_state_written_when_scripted_dict_outputs(self):
         """Scripted node with dict outputs writes each key to its state field."""
         from neograph import node, construct_from_module, compile, run
         from neograph.factory import register_scripted
@@ -522,7 +522,7 @@ class TestDictOutputsFactory:
         assert result["analyze_summary"] == RawText(text="hello")
         assert result["analyze_count"] == Claims(items=["a"])
 
-    def test_single_type_outputs_backward_compat_runtime(self):
+    def test_node_name_field_written_when_single_type_at_runtime(self):
         """Single-type outputs still writes to {node_name} at runtime."""
         from neograph import node, construct_from_module, compile, run
         import types
@@ -552,7 +552,7 @@ class TestDictOutputsFactory:
 # ═══════════════════════════════════════════════════════════════════════════
 
 class TestNodeInputsEpicAcceptance:
-    def test_llm_driven_spec_fan_in_roundtrip(self):
+    def test_pipeline_compiles_when_llm_spec_with_fan_in(self):
         """An LLM-driven pipeline builder constructs Nodes from a JSON-shaped
         dict with string type names, resolves them via a type registry,
         and compiles — validator catches any mismatches."""
@@ -619,7 +619,7 @@ class TestNodeInputsEpicAcceptance:
         result = run(graph, input={"node_id": "l7"})
         assert result["combine"].final_text == "hello:a,b"
 
-    def test_llm_driven_spec_type_mismatch_rejected(self):
+    def test_construct_raises_when_llm_spec_has_type_mismatch(self):
         """LLM-emitted spec with a type mismatch raises ConstructError
         at assembly time, not during runtime."""
         type_registry: dict[str, type] = {
@@ -655,7 +655,7 @@ class TestNodeInputsEpicAcceptance:
         msg = str(exc_info.value)
         assert "upstream" in msg
 
-    def test_zero_upstream_node_inputs_none(self):
+    def test_node_assembles_when_inputs_none(self):
         """Nodes with no upstreams use inputs=None and assemble cleanly."""
         seed = Node.scripted("seed", fn="f", inputs=None, outputs=Claims)
         pipeline = Construct("zero-upstream", nodes=[seed])
@@ -664,7 +664,7 @@ class TestNodeInputsEpicAcceptance:
         assert pipeline.nodes[0].outputs is Claims
         assert pipeline.nodes[0].name == "seed"
 
-    def test_node_decorator_mixed_upstream_and_fanout_e2e(self):
+    def test_fanout_and_upstream_coexist_when_mixed_in_one_node(self):
         """@node with BOTH upstream params AND a fan-out param (Each)
         runs end-to-end — the critical path for kqd.8 unification."""
         from neograph import compile, run, node
@@ -703,7 +703,7 @@ class TestNodeInputsEpicAcceptance:
         assert result["verify"]["a"].matched == ["shared-context-a"]
         assert result["verify"]["b"].matched == ["shared-context-b"]
 
-    def test_attach_scripted_raw_fn_deleted(self):
+    def test_attach_scripted_raw_fn_absent_from_module(self):
         """_attach_scripted_raw_fn no longer exists — all scripted @node
         routes through register_scripted + _make_scripted_wrapper."""
         import neograph.decorators as dec
@@ -711,7 +711,7 @@ class TestNodeInputsEpicAcceptance:
             "_attach_scripted_raw_fn still exists — kqd.8 is incomplete"
         )
 
-    def test_scripted_node_raw_fn_not_set(self):
+    def test_raw_fn_none_when_scripted_node_uses_register_scripted(self):
         """Scripted @node nodes no longer have raw_fn set — they use
         scripted_fn + register_scripted instead."""
         from neograph import node
@@ -731,7 +731,7 @@ class TestNodeInputsEpicAcceptance:
         assert produce.scripted_fn is not None
         assert consume.scripted_fn is not None
 
-    def test_programmatic_fan_in_via_pipe(self):
+    def test_fan_in_produces_result_when_programmatic_node_pipe(self):
         """Programmatic Node(inputs={...}) + modifier pipe works end-to-end."""
         from neograph import compile, run
         from neograph.factory import register_scripted

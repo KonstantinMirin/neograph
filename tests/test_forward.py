@@ -46,7 +46,7 @@ class FinalResult(BaseModel, frozen=True):
 class TestForwardConstructBase:
     """Task neograph-di0: ForwardConstruct base class and node discovery."""
 
-    def test_forward_construct_discovers_node_attributes(self):
+    def test_nodes_discovered_when_class_has_node_attributes(self):
         """Class with 3 Node attrs — all discovered in declaration order."""
         from neograph import ForwardConstruct, Node
 
@@ -66,7 +66,7 @@ class TestForwardConstructBase:
         assert discovered["b"] is Triple.b
         assert discovered["c"] is Triple.c
 
-    def test_forward_construct_is_construct_subclass(self):
+    def test_isinstance_true_when_checking_construct_subclass(self):
         """isinstance(pipeline, Construct) is True."""
         from neograph import Construct, ForwardConstruct, Node
 
@@ -80,7 +80,7 @@ class TestForwardConstructBase:
         assert isinstance(pipeline, Construct)
         assert isinstance(pipeline, ForwardConstruct)
 
-    def test_forward_construct_without_forward_raises(self):
+    def test_init_raises_when_forward_method_missing(self):
         """Subclass without forward() method raises TypeError."""
         from neograph import ForwardConstruct, Node
 
@@ -99,7 +99,7 @@ class TestForwardConstructBase:
 class TestForwardConstructTracer:
     """Task neograph-3us: symbolic proxy tracer for straight-line forward()."""
 
-    def test_trace_straight_line_two_nodes(self):
+    def test_trace_matches_sequence_when_two_nodes_called(self):
         """Two nodes called in sequence — traced order matches."""
         from neograph import ForwardConstruct, Node
 
@@ -116,7 +116,7 @@ class TestForwardConstructTracer:
         assert pipeline.nodes[0].name == "extract"
         assert pipeline.nodes[1].name == "classify"
 
-    def test_trace_three_nodes_chain(self):
+    def test_trace_matches_sequence_when_three_nodes_chained(self):
         """A -> B -> C traced as [A, B, C]."""
         from neograph import ForwardConstruct, Node
 
@@ -133,7 +133,7 @@ class TestForwardConstructTracer:
         pipeline = ThreeChain()
         assert [n.name for n in pipeline.nodes] == ["a", "b", "c"]
 
-    def test_trace_preserves_node_identity(self):
+    def test_traced_node_is_same_object_when_class_attr_checked(self):
         """traced_nodes[0] is MyPipeline.extract (same object)."""
         from neograph import ForwardConstruct, Node
 
@@ -149,7 +149,7 @@ class TestForwardConstructTracer:
         assert pipeline.nodes[0] is Identity.extract
         assert pipeline.nodes[1] is Identity.classify
 
-    def test_trace_skips_unused_nodes(self):
+    def test_trace_has_two_when_third_node_unused(self):
         """Class has 3 nodes, forward() only calls 2 — trace has 2."""
         from neograph import ForwardConstruct, Node
 
@@ -175,7 +175,7 @@ class TestForwardConstructTracer:
 class TestForwardConstructCompile:
     """Task neograph-vxv: compile() integration for traced ForwardConstruct."""
 
-    def test_forward_construct_compile_and_run(self):
+    def test_pipeline_produces_output_when_compiled_and_run(self):
         """Full end-to-end: ForwardConstruct with 2 scripted nodes, compile, run."""
         from neograph import ForwardConstruct, Node, compile, run
         from neograph.factory import register_scripted
@@ -200,7 +200,7 @@ class TestForwardConstructCompile:
         assert isinstance(result["fc_extract"], RawText)
         assert result["fc_extract"].text == "hello world"
 
-    def test_forward_construct_compile_with_produce_mode(self):
+    def test_produce_node_runs_when_forward_construct_with_fake_llm(self):
         """ForwardConstruct with a produce node + FakeLLM."""
         from neograph import ForwardConstruct, Node, compile, run
         from neograph.factory import register_scripted
@@ -225,7 +225,7 @@ class TestForwardConstructCompile:
         assert isinstance(result["fc_classify"], Claims)
         assert result["fc_classify"].items == ["classified-a", "classified-b"]
 
-    def test_forward_construct_equivalent_to_declarative(self):
+    def test_output_identical_when_compared_to_declarative_construct(self):
         """Same pipeline as ForwardConstruct and Construct(nodes=[...]) — identical output."""
         from neograph import Construct, ForwardConstruct, Node, compile, run
         from neograph.factory import register_scripted
@@ -269,7 +269,7 @@ class TestForwardConstructCompile:
 class TestProxyAttributeAccess:
     """Proxy gains __getattr__ for dotted access and comparison operators."""
 
-    def test_proxy_attribute_access_returns_child_proxy(self):
+    def test_child_proxy_created_when_attribute_accessed(self):
         """classified.confidence returns a child proxy with dotted name."""
         from neograph.forward import _Proxy
 
@@ -278,7 +278,7 @@ class TestProxyAttributeAccess:
         assert child._neo_name == "classified.confidence"
         assert child._neo_source is parent._neo_source
 
-    def test_proxy_chained_attribute_access(self):
+    def test_dotted_name_correct_when_attributes_chained(self):
         """classified.items.severity chains produce correct names."""
         from neograph.forward import _Proxy
 
@@ -286,7 +286,7 @@ class TestProxyAttributeAccess:
         child = parent.items.severity
         assert child._neo_name == "result.items.severity"
 
-    def test_proxy_internal_attrs_raise(self):
+    def test_attribute_error_raised_when_neo_prefix_accessed(self):
         """Accessing _neo_* attributes raises AttributeError, not child proxy."""
         from neograph.forward import _Proxy
 
@@ -294,7 +294,7 @@ class TestProxyAttributeAccess:
         with pytest.raises(AttributeError):
             proxy._neo_nonexistent
 
-    def test_proxy_comparison_returns_condition_proxy(self):
+    def test_condition_proxy_returned_when_less_than_used(self):
         """proxy < 0.7 returns a _ConditionProxy, not a plain bool."""
         from neograph.forward import _ConditionProxy, _Proxy
 
@@ -304,7 +304,7 @@ class TestProxyAttributeAccess:
         assert result._op == "<"
         assert result._right == 0.7
 
-    def test_proxy_all_comparison_operators(self):
+    def test_condition_proxy_created_when_any_comparison_used(self):
         """All 6 comparison operators produce correct _ConditionProxy."""
         from neograph.forward import _ConditionProxy, _Proxy
 
@@ -321,7 +321,7 @@ class TestProxyAttributeAccess:
             assert isinstance(cond, _ConditionProxy), f"Failed for {op_str}"
             assert cond._op == op_str
 
-    def test_proxy_bool_outside_tracing_raises(self):
+    def test_type_error_raised_when_proxy_used_as_bool_outside_tracing(self):
         """Using proxy in boolean context outside tracing raises TypeError."""
         from neograph.forward import _Proxy
 
@@ -329,7 +329,7 @@ class TestProxyAttributeAccess:
         with pytest.raises(TypeError, match="boolean context"):
             bool(proxy)
 
-    def test_condition_proxy_bool_outside_tracing_raises(self):
+    def test_type_error_raised_when_condition_used_as_bool_outside_tracing(self):
         """Using condition in boolean context outside tracing raises TypeError."""
         from neograph.forward import _ConditionProxy, _Proxy
 
@@ -347,7 +347,7 @@ class TestProxyAttributeAccess:
 class TestTracerBranchRecording:
     """_Tracer records branch decisions during forward() tracing."""
 
-    def test_tracer_records_branch_point(self):
+    def test_branch_recorded_when_condition_evaluated(self):
         """record_branch stores the condition and returns a bool."""
         from neograph.forward import _ConditionProxy, _Proxy, _Tracer
 
@@ -361,7 +361,7 @@ class TestTracerBranchRecording:
         assert len(tracer.branches) == 1
         assert tracer.branches[0].branch_id == 0
 
-    def test_tracer_respects_branch_decisions(self):
+    def test_false_returned_when_branch_decision_overridden(self):
         """Pre-configured branch decisions override the default True."""
         from neograph.forward import _ConditionProxy, _Proxy, _Tracer
 
@@ -373,7 +373,7 @@ class TestTracerBranchRecording:
         result = tracer.record_branch(cond)
         assert result is False
 
-    def test_proxy_bool_delegates_to_tracer(self):
+    def test_tracer_records_when_condition_bool_called(self):
         """if proxy.score < 0.7 calls tracer.record_branch via __bool__."""
         from neograph.forward import _Proxy, _Tracer
 
@@ -424,21 +424,21 @@ class TestIfBranchSimple:
 
         return BranchPipeline
 
-    def test_branch_pipeline_instantiates(self):
+    def test_pipeline_instantiates_when_forward_has_if_else(self):
         """Pipeline with if/else in forward() can be instantiated."""
         Pipeline = self._make_branching_pipeline()
         pipeline = Pipeline()
         # Should have nodes: check + branch metadata
         assert any(n.name == "br-check" for n in pipeline.nodes)
 
-    def test_branch_pipeline_compiles(self):
+    def test_graph_compiles_when_forward_has_if_else(self):
         """Pipeline with if/else compiles to a LangGraph graph."""
         Pipeline = self._make_branching_pipeline()
         pipeline = Pipeline()
         graph = compile(pipeline)
         assert graph is not None
 
-    def test_branch_true_arm(self):
+    def test_high_path_runs_when_condition_true(self):
         """When condition is true at runtime, high_path runs."""
         # Override to produce score > 0.5
         register_scripted(
@@ -452,7 +452,7 @@ class TestIfBranchSimple:
         assert "br_high" in result
         assert result["br_high"].label == "high-confidence"
 
-    def test_branch_false_arm(self):
+    def test_low_path_runs_when_condition_false(self):
         """When condition is false at runtime, low_path runs."""
         Pipeline = self._make_branching_pipeline()
         pipeline = Pipeline()
@@ -476,7 +476,7 @@ class TestIfBranchSimple:
 class TestSequentialBranches:
     """Two sequential if-blocks in forward()."""
 
-    def test_two_sequential_branches(self):
+    def test_correct_paths_run_when_two_independent_branches(self):
         """Pipeline with two independent if-blocks compiles and runs."""
         register_scripted(
             "seq_check1",
@@ -543,7 +543,7 @@ class TestSequentialBranches:
 class TestBranchCountLimit:
     """More than 8 branches raises a clear error."""
 
-    def test_too_many_branches_raises(self):
+    def test_tracer_raises_when_nine_branches_recorded(self):
         """9 branches in forward() raises an error."""
         # We can't easily create 9 real branches in a single forward(),
         # but we can test that the tracer enforces the limit.
@@ -574,7 +574,7 @@ class TestBranchCountLimit:
 class TestProxyAttributeChains:
     """Attribute chains on proxies produce correct condition metadata."""
 
-    def test_condition_captures_attribute_path(self):
+    def test_full_path_captured_when_dotted_proxy_compared(self):
         """result.score > 0.5 captures the full attribute path."""
         from neograph.forward import _ConditionProxy, _Proxy
 
@@ -585,7 +585,7 @@ class TestProxyAttributeChains:
         assert cond._op == ">"
         assert cond._right == 0.5
 
-    def test_deep_attribute_chain_in_condition(self):
+    def test_deep_path_captured_when_multi_level_chain_compared(self):
         """result.items.first.severity < 3 captures deep chain."""
         from neograph.forward import _ConditionProxy, _Proxy
 
@@ -608,7 +608,7 @@ class Report(BaseModel, frozen=True):
 class TestForwardConstructLoops:
     """For-loop over a proxy attribute lowers to Each fan-out modifier."""
 
-    def test_for_loop_over_proxy_attr(self):
+    def test_each_traced_when_for_loop_over_proxy_attr(self):
         """for item in clusters.groups: self.verify(item) traces verify with Each."""
         register_scripted(
             "loop_make",
@@ -638,7 +638,7 @@ class TestForwardConstructLoops:
         graph = compile(pipeline)
         assert graph is not None
 
-    def test_for_loop_literal_range_unrolls(self):
+    def test_step_deduped_when_for_loop_over_range(self):
         """for i in range(3): self.step(x) traces step once (dedup). No Each."""
         register_scripted(
             "range_step",
@@ -659,7 +659,7 @@ class TestForwardConstructLoops:
         assert len(step_node) == 1
         assert not step_node[0].has_modifier(Each)
 
-    def test_for_loop_each_modifier_attached(self):
+    def test_each_modifier_present_when_for_loop_over_proxy(self):
         """Loop-body node has Each modifier with correct over path."""
         register_scripted(
             "each_make",
@@ -687,7 +687,7 @@ class TestForwardConstructLoops:
         each_mod = verify_node[0].get_modifier(Each)
         assert each_mod.over == "each_make.groups"
 
-    def test_for_loop_with_post_loop_node(self):
+    def test_post_loop_node_has_no_each_when_after_for_loop(self):
         """Nodes after the for loop are NOT wrapped with Each."""
         register_scripted(
             "post_make",
@@ -740,7 +740,7 @@ class TestForwardConstructExceptions:
     fallback graph. The except block only runs if tracing itself fails.
     """
 
-    def test_try_block_traces_normally(self):
+    def test_try_body_nodes_traced_when_no_exception(self):
         """try body with node calls, no exception -> nodes recorded correctly."""
         register_scripted(
             "te_extract",
@@ -769,7 +769,7 @@ class TestForwardConstructExceptions:
         assert "te-classify" in node_names
         assert len(node_names) == 2
 
-    def test_except_block_catches_tracing_error(self):
+    def test_except_body_traced_when_real_python_error_raised(self):
         """try body raises a real Python error (division by zero) before a
         node call -> except body calls a fallback node -> fallback is recorded."""
         register_scripted(
@@ -794,7 +794,7 @@ class TestForwardConstructExceptions:
         assert "te-fallback" in node_names
         assert len(node_names) == 1
 
-    def test_try_except_with_proxy_operations(self):
+    def test_try_body_only_traced_when_proxy_ops_in_try(self):
         """Proxy operations in try block don't raise -> try-body nodes
         are recorded, except body is skipped."""
         register_scripted(
@@ -830,7 +830,7 @@ class TestForwardConstructExceptions:
         assert "te-report" in node_names
         assert len(node_names) == 2
 
-    def test_try_except_documented_limitation(self):
+    def test_except_body_skipped_when_proxy_ops_never_raise(self):
         """If both try and except call nodes, only try-body nodes appear
         in the trace. The except block is dead code during tracing.
 

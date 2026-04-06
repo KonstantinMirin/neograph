@@ -23,7 +23,7 @@ from tests.schemas import RawText, Claims, ClassifiedClaims, ClusterGroup, Clust
 # ═══════════════════════════════════════════════════════════════════════════
 
 class TestScriptedPipeline:
-    def test_three_node_pipeline(self):
+    def test_data_flows_through_when_three_scripted_nodes_chained(self):
         """Data flows through 3 scripted nodes via typed state bus."""
         import types as _types
 
@@ -69,7 +69,7 @@ class TestScriptedPipeline:
 # ═══════════════════════════════════════════════════════════════════════════
 
 class TestProduceMode:
-    def test_produce_node_with_fake_llm(self):
+    def test_structured_output_returned_when_produce_mode_with_fake_llm(self):
         """Produce node calls LLM and gets structured output."""
         import types as _types
 
@@ -107,7 +107,7 @@ class TestProduceMode:
 # ═══════════════════════════════════════════════════════════════════════════
 
 class TestGatherMode:
-    def test_gather_with_tool_budgets(self):
+    def test_tool_called_within_budget_when_gather_mode(self):
         """Gather node uses tools within budget, then forced to respond."""
         import types as _types
 
@@ -148,7 +148,7 @@ class TestGatherMode:
         # Tool was called exactly twice (budget=2)
         assert len(search_tool.calls) == 2
 
-    def test_gather_unlimited_budget(self):
+    def test_tool_called_five_times_when_budget_unlimited(self):
         """Tool with budget=0 is never exhausted — LLM decides when to stop."""
         import types as _types
 
@@ -201,7 +201,7 @@ class TestGatherMode:
 # ═══════════════════════════════════════════════════════════════════════════
 
 class TestRawNode:
-    def test_raw_node_in_pipeline(self):
+    def test_raw_node_filters_when_mixed_with_declarative(self):
         """@node(mode='raw') works alongside declarative nodes."""
         import types as _types
 
@@ -251,7 +251,7 @@ class TestRawNode:
 # ═══════════════════════════════════════════════════════════════════════════
 
 class TestMiniRWPipeline:
-    def test_mixed_mode_pipeline(self):
+    def test_all_outputs_present_when_produce_and_scripted_mixed(self):
         """Realistic pipeline mixing produce + scripted modes."""
         import types as _types
 
@@ -306,7 +306,7 @@ class TestMiniRWPipeline:
 class TestExecuteMode:
     """Execute mode: ReAct tool loop with mutation tools."""
 
-    def test_execute_with_tools(self):
+    def test_tool_called_when_execute_mode_with_mutation_tools(self):
         """Execute node calls tools and produces structured output."""
         import types as _types
 
@@ -349,7 +349,7 @@ class TestExecuteMode:
 class TestErrorPaths:
     """Every error path the framework raises."""
 
-    def test_produce_without_configure_llm(self):
+    def test_runtime_raises_when_llm_not_configured(self):
         """Produce node without configure_llm() raises RuntimeError."""
         node = Node(name="fail", mode="produce", outputs=Claims, model="fast", prompt="x")
         pipeline = Construct("test-no-llm", nodes=[node])
@@ -358,7 +358,7 @@ class TestErrorPaths:
         with pytest.raises(ValueError, match="LLM not configured"):
             run(graph, input={"node_id": "test-001"})
 
-    def test_unregistered_scripted_fn(self):
+    def test_compile_raises_when_scripted_fn_not_registered(self):
         """Referencing unregistered scripted function raises ValueError."""
         node = Node.scripted("bad", fn="nonexistent_fn", outputs=Claims)
         pipeline = Construct("test-bad-fn", nodes=[node])
@@ -366,7 +366,7 @@ class TestErrorPaths:
         with pytest.raises(ValueError, match="not registered"):
             compile(pipeline)
 
-    def test_unregistered_oracle_merge_fn(self):
+    def test_compile_raises_when_oracle_merge_fn_not_registered(self):
         """Oracle with unregistered merge_fn raises ValueError at compile."""
         from neograph.factory import register_scripted
 
@@ -381,7 +381,7 @@ class TestErrorPaths:
         with pytest.raises(ValueError, match="not registered"):
             compile(pipeline)
 
-    def test_unregistered_operator_condition(self):
+    def test_compile_raises_when_operator_condition_not_registered(self):
         """Operator with unregistered condition raises ValueError at compile."""
         from langgraph.checkpoint.memory import MemorySaver
 
@@ -398,7 +398,7 @@ class TestErrorPaths:
         with pytest.raises(ValueError, match="not registered"):
             compile(pipeline, checkpointer=MemorySaver())
 
-    def test_unregistered_tool_factory(self):
+    def test_runtime_raises_when_tool_factory_not_registered(self):
         """Gather node with unregistered tool factory raises ValueError."""
         configure_fake_llm(lambda tier: ReActFake(tool_calls=[[]]))
 
@@ -417,7 +417,7 @@ class TestErrorPaths:
         with pytest.raises(ValueError, match="not registered"):
             run(graph, input={"node_id": "test-001"})
 
-    def test_run_with_no_input_or_resume(self):
+    def test_run_raises_when_neither_input_nor_resume(self):
         """run() with neither input nor resume raises ValueError."""
         from neograph.factory import register_scripted
 
@@ -429,7 +429,7 @@ class TestErrorPaths:
         with pytest.raises(ValueError, match="input or resume"):
             run(graph)
 
-    def test_node_without_output_type(self):
+    def test_compile_raises_when_node_missing_output_type(self):
         """Node with no output type raises ValueError at compile."""
         node = Node(name="bad-node", mode="produce", model="fast", prompt="x")
         pipeline = Construct("test-no-output", nodes=[node])
@@ -441,7 +441,7 @@ class TestErrorPaths:
 class TestLLMUnknownToolCall:
     """LLM hallucinates a tool name the framework doesn't have."""
 
-    def test_unknown_tool_call_handled(self):
+    def test_framework_recovers_when_llm_hallucinates_tool_name(self):
         """Framework responds with error message, doesn't crash."""
         from langchain_core.messages import AIMessage
 
@@ -502,7 +502,7 @@ class TestLLMUnknownToolCall:
 class TestFirstNodeEdgeCases:
     """Subgraphs and modified constructs as the first node (wired from START)."""
 
-    def test_plain_subgraph_as_first_node(self):
+    def test_sub_construct_runs_when_first_node_in_parent(self):
         """Sub-construct as the very first node — no upstream data."""
         from neograph.factory import register_scripted
 
@@ -522,7 +522,7 @@ class TestFirstNodeEdgeCases:
 
         assert result["first_sub"].items == ["self-seeded"]
 
-    def test_construct_oracle_as_first_node(self):
+    def test_oracle_construct_runs_when_first_node_in_parent(self):
         """Construct | Oracle as the first node — router wired from START."""
         from neograph.factory import register_scripted
 
@@ -546,7 +546,7 @@ class TestFirstNodeEdgeCases:
 
         assert result["oracle_first"].items == ["merged-2"]
 
-    def test_construct_each_as_first_node(self):
+    def test_each_construct_compiles_when_first_node_in_parent(self):
         """Construct | Each as the first node — needs collection in state."""
         from neograph.factory import register_scripted
 
@@ -575,7 +575,7 @@ class TestFirstNodeEdgeCases:
 class TestLLMConfig:
     """Per-node LLM configuration flows through to the factory."""
 
-    def test_llm_config_passed_to_factory(self):
+    def test_factory_receives_config_when_llm_config_set(self):
         """Node's llm_config dict reaches the llm_factory."""
         factory_calls = []
 
@@ -609,7 +609,7 @@ class TestLLMConfig:
         assert factory_calls[0]["llm_config"]["temperature"] == 0.9
         assert factory_calls[0]["llm_config"]["max_tokens"] == 2000
 
-    def test_llm_config_backward_compatible(self):
+    def test_old_factory_works_when_llm_config_present(self):
         """Old-style factory(tier) still works without llm_config."""
         # Old-style factory: only accepts tier
         configure_fake_llm(lambda tier: StructuredFake(lambda m: m(items=["ok"])))
@@ -629,7 +629,7 @@ class TestLLMConfig:
 
         assert result["old_style"].items == ["ok"]
 
-    def test_input_injected_into_config(self):
+    def test_configurable_has_fields_when_input_provided(self):
         """Pipeline input fields (node_id, project_root) accessible via config["configurable"]."""
         from neograph.factory import register_scripted
 
@@ -657,7 +657,7 @@ class TestLLMConfig:
         assert config_seen["project_root"] == "/my/project"
         assert config_seen["custom_field"] == "extra-data"
 
-    def test_prompt_compiler_receives_config(self):
+    def test_compiler_sees_metadata_when_node_name_and_config_provided(self):
         """Prompt compiler gets node_name and full config with pipeline metadata."""
         compiler_calls = []
 
@@ -690,7 +690,7 @@ class TestLLMConfig:
 class TestRunIsolated:
     """Node.run_isolated() — direct invocation for unit testing."""
 
-    def test_scripted_node_run_isolated(self):
+    def test_result_returned_when_scripted_node_run_isolated(self):
         """Scripted nodes can be tested without compile()/run()."""
         from neograph import register_scripted
 
@@ -706,7 +706,7 @@ class TestRunIsolated:
         assert isinstance(result, RawText)
         assert result.text == "HELLO"
 
-    def test_produce_node_run_isolated(self):
+    def test_result_returned_when_produce_node_run_isolated(self):
         """Produce nodes can be tested with a fake LLM."""
         configure_fake_llm(lambda tier: StructuredFake(
             lambda model: model(items=["isolated-result"])
@@ -721,7 +721,7 @@ class TestRunIsolated:
         assert isinstance(result, Claims)
         assert result.items == ["isolated-result"]
 
-    def test_run_isolated_with_config(self):
+    def test_config_passed_through_when_run_isolated_with_config(self):
         """run_isolated passes config through to the node function."""
         from neograph import register_scripted
 
@@ -745,7 +745,7 @@ class TestRunIsolated:
 class TestConfigInjectionPatterns:
     """Real-world config injection patterns from piarch consumer."""
 
-    def test_shared_resources_in_config(self):
+    def test_resource_invoked_when_passed_via_config(self):
         """Consumer passes shared infrastructure (rate limiter, tracer) via config."""
         from neograph.factory import register_scripted
 
@@ -778,7 +778,7 @@ class TestConfigInjectionPatterns:
         assert limiter.calls == 1
         assert result["step"].items == ["calls=1"]
 
-    def test_config_available_in_subgraph(self):
+    def test_sub_node_sees_config_when_parent_passes_it(self):
         """Config flows through to sub-construct node functions."""
         from neograph.factory import register_scripted
 
@@ -812,7 +812,7 @@ class TestConfigInjectionPatterns:
         assert seen_in_sub["node_id"] == "BR-042"
         assert seen_in_sub["custom"] == "my-value"
 
-    def test_config_available_in_oracle_generators(self):
+    def test_all_generators_see_config_when_oracle_with_metadata(self):
         """Each Oracle generator sees config with node_id and custom fields."""
         from neograph.factory import register_scripted
 
@@ -849,7 +849,7 @@ class TestConfigInjectionPatterns:
             assert gc["project_root"] == "/proj"
             assert gc["gen_id"] is not None  # generator ID also present
 
-    def test_config_available_in_each_fanout(self):
+    def test_each_invocation_sees_config_when_metadata_present(self):
         """Each fan-out node sees config with node_id."""
         from neograph.factory import register_scripted
 
@@ -884,7 +884,7 @@ class TestConfigInjectionPatterns:
         labels = {c["label"] for c in each_configs}
         assert labels == {"a", "b"}
 
-    def test_multi_node_pipeline_all_see_config(self):
+    def test_every_node_sees_config_when_multi_step_pipeline(self):
         """Every node in a multi-step pipeline sees the same config metadata."""
         from neograph.factory import register_scripted
 
@@ -925,7 +925,7 @@ class TestConfigInjectionPatterns:
 class TestOutputStrategyStructured:
     """Default strategy: llm.with_structured_output(model). Current behavior."""
 
-    def test_structured_output_default(self):
+    def test_structured_output_used_when_no_strategy_specified(self):
         """Produce node uses with_structured_output by default."""
         configure_fake_llm(lambda tier: StructuredFake(lambda m: m(items=["via-structured"])))
 
@@ -940,7 +940,7 @@ class TestOutputStrategyStructured:
 class TestOutputStrategyJsonMode:
     """json_mode strategy: inject schema into prompt, parse response as JSON."""
 
-    def test_json_mode_injects_schema_and_parses(self):
+    def test_json_parsed_when_json_mode_strategy_set(self):
         """json_mode: schema injected into prompt, LLM returns raw JSON, framework parses."""
         compiler_calls = []
 
@@ -968,7 +968,7 @@ class TestOutputStrategyJsonMode:
         # Parsed correctly from raw JSON
         assert result["extract"].items == ["via-json-mode"]
 
-    def test_json_mode_handles_markdown_fences(self):
+    def test_fences_stripped_when_json_response_wrapped_in_markdown(self):
         """json_mode: strips markdown code fences before parsing."""
         configure_fake_llm(lambda tier: TextFake('```json\n{"items": ["fenced"]}\n```'))
 
@@ -990,7 +990,7 @@ class TestOutputStrategyJsonMode:
 class TestOutputStrategyText:
     """text strategy: LLM returns plain text, consumer's prompt_compiler handles schema."""
 
-    def test_text_mode_parses_json_from_response(self):
+    def test_json_extracted_when_text_strategy_with_embedded_json(self):
         """text mode: LLM returns text containing JSON, framework extracts and parses."""
         configure_fake_llm(
             lambda tier: TextFake('Here is my analysis:\n{"items": ["from-text"]}\nDone.')
@@ -1014,7 +1014,7 @@ class TestOutputStrategyText:
 class TestOutputStrategyOnGather:
     """Output strategy also applies to the final parse in gather/execute modes."""
 
-    def test_gather_json_mode_parses_final_response(self):
+    def test_json_parsed_when_gather_mode_with_json_strategy(self):
         """Gather node with json_mode parses the final structured output from raw JSON."""
         from langchain_core.messages import AIMessage
 
@@ -1064,7 +1064,7 @@ class TestOutputStrategyOnGather:
 class TestPromptCompilerReceivesOutputModel:
     """prompt_compiler must receive output_model and llm_config for json_mode prompts."""
 
-    def test_compiler_receives_output_model_in_produce(self):
+    def test_output_model_passed_when_produce_node_compiled(self):
         """Produce node's prompt compiler sees the output Pydantic model."""
         compiler_calls = []
 
@@ -1085,7 +1085,7 @@ class TestPromptCompilerReceivesOutputModel:
         assert len(compiler_calls) == 1
         assert compiler_calls[0].get("output_model") is Claims
 
-    def test_compiler_receives_llm_config(self):
+    def test_llm_config_passed_when_produce_node_compiled(self):
         """Prompt compiler sees the node's llm_config including output_strategy."""
         compiler_calls = []
 
@@ -1110,7 +1110,7 @@ class TestPromptCompilerReceivesOutputModel:
         assert compiler_calls[0].get("llm_config") == {"output_strategy": "json_mode", "temperature": 0.5}
         assert compiler_calls[0].get("output_model") is Claims
 
-    def test_json_mode_compiler_can_inject_schema(self):
+    def test_schema_injected_when_compiler_uses_json_mode(self):
         """End-to-end: compiler injects JSON schema into prompt for json_mode."""
         import json
 
@@ -1151,7 +1151,7 @@ class TestPromptCompilerReceivesOutputModel:
 class TestGatherToolCollection:
     """invoke_with_tools collects ToolInteraction records (neograph-1bp.6)."""
 
-    def test_tool_interaction_model(self):
+    def test_tool_interaction_has_expected_fields(self):
         """ToolInteraction has the expected fields."""
         from neograph import ToolInteraction
         ti = ToolInteraction(tool_name="search", args={"q": "test"}, result="found", duration_ms=42)
@@ -1160,7 +1160,7 @@ class TestGatherToolCollection:
         assert ti.result == "found"
         assert ti.duration_ms == 42
 
-    def test_tool_interactions_collected(self):
+    def test_tool_log_written_when_gather_with_dict_outputs(self):
         """Gather node with dict outputs writes tool_log to state."""
         from neograph import node, construct_from_module, compile, run, tool, ToolInteraction
         from neograph.factory import register_tool_factory

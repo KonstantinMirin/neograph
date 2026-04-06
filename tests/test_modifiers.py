@@ -42,7 +42,7 @@ class TestOracle:
         import types as _types
         return _types.ModuleType(name)
 
-    def test_three_way_ensemble(self):
+    def test_merge_combines_variants_when_three_generators_run(self):
         """Oracle dispatches 3 generators and merges results."""
         import types as _types
 
@@ -79,7 +79,7 @@ class TestOracle:
         assert merged is not None
         assert len(merged.items) == 3
 
-    def test_llm_merge(self):
+    def test_llm_judge_merges_when_merge_prompt_set(self):
         """Oracle with merge_prompt calls LLM to judge-merge variants."""
         import types as _types
 
@@ -105,12 +105,12 @@ class TestOracle:
         assert merged is not None
         assert merged.items == ["merged-consensus"]
 
-    def test_rejects_bare_oracle(self):
+    def test_oracle_raises_when_no_merge_option_given(self):
         """Oracle without merge_prompt or merge_fn is a ValueError."""
         with pytest.raises(ValueError, match="merge_prompt.*merge_fn"):
             Oracle(n=3)
 
-    def test_rejects_both_merge_options(self):
+    def test_oracle_raises_when_both_merge_options_given(self):
         """Oracle with both merge_prompt and merge_fn is a ValueError."""
         with pytest.raises(ValueError, match="not both"):
             Oracle(n=3, merge_prompt="x", merge_fn="y")
@@ -136,7 +136,7 @@ class TestOracle:
 # ═══════════════════════════════════════════════════════════════════════════
 
 class TestEach:
-    def test_fanout_over_collection(self):
+    def test_each_dispatches_per_item_when_collection_provided(self):
         """Each dispatches per-item and collects results (@node API)."""
         import types as _types
         from neograph import compile, construct_from_module, node, run
@@ -198,7 +198,7 @@ class TestEach:
 class TestNodeMap:
     """Node.map() — lambda- and string-path fan-out sugar over `| Each(...)`."""
 
-    def test_map_with_lambda_resolves_path(self):
+    def test_each_resolves_path_when_lambda_used(self):
         """A lambda `s.foo.bar` resolves to the same Each(over='foo.bar', ...)."""
         node = Node.scripted("verify", fn="noop", inputs=ClusterGroup, outputs=MatchResult)
         mapped = node.map(lambda s: s.make_clusters.groups, key="label")
@@ -208,7 +208,7 @@ class TestNodeMap:
         assert each.over == "make_clusters.groups"
         assert each.key == "label"
 
-    def test_map_with_string_path(self):
+    def test_each_resolves_path_when_string_used(self):
         """A string source is passed straight through to Each.over."""
         node = Node.scripted("verify", fn="noop", inputs=ClusterGroup, outputs=MatchResult)
         mapped = node.map("make_clusters.groups", key="label")
@@ -218,7 +218,7 @@ class TestNodeMap:
         assert each.over == "make_clusters.groups"
         assert each.key == "label"
 
-    def test_map_equivalent_to_pipe_each(self):
+    def test_map_produces_same_node_when_compared_to_pipe_each(self):
         """node.map(...) and node | Each(...) produce structurally identical nodes."""
         base = Node.scripted("verify", fn="noop", inputs=ClusterGroup, outputs=MatchResult)
 
@@ -227,7 +227,7 @@ class TestNodeMap:
 
         assert via_map.modifiers == via_pipe.modifiers
 
-    def test_map_end_to_end_fanout(self):
+    def test_fanout_runs_when_map_sugar_used(self):
         """.map() drives the same fan-out/collect behavior as | Each(...)."""
         from neograph.factory import register_scripted
 
@@ -257,49 +257,49 @@ class TestNodeMap:
         assert verify_results["alpha"].cluster_label == "alpha"
         assert verify_results["beta"].cluster_label == "beta"
 
-    def test_map_lambda_with_no_attrs_raises(self):
+    def test_map_raises_when_lambda_has_no_attributes(self):
         """`lambda s: s` has no path — clear error."""
         node = Node.scripted("verify", fn="noop", outputs=MatchResult)
         with pytest.raises(TypeError, match="at least one attribute"):
             node.map(lambda s: s, key="label")
 
-    def test_map_lambda_returning_scalar_raises(self):
+    def test_map_raises_when_lambda_returns_scalar(self):
         """`lambda s: 42` — clear error, not a silent Each."""
         node = Node.scripted("verify", fn="noop", outputs=MatchResult)
         with pytest.raises(TypeError, match="attribute-access chain"):
             node.map(lambda s: 42, key="label")
 
-    def test_map_lambda_that_errors_raises_typeerror(self):
+    def test_map_raises_when_lambda_uses_indexing(self):
         """A lambda that does something illegal (e.g. indexing) reports cleanly."""
         node = Node.scripted("verify", fn="noop", outputs=MatchResult)
         with pytest.raises(TypeError, match="pure attribute-access chain"):
             node.map(lambda s: s.items[0], key="label")  # __getitem__ on recorder
 
-    def test_map_rejects_dunder_attribute_access(self):
+    def test_map_raises_when_lambda_accesses_dunder(self):
         """`lambda s: s.__dict__.foo` must not silently produce Each(over='__dict__.foo')."""
         node = Node.scripted("verify", fn="noop", inputs=ClusterGroup, outputs=MatchResult)
         with pytest.raises(TypeError, match="pure attribute-access chain"):
             node.map(lambda s: s.__dict__.foo, key="label")
 
-    def test_map_rejects_leading_underscore_attribute(self):
+    def test_map_raises_when_lambda_accesses_underscore_attr(self):
         """Reject `lambda s: s._private.field` — underscores are a footgun trapdoor."""
         node = Node.scripted("verify", fn="noop", inputs=ClusterGroup, outputs=MatchResult)
         with pytest.raises(TypeError, match="pure attribute-access chain"):
             node.map(lambda s: s._private.x, key="label")
 
-    def test_map_user_exception_propagates_unchanged(self):
+    def test_user_exception_propagates_when_lambda_raises(self):
         """Non-attribute errors (e.g. ZeroDivisionError) propagate with their own type."""
         node = Node.scripted("verify", fn="noop", inputs=ClusterGroup, outputs=MatchResult)
         with pytest.raises(ZeroDivisionError):
             node.map(lambda s: 1 / 0 and s.x, key="label")
 
-    def test_map_rejects_non_string_non_callable(self):
+    def test_map_raises_when_source_not_string_or_callable(self):
         """Passing an int or other non-source type raises immediately."""
         node = Node.scripted("verify", fn="noop", outputs=MatchResult)
         with pytest.raises(TypeError, match="string path or a lambda"):
             node.map(42, key="label")  # type: ignore[arg-type]
 
-    def test_map_on_construct(self):
+    def test_each_attaches_when_map_called_on_construct(self):
         """Construct also gets .map() via Modifiable — sub-construct fan-out."""
         inner = Node.scripted("inner", fn="noop", inputs=ClusterGroup, outputs=MatchResult)
         sub = Construct("sub", input=ClusterGroup, output=MatchResult, nodes=[inner])
@@ -331,7 +331,7 @@ class TestNodeMap:
 # ═══════════════════════════════════════════════════════════════════════════
 
 class TestOperator:
-    def test_interrupt_on_failure(self):
+    def test_graph_pauses_when_operator_condition_truthy(self):
         """Graph pauses when Operator condition is met."""
         import types as _types
 
@@ -379,7 +379,7 @@ class TestOperator:
 class TestOperatorContinues:
     """Operator condition is falsy — graph continues without interrupt."""
 
-    def test_operator_passes_when_condition_falsy(self):
+    def test_graph_continues_when_operator_condition_falsy(self):
         """Graph runs through Operator without pausing when condition returns None."""
         import types as _types
 
@@ -410,7 +410,7 @@ class TestOperatorContinues:
 class TestOperatorResume:
     """Operator interrupt + resume flow."""
 
-    def test_interrupt_then_resume(self):
+    def test_graph_resumes_when_human_feedback_provided(self):
         """Graph pauses at interrupt, resumes with human feedback via run()."""
         import types as _types
 
@@ -454,7 +454,7 @@ class TestOperatorResume:
 class TestModifierAsFirstNode:
     """Modifiers on the first node wire from START, not from a previous node."""
 
-    def test_oracle_at_start(self):
+    def test_oracle_wires_from_start_when_first_node(self):
         """Oracle as the first (and only) node — router wired from START."""
         from neograph.factory import register_scripted
 
@@ -480,7 +480,7 @@ class TestModifierAsFirstNode:
         assert merged is not None
         assert len(merged.items) == 2
 
-    def test_each_at_start(self):
+    def test_each_wires_from_start_when_first_node(self):
         """Each as the first node — router wired from START."""
         from langgraph.graph import END, StateGraph
 
@@ -515,7 +515,7 @@ class TestModifierAsFirstNode:
 class TestConstructOracle:
     """Construct | Oracle — run entire sub-pipeline N times, merge outputs."""
 
-    def test_construct_oracle_scripted_merge(self):
+    def test_sub_pipeline_runs_n_times_when_oracle_with_scripted_merge(self):
         """Sub-pipeline runs 3 times, scripted merge combines outputs."""
         from neograph.factory import register_scripted
 
@@ -553,7 +553,7 @@ class TestConstructOracle:
         assert result["enrich"] is not None
         assert result["enrich"].text.count("processed") == 3
 
-    def test_construct_oracle_llm_merge(self):
+    def test_sub_pipeline_runs_n_times_when_oracle_with_llm_merge(self):
         """Sub-pipeline runs 2 times, LLM merge combines outputs."""
         from neograph.factory import register_scripted
 
@@ -583,7 +583,7 @@ class TestConstructOracle:
 class TestConstructEach:
     """Construct | Each — run entire sub-pipeline per collection item."""
 
-    def test_construct_each_over_collection(self):
+    def test_sub_pipeline_runs_per_item_when_each_over_collection(self):
         """Sub-pipeline runs once per cluster, results collected as dict."""
         from neograph.factory import register_scripted
 
@@ -628,7 +628,7 @@ class TestConstructEach:
 class TestConstructOperator:
     """Construct | Operator — check condition after sub-pipeline completes."""
 
-    def test_construct_operator_interrupts(self):
+    def test_parent_pauses_when_sub_construct_operator_truthy(self):
         """Sub-pipeline runs, then Operator checks and interrupts."""
         from langgraph.checkpoint.memory import MemorySaver
 
@@ -668,7 +668,7 @@ class TestConstructOperator:
         # Interrupted
         assert "__interrupt__" in result
 
-    def test_construct_operator_passes(self):
+    def test_parent_continues_when_sub_construct_operator_falsy(self):
         """Sub-pipeline runs, condition is falsy, graph continues."""
         from langgraph.checkpoint.memory import MemorySaver
 
@@ -705,7 +705,7 @@ class TestConstructOperator:
 class TestDeepCompositions:
     """Complex nesting: modifiers inside modifiers, tool exhaustion, etc."""
 
-    def test_oracle_inside_each(self):
+    def test_oracle_runs_per_item_when_nested_inside_each(self):
         """Each item gets Oracle ensemble — fan-out inside fan-out."""
         from neograph.factory import register_scripted
 
@@ -752,7 +752,7 @@ class TestDeepCompositions:
         assert "x" in result["oracle_inner"]
         assert "y" in result["oracle_inner"]
 
-    def test_tool_budget_exhaustion_in_subgraph(self):
+    def test_tool_budget_enforced_when_gather_inside_subgraph(self):
         """Gather node inside subgraph exhausts tool budget, forced to respond."""
         from neograph.factory import register_scripted, register_tool_factory
 
@@ -803,7 +803,7 @@ class TestDeepCompositions:
         # Subgraph still produced output
         assert result["deep_search"] is not None
 
-    def test_operator_inside_subgraph_bubbles_interrupt(self):
+    def test_interrupt_surfaces_when_operator_inside_subgraph(self):
         """Operator inside a sub-construct pauses the entire parent pipeline."""
         from langgraph.checkpoint.memory import MemorySaver
 
@@ -866,7 +866,7 @@ class TestDeepCompositions:
 # ═══════════════════════════════════════════════════════════════════════════
 
 class TestListOverEachEndToEnd:
-    def test_declarative_each_to_list_consumer(self):
+    def test_list_consumer_receives_values_when_declarative_each_producer(self):
         """Declarative: Each producer + Node.scripted consumer that
         annotates inputs={'verify': list[MatchResult]}."""
         from neograph import compile, run
@@ -912,7 +912,7 @@ class TestListOverEachEndToEnd:
         result = run(graph, input={"node_id": "l5"})
         assert result["summarize"].final_text == "verified:3:a,b,c"
 
-    def test_decorator_each_to_list_consumer(self):
+    def test_list_consumer_receives_values_when_decorator_each_producer(self):
         """@node: Each producer + @node consumer with list[X] annotation."""
         from neograph import compile, run, node
         from neograph.decorators import construct_from_functions
@@ -945,7 +945,7 @@ class TestListOverEachEndToEnd:
         result = run(graph, input={"node_id": "l5"})
         assert result["summarize"].final_text == "got:2:alpha,beta"
 
-    def test_list_wrong_element_type_rejected(self):
+    def test_construct_raises_when_list_element_type_wrong(self):
         """list[WrongType] consumer + Each producer raises ConstructError."""
         make = _producer("make", Clusters)
         verify = _consumer("verify", ClusterGroup, MatchResult).map(
@@ -961,7 +961,7 @@ class TestListOverEachEndToEnd:
         msg = str(exc_info.value)
         assert "verify" in msg
 
-    def test_dict_consumer_still_works_after_each(self):
+    def test_dict_consumer_passes_when_each_producer_present(self):
         """dict[str, X] consumer still passes through unchanged (regression)."""
         from neograph import compile, run
         from neograph.factory import register_scripted
@@ -1013,3 +1013,122 @@ class TestListOverEachEndToEnd:
 # ═══════════════════════════════════════════════════════════════════════════
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# Three-surface parity: Each fan-out behavior
+#
+# Template pattern: @pytest.mark.parametrize("build", [...]) with one
+# builder per API surface (declarative, @node decorator, programmatic).
+# Each builder returns a Construct; the test compiles, runs, and asserts
+# identically across all three surfaces.
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def _each_via_declarative() -> Construct:
+    """Declarative surface: Node.scripted + .map()."""
+    register_scripted(
+        "tsp_make",
+        lambda _in, _cfg: Clusters(groups=[
+            ClusterGroup(label="alpha", claim_ids=["c1"]),
+            ClusterGroup(label="beta", claim_ids=["c2"]),
+        ]),
+    )
+    register_scripted(
+        "tsp_verify",
+        lambda input_data, _cfg: MatchResult(
+            cluster_label=input_data.label if hasattr(input_data, "label") else "?",
+            matched=[f"m-{input_data.label}" if hasattr(input_data, "label") else "?"],
+        ),
+    )
+
+    make = Node.scripted("make", fn="tsp_make", outputs=Clusters)
+    verify = Node.scripted(
+        "verify", fn="tsp_verify", inputs=ClusterGroup, outputs=MatchResult
+    ).map(lambda s: s.make.groups, key="label")
+
+    return Construct("tsp-decl", nodes=[make, verify])
+
+
+def _each_via_decorator() -> Construct:
+    """@node decorator surface: construct_from_functions."""
+    @node(mode="scripted", outputs=Clusters)
+    def tsp_dec_make() -> Clusters:
+        return Clusters(groups=[
+            ClusterGroup(label="alpha", claim_ids=["c1"]),
+            ClusterGroup(label="beta", claim_ids=["c2"]),
+        ])
+
+    @node(
+        mode="scripted",
+        outputs=MatchResult,
+        map_over="tsp_dec_make.groups",
+        map_key="label",
+    )
+    def tsp_dec_verify(cluster: ClusterGroup) -> MatchResult:
+        return MatchResult(
+            cluster_label=cluster.label,
+            matched=[f"m-{cluster.label}"],
+        )
+
+    return construct_from_functions("tsp-dec", [tsp_dec_make, tsp_dec_verify])
+
+
+def _each_via_programmatic() -> Construct:
+    """Programmatic surface: Node() | Each() with single-type inputs."""
+    register_scripted(
+        "tsp_make",
+        lambda _in, _cfg: Clusters(groups=[
+            ClusterGroup(label="alpha", claim_ids=["c1"]),
+            ClusterGroup(label="beta", claim_ids=["c2"]),
+        ]),
+    )
+    register_scripted(
+        "tsp_verify",
+        lambda input_data, _cfg: MatchResult(
+            cluster_label=input_data.label,
+            matched=[f"m-{input_data.label}"],
+        ),
+    )
+
+    make = Node.scripted("make", fn="tsp_make", outputs=Clusters)
+    verify = Node.scripted(
+        "verify", fn="tsp_verify",
+        inputs=ClusterGroup,
+        outputs=MatchResult,
+    ) | Each(over="make.groups", key="label")
+
+    return Construct("tsp-prog", nodes=[make, verify])
+
+
+class TestThreeSurfaceParity:
+    """Each fan-out tested identically across declarative, @node, and
+    programmatic API surfaces. Template pattern for future parity tests."""
+
+    @pytest.mark.parametrize("build", [
+        _each_via_declarative,
+        _each_via_decorator,
+        _each_via_programmatic,
+    ], ids=["declarative", "decorator", "programmatic"])
+    def test_each_produces_dict_when_any_surface_used(self, build):
+        """Each fan-out produces dict[str, MatchResult] keyed by label."""
+        pipeline = build()
+        graph = compile(pipeline)
+        result = run(graph, input={"node_id": "tsp-001"})
+
+        verify_results = result.get("verify") or result.get("tsp_dec_verify")
+        assert isinstance(verify_results, dict)
+        assert set(verify_results.keys()) == {"alpha", "beta"}
+
+    @pytest.mark.parametrize("build", [
+        _each_via_declarative,
+        _each_via_decorator,
+        _each_via_programmatic,
+    ], ids=["declarative", "decorator", "programmatic"])
+    def test_each_items_match_source_when_any_surface_used(self, build):
+        """Each fan-out item has the correct cluster_label from the source."""
+        pipeline = build()
+        graph = compile(pipeline)
+        result = run(graph, input={"node_id": "tsp-002"})
+
+        verify_results = result.get("verify") or result.get("tsp_dec_verify")
+        labels = {v.cluster_label for v in verify_results.values()}
+        assert labels == {"alpha", "beta"}
