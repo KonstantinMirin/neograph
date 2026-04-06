@@ -1298,6 +1298,53 @@ class TestModifierCombinations:
         assert len(merged.items) == 2
         assert set(merged.items) == {"v1", "v2"}
 
+    def test_oracle_merges_per_key_when_dict_form_outputs(self):
+        """neograph-7ft: dict-form outputs + Oracle — Oracle redirect must
+        handle per-key state fields ({node}_{key}), not just {node}.
+
+        BUG: make_oracle_redirect_fn looks for result.get(field_name) but
+        dict-form outputs write to {field_name}_{key}. The redirect misses
+        them, each generator writes directly to per-key fields, causing
+        concurrent write errors in LangGraph's state management."""
+        from neograph.factory import register_scripted
+
+        gen_count = [0]
+
+        def dict_oracle_gen(input_data, config):
+            gen_count[0] += 1
+            return {
+                "result": Claims(items=[f"v{gen_count[0]}"]),
+                "meta": RawText(text=f"meta-{gen_count[0]}"),
+            }
+
+        register_scripted("dict_oracle_gen", dict_oracle_gen)
+
+        def dict_oracle_merge(variants, config):
+            all_items = []
+            for v in variants:
+                all_items.extend(v.items)
+            return Claims(items=all_items)
+
+        register_scripted("dict_oracle_merge", dict_oracle_merge)
+
+        gen_node = (
+            Node.scripted(
+                "dogen", fn="dict_oracle_gen",
+                outputs={"result": Claims, "meta": RawText},
+            )
+            | Oracle(n=2, merge_fn="dict_oracle_merge")
+        )
+        pipeline = Construct("test-dict-oracle", nodes=[gen_node])
+        graph = compile(pipeline)
+        result = run(graph, input={"node_id": "7ft"})
+
+        # Oracle ran 2 variants
+        assert gen_count[0] == 2
+        # Primary output merged
+        merged = result.get("dogen_result")
+        assert merged is not None
+        assert len(merged.items) == 2
+
     def test_each_wraps_per_key_when_dict_outputs_with_each(self):
         """neograph-rdu.7: dict-form outputs + Each — each output key becomes
         dict[str, type] independently in state."""

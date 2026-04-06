@@ -439,17 +439,95 @@ def make_oracle_redirect_fn(raw_fn: Callable, field_name: str, collector_field: 
 
     Used by Oracle generators: the node writes to the collector (list reducer)
     instead of the consumer-facing field.
+
+    Handles both single-type outputs (result has field_name key) and dict-form
+    outputs (result has {field_name}_{key} keys). For dict-form, collects the
+    full result dict into the collector so the merge fn can process per-key.
     """
+    prefix = f"{field_name}_"
 
     def oracle_redirect_fn(state: Any, config: RunnableConfig) -> dict:
         result = raw_fn(state, config)
         val = result.get(field_name)
         if val is not None:
             return {collector_field: val}
+        # Dict-form outputs: per-key fields like {field_name}_{key}
+        if any(k.startswith(prefix) for k in result):
+            return {collector_field: result}
         return result
 
     oracle_redirect_fn.__name__ = raw_fn.__name__
     return oracle_redirect_fn
+
+
+def _unwrap_oracle_results(
+    results: list,
+    field_name: str,
+    output_model: Any,
+) -> tuple[list, dict[str, list] | None]:
+    """Unwrap collected Oracle results for the merge function.
+
+    For single-type outputs: results is [val1, val2, ...] — return as-is.
+    For dict-form outputs: results is [{field_result: v1, field_meta: m1}, ...].
+    Extract primary values for the merge fn, collect secondary values.
+
+    Returns (primary_values, secondary_by_key) where secondary_by_key is None
+    for single-type outputs.
+    """
+    if not results or not isinstance(results[0], dict):
+        return results, None
+
+    # Dict-form: extract primary (first key) for merge, collect secondaries
+    prefix = f"{field_name}_"
+    primary_key = None
+    secondary_keys: list[str] = []
+
+    if isinstance(output_model, dict):
+        keys = list(output_model)
+        primary_key = f"{prefix}{keys[0]}"
+        secondary_keys = [f"{prefix}{k}" for k in keys[1:]]
+    else:
+        # Fallback: find keys by prefix
+        for k in results[0]:
+            if k.startswith(prefix):
+                if primary_key is None:
+                    primary_key = k
+                else:
+                    secondary_keys.append(k)
+
+    if primary_key is None:
+        return results, None
+
+    primary_values = [r.get(primary_key) for r in results if r.get(primary_key) is not None]
+    secondaries = {k: [r.get(k) for r in results if r.get(k) is not None] for k in secondary_keys}
+    return primary_values, secondaries
+
+
+def _build_oracle_merge_result(
+    merged: Any,
+    field_name: str,
+    output_model: Any,
+    secondaries: dict[str, list] | None,
+) -> dict:
+    """Build the state update dict after Oracle merge.
+
+    For single-type: {field_name: merged}.
+    For dict-form: {field_name_primary: merged, field_name_secondary: last_value, ...}.
+    """
+    if secondaries is None:
+        return {field_name: merged}
+
+    prefix = f"{field_name}_"
+    if isinstance(output_model, dict):
+        primary_field = f"{prefix}{next(iter(output_model))}"
+    else:
+        primary_field = field_name
+
+    update = {primary_field: merged}
+    for key, values in secondaries.items():
+        if values:
+            update[key] = values[-1]  # take last variant's secondary value
+    return update
 
 
 def make_oracle_merge_fn(
@@ -463,24 +541,24 @@ def make_oracle_merge_fn(
     If oracle.merge_prompt, calls invoke_structured (LLM judge).
     If oracle.merge_fn, calls the registered scripted function — with
     FromInput/FromConfig DI if it was declared via ``@merge_fn``.
-    Reads from collector_field, writes to field_name.
+    Reads from collector_field, writes to field_name (or per-key fields
+    for dict-form outputs).
     """
     if oracle.merge_prompt:
         def merge_fn(state: Any, config: RunnableConfig) -> dict:
             from neograph._llm import invoke_structured
 
             results = getattr(state, collector_field, [])
-            return {field_name: invoke_structured(
+            primary, secondaries = _unwrap_oracle_results(results, field_name, output_model)
+            merged = invoke_structured(
                 model_tier=oracle.merge_model,
                 prompt_template=oracle.merge_prompt,
-                input_data=results,
-                output_model=output_model,
+                input_data=primary,
+                output_model=output_model if not isinstance(output_model, dict) else next(iter(output_model.values())),
                 config=config,
-            )}
+            )
+            return _build_oracle_merge_result(merged, field_name, output_model, secondaries)
     else:
-        # Check for @merge_fn DI metadata first. If present, call the
-        # original user function with resolved DI parameters. Otherwise
-        # fall back to the legacy (variants, config) scripted signature.
         from neograph.decorators import get_merge_fn_metadata, _resolve_di_args
 
         metadata = get_merge_fn_metadata(oracle.merge_fn)
@@ -489,13 +567,17 @@ def make_oracle_merge_fn(
 
             def merge_fn(state: Any, config: RunnableConfig) -> dict:
                 results = getattr(state, collector_field, [])
-                return {field_name: user_fn(results, *_resolve_di_args(param_res, config))}
+                primary, secondaries = _unwrap_oracle_results(results, field_name, output_model)
+                merged = user_fn(primary, *_resolve_di_args(param_res, config))
+                return _build_oracle_merge_result(merged, field_name, output_model, secondaries)
         else:
             scripted_merge = lookup_scripted(oracle.merge_fn)
 
             def merge_fn(state: Any, config: RunnableConfig) -> dict:
                 results = getattr(state, collector_field, [])
-                return {field_name: scripted_merge(results, config)}
+                primary, secondaries = _unwrap_oracle_results(results, field_name, output_model)
+                merged = scripted_merge(primary, config)
+                return _build_oracle_merge_result(merged, field_name, output_model, secondaries)
 
     return merge_fn
 

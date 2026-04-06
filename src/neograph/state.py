@@ -130,9 +130,21 @@ def _add_output_field(node: Node, fields: dict[str, Any]) -> None:
 
     # Dict-form outputs: one state field per key (neograph-1bp.2).
     if isinstance(node.outputs, dict):
-        for output_key, output_type in node.outputs.items():
-            key_field = f"{field_name}_{output_key}"
-            _add_single_output_field(node, key_field, output_type, fields)
+        if node.has_modifier(Oracle):
+            # Oracle + dict-form: single collector for the whole result dict,
+            # per-key consumer fields without per-key collectors (neograph-7ft).
+            collector_field = f"neo_oracle_{field_name}"
+            fields[collector_field] = (
+                Annotated[list[dict], _collect_oracle_results],
+                [],
+            )
+            for output_key, output_type in node.outputs.items():
+                key_field = f"{field_name}_{output_key}"
+                fields[key_field] = (output_type | None, None)
+        else:
+            for output_key, output_type in node.outputs.items():
+                key_field = f"{field_name}_{output_key}"
+                _add_single_output_field(node, key_field, output_type, fields)
         return
 
     # Single-type outputs (backward compat): one field named after the node.
