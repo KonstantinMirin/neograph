@@ -86,6 +86,49 @@ def _type_name(t: Any) -> str | None:
     return getattr(t, '__name__', str(t))
 
 
+def _build_state_update(
+    node: Node,
+    field_name: str,
+    result: Any,
+    state: Any,
+) -> dict[str, Any]:
+    """Build a state update dict, handling dict-form and single-type outputs.
+
+    For dict-form outputs (``outputs={'a': A, 'b': B}``):
+      - result must be a dict with matching keys
+      - each key writes to ``{field_name}_{key}``
+      - Each modifier wraps per-key
+
+    For single-type outputs: writes to ``{field_name}`` as before.
+    """
+    if result is None or node.outputs is None:
+        return {}
+
+    each_mod = node.get_modifier(Each)
+    each_item = _state_get(state, "neo_each_item")
+
+    # Dict-form outputs: per-key state fields (neograph-1bp.3).
+    if isinstance(node.outputs, dict) and isinstance(result, dict):
+        update: dict[str, Any] = {}
+        for key in node.outputs:
+            val = result.get(key)
+            if val is None:
+                continue
+            key_field = f"{field_name}_{key}"
+            if each_mod and each_item is not None:
+                key_val = getattr(each_item, each_mod.key, str(each_item))
+                update[key_field] = {key_val: val}
+            else:
+                update[key_field] = val
+        return update
+
+    # Single-type outputs (backward compat).
+    if each_mod and each_item is not None:
+        key_val = getattr(each_item, each_mod.key, str(each_item))
+        return {field_name: {key_val: result}}
+    return {field_name: result}
+
+
 def make_node_fn(node: Node) -> Callable:
     """Create a LangGraph node function from a Node definition.
 
@@ -156,17 +199,7 @@ def _make_scripted_wrapper(node: Node) -> Callable:
         input_data = _extract_input(state, node)
         result = fn(input_data, config)
 
-        update: dict[str, Any] = {}
-        if node.outputs is not None and result is not None:
-            # Each fan-out: wrap result in dict keyed by item's key field
-            each_mod = node.get_modifier(Each)
-            each_item = _state_get(state, "neo_each_item")
-            if each_mod and each_item is not None:
-                key_val = getattr(each_item, each_mod.key, str(each_item))
-                update[field_name] = {key_val: result}
-            else:
-                # Oracle redirection handled by compiler wrapper, not here
-                update[field_name] = result
+        update = _build_state_update(node, field_name, result, state)
 
         elapsed = time.monotonic() - t0
         node_log.info("node_complete", duration_s=round(elapsed, 3))
@@ -213,19 +246,29 @@ def _make_produce_fn(node: Node) -> Callable:
         if effective_renderer is not None:
             input_data = render_input(input_data, renderer=effective_renderer)
 
+        # For dict-form outputs, the LLM produces the primary type (first key).
+        # Secondary outputs (e.g. tool_log) are framework-collected (1bp.6).
+        output_model = node.outputs
+        primary_key: str | None = None
+        if isinstance(node.outputs, dict):
+            primary_key = next(iter(node.outputs))
+            output_model = node.outputs[primary_key]
+
         result = invoke_structured(
             model_tier=node.model,
             prompt_template=node.prompt,
             input_data=input_data,
-            output_model=node.outputs,
+            output_model=output_model,
             config=config,
             node_name=node.name,
             llm_config=node.llm_config,
         )
 
-        update: dict[str, Any] = {}
-        if result is not None:
-            update[field_name] = result
+        if primary_key is not None and result is not None:
+            # Wrap single LLM result as a dict so _build_state_update routes per-key
+            result = {primary_key: result}
+
+        update = _build_state_update(node, field_name, result, state)
 
         elapsed = time.monotonic() - t0
         node_log.info("node_complete", duration_s=round(elapsed, 3))
@@ -273,13 +316,20 @@ def _make_tool_fn(node: Node) -> Callable:
         if effective_renderer is not None:
             input_data = render_input(input_data, renderer=effective_renderer)
 
+        # For dict-form outputs, the LLM produces the primary type (first key).
+        output_model = node.outputs
+        primary_key: str | None = None
+        if isinstance(node.outputs, dict):
+            primary_key = next(iter(node.outputs))
+            output_model = node.outputs[primary_key]
+
         budget_tracker = ToolBudgetTracker(node.tools)
 
         result = invoke_with_tools(
             model_tier=node.model,
             prompt_template=node.prompt,
             input_data=input_data,
-            output_model=node.outputs,
+            output_model=output_model,
             tools=node.tools,
             budget_tracker=budget_tracker,
             config=config,
@@ -287,9 +337,10 @@ def _make_tool_fn(node: Node) -> Callable:
             llm_config=node.llm_config,
         )
 
-        update: dict[str, Any] = {}
-        if result is not None:
-            update[field_name] = result
+        if primary_key is not None and result is not None:
+            result = {primary_key: result}
+
+        update = _build_state_update(node, field_name, result, state)
 
         elapsed = time.monotonic() - t0
         node_log.info("node_complete", duration_s=round(elapsed, 3))

@@ -6827,3 +6827,43 @@ class TestDictOutputsStateModel:
         state_model = compile_state_model(c)
         assert "verify_result" in state_model.model_fields
         assert "verify_meta" in state_model.model_fields
+
+
+class TestDictOutputsFactory:
+    """Factory writes dict-form outputs to per-key state fields (neograph-1bp.3)."""
+
+    def test_scripted_dict_outputs_writes_per_key(self):
+        """Scripted node with dict outputs writes each key to its state field."""
+        from neograph import node, construct_from_module, compile, run
+        from neograph.factory import register_scripted
+        import types
+
+        mod = types.ModuleType("test_dict_out_mod")
+
+        @node(mode="scripted", outputs={"summary": RawText, "count": Claims})
+        def analyze() -> dict:
+            return {"summary": RawText(text="hello"), "count": Claims(items=["a"])}
+
+        mod.analyze = analyze
+        pipeline = construct_from_module(mod)
+        graph = compile(pipeline)
+        result = run(graph, input={})
+        assert result["analyze_summary"] == RawText(text="hello")
+        assert result["analyze_count"] == Claims(items=["a"])
+
+    def test_single_type_outputs_backward_compat_runtime(self):
+        """Single-type outputs still writes to {node_name} at runtime."""
+        from neograph import node, construct_from_module, compile, run
+        import types
+
+        mod = types.ModuleType("test_single_out_mod")
+
+        @node(mode="scripted", outputs=RawText)
+        def extract() -> RawText:
+            return RawText(text="world")
+
+        mod.extract = extract
+        pipeline = construct_from_module(mod)
+        graph = compile(pipeline)
+        result = run(graph, input={})
+        assert result["extract"] == RawText(text="world")
