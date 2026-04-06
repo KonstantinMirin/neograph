@@ -361,15 +361,26 @@ def invoke_with_tools(
                 duration_s=round(tool_elapsed, 3),
             )
 
+            # Render for LLM: Pydantic → JSON, else str()
+            from pydantic import BaseModel as _BM
+            if isinstance(result, _BM):
+                rendered = result.model_dump_json(indent=2)
+            elif isinstance(result, list) and result and isinstance(result[0], _BM):
+                import json as _json
+                rendered = _json.dumps([r.model_dump() for r in result], indent=2)
+            else:
+                rendered = str(result)
+
             tool_interactions.append(ToolInteraction(
                 tool_name=tool_name,
                 args=tool_call.get("args", {}),
-                result=str(result),
+                result=rendered,
+                typed_result=result,
                 duration_ms=int(tool_elapsed * 1000),
             ))
 
             messages.append(ToolMessage(
-                content=str(result),
+                content=rendered,
                 tool_call_id=tool_call["id"],
             ))
 
