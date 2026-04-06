@@ -1130,6 +1130,88 @@ class TestPortParamErrors:
         assert "neo_subgraph_input" not in consumer_node.inputs
 
 
+class TestMixedNodeAndConstruct:
+    """construct_from_functions accepts @node items + Construct items (neograph-dqe).
+
+    The primary use case: 15 @node functions + 1 sub-construct in the same
+    pipeline, assembled via construct_from_functions. The @node param names
+    resolve against both peer @nodes AND peer sub-constructs.
+    """
+
+    def test_construct_from_functions_accepts_construct_items(self):
+        """construct_from_functions accepts a Construct alongside @node items."""
+        # Sub-construct: explore→score (from previous tests)
+        register_scripted("dqe_explore", lambda _in, _cfg: ExplorationResult(
+            evidence=["e1"], summary="found",
+        ))
+        register_scripted("dqe_score", lambda _in, _cfg: ClaimVerdict(
+            claim_id=_in["explore"].claim_id if isinstance(_in, dict) else "?",
+            disposition="confirmed",
+        ))
+        verify_sub = Construct(
+            "verify", input=VerifyClaim, output=ClaimVerdict,
+            nodes=[
+                Node.scripted("explore", fn="dqe_explore",
+                              inputs=VerifyClaim, outputs=ExplorationResult),
+                Node.scripted("score", fn="dqe_score",
+                              inputs=ExplorationResult, outputs=ClaimVerdict),
+            ],
+        )
+
+        # @node functions that reference the sub-construct by name
+        @node(outputs=VerifyClaim)
+        def make_claim() -> VerifyClaim:
+            return VerifyClaim(claim_id="c1", text="test")
+
+        @node(outputs=RawText)
+        def summarize(verify: ClaimVerdict) -> RawText:
+            return RawText(text=f"verdict: {verify.disposition}")
+
+        pipeline = construct_from_functions(
+            "mixed", [make_claim, verify_sub, summarize],
+        )
+        graph = compile(pipeline)
+        result = run(graph, input={"node_id": "dqe"})
+
+        assert result["verify"].disposition == "confirmed"
+        assert result["summarize"].text == "verdict: confirmed"
+
+    def test_construct_from_functions_rejects_construct_without_output(self):
+        """Construct items must have output declared."""
+        bad_sub = Construct("bad", input=VerifyClaim, nodes=[])
+
+        @node(outputs=VerifyClaim)
+        def seed() -> VerifyClaim:
+            return VerifyClaim(claim_id="x", text="x")
+
+        with pytest.raises(ConstructError, match="output"):
+            construct_from_functions("fail", [seed, bad_sub])
+
+    def test_node_param_resolves_against_sub_construct_name(self):
+        """@node param named after a sub-construct resolves as a dependency."""
+        verify_sub = Construct(
+            "verify", input=VerifyClaim, output=ClaimVerdict,
+            nodes=[
+                Node.scripted("s", fn="dqe_score",
+                              inputs=VerifyClaim, outputs=ClaimVerdict),
+            ],
+        )
+
+        @node(outputs=VerifyClaim)
+        def make() -> VerifyClaim:
+            return VerifyClaim(claim_id="c1", text="t")
+
+        @node(outputs=RawText)
+        def consume(verify: ClaimVerdict) -> RawText:
+            return RawText(text=verify.disposition)
+
+        pipeline = construct_from_functions("resolve-test", [make, verify_sub, consume])
+        # Verify the topo sort placed verify between make and consume
+        names = [n.name for n in pipeline.nodes]
+        assert names.index("verify") < names.index("consume")
+        assert names.index("make") < names.index("verify")
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # GATHER → PRODUCE INSIDE SUB-CONSTRUCT (neograph-dp5)
 #

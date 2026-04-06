@@ -848,20 +848,33 @@ def construct_from_functions(
     """
     source_label = f"construct '{name}'"
     nodes: list[Node] = []
+    sub_constructs: list[Construct] = []
     for item in functions:
-        if not isinstance(item, Node) or _get_sidecar(item) is None:
+        if isinstance(item, Construct):
+            if item.output is None:
+                msg = (
+                    f"construct_from_functions('{name}'): Construct '{item.name}' "
+                    f"has no output type. Sub-constructs must declare output= "
+                    f"so downstream @nodes can resolve dependencies."
+                )
+                raise ConstructError(msg)
+            sub_constructs.append(item)
+        elif isinstance(item, Node) and _get_sidecar(item) is not None:
+            nodes.append(item)
+        else:
             got = type(item).__name__
             msg = (
                 f"construct_from_functions('{name}'): argument is not "
-                f"decorated with @node (got {got}). Every list element must "
-                f"be a function decorated with @node."
+                f"decorated with @node or a Construct (got {got}). "
+                f"Every list element must be a function decorated with "
+                f"@node or a Construct with declared output."
             )
             raise ConstructError(msg)
-        nodes.append(item)
 
     return _build_construct_from_decorated(
         nodes, name, source_label, llm_config,
         construct_input=input, construct_output=output,
+        sub_constructs=sub_constructs,
     )
 
 
@@ -890,25 +903,35 @@ def _build_construct_from_decorated(
     llm_config: dict[str, Any] | None,
     construct_input: type[BaseModel] | None = None,
     construct_output: type[BaseModel] | None = None,
+    sub_constructs: list[Construct] | None = None,
 ) -> Construct:
     """Core pipeline builder shared by construct_from_module and
     construct_from_functions. Builds {field_name: Node} with collision
     checking, then runs adjacency + topo sort + validation + scripted shim
     registration.
     """
-    if not nodes:
+    _sub_constructs = sub_constructs or []
+    if not nodes and not _sub_constructs:
         return Construct(name=construct_name, nodes=[], llm_config=llm_config or {})
+
+    # Build field_name → Construct dict for sub-constructs (separate from
+    # decorated @nodes — Option B from architect review). Sub-constructs
+    # participate in adjacency as producers but skip all sidecar processing.
+    sub_by_field: dict[str, Construct] = {}
+    for sc in _sub_constructs:
+        field_name = sc.name.replace("-", "_")
+        sub_by_field[field_name] = sc
 
     # Build field_name → Node dict with collision detection.
     decorated: dict[str, Node] = {}
     for n in nodes:
         field_name = n.name.replace("-", "_")
-        if field_name in decorated:
-            existing = decorated[field_name]
+        if field_name in decorated or field_name in sub_by_field:
+            existing_name = decorated[field_name].name if field_name in decorated else sub_by_field[field_name].name
             msg = (
-                f"@node name collision: two nodes resolve to field name "
+                f"name collision: two items resolve to field name "
                 f"'{field_name}' in {source_label}. "
-                f"One is '{existing.name}', another is '{n.name}'. "
+                f"One is '{existing_name}', another is '{n.name}'. "
                 f"Fix: pass explicit name= to @node on one of them."
             )
             raise ConstructError(msg)
@@ -982,7 +1005,7 @@ def _build_construct_from_decorated(
                 continue
             if pname in port_params.get(field_name, set()):
                 continue
-            if pname not in decorated:
+            if pname not in decorated and pname not in sub_by_field:
                 p = sig.parameters.get(pname)
                 if p is not None and p.default is not inspect.Parameter.empty:
                     param_res[pname] = ("constant", p.default)
@@ -990,7 +1013,10 @@ def _build_construct_from_decorated(
         if updated:
             _register_param_resolutions(n, param_res)
 
-    adjacency: dict[str, list[str]] = {k: [] for k in decorated}
+    # Sub-constructs participate in adjacency as producers with no deps of
+    # their own (they're self-contained — internal wiring is already validated).
+    all_known = {**{k: None for k in decorated}, **{k: None for k in sub_by_field}}
+    adjacency: dict[str, list[str]] = {k: [] for k in all_known}
     for field_name, n in decorated.items():
         sidecar = _get_sidecar(n)
         if sidecar is None:
@@ -1011,6 +1037,12 @@ def _build_construct_from_decorated(
                 continue
             if pname in _ports:
                 continue  # port param — reads from neo_subgraph_input, not a peer
+            if pname in sub_by_field:
+                # Param names a sub-construct — wire dependency edge.
+                if pname not in seen_deps:
+                    adjacency[field_name].append(pname)
+                    seen_deps.add(pname)
+                continue
             if pname not in decorated:
                 # Check if pname matches {upstream}_{output_key} for a dict-output
                 # upstream (neograph-1bp.5). E.g. "analyze_summary" matches upstream
@@ -1023,12 +1055,13 @@ def _build_construct_from_decorated(
                     continue
                 src = _get_node_source(n)
                 src_suffix = f"\n  @node defined at {src}" if src else ""
+                all_names = sorted(set(decorated.keys()) | set(sub_by_field.keys()))
                 msg = (
                     f"@node '{n.name}' parameter '{pname}' does not match any "
-                    f"@node in {source_label}. All parameters must "
-                    f"name an upstream @node, use FromInput/FromConfig annotation, "
+                    f"@node or sub-construct in {source_label}. All parameters must "
+                    f"name an upstream @node/Construct, use FromInput/FromConfig annotation, "
                     f"or have a default value.\n"
-                    f"  available @nodes: {sorted(decorated.keys())}"
+                    f"  available items: {all_names}"
                     f"{src_suffix}"
                 )
                 raise ConstructError(msg)
@@ -1046,7 +1079,8 @@ def _build_construct_from_decorated(
                 seen_deps.add(pname)
 
     # Topological sort via DFS with a visiting set for cycle detection.
-    ordered: list[Node] = []
+    # ordered contains both Node and Construct items in dependency order.
+    ordered: list[Any] = []
     marks: dict[str, str] = {}
 
     def visit(field: str) -> None:
@@ -1054,11 +1088,12 @@ def _build_construct_from_decorated(
         if state == "black":
             return
         if state == "gray":
-            src = _get_node_source(decorated[field])
-            src_suffix = f"\n  @node defined at {src}" if src else ""
+            item = decorated.get(field) or sub_by_field.get(field)
+            src = _get_node_source(item) if isinstance(item, Node) else ""
+            src_suffix = f"\n  defined at {src}" if src else ""
             msg = (
-                f"@node cycle detected in {source_label} involving '{field}'. "
-                f"Cyclical parameter-name dependencies are not allowed."
+                f"Cycle detected in {source_label} involving '{field}'. "
+                f"Cyclical dependencies are not allowed."
                 f"{src_suffix}"
             )
             raise ConstructError(msg)
@@ -1066,9 +1101,13 @@ def _build_construct_from_decorated(
         for dep in adjacency[field]:
             visit(dep)
         marks[field] = "black"
-        ordered.append(decorated[field])
+        # Append the actual item: Node or Construct
+        if field in decorated:
+            ordered.append(decorated[field])
+        elif field in sub_by_field:
+            ordered.append(sub_by_field[field])
 
-    for field in decorated:
+    for field in all_known:
         visit(field)
 
     # Clean up n.inputs: strip DI params and constants (non-upstream) but
@@ -1091,6 +1130,7 @@ def _build_construct_from_decorated(
                 filtered["neo_subgraph_input"] = v
             elif (
                 (k in decorated and k != field)
+                or k in sub_by_field
                 or k in skip
                 or _resolve_dict_output_param(k, decorated) is not None
             ):
@@ -1107,6 +1147,8 @@ def _build_construct_from_decorated(
     # so they dispatch through factory._make_scripted_wrapper — one path
     # for all scripted nodes (neograph-kqd.8).
     for n in ordered:
+        if not isinstance(n, Node):
+            continue  # sub-construct — no shim needed
         if n.mode == "scripted" and n.raw_fn is None:
             field = n.name.replace("-", "_")
             _register_node_scripted(
