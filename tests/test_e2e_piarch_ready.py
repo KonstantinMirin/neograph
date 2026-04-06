@@ -6891,3 +6891,49 @@ class TestDictOutputsValidator:
         upstream = Node("extract", outputs=RawText)
         downstream = Node("score", inputs={"extract": RawText}, outputs=ClassifiedClaims)
         Construct("p", nodes=[upstream, downstream])
+
+
+class TestDecoratorDictOutputs:
+    """@node decorator with dict-form outputs (neograph-1bp.5)."""
+
+    def test_decorator_dict_outputs_e2e(self):
+        """@node(outputs={'a': X, 'b': Y}) scripted → writes per-key fields."""
+        from neograph import node, construct_from_module, compile, run
+        import types
+
+        mod = types.ModuleType("test_dec_dict_out_mod")
+
+        @node(mode="scripted", outputs={"summary": RawText, "tags": Claims})
+        def analyze() -> dict:
+            return {"summary": RawText(text="hello"), "tags": Claims(items=["a"])}
+
+        @node(mode="scripted", outputs=ClassifiedClaims)
+        def classify(analyze_summary: RawText, analyze_tags: Claims) -> ClassifiedClaims:
+            return ClassifiedClaims(classified=[{"claim": analyze_summary.text, "category": "ok"}])
+
+        mod.analyze = analyze
+        mod.classify = classify
+        pipeline = construct_from_module(mod)
+        graph = compile(pipeline)
+        result = run(graph, input={})
+        assert result["classify"] == ClassifiedClaims(classified=[{"claim": "hello", "category": "ok"}])
+
+    def test_decorator_single_output_backward_compat(self):
+        """@node(outputs=X) still works with single type."""
+        from neograph import node
+
+        @node(mode="scripted", outputs=RawText)
+        def extract() -> RawText:
+            return RawText(text="hi")
+
+        assert extract.outputs is RawText
+
+    def test_decorator_return_annotation_inference(self):
+        """Return annotation → outputs= when explicit kwarg not set."""
+        from neograph import node
+
+        @node(mode="scripted")
+        def extract() -> RawText:
+            return RawText(text="hi")
+
+        assert extract.outputs is RawText

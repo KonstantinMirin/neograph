@@ -533,10 +533,22 @@ def node(
             param_res = _classify_di_params(f, sig, frame_depth=2)
 
         # Output inference: explicit kwarg wins; fall back to return annotation.
+        # Uses get_type_hints to resolve stringified annotations from
+        # `from __future__ import annotations`.
         inferred_output = outputs
         if inferred_output is None:
-            ret = sig.return_annotation
-            if ret is not inspect.Signature.empty:
+            try:
+                import typing as _typing
+                extra_ns = _build_annotation_namespace(f, frame_depth=2)
+                all_hints = _typing.get_type_hints(
+                    f, localns=extra_ns, include_extras=False,
+                )
+                ret = all_hints.get("return")
+            except Exception:
+                ret = sig.return_annotation
+                if ret is inspect.Signature.empty:
+                    ret = None
+            if ret is not None:
                 inferred_output = ret
 
         # Inputs inference: explicit kwarg wins. Otherwise build a dict-form
@@ -833,6 +845,24 @@ def construct_from_functions(
     )
 
 
+def _resolve_dict_output_param(
+    pname: str,
+    decorated: dict[str, Node],
+) -> str | None:
+    """If pname is {upstream}_{output_key} for a dict-output upstream, return the upstream name.
+
+    Tries longest-prefix matching against decorated node names with dict outputs.
+    Returns None if no match.
+    """
+    for upstream_name, upstream_node in decorated.items():
+        prefix = f"{upstream_name}_"
+        if pname.startswith(prefix) and isinstance(upstream_node.outputs, dict):
+            output_key = pname[len(prefix):]
+            if output_key in upstream_node.outputs:
+                return upstream_name
+    return None
+
+
 def _build_construct_from_decorated(
     nodes: list[Node],
     construct_name: str,
@@ -910,6 +940,15 @@ def _build_construct_from_decorated(
             if pname in param_res:
                 continue
             if pname not in decorated:
+                # Check if pname matches {upstream}_{output_key} for a dict-output
+                # upstream (neograph-1bp.5). E.g. "analyze_summary" matches upstream
+                # "analyze" with outputs={"summary": ...}.
+                resolved_upstream = _resolve_dict_output_param(pname, decorated)
+                if resolved_upstream is not None:
+                    if resolved_upstream not in seen_deps:
+                        adjacency[field_name].append(resolved_upstream)
+                        seen_deps.add(resolved_upstream)
+                    continue
                 src = _get_node_source(n)
                 src_suffix = f"\n  @node defined at {src}" if src else ""
                 msg = (
@@ -968,10 +1007,13 @@ def _build_construct_from_decorated(
         if not isinstance(n.inputs, dict):
             continue
         skip = fan_out_params.get(field, set())
-        # Keep keys that are either upstream @nodes or fan-out receivers.
+        # Keep keys that are upstream @nodes, fan-out receivers, or
+        # dict-output references ({upstream}_{output_key}, neograph-1bp.5).
         filtered = {
             k: v for k, v in n.inputs.items()
-            if (k in decorated and k != field) or k in skip
+            if (k in decorated and k != field)
+            or k in skip
+            or _resolve_dict_output_param(k, decorated) is not None
         }
         if filtered != n.inputs:
             n.inputs = filtered
