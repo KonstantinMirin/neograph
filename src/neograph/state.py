@@ -166,8 +166,12 @@ def _add_single_output_field(
         )
     elif node.has_modifier(Oracle):
         collector_field = f"neo_oracle_{field_name}"
+        # When oracle_gen_type is set, the collector holds per-variant types
+        # (list[gen_type]), not the post-merge type. The consumer-facing field
+        # keeps node.outputs (the post-merge type).
+        collector_type = node.oracle_gen_type if node.oracle_gen_type is not None else output_type
         fields[collector_field] = (
-            Annotated[list[output_type], _collect_oracle_results],
+            Annotated[list[collector_type], _collect_oracle_results],
             [],
         )
         fields[field_name] = (output_type | None, None)

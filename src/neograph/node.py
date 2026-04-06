@@ -79,6 +79,11 @@ class Node(Modifiable, BaseModel):
     skip_when: Callable | None = None
     skip_value: Callable | None = None
 
+    # Oracle generator output type — when merge_fn transforms types (A → B),
+    # this is A (per-variant type). The LLM produces this type, the merge_fn
+    # converts list[A] → B (= node.outputs). Inferred from merge_fn signature.
+    oracle_gen_type: Any = None
+
     # Modifiers applied via | operator
     modifiers: list[Modifier] = []
 

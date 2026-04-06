@@ -1334,6 +1334,58 @@ class TestMixedNodeAndConstruct:
         assert "got 4 items" in result["flatten"].text  # 1 "merged-3v" + 3 "variant-item"
         assert result["decompose"].items[0] == "merged-3v"
 
+    def test_oracle_generator_uses_merge_input_type_not_node_outputs(self):
+        """Oracle generators should use the merge_fn's input element type as
+        the LLM schema, not node.outputs (which is the post-merge type).
+        neograph-o1m: when merge_fn transforms type A → B, generators must
+        produce A, not B."""
+        from tests.fakes import StructuredFakeWithRaw, configure_fake_llm
+
+        class PerVariant(BaseModel, frozen=True):
+            raw_claims: list[str]
+
+        class PostMerge(BaseModel, frozen=True):
+            grouped: dict[str, list[str]]
+
+        # Track what type the LLM was asked to produce
+        requested_types: list[type] = []
+
+        def tracking_factory(model):
+            requested_types.append(model)
+            # Return a PerVariant regardless — if the framework asks for
+            # PostMerge, it'll fail Pydantic validation (the bug)
+            return PerVariant(raw_claims=["claim-1"])
+
+        configure_fake_llm(lambda tier: StructuredFakeWithRaw(tracking_factory))
+
+        @merge_fn
+        def group_variants(variants: list[PerVariant]) -> PostMerge:
+            all_claims = [c for v in variants for c in v.raw_claims]
+            return PostMerge(grouped={"all": all_claims})
+
+        @node(outputs=PostMerge, model="fast", prompt="decompose",
+              ensemble_n=2, merge_fn="group_variants")
+        def decompose() -> PostMerge: ...
+
+        import types as t
+        mod = t.ModuleType("test_oracle_type_mod")
+        mod.decompose = decompose
+        pipeline = construct_from_module(mod)
+        graph = compile(pipeline)
+        result = run(graph, input={"node_id": "o1m"})
+
+        # The critical assertion: generators should have been asked to produce
+        # PerVariant (from merge_fn signature), NOT PostMerge (from node.outputs)
+        assert len(requested_types) == 2, f"Expected 2 generator calls, got {len(requested_types)}"
+        for rt in requested_types:
+            assert rt is PerVariant, (
+                f"Generator was asked to produce {rt.__name__}, "
+                f"expected PerVariant (merge_fn input element type)"
+            )
+        # Merge should have run and produced PostMerge
+        assert isinstance(result["decompose"], PostMerge)
+        assert result["decompose"].grouped == {"all": ["claim-1", "claim-1"]}
+
     def test_oracle_merge_fires_when_sub_construct_is_first_failure_mode(self):
         """Variant: sub-construct comes BEFORE the Oracle node in the list.
         Tests the second failure mode from the consumer report."""

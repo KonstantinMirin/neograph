@@ -137,9 +137,17 @@ def _resolve_primary_output(node: Node) -> tuple[Any, str | None]:
     For dict-form outputs, the LLM produces the primary type (first key).
     Secondary outputs (e.g. tool_log) are framework-collected.
 
+    When ``node.oracle_gen_type`` is set (Oracle with type-transforming merge_fn),
+    the generator type overrides ``node.outputs`` — the LLM should produce the
+    per-variant type, not the post-merge type.
+
     Returns (output_model, primary_key) where primary_key is None for
     single-type outputs.
     """
+    # Oracle generator type override: merge_fn transforms A → B, generators produce A.
+    if node.oracle_gen_type is not None:
+        return node.oracle_gen_type, None
+
     if isinstance(node.outputs, dict):
         primary_key = next(iter(node.outputs))
         return node.outputs[primary_key], primary_key
