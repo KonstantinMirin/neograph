@@ -25,6 +25,7 @@ Demonstrates:
   - construct_from_functions with input=/output= for sub-construct boundary
   - Port param resolution (claim param -> neo_subgraph_input)
   - .map() fan-out on a sub-construct
+  - context= for verbatim state injection (pre-formatted catalogs)
 
 Run:
     python examples/13_gather_produce_subconstruct.py
@@ -289,7 +290,45 @@ if __name__ == "__main__":
     tool_log = demo_result["demo_explore_tool_log"]
     print("\n-- Typed tool results --")
     print(f"  tool_log[0].tool_name: {tool_log[0].tool_name}")
-    print(f"  tool_log[0].result (rendered JSON): {tool_log[0].result[:60]}...")
+    print(f"  tool_log[0].result (rendered BAML): {tool_log[0].result[:60]}...")
     print(f"  tool_log[0].typed_result: {tool_log[0].typed_result}")
     print(f"  typed_result.source_file: {tool_log[0].typed_result.source_file}")
     print(f"  typed_result.relevance: {tool_log[0].typed_result.relevance}")
+
+    # -- Context injection demo -------------------------------------------------
+    # context= injects verbatim state fields alongside typed input.
+    # The catalog is pre-formatted for LLM consumption — not BAML-rendered.
+
+    class GraphCatalog(BaseModel, frozen=True):
+        """Pre-computed graph catalog for LLM context."""
+        content: str
+
+    ctx_mod = types.ModuleType("context_demo")
+
+    @node(outputs=GraphCatalog)
+    def build_catalog() -> GraphCatalog:
+        return GraphCatalog(content=(
+            "=== Graph Catalog (BFS order) ===\n"
+            "UC-001: User Authentication [impl: auth.py]\n"
+            "UC-002: Data Encryption [impl: crypto.py]\n"
+            "BR-001: Password min 12 chars [traces: UC-001]\n"
+        ))
+
+    @node(
+        mode="agent",
+        outputs={"result": ExplorationResult, "tool_log": list[ToolInteraction]},
+        model="research", prompt="verify/explore",
+        tools=[Tool("search_evidence", budget=1)],
+        context=["build_catalog"],  # <-- verbatim state injection
+    )
+    def ctx_explore(build_catalog: GraphCatalog) -> ExplorationResult: ...
+
+    ctx_mod.build_catalog = build_catalog
+    ctx_mod.ctx_explore = ctx_explore
+    ctx_graph = compile(construct_from_module(ctx_mod))
+    ctx_result = run(ctx_graph, input={"node_id": "ctx-demo"})
+
+    print("\n-- Context injection --")
+    print("  context=['build_catalog'] passes the catalog verbatim to the prompt compiler.")
+    print("  The prompt compiler receives: context={'build_catalog': GraphCatalog(content=...)}")
+    print(f"  explore result: {ctx_result['ctx_explore_result'].summary}")
