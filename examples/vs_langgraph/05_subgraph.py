@@ -121,13 +121,13 @@ def run_neograph():
         "enrich",
         input=Claims,
         output=ScoredClaims,
-        nodes=[Node(name="score", mode="produce", inputs=Claims, outputs=ScoredClaims, model="fast", prompt="score")],
+        nodes=[Node(name="score", mode="think", inputs=Claims, outputs=ScoredClaims, model="fast", prompt="score")],
     )
 
     pipeline = Construct("analysis", nodes=[
-        Node(name="decompose", mode="produce", outputs=Claims, model="fast", prompt="decompose"),
+        Node(name="decompose", mode="think", outputs=Claims, model="fast", prompt="decompose"),
         enrich,  # ← sub-pipeline, isolated state, no wrapper function
-        Node(name="report", mode="produce", inputs=ScoredClaims, outputs=Report, model="fast", prompt="report"),
+        Node(name="report", mode="think", inputs=ScoredClaims, outputs=Report, model="fast", prompt="report"),
     ])
 
     graph = compile(pipeline)

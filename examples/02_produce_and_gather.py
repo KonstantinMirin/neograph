@@ -1,7 +1,7 @@
 """Example 2: Produce + Gather — LLM-powered pipeline with tool use.
 
 Scenario: Analyze a software requirement. First, an LLM decomposes the
-requirement into claims (produce mode — single structured call). Then,
+requirement into claims (think mode — single structured call). Then,
 a gather node uses a search tool to research each claim, constrained
 by a per-tool call budget. The tool budget prevents runaway API costs.
 
@@ -116,19 +116,19 @@ configure_llm(
 
 @node(outputs=Claims, model="fast", prompt="req/decompose")
 def decompose() -> Claims:
-    # body unused for mode='produce' — LLM handles execution via prompt=
+    # body unused for mode='think' — LLM handles execution via prompt=
     ...
 
 
 @node(
-    mode="gather",
+    mode="agent",
     outputs=ResearchResult,
     model="reason",
     prompt="req/research",
     tools=[Tool(name="search_codebase", budget=2)],  # max 2 searches
 )
 def research(decompose: Claims) -> ResearchResult:
-    # body unused for mode='gather' — LLM handles execution via prompt=
+    # body unused for mode='agent' — LLM handles execution via prompt=
     ...
 
 

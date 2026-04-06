@@ -6,7 +6,7 @@ LangGraph: ~40 lines (router function, conditional edges, tool loop cycle)
 NeoGraph:  ~8 lines (one gather Node with tools + budget)
 
 The ReAct pattern (call LLM → if tool_calls → execute → call LLM again)
-is identical in every LangGraph agent. NeoGraph's gather mode handles
+is identical in every LangGraph agent. NeoGraph's agent mode handles
 the entire loop, including per-tool budget enforcement.
 
 Run (uses Gemini Flash via OpenRouter — ~$0.002):
@@ -119,7 +119,7 @@ def run_neograph():
     # One node. Gather mode = ReAct loop. Budget = max 3 searches.
     research = Node(
         name="research",
-        mode="gather",
+        mode="agent",
         outputs=ResearchResult,
         model="fast",
         prompt="research",

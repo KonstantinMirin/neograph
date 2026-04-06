@@ -116,7 +116,7 @@ def run_neograph():
     # Oracle: 3 parallel generators + LLM merge. One line.
     generate = Node(
         name="jokes",
-        mode="produce",
+        mode="think",
         outputs=Jokes,
         model="fast",
         prompt="generate",

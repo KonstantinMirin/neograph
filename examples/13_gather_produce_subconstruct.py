@@ -1,9 +1,9 @@
 """Example 13: Gather + Produce Sub-Construct -- agent explores then judges.
 
 Scenario: A claim verification pipeline. For each claim:
-  1. Explore (gather mode): uses a search_evidence tool to find supporting
+  1. Explore (agent mode): uses a search_evidence tool to find supporting
      evidence, produces an ExplorationResult + tool interaction log
-  2. Score (produce mode): receives the exploration result AND the tool log
+  2. Score (think mode): receives the exploration result AND the tool log
      as context, judges the claim in a fresh LLM conversation
 
 The two-phase pattern is critical for quality: the explore phase does noisy
@@ -16,8 +16,8 @@ explore node's `claim: VerifyClaim` param is automatically wired to the
 sub-construct's input port. Then .map() fans out over a collection.
 
 Demonstrates:
-  - @node gather mode with dict-form outputs (result + tool_log)
-  - @node produce mode consuming dict-output references (explore_result, explore_tool_log)
+  - @node agent mode with dict-form outputs (result + tool_log)
+  - @node think mode consuming dict-output references (explore_result, explore_tool_log)
   - construct_from_functions with input=/output= for sub-construct boundary
   - Port param resolution (claim param -> neo_subgraph_input)
   - .map() fan-out on a sub-construct
@@ -112,7 +112,7 @@ class FakeExploreLLM:
 
 
 class FakeScoreLLM:
-    """Simulates a produce-mode LLM that scores a claim."""
+    """Simulates a think-mode LLM that scores a claim."""
 
     def with_structured_output(self, model, **kwargs):
         self._model = model
@@ -154,11 +154,11 @@ configure_llm(
 
 
 # -- Pipeline nodes -----------------------------------------------------------
-# Phase 1: Explore with tools (gather mode, dict outputs: result + tool_log)
-# Phase 2: Score in fresh conversation (produce mode, consumes result + tool_log)
+# Phase 1: Explore with tools (agent mode, dict outputs: result + tool_log)
+# Phase 2: Score in fresh conversation (think mode, consumes result + tool_log)
 
 @node(
-    mode="gather",
+    mode="agent",
     outputs={"result": ExplorationResult, "tool_log": list[ToolInteraction]},
     model="research",
     prompt="verify/explore",
@@ -170,7 +170,7 @@ def explore(claim: VerifyClaim) -> ExplorationResult:
 
 
 @node(
-    mode="produce",
+    mode="think",
     outputs=ClaimVerdict,
     model="judge",
     prompt="verify/score",

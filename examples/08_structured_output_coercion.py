@@ -101,7 +101,7 @@ configure_llm(
 # Strategy 1: structured (default) — model supports with_structured_output
 @node(outputs=Claims, model="fast", prompt="extract")
 def structured() -> Claims:
-    # body unused for mode='produce' — LLM handles execution via prompt=
+    # body unused for mode='think' — LLM handles execution via prompt=
     # No output_strategy in llm_config — defaults to "structured"
     ...
 
@@ -115,7 +115,7 @@ def structured() -> Claims:
     name="json-mode",
 )
 def json_mode() -> Claims:
-    # body unused for mode='produce' — LLM handles execution via prompt=
+    # body unused for mode='think' — LLM handles execution via prompt=
     ...
 
 
@@ -128,7 +128,7 @@ def json_mode() -> Claims:
     name="text-mode",
 )
 def text_mode() -> Claims:
-    # body unused for mode='produce' — LLM handles execution via prompt=
+    # body unused for mode='think' — LLM handles execution via prompt=
     ...
 
 

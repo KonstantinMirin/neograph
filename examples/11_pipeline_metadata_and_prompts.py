@@ -159,7 +159,7 @@ register_scripted("build_report", build_report)
 
 decompose = Node(
     name="decompose",
-    mode="produce",
+    mode="think",
     outputs=Claims,
     model="fast",
     prompt="decompose",
