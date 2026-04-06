@@ -16,21 +16,7 @@ from neograph import (
 )
 from neograph.renderers import render_input
 from tests.fakes import StructuredFake, TextFake, configure_fake_llm
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# SHARED SCHEMAS
-# ═══════════════════════════════════════════════════════════════════════════
-
-class RawText(BaseModel, frozen=True):
-    text: str
-
-class Claims(BaseModel, frozen=True):
-    items: list[str]
-
-class MatchResult(BaseModel, frozen=True):
-    cluster_label: str
-    matched: list[str]
+from tests.schemas import RawText, Claims, MatchResult
 
 
 class TestXmlRenderer:

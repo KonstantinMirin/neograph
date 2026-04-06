@@ -7,7 +7,6 @@ from __future__ import annotations
 from typing import Annotated, Any
 
 import pytest
-from pydantic import BaseModel
 
 from neograph import (
     Construct, ConstructError, Node, Each, Oracle, Operator, Tool,
@@ -16,52 +15,17 @@ from neograph import (
 )
 from neograph.factory import register_scripted, register_tool_factory
 from tests.fakes import FakeTool, ReActFake, StructuredFake, configure_fake_llm
+from tests.schemas import RawText, Claims, ClassifiedClaims, ClusterGroup, Clusters, MatchResult, MergedResult, ValidationResult, _producer, _consumer
 
 
 # ═════════════════════════════════���═════════════════════════════════════════
 # SHARED SCHEMAS
 # ══════════════════��════════════════════════════════════════════════════════
 
-class RawText(BaseModel, frozen=True):
-    text: str
-
-class Claims(BaseModel, frozen=True):
-    items: list[str]
-
-class ClassifiedClaims(BaseModel, frozen=True):
-    classified: list[dict[str, str]]
-
-class ClusterGroup(BaseModel, frozen=True):
-    label: str
-    claim_ids: list[str]
-
-class Clusters(BaseModel, frozen=True):
-    groups: list[ClusterGroup]
-
-class MatchResult(BaseModel, frozen=True):
-    cluster_label: str
-    matched: list[str]
-
-class MergedResult(BaseModel, frozen=True):
-    final_text: str
-
-class ValidationResult(BaseModel, frozen=True):
-    passed: bool
-    issues: list[str]
-
 
 # ═══════════════════════════════════════════════════════════════════════════
 # HELPERS
 # ══���═══════════════���════════════════════════════════════════════════════════
-
-def _producer(name: str, out: type) -> Node:
-    return Node.scripted(name, fn="f", outputs=out)
-
-
-def _consumer(name: str, in_: type, out: type) -> Node:
-    return Node.scripted(name, fn="f", inputs=in_, outputs=out)
-
-
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -162,8 +126,6 @@ class TestOracle:
 # ═══════════════════════════════════════════════════════════════════════════
 
 
-
-
 # ═══════════════════════════════════════════════════════════════════════════
 # TEST 5: Each — dynamic fan-out over collection
 #
@@ -222,8 +184,6 @@ class TestEach:
 # This proves: .map() is pure sugar, lambda introspection resolves attribute
 # chains to dotted paths, the resulting graph runs identically to | Each(...).
 # ═══════════════════════════════════════════════════════════════════════════
-
-
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -359,8 +319,6 @@ class TestNodeMap:
 # This proves: Operator modifier wires interrupt() correctly,
 # graph pauses and resumes.
 # ═══════════════════════════════════════════════════════════════════════════
-
-
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -545,8 +503,6 @@ class TestModifierAsFirstNode:
         graph.add_edge(prev, END)
         compiled = graph.compile()
         # Compilation succeeded — Each wired from START without crash
-
-
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -898,8 +854,6 @@ class TestDeepCompositions:
 # ═══════════════════════════════════════════════════════════════════════════
 # REMAINING COVERAGE GAPS — paths not yet exercised
 # ═══════════════════════════════════════════════════════════════════════════
-
-
 
 
 # ═══════════════════════════════════════════════════════════════════════════

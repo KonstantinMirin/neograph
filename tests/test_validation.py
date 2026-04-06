@@ -10,54 +10,14 @@ from typing import Annotated, Any
 import pytest
 from pydantic import BaseModel
 
+from tests.schemas import (
+    RawText, Claims, ClassifiedClaims, ClusterGroup, Clusters,
+    MatchResult, MergedResult, ValidationResult, _producer, _consumer,
+)
 from neograph import (
     Construct, ConstructError, Node, Each, Oracle, Operator,
     compile, run,
 )
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# SHARED SCHEMAS
-# ═══════════════════════════════════════════════════════════════════════════
-
-class RawText(BaseModel, frozen=True):
-    text: str
-
-class Claims(BaseModel, frozen=True):
-    items: list[str]
-
-class ClassifiedClaims(BaseModel, frozen=True):
-    classified: list[dict[str, str]]
-
-class ClusterGroup(BaseModel, frozen=True):
-    label: str
-    claim_ids: list[str]
-
-class Clusters(BaseModel, frozen=True):
-    groups: list[ClusterGroup]
-
-class MatchResult(BaseModel, frozen=True):
-    cluster_label: str
-    matched: list[str]
-
-class MergedResult(BaseModel, frozen=True):
-    final_text: str
-
-class ValidationResult(BaseModel, frozen=True):
-    passed: bool
-    issues: list[str]
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# HELPERS
-# ═══════════════════════════════════════════════════════════════════════════
-
-def _producer(name: str, out: type) -> Node:
-    return Node.scripted(name, fn="f", outputs=out)
-
-
-def _consumer(name: str, in_: type, out: type) -> Node:
-    return Node.scripted(name, fn="f", inputs=in_, outputs=out)
 
 
 # ═══════════════════════════════════════════════════════════════════════════

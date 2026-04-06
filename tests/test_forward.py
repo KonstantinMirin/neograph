@@ -14,28 +14,7 @@ from pydantic import BaseModel
 from neograph import Construct, Each, ForwardConstruct, Node, compile, run
 from neograph.factory import register_scripted
 from tests.fakes import StructuredFake, configure_fake_llm
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# SHARED SCHEMAS
-# ═══════════════════════════════════════════════════════════════════════════
-
-class RawText(BaseModel, frozen=True):
-    text: str
-
-class Claims(BaseModel, frozen=True):
-    items: list[str]
-
-class ClassifiedClaims(BaseModel, frozen=True):
-    classified: list[dict[str, str]]
-
-# ═══════════════════════════════════════════════════════════════════════════
-# Test schemas
-# ═══════════════════════════════════════════════════════════════════════════
-
-
-class RawText(BaseModel, frozen=True):
-    text: str
+from tests.schemas import RawText, Claims, ClassifiedClaims, Clusters, MatchResult
 
 
 class Confidence(BaseModel, frozen=True):
@@ -57,7 +36,6 @@ class FinalResult(BaseModel, frozen=True):
 # ═══════════════════════════════════════════════════════════════════════════
 # Part 1: _Proxy attribute access + comparison dunders
 # ═══════════════════════════════════════════════════════════════════════════
-
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -281,7 +259,6 @@ class TestForwardConstructCompile:
         assert result_decl["fc_equiv_b"] == result_fwd["fc_equiv_b"]
         assert isinstance(result_fwd["fc_equiv_a"], RawText)
         assert isinstance(result_fwd["fc_equiv_b"], Claims)
-
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -622,14 +599,6 @@ class TestProxyAttributeChains:
 # ═══════════════════════════════════════════════════════════════════════════
 # Part 7: For-loop support (Proxy.__iter__ → Each fan-out)
 # ═══════════════════════════════════════════════════════════════════════════
-
-
-class Clusters(BaseModel, frozen=True):
-    groups: list[str]
-
-
-class MatchResult(BaseModel, frozen=True):
-    label: str
 
 
 class Report(BaseModel, frozen=True):

@@ -17,38 +17,7 @@ from neograph import (
 )
 from neograph.factory import register_scripted
 from tests.fakes import StructuredFake, configure_fake_llm
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# SHARED SCHEMAS
-# ═══════════════════════════════════════════════════════════════════════════
-
-class RawText(BaseModel, frozen=True):
-    text: str
-
-class Claims(BaseModel, frozen=True):
-    items: list[str]
-
-class ClassifiedClaims(BaseModel, frozen=True):
-    classified: list[dict[str, str]]
-
-class ClusterGroup(BaseModel, frozen=True):
-    label: str
-    claim_ids: list[str]
-
-class Clusters(BaseModel, frozen=True):
-    groups: list[ClusterGroup]
-
-class MatchResult(BaseModel, frozen=True):
-    cluster_label: str
-    matched: list[str]
-
-class MergedResult(BaseModel, frozen=True):
-    final_text: str
-
-class ValidationResult(BaseModel, frozen=True):
-    passed: bool
-    issues: list[str]
+from tests.schemas import RawText, Claims, ClassifiedClaims, ClusterGroup, Clusters, MatchResult, MergedResult, ValidationResult
 
 
 class TestToolDecorator:
@@ -123,8 +92,6 @@ class TestToolDecorator:
         assert isinstance(noop, Tool)
         assert noop.name == "noop"
         assert noop.budget == 0  # unlimited by default
-
-
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -587,8 +554,6 @@ class TestNodeDecoratorFanout:
 # ═══════════════════════════════════════════════════════════════════════════
 
 
-
-
 # ═══════════════════════════════════════════════════════════════════════════
 # @node decorator: Oracle ensemble kwargs (ensemble_n, merge_fn, merge_prompt)
 #
@@ -706,8 +671,6 @@ class TestNodeDecoratorOracle:
 # observability. No parameter-name topology — the function body manages
 # its own state access.
 # ═══════════════════════════════════════════════════════════════════════════
-
-
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -849,8 +812,6 @@ class TestNodeDecoratorRawMode:
 # The interrupt_when= kwarg on @node composes the node with Operator(when=...).
 # String form uses a pre-registered condition name; callable form auto-registers.
 # ═══════════════════════════════════════════════════════════════════════════
-
-
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1021,8 +982,6 @@ class TestNodeDecoratorOperator:
 #   2. Annotated[T, FromConfig] — value from config["configurable"][param]
 #   3. default value  — compile-time constant, no upstream needed
 # ═══════════════════════════════════════════════════════════════════════════
-
-
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1342,12 +1301,9 @@ class TestNodeDecoratorCrossModule:
 # ═══════════════════════════════════════════════════════════════════════════
 
 
-
-
 # ═══════════════════════════════════════════════════════════════════════════
 # ForwardConstruct — Task 1: base class + node discovery
 # ═══════════════════════════════════════════════════════════════════════════
-
 
 
 class TestConstructFromFunctions:
@@ -1780,8 +1736,6 @@ class TestOracleMergeFnDI:
 # ═══════════════════════════════════════════════════════════════════════════
 
 
-
-
 # ═══════════════════════════════════════════════════════════════════════════
 # TestNodeDecoratorDictInputs (neograph-kqd.4)
 #
@@ -1938,9 +1892,6 @@ class TestNodeDecoratorDictInputs:
 # decorator dict-form inputs (kqd.4) + raw_adapter unwrap (kqd.5) wire
 # together into a complete end-to-end feature.
 # ═══════════════════════════════════════════════════════════════════════════
-
-
-
 
 
 # ═══════════════════════════════════════════════════════════════════════════
