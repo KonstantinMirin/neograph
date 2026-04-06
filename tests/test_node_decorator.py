@@ -67,7 +67,7 @@ class TestToolDecorator:
 
         researcher = Node(
             name="research",
-            mode="gather",
+            mode="agent",
             outputs=Claims,
             model="fast",
             prompt="test",
@@ -344,7 +344,7 @@ class TestNodeDecoratorModeInference:
         @node(outputs=Claims, prompt="rw/decompose", model="reason")
         def decompose(topic: RawText) -> Claims: ...
 
-        assert decompose.mode == "produce"
+        assert decompose.mode == "think"
 
     def test_decoration_raises_when_produce_mode_missing_prompt(self):
         """@node(mode='produce', outputs=X, model='reason') with no prompt raises at decoration time."""
@@ -352,7 +352,7 @@ class TestNodeDecoratorModeInference:
 
         with pytest.raises(ConstructError, match="requires prompt="):
 
-            @node(mode="produce", outputs=Claims, model="reason")
+            @node(mode="think", outputs=Claims, model="reason")
             def decompose(topic: RawText) -> Claims: ...
 
     def test_decoration_raises_when_gather_mode_missing_model(self):
@@ -361,7 +361,7 @@ class TestNodeDecoratorModeInference:
 
         with pytest.raises(ConstructError, match="requires model="):
 
-            @node(mode="gather", outputs=Claims, prompt="rw/decompose")
+            @node(mode="agent", outputs=Claims, prompt="rw/decompose")
             def decompose(topic: RawText) -> Claims: ...
 
     def test_warning_emitted_when_produce_mode_has_nontrivial_body(self):
@@ -372,7 +372,7 @@ class TestNodeDecoratorModeInference:
 
         with pytest.warns(UserWarning, match="body.*not executed"):
 
-            @node(mode="produce", outputs=Claims, prompt="rw/decompose", model="reason")
+            @node(mode="think", outputs=Claims, prompt="rw/decompose", model="reason")
             def decompose(topic: RawText) -> Claims:
                 return Claims(items=topic.text.split("."))
 
@@ -385,7 +385,7 @@ class TestNodeDecoratorModeInference:
         with _warnings.catch_warnings():
             _warnings.simplefilter("error")
 
-            @node(mode="produce", outputs=Claims, prompt="rw/decompose", model="reason")
+            @node(mode="think", outputs=Claims, prompt="rw/decompose", model="reason")
             def decompose(topic: RawText) -> Claims: ...
 
 
@@ -594,7 +594,7 @@ class TestNodeDecoratorOracle:
 
         mod = self._fresh_module("test_oracle_merge_fn")
 
-        @node(mode="produce", outputs=Claims, prompt="rw/decompose", model="reason",
+        @node(mode="think", outputs=Claims, prompt="rw/decompose", model="reason",
               ensemble_n=3, merge_fn="combine_dec")
         def decompose(topic: RawText) -> Claims: ...
 
@@ -612,7 +612,7 @@ class TestNodeDecoratorOracle:
         attached with merge_prompt for LLM judge."""
         from neograph import node
 
-        @node(mode="produce", outputs=Claims, prompt="rw/decompose", model="reason",
+        @node(mode="think", outputs=Claims, prompt="rw/decompose", model="reason",
               ensemble_n=2, merge_prompt="rw/decompose-merge")
         def decompose(topic: RawText) -> Claims: ...
 
@@ -626,7 +626,7 @@ class TestNodeDecoratorOracle:
         """merge_fn without ensemble_n defaults to n=3."""
         from neograph import node
 
-        @node(mode="produce", outputs=Claims, prompt="rw/decompose", model="reason",
+        @node(mode="think", outputs=Claims, prompt="rw/decompose", model="reason",
               merge_fn="combine")
         def decompose(topic: RawText) -> Claims: ...
 
@@ -640,7 +640,7 @@ class TestNodeDecoratorOracle:
         from neograph import node
 
         with pytest.raises(ConstructError, match="neither merge_fn nor merge_prompt"):
-            @node(mode="produce", outputs=Claims, prompt="rw/decompose", model="reason",
+            @node(mode="think", outputs=Claims, prompt="rw/decompose", model="reason",
                   ensemble_n=3)
             def decompose(topic: RawText) -> Claims: ...
 
@@ -649,7 +649,7 @@ class TestNodeDecoratorOracle:
         from neograph import node
 
         with pytest.raises(ConstructError, match="both merge_fn and merge_prompt"):
-            @node(mode="produce", outputs=Claims, prompt="rw/decompose", model="reason",
+            @node(mode="think", outputs=Claims, prompt="rw/decompose", model="reason",
                   ensemble_n=3, merge_fn="combine", merge_prompt="rw/merge")
             def decompose(topic: RawText) -> Claims: ...
 
@@ -658,7 +658,7 @@ class TestNodeDecoratorOracle:
         from neograph import node
 
         with pytest.raises(ConstructError, match="ensemble_n must be >= 2"):
-            @node(mode="produce", outputs=Claims, prompt="rw/decompose", model="reason",
+            @node(mode="think", outputs=Claims, prompt="rw/decompose", model="reason",
                   ensemble_n=1, merge_fn="combine")
             def decompose(topic: RawText) -> Claims: ...
 
@@ -1439,8 +1439,8 @@ class TestConstructLlmConfigDefault:
         configure_fake_llm(lambda tier: StructuredFake(lambda m: m(items=["x"])))
 
         # Build via declarative API — Construct carries the default
-        a = Node("a", mode="produce", outputs=Claims, model="fast", prompt="p")
-        b = Node("b", mode="produce", inputs=Claims, outputs=Claims, model="fast", prompt="p")
+        a = Node("a", mode="think", outputs=Claims, model="fast", prompt="p")
+        b = Node("b", mode="think", inputs=Claims, outputs=Claims, model="fast", prompt="p")
 
         pipeline = Construct(
             "with-default",
@@ -1462,7 +1462,7 @@ class TestConstructLlmConfigDefault:
         """Per-node llm_config merges with Construct default; node wins on conflicts."""
         from neograph import Construct, Node
 
-        a = Node("a", mode="produce", outputs=Claims, model="fast", prompt="p",
+        a = Node("a", mode="think", outputs=Claims, model="fast", prompt="p",
                  llm_config={"temperature": 0.9, "max_tokens": 1000})
 
         pipeline = Construct(
@@ -1502,7 +1502,7 @@ class TestConstructLlmConfigDefault:
         """When Construct has no llm_config, nodes keep their original config unchanged."""
         from neograph import Construct, Node
 
-        a = Node("a", mode="produce", outputs=Claims, model="fast", prompt="p",
+        a = Node("a", mode="think", outputs=Claims, model="fast", prompt="p",
                  llm_config={"temperature": 0.7})
 
         pipeline = Construct("no-default", nodes=[a])
@@ -1914,7 +1914,7 @@ class TestConditionalProduce:
 
         @node(
             outputs=MergedResult,
-            mode="produce",
+            mode="think",
             model="fast",
             prompt="p",
             skip_when=lambda inp: len(inp.items) == 1,
@@ -1943,7 +1943,7 @@ class TestConditionalProduce:
 
         @node(
             outputs=MergedResult,
-            mode="produce",
+            mode="think",
             model="fast",
             prompt="p",
             skip_when=lambda inp: len(inp.items) == 1,
@@ -1961,7 +1961,7 @@ class TestConditionalProduce:
         pred = lambda x: True
         val = lambda x: x
         n = Node(
-            "t", mode="produce", inputs=Claims, outputs=MergedResult,
+            "t", mode="think", inputs=Claims, outputs=MergedResult,
             model="fast", prompt="p",
             skip_when=pred, skip_value=val,
         )
@@ -1970,7 +1970,7 @@ class TestConditionalProduce:
 
     def test_skip_fields_none_when_not_set(self):
         """Nodes without skip_when have it as None (backward compat)."""
-        n = Node("t", mode="produce", inputs=Claims, outputs=MergedResult,
+        n = Node("t", mode="think", inputs=Claims, outputs=MergedResult,
                  model="fast", prompt="p")
         assert n.skip_when is None
         assert n.skip_value is None
@@ -1980,7 +1980,7 @@ class TestConditionalProduce:
         from neograph import node
 
         @node(
-            outputs=MergedResult, mode="produce", model="fast", prompt="p",
+            outputs=MergedResult, mode="think", model="fast", prompt="p",
             skip_when=lambda x: True,
             skip_value=lambda x: MergedResult(final_text="skipped"),
         )

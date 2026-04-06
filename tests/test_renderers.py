@@ -642,7 +642,7 @@ class TestJsonModeOutputSchema:
 
         n = Node(
             name="extract",
-            mode="produce",
+            mode="think",
             outputs=Claims,
             model="fast",
             prompt="test",
@@ -673,7 +673,7 @@ class TestJsonModeOutputSchema:
 
         n = Node(
             name="extract",
-            mode="produce",
+            mode="think",
             outputs=Claims,
             model="fast",
             prompt="test",
@@ -701,7 +701,7 @@ class TestJsonModeOutputSchema:
 
         n = Node(
             name="extract",
-            mode="produce",
+            mode="think",
             outputs=Claims,
             model="fast",
             prompt="test",
@@ -726,7 +726,7 @@ class TestJsonModeOutputSchema:
 
         n = Node(
             name="extract",
-            mode="produce",
+            mode="think",
             outputs=Claims,
             model="fast",
             prompt="test",
@@ -760,7 +760,7 @@ class TestRenderPromptInspector:
             ],
         )
 
-        n = Node(name="test-node", mode="produce", outputs=Claims, model="fast", prompt="my/template")
+        n = Node(name="test-node", mode="think", outputs=Claims, model="fast", prompt="my/template")
         result = render_prompt(n, "hello world")
 
         assert "[system]" in result
@@ -790,7 +790,7 @@ class TestRenderPromptInspector:
 
         n = Node(
             name="test-rendered",
-            mode="produce",
+            mode="think",
             outputs=Claims,
             model="fast",
             prompt="test",
@@ -822,7 +822,7 @@ class TestRenderPromptInspector:
 
         n = Node(
             name="json-node",
-            mode="produce",
+            mode="think",
             outputs=Claims,
             model="fast",
             prompt="test",
@@ -862,7 +862,7 @@ class TestRendererThreeSurfaces:
 
         child = Node(
             "render-decl",
-            mode="produce",
+            mode="think",
             outputs=Claims,
             model="fast",
             prompt="test",

@@ -3,7 +3,7 @@
     # Declarative: framework generates the LangGraph node function
     classify = Node(
         "classify",
-        mode="produce",
+        mode="think",
         inputs=DecompositionResult,
         outputs=ClassificationResult,
         model="reason",
@@ -33,15 +33,15 @@ class Node(Modifiable, BaseModel):
     """A typed processing block. The unit of graph specification.
 
     mode= determines execution mechanics:
-        "produce"   — single LLM call, structured JSON output, no tools
-        "gather"    — ReAct tool loop (exploration, read-only)
-        "execute"   — ReAct tool loop (mutations, side effects)
+        "think"     — single LLM call, structured JSON output, no tools
+        "agent"     — ReAct tool loop (exploration, read-only)
+        "act"       — ReAct tool loop (mutations, side effects)
 
     Node.scripted() creates a deterministic node (no LLM).
     """
 
     name: str
-    mode: Literal["produce", "gather", "execute", "scripted"] = "produce"
+    mode: Literal["think", "agent", "act", "scripted"] = "think"
 
     # Typed contracts — specific Pydantic models, not BaseModel
     inputs: Any = None   # type[BaseModel] | dict[str, type] | None

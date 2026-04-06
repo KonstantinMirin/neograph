@@ -212,7 +212,7 @@ class TestForwardConstructCompile:
 
         class ProducePipeline(ForwardConstruct):
             prep = Node.scripted("fc-prep", fn="fc_prep", outputs=RawText)
-            classify = Node("fc-classify", mode="produce", outputs=Claims, prompt="rw/classify", model="fast")
+            classify = Node("fc-classify", mode="think", outputs=Claims, prompt="rw/classify", model="fast")
 
             def forward(self, topic):
                 raw = self.prep(topic)

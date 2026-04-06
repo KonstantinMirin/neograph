@@ -782,7 +782,7 @@ class TestDeepCompositions:
             nodes=[
                 Node(
                     name="search",
-                    mode="gather",
+                    mode="agent",
                     inputs=Claims,
                     outputs=RawText,
                     model="fast",

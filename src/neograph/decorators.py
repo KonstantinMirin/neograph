@@ -351,7 +351,7 @@ def _get_node_source(n: Node) -> str | None:
 def node(
     fn: Callable | None = None,
     *,
-    mode: Literal["produce", "gather", "execute", "scripted", "raw"] | None = None,
+    mode: Literal["think", "agent", "act", "scripted", "raw"] | None = None,
     inputs: Any = None,
     outputs: Any = None,
     model: str | None = None,
@@ -434,14 +434,14 @@ def node(
         effective_mode = mode
         if effective_mode is None:
             if prompt is not None or model is not None:
-                effective_mode = "produce"
+                effective_mode = "think"
             else:
                 effective_mode = "scripted"
 
         node_label = (name or f.__name__).replace("_", "-")
 
         # -- Decoration-time validation for LLM modes -------------------------
-        if effective_mode in ("produce", "gather", "execute"):
+        if effective_mode in ("think", "agent", "act"):
             if prompt is None:
                 raise ConstructError(
                     f"@node '{node_label}' uses mode='{effective_mode}' "

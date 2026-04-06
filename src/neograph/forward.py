@@ -2,7 +2,7 @@
 
     class MyPipeline(ForwardConstruct):
         extract = Node.scripted("extract", fn="extract_fn", outputs=RawText)
-        classify = Node(mode="produce", outputs=Claims, prompt="rw/classify", model="fast")
+        classify = Node(mode="think", outputs=Claims, prompt="rw/classify", model="fast")
 
         def forward(self, topic):
             raw = self.extract(topic)

@@ -221,9 +221,9 @@ def make_node_fn(node: Node) -> Callable:
         return _make_scripted_wrapper(node)
 
     # LLM nodes — dispatch by mode
-    if node.mode == "produce":
+    if node.mode == "think":
         return _make_produce_fn(node)
-    if node.mode in ("gather", "execute"):
+    if node.mode in ("agent", "act"):
         return _make_tool_fn(node)
 
 
@@ -290,7 +290,7 @@ def _make_produce_fn(node: Node) -> Callable:
     def produce_node(state: BaseModel, config: RunnableConfig) -> dict[str, Any]:
         from neograph._llm import invoke_structured
 
-        node_log = log.bind(node=node.name, mode="produce", model=node.model, prompt=node.prompt)
+        node_log = log.bind(node=node.name, mode="think", model=node.model, prompt=node.prompt)
         node_log.info("node_start", input_type=_type_name(node.inputs), output_type=_type_name(node.outputs))
 
         t0 = time.monotonic()

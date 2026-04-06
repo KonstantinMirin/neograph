@@ -13,7 +13,7 @@ Two ways to define a tool:
         return _do_search(query)
 
     # In both cases, pass to a Node via tools=[...]
-    research = Node("research", mode="gather", tools=[search_code], ...)
+    research = Node("research", mode="agent", tools=[search_code], ...)
 """
 
 from __future__ import annotations
@@ -118,7 +118,7 @@ def tool(
             '''Search the codebase for the given query.'''
             return _do_search(query)
 
-        research = Node("research", mode="gather", tools=[search_code], ...)
+        research = Node("research", mode="agent", tools=[search_code], ...)
 
     The decorated function IS a Tool instance (with the original function
     attached as .fn), so it can be passed directly to Node's tools= list.

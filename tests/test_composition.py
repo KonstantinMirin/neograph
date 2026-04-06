@@ -1033,7 +1033,7 @@ class TestNodeSubConstruct:
             prompt_compiler=capturing_compiler,
         )
 
-        @node(mode="produce", outputs=ClaimResult, model="default", prompt="jc3/score")
+        @node(mode="think", outputs=ClaimResult, model="default", prompt="jc3/score")
         def llm_score(claim: VerifyClaim) -> ClaimResult: ...
 
         sub = construct_from_functions(
@@ -1240,14 +1240,14 @@ class TestMixedNodeAndConstruct:
 
         # -- Sub-construct: explore→score (gather→produce with tool_log)
         @node(
-            mode="gather",
+            mode="agent",
             outputs={"result": ExplorationResult, "tool_log": list[ToolInteraction]},
             model="research", prompt="v/explore",
             tools=[Tool("search", budget=3)],
         )
         def explore(claim: VerifyClaim) -> ExplorationResult: ...
 
-        @node(mode="produce", outputs=ClaimVerdict, model="judge", prompt="v/score")
+        @node(mode="think", outputs=ClaimVerdict, model="judge", prompt="v/score")
         def score(explore_result: ExplorationResult, explore_tool_log: list[ToolInteraction]) -> ClaimVerdict: ...
 
         verify_claim = construct_from_functions(
@@ -1531,7 +1531,7 @@ class TestGatherProduceSubConstruct:
         from neograph import Tool, ToolInteraction, node, construct_from_functions
 
         @node(
-            mode="gather",
+            mode="agent",
             outputs={"result": ExplorationResult, "tool_log": list[ToolInteraction]},
             model="research",
             prompt="verify/explore",
@@ -1540,7 +1540,7 @@ class TestGatherProduceSubConstruct:
         def explore(claim: VerifyClaim) -> ExplorationResult: ...
 
         @node(
-            mode="produce",
+            mode="think",
             outputs=ClaimVerdict,
             model="judge",
             prompt="verify/score",
@@ -1620,7 +1620,7 @@ class TestGatherProduceSubConstruct:
         from neograph import Tool, ToolInteraction, node, construct_from_functions
 
         @node(
-            mode="gather",
+            mode="agent",
             outputs={"result": ExplorationResult, "tool_log": list[ToolInteraction]},
             model="research",
             prompt="verify/explore",
@@ -1629,7 +1629,7 @@ class TestGatherProduceSubConstruct:
         def explore_each(claim: VerifyClaim) -> ExplorationResult: ...
 
         @node(
-            mode="produce",
+            mode="think",
             outputs=ClaimVerdict,
             model="judge",
             prompt="verify/score",
@@ -1666,7 +1666,7 @@ class TestGatherProduceSubConstruct:
         from neograph import Tool, ToolInteraction, node, construct_from_functions
 
         @node(
-            mode="gather",
+            mode="agent",
             outputs={"result": ExplorationResult, "tool_log": list[ToolInteraction]},
             model="research",
             prompt="verify/explore",

@@ -84,7 +84,7 @@ class TestProduceMode:
 
         mod = _types.ModuleType("test_produce_mode_mod")
 
-        @node(mode="produce", outputs=Claims, model="fast", prompt="test/extract")
+        @node(mode="think", outputs=Claims, model="fast", prompt="test/extract")
         def extract() -> Claims: ...
 
         mod.extract = extract
@@ -132,7 +132,7 @@ class TestGatherMode:
         mod = _types.ModuleType("test_gather_budget_mod")
 
         @node(
-            mode="gather",
+            mode="agent",
             outputs=Claims,
             model="reason",
             prompt="test/explore",
@@ -175,7 +175,7 @@ class TestGatherMode:
         mod = _types.ModuleType("test_gather_unlimited_mod")
 
         @node(
-            mode="gather",
+            mode="agent",
             outputs=Claims,
             model="fast",
             prompt="test/scan",
@@ -272,10 +272,10 @@ class TestMiniRWPipeline:
 
         mod = _types.ModuleType("test_mini_rw_mod")
 
-        @node(mode="produce", outputs=Claims, model="reason", prompt="rw/decompose")
+        @node(mode="think", outputs=Claims, model="reason", prompt="rw/decompose")
         def decompose() -> Claims: ...
 
-        @node(mode="produce", outputs=ClassifiedClaims, model="fast", prompt="rw/classify")
+        @node(mode="think", outputs=ClassifiedClaims, model="fast", prompt="rw/classify")
         def classify(decompose: Claims) -> ClassifiedClaims: ...
 
         @node(mode="scripted", outputs=RawText)
@@ -329,7 +329,7 @@ class TestExecuteMode:
         mod = _types.ModuleType("test_execute_mode_mod")
 
         @node(
-            mode="execute",
+            mode="act",
             outputs=RawText,
             model="fast",
             prompt="test/write",
@@ -352,7 +352,7 @@ class TestErrorPaths:
 
     def test_runtime_raises_when_llm_not_configured(self):
         """Produce node without configure_llm() raises RuntimeError."""
-        node = Node(name="fail", mode="produce", outputs=Claims, model="fast", prompt="x")
+        node = Node(name="fail", mode="think", outputs=Claims, model="fast", prompt="x")
         pipeline = Construct("test-no-llm", nodes=[node])
         graph = compile(pipeline)
 
@@ -405,7 +405,7 @@ class TestErrorPaths:
 
         node = Node(
             name="explore",
-            mode="gather",
+            mode="agent",
             outputs=Claims,
             model="fast",
             prompt="x",
@@ -432,7 +432,7 @@ class TestErrorPaths:
 
     def test_compile_raises_when_node_missing_output_type(self):
         """Node with no output type raises CompileError at compile."""
-        node = Node(name="bad-node", mode="produce", model="fast", prompt="x")
+        node = Node(name="bad-node", mode="think", model="fast", prompt="x")
         pipeline = Construct("test-no-output", nodes=[node])
 
         with pytest.raises(CompileError, match="no output type"):
@@ -485,7 +485,7 @@ class TestLLMUnknownToolCall:
 
         node = Node(
             name="explore",
-            mode="gather",
+            mode="agent",
             outputs=Claims,
             model="fast",
             prompt="test/explore",
@@ -592,7 +592,7 @@ class TestLLMConfig:
 
         node = Node(
             name="custom-llm",
-            mode="produce",
+            mode="think",
             outputs=Claims,
             model="reason",
             prompt="test",
@@ -617,7 +617,7 @@ class TestLLMConfig:
 
         node = Node(
             name="old-style",
-            mode="produce",
+            mode="think",
             outputs=Claims,
             model="fast",
             prompt="test",
@@ -676,7 +676,7 @@ class TestLLMConfig:
             prompt_compiler=tracking_compiler,
         )
 
-        node = Node(name="analyze", mode="produce", outputs=Claims, model="fast", prompt="rw/analyze")
+        node = Node(name="analyze", mode="think", outputs=Claims, model="fast", prompt="rw/analyze")
         pipeline = Construct("test-prompt-ctx", nodes=[node])
         graph = compile(pipeline)
         run(graph, input={"node_id": "BR-001", "project_root": "/proj"})
@@ -714,7 +714,7 @@ class TestRunIsolated:
         ))
 
         decompose = Node(
-            "decompose", mode="produce", outputs=Claims, model="fast", prompt="test"
+            "decompose", mode="think", outputs=Claims, model="fast", prompt="test"
         )
 
         result = decompose.run_isolated()
@@ -930,7 +930,7 @@ class TestOutputStrategyStructured:
         """Produce node uses with_structured_output by default."""
         configure_fake_llm(lambda tier: StructuredFake(lambda m: m(items=["via-structured"])))
 
-        node = Node(name="extract", mode="produce", outputs=Claims, model="fast", prompt="test")
+        node = Node(name="extract", mode="think", outputs=Claims, model="fast", prompt="test")
         pipeline = Construct("test-structured", nodes=[node])
         graph = compile(pipeline)
         result = run(graph, input={"node_id": "test"})
@@ -956,7 +956,7 @@ class TestOutputStrategyJsonMode:
 
         node = Node(
             name="extract",
-            mode="produce",
+            mode="think",
             outputs=Claims,
             model="fast",
             prompt="test",
@@ -975,7 +975,7 @@ class TestOutputStrategyJsonMode:
 
         node = Node(
             name="extract",
-            mode="produce",
+            mode="think",
             outputs=Claims,
             model="fast",
             prompt="test",
@@ -999,7 +999,7 @@ class TestOutputStrategyText:
 
         node = Node(
             name="extract",
-            mode="produce",
+            mode="think",
             outputs=Claims,
             model="fast",
             prompt="test",
@@ -1048,7 +1048,7 @@ class TestOutputStrategyOnGather:
 
         node = Node(
             name="research",
-            mode="gather",
+            mode="agent",
             outputs=Claims,
             model="fast",
             prompt="test",
@@ -1078,7 +1078,7 @@ class TestPromptCompilerReceivesOutputModel:
             prompt_compiler=tracking_compiler,
         )
 
-        node = Node(name="x", mode="produce", outputs=Claims, model="fast", prompt="test")
+        node = Node(name="x", mode="think", outputs=Claims, model="fast", prompt="test")
         pipeline = Construct("test", nodes=[node])
         graph = compile(pipeline)
         run(graph, input={"node_id": "test"})
@@ -1100,7 +1100,7 @@ class TestPromptCompilerReceivesOutputModel:
         )
 
         node = Node(
-            name="x", mode="produce", outputs=Claims, model="fast", prompt="test",
+            name="x", mode="think", outputs=Claims, model="fast", prompt="test",
             llm_config={"output_strategy": "json_mode", "temperature": 0.5},
         )
         pipeline = Construct("test", nodes=[node])
@@ -1136,7 +1136,7 @@ class TestPromptCompilerReceivesOutputModel:
         )
 
         node = Node(
-            name="x", mode="produce", outputs=Claims, model="fast", prompt="decompose",
+            name="x", mode="think", outputs=Claims, model="fast", prompt="decompose",
             llm_config={"output_strategy": "json_mode"},
         )
         pipeline = Construct("test", nodes=[node])
@@ -1187,7 +1187,7 @@ class TestGatherToolCollection:
         search_tool = Tool("search", budget=3)
 
         @node(
-            mode="gather",
+            mode="agent",
             outputs={"result": Claims, "tool_log": list[ToolInteraction]},
             model="fast",
             prompt="test",
@@ -1231,7 +1231,7 @@ class TestToolRegistrationError:
         mod = _types.ModuleType("test_unreg_tool_mod")
 
         @node(
-            mode="gather",
+            mode="agent",
             outputs=Claims,
             model="fast",
             prompt="test",
@@ -1262,7 +1262,7 @@ class TestToolRegistrationError:
         mod = _types.ModuleType("test_unreg_exec_mod")
 
         @node(
-            mode="execute",
+            mode="act",
             outputs=RawText,
             model="fast",
             prompt="test",
@@ -1314,7 +1314,7 @@ class TestSkipWhenOnToolNodes:
             return Claims(items=["only-one"])
 
         @node(
-            mode="gather",
+            mode="agent",
             outputs=MergedResult,
             model="fast",
             prompt="test",
@@ -1363,7 +1363,7 @@ class TestSkipWhenOnToolNodes:
             return Claims(items=["a", "b"])
 
         @node(
-            mode="gather",
+            mode="agent",
             outputs=MergedResult,
             model="fast",
             prompt="test",

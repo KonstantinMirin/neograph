@@ -263,7 +263,7 @@ def invoke_structured(
             "total_tokens": usage.get("total_tokens"),
         }
 
-    llm_log.info("llm_call", mode="produce", duration_s=round(elapsed, 3), **usage_info)
+    llm_log.info("llm_call", mode="think", duration_s=round(elapsed, 3), **usage_info)
     return result
 
 
