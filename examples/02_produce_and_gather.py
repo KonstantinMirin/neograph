@@ -38,6 +38,12 @@ class Claims(BaseModel, frozen=True):
 class ResearchResult(BaseModel, frozen=True):
     findings: list[dict[str, str]]
 
+class CodeReference(BaseModel, frozen=True):
+    """Typed tool result -- what search_codebase returns."""
+    query: str
+    matches: int
+    top_file: str
+
 
 # ── Fake LLM (replace with real OpenRouter/OpenAI in production) ─────────
 
@@ -88,11 +94,14 @@ class FakeResearchLLM:
 search_count = {"n": 0}
 
 class FakeSearchTool:
+    """Returns a typed CodeReference model, not a string.
+    The framework preserves it in ToolInteraction.typed_result."""
     name = "search_codebase"
 
     def invoke(self, args):
         search_count["n"] += 1
-        return f"Found 3 references for: {args.get('query', '?')}"
+        query = args.get("query", "?")
+        return CodeReference(query=query, matches=3, top_file="auth.py")
 
 register_tool_factory("search_codebase", lambda config, tool_config: FakeSearchTool())
 

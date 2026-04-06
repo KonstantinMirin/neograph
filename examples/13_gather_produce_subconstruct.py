@@ -1,10 +1,12 @@
-"""Example 13: Gather + Produce Sub-Construct -- agent explores then judges.
+"""Example 13: Agent + Think Sub-Construct -- agent explores, thinker judges.
 
 Scenario: A claim verification pipeline. For each claim:
   1. Explore (agent mode): uses a search_evidence tool to find supporting
-     evidence, produces an ExplorationResult + tool interaction log
-  2. Score (think mode): receives the exploration result AND the tool log
-     as context, judges the claim in a fresh LLM conversation
+     evidence. The tool returns a TYPED Pydantic model (EvidenceHit), not
+     a string. The framework preserves the typed result in ToolInteraction
+     and renders it as JSON for the LLM.
+  2. Score (think mode): receives the exploration result AND the typed tool
+     log as context, judges the claim in a fresh LLM conversation.
 
 The two-phase pattern is critical for quality: the explore phase does noisy
 tool-calling work, while the score phase gets a clean, distilled research
@@ -16,6 +18,8 @@ explore node's `claim: VerifyClaim` param is automatically wired to the
 sub-construct's input port. Then .map() fans out over a collection.
 
 Demonstrates:
+  - Typed tool results: tools return Pydantic models, not strings
+  - ToolInteraction.typed_result preserves the original model
   - @node agent mode with dict-form outputs (result + tool_log)
   - @node think mode consuming dict-output references (explore_result, explore_tool_log)
   - construct_from_functions with input=/output= for sub-construct boundary
@@ -66,6 +70,16 @@ class ClaimVerdict(BaseModel, frozen=True):
     claim_id: str
     disposition: str
     reasoning: str
+
+
+class EvidenceHit(BaseModel, frozen=True):
+    """Typed tool result -- what search_evidence returns.
+    The framework preserves this in ToolInteraction.typed_result and
+    renders it as JSON for the LLM (not Python repr)."""
+    source_file: str
+    line: int
+    snippet: str
+    relevance: float
 
 
 # -- Fake LLMs (replace with real OpenRouter/OpenAI in production) ------------
@@ -129,11 +143,17 @@ class FakeScoreLLM:
 # -- Fake tool ----------------------------------------------------------------
 
 class FakeEvidenceSearch:
+    """Fake tool that returns a TYPED Pydantic model, not a string.
+    In production, this would query a code search index or knowledge graph."""
     name = "search_evidence"
 
     def invoke(self, args):
-        query = args.get("query", "?")
-        return f"Found reference for: {query} -> auth.py:42"
+        return EvidenceHit(
+            source_file="auth.py",
+            line=42,
+            snippet="def authenticate(user, password): ...",
+            relevance=0.95,
+        )
 
 
 register_tool_factory("search_evidence", lambda config, tool_config: FakeEvidenceSearch())
@@ -245,3 +265,31 @@ if __name__ == "__main__":
     print(f"\nTotal claims: {result['deterministic_merge'].claim_count}")
     print(f"Result keys: {sorted(result.keys())}")
     print("Note: explore/score internals are NOT in the result")
+
+    # -- Typed tool results demo ------------------------------------------------
+    # The tool_log lives inside the sub-construct (doesn't surface to parent).
+    # To show typed_result, run a standalone agent node:
+    import types
+    from neograph import construct_from_module
+
+    mod = types.ModuleType("typed_tool_demo")
+
+    @node(
+        mode="agent",
+        outputs={"result": ExplorationResult, "tool_log": list[ToolInteraction]},
+        model="research", prompt="verify/explore",
+        tools=[Tool("search_evidence", budget=1)],
+    )
+    def demo_explore() -> ExplorationResult: ...
+
+    mod.demo_explore = demo_explore
+    demo_graph = compile(construct_from_module(mod))
+    demo_result = run(demo_graph, input={"node_id": "demo"})
+
+    tool_log = demo_result["demo_explore_tool_log"]
+    print("\n-- Typed tool results --")
+    print(f"  tool_log[0].tool_name: {tool_log[0].tool_name}")
+    print(f"  tool_log[0].result (rendered JSON): {tool_log[0].result[:60]}...")
+    print(f"  tool_log[0].typed_result: {tool_log[0].typed_result}")
+    print(f"  typed_result.source_file: {tool_log[0].typed_result.source_file}")
+    print(f"  typed_result.relevance: {tool_log[0].typed_result.relevance}")
