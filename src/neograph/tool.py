@@ -42,6 +42,19 @@ class Tool(BaseModel, frozen=True):
         super().__init__(**kwargs)
 
 
+class ToolInteraction(BaseModel, frozen=True):
+    """Record of a single tool call during a ReAct loop.
+
+    Collected by invoke_with_tools and exposed as a secondary output
+    when the gather/execute node declares it in dict-form outputs.
+    """
+
+    tool_name: str
+    args: dict[str, Any] = Field(default_factory=dict)
+    result: str = ""
+    duration_ms: int = 0
+
+
 class ToolBudgetTracker:
     """Tracks per-tool call counts and enforces budgets at runtime.
 

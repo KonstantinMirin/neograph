@@ -41,7 +41,7 @@ from neograph.renderers import (
     XmlRenderer,
 )
 from neograph.runner import run
-from neograph.tool import Tool, tool
+from neograph.tool import Tool, ToolInteraction, tool
 
 __all__ = [
     # Primary API — @node decorator + module assembly

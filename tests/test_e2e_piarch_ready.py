@@ -6937,3 +6937,61 @@ class TestDecoratorDictOutputs:
             return RawText(text="hi")
 
         assert extract.outputs is RawText
+
+
+class TestGatherToolCollection:
+    """invoke_with_tools collects ToolInteraction records (neograph-1bp.6)."""
+
+    def test_tool_interaction_model(self):
+        """ToolInteraction has the expected fields."""
+        from neograph import ToolInteraction
+        ti = ToolInteraction(tool_name="search", args={"q": "test"}, result="found", duration_ms=42)
+        assert ti.tool_name == "search"
+        assert ti.args == {"q": "test"}
+        assert ti.result == "found"
+        assert ti.duration_ms == 42
+
+    def test_tool_interactions_collected(self):
+        """Gather node with dict outputs writes tool_log to state."""
+        from neograph import node, construct_from_module, compile, run, tool, ToolInteraction
+        from neograph.factory import register_tool_factory
+        from tests.fakes import FakeTool, ReActFake, configure_fake_llm
+        import types
+
+        configure_fake_llm(
+            lambda tier: ReActFake(
+                tool_calls=[
+                    [{"name": "search", "args": {"q": "test"}, "id": "tc1"}],
+                    [],  # final response
+                ],
+                final=lambda m: Claims(items=["result"]),
+            )
+        )
+
+        # Register a tool factory that returns a fake tool
+        fake_tool = FakeTool("search", response="found it")
+        register_tool_factory("search", lambda config, tool_config: fake_tool)
+
+        mod = types.ModuleType("test_tool_collection_mod")
+
+        search_tool = Tool("search", budget=3)
+
+        @node(
+            mode="gather",
+            outputs={"result": Claims, "tool_log": list[ToolInteraction]},
+            model="fast",
+            prompt="test",
+            tools=[search_tool],
+        )
+        def explore() -> Claims: ...
+
+        mod.explore = explore
+        pipeline = construct_from_module(mod)
+        graph = compile(pipeline)
+        result = run(graph, input={})
+        assert result.get("explore_result") == Claims(items=["result"])
+        tool_log = result.get("explore_tool_log")
+        assert tool_log is not None
+        assert len(tool_log) == 1
+        assert tool_log[0].tool_name == "search"
+        assert tool_log[0].result == "found it"

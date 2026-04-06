@@ -276,8 +276,12 @@ def invoke_with_tools(
     config: RunnableConfig,
     node_name: str = "",
     llm_config: dict | None = None,
-) -> BaseModel | None:
-    """ReAct tool loop with per-tool budget enforcement. Mode: gather/execute."""
+) -> tuple[BaseModel | None, list]:
+    """ReAct tool loop with per-tool budget enforcement. Mode: gather/execute.
+
+    Returns (parsed_result, tool_interactions) where tool_interactions is a
+    list of ToolInteraction records from the ReAct loop.
+    """
     from langchain_core.messages import ToolMessage
 
     from neograph.factory import _tool_factory_registry
@@ -308,8 +312,11 @@ def invoke_with_tools(
     active_tools = list(tool_instances.values())
     llm_with_tools = llm.bind_tools(active_tools)
 
+    from neograph.tool import ToolInteraction
+
     loop_count = 0
     total_tool_calls = 0
+    tool_interactions: list[ToolInteraction] = []
     t0 = time.monotonic()
 
     while True:
@@ -352,6 +359,13 @@ def invoke_with_tools(
                 call_num=total_tool_calls,
                 duration_s=round(tool_elapsed, 3),
             )
+
+            tool_interactions.append(ToolInteraction(
+                tool_name=tool_name,
+                args=tool_call.get("args", {}),
+                result=str(result),
+                duration_ms=int(tool_elapsed * 1000),
+            ))
 
             messages.append(ToolMessage(
                 content=str(result),
@@ -418,7 +432,7 @@ def invoke_with_tools(
         output=output_model.__name__,
         **usage_info,
     )
-    return parse_result
+    return parse_result, tool_interactions
 
 
 def render_prompt(

@@ -325,7 +325,7 @@ def _make_tool_fn(node: Node) -> Callable:
 
         budget_tracker = ToolBudgetTracker(node.tools)
 
-        result = invoke_with_tools(
+        result, tool_interactions = invoke_with_tools(
             model_tier=node.model,
             prompt_template=node.prompt,
             input_data=input_data,
@@ -338,7 +338,16 @@ def _make_tool_fn(node: Node) -> Callable:
         )
 
         if primary_key is not None and result is not None:
-            result = {primary_key: result}
+            # Build a dict with primary LLM result and tool_log if present
+            result_dict: dict[str, Any] = {primary_key: result}
+            # Write tool_log if the node declares it as an output key
+            if isinstance(node.outputs, dict) and "tool_log" in node.outputs:
+                result_dict["tool_log"] = tool_interactions
+            result = result_dict
+        elif isinstance(node.outputs, dict):
+            result = {next(iter(node.outputs)): result} if result is not None else None
+            if result is not None and "tool_log" in node.outputs:
+                result["tool_log"] = tool_interactions
 
         update = _build_state_update(node, field_name, result, state)
 
