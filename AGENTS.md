@@ -234,6 +234,7 @@ This was the cause of `neograph-jyw` before the fix. Any new modifier kwarg you 
 - **Throwaway modules for `construct_from_module` tests**: use `types.ModuleType("test_xyz_mod")` and attach `@node` functions as attributes. Don't pollute real modules. Pattern is `TestNodeDecorator._fresh_module` (around line 2666).
 - **Fakes live in `tests/fakes.py`**: `FakeTool`, `StructuredFake`, `TextFake`, `ReActFake`, `configure_fake_llm`. Don't invent new fakes unless the existing ones genuinely don't cover the case.
 - **TDD the user explicitly expects**: for bug fixes, write the failing repro first, verify it fails, then fix. The user has asked for this multiple times — honor it on every bug-fix task.
+- **Three-surface parity rule**: any IR-level behavioral change (`node.py`, `_construct_validation.py`, `factory.py`, `state.py`) must be tested through all three API surfaces — `@node` decorator, declarative `Node.scripted()`, and programmatic `Node() | Modifier()`. This is the most common source of bugs: a feature works via `@node` (which runs through `_build_construct_from_decorated`) but breaks via the programmatic API (which goes straight to `Construct(nodes=[...])`). The `neograph-ts7` bug was exactly this pattern — `fan_out_param` was set only in the decorator path, so programmatic `Each` + dict-form inputs failed validation. Test all three surfaces or explain why a surface is exempt.
 
 ---
 
