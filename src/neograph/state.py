@@ -104,6 +104,23 @@ def compile_state_model(construct: Construct) -> type[BaseModel]:
     if construct.input is not None:
         fields["neo_subgraph_input"] = (construct.input | None, None)
 
+    # Context fields — forwarded from parent state for nodes that declare context=
+    for n in nodes_only:
+        if n.context:
+            for ctx_name in n.context:
+                ctx_field = ctx_name.replace("-", "_")
+                if ctx_field not in fields:
+                    fields[ctx_field] = (Any, None)
+    # Also check branch arm nodes
+    for branch in branch_nodes:
+        meta = branch._neo_branch_meta
+        for arm_node in meta.true_arm_nodes + meta.false_arm_nodes:
+            if arm_node.context:
+                for ctx_name in arm_node.context:
+                    ctx_field = ctx_name.replace("-", "_")
+                    if ctx_field not in fields:
+                        fields[ctx_field] = (Any, None)
+
     # Framework fields — always present
     # node_id and project_root have defaults so consumers can omit them
     # in run(input=...); they're still accessible via config["configurable"]

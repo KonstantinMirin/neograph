@@ -1091,6 +1091,61 @@ class TestNodeSubConstruct:
         assert result[sub.name].claim_id == "xjt"
         assert result[sub.name].disposition == "module-path"
 
+    def test_context_forwarded_when_node_inside_sub_construct_declares_it(self):
+        """context= fields from parent state are forwarded into the sub-construct
+        so nodes inside can access them (neograph-j66m). E2E: compile + run."""
+        from tests.fakes import StructuredFakeWithRaw, configure_fake_llm
+
+        captured = {}
+
+        def capturing_compiler(template, data, **kw):
+            captured[template] = {"data": data, "kw": kw}
+            return [{"role": "user", "content": "test"}]
+
+        configure_fake_llm(
+            lambda tier: StructuredFakeWithRaw(
+                lambda m: m(claim_id="c1", disposition="ctx-confirmed"),
+            ),
+            prompt_compiler=capturing_compiler,
+        )
+
+        # Parent node produces a catalog
+        register_scripted("j66_catalog", lambda _in, _cfg: RawText(
+            text="<catalog>UC-001,UC-002</catalog>",
+        ))
+
+        # Sub-construct node uses context= to access the catalog
+        @node(
+            mode="think", outputs=ClaimResult, model="fast", prompt="j66/score",
+            context=["catalog"],
+        )
+        def score_with_ctx(claim: VerifyClaim) -> ClaimResult: ...
+
+        sub = construct_from_functions(
+            "scorer", [score_with_ctx],
+            input=VerifyClaim, output=ClaimResult,
+        )
+
+        register_scripted("j66_seed", lambda _in, _cfg: VerifyClaim(
+            claim_id="c1", text="test claim",
+        ))
+        parent = Construct("parent", nodes=[
+            Node.scripted("catalog", fn="j66_catalog", outputs=RawText),
+            Node.scripted("seed", fn="j66_seed", outputs=VerifyClaim),
+            sub,
+        ])
+        graph = compile(parent)
+        result = run(graph, input={"node_id": "j66"})
+
+        # The sub-construct node should have received the catalog via context
+        assert "j66/score" in captured, f"Expected j66/score in captured, got: {list(captured.keys())}"
+        kw = captured["j66/score"]["kw"]
+        assert "context" in kw, f"Expected 'context' kwarg, got: {list(kw.keys())}"
+        assert "catalog" in kw["context"]
+        assert kw["context"]["catalog"].text == "<catalog>UC-001,UC-002</catalog>"
+        # Result still surfaces
+        assert result["scorer"].disposition == "ctx-confirmed"
+
 
 class TestPortParamErrors:
     """Error cases for port param resolution (neograph-vih)."""

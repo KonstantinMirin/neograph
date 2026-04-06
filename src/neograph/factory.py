@@ -655,6 +655,15 @@ def make_subgraph_fn(sub: Any, sub_graph: Any) -> Callable:
         if input_data is not None:
             sub_input["neo_subgraph_input"] = input_data
 
+        # Forward context fields from parent state into sub-construct
+        for n in sub.nodes:
+            if hasattr(n, "context") and n.context:
+                for ctx_name in n.context:
+                    ctx_field = ctx_name.replace("-", "_")
+                    val = _state_get(state, ctx_field)
+                    if val is not None:
+                        sub_input[ctx_field] = val
+
         sub_result = _strip_internals(sub_graph.invoke(sub_input, config=config))
 
         # Extract the declared output type from sub result
