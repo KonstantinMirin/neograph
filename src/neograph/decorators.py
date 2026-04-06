@@ -900,7 +900,12 @@ def _build_construct_from_decorated(
     for field_name, n in decorated.items():
         if n.has_modifier(Each):
             sidecar = _get_sidecar(n)
-            assert sidecar is not None
+            if sidecar is None:
+                raise ConstructError(
+                    f"@node '{n.name}' lost its sidecar metadata (function + param names). "
+                    f"This usually means a modifier was applied via | without re-registering "
+                    f"the sidecar on the new Node copy. See AGENTS.md '@node sidecar pattern'."
+                )
             _, pnames = sidecar
             fan_out_params[field_name] = {p for p in pnames if p not in decorated}
 
@@ -908,7 +913,12 @@ def _build_construct_from_decorated(
     # any decorated @node and aren't already classified as from_input/from_config.
     for field_name, n in decorated.items():
         sidecar = _get_sidecar(n)
-        assert sidecar is not None
+        if sidecar is None:
+            raise ConstructError(
+                f"@node '{n.name}' lost its sidecar metadata (function + param names). "
+                f"This usually means a modifier was applied via | without re-registering "
+                f"the sidecar on the new Node copy. See AGENTS.md '@node sidecar pattern'."
+            )
         fn, pnames = sidecar
         param_res = _get_param_resolutions(n)
         sig = inspect.signature(fn)
@@ -929,7 +939,12 @@ def _build_construct_from_decorated(
     adjacency: dict[str, list[str]] = {k: [] for k in decorated}
     for field_name, n in decorated.items():
         sidecar = _get_sidecar(n)
-        assert sidecar is not None
+        if sidecar is None:
+            raise ConstructError(
+                f"@node '{n.name}' lost its sidecar metadata (function + param names). "
+                f"This usually means a modifier was applied via | without re-registering "
+                f"the sidecar on the new Node copy. See AGENTS.md '@node sidecar pattern'."
+            )
         _, param_names = sidecar
         param_res = _get_param_resolutions(n)
         skip = fan_out_params.get(field_name, set())
