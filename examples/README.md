@@ -22,7 +22,8 @@ exercise config-injection patterns not yet ported to `Annotated[T, FromConfig]`.
 | 10 | `10_full_pipeline.py` | Every feature in one scenario (Oracle + Each + Operator + sub-construct) | mixed |
 | 11 | `11_pipeline_metadata_and_prompts.py` | Pipeline metadata + config injection via `config['configurable']` | declarative |
 | 12 | `12_input_rendering.py` | Pluggable input rendering (XML, delimited, JSON) | @node |
-| 13 | `13_gather_produce_subconstruct.py` | Gather+produce inside a sub-construct with tool_log flow + Each fan-out | @node + sub-construct |
+| 13 | `13_gather_produce_subconstruct.py` | Agent+think inside a sub-construct with tool_log flow + Each fan-out | @node + sub-construct |
+| 14 | `14_context_injection.py` | Verbatim context= in sub-constructs (catalog forwarded from parent) | @node + sub-construct |
 | -- | `observable_pipeline.py` | Observable LLM pipeline with Langfuse tracing | @node |
 
 ### Why some examples stay declarative
