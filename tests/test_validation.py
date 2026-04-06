@@ -912,3 +912,155 @@ class TestThreeSurfaceFanInParity:
         msg = str(exc_info.value)
         assert "b" in msg
         assert "Claims" in msg
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Modifiable.map() error paths
+# ═══════════════════════════════════════════════════════════════════════════
+
+class TestModifiableMapErrors:
+    """Error paths for Modifiable.map() — string/lambda introspection."""
+
+    def test_map_resolves_when_lambda_path_valid(self):
+        """Happy path: lambda with valid attribute chain produces Each modifier."""
+        n = _consumer("verify", ClusterGroup, MatchResult)
+        mapped = n.map(lambda s: s.make.groups, key="label")
+        each = mapped.get_modifier(Each)
+        assert isinstance(each, Each)
+        assert each.over == "make.groups"
+        assert each.key == "label"
+
+    def test_map_resolves_when_string_path_given(self):
+        """String path is used directly without introspection."""
+        n = _consumer("verify", ClusterGroup, MatchResult)
+        mapped = n.map("make.groups", key="label")
+        each = mapped.get_modifier(Each)
+        assert isinstance(each, Each)
+        assert each.over == "make.groups"
+
+    def test_map_raises_when_source_not_string_or_callable(self):
+        """Non-string, non-callable source raises TypeError."""
+        n = _consumer("verify", ClusterGroup, MatchResult)
+        with pytest.raises(TypeError, match="must be a string path or a lambda"):
+            n.map(42, key="label")
+
+    def test_map_raises_when_lambda_uses_indexing(self):
+        """Lambda with subscript/indexing raises TypeError (not a pure attr chain)."""
+        n = _consumer("verify", ClusterGroup, MatchResult)
+        with pytest.raises(TypeError, match="pure attribute-access chain"):
+            n.map(lambda s: s.make.groups[0], key="label")
+
+    def test_map_raises_when_lambda_accesses_underscore_attr(self):
+        """Lambda accessing underscore-prefixed attribute raises TypeError."""
+        n = _consumer("verify", ClusterGroup, MatchResult)
+        with pytest.raises(TypeError, match="pure attribute-access chain"):
+            n.map(lambda s: s.make._private, key="label")
+
+    def test_map_raises_when_lambda_returns_non_recorder(self):
+        """Lambda that returns a non-recorder value raises TypeError."""
+        n = _consumer("verify", ClusterGroup, MatchResult)
+        with pytest.raises(TypeError, match="must return an attribute-access chain"):
+            n.map(lambda s: "literal_string", key="label")
+
+    def test_map_raises_when_lambda_is_identity(self):
+        """Lambda that returns the recorder without any attribute access raises TypeError."""
+        n = _consumer("verify", ClusterGroup, MatchResult)
+        with pytest.raises(TypeError, match="must access at least one attribute"):
+            n.map(lambda s: s, key="label")
+
+    def test_map_applies_second_each_when_called_twice(self):
+        """Calling .map() twice appends a second Each modifier (does not replace)."""
+        n = _consumer("verify", ClusterGroup, MatchResult)
+        mapped_once = n.map("a.groups", key="label")
+        mapped_twice = mapped_once.map("b.items", key="id")
+        each_mods = [m for m in mapped_twice.modifiers if isinstance(m, Each)]
+        assert len(each_mods) == 2
+        assert each_mods[0].over == "a.groups"
+        assert each_mods[1].over == "b.items"
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# _check_each_path edge cases
+# ═══════════════════════════════════════════════════════════════════════════
+
+class TestCheckEachPathErrors:
+    """Edge cases for _check_each_path beyond the standard 3 error paths."""
+
+    def test_single_segment_path_defers_when_no_dot(self):
+        """Each(over="a") with no dot — root matches upstream but no field to walk.
+        split_each_path returns root='a', segments=(). The path resolves to the
+        raw upstream type, which must be a list for validation to pass. Since
+        Clusters is NOT a list, this should raise 'not a list'."""
+        a = _producer("a", Clusters)
+        b = _consumer("b", ClusterGroup, MatchResult) | Each(
+            over="a", key="label"
+        )
+        with pytest.raises(ConstructError, match="not a list"):
+            Construct("single-seg", nodes=[a, b])
+
+    def test_single_segment_path_defers_when_root_unknown(self):
+        """Each(over="unknown") with a single segment and no matching upstream
+        defers to runtime rather than raising."""
+        a = _producer("a", Clusters)
+        b = _consumer("b", ClusterGroup, MatchResult) | Each(
+            over="unknown", key="label"
+        )
+        pipeline = Construct("single-seg-defer", nodes=[a, b])
+        assert len(pipeline.nodes) == 2
+
+    def test_empty_path_string_defers_when_root_unmatched(self):
+        """Each(over='') — split yields root='', segments=(). Empty string
+        root doesn't match any upstream producer, so validation defers."""
+        a = _producer("a", Clusters)
+        b = _consumer("b", ClusterGroup, MatchResult) | Each(
+            over="", key="label"
+        )
+        # Empty root '' doesn't match upstream 'a', so defers to runtime.
+        pipeline = Construct("empty-path", nodes=[a, b])
+        assert len(pipeline.nodes) == 2
+
+    def test_deeply_nested_path_resolves_when_fields_exist(self):
+        """Multi-level dotted path that walks through nested models."""
+
+        class Inner(BaseModel, frozen=True):
+            claim_ids: list[str]
+
+        class Middle(BaseModel, frozen=True):
+            inner: Inner
+
+        class Outer(BaseModel, frozen=True):
+            middle: Middle
+
+        a = _producer("a", Outer)
+        # Path: a.middle.inner.claim_ids → list[str], element str
+        b = Node.scripted(
+            "b", fn="f", inputs=str, outputs=MatchResult,
+        ) | Each(over="a.middle.inner.claim_ids", key="id")
+        pipeline = Construct("deep-path", nodes=[a, b])
+        assert len(pipeline.nodes) == 2
+
+    def test_deeply_nested_path_raises_when_intermediate_missing(self):
+        """Multi-level path where an intermediate segment doesn't exist."""
+
+        class Shallow(BaseModel, frozen=True):
+            name: str
+
+        a = _producer("a", Shallow)
+        b = _consumer("b", ClusterGroup, MatchResult) | Each(
+            over="a.name.nonexistent.deep", key="label"
+        )
+        with pytest.raises(ConstructError, match="has no field 'nonexistent'"):
+            Construct("deep-missing", nodes=[a, b])
+
+    def test_path_raises_when_terminal_is_non_list_primitive(self):
+        """Path resolving to a primitive (int) raises 'not a list'."""
+
+        class WithInt(BaseModel, frozen=True):
+            count: int
+
+        a = _producer("a", WithInt)
+        b = _consumer("b", ClusterGroup, MatchResult) | Each(
+            over="a.count", key="label"
+        )
+        with pytest.raises(ConstructError, match="not a list"):
+            Construct("prim-terminal", nodes=[a, b])

@@ -1204,3 +1204,310 @@ class TestGatherToolCollection:
         assert len(tool_log) == 1
         assert tool_log[0].tool_name == "search"
         assert tool_log[0].result == "found it"
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# TEST: Tool registration error in invoke_with_tools (neograph-rdu.2)
+#
+# When a gather/execute node references a tool name that has no registered
+# factory, the error should be clear and mention the unregistered tool name.
+# ═══════════════════════════════════════════════════════════════════════════
+
+class TestToolRegistrationError:
+    def test_clear_error_raised_when_tool_not_registered(self):
+        """Gather node with unregistered tool raises ValueError naming the tool."""
+        import types as _types
+
+        from neograph import construct_from_module, node
+        from neograph.factory import register_tool_factory
+
+        fake = ReActFake(
+            tool_calls=[[], []],
+            final=lambda m: m(items=["x"]),
+        )
+        configure_fake_llm(lambda tier: fake)
+
+        mod = _types.ModuleType("test_unreg_tool_mod")
+
+        @node(
+            mode="gather",
+            outputs=Claims,
+            model="fast",
+            prompt="test",
+            tools=[Tool(name="nonexistent_tool", budget=3)],
+        )
+        def searcher() -> Claims: ...
+
+        mod.searcher = searcher
+
+        pipeline = construct_from_module(mod, name="test-unreg-tool")
+        graph = compile(pipeline)
+
+        with pytest.raises(ValueError, match="nonexistent_tool"):
+            run(graph, input={})
+
+    def test_clear_error_raised_when_execute_tool_not_registered(self):
+        """Execute node with unregistered tool also raises ValueError."""
+        import types as _types
+
+        from neograph import construct_from_module, node
+
+        fake = ReActFake(
+            tool_calls=[[], []],
+            final=lambda m: m(text="x"),
+        )
+        configure_fake_llm(lambda tier: fake)
+
+        mod = _types.ModuleType("test_unreg_exec_mod")
+
+        @node(
+            mode="execute",
+            outputs=RawText,
+            model="fast",
+            prompt="test",
+            tools=[Tool(name="missing_exec_tool", budget=1)],
+        )
+        def writer() -> RawText: ...
+
+        mod.writer = writer
+
+        pipeline = construct_from_module(mod, name="test-unreg-exec")
+        graph = compile(pipeline)
+
+        with pytest.raises(ValueError, match="missing_exec_tool"):
+            run(graph, input={})
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# TEST: skip_when on gather/execute nodes (neograph-rdu.8)
+#
+# skip_when is tested on produce nodes but never on gather/execute.
+# The same code path in factory._make_tool_fn should work.
+# ═══════════════════════════════════════════════════════════════════════════
+
+class TestSkipWhenOnToolNodes:
+    def test_node_skipped_when_skip_when_true_on_gather(self):
+        """Gather node with skip_when=True skips LLM and returns skip_value."""
+        import types as _types
+
+        from neograph import construct_from_module, node
+        from neograph.factory import register_tool_factory
+
+        # Register tool factory so it doesn't fail on missing tool
+        fake_tool = FakeTool("lookup", response="found")
+        register_tool_factory("lookup", lambda config, tool_config: fake_tool)
+
+        # LLM should NOT be called — if it is, the test will still pass
+        # but we verify via the skip_value output
+        configure_fake_llm(
+            lambda tier: ReActFake(
+                tool_calls=[[], []],
+                final=lambda m: m(items=["should-not-appear"]),
+            )
+        )
+
+        mod = _types.ModuleType("test_skip_gather_mod")
+
+        @node(outputs=Claims)
+        def seed() -> Claims:
+            return Claims(items=["only-one"])
+
+        @node(
+            mode="gather",
+            outputs=MergedResult,
+            model="fast",
+            prompt="test",
+            tools=[Tool(name="lookup", budget=3)],
+            skip_when=lambda inp: len(inp.items) == 1,
+            skip_value=lambda inp: MergedResult(final_text=inp.items[0]),
+        )
+        def gatherer(seed: Claims) -> MergedResult: ...
+
+        mod.seed = seed
+        mod.gatherer = gatherer
+
+        pipeline = construct_from_module(mod, name="test-skip-gather")
+        graph = compile(pipeline)
+        result = run(graph, input={})
+
+        # Node was skipped — skip_value produced the output
+        assert result["gatherer"].final_text == "only-one"
+        # Tool was never called
+        assert len(fake_tool.calls) == 0
+
+    def test_node_runs_when_skip_when_false_on_gather(self):
+        """Gather node runs normally when skip_when returns False."""
+        import types as _types
+
+        from neograph import construct_from_module, node
+        from neograph.factory import register_tool_factory
+
+        fake_tool = FakeTool("lookup", response="result")
+        register_tool_factory("lookup", lambda config, tool_config: fake_tool)
+
+        configure_fake_llm(
+            lambda tier: ReActFake(
+                tool_calls=[
+                    [{"name": "lookup", "args": {"q": "test"}, "id": "tc1"}],
+                    [],  # final
+                ],
+                final=lambda m: m(final_text="llm-produced"),
+            )
+        )
+
+        mod = _types.ModuleType("test_noskip_gather_mod")
+
+        @node(outputs=Claims)
+        def seed() -> Claims:
+            return Claims(items=["a", "b"])
+
+        @node(
+            mode="gather",
+            outputs=MergedResult,
+            model="fast",
+            prompt="test",
+            tools=[Tool(name="lookup", budget=3)],
+            skip_when=lambda inp: len(inp.items) == 1,
+            skip_value=lambda inp: MergedResult(final_text=inp.items[0]),
+        )
+        def gatherer(seed: Claims) -> MergedResult: ...
+
+        mod.seed = seed
+        mod.gatherer = gatherer
+
+        pipeline = construct_from_module(mod, name="test-noskip-gather")
+        graph = compile(pipeline)
+        result = run(graph, input={})
+
+        # skip_when was False → LLM ran, tool was called
+        assert result["gatherer"].final_text == "llm-produced"
+        assert len(fake_tool.calls) == 1
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# TEST: _extract_json regex edge cases (neograph-rdu.9)
+#
+# _extract_json in _llm.py parses JSON from LLM text responses.
+# Test edge cases: plain JSON, markdown fences, multiple objects,
+# nested braces, no JSON.
+# ═══════════════════════════════════════════════════════════════════════════
+
+class TestExtractJsonEdgeCases:
+    def test_plain_json_parsed_when_no_wrapping(self):
+        """Plain JSON string is returned as-is."""
+        from neograph._llm import _extract_json
+
+        result = _extract_json('{"key": "value"}')
+        assert result == '{"key": "value"}'
+
+    def test_json_extracted_when_wrapped_in_markdown_fences(self):
+        """JSON wrapped in ```json ... ``` is extracted."""
+        from neograph._llm import _extract_json
+
+        text = '```json\n{"key": "value"}\n```'
+        result = _extract_json(text)
+        assert '"key"' in result
+        assert '"value"' in result
+        # Verify it's valid JSON
+        import json
+        parsed = json.loads(result)
+        assert parsed == {"key": "value"}
+
+    def test_first_json_extracted_when_multiple_objects_in_text(self):
+        """When multiple JSON objects exist, the first one is extracted."""
+        from neograph._llm import _extract_json
+        import json
+
+        text = 'Here is result: {"first": 1} and also {"second": 2}'
+        result = _extract_json(text)
+        parsed = json.loads(result)
+        assert "first" in parsed
+
+    def test_nested_braces_parsed_when_json_has_nested_objects(self):
+        """JSON with nested braces parses correctly."""
+        from neograph._llm import _extract_json
+        import json
+
+        text = '{"outer": {"inner": "value"}}'
+        result = _extract_json(text)
+        parsed = json.loads(result)
+        assert parsed["outer"]["inner"] == "value"
+
+    def test_text_returned_when_no_json_present(self):
+        """When no JSON is present, the cleaned text is returned."""
+        from neograph._llm import _extract_json
+
+        result = _extract_json("no json here at all")
+        assert result == "no json here at all"
+
+    def test_json_extracted_when_surrounded_by_prose(self):
+        """JSON embedded in prose text is extracted."""
+        from neograph._llm import _extract_json
+        import json
+
+        text = 'The answer is: {"items": ["a", "b"]} as shown above.'
+        result = _extract_json(text)
+        parsed = json.loads(result)
+        assert parsed["items"] == ["a", "b"]
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# TEST: _call_structured TypeError fallback for include_raw (neograph-rdu.11)
+#
+# _call_structured() passes include_raw=True by default. Some LLMs don't
+# support this kwarg and raise TypeError. The code catches this and retries
+# without include_raw.
+# ═══════════════════════════════════════════════════════════════════════════
+
+class TestCallStructuredFallback:
+    def test_fallback_succeeds_when_include_raw_raises_type_error(self):
+        """_call_structured retries without include_raw when TypeError is raised."""
+        from unittest.mock import MagicMock
+
+        from neograph._llm import _call_structured
+
+        expected = Claims(items=["fallback-result"])
+
+        # Mock LLM: with_structured_output(model, include_raw=True) raises TypeError
+        # but with_structured_output(model) alone succeeds
+        mock_llm = MagicMock()
+
+        call_count = {"n": 0}
+
+        def with_structured_output_side_effect(model, **kwargs):
+            call_count["n"] += 1
+            if kwargs.get("include_raw", False):
+                raise TypeError("unexpected keyword argument 'include_raw'")
+            # Return a mock structured LLM that returns our expected result
+            mock_structured = MagicMock()
+            mock_structured.invoke.return_value = expected
+            return mock_structured
+
+        mock_llm.with_structured_output.side_effect = with_structured_output_side_effect
+
+        config = {"configurable": {}}
+        result, usage = _call_structured(mock_llm, [], Claims, "structured", config)
+
+        assert result == expected
+        # Called twice: first with include_raw=True (fails), then without
+        assert call_count["n"] == 2
+
+    def test_result_correct_when_include_raw_supported(self):
+        """_call_structured returns parsed result when include_raw works."""
+        from unittest.mock import MagicMock
+
+        from neograph._llm import _call_structured
+
+        expected = Claims(items=["direct-result"])
+
+        mock_llm = MagicMock()
+        mock_structured = MagicMock()
+        mock_structured.invoke.return_value = {"parsed": expected, "raw": None}
+        mock_llm.with_structured_output.return_value = mock_structured
+
+        config = {"configurable": {}}
+        result, usage = _call_structured(mock_llm, [], Claims, "structured", config)
+
+        assert result == expected
+        # Called once — include_raw=True worked
+        mock_llm.with_structured_output.assert_called_once_with(Claims, include_raw=True)

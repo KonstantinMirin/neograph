@@ -2041,3 +2041,76 @@ class TestDecoratorDictOutputs:
         assert extract.outputs is RawText
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# INTEROP: @node decorator integration with Operator and Each+DI
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TestNodeDecoratorInterop:
+    """Cross-feature integration: @node with Operator interrupt/resume and Each+DI."""
+
+    def test_output_present_after_resume_when_operator_interrupt_always(self):
+        """@node(interrupt_when=<callable>) pauses graph, resume delivers final result."""
+        from langgraph.checkpoint.memory import MemorySaver
+
+        from neograph import FromInput, compile, construct_from_functions, node, run
+
+        @node(mode="scripted", outputs=Claims)
+        def produce(node_id: Annotated[str, FromInput]) -> Claims:
+            return Claims(items=["claim-a", "claim-b"])
+
+        @node(
+            mode="scripted",
+            outputs=Claims,
+            interrupt_when=lambda state: {"needs_review": True},
+        )
+        def review(produce: Claims) -> Claims:
+            return Claims(items=[f"reviewed:{c}" for c in produce.items])
+
+        pipeline = construct_from_functions("op_interop", [produce, review])
+        checkpointer = MemorySaver()
+        graph = compile(pipeline, checkpointer=checkpointer)
+
+        config = {"configurable": {"thread_id": "test-op-interop"}}
+
+        # First run: hits interrupt after review executes
+        result = run(graph, input={"node_id": "op-test"}, config=config)
+        assert "__interrupt__" in result
+
+        # Resume with human feedback
+        result = run(graph, resume={"approved": True}, config=config)
+        assert result["review"] == Claims(items=["reviewed:claim-a", "reviewed:claim-b"])
+        assert result["human_feedback"] == {"approved": True}
+
+    def test_di_param_resolves_when_node_inside_each_fanout(self):
+        """@node with map_over (Each) + Annotated[str, FromInput] resolves both fan-out
+        item and DI param correctly."""
+        from neograph import FromInput, compile, construct_from_functions, node, run
+
+        @node(mode="scripted", outputs=Clusters)
+        def producer() -> Clusters:
+            return Clusters(groups=[
+                ClusterGroup(label="alpha", claim_ids=["c1"]),
+                ClusterGroup(label="beta", claim_ids=["c2", "c3"]),
+            ])
+
+        @node(
+            mode="scripted",
+            outputs=MatchResult,
+            map_over="producer.groups",
+            map_key="label",
+        )
+        def consumer(
+            cluster: ClusterGroup,
+            node_id: Annotated[str, FromInput],
+        ) -> MatchResult:
+            return MatchResult(cluster_label=f"{node_id}:{cluster.label}", matched=[])
+
+        pipeline = construct_from_functions("each_di", [producer, consumer])
+        graph = compile(pipeline)
+        result = run(graph, input={"node_id": "test-42"})
+
+        consumer_results = result["consumer"]
+        assert set(consumer_results.keys()) == {"alpha", "beta"}
+        assert consumer_results["alpha"].cluster_label == "test-42:alpha"
+        assert consumer_results["beta"].cluster_label == "test-42:beta"

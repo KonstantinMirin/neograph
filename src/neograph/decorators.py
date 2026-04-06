@@ -907,7 +907,8 @@ def _build_construct_from_decorated(
                     f"the sidecar on the new Node copy. See AGENTS.md '@node sidecar pattern'."
                 )
             _, pnames = sidecar
-            fan_out_params[field_name] = {p for p in pnames if p not in decorated}
+            di_params = set(_get_param_resolutions(n))
+            fan_out_params[field_name] = {p for p in pnames if p not in decorated and p not in di_params}
 
     # Classify default-value constants: params with defaults that don't match
     # any decorated @node and aren't already classified as from_input/from_config.

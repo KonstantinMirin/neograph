@@ -1132,3 +1132,216 @@ class TestThreeSurfaceParity:
         verify_results = result.get("verify") or result.get("tsp_dec_verify")
         labels = {v.cluster_label for v in verify_results.values()}
         assert labels == {"alpha", "beta"}
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# TestModifierCombinations (neograph-rdu.1, rdu.4, rdu.6, rdu.7)
+#
+# Integration tests for modifier combinations that were previously only
+# covered via one API surface or not at all.
+# ═══════════════════════════════════════════════════════════════════════════
+
+class TestModifierCombinations:
+    """Cross-modifier integration tests: Each+Oracle, Each+Operator,
+    dict-outputs+Oracle, dict-outputs+Each."""
+
+    def test_oracle_merges_per_item_when_each_wraps_oracle_subconstruct(self):
+        """neograph-rdu.1: Each fans out over clusters, each runs Oracle
+        ensemble (2 variants + merge) via a sub-Construct containing @node."""
+        import types as _types
+        from neograph import compile, node, run
+        from neograph.factory import register_scripted
+
+        gen_count = [0]
+
+        def mc_merge(variants, config):
+            all_matched = []
+            for v in variants:
+                all_matched.extend(v.matched)
+            return MatchResult(
+                cluster_label=variants[0].cluster_label,
+                matched=all_matched,
+            )
+
+        register_scripted("mc_merge_fn", mc_merge)
+
+        # Inner @node with Oracle
+        @node(mode="scripted", outputs=MatchResult, ensemble_n=2, merge_fn="mc_merge_fn")
+        def mc_verify() -> MatchResult:
+            gen_count[0] += 1
+            return MatchResult(cluster_label="item", matched=[f"m-{gen_count[0]}"])
+
+        mod = _types.ModuleType("mc_oracle_inner_mod")
+        mod.mc_verify = mc_verify
+
+        from neograph import construct_from_module
+        inner = construct_from_module(mod, name="mc-oracle-inner")
+        # Give the sub-construct proper input/output for Each
+        inner = inner.model_copy(update={"input": ClusterGroup, "output": MatchResult})
+
+        register_scripted(
+            "mc_make_clusters_rdu1",
+            lambda _in, _cfg: Clusters(groups=[
+                ClusterGroup(label="alpha", claim_ids=["c1", "c2"]),
+                ClusterGroup(label="beta", claim_ids=["c3"]),
+            ]),
+        )
+
+        parent = Construct("test-each-oracle", nodes=[
+            Node.scripted("mc-make", fn="mc_make_clusters_rdu1", outputs=Clusters),
+            inner | Each(over="mc_make.groups", key="label"),
+        ])
+        graph = compile(parent)
+        result = run(graph, input={"node_id": "rdu1"})
+
+        # Each cluster got Oracle'd (2 variants each) => 2 clusters x 2 = 4 calls
+        assert gen_count[0] == 4
+        verify_results = result.get("mc_oracle_inner", {})
+        assert isinstance(verify_results, dict)
+        assert set(verify_results.keys()) == {"alpha", "beta"}
+
+    def test_graph_pauses_when_each_then_operator_on_next_node(self):
+        """neograph-rdu.4: Each fan-out followed by Operator on a downstream
+        node — the interrupt fires after Each results are collected."""
+        from langgraph.checkpoint.memory import MemorySaver
+        from neograph.factory import register_condition, register_scripted
+
+        register_scripted(
+            "mc_make_clusters_rdu4",
+            lambda _in, _cfg: Clusters(groups=[
+                ClusterGroup(label="x", claim_ids=["1"]),
+                ClusterGroup(label="y", claim_ids=["2"]),
+            ]),
+        )
+        register_scripted(
+            "mc_review_item",
+            lambda input_data, _cfg: MatchResult(
+                cluster_label=input_data.label if hasattr(input_data, "label") else "?",
+                matched=["reviewed"],
+            ),
+        )
+
+        def mc_check_fn(input_data, _cfg):
+            return ValidationResult(passed=False, issues=["needs human review"])
+
+        register_scripted("mc_check_fn", mc_check_fn)
+
+        register_condition(
+            "mc_check_failed",
+            lambda state: (
+                {"issues": state.mc_check.issues}
+                if hasattr(state, "mc_check") and state.mc_check and not state.mc_check.passed
+                else None
+            ),
+        )
+
+        make = Node.scripted("mc-make", fn="mc_make_clusters_rdu4", outputs=Clusters)
+        review = (
+            Node.scripted(
+                "mc-review", fn="mc_review_item",
+                inputs=ClusterGroup, outputs=MatchResult,
+            )
+            | Each(over="mc_make.groups", key="label")
+        )
+        check = (
+            Node.scripted("mc-check", fn="mc_check_fn", outputs=ValidationResult)
+            | Operator(when="mc_check_failed")
+        )
+        pipeline = Construct("test-each-operator", nodes=[make, review, check])
+        graph = compile(pipeline, checkpointer=MemorySaver())
+        config = {"configurable": {"thread_id": "rdu4-test"}}
+
+        result = run(graph, input={"node_id": "rdu4"}, config=config)
+
+        # Each fan-out ran and produced results
+        review_results = result.get("mc_review", {})
+        assert isinstance(review_results, dict)
+        assert set(review_results.keys()) == {"x", "y"}
+        # Operator interrupted after check
+        assert "__interrupt__" in result
+
+    def test_oracle_merges_variants_when_single_output_oracle_node(self):
+        """neograph-rdu.6: Oracle modifier on a node with single-type outputs
+        runs N variants and merges via scripted merge_fn."""
+        from neograph.factory import register_scripted
+
+        gen_count = [0]
+
+        def mc_gen(input_data, config):
+            gen_count[0] += 1
+            return Claims(items=[f"v{gen_count[0]}"])
+
+        register_scripted("mc_oracle_gen", mc_gen)
+
+        def mc_merge(variants, config):
+            all_items = []
+            for v in variants:
+                all_items.extend(v.items)
+            return Claims(items=all_items)
+
+        register_scripted("mc_oracle_merge", mc_merge)
+
+        gen_node = (
+            Node.scripted("mc-gen", fn="mc_oracle_gen", outputs=Claims)
+            | Oracle(n=2, merge_fn="mc_oracle_merge")
+        )
+        pipeline = Construct("test-oracle-merge", nodes=[gen_node])
+        graph = compile(pipeline)
+        result = run(graph, input={"node_id": "rdu6"})
+
+        # Oracle ran 2 variants
+        assert gen_count[0] == 2
+        # Merge combined both variants
+        merged = result.get("mc_gen")
+        assert merged is not None
+        assert len(merged.items) == 2
+        assert set(merged.items) == {"v1", "v2"}
+
+    def test_each_wraps_per_key_when_dict_outputs_with_each(self):
+        """neograph-rdu.7: dict-form outputs + Each — each output key becomes
+        dict[str, type] independently in state."""
+        from neograph.factory import register_scripted
+
+        register_scripted(
+            "mc_each_make",
+            lambda _in, _cfg: Clusters(groups=[
+                ClusterGroup(label="a", claim_ids=["1"]),
+                ClusterGroup(label="b", claim_ids=["2"]),
+            ]),
+        )
+
+        def mc_each_process(input_data, config):
+            label = input_data.label if hasattr(input_data, "label") else "?"
+            return {
+                "result": MatchResult(cluster_label=label, matched=[f"ok-{label}"]),
+                "score": RawText(text=f"score-{label}"),
+            }
+
+        register_scripted("mc_each_process", mc_each_process)
+
+        make = Node.scripted("mc-each-make", fn="mc_each_make", outputs=Clusters)
+        process = (
+            Node.scripted(
+                "mc-each-proc", fn="mc_each_process",
+                inputs=ClusterGroup,
+                outputs={"result": MatchResult, "score": RawText},
+            )
+            | Each(over="mc_each_make.groups", key="label")
+        )
+        pipeline = Construct("test-dict-each", nodes=[make, process])
+        graph = compile(pipeline)
+        result = run(graph, input={"node_id": "rdu7"})
+
+        # Each output key should be a dict keyed by Each labels
+        result_dict = result.get("mc_each_proc_result", {})
+        score_dict = result.get("mc_each_proc_score", {})
+
+        assert isinstance(result_dict, dict)
+        assert set(result_dict.keys()) == {"a", "b"}
+        assert result_dict["a"].cluster_label == "a"
+        assert result_dict["b"].cluster_label == "b"
+
+        assert isinstance(score_dict, dict)
+        assert set(score_dict.keys()) == {"a", "b"}
+        assert score_dict["a"].text == "score-a"
+        assert score_dict["b"].text == "score-b"
