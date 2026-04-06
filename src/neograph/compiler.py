@@ -149,11 +149,17 @@ def _add_node_to_graph(
 
     # ── Oracle: expand to fan-out + merge ──
     if oracle:
-        return _add_oracle_nodes(graph, node, oracle, prev_node)
+        last_name = _add_oracle_nodes(graph, node, oracle, prev_node)
+        if operator:
+            last_name = _add_operator_check(graph, last_name, operator)
+        return last_name
 
     # ── Each: expand to fan-out + barrier ──
     if each:
-        return _add_each_nodes(graph, node, each, prev_node)
+        last_name = _add_each_nodes(graph, node, each, prev_node)
+        if operator:
+            last_name = _add_operator_check(graph, last_name, operator)
+        return last_name
 
     # ── Simple node ──
     node_name = node.name
@@ -270,13 +276,27 @@ def _wire_each(
         for part in segments:
             obj = getattr(obj, part) if hasattr(obj, part) else obj[part]
 
+        # Guard: detect duplicate dispatch keys before fan-out
+        seen_keys: dict[str, int] = {}
+        items = list(obj)
+        for idx, item in enumerate(items):
+            key_val = getattr(item, each.key, str(item))
+            if key_val in seen_keys:
+                msg = (
+                    f"Each fan-out for '{fan_name}' produced duplicate key '{key_val}' "
+                    f"(items at index {seen_keys[key_val]} and {idx}). "
+                    f"Each item's '{each.key}' must be unique."
+                )
+                raise ValueError(msg)
+            seen_keys[key_val] = idx
+
         state_dict = {
             k: getattr(state, k)
             for k in state.__class__.model_fields
         }
         return [
             Send(fan_name, {**state_dict, "neo_each_item": item})
-            for item in obj
+            for item in items
         ]
 
     if prev_node:

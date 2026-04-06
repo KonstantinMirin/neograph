@@ -1345,3 +1345,267 @@ class TestModifierCombinations:
         assert set(score_dict.keys()) == {"a", "b"}
         assert score_dict["a"].text == "score-a"
         assert score_dict["b"].text == "score-b"
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# TEST: Each duplicate key guard
+#
+# When the input collection contains items with duplicate key values,
+# the each_router should raise a clear ValueError before dispatching
+# Send() calls — not let it bubble up from the LangGraph reducer.
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TestEachDuplicateKeyGuard:
+
+    def test_raises_clear_error_when_each_collection_has_duplicate_keys_node_api(self):
+        """@node API: duplicate key in Each collection raises ValueError at dispatch."""
+        import types as _types
+        from neograph import compile, construct_from_module, node, run
+
+        mod = _types.ModuleType("test_each_dup_key")
+
+        @node(mode="scripted", outputs=Clusters)
+        def make_clusters() -> Clusters:
+            return Clusters(groups=[
+                ClusterGroup(label="dup", claim_ids=["c1"]),
+                ClusterGroup(label="dup", claim_ids=["c2"]),
+            ])
+
+        @node(
+            mode="scripted",
+            outputs=MatchResult,
+            map_over="make_clusters.groups",
+            map_key="label",
+        )
+        def verify(cluster: ClusterGroup) -> MatchResult:
+            return MatchResult(cluster_label=cluster.label, matched=[])
+
+        mod.make_clusters = make_clusters
+        mod.verify = verify
+
+        pipeline = construct_from_module(mod)
+        graph = compile(pipeline)
+
+        with pytest.raises(ValueError, match=r"duplicate key 'dup'"):
+            run(graph, input={"node_id": "dup-test"})
+
+    def test_raises_clear_error_when_each_collection_has_duplicate_keys_programmatic(self):
+        """Programmatic API: duplicate key in Each collection raises ValueError."""
+        from neograph import compile, run
+
+        def make_fn(input_data, config):
+            return Clusters(groups=[
+                ClusterGroup(label="same", claim_ids=["c1"]),
+                ClusterGroup(label="same", claim_ids=["c2"]),
+            ])
+
+        def proc_fn(input_data, config):
+            return MatchResult(cluster_label="same", matched=[])
+
+        register_scripted("dup_each_make", make_fn)
+        register_scripted("dup_each_proc", proc_fn)
+
+        make = Node.scripted("dup-each-make", fn="dup_each_make", outputs=Clusters)
+        proc = (
+            Node.scripted(
+                "dup-each-proc", fn="dup_each_proc",
+                inputs=ClusterGroup, outputs=MatchResult,
+            )
+            | Each(over="dup_each_make.groups", key="label")
+        )
+        pipeline = Construct("test-dup-each", nodes=[make, proc])
+        graph = compile(pipeline)
+
+        with pytest.raises(ValueError, match=r"duplicate key 'same'"):
+            run(graph, input={"node_id": "dup-prog"})
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# TestOracleOperatorCombo (neograph-l84)
+#
+# Oracle + Operator modifier combination: run N LLM variants (Oracle),
+# merge them, then pause for human review (Operator) before continuing.
+# This proves: the two modifiers compose on a single node, interrupt
+# fires after Oracle merge, and resume delivers the merged result.
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TestOracleOperatorCombo:
+    """Oracle + Operator on the same node — ensemble then human review."""
+
+    def test_graph_pauses_with_merged_result_when_oracle_operator_applied(self):
+        """Oracle merges N variants, then Operator interrupts for review.
+        The merged result must be in state before the interrupt fires."""
+        from langgraph.checkpoint.memory import MemorySaver
+
+        from neograph.factory import register_condition, register_scripted
+
+        gen_count = [0]
+
+        def oo_gen(input_data, config):
+            gen_count[0] += 1
+            return Claims(items=[f"variant-{gen_count[0]}"])
+
+        register_scripted("oo_gen", oo_gen)
+
+        def oo_merge(variants, config):
+            all_items = []
+            for v in variants:
+                all_items.extend(v.items)
+            return Claims(items=all_items)
+
+        register_scripted("oo_merge", oo_merge)
+
+        register_condition(
+            "oo_always_review",
+            lambda state: (
+                {"needs_review": True}
+                if hasattr(state, "oo_gen") and state.oo_gen is not None
+                else None
+            ),
+        )
+
+        gen_node = (
+            Node.scripted("oo-gen", fn="oo_gen", outputs=Claims)
+            | Oracle(n=2, merge_fn="oo_merge")
+            | Operator(when="oo_always_review")
+        )
+
+        pipeline = Construct("test-oracle-operator", nodes=[gen_node])
+        graph = compile(pipeline, checkpointer=MemorySaver())
+        config = {"configurable": {"thread_id": "oracle-op-test"}}
+
+        result = run(graph, input={"node_id": "oo-001"}, config=config)
+
+        # Oracle ran 2 variants
+        assert gen_count[0] == 2
+        # Merged result is in state before interrupt
+        merged = result.get("oo_gen")
+        assert merged is not None
+        assert len(merged.items) == 2
+        assert set(merged.items) == {"variant-1", "variant-2"}
+        # Operator interrupted
+        assert "__interrupt__" in result
+
+    def test_graph_resumes_with_merged_output_when_oracle_operator_resumed(self):
+        """After interrupt, resume delivers the Oracle-merged output
+        and human feedback is accessible in state."""
+        from langgraph.checkpoint.memory import MemorySaver
+
+        from neograph.factory import register_condition, register_scripted
+
+        gen_count = [0]
+
+        def oo_gen2(input_data, config):
+            gen_count[0] += 1
+            return Claims(items=[f"v{gen_count[0]}"])
+
+        register_scripted("oo_gen2", oo_gen2)
+
+        def oo_merge2(variants, config):
+            all_items = []
+            for v in variants:
+                all_items.extend(v.items)
+            return Claims(items=all_items)
+
+        register_scripted("oo_merge2", oo_merge2)
+
+        register_condition(
+            "oo_always_review2",
+            lambda state: (
+                {"needs_review": True}
+                if hasattr(state, "oo_gen2") and state.oo_gen2 is not None
+                else None
+            ),
+        )
+
+        gen_node = (
+            Node.scripted("oo-gen2", fn="oo_gen2", outputs=Claims)
+            | Oracle(n=2, merge_fn="oo_merge2")
+            | Operator(when="oo_always_review2")
+        )
+
+        pipeline = Construct("test-oracle-op-resume", nodes=[gen_node])
+        graph = compile(pipeline, checkpointer=MemorySaver())
+        config = {"configurable": {"thread_id": "oracle-op-resume"}}
+
+        # First run: hits interrupt
+        result = run(graph, input={"node_id": "oo-002"}, config=config)
+        assert "__interrupt__" in result
+
+        # Resume with human feedback
+        result = run(graph, resume={"approved": True}, config=config)
+
+        # Merged output persists after resume
+        merged = result.get("oo_gen2")
+        assert merged is not None
+        assert len(merged.items) == 2
+        # Human feedback captured
+        assert result["human_feedback"] == {"approved": True}
+
+    def test_oracle_subconstruct_then_operator_on_parent_node(self):
+        """Oracle on a sub-Construct, then Operator on the next parent node.
+        Tests that modifiers compose across construct boundaries."""
+        from langgraph.checkpoint.memory import MemorySaver
+
+        from neograph.factory import register_condition, register_scripted
+
+        register_scripted(
+            "oo_sub_gen",
+            lambda input_data, config: Claims(items=["sub-variant"]),
+        )
+
+        def oo_sub_merge(variants, config):
+            all_items = []
+            for v in variants:
+                all_items.extend(v.items)
+            return Claims(items=all_items)
+
+        register_scripted("oo_sub_merge", oo_sub_merge)
+
+        # Sub-construct with Oracle
+        sub = Construct(
+            "oo-ensemble",
+            input=Claims,
+            output=Claims,
+            nodes=[Node.scripted("gen", fn="oo_sub_gen", outputs=Claims)],
+        ) | Oracle(n=2, merge_fn="oo_sub_merge")
+
+        # Validation node after sub-construct, with Operator
+        def oo_validate(input_data, config):
+            return ValidationResult(passed=False, issues=["human must review ensemble"])
+
+        register_scripted("oo_validate", oo_validate)
+
+        register_condition(
+            "oo_val_failed",
+            lambda state: (
+                {"issues": state.oo_validate.issues}
+                if hasattr(state, "oo_validate") and state.oo_validate
+                and not state.oo_validate.passed
+                else None
+            ),
+        )
+
+        register_scripted("oo_seed", lambda _in, _cfg: Claims(items=["seed"]))
+
+        parent = Construct("test-oracle-sub-operator", nodes=[
+            Node.scripted("seed", fn="oo_seed", outputs=Claims),
+            sub,
+            Node.scripted("oo-validate", fn="oo_validate", outputs=ValidationResult)
+            | Operator(when="oo_val_failed"),
+        ])
+        graph = compile(parent, checkpointer=MemorySaver())
+        config = {"configurable": {"thread_id": "oracle-sub-op-test"}}
+
+        result = run(graph, input={"node_id": "oo-003"}, config=config)
+
+        # Oracle sub-construct ran and merged 2 variants
+        ensemble_result = result.get("oo_ensemble")
+        assert ensemble_result is not None
+        assert len(ensemble_result.items) == 2
+        # Validation node ran
+        assert result["oo_validate"].passed is False
+        # Operator interrupted
+        assert "__interrupt__" in result

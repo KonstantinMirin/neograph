@@ -58,6 +58,57 @@ class StructuredFake:
         return self._respond(self._model)
 
 
+class StructuredFakeWithRaw:
+    """Fake LLM that honors include_raw=True in with_structured_output.
+
+    When include_raw=True (the default in _call_structured), returns
+    {"parsed": model_instance, "raw": AIMessage(content="fake", response_metadata=...)}
+    so the usage metadata extraction path is testable.
+
+    When include_raw=False, behaves like regular StructuredFake.
+
+    Usage:
+        fake = StructuredFakeWithRaw(lambda model: model(items=["a", "b"]))
+        configure_fake_llm(lambda tier: fake)
+    """
+
+    def __init__(
+        self,
+        respond: Callable[[type[BaseModel]], BaseModel],
+        *,
+        usage: dict[str, int] | None = None,
+    ):
+        self._respond = respond
+        self._model: type[BaseModel] | None = None
+        self._include_raw: bool = False
+        self._usage = usage or {"prompt_tokens": 10, "completion_tokens": 20}
+
+    def with_structured_output(self, model: type[BaseModel], **kwargs) -> "StructuredFakeWithRaw":
+        clone = StructuredFakeWithRaw(self._respond, usage=self._usage)
+        clone._model = model
+        clone._include_raw = kwargs.get("include_raw", False)
+        return clone
+
+    def invoke(self, messages: list, **kwargs) -> Any:
+        assert self._model is not None, "with_structured_output must be called first"
+        result = self._respond(self._model)
+        if self._include_raw:
+            raw_msg = AIMessage(
+                content="fake",
+                response_metadata={"token_usage": self._usage},
+                usage_metadata={
+                    "input_tokens": self._usage.get("prompt_tokens", 0),
+                    "output_tokens": self._usage.get("completion_tokens", 0),
+                    "total_tokens": (
+                        self._usage.get("prompt_tokens", 0)
+                        + self._usage.get("completion_tokens", 0)
+                    ),
+                },
+            )
+            return {"parsed": result, "raw": raw_msg}
+        return result
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # ReActFake — gather/execute mode
 # ═══════════════════════════════════════════════════════════════════════════
