@@ -60,7 +60,10 @@ import sys
 import textwrap
 import warnings
 import weakref
-from typing import Annotated, Any, Callable, Literal, get_args, get_origin
+from typing import TYPE_CHECKING, Annotated, Any, Callable, Literal, get_args, get_origin
+
+if TYPE_CHECKING:
+    from pydantic import BaseModel
 
 import structlog
 
@@ -769,6 +772,8 @@ def construct_from_module(
     name: str | None = None,
     *,
     llm_config: dict[str, Any] | None = None,
+    input: type[BaseModel] | None = None,
+    output: type[BaseModel] | None = None,
 ) -> Construct:
     """Walk a module's @node-built Nodes, sort topologically, return a Construct.
 
@@ -788,6 +793,8 @@ def construct_from_module(
         name: Construct name. Default: module's short name.
         llm_config: Default LLM config inherited by every node. Per-node
             llm_config merges over this (node wins on conflicts).
+        input: Input type for sub-construct boundary.
+        output: Output type for sub-construct boundary.
     """
     nodes: list[Node] = []
     source_label = f"module '{mod.__name__}'"
@@ -797,7 +804,8 @@ def construct_from_module(
 
     construct_name = name or mod.__name__.split(".")[-1]
     return _build_construct_from_decorated(
-        nodes, construct_name, source_label, llm_config
+        nodes, construct_name, source_label, llm_config,
+        construct_input=input, construct_output=output,
     )
 
 
@@ -806,6 +814,8 @@ def construct_from_functions(
     functions: list[Any],
     *,
     llm_config: dict[str, Any] | None = None,
+    input: type[BaseModel] | None = None,
+    output: type[BaseModel] | None = None,
 ) -> Construct:
     """Build a Construct from an explicit list of @node-decorated functions.
 
@@ -815,6 +825,12 @@ def construct_from_functions(
 
         pipelineA = construct_from_functions("A", [fn1, fn2, fn3])
         pipelineB = construct_from_functions("B", [fn4, fn5])
+
+    When building a sub-construct, pass ``input=`` / ``output=`` to define the
+    state boundary:
+
+        sub = construct_from_functions("verify", [explore, score],
+                                       input=VerifyClaim, output=ClaimResult)
 
     Same topological sort, validation, and error messages as
     `construct_from_module()`. The returned Construct is a regular Construct.
@@ -826,6 +842,9 @@ def construct_from_functions(
             instance returned by @node; plain callables raise ConstructError.
         llm_config: Default LLM config inherited by every node. Per-node
             llm_config merges over this (node wins on conflicts).
+        input: Input type for sub-construct boundary. When set, the Construct
+            receives an isolated state with this type at ``neo_subgraph_input``.
+        output: Output type for sub-construct boundary.
     """
     source_label = f"construct '{name}'"
     nodes: list[Node] = []
@@ -841,7 +860,8 @@ def construct_from_functions(
         nodes.append(item)
 
     return _build_construct_from_decorated(
-        nodes, name, source_label, llm_config
+        nodes, name, source_label, llm_config,
+        construct_input=input, construct_output=output,
     )
 
 
@@ -868,6 +888,8 @@ def _build_construct_from_decorated(
     construct_name: str,
     source_label: str,
     llm_config: dict[str, Any] | None,
+    construct_input: type[BaseModel] | None = None,
+    construct_output: type[BaseModel] | None = None,
 ) -> Construct:
     """Core pipeline builder shared by construct_from_module and
     construct_from_functions. Builds {field_name: Node} with collision
@@ -1047,7 +1069,13 @@ def _build_construct_from_decorated(
             field = n.name.replace("-", "_")
             _register_node_scripted(n, fan_out_params.get(field, set()))
 
-    return Construct(name=construct_name, nodes=ordered, llm_config=llm_config or {})
+    return Construct(
+        name=construct_name,
+        nodes=ordered,
+        llm_config=llm_config or {},
+        input=construct_input,
+        output=construct_output,
+    )
 
 
 def _register_node_scripted(n: Node, fan_out: set[str] | None = None) -> None:
