@@ -1284,6 +1284,92 @@ class TestMixedNodeAndConstruct:
         assert all(isinstance(v, ClaimVerdict) for v in result["verify_claim"].values())
         assert result["deterministic_merge"].text == "c1=confirmed; c2=confirmed"
 
+    def test_oracle_merge_fires_when_oracle_node_and_sub_construct_in_same_pipeline(self):
+        """Oracle merge_fn fires after generators when pipeline also contains a
+        sub-construct (neograph-pq4). Regression: dqe's all_known adjacency dict
+        broke Oracle barrier assembly."""
+        from tests.fakes import StructuredFakeWithRaw, configure_fake_llm
+
+        configure_fake_llm(lambda tier: StructuredFakeWithRaw(
+            lambda m: m(items=["variant-item"]),
+        ))
+
+        gen_count = [0]
+
+        @merge_fn
+        def combine_pq4(variants: list[Claims]) -> Claims:
+            all_items = [i for v in variants for i in v.items]
+            return Claims(items=[f"merged-{len(variants)}v"] + all_items)
+
+        @node(outputs=Claims, model="fast", prompt="decompose",
+              ensemble_n=3, merge_fn="combine_pq4")
+        def decompose() -> Claims: ...
+
+        @node(outputs=RawText)
+        def flatten(decompose: Claims) -> RawText:
+            return RawText(text=f"got {len(decompose.items)} items")
+
+        # Sub-construct (triggers the dqe code path).
+        @node(outputs=VerifyClaim)
+        def make_claim(decompose: Claims) -> VerifyClaim:
+            return VerifyClaim(claim_id="c1", text=decompose.items[0])
+
+        register_scripted("pq4_inner", lambda _in, _cfg: ClaimResult(
+            claim_id="x", disposition="ok",
+        ))
+        sub = Construct(
+            "sub", input=VerifyClaim, output=ClaimResult,
+            nodes=[Node.scripted("inner", fn="pq4_inner",
+                                 inputs=VerifyClaim, outputs=ClaimResult)],
+        )
+
+        pipeline = construct_from_functions(
+            "oracle-sub-test", [decompose, flatten, make_claim, sub],
+        )
+        graph = compile(pipeline)
+        result = run(graph, input={"node_id": "pq4"})
+
+        # The critical assertion: merge ran, flatten got merged result (not None/empty)
+        assert result["flatten"] is not None
+        assert "got 4 items" in result["flatten"].text  # 1 "merged-3v" + 3 "variant-item"
+        assert result["decompose"].items[0] == "merged-3v"
+
+    def test_oracle_merge_fires_when_sub_construct_is_first_failure_mode(self):
+        """Variant: sub-construct comes BEFORE the Oracle node in the list.
+        Tests the second failure mode from the consumer report."""
+        from tests.fakes import StructuredFakeWithRaw, configure_fake_llm
+
+        configure_fake_llm(lambda tier: StructuredFakeWithRaw(
+            lambda m: m(items=["v-item"]),
+        ))
+
+        @merge_fn
+        def combine_pq4b(variants: list[Claims]) -> Claims:
+            return Claims(items=[f"merged-{len(variants)}"])
+
+        register_scripted("pq4b_inner", lambda _in, _cfg: RawText(text="processed"))
+        sub = Construct(
+            "preprocess", input=Claims, output=RawText,
+            nodes=[Node.scripted("inner", fn="pq4b_inner",
+                                 inputs=Claims, outputs=RawText)],
+        )
+
+        @node(outputs=Claims)
+        def seed() -> Claims:
+            return Claims(items=["raw"])
+
+        @node(outputs=Claims, model="fast", prompt="gen",
+              ensemble_n=2, merge_fn="combine_pq4b")
+        def generate(preprocess: RawText) -> Claims: ...
+
+        pipeline = construct_from_functions(
+            "sub-before-oracle", [seed, sub, generate],
+        )
+        graph = compile(pipeline)
+        result = run(graph, input={"node_id": "pq4b"})
+
+        assert result["generate"].items == ["merged-2"]
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 # GATHER → PRODUCE INSIDE SUB-CONSTRUCT (neograph-dp5)
