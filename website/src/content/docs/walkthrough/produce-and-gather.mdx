@@ -1,19 +1,19 @@
 ---
-title: "2. LLM Produce + Gather"
+title: "2. LLM Think + Agent"
 description: "Use an LLM to decompose a requirement, then research it with tools under a call budget."
 ---
 
-This walkthrough introduces NeoGraph's two primary LLM modes: **produce** (single structured call) and **gather** (ReAct tool loop with budget enforcement). Together they form the most common two-step pattern: decompose a problem, then research it.
+This walkthrough introduces NeoGraph's two primary LLM modes: **think** (single structured call) and **agent** (ReAct tool loop with budget enforcement). Together they form the most common two-step pattern: decompose a problem, then research it.
 
-The pipeline is built with `@node`-decorated functions and `construct_from_module`. Mode is inferred from the kwargs: `prompt=` + `model=` means LLM call. Add `tools=` and it becomes a gather loop.
+The pipeline is built with `@node`-decorated functions and `construct_from_module`. Mode is inferred from the kwargs: `prompt=` + `model=` means LLM call. Add `tools=` and it becomes an agent loop.
 
 The example uses fake LLM and tool implementations so you can run it without API keys. Replace them with real ones for production.
 
 ## What you will learn
 
 - Configuring the LLM layer with `configure_llm()`
-- Using `@node` with `prompt=` and `model=` for LLM produce mode
-- Using `@node` with `mode="gather"` and `tools=` for ReAct tool loops
+- Using `@node` with `prompt=` and `model=` for LLM think mode
+- Using `@node` with `mode="agent"` and `tools=` for ReAct tool loops
 - Declaring tools with `Tool(name, budget)`
 - Registering tool factories with `register_tool_factory()`
 - Parameter-name wiring between LLM nodes
@@ -35,9 +35,9 @@ class ResearchResult(BaseModel, frozen=True):
 
 ## Nodes
 
-The `decompose` node has `prompt=` and `model=` but no `mode=` -- NeoGraph infers `mode="produce"` (single LLM call, structured output). The function body is `...` because the LLM handles execution.
+The `decompose` node has `prompt=` and `model=` but no `mode=` -- NeoGraph infers `mode="think"` (single LLM call, structured output). The function body is `...` because the LLM handles execution.
 
-The `research` node explicitly sets `mode="gather"` and adds `tools=`. It runs a ReAct loop: call the LLM, execute tool calls, feed results back, repeat until the budget is exhausted.
+The `research` node explicitly sets `mode="agent"` and adds `tools=`. It runs a ReAct loop: call the LLM, execute tool calls, feed results back, repeat until the budget is exhausted.
 
 ```python
 from neograph import node, Tool
@@ -48,7 +48,7 @@ def decompose() -> Claims:
 
 
 @node(
-    mode="gather",
+    mode="agent",
     output=ResearchResult,
     model="reason",
     prompt="req/research",
@@ -170,7 +170,7 @@ def decompose() -> Claims:
 
 
 @node(
-    mode="gather",
+    mode="agent",
     output=ResearchResult,
     model="reason",
     prompt="req/research",
@@ -215,13 +215,13 @@ NeoGraph infers the execution mode from the kwargs you pass to `@node`:
 
 | Present kwargs | Inferred mode | Behavior |
 |---|---|---|
-| `prompt=` + `model=` | `produce` | Single LLM call, structured JSON output |
-| `prompt=` + `model=` + `tools=` | `gather` | ReAct tool loop |
+| `prompt=` + `model=` | `think` | Single LLM call, structured JSON output |
+| `prompt=` + `model=` + `tools=` | `agent` | ReAct tool loop |
 | Neither | `scripted` | Function body runs as-is |
 
-You can also set `mode=` explicitly, which is required for `gather` if you want to be explicit about the distinction from `produce`.
+You can also set `mode=` explicitly, which is required for `agent` if you want to be explicit about the distinction from `think`.
 
-## Produce mode
+## Think mode
 
 A **produce** node makes a single LLM call and expects structured JSON back. The framework calls `llm.with_structured_output(output_model)` and parses the response into your Pydantic schema automatically.
 
@@ -233,13 +233,13 @@ def decompose() -> Claims:
 
 No tool loop. No message history management. One call, one typed result.
 
-## Gather mode
+## Agent mode
 
 A **gather** node runs a ReAct loop: call the LLM, if it requests tool calls execute them, feed results back, repeat. The loop continues until the LLM responds without tool calls, or all tool budgets are exhausted.
 
 ```python
 @node(
-    mode="gather",
+    mode="agent",
     output=ResearchResult,
     model="reason",
     prompt="req/research",

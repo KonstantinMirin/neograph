@@ -26,7 +26,7 @@ llm_output = {
     "nodes": [
         {
             "name": "decompose",
-            "mode": "produce",
+            "mode": "think",
             "output": "Claims",
             "prompt": "rw/decompose",
             "model": "reason",
@@ -36,7 +36,7 @@ llm_output = {
         },
         {
             "name": "verify",
-            "mode": "gather",
+            "mode": "agent",
             "output": "MatchResult",
             "prompt": "match/verify",
             "model": "fast",
@@ -47,7 +47,7 @@ llm_output = {
         },
         {
             "name": "report",
-            "mode": "produce",
+            "mode": "think",
             "output": "Report",
             "prompt": "rw/report",
             "model": "fast",

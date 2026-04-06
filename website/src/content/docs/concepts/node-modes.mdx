@@ -1,6 +1,6 @@
 ---
 title: Node Modes
-description: Five execution modes — produce, gather, execute, scripted, raw — and how @node infers them from kwargs.
+description: Five execution modes — think, agent, act, scripted, raw — and how @node infers them from kwargs.
 ---
 
 Every node has a `mode` that determines how it runs. The mode controls whether an LLM is called, whether tools are available, and what side effects are permitted.
@@ -9,9 +9,9 @@ Every node has a `mode` that determines how it runs. The mode controls whether a
 
 | Mode | LLM? | Tools? | Side effects? | Use case |
 |---|---|---|---|---|
-| `produce` | Yes | No | No | Single structured LLM call. Classification, extraction, generation. |
-| `gather` | Yes | Yes (read-only) | No | ReAct tool loop. Research, lookup, exploration. |
-| `execute` | Yes | Yes (mutations) | Yes | ReAct tool loop. Write files, call APIs, apply changes. |
+| `think` | Yes | No | No | Single structured LLM call. Classification, extraction, generation. |
+| `agent` | Yes | Yes (read-only) | No | ReAct tool loop. Research, lookup, exploration. |
+| `act` | Yes | Yes (mutations) | Yes | ReAct tool loop. Write files, call APIs, apply changes. |
 | `scripted` | No | No | Up to you | Pure Python. Deterministic transforms, filtering, formatting. |
 | `raw` | No | No | Up to you | LangGraph escape hatch. Full access to `(state, config)`. |
 
@@ -21,14 +21,14 @@ You rarely need to set `mode` explicitly. The `@node` decorator infers it from t
 
 | You pass... | Inferred mode |
 |---|---|
-| `prompt=` and/or `model=` | `produce` |
+| `prompt=` and/or `model=` | `think` |
 | Neither `prompt=` nor `model=` | `scripted` |
 | `mode='raw'` | `raw` (must be explicit) |
 
 ```python
 from neograph import node
 
-# Inferred as produce — prompt= and model= are present
+# Inferred as think — prompt= and model= are present
 @node(output=Claims, prompt='rw/decompose', model='reason')
 def decompose(topic: RawText) -> Claims: ...
 
@@ -38,10 +38,10 @@ def report(classify: Classified) -> Report:
     return Report(summary=f"{len(classify.items)} claims processed")
 ```
 
-If you need `gather` or `execute`, set mode explicitly — the presence of `tools=` alone does not trigger inference:
+If you need `agent` or `act`, set mode explicitly — the presence of `tools=` alone does not trigger inference:
 
 ```python
-@node(mode='gather', output=ResearchFindings, prompt='rw/explore', model='reason',
+@node(mode='agent', output=ResearchFindings, prompt='rw/explore', model='reason',
       tools=[Tool("search_nodes", budget=5)])
 def explore(query: SearchQuery) -> ResearchFindings: ...
 ```
@@ -59,7 +59,7 @@ def classify(raw_claims: RawClaims) -> ClassifiedClaims: ...
 
 Under the hood, the framework calls `llm.with_structured_output(output_model)` and logs the token usage, duration, and output type via structlog.
 
-The function body is not executed for `produce` nodes -- the LLM call provides the output. If you write a non-trivial body, the framework emits a warning:
+The function body is not executed for `think` nodes -- the LLM call provides the output. If you write a non-trivial body, the framework emits a warning:
 
 ```python
 # WARNING: body is dead code for produce nodes
@@ -79,7 +79,7 @@ A ReAct tool loop with read-only tools. The LLM can call tools repeatedly (subje
 ```python
 from neograph import node, Tool
 
-@node(mode='gather', output=ResearchFindings, prompt='rw/explore', model='reason',
+@node(mode='agent', output=ResearchFindings, prompt='rw/explore', model='reason',
       tools=[
           Tool("search_nodes", budget=5),
           Tool("read_artifact", budget=10, config={"max_chars": 6000}),
@@ -91,12 +91,12 @@ Tool budgets are enforced per tool. When `search_nodes` hits 5 calls, the LLM is
 
 ## execute
 
-A ReAct tool loop with mutation tools. Mechanically identical to `gather`, but the tools are permitted to have side effects: writing files, calling external APIs, modifying databases.
+A ReAct tool loop with mutation tools. Mechanically identical to `agent`, but the tools are permitted to have side effects: writing files, calling external APIs, modifying databases.
 
-**When to use:** Tasks that change the world. Applying code fixes, updating records, sending notifications. Separating `execute` from `gather` makes it clear during review which nodes are write-capable.
+**When to use:** Tasks that change the world. Applying code fixes, updating records, sending notifications. Separating `act` from `agent` makes it clear during review which nodes are write-capable.
 
 ```python
-@node(mode='execute', output=ApplyResult, prompt='rw/apply-fix', model='reason',
+@node(mode='act', output=ApplyResult, prompt='rw/apply-fix', model='reason',
       tools=[
           Tool("write_file", budget=3),
           Tool("run_tests", budget=1),

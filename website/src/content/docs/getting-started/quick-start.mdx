@@ -91,7 +91,7 @@ Each `@node` specifies:
 - **prompt** -- template name passed to your `prompt_compiler`
 - **model** -- tier string passed to your `llm_factory`
 
-Mode is inferred: `prompt=` + `model=` means LLM call (`produce` mode). Neither means the function body runs as scripted Python.
+Mode is inferred: `prompt=` + `model=` means LLM call (`think` mode). Neither means the function body runs as scripted Python.
 
 `construct_from_module` scans the module for all `@node`-decorated functions, infers the dependency graph from parameter names, and builds a `Construct`.
 
@@ -182,7 +182,7 @@ You got a standard LangGraph graph. You can stream it, checkpoint it, visualize 
 
 ## Next Steps
 
-- Add tools to a node with `mode="gather"` and `Tool("name", budget=5)` -- see the [Walkthrough](/walkthrough/scripted-pipeline/)
+- Add tools to a node with `mode="agent"` and `Tool("name", budget=5)` -- see the [Walkthrough](/walkthrough/scripted-pipeline/)
 - Fan out with `ensemble_n=3` or `map_over='field.path'` in `@node` kwargs -- see [Core Concepts](/concepts/vocabulary/)
 - Add human-in-the-loop with `interrupt_when=` -- see the [Walkthrough](/walkthrough/human-in-the-loop/)
 - Use `ForwardConstruct` for branching pipelines -- see [What is NeoGraph?](/getting-started/what-is-neograph/)

@@ -16,11 +16,11 @@ Use `construct_from_functions(name, functions, input=X, output=Y)` to build a su
 ```python
 from neograph import node, construct_from_functions, Tool, ToolInteraction
 
-@node(mode="gather", outputs={"result": ExplorationResult, "tool_log": list[ToolInteraction]},
+@node(mode="agent", outputs={"result": ExplorationResult, "tool_log": list[ToolInteraction]},
       model="research", prompt="verify/explore", tools=[Tool("search", budget=3)])
 def explore(claim: VerifyClaim) -> ExplorationResult: ...
 
-@node(mode="produce", outputs=ClaimVerdict, model="judge", prompt="verify/score")
+@node(mode="think", outputs=ClaimVerdict, model="judge", prompt="verify/score")
 def score(explore_result: ExplorationResult, explore_tool_log: list[ToolInteraction]) -> ClaimVerdict: ...
 
 verify = construct_from_functions(
@@ -63,12 +63,12 @@ class ScoredClaims(BaseModel):
     scored: list[dict]
 
 # Internal nodes use the declarative Node(...) form
-lookup = Node("lookup", mode="gather", inputs=Claims, output=LookupResults,
+lookup = Node("lookup", mode="agent", inputs=Claims, output=LookupResults,
               model="reason", prompt="rw/lookup",
               tools=[Tool("search", budget=5)])
-verify = Node("verify", mode="produce", inputs=LookupResults, output=VerifiedClaims,
+verify = Node("verify", mode="think", inputs=LookupResults, output=VerifiedClaims,
               model="fast", prompt="rw/verify")
-score  = Node("score", mode="produce", inputs=VerifiedClaims, output=ScoredClaims,
+score  = Node("score", mode="think", inputs=VerifiedClaims, output=ScoredClaims,
               model="fast", prompt="rw/score")
 
 # Sub-construct with I/O boundary

@@ -75,9 +75,9 @@ For runtime construction -- an LLM emitting a pipeline via tool calls, a config 
 ```python
 from neograph import Node, Construct, Oracle, Each, compile, run
 
-decompose = Node("decompose", mode="produce", output=Claims,
+decompose = Node("decompose", mode="think", output=Claims,
                  prompt="rw/decompose", model="reason") | Oracle(n=3, merge_fn="merge")
-verify = Node("verify", mode="gather", output=MatchResult,
+verify = Node("verify", mode="agent", output=MatchResult,
               prompt="verify", model="fast") | Each(over="decompose.items", key="label")
 
 pipeline = Construct("dynamic", nodes=[decompose, verify])
@@ -113,7 +113,7 @@ A typed processing block. Declared with `@node` (decorator style) or `Node(...)`
 def decompose(topic: RawText) -> Claims: ...
 
 # Programmatic style — mode explicit
-Node(name="decompose", mode="produce", output=Claims, model="fast", prompt="decompose")
+Node(name="decompose", mode="think", output=Claims, model="fast", prompt="decompose")
 ```
 
 Modes:
@@ -124,7 +124,7 @@ Modes:
 
 ### Tool
 
-An LLM-callable tool with a per-tool call budget. Used in `gather` and `execute` mode Nodes.
+An LLM-callable tool with a per-tool call budget. Used in `agent` and `act` mode Nodes.
 
 ```python
 search = Tool("search_web", budget=5)

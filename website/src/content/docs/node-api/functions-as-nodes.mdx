@@ -38,12 +38,12 @@ You can set `mode=` explicitly, but the decorator infers it when you don't:
 
 | You write | Inferred mode | What happens |
 |---|---|---|
-| `prompt=` and/or `model=` | `produce` | LLM call via the prompt template. Function body is ignored (a warning fires if it's non-trivial). |
+| `prompt=` and/or `model=` | `think` | LLM call via the prompt template. Function body is ignored (a warning fires if it's non-trivial). |
 | Neither `prompt=` nor `model=` | `scripted` | Function body executes. Pure Python. |
 | `mode='raw'` | `scripted` (with `raw_fn`) | Escape hatch. Function receives `(state, config)` directly. |
 
 ```python
-# Inferred as produce — prompt= triggers LLM mode
+# Inferred as think — prompt= triggers LLM mode
 @node(output=Claims, prompt='rw/decompose', model='reason')
 def decompose(topic: RawText) -> Claims: ...
 
@@ -132,7 +132,7 @@ import sys
 @node(output=Claims, model="fast", prompt="req/decompose")
 def decompose() -> Claims: ...
 
-@node(mode="gather", output=ResearchResult, model="reason",
+@node(mode="agent", output=ResearchResult, model="reason",
       prompt="req/research", tools=[Tool(name="search_codebase", budget=2)])
 def research(decompose: Claims) -> ResearchResult: ...
 

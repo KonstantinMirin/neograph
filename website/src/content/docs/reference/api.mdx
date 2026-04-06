@@ -38,7 +38,7 @@ Decorator that turns a function into a Node with signature-inferred dependencies
 @node(
     output: type[BaseModel],
     *,
-    mode: Literal["scripted", "produce", "gather", "execute", "raw"] | None = None,
+    mode: Literal["scripted", "think", "agent", "act", "raw"] | None = None,
     prompt: str | None = None,
     model: str | None = None,
     tools: list[Tool] | None = None,
@@ -55,9 +55,9 @@ Decorator that turns a function into a Node with signature-inferred dependencies
 ```
 
 - **`output`** — Pydantic model the node produces. Required for all modes except `raw`.
-- **`mode`** — Execution mode. Inferred from kwargs if not set: `prompt=` + `model=` → `produce`; neither → `scripted`.
-- **`prompt`**, **`model`** — Required for LLM modes (`produce`, `gather`, `execute`). Validated at decoration time.
-- **`tools`** — List of `Tool` instances for `gather` / `execute` modes.
+- **`mode`** — Execution mode. Inferred from kwargs if not set: `prompt=` + `model=` → `think`; neither → `scripted`.
+- **`prompt`**, **`model`** — Required for LLM modes (`think`, `agent`, `act`). Validated at decoration time.
+- **`tools`** — List of `Tool` instances for `agent` / `act` modes.
 - **`llm_config`** — Per-node LLM settings (temperature, max_tokens, output_strategy, etc.)
 - **`name`** — Override the node name. Default: function name with `_` → `-`.
 - **`map_over`** / **`map_key`** — Fan-out: run this node once per item in the referenced collection.
@@ -148,7 +148,7 @@ For testing, call `forward()` directly — it runs real Python with real values.
 The Node IR class. Used directly for runtime construction, programmatic pipeline generation, and sub-constructs.
 
 ```python
-decompose = Node("decompose", mode="produce", output=Claims,
+decompose = Node("decompose", mode="think", output=Claims,
                  prompt="rw/decompose", model="reason")
 ```
 
@@ -216,7 +216,7 @@ Configures the LLM provider once per process. `llm_factory(tier, ...)` returns a
 
 ### `Tool(name, budget=None, config=None)`
 
-LLM-callable tool with an optional per-call budget. Used in `gather` / `execute` nodes.
+LLM-callable tool with an optional per-call budget. Used in `agent` / `act` nodes.
 
 ### `@tool(budget=None, config=None)`
 
@@ -228,7 +228,7 @@ def search_codebase(query: str) -> str:
     """Search the codebase for a query."""
     return results
 
-@node(output=Answer, mode='gather', prompt='research', model='reason',
+@node(output=Answer, mode='agent', prompt='research', model='reason',
       tools=[search_codebase])
 def researcher() -> Answer: ...
 ```

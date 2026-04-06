@@ -25,7 +25,7 @@ These checks run at assembly time -- when the `Construct` is instantiated or `co
 - **Missing upstream dependencies** are flagged with the list of available producers.
 - **Self-dependencies and cycles** in `@node` parameter names raise immediately.
 - **Fan-out path errors** (e.g., `Each(over="clusters.groups")` where `groups` is not a list) are validated against Pydantic model fields.
-- **Invalid mode configurations** (e.g., `produce` without `prompt=`) raise `ConstructError` at decoration time.
+- **Invalid mode configurations** (e.g., `think` without `prompt=`) raise `ConstructError` at decoration time.
 
 This shifts most structural bugs from runtime failures to import-time errors.
 
@@ -57,7 +57,7 @@ def test_report():
     assert result["report"].avg_score == 0.7
 ```
 
-For `produce`/`gather`/`execute` nodes, unit testing focuses on the input/output types -- the LLM call is mocked at integration test time.
+For `think`/`agent`/`act` nodes, unit testing focuses on the input/output types -- the LLM call is mocked at integration test time.
 
 ## Integration testing: compile + run
 

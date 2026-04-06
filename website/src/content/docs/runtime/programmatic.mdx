@@ -21,7 +21,7 @@ from neograph import Node
 
 decompose = Node(
     "decompose",
-    mode="produce",
+    mode="think",
     inputs=RawText,
     output=Claims,
     model="reason",
@@ -30,7 +30,7 @@ decompose = Node(
 
 classify = Node(
     "classify",
-    mode="produce",
+    mode="think",
     inputs=Claims,
     output=ClassifiedClaims,
     model="fast",
@@ -63,26 +63,26 @@ from neograph import Node, Oracle, Each, Operator
 
 # Oracle: 3-way ensemble with LLM merge
 decompose = Node(
-    "decompose", mode="produce", output=Claims,
+    "decompose", mode="think", output=Claims,
     prompt="rw/decompose", model="reason",
 ) | Oracle(n=3, merge_prompt="rw/decompose-merge")
 
 # Each: fan-out over a collection
 verify = Node(
-    "verify", mode="gather", output=MatchResult,
+    "verify", mode="agent", output=MatchResult,
     prompt="rw/verify", model="fast",
     tools=[Tool("search", budget=5)],
 ) | Each(over="decompose.items", key="label")
 
 # Operator: human-in-the-loop interrupt
 validate = Node(
-    "validate", mode="produce", output=ValidationResult,
+    "validate", mode="think", output=ValidationResult,
     prompt="rw/validate", model="fast",
 ) | Operator(when="validation_failed")
 
 # Chain multiple modifiers
 robust_decompose = Node(
-    "decompose", mode="produce", output=Claims,
+    "decompose", mode="think", output=Claims,
     prompt="rw/decompose", model="reason",
 ) | Oracle(n=3, merge_prompt="rw/merge") | Operator(when="needs_review")
 ```
@@ -106,8 +106,8 @@ The programmatic API is not an escape hatch from validation. When you instantiat
 # This raises ConstructError -- verify expects ClusterGroup
 # but decompose produces Claims
 pipeline = Construct("broken", nodes=[
-    Node("decompose", mode="produce", output=Claims, ...),
-    Node("verify", mode="produce", inputs=ClusterGroup, output=MatchResult, ...),
+    Node("decompose", mode="think", output=Claims, ...),
+    Node("verify", mode="think", inputs=ClusterGroup, output=MatchResult, ...),
 ])
 # ConstructError: Node 'verify' in construct 'broken' declares
 #   input=ClusterGroup but no upstream produces a compatible value.

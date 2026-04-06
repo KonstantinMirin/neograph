@@ -141,7 +141,7 @@ graph = compile(pipeline)
 result = run(graph, input={'query': 'latest AI research'})
 ```
 
-One `@node` with `tools=`. The compiler infers `gather` mode from the presence of tools and generates the full ReAct loop: call LLM, check for tool calls, execute tools, loop back. The `budget=3` on the Tool enforces a hard limit -- after 3 calls, the tool is removed and the LLM is forced to produce a final structured response.
+One `@node` with `tools=`. The compiler infers `agent` mode from the presence of tools and generates the full ReAct loop: call LLM, check for tool calls, execute tools, loop back. The `budget=3` on the Tool enforces a hard limit -- after 3 calls, the tool is removed and the LLM is forced to produce a final structured response.
 
 ## Pattern 3: Map-Reduce (Fan-Out / Fan-In)
 
@@ -379,7 +379,7 @@ enrich = Construct(
     "enrich",
     input=Claims,
     output=ScoredClaims,
-    nodes=[Node(name="score", mode="produce", inputs=Claims, output=ScoredClaims, model="fast", prompt="score")],
+    nodes=[Node(name="score", mode="think", inputs=Claims, output=ScoredClaims, model="fast", prompt="score")],
 )
 
 @node(output=Claims, prompt='decompose', model='fast')

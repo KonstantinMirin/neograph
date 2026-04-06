@@ -3,7 +3,7 @@ title: LLM Configuration
 description: configure_llm(), per-node llm_config, prompt compilers with full context access, and config injection.
 ---
 
-NeoGraph does not own the LLM client. You register a factory that creates LLM instances and a compiler that builds prompts. The framework calls them for every LLM invocation -- produce, gather, execute, and Oracle merge.
+NeoGraph does not own the LLM client. You register a factory that creates LLM instances and a compiler that builds prompts. The framework calls them for every LLM invocation -- think, agent, act, and Oracle merge.
 
 ## configure_llm()
 
@@ -75,7 +75,7 @@ def classify(raw_claims: RawClaims) -> ClassifiedClaims: ...
 
 The `llm_config` dict is opaque to NeoGraph. The framework passes it through to your factory; you decide what keys mean. Common uses: temperature, max_tokens, top_p, stop sequences.
 
-Mode inference still works when `llm_config` is present -- the decorator infers `produce` from the `prompt=` and `model=` kwargs, regardless of `llm_config`.
+Mode inference still works when `llm_config` is present -- the decorator infers `think` from the `prompt=` and `model=` kwargs, regardless of `llm_config`.
 
 ## Prompt compiler
 
@@ -266,7 +266,7 @@ def classify(decompose: Claims) -> ClassifiedClaims: ...
 pipeline = construct_from_module(sys.modules[__name__])
 ```
 
-### Strategies in gather/execute modes
+### Strategies in agent/act modes
 
 For ReAct modes, the output strategy applies to the final parsing step after the tool loop completes:
 
@@ -274,7 +274,7 @@ For ReAct modes, the output strategy applies to the final parsing step after the
 - `"json_mode"` / `"text"`: the last message in the tool loop is parsed directly as JSON
 
 ```python
-@node(mode='gather', output=ResearchResult, prompt='rw/research', model='reason',
+@node(mode='agent', output=ResearchResult, prompt='rw/research', model='reason',
       tools=[Tool(name="search", budget=5)],
       llm_config={"output_strategy": "json_mode"})
 def research(query: SearchQuery) -> ResearchResult: ...

@@ -178,7 +178,7 @@ from neograph import Node, Each, Oracle, Operator
 verify = Node("verify", mode="scripted", output=VerifyResult) | Each(over="clusters.groups", key="label")
 
 # Ensemble
-decompose = Node("decompose", mode="produce", output=Claims,
+decompose = Node("decompose", mode="think", output=Claims,
                  prompt="rw/decompose", model="reason") | Oracle(n=3, merge_fn="merge_claims")
 
 # Interrupt

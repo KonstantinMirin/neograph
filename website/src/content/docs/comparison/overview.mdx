@@ -95,14 +95,14 @@ app = graph.compile()
 ### NeoGraph
 
 ```python
-@node(output=Answer, mode='gather', prompt='research', model='reason',
+@node(output=Answer, mode='agent', prompt='research', model='reason',
       tools=[Tool('search_web', budget=5)])
 def researcher() -> Answer: ...
 
 graph = compile(construct_from_module(sys.modules[__name__]))
 ```
 
-`mode='gather'` is the ReAct tool loop. Budgets are enforced per tool. The LLM config, tool wiring, and termination logic are handled by the framework.
+`mode='agent'` is the ReAct tool loop. Budgets are enforced per tool. The LLM config, tool wiring, and termination logic are handled by the framework.
 
 ## Pattern 3: Map-reduce fan-out
 
