@@ -1061,6 +1061,37 @@ class TestNodeSubConstruct:
         assert score_data["neo_subgraph_input"].claim_id == "jc3"
 
 
+    def test_construct_from_module_with_input_output_builds_sub_construct(self):
+        """construct_from_module(mod, input=X, output=Y) builds a working sub-construct (neograph-xjt)."""
+        import types
+
+        mod = types.ModuleType("test_cfm_sub_mod")
+
+        @node(outputs=ClaimResult)
+        def judge(claim: VerifyClaim) -> ClaimResult:
+            return ClaimResult(claim_id=claim.claim_id, disposition="module-path")
+
+        mod.judge = judge
+
+        sub = construct_from_module(mod, input=VerifyClaim, output=ClaimResult)
+        assert sub.input is VerifyClaim
+        assert sub.output is ClaimResult
+
+        # Run it inside a parent
+        register_scripted("xjt_seed", lambda _in, _cfg: VerifyClaim(
+            claim_id="xjt", text="module test",
+        ))
+        parent = Construct("parent", nodes=[
+            Node.scripted("seed", fn="xjt_seed", outputs=VerifyClaim),
+            sub,
+        ])
+        graph = compile(parent)
+        result = run(graph, input={"node_id": "xjt"})
+
+        assert result[sub.name].claim_id == "xjt"
+        assert result[sub.name].disposition == "module-path"
+
+
 class TestPortParamErrors:
     """Error cases for port param resolution (neograph-vih)."""
 
