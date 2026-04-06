@@ -19,7 +19,7 @@ sub-constructs), see Node and Construct directly.
 """
 
 from neograph._llm import configure_llm, render_prompt
-from neograph.describe_type import describe_type
+from neograph.describe_type import describe_type, describe_value
 from neograph.compiler import compile
 from neograph.construct import Construct
 from neograph.errors import (
@@ -80,6 +80,7 @@ __all__ = [
     "configure_llm",
     # Schema rendering
     "describe_type",
+    "describe_value",
     # Prompt inspection
     "render_prompt",
     # Renderers

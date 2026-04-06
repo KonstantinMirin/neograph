@@ -1259,9 +1259,9 @@ class TestGatherToolCollection:
         assert isinstance(tool_log[0].typed_result, SearchHit)
         assert tool_log[0].typed_result.node_id == "UC-001"
         assert tool_log[0].typed_result.score == 0.95
-        # result is JSON-rendered, not repr
-        assert '"node_id"' in tool_log[0].result, (
-            f"Expected JSON in result, got: {tool_log[0].result}"
+        # result is BAML-rendered with field descriptions, not repr
+        assert "node_id:" in tool_log[0].result, (
+            f"Expected BAML notation in result, got: {tool_log[0].result}"
         )
 
     def test_typed_result_holds_string_when_tool_returns_string(self):

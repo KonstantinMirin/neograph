@@ -481,6 +481,127 @@ class TestDescribeType:
         assert len(ts_output) < len(json_schema)
 
 
+class TestDescribeValue:
+    """describe_value renders Pydantic instances in BAML notation (neograph-q8uj).
+
+    BAML protocol: same TypeScript-style notation as describe_type but with
+    actual values instead of type names. Field descriptions as // comments.
+    Strings quoted, numbers bare, booleans lowercase, None as null.
+    """
+
+    def test_flat_model_exact_output(self):
+        """Flat model with Field descriptions produces exact BAML instance notation."""
+        from pydantic import Field
+        from neograph.describe_type import describe_value
+
+        class SearchHit(BaseModel, frozen=True):
+            node_id: str = Field(description="Graph node identifier")
+            score: float = Field(description="Relevance score 0-1")
+
+        hit = SearchHit(node_id="UC-042", score=0.9)
+        result = describe_value(hit)
+
+        expected = (
+            '{\n'
+            '  node_id: "UC-042"  // Graph node identifier\n'
+            '  score: 0.9  // Relevance score 0-1\n'
+            '}'
+        )
+        assert result == expected
+
+    def test_flat_model_no_descriptions(self):
+        """Fields without descriptions produce no // comment."""
+        from neograph.describe_type import describe_value
+
+        class Point(BaseModel, frozen=True):
+            x: int
+            y: int
+
+        result = describe_value(Point(x=10, y=20))
+        expected = '{\n  x: 10\n  y: 20\n}'
+        assert result == expected
+
+    def test_nested_model_exact_output(self):
+        """Nested BaseModel renders recursively with correct indentation."""
+        from neograph.describe_type import describe_value
+
+        class Inner(BaseModel, frozen=True):
+            x: int
+
+        class Outer(BaseModel, frozen=True):
+            name: str
+            detail: Inner
+
+        result = describe_value(Outer(name="test", detail=Inner(x=42)))
+        expected = (
+            '{\n'
+            '  name: "test"\n'
+            '  detail: {\n'
+            '    x: 42\n'
+            '  }\n'
+            '}'
+        )
+        assert result == expected
+
+    def test_list_of_models_exact_output(self):
+        """List of BaseModel instances renders as BAML array."""
+        from neograph.describe_type import describe_value
+
+        class Item(BaseModel, frozen=True):
+            label: str
+
+        result = describe_value([Item(label="a"), Item(label="b")])
+        expected = (
+            '[\n'
+            '  {\n'
+            '    label: "a"\n'
+            '  },\n'
+            '  {\n'
+            '    label: "b"\n'
+            '  }\n'
+            ']'
+        )
+        assert result == expected
+
+    def test_primitive_values_protocol(self):
+        """BAML value rendering: str→quoted, int/float→bare, bool→lowercase, None→null."""
+        from neograph.describe_type import describe_value
+
+        class AllTypes(BaseModel, frozen=True):
+            s: str
+            i: int
+            f: float
+            b_true: bool
+            b_false: bool
+            n: str | None = None
+
+        result = describe_value(AllTypes(
+            s="hello", i=42, f=3.14, b_true=True, b_false=False, n=None,
+        ))
+        assert '  s: "hello"' in result
+        assert '  i: 42' in result
+        assert '  f: 3.14' in result
+        assert '  b_true: true' in result
+        assert '  b_false: false' in result
+        assert '  n: null' in result
+
+    def test_prefix_prepended(self):
+        """Custom prefix on first line, body follows."""
+        from neograph.describe_type import describe_value
+
+        class Simple(BaseModel, frozen=True):
+            x: int
+
+        result = describe_value(Simple(x=1), prefix="Tool result:")
+        assert result == 'Tool result:\n{\n  x: 1\n}'
+
+    def test_empty_list_renders_brackets(self):
+        """Empty list renders as []."""
+        from neograph.describe_type import describe_value
+
+        assert describe_value([]) == "[]"
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # TestRendererDispatch (neograph-46w)
 #

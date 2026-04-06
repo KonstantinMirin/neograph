@@ -270,30 +270,18 @@ def invoke_structured(
 def _render_tool_result_for_llm(result: Any, renderer: Any = None) -> str:
     """Render a typed tool result for the LLM's ToolMessage content.
 
-    For Pydantic models: describe_type schema header + rendered instance.
-    For lists of models: schema header (of element type) + rendered list.
-    Falls back to model_dump_json when no renderer is configured.
+    For Pydantic models and lists of models: uses ``describe_value`` which
+    renders in BAML-style notation (same format as ``describe_type`` but with
+    actual values). Field descriptions appear as inline ``//`` comments.
+    Falls back to str() for non-Pydantic returns.
     """
     from pydantic import BaseModel as _BM
-    from neograph.describe_type import describe_type
 
-    if isinstance(result, _BM):
-        schema = describe_type(type(result), prefix="Tool result schema:")
-        if renderer is not None and hasattr(renderer, "render"):
-            instance = renderer.render(result)
-        else:
-            instance = result.model_dump_json(indent=2)
-        return f"{schema}\n\n{instance}"
-
-    if isinstance(result, list) and result and isinstance(result[0], _BM):
-        element_type = type(result[0])
-        schema = describe_type(element_type, prefix="Tool result schema (per item):")
-        if renderer is not None and hasattr(renderer, "render"):
-            instance = renderer.render(result)
-        else:
-            import json as _json
-            instance = _json.dumps([r.model_dump() for r in result], indent=2)
-        return f"{schema}\n\n{instance}"
+    if isinstance(result, _BM) or (
+        isinstance(result, list) and result and isinstance(result[0], _BM)
+    ):
+        from neograph.describe_type import describe_value
+        return describe_value(result, prefix="Tool result:")
 
     return str(result)
 
