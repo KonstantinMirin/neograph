@@ -257,12 +257,26 @@ This was the cause of `neograph-jyw` before the fix. Any new modifier kwarg you 
 
 ## Test conventions
 
-- **One monolithic test file**: `tests/test_e2e_piarch_ready.py`. Currently ~4900 lines, 217 tests. Do not split it — the existing convention is one file, many `Test*` classes, each scoped to a feature.
-- **Test class naming**: `TestFeatureName` at the top level. New tests from a feature go in a dedicated class appended at the end of the file.
-- **Throwaway modules for `construct_from_module` tests**: use `types.ModuleType("test_xyz_mod")` and attach `@node` functions as attributes. Don't pollute real modules. Pattern is `TestNodeDecorator._fresh_module` (around line 2666).
+### Test file layout (7 files)
+
+| File | Scope | Tests |
+|------|-------|-------|
+| `test_pipeline_modes.py` | Scripted, produce, gather, execute, raw modes; output strategies; LLM config; config injection; error paths | ~40 |
+| `test_node_decorator.py` | `@node`, `@tool`, `@merge_fn` decorators; mode inference; fan-out/Oracle/Operator interop; DI; `construct_from_functions`/`construct_from_module` | ~78 |
+| `test_validation.py` | Assembly-time type checking; fan-in validation; `effective_producer_type`; list/dict compat; dict-form outputs; Oracle errors | ~50 |
+| `test_renderers.py` | `XmlRenderer`, `DelimitedRenderer`, `JsonRenderer`, `describe_type`, render dispatch, json_mode output schema, `render_prompt` | ~54 |
+| `test_forward.py` | `ForwardConstruct` base class, tracer, compilation, branching, loops | ~36 |
+| `test_modifiers.py` | Oracle, Each, Operator, `map()`, deep compositions, Construct-level modifiers, list-over-Each | ~34 |
+| `test_composition.py` | Sub-constructs, multi-field input, state hygiene, reducers, dict-form output state/factory | ~29 |
+
+Supporting files: `conftest.py` (registry cleanup fixture), `schemas.py` (shared Pydantic models + `_producer`/`_consumer` helpers), `fakes.py` (LLM fakes).
+
+- **New tests go in the matching file.** If a feature spans multiple files, put the test where the primary behavior lives and add cross-references in docstrings.
+- **BDD naming**: `test_{what_should_happen}_when_{condition}`. Class docstrings describe the feature being tested.
+- **Throwaway modules for `construct_from_module` tests**: use `types.ModuleType("test_xyz_mod")` and attach `@node` functions as attributes. Don't pollute real modules. Pattern is `TestNodeDecorator._fresh_module`.
 - **Fakes live in `tests/fakes.py`**: `FakeTool`, `StructuredFake`, `TextFake`, `ReActFake`, `configure_fake_llm`. Don't invent new fakes unless the existing ones genuinely don't cover the case.
-- **TDD the user explicitly expects**: for bug fixes, write the failing repro first, verify it fails, then fix. The user has asked for this multiple times — honor it on every bug-fix task.
-- **Three-surface parity rule**: any IR-level behavioral change (`node.py`, `_construct_validation.py`, `factory.py`, `state.py`) must be tested through all three API surfaces — `@node` decorator, declarative `Node.scripted()`, and programmatic `Node() | Modifier()`. This is the most common source of bugs: a feature works via `@node` (which runs through `_build_construct_from_decorated`) but breaks via the programmatic API (which goes straight to `Construct(nodes=[...])`). The `neograph-ts7` bug was exactly this pattern — `fan_out_param` was set only in the decorator path, so programmatic `Each` + dict-form inputs failed validation. Test all three surfaces or explain why a surface is exempt.
+- **TDD the user explicitly expects**: for bug fixes, write the failing repro first, verify it fails, then fix. The user has asked for this multiple times -- honor it on every bug-fix task.
+- **Three-surface parity rule**: any IR-level behavioral change (`node.py`, `_construct_validation.py`, `factory.py`, `state.py`) must be tested through all three API surfaces -- `@node` decorator, declarative `Node.scripted()`, and programmatic `Node() | Modifier()`. This is the most common source of bugs: a feature works via `@node` (which runs through `_build_construct_from_decorated`) but breaks via the programmatic API (which goes straight to `Construct(nodes=[...])`). The `neograph-ts7` bug was exactly this pattern -- `fan_out_param` was set only in the decorator path, so programmatic `Each` + dict-form inputs failed validation. Test all three surfaces or explain why a surface is exempt.
 
 ---
 
