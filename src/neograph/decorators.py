@@ -366,6 +366,7 @@ def node(
     merge_prompt: str | None = None,
     interrupt_when: str | Callable | None = None,
     renderer: Any = None,
+    context: list[str] | None = None,
     skip_when: Callable | None = None,
     skip_value: Callable | None = None,
 ) -> Any:
@@ -607,6 +608,7 @@ def node(
             tools=tools or [],
             raw_fn=f if effective_mode == "raw" else None,
             renderer=renderer,
+            context=context,
             skip_when=skip_when,
             skip_value=skip_value,
         )

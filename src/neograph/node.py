@@ -72,6 +72,11 @@ class Node(Modifiable, BaseModel):
     # hierarchy: model.render_for_prompt() > node.renderer > global > None.
     renderer: Any = None
 
+    # Verbatim state fields injected into the prompt alongside typed input.
+    # Values are passed as-is (not BAML-rendered). Use for pre-formatted
+    # context like graph catalogs or domain briefings.
+    context: list[str] | None = None
+
     # Conditional produce: skip the LLM call when the predicate returns True.
     # skip_when receives the extracted input_data (after _extract_input, before
     # renderer). skip_value produces the output when skipped; if None, the node
