@@ -989,9 +989,31 @@ class TestNodeSubConstruct:
         node_graph = compile(node_parent)
         node_result = run(node_graph, input={"node_id": "parity"})
 
-        # Both produce identical results
+        # --- Programmatic path (Node() directly, no @node or Node.scripted) ---
+        prog_score = Node(
+            "prog-score",
+            mode="scripted",
+            inputs={"neo_subgraph_input": VerifyClaim},
+            outputs=ClaimResult,
+            scripted_fn="parity_score",
+        )
+        prog_sub = Construct(
+            "prog-sub",
+            input=VerifyClaim, output=ClaimResult,
+            nodes=[prog_score],
+        )
+        prog_parent = Construct("prog-parent", nodes=[
+            Node.scripted("seed", fn="parity_seed", outputs=VerifyClaim),
+            prog_sub,
+        ])
+        prog_graph = compile(prog_parent)
+        prog_result = run(prog_graph, input={"node_id": "parity"})
+
+        # All three surfaces produce identical results
         assert decl_result["decl_sub"].claim_id == node_result["node_sub"].claim_id
         assert decl_result["decl_sub"].disposition == node_result["node_sub"].disposition
+        assert prog_result["prog_sub"].claim_id == decl_result["decl_sub"].claim_id
+        assert prog_result["prog_sub"].disposition == decl_result["decl_sub"].disposition
 
 
 class TestPortParamErrors:
