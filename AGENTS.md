@@ -112,6 +112,34 @@ The plural/singular split reflects the structural difference: a Node can consume
 
 ---
 
+## `Node.outputs`: N named outputs + gather tool context
+
+`Node.outputs` mirrors `Node.inputs`. It is `dict[str, type] | type | None`:
+
+| Form | Example | State fields |
+|------|---------|-------------|
+| Single type (backward compat) | `outputs=Claims` | `{node_name}` |
+| Dict form (multi-output) | `outputs={"result": Claims, "tool_log": list[ToolInteraction]}` | `{node_name}_result`, `{node_name}_tool_log` |
+
+**State model**: `compile_state_model` creates one field per output key. Each/Oracle modifiers apply independently per key.
+
+**Validator**: `_validate_node_chain` registers one producer per output key. Downstream nodes reference upstream output keys via `{upstream}_{key}` naming in their `inputs` dict.
+
+**Factory**: `_build_state_update` writes dict-form outputs to per-key state fields. For LLM modes, the first dict key is the "primary" output type passed to `invoke_structured`/`invoke_with_tools`. Secondary keys (like `tool_log`) are framework-collected.
+
+**Gather tool collection**: `invoke_with_tools` collects `ToolInteraction(tool_name, args, result, duration_ms)` during the ReAct loop. When the node declares `"tool_log"` as an output key, the factory writes the interactions to the tool_log state field. Demand-driven: no collection overhead if no consumer references tool_log.
+
+**@node decorator**: `@node(outputs={"result": X, "tool_log": list[ToolInteraction]})` passes through. Return annotation inference: `def f() -> X` infers `outputs=X` (single type). Parameters named `{upstream}_{output_key}` are resolved via `_resolve_dict_output_param` in `construct_from_module`.
+
+### `Node.outputs` (plural) vs `Construct.output` (singular)
+
+Same pattern as inputs/input:
+
+- **`Node.outputs`** (plural, `dict[str, type] | type | None`) — declares what a node *produces* to the state bus. Dict form enables multi-output; single-type form is a convenience shorthand.
+- **`Construct.output`** (singular, `type[BaseModel] | None`) — declares the *boundary port* when a Construct is used as a sub-construct. It defines what surfaces from the isolated sub-pipeline, not a multi-output mapping.
+
+---
+
 ## Layer discipline
 
 Do NOT add `@node`-specific logic to the low-level modules. The layering is:

@@ -9,6 +9,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed — BREAKING
 
+**`Node.output` → `Node.outputs: dict[str, type]`** (`neograph-1bp`).
+
+`Node` now carries a plural `outputs` field that supports both single-type
+(backward compatible) and dict-form for multiple named outputs:
+
+```python
+# Single-type (unchanged DX):
+extract = Node("extract", outputs=RawText, ...)
+
+# Dict-form (N named outputs):
+explore = Node(
+    "explore",
+    outputs={"result": Claims, "tool_log": list[ToolInteraction]},
+    mode="gather", tools=[search], model="fast", prompt="explore",
+)
+# → state fields: explore_result, explore_tool_log
+```
+
+Gather/execute nodes with a `"tool_log"` output key automatically collect
+`ToolInteraction` records from the ReAct loop. Demand-driven: no overhead
+if no downstream node references `tool_log`.
+
+`Construct.output` stays singular — sub-construct boundary port, same as
+`Construct.input`.
+
 **`Node.input` → `Node.inputs: dict[str, type]`** (`neograph-kqd`).
 
 `Node` now carries a plural `inputs` field keyed by upstream name, matching
@@ -18,14 +43,14 @@ not just `@node`:
 
 ```python
 # Before (0.1.x):
-report = Node("report", input=Claims, output=Report)
+report = Node("report", input=Claims, outputs=Report)
 # Fan-in was impossible to validate statically with a single type.
 
 # After (0.2.x):
 report = Node(
     "report",
     inputs={"claims": Claims, "scores": Scores, "verified": VerifyResult},
-    output=Report,
+    outputs=Report,
 )
 ```
 
@@ -43,13 +68,13 @@ A downstream node can consume a fanned-out result as a `list[X]` instead of
 `list(values())` at runtime:
 
 ```python
-@node(output=Clusters)
+@node(outputs=Clusters)
 def make_clusters() -> Clusters: ...
 
-@node(output=MatchResult, map_over="make_clusters.groups", map_key="label")
+@node(outputs=MatchResult, map_over="make_clusters.groups", map_key="label")
 def verify(cluster: ClusterGroup) -> MatchResult: ...
 
-@node(output=Summary)
+@node(outputs=Summary)
 def summarize(verify: list[MatchResult]) -> Summary:
     return Summary(count=len(verify))
 ```
