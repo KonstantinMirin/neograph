@@ -25,13 +25,13 @@ Decorate Python functions. Parameter names are dependencies. The compiler infers
 from neograph import node, construct_from_module, compile, run
 import sys
 
-@node(output=Claims, prompt='decompose', model='reason')
+@node(outputs=Claims, prompt='decompose', model='reason')
 def decompose(topic: RawText) -> Claims: ...
 
-@node(output=Classified, prompt='classify', model='fast')
+@node(outputs=Classified, prompt='classify', model='fast')
 def classify(decompose: Claims) -> Classified: ...
 
-@node(output=Report)
+@node(outputs=Report)
 def report(classify: Classified) -> Report:
     return Report(summary=f"{len(classify.items)} claims processed")
 
@@ -52,9 +52,9 @@ A class-based surface for pipelines with `if`/`else` branches. Python control fl
 from neograph import ForwardConstruct, Node, compile
 
 class Analysis(ForwardConstruct):
-    check   = Node(output=CheckResult, prompt='check', model='fast')
-    deep    = Node(output=Result, prompt='deep-analysis', model='reason')
-    shallow = Node(output=Result, prompt='quick-scan', model='fast')
+    check   = Node(outputs=CheckResult, prompt='check', model='fast')
+    deep    = Node(outputs=Result, prompt='deep-analysis', model='reason')
+    shallow = Node(outputs=Result, prompt='quick-scan', model='fast')
 
     def forward(self, topic):
         checked = self.check(topic)
@@ -75,9 +75,9 @@ For runtime construction -- an LLM emitting a pipeline via tool calls, a config 
 ```python
 from neograph import Node, Construct, Oracle, Each, compile, run
 
-decompose = Node("decompose", mode="think", output=Claims,
+decompose = Node("decompose", mode="think", outputs=Claims,
                  prompt="rw/decompose", model="reason") | Oracle(n=3, merge_fn="merge")
-verify = Node("verify", mode="agent", output=MatchResult,
+verify = Node("verify", mode="agent", outputs=MatchResult,
               prompt="verify", model="fast") | Each(over="decompose.items", key="label")
 
 pipeline = Construct("dynamic", nodes=[decompose, verify])
@@ -109,17 +109,17 @@ A typed processing block. Declared with `@node` (decorator style) or `Node(...)`
 
 ```python
 # Decorator style — mode inferred from kwargs
-@node(output=Claims, prompt='decompose', model='fast')
+@node(outputs=Claims, prompt='decompose', model='fast')
 def decompose(topic: RawText) -> Claims: ...
 
 # Programmatic style — mode explicit
-Node(name="decompose", mode="think", output=Claims, model="fast", prompt="decompose")
+Node(name="decompose", mode="think", outputs=Claims, model="fast", prompt="decompose")
 ```
 
 Modes:
-- **produce** -- single LLM call with structured JSON output, no tools
-- **gather** -- ReAct tool loop (read-only exploration)
-- **execute** -- ReAct tool loop (mutations, side effects)
+- **think** -- single LLM call with structured JSON output, no tools
+- **agent** -- ReAct tool loop with tools (read-only exploration)
+- **act** -- ReAct tool loop with tools (mutations, side effects)
 - **scripted** -- deterministic Python, no LLM (inferred when `@node` has no `prompt=`/`model=`)
 
 ### Tool
@@ -151,7 +151,7 @@ A modifier that runs a Node N times in parallel and merges the results. Ensemble
 
 ```python
 # @node style — keyword argument
-@node(output=Claims, prompt='decompose', model='reason',
+@node(outputs=Claims, prompt='decompose', model='reason',
       ensemble_n=3, merge_fn='merge_claims')
 def decompose() -> Claims: ...
 
@@ -165,7 +165,7 @@ A modifier that fans out a Node over a collection. Map-reduce pattern.
 
 ```python
 # @node style — keyword arguments
-@node(output=MatchResult, map_over='clusters.groups', map_key='label')
+@node(outputs=MatchResult, map_over='clusters.groups', map_key='label')
 def verify(cluster: ClusterGroup) -> MatchResult: ...
 
 # Programmatic style — pipe operator
@@ -178,7 +178,7 @@ A modifier that pauses the graph for human review. Human-in-the-loop.
 
 ```python
 # @node style — keyword argument
-@node(output=ValidationResult,
+@node(outputs=ValidationResult,
       interrupt_when=lambda s: {'issues': s.validate.issues} if not s.validate.passed else None)
 def validate(claims: Claims) -> ValidationResult: ...
 
@@ -201,11 +201,11 @@ class Claims(BaseModel):
 class Classified(BaseModel):
     classified: list[dict[str, str]]
 
-@node(output=Claims)
+@node(outputs=Claims)
 def extract() -> Claims:
     return Claims(items=["The system shall log access", "The system shall validate input"])
 
-@node(output=Classified)
+@node(outputs=Classified)
 def classify(extract: Claims) -> Classified:
     return Classified(classified=[
         {"claim": c, "category": "security"} for c in extract.items

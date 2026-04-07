@@ -42,14 +42,14 @@ The `research` node explicitly sets `mode="agent"` and adds `tools=`. It runs a 
 ```python
 from neograph import node, Tool
 
-@node(output=Claims, model="fast", prompt="req/decompose")
+@node(outputs=Claims, model="fast", prompt="req/decompose")
 def decompose() -> Claims:
     ...
 
 
 @node(
     mode="agent",
-    output=ResearchResult,
+    outputs=ResearchResult,
     model="reason",
     prompt="req/research",
     tools=[Tool(name="search_codebase", budget=2)],
@@ -63,7 +63,7 @@ The parameter name `decompose` on `research` wires it to the upstream `decompose
 ## The complete pipeline
 
 ```python
-"""Produce + Gather: decompose a requirement, then research with tools.
+"""Think + Agent: decompose a requirement, then research with tools.
 
 Run:
     python 02_produce_and_gather.py
@@ -164,14 +164,14 @@ configure_llm(
 
 # -- Pipeline nodes ---------------------------------------------------------
 
-@node(output=Claims, model="fast", prompt="req/decompose")
+@node(outputs=Claims, model="fast", prompt="req/decompose")
 def decompose() -> Claims:
     ...
 
 
 @node(
     mode="agent",
-    output=ResearchResult,
+    outputs=ResearchResult,
     model="reason",
     prompt="req/research",
     tools=[Tool(name="search_codebase", budget=2)],
@@ -223,10 +223,10 @@ You can also set `mode=` explicitly, which is required for `agent` if you want t
 
 ## Think mode
 
-A **produce** node makes a single LLM call and expects structured JSON back. The framework calls `llm.with_structured_output(output_model)` and parses the response into your Pydantic schema automatically.
+A **think** node makes a single LLM call and expects structured JSON back. The framework calls `llm.with_structured_output(output_model)` and parses the response into your Pydantic schema automatically.
 
 ```python
-@node(output=Claims, model="fast", prompt="req/decompose")
+@node(outputs=Claims, model="fast", prompt="req/decompose")
 def decompose() -> Claims:
     ...
 ```
@@ -235,12 +235,12 @@ No tool loop. No message history management. One call, one typed result.
 
 ## Agent mode
 
-A **gather** node runs a ReAct loop: call the LLM, if it requests tool calls execute them, feed results back, repeat. The loop continues until the LLM responds without tool calls, or all tool budgets are exhausted.
+An **agent** node runs a ReAct loop: call the LLM, if it requests tool calls execute them, feed results back, repeat. The loop continues until the LLM responds without tool calls, or all tool budgets are exhausted.
 
 ```python
 @node(
     mode="agent",
-    output=ResearchResult,
+    outputs=ResearchResult,
     model="reason",
     prompt="req/research",
     tools=[Tool(name="search_codebase", budget=2)],

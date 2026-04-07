@@ -25,14 +25,14 @@ class VerifyResult(BaseModel, frozen=True):
     cluster_label: str
     coverage_pct: int
 
-@node(output=Clusters)
+@node(outputs=Clusters)
 def discover_clusters() -> Clusters:
     return Clusters(groups=[
         ClusterGroup(label="authentication", claim_ids=["REQ-1", "REQ-2"]),
         ClusterGroup(label="logging", claim_ids=["REQ-3"]),
     ])
 
-@node(output=VerifyResult, map_over="discover_clusters.groups", map_key="label")
+@node(outputs=VerifyResult, map_over="discover_clusters.groups", map_key="label")
 def verify(cluster: ClusterGroup) -> VerifyResult:
     coverage = {"authentication": 85, "logging": 60}
     return VerifyResult(
@@ -79,7 +79,7 @@ def merge_claims(variants, config):
 
 register_scripted("merge_claims", merge_claims)
 
-@node(output=Claims, ensemble_n=3, merge_fn="merge_claims")
+@node(outputs=Claims, ensemble_n=3, merge_fn="merge_claims")
 def decompose() -> Claims:
     # Each of the 3 copies runs this function independently
     return Claims(items=["shall authenticate", "shall encrypt"])
@@ -101,7 +101,7 @@ Exactly one of `merge_fn` or `merge_prompt` is required. Setting both raises `Co
 For LLM-mode nodes, the ensemble runs the same prompt N times (useful with non-zero temperature):
 
 ```python
-@node(output=Claims, prompt='rw/decompose', model='reason',
+@node(outputs=Claims, prompt='rw/decompose', model='reason',
       llm_config={"temperature": 0.8},
       ensemble_n=3, merge_fn="merge_claims")
 def decompose() -> Claims: ...
@@ -120,12 +120,12 @@ from neograph import node, construct_from_module, compile, run
 from langgraph.checkpoint.memory import MemorySaver
 import sys
 
-@node(output=Analysis)
+@node(outputs=Analysis)
 def analyze() -> Analysis:
     return Analysis(claims=["auth", "logging"], coverage_pct=55)
 
 @node(
-    output=ValidationResult,
+    outputs=ValidationResult,
     interrupt_when=lambda state: (
         {"issues": state.check.issues, "message": "Please review"}
         if state.check and not state.check.passed
@@ -163,7 +163,7 @@ def needs_review(state):
 
 register_condition("needs_review", needs_review)
 
-@node(output=ValidationResult, interrupt_when="needs_review")
+@node(outputs=ValidationResult, interrupt_when="needs_review")
 def check(analyze: Analysis) -> ValidationResult: ...
 ```
 
@@ -175,14 +175,14 @@ Every modifier keyword compiles to the same `Node | Modifier` that the runtime A
 from neograph import Node, Each, Oracle, Operator
 
 # Fan-out
-verify = Node("verify", mode="scripted", output=VerifyResult) | Each(over="clusters.groups", key="label")
+verify = Node("verify", mode="scripted", outputs=VerifyResult) | Each(over="clusters.groups", key="label")
 
 # Ensemble
-decompose = Node("decompose", mode="think", output=Claims,
+decompose = Node("decompose", mode="think", outputs=Claims,
                  prompt="rw/decompose", model="reason") | Oracle(n=3, merge_fn="merge_claims")
 
 # Interrupt
-check = Node("check", mode="scripted", output=ValidationResult) | Operator(when="needs_review")
+check = Node("check", mode="scripted", outputs=ValidationResult) | Operator(when="needs_review")
 ```
 
 ---

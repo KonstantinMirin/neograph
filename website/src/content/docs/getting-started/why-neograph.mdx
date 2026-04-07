@@ -67,13 +67,13 @@ The `TypedDict` must list every field. Every node is added individually. Every e
 import sys
 from neograph import node, construct_from_module, compile, run
 
-@node(output=Claims, prompt='decompose', model='fast')
+@node(outputs=Claims, prompt='decompose', model='fast')
 def decompose() -> Claims: ...
 
-@node(output=ClassifiedClaims, prompt='classify', model='fast')
+@node(outputs=ClassifiedClaims, prompt='classify', model='fast')
 def classify(decompose: Claims) -> ClassifiedClaims: ...
 
-@node(output=Summary, prompt='summarize', model='fast')
+@node(outputs=Summary, prompt='summarize', model='fast')
 def summarize(classify: ClassifiedClaims) -> Summary: ...
 
 pipeline = construct_from_module(sys.modules[__name__])
@@ -132,7 +132,7 @@ import sys
 from neograph import node, construct_from_module, compile, run
 from neograph import Tool
 
-@node(output=ResearchResult, prompt='research', model='fast',
+@node(outputs=ResearchResult, prompt='research', model='fast',
       tools=[Tool("search_web", budget=3)])
 def research() -> ResearchResult: ...
 
@@ -202,7 +202,7 @@ This requires two state schemas (parent and per-worker), an `Annotated` reducer 
 import sys
 from neograph import node, construct_from_module, compile, run
 
-@node(output=Jokes, prompt='generate', model='fast',
+@node(outputs=Jokes, prompt='generate', model='fast',
       ensemble_n=3, merge_prompt='pick-best')
 def generate() -> Jokes: ...
 
@@ -216,7 +216,7 @@ result = run(graph, input={'topic': 'programming'})
 For scripted merging instead of LLM judging, use `merge_fn` instead of `merge_prompt`:
 
 ```python
-@node(output=Claims, prompt='decompose', model='reason',
+@node(outputs=Claims, prompt='decompose', model='reason',
       ensemble_n=3, merge_fn='combine_variants')
 def decompose() -> Claims: ...
 ```
@@ -284,7 +284,7 @@ You need a dedicated `review_gate` node just for the interrupt, a separate `rout
 import sys
 from neograph import node, construct_from_module, compile, run
 
-@node(output=Analysis, prompt='analyze', model='fast',
+@node(outputs=Analysis, prompt='analyze', model='fast',
       interrupt_when=lambda s: (
           {"message": f"Confidence {s.analyze.confidence:.0%} is low. Approve?"}
           if s.analyze and s.analyze.confidence < 0.8
@@ -292,7 +292,7 @@ from neograph import node, construct_from_module, compile, run
       ))
 def analyze() -> Analysis: ...
 
-@node(output=Report, prompt='report', model='fast')
+@node(outputs=Report, prompt='report', model='fast')
 def report(analyze: Analysis) -> Report: ...
 
 pipeline = construct_from_module(sys.modules[__name__])
@@ -378,14 +378,14 @@ from neograph import Construct, Node
 enrich = Construct(
     "enrich",
     input=Claims,
-    output=ScoredClaims,
-    nodes=[Node(name="score", mode="think", inputs=Claims, output=ScoredClaims, model="fast", prompt="score")],
+    outputs=ScoredClaims,
+    nodes=[Node(name="score", mode="think", inputs=Claims, outputs=ScoredClaims, model="fast", prompt="score")],
 )
 
-@node(output=Claims, prompt='decompose', model='fast')
+@node(outputs=Claims, prompt='decompose', model='fast')
 def decompose() -> Claims: ...
 
-@node(output=Report, prompt='report', model='fast')
+@node(outputs=Report, prompt='report', model='fast')
 def report(enrich: ScoredClaims) -> Report: ...
 
 # Mix @node functions with programmatic sub-constructs

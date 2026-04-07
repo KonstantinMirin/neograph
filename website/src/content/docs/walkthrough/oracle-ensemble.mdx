@@ -35,7 +35,7 @@ Adding `ensemble_n=3` and `merge_fn="merge_claims"` to `@node` tells the compile
 ```python
 from neograph import node, register_scripted
 
-@node(output=Claims, ensemble_n=3, merge_fn="merge_claims")
+@node(outputs=Claims, ensemble_n=3, merge_fn="merge_claims")
 def decompose() -> Claims:
     with _gen_counter_lock:
         idx = _gen_counter[0] % len(_perspectives)
@@ -124,7 +124,7 @@ register_scripted("merge_claims", merge_claims)
 
 # -- Build pipeline ---------------------------------------------------------
 
-@node(output=Claims, ensemble_n=3, merge_fn="merge_claims")
+@node(outputs=Claims, ensemble_n=3, merge_fn="merge_claims")
 def decompose() -> Claims:
     with _gen_counter_lock:
         idx = _gen_counter[0] % len(_perspectives)
@@ -168,7 +168,7 @@ The `@node` decorator accepts Oracle kwargs directly:
 
 ```python
 # @node style (this walkthrough)
-@node(output=Claims, ensemble_n=3, merge_fn="merge_claims")
+@node(outputs=Claims, ensemble_n=3, merge_fn="merge_claims")
 def decompose() -> Claims: ...
 ```
 
@@ -176,7 +176,7 @@ This is equivalent to the pipe-operator style used in the Runtime/IR API:
 
 ```python
 # Pipe style (programmatic API)
-decompose = Node.scripted("decompose", fn="generate", output=Claims) | Oracle(n=3, merge_fn="merge_claims")
+decompose = Node.scripted("decompose", fn="generate", outputs=Claims) | Oracle(n=3, merge_fn="merge_claims")
 ```
 
 Both compile to the same topology. Use `@node` kwargs when writing pipelines as modules. Use the pipe operator when building pipelines programmatically.
@@ -188,7 +188,7 @@ Oracle requires exactly one of `merge_fn` or `merge_prompt`.
 ### Scripted merge (deterministic)
 
 ```python
-@node(output=Claims, ensemble_n=3, merge_fn="merge_claims")
+@node(outputs=Claims, ensemble_n=3, merge_fn="merge_claims")
 def decompose() -> Claims: ...
 ```
 
@@ -197,7 +197,7 @@ Use scripted merge when the combination logic is straightforward (deduplication,
 ### LLM merge (judge)
 
 ```python
-@node(output=Claims, prompt="decompose", model="reason",
+@node(outputs=Claims, prompt="decompose", model="reason",
       ensemble_n=3, merge_prompt="rw/decompose-merge", merge_model="reason")
 def decompose() -> Claims: ...
 ```

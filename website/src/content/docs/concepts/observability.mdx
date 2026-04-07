@@ -57,7 +57,7 @@ A think node emits something like this (formatted as JSON for clarity):
 }
 ```
 
-A gather node with tools adds tool-level detail:
+An agent node with tools adds tool-level detail:
 
 ```json
 {
@@ -121,7 +121,7 @@ Use `Annotated[T, FromConfig]` to inject trace providers, span managers, or any 
 from typing import Annotated
 from neograph import node, FromConfig
 
-@node(output=Report)
+@node(outputs=Report)
 def summarize(
     claims: Claims,
     tracer: Annotated[LangfuseTracer, FromConfig],

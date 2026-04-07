@@ -71,13 +71,13 @@ class Report(BaseModel):
     summary: str
 
 # Agent — plain Python functions. Types flow through the signatures.
-@node(output=Claims, prompt='decompose', model='reason')
+@node(outputs=Claims, prompt='decompose', model='reason')
 def decompose(topic: str) -> Claims: ...
 
-@node(output=Classified, prompt='classify', model='fast')
+@node(outputs=Classified, prompt='classify', model='fast')
 def classify(decompose: Claims) -> Classified: ...
 
-@node(output=Report, prompt='summarize', model='fast')
+@node(outputs=Report, prompt='summarize', model='fast')
 def summarize(classify: Classified) -> Report: ...
 
 # Compile and run.
@@ -95,7 +95,7 @@ The parameter name `decompose` in `classify(decompose: Claims)` IS the dependenc
 Fan-in is just more parameters:
 
 ```python
-@node(output=Report, prompt='report', model='reason')
+@node(outputs=Report, prompt='report', model='reason')
 def report(claims: Claims, scores: Scores, verified: VerifyResult) -> Report: ...
 ```
 
@@ -107,9 +107,9 @@ For agents with real branching logic — retries, quality gates, conditional pat
 from neograph import ForwardConstruct, Node, compile
 
 class Analysis(ForwardConstruct):
-    check   = Node(output=CheckResult, prompt='check', model='fast')
-    deep    = Node(output=Result, prompt='deep', model='reason')
-    shallow = Node(output=Result, prompt='quick', model='fast')
+    check   = Node(outputs=CheckResult, prompt='check', model='fast')
+    deep    = Node(outputs=Result, prompt='deep', model='reason')
+    shallow = Node(outputs=Result, prompt='quick', model='fast')
 
     def forward(self, topic):
         checked = self.check(topic)

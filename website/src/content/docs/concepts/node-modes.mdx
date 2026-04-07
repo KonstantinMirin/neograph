@@ -29,11 +29,11 @@ You rarely need to set `mode` explicitly. The `@node` decorator infers it from t
 from neograph import node
 
 # Inferred as think — prompt= and model= are present
-@node(output=Claims, prompt='rw/decompose', model='reason')
+@node(outputs=Claims, prompt='rw/decompose', model='reason')
 def decompose(topic: RawText) -> Claims: ...
 
 # Inferred as scripted — no prompt or model
-@node(output=Report)
+@node(outputs=Report)
 def report(classify: Classified) -> Report:
     return Report(summary=f"{len(classify.items)} claims processed")
 ```
@@ -41,19 +41,19 @@ def report(classify: Classified) -> Report:
 If you need `agent` or `act`, set mode explicitly — the presence of `tools=` alone does not trigger inference:
 
 ```python
-@node(mode='agent', output=ResearchFindings, prompt='rw/explore', model='reason',
+@node(mode='agent', outputs=ResearchFindings, prompt='rw/explore', model='reason',
       tools=[Tool("search_nodes", budget=5)])
 def explore(query: SearchQuery) -> ResearchFindings: ...
 ```
 
-## produce
+## think
 
 A single LLM call with structured output. The LLM receives a compiled prompt and must return a response that validates against the node's `output` Pydantic model. No tools are involved.
 
 **When to use:** Classification, extraction, summarization, generation -- any task where the LLM has all the context it needs in the prompt and should produce a single structured answer.
 
 ```python
-@node(output=ClassifiedClaims, prompt='rw/classify', model='reason')
+@node(outputs=ClassifiedClaims, prompt='rw/classify', model='reason')
 def classify(raw_claims: RawClaims) -> ClassifiedClaims: ...
 ```
 
@@ -62,24 +62,24 @@ Under the hood, the framework calls `llm.with_structured_output(output_model)` a
 The function body is not executed for `think` nodes -- the LLM call provides the output. If you write a non-trivial body, the framework emits a warning:
 
 ```python
-# WARNING: body is dead code for produce nodes
-@node(output=Claims, prompt='rw/decompose', model='reason')
+# WARNING: body is dead code for think nodes
+@node(outputs=Claims, prompt='rw/decompose', model='reason')
 def decompose(topic: RawText) -> Claims:
     print("This never runs")  # UserWarning raised at decoration time
 ```
 
 Use `...` as a placeholder body, or omit the body entirely.
 
-## gather
+## agent
 
 A ReAct tool loop with read-only tools. The LLM can call tools repeatedly (subject to per-tool budgets), then produces a structured final answer.
 
-**When to use:** Research tasks where the LLM needs to explore -- searching a codebase, reading documents, querying databases -- before synthesizing a result. The tools should be read-only; gather nodes do not modify external state.
+**When to use:** Research tasks where the LLM needs to explore -- searching a codebase, reading documents, querying databases -- before synthesizing a result. The tools should be read-only; agent nodes do not modify external state.
 
 ```python
 from neograph import node, Tool
 
-@node(mode='agent', output=ResearchFindings, prompt='rw/explore', model='reason',
+@node(mode='agent', outputs=ResearchFindings, prompt='rw/explore', model='reason',
       tools=[
           Tool("search_nodes", budget=5),
           Tool("read_artifact", budget=10, config={"max_chars": 6000}),
@@ -89,14 +89,14 @@ def explore(query: SearchQuery) -> ResearchFindings: ...
 
 Tool budgets are enforced per tool. When `search_nodes` hits 5 calls, the LLM is told that tool is exhausted and must use remaining tools or respond. When all budgeted tools are spent, tools are unbound entirely and the LLM is forced to produce a final structured answer.
 
-## execute
+## act
 
 A ReAct tool loop with mutation tools. Mechanically identical to `agent`, but the tools are permitted to have side effects: writing files, calling external APIs, modifying databases.
 
 **When to use:** Tasks that change the world. Applying code fixes, updating records, sending notifications. Separating `act` from `agent` makes it clear during review which nodes are write-capable.
 
 ```python
-@node(mode='act', output=ApplyResult, prompt='rw/apply-fix', model='reason',
+@node(mode='act', outputs=ApplyResult, prompt='rw/apply-fix', model='reason',
       tools=[
           Tool("write_file", budget=3),
           Tool("run_tests", budget=1),
@@ -113,7 +113,7 @@ Pure Python. No LLM, no tools. The function body is executed directly. Parameter
 ```python
 from neograph import node
 
-@node(output=Catalog)
+@node(outputs=Catalog)
 def build_catalog(classify: ClassifiedClaims) -> Catalog:
     return Catalog(entries=[
         CatalogEntry(claim=c.claim, category=c.category)
@@ -126,7 +126,7 @@ def build_catalog(classify: ClassifiedClaims) -> Catalog:
 Scripted nodes support fan-in naturally -- just add more parameters. Each parameter name must match an upstream `@node` function name:
 
 ```python
-@node(output=Report)
+@node(outputs=Report)
 def report(claims: Claims, scores: ScoredClaims, verified: VerifiedClaims) -> Report:
     return Report(
         total=len(claims.items),
@@ -143,7 +143,7 @@ Not every parameter needs to be an upstream node. Use type annotations to declar
 from typing import Annotated
 from neograph import node, FromInput, FromConfig
 
-@node(output=Report)
+@node(outputs=Report)
 def summarize(
     claims: Claims,                                   # upstream node
     topic: Annotated[str, FromInput],                 # from run(input={...})
@@ -164,7 +164,7 @@ The LangGraph escape hatch. When you need direct access to the full LangGraph st
 ```python
 from neograph import node
 
-@node(mode='raw', output=Disposition)
+@node(mode='raw', outputs=Disposition)
 def custom_resolution(state, config):
     """Full access to the LangGraph state and config."""
     disp = state.disposition

@@ -68,7 +68,7 @@ Each node can carry an `llm_config` dict that is passed to the factory. With `@n
 ```python
 from neograph import node
 
-@node(output=ClassifiedClaims, prompt='rw/classify', model='reason',
+@node(outputs=ClassifiedClaims, prompt='rw/classify', model='reason',
       llm_config={"temperature": 0.7, "max_tokens": 2048})
 def classify(raw_claims: RawClaims) -> ClassifiedClaims: ...
 ```
@@ -190,7 +190,7 @@ result = run(
 # In a scripted @node function
 from typing import Annotated
 
-@node(output=ContextData)
+@node(outputs=ContextData)
 def load_context(
     claims: Claims,
     db_pool: Annotated[ConnectionPool, FromConfig],
@@ -216,7 +216,7 @@ Many models (DeepSeek-R1, o1, QwQ, local models) don't support `with_structured_
 The framework calls `llm.with_structured_output(output_model)`. Works with any LangChain model that supports native structured output. The framework tries `include_raw=True` to capture token counts, falling back without it.
 
 ```python
-@node(output=Claims, prompt='rw/classify', model='fast')
+@node(outputs=Claims, prompt='rw/classify', model='fast')
 def classify(topic: RawText) -> Claims: ...
 # No output_strategy needed — "structured" is the default
 ```
@@ -226,7 +226,7 @@ def classify(topic: RawText) -> Claims: ...
 The framework calls `llm.invoke()` directly (no `with_structured_output`), then strips markdown code fences and parses the JSON into the Pydantic model. Works with any model that returns JSON in its text response.
 
 ```python
-@node(output=Claims, prompt='rw/decompose', model='reason',
+@node(outputs=Claims, prompt='rw/decompose', model='reason',
       llm_config={"output_strategy": "json_mode"})
 def decompose(topic: RawText) -> Claims: ...
 ```
@@ -241,7 +241,7 @@ The framework handles:
 Same as `json_mode` -- the framework extracts JSON from the LLM's plain text response. Use this name to signal intent when the model returns prose with embedded JSON rather than fenced code blocks.
 
 ```python
-@node(output=Analysis, prompt='rw/analyze', model='reason',
+@node(outputs=Analysis, prompt='rw/analyze', model='reason',
       llm_config={"output_strategy": "text"})
 def analyze(topic: RawText) -> Analysis: ...
 ```
@@ -254,12 +254,12 @@ Different nodes can use different strategies. This is the production pattern for
 from neograph import node
 
 # DeepSeek for creative decomposition (no structured output support)
-@node(output=Claims, prompt='rw/decompose', model='reason',
+@node(outputs=Claims, prompt='rw/decompose', model='reason',
       llm_config={"temperature": 0.9, "output_strategy": "json_mode"})
 def decompose(topic: RawText) -> Claims: ...
 
 # Gemini for precise classification (native structured output)
-@node(output=ClassifiedClaims, prompt='rw/classify', model='fast',
+@node(outputs=ClassifiedClaims, prompt='rw/classify', model='fast',
       llm_config={"temperature": 0, "output_strategy": "structured"})
 def classify(decompose: Claims) -> ClassifiedClaims: ...
 
@@ -274,7 +274,7 @@ For ReAct modes, the output strategy applies to the final parsing step after the
 - `"json_mode"` / `"text"`: the last message in the tool loop is parsed directly as JSON
 
 ```python
-@node(mode='agent', output=ResearchResult, prompt='rw/research', model='reason',
+@node(mode='agent', outputs=ResearchResult, prompt='rw/research', model='reason',
       tools=[Tool(name="search", budget=5)],
       llm_config={"output_strategy": "json_mode"})
 def research(query: SearchQuery) -> ResearchResult: ...

@@ -26,7 +26,7 @@ Values injected from `run(input={...})`. Use this for data that varies per execu
 from typing import Annotated
 from neograph import node, FromInput
 
-@node(output=RawText)
+@node(outputs=RawText)
 def fetch(doc_id: Annotated[str, FromInput]) -> RawText:
     # doc_id comes from run(graph, input={"doc_id": "DOC-42"})
     return RawText(text=f"Contents of {doc_id}")
@@ -47,7 +47,7 @@ class RunCtx(BaseModel):
     node_id: str
     project_root: str
 
-@node(output=Report)
+@node(outputs=Report)
 def analyze(upstream: Claims, ctx: Annotated[RunCtx, FromInput]) -> Report:
     log(ctx.node_id, ctx.project_root)
     ...
@@ -73,7 +73,7 @@ class RateLimiter:
     def check(self) -> bool:
         return True
 
-@node(output=Result)
+@node(outputs=Result)
 def process(data: UpstreamData, limiter: Annotated[RateLimiter, FromConfig]) -> Result:
     if not limiter.check():
         return Result(status="rate_limited")
@@ -87,7 +87,7 @@ class Shared(BaseModel):
     tenant: str
     api_key: str
 
-@node(output=Result)
+@node(outputs=Result)
 def process(data: Data, shared: Annotated[Shared, FromConfig]) -> Result: ...
 ```
 
@@ -107,7 +107,7 @@ Both `FromInput` and `FromConfig` resolve from `config["configurable"]` at runti
 Parameters with a default value that don't match any upstream `@node` are treated as compile-time constants.
 
 ```python
-@node(output=Summary)
+@node(outputs=Summary)
 def summarize(claims: Claims, max_items: int = 10, verbose: bool = False) -> Summary:
     items = claims.items[:max_items]
     if verbose:
@@ -138,7 +138,7 @@ class Report(BaseModel, frozen=True):
 class RateLimiter:
     def wait(self): pass
 
-@node(output=Report)
+@node(outputs=Report)
 def summarize(
     claims: Claims,                        # upstream node — wired by parameter name
     scores: Scores,                        # upstream node — fan-in, second edge

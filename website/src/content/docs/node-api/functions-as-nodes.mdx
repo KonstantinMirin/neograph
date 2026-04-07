@@ -11,13 +11,13 @@ The `@node` decorator is the primary way to define a NeoGraph pipeline. Decorate
 from neograph import node, construct_from_module, compile, run
 import sys
 
-@node(output=Claims, prompt='rw/decompose', model='reason')
+@node(outputs=Claims, prompt='rw/decompose', model='reason')
 def decompose(topic: RawText) -> Claims: ...
 
-@node(output=Classified, prompt='rw/classify', model='fast')
+@node(outputs=Classified, prompt='rw/classify', model='fast')
 def classify(decompose: Claims) -> Classified: ...
 
-@node(output=Report)
+@node(outputs=Report)
 def report(classify: Classified) -> Report:
     return Report(summary=f"{len(classify.items)} claims processed")
 
@@ -44,16 +44,16 @@ You can set `mode=` explicitly, but the decorator infers it when you don't:
 
 ```python
 # Inferred as think — prompt= triggers LLM mode
-@node(output=Claims, prompt='rw/decompose', model='reason')
+@node(outputs=Claims, prompt='rw/decompose', model='reason')
 def decompose(topic: RawText) -> Claims: ...
 
 # Inferred as scripted — no prompt, no model
-@node(output=Report)
+@node(outputs=Report)
 def report(classify: Classified) -> Report:
     return Report(summary=f"{len(classify.items)} claims processed")
 
 # Explicit raw — full LangGraph state access
-@node(mode='raw', inputs=Claims, output=FilteredClaims)
+@node(mode='raw', inputs=Claims, outputs=FilteredClaims)
 def custom_filter(state, config):
     claims = getattr(state, 'extract_claims', None)
     kept = [c for c in claims.items if 'shall' in c]
@@ -99,16 +99,16 @@ class Claims(BaseModel, frozen=True):
 class ClassifiedClaims(BaseModel, frozen=True):
     classified: list[dict[str, str]]
 
-@node(output=RawText)
+@node(outputs=RawText)
 def extract() -> RawText:
     return RawText(text="The system shall log access. The system shall validate input.")
 
-@node(output=Claims)
+@node(outputs=Claims)
 def split(extract: RawText) -> Claims:
     sentences = [s.strip() for s in extract.text.split(".") if s.strip()]
     return Claims(items=sentences)
 
-@node(output=ClassifiedClaims)
+@node(outputs=ClassifiedClaims)
 def classify(split: Claims) -> ClassifiedClaims:
     classified = []
     for claim in split.items:
@@ -123,20 +123,20 @@ result = run(graph, input={"node_id": "doc-001"})
 
 ## Example: 3-node LLM pipeline
 
-An LLM decomposes a requirement, then a gather node researches with tools:
+An LLM decomposes a requirement, then an agent node researches with tools:
 
 ```python
 from neograph import node, Tool, construct_from_module, compile, run
 import sys
 
-@node(output=Claims, model="fast", prompt="req/decompose")
+@node(outputs=Claims, model="fast", prompt="req/decompose")
 def decompose() -> Claims: ...
 
-@node(mode="agent", output=ResearchResult, model="reason",
+@node(mode="agent", outputs=ResearchResult, model="reason",
       prompt="req/research", tools=[Tool(name="search_codebase", budget=2)])
 def research(decompose: Claims) -> ResearchResult: ...
 
-@node(output=Report)
+@node(outputs=Report)
 def report(research: ResearchResult) -> Report:
     return Report(summary="Analysis complete")
 
@@ -148,7 +148,7 @@ pipeline = construct_from_module(sys.modules[__name__])
 Four producers feed one consumer. Declaration order doesn't matter — `construct_from_module` topologically sorts:
 
 ```python
-@node(output=Report)
+@node(outputs=Report)
 def report(
     fetch_claims: Claims,
     score_claims: Scores,
@@ -158,16 +158,16 @@ def report(
     avg = sum(score_claims.ratings.values()) / len(score_claims.ratings)
     return Report(summary=f"Claims: {len(fetch_claims.items)}, avg: {avg:.1f}")
 
-@node(output=Verification)
+@node(outputs=Verification)
 def verify_claims(fetch_claims: Claims, score_claims: Scores) -> Verification:
     passed = [c for c in fetch_claims.items if score_claims.ratings.get(c, 0) >= 0.5]
     return Verification(passed=passed, failed=[])
 
-@node(output=Scores)
+@node(outputs=Scores)
 def score_claims(fetch_claims: Claims) -> Scores:
     return Scores(ratings={c: 0.8 for c in fetch_claims.items})
 
-@node(output=Claims)
+@node(outputs=Claims)
 def fetch_claims() -> Claims:
     return Claims(items=["shall authenticate", "shall log"])
 

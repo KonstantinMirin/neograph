@@ -57,10 +57,10 @@ app = graph.compile()
 import sys
 from neograph import node, construct_from_module, compile
 
-@node(output=Claims, prompt='decompose', model='fast')
+@node(outputs=Claims, prompt='decompose', model='fast')
 def decompose(topic: Annotated[str, FromInput]) -> Claims: ...
 
-@node(output=ClassifiedClaims, prompt='classify', model='fast')
+@node(outputs=ClassifiedClaims, prompt='classify', model='fast')
 def classify(decompose: Claims) -> ClassifiedClaims: ...
 
 graph = compile(construct_from_module(sys.modules[__name__]))
@@ -95,7 +95,7 @@ app = graph.compile()
 ### NeoGraph
 
 ```python
-@node(output=Answer, mode='agent', prompt='research', model='reason',
+@node(outputs=Answer, mode='agent', prompt='research', model='reason',
       tools=[Tool('search_web', budget=5)])
 def researcher() -> Answer: ...
 
@@ -133,13 +133,13 @@ app = graph.compile()
 ### NeoGraph
 
 ```python
-@node(output=Items)
+@node(outputs=Items)
 def source() -> Items: ...
 
-@node(output=ProcessResult, map_over='source.items', map_key='id')
+@node(outputs=ProcessResult, map_over='source.items', map_key='id')
 def process(item: Item) -> ProcessResult: ...
 
-@node(output=Summary)
+@node(outputs=Summary)
 def reduce(process: dict[str, ProcessResult]) -> Summary: ...
 
 graph = compile(construct_from_module(sys.modules[__name__]))
@@ -170,7 +170,7 @@ app = graph.compile(checkpointer=MemorySaver())
 ### NeoGraph
 
 ```python
-@node(output=ValidationResult,
+@node(outputs=ValidationResult,
       interrupt_when=lambda s: {'issues': s.validate.issues}
                                if not s.validate.passed else None)
 def validate(claims: Claims) -> ValidationResult: ...
@@ -219,7 +219,7 @@ enrich = Construct(
     nodes=[lookup, score],
 )
 
-@node(output=Claims, prompt='decompose', model='reason')
+@node(outputs=Claims, prompt='decompose', model='reason')
 def decompose() -> Claims: ...
 
 # Top-level @node + sub-construct compose into one pipeline
@@ -227,7 +227,7 @@ pipeline = Construct("main", nodes=[decompose, enrich])
 graph = compile(pipeline)
 ```
 
-Sub-constructs are the one place NeoGraph keeps the declarative form — the typed I/O boundary (`input=Claims, output=ScoredClaims`) is meaningful metadata that doesn't map cleanly to function signatures.
+Sub-constructs are the one place NeoGraph keeps the declarative form — the typed I/O boundary (`input=Claims, outputs=ScoredClaims`) is meaningful metadata that doesn't map cleanly to function signatures.
 
 ## When NeoGraph doesn't help
 

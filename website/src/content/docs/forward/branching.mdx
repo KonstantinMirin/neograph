@@ -18,9 +18,9 @@ class Result(BaseModel, frozen=True):
     analysis: str
 
 class QualityGate(ForwardConstruct):
-    check   = Node(output=CheckResult, prompt='check', model='fast')
-    deep    = Node(output=Result, prompt='deep-analysis', model='reason')
-    shallow = Node(output=Result, prompt='quick-scan', model='fast')
+    check   = Node(outputs=CheckResult, prompt='check', model='fast')
+    deep    = Node(outputs=Result, prompt='deep-analysis', model='reason')
+    shallow = Node(outputs=Result, prompt='quick-scan', model='fast')
 
     def forward(self, topic):
         checked = self.check(topic)
@@ -87,8 +87,8 @@ class VerifyResult(BaseModel, frozen=True):
     passed: bool
 
 class FanOutPipeline(ForwardConstruct):
-    discover = Node(output=Clusters, prompt='discover', model='fast')
-    verify   = Node(output=VerifyResult, prompt='verify', model='reason')
+    discover = Node(outputs=Clusters, prompt='discover', model='fast')
+    verify   = Node(outputs=VerifyResult, prompt='verify', model='reason')
 
     def forward(self, topic):
         clusters = self.discover(topic)
@@ -112,10 +112,10 @@ Combine branching and sequential calls for a retry pattern:
 
 ```python
 class RetryPipeline(ForwardConstruct):
-    analyze  = Node(output=Analysis, prompt='analyze', model='reason')
-    validate = Node(output=Validation, prompt='validate', model='fast')
-    fix      = Node(output=Analysis, prompt='fix-issues', model='reason')
-    report   = Node(output=Report, prompt='report', model='fast')
+    analyze  = Node(outputs=Analysis, prompt='analyze', model='reason')
+    validate = Node(outputs=Validation, prompt='validate', model='fast')
+    fix      = Node(outputs=Analysis, prompt='fix-issues', model='reason')
+    report   = Node(outputs=Report, prompt='report', model='fast')
 
     def forward(self, topic):
         result = self.analyze(topic)
@@ -133,10 +133,10 @@ Process each cluster independently, then continue with the collected results:
 
 ```python
 class ClusterAnalysis(ForwardConstruct):
-    discover = Node(output=Clusters, prompt='discover', model='fast')
-    verify   = Node(output=VerifyResult, prompt='verify', model='reason')
-    score    = Node(output=ScoreResult, prompt='score', model='fast')
-    report   = Node(output=Report, prompt='report', model='fast')
+    discover = Node(outputs=Clusters, prompt='discover', model='fast')
+    verify   = Node(outputs=VerifyResult, prompt='verify', model='reason')
+    score    = Node(outputs=ScoreResult, prompt='score', model='fast')
+    report   = Node(outputs=Report, prompt='report', model='fast')
 
     def forward(self, topic):
         clusters = self.discover(topic)
@@ -156,8 +156,8 @@ During tracing, node calls are symbolic — they never raise. The `except` block
 
 ```python
 class WithTryCatch(ForwardConstruct):
-    primary  = Node(output=Result, prompt='primary', model='reason')
-    fallback = Node(output=Result, prompt='fallback', model='fast')
+    primary  = Node(outputs=Result, prompt='primary', model='reason')
+    fallback = Node(outputs=Result, prompt='fallback', model='fast')
 
     def forward(self, topic):
         try:

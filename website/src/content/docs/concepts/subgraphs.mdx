@@ -11,7 +11,7 @@ Sub-constructs can be built with `@node` functions or with declarative `Node(...
 
 ### Option A: `@node` functions via `construct_from_functions`
 
-Use `construct_from_functions(name, functions, input=X, output=Y)` to build a sub-construct from `@node`-decorated functions. Parameters whose type matches `input=` are automatically wired to the sub-construct's input port:
+Use `construct_from_functions(name, functions, input=X, outputs=Y)` to build a sub-construct from `@node`-decorated functions. Parameters whose type matches `input=` are automatically wired to the sub-construct's input port:
 
 ```python
 from neograph import node, construct_from_functions, Tool, ToolInteraction
@@ -25,7 +25,7 @@ def score(explore_result: ExplorationResult, explore_tool_log: list[ToolInteract
 
 verify = construct_from_functions(
     "verify", [explore, score],
-    input=VerifyClaim, output=ClaimVerdict,
+    input=VerifyClaim, outputs=ClaimVerdict,
 )
 ```
 
@@ -63,12 +63,12 @@ class ScoredClaims(BaseModel):
     scored: list[dict]
 
 # Internal nodes use the declarative Node(...) form
-lookup = Node("lookup", mode="agent", inputs=Claims, output=LookupResults,
+lookup = Node("lookup", mode="agent", inputs=Claims, outputs=LookupResults,
               model="reason", prompt="rw/lookup",
               tools=[Tool("search", budget=5)])
-verify = Node("verify", mode="think", inputs=LookupResults, output=VerifiedClaims,
+verify = Node("verify", mode="think", inputs=LookupResults, outputs=VerifiedClaims,
               model="fast", prompt="rw/verify")
-score  = Node("score", mode="think", inputs=VerifiedClaims, output=ScoredClaims,
+score  = Node("score", mode="think", inputs=VerifiedClaims, outputs=ScoredClaims,
               model="fast", prompt="rw/score")
 
 # Sub-construct with I/O boundary
@@ -90,15 +90,15 @@ The top-level pipeline uses `@node` for its own nodes. The sub-construct slots i
 from neograph import node, construct_from_module, compile, run
 import sys
 
-@node(output=RawText, prompt='rw/extract', model='fast')
+@node(outputs=RawText, prompt='rw/extract', model='fast')
 def extract(topic: Annotated[str, FromInput]) -> RawText: ...
 
-@node(output=Claims, prompt='rw/decompose', model='reason')
+@node(outputs=Claims, prompt='rw/decompose', model='reason')
 def decompose(extract: RawText) -> Claims: ...
 
 # enrich is the sub-Construct defined above
 
-@node(output=FinalReport, prompt='rw/report', model='fast')
+@node(outputs=FinalReport, prompt='rw/report', model='fast')
 def report(enrich: ScoredClaims) -> FinalReport: ...
 
 # construct_from_module discovers @node functions;

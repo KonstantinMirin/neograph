@@ -18,7 +18,7 @@ The pipeline:
 
 This example uses `@node` for the top-level decompose (with Oracle kwargs) but drops to declarative `Node` + `Construct` for the rest. Why?
 
-The sub-construct (`enrich`) needs an explicit I/O boundary: `input=Claims, output=ScoredClaims`. `construct_from_module` walks a whole module into one flat Construct — it can't inline a sub-pipeline with its own isolated state. That's a legitimate boundary case where the declarative form is the right tool.
+The sub-construct (`enrich`) needs an explicit I/O boundary: `input=Claims, outputs=ScoredClaims`. `construct_from_module` walks a whole module into one flat Construct — it can't inline a sub-pipeline with its own isolated state. That's a legitimate boundary case where the declarative form is the right tool.
 
 For the other scripted nodes, declarative stays for consistency with the sub-construct. In a pipeline without sub-constructs, every node here could be `@node`-decorated.
 
@@ -66,7 +66,7 @@ from neograph import (
 from langgraph.checkpoint.memory import MemorySaver
 
 # Step 1 — @node with Oracle kwargs for LLM ensemble
-@node(output=Claims, prompt="decompose", model="fast",
+@node(outputs=Claims, prompt="decompose", model="fast",
       llm_config={"temperature": 0.8},
       ensemble_n=3, merge_fn="merge_claims")
 def decompose() -> Claims: ...
@@ -75,28 +75,28 @@ def decompose() -> Claims: ...
 enrich = Construct(
     "enrich",
     input=Claims,
-    output=ScoredClaims,
+    outputs=ScoredClaims,
     nodes=[
-        Node.scripted("lookup", fn="lookup_context", inputs=Claims, output=Context),
-        Node.scripted("score", fn="score_claims", inputs=Claims, output=ScoredClaims),
+        Node.scripted("lookup", fn="lookup_context", inputs=Claims, outputs=Context),
+        Node.scripted("score", fn="score_claims", inputs=Claims, outputs=ScoredClaims),
     ],
 )
 
 # Step 3 — scripted clustering
-cluster = Node.scripted("cluster", fn="make_clusters", output=Clusters)
+cluster = Node.scripted("cluster", fn="make_clusters", outputs=Clusters)
 
 # Step 4 — Each fan-out over the clusters
 verify = Node.scripted(
-    "verify", fn="verify_cluster", inputs=ClusterGroup, output=VerifyResult
+    "verify", fn="verify_cluster", inputs=ClusterGroup, outputs=VerifyResult
 ) | Each(over="cluster.groups", key="label")
 
 # Step 5 — Operator pauses if any cluster failed
 check_results = Node.scripted(
-    "check-results", fn="check_passed", output=ValidationResult
+    "check-results", fn="check_passed", outputs=ValidationResult
 ) | Operator(when="needs_review")
 
 # Step 6 — final report
-report = Node.scripted("report", fn="build_report", output=Report)
+report = Node.scripted("report", fn="build_report", outputs=Report)
 
 # Assembly
 pipeline = Construct(

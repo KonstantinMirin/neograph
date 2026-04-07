@@ -11,9 +11,9 @@ description: Define pipeline topology with Python control flow — subclass Cons
 from neograph import ForwardConstruct, Node, compile
 
 class Analysis(ForwardConstruct):
-    check   = Node(output=CheckResult, prompt='check', model='fast')
-    deep    = Node(output=Result, prompt='deep-analysis', model='reason')
-    shallow = Node(output=Result, prompt='quick-scan', model='fast')
+    check   = Node(outputs=CheckResult, prompt='check', model='fast')
+    deep    = Node(outputs=Result, prompt='deep-analysis', model='reason')
+    shallow = Node(outputs=Result, prompt='quick-scan', model='fast')
 
     def forward(self, topic):
         checked = self.check(topic)
@@ -60,9 +60,9 @@ class Report(BaseModel, frozen=True):
     summary: str
 
 class Pipeline(ForwardConstruct):
-    extract = Node(output=RawText, prompt='extract', model='fast')
-    analyze = Node(output=Claims, prompt='analyze', model='reason')
-    report  = Node(output=Report, prompt='report', model='fast')
+    extract = Node(outputs=RawText, prompt='extract', model='fast')
+    analyze = Node(outputs=Claims, prompt='analyze', model='reason')
+    report  = Node(outputs=Report, prompt='report', model='fast')
 
     def forward(self, topic):
         raw = self.extract(topic)

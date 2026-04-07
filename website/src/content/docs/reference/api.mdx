@@ -36,7 +36,7 @@ Decorator that turns a function into a Node with signature-inferred dependencies
 
 ```python
 @node(
-    output: type[BaseModel],
+    outputs: type[BaseModel] | dict[str, type],
     *,
     mode: Literal["scripted", "think", "agent", "act", "raw"] | None = None,
     prompt: str | None = None,
@@ -87,7 +87,7 @@ Dependency-injection marker used inside `typing.Annotated`. Parameters annotated
 from typing import Annotated
 from neograph import node, FromInput
 
-@node(output=Report)
+@node(outputs=Report)
 def summarize(claims: Claims, topic: Annotated[str, FromInput]) -> Report: ...
 
 run(graph, input={'topic': 'security', 'node_id': 'demo'})
@@ -103,7 +103,7 @@ Dependency-injection marker used inside `typing.Annotated`. Parameters annotated
 from typing import Annotated
 from neograph import node, FromConfig
 
-@node(output=Result)
+@node(outputs=Result)
 def process(data: Data, tracer: Annotated[Tracer, FromConfig]) -> Result: ...
 
 run(graph, input={...}, config={'configurable': {'tracer': my_tracer}})
@@ -121,9 +121,9 @@ Base class for pipelines with Python control flow. Subclass, declare `Node` attr
 
 ```python
 class Analysis(ForwardConstruct):
-    check   = Node(output=CheckResult, prompt='check', model='fast')
-    deep    = Node(output=Result, prompt='deep', model='reason')
-    shallow = Node(output=Result, prompt='shallow', model='fast')
+    check   = Node(outputs=CheckResult, prompt='check', model='fast')
+    deep    = Node(outputs=Result, prompt='deep', model='reason')
+    shallow = Node(outputs=Result, prompt='shallow', model='fast')
 
     def forward(self, topic):
         checked = self.check(topic)
@@ -148,17 +148,17 @@ For testing, call `forward()` directly — it runs real Python with real values.
 The Node IR class. Used directly for runtime construction, programmatic pipeline generation, and sub-constructs.
 
 ```python
-decompose = Node("decompose", mode="think", output=Claims,
+decompose = Node("decompose", mode="think", outputs=Claims,
                  prompt="rw/decompose", model="reason")
 ```
 
-### `Node.scripted(name, fn, inputs=None, output=None)`
+### `Node.scripted(name, fn, inputs=None, outputs=None)`
 
 Convenience constructor for scripted nodes registered via `register_scripted`:
 
 ```python
 register_scripted("extract_fn", lambda input_data, config: ...)
-extract = Node.scripted("extract", fn="extract_fn", output=RawText)
+extract = Node.scripted("extract", fn="extract_fn", outputs=RawText)
 ```
 
 ### `Construct(name, *, nodes, input=None, output=None, description=None)`
@@ -228,7 +228,7 @@ def search_codebase(query: str) -> str:
     """Search the codebase for a query."""
     return results
 
-@node(output=Answer, mode='agent', prompt='research', model='reason',
+@node(outputs=Answer, mode='agent', prompt='research', model='reason',
       tools=[search_codebase])
 def researcher() -> Answer: ...
 ```

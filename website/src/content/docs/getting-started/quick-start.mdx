@@ -74,13 +74,13 @@ Decorate functions with `@node`. The parameter name IS the dependency -- `classi
 import sys
 from neograph import node, construct_from_module
 
-@node(output=Claims, prompt='decompose', model='fast')
+@node(outputs=Claims, prompt='decompose', model='fast')
 def decompose() -> Claims: ...
 
-@node(output=ClassifiedClaims, prompt='classify', model='fast')
+@node(outputs=ClassifiedClaims, prompt='classify', model='fast')
 def classify(decompose: Claims) -> ClassifiedClaims: ...
 
-@node(output=Summary, prompt='summarize', model='fast')
+@node(outputs=Summary, prompt='summarize', model='fast')
 def summarize(classify: ClassifiedClaims) -> Summary: ...
 
 pipeline = construct_from_module(sys.modules[__name__])
@@ -152,13 +152,13 @@ configure_llm(
 )
 
 # --- Pipeline ---
-@node(output=Claims, prompt='decompose', model='fast')
+@node(outputs=Claims, prompt='decompose', model='fast')
 def decompose() -> Claims: ...
 
-@node(output=ClassifiedClaims, prompt='classify', model='fast')
+@node(outputs=ClassifiedClaims, prompt='classify', model='fast')
 def classify(decompose: Claims) -> ClassifiedClaims: ...
 
-@node(output=Summary, prompt='summarize', model='fast')
+@node(outputs=Summary, prompt='summarize', model='fast')
 def summarize(classify: ClassifiedClaims) -> Summary: ...
 
 pipeline = construct_from_module(sys.modules[__name__])

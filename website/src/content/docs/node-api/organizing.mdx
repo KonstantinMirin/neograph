@@ -23,10 +23,10 @@ src/
 import sys
 from neograph import node, construct_from_module
 
-@node(output=Claims, prompt='rw/decompose', model='reason')
+@node(outputs=Claims, prompt='rw/decompose', model='reason')
 def decompose(topic: RawText) -> Claims: ...
 
-@node(output=Classified, prompt='rw/classify', model='fast')
+@node(outputs=Classified, prompt='rw/classify', model='fast')
 def classify(decompose: Claims) -> Classified: ...
 
 pipeline = construct_from_module(sys.modules[__name__], name="decompose")
@@ -78,10 +78,10 @@ register_scripted("score_claims", score_claims)
 enrich = Construct(
     "enrich",
     input=Claims,
-    output=ScoredClaims,
+    outputs=ScoredClaims,
     nodes=[
-        Node.scripted("lookup", fn="lookup_context", inputs=Claims, output=Context),
-        Node.scripted("score", fn="score_claims", inputs=Claims, output=ScoredClaims),
+        Node.scripted("lookup", fn="lookup_context", inputs=Claims, outputs=Context),
+        Node.scripted("score", fn="score_claims", inputs=Claims, outputs=ScoredClaims),
     ],
 )
 ```

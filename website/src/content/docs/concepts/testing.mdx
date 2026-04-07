@@ -36,7 +36,7 @@ Test individual nodes in isolation by calling the underlying function directly. 
 ```python
 from neograph import node
 
-@node(output=Report)
+@node(outputs=Report)
 def report(claims: Claims, scores: ScoredClaims) -> Report:
     return Report(
         total=len(claims.items),
@@ -108,9 +108,9 @@ The key pattern: `configure_llm` with a fake factory before `run()`. Since `conf
 from neograph import ForwardConstruct, Node, compile
 
 class Analysis(ForwardConstruct):
-    check   = Node(output=CheckResult, prompt='check', model='fast')
-    deep    = Node(output=Result, prompt='deep-analysis', model='reason')
-    shallow = Node(output=Result, prompt='quick-scan', model='fast')
+    check   = Node(outputs=CheckResult, prompt='check', model='fast')
+    deep    = Node(outputs=Result, prompt='deep-analysis', model='reason')
+    shallow = Node(outputs=Result, prompt='quick-scan', model='fast')
 
     def forward(self, topic):
         checked = self.check(topic)

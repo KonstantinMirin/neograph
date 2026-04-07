@@ -37,13 +37,13 @@ class FinalReport(BaseModel, frozen=True):
 
 # ── Pipeline ──
 
-@node(output=Analysis)
+@node(outputs=Analysis)
 def analyze() -> Analysis:
     return Analysis(claims=["auth", "logging", "encryption"], coverage_pct=55)
 
 
 @node(
-    output=ValidationResult,
+    outputs=ValidationResult,
     interrupt_when=lambda state: (
         {"issues": state.check.issues, "message": "Please review and approve"}
         if state.check and not state.check.passed
@@ -59,7 +59,7 @@ def check(analyze: Analysis) -> ValidationResult:
     return ValidationResult(passed=True, issues=[])
 
 
-@node(output=FinalReport)
+@node(outputs=FinalReport)
 def report(analyze: Analysis) -> FinalReport:
     return FinalReport(
         text=f"Report: {analyze.claims}, coverage: {analyze.coverage_pct}%"

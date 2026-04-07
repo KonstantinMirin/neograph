@@ -23,7 +23,7 @@ decompose = Node(
     "decompose",
     mode="think",
     inputs=RawText,
-    output=Claims,
+    outputs=Claims,
     model="reason",
     prompt="rw/decompose",
 )
@@ -32,7 +32,7 @@ classify = Node(
     "classify",
     mode="think",
     inputs=Claims,
-    output=ClassifiedClaims,
+    outputs=ClassifiedClaims,
     model="fast",
     prompt="rw/classify",
 )
@@ -63,26 +63,26 @@ from neograph import Node, Oracle, Each, Operator
 
 # Oracle: 3-way ensemble with LLM merge
 decompose = Node(
-    "decompose", mode="think", output=Claims,
+    "decompose", mode="think", outputs=Claims,
     prompt="rw/decompose", model="reason",
 ) | Oracle(n=3, merge_prompt="rw/decompose-merge")
 
 # Each: fan-out over a collection
 verify = Node(
-    "verify", mode="agent", output=MatchResult,
+    "verify", mode="agent", outputs=MatchResult,
     prompt="rw/verify", model="fast",
     tools=[Tool("search", budget=5)],
 ) | Each(over="decompose.items", key="label")
 
 # Operator: human-in-the-loop interrupt
 validate = Node(
-    "validate", mode="think", output=ValidationResult,
+    "validate", mode="think", outputs=ValidationResult,
     prompt="rw/validate", model="fast",
 ) | Operator(when="validation_failed")
 
 # Chain multiple modifiers
 robust_decompose = Node(
-    "decompose", mode="think", output=Claims,
+    "decompose", mode="think", outputs=Claims,
     prompt="rw/decompose", model="reason",
 ) | Oracle(n=3, merge_prompt="rw/merge") | Operator(when="needs_review")
 ```
@@ -93,7 +93,7 @@ Modifiers work on both Nodes and Constructs:
 enrich = Construct(
     "enrich",
     input=Claims,
-    output=ScoredClaims,
+    outputs=ScoredClaims,
     nodes=[lookup, verify, score],
 ) | Oracle(n=3, merge_fn="combine_scores")
 ```
@@ -106,8 +106,8 @@ The programmatic API is not an escape hatch from validation. When you instantiat
 # This raises ConstructError -- verify expects ClusterGroup
 # but decompose produces Claims
 pipeline = Construct("broken", nodes=[
-    Node("decompose", mode="think", output=Claims, ...),
-    Node("verify", mode="think", inputs=ClusterGroup, output=MatchResult, ...),
+    Node("decompose", mode="think", outputs=Claims, ...),
+    Node("verify", mode="think", inputs=ClusterGroup, outputs=MatchResult, ...),
 ])
 # ConstructError: Node 'verify' in construct 'broken' declares
 #   input=ClusterGroup but no upstream produces a compatible value.
@@ -143,7 +143,7 @@ def build_from_config(config_path: str) -> Construct:
             node_spec["name"],
             mode=node_spec["mode"],
             inputs=resolve_type(node_spec.get("input")),
-            output=resolve_type(node_spec["output"]),
+            outputs=resolve_type(node_spec["output"]),
             model=node_spec.get("model"),
             prompt=node_spec.get("prompt"),
         )

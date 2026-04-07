@@ -72,7 +72,7 @@ def build_node(spec):
     n = Node(
         spec["name"],
         mode=spec["mode"],
-        output=TYPES[spec["output"]],
+        outputs=TYPES[spec["output"]],
         prompt=spec.get("prompt"),
         model=spec.get("model"),
         tools=[TOOLS[t] for t in spec.get("tools", [])],
