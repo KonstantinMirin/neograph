@@ -372,8 +372,10 @@ class TestLoopValidation:
 class TestForwardConstructLoop:
     """ForwardConstruct: Python while/for loop compiles to cycle."""
 
-    def test_for_loop_compiles_to_cycle(self):
-        """for loop in forward() compiles to a cyclical graph."""
+    def test_for_loop_traces_nodes_in_forward(self):
+        """ForwardConstruct forward() with for loop traces the nodes.
+        NOTE: The tracer does NOT compile for/while to graph cycles (neograph-mwx3).
+        It traces the loop body once. Cycle support requires Loop modifier."""
         from neograph import ForwardConstruct
 
         class Writer(ForwardConstruct):
@@ -396,15 +398,21 @@ class TestForwardConstructLoop:
 
         def fc_review(_in, _cfg):
             _review_count[0] += 1
-            return ReviewResult(score=0.3 * _review_count[0], feedback="ok")
+            return ReviewResult(score=0.3 * _review_count[0], feedback=f"feedback-{_review_count[0]}")
 
         register_scripted("fc_review", fc_review)
-        register_scripted("fc_revise", lambda _in, _cfg: Draft(
-            content="revised", score=0.0, iteration=1,
-        ))
+
+        def fc_revise(_in, _cfg):
+            return Draft(content="revised", score=0.0, iteration=1)
+
+        register_scripted("fc_revise", fc_revise)
 
         writer = Writer()
         graph = compile(writer)
         result = run(graph, input={"node_id": "fc-loop"})
 
-        assert result["draft"] is not None or result.get("revise") is not None
+        # Known limitation (neograph-mwx3): the tracer does NOT compile
+        # for/while to graph cycles. It traces the loop body nodes once.
+        # This test verifies the nodes were at least traced and ran.
+        assert _review_count[0] >= 1, "review did not run at all"
+        assert result.get("draft") is not None, "draft node did not produce output"

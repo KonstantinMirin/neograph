@@ -164,21 +164,26 @@ class TestLoadSpecWithLoop:
     """Loop modifier from spec."""
 
     def test_self_loop_runs_until_condition_met(self):
-        """Spec with loop: {when: 'score < 0.8'} compiles to a looping graph."""
+        """Spec with loop: {when: 'score < 0.8'} compiles to a looping graph.
+        Honest: no forgiving fallbacks, strict type assertion on input."""
         from neograph.loader import load_spec
         from neograph.spec_types import register_type
 
         register_type("Draft", Draft)
 
         def seed_fn(input_data, config):
-            return Draft(content="v0", score=0.0)
+            return Draft(content="seed-marker", score=0.1)  # unique score to detect
 
         call_count = [0]
+        received_inputs = []
 
         def refine_fn(input_data, config):
             call_count[0] += 1
-            d = input_data if isinstance(input_data, Draft) else next(iter(input_data.values()))
-            return Draft(content=f"v{call_count[0]}", score=d.score + 0.3, iteration=d.iteration + 1)
+            received_inputs.append(type(input_data).__name__)
+            assert isinstance(input_data, Draft), (
+                f"refine expected Draft, got {type(input_data).__name__}: {input_data!r}"
+            )
+            return Draft(content=f"v{call_count[0]}", score=input_data.score + 0.3, iteration=input_data.iteration + 1)
 
         register_scripted("loop_seed", seed_fn)
         register_scripted("loop_refine", refine_fn)
@@ -202,8 +207,11 @@ class TestLoadSpecWithLoop:
         graph = compile(construct)
         result = run(graph, input={"node_id": "test"})
 
-        assert call_count[0] == 3  # 0.0 -> 0.3 -> 0.6 -> 0.9
+        # Seed starts at 0.1, each iteration adds 0.3: 0.1→0.4→0.7→1.0
+        assert call_count[0] == 3
         assert result["refine"][-1].score >= 0.8
+        # First iteration received seed output (score=0.1), not a fallback
+        assert result["refine"][0].score == pytest.approx(0.4)  # 0.1 + 0.3
 
 
 class TestLoadSpecWithConstruct:
@@ -211,21 +219,23 @@ class TestLoadSpecWithConstruct:
 
     def test_construct_with_loop_compiles_and_runs(self):
         """Spec construct with loop modifier runs as a looping sub-construct.
-        Uses a single-node sub-construct (self-loop inside) for simplicity."""
+        Honest: unique seed score, strict type assertion, no fallbacks."""
         from neograph.loader import load_spec
         from neograph.spec_types import register_type
 
         register_type("Draft", Draft)
 
         def draft_fn(input_data, config):
-            return Draft(content="initial", score=0.0)
+            return Draft(content="construct-seed", score=0.15)  # unique score
 
         call_count = [0]
 
         def improve_fn(input_data, config):
             call_count[0] += 1
-            d = input_data if isinstance(input_data, Draft) else Draft(content="x", score=0.0)
-            return Draft(content=f"v{call_count[0]}", score=d.score + 0.3, iteration=d.iteration + 1)
+            assert isinstance(input_data, Draft), (
+                f"improve expected Draft, got {type(input_data).__name__}: {input_data!r}"
+            )
+            return Draft(content=f"v{call_count[0]}", score=input_data.score + 0.3, iteration=input_data.iteration + 1)
 
         register_scripted("cl_draft", draft_fn)
         register_scripted("cl_improve", improve_fn)
@@ -252,8 +262,11 @@ class TestLoadSpecWithConstruct:
         graph = compile(construct)
         result = run(graph, input={"node_id": "test"})
 
-        assert call_count[0] >= 3  # 0.0 -> 0.3 -> 0.6 -> 0.9
+        # Seed at 0.15, +0.3 each: 0.15→0.45→0.75→1.05 (3 iterations)
+        assert call_count[0] == 3
         assert result["refine"][-1].score >= 0.8
+        # First iteration derived from seed (0.15 + 0.3 = 0.45)
+        assert result["refine"][0].score == pytest.approx(0.45)
 
 
 class TestLoadSpecOracle:
@@ -346,23 +359,25 @@ class TestLoadSpecLoopHistory:
 
     def test_loop_preserves_all_iterations_in_append_list(self):
         """Each loop iteration's output is preserved in the append-list.
-        result["node"] is a list with one entry per iteration."""
+        Honest: unique seed score, strict type assertion, scores prove data flow."""
         from neograph.loader import load_spec
         from neograph.spec_types import register_type
 
         register_type("Draft", Draft)
 
         def seed_fn(input_data, config):
-            return Draft(content="v0", score=0.0)
+            return Draft(content="history-seed", score=0.05)  # unique non-zero score
 
         iteration = [0]
 
         def refine_fn(input_data, config):
             iteration[0] += 1
-            d = input_data if isinstance(input_data, Draft) else Draft(content="", score=0.0)
+            assert isinstance(input_data, Draft), (
+                f"refine expected Draft, got {type(input_data).__name__}: {input_data!r}"
+            )
             return Draft(
                 content=f"v{iteration[0]}",
-                score=d.score + 0.25,
+                score=input_data.score + 0.25,
                 iteration=iteration[0],
             )
 
@@ -389,16 +404,15 @@ class TestLoadSpecLoopHistory:
         result = run(graph, input={"node_id": "test"})
 
         history = result["refine"]
-        # Append-list preserves all iterations
         assert isinstance(history, list)
-        assert len(history) == 4  # 0.0 -> 0.25 -> 0.50 -> 0.75 -> 1.0 (4 calls)
-        # Each entry has increasing score
-        scores = [d.score for d in history]
-        assert scores == sorted(scores)
-        assert scores[-1] >= 0.8
+        # Seed at 0.05, +0.25 each: 0.30, 0.55, 0.80 (3 iterations, exits at 0.80)
+        assert len(history) == 3
+        # Scores prove data flowed from seed (0.05), not from a fallback (0.0)
+        scores = [round(d.score, 2) for d in history]
+        assert scores == [0.30, 0.55, 0.80]
         # Iteration numbers are sequential
         iterations = [d.iteration for d in history]
-        assert iterations == [1, 2, 3, 4]
+        assert iterations == [1, 2, 3]
 
 
 class TestLoadSpecMultiNodeConstruct:
@@ -406,23 +420,33 @@ class TestLoadSpecMultiNodeConstruct:
 
     def test_multi_node_construct_loops_as_unit(self):
         """A sub-construct with two nodes (review + revise) loops until
-        the output meets the condition. Both nodes re-run each iteration."""
+        the output meets the condition. Both nodes re-run each iteration.
+        Honest: both functions derive output from input_data, not closures."""
         from neograph.loader import load_spec
         from neograph.spec_types import register_type
 
         register_type("Draft", Draft)
         register_type("ReviewResult", ReviewResult)
 
-        review_count = [0]
+        review_received = []
+        revise_received = []
 
         def mn_review(input_data, config):
-            review_count[0] += 1
-            score = 0.3 * review_count[0]
-            return ReviewResult(score=min(score, 1.0), feedback=f"iter-{review_count[0]}")
+            review_received.append(input_data)
+            # Must read draft from input_data to derive score
+            d = input_data if isinstance(input_data, Draft) else None
+            base_score = d.score if d else 0.0
+            new_score = base_score + 0.3
+            return ReviewResult(score=min(new_score, 1.0), feedback=f"reviewed-{new_score:.1f}")
 
         def mn_revise(input_data, config):
-            # Inside sub-construct: reads review from state, draft from input
-            return Draft(content="revised", score=0.3 * review_count[0], iteration=review_count[0])
+            revise_received.append(input_data)
+            # Must read review from input_data dict
+            assert isinstance(input_data, dict), f"revise expected dict, got {type(input_data).__name__}"
+            review = input_data.get("review")
+            assert review is not None, "revise did not receive review output"
+            assert isinstance(review, ReviewResult), f"review is {type(review).__name__}"
+            return Draft(content=review.feedback, score=review.score, iteration=1)
 
         def mn_draft(input_data, config):
             return Draft(content="initial", score=0.0)
@@ -454,20 +478,25 @@ class TestLoadSpecMultiNodeConstruct:
         graph = compile(construct)
         result = run(graph, input={"node_id": "test"})
 
-        # review ran 3 times (0.3, 0.6, 0.9 — exits at 0.9 >= 0.8)
-        assert review_count[0] == 3
-        # Sub-construct result is an append-list
-        assert isinstance(result["refine"], list)
-        assert result["refine"][-1].score >= 0.8
+        # review ran 3 times (0.0+0.3=0.3, 0.3+0.3=0.6, 0.6+0.3=0.9)
+        assert len(review_received) == 3
+        # revise actually received review output (not None, not just Draft)
+        assert len(revise_received) == 3
+        for r in revise_received:
+            assert isinstance(r, dict), f"revise got {type(r).__name__}, expected dict"
+            assert "review" in r, f"revise input missing 'review' key: {list(r.keys())}"
+        # Final result reflects data that flowed through review → revise
+        final = result["refine"][-1]
+        assert final.score >= 0.8
+        assert "reviewed-" in final.content, f"Content should contain review feedback: {final.content!r}"
 
 
-class TestLoadSpecVariableSubstitution:
-    """${node.field} variable substitution in inline prompts."""
+class TestLoadSpecDataFlow:
+    """Verify data flows correctly between spec-loaded nodes."""
 
-    def test_inline_prompt_with_variable_substitution_renders(self):
-        """A think-mode node with an inline prompt containing ${node.field}
-        should have the variable resolved before hitting the LLM. We verify
-        via a scripted node that captures what _compile_prompt produced."""
+    def test_second_node_receives_upstream_output_with_exact_values(self):
+        """Scripted node receives upstream output with exact field values.
+        Tests basic data flow, not variable substitution (that's in test_inline_prompts.py)."""
         from neograph.loader import load_spec
         from neograph.spec_types import register_type
 
@@ -487,7 +516,7 @@ class TestLoadSpecVariableSubstitution:
         register_scripted("var_seed", seed_fn)
 
         spec = {
-            "name": "var-test",
+            "name": "flow-test",
             "nodes": [
                 {"name": "seed", "mode": "scripted", "scripted_fn": "var_seed", "outputs": "Draft"},
                 {"name": "process", "mode": "scripted", "scripted_fn": "capture_fn", "outputs": "Draft"},
@@ -499,7 +528,6 @@ class TestLoadSpecVariableSubstitution:
         graph = compile(construct)
         result = run(graph, input={"node_id": "test"})
 
-        # The process node received the seed's output (Draft with score=0.42)
         inp = captured_input[0]
         assert inp is not None, "process node received None — input wiring broken"
         assert isinstance(inp, Draft), f"Expected Draft, got {type(inp).__name__}"
@@ -695,6 +723,30 @@ class TestLoadSpecErrors:
         }
 
         with pytest.raises(ConfigurationError, match="ghost"):
+            load_spec(spec)
+
+    def test_raises_when_loop_condition_unparseable(self):
+        """Malformed when expression raises ValueError at load time."""
+        from neograph.loader import load_spec
+        from neograph.spec_types import register_type
+
+        register_type("Draft", Draft)
+
+        spec = {
+            "name": "bad-loop",
+            "nodes": [
+                {
+                    "name": "x",
+                    "mode": "scripted",
+                    "scripted_fn": "whatever",
+                    "outputs": "Draft",
+                    "loop": {"when": "this is not a valid expression!!!"},
+                }
+            ],
+            "pipeline": {"nodes": ["x"]},
+        }
+
+        with pytest.raises(ValueError, match="Invalid condition"):
             load_spec(spec)
 
     def test_raises_when_construct_refs_unknown_node(self):

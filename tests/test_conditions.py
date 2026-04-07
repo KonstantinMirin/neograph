@@ -195,3 +195,37 @@ class TestErrorPaths:
         # The key protection is that we never eval — we only do getattr.
         with pytest.raises(ValueError, match="Invalid condition expression"):
             parse_condition('__import__("os") == true')
+
+
+class TestConditionEdgeCases:
+    """Edge cases from TQ-10-12 audit."""
+
+    def test_negative_number_literal(self):
+        """Negative number: score > -0.5."""
+        cond = parse_condition("score > -0.5")
+
+        class M(BaseModel):
+            score: float
+
+        assert cond(M(score=0.0)) is True
+        assert cond(M(score=-1.0)) is False
+
+    def test_int_field_vs_float_literal(self):
+        """Cross-type: integer field compared to float literal."""
+        cond = parse_condition("count >= 2.5")
+
+        class M(BaseModel):
+            count: int
+
+        assert cond(M(count=3)) is True
+        assert cond(M(count=2)) is False
+
+    def test_zero_literal(self):
+        """Zero as literal: score == 0."""
+        cond = parse_condition("score == 0")
+
+        class M(BaseModel):
+            score: float
+
+        assert cond(M(score=0.0)) is True
+        assert cond(M(score=0.1)) is False
