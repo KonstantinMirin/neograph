@@ -319,6 +319,41 @@ class TestLoopValidation:
         with pytest.raises(ConstructError, match="loop.*compatible"):
             incompatible | Loop(when=lambda x: True, max_iterations=3)
 
+    def test_raises_when_loop_param_ambiguous_type_match(self):
+        """When multiple upstreams produce the same type, error on ambiguity."""
+
+        @node(outputs=Draft)
+        def seed_a() -> Draft:
+            return Draft(content="a")
+
+        @node(outputs=Draft)
+        def seed_b() -> Draft:
+            return Draft(content="b")
+
+        @node(
+            outputs=Draft,
+            loop_when=lambda d: d.score < 0.8,
+            max_iterations=3,
+        )
+        def ambiguous(draft: Draft) -> Draft:
+            return Draft(content="x", score=1.0)
+
+        with pytest.raises(ConstructError, match="matches multiple upstreams"):
+            construct_from_functions("ambiguous", [seed_a, seed_b, ambiguous])
+
+    def test_raises_when_each_and_loop_combined(self):
+        """Each + Loop on the same node is restricted."""
+        with pytest.raises(ConstructError, match="Each.*Loop.*cannot be combined"):
+            @node(
+                outputs=ClaimItem,
+                map_over="claims.items",
+                map_key="claim_id",
+                loop_when=lambda c: c.confidence < 0.9,
+                max_iterations=5,
+            )
+            def bad_combo(claim: ClaimItem) -> ClaimItem:
+                return claim
+
 
 # =============================================================================
 # Pattern 6: ForwardConstruct with while loop

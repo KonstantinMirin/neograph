@@ -116,7 +116,7 @@ class FromConfig:
 
 from neograph._construct_validation import ConstructError
 from neograph.construct import Construct
-from neograph.modifiers import Each, Operator, Oracle
+from neograph.modifiers import Each, Loop, Operator, Oracle
 from neograph.node import Node
 from neograph.tool import Tool
 
@@ -991,6 +991,51 @@ def _resolve_dict_output_param(
     return None
 
 
+def _resolve_loop_self_param(
+    node: Node,
+    pname: str,
+    decorated: dict[str, Node],
+    sub_by_field: dict[str, Any],
+) -> str | None:
+    """For a Loop node, resolve a param by type when name doesn't match upstream.
+
+    Returns the upstream field_name if exactly one upstream produces a compatible
+    type. Returns None if no match. Raises ConstructError if ambiguous (multiple
+    matches).
+    """
+    from neograph._construct_validation import effective_producer_type, _types_compatible
+
+    if not isinstance(node.inputs, dict):
+        return None
+    param_type = node.inputs.get(pname)
+    if param_type is None:
+        return None
+
+    field_name = node.name.replace("-", "_")
+    candidates: list[str] = []
+    all_upstreams = {**decorated, **sub_by_field}
+    for up_field, upstream in all_upstreams.items():
+        if up_field == field_name:
+            continue  # skip self
+        up_type = effective_producer_type(upstream)
+        if up_type is not None and _types_compatible(up_type, param_type):
+            candidates.append(up_field)
+
+    if len(candidates) == 1:
+        return candidates[0]
+    if len(candidates) > 1:
+        src = _get_node_source(node)
+        src_suffix = f"\n  @node defined at {src}" if src else ""
+        msg = (
+            f"@node '{node.name}' loop self-reference param '{pname}' "
+            f"matches multiple upstreams by type: {sorted(candidates)}. "
+            f"Name the param after the specific upstream to disambiguate."
+            f"{src_suffix}"
+        )
+        raise ConstructError(msg)
+    return None
+
+
 def _build_construct_from_decorated(
     nodes: list[Node],
     construct_name: str,
@@ -1110,6 +1155,8 @@ def _build_construct_from_decorated(
 
     # Sub-constructs participate in adjacency as producers with no deps of
     # their own (they're self-contained — internal wiring is already validated).
+    # Track loop self-reference param renames: {field_name: {orig_param: resolved_upstream}}
+    loop_param_renames: dict[str, dict[str, str]] = {}
     all_known = {**{k: None for k in decorated}, **{k: None for k in sub_by_field}}
     adjacency: dict[str, list[str]] = {k: [] for k in all_known}
     for field_name, n in decorated.items():
@@ -1148,6 +1195,17 @@ def _build_construct_from_decorated(
                         adjacency[field_name].append(resolved_upstream)
                         seen_deps.add(resolved_upstream)
                     continue
+                # Loop self-reference: when loop_when is set and param type
+                # matches exactly one upstream, resolve by type (neograph-0zk2).
+                if n.has_modifier(Loop):
+                    loop_upstream = _resolve_loop_self_param(n, pname, decorated, sub_by_field)
+                    if loop_upstream is not None:
+                        if loop_upstream not in seen_deps:
+                            adjacency[field_name].append(loop_upstream)
+                            seen_deps.add(loop_upstream)
+                        # Track the rename so inputs cleanup + shim can handle it
+                        loop_param_renames.setdefault(field_name, {})[pname] = loop_upstream
+                        continue
                 src = _get_node_source(n)
                 src_suffix = f"\n  @node defined at {src}" if src else ""
                 all_names = sorted(set(decorated.keys()) | set(sub_by_field.keys()))
@@ -1216,13 +1274,19 @@ def _build_construct_from_decorated(
         skip = fan_out_params.get(field, set())
         _ports = port_params.get(field, set())
         # Keep keys that are upstream @nodes, fan-out receivers, port params,
-        # or dict-output references ({upstream}_{output_key}, neograph-1bp.5).
+        # dict-output references ({upstream}_{output_key}, neograph-1bp.5),
+        # or loop self-reference params (renamed to resolved upstream).
+        renames = loop_param_renames.get(field, {})
         filtered: dict[str, Any] = {}
         for k, v in n.inputs.items():
             if k in _ports:
                 # Port param: rewrite key to neo_subgraph_input so
                 # factory._extract_input reads from the right state field.
                 filtered["neo_subgraph_input"] = v
+            elif k in renames:
+                # Loop self-reference: rewrite key to the resolved upstream
+                # so _extract_input finds it by name on the first iteration.
+                filtered[renames[k]] = v
             elif (
                 (k in decorated and k != field)
                 or k in sub_by_field
@@ -1249,6 +1313,7 @@ def _build_construct_from_decorated(
             _register_node_scripted(
                 n, fan_out_params.get(field, set()),
                 port_param_map={p: "neo_subgraph_input" for p in port_params.get(field, set())},
+                loop_renames=loop_param_renames.get(field),
             )
 
     # Deferred oracle_gen_type inference: at decoration time, the merge_fn
@@ -1276,6 +1341,7 @@ def _register_node_scripted(
     n: Node,
     fan_out: set[str] | None = None,
     port_param_map: dict[str, str] | None = None,
+    loop_renames: dict[str, str] | None = None,
 ) -> None:
     """Register a scripted shim for a @node-decorated function via
     ``register_scripted`` so it dispatches through
@@ -1295,6 +1361,10 @@ def _register_node_scripted(
     When ``port_param_map`` is set, port params (whose keys were rewritten
     in ``n.inputs`` to ``neo_subgraph_input``) are looked up under the
     rewritten key in ``input_data``.
+
+    When ``loop_renames`` is set, loop self-reference params (whose keys
+    were rewritten in ``n.inputs`` from original name to resolved upstream)
+    are looked up under the rewritten key in ``input_data``.
     """
     from neograph.factory import register_scripted
 
@@ -1305,6 +1375,7 @@ def _register_node_scripted(
     param_res = _get_param_resolutions(n)
     _fan_out = fan_out or set()
     _port_map = port_param_map or {}
+    _loop_map = loop_renames or {}
 
     # Synthesize a unique name for the registered shim. Use id(n) so
     # parallel pipelines with the same node names don't collide.
@@ -1319,9 +1390,10 @@ def _register_node_scripted(
                 kind, payload = resolution
                 args.append(_resolve_di_value(kind, payload, pname, config))
             else:
-                # Port param: key was rewritten (e.g. "claim" →
-                # "neo_subgraph_input"). Look up the rewritten key.
-                lookup_key = _port_map.get(pname, pname)
+                # Port param or loop rename: key was rewritten
+                # (e.g. "claim" → "neo_subgraph_input", or
+                # "draft" → "seed" for loop self-ref). Look up rewritten key.
+                lookup_key = _port_map.get(pname, _loop_map.get(pname, pname))
                 # Fan-out or upstream param — both are already in
                 # input_data under the param name (fan-out via
                 # node.fan_out_param → neo_each_item, upstream via
