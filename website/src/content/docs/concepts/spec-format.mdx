@@ -1,0 +1,318 @@
+---
+title: "Pipeline Spec Format"
+description: "Define pipelines as YAML/JSON — the declarative API for LLM-generated workflows."
+---
+
+Pipelines don't have to be Python. A YAML or JSON document can describe the full topology — nodes, modes, modifiers, wiring — and `load_spec` compiles it to the same IR that `@node` and `ForwardConstruct` produce. The spec format is the compiler between AI intent and structured execution: an LLM generates the YAML, neograph validates and compiles it.
+
+## Minimal example
+
+```yaml
+name: draft-pipeline
+nodes:
+  - name: generate
+    mode: think
+    prompt: "Write a first draft about the given topic."
+    model: fast
+    outputs: Draft
+
+pipeline:
+  nodes: [generate]
+```
+
+```python
+from neograph import load_spec, compile, run
+
+construct = load_spec("pipeline.yaml")  # file path, YAML string, or dict
+graph = compile(construct)
+result = run(graph, input={"node_id": "demo"})
+```
+
+`load_spec` accepts a file path, a YAML/JSON string, or a pre-parsed dict. It returns a `Construct` — the same IR that `@node` and `Construct(nodes=[...])` produce — ready for `compile()`.
+
+## Spec structure
+
+Every spec has three top-level keys:
+
+| Key | Required | Description |
+|-----|----------|-------------|
+| `name` | Yes | Pipeline name. Becomes the `Construct` name. |
+| `nodes` | Yes | Array of node definitions. |
+| `constructs` | No | Array of sub-construct definitions. |
+| `pipeline` | Yes | Ordered list of node/construct names to execute. |
+
+### Node definition
+
+```yaml
+nodes:
+  - name: classify
+    mode: think
+    prompt: "Classify the input into categories."
+    model: fast
+    outputs: Classification
+    tools: [search_codebase]       # for agent/act modes
+    context: [raw_input]           # state fields injected into prompt
+    llm_config:
+      temperature: 0.2
+    inputs:                        # explicit; usually inferred from pipeline order
+      upstream_name: TypeName
+```
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `name` | Yes | Unique node name within the pipeline. |
+| `mode` | No | `scripted`, `think`, `agent`, `act`, `raw`. Default: `scripted`. |
+| `outputs` | Yes | Output type name (resolved from type registry). |
+| `prompt` | No | Prompt template or registered template name. Required for LLM modes. |
+| `model` | No | Model tier name. Required for LLM modes. |
+| `tools` | No | Tool names for `agent`/`act` modes. |
+| `scripted_fn` | No | Registered function name for `scripted` mode. |
+| `inputs` | No | Explicit `{upstream: type}` mapping. Usually inferred. |
+| `context` | No | State field names injected verbatim into the prompt. |
+| `llm_config` | No | Per-node LLM settings (temperature, max_tokens, etc.). |
+
+### Modifier blocks
+
+Modifiers are declared as sibling keys on the node, not as nested arrays:
+
+```yaml
+nodes:
+  - name: analyze
+    mode: think
+    prompt: "Analyze the input."
+    model: reason
+    outputs: Analysis
+    oracle:
+      models: [reason, fast, reason]
+      merge_prompt: "Combine these analyses into a single report."
+```
+
+#### Oracle
+
+```yaml
+oracle:
+  n: 3                    # number of parallel generators
+  models: [reason, fast]  # model tiers (infers n from length)
+  merge_fn: combine       # registered scripted merge function
+  merge_prompt: "..."     # OR: LLM merge prompt
+  merge_model: reason     # model for LLM merge (default: reason)
+```
+
+Exactly one of `merge_fn` or `merge_prompt` is required. `models` assigns tiers round-robin and infers `n` from `len(models)`.
+
+#### Each (fan-out)
+
+```yaml
+each:
+  over: claims.items      # dotted path to collection in state
+  key: label              # field on each item used as dispatch key
+```
+
+#### Loop
+
+```yaml
+loop:
+  when: "score < 0.8"     # condition expression (field op literal)
+  max_iterations: 10      # default: 10
+  on_exhaust: error       # "error" (default) or "last"
+```
+
+The `when` expression supports `<`, `>`, `<=`, `>=`, `==`, `!=` with numeric, boolean (`true`/`false`), or quoted string literals. Dotted field access works: `result.score < 0.8`.
+
+#### Operator (human-in-the-loop)
+
+```yaml
+operator:
+  when: needs_review      # registered condition name
+```
+
+### Sub-constructs
+
+Sub-constructs group nodes with isolated state and typed I/O boundaries:
+
+```yaml
+constructs:
+  - name: refine
+    input: Draft
+    output: Draft
+    nodes: [review, revise]
+    loop:
+      when: "score < 0.8"
+      max_iterations: 5
+```
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `name` | Yes | Sub-construct name. |
+| `input` | Yes | Input type (boundary port). |
+| `output` | Yes | Output type (boundary port). |
+| `nodes` | Yes | Node names (references to top-level `nodes` array). |
+
+Sub-constructs support the same modifier blocks as nodes: `oracle`, `each`, `loop`, `operator`.
+
+## Full example: security analysis pipeline
+
+A pipeline that decomposes a codebase description into security claims, verifies each claim against the codebase, and produces a report:
+
+```yaml
+name: security-analysis
+
+nodes:
+  - name: decompose
+    mode: think
+    prompt: |
+      Decompose this codebase description into discrete security claims.
+      Each claim should be independently verifiable.
+    model: reason
+    outputs: Claims
+    oracle:
+      models: [reason, fast, reason]
+      merge_prompt: |
+        You have multiple decompositions. Combine them into a single,
+        deduplicated list of security claims.
+
+  - name: verify
+    mode: agent
+    prompt: |
+      Verify this security claim against the codebase.
+      Search for evidence that supports or refutes the claim.
+    model: fast
+    outputs: MatchResult
+    tools: [search_codebase, read_file]
+    each:
+      over: decompose.items
+      key: claim_id
+
+  - name: report
+    mode: think
+    prompt: |
+      Produce a security analysis report from the verification results.
+      Flag critical findings and suggest remediation steps.
+    model: reason
+    outputs: Report
+
+pipeline:
+  nodes: [decompose, verify, report]
+```
+
+## Full example: iterative refinement with sub-construct
+
+A pipeline that drafts content, then iteratively reviews and revises it:
+
+```yaml
+name: iterative-writer
+
+nodes:
+  - name: draft
+    mode: think
+    prompt: "Write a first draft about the given topic."
+    model: fast
+    outputs: Draft
+
+  - name: review
+    mode: think
+    prompt: "Review this draft. Score 0-1 and provide feedback."
+    model: reason
+    outputs: ReviewResult
+
+  - name: revise
+    mode: think
+    prompt: "Revise the draft based on the review feedback."
+    model: fast
+    outputs: Draft
+
+constructs:
+  - name: refine
+    input: Draft
+    output: Draft
+    nodes: [review, revise]
+    loop:
+      when: "score < 0.8"
+      max_iterations: 5
+
+pipeline:
+  nodes: [draft, refine]
+```
+
+## Project surface
+
+Types referenced in the spec (like `Draft`, `Claims`, `Report`) must exist in the type registry. You have two options:
+
+### Option 1: Pre-register Python types
+
+```python
+from neograph import register_type
+from myapp.schemas import Draft, Claims, Report
+
+register_type("Draft", Draft)
+register_type("Claims", Claims)
+register_type("Report", Report)
+
+construct = load_spec("pipeline.yaml")
+```
+
+### Option 2: Auto-generate types from a project surface
+
+Pass a project surface definition to `load_spec`. Types are generated as Pydantic models from JSON Schema definitions:
+
+```yaml
+# project.yaml
+types:
+  Draft:
+    properties:
+      content: { type: string }
+      score: { type: number }
+      iteration: { type: integer }
+    required: [content]
+
+  ReviewResult:
+    properties:
+      score: { type: number }
+      feedback: { type: string }
+    required: [score, feedback]
+
+  Claims:
+    properties:
+      items:
+        type: array
+        items: { $ref: Draft }
+    required: [items]
+```
+
+```python
+construct = load_spec("pipeline.yaml", project="project.yaml")
+```
+
+The project surface uses JSON Schema conventions. Nested type references use `$ref` with the type name (not a JSON pointer). Types are processed in definition order, so a type can reference another type defined earlier in the file.
+
+Supported field types:
+
+| JSON Schema | Python type |
+|-------------|-------------|
+| `string` | `str` |
+| `number` | `float` |
+| `integer` | `int` |
+| `boolean` | `bool` |
+| `array` (with `items`) | `list[T]` |
+| `$ref: TypeName` | Registered Pydantic model |
+
+## JSON Schema
+
+The spec format is validated against a JSON Schema at load time (when `jsonschema` is installed). The schema is bundled at `neograph/schemas/neograph-pipeline.schema.json`.
+
+The full schema is available at the [GitHub repository](https://github.com/KonstantinMirin/neograph/blob/develop/src/neograph/schemas/neograph-pipeline.schema.json).
+
+## Assembly-time validation
+
+After parsing, `load_spec` builds a `Construct` and the same validator that checks `@node` and programmatic pipelines runs on the result:
+
+- Every node's inputs are type-checked against upstream outputs
+- Modifier chains are validated (Each paths resolve, Oracle has a merge strategy)
+- Fan-in parameters are type-checked across all upstreams
+- Cycles and self-dependencies raise `ConstructError`
+
+If the spec is malformed, you get a clear error pointing at the broken edge — before anything executes. When an LLM generates the spec, surface the error back and let it revise.
+
+---
+
+Documentation © 2025-2026 Constantine Mirin, [mirin.pro](https://mirin.pro). Licensed under [CC BY-ND 4.0](https://creativecommons.org/licenses/by-nd/4.0/).

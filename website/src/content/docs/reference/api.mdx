@@ -34,6 +34,8 @@ from neograph import (
     NeographError, ConstructError, CompileError, ConfigurationError, ExecutionError,
     # Registries (for runtime construction)
     register_scripted, register_condition, register_tool_factory,
+    # Spec loader
+    load_spec, register_type, lookup_type,
 )
 ```
 
@@ -366,6 +368,50 @@ All errors are importable: `from neograph import ConstructError, CompileError, C
 - **`register_tool_factory(name, factory)`** — Register a tool factory for declarative tool lookup
 
 These are only needed for the programmatic API. `@node`, `@tool`, and `@merge_fn` handle registration automatically.
+
+---
+
+## Spec Loader
+
+### `load_spec(spec, project=None)`
+
+Load a YAML/JSON pipeline spec and return a compilable `Construct`.
+
+```python
+from neograph import load_spec, compile, run
+
+construct = load_spec("pipeline.yaml")
+graph = compile(construct)
+result = run(graph, input={"node_id": "demo"})
+```
+
+**Parameters:**
+
+- **`spec`** (`str | dict`) — Pipeline spec as a YAML/JSON string, a file path, or a pre-parsed dict.
+- **`project`** (`str | dict | None`) — Project surface (types/tools/models) as a YAML/JSON string, file path, or pre-parsed dict. Optional — types can also be pre-registered via `register_type`.
+
+**Returns:** A `Construct` ready for `compile()`.
+
+The spec is validated against the bundled JSON Schema (`neograph/schemas/neograph-pipeline.schema.json`) when `jsonschema` is installed. After parsing, the standard Construct validator runs — same checks as `@node` and programmatic pipelines.
+
+See [Pipeline Spec Format](/concepts/spec-format/) for the full spec schema and examples.
+
+### `register_type(name, cls)`
+
+Register a Pydantic model under a string name for spec-based lookup.
+
+```python
+from neograph import register_type
+from myapp.schemas import Draft
+
+register_type("Draft", Draft)
+```
+
+Types referenced in specs (e.g., `outputs: Draft`) are resolved from this registry. Types can also be auto-generated from a project surface passed to `load_spec(project=...)`.
+
+### `lookup_type(name)`
+
+Return the model registered under the given name. Raises `ConfigurationError` if not found.
 
 ---
 

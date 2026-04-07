@@ -152,9 +152,78 @@ The LLM calls `construct_pipeline` with a JSON spec. If the validator rejects it
 
 This gives you a self-correcting loop: the LLM proposes a pipeline, validation either accepts or rejects with a diagnostic, and the LLM iterates until the spec is correct.
 
+## Spec-driven pipelines: `load_spec`
+
+The tool-calling pattern above gives the LLM full control over the Python API. For a more constrained approach, the LLM generates a YAML or JSON spec and `load_spec` handles the rest:
+
+```yaml
+name: requirements-analysis
+nodes:
+  - name: decompose
+    mode: think
+    prompt: "Decompose the requirements into discrete claims."
+    model: reason
+    outputs: Claims
+    oracle:
+      n: 3
+      merge_fn: merge_claims
+
+  - name: verify
+    mode: agent
+    prompt: "Verify this claim against the codebase."
+    model: fast
+    outputs: MatchResult
+    tools: [search_codebase]
+    each:
+      over: decompose.items
+      key: label
+
+  - name: report
+    mode: think
+    prompt: "Produce the final analysis report."
+    model: fast
+    outputs: Report
+
+pipeline:
+  nodes: [decompose, verify, report]
+```
+
+```python
+from neograph import load_spec, compile, run
+
+construct = load_spec(yaml_string)  # or a file path, or a dict
+graph = compile(construct)
+result = run(graph, input={"node_id": "user-request-42"})
+```
+
+`load_spec` parses the spec, resolves type names from the registry, applies modifiers (Oracle, Each, Loop, Operator), validates the full chain, and returns a `Construct`. The same validator that checks `@node` and programmatic pipelines runs on the result — malformed specs get a clear error before anything executes.
+
+The spec format supports everything the programmatic API does: LLM modes, fan-out, ensembles, loops, sub-constructs with isolated state, and human-in-the-loop interrupts. See the [Pipeline Spec Format](/concepts/spec-format/) reference for the full schema and examples.
+
+### Why specs over tool calling
+
+The tool-calling pattern exposes the full Python API. The spec format is more constrained:
+
+- **Validated schema**: the spec is checked against a JSON Schema at parse time, before any Python runs
+- **LLM-friendly**: YAML is a natural output format for LLMs — no Python syntax, no imports, no class definitions
+- **Auditable**: the YAML spec is a readable, diffable artifact that can be logged, versioned, and reviewed
+- **Self-correcting**: when validation fails, the error message tells the LLM exactly what to fix
+
+Use tool calling when the LLM needs full flexibility (dynamic modifier logic, custom scripted functions). Use specs when the pipeline topology is the main decision and you want a clean contract between the LLM and the runtime.
+
 ## Config-driven pipelines
 
-The same pattern works when pipelines come from YAML, JSON config files, or a database:
+The same pattern works when pipelines come from YAML, JSON config files, or a database. With `load_spec`, there's no custom `build_pipeline` function needed:
+
+```python
+from neograph import load_spec, compile, run
+
+construct = load_spec("pipelines/daily-ingestion.yaml")
+graph = compile(construct)
+run(graph, input={"node_id": "daily-001"})
+```
+
+For the tool-calling approach, the runtime logic is identical to the LLM case — only the source of the spec changes:
 
 ```python
 import yaml
@@ -167,17 +236,16 @@ graph = compile(pipeline)
 run(graph, input={"node_id": "daily-001"})
 ```
 
-The runtime logic is identical. Only the source of the spec changes.
-
 ## Summary
 
-Three surfaces, one compiler:
+Four paths to the same compiler:
 
 - **`@node`** — humans writing pipelines in source code
 - **`ForwardConstruct`** — humans writing branching logic as Python
-- **`Node` + `Construct` + `|`** — LLMs and config systems building pipelines at runtime
+- **`Node` + `Construct` + `|`** — LLMs and config systems building pipelines via tool calling
+- **`load_spec`** — LLMs and config files describing pipelines as YAML/JSON
 
-The runtime API is a first-class citizen. It's the path for every use case where "who writes the pipeline" isn't a human at a keyboard.
+The runtime APIs are first-class citizens. They're the path for every use case where "who writes the pipeline" isn't a human at a keyboard.
 
 ---
 

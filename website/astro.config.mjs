@@ -47,7 +47,8 @@ export default defineConfig({
 						{ label: 'Subgraphs', slug: 'concepts/subgraphs' },
 						{ label: 'Observability', slug: 'concepts/observability' },
 						{ label: 'LLM Configuration', slug: 'concepts/llm-configuration' },
-						{ label: 'Testing', slug: 'concepts/testing' },
+						{ label: 'Pipeline Spec Format', slug: 'concepts/spec-format' },
+					{ label: 'Testing', slug: 'concepts/testing' },
 					],
 				},
 				{
