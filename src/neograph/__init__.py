@@ -21,6 +21,7 @@ sub-constructs), see Node and Construct directly.
 from neograph._llm import configure_llm, render_prompt
 from neograph.conditions import parse_condition
 from neograph.describe_type import describe_type, describe_value
+from neograph.loader import load_spec
 from neograph.compiler import compile
 from neograph.construct import Construct
 from neograph.errors import (
@@ -99,6 +100,8 @@ __all__ = [
     "lookup_type",
     # Condition evaluator
     "parse_condition",
+    # Spec loader
+    "load_spec",
 ]
 
 __version__ = "0.2.0.dev0"
