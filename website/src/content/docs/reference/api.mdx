@@ -191,9 +191,38 @@ class Analysis(ForwardConstruct):
 graph = compile(Analysis())
 ```
 
-At compile time, NeoGraph traces `forward()` with symbolic proxies. Python `if` compiles to a conditional edge. `for` over a proxy compiles to Each fan-out. `try`/`except` around node calls is allowed but doesn't create a fallback edge in v1 — see the [ForwardConstruct guide](/forward/branching/) for the full semantics.
+At compile time, NeoGraph traces `forward()` with symbolic proxies. Python `if` compiles to a conditional edge. `for` over a proxy compiles to Each fan-out. `self.loop()` compiles to a graph cycle. `try`/`except` around node calls is allowed but doesn't create a fallback edge in v1 -- see the [ForwardConstruct guide](/forward/branching/) for the full semantics.
 
-For testing, call `forward()` directly — it runs real Python with real values.
+Python `for`/`while` loops don't produce graph cycles (same limitation as `torch.jit.trace`). Use `self.loop()` for iterative patterns.
+
+For testing, call `forward()` directly -- it runs real Python with real values.
+
+### `self.loop(body, when, max_iterations=10, on_exhaust="error")`
+
+Explicit loop primitive that compiles to a sub-construct with a `Loop` modifier. Returns a callable; call it with a proxy to wire the loop into the graph.
+
+```python
+class Writer(ForwardConstruct):
+    draft  = Node(outputs=Draft, prompt='draft', model='fast')
+    review = Node(outputs=ReviewResult, prompt='review', model='reason')
+    revise = Node(outputs=Draft, prompt='revise', model='reason')
+
+    def forward(self, topic):
+        d = self.draft(topic)
+        d = self.loop(
+            body=[self.review, self.revise],
+            when=lambda r: r.score < 0.8,
+            max_iterations=5,
+        )(d)
+        return d
+```
+
+- **`body`** -- List of node references (`self.review`, `self.revise`, etc.) that form the loop body. At least one node required.
+- **`when`** -- Callable that receives the loop body's latest output. Return `True` to continue looping, `False` to exit.
+- **`max_iterations`** -- Iteration cap. Default 10.
+- **`on_exhaust`** -- `"error"` (default) raises `ExecutionError`; `"last"` exits with the last result.
+
+Maps 1:1 to `construct | Loop(when=..., max_iterations=...)` in the programmatic API.
 
 ---
 

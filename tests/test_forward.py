@@ -875,3 +875,102 @@ class TestForwardConstructExceptions:
         # The pipeline should still compile successfully
         graph = compile(pipeline)
         assert graph is not None
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Part 9: self.loop() primitive — tracing and validation
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class Draft(BaseModel, frozen=True):
+    content: str
+    iteration: int = 0
+    score: float = 0.0
+
+
+class ReviewResult(BaseModel, frozen=True):
+    score: float
+    feedback: str
+
+
+class TestSelfLoopTracing:
+    """self.loop() primitive: tracing, node list, and error handling."""
+
+    def test_empty_body_raises_construct_error(self):
+        """self.loop(body=[], when=...) raises ConstructError at trace time."""
+        from neograph import ConstructError, ForwardConstruct
+
+        class EmptyLoop(ForwardConstruct):
+            seed = Node.scripted("seed", fn="fc_seed_empty", outputs=Draft)
+
+            def forward(self, topic):
+                d = self.seed(topic)
+                d = self.loop(
+                    body=[],
+                    when=lambda r: r is None or r.score < 0.8,
+                    max_iterations=5,
+                )(d)
+                return d
+
+        register_scripted(
+            "fc_seed_empty",
+            lambda _in, _cfg: Draft(content="seed", score=0.0),
+        )
+
+        with pytest.raises(ConstructError, match="at least one node"):
+            EmptyLoop()
+
+    def test_loop_construct_appears_in_traced_nodes(self):
+        """After tracing, the node list contains a Construct with Loop modifier
+        for the loop body, not the individual body nodes."""
+        from neograph import ForwardConstruct
+        from neograph.modifiers import Loop
+
+        class LoopPipeline(ForwardConstruct):
+            seed = Node.scripted("seed", fn="fc_seed_trace", outputs=Draft)
+            review = Node.scripted("review", fn="fc_review_trace", outputs=ReviewResult)
+            revise = Node.scripted("revise", fn="fc_revise_trace", outputs=Draft)
+
+            def forward(self, topic):
+                d = self.seed(topic)
+                d = self.loop(
+                    body=[self.review, self.revise],
+                    when=lambda r: r is None or r.score < 0.8,
+                    max_iterations=10,
+                )(d)
+                return d
+
+        register_scripted(
+            "fc_seed_trace",
+            lambda _in, _cfg: Draft(content="trace-seed", score=0.0),
+        )
+        register_scripted(
+            "fc_review_trace",
+            lambda _in, _cfg: ReviewResult(score=0.5, feedback="ok"),
+        )
+        register_scripted(
+            "fc_revise_trace",
+            lambda _in, _cfg: Draft(content="trace-revised", score=0.5),
+        )
+
+        pipeline = LoopPipeline()
+
+        # Should have 2 entries: the seed Node and the loop Construct
+        assert len(pipeline.nodes) == 2
+
+        # First is the seed node
+        assert isinstance(pipeline.nodes[0], Node)
+        assert pipeline.nodes[0].name == "seed"
+
+        # Second is a Construct (the loop body) with a Loop modifier
+        loop_entry = pipeline.nodes[1]
+        assert isinstance(loop_entry, Construct)
+        assert loop_entry.has_modifier(Loop)
+
+        loop_mod = loop_entry.get_modifier(Loop)
+        assert loop_mod.max_iterations == 10
+
+        # The loop construct's internal nodes are the body nodes
+        inner_names = [n.name for n in loop_entry.nodes]
+        assert "review" in inner_names
+        assert "revise" in inner_names

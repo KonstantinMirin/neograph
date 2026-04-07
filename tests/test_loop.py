@@ -465,3 +465,216 @@ class TestForwardConstructLoop:
         assert _review_count[0] == 3, (
             f"Expected review to run 3 times, ran {_review_count[0]}"
         )
+
+    def test_single_node_loop_body_via_explicit_loop_primitive(self):
+        """self.loop(body=[self.refine], ...) compiles a single-node self-loop
+        via ForwardConstruct. The refine node loops until score >= 0.8."""
+        from neograph import ForwardConstruct
+
+        class Refiner(ForwardConstruct):
+            seed = Node.scripted("seed", fn="fc_seed_single", outputs=Draft)
+            refine = Node.scripted("refine", fn="fc_refine_single", outputs=Draft)
+
+            def forward(self, topic):
+                d = self.seed(topic)
+                d = self.loop(
+                    body=[self.refine],
+                    when=lambda r: r is None or r.score < 0.8,
+                    max_iterations=5,
+                )(d)
+                return d
+
+        register_scripted(
+            "fc_seed_single",
+            lambda _in, _cfg: Draft(content="seed-v0", score=0.1),
+        )
+
+        _refine_count = [0]
+
+        def fc_refine_single(_in, _cfg):
+            _refine_count[0] += 1
+            new_score = 0.1 + 0.25 * _refine_count[0]
+            return Draft(
+                content=f"refined-v{_refine_count[0]}",
+                iteration=_refine_count[0],
+                score=new_score,
+            )
+
+        register_scripted("fc_refine_single", fc_refine_single)
+
+        pipeline = Refiner()
+        graph = compile(pipeline)
+        result = run(graph, input={"node_id": "fc-single-loop"})
+
+        # 0.1 seed → refine1=0.35, refine2=0.60, refine3=0.85 → exits
+        assert _refine_count[0] == 3, (
+            f"Expected refine to run 3 times, ran {_refine_count[0]}"
+        )
+
+    def test_on_exhaust_last_exits_with_last_result(self):
+        """self.loop() with on_exhaust='last': loop never meets condition,
+        exits at max_iterations with last result (no error)."""
+        from neograph import ForwardConstruct
+
+        class NeverDone(ForwardConstruct):
+            seed = Node.scripted("seed", fn="fc_seed_exhaust", outputs=Draft)
+            tweak = Node.scripted("tweak", fn="fc_tweak_exhaust", outputs=Draft)
+
+            def forward(self, topic):
+                d = self.seed(topic)
+                d = self.loop(
+                    body=[self.tweak],
+                    when=lambda r: r is None or r.score < 0.99,
+                    max_iterations=3,
+                    on_exhaust="last",
+                )(d)
+                return d
+
+        register_scripted(
+            "fc_seed_exhaust",
+            lambda _in, _cfg: Draft(content="seed-exhaust", score=0.0),
+        )
+
+        _tweak_count = [0]
+
+        def fc_tweak_exhaust(_in, _cfg):
+            _tweak_count[0] += 1
+            return Draft(
+                content=f"tweak-v{_tweak_count[0]}",
+                iteration=_tweak_count[0],
+                score=0.1 * _tweak_count[0],
+            )
+
+        register_scripted("fc_tweak_exhaust", fc_tweak_exhaust)
+
+        pipeline = NeverDone()
+        graph = compile(pipeline)
+        # Should NOT raise — on_exhaust='last' means exit silently
+        result = run(graph, input={"node_id": "fc-exhaust-last"})
+
+        # Loop ran exactly max_iterations=3 times (never reached score 0.99)
+        assert _tweak_count[0] == 3, (
+            f"Expected tweak to run 3 times, ran {_tweak_count[0]}"
+        )
+
+    def test_on_exhaust_error_raises_execution_error(self):
+        """self.loop() with on_exhaust='error': loop exceeds max_iterations
+        and raises ExecutionError."""
+        from neograph import ExecutionError, ForwardConstruct
+
+        class AlwaysBad(ForwardConstruct):
+            seed = Node.scripted("seed", fn="fc_seed_err", outputs=Draft)
+            polish = Node.scripted("polish", fn="fc_polish_err", outputs=Draft)
+
+            def forward(self, topic):
+                d = self.seed(topic)
+                d = self.loop(
+                    body=[self.polish],
+                    when=lambda r: r is None or r.score < 0.99,
+                    max_iterations=2,
+                    on_exhaust="error",
+                )(d)
+                return d
+
+        register_scripted(
+            "fc_seed_err",
+            lambda _in, _cfg: Draft(content="seed-err", score=0.0),
+        )
+
+        register_scripted(
+            "fc_polish_err",
+            lambda _in, _cfg: Draft(content="polished", score=0.1),
+        )
+
+        pipeline = AlwaysBad()
+        graph = compile(pipeline)
+
+        with pytest.raises(ExecutionError, match="max_iterations"):
+            run(graph, input={"node_id": "fc-exhaust-err"})
+
+    @pytest.mark.xfail(
+        reason="Loop + branch composition: state builder does not handle "
+               "Constructs in branch arm nodes yet (Construct.outputs vs "
+               "Construct.output). Known limitation.",
+        strict=True,
+        raises=AttributeError,
+    )
+    def test_loop_followed_by_branch_composes(self):
+        """self.loop() followed by an if/else branch — both features compose.
+        The loop refines a draft, then a branch selects the output path.
+
+        Currently fails because the branch tracer puts the loop Construct
+        into the arm-node lists and compile_state_model expects Node.outputs
+        (plural) but Construct has .output (singular).
+        """
+        from neograph import ForwardConstruct
+
+        class Confidence(BaseModel, frozen=True):
+            score: float
+
+        class HighResult(BaseModel, frozen=True):
+            label: str
+
+        class LowResult(BaseModel, frozen=True):
+            label: str
+
+        class LoopThenBranch(ForwardConstruct):
+            seed = Node.scripted("seed", fn="fc_seed_lb", outputs=Draft)
+            refine = Node.scripted("refine", fn="fc_refine_lb", outputs=Draft)
+            check = Node.scripted("check", fn="fc_check_lb", outputs=Confidence)
+            high = Node.scripted("high", fn="fc_high_lb", outputs=HighResult)
+            low = Node.scripted("low", fn="fc_low_lb", outputs=LowResult)
+
+            def forward(self, topic):
+                d = self.seed(topic)
+                d = self.loop(
+                    body=[self.refine],
+                    when=lambda r: r is None or r.score < 0.5,
+                    max_iterations=5,
+                )(d)
+                c = self.check(d)
+                if c.score > 0.7:
+                    return self.high(c)
+                else:
+                    return self.low(c)
+
+        register_scripted(
+            "fc_seed_lb",
+            lambda _in, _cfg: Draft(content="lb-seed", score=0.0),
+        )
+
+        _refine_lb_count = [0]
+
+        def fc_refine_lb(_in, _cfg):
+            _refine_lb_count[0] += 1
+            return Draft(
+                content=f"lb-refined-v{_refine_lb_count[0]}",
+                iteration=_refine_lb_count[0],
+                score=0.3 * _refine_lb_count[0],
+            )
+
+        register_scripted("fc_refine_lb", fc_refine_lb)
+        register_scripted(
+            "fc_check_lb",
+            lambda _in, _cfg: Confidence(score=0.9),
+        )
+        register_scripted(
+            "fc_high_lb",
+            lambda _in, _cfg: HighResult(label="high-after-loop"),
+        )
+        register_scripted(
+            "fc_low_lb",
+            lambda _in, _cfg: LowResult(label="low-after-loop"),
+        )
+
+        pipeline = LoopThenBranch()
+        graph = compile(pipeline)
+        result = run(graph, input={"node_id": "fc-loop-branch"})
+
+        # refine: 0.0 → 0.3 → 0.6 → exits (score >= 0.5)
+        assert _refine_lb_count[0] == 2, (
+            f"Expected refine to run 2 times, ran {_refine_lb_count[0]}"
+        )
+        # check returns 0.9 > 0.7, so high path runs
+        assert "high" in result
+        assert result["high"].label == "high-after-loop"

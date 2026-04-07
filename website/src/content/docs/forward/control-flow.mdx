@@ -3,7 +3,7 @@ title: ForwardConstruct
 description: Define pipeline topology with Python control flow — subclass Construct, declare Nodes, override forward().
 ---
 
-`ForwardConstruct` is the class-based API for pipelines that need control flow. Subclass it, declare Nodes as class attributes, and override `forward()` to define execution order. Python's `if`, `for`, and function calls become graph topology.
+`ForwardConstruct` is the class-based API for pipelines that need control flow. Subclass it, declare Nodes as class attributes, and override `forward()` to define execution order. Python's `if` statements compile to conditional edges, and `self.loop()` compiles to graph cycles.
 
 ## How it works
 
@@ -116,11 +116,17 @@ For integration testing, use `compile()` + `run()` with real or mocked LLMs.
 |---|---|
 | DAG with no conditional branching | `@node` + `construct_from_module` |
 | Conditional edges (`if` on node output) | `ForwardConstruct` |
-| Loop fan-out (`for` over node output) | `ForwardConstruct` |
+| Iterative refinement (loop until condition) | `ForwardConstruct` with `self.loop()` |
 | Fan-out over a known collection path | `@node(map_over=..., map_key=...)` |
 | Runtime/dynamic graph construction | `Node \| Modifier` pipe syntax |
 
-`@node` is simpler when you don't need branching. `ForwardConstruct` is more powerful when you do. Both compile to the same graph format.
+`@node` is simpler when you don't need branching or loops. `ForwardConstruct` is more powerful when you do. Both compile to the same graph format.
+
+:::note[Python loops don't compile to cycles]
+Python `for` and `while` loops in `forward()` are traced once -- the loop body executes during tracing but doesn't produce a graph cycle. This is the same limitation as `torch.jit.trace` and JAX's tracing: the tracer sees one unrolled pass, not a loop.
+
+Use `self.loop()` for iterative patterns that need a real back-edge in the compiled graph.
+:::
 
 ---
 

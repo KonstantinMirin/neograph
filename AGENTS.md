@@ -61,7 +61,7 @@ This is the most important architectural fact. All three produce the same intern
 | Surface | When to use | Where it lives |
 |---|---|---|
 | `@node` decorator | Default for humans writing source code. Functions are nodes, parameter names are edges. | `src/neograph/decorators.py` |
-| `ForwardConstruct` | Pipelines with Python control flow (`if`/`for`/`try`). Class-based, `forward()` traced via symbolic proxies. | `src/neograph/forward.py` |
+| `ForwardConstruct` | Pipelines with Python control flow (`if`/`loop`/`try`). Class-based, `forward()` traced via symbolic proxies. | `src/neograph/forward.py` |
 | `Node` + `Construct` + `\|` pipe | Runtime construction by LLMs, config systems, routing layers. Programmatic composition. | `src/neograph/node.py`, `construct.py`, `modifiers.py` |
 
 **All three coexist. The programmatic form is not legacy.** It is the primary path for runtime-assembled pipelines (e.g., LLM tool-calling builds a spec, the runtime constructs `Node`s and pipes modifiers, `compile()` + `run()`). See `website/src/content/docs/runtime/llm-driven.mdx` for the documented use case.

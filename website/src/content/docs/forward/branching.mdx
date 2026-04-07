@@ -1,9 +1,9 @@
 ---
-title: Branching in forward()
-description: if compiles to conditional edges, for compiles to fan-out, and try/except limitations in v1.
+title: Branching and Loops in forward()
+description: if compiles to conditional edges, self.loop() compiles to cycles, for compiles to fan-out, and try/except limitations in v1.
 ---
 
-The power of `ForwardConstruct` is that Python control flow becomes graph topology. An `if` statement compiles to a conditional edge. A `for` loop compiles to an Each fan-out. The framework discovers both arms by re-tracing `forward()` with alternate branch decisions.
+The power of `ForwardConstruct` is that Python control flow becomes graph topology. An `if` statement compiles to a conditional edge. `self.loop()` compiles to a graph cycle. A `for` loop over a proxy attribute compiles to an Each fan-out. The framework discovers both arms of a branch by re-tracing `forward()` with alternate branch decisions.
 
 ## if compiles to conditional edges
 
@@ -105,6 +105,56 @@ During tracing, `for group in clusters.groups` enters loop mode. The tracer:
 3. Attaches `Each(over="discover.groups", key="label")` to the `verify` node.
 
 The compiled graph runs `verify` once per item in `discover.groups`, collecting results as a dict keyed by `label`.
+
+## self.loop() compiles to graph cycles
+
+Python `for` and `while` loops in `forward()` are traced once -- the loop body runs during tracing but doesn't produce a graph cycle. This is the same limitation as `torch.jit.trace` and JAX's tracing: the tracer sees one unrolled pass, not a loop.
+
+For iterative patterns that need a real back-edge in the compiled graph, use `self.loop()`:
+
+```python
+from neograph import ForwardConstruct, Node, compile
+from pydantic import BaseModel
+
+class Draft(BaseModel, frozen=True):
+    content: str
+    score: float = 0.0
+
+class ReviewResult(BaseModel, frozen=True):
+    score: float
+    feedback: str
+
+class Writer(ForwardConstruct):
+    draft  = Node(outputs=Draft, prompt='draft', model='fast')
+    review = Node(outputs=ReviewResult, prompt='review', model='reason')
+    revise = Node(outputs=Draft, prompt='revise', model='reason')
+
+    def forward(self, topic):
+        d = self.draft(topic)
+        d = self.loop(
+            body=[self.review, self.revise],
+            when=lambda r: r.score < 0.8,
+            max_iterations=5,
+        )(d)
+        return d
+
+graph = compile(Writer())
+```
+
+`self.loop()` takes a list of node references, an exit condition, and an iteration cap. It builds a sub-construct with a `Loop` modifier, producing a real cycle in the compiled graph. The `when=` callable receives the loop body's latest output; return `True` to continue looping, `False` to exit.
+
+This maps 1:1 to the programmatic equivalent `construct | Loop(when=..., max_iterations=...)` and to the YAML spec's `loop:` block. The explicit primitive is language-agnostic -- it works the same way regardless of host language, unlike tracing Python loops.
+
+### Single-node self-loop
+
+For a single node that refines its own output, use `loop_when=` on `@node` instead:
+
+```python
+@node(outputs=Draft, loop_when=lambda d: d is None or d.score < 0.8, max_iterations=5)
+def refine(draft: Draft) -> Draft: ...
+```
+
+See the [Loop with loop_when](/node-api/modifier-kwargs/#loop-with-loop_when-and-max_iterations) section for the full pattern.
 
 ## Example: quality gate with retry
 

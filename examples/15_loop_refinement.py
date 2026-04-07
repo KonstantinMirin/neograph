@@ -13,6 +13,7 @@ Patterns demonstrated:
   1. Self-loop: single node refines its own output
   2. Multi-node loop body as sub-construct with Loop
   3. Loop inside a sub-construct (parent sees clean I/O)
+  4. ForwardConstruct with self.loop() — explicit cycle primitive
 
 Run:
     python examples/15_loop_refinement.py
@@ -217,8 +218,79 @@ def demo_loop_in_sub_construct():
 
 
 # =============================================================================
+# Pattern 4: ForwardConstruct with self.loop()
+# =============================================================================
+#
+# Graph: start -> draft -> [loop-body: review -> revise] -(loop)-> end
+#
+# self.loop() is the explicit cycle primitive for ForwardConstruct. Python
+# for/while loops in forward() trace the body once but don't produce graph
+# cycles (same limitation as torch.jit.trace). self.loop() compiles to a
+# sub-construct with Loop modifier — a real back-edge in the graph.
+
+def demo_forward_loop():
+    """ForwardConstruct with self.loop() — explicit cycle primitive."""
+    from neograph import ForwardConstruct, Node, register_scripted
+
+    review_count = [0]
+
+    register_scripted(
+        "fc_draft_ex15",
+        lambda _in, _cfg: Draft(content="Initial essay about distributed systems", score=0.0),
+    )
+
+    def fc_review(_in, _cfg):
+        review_count[0] += 1
+        score = 0.3 * review_count[0]
+        return ReviewResult(
+            score=min(score, 1.0),
+            feedback=f"Iteration {review_count[0]}: {'needs work' if score < 0.8 else 'approved'}",
+        )
+
+    register_scripted("fc_review_ex15", fc_review)
+
+    def fc_revise(_in, _cfg):
+        return Draft(
+            content=f"Revised v{review_count[0]}",
+            iteration=review_count[0],
+            score=0.3 * review_count[0],
+        )
+
+    register_scripted("fc_revise_ex15", fc_revise)
+
+    class Writer(ForwardConstruct):
+        draft  = Node.scripted("draft", fn="fc_draft_ex15", outputs=Draft)
+        review = Node.scripted("review", fn="fc_review_ex15", outputs=ReviewResult)
+        revise = Node.scripted("revise", fn="fc_revise_ex15", outputs=Draft)
+
+        def forward(self, topic):
+            d = self.draft(topic)
+            d = self.loop(
+                body=[self.review, self.revise],
+                when=lambda r: r is None or r.score < 0.8,
+                max_iterations=10,
+            )(d)
+            return d
+
+    graph = compile(Writer())
+    result = run(graph, input={"node_id": "forward-loop-demo"})
+
+    print("=== Pattern 4: ForwardConstruct with self.loop() ===")
+    print(f"Review iterations: {review_count[0]}")
+    print(f"Draft output: {result.get('draft')}")
+    # The loop body is a sub-construct; its output appears under the
+    # sub-construct name, not individual node names.
+    for key, val in result.items():
+        if isinstance(val, list) and val and hasattr(val[0], "score"):
+            for i, d in enumerate(val):
+                print(f"  [{i+1}] score={d.score:.1f} content={d.content!r}")
+    print()
+
+
+# =============================================================================
 
 if __name__ == "__main__":
     demo_self_loop()
     demo_multi_node_loop()
     demo_loop_in_sub_construct()
+    demo_forward_loop()

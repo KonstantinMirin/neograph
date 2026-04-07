@@ -265,10 +265,32 @@ pipeline = construct_from_functions("writer", [seed, refine, finalize])
 
 The parent pipeline sees only `Draft -> Draft`. The iteration is hidden inside the sub-construct.
 
+### ForwardConstruct equivalent
+
+In `ForwardConstruct`, use `self.loop()` for multi-node loop bodies:
+
+```python
+class Writer(ForwardConstruct):
+    draft  = Node(outputs=Draft, prompt='draft', model='fast')
+    review = Node(outputs=ReviewResult, prompt='review', model='reason')
+    revise = Node(outputs=Draft, prompt='revise', model='reason')
+
+    def forward(self, topic):
+        d = self.draft(topic)
+        d = self.loop(
+            body=[self.review, self.revise],
+            when=lambda r: r.score < 0.8,
+            max_iterations=5,
+        )(d)
+        return d
+```
+
+Python `for`/`while` loops in `forward()` don't compile to graph cycles -- they trace the body once (same limitation as `torch.jit.trace`). `self.loop()` is the explicit cycle primitive.
+
 ### Restrictions
 
 - `loop_when=` and `map_over=` cannot be combined on the same node. Use a sub-construct with internal loop inside an `Each` fan-out instead.
-- Loop on a node is always a self-loop. Multi-node loops use `construct | Loop(when=...)`.
+- Loop on a node is always a self-loop. Multi-node loops use `construct | Loop(when=...)` or `self.loop()` in ForwardConstruct.
 
 ## Programmatic equivalent
 
