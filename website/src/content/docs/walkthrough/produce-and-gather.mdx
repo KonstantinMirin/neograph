@@ -9,6 +9,21 @@ The pipeline is built with `@node`-decorated functions and `construct_from_modul
 
 The example uses fake LLM and tool implementations so you can run it without API keys. Replace them with real ones for production.
 
+## The graph
+
+```mermaid
+graph LR
+    start((" ")) --> decompose
+    decompose -->|Claims| research
+    research -.->|"tool: search_codebase\n(budget: 2)"| research
+    research -->|ResearchResult| end_(((" ")))
+
+    style decompose fill:#e8f4f8
+    style research fill:#fff3e0
+```
+
+`decompose` is a **think** node (single LLM call). `research` is an **agent** node (ReAct tool loop with budget). The dotted self-edge represents the tool-calling cycle inside the agent.
+
 ## What you will learn
 
 - Configuring the LLM layer with `configure_llm()`

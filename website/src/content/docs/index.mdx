@@ -89,6 +89,14 @@ result = run(graph, input={'topic': 'microservice authentication', 'node_id': 'd
 print(result['summarize'].summary)
 ```
 
+```mermaid
+graph LR
+    start((" ")) --> decompose
+    decompose -->|Claims| classify
+    classify -->|Classified| summarize
+    summarize -->|Report| end_(((" ")))
+```
+
 That's the whole agent. Three functions, three types, three lines of compilation. No `TypedDict`, no `add_node`, no `add_edge`, no state-dict reads and writes.
 
 The parameter name `decompose` in `classify(decompose: Claims)` IS the dependency. neograph reads the signature, builds the DAG, validates that `decompose` produces `Claims`, and wires `decompose → classify → summarize` automatically. Rename the `decompose` function and the downstream parameter breaks at import time — your IDE will tell you before you even hit save.

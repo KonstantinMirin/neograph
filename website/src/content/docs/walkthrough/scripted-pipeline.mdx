@@ -7,6 +7,18 @@ A scripted pipeline is the simplest thing you can build with NeoGraph. Every nod
 
 This walkthrough builds a document processor: **extract** raw text, **split** it into claims, **classify** each claim by category.
 
+## The graph
+
+```mermaid
+graph LR
+    start((" ")) --> extract
+    extract -->|RawText| split
+    split -->|Claims| classify
+    classify -->|ClassifiedClaims| end_(((" ")))
+```
+
+Three nodes, linear sequence. Each edge carries a typed Pydantic model. The parameter name `extract` in `split(extract: RawText)` IS the edge — the compiler wires it automatically.
+
 ## What you will learn
 
 - Defining Pydantic schemas for typed state

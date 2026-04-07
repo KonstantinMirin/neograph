@@ -5,6 +5,36 @@ description: "Combine @node with Oracle, Each, Operator, a sub-construct, and ob
 
 The previous walkthroughs showed each NeoGraph feature in isolation. Real pipelines combine several at once. This walkthrough shows a requirement verification system that uses Oracle ensemble, sub-construct isolation, Each fan-out, Operator interrupt, and mixed modes — all wired together.
 
+## The graph
+
+```mermaid
+graph TD
+    start((" ")) --> decompose_r{"Oracle\n(n=3)"}
+    decompose_r --> decompose_0["decompose"]
+    decompose_r --> decompose_1["decompose"]
+    decompose_r --> decompose_2["decompose"]
+    decompose_0 --> merge["merge_decompose"]
+    decompose_1 --> merge
+    decompose_2 --> merge
+    merge --> enrich["enrich\n(sub-construct)"]
+    enrich --> cluster
+    cluster --> each_r{"Each\nrouter"}
+    each_r --> verify_a["verify"]
+    each_r --> verify_b["verify"]
+    verify_a --> barrier["assemble_verify"]
+    verify_b --> barrier
+    barrier --> check{"Operator\ninterrupt?"}
+    check --> report
+    report --> end_(((" ")))
+
+    style decompose_r fill:#fff3e0
+    style merge fill:#e8f4f8
+    style enrich fill:#e0f0e0
+    style each_r fill:#fff3e0
+    style barrier fill:#e8f4f8
+    style check fill:#ffe0e0
+```
+
 The pipeline:
 
 1. **decompose** — LLM breaks a requirement into claims (think mode, Oracle ensemble x3)

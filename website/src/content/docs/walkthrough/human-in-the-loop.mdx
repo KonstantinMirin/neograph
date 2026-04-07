@@ -7,6 +7,22 @@ Some pipelines can't run end-to-end without a human in the loop. A validation st
 
 NeoGraph makes this a one-line addition: pass `interrupt_when=` to `@node`. When the condition returns a truthy value, the graph pauses via LangGraph's `interrupt()` mechanism, checkpoints its state, and waits. Resume with `run(graph, resume={...}, config=config)`.
 
+## The graph
+
+```mermaid
+graph LR
+    start((" ")) --> analyze
+    analyze -->|Claims| validate
+    validate -->|"ValidationResult"| check{"Operator\ninterrupt?"}
+    check -->|"passed"| report
+    check -->|"failed: pause\nfor human review"| check
+    report --> end_(((" ")))
+
+    style check fill:#ffe0e0
+```
+
+The `Operator` modifier adds an interrupt checkpoint after `validate`. If the condition returns truthy, the graph pauses. Resume with `run(graph, resume={...})` to continue.
+
 ## The scenario
 
 A pipeline analyzes a set of requirements and checks whether coverage meets a quality bar. If it doesn't, a human must review the gaps before the final report is generated.

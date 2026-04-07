@@ -9,6 +9,25 @@ This is the ensemble pattern: multiple independent attempts at the same task, de
 
 With `@node`, the Oracle modifier is applied via kwargs: `ensemble_n=` and `merge_fn=` on the decorator. No `|` pipe operator needed.
 
+## The graph
+
+```mermaid
+graph TD
+    start((" ")) --> router{"Oracle\nrouter"}
+    router -->|gen-0| decompose_0["decompose"]
+    router -->|gen-1| decompose_1["decompose"]
+    router -->|gen-2| decompose_2["decompose"]
+    decompose_0 --> merge["merge_decompose\n(barrier)"]
+    decompose_1 --> merge
+    decompose_2 --> merge
+    merge --> end_(((" ")))
+
+    style router fill:#fff3e0
+    style merge fill:#e8f4f8
+```
+
+The Oracle modifier expands a single node into N parallel generators + a merge barrier. Each generator runs independently. The merge function combines N results into one.
+
 ## What you will learn
 
 - Applying the Oracle modifier via `@node` kwargs (`ensemble_n=`, `merge_fn=`)

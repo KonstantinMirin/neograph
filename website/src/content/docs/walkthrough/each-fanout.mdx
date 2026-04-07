@@ -9,6 +9,24 @@ This is the map phase of map-reduce: discover a set of items, process each one i
 
 With `@node`, the Each modifier is applied via kwargs: `map_over=` and `map_key=` on the decorator.
 
+## The graph
+
+```mermaid
+graph TD
+    start((" ")) --> make_clusters
+    make_clusters -->|"Clusters"| router{"Each\nrouter"}
+    router -->|"item: a"| verify["verify"]
+    router -->|"item: b"| verify
+    router -->|"item: c"| verify
+    verify --> barrier["assemble_verify\n(barrier)"]
+    barrier --> end_(((" ")))
+
+    style router fill:#fff3e0
+    style barrier fill:#e8f4f8
+```
+
+`make_clusters` produces a collection. The `Each` modifier fans out `verify` — one instance per item, keyed by label. The barrier collects results as `dict[str, MatchResult]`.
+
 ## What you will learn
 
 - Producing a collection from one node

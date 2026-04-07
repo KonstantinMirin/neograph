@@ -1,10 +1,12 @@
 // @ts-check
 import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
+import starlightClientMermaid from '@pasqal-io/starlight-client-mermaid';
 
 export default defineConfig({
 	integrations: [
 		starlight({
+			plugins: [starlightClientMermaid()],
 			title: 'neograph',
 			description: 'Write Python. Get a production graph. Declarative LLM graph compiler.',
 			social: [{ icon: 'github', label: 'GitHub', href: 'https://github.com/KonstantinMirin/neograph' }],
@@ -59,7 +61,7 @@ export default defineConfig({
 					label: 'Walkthrough',
 					items: [
 						{ label: '1. Scripted Pipeline', slug: 'walkthrough/scripted-pipeline' },
-						{ label: '2. LLM Produce + Gather', slug: 'walkthrough/produce-and-gather' },
+						{ label: '2. LLM Think + Agent', slug: 'walkthrough/produce-and-gather' },
 						{ label: '3. Oracle Ensemble', slug: 'walkthrough/oracle-ensemble' },
 						{ label: '4. Each Fan-Out', slug: 'walkthrough/each-fanout' },
 						{ label: '5. Human-in-the-Loop', slug: 'walkthrough/human-in-the-loop' },
