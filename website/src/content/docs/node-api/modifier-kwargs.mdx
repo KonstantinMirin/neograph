@@ -107,6 +107,41 @@ For LLM-mode nodes, the ensemble runs the same prompt N times (useful with non-z
 def decompose() -> Claims: ...
 ```
 
+### Multi-model ensemble with models=
+
+Run the same prompt on different models and merge. Each generator gets a different model tier:
+
+```python
+@node(outputs=Summary, prompt='rw/summarize',
+      models=["reason", "fast", "creative"],
+      merge_fn="pick_best")
+def summarize() -> Summary: ...
+```
+
+When `models=` is set, `ensemble_n` is inferred from `len(models)`. You can also set both for redundancy — generators are assigned models round-robin:
+
+```python
+# 9 generators across 3 models (3 each)
+@node(outputs=Summary, prompt='rw/summarize',
+      models=["reason", "fast", "creative"], ensemble_n=9,
+      merge_fn="pick_best")
+def summarize() -> Summary: ...
+```
+
+### Body-as-merge
+
+When `models=` is set without `merge_fn` or `merge_prompt`, the function body IS the merge function. It receives `list[OutputType]` at runtime:
+
+```python
+@node(outputs=Summary, prompt='rw/summarize',
+      models=["reason", "fast", "creative"])
+def summarize(data: Claims) -> Summary:
+    # data is list[Summary] at runtime (the collected variants)
+    return max(data, key=lambda v: v.confidence)
+```
+
+One definition captures what to generate (prompt), where to send it (models), and how to merge (body).
+
 ## Interrupt with interrupt_when
 
 Pause the graph for human review when a condition is met. This is the Operator pattern — human-in-the-loop checkpoints that require a checkpointer.
@@ -167,22 +202,102 @@ register_condition("needs_review", needs_review)
 def check(analyze: Analysis) -> ValidationResult: ...
 ```
 
+## Loop with loop_when and max_iterations
+
+Repeat a node until a condition is met. The node's output feeds back as its own input on the next iteration.
+
+```python
+from pydantic import BaseModel
+from neograph import node, construct_from_functions, compile, run
+
+class Draft(BaseModel, frozen=True):
+    content: str
+    score: float = 0.0
+    iteration: int = 0
+
+@node(outputs=Draft)
+def seed() -> Draft:
+    return Draft(content="initial", score=0.0)
+
+@node(outputs=Draft, loop_when=lambda d: d is None or d.score < 0.8, max_iterations=5)
+def refine(draft: Draft) -> Draft:
+    return Draft(content=f"v{draft.iteration + 1}", iteration=draft.iteration + 1,
+                 score=draft.score + 0.3)
+
+pipeline = construct_from_functions("writer", [seed, refine])
+graph = compile(pipeline)
+result = run(graph, input={"node_id": "loop-demo"})
+
+# result["refine"] is a list (all iterations preserved)
+final = result["refine"][-1]
+print(f"Final: score={final.score}, iterations={final.iteration}")
+```
+
+How it works:
+
+- `loop_when=` receives the node's latest output. Return `True` to continue looping, `False` to exit.
+- `max_iterations=` caps the loop. Default is 10. When exceeded, behavior depends on `on_exhaust=`:
+  - `"error"` (default): raises `ExecutionError`
+  - `"last"`: exits with the last result
+- The result is an append-list: every iteration's output is preserved.
+- The parameter name doesn't need to match the upstream. For self-loops, the framework resolves it by type — if exactly one upstream produces a compatible type, it wires automatically.
+
+### Multi-node loop body
+
+For loops involving multiple nodes (e.g., review + revise), wrap the loop body as a sub-construct with `Loop`:
+
+```python
+from neograph.modifiers import Loop
+
+@node(outputs=ReviewResult)
+def review(draft: Draft) -> ReviewResult: ...
+
+@node(outputs=Draft)
+def revise(draft: Draft, review: ReviewResult) -> Draft: ...
+
+# Sub-construct loops as a unit: Draft in, Draft out
+refine = construct_from_functions(
+    "refine", [review, revise], input=Draft, output=Draft,
+) | Loop(when=lambda d: d is None or d.score < 0.8, max_iterations=10)
+
+pipeline = construct_from_functions("writer", [seed, refine, finalize])
+```
+
+The parent pipeline sees only `Draft -> Draft`. The iteration is hidden inside the sub-construct.
+
+### Restrictions
+
+- `loop_when=` and `map_over=` cannot be combined on the same node. Use a sub-construct with internal loop inside an `Each` fan-out instead.
+- Loop on a node is always a self-loop. Multi-node loops use `construct | Loop(when=...)`.
+
 ## Programmatic equivalent
 
 Every modifier keyword compiles to the same `Node | Modifier` that the runtime API uses. If you prefer the pipe syntax (for example, when an LLM is constructing the graph at runtime), the equivalent is:
 
 ```python
 from neograph import Node, Each, Oracle, Operator
+from neograph.modifiers import Loop
 
 # Fan-out
 verify = Node("verify", mode="scripted", outputs=VerifyResult) | Each(over="clusters.groups", key="label")
 
-# Ensemble
+# Ensemble (same model)
 decompose = Node("decompose", mode="think", outputs=Claims,
                  prompt="rw/decompose", model="reason") | Oracle(n=3, merge_fn="merge_claims")
 
+# Ensemble (multi-model)
+decompose = Node("decompose", mode="think", outputs=Claims,
+                 prompt="rw/decompose") | Oracle(models=["reason", "fast", "creative"], merge_fn="merge_claims")
+
 # Interrupt
 check = Node("check", mode="scripted", outputs=ValidationResult) | Operator(when="needs_review")
+
+# Loop (self-loop on node)
+refine = Node("refine", mode="scripted", outputs=Draft) | Loop(when=lambda d: d.score < 0.8, max_iterations=5)
+
+# Loop (on sub-construct)
+body = Construct("refine", input=Draft, output=Draft, nodes=[review, revise])
+body = body | Loop(when=lambda d: d.score < 0.8, max_iterations=10)
 ```
 
 ---

@@ -223,6 +223,66 @@ def decompose() -> Claims: ...
 
 The framework passes all generator outputs to an LLM with the given prompt template. The LLM produces the final merged result as structured output. Use this when merging requires judgment (picking the best analysis, synthesizing contradictory results).
 
+## Multi-model ensemble with models=
+
+Instead of running the same model N times, run different models on the same input. Each generator gets a different model tier:
+
+```python
+from neograph import Node, Construct, compile, run
+from neograph.modifiers import Oracle
+from neograph.factory import register_scripted
+
+def gen(input_data, config):
+    model = config.get("configurable", {}).get("_oracle_model", "default")
+    return Claims(items=[f"claim-from-{model}"])
+
+register_scripted("multi_gen", gen)
+
+def pick_best(variants, config):
+    # In production: score variants, pick highest quality
+    all_items = []
+    for v in variants:
+        all_items.extend(v.items)
+    return Claims(items=all_items)
+
+register_scripted("pick_best", pick_best)
+
+gen_node = (
+    Node.scripted("gen", fn="multi_gen", outputs=Claims)
+    | Oracle(models=["reason", "fast", "creative"], merge_fn="pick_best")
+)
+pipeline = Construct("multi-model", nodes=[gen_node])
+graph = compile(pipeline)
+result = run(graph, input={"node_id": "REQ-001"})
+# result["gen"].items = ["claim-from-reason", "claim-from-fast", "claim-from-creative"]
+```
+
+When `models=` is set:
+- `n` is inferred from `len(models)` unless explicitly overridden
+- Each generator sees its model tier via `config["configurable"]["_oracle_model"]`
+- For redundancy, set both: `Oracle(n=9, models=["reason", "fast", "creative"], ...)` distributes round-robin (3 each)
+- If `n % len(models) != 0`, uneven distribution is logged as info
+
+The `@node` decorator equivalent:
+
+```python
+@node(outputs=Claims, models=["reason", "fast", "creative"], merge_fn="pick_best")
+def decompose() -> Claims: ...
+```
+
+### Body-as-merge
+
+When `models=` is set without `merge_fn` or `merge_prompt`, the function body IS the merge:
+
+```python
+@node(outputs=Claims, models=["reason", "fast", "creative"])
+def decompose(data: Input) -> Claims:
+    # Body receives list[Claims] at runtime (one per model)
+    return max(data, key=lambda v: len(v.items))
+```
+
+One definition captures the entire ensemble: prompt (via the node), models, and merge logic.
+
 ## What the compiler generates
 
 When it encounters `ensemble_n=3, merge_fn="merge_claims"`, the compiler expands the single node into:

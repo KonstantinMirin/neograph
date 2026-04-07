@@ -59,9 +59,13 @@ Decorator that turns a function into a Node with signature-inferred dependencies
     map_over: str | None = None,
     map_key: str | None = None,
     ensemble_n: int | None = None,
+    models: list[str] | None = None,
     merge_fn: str | None = None,
     merge_prompt: str | None = None,
     interrupt_when: str | Callable | None = None,
+    loop_when: str | Callable | None = None,
+    max_iterations: int | None = None,
+    on_exhaust: "error" | "last" | None = None,
 )
 ```
 
@@ -74,7 +78,11 @@ Decorator that turns a function into a Node with signature-inferred dependencies
 - **`inputs`** — Explicit `dict[str, type]` input spec. Usually inferred from param annotations.
 - **`map_over`** / **`map_key`** — Fan-out: run this node once per item in the referenced collection.
 - **`ensemble_n`** / **`merge_fn`** / **`merge_prompt`** — Oracle ensemble: N parallel generators plus a scripted or LLM merge.
+- **`models`** — Multi-model ensemble: list of model tiers. Each generator gets a different model round-robin. Infers `ensemble_n` from `len(models)`. When `models=` is set without `merge_fn`/`merge_prompt`, the function body IS the merge.
 - **`interrupt_when`** — Human-in-the-loop: inline callable or registered condition name.
+- **`loop_when`** — Loop: callable or registered condition name. Return `True` to continue looping.
+- **`max_iterations`** — Loop iteration cap. Default 10. Used with `loop_when=`.
+- **`on_exhaust`** — `"error"` (default) raises `ExecutionError` when max reached; `"last"` exits with last result.
 - **`renderer`** — Pluggable prompt-input renderer (`XmlRenderer`, `DelimitedRenderer`, `JsonRenderer`, or custom).
 - **`context`** — `list[str]` of state field names injected verbatim into the prompt (not BAML-rendered). For pre-formatted context like graph catalogs.
 - **`skip_when`** — Callable predicate. When True, skips the LLM call entirely.
@@ -232,17 +240,22 @@ Apply to a Node or Construct via `|`:
 
 ```python
 node | Oracle(n=3, merge_fn="combine")
+node | Oracle(models=["reason", "fast"], merge_fn="pick_best")
 node | Each(over="upstream.field", key="id")
 node | Operator(when="condition_name")
+node | Loop(when=lambda d: d.score < 0.8, max_iterations=5)
+construct | Loop(when=lambda d: d.score < 0.8, max_iterations=10)
 ```
 
-**`Oracle(n, merge_fn=None, merge_prompt=None)`** — N-way ensemble. Exactly one of `merge_fn` / `merge_prompt` required.
+**`Oracle(n=3, models=None, merge_fn=None, merge_prompt=None)`** — N-way ensemble. Exactly one of `merge_fn` / `merge_prompt` required. `models=` assigns model tiers round-robin; infers `n` from `len(models)`.
 
 **`Each(over, key)`** — Fan-out over a dotted-path collection. Results keyed by `getattr(item, key)`.
 
 **`Operator(when)`** — Human-in-the-loop interrupt. `when` is a registered condition name.
 
-The `|` syntax returns a new Node with the modifier appended. You can chain: `node | Oracle(...) | Operator(...)`.
+**`Loop(when, max_iterations=10, on_exhaust="error")`** — Cycle modifier. On a Node: self-loop (output feeds back as input). On a Construct: the sub-construct re-runs with its output as the next input. `when` receives the latest output; return `True` to continue.
+
+The `|` syntax returns a new Node/Construct with the modifier appended. You can chain: `node | Oracle(...) | Operator(...)`.
 
 ---
 

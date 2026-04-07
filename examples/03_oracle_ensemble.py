@@ -84,7 +84,48 @@ if __name__ == "__main__":
     result = run(graph, input={"node_id": "REQ-001"})
 
     merged = result["decompose"]
-    print(f"3 generators produced {len(merged.items)} unique claims:")
+    print(f"=== Same-model ensemble (3 generators) ===")
+    print(f"{len(merged.items)} unique claims:")
     for claim in merged.items:
         print(f"  - {claim}")
     # "security: must authenticate" appears in gen-0 and gen-2 but is deduplicated
+    print()
+
+    # ── Multi-model ensemble ────────────────────────────────────────────
+    # Run the same task on different models and merge. Each generator
+    # gets a different model tier via round-robin assignment.
+    from neograph import Construct, Node
+    from neograph.modifiers import Oracle
+
+    seen_models = []
+
+    def multi_model_gen(input_data, config):
+        model = config.get("configurable", {}).get("_oracle_model", "default")
+        seen_models.append(model)
+        return Claims(items=[f"claim-from-{model}"])
+
+    register_scripted("multi_model_gen", multi_model_gen)
+
+    def pick_best(variants, config):
+        # In a real pipeline, you'd score and pick. Here we merge all.
+        all_items = []
+        for v in variants:
+            all_items.extend(v.items)
+        return Claims(items=all_items)
+
+    register_scripted("pick_best", pick_best)
+
+    gen_node = (
+        Node.scripted("multi-gen", fn="multi_model_gen", outputs=Claims)
+        | Oracle(models=["reason", "fast", "creative"], merge_fn="pick_best")
+    )
+    multi_pipeline = Construct("multi-model", nodes=[gen_node])
+    multi_graph = compile(multi_pipeline)
+    multi_result = run(multi_graph, input={"node_id": "REQ-002"})
+
+    multi_merged = multi_result["multi_gen"]
+    print(f"=== Multi-model ensemble (models={['reason', 'fast', 'creative']}) ===")
+    print(f"Models used: {seen_models}")
+    print(f"Merged claims:")
+    for claim in multi_merged.items:
+        print(f"  - {claim}")
