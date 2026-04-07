@@ -503,14 +503,26 @@ def _add_branch_to_graph(
     true_nodes = meta.true_arm_nodes
     false_nodes = meta.false_arm_nodes
 
-    # Add all arm nodes to the graph
-    for node in true_nodes:
-        node_fn = make_node_fn(node)
-        graph.add_node(node.name, node_fn)
+    # Add all arm nodes to the graph. Arms can contain both Nodes and
+    # Constructs (e.g., self.loop() produces a Construct in the arm).
+    # We only add the node function here — edge wiring is handled below.
+    for item in true_nodes:
+        if isinstance(item, Construct):
+            sub_graph = compile(item, checkpointer=None)
+            subgraph_fn = make_subgraph_fn(item, sub_graph)
+            graph.add_node(item.name, subgraph_fn)
+        else:
+            node_fn = make_node_fn(item)
+            graph.add_node(item.name, node_fn)
 
-    for node in false_nodes:
-        node_fn = make_node_fn(node)
-        graph.add_node(node.name, node_fn)
+    for item in false_nodes:
+        if isinstance(item, Construct):
+            sub_graph = compile(item, checkpointer=None)
+            subgraph_fn = make_subgraph_fn(item, sub_graph)
+            graph.add_node(item.name, subgraph_fn)
+        else:
+            node_fn = make_node_fn(item)
+            graph.add_node(item.name, node_fn)
 
     # Wire sequential edges within each arm
     for i in range(1, len(true_nodes)):

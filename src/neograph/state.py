@@ -74,11 +74,27 @@ def compile_state_model(construct: Construct) -> type[BaseModel]:
     for node in nodes_only:
         _add_output_field(node, fields)
 
-    # Branch arm nodes: add state fields for nodes inside branch arms
+    # Branch arm nodes: add state fields for nodes inside branch arms.
+    # Arms can contain both Nodes and Constructs (e.g., self.loop() in
+    # ForwardConstruct produces a Construct in the branch arm).
     for branch in branch_nodes:
         meta = branch._neo_branch_meta
-        for arm_node in meta.true_arm_nodes + meta.false_arm_nodes:
-            _add_output_field(arm_node, fields)
+        for arm_item in meta.true_arm_nodes + meta.false_arm_nodes:
+            if isinstance(arm_item, Construct):
+                # Construct in branch arm — same handling as sub-constructs
+                if arm_item.output is None:
+                    continue
+                field_name = arm_item.name.replace("-", "_")
+                if arm_item.has_modifier(Loop):
+                    fields[field_name] = (
+                        Annotated[list[arm_item.output], _append_loop_result],
+                        [],
+                    )
+                    fields[f'neo_loop_count_{field_name}'] = (int, 0)
+                else:
+                    fields[field_name] = (arm_item.output | None, None)
+            else:
+                _add_output_field(arm_item, fields)
 
     # Sub-constructs: handle modifiers same as nodes
     for sub in sub_constructs:
@@ -144,10 +160,12 @@ def compile_state_model(construct: Construct) -> type[BaseModel]:
                 ctx_field = ctx_name.replace("-", "_")
                 if ctx_field not in fields:
                     fields[ctx_field] = (Any, None)
-    # Also check branch arm nodes
+    # Also check branch arm nodes (skip Constructs — they handle context internally)
     for branch in branch_nodes:
         meta = branch._neo_branch_meta
         for arm_node in meta.true_arm_nodes + meta.false_arm_nodes:
+            if isinstance(arm_node, Construct):
+                continue
             if arm_node.context:
                 for ctx_name in arm_node.context:
                     ctx_field = ctx_name.replace("-", "_")

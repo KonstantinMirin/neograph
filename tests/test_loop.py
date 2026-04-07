@@ -593,11 +593,11 @@ class TestForwardConstructLoop:
             run(graph, input={"node_id": "fc-exhaust-err"})
 
     @pytest.mark.xfail(
-        reason="Loop + branch composition: state builder does not handle "
-               "Constructs in branch arm nodes yet (Construct.outputs vs "
-               "Construct.output). Known limitation.",
+        reason="Loop + branch composition: state model fixed (neograph-fxb6) "
+               "but branch router evaluates condition before check node runs. "
+               "Deeper ForwardConstruct interaction issue.",
         strict=True,
-        raises=AttributeError,
+        raises=TypeError,
     )
     def test_loop_followed_by_branch_composes(self):
         """self.loop() followed by an if/else branch — both features compose.
