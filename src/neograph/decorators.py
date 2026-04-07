@@ -369,6 +369,10 @@ def node(
     context: list[str] | None = None,
     skip_when: Callable | None = None,
     skip_value: Callable | None = None,
+    loop_when: str | Callable | None = None,
+    max_iterations: int | None = None,
+    loop_to: str | None = None,
+    on_exhaust: Literal["error", "last"] | None = None,
 ) -> Any:
     """Decorator that turns a function into a Node spec with signature-inferred
     dependencies. Supports both `@node` and `@node(...)` call forms.
@@ -672,6 +676,23 @@ def node(
                 )
 
             n = n | Operator(when=condition_name)
+            _register_sidecar(n, f, param_names)
+            if param_res:
+                _register_param_resolutions(n, param_res)
+
+        # -- Loop when loop_when is set -----------------------------------------
+        if loop_when is not None:
+            from neograph.modifiers import Loop as _Loop
+
+            loop_kwargs: dict[str, Any] = {
+                "when": loop_when,
+                "max_iterations": max_iterations or 10,
+            }
+            if loop_to is not None:
+                loop_kwargs["reenter"] = loop_to
+            if on_exhaust is not None:
+                loop_kwargs["on_exhaust"] = on_exhaust
+            n = n | _Loop(**loop_kwargs)
             _register_sidecar(n, f, param_names)
             if param_res:
                 _register_param_resolutions(n, param_res)

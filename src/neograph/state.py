@@ -13,7 +13,7 @@ from pydantic import BaseModel, create_model
 from neograph.construct import Construct
 from neograph.errors import CompileError, ExecutionError
 from neograph.forward import _BranchNode
-from neograph.modifiers import Oracle, Each
+from neograph.modifiers import Oracle, Each, Loop
 from neograph.node import Node
 
 
@@ -99,6 +99,17 @@ def compile_state_model(construct: Construct) -> type[BaseModel]:
     # Each support: current item passed via state
     if any(item.has_modifier(Each) for item in all_items):
         fields["neo_each_item"] = (Any, None)
+
+    # Loop support: iteration counter per looped node
+    for n in nodes_only:
+        if n.has_modifier(Loop):
+            field_name = n.name.replace('-', '_')
+            fields[f'neo_loop_count_{field_name}'] = (int, 0)
+            loop = n.get_modifier(Loop)
+            if loop.history:
+                fields[f'neo_loop_history_{field_name}'] = (
+                    Annotated[list, _collect_oracle_results], []
+                )
 
     # Subgraph input port — when this Construct declares an input type
     if construct.input is not None:

@@ -63,7 +63,13 @@ class Modifiable:
 
     def __or__(self, modifier: Modifier) -> Self:
         """Compose modifiers via pipe: obj | Oracle(n=3) | Operator(when=...)"""
-        return self.model_copy(update={"modifiers": [*self.modifiers, modifier]})
+        result = self.model_copy(update={"modifiers": [*self.modifiers, modifier]})
+        # Self-loop validation: when a Loop(reenter=None) is applied to a Node,
+        # validate that outputs are compatible with inputs immediately.
+        if isinstance(modifier, Loop) and modifier.reenter is None:
+            from neograph._construct_validation import validate_loop_self_edge
+            validate_loop_self_edge(result)
+        return result
 
     def has_modifier(self, modifier_type: type[Modifier]) -> bool:
         """Check if a specific modifier is applied."""

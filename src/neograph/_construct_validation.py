@@ -23,7 +23,7 @@ import types
 from typing import Any, ForwardRef, Union, get_args, get_origin, get_type_hints
 
 from neograph.errors import ConstructError
-from neograph.modifiers import Each, split_each_path
+from neograph.modifiers import Each, Loop, split_each_path
 from neograph.node import Node
 
 
@@ -57,6 +57,55 @@ def effective_producer_type(item: Any) -> Any:
     if get_mod(Each):
         return dict[str, output]
     return output
+
+
+def validate_loop_self_edge(node: Node) -> None:
+    """Check that a self-loop's output type is compatible with its input type.
+
+    Called at ``|`` time (from ``Modifiable.__or__``) when a ``Loop`` modifier
+    with ``reenter=None`` is applied.  Multi-node reenter validation requires
+    the full construct node list and is handled inside ``_validate_node_chain``.
+    """
+    loop = node.get_modifier(Loop)
+    if loop is None or loop.reenter is not None:
+        return
+
+    output_type = node.outputs
+    input_type = node.inputs
+    if output_type is None or input_type is None:
+        return
+
+    # Dict-form inputs: the back-edge feeds the node's output back as one
+    # of its own inputs.  Check if the output is compatible with ANY input
+    # value type — the compiler wires the specific slot.
+    if isinstance(input_type, dict):
+        for _key, expected in input_type.items():
+            if _types_compatible(output_type, expected):
+                return
+        # No compatible input slot found.
+        type_list = ", ".join(
+            f"{k}={_fmt_type(v)}" for k, v in input_type.items()
+        )
+        msg = (
+            f"loop on node '{node.name}' back-edge to '{node.name}': "
+            f"output type {_fmt_type(output_type)} not compatible with "
+            f"reentry input types ({type_list}).\n"
+            f"  hint: the loop's last node output must match the "
+            f"reentry node's input type."
+        )
+        raise ConstructError(msg)
+        return
+
+    # Single-type inputs.
+    if not _types_compatible(output_type, input_type):
+        msg = (
+            f"loop on node '{node.name}' back-edge to '{node.name}': "
+            f"output type {_fmt_type(output_type)} not compatible with "
+            f"reentry input type {_fmt_type(input_type)}.\n"
+            f"  hint: the loop's last node output must match the "
+            f"reentry node's input type."
+        )
+        raise ConstructError(msg)
 
 
 def _validate_node_chain(construct: Any) -> None:
@@ -109,6 +158,69 @@ def _validate_node_chain(construct: Any) -> None:
                 )
                 # Shared helper decides the modifier-adjusted state-bus type.
                 producers.append((field_name, effective_producer_type(item), label))
+
+        # Loop modifier with reenter — validate that the last node's output
+        # is compatible with the reentry target's input type.
+        if isinstance(item, Node):
+            loop = item.get_modifier(Loop)
+            if loop is not None and loop.reenter is not None:
+                _check_loop_reenter(construct, item, loop)
+
+
+def _check_loop_reenter(
+    construct: Any,
+    item: Node,
+    loop: Loop,
+) -> None:
+    """Validate a multi-node Loop back-edge: item.outputs must be compatible
+    with the reentry node's inputs."""
+    reenter_name = loop.reenter
+    reenter_node: Node | None = None
+    for n in construct.nodes:
+        if isinstance(n, Node) and n.name == reenter_name:
+            reenter_node = n
+            break
+    if reenter_node is None:
+        msg = (
+            f"loop on node '{item.name}' references reenter='{reenter_name}' "
+            f"but no node named '{reenter_name}' exists in construct "
+            f"'{construct.name}'."
+        )
+        raise ConstructError(msg)
+
+    output_type = item.outputs
+    reentry_input = reenter_node.inputs
+    if output_type is None or reentry_input is None:
+        return
+
+    # Dict-form inputs on the reentry node: check the key matching the
+    # looping node's name (the back-edge producer).
+    if isinstance(reentry_input, dict):
+        looper_key = item.name.replace("-", "_")
+        expected = reentry_input.get(looper_key)
+        if expected is None:
+            return
+        if not _types_compatible(output_type, expected):
+            msg = (
+                f"loop on node '{item.name}' back-edge to '{reenter_name}': "
+                f"output type {_fmt_type(output_type)} not compatible with "
+                f"reentry input type {_fmt_type(expected)}.\n"
+                f"  hint: the loop's last node output must match the "
+                f"reentry node's input type."
+            )
+            raise ConstructError(msg)
+        return
+
+    # Single-type inputs on the reentry node.
+    if not _types_compatible(output_type, reentry_input):
+        msg = (
+            f"loop on node '{item.name}' back-edge to '{reenter_name}': "
+            f"output type {_fmt_type(output_type)} not compatible with "
+            f"reentry input type {_fmt_type(reentry_input)}.\n"
+            f"  hint: the loop's last node output must match the "
+            f"reentry node's input type."
+        )
+        raise ConstructError(msg)
 
 
 def _check_item_input(
