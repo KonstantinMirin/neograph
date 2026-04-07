@@ -26,6 +26,7 @@ dependencies = [
     "langchain-core>=0.3",
     "structlog>=23.0",
     "jsonschema>=4.26.0",
+    "json-repair>=0.30",
 ]
 
 [project.optional-dependencies]

@@ -1762,6 +1762,70 @@ class TestExtractJsonEdgeCases:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# TEST: _parse_json_response lenient parsing (neograph-hqhw)
+#
+# _parse_json_response must recover from common LLM JSON malformations:
+# control characters, trailing commas, single quotes, truncated fields.
+# Currently it fails because model_validate_json uses strict json.loads.
+# ═══════════════════════════════════════════════════════════════════════════
+
+class TestParseJsonResponseLenientParsing:
+    """_parse_json_response should handle malformed LLM JSON output."""
+
+    def test_control_characters_in_strings_parsed(self):
+        """Control characters inside JSON string values should not crash parsing."""
+        from pydantic import BaseModel
+        from neograph._llm import _parse_json_response
+
+        class SimpleModel(BaseModel):
+            content: str
+
+        # Embedded null character — not valid in JSON strings
+        text = '{"content": "hello\x00world"}'
+        result = _parse_json_response(text, SimpleModel)
+        assert "hello" in result.content
+
+    def test_trailing_comma_parsed(self):
+        """Trailing commas in JSON objects should not crash parsing."""
+        from pydantic import BaseModel
+        from neograph._llm import _parse_json_response
+
+        class SimpleModel(BaseModel):
+            name: str
+            value: int
+
+        text = '{"name": "test", "value": 42,}'
+        result = _parse_json_response(text, SimpleModel)
+        assert result.name == "test"
+        assert result.value == 42
+
+    def test_single_quotes_parsed(self):
+        """Single-quoted JSON strings should not crash parsing."""
+        from pydantic import BaseModel
+        from neograph._llm import _parse_json_response
+
+        class SimpleModel(BaseModel):
+            name: str
+
+        text = "{'name': 'test'}"
+        result = _parse_json_response(text, SimpleModel)
+        assert result.name == "test"
+
+    def test_unescaped_newlines_in_strings_parsed(self):
+        """Literal newlines inside JSON string values should not crash parsing."""
+        from pydantic import BaseModel
+        from neograph._llm import _parse_json_response
+
+        class SimpleModel(BaseModel):
+            content: str
+
+        text = '{"content": "line1\nline2"}'
+        result = _parse_json_response(text, SimpleModel)
+        assert "line1" in result.content
+        assert "line2" in result.content
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # TEST: _call_structured TypeError fallback for include_raw (neograph-rdu.11)
 #
 # _call_structured() passes include_raw=True by default. Some LLMs don't
@@ -1898,3 +1962,84 @@ class TestRetryPolicy:
         result = run(graph, input={})
 
         assert result["scripted_node"].items == ["scripted"]
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# GRAPH VISUALIZATION — get_graph().edges completeness
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TestGetGraphEdges:
+    """get_graph().edges must report edges for all nodes, including those
+    wired through Send()-based conditional routing (Oracle, Each)."""
+
+    def test_oracle_edges_visible_in_get_graph(self):
+        """Nodes after an Oracle fan-out must appear in get_graph().edges.
+
+        Regression: without path_map on add_conditional_edges, LangGraph
+        cannot resolve Send() targets statically, so get_graph() shows only
+        the first chain terminating at __end__.
+        """
+        from neograph.factory import register_scripted
+        from neograph.decorators import _merge_fn_registry
+
+        register_scripted("viz_pre", lambda _in, _cfg: RawText(text="input"))
+        register_scripted("viz_gen", lambda _in, _cfg: Claims(items=["x"]))
+
+        def merge_fn(results):
+            return Claims(items=["merged"])
+
+        _merge_fn_registry["viz_merge"] = (merge_fn, None)
+
+        register_scripted("viz_post", lambda _in, _cfg: RawText(text="done"))
+
+        pre = Node.scripted("pre", fn="viz_pre", outputs=RawText)
+        gen = Node.scripted("gen", fn="viz_gen", inputs=RawText, outputs=Claims) | Oracle(n=2, merge_fn="viz_merge")
+        post = Node.scripted("post", fn="viz_post", inputs=Claims, outputs=RawText)
+
+        pipeline = Construct("test-viz-oracle", nodes=[pre, gen, post])
+        graph = compile(pipeline)
+
+        dg = graph.get_graph()
+        edge_set = {(e.source, e.target) for e in dg.edges}
+
+        # post node must be reachable — not orphaned
+        assert ("merge_gen", "post") in edge_set, (
+            f"Edge merge_gen -> post missing from get_graph().edges: {edge_set}"
+        )
+        assert ("post", "__end__") in edge_set, (
+            f"Edge post -> __end__ missing from get_graph().edges: {edge_set}"
+        )
+
+    def test_each_edges_visible_in_get_graph(self):
+        """Nodes after an Each fan-out must appear in get_graph().edges."""
+        from neograph.factory import register_scripted
+
+        register_scripted("viz_make", lambda _in, _cfg: Clusters(
+            groups=[ClusterGroup(label="a", claim_ids=["1"])]))
+        register_scripted("viz_verify", lambda _in, _cfg: MatchResult(
+            cluster_label="a", matched=["ok"]))
+        register_scripted("viz_summary", lambda _in, _cfg: RawText(text="done"))
+
+        make = Node.scripted("make", fn="viz_make", outputs=Clusters)
+        verify = Node.scripted(
+            "verify", fn="viz_verify", inputs=ClusterGroup, outputs=MatchResult,
+        ) | Each(over="make.groups", key="label")
+        summary = Node.scripted(
+            "summary", fn="viz_summary",
+            inputs=dict[str, MatchResult], outputs=RawText,
+        )
+
+        pipeline = Construct("test-viz-each", nodes=[make, verify, summary])
+        graph = compile(pipeline)
+
+        dg = graph.get_graph()
+        edge_set = {(e.source, e.target) for e in dg.edges}
+
+        # summary node must be reachable after the Each barrier
+        assert ("assemble_verify", "summary") in edge_set, (
+            f"Edge assemble_verify -> summary missing: {edge_set}"
+        )
+        assert ("summary", "__end__") in edge_set, (
+            f"Edge summary -> __end__ missing: {edge_set}"
+        )

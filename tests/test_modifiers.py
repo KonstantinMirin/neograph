@@ -1406,8 +1406,8 @@ class TestModifierCombinations:
 
 class TestEachDuplicateKeyGuard:
 
-    def test_raises_clear_error_when_each_collection_has_duplicate_keys_node_api(self):
-        """@node API: duplicate key in Each collection raises ValueError at dispatch."""
+    def test_dedup_with_warning_when_each_collection_has_duplicate_keys_node_api(self):
+        """@node API: duplicate key in Each collection deduped (keep first), no crash."""
         import types as _types
         from neograph import compile, construct_from_module, node, run
 
@@ -1427,7 +1427,7 @@ class TestEachDuplicateKeyGuard:
             map_key="label",
         )
         def verify(cluster: ClusterGroup) -> MatchResult:
-            return MatchResult(cluster_label=cluster.label, matched=[])
+            return MatchResult(cluster_label=cluster.label, matched=cluster.claim_ids)
 
         mod.make_clusters = make_clusters
         mod.verify = verify
@@ -1435,11 +1435,13 @@ class TestEachDuplicateKeyGuard:
         pipeline = construct_from_module(mod)
         graph = compile(pipeline)
 
-        with pytest.raises(ExecutionError, match=r"duplicate key 'dup'"):
-            run(graph, input={"node_id": "dup-test"})
+        result = run(graph, input={"node_id": "dup-test"})
+        # First occurrence kept
+        assert "dup" in result["verify"]
+        assert result["verify"]["dup"].matched == ["c1"]
 
-    def test_raises_clear_error_when_each_collection_has_duplicate_keys_programmatic(self):
-        """Programmatic API: duplicate key in Each collection raises ExecutionError."""
+    def test_dedup_with_warning_when_each_collection_has_duplicate_keys_programmatic(self):
+        """Programmatic API: duplicate key in Each collection deduped (keep first), no crash."""
         from neograph import compile, run
 
         def make_fn(input_data, config):
@@ -1449,7 +1451,7 @@ class TestEachDuplicateKeyGuard:
             ])
 
         def proc_fn(input_data, config):
-            return MatchResult(cluster_label="same", matched=[])
+            return MatchResult(cluster_label=input_data.label, matched=input_data.claim_ids)
 
         register_scripted("dup_each_make", make_fn)
         register_scripted("dup_each_proc", proc_fn)
@@ -1465,8 +1467,85 @@ class TestEachDuplicateKeyGuard:
         pipeline = Construct("test-dup-each", nodes=[make, proc])
         graph = compile(pipeline)
 
-        with pytest.raises(ExecutionError, match=r"duplicate key 'same'"):
-            run(graph, input={"node_id": "dup-prog"})
+        result = run(graph, input={"node_id": "dup-prog"})
+        # First occurrence kept
+        assert "same" in result["dup_each_proc"]
+        assert result["dup_each_proc"]["same"].matched == ["c1"]
+
+
+class TestEachDuplicateKeyDedup:
+    """neograph-b1g9: Each fan-out should dedup duplicate keys with a warning
+    instead of crashing. Keep first occurrence, log warning, continue."""
+
+    def test_dedup_keeps_first_and_warns_when_each_has_duplicate_keys_node_api(self):
+        """@node API: duplicate keys in Each collection dedup with warning, keep first."""
+        import types as _types
+        from neograph import compile, construct_from_module, node, run
+
+        mod = _types.ModuleType("test_each_dedup")
+
+        @node(mode="scripted", outputs=Clusters)
+        def make_clusters() -> Clusters:
+            return Clusters(groups=[
+                ClusterGroup(label="dup", claim_ids=["c1"]),
+                ClusterGroup(label="dup", claim_ids=["c2"]),
+                ClusterGroup(label="unique", claim_ids=["c3"]),
+            ])
+
+        @node(
+            mode="scripted",
+            outputs=MatchResult,
+            map_over="make_clusters.groups",
+            map_key="label",
+        )
+        def verify(cluster: ClusterGroup) -> MatchResult:
+            return MatchResult(cluster_label=cluster.label, matched=cluster.claim_ids)
+
+        mod.make_clusters = make_clusters
+        mod.verify = verify
+
+        pipeline = construct_from_module(mod)
+        graph = compile(pipeline)
+
+        result = run(graph, input={"node_id": "dedup-test"})
+
+        # First occurrence kept for the duplicate key, unique key also present
+        assert "dup" in result["verify"]
+        assert result["verify"]["dup"].matched == ["c1"]
+        assert "unique" in result["verify"]
+
+    def test_dedup_keeps_first_and_warns_when_each_has_duplicate_keys_programmatic(self):
+        """Programmatic API: duplicate keys dedup with warning, keep first."""
+        from neograph import compile, run
+
+        def make_fn(input_data, config):
+            return Clusters(groups=[
+                ClusterGroup(label="same", claim_ids=["c1"]),
+                ClusterGroup(label="same", claim_ids=["c2"]),
+            ])
+
+        def proc_fn(input_data, config):
+            return MatchResult(cluster_label=input_data.label, matched=input_data.claim_ids)
+
+        register_scripted("dedup_each_make", make_fn)
+        register_scripted("dedup_each_proc", proc_fn)
+
+        make = Node.scripted("dedup-each-make", fn="dedup_each_make", outputs=Clusters)
+        proc = (
+            Node.scripted(
+                "dedup-each-proc", fn="dedup_each_proc",
+                inputs=ClusterGroup, outputs=MatchResult,
+            )
+            | Each(over="dedup_each_make.groups", key="label")
+        )
+        pipeline = Construct("test-dedup-each", nodes=[make, proc])
+        graph = compile(pipeline)
+
+        result = run(graph, input={"node_id": "dedup-prog"})
+
+        # First occurrence kept
+        assert "same" in result["dedup_each_proc"]
+        assert result["dedup_each_proc"]["same"].matched == ["c1"]
 
 
 class TestSkipWhenWithEach:

@@ -416,3 +416,57 @@ class TestForwardConstructLoop:
         # This test verifies the nodes were at least traced and ran.
         assert _review_count[0] >= 1, "review did not run at all"
         assert result.get("draft") is not None, "draft node did not produce output"
+
+    @pytest.mark.skip(reason="neograph-mwx3: tracer does not compile for/while to graph cycles — needs design spike")
+    def test_for_loop_review_cycles_when_score_below_threshold(self):
+        """BUG neograph-mwx3: for/while in forward() should compile to a graph
+        cycle so the review node runs multiple times until the exit condition
+        is met. Currently fails because the tracer traces the loop body once
+        and does not produce a back-edge."""
+        from neograph import ForwardConstruct
+
+        class Writer(ForwardConstruct):
+            draft = Node.scripted("draft", fn="fc_draft_cycle", outputs=Draft)
+            review = Node.scripted("review", fn="fc_review_cycle", outputs=ReviewResult)
+            revise = Node.scripted("revise", fn="fc_revise_cycle", outputs=Draft)
+
+            def forward(self, topic):
+                d = self.draft(topic)
+                for _ in range(5):
+                    r = self.review(d)
+                    if r.score >= 0.8:
+                        break
+                    d = self.revise(d, r)
+                return d
+
+        register_scripted(
+            "fc_draft_cycle",
+            lambda _in, _cfg: Draft(content="v0", score=0.0),
+        )
+
+        _review_count = [0]
+
+        def fc_review_cycle(_in, _cfg):
+            _review_count[0] += 1
+            return ReviewResult(
+                score=0.3 * _review_count[0],
+                feedback=f"feedback-{_review_count[0]}",
+            )
+
+        register_scripted("fc_review_cycle", fc_review_cycle)
+
+        def fc_revise_cycle(_in, _cfg):
+            return Draft(content="revised", score=0.0, iteration=1)
+
+        register_scripted("fc_revise_cycle", fc_revise_cycle)
+
+        writer = Writer()
+        graph = compile(writer)
+        result = run(graph, input={"node_id": "fc-loop-cycle"})
+
+        # The loop should cycle: review runs 3 times (0.3, 0.6, 0.9 >= 0.8)
+        assert _review_count[0] >= 2, (
+            f"Expected review to run >= 2 times via graph cycle, "
+            f"but it ran {_review_count[0]} time(s). "
+            f"The tracer does not compile for/while to cycles (neograph-mwx3)."
+        )

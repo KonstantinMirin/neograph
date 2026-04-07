@@ -13,7 +13,7 @@ from neograph import (
     Construct, ConstructError, Node, Each, Oracle, Operator, Tool, ToolInteraction,
     compile, construct_from_functions, construct_from_module,
     merge_fn, node, run, tool,
-    CompileError, ConfigurationError, ExecutionError,
+    CompileError, ConfigurationError,
 )
 from neograph.factory import register_scripted
 from tests.schemas import RawText, Claims, ClassifiedClaims, ClusterGroup, Clusters, MatchResult, MergedResult, ValidationResult
@@ -356,9 +356,9 @@ class TestReducerEdgeCases:
         result = _merge_dicts({"a": 1}, {"b": 2})
         assert result == {"a": 1, "b": 2}
 
-        # Duplicate key raises
-        with pytest.raises(ExecutionError, match="duplicate key"):
-            _merge_dicts({"a": 1}, {"a": 99})
+        # Duplicate key keeps existing (first-write-wins), no crash
+        result = _merge_dicts({"a": 1}, {"a": 99})
+        assert result == {"a": 1}
 
     def test_new_value_replaces_when_last_write_wins(self):
         """Last-write-wins reducer always returns new value."""
@@ -414,8 +414,8 @@ class TestStateHygiene:
         # Internals stripped
         assert not any(k.startswith("neo_") for k in result)
 
-    def test_reducer_raises_when_each_keys_duplicate(self):
-        """Each fan-out with duplicate dispatch keys raises, not silently overwrites."""
+    def test_reducer_dedup_when_each_keys_duplicate(self):
+        """Each fan-out with duplicate dispatch keys dedupes (keeps first), no crash."""
         from neograph.factory import register_scripted
 
         # Collection with duplicate labels
@@ -426,7 +426,7 @@ class TestStateHygiene:
             ]
         ))
         register_scripted("proc_dupe", lambda input_data, config: MatchResult(
-            cluster_label=input_data.label, matched=["done"],
+            cluster_label=input_data.label, matched=input_data.claim_ids,
         ))
 
         make = Node.scripted("make-dupes", fn="make_dupes", outputs=Clusters)
@@ -437,8 +437,10 @@ class TestStateHygiene:
         pipeline = Construct("test-dupe-key", nodes=[make, proc])
         graph = compile(pipeline)
 
-        with pytest.raises(Exception, match="duplicate key"):
-            run(graph, input={"node_id": "test-001"})
+        result = run(graph, input={"node_id": "test-001"})
+        # First occurrence kept
+        assert "same" in result["proc_dupe"]
+        assert result["proc_dupe"]["same"].matched == ["1"]
 
 
 # ═══════════════════════════════════════════════════════════════════════════

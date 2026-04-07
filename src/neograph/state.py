@@ -10,9 +10,13 @@ from typing import Annotated, Any
 
 from pydantic import BaseModel, create_model
 
+import structlog
+
 from neograph.construct import Construct
-from neograph.errors import CompileError, ExecutionError
+from neograph.errors import CompileError
 from neograph.forward import _BranchNode
+
+log = structlog.get_logger()
 from neograph.modifiers import Oracle, Each, Loop
 from neograph.node import Node
 
@@ -40,14 +44,17 @@ def _collect_oracle_results(existing: Any, new: Any) -> list:
 
 
 def _merge_dicts(existing: Any, new: dict) -> dict:
-    """Reducer: merge dicts additively (for fan-out results)."""
+    """Reducer: merge dicts additively (for fan-out results).
+
+    On duplicate keys, keeps the existing (first) value and logs a warning.
+    """
     if existing is None:
         existing = {}
     merged = {**existing}
     for key, val in new.items():
         if key in merged:
-            msg = f"Each fan-out: duplicate key '{key}'. Two items produced the same dispatch key."
-            raise ExecutionError(msg)
+            log.warning("each_duplicate_key", key=key, action="kept_existing")
+            continue
         merged[key] = val
     return merged
 

@@ -1029,3 +1029,48 @@ class TestRendererThreeSurfaces:
         for n in pipeline.nodes:
             assert n.renderer is xml
 
+
+class TestRenderToolResultForLlm:
+    """_render_tool_result_for_llm: uses renderer when provided (neograph-w6hk)."""
+
+    def test_renderer_used_for_pydantic_model(self):
+        """When a renderer is supplied, it should be used instead of describe_value."""
+        from neograph._llm import _render_tool_result_for_llm
+
+        class Result(BaseModel):
+            score: int = 42
+
+        class FakeRenderer:
+            def render(self, value: Any) -> str:
+                return f"CUSTOM:{value.score}"
+
+        result = _render_tool_result_for_llm(Result(), renderer=FakeRenderer())
+        assert "CUSTOM:42" in result
+
+    def test_renderer_used_for_list_of_models(self):
+        """When a renderer is supplied for a list of models, it should be used."""
+        from neograph._llm import _render_tool_result_for_llm
+
+        class Item(BaseModel):
+            label: str
+
+        class FakeRenderer:
+            def render(self, value: Any) -> str:
+                return f"RENDERED:{len(value)}"
+
+        items = [Item(label="a"), Item(label="b")]
+        result = _render_tool_result_for_llm(items, renderer=FakeRenderer())
+        assert "RENDERED:2" in result
+
+    def test_fallback_to_describe_value_when_no_renderer(self):
+        """Without renderer, Pydantic models still use describe_value (default)."""
+        from neograph._llm import _render_tool_result_for_llm
+
+        class Simple(BaseModel):
+            x: int = 5
+
+        result = _render_tool_result_for_llm(Simple())
+        # describe_value produces BAML-style notation
+        assert "x" in result
+        assert "5" in result
+

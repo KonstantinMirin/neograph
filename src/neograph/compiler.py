@@ -296,7 +296,9 @@ def _add_loop_back_edge(
             return reenter_target
         return exit_name
 
-    graph.add_conditional_edges(node_name, loop_router)
+    graph.add_conditional_edges(
+        node_name, loop_router, path_map=[reenter_target, exit_name],
+    )
 
     return exit_name
 
@@ -353,7 +355,9 @@ def _add_subgraph_loop(
             return sub.name
         return exit_name
 
-    graph.add_conditional_edges(sub.name, loop_router)
+    graph.add_conditional_edges(
+        sub.name, loop_router, path_map=[sub.name, exit_name],
+    )
 
     return exit_name
 
@@ -400,9 +404,9 @@ def _wire_oracle(
         return sends
 
     if prev_node:
-        graph.add_conditional_edges(prev_node, oracle_router)
+        graph.add_conditional_edges(prev_node, oracle_router, path_map=[gen_name])
     else:
-        graph.add_conditional_edges(START, oracle_router)
+        graph.add_conditional_edges(START, oracle_router, path_map=[gen_name])
 
     # Merge barrier
     graph.add_node(merge_name, merge_fn, defer=True)
@@ -437,19 +441,23 @@ def _wire_each(
         for part in segments:
             obj = getattr(obj, part) if hasattr(obj, part) else obj[part]
 
-        # Guard: detect duplicate dispatch keys before fan-out
+        # Dedup: keep first occurrence of each dispatch key, warn on duplicates
         seen_keys: dict[str, int] = {}
         items = list(obj)
+        unique_items: list = []
         for idx, item in enumerate(items):
             key_val = getattr(item, each.key, str(item))
             if key_val in seen_keys:
-                msg = (
-                    f"Each fan-out for '{fan_name}' produced duplicate key '{key_val}' "
-                    f"(items at index {seen_keys[key_val]} and {idx}). "
-                    f"Each item's '{each.key}' must be unique."
+                log.warning(
+                    "each_duplicate_key",
+                    fan_out=fan_name,
+                    key=key_val,
+                    kept_index=seen_keys[key_val],
+                    dropped_index=idx,
                 )
-                raise ExecutionError(msg)
+                continue
             seen_keys[key_val] = idx
+            unique_items.append(item)
 
         state_dict = {
             k: getattr(state, k)
@@ -457,13 +465,13 @@ def _wire_each(
         }
         return [
             Send(fan_name, {**state_dict, "neo_each_item": item})
-            for item in items
+            for item in unique_items
         ]
 
     if prev_node:
-        graph.add_conditional_edges(prev_node, each_router)
+        graph.add_conditional_edges(prev_node, each_router, path_map=[fan_name])
     else:
-        graph.add_conditional_edges(START, each_router)
+        graph.add_conditional_edges(START, each_router, path_map=[fan_name])
 
     # Barrier node (collects fan-out results)
     def barrier_fn(state: Any) -> dict:

@@ -227,8 +227,17 @@ def _extract_json(text: str) -> str:
 
 
 def _parse_json_response(text: str, output_model: type[BaseModel]) -> BaseModel:
-    """Parse a JSON string into a Pydantic model."""
-    return output_model.model_validate_json(_extract_json(text))
+    """Parse a JSON string into a Pydantic model.
+
+    Uses json_repair to handle common LLM JSON malformations (control
+    characters, trailing commas, single quotes, unescaped newlines) before
+    passing to Pydantic validation.
+    """
+    from json_repair import repair_json
+
+    extracted = _extract_json(text)
+    repaired = repair_json(extracted, return_objects=False)
+    return output_model.model_validate_json(repaired)
 
 
 def _call_structured(
@@ -323,9 +332,9 @@ def invoke_structured(
 def _render_tool_result_for_llm(result: Any, renderer: Any = None) -> str:
     """Render a typed tool result for the LLM's ToolMessage content.
 
-    For Pydantic models and lists of models: uses ``describe_value`` which
-    renders in BAML-style notation (same format as ``describe_type`` but with
-    actual values). Field descriptions appear as inline ``//`` comments.
+    When ``renderer`` is provided, it is used for Pydantic models and lists
+    of models.  Otherwise falls back to ``describe_value`` (BAML-style
+    notation with field descriptions as inline ``//`` comments).
     Falls back to str() for non-Pydantic returns.
     """
     from pydantic import BaseModel as _BM
@@ -333,6 +342,8 @@ def _render_tool_result_for_llm(result: Any, renderer: Any = None) -> str:
     if isinstance(result, _BM) or (
         isinstance(result, list) and result and isinstance(result[0], _BM)
     ):
+        if renderer is not None:
+            return renderer.render(result)
         from neograph.describe_type import describe_value
         return describe_value(result, prefix="Tool result:")
 
