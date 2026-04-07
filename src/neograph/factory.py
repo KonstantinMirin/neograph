@@ -700,11 +700,17 @@ def make_subgraph_fn(sub: Any, sub_graph: Any) -> Callable:
 
         sub_result = _strip_internals(sub_graph.invoke(sub_input, config=config))
 
-        # Extract the declared output type from sub result
+        # Extract the declared output type from sub result.
+        # Iterate in reverse so later pipeline nodes take precedence.
+        # Unwrap loop append-lists: Loop nodes have list[T] from the
+        # append-list reducer; check val[-1] against the output type.
         output_val = None
-        for val in sub_result.values():
-            if isinstance(val, sub.output):
-                output_val = val
+        for val in reversed(list(sub_result.values())):
+            check_val = val
+            if isinstance(val, list) and val:
+                check_val = val[-1]
+            if isinstance(check_val, sub.output):
+                output_val = check_val
                 break
 
         sub_log.info("subgraph_complete")

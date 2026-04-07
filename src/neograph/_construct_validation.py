@@ -63,11 +63,10 @@ def validate_loop_self_edge(node: Node) -> None:
     """Check that a self-loop's output type is compatible with its input type.
 
     Called at ``|`` time (from ``Modifiable.__or__``) when a ``Loop`` modifier
-    with ``reenter=None`` is applied.  Multi-node reenter validation requires
-    the full construct node list and is handled inside ``_validate_node_chain``.
+    is applied to a Node. Loop on Node always means self-loop.
     """
     loop = node.get_modifier(Loop)
-    if loop is None or loop.reenter is not None:
+    if loop is None:
         return
 
     output_type = node.outputs
@@ -159,66 +158,41 @@ def _validate_node_chain(construct: Any) -> None:
                 # Shared helper decides the modifier-adjusted state-bus type.
                 producers.append((field_name, effective_producer_type(item), label))
 
-        # Loop modifier with reenter — validate that the last node's output
-        # is compatible with the reentry target's input type.
+        # Each + Loop mutual exclusion (belt-and-suspenders: also checked
+        # at | time in Modifiable.__or__, but the programmatic API can bypass
+        # pipe syntax by constructing modifiers lists directly).
         if isinstance(item, Node):
-            loop = item.get_modifier(Loop)
-            if loop is not None and loop.reenter is not None:
-                _check_loop_reenter(construct, item, loop)
+            if item.has_modifier(Each) and item.has_modifier(Loop):
+                msg = (
+                    f"Node '{item.name}' has both Each and Loop modifiers. "
+                    f"These cannot be combined on a single node. "
+                    f"Use a sub-construct with Loop inside an Each fan-out instead."
+                )
+                raise ConstructError(msg)
+
+        # (Loop reenter validation removed — Loop.reenter no longer exists.
+        # Multi-node loops use Loop on Construct instead.)
 
 
-def _check_loop_reenter(
-    construct: Any,
-    item: Node,
-    loop: Loop,
-) -> None:
-    """Validate a multi-node Loop back-edge: item.outputs must be compatible
-    with the reentry node's inputs."""
-    reenter_name = loop.reenter
-    reenter_node: Node | None = None
-    for n in construct.nodes:
-        if isinstance(n, Node) and n.name == reenter_name:
-            reenter_node = n
-            break
-    if reenter_node is None:
+def validate_loop_construct(construct: Any) -> None:
+    """Validate Loop on a Construct: output must be compatible with input.
+
+    Called at ``|`` time from ``Modifiable.__or__`` when a Loop modifier
+    is applied to a Construct.
+    """
+    if construct.output is None or construct.input is None:
         msg = (
-            f"loop on node '{item.name}' references reenter='{reenter_name}' "
-            f"but no node named '{reenter_name}' exists in construct "
-            f"'{construct.name}'."
+            f"Loop on construct '{construct.name}' requires both input= "
+            f"and output= declared."
         )
         raise ConstructError(msg)
-
-    output_type = item.outputs
-    reentry_input = reenter_node.inputs
-    if output_type is None or reentry_input is None:
-        return
-
-    # Dict-form inputs on the reentry node: check the key matching the
-    # looping node's name (the back-edge producer).
-    if isinstance(reentry_input, dict):
-        looper_key = item.name.replace("-", "_")
-        expected = reentry_input.get(looper_key)
-        if expected is None:
-            return
-        if not _types_compatible(output_type, expected):
-            msg = (
-                f"loop on node '{item.name}' back-edge to '{reenter_name}': "
-                f"output type {_fmt_type(output_type)} not compatible with "
-                f"reentry input type {_fmt_type(expected)}.\n"
-                f"  hint: the loop's last node output must match the "
-                f"reentry node's input type."
-            )
-            raise ConstructError(msg)
-        return
-
-    # Single-type inputs on the reentry node.
-    if not _types_compatible(output_type, reentry_input):
+    if not _types_compatible(construct.output, construct.input):
         msg = (
-            f"loop on node '{item.name}' back-edge to '{reenter_name}': "
-            f"output type {_fmt_type(output_type)} not compatible with "
-            f"reentry input type {_fmt_type(reentry_input)}.\n"
-            f"  hint: the loop's last node output must match the "
-            f"reentry node's input type."
+            f"Loop on construct '{construct.name}': output type "
+            f"{_fmt_type(construct.output)} not compatible with input type "
+            f"{_fmt_type(construct.input)}.\n"
+            f"  hint: the loop's output must match the construct's "
+            f"input type for the back-edge."
         )
         raise ConstructError(msg)
 

@@ -259,7 +259,7 @@ def _add_loop_back_edge(
     else:
         condition = loop.when
 
-    reenter_target = loop.reenter or node_name  # self-loop default
+    reenter_target = node_name  # always self-loop (multi-node loops use Construct)
     exit_name = f"__loop_exit_{node_name}"
 
     def loop_exit(state: Any) -> dict:

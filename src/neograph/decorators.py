@@ -371,7 +371,6 @@ def node(
     skip_value: Callable | None = None,
     loop_when: str | Callable | None = None,
     max_iterations: int | None = None,
-    loop_to: str | None = None,
     on_exhaust: Literal["error", "last"] | None = None,
 ) -> Any:
     """Decorator that turns a function into a Node spec with signature-inferred
@@ -433,6 +432,13 @@ def node(
                 f"@node '{(name or f.__name__).replace('_', '-')}': "
                 f"map_key= requires map_over=. Pass map_over='<dotted.path>' "
                 f"to specify the collection to fan out over."
+            )
+        if map_over is not None and loop_when is not None:
+            raise ConstructError(
+                f"@node '{(name or f.__name__).replace('_', '-')}': "
+                f"map_over= (Each) and loop_when= (Loop) cannot be combined "
+                f"on the same node. Use a sub-construct with Loop inside an "
+                f"Each fan-out instead."
             )
 
         # -- Mode inference: if not explicitly set, infer from kwargs ----------
@@ -688,8 +694,6 @@ def node(
                 "when": loop_when,
                 "max_iterations": max_iterations or 10,
             }
-            if loop_to is not None:
-                loop_kwargs["reenter"] = loop_to
             if on_exhaust is not None:
                 loop_kwargs["on_exhaust"] = on_exhaust
             n = n | _Loop(**loop_kwargs)

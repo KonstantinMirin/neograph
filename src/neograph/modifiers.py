@@ -63,12 +63,33 @@ class Modifiable:
 
     def __or__(self, modifier: Modifier) -> Self:
         """Compose modifiers via pipe: obj | Oracle(n=3) | Operator(when=...)"""
+        from neograph.errors import ConstructError
+
+        # Each + Loop mutual exclusion
+        if isinstance(modifier, Loop) and self.has_modifier(Each):
+            msg = (
+                "Cannot combine Each and Loop on the same item. "
+                "Use a sub-construct with Loop inside an Each fan-out instead."
+            )
+            raise ConstructError(msg)
+        if isinstance(modifier, Each) and self.has_modifier(Loop):
+            msg = (
+                "Cannot combine Each and Loop on the same item. "
+                "Use a sub-construct with Loop inside an Each fan-out instead."
+            )
+            raise ConstructError(msg)
+
         result = self.model_copy(update={"modifiers": [*self.modifiers, modifier]})
-        # Self-loop validation: when a Loop(reenter=None) is applied to a Node,
-        # validate that outputs are compatible with inputs immediately.
-        if isinstance(modifier, Loop) and modifier.reenter is None:
-            from neograph._construct_validation import validate_loop_self_edge
-            validate_loop_self_edge(result)
+        # Loop validation at | time: check type compatibility immediately.
+        if isinstance(modifier, Loop):
+            if hasattr(result, 'outputs'):
+                # Node: validate output compat with inputs
+                from neograph._construct_validation import validate_loop_self_edge
+                validate_loop_self_edge(result)
+            elif hasattr(result, 'output') and hasattr(result, 'input'):
+                # Construct: validate output compat with input
+                from neograph._construct_validation import validate_loop_construct
+                validate_loop_construct(result)
         return result
 
     def has_modifier(self, modifier_type: type[Modifier]) -> bool:
@@ -232,17 +253,19 @@ class Operator(Modifier):
 
 
 class Loop(Modifier):
-    """Cycle modifier: repeat a node (or node group) until a condition is met.
+    """Cycle modifier: repeat a node or sub-construct until a condition is met.
 
-    The compiler inserts a conditional back-edge from the modified node
-    to either itself (self-loop) or an earlier node (multi-node cycle).
+    On a Node: self-loop (output feeds back as input).
+    On a Construct: the sub-construct re-runs with its output as the next input.
+    Multi-node loop bodies should be expressed as sub-constructs with Loop.
 
     Usage:
-        # Self-loop: refine until quality threshold
+        # Self-loop on a node:
         node | Loop(when=lambda d: d.score < 0.8, max_iterations=5)
 
-        # Multi-node: review→revise cycle
-        revise | Loop(when=lambda s: s.review.score < 0.8, reenter="review")
+        # Multi-node loop body as sub-construct:
+        body = construct_from_functions("refine", [review, revise], input=Draft, output=Draft)
+        body | Loop(when=lambda d: d.score < 0.8, max_iterations=10)
 
         # @node sugar:
         @node(outputs=Draft, loop_when=lambda d: d.score < 0.8, max_iterations=5)
@@ -251,7 +274,6 @@ class Loop(Modifier):
 
     when: Any           # str (registered condition name) or Callable. True = continue looping.
     max_iterations: int = 10
-    reenter: str | None = None          # back-edge target node name (None = self-loop)
     on_exhaust: str = "error"           # "error" raises ExecutionError, "last" returns last result
     history: bool = False               # collect each iteration's output in state
 
