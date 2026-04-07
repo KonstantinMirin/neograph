@@ -1821,3 +1821,80 @@ class TestCallStructuredFallback:
         assert result == expected
         # Called once — include_raw=True worked
         mock_llm.with_structured_output.assert_called_once_with(Claims, include_raw=True)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# TEST: RetryPolicy support (neograph-o0qw)
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TestRetryPolicy:
+    """compile(retry_policy=) applies retry to LLM nodes only (neograph-o0qw)."""
+
+    def test_pipeline_compiles_and_runs_when_retry_policy_set(self):
+        """compile(retry_policy=...) produces a working graph. E2E."""
+        from langgraph.types import RetryPolicy
+        from neograph import node, construct_from_module, compile, run
+        from tests.fakes import StructuredFake, configure_fake_llm
+        import types
+
+        configure_fake_llm(lambda tier: StructuredFake(lambda m: m(items=["done"])))
+
+        mod = types.ModuleType("test_retry_mod")
+
+        @node(outputs=Claims, mode="think", model="fast", prompt="test")
+        def analyze() -> Claims: ...
+
+        mod.analyze = analyze
+        pipeline = construct_from_module(mod)
+        graph = compile(pipeline, retry_policy=RetryPolicy(max_attempts=3))
+        result = run(graph, input={"node_id": "retry-test"})
+
+        assert result["analyze"].items == ["done"]
+
+    def test_retry_policy_inherited_by_sub_constructs(self):
+        """Sub-constructs inherit retry_policy from parent compile(). E2E."""
+        from langgraph.types import RetryPolicy
+        from neograph import node, construct_from_functions, compile, run
+        from neograph.factory import register_scripted
+        from tests.fakes import StructuredFake, configure_fake_llm
+
+        configure_fake_llm(lambda tier: StructuredFake(
+            lambda m: m(items=["sub-done"]),
+        ))
+
+        @node(mode="think", outputs=Claims, model="fast", prompt="score")
+        def score(input_text: RawText) -> Claims: ...
+
+        sub = construct_from_functions(
+            "scorer", [score], input=RawText, output=Claims,
+        )
+
+        register_scripted("retry_seed", lambda _in, _cfg: RawText(text="test"))
+        parent = Construct("parent", nodes=[
+            Node.scripted("seed", fn="retry_seed", outputs=RawText),
+            sub,
+        ])
+        graph = compile(parent, retry_policy=RetryPolicy(max_attempts=2))
+        result = run(graph, input={"node_id": "retry-sub"})
+
+        assert result["scorer"].items == ["sub-done"]
+
+    def test_scripted_nodes_not_affected_by_retry_policy(self):
+        """Scripted nodes should work fine with retry_policy set (no crash). E2E."""
+        from langgraph.types import RetryPolicy
+        from neograph import node, construct_from_module, compile, run
+        import types
+
+        mod = types.ModuleType("test_retry_scripted_mod")
+
+        @node(outputs=Claims)
+        def scripted_node() -> Claims:
+            return Claims(items=["scripted"])
+
+        mod.scripted_node = scripted_node
+        pipeline = construct_from_module(mod)
+        graph = compile(pipeline, retry_policy=RetryPolicy(max_attempts=3))
+        result = run(graph, input={})
+
+        assert result["scripted_node"].items == ["scripted"]

@@ -32,13 +32,17 @@ from neograph.state import compile_state_model
 log = structlog.get_logger()
 
 
-def compile(construct: Construct, checkpointer: Any = None) -> Any:
+def compile(construct: Construct, checkpointer: Any = None, retry_policy: Any = None) -> Any:
     """Compile a Construct into an executable LangGraph StateGraph.
 
     Args:
         construct: The Construct to compile.
         checkpointer: LangGraph checkpointer for persistence/resume support.
                       Required if any node uses Operator (interrupt/resume).
+        retry_policy: LangGraph RetryPolicy applied to all LLM-calling nodes
+                      (think/agent/act). Handles malformed JSON, validation
+                      errors, and transient API failures. Scripted nodes are
+                      not retried.
     """
     compile_log = log.bind(construct=construct.name, nodes=len(construct.nodes))
     compile_log.info("compile_start",
@@ -71,9 +75,9 @@ def compile(construct: Construct, checkpointer: Any = None) -> Any:
         if isinstance(item, _BranchNode):
             prev_node = _add_branch_to_graph(graph, item, prev_node)
         elif isinstance(item, Construct):
-            prev_node = _add_subgraph(graph, item, prev_node, checkpointer=checkpointer)
+            prev_node = _add_subgraph(graph, item, prev_node, checkpointer=checkpointer, retry_policy=retry_policy)
         else:
-            prev_node = _add_node_to_graph(graph, item, prev_node)
+            prev_node = _add_node_to_graph(graph, item, prev_node, retry_policy=retry_policy)
 
     # Final edge to END
     if prev_node:
@@ -90,6 +94,7 @@ def _add_subgraph(
     sub: Construct,
     prev_node: str | None,
     checkpointer: Any = None,
+    retry_policy: Any = None,
 ) -> str:
     """Compile a sub-Construct as an isolated subgraph node, with modifier support."""
     if sub.input is None:
@@ -100,7 +105,7 @@ def _add_subgraph(
     sub_log.info("subgraph_compile", input=sub.input.__name__, output=sub.output.__name__)
 
     # Compile the sub-construct into its own graph (recursive, thread checkpointer)
-    sub_graph = compile(sub, checkpointer=checkpointer)
+    sub_graph = compile(sub, checkpointer=checkpointer, retry_policy=retry_policy)
     field_name = sub.name.replace("-", "_")
 
     # Build the subgraph node function via factory
@@ -141,8 +146,13 @@ def _add_node_to_graph(
     graph: StateGraph,
     node: Node,
     prev_node: str | None,
+    retry_policy: Any = None,
 ) -> str:
     """Add a single node (with its modifiers) to the graph. Returns the last node name."""
+
+    # Retry applies to LLM-calling nodes only (think/agent/act).
+    # Scripted nodes are deterministic — retrying won't help.
+    rp = retry_policy if node.mode in ("think", "agent", "act") else None
 
     oracle = node.get_modifier(Oracle)
     each = node.get_modifier(Each)
@@ -150,14 +160,14 @@ def _add_node_to_graph(
 
     # ── Oracle: expand to fan-out + merge ──
     if oracle:
-        last_name = _add_oracle_nodes(graph, node, oracle, prev_node)
+        last_name = _add_oracle_nodes(graph, node, oracle, prev_node, retry_policy=rp)
         if operator:
             last_name = _add_operator_check(graph, last_name, operator)
         return last_name
 
     # ── Each: expand to fan-out + barrier ──
     if each:
-        last_name = _add_each_nodes(graph, node, each, prev_node)
+        last_name = _add_each_nodes(graph, node, each, prev_node, retry_policy=rp)
         if operator:
             last_name = _add_operator_check(graph, last_name, operator)
         return last_name
@@ -165,7 +175,7 @@ def _add_node_to_graph(
     # ── Simple node ──
     node_name = node.name
     node_fn = make_node_fn(node)
-    graph.add_node(node_name, node_fn)
+    graph.add_node(node_name, node_fn, retry_policy=rp)
 
     if prev_node:
         graph.add_edge(prev_node, node_name)
@@ -186,6 +196,7 @@ def _add_oracle_nodes(
     node: Node,
     oracle: Oracle,
     prev_node: str | None,
+    retry_policy: Any = None,
 ) -> str:
     """Expand Oracle modifier into fan-out generators + merge barrier."""
     field_name = node.name.replace("-", "_")
@@ -195,7 +206,7 @@ def _add_oracle_nodes(
     redirect_fn = make_oracle_redirect_fn(raw_fn, field_name, collector_field)
     merge_fn = make_oracle_merge_fn(oracle, field_name, collector_field, node.outputs)
 
-    return _wire_oracle(graph, node.name, redirect_fn, merge_fn, oracle, prev_node)
+    return _wire_oracle(graph, node.name, redirect_fn, merge_fn, oracle, prev_node, retry_policy=retry_policy)
 
 
 def _add_each_nodes(
@@ -203,10 +214,11 @@ def _add_each_nodes(
     node: Node,
     each: Each,
     prev_node: str | None,
+    retry_policy: Any = None,
 ) -> str:
     """Expand Each modifier into fan-out dispatch + barrier."""
     node_fn = make_node_fn(node)
-    return _wire_each(graph, node.name, node_fn, each, prev_node)
+    return _wire_each(graph, node.name, node_fn, each, prev_node, retry_policy=retry_policy)
 
 
 # ── Shared topology wiring ──────────────────────────────────────────────
@@ -219,6 +231,7 @@ def _wire_oracle(
     merge_fn: Any,
     oracle: Oracle,
     prev_node: str | None,
+    retry_policy: Any = None,
 ) -> str:
     """Shared Oracle wiring used by both Node and Construct paths.
 
@@ -226,8 +239,8 @@ def _wire_oracle(
     """
     merge_name = f"merge_{gen_name}"
 
-    # Generator node (called N times via Send)
-    graph.add_node(gen_name, gen_fn)
+    # Generator node (called N times via Send) — retryable
+    graph.add_node(gen_name, gen_fn, retry_policy=retry_policy)
 
     # Router that dispatches N generators
     def oracle_router(state: Any) -> list:
@@ -258,6 +271,7 @@ def _wire_each(
     fan_fn: Any,
     each: Each,
     prev_node: str | None,
+    retry_policy: Any = None,
 ) -> str:
     """Shared Each wiring used by both Node and Construct paths.
 
@@ -266,7 +280,7 @@ def _wire_each(
     """
     barrier_name = f"assemble_{fan_name}"
 
-    graph.add_node(fan_name, fan_fn)
+    graph.add_node(fan_name, fan_fn, retry_policy=retry_policy)
 
     # Router that iterates over the collection
     root, segments = split_each_path(each.over)
