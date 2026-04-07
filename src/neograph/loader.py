@@ -173,13 +173,12 @@ def _build_sub_construct(
     input_type = lookup_type(construct_spec["input"])
     output_type = lookup_type(construct_spec["output"])
 
-    # Collect nodes for this sub-construct. Clear the defaulted inputs
-    # (set to outputs by _build_node) — inside a sub-construct the
-    # Construct validator handles input wiring, and the default would
-    # cause false type mismatches (e.g. review outputs ReviewResult but
-    # consumes Draft from the input port).
+    # Collect nodes for this sub-construct. Wire inputs so that each node
+    # can see the input port AND all preceding peer nodes via dict-form inputs.
+    # First node: inputs from sub-construct input port (neo_subgraph_input).
+    # Subsequent nodes: inputs from input port + all preceding peer outputs.
     nodes: list[Node] = []
-    for ref in construct_spec["nodes"]:
+    for i, ref in enumerate(construct_spec["nodes"]):
         field_ref = ref.replace("-", "_")
         if field_ref not in all_nodes:
             msg = (
@@ -188,11 +187,18 @@ def _build_sub_construct(
             )
             raise ConfigurationError(msg)
         node = all_nodes[field_ref]
-        # For sub-construct nodes without explicit inputs: set inputs to
-        # the sub-construct's input type so _extract_input can resolve
-        # from neo_subgraph_input or from peer nodes by type scanning.
         if field_ref not in (explicit_inputs or set()):
-            node.inputs = input_type
+            if i == 0:
+                # First node: reads from sub-construct input port
+                node.inputs = input_type
+            else:
+                # Subsequent nodes: dict-form inputs from input port + peers
+                inputs_dict: dict[str, Any] = {"neo_subgraph_input": input_type}
+                for prev_ref in construct_spec["nodes"][:i]:
+                    prev_field = prev_ref.replace("-", "_")
+                    prev_node = all_nodes[prev_field]
+                    inputs_dict[prev_field] = prev_node.outputs
+                node.inputs = inputs_dict
         nodes.append(node)
 
     sub = Construct(
