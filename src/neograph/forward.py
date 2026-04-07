@@ -55,7 +55,7 @@ from typing import Any
 
 from neograph.construct import Construct
 from neograph.errors import ConstructError
-from neograph.modifiers import Each
+from neograph.modifiers import Each, Loop
 from neograph.node import Node
 
 __all__ = ["ForwardConstruct"]
@@ -389,6 +389,10 @@ class _Tracer:
         if self._loop_stack:
             self._loop_body_nodes[key] = self._loop_stack[-1]
 
+    def record_construct(self, construct: Construct) -> None:
+        """Record a sub-construct (e.g., from self.loop()) in the node list."""
+        self._ordered.append(construct)
+
     def record_iteration(self, proxy: _Proxy) -> iter:
         """Record a for-loop iteration over a proxy attribute.
 
@@ -486,6 +490,78 @@ class _NodeCall:
         )
 
 
+class _LoopCall:
+    """Returned by _ForwardSelf.loop(). When called with a proxy, builds a
+    sub-construct with Loop modifier and records it in the tracer.
+
+    Usage in forward()::
+
+        d = self.loop(
+            body=[self.review, self.revise],
+            when=lambda r: r.score < 0.8,
+            max_iterations=5,
+        )(d)
+    """
+
+    _loop_counter = 0
+
+    def __init__(
+        self,
+        body: list[_NodeCall],
+        when: Any,
+        max_iterations: int,
+        on_exhaust: str,
+        tracer: _Tracer,
+    ) -> None:
+        self._body = body
+        self._when = when
+        self._max_iterations = max_iterations
+        self._on_exhaust = on_exhaust
+        self._tracer = tracer
+
+    def __call__(self, input_proxy: _Proxy) -> _Proxy:
+        # Extract Node objects from _NodeCall body list
+        body_nodes = [nc._node for nc in self._body]
+
+        if not body_nodes:
+            raise ConstructError("self.loop() body must contain at least one node.")
+
+        # Infer input/output types from the proxy source and last body node
+        source_node = input_proxy._neo_source
+        input_type = source_node.outputs if source_node else None
+        output_type = body_nodes[-1].outputs
+
+        if input_type is None:
+            raise ConstructError(
+                "self.loop() input type could not be inferred. "
+                "Call self.loop()(proxy) where proxy is a node output."
+            )
+
+        # Build sub-construct with Loop modifier
+        _LoopCall._loop_counter += 1
+        name = f"loop-body-{_LoopCall._loop_counter}"
+
+        sub = Construct(
+            name=name,
+            input=input_type,
+            output=output_type,
+            nodes=list(body_nodes),
+        ) | Loop(
+            when=self._when,
+            max_iterations=self._max_iterations,
+            on_exhaust=self._on_exhaust,
+        )
+
+        # Record the sub-construct in the tracer (it appears in the node list)
+        self._tracer.record_construct(sub)
+
+        return _Proxy(
+            source_node=None,
+            name=f"out_of_{name}",
+            tracer=self._tracer,
+        )
+
+
 class _ForwardSelf:
     """Replacement self used during tracing.
 
@@ -515,6 +591,29 @@ class _ForwardSelf:
     def __setattr__(self, name: str, value: Any) -> None:
         real: ForwardConstruct = object.__getattribute__(self, "_neo_real")
         setattr(real, name, value)
+
+    def loop(
+        self,
+        body: list,
+        when: Any,
+        max_iterations: int = 10,
+        on_exhaust: str = "error",
+    ) -> _LoopCall:
+        """Define a loop body with explicit nodes and exit condition.
+
+        Returns a callable that, when called with a proxy, builds a
+        sub-construct with Loop modifier.
+
+        Usage::
+
+            d = self.loop(
+                body=[self.review, self.revise],
+                when=lambda r: r.score < 0.8,
+                max_iterations=5,
+            )(d)
+        """
+        tracer: _Tracer = object.__getattribute__(self, "_neo_tracer")
+        return _LoopCall(body, when, max_iterations, on_exhaust, tracer)
 
 
 def _run_trace(
