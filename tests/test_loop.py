@@ -75,17 +75,19 @@ class TestSelfLoop:
 
     def test_self_loop_exits_when_condition_met(self):
         """Node loops 3 times, score reaches threshold, exits."""
-        from neograph import Loop  # noqa: F811 — not yet implemented
-
         call_count = [0]
 
-        @node(outputs=Draft)
-        def refine(draft: Draft) -> Draft:
+        @node(
+            outputs=Draft,
+            loop_when=lambda state: state.refine.score < 0.8 if hasattr(state, 'refine') and state.refine else True,
+            max_iterations=10,
+        )
+        def refine(seed: Draft) -> Draft:
             call_count[0] += 1
-            new_score = draft.score + 0.3
+            new_score = seed.score + 0.3
             return Draft(
                 content=f"v{call_count[0]}",
-                iteration=draft.iteration + 1,
+                iteration=seed.iteration + 1,
                 score=new_score,
             )
 
@@ -93,13 +95,7 @@ class TestSelfLoop:
         def seed() -> Draft:
             return Draft(content="v0", iteration=0, score=0.0)
 
-        # refine loops while score < 0.8
-        looped_refine = refine | Loop(
-            when=lambda draft: draft.score < 0.8,
-            max_iterations=10,
-        )
-
-        pipeline = construct_from_functions("self-loop", [seed, looped_refine])
+        pipeline = construct_from_functions("self-loop", [seed, refine])
         graph = compile(pipeline)
         result = run(graph, input={"node_id": "loop-1"})
 
@@ -110,23 +106,20 @@ class TestSelfLoop:
 
     def test_self_loop_respects_max_iterations(self):
         """Loop exits after max_iterations even if condition still true."""
-        from neograph import Loop
-
         @node(outputs=Draft)
         def seed() -> Draft:
             return Draft(content="v0", score=0.0)
 
-        @node(outputs=Draft)
+        @node(
+            outputs=Draft,
+            loop_when=lambda d: d.score < 0.8,
+            max_iterations=3,
+            on_exhaust="last",
+        )
         def never_good(draft: Draft) -> Draft:
             return Draft(content="still bad", iteration=draft.iteration + 1, score=0.1)
 
-        looped = never_good | Loop(
-            when=lambda d: d.score < 0.8,
-            max_iterations=3,
-            on_exhaust="last",  # return last result instead of raising
-        )
-
-        pipeline = construct_from_functions("capped", [seed, looped])
+        pipeline = construct_from_functions("capped", [seed, never_good])
         graph = compile(pipeline)
         result = run(graph, input={"node_id": "loop-cap"})
 
@@ -135,23 +128,22 @@ class TestSelfLoop:
 
     def test_self_loop_raises_on_exhaust_error(self):
         """When on_exhaust='error' (default), exceeding max_iterations raises."""
-        from neograph import Loop, ExecutionError
+        from neograph import ExecutionError
 
         @node(outputs=Draft)
         def seed() -> Draft:
             return Draft(content="v0", score=0.0)
 
-        @node(outputs=Draft)
-        def always_bad(draft: Draft) -> Draft:
-            return Draft(content="bad", iteration=draft.iteration + 1, score=0.0)
-
-        looped = always_bad | Loop(
-            when=lambda d: d.score < 0.8,
+        @node(
+            outputs=Draft,
+            loop_when=lambda d: d.score < 0.8,
             max_iterations=2,
             on_exhaust="error",
         )
+        def always_bad(draft: Draft) -> Draft:
+            return Draft(content="bad", iteration=draft.iteration + 1, score=0.0)
 
-        pipeline = construct_from_functions("error-loop", [seed, looped])
+        pipeline = construct_from_functions("error-loop", [seed, always_bad])
         graph = compile(pipeline)
 
         with pytest.raises(ExecutionError, match="max_iterations"):
@@ -169,8 +161,6 @@ class TestMultiNodeLoop:
 
     def test_review_revise_cycle_exits_when_approved(self):
         """review→revise loops until review.score >= 0.8."""
-        from neograph import Loop
-
         review_count = [0]
 
         @node(outputs=Draft)
@@ -180,11 +170,15 @@ class TestMultiNodeLoop:
         @node(outputs=ReviewResult)
         def review(draft: Draft) -> ReviewResult:
             review_count[0] += 1
-            # Score improves each review
             score = 0.3 * review_count[0]
             return ReviewResult(score=min(score, 1.0), feedback=f"iteration {review_count[0]}")
 
-        @node(outputs=Draft)
+        @node(
+            outputs=Draft,
+            loop_when=lambda state: state["review"].score < 0.8,
+            loop_to="review",
+            max_iterations=10,
+        )
         def revise(draft: Draft, review: ReviewResult) -> Draft:
             return Draft(
                 content=f"revised: {review.feedback}",
@@ -192,15 +186,8 @@ class TestMultiNodeLoop:
                 score=review.score,
             )
 
-        # revise loops back to review when score < 0.8
-        looped_revise = revise | Loop(
-            when=lambda state: state["review"].score < 0.8,
-            reenter="review",
-            max_iterations=10,
-        )
-
         pipeline = construct_from_functions(
-            "multi-loop", [draft, review, looped_revise],
+            "multi-loop", [draft, review, revise],
         )
         graph = compile(pipeline)
         result = run(graph, input={"node_id": "multi-loop"})
@@ -220,13 +207,15 @@ class TestLoopInSubConstruct:
 
     def test_sub_construct_with_internal_loop(self):
         """Sub-construct loops internally, parent sees clean I/O."""
-        from neograph import Loop
-
         @node(outputs=Draft)
         def write(topic: Draft) -> Draft:
             return Draft(content="draft", score=0.5)
 
-        @node(outputs=Draft)
+        @node(
+            outputs=Draft,
+            loop_when=lambda d: d.score < 0.8,
+            max_iterations=5,
+        )
         def improve(write: Draft) -> Draft:
             return Draft(
                 content="improved",
@@ -234,13 +223,8 @@ class TestLoopInSubConstruct:
                 score=write.score + 0.2,
             )
 
-        looped_improve = improve | Loop(
-            when=lambda d: d.score < 0.8,
-            max_iterations=5,
-        )
-
         refine_sub = construct_from_functions(
-            "refine", [write, looped_improve],
+            "refine", [write, improve],
             input=Draft, output=Draft,
         )
 
@@ -274,8 +258,6 @@ class TestEachPlusLoop:
 
     def test_per_item_loop_with_each_fanout(self):
         """Each claim loops independently until confidence >= 0.9."""
-        from neograph import Loop
-
         @node(outputs=ClaimBatch)
         def make_claims() -> ClaimBatch:
             return ClaimBatch(items=[
@@ -287,6 +269,8 @@ class TestEachPlusLoop:
             outputs=ClaimItem,
             map_over="make_claims.items",
             map_key="claim_id",
+            loop_when=lambda claim: claim.confidence < 0.9,
+            max_iterations=5,
         )
         def verify(claim: ClaimItem) -> ClaimItem:
             return ClaimItem(
@@ -295,13 +279,7 @@ class TestEachPlusLoop:
                 confidence=min(claim.confidence + 0.3, 1.0),
             )
 
-        # Each item loops independently
-        looped_verify = verify | Loop(
-            when=lambda claim: claim.confidence < 0.9,
-            max_iterations=5,
-        )
-
-        pipeline = construct_from_functions("each-loop", [make_claims, looped_verify])
+        pipeline = construct_from_functions("each-loop", [make_claims, verify])
         graph = compile(pipeline)
         result = run(graph, input={"node_id": "each-loop"})
 

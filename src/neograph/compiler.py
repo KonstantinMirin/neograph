@@ -25,7 +25,7 @@ from neograph.factory import (
     make_subgraph_fn,
 )
 from neograph.forward import _BranchNode
-from neograph.modifiers import Each, Operator, Oracle, split_each_path
+from neograph.modifiers import Each, Loop, Operator, Oracle, split_each_path
 from neograph.node import Node
 from neograph.state import compile_state_model
 
@@ -172,6 +172,14 @@ def _add_node_to_graph(
             last_name = _add_operator_check(graph, last_name, operator)
         return last_name
 
+    # ── Loop: conditional back-edge ──
+    loop = node.get_modifier(Loop)
+    if loop:
+        last_name = _add_loop_back_edge(graph, node, loop, prev_node, retry_policy=rp)
+        if operator:
+            last_name = _add_operator_check(graph, last_name, operator)
+        return last_name
+
     # ── Simple node ──
     node_name = node.name
     node_fn = make_node_fn(node)
@@ -219,6 +227,62 @@ def _add_each_nodes(
     """Expand Each modifier into fan-out dispatch + barrier."""
     node_fn = make_node_fn(node)
     return _wire_each(graph, node.name, node_fn, each, prev_node, retry_policy=retry_policy)
+
+
+def _add_loop_back_edge(
+    graph: StateGraph,
+    node: Node,
+    loop: Loop,
+    prev_node: str | None,
+    retry_policy: Any = None,
+) -> str:
+    """Wire Loop modifier: conditional back-edge with iteration tracking.
+
+    Adds the node, a loop_router conditional edge (back-edge or exit),
+    and a pass-through exit node so the compile loop can wire forward normally.
+    """
+    node_name = node.name
+    node_fn = make_node_fn(node)
+    field_name = node_name.replace('-', '_')
+    count_field = f'neo_loop_count_{field_name}'
+
+    graph.add_node(node_name, node_fn, retry_policy=retry_policy)
+
+    if prev_node:
+        graph.add_edge(prev_node, node_name)
+    else:
+        graph.add_edge(START, node_name)
+
+    # Resolve the when condition (string name or callable)
+    if isinstance(loop.when, str):
+        condition = lookup_condition(loop.when)
+    else:
+        condition = loop.when
+
+    reenter_target = loop.reenter or node_name  # self-loop default
+    exit_name = f"__loop_exit_{node_name}"
+
+    def loop_exit(state: Any) -> dict:
+        return {}  # pass-through
+
+    graph.add_node(exit_name, loop_exit)
+
+    def loop_router(state: Any) -> str:
+        count = getattr(state, count_field, 0)
+        if count >= loop.max_iterations:
+            if loop.on_exhaust == 'error':
+                raise ExecutionError(
+                    f"Loop on '{node_name}' exceeded max_iterations={loop.max_iterations}"
+                )
+            return exit_name  # on_exhaust='last' — exit with last result
+        should_continue = condition(state)
+        if should_continue:
+            return reenter_target
+        return exit_name
+
+    graph.add_conditional_edges(node_name, loop_router)
+
+    return exit_name
 
 
 # ── Shared topology wiring ──────────────────────────────────────────────

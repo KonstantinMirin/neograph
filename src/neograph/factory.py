@@ -22,7 +22,7 @@ from langchain_core.runnables import RunnableConfig
 from pydantic import BaseModel
 
 from neograph.errors import ConfigurationError
-from neograph.modifiers import Each, Oracle
+from neograph.modifiers import Each, Loop, Oracle
 from neograph.node import Node
 from neograph.tool import ToolBudgetTracker
 
@@ -194,13 +194,25 @@ def _build_state_update(
                 update[key_field] = {key_val: val}
             else:
                 update[key_field] = val
-        return update
+    else:
+        # Single-type outputs (backward compat).
+        if each_mod and each_item is not None:
+            key_val = getattr(each_item, each_mod.key, str(each_item))
+            update = {field_name: {key_val: result}}
+        else:
+            update = {field_name: result}
 
-    # Single-type outputs (backward compat).
-    if each_mod and each_item is not None:
-        key_val = getattr(each_item, each_mod.key, str(each_item))
-        return {field_name: {key_val: result}}
-    return {field_name: result}
+    # Loop modifier: increment iteration counter and optionally collect history.
+    loop_mod = node.get_modifier(Loop)
+    if loop_mod is not None:
+        count_field = f"neo_loop_count_{field_name}"
+        current_count = _state_get(state, count_field) or 0
+        update[count_field] = current_count + 1
+        if loop_mod.history:
+            history_field = f"neo_loop_history_{field_name}"
+            update[history_field] = result
+
+    return update
 
 
 def make_node_fn(node: Node) -> Callable:
