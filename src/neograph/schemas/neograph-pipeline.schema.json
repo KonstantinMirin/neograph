@@ -1,0 +1,212 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://neograph.pro/schemas/neograph-pipeline.schema.json",
+  "title": "neograph pipeline spec",
+  "description": "Declarative pipeline definition for neograph. Validated at load time, compiled to LangGraph StateGraph.",
+  "type": "object",
+  "required": ["name", "nodes", "pipeline"],
+  "additionalProperties": false,
+  "properties": {
+    "name": {
+      "type": "string",
+      "description": "Pipeline name. Used as the Construct name."
+    },
+    "description": {
+      "type": "string",
+      "description": "Human-readable description of the pipeline's purpose."
+    },
+    "nodes": {
+      "type": "array",
+      "description": "Node definitions. Each node is a processing step.",
+      "items": { "$ref": "#/$defs/NodeSpec" },
+      "minItems": 1
+    },
+    "constructs": {
+      "type": "array",
+      "description": "Sub-construct definitions. Groups of nodes with isolated state.",
+      "items": { "$ref": "#/$defs/ConstructSpec" }
+    },
+    "pipeline": {
+      "$ref": "#/$defs/PipelineSpec"
+    }
+  },
+  "$defs": {
+    "NodeSpec": {
+      "type": "object",
+      "required": ["name", "outputs"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Node name. Must be unique within the pipeline."
+        },
+        "mode": {
+          "type": "string",
+          "enum": ["scripted", "think", "agent", "act", "raw"],
+          "default": "scripted",
+          "description": "Execution mode. 'think' = single LLM call, 'agent' = ReAct tool loop (read-only), 'act' = ReAct with mutations, 'scripted' = deterministic function."
+        },
+        "model": {
+          "type": "string",
+          "description": "Model tier name (resolved from project surface). Required for think/agent/act modes."
+        },
+        "prompt": {
+          "type": "string",
+          "description": "Prompt template. Inline text with ${node.field} substitution, or a registered template name."
+        },
+        "outputs": {
+          "type": "string",
+          "description": "Output type name (resolved from project surface type registry)."
+        },
+        "inputs": {
+          "type": "object",
+          "description": "Explicit input spec: {upstream_name: type_name}. Usually inferred from pipeline wiring.",
+          "additionalProperties": { "type": "string" }
+        },
+        "tools": {
+          "type": "array",
+          "description": "Tool names (resolved from project surface). For agent/act modes.",
+          "items": { "type": "string" }
+        },
+        "scripted_fn": {
+          "type": "string",
+          "description": "Registered scripted function name. For scripted mode."
+        },
+        "oracle": { "$ref": "#/$defs/OracleSpec" },
+        "each": { "$ref": "#/$defs/EachSpec" },
+        "loop": { "$ref": "#/$defs/LoopSpec" },
+        "operator": { "$ref": "#/$defs/OperatorSpec" },
+        "context": {
+          "type": "array",
+          "description": "State field names injected verbatim into the prompt.",
+          "items": { "type": "string" }
+        },
+        "llm_config": {
+          "type": "object",
+          "description": "Per-node LLM settings (temperature, max_tokens, etc.).",
+          "additionalProperties": true
+        }
+      }
+    },
+    "ConstructSpec": {
+      "type": "object",
+      "required": ["name", "input", "output", "nodes"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Sub-construct name."
+        },
+        "input": {
+          "type": "string",
+          "description": "Input type name (boundary port)."
+        },
+        "output": {
+          "type": "string",
+          "description": "Output type name (boundary port)."
+        },
+        "nodes": {
+          "type": "array",
+          "description": "Node names (references to nodes defined in the top-level nodes array).",
+          "items": { "type": "string" },
+          "minItems": 1
+        },
+        "oracle": { "$ref": "#/$defs/OracleSpec" },
+        "each": { "$ref": "#/$defs/EachSpec" },
+        "loop": { "$ref": "#/$defs/LoopSpec" },
+        "operator": { "$ref": "#/$defs/OperatorSpec" }
+      }
+    },
+    "PipelineSpec": {
+      "type": "object",
+      "required": ["nodes"],
+      "additionalProperties": false,
+      "properties": {
+        "nodes": {
+          "type": "array",
+          "description": "Ordered list of node/construct names forming the pipeline.",
+          "items": { "type": "string" },
+          "minItems": 1
+        }
+      }
+    },
+    "OracleSpec": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "n": {
+          "type": "integer",
+          "minimum": 2,
+          "description": "Number of parallel generators. Inferred from len(models) if models is set."
+        },
+        "models": {
+          "type": "array",
+          "description": "Model tiers for multi-model ensemble. Round-robin assignment.",
+          "items": { "type": "string" },
+          "minItems": 1
+        },
+        "merge_fn": {
+          "type": "string",
+          "description": "Registered scripted merge function name."
+        },
+        "merge_prompt": {
+          "type": "string",
+          "description": "LLM merge prompt template."
+        },
+        "merge_model": {
+          "type": "string",
+          "description": "Model tier for LLM merge. Default: 'reason'."
+        }
+      }
+    },
+    "EachSpec": {
+      "type": "object",
+      "required": ["over", "key"],
+      "additionalProperties": false,
+      "properties": {
+        "over": {
+          "type": "string",
+          "description": "Dotted path to the collection in state (e.g. 'claims.items')."
+        },
+        "key": {
+          "type": "string",
+          "description": "Field on each item used as the dispatch key."
+        }
+      }
+    },
+    "LoopSpec": {
+      "type": "object",
+      "required": ["when"],
+      "additionalProperties": false,
+      "properties": {
+        "when": {
+          "type": "string",
+          "description": "Condition expression. Evaluated against the node's output. True = continue looping."
+        },
+        "max_iterations": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 10,
+          "description": "Maximum loop iterations."
+        },
+        "on_exhaust": {
+          "type": "string",
+          "enum": ["error", "last"],
+          "default": "error",
+          "description": "'error' raises ExecutionError, 'last' returns the last result."
+        }
+      }
+    },
+    "OperatorSpec": {
+      "type": "object",
+      "required": ["when"],
+      "additionalProperties": false,
+      "properties": {
+        "when": {
+          "type": "string",
+          "description": "Registered condition name. When truthy, interrupt for human review."
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,118 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://neograph.pro/schemas/project.neograph.schema.json",
+  "title": "neograph project surface",
+  "description": "Project-level inventory of types, tools, and models that pipeline specs reference by name.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "types": {
+      "type": "object",
+      "description": "Named type definitions. Each value is a JSON Schema object that maps to a Pydantic model (Python) or Zod schema (TypeScript).",
+      "additionalProperties": {
+        "$ref": "#/$defs/TypeDef"
+      }
+    },
+    "tools": {
+      "type": "object",
+      "description": "Named tool definitions. Tool implementations are language-specific; the spec defines the interface.",
+      "additionalProperties": {
+        "$ref": "#/$defs/ToolDef"
+      }
+    },
+    "models": {
+      "type": "object",
+      "description": "Named model configurations. Pipeline nodes reference these by name.",
+      "additionalProperties": {
+        "$ref": "#/$defs/ModelDef"
+      }
+    }
+  },
+  "$defs": {
+    "TypeDef": {
+      "type": "object",
+      "required": ["properties"],
+      "properties": {
+        "description": {
+          "type": "string",
+          "description": "Human-readable type description."
+        },
+        "properties": {
+          "type": "object",
+          "description": "Field definitions. Each value is a JSON Schema type definition.",
+          "additionalProperties": {
+            "$ref": "#/$defs/FieldDef"
+          },
+          "minProperties": 1
+        },
+        "required": {
+          "type": "array",
+          "description": "Required field names.",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "FieldDef": {
+      "type": "object",
+      "description": "A field's type definition (JSON Schema subset).",
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["string", "number", "integer", "boolean", "array", "object"],
+          "description": "JSON Schema type."
+        },
+        "description": {
+          "type": "string"
+        },
+        "items": {
+          "description": "For array fields: the item type.",
+          "oneOf": [
+            { "$ref": "#/$defs/FieldDef" },
+            { "type": "object", "properties": { "$ref": { "type": "string" } } }
+          ]
+        },
+        "default": {
+          "description": "Default value for this field."
+        },
+        "$ref": {
+          "type": "string",
+          "description": "Reference to another named type (e.g. '#/types/Finding')."
+        }
+      }
+    },
+    "ToolDef": {
+      "type": "object",
+      "required": ["description"],
+      "properties": {
+        "description": {
+          "type": "string",
+          "description": "What this tool does. Shown to the LLM."
+        },
+        "params": {
+          "type": "object",
+          "description": "Tool parameter schema (JSON Schema object).",
+          "additionalProperties": true
+        }
+      }
+    },
+    "ModelDef": {
+      "type": "object",
+      "required": ["provider", "model"],
+      "properties": {
+        "provider": {
+          "type": "string",
+          "description": "LLM provider (e.g. 'openrouter', 'openai', 'anthropic')."
+        },
+        "model": {
+          "type": "string",
+          "description": "Model identifier (e.g. 'anthropic/claude-sonnet-4-20250514')."
+        },
+        "config": {
+          "type": "object",
+          "description": "Provider-specific config (temperature, max_tokens, etc.).",
+          "additionalProperties": true
+        }
+      }
+    }
+  }
+}
