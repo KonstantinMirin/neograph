@@ -13,6 +13,7 @@ Structlog captures the framework-level view regardless.
 from __future__ import annotations
 
 import inspect
+import re
 import time
 from typing import Any, Callable
 
@@ -129,6 +130,48 @@ def _get_llm(tier: str, node_name: str = "", llm_config: dict | None = None) -> 
     return _llm_factory(tier, **kwargs)
 
 
+def _is_inline_prompt(template: str) -> bool:
+    """Detect whether a prompt template is inline text vs a file reference.
+
+    Inline text contains a space character or a ``${`` substitution marker.
+    Everything else (e.g. ``"rw/summarize"``) is treated as a file reference
+    and delegated to the consumer-provided prompt compiler.
+    """
+    return " " in template or "${" in template
+
+
+_VAR_RE = re.compile(r"\$\{([^}]+)\}")
+
+
+def _resolve_var(path: str, input_data: Any) -> str:
+    """Resolve a single ``${path}`` variable against *input_data*.
+
+    *path* may be a plain name (``claim``) or dotted (``claim.text``).
+
+    When *input_data* is a dict the first segment is looked up as a key;
+    when it is a single value (non-dict) the whole value is used as the root,
+    and subsequent segments are resolved via ``getattr``.
+    """
+    parts = path.split(".")
+
+    if isinstance(input_data, dict):
+        root = input_data.get(parts[0], "")
+        rest = parts[1:]
+    else:
+        root = input_data
+        rest = parts[1:]
+
+    obj = root
+    for attr in rest:
+        obj = getattr(obj, attr, "")
+    return str(obj)
+
+
+def _substitute_vars(template: str, input_data: Any) -> str:
+    """Replace all ``${...}`` placeholders in *template*."""
+    return _VAR_RE.sub(lambda m: _resolve_var(m.group(1), input_data), template)
+
+
 def _compile_prompt(
     template: str,
     input_data: Any,
@@ -140,6 +183,11 @@ def _compile_prompt(
     output_schema: str | None = None,
     context: dict[str, Any] | None = None,
 ) -> list:
+    # Inline prompt — resolve ${} variables and return directly
+    if _is_inline_prompt(template):
+        rendered = _substitute_vars(template, input_data)
+        return [{"role": "user", "content": rendered}]
+
     all_kwargs = {
         "node_name": node_name,
         "config": config,
