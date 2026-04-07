@@ -105,10 +105,11 @@ def compile_state_model(construct: Construct) -> type[BaseModel]:
         else:
             fields[field_name] = (sub.output | None, None)
 
-    # Oracle support: generator ID passed via state
+    # Oracle support: generator ID + optional model override passed via state
     all_items = nodes_only + sub_constructs
     if any(item.has_modifier(Oracle) for item in all_items):
         fields["neo_oracle_gen_id"] = (str | None, None)
+        fields["neo_oracle_model"] = (str | None, None)
 
     # Each support: current item passed via state
     if any(item.has_modifier(Each) for item in all_items):

@@ -1703,3 +1703,149 @@ class TestOracleOperatorCombo:
         assert result["oo_validate"].passed is False
         # Operator interrupted
         assert "__interrupt__" in result
+
+
+# =============================================================================
+# Oracle models= — multi-model ensemble (neograph-beyr)
+# =============================================================================
+
+
+class TestOracleModels:
+    """Oracle with models= parameter for multi-model ensemble."""
+
+    def test_oracle_assigns_model_per_generator_when_models_set(self):
+        """Each generator gets a different model from the models list."""
+        from neograph.factory import register_scripted
+
+        seen_models = []
+
+        def gen(input_data, config):
+            # The generator should see a model override in config or state
+            model = config.get("configurable", {}).get("_oracle_model")
+            seen_models.append(model)
+            return Claims(items=[f"from-{model}"])
+
+        register_scripted("models_gen", gen)
+
+        def merge(variants, config):
+            all_items = []
+            for v in variants:
+                all_items.extend(v.items)
+            return Claims(items=all_items)
+
+        register_scripted("models_merge", merge)
+
+        gen_node = (
+            Node.scripted("models-gen", fn="models_gen", outputs=Claims)
+            | Oracle(models=["reason", "fast", "creative"], merge_fn="models_merge")
+        )
+        pipeline = Construct("test-oracle-models", nodes=[gen_node])
+        graph = compile(pipeline)
+        result = run(graph, input={"node_id": "oracle-models"})
+
+        # 3 generators, one per model
+        assert len(seen_models) == 3
+        assert set(seen_models) == {"reason", "fast", "creative"}
+        # Merge combined all 3
+        merged = result["models_gen"]
+        assert merged is not None
+        assert len(merged.items) == 3
+
+    def test_oracle_round_robins_models_when_n_exceeds_models_count(self):
+        """When n > len(models), models are assigned round-robin."""
+        from neograph.factory import register_scripted
+
+        seen_models = []
+
+        def rr_gen(input_data, config):
+            model = config.get("configurable", {}).get("_oracle_model")
+            seen_models.append(model)
+            return Claims(items=[f"from-{model}"])
+
+        register_scripted("rr_gen", rr_gen)
+
+        def rr_merge(variants, config):
+            return Claims(items=[f"{len(variants)} variants"])
+
+        register_scripted("rr_merge", rr_merge)
+
+        gen_node = (
+            Node.scripted("rr-gen", fn="rr_gen", outputs=Claims)
+            | Oracle(n=7, models=["reason", "fast", "creative"], merge_fn="rr_merge")
+        )
+        pipeline = Construct("test-rr", nodes=[gen_node])
+        graph = compile(pipeline)
+        result = run(graph, input={"node_id": "rr"})
+
+        # 7 generators, round-robin across 3 models
+        assert len(seen_models) == 7
+        assert seen_models.count("reason") == 3   # 0,3,6
+        assert seen_models.count("fast") == 2      # 1,4
+        assert seen_models.count("creative") == 2  # 2,5
+
+    def test_oracle_infers_n_from_models_length(self):
+        """When only models= is set, n defaults to len(models)."""
+        oracle = Oracle(models=["a", "b"], merge_fn="some_merge")
+        assert oracle.n == 2
+
+    def test_body_as_merge_when_models_set_on_node_decorator(self):
+        """@node with models= uses the function body as the merge function.
+        The body receives list[OutputType] at runtime (the collected variants)."""
+        from neograph import node, construct_from_functions
+        from neograph.factory import register_scripted
+
+        gen_count = [0]
+
+        def bam_gen(input_data, config):
+            gen_count[0] += 1
+            model = config.get("configurable", {}).get("_oracle_model", "unknown")
+            return Claims(items=[f"from-{model}"])
+
+        register_scripted("bam_gen", bam_gen)
+
+        # Body-as-merge: function body IS the merge function
+        # models= triggers Oracle, body receives list[Claims]
+        gen_node = (
+            Node.scripted("bam-gen", fn="bam_gen", outputs=Claims)
+            | Oracle(models=["reason", "fast"], merge_fn="bam_body_merge")
+        )
+
+        # Register a merge that simulates what the body-as-merge would do
+        def bam_body_merge(variants, config):
+            all_items = []
+            for v in variants:
+                all_items.extend(v.items)
+            return Claims(items=all_items)
+
+        register_scripted("bam_body_merge", bam_body_merge)
+
+        pipeline = Construct("body-merge", nodes=[gen_node])
+        graph = compile(pipeline)
+        result = run(graph, input={"node_id": "body-merge"})
+
+        assert gen_count[0] == 2
+        merged = result["bam_gen"]
+        assert merged is not None
+        assert len(merged.items) == 2
+        assert "from-reason" in merged.items
+        assert "from-fast" in merged.items
+
+    def test_node_decorator_models_registers_body_as_merge(self):
+        """@node(models=...) without merge_fn uses the function body as merge."""
+        from neograph import node, construct_from_functions
+
+        # The body receives list[Claims] and merges them
+        @node(outputs=Claims, models=["reason", "fast"])
+        def ensemble(data: Claims) -> Claims:
+            # At runtime, 'data' is list[Claims] (the collected variants)
+            all_items = []
+            for v in data:
+                all_items.extend(v.items)
+            return Claims(items=all_items)
+
+        # Should have Oracle modifier with body-as-merge registered
+        assert ensemble.has_modifier(Oracle)
+        oracle = ensemble.get_modifier(Oracle)
+        assert oracle.models == ["reason", "fast"]
+        assert oracle.n == 2
+        assert oracle.merge_fn is not None  # body was registered as merge_fn

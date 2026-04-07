@@ -187,14 +187,18 @@ class Oracle(Modifier):
     Exactly one of merge_prompt or merge_fn must be provided.
 
     Usage:
-        # LLM merge:
-        node | Oracle(n=3, merge_prompt="rw/decompose-merge")
-
-        # Scripted merge:
+        # Same model, N copies:
         node | Oracle(n=3, merge_fn="combine_variants")
+
+        # Multi-model ensemble (one per model):
+        node | Oracle(models=["reason", "fast", "creative"], merge_fn="pick_best")
+
+        # Multi-model with redundancy (round-robin):
+        node | Oracle(n=9, models=["reason", "fast", "creative"], merge_fn="pick_best")
     """
 
     n: int = 3
+    models: list[str] | None = None  # per-generator model tiers (round-robin)
     merge_prompt: str | None = None
     merge_model: str = "reason"
     merge_fn: str | None = None  # registered scripted function name
@@ -206,6 +210,10 @@ class Oracle(Modifier):
         if self.merge_prompt and self.merge_fn:
             msg = "Oracle accepts merge_prompt or merge_fn, not both."
             raise ConfigurationError(msg)
+        # Infer n from models length when n wasn't explicitly set
+        if self.models is not None and len(self.models) > 0:
+            if 'n' not in self.model_fields_set:
+                object.__setattr__(self, 'n', len(self.models))
 
 
 class Each(Modifier):

@@ -362,6 +362,7 @@ def node(
     map_over: str | None = None,
     map_key: str | None = None,
     ensemble_n: int | None = None,
+    models: list[str] | None = None,
     merge_fn: str | None = None,
     merge_prompt: str | None = None,
     interrupt_when: str | Callable | None = None,
@@ -639,23 +640,51 @@ def node(
             _register_param_resolutions(n, param_res)
 
         # -- Oracle ensemble when any ensemble kwarg is set --------------------
-        if ensemble_n is not None or merge_fn is not None or merge_prompt is not None:
-            if merge_fn is None and merge_prompt is None:
+        has_oracle_kwarg = (
+            ensemble_n is not None or models is not None
+            or merge_fn is not None or merge_prompt is not None
+        )
+        if has_oracle_kwarg:
+            # Body-as-merge: when models= is set without merge_fn/merge_prompt,
+            # the function body IS the merge function.
+            effective_merge_fn = merge_fn
+            effective_merge_prompt = merge_prompt
+            if models is not None and merge_fn is None and merge_prompt is None:
+                # Register the function body as a scripted merge_fn
+                body_merge_name = f"_body_merge_{node_label}_{id(f):x}"
+                from neograph.factory import register_scripted as _reg_scripted
+
+                def _make_body_merge(user_fn: Callable) -> Callable:
+                    def body_merge(variants: list, config: Any) -> Any:
+                        return user_fn(variants)
+                    return body_merge
+
+                _reg_scripted(body_merge_name, _make_body_merge(f))
+                effective_merge_fn = body_merge_name
+
+            if effective_merge_fn is None and effective_merge_prompt is None:
                 raise ConstructError(
                     f"@node '{node_label}' sets ensemble_n={ensemble_n} but "
                     f"neither merge_fn nor merge_prompt. One is required."
                 )
-            if merge_fn is not None and merge_prompt is not None:
+            if effective_merge_fn is not None and effective_merge_prompt is not None:
                 raise ConstructError(
                     f"@node '{node_label}' sets both merge_fn and merge_prompt. "
                     f"Choose exactly one."
                 )
-            n_copies = ensemble_n if ensemble_n is not None else 3
-            if n_copies < 2:
-                raise ConstructError(
-                    f"@node '{node_label}' ensemble_n must be >= 2, got {n_copies}."
-                )
-            n = n | Oracle(n=n_copies, merge_fn=merge_fn, merge_prompt=merge_prompt)
+            oracle_kwargs: dict[str, Any] = {
+                "merge_fn": effective_merge_fn,
+                "merge_prompt": effective_merge_prompt,
+            }
+            if models is not None:
+                oracle_kwargs["models"] = models
+            if ensemble_n is not None:
+                oracle_kwargs["n"] = ensemble_n
+                if ensemble_n < 2:
+                    raise ConstructError(
+                        f"@node '{node_label}' ensemble_n must be >= 2, got {ensemble_n}."
+                    )
+            n = n | Oracle(**oracle_kwargs)
             _register_sidecar(n, f, param_names)
             if param_res:
                 _register_param_resolutions(n, param_res)

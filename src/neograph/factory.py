@@ -275,11 +275,15 @@ def _make_scripted_wrapper(node: Node) -> Callable:
 
         t0 = time.monotonic()
 
-        # Inject oracle generator ID into config if present in state
+        # Inject oracle generator ID + model override into config if present
         oracle_gen_id = _state_get(state, "neo_oracle_gen_id")
         if oracle_gen_id is not None:
             configurable = config.get("configurable", {})
-            config = {**config, "configurable": {**configurable, "_generator_id": oracle_gen_id}}
+            extra = {"_generator_id": oracle_gen_id}
+            oracle_model = _state_get(state, "neo_oracle_model")
+            if oracle_model is not None:
+                extra["_oracle_model"] = oracle_model
+            config = {**config, "configurable": {**configurable, **extra}}
 
         # Extract input from state if specified
         input_data = _extract_input(state, node)
@@ -323,8 +327,11 @@ def _make_produce_fn(node: Node) -> Callable:
                 for name in node.context
             }
 
+        # Oracle model override: per-generator model tier from config
+        effective_model = config.get("configurable", {}).get("_oracle_model", node.model)
+
         result = invoke_structured(
-            model_tier=node.model,
+            model_tier=effective_model,
             prompt_template=node.prompt,
             input_data=input_data,
             output_model=output_model,
@@ -388,8 +395,11 @@ def _make_tool_fn(node: Node) -> Callable:
                 for name in node.context
             }
 
+        # Oracle model override: per-generator model tier from config
+        effective_model = config.get("configurable", {}).get("_oracle_model", node.model)
+
         result, tool_interactions = invoke_with_tools(
-            model_tier=node.model,
+            model_tier=effective_model,
             prompt_template=node.prompt,
             input_data=input_data,
             output_model=output_model,

@@ -380,15 +380,24 @@ def _wire_oracle(
     graph.add_node(gen_name, gen_fn, retry_policy=retry_policy)
 
     # Router that dispatches N generators
+    models = oracle.models
+
     def oracle_router(state: Any) -> list:
         state_dict = {
             k: getattr(state, k)
             for k in state.__class__.model_fields
         }
-        return [
-            Send(gen_name, {**state_dict, "neo_oracle_gen_id": f"gen-{i}"})
-            for i in range(oracle.n)
-        ]
+        sends = []
+        for i in range(oracle.n):
+            send_state = {**state_dict, "neo_oracle_gen_id": f"gen-{i}"}
+            if models:
+                send_state["neo_oracle_model"] = models[i % len(models)]
+            sends.append(Send(gen_name, send_state))
+        if models and oracle.n % len(models) != 0:
+            log.info("oracle_uneven_distribution",
+                     node=gen_name, n=oracle.n, models=models,
+                     msg=f"Uneven distribution: {oracle.n} generators across {len(models)} models")
+        return sends
 
     if prev_node:
         graph.add_conditional_edges(prev_node, oracle_router)
