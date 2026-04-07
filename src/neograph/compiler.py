@@ -126,6 +126,14 @@ def _add_subgraph(
         each_fn = make_each_redirect_fn(subgraph_fn, field_name, each)
         return _wire_each(graph, sub.name, each_fn, each, prev_node)
 
+    # ── Loop on Construct: conditional back-edge ──
+    loop = sub.get_modifier(Loop)
+    if loop:
+        last_name = _add_subgraph_loop(graph, sub, subgraph_fn, loop, prev_node)
+        if operator:
+            last_name = _add_operator_check(graph, last_name, operator)
+        return last_name
+
     # Plain subgraph — no modifiers (or Operator handled after)
     graph.add_node(sub.name, subgraph_fn)
 
@@ -289,6 +297,63 @@ def _add_loop_back_edge(
         return exit_name
 
     graph.add_conditional_edges(node_name, loop_router)
+
+    return exit_name
+
+
+def _add_subgraph_loop(
+    graph: StateGraph,
+    sub: Construct,
+    subgraph_fn: Any,
+    loop: Loop,
+    prev_node: str | None,
+) -> str:
+    """Wire Loop modifier on a sub-construct: conditional back-edge.
+
+    Same pattern as _add_loop_back_edge but for sub-constructs.
+    The subgraph_fn runs the sub-construct; the loop_router checks
+    the condition on the latest output and decides to re-enter or exit.
+    """
+    field_name = sub.name.replace('-', '_')
+    count_field = f'neo_loop_count_{field_name}'
+
+    graph.add_node(sub.name, subgraph_fn)
+
+    if prev_node:
+        graph.add_edge(prev_node, sub.name)
+    else:
+        graph.add_edge(START, sub.name)
+
+    # Resolve condition
+    if isinstance(loop.when, str):
+        condition = lookup_condition(loop.when)
+    else:
+        condition = loop.when
+
+    exit_name = f"__loop_exit_{sub.name}"
+
+    def loop_exit(state: Any) -> dict:
+        return {}
+
+    graph.add_node(exit_name, loop_exit)
+
+    def loop_router(state: Any) -> str:
+        count = getattr(state, count_field, 0)
+        if count >= loop.max_iterations:
+            if loop.on_exhaust == 'error':
+                raise ExecutionError(
+                    f"Loop on '{sub.name}' exceeded max_iterations={loop.max_iterations}"
+                )
+            return exit_name
+        val = getattr(state, field_name, None)
+        if isinstance(val, list) and val:
+            val = val[-1]
+        should_continue = condition(val)
+        if should_continue:
+            return sub.name
+        return exit_name
+
+    graph.add_conditional_edges(sub.name, loop_router)
 
     return exit_name
 

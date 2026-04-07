@@ -160,11 +160,13 @@ class TestSelfLoop:
 
 
 class TestMultiNodeLoop:
-    """Two nodes form the loop body. review scores, revise improves.
-    The loop back-edge goes from revise to review."""
+    """Multi-node loop body expressed as a sub-construct with Loop modifier.
+    The review+revise cycle is a sub-construct that loops until approved."""
 
-    def test_review_revise_cycle_exits_when_approved(self):
-        """review→revise loops until review.score >= 0.8."""
+    def test_review_revise_cycle_as_looping_sub_construct(self):
+        """review+revise sub-construct loops until score >= 0.8."""
+        from neograph.modifiers import Loop
+
         review_count = [0]
 
         @node(outputs=Draft)
@@ -177,12 +179,7 @@ class TestMultiNodeLoop:
             score = 0.3 * review_count[0]
             return ReviewResult(score=min(score, 1.0), feedback=f"iteration {review_count[0]}")
 
-        @node(
-            outputs=Draft,
-            loop_when=lambda draft: draft is None or draft.score < 0.8,
-            loop_to="review",
-            max_iterations=10,
-        )
+        @node(outputs=Draft)
         def revise(draft: Draft, review: ReviewResult) -> Draft:
             return Draft(
                 content=f"revised: {review.feedback}",
@@ -190,14 +187,19 @@ class TestMultiNodeLoop:
                 score=review.score,
             )
 
-        pipeline = construct_from_functions(
-            "multi-loop", [draft, review, revise],
-        )
+        # Loop body as sub-construct: Draft in, Draft out
+        refine = construct_from_functions(
+            "refine", [review, revise], input=Draft, output=Draft,
+        ) | Loop(when=lambda d: d is None or d.score < 0.8, max_iterations=10)
+
+        pipeline = construct_from_functions("multi-loop", [draft, refine])
         graph = compile(pipeline)
         result = run(graph, input={"node_id": "multi-loop"})
 
         assert review_count[0] == 3  # 0.3, 0.6, 0.9
-        assert result["revise"][-1].score >= 0.8
+        final = result["refine"][-1]
+        assert final.score >= 0.8
+        assert final.iteration >= 2
 
 
 # =============================================================================
@@ -259,10 +261,12 @@ class TestLoopInSubConstruct:
 
 
 class TestEachPlusLoop:
-    """Each item in a collection is refined independently via its own loop."""
+    """Each item in a collection is refined via a looping sub-construct
+    inside an Each fan-out."""
 
-    def test_per_item_loop_with_each_fanout(self):
-        """Each claim loops independently until confidence >= 0.9."""
+    def test_per_item_loop_with_each_over_looping_sub_construct(self):
+        """Each claim gets its own sub-construct that loops internally."""
+
         @node(outputs=ClaimBatch)
         def make_claims() -> ClaimBatch:
             return ClaimBatch(items=[
@@ -270,10 +274,9 @@ class TestEachPlusLoop:
                 ClaimItem(claim_id="c2", text="hard claim", confidence=0.3),
             ])
 
+        # Loop is on the NODE inside the sub-construct, not on the Construct
         @node(
             outputs=ClaimItem,
-            map_over="make_claims.items",
-            map_key="claim_id",
             loop_when=lambda c: c is None or c.confidence < 0.9,
             max_iterations=5,
         )
@@ -284,7 +287,13 @@ class TestEachPlusLoop:
                 confidence=min(claim.confidence + 0.3, 1.0),
             )
 
-        pipeline = construct_from_functions("each-loop", [make_claims, verify])
+        # Sub-construct with internal loop, wrapped by Each
+        verify_sub = construct_from_functions(
+            "verify", [verify], input=ClaimItem, output=ClaimItem,
+        )
+        verify_each = verify_sub | Each(over="make_claims.items", key="claim_id")
+
+        pipeline = construct_from_functions("each-loop", [make_claims, verify_each])
         graph = compile(pipeline)
         result = run(graph, input={"node_id": "each-loop"})
 

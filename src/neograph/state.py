@@ -95,6 +95,13 @@ def compile_state_model(construct: Construct) -> type[BaseModel]:
                 Annotated[field_type, _merge_dicts],
                 None,
             )
+        elif sub.has_modifier(Loop):
+            # Loop on Construct: append-list + iteration counter
+            fields[field_name] = (
+                Annotated[list[sub.output], _append_loop_result],
+                [],
+            )
+            fields[f'neo_loop_count_{field_name}'] = (int, 0)
         else:
             fields[field_name] = (sub.output | None, None)
 

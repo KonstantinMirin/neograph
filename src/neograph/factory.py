@@ -667,22 +667,31 @@ def make_subgraph_fn(sub: Any, sub_graph: Any) -> Callable:
     sub_log = log.bind(subgraph=sub.name)
     field_name = sub.name.replace("-", "_")
 
+    has_loop = sub.has_modifier(Loop)
+
     def subgraph_node(state: Any, config: RunnableConfig) -> dict:
         sub_log.info("subgraph_start")
 
-        # Extract input from parent state by type
+        # Loop re-entry: on iteration 2+, read from own append-list
         input_data = None
-        if isinstance(state, dict):
-            for val in state.values():
-                if val is not None and isinstance(val, sub.input):
-                    input_data = val
-                    break
-        else:
-            for attr_name in state.__class__.model_fields:
-                val = getattr(state, attr_name, None)
-                if val is not None and isinstance(val, sub.input):
-                    input_data = val
-                    break
+        if has_loop:
+            own_val = _state_get(state, field_name)
+            if isinstance(own_val, list) and own_val:
+                input_data = own_val[-1]
+
+        # First iteration or non-loop: extract input by type
+        if input_data is None:
+            if isinstance(state, dict):
+                for val in state.values():
+                    if val is not None and isinstance(val, sub.input):
+                        input_data = val
+                        break
+            else:
+                for attr_name in state.__class__.model_fields:
+                    val = getattr(state, attr_name, None)
+                    if val is not None and isinstance(val, sub.input):
+                        input_data = val
+                        break
 
         # Run sub-graph with isolated state
         sub_input: dict[str, Any] = {"node_id": state.get("node_id", "") if isinstance(state, dict) else getattr(state, "node_id", "")}
@@ -714,7 +723,12 @@ def make_subgraph_fn(sub: Any, sub_graph: Any) -> Callable:
                 break
 
         sub_log.info("subgraph_complete")
-        return {field_name: output_val}
+        update: dict[str, Any] = {field_name: output_val}
+        if has_loop:
+            count_field = f"neo_loop_count_{field_name}"
+            current = _state_get(state, count_field) or 0
+            update[count_field] = current + 1
+        return update
 
     subgraph_node.__name__ = field_name
     return subgraph_node
