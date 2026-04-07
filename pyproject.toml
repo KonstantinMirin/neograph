@@ -1,6 +1,6 @@
 [project]
 name = "neograph"
-version = "0.2.0.dev0"
+version = "0.2.0"
 description = "Write Python. Get a production LLM graph. Declarative LLM graph compiler that compiles @node-decorated functions into LangGraph."
 readme = "README.md"
 requires-python = ">=3.11"
