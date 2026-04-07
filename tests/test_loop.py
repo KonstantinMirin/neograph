@@ -79,7 +79,7 @@ class TestSelfLoop:
 
         @node(
             outputs=Draft,
-            loop_when=lambda state: state.refine.score < 0.8 if hasattr(state, 'refine') and state.refine else True,
+            loop_when=lambda draft: draft is None or draft.score < 0.8,
             max_iterations=10,
         )
         def refine(seed: Draft) -> Draft:
@@ -101,8 +101,12 @@ class TestSelfLoop:
 
         # Should have looped 3 times (0.0 → 0.3 → 0.6 → 0.9 exits)
         assert call_count[0] == 3
-        assert result["refine"].score >= 0.8
-        assert result["refine"].iteration == 3
+        # Loop result is a list (append reducer). Last element is final.
+        assert isinstance(result["refine"], list)
+        assert result["refine"][-1].score >= 0.8
+        assert result["refine"][-1].iteration == 3
+        # History is preserved: all iterations available
+        assert len(result["refine"]) == 3
 
     def test_self_loop_respects_max_iterations(self):
         """Loop exits after max_iterations even if condition still true."""
@@ -123,8 +127,8 @@ class TestSelfLoop:
         graph = compile(pipeline)
         result = run(graph, input={"node_id": "loop-cap"})
 
-        assert result["never_good"].iteration == 3
-        assert result["never_good"].score == 0.1  # never improved
+        assert result["never_good"][-1].iteration == 3
+        assert result["never_good"][-1].score == 0.1  # never improved
 
     def test_self_loop_raises_on_exhaust_error(self):
         """When on_exhaust='error' (default), exceeding max_iterations raises."""
@@ -175,7 +179,7 @@ class TestMultiNodeLoop:
 
         @node(
             outputs=Draft,
-            loop_when=lambda state: state["review"].score < 0.8,
+            loop_when=lambda draft: draft is None or draft.score < 0.8,
             loop_to="review",
             max_iterations=10,
         )
@@ -193,7 +197,7 @@ class TestMultiNodeLoop:
         result = run(graph, input={"node_id": "multi-loop"})
 
         assert review_count[0] == 3  # 0.3, 0.6, 0.9
-        assert result["revise"].score >= 0.8
+        assert result["revise"][-1].score >= 0.8
 
 
 # =============================================================================
@@ -213,7 +217,7 @@ class TestLoopInSubConstruct:
 
         @node(
             outputs=Draft,
-            loop_when=lambda d: d.score < 0.8,
+            loop_when=lambda d: d is None or d.score < 0.8,
             max_iterations=5,
         )
         def improve(write: Draft) -> Draft:
@@ -241,8 +245,9 @@ class TestLoopInSubConstruct:
         graph = compile(pipeline)
         result = run(graph, input={"node_id": "sub-loop"})
 
-        assert result["finalize"].final_score >= 0.8
-        assert result["finalize"].iterations >= 2
+        final = result["finalize"][-1] if isinstance(result["finalize"], list) else result["finalize"]
+        assert final.final_score >= 0.8
+        assert final.iterations >= 2
         # Sub-construct internals don't leak
         assert "write" not in result
         assert "improve" not in result
@@ -269,7 +274,7 @@ class TestEachPlusLoop:
             outputs=ClaimItem,
             map_over="make_claims.items",
             map_key="claim_id",
-            loop_when=lambda claim: claim.confidence < 0.9,
+            loop_when=lambda c: c is None or c.confidence < 0.9,
             max_iterations=5,
         )
         def verify(claim: ClaimItem) -> ClaimItem:

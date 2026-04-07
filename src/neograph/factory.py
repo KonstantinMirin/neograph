@@ -448,6 +448,21 @@ def _extract_input(state: Any, node: Node) -> Any:
             return list(state.keys())
         return list(state.__class__.model_fields.keys())
 
+    # Loop re-entry: on iteration 1+, read from the node's OWN output field
+    # (an append-list) instead of the upstream. The append-list reducer
+    # accumulates each iteration's result; we unwrap [-1] for the latest.
+    if node.has_modifier(Loop):
+        own_field = node.name.replace("-", "_")
+        own_val = _state_get(state, own_field)
+        if isinstance(own_val, list) and own_val:
+            latest = own_val[-1]
+            # For dict-form inputs, wrap in a dict matching the input spec
+            if isinstance(node.inputs, dict):
+                # Use the first input key as the wrapper key
+                first_key = next(iter(node.inputs))
+                return {first_key: latest}
+            return latest
+
     # Each fan-out: item is passed via neo_each_item
     replicate_item = _state_get(state, "neo_each_item")
     if replicate_item is not None and _is_instance_safe(replicate_item, node.inputs):
@@ -465,6 +480,10 @@ def _extract_input(state: Any, node: Node) -> Any:
             else:
                 state_key = field_name.replace("-", "_")
                 value = _state_get(state, state_key)
+                # Unwrap loop-list fields: upstream was a Loop node, field is
+                # a list from the append reducer. Read [-1] for latest.
+                if isinstance(value, list) and value and not _get_origin(expected_type) is list:
+                    value = value[-1]
                 if (
                     value is not None
                     and _get_origin(expected_type) is list
@@ -477,6 +496,9 @@ def _extract_input(state: Any, node: Node) -> Any:
     # Single type — find matching field in state by type or name
     for attr_name in _fields():
         val = _state_get(state, attr_name)
+        # Unwrap loop-list fields for downstream consumers
+        if isinstance(val, list) and val and not _get_origin(node.inputs) is list:
+            val = val[-1]
         if val is not None and _is_instance_safe(val, node.inputs):
             return val
 

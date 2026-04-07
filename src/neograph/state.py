@@ -23,6 +23,13 @@ def _last_write_wins(existing: Any, new: Any) -> Any:
     return new
 
 
+def _append_loop_result(existing: Any, new: Any) -> list:
+    """Reducer: append each loop iteration's result to a list."""
+    if existing is None:
+        existing = []
+    return [*existing, new]
+
+
 def _collect_oracle_results(existing: Any, new: Any) -> list:
     """Reducer: collect oracle fan-out results into a list."""
     if existing is None:
@@ -203,5 +210,13 @@ def _add_single_output_field(
             [],
         )
         fields[field_name] = (output_type | None, None)
+    elif node.has_modifier(Loop):
+        # Loop: append-list reducer. Each iteration pushes to the list.
+        # _extract_input unwraps [-1] for the node on re-entry.
+        # Downstream nodes after loop exit see the final value (unwrapped).
+        fields[field_name] = (
+            Annotated[list[output_type], _append_loop_result],
+            [],
+        )
     else:
         fields[field_name] = (output_type | None, None)

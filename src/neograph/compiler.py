@@ -275,7 +275,15 @@ def _add_loop_back_edge(
                     f"Loop on '{node_name}' exceeded max_iterations={loop.max_iterations}"
                 )
             return exit_name  # on_exhaust='last' — exit with last result
-        should_continue = condition(state)
+        # The loop condition receives the node's latest output (unwrapped
+        # from the append-list). This lets the user write simple lambdas
+        # like `lambda draft: draft.score < 0.8` without list awareness.
+        own_val = getattr(state, field_name, None)
+        if isinstance(own_val, list) and own_val:
+            latest = own_val[-1]
+        else:
+            latest = own_val
+        should_continue = condition(latest)
         if should_continue:
             return reenter_target
         return exit_name
