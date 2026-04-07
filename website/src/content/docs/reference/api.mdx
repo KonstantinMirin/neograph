@@ -14,13 +14,24 @@ All three are importable from `neograph`:
 ```python
 from neograph import (
     # Primary @node API
-    node, construct_from_module, FromInput, FromConfig,
+    node, construct_from_module, construct_from_functions,
+    FromInput, FromConfig, merge_fn,
     # ForwardConstruct
     ForwardConstruct,
     # Programmatic IR
     Node, Construct, Oracle, Each, Operator,
+    # Tools
+    Tool, tool, ToolInteraction,
+    # BAML rendering
+    describe_type, describe_value,
+    # Prompt inspection
+    render_prompt,
+    # Renderers (opt-in alternatives to BAML)
+    Renderer, XmlRenderer, DelimitedRenderer, JsonRenderer,
     # Shared
-    Tool, tool, compile, run, configure_llm, ConstructError,
+    compile, run, configure_llm,
+    # Errors
+    NeographError, ConstructError, CompileError, ConfigurationError, ExecutionError,
     # Registries (for runtime construction)
     register_scripted, register_condition, register_tool_factory,
 )
@@ -54,19 +65,24 @@ Decorator that turns a function into a Node with signature-inferred dependencies
 )
 ```
 
-- **`output`** — Pydantic model the node produces. Required for all modes except `raw`.
+- **`outputs`** — Pydantic model or `dict[str, type]` the node produces. Required for all modes except `raw`. Dict form enables multi-output (e.g. `{"result": Claims, "tool_log": list[ToolInteraction]}`).
 - **`mode`** — Execution mode. Inferred from kwargs if not set: `prompt=` + `model=` → `think`; neither → `scripted`.
 - **`prompt`**, **`model`** — Required for LLM modes (`think`, `agent`, `act`). Validated at decoration time.
 - **`tools`** — List of `Tool` instances for `agent` / `act` modes.
 - **`llm_config`** — Per-node LLM settings (temperature, max_tokens, output_strategy, etc.)
 - **`name`** — Override the node name. Default: function name with `_` → `-`.
+- **`inputs`** — Explicit `dict[str, type]` input spec. Usually inferred from param annotations.
 - **`map_over`** / **`map_key`** — Fan-out: run this node once per item in the referenced collection.
 - **`ensemble_n`** / **`merge_fn`** / **`merge_prompt`** — Oracle ensemble: N parallel generators plus a scripted or LLM merge.
 - **`interrupt_when`** — Human-in-the-loop: inline callable or registered condition name.
+- **`renderer`** — Pluggable prompt-input renderer (`XmlRenderer`, `DelimitedRenderer`, `JsonRenderer`, or custom).
+- **`context`** — `list[str]` of state field names injected verbatim into the prompt (not BAML-rendered). For pre-formatted context like graph catalogs.
+- **`skip_when`** — Callable predicate. When True, skips the LLM call entirely.
+- **`skip_value`** — Callable that produces the output when `skip_when` fires.
 
 The function body runs for `scripted` and `raw` modes. For LLM modes, the body is dead code — use `...` as the body.
 
-### `construct_from_module(mod, name=None)`
+### `construct_from_module(mod, name=None, *, llm_config=None, input=None, output=None)`
 
 Walks a module's `@node`-decorated functions, infers dependencies from parameter names, topologically sorts, and returns a `Construct`.
 
@@ -74,10 +90,40 @@ Walks a module's `@node`-decorated functions, infers dependencies from parameter
 pipeline = construct_from_module(sys.modules[__name__], name="my-pipeline")
 ```
 
-- **`mod`** — The module to scan. Usually `sys.modules[__name__]`.
-- **`name`** — Construct name. Default: module name.
+When building a sub-construct, pass `input=` / `output=` to define the state boundary:
 
-Raises `ConstructError` for unknown parameters, cycles, self-dependencies, and name collisions. Fan-in type validation runs across all parameters.
+```python
+sub = construct_from_module(mod, input=VerifyClaim, output=ClaimResult)
+```
+
+### `construct_from_functions(name, functions, *, llm_config=None, input=None, output=None)`
+
+Builds a `Construct` from an explicit list of `@node`-decorated functions and/or `Construct` instances. Use when multiple pipelines share a file or when mixing `@node` functions with sub-constructs:
+
+```python
+pipeline = construct_from_functions("rw-ingestion", [
+    flatten_claims,
+    verify_claim.map("flatten_claims.claims", key="claim_id"),
+    deterministic_merge,
+])
+```
+
+Accepts both `@node` items and `Construct` items in the same list. Construct items must declare `output=` so downstream `@node` params can resolve against them.
+
+### `@merge_fn`
+
+Decorator for Oracle merge functions with `FromInput`/`FromConfig` DI support:
+
+```python
+@merge_fn
+def combine(variants: list[Claims], shared: Annotated[Ctx, FromConfig]) -> Claims:
+    return Claims(items=[i for v in variants for i in v.items])
+
+@node(outputs=Claims, ensemble_n=3, merge_fn="combine")
+def generate() -> Claims: ...
+```
+
+The first parameter receives the list of Oracle generator results. Subsequent parameters use standard DI annotations. The merge_fn's first parameter type (`list[T]`) tells the framework what type each generator should produce — the generators use `T` as the LLM schema, not `node.outputs`.
 
 ### `FromInput`
 
@@ -143,7 +189,7 @@ For testing, call `forward()` directly — it runs real Python with real values.
 
 ## Programmatic IR
 
-### `Node(name, *, mode, output, inputs=None, prompt=None, model=None, tools=None, llm_config=None)`
+### `Node(name, *, mode, outputs, inputs=None, prompt=None, model=None, tools=None, llm_config=None, context=None, skip_when=None, skip_value=None, renderer=None)`
 
 The Node IR class. Used directly for runtime construction, programmatic pipeline generation, and sub-constructs.
 
@@ -202,9 +248,17 @@ The `|` syntax returns a new Node with the modifier appended. You can chain: `no
 
 ## Shared
 
-### `compile(construct, *, checkpointer=None) -> CompiledGraph`
+### `compile(construct, *, checkpointer=None, retry_policy=None) -> CompiledGraph`
 
-Compiles a `Construct` (or `ForwardConstruct`) into an executable LangGraph `StateGraph`. A `checkpointer` is required when the pipeline uses `Operator` or `interrupt_when=`.
+Compiles a `Construct` (or `ForwardConstruct`) into an executable LangGraph `StateGraph`.
+
+- **`checkpointer`** — Required when the pipeline uses `Operator` or `interrupt_when=`.
+- **`retry_policy`** — LangGraph `RetryPolicy` applied to all LLM-calling nodes (`think`/`agent`/`act`). Handles malformed JSON, validation errors, and transient API failures. Scripted nodes are not retried. Sub-constructs inherit the policy.
+
+```python
+from langgraph.types import RetryPolicy
+graph = compile(pipeline, retry_policy=RetryPolicy(max_attempts=3))
+```
 
 ### `run(graph, *, input=None, resume=None, config=None) -> dict`
 
@@ -214,28 +268,83 @@ Executes a compiled graph. Use `input=` for the first run, `resume=` to continue
 
 Configures the LLM provider once per process. `llm_factory(tier, ...)` returns a `BaseChatModel`. `prompt_compiler(template, data, **kwargs)` returns a list of messages.
 
-### `Tool(name, budget=None, config=None)`
+The prompt compiler may accept additional kwargs: `output_model`, `output_schema`, `llm_config`, `context`, `node_name`, `config`. NeoGraph inspects the compiler's signature and passes only kwargs it declares.
 
-LLM-callable tool with an optional per-call budget. Used in `agent` / `act` nodes.
+### `Tool(name, budget=0, config=None)`
+
+LLM-callable tool with an optional per-call budget. `budget=0` means unlimited.
+
+### `ToolInteraction`
+
+Record of a single tool call during a ReAct loop:
+
+```python
+class ToolInteraction(BaseModel, frozen=True):
+    tool_name: str
+    args: dict[str, Any]
+    result: str          # BAML-rendered string (for prompts)
+    typed_result: Any    # original Pydantic model (for downstream nodes)
+    duration_ms: int
+```
+
+`typed_result` preserves the original tool return value. `result` is the BAML-rendered form (via `describe_value`) sent to the LLM in the ReAct loop.
 
 ### `@tool(budget=None, config=None)`
 
-Decorator that wraps a function as a `Tool`, auto-registers it, and returns the Tool instance directly for use in `tools=[...]`:
+Decorator that wraps a function as a `Tool`, auto-registers it, and returns the Tool instance directly:
 
 ```python
 @tool(budget=5)
-def search_codebase(query: str) -> str:
+def search_codebase(query: str) -> SearchResult:
     """Search the codebase for a query."""
-    return results
-
-@node(outputs=Answer, mode='agent', prompt='research', model='reason',
-      tools=[search_codebase])
-def researcher() -> Answer: ...
+    return SearchResult(file="auth.py", line=42, score=0.95)
 ```
 
-### `ConstructError`
+Tool results can be typed Pydantic models. The framework preserves them in `ToolInteraction.typed_result` and renders them as BAML for the LLM.
 
-Raised by the validator when a pipeline has a type mismatch, unknown parameter, cycle, or name collision. Subclass of `ValueError`. Includes structured messages with producer inventories, `.map()` hints, and source locations.
+### `describe_type(model, *, prefix=...) -> str`
+
+Renders a Pydantic model class as a TypeScript-style (BAML) schema. Used internally for `json_mode` output schemas:
+
+```python
+describe_type(SearchResult)
+# {
+#   file: string
+#   line: int
+#   score: float  // Relevance score 0-1
+# }
+```
+
+### `describe_value(instance, *, prefix=...) -> str`
+
+Renders a Pydantic model instance in the same BAML notation with actual values:
+
+```python
+describe_value(SearchResult(file="auth.py", line=42, score=0.95))
+# {
+#   file: "auth.py"
+#   line: 42
+#   score: 0.95  // Relevance score 0-1
+# }
+```
+
+Used for tool result rendering in ToolMessage content.
+
+### `render_prompt(node, input_data, *, config=None) -> str`
+
+Returns the exact prompt that would be sent to the LLM, without calling the LLM. For debugging and testing prompt templates.
+
+### Error Hierarchy
+
+```
+NeographError (base)
+  ├── ConstructError (ValueError)  — assembly-time validation failures
+  ├── CompileError                 — compilation failures
+  ├── ConfigurationError           — missing LLM config, unregistered tools
+  └── ExecutionError               — runtime failures (duplicate keys, reducer errors)
+```
+
+All errors are importable: `from neograph import ConstructError, CompileError, ConfigurationError, ExecutionError`.
 
 ### Registries
 
@@ -243,7 +352,7 @@ Raised by the validator when a pipeline has a type mismatch, unknown parameter, 
 - **`register_condition(name, fn)`** — Register a condition for `Operator(when='name')` and string-form `interrupt_when='name'`
 - **`register_tool_factory(name, factory)`** — Register a tool factory for declarative tool lookup
 
-These are only needed for the programmatic API. `@node` and `@tool` handle registration automatically.
+These are only needed for the programmatic API. `@node`, `@tool`, and `@merge_fn` handle registration automatically.
 
 ---
 
