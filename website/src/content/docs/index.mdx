@@ -56,8 +56,9 @@ pip install neograph
 
 ```python
 import sys
+from typing import Annotated
 from pydantic import BaseModel
-from neograph import node, construct_from_module, compile, run
+from neograph import node, construct_from_module, compile, run, FromInput
 
 # Types — plain Pydantic.
 class Claims(BaseModel):
@@ -72,7 +73,7 @@ class Report(BaseModel):
 
 # Agent — plain Python functions. Types flow through the signatures.
 @node(outputs=Claims, prompt='decompose', model='reason')
-def decompose(topic: str) -> Claims: ...
+def decompose(topic: Annotated[str, FromInput]) -> Claims: ...
 
 @node(outputs=Classified, prompt='classify', model='fast')
 def classify(decompose: Claims) -> Classified: ...
@@ -84,7 +85,7 @@ def summarize(classify: Classified) -> Report: ...
 pipeline = construct_from_module(sys.modules[__name__])
 graph = compile(pipeline)
 
-result = run(graph, input={'topic': 'microservice authentication'})
+result = run(graph, input={'topic': 'microservice authentication', 'node_id': 'demo'})
 print(result['summarize'].summary)
 ```
 
@@ -153,7 +154,7 @@ The `if` compiles to a LangGraph conditional edge. `for` compiles to fan-out. Py
   <LinkCard
     title="Examples"
     href="https://github.com/KonstantinMirin/neograph/tree/main/examples"
-    description="13 runnable pipelines covering every feature, plus LangGraph comparisons."
+    description="16 runnable pipelines covering every feature, plus LangGraph comparisons."
   />
 </CardGrid>
 

@@ -87,7 +87,7 @@ pipeline = construct_from_module(sys.modules[__name__])
 ```
 
 Each `@node` specifies:
-- **output** -- Pydantic model defining the typed output contract
+- **outputs** -- Pydantic model defining the typed output contract
 - **prompt** -- template name passed to your `prompt_compiler`
 - **model** -- tier string passed to your `llm_factory`
 
