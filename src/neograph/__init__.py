@@ -39,7 +39,7 @@ from neograph.decorators import (
 )
 from neograph.forward import ForwardConstruct
 from neograph.factory import register_condition, register_scripted, register_tool_factory
-from neograph.modifiers import Operator, Oracle, Each
+from neograph.modifiers import Operator, Oracle, Each, Loop
 from neograph.node import Node
 from neograph.renderers import (
     DelimitedRenderer,
@@ -64,6 +64,7 @@ __all__ = [
     # Modifiers (used as @node kwargs; also available standalone)
     "Oracle",
     "Each",
+    "Loop",
     "Operator",
     # Low-level IR (advanced use: programmatic construction, IR tests)
     "Node",

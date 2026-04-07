@@ -223,3 +223,33 @@ class Operator(Modifier):
     """
 
     when: str       # registered condition function name
+
+
+class Loop(Modifier):
+    """Cycle modifier: repeat a node (or node group) until a condition is met.
+
+    The compiler inserts a conditional back-edge from the modified node
+    to either itself (self-loop) or an earlier node (multi-node cycle).
+
+    Usage:
+        # Self-loop: refine until quality threshold
+        node | Loop(when=lambda d: d.score < 0.8, max_iterations=5)
+
+        # Multi-node: review→revise cycle
+        revise | Loop(when=lambda s: s.review.score < 0.8, reenter="review")
+
+        # @node sugar:
+        @node(outputs=Draft, loop_when=lambda d: d.score < 0.8, max_iterations=5)
+        def refine(draft: Draft) -> Draft: ...
+    """
+
+    when: Any           # str (registered condition name) or Callable. True = continue looping.
+    max_iterations: int = 10
+    reenter: str | None = None          # back-edge target node name (None = self-loop)
+    on_exhaust: str = "error"           # "error" raises ExecutionError, "last" returns last result
+    history: bool = False               # collect each iteration's output in state
+
+    def model_post_init(self, __context: Any) -> None:
+        if self.max_iterations < 1:
+            msg = f"Loop max_iterations must be >= 1, got {self.max_iterations}."
+            raise ConfigurationError(msg)
