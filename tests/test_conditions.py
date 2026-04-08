@@ -197,6 +197,50 @@ class TestErrorPaths:
             parse_condition('__import__("os") == true')
 
 
+class TestPrivateFieldAccessBlocked:
+    """Dunder and single-underscore field segments are rejected at resolve time."""
+
+    def test_dunder_class_raises(self):
+        """'x.__class__' must raise, not leak type info."""
+        cond = parse_condition('__class__ == "foo"')
+        with pytest.raises(AttributeError, match="private/dunder"):
+            cond(Score(value=0.5, confidence=0.9))
+
+    def test_dotted_dunder_class_raises(self):
+        """'score.__class__' via dotted path must raise."""
+        cond = parse_condition('score.__class__ == "Score"')
+        with pytest.raises(AttributeError, match="private/dunder"):
+            cond(Result(score=Score(value=0.5, confidence=0.9), passed=True, name="x", count=1))
+
+    def test_dunder_dict_raises(self):
+        """'x.__dict__.keys' must raise."""
+        cond = parse_condition('__dict__ == "bar"')
+        with pytest.raises(AttributeError, match="private/dunder"):
+            cond(Score(value=0.5, confidence=0.9))
+
+    def test_single_underscore_private_raises(self):
+        """'x._private' single-underscore prefix also blocked."""
+        cond = parse_condition('_private == 1')
+        with pytest.raises(AttributeError, match="private/dunder"):
+            cond(Score(value=0.5, confidence=0.9))
+
+    def test_underscore_in_middle_of_name_works(self):
+        """'normal_field' with underscore in middle is fine."""
+        cond = parse_condition("confidence > 0.5")
+        assert cond(Score(value=0.1, confidence=0.9)) is True
+
+    def test_dotted_path_with_underscores_in_middle_works(self):
+        """'score.value' style paths still work — underscore not at start."""
+        cond = parse_condition("score.value < 0.8")
+        assert cond(Result(score=Score(value=0.5, confidence=0.9), passed=True, name="x", count=1)) is True
+
+    def test_nested_dunder_in_dotted_path_raises(self):
+        """'score.__class__.__module__' — dunder deeper in the path."""
+        cond = parse_condition('score.__class__ == "Score"')
+        with pytest.raises(AttributeError, match="private/dunder"):
+            cond(Result(score=Score(value=0.5, confidence=0.9), passed=True, name="x", count=1))
+
+
 class TestConditionEdgeCases:
     """Edge cases from TQ-10-12 audit."""
 

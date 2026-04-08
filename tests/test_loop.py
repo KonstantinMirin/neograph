@@ -363,6 +363,109 @@ class TestLoopValidation:
             def bad_combo(claim: ClaimItem) -> ClaimItem:
                 return claim
 
+    def test_raises_when_oracle_then_loop_on_node(self):
+        """Node | Oracle(...) | Loop(...) raises ConstructError."""
+        from neograph import Loop, Oracle
+
+        n = Node.scripted("refine", fn="noop", inputs=Draft, outputs=Draft)
+        n = n | Oracle(n=3, merge_fn="combine")
+        with pytest.raises(ConstructError, match="Cannot combine Oracle and Loop"):
+            n | Loop(when=lambda d: True, max_iterations=3)
+
+    def test_raises_when_loop_then_oracle_on_node(self):
+        """Node | Loop(...) | Oracle(...) raises ConstructError."""
+        from neograph import Loop, Oracle
+
+        n = Node.scripted("refine", fn="noop", inputs=Draft, outputs=Draft)
+        n = n | Loop(when=lambda d: True, max_iterations=3)
+        with pytest.raises(ConstructError, match="Cannot combine Oracle and Loop"):
+            n | Oracle(n=3, merge_fn="combine")
+
+    def test_raises_when_oracle_then_loop_on_construct(self):
+        """Construct | Oracle(...) | Loop(...) raises ConstructError."""
+        from neograph import Loop, Oracle
+
+        sub = Construct(
+            name="sub",
+            nodes=[Node.scripted("inner", fn="noop", outputs=Draft)],
+            input=Draft,
+            output=Draft,
+        )
+        sub = sub | Oracle(n=3, merge_fn="combine")
+        with pytest.raises(ConstructError, match="Cannot combine Oracle and Loop"):
+            sub | Loop(when=lambda d: True, max_iterations=3)
+
+    def test_oracle_alone_still_works(self):
+        """Oracle without Loop is fine — no false positive."""
+        from neograph import Oracle
+
+        n = Node.scripted("refine", fn="noop", inputs=Draft, outputs=Draft)
+        result = n | Oracle(n=3, merge_fn="combine")
+        assert result.has_modifier(Oracle)
+
+    def test_loop_alone_still_works(self):
+        """Loop without Oracle is fine — no false positive."""
+        from neograph import Loop
+
+        n = Node.scripted("refine", fn="noop", inputs=Draft, outputs=Draft)
+        result = n | Loop(when=lambda d: True, max_iterations=3)
+        assert result.has_modifier(Loop)
+
+    def test_oracle_plus_operator_still_works(self):
+        """Oracle + Operator is not restricted."""
+        from neograph import Oracle, Operator
+
+        n = Node.scripted("refine", fn="noop", inputs=Draft, outputs=Draft)
+        result = n | Oracle(n=3, merge_fn="combine")
+        result = result | Operator(when="needs_review")
+        assert result.has_modifier(Oracle)
+        assert result.has_modifier(Operator)
+
+    # -- on_exhaust validation (neograph-jyz3) --------------------------------
+
+    def test_on_exhaust_error_accepted(self):
+        """Loop(on_exhaust='error') is valid — no error raised."""
+        from neograph.modifiers import Loop
+        Loop(when=lambda x: True, on_exhaust="error")
+
+    def test_on_exhaust_last_accepted(self):
+        """Loop(on_exhaust='last') is valid — no error raised."""
+        from neograph.modifiers import Loop
+        Loop(when=lambda x: True, on_exhaust="last")
+
+    def test_on_exhaust_invalid_raises_configuration_error(self):
+        """Loop(on_exhaust='explode') must raise ConfigurationError."""
+        from neograph.errors import ConfigurationError
+        from neograph.modifiers import Loop
+        with pytest.raises(ConfigurationError, match="on_exhaust.*must be.*'error'.*'last'"):
+            Loop(when=lambda x: True, on_exhaust="explode")
+
+    def test_on_exhaust_empty_string_raises_configuration_error(self):
+        """Loop(on_exhaust='') must raise ConfigurationError."""
+        from neograph.errors import ConfigurationError
+        from neograph.modifiers import Loop
+        with pytest.raises(ConfigurationError, match="on_exhaust.*must be.*'error'.*'last'"):
+            Loop(when=lambda x: True, on_exhaust="")
+
+    def test_node_decorator_on_exhaust_invalid_raises(self):
+        """@node(on_exhaust='bad') goes through Loop() — must raise."""
+        from neograph.errors import ConfigurationError
+        with pytest.raises(ConfigurationError, match="on_exhaust.*must be.*'error'.*'last'"):
+            @node(
+                outputs=Draft,
+                loop_when=lambda d: d.score < 0.8,
+                max_iterations=3,
+                on_exhaust="bad",
+            )
+            def bad_exhaust(draft: Draft) -> Draft:
+                return draft
+
+    def test_on_exhaust_default_works(self):
+        """Loop with no on_exhaust kwarg defaults to 'error' — no error raised."""
+        from neograph.modifiers import Loop
+        loop = Loop(when=lambda x: True)
+        assert loop.on_exhaust == "error"
+
 
 # =============================================================================
 # Pattern 6: ForwardConstruct with while loop

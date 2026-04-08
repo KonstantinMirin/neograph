@@ -531,7 +531,14 @@ class _LoopCall:
         self._tracer = tracer
 
     def __call__(self, input_proxy: _Proxy) -> _Proxy:
-        # Extract Node objects from _NodeCall body list
+        # Validate body items before extracting nodes
+        for nc in self._body:
+            if not isinstance(nc, _NodeCall):
+                raise ConstructError(
+                    f"self.loop() body must contain node references (self.node_name), "
+                    f"not {type(nc).__name__}. Nested self.loop() is not supported."
+                )
+
         body_nodes = [nc._node for nc in self._body]
 
         if not body_nodes:

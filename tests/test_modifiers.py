@@ -580,6 +580,87 @@ class TestConstructOracle:
 
         assert result["gen_pipeline"].items == ["llm-merged"]
 
+    def test_oracle_models_forwarded_to_sub_construct_inner_nodes(self):
+        """Oracle(models=) on a Construct must forward model override to inner nodes.
+
+        Bug neograph-e481: make_subgraph_fn builds sub_input without
+        neo_oracle_model, so all variants use the same model. The fix
+        injects _oracle_model into the config passed to sub_graph.invoke.
+        """
+        seen_models = []
+
+        def model_capturing_step(input_data, config):
+            model = config.get("configurable", {}).get("_oracle_model")
+            seen_models.append(model)
+            return RawText(text=f"from-{model}")
+
+        register_scripted("capture_model_step", model_capturing_step)
+
+        def merge_models(variants, config):
+            return RawText(text=" | ".join(v.text for v in variants))
+
+        register_scripted("merge_model_variants", merge_models)
+
+        sub = Construct(
+            "model-sub",
+            input=Claims,
+            output=RawText,
+            nodes=[
+                Node.scripted("capture", fn="capture_model_step", inputs=Claims, outputs=RawText),
+            ],
+        ) | Oracle(models=["reason", "fast"], merge_fn="merge_model_variants")
+
+        register_scripted("seed_claims", lambda input_data, config: Claims(items=["x"]))
+
+        parent = Construct("parent", nodes=[
+            Node.scripted("seed", fn="seed_claims", outputs=Claims),
+            sub,
+        ])
+        graph = compile(parent)
+        result = run(graph, input={"node_id": "model-fwd-test"})
+
+        # Each variant must have received a distinct model override
+        assert len(seen_models) == 2, f"Expected 2 inner calls, got {len(seen_models)}"
+        assert set(seen_models) == {"reason", "fast"}, f"Expected {{reason, fast}}, got {seen_models}"
+
+    def test_oracle_without_models_on_construct_no_model_override(self):
+        """Oracle(n=3) without models= must NOT inject _oracle_model (backward compat)."""
+        seen_models = []
+
+        def check_no_model(input_data, config):
+            model = config.get("configurable", {}).get("_oracle_model")
+            seen_models.append(model)
+            return RawText(text="ok")
+
+        register_scripted("check_no_model_step", check_no_model)
+
+        def merge_no_model(variants, config):
+            return RawText(text="merged")
+
+        register_scripted("merge_no_model", merge_no_model)
+
+        sub = Construct(
+            "no-model-sub",
+            input=Claims,
+            output=RawText,
+            nodes=[
+                Node.scripted("check", fn="check_no_model_step", inputs=Claims, outputs=RawText),
+            ],
+        ) | Oracle(n=3, merge_fn="merge_no_model")
+
+        register_scripted("seed_nmo", lambda input_data, config: Claims(items=["x"]))
+
+        parent = Construct("parent", nodes=[
+            Node.scripted("seed", fn="seed_nmo", outputs=Claims),
+            sub,
+        ])
+        graph = compile(parent)
+        result = run(graph, input={"node_id": "no-model-test"})
+
+        # All 3 variants should have seen None for _oracle_model
+        assert len(seen_models) == 3
+        assert all(m is None for m in seen_models), f"Expected all None, got {seen_models}"
+
 
 class TestConstructEach:
     """Construct | Each — run entire sub-pipeline per collection item."""

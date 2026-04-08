@@ -759,6 +759,12 @@ def make_subgraph_fn(sub: Any, sub_graph: Any) -> Callable:
                     if val is not None:
                         sub_input[ctx_field] = val
 
+        # Forward Oracle model override from parent state into sub-graph config
+        oracle_model = _state_get(state, "neo_oracle_model")
+        if oracle_model is not None:
+            configurable = config.get("configurable", {})
+            config = {**config, "configurable": {**configurable, "_oracle_model": oracle_model}}
+
         sub_result = _strip_internals(sub_graph.invoke(sub_input, config=config))
 
         # Extract the declared output type from sub result.

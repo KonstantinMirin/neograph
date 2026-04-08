@@ -69,6 +69,11 @@ def _resolve_field(obj: Any, dotted: str) -> Any:
     """Walk a dotted path on a Pydantic model or dict."""
     current = obj
     for part in dotted.split("."):
+        if part.startswith("_"):
+            raise AttributeError(
+                f"Field access to private/dunder attribute {part!r} "
+                f"is not allowed in condition {dotted!r}"
+            )
         if isinstance(current, dict):
             try:
                 current = current[part]

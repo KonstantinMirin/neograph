@@ -23,7 +23,7 @@ import types
 from typing import Any, ForwardRef, Union, get_args, get_origin, get_type_hints
 
 from neograph.errors import ConstructError
-from neograph.modifiers import Each, Loop, split_each_path
+from neograph.modifiers import Each, Loop, Oracle, split_each_path
 from neograph.node import Node
 
 
@@ -172,6 +172,17 @@ def _validate_node_chain(construct: Any) -> None:
                     f"Node '{item.name}' has both Each and Loop modifiers. "
                     f"These cannot be combined on a single node. "
                     f"Use a sub-construct with Loop inside an Each fan-out instead."
+                )
+                raise ConstructError(msg)
+
+        # Oracle + Loop mutual exclusion (belt-and-suspenders).
+        if isinstance(item, Node):
+            if item.has_modifier(Oracle) and item.has_modifier(Loop):
+                msg = (
+                    f"Node '{item.name}' has both Oracle and Loop modifiers. "
+                    f"These cannot be combined on a single node. "
+                    f"Use a sub-construct: nest the Loop body inside an Oracle "
+                    f"ensemble, or vice versa."
                 )
                 raise ConstructError(msg)
 

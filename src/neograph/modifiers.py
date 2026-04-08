@@ -79,6 +79,22 @@ class Modifiable:
             )
             raise ConstructError(msg)
 
+        # Oracle + Loop mutual exclusion
+        if isinstance(modifier, Loop) and self.has_modifier(Oracle):
+            msg = (
+                "Cannot combine Oracle and Loop on the same item. "
+                "Use a sub-construct: nest the Loop body inside an Oracle ensemble, "
+                "or vice versa."
+            )
+            raise ConstructError(msg)
+        if isinstance(modifier, Oracle) and self.has_modifier(Loop):
+            msg = (
+                "Cannot combine Oracle and Loop on the same item. "
+                "Use a sub-construct: nest the Loop body inside an Oracle ensemble, "
+                "or vice versa."
+            )
+            raise ConstructError(msg)
+
         result = self.model_copy(update={"modifiers": [*self.modifiers, modifier]})
         # Loop validation at | time: check type compatibility immediately.
         if isinstance(modifier, Loop):
@@ -286,6 +302,10 @@ class Loop(Modifier):
     history: bool = False               # collect each iteration's output in state
 
     def model_post_init(self, __context: Any) -> None:
+        if self.on_exhaust not in ("error", "last"):
+            raise ConfigurationError(
+                f"Loop on_exhaust must be 'error' or 'last', got {self.on_exhaust!r}."
+            )
         if self.max_iterations < 1:
             msg = f"Loop max_iterations must be >= 1, got {self.max_iterations}."
             raise ConfigurationError(msg)

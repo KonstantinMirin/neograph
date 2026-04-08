@@ -1106,3 +1106,138 @@ class TestLoopCallDoesNotMutateClassNodes:
         # Class-level nodes still untouched
         assert BranchWriter.review.inputs is None
         assert BranchWriter.revise.inputs is None
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Part 11: Nested self.loop() and invalid body items (neograph-ndm1)
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TestLoopBodyValidation:
+    """neograph-ndm1: self.loop() body must contain only node references.
+    Passing proxies, nested loops, or non-node objects should raise
+    ConstructError with a clear message instead of cryptic AttributeError."""
+
+    def test_proxy_in_body_raises_construct_error(self):
+        """Passing a _Proxy (result of self.some_node(x)) as body item
+        raises ConstructError, not AttributeError."""
+        from neograph import ConstructError, ForwardConstruct
+
+        register_scripted(
+            "fc_seed_ndm1_a",
+            lambda _in, _cfg: Draft(content="seed", score=0.0),
+        )
+        register_scripted(
+            "fc_review_ndm1_a",
+            lambda _in, _cfg: ReviewResult(score=0.5, feedback="ok"),
+        )
+
+        class ProxyInBody(ForwardConstruct):
+            seed = Node.scripted("seed", fn="fc_seed_ndm1_a", outputs=Draft)
+            review = Node.scripted("review", fn="fc_review_ndm1_a", outputs=ReviewResult)
+
+            def forward(self, topic):
+                d = self.seed(topic)
+                r = self.review(d)  # r is a _Proxy
+                d = self.loop(
+                    body=[r],  # bad: _Proxy instead of _NodeCall
+                    when=lambda x: x is None or x.score < 0.8,
+                    max_iterations=3,
+                )(d)
+                return d
+
+        with pytest.raises(ConstructError, match="node references"):
+            ProxyInBody()
+
+    def test_non_node_object_in_body_raises_construct_error(self):
+        """Passing a plain string as body item raises ConstructError."""
+        from neograph import ConstructError, ForwardConstruct
+
+        register_scripted(
+            "fc_seed_ndm1_b",
+            lambda _in, _cfg: Draft(content="seed", score=0.0),
+        )
+
+        class StringInBody(ForwardConstruct):
+            seed = Node.scripted("seed", fn="fc_seed_ndm1_b", outputs=Draft)
+
+            def forward(self, topic):
+                d = self.seed(topic)
+                d = self.loop(
+                    body=["not_a_node"],  # bad: string
+                    when=lambda x: x is None or x.score < 0.8,
+                    max_iterations=3,
+                )(d)
+                return d
+
+        with pytest.raises(ConstructError, match="node references"):
+            StringInBody()
+
+    def test_normal_loop_body_still_works(self):
+        """Normal usage: body=[self.review, self.revise] still traces correctly."""
+        from neograph.modifiers import Loop
+
+        register_scripted(
+            "fc_seed_ndm1_c",
+            lambda _in, _cfg: Draft(content="seed", score=0.0),
+        )
+        register_scripted(
+            "fc_review_ndm1_c",
+            lambda _in, _cfg: ReviewResult(score=0.5, feedback="ok"),
+        )
+        register_scripted(
+            "fc_revise_ndm1_c",
+            lambda _in, _cfg: Draft(content="revised", score=0.9),
+        )
+
+        class NormalLoop(ForwardConstruct):
+            seed = Node.scripted("seed", fn="fc_seed_ndm1_c", outputs=Draft)
+            review = Node.scripted("review", fn="fc_review_ndm1_c", outputs=ReviewResult)
+            revise = Node.scripted("revise", fn="fc_revise_ndm1_c", outputs=Draft)
+
+            def forward(self, topic):
+                d = self.seed(topic)
+                d = self.loop(
+                    body=[self.review, self.revise],
+                    when=lambda r: r is None or r.score < 0.8,
+                    max_iterations=5,
+                )(d)
+                return d
+
+        pipeline = NormalLoop()
+        assert len(pipeline.nodes) == 2
+        loop_entry = pipeline.nodes[1]
+        assert isinstance(loop_entry, Construct)
+        assert loop_entry.has_modifier(Loop)
+
+    def test_single_node_body_works(self):
+        """body=[self.refine] with a single _NodeCall works."""
+        from neograph.modifiers import Loop
+
+        register_scripted(
+            "fc_seed_ndm1_d",
+            lambda _in, _cfg: Draft(content="seed", score=0.0),
+        )
+        register_scripted(
+            "fc_refine_ndm1_d",
+            lambda _in, _cfg: Draft(content="refined", score=0.9),
+        )
+
+        class SingleBody(ForwardConstruct):
+            seed = Node.scripted("seed", fn="fc_seed_ndm1_d", outputs=Draft)
+            refine = Node.scripted("refine", fn="fc_refine_ndm1_d", outputs=Draft)
+
+            def forward(self, topic):
+                d = self.seed(topic)
+                d = self.loop(
+                    body=[self.refine],
+                    when=lambda r: r is None or r.score < 0.8,
+                    max_iterations=5,
+                )(d)
+                return d
+
+        pipeline = SingleBody()
+        assert len(pipeline.nodes) == 2
+        loop_entry = pipeline.nodes[1]
+        assert isinstance(loop_entry, Construct)
+        assert loop_entry.has_modifier(Loop)
