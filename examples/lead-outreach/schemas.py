@@ -30,31 +30,33 @@ class KeyIdeas(BaseModel, frozen=True):
     relevant_to_lead: list[str]
 
 
-class EmailBrief(BaseModel, frozen=True):
-    """One email in the sequence. Carries lead + ideas so the sub-construct
-    input is self-contained — prompts reference ${lead.first_name} etc."""
-    email_number: int
-    send_day: int
+class EmailState(BaseModel, frozen=True):
+    """Full state for one email through the draft/feedback cycle.
+
+    Carries the brief context (constant across iterations) plus the
+    evolving draft and feedback. Both the draft and feedback LLM nodes
+    output this same type — draft fills subject/body, feedback fills
+    score/feedback. The Loop condition reads score.
+    """
+    # Context (constant, echoed through by the LLM)
     intent: str
-    angle: str
-    constraints: str
-    lead: LeadProfile
-    ideas: KeyIdeas
-
-
-class BriefSet(BaseModel, frozen=True):
-    briefs: list[EmailBrief]
-
-
-class EmailDraft(BaseModel, frozen=True):
-    """Email draft flowing through the pipeline. score drives the Loop exit."""
-    subject: str
-    body: str
     email_number: int = 0
     send_day: int = 0
+    angle: str = ""
+    constraints: str = ""
+    lead: LeadProfile | None = None
+    ideas: KeyIdeas | None = None
+    # Draft (written by the draft node)
+    subject: str = ""
+    body: str = ""
+    # Evaluation (written by the feedback node, fed back to draft)
     score: float = 0.0
-    eval_feedback: str = ""
+    feedback: str = ""
     iteration: int = 0
+
+
+class EmailStateSet(BaseModel, frozen=True):
+    items: list[EmailState]
 
 
 class EmailResult(BaseModel, frozen=True):
