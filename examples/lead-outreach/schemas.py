@@ -31,14 +31,13 @@ class KeyIdeas(BaseModel, frozen=True):
 
 
 class EmailState(BaseModel, frozen=True):
-    """Full state for one email through the draft/feedback cycle.
+    """The one type that flows through everything.
 
-    Carries the brief context (constant across iterations) plus the
-    evolving draft and feedback. Both the draft and feedback LLM nodes
-    output this same type — draft fills subject/body, feedback fills
-    score/feedback. The Loop condition reads score.
+    Carries the brief context (constant) plus the evolving draft and
+    feedback. draft node fills subject/body, feedback node fills
+    score/feedback. Loop reads score.
     """
-    # Context (constant, echoed through by the LLM)
+    # Brief context
     intent: str
     email_number: int = 0
     send_day: int = 0
@@ -46,29 +45,14 @@ class EmailState(BaseModel, frozen=True):
     constraints: str = ""
     lead: LeadProfile | None = None
     ideas: KeyIdeas | None = None
-    # Draft (written by the draft node)
+    # Draft
     subject: str = ""
     body: str = ""
-    # Evaluation (written by the feedback node, fed back to draft)
+    # Evaluation
     score: float = 0.0
     feedback: str = ""
     iteration: int = 0
 
 
-class EmailStateSet(BaseModel, frozen=True):
+class EmailStates(BaseModel, frozen=True):
     items: list[EmailState]
-
-
-class EmailResult(BaseModel, frozen=True):
-    email_number: int
-    send_day: int
-    subject: str
-    body: str
-    evaluation: dict
-    iterations: int
-
-
-class OutreachSequence(BaseModel, frozen=True):
-    lead_name: str
-    company: str
-    emails: list[EmailResult]
