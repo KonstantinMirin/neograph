@@ -631,7 +631,23 @@ def _build_oracle_merge_result(
 
     For single-type: {field_name: merged}.
     For dict-form: {field_name_primary: merged, field_name_secondary: last_value, ...}.
+
+    Validates the merge result against the expected output type. Raises
+    ExecutionError if the merge_fn returns the wrong type — catches silent
+    garbage before it propagates through the pipeline.
     """
+    expected_type = output_model
+    if isinstance(output_model, dict):
+        expected_type = next(iter(output_model.values()))
+
+    if not isinstance(merged, expected_type):
+        from neograph.errors import ExecutionError
+        raise ExecutionError(
+            f"Oracle merge_fn for '{field_name}' returned {type(merged).__name__}, "
+            f"expected {expected_type.__name__}. "
+            f"The merge function must return an instance of the node's output type."
+        )
+
     if secondaries is None:
         return {field_name: merged}
 

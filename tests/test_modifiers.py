@@ -2282,3 +2282,60 @@ class TestOracleModels:
             @node(outputs=Claims, models=[])
             def bad_ensemble(data: Claims) -> Claims:
                 return data
+
+
+# =============================================================================
+# BUG REGRESSION: neograph-bglm
+# merge_fn exceptions must surface, not produce silent garbage
+# =============================================================================
+
+
+class TestOracleMergeFnErrors:
+    """When a merge_fn throws an exception, neograph must propagate it —
+    not silently continue with whatever state the node had before the merge."""
+
+    def test_exception_propagates_when_merge_fn_raises(self):
+        """merge_fn that raises AttributeError must crash the pipeline,
+        not produce silent garbage results."""
+        from neograph.factory import register_scripted
+
+        register_scripted("bglm_gen", lambda input_data, config: Claims(items=["v1"]))
+
+        def bad_merge(variants, config):
+            raise AttributeError("ModelRole.FAST doesn't exist")
+
+        register_scripted("bglm_bad_merge", bad_merge)
+
+        gen_node = (
+            Node.scripted("gen", fn="bglm_gen", outputs=Claims)
+            | Oracle(n=2, merge_fn="bglm_bad_merge")
+        )
+        pipeline = Construct("test-merge-error", nodes=[gen_node])
+        graph = compile(pipeline)
+
+        # The pipeline MUST fail — not silently produce garbage
+        with pytest.raises(Exception, match="ModelRole.FAST"):
+            run(graph, input={"node_id": "bglm-test"})
+
+    def test_wrong_return_type_raises_when_merge_fn_returns_bad_type(self):
+        """merge_fn that returns the wrong type should be caught."""
+        from neograph.factory import register_scripted
+
+        register_scripted("bglm_gen2", lambda input_data, config: Claims(items=["v1"]))
+
+        def wrong_type_merge(variants, config):
+            # Returns a string instead of Claims
+            return "this is not a Claims object"
+
+        register_scripted("bglm_wrong_merge", wrong_type_merge)
+
+        gen_node = (
+            Node.scripted("gen2", fn="bglm_gen2", outputs=Claims)
+            | Oracle(n=2, merge_fn="bglm_wrong_merge")
+        )
+        pipeline = Construct("test-merge-type", nodes=[gen_node])
+        graph = compile(pipeline)
+
+        # Should raise because merge result doesn't match output type
+        with pytest.raises(ExecutionError, match="(?i)merge.*type|expected.*Claims"):
+            run(graph, input={"node_id": "bglm-test2"})
