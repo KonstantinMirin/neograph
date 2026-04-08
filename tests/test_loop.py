@@ -678,3 +678,102 @@ class TestForwardConstructLoop:
         # check returns 0.9 > 0.7, so high path runs
         assert "high" in result
         assert result["high"].label == "high-after-loop"
+
+    @pytest.mark.xfail(
+        reason="Branch + loop composition: re-trace merges loop construct "
+               "into branch arm instead of after it (neograph-477t).",
+        strict=True,
+    )
+    def test_branch_followed_by_loop(self):
+        """if/else branch followed by self.loop() — branch first, then loop."""
+        from neograph import ForwardConstruct
+
+        class BranchThenLoop(ForwardConstruct):
+            seed = Node.scripted("seed", fn="fc_seed_bl", outputs=Draft)
+            check = Node.scripted("check", fn="fc_check_bl", outputs=Draft)
+            boost = Node.scripted("boost", fn="fc_boost_bl", outputs=Draft)
+            refine = Node.scripted("refine", fn="fc_refine_bl", outputs=Draft)
+
+            def forward(self, topic):
+                d = self.seed(topic)
+                c = self.check(d)
+                if c.score > 0.5:
+                    d = self.boost(c)
+                d = self.loop(
+                    body=[self.refine],
+                    when=lambda r: r is None or r.score < 0.8,
+                    max_iterations=5,
+                )(d)
+                return d
+
+        register_scripted("fc_seed_bl", lambda _in, _cfg: Draft(content="bl-seed", score=0.6))
+        register_scripted("fc_check_bl", lambda _in, _cfg: Draft(content="checked", score=0.6))
+        register_scripted("fc_boost_bl", lambda _in, _cfg: Draft(content="boosted", score=0.6))
+
+        _refine_bl_count = [0]
+
+        def fc_refine_bl(_in, _cfg):
+            _refine_bl_count[0] += 1
+            d = _in if isinstance(_in, Draft) else Draft(content="", score=0.0)
+            return Draft(content=f"refined-{_refine_bl_count[0]}", score=d.score + 0.15, iteration=_refine_bl_count[0])
+
+        register_scripted("fc_refine_bl", fc_refine_bl)
+
+        pipeline = BranchThenLoop()
+        graph = compile(pipeline)
+        result = run(graph, input={"node_id": "fc-branch-loop"})
+
+        # Branch should have taken the boost path (0.6 > 0.5)
+        # Loop: 0.6 → 0.75 → 0.90 → exits (2 iterations)
+        assert _refine_bl_count[0] >= 2, (
+            f"Expected refine to run >= 2 times, ran {_refine_bl_count[0]}"
+        )
+
+    def test_two_sequential_loops(self):
+        """Two self.loop() calls in sequence — both should cycle independently."""
+        from neograph import ForwardConstruct
+
+        class TwoLoops(ForwardConstruct):
+            seed = Node.scripted("seed", fn="fc_seed_2l", outputs=Draft)
+            rough = Node.scripted("rough", fn="fc_rough_2l", outputs=Draft)
+            polish = Node.scripted("polish", fn="fc_polish_2l", outputs=Draft)
+
+            def forward(self, topic):
+                d = self.seed(topic)
+                d = self.loop(
+                    body=[self.rough],
+                    when=lambda r: r is None or r.score < 0.5,
+                    max_iterations=5,
+                )(d)
+                d = self.loop(
+                    body=[self.polish],
+                    when=lambda r: r is None or r.score < 0.9,
+                    max_iterations=5,
+                )(d)
+                return d
+
+        register_scripted("fc_seed_2l", lambda _in, _cfg: Draft(content="2l-seed", score=0.0))
+
+        _rough_count = [0]
+        def fc_rough_2l(_in, _cfg):
+            _rough_count[0] += 1
+            d = _in if isinstance(_in, Draft) else Draft(content="", score=0.0)
+            return Draft(content=f"rough-{_rough_count[0]}", score=d.score + 0.2, iteration=_rough_count[0])
+
+        _polish_count = [0]
+        def fc_polish_2l(_in, _cfg):
+            _polish_count[0] += 1
+            d = _in if isinstance(_in, Draft) else Draft(content="", score=0.0)
+            return Draft(content=f"polish-{_polish_count[0]}", score=d.score + 0.15, iteration=_polish_count[0])
+
+        register_scripted("fc_rough_2l", fc_rough_2l)
+        register_scripted("fc_polish_2l", fc_polish_2l)
+
+        pipeline = TwoLoops()
+        graph = compile(pipeline)
+        result = run(graph, input={"node_id": "fc-two-loops"})
+
+        # Rough: 0.0 → 0.2 → 0.4 → 0.6 (3 iterations, exits at 0.6 >= 0.5)
+        assert _rough_count[0] == 3, f"rough ran {_rough_count[0]}, expected 3"
+        # Polish: 0.6 → 0.75 → 0.90 (2 iterations, exits at 0.90 >= 0.9)
+        assert _polish_count[0] == 2, f"polish ran {_polish_count[0]}, expected 2"

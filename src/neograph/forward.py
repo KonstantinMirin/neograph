@@ -526,10 +526,17 @@ class _LoopCall:
         if not body_nodes:
             raise ConstructError("self.loop() body must contain at least one node.")
 
-        # Infer input/output types from the proxy source and last body node
+        # Infer input/output types from the proxy source and last body node.
+        # source_node can be None when the proxy comes from a previous
+        # self.loop() or a branch — fall back to the last body node's
+        # output type (Loop requires output compatible with input).
         source_node = input_proxy._neo_source
-        input_type = source_node.outputs if source_node else None
         output_type = body_nodes[-1].outputs
+        if source_node is not None:
+            input_type = source_node.outputs if isinstance(source_node, Node) else getattr(source_node, 'output', None)
+        else:
+            # Fallback: use output_type (Loop's input = output constraint)
+            input_type = output_type
 
         if input_type is None:
             raise ConstructError(
@@ -537,9 +544,15 @@ class _LoopCall:
                 "Call self.loop()(proxy) where proxy is a node output."
             )
 
-        # Build sub-construct with Loop modifier
+        # Build sub-construct with Loop modifier.
+        # Set inputs on body nodes so _extract_input can resolve from
+        # neo_subgraph_input (same fix as spec loader for sub-construct nodes).
         _LoopCall._loop_counter += 1
         name = f"loop-body-{_LoopCall._loop_counter}"
+
+        for i, bn in enumerate(body_nodes):
+            if bn.inputs is None:
+                bn.inputs = input_type
 
         sub = Construct(
             name=name,
@@ -555,8 +568,10 @@ class _LoopCall:
         # Record the sub-construct in the tracer (it appears in the node list)
         self._tracer.record_construct(sub)
 
+        # Return a proxy whose source is the sub-construct so downstream
+        # loops/branches can infer input types from it.
         return _Proxy(
-            source_node=None,
+            source_node=sub,
             name=f"out_of_{name}",
             tracer=self._tracer,
         )

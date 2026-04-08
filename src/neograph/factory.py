@@ -689,18 +689,26 @@ def make_subgraph_fn(sub: Any, sub_graph: Any) -> Callable:
             if isinstance(own_val, list) and own_val:
                 input_data = own_val[-1]
 
-        # First iteration or non-loop: extract input by type
+        # First iteration or non-loop: extract input by type.
+        # Iterate in reverse so later pipeline nodes take precedence
+        # (e.g., loop output over seed). Unwrap append-lists.
         if input_data is None:
             if isinstance(state, dict):
-                for val in state.values():
-                    if val is not None and isinstance(val, sub.input):
-                        input_data = val
+                for val in reversed(list(state.values())):
+                    check_val = val
+                    if isinstance(val, list) and val:
+                        check_val = val[-1]
+                    if check_val is not None and isinstance(check_val, sub.input):
+                        input_data = check_val
                         break
             else:
-                for attr_name in state.__class__.model_fields:
+                for attr_name in reversed(list(state.__class__.model_fields)):
                     val = getattr(state, attr_name, None)
-                    if val is not None and isinstance(val, sub.input):
-                        input_data = val
+                    check_val = val
+                    if isinstance(val, list) and val:
+                        check_val = val[-1]
+                    if check_val is not None and isinstance(check_val, sub.input):
+                        input_data = check_val
                         break
 
         # Run sub-graph with isolated state
