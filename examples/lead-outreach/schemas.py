@@ -1,15 +1,9 @@
-"""Schemas for the lead outreach email sequence pipeline.
-
-All types are frozen Pydantic models, which is idiomatic for neograph:
-immutable state snapshots flowing between nodes.
-"""
+"""Schemas for the lead outreach email sequence pipeline."""
 
 from __future__ import annotations
 
 from pydantic import BaseModel
 
-
-# -- Input data ---------------------------------------------------------------
 
 class Experience(BaseModel, frozen=True):
     title: str
@@ -36,55 +30,57 @@ class KeyIdeas(BaseModel, frozen=True):
     relevant_to_lead: list[str]
 
 
-# -- Intermediate types -------------------------------------------------------
-
 class EmailBrief(BaseModel, frozen=True):
-    """Planning output: what each email in the sequence should accomplish."""
+    """Self-contained brief for one email. Carries all context the LLM needs
+    so the sub-construct input is complete without DI."""
     email_number: int
     send_day: int
-    intent: str        # cold_open | value_drop | soft_ask | breakup
-    angle: str         # the specific hook for this email
-    constraints: str   # style/content requirements
+    intent: str
+    angle: str
+    constraints: str
+    # Lead context (pre-formatted for prompt rendering)
+    lead_name: str
+    lead_headline: str
+    lead_company: str
+    lead_company_description: str
+    lead_location: str
+    lead_experience: str
+    lead_recent_posts: str
+    lead_skills: str
+    # Seller context
+    product: str
+    positioning: str
+    seller_angles: str
+    relevance: str
 
 
 class BriefSet(BaseModel, frozen=True):
-    """Collection of email briefs -- the sequence plan."""
-    lead: LeadProfile
-    ideas: KeyIdeas
     briefs: list[EmailBrief]
 
 
 class EmailDraft(BaseModel, frozen=True):
-    """A single email draft flowing through the quality pipeline.
-
-    Carries its own quality state so the Loop modifier's condition
-    can inspect `draft.score` directly.
-    """
+    """Email draft flowing through the pipeline. Carries quality state
+    so the Loop condition can read draft.score."""
     subject: str
     body: str
-    email_number: int
-    send_day: int
+    email_number: int = 0
+    send_day: int = 0
     score: float = 0.0
     violations: list[str] = []
     eval_feedback: str = ""
     iteration: int = 0
 
 
-# -- Output -------------------------------------------------------------------
-
 class EmailResult(BaseModel, frozen=True):
-    """Final output per email after all quality passes."""
     email_number: int
     send_day: int
     subject: str
     body: str
-    quality_gate: dict
     evaluation: dict
     iterations: int
 
 
 class OutreachSequence(BaseModel, frozen=True):
-    """The complete email sequence, ready to load into a sending tool."""
     lead_name: str
     company: str
     emails: list[EmailResult]
