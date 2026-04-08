@@ -155,35 +155,18 @@ def _fake_llm_factory(tier: str, *, node_name: str = "", llm_config: dict | None
     return _Fake()
 
 
-def _prompt_compiler(template: str, input_data: Any, *, node_name: str = "", config: dict | None = None):
-    """Load prompt from prompts/ dir, substitute ${variables} from input_data."""
-    prompt_text = _load_prompt(template)
-
-    # Substitute ${var} patterns from input_data fields
-    if input_data is not None:
-        if hasattr(input_data, "model_dump"):
-            data = input_data.model_dump()
-        elif isinstance(input_data, dict):
-            data = input_data
-        else:
-            data = {"input": str(input_data)}
-
-        import re
-        def _replace(match):
-            key = match.group(1)
-            val = data.get(key, match.group(0))
-            if isinstance(val, list):
-                return "\n".join(f"- {item}" for item in val)
-            return str(val)
-
-        prompt_text = re.sub(r"\$\{(\w+)\}", _replace, prompt_text)
-
-    return [{"role": "user", "content": prompt_text}]
-
+# Inline prompts loaded from files. neograph's built-in ${var} substitution
+# resolves variables from the Pydantic input model. Structured output is
+# automatic from the outputs= type — no manual JSON schema needed.
+PROMPT_DRAFT = _load_prompt("draft")
+PROMPT_PICK_BEST = _load_prompt("pick_best")
+PROMPT_REFINE = _load_prompt("refine")
 
 configure_llm(
     llm_factory=_fake_llm_factory if USE_FAKE else _real_llm_factory,
-    prompt_compiler=_prompt_compiler,
+    # Prompt compiler unused — all prompts are inline (contain spaces / ${}).
+    # neograph detects them as inline and handles substitution automatically.
+    prompt_compiler=lambda template, data: [{"role": "user", "content": template}],
 )
 
 
@@ -291,11 +274,11 @@ _produce_email = Construct(
             inputs=EmailBrief,
             outputs=EmailDraft,
             model="reason",
-            prompt="draft",
+            prompt=PROMPT_DRAFT,
             llm_config={"temperature": 0.8},
         ) | Oracle(
             models=["reason", "fast", "creative"],
-            merge_prompt="pick_best",
+            merge_prompt=PROMPT_PICK_BEST,
         ),
         Node(
             name="refine",
@@ -303,7 +286,7 @@ _produce_email = Construct(
             inputs=EmailDraft,
             outputs=EmailDraft,
             model="reason",
-            prompt="refine",
+            prompt=PROMPT_REFINE,
             llm_config={"temperature": 0.4},
         ) | Loop(
             when=lambda d: d is None or d.score < 0.8,
