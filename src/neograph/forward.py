@@ -378,6 +378,8 @@ class _Tracer:
         # Loop-mode tracking: maps node id → Each over-path for nodes in loop body
         self._loop_stack: list[str] = []  # stack of over-paths (for nested detection)
         self._loop_body_nodes: dict[int, str] = {}  # id(node) → over-path
+        # Deterministic loop naming: per-slug occurrence counter
+        self._loop_occurrences: dict[str, int] = {}
 
     def record(self, node: Node) -> None:
         key = id(node)
@@ -392,6 +394,17 @@ class _Tracer:
     def record_construct(self, construct: Construct) -> None:
         """Record a sub-construct (e.g., from self.loop()) in the node list."""
         self._ordered.append(construct)
+
+    def next_loop_occurrence(self, body_slug: str) -> int:
+        """Return the next occurrence index for a loop with the given body slug.
+
+        Deterministic within a single trace pass: the first loop with body
+        'review-revise' gets 0, the second gets 1. Re-trace passes produce
+        the same sequence because forward() is called the same way.
+        """
+        count = self._loop_occurrences.get(body_slug, 0)
+        self._loop_occurrences[body_slug] = count + 1
+        return count
 
     def record_iteration(self, proxy: _Proxy) -> iter:
         """Record a for-loop iteration over a proxy attribute.
@@ -503,8 +516,6 @@ class _LoopCall:
         )(d)
     """
 
-    _loop_counter = 0
-
     def __init__(
         self,
         body: list[_NodeCall],
@@ -547,8 +558,13 @@ class _LoopCall:
         # Build sub-construct with Loop modifier.
         # Set inputs on body nodes so _extract_input can resolve from
         # neo_subgraph_input (same fix as spec loader for sub-construct nodes).
-        _LoopCall._loop_counter += 1
-        name = f"loop-body-{_LoopCall._loop_counter}"
+        #
+        # Name is deterministic from body node names so re-trace (branch
+        # discovery) produces identical names across passes. A per-tracer
+        # occurrence counter disambiguates duplicate body compositions.
+        body_slug = "-".join(n.name for n in body_nodes)
+        occurrence = self._tracer.next_loop_occurrence(body_slug)
+        name = f"loop-{body_slug}" if occurrence == 0 else f"loop-{body_slug}-{occurrence}"
 
         for i, bn in enumerate(body_nodes):
             if bn.inputs is None:

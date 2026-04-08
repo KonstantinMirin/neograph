@@ -592,13 +592,6 @@ class TestForwardConstructLoop:
         with pytest.raises(ExecutionError, match="max_iterations"):
             run(graph, input={"node_id": "fc-exhaust-err"})
 
-    @pytest.mark.xfail(
-        reason="Loop + branch composition: state model fixed (neograph-fxb6) "
-               "but branch router evaluates condition before check node runs. "
-               "Deeper ForwardConstruct interaction issue.",
-        strict=True,
-        raises=TypeError,
-    )
     def test_loop_followed_by_branch_composes(self):
         """self.loop() followed by an if/else branch — both features compose.
         The loop refines a draft, then a branch selects the output path.
@@ -679,11 +672,6 @@ class TestForwardConstructLoop:
         assert "high" in result
         assert result["high"].label == "high-after-loop"
 
-    @pytest.mark.xfail(
-        reason="Branch + loop composition: re-trace merges loop construct "
-               "into branch arm instead of after it (neograph-477t).",
-        strict=True,
-    )
     def test_branch_followed_by_loop(self):
         """if/else branch followed by self.loop() — branch first, then loop."""
         from neograph import ForwardConstruct
