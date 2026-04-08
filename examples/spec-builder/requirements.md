@@ -1,129 +1,182 @@
-# Spec Builder — describe a pipeline, get a running pipeline
+# Spec Builder — describe a workflow, get a running pipeline
 
-## What this does
+## The point
 
-Takes a natural language description of a workflow and produces a running neograph pipeline. The user describes what they want ("research these companies, score them, draft outreach for the good ones"), and an LLM generates the pipeline spec (YAML) + type definitions. neograph compiles and executes it.
+Demonstrate that given a fixed runtime surface (tools + models), a user can describe a workflow in plain English and get a compiled, type-safe, observable pipeline back. The LLM does the wiring. neograph does the execution.
 
-This is the "Clay for arbitrary LLM workflows" demo. Clay has fixed nodes (enrichment, scoring, emailing). This has arbitrary nodes — the LLM defines them based on what you ask for.
+This is NOT a product. It is a demo that shows the spec format + load_spec + compile in action.
 
-## Who uses this
+## System boundaries
 
-Founders, ops people, anyone who can describe a workflow but doesn't write code. Also: developers prototyping — describe the pipeline in English, get a working first draft, then refine the YAML directly.
+### Fixed runtime surface (the "platform")
 
-## The flow
+Three tools, pre-registered:
 
-### Step 1: User describes the workflow
+| Tool | What it does | Implementation |
+|------|-------------|----------------|
+| `web_search` | Search the web, return top 5 results with titles + snippets | Serper API (real) or fake results from `data/search_results.json` |
+| `read_page` | Fetch a URL, extract text content | httpx + readability (real) or fake from `data/pages/` |
+| `linkedin_lookup` | Look up a person's LinkedIn profile | Fake — returns from `data/linkedin/{name}.json` |
 
-Plain text. Examples:
+Three model tiers, pre-configured:
 
-> "I have a list of 50 companies. For each one, look up their website and recent news. Score them 0-100 on how well they match my ICP (B2B SaaS, 50-200 employees, raised Series A-B). For companies scoring above 60, draft a cold email referencing something specific from the research."
+| Tier | Model | Use case |
+|------|-------|----------|
+| `reason` | Claude Sonnet | Complex analysis, scoring |
+| `fast` | Gemini Flash | Quick extraction, classification |
+| `creative` | GPT-4o | Writing, personalization |
 
-> "Take this incident alert JSON. Pull logs, metrics, and recent deploys in parallel. Correlate them into a timeline. Form a hypothesis about the root cause. Write an RCA draft."
+That is it. No file system access, no databases, no email sending, no other APIs. The LLM can only use these tools and models when generating the spec.
 
-> "Review this git diff. For each changed file, check for security issues, logic bugs, and style problems independently. Synthesize into a prioritized report."
+### Fixed test data
 
-### Step 2: LLM generates the spec
+`data/linkedin/` contains 5-10 fake LinkedIn profiles (JSON). Different roles, companies, industries. Enough variety for the demo to be interesting.
 
-An LLM call with:
-- **Input**: the user's description + the JSON Schema for pipeline specs + the JSON Schema for project types
-- **Output**: two YAML documents — `pipeline.yaml` and `project.yaml`
+`data/search_results.json` contains canned web search results for a few company names. Used when running without Serper API key.
 
-The LLM knows the spec format because the JSON Schema IS the tool schema. It defines types (Pydantic models as JSON Schema), nodes (with mode, prompt, inputs/outputs, modifiers), and wiring.
+### One use case for the demo
 
-The generation prompt teaches the LLM:
-- Available modes: `think` (LLM call), `scripted` (Python function), `agent` (LLM + tools)
-- Available modifiers: `Oracle` (ensemble), `Each` (fan-out), `Loop` (iterate)
-- How nodes wire: parameter names match upstream node names
-- How types work: JSON Schema properties become Pydantic fields
-- Inline prompts: each `think` node needs a prompt that tells the LLM what to do
+"Research [person] — find out what their company does, what they care about, and write a personalized LinkedIn connection request."
 
-### Step 3: Validate the spec
+This is concrete, uses all three tools, produces a tangible output (the connection request), and naturally exercises:
+- **Agent mode**: web_search + read_page (tool-calling nodes)
+- **Think mode**: scoring, writing (structured LLM output)
+- **Each**: if given multiple people, fan-out
+- **Loop**: refine the connection request until quality threshold met
 
-- JSON Schema validation of both documents (catches structural errors)
-- Type-reference validation (every node's inputs/outputs reference defined types)
-- Wiring validation (compile-time type checking)
+## How it works
 
-On validation failure, feed the errors back to the LLM and retry (same pattern as the json_mode retry with validation details).
+### The project surface file
 
-### Step 4: Compile and run
+`project.yaml` — declares what the platform offers:
 
-```python
-construct = load_spec(pipeline_yaml, project=project_yaml)
-graph = compile(construct)
-result = run(graph, input=user_params)
+```yaml
+tools:
+  - name: web_search
+    description: "Search the web. Returns top 5 results with title, url, snippet."
+    args:
+      query: {type: string}
+  - name: read_page
+    description: "Fetch a URL and extract the main text content."
+    args:
+      url: {type: string}
+  - name: linkedin_lookup
+    description: "Look up a person's LinkedIn profile by name."
+    args:
+      name: {type: string}
+
+models:
+  reason: "Complex analysis, scoring, evaluation"
+  fast: "Quick extraction, classification, parsing"
+  creative: "Writing, personalization, tone"
 ```
 
-### Step 5: Show the result
+This file IS the system prompt context for the spec-generating LLM. The LLM sees exactly what it can use.
 
-Structured output from the pipeline — the types the LLM defined determine the shape.
-
-## What makes this different from "just prompting an LLM"
-
-1. **Type safety**: the generated spec goes through neograph's compile-time validation. Type mismatches between nodes are caught before execution, not at 3 AM.
-2. **Parallelism**: Each modifier means independent steps run in parallel automatically. The LLM doesn't need to think about async/threading.
-3. **Ensemble**: Oracle modifier means you get multiple model perspectives merged. The LLM just says "use 3 models" in the spec.
-4. **Iteration**: Loop modifier means quality-gated refinement. The LLM defines when to stop, neograph handles the back-edge.
-5. **Durability**: checkpointing means a 20-minute pipeline can resume from where it left off.
-6. **Observability**: structlog at every node, timing data, token usage — all automatic.
-
-None of these exist when you "just prompt an LLM." The spec is the contract between human intent and structured execution.
-
-## Architecture
+### The flow
 
 ```
-User description (text)
-        |
-        v
-   [generate-spec]  LLM call with JSON Schema as structured output
-        |
-        v
-   pipeline.yaml + project.yaml
-        |
-        v
-   [validate]  JSON Schema + compile-time type checking
-        |
-        v  (retry with errors if validation fails)
-   [compile]   load_spec → compile
-        |
-        v
-   [execute]   run with user parameters
-        |
-        v
-   Structured result (typed, observable, checkpointed)
+1. User: "Research Sarah Chen and write a connection request"
+2. Script loads project.yaml (available tools + models)
+3. Script calls LLM with:
+   - The user's request
+   - The project surface (tools + models)
+   - The pipeline JSON Schema (what a valid spec looks like)
+4. LLM generates: pipeline.yaml + types
+5. Script validates: JSON Schema + compile-time type checking
+6. If validation fails: retry with errors (same pattern as json_mode retry)
+7. Script runs: load_spec → compile → run
+8. Output: structured result (research + connection request)
 ```
 
-The generate-spec step is itself a neograph pipeline (meta-pipeline):
-- Node 1: `parse_request` (scripted) — extract intent, entities, constraints from user description
-- Node 2: `generate` (think, Oracle models=) — LLM generates the spec, multiple models for diversity
-- Node 3: `validate` (scripted) — JSON Schema + compile validation
-- Node 4: `compile_and_run` (scripted) — load_spec → compile → run
+### What the LLM generates (example)
 
-With a Loop on nodes 2-3: generate → validate → if errors, retry with feedback.
+Given "Research Sarah Chen and write a connection request":
 
-## Demo experience
+```yaml
+# types (generated)
+types:
+  ProfileData:
+    properties:
+      name: {type: string}
+      headline: {type: string}
+      company: {type: string}
+      recent_activity: {type: string}
+  CompanyInfo:
+    properties:
+      description: {type: string}
+      recent_news: {type: string}
+  ConnectionRequest:
+    properties:
+      message: {type: string}
+      score: {type: number}
+      reasoning: {type: string}
 
-This needs a walkthrough page on neograph.pro showing:
+# pipeline (generated)  
+name: research-and-connect
+nodes:
+  - name: lookup
+    mode: agent
+    model: fast
+    tools: [linkedin_lookup]
+    prompt: "Look up the LinkedIn profile for the person specified in the input."
+    outputs: ProfileData
 
-1. The user's plain-text description (input box or code block)
-2. The generated YAML spec (syntax-highlighted, collapsible)
-3. The generated types (what Pydantic models the LLM created)
-4. The compiled graph (visual — mermaid diagram or similar)
-5. The execution log (structlog output, timing, token usage)
-6. The structured result (JSON output)
+  - name: research
+    mode: agent
+    model: reason
+    tools: [web_search, read_page]
+    prompt: "Research this person's company. Search for recent news, product launches, funding. Read the most relevant pages."
+    inputs: {lookup: ProfileData}
+    outputs: CompanyInfo
 
-The walkthrough should show 2-3 examples:
-- Simple: "summarize this document in 3 bullet points" (single node, no modifiers)
-- Medium: "research and score these companies" (Each + Oracle)
-- Complex: "review this code diff across 3 dimensions with refinement" (Each + Loop + sub-constructs)
+  - name: write
+    mode: think
+    model: creative
+    prompt: "Write a personalized LinkedIn connection request..."
+    inputs:
+      lookup: ProfileData
+      research: CompanyInfo
+    outputs: ConnectionRequest
+    loop:
+      when: "score < 0.8"
+      max_iterations: 3
+```
 
-Each example shows the full flow from description to result.
+The LLM decided the types, the nodes, the prompts, and the wiring. neograph validates and runs it.
 
-## What neograph features this demonstrates
+## What this is NOT
 
-- **load_spec**: YAML → Construct (the whole point)
-- **JSON Schema validation**: specs validated at load time
-- **Compile-time type checking**: type mismatches caught before execution
-- **All modifiers**: Each, Oracle, Loop available in the spec format
-- **Inline prompts**: LLM-generated prompts embedded in the spec
-- **Type auto-generation**: JSON Schema → Pydantic models
-- **The thesis**: "the agent generates the workflow, the workflow executes the agent"
+- NOT a product or platform
+- NOT a web UI (it is a Python script you run from the terminal)
+- NOT supporting arbitrary tools (3 tools, that is the boundary)
+- NOT generating Python code (it generates YAML specs)
+- NOT doing anything that load_spec + compile + run can not already do
+
+## Files
+
+```
+examples/spec-builder/
+  requirements.md          (this file)
+  project.yaml             (fixed runtime surface)
+  builder.py               (the script — takes user request, generates spec, runs it)
+  prompts/
+    generate_spec.md       (system prompt for the spec-generating LLM)
+  data/
+    linkedin/              (5-10 fake profiles)
+    search_results.json    (canned web search results)
+    pages/                 (canned page content)
+```
+
+## Demo walkthrough (for neograph.pro)
+
+One page showing:
+
+1. "Here is what the platform offers" — the project.yaml (3 tools, 3 models)
+2. "Here is what the user asked" — plain text request
+3. "Here is what the LLM generated" — the YAML spec (syntax-highlighted)
+4. "Here is what neograph validated" — compile log showing type checking
+5. "Here is what ran" — execution log with timing and tool calls
+6. "Here is the result" — the structured output
+
+One use case, shown end to end. That is the demo.
