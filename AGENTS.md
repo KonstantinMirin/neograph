@@ -257,19 +257,40 @@ This was the cause of `neograph-jyw` before the fix. Any new modifier kwarg you 
 
 ## Test conventions
 
-### Test file layout (7 files)
+### Test file layout (9 files)
 
 | File | Scope | Tests |
 |------|-------|-------|
-| `test_pipeline_modes.py` | Scripted, think, agent, act, raw modes; output strategies; LLM config; config injection; error paths | ~40 |
+| `test_pipeline_modes.py` | Scripted, think, agent, act, raw modes; output strategies; LLM config; config injection; error paths; compile-time checks | ~55 |
 | `test_node_decorator.py` | `@node`, `@tool`, `@merge_fn` decorators; mode inference; fan-out/Oracle/Operator interop; DI; `construct_from_functions`/`construct_from_module` | ~78 |
-| `test_validation.py` | Assembly-time type checking; fan-in validation; `effective_producer_type`; list/dict compat; dict-form outputs; Oracle errors | ~50 |
+| `test_validation.py` | Assembly-time type checking; fan-in validation; `effective_producer_type`; list/dict compat; dict-form outputs; Oracle errors; lint(); Each.key; boundary contracts | ~76 |
 | `test_renderers.py` | `XmlRenderer`, `DelimitedRenderer`, `JsonRenderer`, `describe_type`, render dispatch, json_mode output schema, `render_prompt` | ~54 |
 | `test_forward.py` | `ForwardConstruct` base class, tracer, compilation, branching, loops | ~36 |
-| `test_modifiers.py` | Oracle, Each, Operator, `map()`, deep compositions, Construct-level modifiers, list-over-Each | ~34 |
+| `test_modifiers.py` | Oracle, Each, Operator, `map()`, deep compositions, Construct-level modifiers, list-over-Each, merge_fn errors | ~36 |
 | `test_composition.py` | Sub-constructs, @node sub-constructs, multi-field input, state hygiene, reducers, dict-form output state/factory | ~36 |
+| `test_loop.py` | Loop modifier: self-loop, Loop-on-Construct, ForwardConstruct, dict-form, skip_when, validation | ~38 |
+| `test_check_fixtures.py` | Compiler safety net: parametrized fixtures (should_fail + should_pass + known_gaps) | ~12 |
 
 Supporting files: `conftest.py` (registry cleanup fixture), `schemas.py` (shared Pydantic models + `_producer`/`_consumer` helpers), `fakes.py` (LLM fakes).
+
+### Compiler safety net (fixture-based validation testing)
+
+`tests/check_fixtures/` — rustc-style fixture suite that tests the validator itself, not just pipelines. Each fixture is a self-contained `.py` file with a top-level `Construct`. A parametrized test in `test_check_fixtures.py` discovers them automatically.
+
+| Directory | Purpose | Convention |
+|-----------|---------|------------|
+| `should_fail/` | Each file has one known defect. Must raise during import or compile. | `# CHECK_ERROR: <regex>` comment matches the expected error message |
+| `should_pass/` | Valid pipelines. Must import and compile cleanly. | No special comment needed |
+| `known_gaps/` | Defects the validator SHOULD catch but doesn't yet. Each is a filed bug. | Same `# CHECK_ERROR:` as should_fail; moves to should_fail when the validator is fixed |
+
+**Rules:**
+- Every new validation rule gets a corresponding should_fail fixture AND a should_pass fixture.
+- Fixtures derived from real consumer code (piarch patterns) are higher quality than hypothetical ones. When adding fixtures, look at actual usage in `piarch/src/derive_ensemble/constructs/`.
+- The fixture author should be different from the validation author when possible — neograph-a9n2 was caught by a fixture written AFTER the validation was "done."
+- `known_gaps/` IS the backlog for validation improvements. When a fixture should_fail but doesn't, move it there and file a bug.
+- Keep fixtures minimal — one Construct, one defect, ~15 lines.
+
+### General test conventions
 
 - **New tests go in the matching file.** If a feature spans multiple files, put the test where the primary behavior lives and add cross-references in docstrings.
 - **BDD naming**: `test_{what_should_happen}_when_{condition}`. Class docstrings describe the feature being tested.
