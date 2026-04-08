@@ -74,6 +74,11 @@ def validate_loop_self_edge(node: Node) -> None:
     if output_type is None or input_type is None:
         return
 
+    # Dict-form outputs: loop feeds back the PRIMARY key only (first key).
+    # Secondary keys (e.g. tool_log) are per-iteration metadata.
+    if isinstance(output_type, dict):
+        output_type = next(iter(output_type.values()))
+
     # Dict-form inputs: the back-edge feeds the node's output back as one
     # of its own inputs.  Check if the output is compatible with ANY input
     # value type — the compiler wires the specific slot.

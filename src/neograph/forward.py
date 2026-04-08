@@ -566,15 +566,17 @@ class _LoopCall:
         occurrence = self._tracer.next_loop_occurrence(body_slug)
         name = f"loop-{body_slug}" if occurrence == 0 else f"loop-{body_slug}-{occurrence}"
 
-        for i, bn in enumerate(body_nodes):
+        body_nodes_copy = []
+        for bn in body_nodes:
             if bn.inputs is None:
-                bn.inputs = input_type
+                bn = bn.model_copy(update={"inputs": input_type})
+            body_nodes_copy.append(bn)
 
         sub = Construct(
             name=name,
             input=input_type,
             output=output_type,
-            nodes=list(body_nodes),
+            nodes=body_nodes_copy,
         ) | Loop(
             when=self._when,
             max_iterations=self._max_iterations,

@@ -286,9 +286,19 @@ def _add_loop_back_edge(
         # The loop condition receives the node's latest output (unwrapped
         # from the append-list). This lets the user write simple lambdas
         # like `lambda draft: draft.score < 0.8` without list awareness.
-        own_val = getattr(state, field_name, None)
+        # Dict-form outputs: primary key is {field}_{first_key} (neograph-ltqj).
+        if isinstance(node.outputs, dict):
+            primary_key = next(iter(node.outputs))
+            state_field = f"{field_name}_{primary_key}"
+        else:
+            state_field = field_name
+        own_val = getattr(state, state_field, None)
         if isinstance(own_val, list) and own_val:
             latest = own_val[-1]
+        elif isinstance(own_val, list):
+            # Empty list — no output yet (e.g. skip_when with no skip_value).
+            # Pass None so user conditions like `lambda d: d is None or ...` work.
+            latest = None
         else:
             latest = own_val
         should_continue = condition(latest)

@@ -1928,3 +1928,174 @@ class TestOracleModels:
         assert oracle.models == ["reason", "fast"]
         assert oracle.n == 2
         assert oracle.merge_fn is not None  # body was registered as merge_fn
+
+    def test_oracle_models_on_think_mode_node(self):
+        """Oracle(models=) must override model tier for think-mode (produce) nodes.
+
+        Bug: _make_produce_fn reads _oracle_model from config but never
+        transfers neo_oracle_model from state to config. Only the scripted
+        wrapper does this transfer. Regression test for neograph-lbsf.
+        """
+        from neograph.factory import register_scripted
+
+        seen_tiers = []
+
+        def tier_capturing_factory(tier):
+            seen_tiers.append(tier)
+            return StructuredFake(lambda m: m(items=[f"from-{tier}"]))
+
+        configure_fake_llm(tier_capturing_factory)
+
+        # Merge function (scripted) to combine variants
+        def think_merge(variants, config):
+            all_items = []
+            for v in variants:
+                all_items.extend(v.items)
+            return Claims(items=all_items)
+
+        register_scripted("think_models_merge", think_merge)
+
+        gen_node = (
+            Node(
+                name="think-gen",
+                mode="think",
+                outputs=Claims,
+                model="default-tier",
+                prompt="test/generate",
+            )
+            | Oracle(models=["reason", "fast", "creative"], merge_fn="think_models_merge")
+        )
+        pipeline = Construct("test-think-oracle-models", nodes=[gen_node])
+        graph = compile(pipeline)
+        result = run(graph, input={"node_id": "think-oracle-models"})
+
+        # Filter to only the generator tiers (exclude merge LLM calls)
+        gen_tiers = [t for t in seen_tiers if t in ("reason", "fast", "creative")]
+        assert len(gen_tiers) == 3, f"Expected 3 generator calls with model overrides, got tiers: {seen_tiers}"
+        assert set(gen_tiers) == {"reason", "fast", "creative"}
+
+    def test_oracle_models_on_agent_mode_node(self):
+        """Oracle(models=) must override model tier for agent-mode (tool) nodes.
+
+        Bug: _make_tool_fn reads _oracle_model from config but never
+        transfers neo_oracle_model from state to config. Regression test
+        for neograph-lbsf.
+        """
+        from neograph.factory import register_scripted, register_tool_factory
+
+        seen_tiers = []
+        fake_tool = FakeTool("agent_search", response="found")
+        register_tool_factory("agent_search", lambda config, tool_config: fake_tool)
+
+        def tier_capturing_factory(tier):
+            seen_tiers.append(tier)
+            return ReActFake(
+                tool_calls=[
+                    [{"name": "agent_search", "args": {}, "id": "c1"}],
+                    [],  # stop
+                ],
+                final=lambda m: m(items=[f"from-{tier}"]),
+            )
+
+        configure_fake_llm(tier_capturing_factory)
+
+        def agent_merge(variants, config):
+            all_items = []
+            for v in variants:
+                all_items.extend(v.items)
+            return Claims(items=all_items)
+
+        register_scripted("agent_models_merge", agent_merge)
+
+        gen_node = (
+            Node(
+                name="agent-gen",
+                mode="agent",
+                outputs=Claims,
+                model="default-tier",
+                prompt="test/search",
+                tools=[Tool(name="agent_search", budget=5)],
+            )
+            | Oracle(models=["reason", "fast"], merge_fn="agent_models_merge")
+        )
+        pipeline = Construct("test-agent-oracle-models", nodes=[gen_node])
+        graph = compile(pipeline)
+        result = run(graph, input={"node_id": "agent-oracle-models"})
+
+        # Filter to only the generator tiers (exclude merge/final-parse calls)
+        gen_tiers = [t for t in seen_tiers if t in ("reason", "fast")]
+        assert len(gen_tiers) == 2, f"Expected 2 generator calls with model overrides, got tiers: {seen_tiers}"
+        assert set(gen_tiers) == {"reason", "fast"}
+
+    def test_oracle_models_round_robin_on_think_mode(self):
+        """Round-robin model assignment works on think-mode nodes when n > len(models)."""
+        from neograph.factory import register_scripted
+
+        seen_tiers = []
+
+        def tier_capturing_factory(tier):
+            seen_tiers.append(tier)
+            return StructuredFake(lambda m: m(items=[f"from-{tier}"]))
+
+        configure_fake_llm(tier_capturing_factory)
+
+        def rr_think_merge(variants, config):
+            return Claims(items=[f"{len(variants)} variants"])
+
+        register_scripted("rr_think_merge", rr_think_merge)
+
+        gen_node = (
+            Node(
+                name="rr-think",
+                mode="think",
+                outputs=Claims,
+                model="default-tier",
+                prompt="test/generate",
+            )
+            | Oracle(n=5, models=["alpha", "beta"], merge_fn="rr_think_merge")
+        )
+        pipeline = Construct("test-rr-think", nodes=[gen_node])
+        graph = compile(pipeline)
+        result = run(graph, input={"node_id": "rr-think"})
+
+        gen_tiers = [t for t in seen_tiers if t in ("alpha", "beta")]
+        assert len(gen_tiers) == 5, f"Expected 5 generator calls, got tiers: {seen_tiers}"
+        assert gen_tiers.count("alpha") == 3  # 0,2,4
+        assert gen_tiers.count("beta") == 2   # 1,3
+
+    def test_oracle_model_does_not_leak_to_merge_node(self):
+        """Merge node must use merge_model, not a generator's oracle model override."""
+        from neograph.factory import register_scripted
+
+        seen_tiers = []
+
+        def tier_capturing_factory(tier):
+            seen_tiers.append(tier)
+            return StructuredFake(lambda m: m(items=[f"from-{tier}"]))
+
+        configure_fake_llm(tier_capturing_factory)
+
+        gen_node = (
+            Node(
+                name="leak-gen",
+                mode="think",
+                outputs=Claims,
+                model="default-tier",
+                prompt="test/generate",
+            )
+            | Oracle(
+                models=["reason", "fast"],
+                merge_prompt="test/merge",
+                merge_model="judge-tier",
+            )
+        )
+        pipeline = Construct("test-leak", nodes=[gen_node])
+        graph = compile(pipeline)
+        result = run(graph, input={"node_id": "leak-test"})
+
+        # The merge call should use "judge-tier", not "reason" or "fast"
+        # Generator calls use the oracle model overrides
+        gen_tiers = [t for t in seen_tiers if t in ("reason", "fast")]
+        merge_tiers = [t for t in seen_tiers if t == "judge-tier"]
+        assert len(gen_tiers) == 2, f"Expected 2 generator tiers, got: {seen_tiers}"
+        assert len(merge_tiers) == 1, f"Expected 1 merge call with judge-tier, got: {seen_tiers}"

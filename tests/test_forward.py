@@ -974,3 +974,135 @@ class TestSelfLoopTracing:
         inner_names = [n.name for n in loop_entry.nodes]
         assert "review" in inner_names
         assert "revise" in inner_names
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Part 10: _LoopCall must not mutate class-level Node.inputs (neograph-2o9n)
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TestLoopCallDoesNotMutateClassNodes:
+    """neograph-2o9n: _LoopCall.__call__ must copy body nodes instead of
+    mutating class-level Node.inputs, which leaks across instances."""
+
+    def test_class_node_inputs_unchanged_after_instantiation(self):
+        """After creating an instance, the class-level Node.inputs must
+        remain None (not mutated by _LoopCall)."""
+        register_scripted(
+            "fc_seed_2o9n_a",
+            lambda _in, _cfg: Draft(content="seed", score=0.0),
+        )
+        register_scripted(
+            "fc_review_2o9n_a",
+            lambda _in, _cfg: ReviewResult(score=0.5, feedback="ok"),
+        )
+        register_scripted(
+            "fc_revise_2o9n_a",
+            lambda _in, _cfg: Draft(content="revised", score=0.9),
+        )
+
+        class Writer(ForwardConstruct):
+            seed = Node.scripted("seed", fn="fc_seed_2o9n_a", outputs=Draft)
+            review = Node.scripted("review", fn="fc_review_2o9n_a", outputs=ReviewResult)
+            revise = Node.scripted("revise", fn="fc_revise_2o9n_a", outputs=Draft)
+
+            def forward(self, topic):
+                d = self.seed(topic)
+                d = self.loop(
+                    body=[self.review, self.revise],
+                    when=lambda r: r is None or r.score < 0.8,
+                    max_iterations=5,
+                )(d)
+                return d
+
+        Writer()
+
+        # Class-level nodes must not have been mutated
+        assert Writer.review.inputs is None, (
+            "Class-level Node.inputs was mutated by _LoopCall"
+        )
+        assert Writer.revise.inputs is None, (
+            "Class-level Node.inputs was mutated by _LoopCall"
+        )
+
+    def test_second_instance_works_when_same_class_instantiated_twice(self):
+        """Two instances of the same ForwardConstruct subclass must both
+        trace correctly — the second must not see mutated inputs from the first."""
+        register_scripted(
+            "fc_seed_2o9n_b",
+            lambda _in, _cfg: Draft(content="seed", score=0.0),
+        )
+        register_scripted(
+            "fc_review_2o9n_b",
+            lambda _in, _cfg: ReviewResult(score=0.5, feedback="ok"),
+        )
+        register_scripted(
+            "fc_revise_2o9n_b",
+            lambda _in, _cfg: Draft(content="revised", score=0.9),
+        )
+
+        class Writer(ForwardConstruct):
+            seed = Node.scripted("seed", fn="fc_seed_2o9n_b", outputs=Draft)
+            review = Node.scripted("review", fn="fc_review_2o9n_b", outputs=ReviewResult)
+            revise = Node.scripted("revise", fn="fc_revise_2o9n_b", outputs=Draft)
+
+            def forward(self, topic):
+                d = self.seed(topic)
+                d = self.loop(
+                    body=[self.review, self.revise],
+                    when=lambda r: r is None or r.score < 0.8,
+                    max_iterations=5,
+                )(d)
+                return d
+
+        p1 = Writer()
+        p2 = Writer()
+
+        # Both instances should have valid loop constructs
+        from neograph.modifiers import Loop
+
+        loop1 = [n for n in p1.nodes if isinstance(n, Construct) and n.has_modifier(Loop)]
+        loop2 = [n for n in p2.nodes if isinstance(n, Construct) and n.has_modifier(Loop)]
+        assert len(loop1) == 1, "First instance missing loop construct"
+        assert len(loop2) == 1, "Second instance missing loop construct"
+
+    def test_retrace_does_not_corrupt_class_nodes_with_branch(self):
+        """A ForwardConstruct with self.loop() and a branch — re-trace
+        (branch discovery) must not corrupt class-level nodes."""
+        register_scripted(
+            "fc_seed_2o9n_c",
+            lambda _in, _cfg: Draft(content="seed", score=0.0),
+        )
+        register_scripted(
+            "fc_review_2o9n_c",
+            lambda _in, _cfg: ReviewResult(score=0.5, feedback="ok"),
+        )
+        register_scripted(
+            "fc_revise_2o9n_c",
+            lambda _in, _cfg: Draft(content="revised", score=0.9),
+        )
+        register_scripted(
+            "fc_final_2o9n_c",
+            lambda _in, _cfg: FinalResult(summary="done"),
+        )
+
+        class BranchWriter(ForwardConstruct):
+            seed = Node.scripted("seed", fn="fc_seed_2o9n_c", outputs=Draft)
+            review = Node.scripted("review", fn="fc_review_2o9n_c", outputs=ReviewResult)
+            revise = Node.scripted("revise", fn="fc_revise_2o9n_c", outputs=Draft)
+            finish = Node.scripted("finish", fn="fc_final_2o9n_c", outputs=FinalResult)
+
+            def forward(self, topic):
+                d = self.seed(topic)
+                d = self.loop(
+                    body=[self.review, self.revise],
+                    when=lambda r: r is None or r.score < 0.8,
+                    max_iterations=5,
+                )(d)
+                return self.finish(d)
+
+        BranchWriter()
+
+        # Class-level nodes still untouched
+        assert BranchWriter.review.inputs is None
+        assert BranchWriter.revise.inputs is None

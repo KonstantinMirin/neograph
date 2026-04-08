@@ -118,7 +118,15 @@ def _apply_skip_when(
     if node.skip_value is not None:
         result = node.skip_value(skip_input)
         return _build_state_update(node, field_name, result, state)
-    return {}
+    # No skip_value — still need to increment the loop counter so the
+    # loop_router eventually exits (neograph-c4b9).
+    update: dict[str, Any] = {}
+    loop_mod = node.get_modifier(Loop)
+    if loop_mod is not None:
+        count_field = f"neo_loop_count_{field_name}"
+        current_count = _state_get(state, count_field) or 0
+        update[count_field] = current_count + 1
+    return update
 
 
 def _render_input(node: Node, input_data: Any) -> Any:
@@ -310,6 +318,17 @@ def _make_produce_fn(node: Node) -> Callable:
         node_log.info("node_start", input_type=_type_name(node.inputs), output_type=_type_name(node.outputs))
 
         t0 = time.monotonic()
+
+        # Inject oracle generator ID + model override into config if present
+        oracle_gen_id = _state_get(state, "neo_oracle_gen_id")
+        if oracle_gen_id is not None:
+            configurable = config.get("configurable", {})
+            extra = {"_generator_id": oracle_gen_id}
+            oracle_model = _state_get(state, "neo_oracle_model")
+            if oracle_model is not None:
+                extra["_oracle_model"] = oracle_model
+            config = {**config, "configurable": {**configurable, **extra}}
+
         input_data = _extract_input(state, node)
 
         skip_result = _apply_skip_when(node, input_data, field_name, t0, node_log, state)
@@ -369,6 +388,17 @@ def _make_tool_fn(node: Node) -> Callable:
                       budgets={t.name: t.budget for t in node.tools})
 
         t0 = time.monotonic()
+
+        # Inject oracle generator ID + model override into config if present
+        oracle_gen_id = _state_get(state, "neo_oracle_gen_id")
+        if oracle_gen_id is not None:
+            configurable = config.get("configurable", {})
+            extra = {"_generator_id": oracle_gen_id}
+            oracle_model = _state_get(state, "neo_oracle_model")
+            if oracle_model is not None:
+                extra["_oracle_model"] = oracle_model
+            config = {**config, "configurable": {**configurable, **extra}}
+
         input_data = _extract_input(state, node)
 
         skip_result = _apply_skip_when(node, input_data, field_name, t0, node_log, state)
@@ -461,8 +491,12 @@ def _extract_input(state: Any, node: Node) -> Any:
     # Loop re-entry: on iteration 1+, read from the node's OWN output field
     # (an append-list) instead of the upstream. The append-list reducer
     # accumulates each iteration's result; we unwrap [-1] for the latest.
+    # Dict-form outputs: primary key is {field}_{first_key} (neograph-ltqj).
     if node.has_modifier(Loop):
         own_field = node.name.replace("-", "_")
+        if isinstance(node.outputs, dict):
+            primary_key = next(iter(node.outputs))
+            own_field = f"{own_field}_{primary_key}"
         own_val = _state_get(state, own_field)
         if isinstance(own_val, list) and own_val:
             latest = own_val[-1]
