@@ -1,0 +1,10 @@
+product: neograph
+positioning: "Declarative LLM pipeline compiler -- typed, durable, observable"
+angles:
+  - "Engineering teams waste 70% of agent code on wiring, not logic"
+  - "Type mismatches between pipeline stages surface at 3 AM, not at build time"
+  - "Every agent framework requires you to manage state manually"
+relevant_to_lead:
+  - "Finova is hiring backend engineers -- they're scaling their engineering team"
+  - "Sarah's Stripe background means she values reliability and type safety"
+  - "Recent post about 99.99% uptime -- she cares about observable, production-grade infra"

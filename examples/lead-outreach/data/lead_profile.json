@@ -1,0 +1,19 @@
+{
+  "first_name": "Sarah",
+  "last_name": "Chen",
+  "headline": "VP Engineering at Finova | Building real-time payments infrastructure",
+  "company": "Finova",
+  "company_description": "Series B fintech building real-time payment rails for banks",
+  "location": "San Francisco, CA",
+  "experience": [
+    {"title": "VP Engineering", "company": "Finova", "duration": "2 years"},
+    {"title": "Staff Engineer", "company": "Stripe", "duration": "4 years"},
+    {"title": "Senior Engineer", "company": "Square", "duration": "3 years"}
+  ],
+  "recent_posts": [
+    "Excited to share we just hit 99.99% uptime on our core payments API",
+    "Hiring senior backend engineers \u2014 Rust experience a plus",
+    "Great panel today on building reliable distributed systems at scale"
+  ],
+  "skills": ["distributed systems", "Rust", "payments", "API design", "team leadership"]
+}
