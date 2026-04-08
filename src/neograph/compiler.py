@@ -32,6 +32,34 @@ from neograph.state import compile_state_model
 log = structlog.get_logger()
 
 
+def _register_msgpack_types(checkpointer: Any, state_model: type) -> None:
+    """Register node output types with the checkpointer's msgpack serializer.
+
+    Converts the serializer from warn-all mode (allowed_msgpack_modules=True)
+    to an explicit allowlist so LangGraph doesn't emit 'Deserializing
+    unregistered type' warnings on checkpoint resume.
+    """
+    try:
+        from langgraph._internal._serde import build_serde_allowlist
+        from langgraph.checkpoint.serde._msgpack import SAFE_MSGPACK_TYPES
+        from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
+    except ImportError:
+        return  # LangGraph version doesn't have this API
+
+    serde = getattr(checkpointer, "serde", None)
+    if not isinstance(serde, JsonPlusSerializer):
+        return
+    if getattr(serde, "_allowed_msgpack_modules", None) is not True:
+        return  # already has an explicit allowlist
+
+    # Collect types from the state model
+    allowlist = build_serde_allowlist(schemas=[state_model])
+    allowlist = allowlist | SAFE_MSGPACK_TYPES
+
+    # Replace serde with one that has the explicit allowlist
+    checkpointer.serde = JsonPlusSerializer(allowed_msgpack_modules=allowlist)
+
+
 def compile(construct: Construct, checkpointer: Any = None, retry_policy: Any = None) -> Any:
     """Compile a Construct into an executable LangGraph StateGraph.
 
@@ -83,7 +111,11 @@ def compile(construct: Construct, checkpointer: Any = None, retry_policy: Any = 
     if prev_node:
         graph.add_edge(prev_node, END)
 
-    # 3. Compile
+    # 3. Register output types with checkpointer's msgpack serializer
+    if checkpointer is not None:
+        _register_msgpack_types(checkpointer, state_model)
+
+    # 4. Compile
     compiled = graph.compile(checkpointer=checkpointer)
     compile_log.info("compile_complete", state_fields=list(state_model.model_fields.keys()))
     return compiled
