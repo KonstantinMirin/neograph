@@ -189,6 +189,28 @@ def _validate_node_chain(construct: Any) -> None:
         # (Loop reenter validation removed — Loop.reenter no longer exists.
         # Multi-node loops use Loop on Construct instead.)
 
+    # Sub-construct output boundary contract: if construct.output is declared,
+    # at least one internal node must produce a compatible type.
+    if construct.output is not None and producers:
+        declared_output = construct.output
+        for _, producer_type, _ in producers:
+            if producer_type is not None and _types_compatible(producer_type, declared_output):
+                break
+        else:
+            producer_summary = "\n".join(
+                f"    - {label}: {_fmt_type(t)}"
+                for _, t, label in producers
+                if t is not None
+            )
+            msg = (
+                f"Construct '{construct.name}' declares "
+                f"output={_fmt_type(declared_output)} but no internal node "
+                f"produces a compatible type.\n"
+                f"  internal producers:\n{producer_summary}\n"
+                f"{_location_suffix()}"
+            )
+            raise ConstructError(msg)
+
 
 def validate_loop_construct(construct: Any) -> None:
     """Validate Loop on a Construct: output must be compatible with input.
@@ -387,6 +409,20 @@ def _check_each_path(
             f"{'inputs' if isinstance(item, Node) else 'input'}="
             f"{_fmt_type(input_type)} with Each(over='{each.over}'), "
             f"but the path resolves to list[{_fmt_type(element_type)}].\n"
+            f"{_location_suffix()}"
+        )
+        raise ConstructError(msg)
+
+    # Verify each.key names a valid field on the element type.
+    # Only check when the element type has model_fields (Pydantic model);
+    # primitives (str, int, etc.) defer to runtime str(item) fallback.
+    element_fields = getattr(element_type, "model_fields", None)
+    if element_fields is not None and each.key not in element_fields:
+        msg = (
+            f"Node '{item.name}' in construct '{construct.name}' has "
+            f"Each(over='{each.over}', key='{each.key}') but "
+            f"{_fmt_type(element_type)} has no field '{each.key}'.\n"
+            f"  available fields: {sorted(element_fields.keys())}\n"
             f"{_location_suffix()}"
         )
         raise ConstructError(msg)

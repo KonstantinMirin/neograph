@@ -1,6 +1,6 @@
 """Validation tests — assembly-time type checking, fan-in validation,
 Each path resolution, effective_producer_type, list/dict compatibility,
-dict-form outputs validation, and Oracle error paths.
+dict-form outputs validation, Oracle error paths, and lint() DI validation.
 """
 
 from __future__ import annotations
@@ -15,10 +15,18 @@ from tests.schemas import (
     MatchResult, MergedResult, ValidationResult, _producer, _consumer,
 )
 from neograph import (
-    Construct, ConstructError, Node, Each, Oracle, Operator,
+    Construct, ConstructError, Node, Each, Oracle, Operator, Tool,
     compile, run,
     CompileError, ConfigurationError,
+    FromInput, FromConfig,
+    node,
+    construct_from_functions,
+    ExecutionError,
 )
+try:
+    from neograph import lint
+except ImportError:
+    lint = None
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1057,6 +1065,40 @@ class TestCheckEachPathErrors:
         with pytest.raises(ConstructError, match="not a list"):
             Construct("prim-terminal", nodes=[a, b])
 
+    def test_each_key_raises_when_field_missing_on_item_type(self):
+        """Each.key must name a valid field on the list element type.
+        each.key='nonexistent' on list[ClusterGroup] should raise (neograph-mn41)."""
+        a = _producer("a", Clusters)
+        b = _consumer("b", ClusterGroup, MatchResult) | Each(
+            over="a.groups", key="nonexistent"
+        )
+        with pytest.raises(ConstructError, match="has no field 'nonexistent'"):
+            Construct("bad-each-key", nodes=[a, b])
+
+    def test_each_key_passes_when_field_exists_on_item_type(self):
+        """Each.key='label' on list[ClusterGroup] (which has a 'label' field)
+        should assemble without error."""
+        a = _producer("a", Clusters)
+        b = _consumer("b", ClusterGroup, MatchResult) | Each(
+            over="a.groups", key="label"
+        )
+        pipeline = Construct("ok-each-key", nodes=[a, b])
+        assert len(pipeline.nodes) == 2
+
+    def test_each_key_skipped_when_element_type_is_primitive(self):
+        """Each.key on list[str] (no model_fields) defers to runtime."""
+
+        class HasStrings(BaseModel, frozen=True):
+            tags: list[str]
+
+        a = _producer("a", HasStrings)
+        b = Node.scripted(
+            "b", fn="f", inputs=str, outputs=MatchResult,
+        ) | Each(over="a.tags", key="value")
+        # str has no model_fields — should defer to runtime, not raise.
+        pipeline = Construct("prim-key", nodes=[a, b])
+        assert len(pipeline.nodes) == 2
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Node name collision detection (neograph-x820)
@@ -1105,3 +1147,413 @@ class TestNodeNameCollision:
         parent = Construct("parent", nodes=[parent_node, sub])
         graph = compile(parent)
         assert graph is not None
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Compile-time: tool factory registration check (neograph-9513)
+# ═══════════════════════════════════════════════════════════════════════════
+
+class TestToolFactoryRegistrationCheck:
+    """compile() must verify that every tool referenced by agent/act nodes
+    is registered in _tool_factory_registry."""
+
+    def test_unregistered_tool_raises_at_compile_when_agent_mode(self):
+        """Agent node with unregistered tool raises CompileError at compile()."""
+        from tests.fakes import StructuredFake, configure_fake_llm
+        configure_fake_llm(lambda tier: StructuredFake(lambda m: m()))
+        n = Node(
+            "research",
+            mode="agent",
+            inputs=RawText,
+            outputs=Claims,
+            model="fast",
+            prompt="test",
+            tools=[Tool("nonexistent_tool_9513", budget=3)],
+        )
+        pipeline = Construct("bad-tool", nodes=[n])
+        with pytest.raises(CompileError, match="nonexistent_tool_9513"):
+            compile(pipeline)
+
+    def test_unregistered_tool_raises_at_compile_when_act_mode(self):
+        """Act node with unregistered tool raises CompileError at compile()."""
+        from tests.fakes import StructuredFake, configure_fake_llm
+        configure_fake_llm(lambda tier: StructuredFake(lambda m: m()))
+        n = Node(
+            "actor",
+            mode="act",
+            inputs=RawText,
+            outputs=Claims,
+            model="fast",
+            prompt="test",
+            tools=[Tool("missing_tool_9513", budget=1)],
+        )
+        pipeline = Construct("bad-act-tool", nodes=[n])
+        with pytest.raises(CompileError, match="missing_tool_9513"):
+            compile(pipeline)
+
+    def test_registered_tool_passes_compile_when_agent_mode(self):
+        """Agent node with registered tool compiles without error."""
+        from neograph.factory import register_tool_factory
+        from tests.fakes import StructuredFake, configure_fake_llm
+
+        configure_fake_llm(lambda tier: StructuredFake(lambda m: m()))
+        register_tool_factory("registered_tool_9513", lambda config, tool_config: None)
+
+        n = Node(
+            "research-ok",
+            mode="agent",
+            inputs=RawText,
+            outputs=Claims,
+            model="fast",
+            prompt="test",
+            tools=[Tool("registered_tool_9513", budget=3)],
+        )
+        pipeline = Construct("good-tool", nodes=[n])
+        graph = compile(pipeline)
+        assert graph is not None
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Compile-time: LLM + prompt compiler configured (neograph-fn5x)
+# ═══════════════════════════════════════════════════════════════════════════
+
+class TestLlmConfiguredCheck:
+    """compile() must verify _llm_factory and _prompt_compiler are set
+    when any node has mode in (think, agent, act)."""
+
+    def test_unconfigured_llm_raises_at_compile_when_think_node(self):
+        """Think node without configure_llm() raises CompileError at compile()."""
+        import neograph._llm as _llm_mod
+        old_factory, old_compiler = _llm_mod._llm_factory, _llm_mod._prompt_compiler
+        try:
+            _llm_mod._llm_factory = None
+            _llm_mod._prompt_compiler = None
+            n = Node(
+                "think-node",
+                mode="think",
+                inputs=RawText,
+                outputs=Claims,
+                model="fast",
+                prompt="test",
+            )
+            pipeline = Construct("bad-llm", nodes=[n])
+            with pytest.raises(CompileError, match="configure_llm"):
+                compile(pipeline)
+        finally:
+            _llm_mod._llm_factory = old_factory
+            _llm_mod._prompt_compiler = old_compiler
+
+    def test_unconfigured_prompt_compiler_raises_at_compile(self):
+        """LLM factory set but prompt compiler missing raises CompileError."""
+        import neograph._llm as _llm_mod
+        old_factory, old_compiler = _llm_mod._llm_factory, _llm_mod._prompt_compiler
+        try:
+            _llm_mod._llm_factory = lambda tier: None
+            _llm_mod._prompt_compiler = None
+            n = Node(
+                "think-node-pc",
+                mode="think",
+                inputs=RawText,
+                outputs=Claims,
+                model="fast",
+                prompt="test",
+            )
+            pipeline = Construct("bad-pc", nodes=[n])
+            with pytest.raises(CompileError, match="configure_llm"):
+                compile(pipeline)
+        finally:
+            _llm_mod._llm_factory = old_factory
+            _llm_mod._prompt_compiler = old_compiler
+
+    def test_scripted_only_compiles_without_llm_configured(self):
+        """Pipeline with only scripted nodes compiles even without configure_llm()."""
+        import neograph._llm as _llm_mod
+        from neograph.factory import register_scripted
+        old_factory, old_compiler = _llm_mod._llm_factory, _llm_mod._prompt_compiler
+        try:
+            _llm_mod._llm_factory = None
+            _llm_mod._prompt_compiler = None
+            register_scripted("fn_no_llm_test", lambda input_data, config: RawText(text="ok"))
+            n = Node.scripted("scripted-only", fn="fn_no_llm_test", outputs=RawText)
+            pipeline = Construct("scripted-ok", nodes=[n])
+            graph = compile(pipeline)
+            assert graph is not None
+        finally:
+            _llm_mod._llm_factory = old_factory
+            _llm_mod._prompt_compiler = old_compiler
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Compile-time: output_strategy validation (neograph-0b2m)
+# ═══════════════════════════════════════════════════════════════════════════
+
+class TestOutputStrategyValidation:
+    """compile() must verify output_strategy values are valid."""
+
+    def test_invalid_output_strategy_raises_at_compile(self):
+        """Node with bogus output_strategy raises CompileError at compile()."""
+        from tests.fakes import StructuredFake, configure_fake_llm
+        configure_fake_llm(lambda tier: StructuredFake(lambda m: m()))
+        n = Node(
+            "bad-strat",
+            mode="think",
+            inputs=RawText,
+            outputs=Claims,
+            model="fast",
+            prompt="test",
+            llm_config={"output_strategy": "banana"},
+        )
+        pipeline = Construct("bad-strat-pipe", nodes=[n])
+        with pytest.raises(CompileError, match="banana"):
+            compile(pipeline)
+
+    def test_valid_output_strategies_pass_compile(self):
+        """Nodes with valid output_strategy values compile without error."""
+        from tests.fakes import StructuredFake, configure_fake_llm
+        configure_fake_llm(lambda tier: StructuredFake(lambda m: m()))
+        for strategy in ("structured", "json_mode", "text"):
+            n = Node(
+                f"strat-{strategy}",
+                mode="think",
+                inputs=RawText,
+                outputs=Claims,
+                model="fast",
+                prompt="test",
+                llm_config={"output_strategy": strategy},
+            )
+            pipeline = Construct(f"strat-{strategy}-pipe", nodes=[n])
+            graph = compile(pipeline)
+            assert graph is not None
+
+    def test_no_output_strategy_defaults_without_error(self):
+        """Node with no output_strategy (default) compiles fine."""
+        from tests.fakes import StructuredFake, configure_fake_llm
+        configure_fake_llm(lambda tier: StructuredFake(lambda m: m()))
+        n = Node(
+            "no-strat",
+            mode="think",
+            inputs=RawText,
+            outputs=Claims,
+            model="fast",
+            prompt="test",
+        )
+        pipeline = Construct("no-strat-pipe", nodes=[n])
+        graph = compile(pipeline)
+        assert graph is not None
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Sub-construct output boundary contract (neograph-c4se)
+# ═══════════════════════════════════════════════════════════════════════════
+
+class TestSubConstructOutputBoundary:
+    """When a Construct declares output=SomeType, at least one internal node
+    must produce a compatible type. Silent None propagation at runtime
+    indicates the contract was never satisfied."""
+
+    def test_output_mismatch_raises_when_no_node_produces_output(self):
+        """Sub-construct declares output=Claims but only node produces RawText."""
+        inner = _producer("inner", RawText)
+        with pytest.raises(ConstructError, match="output=Claims"):
+            Construct("bad-sub", input=RawText, output=Claims, nodes=[inner])
+
+    def test_output_match_passes_when_node_produces_compatible_type(self):
+        """Sub-construct declares output=Claims and inner node produces Claims."""
+        inner = Node.scripted("inner", fn="f", inputs=RawText, outputs=Claims)
+        sub = Construct("ok-sub", input=RawText, output=Claims, nodes=[inner])
+        assert sub.output is Claims
+
+    def test_output_subclass_passes_when_node_produces_subclass(self):
+        """Sub-construct output=BaseModel is satisfied by any Pydantic model."""
+        inner = _producer("inner", Claims)
+        sub = Construct("sub-sub", output=BaseModel, nodes=[inner])
+        assert sub.output is BaseModel
+
+    def test_no_output_declared_skips_check(self):
+        """Construct without output= declaration skips boundary check."""
+        inner = _producer("inner", RawText)
+        pipeline = Construct("top-level", nodes=[inner])
+        assert pipeline.output is None
+
+    def test_multiple_nodes_passes_when_last_produces_output(self):
+        """Only one of several nodes needs to produce the output type."""
+        inner_a = _producer("a", RawText)
+        inner_b = Node.scripted("b", fn="f", inputs=RawText, outputs=Claims)
+        sub = Construct("multi", input=RawText, output=Claims, nodes=[inner_a, inner_b])
+        assert sub.output is Claims
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# lint() — DI binding validation (neograph-no0q)
+# ═══════════════════════════════════════════════════════════════════════════
+
+class TestLint:
+    """lint() validates DI bindings against a sample config."""
+
+    def test_lint_returns_empty_when_all_bindings_present(self):
+        """No warnings when every FromInput/FromConfig key exists in config."""
+        @node(outputs=RawText)
+        def my_node(topic: Annotated[str, FromInput]) -> RawText: ...
+
+        pipeline = construct_from_functions("ok", [my_node])
+        issues = lint(pipeline, config={"topic": "hello"})
+        assert issues == []
+
+    def test_lint_reports_missing_from_input_key(self):
+        """lint reports when a FromInput param has no matching config key."""
+        @node(outputs=RawText)
+        def my_node(topic: Annotated[str, FromInput]) -> RawText: ...
+
+        pipeline = construct_from_functions("bad", [my_node])
+        issues = lint(pipeline, config={})
+        assert len(issues) == 1
+        assert "topic" in issues[0].param
+        assert "my" in issues[0].node_name  # "my-node" or "my_node"
+
+    def test_lint_reports_missing_from_config_key(self):
+        """lint reports when a FromConfig param has no matching config key."""
+        @node(outputs=RawText)
+        def my_node(
+            upstream: RawText,
+            limiter: Annotated[str, FromConfig],
+        ) -> RawText: ...
+
+        producer = _producer("upstream", RawText)
+        pipeline = Construct("bad", nodes=[producer, my_node])
+        issues = lint(pipeline, config={})
+        assert len(issues) == 1
+        assert "limiter" in issues[0].param
+
+    def test_lint_reports_missing_bundled_model_fields(self):
+        """When a FromInput param is a BaseModel, lint checks each field."""
+        class Ctx(BaseModel):
+            node_id: str
+            project_root: str
+
+        @node(outputs=RawText)
+        def my_node(ctx: Annotated[Ctx, FromInput]) -> RawText: ...
+
+        pipeline = construct_from_functions("bundled", [my_node])
+        # Only provide node_id, missing project_root
+        issues = lint(pipeline, config={"node_id": "x"})
+        assert len(issues) == 1
+        assert "project_root" in issues[0].param
+
+    def test_lint_bundled_model_all_fields_present(self):
+        """No issues when all bundled model fields are in config."""
+        class Ctx(BaseModel):
+            node_id: str
+            project_root: str
+
+        @node(outputs=RawText)
+        def my_node(ctx: Annotated[Ctx, FromInput]) -> RawText: ...
+
+        pipeline = construct_from_functions("bundled-ok", [my_node])
+        issues = lint(pipeline, config={"node_id": "x", "project_root": "/tmp"})
+        assert issues == []
+
+    def test_lint_no_config_still_validates_required(self):
+        """Without config, lint reports required=True params as errors."""
+        @node(outputs=RawText)
+        def my_node(
+            topic: Annotated[str, FromInput(required=True)],
+        ) -> RawText: ...
+
+        pipeline = construct_from_functions("no-cfg", [my_node])
+        issues = lint(pipeline)
+        assert len(issues) == 1
+        assert issues[0].required is True
+        assert "topic" in issues[0].param
+
+    def test_lint_required_false_no_issue_without_config(self):
+        """Default (non-required) FromInput params are NOT flagged without config."""
+        @node(outputs=RawText)
+        def my_node(topic: Annotated[str, FromInput]) -> RawText: ...
+
+        pipeline = construct_from_functions("opt", [my_node])
+        issues = lint(pipeline)
+        assert issues == []
+
+    def test_lint_walks_sub_constructs(self):
+        """lint recurses into sub-constructs."""
+        @node(outputs=Claims)
+        def inner(topic: Annotated[str, FromInput]) -> Claims: ...
+
+        sub = construct_from_functions("sub", [inner], input=None, output=Claims)
+        outer_prod = _producer("start", RawText)
+        pipeline = Construct("outer", nodes=[outer_prod, sub])
+        issues = lint(pipeline, config={})
+        assert len(issues) == 1
+        assert "topic" in issues[0].param
+
+    def test_lint_skips_upstream_and_constant_params(self):
+        """Upstream and constant params should not be checked against config."""
+        @node(outputs=RawText)
+        def upstream() -> RawText: ...
+
+        @node(outputs=Claims)
+        def my_node(
+            upstream: RawText,
+            limit: int = 10,
+        ) -> Claims: ...
+
+        pipeline = construct_from_functions("ok", [upstream, my_node])
+        issues = lint(pipeline, config={})
+        assert issues == []
+
+    def test_lint_multiple_nodes_multiple_issues(self):
+        """lint collects issues from all nodes, not just the first."""
+        @node(outputs=RawText)
+        def node_a(x: Annotated[str, FromInput]) -> RawText: ...
+
+        @node(outputs=Claims)
+        def node_b(y: Annotated[str, FromConfig]) -> Claims: ...
+
+        pipeline = construct_from_functions("multi", [node_a, node_b])
+        issues = lint(pipeline, config={})
+        assert len(issues) == 2
+        params = {i.param for i in issues}
+        assert params == {"x", "y"}
+
+
+class TestFromInputRequired:
+    """FromInput(required=True) raises ExecutionError at runtime when missing."""
+
+    def test_required_from_input_raises_when_missing(self):
+        """Runtime: required=True param not in config raises ExecutionError."""
+        @node(outputs=RawText)
+        def my_node(
+            topic: Annotated[str, FromInput(required=True)],
+        ) -> RawText:
+            return RawText(text=topic)
+
+        pipeline = construct_from_functions("req", [my_node])
+        graph = compile(pipeline)
+        with pytest.raises(ExecutionError, match="topic"):
+            run(graph, input={})
+
+    def test_required_from_input_works_when_present(self):
+        """Runtime: required=True param that IS in config works normally."""
+        @node(outputs=RawText)
+        def my_node(
+            topic: Annotated[str, FromInput(required=True)],
+        ) -> RawText:
+            return RawText(text=topic)
+
+        pipeline = construct_from_functions("req-ok", [my_node])
+        graph = compile(pipeline)
+        result = run(graph, input={"topic": "hello"})
+        assert result["my_node"].text == "hello"
+
+    def test_required_from_config_raises_when_missing(self):
+        """Runtime: required=True FromConfig param not in config raises."""
+        @node(outputs=RawText)
+        def my_node(
+            key: Annotated[str, FromConfig(required=True)],
+        ) -> RawText:
+            return RawText(text=key)
+
+        pipeline = construct_from_functions("req-cfg", [my_node])
+        graph = compile(pipeline)
+        with pytest.raises(ExecutionError, match="key"):
+            run(graph, input={})

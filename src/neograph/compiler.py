@@ -17,6 +17,7 @@ from langgraph.types import Send, interrupt
 from neograph.construct import Construct
 from neograph.errors import CompileError, ExecutionError
 from neograph.factory import (
+    _tool_factory_registry,
     lookup_condition,
     make_each_redirect_fn,
     make_node_fn,
@@ -90,6 +91,51 @@ def compile(construct: Construct, checkpointer: Any = None, retry_policy: Any = 
             "but no checkpointer provided. Pass checkpointer= to compile()."
         )
         raise CompileError(msg)
+
+    # Validate: LLM nodes require configure_llm() (neograph-fn5x)
+    has_llm_node = any(
+        isinstance(item, Node) and item.mode in ("think", "agent", "act")
+        for item in construct.nodes
+    )
+    if has_llm_node:
+        from neograph._llm import _llm_factory, _prompt_compiler
+        if _llm_factory is None or _prompt_compiler is None:
+            missing = []
+            if _llm_factory is None:
+                missing.append("llm_factory")
+            if _prompt_compiler is None:
+                missing.append("prompt_compiler")
+            msg = (
+                f"Construct '{construct.name}' has LLM nodes but "
+                f"{' and '.join(missing)} not set. "
+                f"Call neograph.configure_llm() before compile()."
+            )
+            raise CompileError(msg)
+
+    # Validate: tool factory registrations (neograph-9513)
+    for item in construct.nodes:
+        if isinstance(item, Node) and item.mode in ("agent", "act") and item.tools:
+            for t in item.tools:
+                if t.name not in _tool_factory_registry:
+                    msg = (
+                        f"Node '{item.name}' references tool '{t.name}' "
+                        f"but no factory is registered for it. "
+                        f"Use register_tool_factory('{t.name}', factory_fn) "
+                        f"before compile()."
+                    )
+                    raise CompileError(msg)
+
+    # Validate: output_strategy values (neograph-0b2m)
+    _VALID_STRATEGIES = {"structured", "json_mode", "text"}
+    for item in construct.nodes:
+        if isinstance(item, Node) and item.mode in ("think", "agent", "act"):
+            strategy = item.llm_config.get("output_strategy")
+            if strategy is not None and strategy not in _VALID_STRATEGIES:
+                msg = (
+                    f"Node '{item.name}' has output_strategy='{strategy}'. "
+                    f"Valid values: {', '.join(sorted(_VALID_STRATEGIES))}."
+                )
+                raise CompileError(msg)
 
     # 1. Generate state model from node I/O
     state_model = compile_state_model(construct)
@@ -333,7 +379,13 @@ def _add_loop_back_edge(
             latest = None
         else:
             latest = own_val
-        should_continue = condition(latest)
+        try:
+            should_continue = condition(latest)
+        except (AttributeError, TypeError) as exc:
+            raise ExecutionError(
+                f"Loop condition on '{node_name}' raised {type(exc).__name__} "
+                f"when called with value {latest!r}: {exc}"
+            ) from exc
         if should_continue:
             return reenter_target
         return exit_name
@@ -392,7 +444,13 @@ def _add_subgraph_loop(
         val = getattr(state, field_name, None)
         if isinstance(val, list) and val:
             val = val[-1]
-        should_continue = condition(val)
+        try:
+            should_continue = condition(val)
+        except (AttributeError, TypeError) as exc:
+            raise ExecutionError(
+                f"Loop condition on '{sub.name}' raised {type(exc).__name__} "
+                f"when called with value {val!r}: {exc}"
+            ) from exc
         if should_continue:
             return sub.name
         return exit_name
@@ -600,7 +658,14 @@ def _add_branch_to_graph(
         else:
             value = None
 
-        if op_fn(value, threshold):
+        try:
+            result = op_fn(value, threshold)
+        except (AttributeError, TypeError) as exc:
+            raise ExecutionError(
+                f"Branch condition on '{branch_node.name}' raised "
+                f"{type(exc).__name__} when called with value {value!r}: {exc}"
+            ) from exc
+        if result:
             return true_target
         return false_target
 

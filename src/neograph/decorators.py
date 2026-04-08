@@ -85,12 +85,21 @@ class FromInput:
     injects every key of ``input=`` into ``configurable`` for you. If the
     key is absent, ``None`` is passed.
 
+    Use ``FromInput(required=True)`` to raise ``ExecutionError`` at runtime
+    when the key is absent instead of passing ``None``::
+
+        @node(outputs=Result)
+        def my_node(topic: Annotated[str, FromInput(required=True)]) -> Result: ...
+
     Pydantic models work the same way: ``Annotated[MyModel, FromInput]``
     constructs an instance by pulling each of the model's declared fields
     from ``config["configurable"]`` under that field's name. This is how
     you bundle pipeline metadata (``node_id``, ``project_root``, ...) into
     a single typed context argument.
     """
+
+    def __init__(self, *, required: bool = False) -> None:
+        self.required = required
 
 
 class FromConfig:
@@ -109,10 +118,19 @@ class FromConfig:
     limiters, trace providers, DB connections) that you pass in via
     ``run(graph, config={"configurable": {...}})``.
 
+    Use ``FromConfig(required=True)`` to raise ``ExecutionError`` at runtime
+    when the key is absent::
+
+        @node(outputs=Result)
+        def my_node(key: Annotated[str, FromConfig(required=True)]) -> Result: ...
+
     Pydantic models work the same way: ``Annotated[Shared, FromConfig]``
     constructs an instance from per-field ``configurable`` entries. Use
     this when your shared resources are a typed bundle.
     """
+
+    def __init__(self, *, required: bool = False) -> None:
+        self.required = required
 
 from neograph._construct_validation import ConstructError
 from neograph.construct import Construct
@@ -259,24 +277,31 @@ def _classify_di_params(
 
         # Match the first FromInput/FromConfig marker we find. Users can
         # stack other Annotated metadata (docs, validators) alongside —
-        # we only care about DI markers.
+        # we only care about DI markers. Both the bare class (FromInput)
+        # and instances (FromInput(required=True)) are supported.
         kind_base: str | None = None
+        required: bool = False
         for marker in markers:
-            if marker is FromInput:
+            if marker is FromInput or isinstance(marker, FromInput):
                 kind_base = "from_input"
+                required = getattr(marker, "required", False)
                 break
-            if marker is FromConfig:
+            if marker is FromConfig or isinstance(marker, FromConfig):
                 kind_base = "from_config"
+                required = getattr(marker, "required", False)
                 break
         if kind_base is None:
             continue
 
         # Pydantic BaseModel → bundled form (build instance from scattered
         # fields). Everything else → per-parameter lookup by name.
+        # Payload carries the required flag alongside type info:
+        #   scalar: payload = required (bool)
+        #   model:  payload = (model_cls, required)
         if isinstance(inner_type, type) and issubclass(inner_type, _BaseModel):
-            param_res[p.name] = (f"{kind_base}_model", inner_type)
+            param_res[p.name] = (f"{kind_base}_model", (inner_type, required))
         else:
-            param_res[p.name] = (kind_base, None)
+            param_res[p.name] = (kind_base, required)
 
     return param_res
 
@@ -291,7 +316,10 @@ def _resolve_di_value(
     Shared between @node raw_adapter and @merge_fn wrapper.
 
     Returns the value to pass into the user function (or None on failure).
+    Raises ExecutionError when a required parameter is missing.
     """
+    from neograph.errors import ExecutionError as _ExecutionError
+
     def _get_configurable(key: str) -> Any:
         cfg = config or {}
         if isinstance(cfg, dict):
@@ -299,9 +327,18 @@ def _resolve_di_value(
         return getattr(cfg, "configurable", {}).get(key)
 
     if kind in ("from_input", "from_config"):
-        return _get_configurable(pname)
+        required = bool(payload)  # payload is the required flag
+        val = _get_configurable(pname)
+        if val is None and required:
+            source = "input" if kind == "from_input" else "config"
+            raise _ExecutionError(
+                f"Required DI parameter '{pname}' (from {source}) is missing "
+                f"from config['configurable']. Provide it via "
+                f"run(input={{'{pname}': ...}})."
+            )
+        return val
     if kind in ("from_input_model", "from_config_model"):
-        model_cls = payload
+        model_cls, _required = payload  # payload is (model_cls, required)
         field_values: dict[str, Any] = {}
         for fname in model_cls.model_fields:
             val = _get_configurable(fname)

@@ -40,6 +40,7 @@ from neograph.decorators import (
     node,
 )
 from neograph.forward import ForwardConstruct
+from neograph.lint import LintIssue, lint
 from neograph.factory import register_condition, register_scripted, register_tool_factory
 from neograph.modifiers import Operator, Oracle, Each, Loop
 from neograph.node import Node
@@ -102,6 +103,9 @@ __all__ = [
     "parse_condition",
     # Spec loader
     "load_spec",
+    # Lint
+    "lint",
+    "LintIssue",
 ]
 
 __version__ = "0.2.0.dev0"

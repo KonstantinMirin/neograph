@@ -350,14 +350,13 @@ class TestExecuteMode:
 class TestErrorPaths:
     """Every error path the framework raises."""
 
-    def test_runtime_raises_when_llm_not_configured(self):
-        """Produce node without configure_llm() raises RuntimeError."""
+    def test_compile_raises_when_llm_not_configured(self):
+        """Produce node without configure_llm() raises CompileError at compile()."""
         node = Node(name="fail", mode="think", outputs=Claims, model="fast", prompt="x")
         pipeline = Construct("test-no-llm", nodes=[node])
-        graph = compile(pipeline)
 
-        with pytest.raises(ConfigurationError, match="LLM not configured"):
-            run(graph, input={"node_id": "test-001"})
+        with pytest.raises(CompileError, match="configure_llm"):
+            compile(pipeline)
 
     def test_compile_raises_when_scripted_fn_not_registered(self):
         """Referencing unregistered scripted function raises ConfigurationError."""
@@ -399,8 +398,8 @@ class TestErrorPaths:
         with pytest.raises(ConfigurationError, match="not registered"):
             compile(pipeline, checkpointer=MemorySaver())
 
-    def test_runtime_raises_when_tool_factory_not_registered(self):
-        """Gather node with unregistered tool factory raises ConfigurationError."""
+    def test_compile_raises_when_tool_factory_not_registered(self):
+        """Agent node with unregistered tool factory raises CompileError at compile()."""
         configure_fake_llm(lambda tier: ReActFake(tool_calls=[[]]))
 
         node = Node(
@@ -413,10 +412,9 @@ class TestErrorPaths:
         )
 
         pipeline = Construct("test-bad-tool", nodes=[node])
-        graph = compile(pipeline)
 
-        with pytest.raises(ConfigurationError, match="not registered"):
-            run(graph, input={"node_id": "test-001"})
+        with pytest.raises(CompileError, match="ghost_tool"):
+            compile(pipeline)
 
     def test_run_raises_when_neither_input_nor_resume(self):
         """run() with neither input nor resume raises ValueError."""
@@ -432,6 +430,7 @@ class TestErrorPaths:
 
     def test_compile_raises_when_node_missing_output_type(self):
         """Node with no output type raises CompileError at compile."""
+        configure_fake_llm(lambda tier: StructuredFake(lambda m: m()))
         node = Node(name="bad-node", mode="think", model="fast", prompt="x")
         pipeline = Construct("test-no-output", nodes=[node])
 
@@ -1618,11 +1617,10 @@ class TestNodeContext:
 
 class TestToolRegistrationError:
     def test_clear_error_raised_when_tool_not_registered(self):
-        """Gather node with unregistered tool raises ConfigurationError naming the tool."""
+        """Gather node with unregistered tool raises CompileError at compile()."""
         import types as _types
 
         from neograph import construct_from_module, node
-        from neograph.factory import register_tool_factory
 
         fake = ReActFake(
             tool_calls=[[], []],
@@ -1644,13 +1642,12 @@ class TestToolRegistrationError:
         mod.searcher = searcher
 
         pipeline = construct_from_module(mod, name="test-unreg-tool")
-        graph = compile(pipeline)
 
-        with pytest.raises(ConfigurationError, match="nonexistent_tool"):
-            run(graph, input={})
+        with pytest.raises(CompileError, match="nonexistent_tool"):
+            compile(pipeline)
 
     def test_clear_error_raised_when_execute_tool_not_registered(self):
-        """Execute node with unregistered tool also raises ConfigurationError."""
+        """Execute node with unregistered tool raises CompileError at compile()."""
         import types as _types
 
         from neograph import construct_from_module, node
@@ -1675,10 +1672,9 @@ class TestToolRegistrationError:
         mod.writer = writer
 
         pipeline = construct_from_module(mod, name="test-unreg-exec")
-        graph = compile(pipeline)
 
-        with pytest.raises(ConfigurationError, match="missing_exec_tool"):
-            run(graph, input={})
+        with pytest.raises(CompileError, match="missing_exec_tool"):
+            compile(pipeline)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -2257,3 +2253,43 @@ class TestMsgpackTypeRegistration:
         type_names = {name for (_mod, name) in allowlist}
         assert "Claims" in type_names, f"Claims not in allowlist: {type_names}"
         assert "MatchResult" in type_names, f"MatchResult not in allowlist: {type_names}"
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Runtime: Loop/branch condition error handling (neograph-d19r)
+# ═══════════════════════════════════════════════════════════════════════════
+
+class TestConditionErrorHandling:
+    """User-provided conditions (Loop.when, branch op_fn) can crash on None
+    with AttributeError/TypeError. The error should be wrapped in a clear
+    ExecutionError naming the condition and the None value."""
+
+    def test_loop_condition_wraps_attribute_error_when_value_is_none(self):
+        """Loop condition accessing .score on None raises ExecutionError."""
+        from neograph.factory import register_scripted
+        from neograph.modifiers import Loop
+
+        register_scripted("d19r_attr_fn", lambda input_data, config: RawText(text="hello"))
+
+        n = Node.scripted("produce-none", fn="d19r_attr_fn", outputs=RawText) | Loop(
+            when=lambda draft: draft.score < 0.8, max_iterations=3
+        )
+        pipeline = Construct("loop-err", nodes=[n])
+        graph = compile(pipeline)
+        with pytest.raises(ExecutionError, match="condition"):
+            run(graph, input={"node_id": "test-loop-err"})
+
+    def test_loop_condition_wraps_type_error_when_value_is_none(self):
+        """Loop condition doing comparison on None raises ExecutionError."""
+        from neograph.factory import register_scripted
+        from neograph.modifiers import Loop
+
+        register_scripted("d19r_type_fn", lambda input_data, config: RawText(text="hello"))
+
+        n = Node.scripted("produce-text", fn="d19r_type_fn", outputs=RawText) | Loop(
+            when=lambda draft: draft < 0.8, max_iterations=3
+        )
+        pipeline = Construct("loop-type-err", nodes=[n])
+        graph = compile(pipeline)
+        with pytest.raises(ExecutionError, match="condition"):
+            run(graph, input={"node_id": "test-loop-type-err"})

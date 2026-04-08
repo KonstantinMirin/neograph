@@ -1907,6 +1907,9 @@ class TestConditionalProduce:
         without any LLM call."""
         from neograph import compile, run, node
         from neograph.decorators import construct_from_functions
+        from tests.fakes import StructuredFake, configure_fake_llm
+
+        configure_fake_llm(lambda tier: StructuredFake(lambda m: m()))
 
         @node(outputs=Claims)
         def seed() -> Claims:
