@@ -124,67 +124,26 @@ def plan_sequence() -> BriefSet:
     lead = _load_lead()
     ideas = _load_ideas()
 
-    exp_str = "; ".join(
-        f"{e.title} at {e.company} ({e.duration})"
-        for e in lead.experience
-    )
-    posts_str = "\n".join(f"- {p}" for p in lead.recent_posts)
-    skills_str = ", ".join(lead.skills)
-    angles_str = "\n".join(f"- {a}" for a in ideas.angles)
-    relevance_str = "\n".join(f"- {r}" for r in ideas.relevant_to_lead)
-
-    common = dict(
-        lead_name=f"{lead.first_name} {lead.last_name}",
-        lead_headline=lead.headline,
-        lead_company=lead.company,
-        lead_company_description=lead.company_description,
-        lead_location=lead.location,
-        lead_experience=exp_str,
-        lead_recent_posts=posts_str,
-        lead_skills=skills_str,
-        product=ideas.product,
-        positioning=ideas.positioning,
-        seller_angles=angles_str,
-        relevance=relevance_str,
-    )
+    def brief(num, day, intent, angle, constraints):
+        return EmailBrief(
+            email_number=num, send_day=day, intent=intent,
+            angle=angle, constraints=constraints,
+            lead=lead, ideas=ideas,
+        )
 
     return BriefSet(briefs=[
-        EmailBrief(
-            email_number=1, send_day=0, intent="cold_open",
-            angle=ideas.relevant_to_lead[2],
-            constraints=(
-                "Reference their recent post about uptime. Ask a genuine "
-                "question. No pitch whatsoever. Pure curiosity and relevance."
-            ),
-            **common,
-        ),
-        EmailBrief(
-            email_number=2, send_day=3, intent="value_drop",
-            angle=ideas.relevant_to_lead[1],
-            constraints=(
-                "Share a relevant insight connecting their Rust hiring to "
-                "type safety in AI tooling. Do not sell. Provide genuine value."
-            ),
-            **common,
-        ),
-        EmailBrief(
-            email_number=3, send_day=7, intent="soft_ask",
-            angle=ideas.angles[0],
-            constraints=(
-                "Reference continuity from emails 1-2. Make one specific "
-                "ask: 15 min demo. Make it trivially easy to say yes."
-            ),
-            **common,
-        ),
-        EmailBrief(
-            email_number=4, send_day=14, intent="breakup",
-            angle=ideas.angles[1],
-            constraints=(
-                "Final email. Be direct. Include one piece of social proof. "
-                "Leave the door open gracefully. OK to use humor."
-            ),
-            **common,
-        ),
+        brief(1, 0, "cold_open", ideas.relevant_to_lead[2],
+              "Reference their recent post about uptime. Ask a genuine "
+              "question. No pitch whatsoever. Pure curiosity and relevance."),
+        brief(2, 3, "value_drop", ideas.relevant_to_lead[1],
+              "Share a relevant insight connecting their Rust hiring to "
+              "type safety in AI tooling. Do not sell. Provide genuine value."),
+        brief(3, 7, "soft_ask", ideas.angles[0],
+              "Reference continuity from emails 1-2. Make one specific "
+              "ask: 15 min demo. Make it trivially easy to say yes."),
+        brief(4, 14, "breakup", ideas.angles[1],
+              "Final email. Be direct. Include one piece of social proof. "
+              "Leave the door open gracefully. OK to use humor."),
     ])
 
 

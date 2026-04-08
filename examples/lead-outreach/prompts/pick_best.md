@@ -1,12 +1,4 @@
-You are evaluating ${variant_count} cold email variants written for the same prospect. Pick the single best one.
-
-## Prospect Context
-
-Name: ${lead_name}
-Title: ${lead_headline}
-Company: ${lead_company}
-
-## Evaluation Criteria
+You are evaluating cold email variants written for the same prospect. Pick the single best one.
 
 Score each variant on:
 1. Would I open this? (subject line effectiveness)
