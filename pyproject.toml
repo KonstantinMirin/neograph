@@ -38,6 +38,9 @@ dev = [
     "mypy>=1.8",
 ]
 
+[project.scripts]
+neograph = "neograph.__main__:main"
+
 [project.urls]
 Homepage = "https://neograph.pro"
 Documentation = "https://neograph.pro"
