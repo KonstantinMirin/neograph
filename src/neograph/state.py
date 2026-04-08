@@ -71,6 +71,19 @@ def compile_state_model(construct: Construct) -> type[BaseModel]:
     sub_constructs = [n for n in construct.nodes if isinstance(n, Construct)]
     branch_nodes = [n for n in construct.nodes if isinstance(n, _BranchNode)]
 
+    # Detect field-name collisions from hyphen/underscore normalization.
+    # Two nodes "my-node" and "my_node" both map to state field "my_node",
+    # which would silently share loop counters, reducers, etc.
+    seen_fields: dict[str, str] = {}  # field_name → original node name
+    for item in nodes_only + sub_constructs:
+        field_name = item.name.replace("-", "_")
+        if field_name in seen_fields:
+            raise CompileError(
+                f"Node name collision: '{item.name}' and '{seen_fields[field_name]}' "
+                f"both map to state field '{field_name}'. Rename one of them."
+            )
+        seen_fields[field_name] = item.name
+
     for node in nodes_only:
         _add_output_field(node, fields)
 

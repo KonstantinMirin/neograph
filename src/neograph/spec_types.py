@@ -87,6 +87,12 @@ def load_project_types(project_config: dict[str, Any]) -> None:
         fields: dict[str, Any] = {}
         properties = type_def.get("properties", {})
         required_fields = set(type_def.get("required", []))
+        unknown_required = required_fields - set(properties.keys())
+        if unknown_required:
+            raise ConfigurationError(
+                f"Type '{type_name}': required fields {sorted(unknown_required)} "
+                f"not found in properties. Available: {sorted(properties.keys())}"
+            )
 
         for field_name, field_schema in properties.items():
             field_type = _resolve_field_type(field_schema)

@@ -160,6 +160,68 @@ class TestLoadProjectTypes:
         with pytest.raises(ConfigurationError, match="DoesNotExist"):
             load_project_types(config)
 
+    def test_required_field_in_properties_works(self):
+        config = {
+            "types": {
+                "Simple": {
+                    "type": "object",
+                    "required": ["x"],
+                    "properties": {
+                        "x": {"type": "string"},
+                    },
+                }
+            }
+        }
+        load_project_types(config)
+        Simple = lookup_type("Simple")
+        assert Simple(x="hi").x == "hi"
+
+    def test_required_field_not_in_properties_raises(self):
+        config = {
+            "types": {
+                "Bad": {
+                    "type": "object",
+                    "required": ["x", "y"],
+                    "properties": {
+                        "x": {"type": "string"},
+                    },
+                }
+            }
+        }
+        with pytest.raises(ConfigurationError, match="y"):
+            load_project_types(config)
+
+    def test_empty_required_list_works(self):
+        config = {
+            "types": {
+                "AllOptional": {
+                    "type": "object",
+                    "required": [],
+                    "properties": {
+                        "x": {"type": "string"},
+                    },
+                }
+            }
+        }
+        load_project_types(config)
+        AllOptional = lookup_type("AllOptional")
+        assert AllOptional().x is None
+
+    def test_no_required_key_works(self):
+        config = {
+            "types": {
+                "NoReq": {
+                    "type": "object",
+                    "properties": {
+                        "x": {"type": "string"},
+                    },
+                }
+            }
+        }
+        load_project_types(config)
+        NoReq = lookup_type("NoReq")
+        assert NoReq().x is None
+
     def test_array_of_nested_type(self):
         config = {
             "types": {

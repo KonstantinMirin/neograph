@@ -650,7 +650,12 @@ def node(
             effective_merge_fn = merge_fn
             effective_merge_prompt = merge_prompt
             if models is not None and merge_fn is None and merge_prompt is None:
-                # Register the function body as a scripted merge_fn
+                # Body-as-merge: the function's parameter type annotation declares
+                # the upstream type (for pipeline wiring), but at runtime the body
+                # receives list[OutputType] (the collected Oracle variants). This
+                # is intentional — the annotation serves compile-time wiring, not
+                # runtime type checking. Static analysers will flag a mismatch;
+                # that is an accepted tradeoff for the DX win of one definition.
                 body_merge_name = f"_body_merge_{node_label}_{id(f):x}"
                 from neograph.factory import register_scripted as _reg_scripted
 

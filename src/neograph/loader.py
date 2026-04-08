@@ -16,7 +16,10 @@ import json
 from pathlib import Path
 from typing import Any
 
+import structlog
 import yaml
+
+log = structlog.get_logger()
 
 from neograph.conditions import parse_condition
 from neograph.construct import Construct
@@ -77,13 +80,14 @@ def _validate_spec(spec: dict[str, Any]) -> None:
     """Validate spec against the JSON Schema (best-effort)."""
     schema_path = Path(__file__).parent / "schemas" / "neograph-pipeline.schema.json"
     if not schema_path.exists():
-        return  # schema not installed — skip validation
+        log.warning("spec_validation_skipped", reason="schema file not found")
+        return
     try:
         from jsonschema import validate
         schema = json.loads(schema_path.read_text())
         validate(instance=spec, schema=schema)
     except ImportError:
-        pass  # jsonschema not installed — skip
+        log.warning("spec_validation_skipped", reason="jsonschema not installed")
 
 
 # -- Builder -----------------------------------------------------------------

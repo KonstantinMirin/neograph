@@ -2180,3 +2180,105 @@ class TestOracleModels:
         merge_tiers = [t for t in seen_tiers if t == "judge-tier"]
         assert len(gen_tiers) == 2, f"Expected 2 generator tiers, got: {seen_tiers}"
         assert len(merge_tiers) == 1, f"Expected 1 merge call with judge-tier, got: {seen_tiers}"
+
+    def test_oracle_raises_when_models_is_empty_list(self):
+        """Oracle(models=[]) must raise ConfigurationError, not silently fall back to n=3."""
+        with pytest.raises(ConfigurationError, match="models= must not be empty"):
+            Oracle(models=[], merge_fn="x")
+
+    def test_oracle_accepts_single_model(self):
+        """Oracle(models=["a"]) is valid — single model ensemble."""
+        oracle = Oracle(models=["a"], merge_fn="x")
+        assert oracle.models == ["a"]
+        assert oracle.n == 1
+
+    def test_oracle_accepts_multiple_models(self):
+        """Oracle(models=["a", "b"]) is valid."""
+        oracle = Oracle(models=["a", "b"], merge_fn="x")
+        assert oracle.models == ["a", "b"]
+        assert oracle.n == 2
+
+    def test_oracle_accepts_none_models(self):
+        """Oracle(models=None) is valid — means no model override, uses default n."""
+        oracle = Oracle(models=None, merge_fn="x")
+        assert oracle.models is None
+        assert oracle.n == 3
+
+    def test_body_as_merge_receives_list_not_single_type(self):
+        """Body-as-merge: param annotation says upstream type T, but body
+        receives list[T] at runtime. This documents the intentional mismatch
+        (neograph-qr9v) — the annotation is for compile-time wiring, not a
+        runtime type contract."""
+        from neograph import node, construct_from_functions
+        from neograph.factory import register_scripted
+
+        received_type = [None]
+
+        # Generator: registered scripted so we control exactly what it returns
+        def bam_typed_gen(input_data, config):
+            model = config.get("configurable", {}).get("_oracle_model", "x")
+            return Claims(items=[f"from-{model}"])
+
+        register_scripted("bam_typed_gen", bam_typed_gen)
+
+        gen_node = (
+            Node.scripted("bam-typed-gen", fn="bam_typed_gen", outputs=Claims)
+            | Oracle(models=["reason", "fast"], merge_fn="bam_typed_merge")
+        )
+
+        def bam_typed_merge(variants, config):
+            received_type[0] = type(variants)
+            # Verify each variant is a Claims instance
+            assert all(isinstance(v, Claims) for v in variants)
+            all_items = []
+            for v in variants:
+                all_items.extend(v.items)
+            return Claims(items=all_items)
+
+        register_scripted("bam_typed_merge", bam_typed_merge)
+
+        pipeline = Construct("body-merge-typed", nodes=[gen_node])
+        graph = compile(pipeline)
+        result = run(graph, input={"node_id": "body-merge-typed"})
+
+        # The merge function receives a list, not a single Claims
+        assert received_type[0] is list
+        merged = result["bam_typed_gen"]
+        assert len(merged.items) == 2
+
+    def test_body_as_merge_decorator_param_annotation_is_upstream_type(self):
+        """The @node body-as-merge parameter is annotated as the upstream type
+        (for compile-time wiring) but receives list[OutputType] at runtime.
+        This documents the intentional mismatch (neograph-qr9v)."""
+        from typing import get_type_hints
+        from neograph import node
+        from neograph.decorators import _get_sidecar
+
+        @node(outputs=Claims, models=["reason", "fast"])
+        def merge_check(data: Claims) -> Claims:
+            # data is list[Claims] at runtime, not Claims
+            all_items = []
+            for v in data:
+                all_items.extend(v.items)
+            return Claims(items=all_items)
+
+        # Compile-time: the annotation says Claims (for wiring)
+        sidecar = _get_sidecar(merge_check)
+        assert sidecar is not None, "Sidecar should be registered for @node"
+        original_fn = sidecar[0]
+        hints = get_type_hints(original_fn)
+        assert hints["data"] is Claims, (
+            "Parameter annotation should be the upstream type Claims"
+        )
+
+        # The node has an Oracle modifier attached
+        assert merge_check.has_modifier(Oracle)
+
+    def test_node_decorator_raises_when_models_is_empty_list(self):
+        """@node(models=[]) must raise at decoration time."""
+        from neograph import node
+
+        with pytest.raises((ConfigurationError, ConstructError)):
+            @node(outputs=Claims, models=[])
+            def bad_ensemble(data: Claims) -> Claims:
+                return data

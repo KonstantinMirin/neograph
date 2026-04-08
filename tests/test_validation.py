@@ -17,7 +17,7 @@ from tests.schemas import (
 from neograph import (
     Construct, ConstructError, Node, Each, Oracle, Operator,
     compile, run,
-    ConfigurationError,
+    CompileError, ConfigurationError,
 )
 
 
@@ -1056,3 +1056,52 @@ class TestCheckEachPathErrors:
         )
         with pytest.raises(ConstructError, match="not a list"):
             Construct("prim-terminal", nodes=[a, b])
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Node name collision detection (neograph-x820)
+# ═══════════════════════════════════════════════════════════════════════════
+
+class TestNodeNameCollision:
+    """Nodes whose names differ only by hyphens vs underscores must be
+    rejected at compile time — they map to the same state field and would
+    silently share loop counters, reducers, etc."""
+
+    def test_collision_raises_when_hyphen_and_underscore_names_collide(self):
+        """'my-node' and 'my_node' both map to field 'my_node' — must raise."""
+        a = _producer("my-node", RawText)
+        b = _producer("my_node", Claims)
+        with pytest.raises(CompileError, match="name collision"):
+            compile(Construct("collision", nodes=[a, b]))
+
+    def test_no_collision_when_names_differ(self):
+        """Two nodes with genuinely different names compile fine."""
+        from neograph.factory import register_scripted
+        register_scripted("f_node_a", lambda input_data, config: RawText(text="a"))
+        register_scripted("f_node_b", lambda input_data, config: Claims(items=["b"]))
+
+        a = Node.scripted("node-a", fn="f_node_a", outputs=RawText)
+        b = Node.scripted("node-b", fn="f_node_b", inputs=RawText, outputs=Claims)
+        graph = compile(Construct("no-collision", nodes=[a, b]))
+        assert graph is not None
+
+    def test_sub_construct_names_do_not_collide_with_parent(self):
+        """Sub-construct node names live in separate state scopes — no error
+        even if a parent node and sub-construct-internal node share a name."""
+        from neograph.factory import register_scripted
+
+        register_scripted("inner_fn", lambda input_data, config: Claims(items=["ok"]))
+        register_scripted("parent_fn", lambda input_data, config: RawText(text="raw"))
+
+        inner_node = Node.scripted("my_node", fn="inner_fn", inputs=RawText, outputs=Claims)
+        sub = Construct(
+            "sub",
+            input=RawText,
+            output=Claims,
+            nodes=[inner_node],
+        )
+        parent_node = Node.scripted("my-parent", fn="parent_fn", outputs=RawText)
+        # 'my_node' inside sub and 'my-parent' in parent — different scopes, no collision
+        parent = Construct("parent", nodes=[parent_node, sub])
+        graph = compile(parent)
+        assert graph is not None

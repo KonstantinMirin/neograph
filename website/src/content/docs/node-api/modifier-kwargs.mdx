@@ -142,6 +142,10 @@ def summarize(data: Claims) -> Summary:
 
 One definition captures what to generate (prompt), where to send it (models), and how to merge (body).
 
+:::note[Type annotation vs runtime type]
+The parameter annotation (`data: Claims`) declares the **upstream type** used for compile-time pipeline wiring. At runtime the body receives `list[Summary]` (the collected Oracle variants), not a single `Claims`. This mismatch is intentional — the annotation serves the compiler, not runtime type checking. Static analysers may flag it; that is an accepted tradeoff for the DX win of a single definition.
+:::
+
 ## Interrupt with interrupt_when
 
 Pause the graph for human review when a condition is met. This is the Operator pattern — human-in-the-loop checkpoints that require a checkpointer.

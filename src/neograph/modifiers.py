@@ -226,6 +226,11 @@ class Oracle(Modifier):
         if self.merge_prompt and self.merge_fn:
             msg = "Oracle accepts merge_prompt or merge_fn, not both."
             raise ConfigurationError(msg)
+        # Empty models list is a user mistake — reject early
+        if self.models is not None and len(self.models) == 0:
+            raise ConfigurationError(
+                "Oracle models= must not be empty. Provide at least one model tier."
+            )
         # Infer n from models length when n wasn't explicitly set
         if self.models is not None and len(self.models) > 0:
             if 'n' not in self.model_fields_set:

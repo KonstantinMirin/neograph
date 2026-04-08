@@ -164,6 +164,8 @@ def _resolve_var(path: str, input_data: Any) -> str:
     obj = root
     for attr in rest:
         obj = getattr(obj, attr, "")
+    if obj is None:
+        return ""
     return str(obj)
 
 

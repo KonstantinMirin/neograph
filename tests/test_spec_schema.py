@@ -250,3 +250,98 @@ class TestProjectSchema:
         from jsonschema import ValidationError
         with pytest.raises(ValidationError):
             _validate(spec, project_schema)
+
+
+# =============================================================================
+# _validate_spec warning tests (neograph-htui)
+# =============================================================================
+
+
+class TestValidateSpecWarnings:
+    """_validate_spec must log a warning when validation is skipped."""
+
+    VALID_SPEC = {
+        "name": "hello",
+        "nodes": [
+            {"name": "greet", "mode": "scripted", "outputs": "Greeting"}
+        ],
+        "pipeline": {"nodes": ["greet"]},
+    }
+
+    @staticmethod
+    def _capture_structlog():
+        """Set up structlog capture, return (captured_list, teardown_fn)."""
+        import structlog
+
+        captured: list[dict] = []
+
+        def capture(logger, method_name, event_dict):
+            captured.append(dict(event_dict))
+            raise structlog.DropEvent
+
+        structlog.configure(processors=[capture])
+        return captured, structlog.reset_defaults
+
+    def test_warns_when_schema_file_not_found(self, monkeypatch):
+        """_validate_spec logs a warning when the schema file does not exist."""
+        import neograph.loader as loader_mod
+        from neograph.loader import _validate_spec
+
+        captured, teardown = self._capture_structlog()
+        try:
+            # Point __file__ to a fake path so the schema dir doesn't exist
+            monkeypatch.setattr(loader_mod, "__file__", "/fake/path/loader.py")
+            _validate_spec(self.VALID_SPEC)
+
+            warnings = [e for e in captured if e.get("event") == "spec_validation_skipped"]
+            assert len(warnings) == 1
+            assert warnings[0]["reason"] == "schema file not found"
+        finally:
+            teardown()
+
+    def test_warns_when_jsonschema_not_installed(self):
+        """_validate_spec logs a warning when jsonschema is not importable."""
+        import builtins
+        from neograph.loader import _validate_spec
+
+        captured, teardown = self._capture_structlog()
+        try:
+            real_import = builtins.__import__
+
+            def fake_import(name, *args, **kwargs):
+                if name == "jsonschema":
+                    raise ImportError("mocked")
+                return real_import(name, *args, **kwargs)
+
+            builtins.__import__ = fake_import
+            try:
+                _validate_spec(self.VALID_SPEC)
+            finally:
+                builtins.__import__ = real_import
+
+            warnings = [e for e in captured if e.get("event") == "spec_validation_skipped"]
+            assert len(warnings) == 1
+            assert warnings[0]["reason"] == "jsonschema not installed"
+        finally:
+            teardown()
+
+    def test_valid_spec_no_warning(self):
+        """A valid spec with jsonschema installed produces no skip warning."""
+        from neograph.loader import _validate_spec
+
+        captured, teardown = self._capture_structlog()
+        try:
+            _validate_spec(self.VALID_SPEC)
+            warnings = [e for e in captured if e.get("event") == "spec_validation_skipped"]
+            assert len(warnings) == 0
+        finally:
+            teardown()
+
+    def test_invalid_spec_raises_validation_error(self):
+        """_validate_spec raises ValidationError for an invalid spec."""
+        from jsonschema import ValidationError
+        from neograph.loader import _validate_spec
+
+        bad_spec = {"not": "a valid spec"}
+        with pytest.raises(ValidationError):
+            _validate_spec(bad_spec)

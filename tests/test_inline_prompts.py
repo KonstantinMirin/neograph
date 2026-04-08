@@ -125,6 +125,25 @@ class TestResolveVar:
 
         assert _resolve_var("x.field", Val(field="ok")) == "ok"
 
+    def test_none_value_returns_empty_string(self):
+        """None in dict must produce '', not literal 'None'."""
+        assert _resolve_var("field", {"field": None}) == ""
+
+    def test_none_intermediate_in_dotted_path_returns_empty(self):
+        """${a.b} where a is None must produce '', not raise."""
+        assert _resolve_var("a.b", {"a": None}) == ""
+
+    def test_zero_value_returns_zero_string(self):
+        """0 is not None — must produce '0'."""
+        assert _resolve_var("n", {"n": 0}) == "0"
+
+    def test_empty_string_value_stays_empty(self):
+        assert _resolve_var("s", {"s": ""}) == ""
+
+    def test_false_value_returns_false_string(self):
+        """False is not None — must produce 'False'."""
+        assert _resolve_var("b", {"b": False}) == "False"
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 # _compile_prompt integration: inline vs file ref
