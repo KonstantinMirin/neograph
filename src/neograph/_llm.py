@@ -208,18 +208,43 @@ def _compile_prompt(
 
 
 def _extract_json(text: str) -> str:
-    """Extract a JSON object from LLM response text.
+    """Extract the first balanced JSON object from LLM response text.
 
-    Finds the outermost { ... } span. Handles markdown fences, thinking
-    tags, prose before/after JSON, and any other wrapping — as long as
-    the JSON object is the dominant brace block.
-
-    Borrowed from instructor's approach: find first '{', find last '}'.
+    Finds the first '{' and tracks brace depth to find its matching '}'.
+    Handles markdown fences, thinking tags, prose before/after JSON —
+    anything wrapping the actual JSON object.
     """
-    first = text.find("{")
+    start = text.find("{")
+    if start == -1:
+        return text.strip()
+
+    depth = 0
+    in_string = False
+    escape = False
+    for i in range(start, len(text)):
+        ch = text[i]
+        if escape:
+            escape = False
+            continue
+        if ch == "\\":
+            escape = True
+            continue
+        if ch == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start : i + 1]
+
+    # Unbalanced — fall back to first-to-last (let json_repair handle it)
     last = text.rfind("}")
-    if first != -1 and last != -1 and last > first:
-        return text[first : last + 1]
+    if last > start:
+        return text[start : last + 1]
     return text.strip()
 
 
@@ -262,6 +287,42 @@ def _parse_json_response(text: str, output_model: type[BaseModel]) -> BaseModel:
         ) from exc
 
 
+_RETRY_MSG = (
+    "Your previous response could not be parsed as valid JSON. "
+    "Respond with ONLY the JSON object. No markdown fences, no XML, "
+    "no explanation. The expected schema was already provided above."
+)
+
+
+def _invoke_json_with_retry(
+    llm: Any,
+    messages: list,
+    output_model: type[BaseModel],
+    config: RunnableConfig,
+) -> tuple[BaseModel, Any]:
+    """Invoke LLM for json_mode/text, with one error-feedback retry.
+
+    On parse failure, appends the bad response + a correction message
+    and calls the LLM once more. The schema is already in the earlier
+    messages — the retry just tells the LLM to try again.
+    """
+    response = llm.invoke(messages, config=config)
+    raw_text = response.content if hasattr(response, "content") else str(response)
+    usage = getattr(response, "usage_metadata", None)
+
+    try:
+        return _parse_json_response(raw_text, output_model), usage
+    except ExecutionError:
+        retry_messages = messages + [
+            {"role": "assistant", "content": raw_text},
+            {"role": "user", "content": _RETRY_MSG},
+        ]
+        response = llm.invoke(retry_messages, config=config)
+        raw_text = response.content if hasattr(response, "content") else str(response)
+        usage = getattr(response, "usage_metadata", None)
+        return _parse_json_response(raw_text, output_model), usage
+
+
 def _call_structured(
     llm: Any,
     messages: list,
@@ -270,9 +331,8 @@ def _call_structured(
     config: RunnableConfig,
 ) -> tuple[BaseModel, Any]:
     """Dispatch structured output by strategy. Returns (result, usage_metadata)."""
-    usage = None
-
     if strategy == "structured":
+        usage = None
         try:
             structured_llm = llm.with_structured_output(output_model, include_raw=True)
             raw_result = structured_llm.invoke(messages, config=config)
@@ -285,34 +345,13 @@ def _call_structured(
         except TypeError:
             structured_llm = llm.with_structured_output(output_model)
             result = structured_llm.invoke(messages, config=config)
+        return result, usage
 
-    elif strategy in ("json_mode", "text"):
-        response = llm.invoke(messages, config=config)
-        raw_text = response.content if hasattr(response, "content") else str(response)
-        usage = getattr(response, "usage_metadata", None)
-        try:
-            result = _parse_json_response(raw_text, output_model)
-        except ExecutionError:
-            # Error-feedback retry: tell the LLM what went wrong and try once more.
-            # Inspired by instructor's retry-with-validation-error pattern.
-            retry_messages = messages + [
-                {"role": "assistant", "content": raw_text},
-                {"role": "user", "content": (
-                    f"Your response could not be parsed as valid JSON for "
-                    f"{output_model.__name__}. Return ONLY a JSON object "
-                    f"matching the schema, no markdown fences, no XML, no prose."
-                )},
-            ]
-            response = llm.invoke(retry_messages, config=config)
-            raw_text = response.content if hasattr(response, "content") else str(response)
-            usage = getattr(response, "usage_metadata", None)
-            result = _parse_json_response(raw_text, output_model)
+    if strategy in ("json_mode", "text"):
+        return _invoke_json_with_retry(llm, messages, output_model, config)
 
-    else:
-        msg = f"Unknown output_strategy: {strategy}. Use 'structured', 'json_mode', or 'text'."
-        raise ExecutionError(msg)
-
-    return result, usage
+    msg = f"Unknown output_strategy: {strategy}. Use 'structured', 'json_mode', or 'text'."
+    raise ExecutionError(msg)
 
 
 def invoke_structured(
@@ -534,22 +573,15 @@ def invoke_with_tools(
     strategy = llm_config.get("output_strategy", "structured")
 
     if strategy in ("json_mode", "text"):
-        # Already have the final response in messages[-1] — parse directly
+        # Already have the final response in messages[-1] — try parsing it,
+        # with one error-feedback retry via the shared helper.
         last_msg = messages[-1]
         raw_text = last_msg.content if hasattr(last_msg, "content") else str(last_msg)
         try:
             parse_result = _parse_json_response(raw_text, output_model)
         except ExecutionError:
-            # Error-feedback retry: tell the LLM what went wrong.
-            messages.append({"role": "user", "content": (
-                f"Your response could not be parsed as valid JSON for "
-                f"{output_model.__name__}. Return ONLY a JSON object "
-                f"matching the schema, no markdown fences, no XML, no prose."
-            )})
-            response = llm.invoke(messages, config=config)
-            raw_text = response.content if hasattr(response, "content") else str(response)
-            messages.append(response)
-            parse_result = _parse_json_response(raw_text, output_model)
+            # First parse failed — retry with error feedback.
+            parse_result, _ = _invoke_json_with_retry(llm, messages, output_model, config)
         usage = getattr(last_msg, "usage_metadata", None)
     else:
         parse_result, usage = _call_structured(llm, messages, output_model, strategy, config)

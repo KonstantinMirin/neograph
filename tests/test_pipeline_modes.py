@@ -1757,17 +1757,15 @@ class TestExtractJsonEdgeCases:
         parsed = json.loads(result)
         assert parsed == {"key": "value"}
 
-    def test_outermost_braces_captured_when_multiple_objects_in_text(self):
-        """When multiple JSON objects exist, find/rfind captures the outermost span.
-        json_repair in _parse_json_response handles the rest."""
+    def test_first_object_extracted_when_multiple_objects_in_text(self):
+        """When multiple JSON objects exist, brace-counting extracts the first balanced one."""
         from neograph._llm import _extract_json
+        import json
 
         text = 'Here is result: {"first": 1} and also {"second": 2}'
         result = _extract_json(text)
-        # Captures from first { to last }
-        assert result.startswith('{"first"')
-        assert result.endswith("}")
-        assert "second" in result
+        parsed = json.loads(result)
+        assert parsed == {"first": 1}
 
     def test_nested_braces_parsed_when_json_has_nested_objects(self):
         """JSON with nested braces parses correctly."""
