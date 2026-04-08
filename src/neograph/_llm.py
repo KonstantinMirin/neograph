@@ -19,7 +19,7 @@ from typing import Any, Callable
 
 import structlog
 from langchain_core.runnables import RunnableConfig
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from neograph.errors import ConfigurationError, ExecutionError
 from neograph.tool import Tool, ToolBudgetTracker
@@ -280,6 +280,16 @@ def _parse_json_response(text: str, output_model: type[BaseModel]) -> BaseModel:
     repaired = repair_json(extracted, return_objects=False)
     try:
         return output_model.model_validate_json(repaired)
+    except ValidationError as exc:
+        # Preserve field-level details for error-feedback retry.
+        details = "; ".join(
+            f"{'.'.join(str(l) for l in e['loc'])}: {e['msg']}"
+            for e in exc.errors()
+        )
+        raise ExecutionError(
+            f"Validation failed for {output_model.__name__}: {details}",
+            validation_errors=str(exc),
+        ) from exc
     except Exception as exc:
         raise ExecutionError(
             f"Failed to parse LLM response as {output_model.__name__}: {exc}. "
@@ -287,11 +297,20 @@ def _parse_json_response(text: str, output_model: type[BaseModel]) -> BaseModel:
         ) from exc
 
 
-_RETRY_MSG = (
-    "Your previous response could not be parsed as valid JSON. "
-    "Respond with ONLY the JSON object. No markdown fences, no XML, "
-    "no explanation. The expected schema was already provided above."
-)
+def _build_retry_msg(error: ExecutionError) -> str:
+    """Build a retry message with validation details when available."""
+    details = getattr(error, "validation_errors", None)
+    if details:
+        return (
+            f"Your response failed validation:\n{details}\n\n"
+            "Fix these errors and respond with ONLY the corrected JSON object. "
+            "No markdown fences, no XML, no explanation."
+        )
+    return (
+        "Your previous response could not be parsed as valid JSON. "
+        "Respond with ONLY the JSON object. No markdown fences, no XML, "
+        "no explanation. The expected schema was already provided above."
+    )
 
 
 def _invoke_json_with_retry(
@@ -299,28 +318,32 @@ def _invoke_json_with_retry(
     messages: list,
     output_model: type[BaseModel],
     config: RunnableConfig,
+    max_retries: int = 1,
 ) -> tuple[BaseModel, Any]:
-    """Invoke LLM for json_mode/text, with one error-feedback retry.
+    """Invoke LLM for json_mode/text, with error-feedback retries.
 
-    On parse failure, appends the bad response + a correction message
-    and calls the LLM once more. The schema is already in the earlier
-    messages — the retry just tells the LLM to try again.
+    On parse failure, appends the bad response + validation errors
+    and calls the LLM again. The LLM sees exactly what fields failed
+    and why, so it can fix the specific problem.
     """
     response = llm.invoke(messages, config=config)
     raw_text = response.content if hasattr(response, "content") else str(response)
     usage = getattr(response, "usage_metadata", None)
 
-    try:
-        return _parse_json_response(raw_text, output_model), usage
-    except ExecutionError:
-        retry_messages = messages + [
-            {"role": "assistant", "content": raw_text},
-            {"role": "user", "content": _RETRY_MSG},
-        ]
-        response = llm.invoke(retry_messages, config=config)
-        raw_text = response.content if hasattr(response, "content") else str(response)
-        usage = getattr(response, "usage_metadata", None)
-        return _parse_json_response(raw_text, output_model), usage
+    for _attempt in range(max_retries):
+        try:
+            return _parse_json_response(raw_text, output_model), usage
+        except ExecutionError as exc:
+            retry_messages = messages + [
+                {"role": "assistant", "content": raw_text},
+                {"role": "user", "content": _build_retry_msg(exc)},
+            ]
+            response = llm.invoke(retry_messages, config=config)
+            raw_text = response.content if hasattr(response, "content") else str(response)
+            usage = getattr(response, "usage_metadata", None)
+
+    # Final attempt — no more retries, let it raise
+    return _parse_json_response(raw_text, output_model), usage
 
 
 def _call_structured(
@@ -329,6 +352,7 @@ def _call_structured(
     output_model: type[BaseModel],
     strategy: str,
     config: RunnableConfig,
+    max_retries: int = 1,
 ) -> tuple[BaseModel, Any]:
     """Dispatch structured output by strategy. Returns (result, usage_metadata)."""
     if strategy == "structured":
@@ -348,7 +372,7 @@ def _call_structured(
         return result, usage
 
     if strategy in ("json_mode", "text"):
-        return _invoke_json_with_retry(llm, messages, output_model, config)
+        return _invoke_json_with_retry(llm, messages, output_model, config, max_retries=max_retries)
 
     msg = f"Unknown output_strategy: {strategy}. Use 'structured', 'json_mode', or 'text'."
     raise ExecutionError(msg)
@@ -390,8 +414,9 @@ def invoke_structured(
         context=context,
     )
 
+    max_retries = llm_config.get("max_retries", 1)
     t0 = time.monotonic()
-    result, usage = _call_structured(llm, messages, output_model, strategy, config)
+    result, usage = _call_structured(llm, messages, output_model, strategy, config, max_retries=max_retries)
     elapsed = time.monotonic() - t0
 
     usage_info = {}
@@ -572,19 +597,20 @@ def invoke_with_tools(
     llm_config = llm_config or {}
     strategy = llm_config.get("output_strategy", "structured")
 
+    max_retries = (llm_config or {}).get("max_retries", 1)
+
     if strategy in ("json_mode", "text"):
         # Already have the final response in messages[-1] — try parsing it,
-        # with one error-feedback retry via the shared helper.
+        # with error-feedback retry via the shared helper.
         last_msg = messages[-1]
         raw_text = last_msg.content if hasattr(last_msg, "content") else str(last_msg)
         try:
             parse_result = _parse_json_response(raw_text, output_model)
         except ExecutionError:
-            # First parse failed — retry with error feedback.
-            parse_result, _ = _invoke_json_with_retry(llm, messages, output_model, config)
+            parse_result, _ = _invoke_json_with_retry(llm, messages, output_model, config, max_retries=max_retries)
         usage = getattr(last_msg, "usage_metadata", None)
     else:
-        parse_result, usage = _call_structured(llm, messages, output_model, strategy, config)
+        parse_result, usage = _call_structured(llm, messages, output_model, strategy, config, max_retries=max_retries)
 
     # Collect total usage from all LLM calls in the loop
     total_input_tokens = 0

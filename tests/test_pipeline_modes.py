@@ -1021,6 +1021,65 @@ class TestOutputStrategyJsonMode:
         assert result["extract"].items == ["recovered"]
         assert call_n["n"] == 2  # first call failed, second succeeded
 
+    def test_validation_errors_included_in_retry_when_fields_wrong(self):
+        """json_mode: when LLM returns valid JSON with wrong field types,
+        the retry message includes the specific Pydantic validation errors."""
+        from langchain_core.messages import AIMessage
+
+        retry_messages_seen = []
+
+        class ValidationRetryFake:
+            def invoke(self, messages, **kwargs):
+                # Check if this is a retry (has the error feedback)
+                for msg in messages:
+                    content = msg.get("content", "") if isinstance(msg, dict) else getattr(msg, "content", "")
+                    if "failed validation" in content:
+                        retry_messages_seen.append(content)
+                        return AIMessage(content='{"items": ["fixed"]}')
+                # First call: valid JSON but wrong type (items should be list[str])
+                return AIMessage(content='{"items": "not-a-list"}')
+
+        configure_fake_llm(lambda tier: ValidationRetryFake())
+
+        node = Node(
+            name="extract", mode="think", outputs=Claims, model="fast",
+            prompt="test", llm_config={"output_strategy": "json_mode"},
+        )
+        pipeline = Construct("test-validation-retry", nodes=[node])
+        graph = compile(pipeline)
+        result = run(graph, input={"node_id": "test"})
+
+        assert result["extract"].items == ["fixed"]
+        assert len(retry_messages_seen) == 1
+        # The retry message should contain field-level error details
+        assert "items" in retry_messages_seen[0]
+
+    def test_max_retries_configurable_when_set_in_llm_config(self):
+        """json_mode: max_retries=2 allows two retries (three total attempts)."""
+        from langchain_core.messages import AIMessage
+
+        call_n = {"n": 0}
+
+        class ThreeAttemptFake:
+            def invoke(self, messages, **kwargs):
+                call_n["n"] += 1
+                if call_n["n"] <= 2:
+                    return AIMessage(content="still garbage")
+                return AIMessage(content='{"items": ["third-time"]}')
+
+        configure_fake_llm(lambda tier: ThreeAttemptFake())
+
+        node = Node(
+            name="extract", mode="think", outputs=Claims, model="fast",
+            prompt="test", llm_config={"output_strategy": "json_mode", "max_retries": 2},
+        )
+        pipeline = Construct("test-max-retries", nodes=[node])
+        graph = compile(pipeline)
+        result = run(graph, input={"node_id": "test"})
+
+        assert result["extract"].items == ["third-time"]
+        assert call_n["n"] == 3  # 1 original + 2 retries
+
 
 class TestOutputStrategyText:
     """text strategy: LLM returns plain text, consumer's prompt_compiler handles schema."""

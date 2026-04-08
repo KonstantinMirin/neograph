@@ -54,5 +54,9 @@ class ExecutionError(NeographError):
     """Runtime errors during graph execution.
 
     Examples: duplicate fan-out keys, unknown output strategy,
-    state reducer conflicts.
+    state reducer conflicts, LLM response parse failures.
     """
+
+    def __init__(self, *args: object, validation_errors: str | None = None) -> None:
+        super().__init__(*args)
+        self.validation_errors = validation_errors
