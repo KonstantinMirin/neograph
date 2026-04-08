@@ -208,28 +208,23 @@ def _compile_prompt(
 
 
 def _extract_json(text: str) -> str:
-    """Extract JSON from LLM response text — strips markdown fences, finds JSON object."""
-    import re
+    """Extract a JSON object from LLM response text.
 
-    # Strip markdown code fences
-    cleaned = re.sub(r'^```(?:json)?\s*', '', text.strip(), flags=re.MULTILINE)
-    cleaned = re.sub(r'\s*```\s*$', '', cleaned, flags=re.MULTILINE)
+    Finds the outermost { ... } span. Handles markdown fences, thinking
+    tags, prose before/after JSON, and any other wrapping — as long as
+    the JSON object is the dominant brace block.
 
-    # Try the cleaned text directly
-    cleaned = cleaned.strip()
-    if cleaned.startswith('{'):
-        return cleaned
-
-    # Find first { ... } block in the text
-    match = re.search(r'\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}', cleaned, re.DOTALL)
-    if match:
-        return match.group(0)
-
-    return cleaned
+    Borrowed from instructor's approach: find first '{', find last '}'.
+    """
+    first = text.find("{")
+    last = text.rfind("}")
+    if first != -1 and last != -1 and last > first:
+        return text[first : last + 1]
+    return text.strip()
 
 
 def _parse_json_response(text: str, output_model: type[BaseModel]) -> BaseModel:
-    """Parse a JSON string into a Pydantic model.
+    """Parse LLM response text into a Pydantic model.
 
     Uses json_repair to handle common LLM JSON malformations (control
     characters, trailing commas, single quotes, unescaped newlines) before
@@ -295,7 +290,23 @@ def _call_structured(
         response = llm.invoke(messages, config=config)
         raw_text = response.content if hasattr(response, "content") else str(response)
         usage = getattr(response, "usage_metadata", None)
-        result = _parse_json_response(raw_text, output_model)
+        try:
+            result = _parse_json_response(raw_text, output_model)
+        except ExecutionError:
+            # Error-feedback retry: tell the LLM what went wrong and try once more.
+            # Inspired by instructor's retry-with-validation-error pattern.
+            retry_messages = messages + [
+                {"role": "assistant", "content": raw_text},
+                {"role": "user", "content": (
+                    f"Your response could not be parsed as valid JSON for "
+                    f"{output_model.__name__}. Return ONLY a JSON object "
+                    f"matching the schema, no markdown fences, no XML, no prose."
+                )},
+            ]
+            response = llm.invoke(retry_messages, config=config)
+            raw_text = response.content if hasattr(response, "content") else str(response)
+            usage = getattr(response, "usage_metadata", None)
+            result = _parse_json_response(raw_text, output_model)
 
     else:
         msg = f"Unknown output_strategy: {strategy}. Use 'structured', 'json_mode', or 'text'."
@@ -526,7 +537,19 @@ def invoke_with_tools(
         # Already have the final response in messages[-1] — parse directly
         last_msg = messages[-1]
         raw_text = last_msg.content if hasattr(last_msg, "content") else str(last_msg)
-        parse_result = _parse_json_response(raw_text, output_model)
+        try:
+            parse_result = _parse_json_response(raw_text, output_model)
+        except ExecutionError:
+            # Error-feedback retry: tell the LLM what went wrong.
+            messages.append({"role": "user", "content": (
+                f"Your response could not be parsed as valid JSON for "
+                f"{output_model.__name__}. Return ONLY a JSON object "
+                f"matching the schema, no markdown fences, no XML, no prose."
+            )})
+            response = llm.invoke(messages, config=config)
+            raw_text = response.content if hasattr(response, "content") else str(response)
+            messages.append(response)
+            parse_result = _parse_json_response(raw_text, output_model)
         usage = getattr(last_msg, "usage_metadata", None)
     else:
         parse_result, usage = _call_structured(llm, messages, output_model, strategy, config)

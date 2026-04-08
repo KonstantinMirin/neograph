@@ -987,6 +987,40 @@ class TestOutputStrategyJsonMode:
 
         assert result["extract"].items == ["fenced"]
 
+    def test_error_feedback_retry_recovers_when_first_response_is_garbage(self):
+        """json_mode: when first response is unparseable, the framework retries
+        with the error fed back to the LLM. If the second attempt succeeds,
+        the node returns normally."""
+        from langchain_core.messages import AIMessage
+
+        call_n = {"n": 0}
+
+        class RetryableFake:
+            def invoke(self, messages, **kwargs):
+                call_n["n"] += 1
+                if call_n["n"] == 1:
+                    # First call: garbage response
+                    return AIMessage(content="I think the answer is maybe some claims")
+                # Second call (after error feedback): valid JSON
+                return AIMessage(content='{"items": ["recovered"]}')
+
+        configure_fake_llm(lambda tier: RetryableFake())
+
+        node = Node(
+            name="extract",
+            mode="think",
+            outputs=Claims,
+            model="fast",
+            prompt="test",
+            llm_config={"output_strategy": "json_mode"},
+        )
+        pipeline = Construct("test-retry-feedback", nodes=[node])
+        graph = compile(pipeline)
+        result = run(graph, input={"node_id": "test"})
+
+        assert result["extract"].items == ["recovered"]
+        assert call_n["n"] == 2  # first call failed, second succeeded
+
 
 class TestOutputStrategyText:
     """text strategy: LLM returns plain text, consumer's prompt_compiler handles schema."""
@@ -1723,15 +1757,17 @@ class TestExtractJsonEdgeCases:
         parsed = json.loads(result)
         assert parsed == {"key": "value"}
 
-    def test_first_json_extracted_when_multiple_objects_in_text(self):
-        """When multiple JSON objects exist, the first one is extracted."""
+    def test_outermost_braces_captured_when_multiple_objects_in_text(self):
+        """When multiple JSON objects exist, find/rfind captures the outermost span.
+        json_repair in _parse_json_response handles the rest."""
         from neograph._llm import _extract_json
-        import json
 
         text = 'Here is result: {"first": 1} and also {"second": 2}'
         result = _extract_json(text)
-        parsed = json.loads(result)
-        assert "first" in parsed
+        # Captures from first { to last }
+        assert result.startswith('{"first"')
+        assert result.endswith("}")
+        assert "second" in result
 
     def test_nested_braces_parsed_when_json_has_nested_objects(self):
         """JSON with nested braces parses correctly."""
