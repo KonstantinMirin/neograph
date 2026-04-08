@@ -234,12 +234,37 @@ def _parse_json_response(text: str, output_model: type[BaseModel]) -> BaseModel:
     Uses json_repair to handle common LLM JSON malformations (control
     characters, trailing commas, single quotes, unescaped newlines) before
     passing to Pydantic validation.
+
+    Raises ExecutionError with a clear message when the LLM produces non-JSON
+    content (e.g., XML tool-call markup from DeepSeek R1 after budget exhaustion).
     """
+    import re
+
     from json_repair import repair_json
 
     extracted = _extract_json(text)
+
+    # Detect non-JSON content: empty result or XML-like tool-call markup.
+    # DeepSeek R1 emits <｜DSML｜function_calls>... after budget exhaustion.
+    if not extracted.strip() or (
+        not extracted.strip().startswith("{")
+        and re.search(r"<[^>]*(?:function_call|invoke|DSML)[^>]*>", text, re.IGNORECASE)
+    ):
+        raise ExecutionError(
+            f"LLM returned non-JSON content instead of structured output "
+            f"(expected {output_model.__name__}). "
+            f"Content appears to be XML tool-call markup. "
+            f"Raw content (first 200 chars): {text[:200]!r}"
+        )
+
     repaired = repair_json(extracted, return_objects=False)
-    return output_model.model_validate_json(repaired)
+    try:
+        return output_model.model_validate_json(repaired)
+    except Exception as exc:
+        raise ExecutionError(
+            f"Failed to parse LLM response as {output_model.__name__}: {exc}. "
+            f"Extracted JSON (first 200 chars): {repaired[:200]!r}"
+        ) from exc
 
 
 def _call_structured(

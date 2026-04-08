@@ -2043,3 +2043,124 @@ class TestGetGraphEdges:
         assert ("summary", "__end__") in edge_set, (
             f"Edge summary -> __end__ missing: {edge_set}"
         )
+
+
+# =============================================================================
+# BUG REGRESSION: neograph-irv3
+# R1 emits tool-call XML in content after budget exhaustion
+# =============================================================================
+
+
+class TestR1XmlAfterBudgetExhaustion:
+    """When tool budgets are exhausted and the bare LLM responds with XML
+    tool-call markup instead of JSON, _parse_json_response must handle it
+    instead of crashing with a ValidationError."""
+
+    def test_xml_tool_call_in_content_parsed_when_json_mode_gather(self):
+        """After budget exhaustion, R1-style XML in content should not crash.
+
+        The LLM emits '<｜DSML｜function_calls>...' in message.content instead
+        of valid JSON. The framework should detect this and either strip it
+        or raise a clear ExecutionError — not a raw ValidationError.
+        """
+        from langchain_core.messages import AIMessage
+
+        from neograph._llm import configure_llm
+        from neograph.factory import register_tool_factory
+
+        lookup_tool = FakeTool("lookup", response="found")
+        register_tool_factory("lookup", lambda config, tool_config: lookup_tool)
+
+        # Fake LLM: first call uses tool (exhausts budget=1),
+        # second call (bare, no tools) emits XML instead of JSON.
+        call_n = {"n": 0}
+        XML_CONTENT = (
+            '<\uff5cDSML\uff5cfunction_calls>'
+            '<\uff5cDSML\uff5cinvoke name="read_artifact">'
+            '<\uff5cDSML\uff5cparameter name="path">test.py'
+            '</\uff5cDSML\uff5cparameter>'
+            '</\uff5cDSML\uff5cinvoke>'
+            '</\uff5cDSML\uff5cfunction_calls>'
+        )
+
+        class FakeR1:
+            def bind_tools(self, tools):
+                return self
+
+            def invoke(self, messages, **kwargs):
+                call_n["n"] += 1
+                if call_n["n"] == 1:
+                    msg = AIMessage(content="")
+                    msg.tool_calls = [{"name": "lookup", "args": {}, "id": "c1"}]
+                    return msg
+                # After budget exhaustion: XML instead of JSON
+                return AIMessage(content=XML_CONTENT)
+
+        configure_llm(
+            llm_factory=lambda tier: FakeR1(),
+            prompt_compiler=lambda template, data, **kw: [{"role": "user", "content": "go"}],
+        )
+
+        node = Node(
+            name="research",
+            mode="agent",
+            outputs=Claims,
+            model="fast",
+            prompt="test",
+            tools=[Tool(name="lookup", budget=1)],
+            llm_config={"output_strategy": "json_mode"},
+        )
+        pipeline = Construct("test-r1-xml", nodes=[node])
+        graph = compile(pipeline)
+
+        # Should raise ExecutionError (clear message), not ValidationError (cryptic)
+        with pytest.raises(ExecutionError, match="(?i)structured output|json|xml"):
+            run(graph, input={"node_id": "test"})
+
+
+# =============================================================================
+# BUG REGRESSION: neograph-g1ip
+# Compiler should register output model types with LangGraph msgpack allowlist
+# =============================================================================
+
+
+class TestMsgpackTypeRegistration:
+    """When compile() receives a checkpointer, it should register all node
+    output types with the checkpointer's serializer so LangGraph doesn't
+    emit 'Deserializing unregistered type' warnings on resume."""
+
+    def test_output_types_registered_when_compiled_with_checkpointer(self):
+        """compile() with MemorySaver should convert the serde from
+        allow-all (True) to an explicit allowlist containing the node
+        output Pydantic models."""
+        from langgraph.checkpoint.memory import MemorySaver
+        from neograph.factory import register_scripted
+
+        register_scripted("dummy_a", lambda input_data, config: Claims(items=["x"]))
+        register_scripted("dummy_b", lambda input_data, config: MatchResult(
+            cluster_label="test", coverage_pct=90, gaps=[],
+        ))
+
+        pipeline = Construct("test-msgpack", nodes=[
+            Node.scripted("a", fn="dummy_a", outputs=Claims),
+            Node.scripted("b", fn="dummy_b", inputs=Claims, outputs=MatchResult),
+        ])
+
+        checkpointer = MemorySaver()
+
+        # Before compile: serde allows all (True = warn mode)
+        assert checkpointer.serde._allowed_msgpack_modules is True
+
+        graph = compile(pipeline, checkpointer=checkpointer)
+
+        # After compile: serde should have an explicit allowlist (set/frozenset),
+        # not True. The allowlist must include our output model types.
+        allowlist = checkpointer.serde._allowed_msgpack_modules
+        assert allowlist is not True, (
+            "compile() should convert the serde from allow-all (True) to an "
+            "explicit allowlist containing node output types"
+        )
+        # The allowlist should contain tuples of (module, classname)
+        type_names = {name for (_mod, name) in allowlist}
+        assert "Claims" in type_names, f"Claims not in allowlist: {type_names}"
+        assert "MatchResult" in type_names, f"MatchResult not in allowlist: {type_names}"
