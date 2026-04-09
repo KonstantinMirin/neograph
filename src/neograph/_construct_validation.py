@@ -471,10 +471,18 @@ def _types_compatible(producer: Any, target: Any) -> bool:
     """
     if producer is target:
         return True
-    # Parameterized generic producer (e.g. dict[str, X]):
-    # compatible with raw origin class (dict) or exact parameterized match.
     producer_origin = get_origin(producer)
     target_origin = get_origin(target)
+    # Unwrap Union/Optional types (neograph-pbyz).
+    # typing.Optional[X] = Union[X, None], PEP 604 X | None = UnionType.
+    if producer_origin is Union or producer_origin is types.UnionType:
+        prod_args = [a for a in get_args(producer) if a is not type(None)]
+        return bool(prod_args) and all(_types_compatible(a, target) for a in prod_args)
+    if target_origin is Union or target_origin is types.UnionType:
+        target_args = [a for a in get_args(target) if a is not type(None)]
+        return bool(target_args) and any(_types_compatible(producer, a) for a in target_args)
+    # Parameterized generic producer (e.g. dict[str, X]):
+    # compatible with raw origin class (dict) or exact parameterized match.
     if producer_origin is not None:
         # dict[str, X] vs dict → compatible (runtime isinstance handles it)
         if isinstance(target, type) and issubclass(producer_origin, target):
