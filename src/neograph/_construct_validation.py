@@ -20,6 +20,7 @@ from __future__ import annotations
 import os
 import sys
 import types
+
 from typing import Any, ForwardRef, Union, get_args, get_origin, get_type_hints
 
 from neograph.errors import ConstructError
@@ -211,16 +212,21 @@ def _validate_node_chain(construct: Any) -> None:
                 )
                 raise ConstructError(msg)
 
-        # Loop + skip_when requires skip_value (neograph-e2dv).
-        # When skip_when fires inside a Loop, the counter increments but no
-        # value is appended. Without skip_value, the re-entry reads stale
-        # state — semantically ambiguous.
+        # Loop + skip_when without skip_value is surprising (neograph-e2dv).
+        # The counter still increments so the loop exits, but re-entry
+        # reads stale state. Warn rather than reject — the behavior is
+        # valid, just easy to misuse.
         if isinstance(item, Node) and item.has_modifier(Loop):
             if item.skip_when is not None and item.skip_value is None:
-                raise ConstructError(
-                    f"Node '{item.name}' has Loop + skip_when but no skip_value. "
-                    f"When skip_when fires inside a Loop, skip_value is required "
-                    f"to provide the output for that iteration."
+                import structlog
+                structlog.get_logger(__name__).error(
+                    "loop_skip_when_no_skip_value",
+                    node=item.name,
+                    msg=(
+                        f"Node '{item.name}' has Loop + skip_when but no skip_value. "
+                        f"When skip_when fires inside a Loop, skip_value is recommended "
+                        f"to provide the output for that iteration."
+                    ),
                 )
 
         # (Loop reenter validation removed — Loop.reenter no longer exists.

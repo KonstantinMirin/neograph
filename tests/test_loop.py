@@ -1054,13 +1054,25 @@ class TestLoopSkipWhenCounterIncrement:
     """Loop + skip_when: even when the node is skipped, the loop counter
     must increment so the loop eventually exits via max_iterations."""
 
-    def test_loop_skip_when_without_skip_value_rejected_at_assembly(self):
-        """Loop + skip_when + no skip_value is rejected at assembly time.
+    def test_loop_skip_when_without_skip_value_warns(self):
+        """Loop + skip_when + no skip_value emits UserWarning at assembly.
 
-        neograph-e2dv: when skip_when fires inside a Loop with
-        skip_value=None, re-entry reads stale state. Assembly-time
-        ConstructError prevents this ambiguity.
+        neograph-e2dv: the behavior is valid (counter increments, loop
+        exits at max_iterations) but surprising — warn so users know
+        skip_value is recommended.
         """
+        import warnings
+        from tests.fakes import StructuredFake, configure_fake_llm
+
+        # LLM should never be called — skip_when fires every time
+        llm_called = [False]
+
+        def should_not_call(model):
+            llm_called[0] = True
+            return model(content="should-not-happen", score=0.0)
+
+        configure_fake_llm(lambda tier: StructuredFake(should_not_call))
+
         @node(outputs=Draft)
         def seed() -> Draft:
             return Draft(content="v0", score=0.0)
@@ -1077,8 +1089,24 @@ class TestLoopSkipWhenCounterIncrement:
         )
         def refine(seed: Draft) -> Draft: ...
 
-        with pytest.raises(ConstructError, match="Loop.*skip_when.*skip_value"):
-            construct_from_functions("skip-loop", [seed, refine])
+        import structlog
+        from structlog.testing import capture_logs
+
+        with capture_logs() as logs:
+            pipeline = construct_from_functions("skip-loop", [seed, refine])
+
+        error_logs = [l for l in logs if l.get("log_level") == "error"
+                      and "skip_value" in l.get("msg", "")]
+        assert error_logs, (
+            f"Expected error log about skip_value, got: {logs}"
+        )
+
+        graph = compile(pipeline)
+
+        # Must not hang — should exit at max_iterations=3
+        result = run(graph, input={"node_id": "skip-loop-1"})
+
+        assert not llm_called[0], "LLM should not be called when skip_when fires"
 
     def test_loop_counter_increments_when_skip_fires_on_first_iteration(self):
         """skip_when fires on iteration 1 (score==0) with skip_value that
@@ -1170,9 +1198,14 @@ class TestLoopSkipWhenCounterIncrement:
         assert history[0].score == 0.55
         assert history[1].score == 0.9  # LLM result
 
-    def test_loop_all_skipped_on_exhaust_last_rejected_without_skip_value(self):
-        """All iterations skipped + on_exhaust='last' but no skip_value
-        is rejected at assembly time (neograph-e2dv)."""
+    def test_loop_all_skipped_on_exhaust_last_exits_at_max(self):
+        """All iterations skipped + on_exhaust='last' → exits at
+        max_iterations with no error."""
+        from tests.fakes import StructuredFake, configure_fake_llm
+
+        configure_fake_llm(lambda tier: StructuredFake(
+            lambda m: m(content="unreachable", score=0.0)
+        ))
 
         @node(outputs=Draft)
         def seed() -> Draft:
@@ -1190,12 +1223,22 @@ class TestLoopSkipWhenCounterIncrement:
         )
         def refine(seed: Draft) -> Draft: ...
 
-        with pytest.raises(ConstructError, match="Loop.*skip_when.*skip_value"):
-            construct_from_functions("all-skip-last", [seed, refine])
+        pipeline = construct_from_functions("all-skip-last", [seed, refine])
+        graph = compile(pipeline)
 
-    def test_loop_all_skipped_on_exhaust_error_rejected_without_skip_value(self):
-        """All iterations skipped + on_exhaust='error' but no skip_value
-        is rejected at assembly time (neograph-e2dv)."""
+        # Must NOT hang — exits at max_iterations=3 with on_exhaust='last'
+        result = run(graph, input={"node_id": "all-skip-last-1"})
+        # Result may be empty (no skip_value) but the point is it terminates
+
+    def test_loop_all_skipped_on_exhaust_error_raises(self):
+        """All iterations skipped + on_exhaust='error' → ExecutionError
+        at max_iterations."""
+        from tests.fakes import StructuredFake, configure_fake_llm
+        from neograph import ExecutionError
+
+        configure_fake_llm(lambda tier: StructuredFake(
+            lambda m: m(content="unreachable", score=0.0)
+        ))
 
         @node(outputs=Draft)
         def seed() -> Draft:
@@ -1213,5 +1256,8 @@ class TestLoopSkipWhenCounterIncrement:
         )
         def refine(seed: Draft) -> Draft: ...
 
-        with pytest.raises(ConstructError, match="Loop.*skip_when.*skip_value"):
-            construct_from_functions("all-skip-err", [seed, refine])
+        pipeline = construct_from_functions("all-skip-err", [seed, refine])
+        graph = compile(pipeline)
+
+        with pytest.raises(ExecutionError, match="max_iterations"):
+            run(graph, input={"node_id": "all-skip-err-1"})
