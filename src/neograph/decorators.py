@@ -279,6 +279,18 @@ def _classify_di_params(
         # stack other Annotated metadata (docs, validators) alongside —
         # we only care about DI markers. Both the bare class (FromInput)
         # and instances (FromInput(required=True)) are supported.
+        # Reject ambiguous double DI markers (neograph-3ep3).
+        di_markers = [
+            m for m in markers
+            if m is FromInput or isinstance(m, FromInput)
+            or m is FromConfig or isinstance(m, FromConfig)
+        ]
+        if len(di_markers) > 1:
+            raise ConstructError(
+                f"Parameter '{p.name}' has multiple DI markers: "
+                f"{[type(m).__name__ for m in di_markers]}. "
+                f"Use exactly one of FromInput or FromConfig."
+            )
         kind_base: str | None = None
         required: bool = False
         for marker in markers:
