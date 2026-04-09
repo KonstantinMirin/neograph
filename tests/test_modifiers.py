@@ -2449,6 +2449,149 @@ class TestMergeFnStateParams:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# EACH×ORACLE FUSION (neograph-tpgi)
+#
+# map_over + ensemble_n on the same @node: flat M×N Send topology.
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TestEachOracleFusion:
+    """Each×Oracle fusion: map_over + ensemble_n on the same node."""
+
+    def test_each_oracle_fusion_e2e_scripted(self):
+        """M items × N generators, grouped merge, dict output."""
+        from pydantic import BaseModel
+        from neograph.factory import register_scripted
+
+        class Chunk(BaseModel, frozen=True):
+            chunk_idx: str
+            text: str
+
+        class ChunkList(BaseModel, frozen=True):
+            items: list[Chunk]
+
+        class Result(BaseModel, frozen=True):
+            text: str
+            model: str
+
+        call_log = []
+
+        register_scripted("tpgi_chunks", lambda i, c: ChunkList(items=[
+            Chunk(chunk_idx="A", text="auth section"),
+            Chunk(chunk_idx="B", text="billing section"),
+        ]))
+
+        register_scripted("tpgi_gen", lambda i, c: Result(
+            text=f"processed",
+            model=c.get("configurable", {}).get("_oracle_model", "default"),
+        ))
+
+        register_scripted("tpgi_merge", lambda variants, c: Result(
+            text=f"merged({len(variants)})",
+            model="merged",
+        ))
+
+        pipeline = Construct("fusion-test", nodes=[
+            Node.scripted("chunks", fn="tpgi_chunks", outputs=ChunkList),
+            Node.scripted("decompose", fn="tpgi_gen",
+                          inputs=Chunk, outputs=Result)
+            | Oracle(n=3, merge_fn="tpgi_merge")
+            | Each(over="chunks.items", key="chunk_idx"),
+        ])
+        graph = compile(pipeline)
+        result = run(graph, input={"node_id": "fusion-1"})
+
+        decompose = result["decompose"]
+        assert isinstance(decompose, dict), f"Expected dict, got {type(decompose)}"
+        assert set(decompose.keys()) == {"A", "B"}
+        # Each chunk got 3 variants merged into 1
+        assert decompose["A"].text == "merged(3)"
+        assert decompose["B"].text == "merged(3)"
+
+    def test_each_oracle_fusion_via_node_decorator(self):
+        """@node with map_over + ensemble_n produces fused topology."""
+        from pydantic import BaseModel
+
+        class Item(BaseModel, frozen=True):
+            item_id: str
+            value: int
+
+        class ItemBatch(BaseModel, frozen=True):
+            items: list[Item]
+
+        class Scored(BaseModel, frozen=True):
+            item_id: str
+            score: float
+
+        @node(outputs=ItemBatch)
+        def make_items() -> ItemBatch:
+            return ItemBatch(items=[
+                Item(item_id="x", value=10),
+                Item(item_id="y", value=20),
+            ])
+
+        @merge_fn
+        def pick_best(variants: list[Scored]) -> Scored:
+            return max(variants, key=lambda v: v.score)
+
+        @node(
+            outputs=Scored,
+            map_over="make_items.items",
+            map_key="item_id",
+            ensemble_n=2,
+            merge_fn="pick_best",
+        )
+        def score(item: Item) -> Scored:
+            return Scored(item_id=item.item_id, score=item.value * 0.1)
+
+        pipeline = construct_from_functions("decorator-fusion", [make_items, score])
+        graph = compile(pipeline)
+        result = run(graph, input={"node_id": "fusion-2"})
+
+        scored = result["score"]
+        assert isinstance(scored, dict)
+        assert set(scored.keys()) == {"x", "y"}
+        assert scored["x"].score == 1.0
+        assert scored["y"].score == 2.0
+
+    def test_each_oracle_fusion_downstream_list_consumer(self):
+        """list[X] consumer of Each×Oracle dict[str, X] works (merge-after-fanout)."""
+        from pydantic import BaseModel
+        from neograph.factory import register_scripted
+
+        class Chunk(BaseModel, frozen=True):
+            chunk_idx: str
+
+        class ChunkList(BaseModel, frozen=True):
+            items: list[Chunk]
+
+        class Result(BaseModel, frozen=True):
+            label: str
+
+        register_scripted("tpgi_c", lambda i, c: ChunkList(items=[
+            Chunk(chunk_idx="A"), Chunk(chunk_idx="B"),
+        ]))
+        register_scripted("tpgi_g", lambda i, c: Result(label="gen"))
+        register_scripted("tpgi_m", lambda v, c: Result(label=f"m({len(v)})"))
+        register_scripted("tpgi_collect", lambda i, c: RawText(
+            text=f"collected {len(i['decompose'])} items",
+        ))
+
+        pipeline = Construct("fusion-list", nodes=[
+            Node.scripted("chunks", fn="tpgi_c", outputs=ChunkList),
+            Node.scripted("decompose", fn="tpgi_g", inputs=Chunk, outputs=Result)
+            | Oracle(n=2, merge_fn="tpgi_m")
+            | Each(over="chunks.items", key="chunk_idx"),
+            Node.scripted("collect", fn="tpgi_collect",
+                          inputs={"decompose": list[Result]}, outputs=RawText),
+        ])
+        graph = compile(pipeline)
+        result = run(graph, input={"node_id": "fusion-list"})
+
+        assert result["collect"].text == "collected 2 items"
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # DEV-MODE WARNINGS
 #
 # NEOGRAPH_DEV=1 emits warnings for ambiguous-but-valid patterns.

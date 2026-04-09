@@ -43,6 +43,15 @@ def _collect_oracle_results(existing: Any, new: Any) -> list:
     return [*existing, new]
 
 
+def _append_tagged(existing: Any, new: Any) -> list:
+    """Reducer: append tagged (key, result) tuples for Each×Oracle fusion."""
+    if existing is None:
+        existing = []
+    if isinstance(new, list):
+        return existing + new
+    return [*existing, new]
+
+
 def _merge_dicts(existing: Any, new: dict) -> dict:
     """Reducer: merge dicts additively (for fan-out results).
 
@@ -239,7 +248,20 @@ def _add_single_output_field(
     fields: dict[str, Any],
 ) -> None:
     """Add one output field to the state model, applying modifier wrapping."""
-    if node.has_modifier(Each):
+    if node.has_modifier(Each) and node.has_modifier(Oracle):
+        # Each×Oracle fusion: tagged collector + dict output (neograph-tpgi)
+        collector_field = f"neo_eachoracle_{field_name}"
+        fields[collector_field] = (
+            Annotated[list, _append_tagged],
+            [],
+        )
+        # Final output: same shape as Each alone (dict[str, merged_type])
+        field_type = dict[str, output_type] | None
+        fields[field_name] = (
+            Annotated[field_type, _merge_dicts],
+            None,
+        )
+    elif node.has_modifier(Each):
         field_type = dict[str, output_type] | None
         fields[field_name] = (
             Annotated[field_type, _merge_dicts],

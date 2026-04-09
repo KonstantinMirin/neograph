@@ -194,6 +194,10 @@ def _build_state_update(
         return {}
 
     each_mod = node.get_modifier(Each)
+    # Skip Each wrapping when Oracle is also present — the Each×Oracle
+    # fusion (neograph-tpgi) handles tagging in the redirect_fn.
+    if each_mod and node.has_modifier(Oracle):
+        each_mod = None
     each_item = _state_get(state, "neo_each_item")
 
     # Dict-form outputs: per-key state fields (neograph-1bp.3).
@@ -583,6 +587,28 @@ def make_oracle_redirect_fn(raw_fn: Callable, field_name: str, collector_field: 
 
     oracle_redirect_fn.__name__ = raw_fn.__name__
     return oracle_redirect_fn
+
+
+def make_eachoracle_redirect_fn(
+    raw_fn: Callable, field_name: str, collector_field: str, each_key: str,
+) -> Callable:
+    """Wrap a node function for Each×Oracle fusion (neograph-tpgi).
+
+    Like make_oracle_redirect_fn, but tags each result with the each_key
+    extracted from neo_each_item. The collector accumulates (key, result) tuples.
+    """
+    def eachoracle_redirect_fn(state: Any, config: RunnableConfig) -> dict:
+        result = raw_fn(state, config)
+        val = result.get(field_name)
+        # Extract the each_key from the item
+        item = _state_get(state, "neo_each_item")
+        key = getattr(item, each_key, str(item)) if item is not None else "unknown"
+        if val is not None:
+            return {collector_field: [(key, val)]}
+        return result
+
+    eachoracle_redirect_fn.__name__ = raw_fn.__name__
+    return eachoracle_redirect_fn
 
 
 def _unwrap_oracle_results(

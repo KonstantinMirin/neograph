@@ -20,6 +20,7 @@ from neograph.factory import (
     _tool_factory_registry,
     lookup_condition,
     make_each_redirect_fn,
+    make_eachoracle_redirect_fn,
     make_node_fn,
     make_oracle_merge_fn,
     make_oracle_redirect_fn,
@@ -252,6 +253,13 @@ def _add_node_to_graph(
     each = node.get_modifier(Each)
     operator = node.get_modifier(Operator)
 
+    # ── Each×Oracle fusion: flat M×N Send topology (neograph-tpgi) ──
+    if oracle and each:
+        last_name = _add_each_oracle_fused(graph, node, each, oracle, prev_node, retry_policy=rp)
+        if operator:
+            last_name = _add_operator_check(graph, last_name, operator)
+        return last_name
+
     # ── Oracle: expand to fan-out + merge ──
     if oracle:
         last_name = _add_oracle_nodes(graph, node, oracle, prev_node, retry_policy=rp)
@@ -321,6 +329,134 @@ def _add_each_nodes(
     """Expand Each modifier into fan-out dispatch + barrier."""
     node_fn = make_node_fn(node)
     return _wire_each(graph, node.name, node_fn, each, prev_node, retry_policy=retry_policy)
+
+
+def _add_each_oracle_fused(
+    graph: StateGraph,
+    node: Node,
+    each: Each,
+    oracle: Oracle,
+    prev_node: str | None,
+    retry_policy: Any = None,
+) -> str:
+    """Each×Oracle fusion: flat M×N Send topology (neograph-tpgi).
+
+    Instead of nesting Each → Sub-graph → Oracle, dispatches M×N generators
+    in a single router and groups by each.key in the merge barrier.
+
+    Topology: prev → flat_router → M×N Send(gen) → group_merge(defer) → next
+    """
+    field_name = node.name.replace("-", "_")
+    collector_field = f"neo_eachoracle_{field_name}"
+    gen_name = node.name
+    barrier_name = f"merge_{node.name}"
+
+    # Generator function — tagged redirect for Each×Oracle fusion
+    raw_fn = make_node_fn(node)
+    redirect_fn = make_eachoracle_redirect_fn(raw_fn, field_name, collector_field, each.key)
+    graph.add_node(gen_name, redirect_fn, retry_policy=retry_policy)
+
+    # Flat router: M items × N generators = M×N Send() calls
+    root, segments = split_each_path(each.over)
+    models = oracle.models
+
+    def flat_router(state: Any) -> list:
+        # Navigate dotted path to collection
+        obj = getattr(state, root) if hasattr(state, root) else state[root]
+        for part in segments:
+            obj = getattr(obj, part) if hasattr(obj, part) else obj[part]
+
+        # Dedup items by each.key
+        seen_keys: dict[str, int] = {}
+        items = list(obj)
+        unique_items: list = []
+        for idx, item in enumerate(items):
+            key_val = getattr(item, each.key, str(item))
+            if key_val in seen_keys:
+                log.warning("each_duplicate_key", fan_out=gen_name, key=key_val)
+                continue
+            seen_keys[key_val] = idx
+            unique_items.append(item)
+
+        # Dispatch M×N
+        state_dict = {k: getattr(state, k) for k in state.__class__.model_fields}
+        sends = []
+        for item in unique_items:
+            for i in range(oracle.n):
+                send_state = {
+                    **state_dict,
+                    "neo_each_item": item,
+                    "neo_oracle_gen_id": f"gen-{i}",
+                }
+                if models:
+                    send_state["neo_oracle_model"] = models[i % len(models)]
+                sends.append(Send(gen_name, send_state))
+        return sends
+
+    if prev_node:
+        graph.add_conditional_edges(prev_node, flat_router, path_map=[gen_name])
+    else:
+        graph.add_conditional_edges(START, flat_router, path_map=[gen_name])
+
+    # Group-merge barrier: partitions by each.key, calls merge_fn per group
+    merge_fn_impl = make_oracle_merge_fn(oracle, field_name, collector_field, node.outputs)
+
+    def group_merge_barrier(state: Any, config: RunnableConfig | None = None) -> dict:
+        from collections import defaultdict
+        collector = getattr(state, collector_field, [])
+
+        # Group tagged results by each_key
+        groups: dict[str, list] = defaultdict(list)
+        for key, result in collector:
+            groups[key].append(result)
+
+        # Call merge per group
+        merged: dict[str, Any] = {}
+        for key, variants in groups.items():
+            # Build a mini-state with just this group's variants for the merge_fn
+            merged[key] = _merge_one_group(oracle, node, variants, config)
+
+        return {field_name: merged}
+
+    graph.add_node(barrier_name, group_merge_barrier, defer=True)
+    graph.add_edge([gen_name], barrier_name)
+
+    return barrier_name
+
+
+def _merge_one_group(oracle: Oracle, node: Node, variants: list, config: Any) -> Any:
+    """Merge one group of Oracle variants (used by Each×Oracle fusion)."""
+    from neograph.factory import lookup_scripted
+    from neograph.decorators import get_merge_fn_metadata, _resolve_merge_args
+
+    output_model = node.outputs
+    if isinstance(output_model, dict):
+        output_model = next(iter(output_model.values()))
+
+    if oracle.merge_prompt:
+        from neograph._llm import invoke_structured
+        return invoke_structured(
+            model_tier=oracle.merge_model,
+            prompt_template=oracle.merge_prompt,
+            input_data=variants[0] if variants else None,
+            output_model=output_model,
+            config=config,
+        )
+
+    if oracle.merge_fn:
+        meta = get_merge_fn_metadata(oracle.merge_fn)
+        if meta is not None:
+            user_fn, param_res = meta
+            # For fused path, no state available for from_state params
+            # (they'd need the outer state which we don't thread here).
+            # DI params (from_input/from_config) work via config.
+            args = _resolve_merge_args(param_res, config, None)
+            return user_fn(variants, *args)
+        else:
+            scripted_merge = lookup_scripted(oracle.merge_fn)
+            return scripted_merge(variants, config)
+
+    return variants[0] if variants else None
 
 
 def _add_loop_back_edge(

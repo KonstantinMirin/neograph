@@ -105,21 +105,8 @@ class Modifiable:
             )
             raise ConstructError(msg)
 
-        # Oracle + Each mutual exclusion
-        if isinstance(modifier, Each) and self.has_modifier(Oracle):
-            msg = (
-                "Cannot combine Oracle and Each on the same item. "
-                "Use a sub-construct: nest the Each fan-out inside an Oracle "
-                "ensemble, or vice versa."
-            )
-            raise ConstructError(msg)
-        if isinstance(modifier, Oracle) and self.has_modifier(Each):
-            msg = (
-                "Cannot combine Oracle and Each on the same item. "
-                "Use a sub-construct: nest the Each fan-out inside an Oracle "
-                "ensemble, or vice versa."
-            )
-            raise ConstructError(msg)
+        # Oracle + Each composition is supported via flat M×N fusion
+        # (neograph-tpgi). No mutual exclusion needed.
 
         # Dev-mode warnings for ambiguous-but-valid patterns
         from neograph._dev_warnings import dev_warn

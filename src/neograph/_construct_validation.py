@@ -201,16 +201,8 @@ def _validate_node_chain(construct: Any) -> None:
                 )
                 raise ConstructError(msg)
 
-        # Oracle + Each mutual exclusion (belt-and-suspenders).
-        if isinstance(item, Node):
-            if item.has_modifier(Oracle) and item.has_modifier(Each):
-                msg = (
-                    f"Node '{item.name}' has both Oracle and Each modifiers. "
-                    f"These cannot be combined on a single node. "
-                    f"Use a sub-construct: nest the Each fan-out inside an Oracle "
-                    f"ensemble, or vice versa."
-                )
-                raise ConstructError(msg)
+        # Oracle + Each composition is supported via flat M×N fusion
+        # (neograph-tpgi). No mutual exclusion needed.
 
         # Loop + skip_when without skip_value is surprising (neograph-e2dv).
         # The counter still increments so the loop exits, but re-entry
