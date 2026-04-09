@@ -76,10 +76,16 @@ def verify(cluster: ClusterGroup) -> MatchResult: ...
       ensemble_n=3, merge_fn='merge_claims')
 def decompose() -> Claims: ...
 
+# Fan-out + ensemble on the same node (Each x Oracle fusion)
+@node(outputs=ClaimGroupingResult, prompt='decompose', model='reason',
+      ensemble_n=3, merge_fn='group_claims',
+      map_over='chunk_document', map_key='chunk_idx')
+def decompose(chunk: ReadContext) -> ClaimGroupingResult: ...
+
 # Human-in-the-loop interrupt
 @node(outputs=ValidationResult,
-      interrupt_when=lambda s: {'issues': s.validate.issues} if not s.validate.passed else None)
-def validate(claims: Claims) -> ValidationResult: ...
+      interrupt_when=lambda s: {'issues': s.check_quality.issues} if not s.check_quality.passed else None)
+def check_quality(claims: Claims) -> ValidationResult: ...
 
 # Agent with tools — typed tool results preserved
 @node(outputs={"result": ExplorationResult, "tool_log": list[ToolInteraction]},
@@ -107,12 +113,23 @@ def summarize(
 ConstructError: Node 'verify' declares inputs=ClusterGroup but no upstream
   produces a compatible value.
   upstream producers:
-    • node 'cluster': Clusters
+    - node 'cluster': Clusters
   hint: did you forget to fan out? try .map(lambda s: s.cluster.groups, key='...')
   at my_pipeline.py:42
 ```
 
-Types are validated at assembly time — when you define the pipeline, not when you execute it.
+Types are validated at assembly time — when you define the pipeline, not when you execute it. 48 compile-time checks backed by a rustc-style fixture suite. CLI validation: `neograph check my_pipeline.py`.
+
+## Visualize the compiled graph
+
+```python
+from neograph import compile, describe_graph
+
+graph = compile(pipeline)
+print(describe_graph(graph))   # Mermaid diagram — paste into GitHub, docs, mermaid.live
+```
+
+Set `NEOGRAPH_DEV=1` for auto-printed DAG summaries after every `compile()`.
 
 ## Scales to real systems
 
@@ -157,7 +174,7 @@ Full documentation is at **[neograph.pro](https://neograph.pro)**:
 
 ## Examples
 
-16 runnable examples in [`examples/`](examples/) and 5 side-by-side comparisons in [`examples/vs_langgraph/`](examples/vs_langgraph/). Each example is narrated on [neograph.pro](https://neograph.pro/walkthrough/scripted-pipeline/) as a walkthrough.
+16 runnable examples in [`examples/`](examples/), 3 multi-file mini-projects ([lead-research](examples/lead-research/), [code-review](examples/code-review/), [spec-builder](examples/spec-builder/)), and 5 side-by-side LangGraph comparisons in [`examples/vs_langgraph/`](examples/vs_langgraph/). Walkthroughs at [neograph.pro](https://neograph.pro/walkthrough/scripted-pipeline/).
 
 ## License
 

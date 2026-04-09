@@ -5,7 +5,93 @@ All notable changes to NeoGraph will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased] — 0.2.0.dev (develop branch)
+## [0.3.0] - 2026-04-09
+
+### Added
+
+- **Each x Oracle fusion** (`neograph-tpgi`). `map_over=` + `ensemble_n=` on the
+  same `@node` produces a flat M x N Send topology. For M items and N Oracle
+  generators, all M x N calls run concurrently. Results are grouped by
+  `each.key` and `merge_fn` is called per group. No sub-construct workaround needed.
+
+- **`@merge_fn` state params** (`neograph-jg2g`). Non-DI parameters in `@merge_fn`
+  are auto-wired from graph state by name, matching `@node`'s upstream wiring
+  pattern. Compile-time validation catches unknown fields, self-references, and
+  type mismatches.
+
+- **`describe_graph()`** (`neograph-vxrg`). Returns a Mermaid diagram string for a
+  compiled graph. `NEOGRAPH_DEV=1` auto-prints a DAG summary after every `compile()`.
+
+- **`neograph check` CLI** (`neograph-0hzr`). `neograph check my_pipeline.py`
+  discovers Constructs, runs `compile()` + `lint()`, reports pass/fail. Supports
+  `--config` (JSON) and `--setup` (Python module).
+
+- **`lint()` helper** (`neograph-fn5x`). `lint(construct, config=...)` validates
+  DI bindings against a sample config. Returns `list[LintIssue]`. Checks
+  FromInput/FromConfig scalar and bundled model params, and merge_fn DI.
+
+- **Dev-mode warnings** (`neograph-o846`). `NEOGRAPH_DEV=1` emits warnings for
+  ambiguous-but-valid patterns: `Oracle(n=1)`, uneven model distribution,
+  `Loop(max_iterations=1)`.
+
+- **Compiler safety net** — rustc-style fixture suite. 48 `should_fail` + 13
+  `should_pass` fixtures with parametrized test harness. Every validation rule
+  has a corresponding fixture.
+
+- **Compile-time validation** — 7 new checks for "if it compiles, it runs":
+  tool factory registration, LLM+prompt configured, output_strategy values,
+  Each.key field existence, sub-construct output boundary, Loop/branch
+  condition wrapping, context= reference validation.
+
+- **Error-feedback retry** — on LLM parse failure, sends Pydantic validation
+  details back to the LLM for self-correction. Configurable `max_retries`.
+
+- **Brace-counting JSON extraction** — replaces regex-based extraction for
+  reliable parsing of LLM responses containing multiple JSON objects.
+
+- **3 mini-project examples**: lead-research (Each fan-out), code-review
+  (per-file analysis), spec-builder (NL to pipeline spec).
+
+- **Model compatibility test suite** — 28 parametrized tests verifying schema
+  round-trip across output strategies and model tiers.
+
+- **34 documentation pages** (was 27). 7 new concept pages: check-cli, lint,
+  visualize, dev-mode, each-oracle-fusion, renderers, merge-fn. API reference
+  expanded with 8 new entries.
+
+### Fixed
+
+- **15 validation gaps closed** (all from adversarial fixture suite):
+  - P0: FromInput shadows upstream node, duplicate modifiers silently dropped,
+    sub-construct output boundary bypassed by input port
+  - P1: Optional/Union crashes `_types_compatible`, context= references never
+    validated, required=True broken for bundled BaseModel DI
+  - P2: Double DI marker silently picks first, merge_fn DI invisible to lint(),
+    Oracle+Each unguarded in `__or__`
+  - P3: Operator condition masked by checkpointer guard, skip_when bad field
+    not caught, Loop history=True on Construct silently ignored, type registry
+    not idempotent
+  - P4: YAML bomb DoS (1MB size limit), Loop skip_when without skip_value
+    ambiguity (now warns)
+
+- **Latent bug**: `factory.py` used `ExecutionError` on 2 lines without importing
+  it. Would have raised `NameError` at runtime if triggered.
+
+- **Documentation**: `Construct(outputs=...)` → `output=` (singular) in 6 website
+  pages. Copy-pasted code would have silently dropped the output boundary.
+
+### Changed
+
+- **999 tests** (was ~400 at 0.2.0). **99% code coverage** — 21 of 22 modules
+  at 100%.
+
+- **0 test warnings** (was 4 Pydantic field-shadowing warnings).
+
+- **0 known_gaps** in the fixture suite (was 15).
+
+---
+
+## [0.2.0] — 2026-04-08
 
 ### Changed — BREAKING
 
@@ -223,4 +309,6 @@ Initial public release.
 
 Optional: `langfuse>=3.0` for observability integration.
 
+[0.3.0]: https://github.com/KonstantinMirin/neograph/releases/tag/v0.3.0
+[0.2.0]: https://github.com/KonstantinMirin/neograph/releases/tag/v0.2.0
 [0.1.0]: https://github.com/KonstantinMirin/neograph/releases/tag/v0.1.0
