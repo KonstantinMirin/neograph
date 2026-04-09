@@ -191,15 +191,21 @@ def _validate_node_chain(construct: Any) -> None:
 
     # Sub-construct output boundary contract: if construct.output is declared,
     # at least one internal node must produce a compatible type.
+    # Exclude neo_subgraph_input — the input port is NOT a valid producer
+    # for the output contract (neograph-luzc).
     if construct.output is not None and producers:
         declared_output = construct.output
-        for _, producer_type, _ in producers:
+        internal_producers = [
+            (fn, pt, lbl) for fn, pt, lbl in producers
+            if fn != "neo_subgraph_input"
+        ]
+        for _, producer_type, _ in internal_producers:
             if producer_type is not None and _types_compatible(producer_type, declared_output):
                 break
         else:
             producer_summary = "\n".join(
                 f"    - {label}: {_fmt_type(t)}"
-                for _, t, label in producers
+                for _, t, label in internal_producers
                 if t is not None
             )
             msg = (

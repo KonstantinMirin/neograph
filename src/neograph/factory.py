@@ -796,6 +796,16 @@ def make_subgraph_fn(sub: Any, sub_graph: Any) -> Callable:
                 output_val = check_val
                 break
 
+        # Runtime defense: if no internal node produced a compatible output,
+        # fail loud instead of writing None silently (neograph-luzc).
+        if output_val is None and sub.output is not None:
+            raise ExecutionError(
+                f"Sub-construct '{sub.name}' declares output="
+                f"{sub.output.__name__} but no internal node produced a "
+                f"compatible value. Check that at least one node writes "
+                f"the declared output type."
+            )
+
         sub_log.info("subgraph_complete")
         update: dict[str, Any] = {field_name: output_val}
         if has_loop:
