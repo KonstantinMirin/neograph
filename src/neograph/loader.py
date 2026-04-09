@@ -58,16 +58,26 @@ def load_spec(
 # -- Parsing -----------------------------------------------------------------
 
 
+MAX_SPEC_SIZE = 1_048_576  # 1 MB
+
+
 def _parse_input(source: str | dict[str, Any]) -> dict[str, Any]:
     """Parse a spec source into a dict."""
     if isinstance(source, dict):
         return source
 
     text = source
-    # Check if it's a file path
-    p = Path(source)
-    if p.exists() and p.is_file():
-        text = p.read_text()
+    # Check if it's a file path (only short strings can be paths)
+    if len(source) <= 4096:
+        p = Path(source)
+        if p.exists() and p.is_file():
+            text = p.read_text()
+
+    if len(text) > MAX_SPEC_SIZE:
+        raise ValueError(
+            f"Spec exceeds maximum size ({MAX_SPEC_SIZE} bytes). "
+            f"Refusing to parse."
+        )
 
     # Try JSON first, then YAML
     text = text.strip()

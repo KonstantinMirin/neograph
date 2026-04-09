@@ -82,7 +82,7 @@ Decorator that turns a function into a Node with signature-inferred dependencies
 - **`ensemble_n`** / **`merge_fn`** / **`merge_prompt`** — Oracle ensemble: N parallel generators plus a scripted or LLM merge.
 - **`models`** — Multi-model ensemble: list of model tiers. Each generator gets a different model round-robin. Infers `ensemble_n` from `len(models)`. When `models=` is set without `merge_fn`/`merge_prompt`, the function body IS the merge.
 - **`interrupt_when`** — Human-in-the-loop: inline callable or registered condition name.
-- **`loop_when`** — Loop: callable or registered condition name. Return `True` to continue looping.
+- **`loop_when`** — Loop: callable or registered condition name. Return `True` to continue looping. The value may be `None` on the first iteration, so the callable must be None-safe.
 - **`max_iterations`** — Loop iteration cap. Default 10. Used with `loop_when=`.
 - **`on_exhaust`** — `"error"` (default) raises `ExecutionError` when max reached; `"last"` exits with last result.
 - **`renderer`** — Pluggable prompt-input renderer (`XmlRenderer`, `DelimitedRenderer`, `JsonRenderer`, or custom).
@@ -274,8 +274,8 @@ node | Oracle(n=3, merge_fn="combine")
 node | Oracle(models=["reason", "fast"], merge_fn="pick_best")
 node | Each(over="upstream.field", key="id")
 node | Operator(when="condition_name")
-node | Loop(when=lambda d: d.score < 0.8, max_iterations=5)
-construct | Loop(when=lambda d: d.score < 0.8, max_iterations=10)
+node | Loop(when=lambda d: d is None or d.score < 0.8, max_iterations=5)
+construct | Loop(when=lambda d: d is None or d.score < 0.8, max_iterations=10)
 ```
 
 **`Oracle(n=3, models=None, merge_fn=None, merge_prompt=None)`** — N-way ensemble. Exactly one of `merge_fn` / `merge_prompt` required. `models=` assigns model tiers round-robin; infers `n` from `len(models)`.
@@ -284,7 +284,7 @@ construct | Loop(when=lambda d: d.score < 0.8, max_iterations=10)
 
 **`Operator(when)`** — Human-in-the-loop interrupt. `when` is a registered condition name.
 
-**`Loop(when, max_iterations=10, on_exhaust="error")`** — Cycle modifier. On a Node: self-loop (output feeds back as input). On a Construct: the sub-construct re-runs with its output as the next input. `when` receives the latest output; return `True` to continue.
+**`Loop(when, max_iterations=10, on_exhaust="error")`** — Cycle modifier. On a Node: self-loop (output feeds back as input). On a Construct: the sub-construct re-runs with its output as the next input. `when` receives the latest output; return `True` to continue. The value may be `None` on the first iteration, so the callable must be None-safe (e.g. `lambda d: d is None or d.score < 0.8`).
 
 The `|` syntax returns a new Node/Construct with the modifier appended. You can chain: `node | Oracle(...) | Operator(...)`.
 

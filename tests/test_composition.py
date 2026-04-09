@@ -240,6 +240,87 @@ class TestSubgraph:
         assert "detail" not in result
         assert "process" not in result
 
+    def test_oracle_model_propagates_when_nested_two_levels_deep(self):
+        """Oracle(models=) on outer sub-construct propagates model tier
+        through an intermediate sub-construct into the innermost scripted node.
+
+        neograph-kqbd: make_subgraph_fn forwards neo_oracle_model from parent
+        state into child config as _oracle_model. At depth > 1 the config
+        (not state) carries the model tier. This test verifies the full chain:
+          Oracle Send → sub_a make_subgraph_fn → sub_b make_subgraph_fn → inner node config.
+        """
+        from neograph.factory import register_scripted
+
+        seen_models = []
+
+        # Innermost node: captures _oracle_model from config
+        def inner_capture(input_data, config):
+            model = config.get("configurable", {}).get("_oracle_model")
+            seen_models.append(model)
+            return RawText(text=f"from-{model}")
+
+        register_scripted("nested_inner_capture", inner_capture)
+
+        # Merge function for the outer Oracle
+        def merge_nested(variants, config):
+            return RawText(text=" | ".join(v.text for v in variants))
+
+        register_scripted("merge_nested_oracle", merge_nested)
+
+        # Level 2 (innermost): Claims → RawText
+        sub_b = Construct(
+            "sub-b",
+            input=Claims,
+            output=RawText,
+            nodes=[
+                Node.scripted(
+                    "capture", fn="nested_inner_capture",
+                    inputs=Claims, outputs=RawText,
+                ),
+            ],
+        )
+
+        # Level 1 (intermediate): Claims → RawText, contains sub_b
+        register_scripted(
+            "nested_passthrough",
+            lambda input_data, config: Claims(items=["forwarded"]),
+        )
+        sub_a = Construct(
+            "sub-a",
+            input=Claims,
+            output=RawText,
+            nodes=[
+                Node.scripted(
+                    "passthrough", fn="nested_passthrough",
+                    inputs=Claims, outputs=Claims,
+                ),
+                sub_b,
+            ],
+        ) | Oracle(models=["reason", "fast"], merge_fn="merge_nested_oracle")
+
+        # Parent pipeline
+        register_scripted(
+            "nested_seed", lambda input_data, config: Claims(items=["start"]),
+        )
+        parent = Construct("parent", nodes=[
+            Node.scripted("seed", fn="nested_seed", outputs=Claims),
+            sub_a,
+        ])
+        graph = compile(parent)
+        result = run(graph, input={"node_id": "nested-oracle-test"})
+
+        # Each Oracle variant must have forwarded a distinct model to the
+        # innermost node through the intermediate sub-construct
+        assert len(seen_models) == 2, (
+            f"Expected 2 inner calls, got {len(seen_models)}"
+        )
+        assert set(seen_models) == {"reason", "fast"}, (
+            f"Expected {{reason, fast}}, got {seen_models}"
+        )
+        # Merged output surfaces under sub_a's name
+        assert result["sub_a"] is not None
+        assert "from-reason" in result["sub_a"].text or "from-fast" in result["sub_a"].text
+
     def test_both_outputs_surface_when_two_sub_constructs_in_parent(self):
         """Two sub-constructs in the same parent pipeline."""
         from neograph.factory import register_scripted

@@ -689,6 +689,39 @@ class TestLoadSpecWiringHonesty:
         assert fi.content == "seed-output", f"First iteration should receive seed output, got {fi.content!r}"
 
 
+class TestLoadSpecSizeLimit:
+    """YAML bomb DoS protection — neograph-cfrd."""
+
+    def test_rejects_oversized_string_input(self):
+        """A string spec exceeding MAX_SPEC_SIZE raises ValueError."""
+        from neograph.loader import load_spec
+
+        oversized = "a" * (1_048_576 + 1)
+        with pytest.raises(ValueError, match="exceeds maximum size"):
+            load_spec(oversized)
+
+    def test_rejects_oversized_file_input(self, tmp_path):
+        """A file spec exceeding MAX_SPEC_SIZE raises ValueError."""
+        from neograph.loader import load_spec
+
+        big_file = tmp_path / "bomb.yaml"
+        big_file.write_text("a" * (1_048_576 + 1))
+        with pytest.raises(ValueError, match="exceeds maximum size"):
+            load_spec(str(big_file))
+
+    def test_accepts_input_at_size_limit(self):
+        """A string exactly at MAX_SPEC_SIZE is not rejected by the size check.
+        (It will fail YAML parsing, but NOT the size guard.)"""
+        from neograph.loader import load_spec
+
+        at_limit = "a" * 1_048_576
+        # Should not raise ValueError for size — will raise something else
+        # (invalid YAML/spec), but not the size guard.
+        with pytest.raises(Exception) as exc_info:
+            load_spec(at_limit)
+        assert "exceeds maximum size" not in str(exc_info.value)
+
+
 class TestLoadSpecErrors:
     """Error paths."""
 

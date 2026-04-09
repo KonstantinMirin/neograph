@@ -239,7 +239,7 @@ print(f"Final: score={final.score}, iterations={final.iteration}")
 
 How it works:
 
-- `loop_when=` receives the node's latest output. Return `True` to continue looping, `False` to exit.
+- `loop_when=` receives the node's latest output. Return `True` to continue looping, `False` to exit. **The value may be `None` on the first iteration** (before the node has produced output), so the callable must be None-safe -- e.g. `lambda d: d is None or d.score < 0.8`.
 - `max_iterations=` caps the loop. Default is 10. When exceeded, behavior depends on `on_exhaust=`:
   - `"error"` (default): raises `ExecutionError`
   - `"last"`: exits with the last result
@@ -318,12 +318,12 @@ decompose = Node("decompose", mode="think", outputs=Claims,
 # Interrupt
 check = Node("check", mode="scripted", outputs=ValidationResult) | Operator(when="needs_review")
 
-# Loop (self-loop on node)
-refine = Node("refine", mode="scripted", outputs=Draft) | Loop(when=lambda d: d.score < 0.8, max_iterations=5)
+# Loop (self-loop on node) — when= must be None-safe
+refine = Node("refine", mode="scripted", outputs=Draft) | Loop(when=lambda d: d is None or d.score < 0.8, max_iterations=5)
 
 # Loop (on sub-construct)
 body = Construct("refine", input=Draft, output=Draft, nodes=[review, revise])
-body = body | Loop(when=lambda d: d.score < 0.8, max_iterations=10)
+body = body | Loop(when=lambda d: d is None or d.score < 0.8, max_iterations=10)
 ```
 
 ---

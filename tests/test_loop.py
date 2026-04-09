@@ -395,6 +395,32 @@ class TestLoopValidation:
         with pytest.raises(ConstructError, match="Cannot combine Oracle and Loop"):
             sub | Loop(when=lambda d: True, max_iterations=3)
 
+    def test_raises_when_history_true_on_construct_loop(self):
+        """Construct | Loop(history=True) raises ConstructError."""
+        from neograph import Loop
+
+        sub = Construct(
+            name="sub",
+            nodes=[Node.scripted("inner", fn="noop", outputs=Draft)],
+            input=Draft,
+            output=Draft,
+        )
+        with pytest.raises(ConstructError, match="history=True.*not supported on Constructs"):
+            sub | Loop(when=lambda d: True, max_iterations=3, history=True)
+
+    def test_history_false_on_construct_loop_is_fine(self):
+        """Construct | Loop(history=False) is allowed — no false positive."""
+        from neograph import Loop
+
+        sub = Construct(
+            name="sub",
+            nodes=[Node.scripted("inner", fn="noop", outputs=Draft)],
+            input=Draft,
+            output=Draft,
+        )
+        result = sub | Loop(when=lambda d: True, max_iterations=3, history=False)
+        assert result.has_modifier(Loop)
+
     def test_oracle_alone_still_works(self):
         """Oracle without Loop is fine — no false positive."""
         from neograph import Oracle
@@ -1028,24 +1054,13 @@ class TestLoopSkipWhenCounterIncrement:
     """Loop + skip_when: even when the node is skipped, the loop counter
     must increment so the loop eventually exits via max_iterations."""
 
-    def test_loop_exits_when_skip_fires_every_iteration_no_skip_value(self):
-        """skip_when fires on ALL iterations, skip_value is None.
-        Loop must still exit at max_iterations (not infinite hang).
+    def test_loop_skip_when_without_skip_value_rejected_at_assembly(self):
+        """Loop + skip_when + no skip_value is rejected at assembly time.
 
-        BUG (neograph-c4b9): _apply_skip_when returns {} without
-        incrementing neo_loop_count, so the loop never terminates.
+        neograph-e2dv: when skip_when fires inside a Loop with
+        skip_value=None, re-entry reads stale state. Assembly-time
+        ConstructError prevents this ambiguity.
         """
-        from tests.fakes import StructuredFake, configure_fake_llm
-
-        # LLM should never be called — skip_when fires every time
-        llm_called = [False]
-
-        def should_not_call(model):
-            llm_called[0] = True
-            return model(content="should-not-happen", score=0.0)
-
-        configure_fake_llm(lambda tier: StructuredFake(should_not_call))
-
         @node(outputs=Draft)
         def seed() -> Draft:
             return Draft(content="v0", score=0.0)
@@ -1062,13 +1077,8 @@ class TestLoopSkipWhenCounterIncrement:
         )
         def refine(seed: Draft) -> Draft: ...
 
-        pipeline = construct_from_functions("skip-loop", [seed, refine])
-        graph = compile(pipeline)
-
-        # Must not hang — should exit at max_iterations=3
-        result = run(graph, input={"node_id": "skip-loop-1"})
-
-        assert not llm_called[0], "LLM should not be called when skip_when fires"
+        with pytest.raises(ConstructError, match="Loop.*skip_when.*skip_value"):
+            construct_from_functions("skip-loop", [seed, refine])
 
     def test_loop_counter_increments_when_skip_fires_on_first_iteration(self):
         """skip_when fires on iteration 1 (score==0) with skip_value that
@@ -1160,14 +1170,9 @@ class TestLoopSkipWhenCounterIncrement:
         assert history[0].score == 0.55
         assert history[1].score == 0.9  # LLM result
 
-    def test_loop_all_skipped_on_exhaust_last_exits_at_max(self):
-        """All iterations skipped + on_exhaust='last' → exits at
-        max_iterations with no error."""
-        from tests.fakes import StructuredFake, configure_fake_llm
-
-        configure_fake_llm(lambda tier: StructuredFake(
-            lambda m: m(content="unreachable", score=0.0)
-        ))
+    def test_loop_all_skipped_on_exhaust_last_rejected_without_skip_value(self):
+        """All iterations skipped + on_exhaust='last' but no skip_value
+        is rejected at assembly time (neograph-e2dv)."""
 
         @node(outputs=Draft)
         def seed() -> Draft:
@@ -1185,22 +1190,12 @@ class TestLoopSkipWhenCounterIncrement:
         )
         def refine(seed: Draft) -> Draft: ...
 
-        pipeline = construct_from_functions("all-skip-last", [seed, refine])
-        graph = compile(pipeline)
+        with pytest.raises(ConstructError, match="Loop.*skip_when.*skip_value"):
+            construct_from_functions("all-skip-last", [seed, refine])
 
-        # Must NOT hang — exits at max_iterations=3 with on_exhaust='last'
-        result = run(graph, input={"node_id": "all-skip-last-1"})
-        # Result may be empty (no skip_value) but the point is it terminates
-
-    def test_loop_all_skipped_on_exhaust_error_raises(self):
-        """All iterations skipped + on_exhaust='error' → ExecutionError
-        at max_iterations."""
-        from tests.fakes import StructuredFake, configure_fake_llm
-        from neograph import ExecutionError
-
-        configure_fake_llm(lambda tier: StructuredFake(
-            lambda m: m(content="unreachable", score=0.0)
-        ))
+    def test_loop_all_skipped_on_exhaust_error_rejected_without_skip_value(self):
+        """All iterations skipped + on_exhaust='error' but no skip_value
+        is rejected at assembly time (neograph-e2dv)."""
 
         @node(outputs=Draft)
         def seed() -> Draft:
@@ -1218,8 +1213,5 @@ class TestLoopSkipWhenCounterIncrement:
         )
         def refine(seed: Draft) -> Draft: ...
 
-        pipeline = construct_from_functions("all-skip-err", [seed, refine])
-        graph = compile(pipeline)
-
-        with pytest.raises(ExecutionError, match="max_iterations"):
-            run(graph, input={"node_id": "all-skip-err-1"})
+        with pytest.raises(ConstructError, match="Loop.*skip_when.*skip_value"):
+            construct_from_functions("all-skip-err", [seed, refine])

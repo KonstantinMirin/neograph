@@ -31,7 +31,19 @@ class TestRegisterAndLookup:
         with pytest.raises(ConfigurationError, match="NoSuchType"):
             lookup_type("NoSuchType")
 
-    def test_register_overwrites_previous(self):
+    def test_register_skips_when_same_fields(self):
+        class V1(BaseModel):
+            x: int
+
+        class V1Copy(BaseModel):
+            x: int
+
+        register_type("Idem", V1)
+        register_type("Idem", V1Copy)
+        # First registration wins — no overwrite
+        assert lookup_type("Idem") is V1
+
+    def test_register_warns_and_overwrites_when_fields_differ(self, capsys):
         class V1(BaseModel):
             x: int
 
@@ -40,7 +52,10 @@ class TestRegisterAndLookup:
 
         register_type("Thing", V1)
         register_type("Thing", V2)
+
         assert lookup_type("Thing") is V2
+        captured = capsys.readouterr()
+        assert "overwriting type" in captured.out
 
 
 # -- load_project_types: auto-generate from JSON Schema -----------------------
@@ -248,3 +263,48 @@ class TestLoadProjectTypes:
         basket = Basket(items=[Item(value=1), Item(value=2)])
         assert len(basket.items) == 2
         assert basket.items[0].value == 1
+
+    def test_load_project_types_twice_same_spec_is_idempotent(self, capsys):
+        config = {
+            "types": {
+                "Ping": {
+                    "type": "object",
+                    "required": ["msg"],
+                    "properties": {"msg": {"type": "string"}},
+                }
+            }
+        }
+        load_project_types(config)
+        load_project_types(config)
+
+        captured = capsys.readouterr()
+        # No warning emitted — schemas match
+        assert "overwriting" not in captured.out
+
+    def test_load_project_types_twice_different_spec_warns(self, capsys):
+        config_v1 = {
+            "types": {
+                "Pong": {
+                    "type": "object",
+                    "required": ["a"],
+                    "properties": {"a": {"type": "string"}},
+                }
+            }
+        }
+        config_v2 = {
+            "types": {
+                "Pong": {
+                    "type": "object",
+                    "required": ["b"],
+                    "properties": {"b": {"type": "integer"}},
+                }
+            }
+        }
+        load_project_types(config_v1)
+        load_project_types(config_v2)
+
+        captured = capsys.readouterr()
+        assert "overwriting" in captured.out
+        # New schema is active
+        Pong = lookup_type("Pong")
+        assert "b" in Pong.model_fields

@@ -15,9 +15,12 @@ from __future__ import annotations
 
 from typing import Any
 
+import structlog
 from pydantic import BaseModel, create_model
 
 from neograph.errors import ConfigurationError
+
+log = structlog.get_logger(__name__)
 
 _type_registry: dict[str, type[BaseModel]] = {}
 
@@ -30,8 +33,28 @@ _JSON_SCHEMA_TYPE_MAP: dict[str, type] = {
 }
 
 
+def _fields_match(a: type[BaseModel], b: type[BaseModel]) -> bool:
+    """Return True if both models have the same field names."""
+    return set(a.model_fields.keys()) == set(b.model_fields.keys())
+
+
 def register_type(name: str, cls: type[BaseModel]) -> None:
-    """Register a Pydantic model under *name* for spec-based lookup."""
+    """Register a Pydantic model under *name* for spec-based lookup.
+
+    Idempotent: if *name* already maps to a model with the same fields,
+    the call is a no-op.  If the fields differ, the registry is updated
+    and a warning is logged.
+    """
+    existing = _type_registry.get(name)
+    if existing is not None:
+        if _fields_match(existing, cls):
+            return  # same schema — skip silently
+        log.warning(
+            "register_type: overwriting type with different schema",
+            type_name=name,
+            old_fields=sorted(existing.model_fields.keys()),
+            new_fields=sorted(cls.model_fields.keys()),
+        )
     _type_registry[name] = cls
 
 

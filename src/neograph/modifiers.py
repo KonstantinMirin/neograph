@@ -105,6 +105,47 @@ class Modifiable:
             )
             raise ConstructError(msg)
 
+        # Oracle + Each mutual exclusion
+        if isinstance(modifier, Each) and self.has_modifier(Oracle):
+            msg = (
+                "Cannot combine Oracle and Each on the same item. "
+                "Use a sub-construct: nest the Each fan-out inside an Oracle "
+                "ensemble, or vice versa."
+            )
+            raise ConstructError(msg)
+        if isinstance(modifier, Oracle) and self.has_modifier(Each):
+            msg = (
+                "Cannot combine Oracle and Each on the same item. "
+                "Use a sub-construct: nest the Each fan-out inside an Oracle "
+                "ensemble, or vice versa."
+            )
+            raise ConstructError(msg)
+
+        # Dev-mode warnings for ambiguous-but-valid patterns
+        from neograph._dev_warnings import dev_warn
+
+        if isinstance(modifier, Oracle):
+            if modifier.n == 1:
+                dev_warn(
+                    f"Oracle(n=1) on '{getattr(self, 'name', '?')}' — "
+                    f"an ensemble of 1 is equivalent to no ensemble. "
+                    f"Did you mean n=3?"
+                )
+            if modifier.models and modifier.n % len(modifier.models) != 0:
+                dev_warn(
+                    f"Oracle(n={modifier.n}, models={modifier.models}) on "
+                    f"'{getattr(self, 'name', '?')}' — uneven distribution: "
+                    f"{modifier.n} generators across {len(modifier.models)} "
+                    f"models means some models run more than others."
+                )
+
+        if isinstance(modifier, Loop) and modifier.max_iterations == 1:
+            dev_warn(
+                f"Loop(max_iterations=1) on '{getattr(self, 'name', '?')}' — "
+                f"a loop that runs at most once is equivalent to a conditional. "
+                f"Did you mean max_iterations=3?"
+            )
+
         result = self.model_copy(update={"modifiers": [*self.modifiers, modifier]})
         # Loop validation at | time: check type compatibility immediately.
         if isinstance(modifier, Loop):
@@ -113,6 +154,12 @@ class Modifiable:
                 from neograph._construct_validation import validate_loop_self_edge
                 validate_loop_self_edge(result)
             elif hasattr(result, 'output') and hasattr(result, 'input'):
+                # Construct-level Loop with history=True — not supported yet
+                if modifier.history:
+                    raise ConstructError(
+                        "Loop(history=True) is not supported on Constructs. "
+                        "history tracking is only available on Node-level Loops."
+                    )
                 # Construct: validate output compat with input
                 from neograph._construct_validation import validate_loop_construct
                 validate_loop_construct(result)
@@ -298,16 +345,23 @@ class Loop(Modifier):
     On a Construct: the sub-construct re-runs with its output as the next input.
     Multi-node loop bodies should be expressed as sub-constructs with Loop.
 
+    The ``when`` callable receives the node's latest output and returns True
+    to continue looping. On the first iteration, the output may be ``None``
+    (the node hasn't produced a value yet), so the callable **must be
+    None-safe**::
+
+        Loop(when=lambda d: d is None or d.score < 0.8, max_iterations=5)
+
     Usage:
         # Self-loop on a node:
-        node | Loop(when=lambda d: d.score < 0.8, max_iterations=5)
+        node | Loop(when=lambda d: d is None or d.score < 0.8, max_iterations=5)
 
         # Multi-node loop body as sub-construct:
         body = construct_from_functions("refine", [review, revise], input=Draft, output=Draft)
-        body | Loop(when=lambda d: d.score < 0.8, max_iterations=10)
+        body | Loop(when=lambda d: d is None or d.score < 0.8, max_iterations=10)
 
         # @node sugar:
-        @node(outputs=Draft, loop_when=lambda d: d.score < 0.8, max_iterations=5)
+        @node(outputs=Draft, loop_when=lambda d: d is None or d.score < 0.8, max_iterations=5)
         def refine(draft: Draft) -> Draft: ...
     """
 

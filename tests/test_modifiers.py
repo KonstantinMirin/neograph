@@ -9,7 +9,7 @@ from typing import Annotated, Any
 import pytest
 
 from neograph import (
-    Construct, ConstructError, Node, Each, Oracle, Operator, Tool,
+    Construct, ConstructError, Node, Each, Loop, Oracle, Operator, Tool,
     compile, construct_from_functions, construct_from_module,
     merge_fn, node, run, tool,
     ConfigurationError, ExecutionError,
@@ -2339,3 +2339,79 @@ class TestOracleMergeFnErrors:
         # Should raise because merge result doesn't match output type
         with pytest.raises(ExecutionError, match="(?i)merge.*type|expected.*Claims"):
             run(graph, input={"node_id": "bglm-test2"})
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# DEV-MODE WARNINGS
+#
+# NEOGRAPH_DEV=1 emits warnings for ambiguous-but-valid patterns.
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TestDevWarnings:
+    """Dev-mode warnings for ambiguous modifier patterns."""
+
+    def test_oracle_n1_warns_in_dev_mode(self, monkeypatch):
+        """Oracle(n=1) emits a dev warning about single-element ensemble."""
+        import warnings
+        import neograph._dev_warnings as dw
+
+        monkeypatch.setattr(dw, "DEV_MODE", True)
+
+        gen = _producer("gen", Claims)
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            gen | Oracle(n=1, merge_fn="dummy_merge")
+
+        dev_msgs = [w for w in caught if "[neograph-dev]" in str(w.message)]
+        assert len(dev_msgs) == 1
+        assert "ensemble of 1" in str(dev_msgs[0].message)
+
+    def test_oracle_n1_silent_without_dev_mode(self, monkeypatch):
+        """Oracle(n=1) does NOT warn when dev mode is off."""
+        import warnings
+        import neograph._dev_warnings as dw
+
+        monkeypatch.setattr(dw, "DEV_MODE", False)
+
+        gen = _producer("gen", Claims)
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            gen | Oracle(n=1, merge_fn="dummy_merge")
+
+        dev_msgs = [w for w in caught if "[neograph-dev]" in str(w.message)]
+        assert len(dev_msgs) == 0
+
+    def test_oracle_uneven_models_warns_in_dev_mode(self, monkeypatch):
+        """Oracle with n not divisible by len(models) warns about uneven distribution."""
+        import warnings
+        import neograph._dev_warnings as dw
+
+        monkeypatch.setattr(dw, "DEV_MODE", True)
+
+        gen = _producer("gen", Claims)
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            gen | Oracle(n=5, models=["a", "b"], merge_fn="dummy_merge")
+
+        dev_msgs = [w for w in caught if "[neograph-dev]" in str(w.message)]
+        assert any("uneven distribution" in str(w.message) for w in dev_msgs)
+
+    def test_loop_max_iterations_1_warns_in_dev_mode(self, monkeypatch):
+        """Loop(max_iterations=1) warns about effectively non-looping config."""
+        import warnings
+        import neograph._dev_warnings as dw
+
+        monkeypatch.setattr(dw, "DEV_MODE", True)
+
+        n = Node.scripted("looper", fn="noop_loop", inputs=Claims, outputs=Claims)
+        from neograph.factory import register_scripted
+        register_scripted("noop_loop", lambda data, config: data)
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            n | Loop(when=lambda d: False, max_iterations=1)
+
+        dev_msgs = [w for w in caught if "[neograph-dev]" in str(w.message)]
+        assert len(dev_msgs) == 1
+        assert "max_iterations=1" in str(dev_msgs[0].message)

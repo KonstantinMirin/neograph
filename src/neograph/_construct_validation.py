@@ -200,6 +200,29 @@ def _validate_node_chain(construct: Any) -> None:
                 )
                 raise ConstructError(msg)
 
+        # Oracle + Each mutual exclusion (belt-and-suspenders).
+        if isinstance(item, Node):
+            if item.has_modifier(Oracle) and item.has_modifier(Each):
+                msg = (
+                    f"Node '{item.name}' has both Oracle and Each modifiers. "
+                    f"These cannot be combined on a single node. "
+                    f"Use a sub-construct: nest the Each fan-out inside an Oracle "
+                    f"ensemble, or vice versa."
+                )
+                raise ConstructError(msg)
+
+        # Loop + skip_when requires skip_value (neograph-e2dv).
+        # When skip_when fires inside a Loop, the counter increments but no
+        # value is appended. Without skip_value, the re-entry reads stale
+        # state — semantically ambiguous.
+        if isinstance(item, Node) and item.has_modifier(Loop):
+            if item.skip_when is not None and item.skip_value is None:
+                raise ConstructError(
+                    f"Node '{item.name}' has Loop + skip_when but no skip_value. "
+                    f"When skip_when fires inside a Loop, skip_value is required "
+                    f"to provide the output for that iteration."
+                )
+
         # (Loop reenter validation removed — Loop.reenter no longer exists.
         # Multi-node loops use Loop on Construct instead.)
 
