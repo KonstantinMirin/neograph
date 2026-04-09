@@ -295,10 +295,16 @@ class TestResolvePathAttributeError:
 
 
 class TestUnsupportedOperator:
-    """Line 125: operator not in _OPS (unreachable with current regex,
-    but defensive — test the code path)."""
+    """Line 125: operator not in _OPS."""
 
     def test_parse_condition_with_nonmatching_expression_raises(self):
         """Expression that doesn't match the grammar raises ValueError."""
         with pytest.raises(ValueError, match="Invalid condition"):
             parse_condition("no-operator-here")
+
+    def test_single_equals_not_in_ops(self):
+        """Single = matches regex but is not in _OPS (line 125)."""
+        # The regex op group [<>!=]=? matches "=" (! optional, = required)
+        # But "=" is not in _OPS dict which has ==, !=, <, >, <=, >=
+        with pytest.raises(ValueError, match="Unsupported operator"):
+            parse_condition("score = 5")

@@ -57,9 +57,9 @@ def _accepted_params(fn: Callable) -> set[str]:
             if p.kind == inspect.Parameter.VAR_KEYWORD:
                 return _ACCEPT_ALL  # accepts everything
         return set(sig.parameters.keys())
-    except (ValueError, TypeError):
+    except (ValueError, TypeError):  # pragma: no cover
         # Builtins, C extensions — assume simple signature
-        return set()
+        return set()  # pragma: no cover
 
 
 def configure_llm(

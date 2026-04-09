@@ -1933,17 +1933,59 @@ class TestConstructPropagationTypeErrors:
     def test_llm_config_propagation_skips_frozen_children(self):
         """When a child node is frozen (llm_config set fails),
         Construct init should not raise (lines 98-101)."""
-        # Node is not truly frozen in pydantic v2 but we test the path
-        # by using a construct with llm_config propagation.
         from neograph import Node, Construct
 
-        a = Node.scripted("a", fn="f", outputs=RawText)
-        # Construct with llm_config should propagate without errors
-        c = Construct("test", nodes=[a], llm_config={"output_strategy": "json_mode"})
-        assert c.nodes[0].llm_config.get("output_strategy") == "json_mode"
+        # Use a frozen Pydantic model as a child that has llm_config
+        class FrozenChild(BaseModel, frozen=True):
+            """Fake node-like object with frozen llm_config."""
+            name: str = "frozen"
+            llm_config: dict = {}
+            outputs: type = RawText
+            modifiers: list = []
+            inputs: Any = None
+            output: Any = None
+
+            def has_modifier(self, mod_type):
+                return False
+
+            def get_modifier(self, mod_type):
+                return None
+
+        child = FrozenChild()
+        # Construct with llm_config tries to set item.llm_config = merged
+        # but FrozenChild is frozen, so the TypeError is caught
+        c = Construct("test", nodes=[child], llm_config={"output_strategy": "json_mode"})
+        # The propagation was skipped, so child still has empty llm_config
+        assert c.nodes[0].llm_config == {}
+
+    def test_renderer_propagation_skips_frozen_children(self):
+        """When a child node is frozen, renderer propagation is skipped (lines 108-109)."""
+        from neograph import Node, Construct
+
+        class FrozenChild(BaseModel, frozen=True):
+            """Fake node-like object with frozen renderer."""
+            name: str = "frozen"
+            renderer: Any = None
+            outputs: type = RawText
+            modifiers: list = []
+            inputs: Any = None
+            output: Any = None
+            llm_config: dict = {}
+
+            def has_modifier(self, mod_type):
+                return False
+
+            def get_modifier(self, mod_type):
+                return None
+
+        child = FrozenChild()
+        sentinel = object()
+        c = Construct("test", nodes=[child], renderer=sentinel)
+        # Propagation was skipped, child still has None renderer
+        assert c.nodes[0].renderer is None
 
     def test_renderer_propagation_to_child_nodes(self):
-        """Renderer is propagated to child nodes that don't have their own (lines 108-109)."""
+        """Renderer is propagated to child nodes that don't have their own."""
         from neograph import Node, Construct
 
         a = Node.scripted("a", fn="f", outputs=RawText)

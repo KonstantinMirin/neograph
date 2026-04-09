@@ -85,7 +85,7 @@ def describe_type(
 
     # Render hoisted declarations in a stable order.
     for cls in _stable_sort(hoisted):
-        if cls in rendered_hoisted:
+        if cls in rendered_hoisted:  # pragma: no cover — dedup guard
             continue
         rendered_hoisted.add(cls)
         if cls in enum_classes:

@@ -939,3 +939,42 @@ class TestLoadSpecModifiers:
         construct = load_spec(spec)
         check_node = construct.nodes[0]
         assert check_node.has_modifier(OpMod)
+
+    def test_oracle_with_n_merge_prompt_merge_model(self):
+        """Oracle spec with explicit n, merge_prompt, merge_model (lines 237, 243, 245)."""
+        from neograph.loader import load_spec
+        from neograph.spec_types import register_type
+        from neograph.modifiers import Oracle as OracleMod
+
+        register_type("Draft", Draft)
+
+        def gen_fn(input_data, config):
+            return Draft(content="gen", score=0.5)
+
+        register_scripted("oracle_gen_fn", gen_fn)
+
+        spec = {
+            "name": "oracle-full",
+            "nodes": [
+                {
+                    "name": "generate",
+                    "mode": "scripted",
+                    "scripted_fn": "oracle_gen_fn",
+                    "outputs": "Draft",
+                    "oracle": {
+                        "n": 5,
+                        "merge_prompt": "combine/them",
+                        "merge_model": "fast",
+                    },
+                },
+            ],
+            "pipeline": {"nodes": ["generate"]},
+        }
+
+        construct = load_spec(spec)
+        gen_node = construct.nodes[0]
+        assert gen_node.has_modifier(OracleMod)
+        oracle = gen_node.get_modifier(OracleMod)
+        assert oracle.n == 5
+        assert oracle.merge_prompt == "combine/them"
+        assert oracle.merge_model == "fast"

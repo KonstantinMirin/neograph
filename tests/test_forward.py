@@ -1281,6 +1281,12 @@ class TestForwardNotOverridden:
         with pytest.raises(TypeError, match="must override forward"):
             NoForward()
 
+    def test_base_forward_raises_not_implemented(self):
+        """Calling ForwardConstruct.forward() directly raises NotImplementedError."""
+        # This hits line 160 — the base class's forward() method body
+        with pytest.raises(NotImplementedError, match="must override forward"):
+            ForwardConstruct.forward(None)
+
 
 class TestProxyHashBoolIter:
     """Lines 215, 223, 228, 232-233: __hash__, __bool__/__iter__ outside tracing."""
@@ -1301,6 +1307,17 @@ class TestProxyHashBoolIter:
         p = _Proxy(source_node=None, name="test")
         with pytest.raises(TypeError, match="outside tracing"):
             iter(p)
+
+    def test_proxy_repr_with_source(self):
+        """Proxy.__repr__ with source node (line 232)."""
+        node = Node.scripted("mynode", fn="f", outputs=RawText)
+        p = _Proxy(source_node=node, name="out_of_mynode")
+        assert "mynode" in repr(p)
+
+    def test_proxy_repr_without_source(self):
+        """Proxy.__repr__ with None source shows <input> (line 232)."""
+        p = _Proxy(source_node=None, name="forward_input")
+        assert "<input>" in repr(p)
 
 
 class TestConditionProxyEmptyAttrChain:
@@ -1417,6 +1434,26 @@ class TestLoopIterationInputInference:
         with pytest.raises(ConstructError, match="node references"):
             lc(p)
 
+    def test_record_iteration_source_none(self):
+        """_Tracer.record_iteration with source_node=None uses full_name (line 431)."""
+        tracer = _Tracer()
+        p = _Proxy(source_node=None, name="some_input_name")
+        it = tracer.record_iteration(p)
+        # Consume the iterator — it yields one proxy item
+        items = list(it)
+        assert len(items) == 1
+        assert tracer._loop_stack == []  # stack is popped after iteration
+
+    def test_record_iteration_name_mismatch(self):
+        """_Tracer.record_iteration when name doesn't match prefix uses field_name (line 429)."""
+        tracer = _Tracer()
+        node = Node.scripted("mynode", fn="f", outputs=RawText)
+        # Name that doesn't start with "out_of_mynode"
+        p = _Proxy(source_node=node, name="different_prefix")
+        it = tracer.record_iteration(p)
+        items = list(it)
+        assert len(items) == 1
+
     def test_loop_input_type_none_raises(self):
         """When loop can't infer input type, raises ConstructError (line 560)."""
         from neograph.forward import _LoopCall, _NodeCall
@@ -1513,5 +1550,40 @@ class TestBranchLoweringEdgeCases:
                 return self.fin(r2)
 
         pipe = TwoBranches()
+        branch_nodes = [n for n in pipe.nodes if isinstance(n, _BranchNode)]
+        assert len(branch_nodes) == 2
+
+    def test_sequential_branches_with_truthy_condition(self):
+        """Two sequential branches where one uses a plain proxy as bool (line 845)."""
+        register_scripted("sb2_a_fn", lambda _i, _c: Confidence(score=0.5))
+        register_scripted("sb2_b_fn", lambda _i, _c: HighResult(label="b"))
+        register_scripted("sb2_c_fn", lambda _i, _c: LowResult(label="c"))
+        register_scripted("sb2_d_fn", lambda _i, _c: HighResult(label="d"))
+        register_scripted("sb2_e_fn", lambda _i, _c: LowResult(label="e"))
+        register_scripted("sb2_f_fn", lambda _i, _c: FinalResult(summary="f"))
+
+        class TruthySequential(ForwardConstruct):
+            check1 = Node.scripted("check1", fn="sb2_a_fn", outputs=Confidence)
+            b = Node.scripted("b", fn="sb2_b_fn", outputs=HighResult)
+            c = Node.scripted("c", fn="sb2_c_fn", outputs=LowResult)
+            check2 = Node.scripted("check2", fn="sb2_a_fn", outputs=Confidence)
+            d = Node.scripted("d", fn="sb2_d_fn", outputs=HighResult)
+            e = Node.scripted("e", fn="sb2_e_fn", outputs=LowResult)
+            fin = Node.scripted("fin", fn="sb2_f_fn", outputs=FinalResult)
+
+            def forward(self, topic):
+                c1 = self.check1(topic)
+                if c1.score > 0.5:
+                    r1 = self.b(c1)
+                else:
+                    r1 = self.c(c1)
+                c2 = self.check2(r1)
+                if c2:  # Plain proxy as bool — truthy check (line 845)
+                    r2 = self.d(c2)
+                else:
+                    r2 = self.e(c2)
+                return self.fin(r2)
+
+        pipe = TruthySequential()
         branch_nodes = [n for n in pipe.nodes if isinstance(n, _BranchNode)]
         assert len(branch_nodes) == 2

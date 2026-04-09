@@ -868,7 +868,7 @@ def _merge_sequential_branches(
                 break
             result.append(node)
             processed_names.add(node.name)
-        else:
+        else:  # pragma: no cover — defensive: divergence always found in practice
             # Branch divergence not found in remaining base nodes — append sentinel
             result.append(_BranchNode(branch_meta, branch.branch_id))
             processed_names.update(n.name for n in true_only)

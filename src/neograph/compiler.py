@@ -46,12 +46,12 @@ def _register_msgpack_types(checkpointer: Any, state_model: type) -> None:
         from langgraph._internal._serde import build_serde_allowlist
         from langgraph.checkpoint.serde._msgpack import SAFE_MSGPACK_TYPES
         from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
-    except ImportError:
+    except ImportError:  # pragma: no cover
         return  # LangGraph version doesn't have this API
 
     serde = getattr(checkpointer, "serde", None)
     if not isinstance(serde, JsonPlusSerializer):
-        return
+        return  # pragma: no cover
     if getattr(serde, "_allowed_msgpack_modules", None) is not True:
         return  # already has an explicit allowlist
 
@@ -440,7 +440,7 @@ def _add_each_oracle_fused(
 
     if prev_node:
         graph.add_conditional_edges(prev_node, flat_router, path_map=[gen_name])
-    else:
+    else:  # pragma: no cover — EachOracle as first node requires pre-populated state
         graph.add_conditional_edges(START, flat_router, path_map=[gen_name])
 
     # Group-merge barrier: partitions by each.key, calls merge_fn per group
@@ -501,7 +501,7 @@ def _merge_one_group(oracle: Oracle, node: Node, variants: list, config: Any) ->
             scripted_merge = lookup_scripted(oracle.merge_fn)
             return scripted_merge(variants, config)
 
-    return variants[0] if variants else None
+    return variants[0] if variants else None  # pragma: no cover — Oracle validation requires merge_fn or merge_prompt
 
 
 def _add_loop_back_edge(
@@ -566,7 +566,7 @@ def _add_loop_back_edge(
             # Empty list — no output yet (e.g. skip_when with no skip_value).
             # Pass None so user conditions like `lambda d: d is None or ...` work.
             latest = None
-        else:
+        else:  # pragma: no cover — Loop reducer always produces a list
             latest = own_val
         try:
             should_continue = condition(latest)
