@@ -1,0 +1,123 @@
+---
+title: Each x Oracle Fusion
+description: Combine fan-out and ensemble on a single node for chunked decomposition and other M x N patterns.
+sidebar:
+  order: 45
+---
+
+When a document exceeds an LLM's context budget, you split it into chunks and process each independently. When a single LLM call is unreliable, you run an ensemble and merge. Each x Oracle fusion combines both patterns on one node: M chunks times N generators, merged per chunk, in a flat topology.
+
+## The use case: chunked decomposition
+
+A 200-page specification does not fit in a single LLM call. You chunk it, process each chunk in parallel, and aggregate. But each chunk also benefits from an ensemble -- three generators with different temperatures, merged into one result per chunk. Without fusion, you would nest an Each fan-out around a sub-construct that itself contains an Oracle. Fusion eliminates the sub-construct.
+
+## Syntax
+
+### @node decorator
+
+```python
+from pydantic import BaseModel
+from neograph import node, merge_fn, construct_from_functions, compile, run
+
+class Chunk(BaseModel, frozen=True):
+    chunk_idx: str
+    text: str
+
+class ChunkList(BaseModel, frozen=True):
+    items: list[Chunk]
+
+class Claims(BaseModel, frozen=True):
+    text: str
+
+@node(outputs=ChunkList)
+def split_doc() -> ChunkList:
+    return ChunkList(items=[
+        Chunk(chunk_idx="intro", text="The system shall authenticate users..."),
+        Chunk(chunk_idx="billing", text="The billing module shall process..."),
+    ])
+
+@merge_fn
+def pick_best(variants: list[Claims]) -> Claims:
+    return max(variants, key=lambda v: len(v.text))
+
+@node(
+    outputs=Claims,
+    map_over="split_doc.items",
+    map_key="chunk_idx",
+    ensemble_n=3,
+    merge_fn="pick_best",
+)
+def decompose(chunk: Chunk) -> Claims:
+    return Claims(text=f"claims from {chunk.text[:20]}")
+
+pipeline = construct_from_functions("chunked", [split_doc, decompose])
+graph = compile(pipeline)
+result = run(graph, input={"node_id": "chunk-demo"})
+
+# result["decompose"] is dict[str, Claims], keyed by chunk_idx
+for label, claims in result["decompose"].items():
+    print(f"{label}: {claims.text}")
+```
+
+### Programmatic (pipe) form
+
+```python
+from neograph import Node, Each, Oracle, Construct, compile, run
+from neograph.factory import register_scripted
+
+register_scripted("split_fn", lambda i, c: ChunkList(items=[...]))
+register_scripted("decompose_fn", lambda i, c: Claims(text="..."))
+register_scripted("merge_fn", lambda v, c: max(v, key=lambda x: len(x.text)))
+
+pipeline = Construct("chunked", nodes=[
+    Node.scripted("split-doc", fn="split_fn", outputs=ChunkList),
+    Node.scripted("decompose", fn="decompose_fn", inputs=Chunk, outputs=Claims)
+    | Oracle(n=3, merge_fn="merge_fn")
+    | Each(over="split_doc.items", key="chunk_idx"),
+])
+```
+
+Modifier order does not matter on Nodes. `| Oracle(...) | Each(...)` and `| Each(...) | Oracle(...)` produce the same fused topology.
+
+## How it works
+
+The compiler detects when a node carries both an Each and an Oracle modifier and emits a flat M x N Send topology:
+
+1. **Flat router**: iterates over the collection (M items) and for each item dispatches N generators, producing M x N `Send()` calls.
+2. **Generator**: each Send runs the node function once with `neo_each_item` set to the chunk and `neo_oracle_gen_id` identifying the generator copy.
+3. **Group-merge barrier**: a single barrier node with `defer=True` collects all M x N results, groups them by each key, and calls the merge function once per group. Each group receives N variants.
+
+The output is a `dict[str, MergedResult]` -- standard Each shape, keyed by the `key` field.
+
+## Output shape
+
+The fused node produces the same output shape as a plain Each: `dict[str, T]` where T is the node's output type after merging. Downstream nodes see the standard Each output and can consume it the same way:
+
+```python
+@node(outputs=Summary)
+def summarize(decompose: list[Claims]) -> Summary:
+    # list[Claims] consumer of dict[str, Claims] -- merge-after-fanout
+    return Summary(total=len(decompose))
+```
+
+## Multi-model fusion
+
+Combine `models=` with `map_over=` to run each chunk through multiple model tiers:
+
+```python
+@node(
+    outputs=Claims,
+    prompt="rw/decompose",
+    models=["reason", "fast", "creative"],
+    map_over="split_doc.items",
+    map_key="chunk_idx",
+    merge_fn="pick_best",
+)
+def decompose(chunk: Chunk) -> Claims: ...
+```
+
+This dispatches M chunks x 3 models = 3M generators, merged per chunk.
+
+---
+
+Documentation &copy; 2025-2026 Constantine Mirin, [mirin.pro](https://mirin.pro). Licensed under [CC BY-ND 4.0](https://creativecommons.org/licenses/by-nd/4.0/).

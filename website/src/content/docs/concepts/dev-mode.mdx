@@ -1,0 +1,89 @@
+---
+title: Developer Mode
+description: NEOGRAPH_DEV=1 enables warnings for ambiguous patterns and prints DAG summaries after compilation.
+---
+
+Developer mode is an opt-in diagnostic layer that catches ambiguous-but-valid patterns early and gives you compile-time visibility into graph topology. Enable it with a single environment variable.
+
+## Enabling dev mode
+
+```bash
+export NEOGRAPH_DEV=1
+```
+
+Or set it per-command:
+
+```bash
+NEOGRAPH_DEV=1 python my_pipeline.py
+```
+
+## What it warns about
+
+Dev mode emits Python `UserWarning` messages for patterns that are technically valid but likely unintentional.
+
+### Oracle(n=1)
+
+An ensemble of one generator is equivalent to no ensemble at all:
+
+```
+[neograph-dev] Oracle(n=1) on 'classify' -- an ensemble of 1 is
+equivalent to no ensemble. Did you mean n=3?
+```
+
+### Uneven model distribution
+
+When the number of Oracle generators does not divide evenly across the model list, some models run more iterations than others:
+
+```
+[neograph-dev] Oracle(n=5, models=['fast', 'reason']) on 'classify' --
+uneven distribution: 5 generators across 2 models means some models
+run more than others.
+```
+
+### Loop(max_iterations=1)
+
+A loop that runs at most once is equivalent to a conditional branch:
+
+```
+[neograph-dev] Loop(max_iterations=1) on 'refine' -- a loop that runs
+at most once is equivalent to a conditional. Did you mean max_iterations=3?
+```
+
+## DAG summary
+
+In dev mode, every `compile()` call prints a human-readable DAG summary to stderr:
+
+```
+[neograph-dev] Compiled 'ingestion' (4 nodes):
+  START -> decompose
+  decompose -> classify
+  classify -> report
+  report -> END
+```
+
+Conditional edges (from `ForwardConstruct` branching, `Loop`, or `Operator`) are annotated:
+
+```
+[neograph-dev] Compiled 'analysis' (3 nodes):
+  START -> check
+  check -> deep [conditional]
+  check -> shallow [conditional]
+  deep -> END
+  shallow -> END
+```
+
+This is the same topology that `describe_graph()` returns as Mermaid, but in a compact text form for terminal use. See [Graph Visualization](/concepts/visualize/) for the Mermaid output.
+
+## When to use it
+
+Dev mode is for local development and debugging. It adds no overhead to production runs -- warnings and the DAG summary are completely skipped when `NEOGRAPH_DEV` is unset or not `"1"`.
+
+Recommended workflow:
+
+1. Set `NEOGRAPH_DEV=1` in your shell profile or `.env` during development.
+2. Review warnings when they appear -- they flag patterns that usually indicate a mistake.
+3. Remove the variable (or leave it unset) in production and CI.
+
+---
+
+Documentation &copy; 2025-2026 Constantine Mirin, [mirin.pro](https://mirin.pro). Licensed under [CC BY-ND 4.0](https://creativecommons.org/licenses/by-nd/4.0/).

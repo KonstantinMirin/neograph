@@ -1,6 +1,6 @@
 ---
 title: Modifier Keywords
-description: Fan-out, ensemble, and human-in-the-loop interrupt as @node keyword arguments.
+description: Fan-out, ensemble, interrupt, loop, skip, context, and history as @node keyword arguments.
 ---
 
 The `@node` decorator accepts keyword arguments that attach modifiers — `Each`, `Oracle`, and `Operator` — without touching the programmatic API. Each pattern shown below compiles to the same graph as its `Node | Modifier` equivalent.
@@ -295,6 +295,221 @@ Python `for`/`while` loops in `forward()` don't compile to graph cycles -- they 
 
 - `loop_when=` and `map_over=` cannot be combined on the same node. Use a sub-construct with internal loop inside an `Each` fan-out instead.
 - Loop on a node is always a self-loop. Multi-node loops use `construct | Loop(when=...)` or `self.loop()` in ForwardConstruct.
+
+## Skip with skip_when and skip_value
+
+Skip the LLM call when a condition is met. Useful for cost optimization -- avoid expensive model invocations when the input is trivial or already resolved.
+
+```python
+from pydantic import BaseModel
+from neograph import node, construct_from_functions, compile, run
+
+class Analysis(BaseModel, frozen=True):
+    text: str
+    complexity: float = 0.0
+
+class Summary(BaseModel, frozen=True):
+    content: str
+
+@node(outputs=Analysis)
+def analyze() -> Analysis:
+    return Analysis(text="simple case", complexity=0.1)
+
+@node(
+    outputs=Summary,
+    prompt="rw/summarize",
+    model="reason",
+    skip_when=lambda a: a.complexity < 0.3,
+    skip_value=lambda a: Summary(content=f"Trivial: {a.text}"),
+)
+def summarize(analyze: Analysis) -> Summary: ...
+
+pipeline = construct_from_functions("pipeline", [analyze, summarize])
+graph = compile(pipeline)
+result = run(graph, input={"node_id": "skip-demo"})
+
+# complexity < 0.3, so the LLM call is skipped entirely
+print(result["summarize"].content)  # "Trivial: simple case"
+```
+
+How it works:
+
+- **`skip_when=`** receives the extracted input data (after `_extract_input`, before rendering). Returns `True` to skip the LLM call, `False` to proceed normally. For single-upstream nodes, the callable receives the typed value directly (not a dict wrapper).
+- **`skip_value=`** produces the output when skipped. Receives the same input as `skip_when`. Required inside a Loop -- without it, the loop counter still increments but no output is written.
+- When skipped, the node logs `node_skipped` with `reason="skip_when"` and the elapsed time.
+
+When to use:
+
+- Cost optimization: skip expensive LLM calls when the input is trivial or a cached result suffices.
+- Conditional execution: nodes that should only run when a quality threshold is not met.
+- Loop exit: inside a `Loop`, `skip_when` + `skip_value` can short-circuit iterations when the output is already good enough.
+
+`skip_when` applies to all LLM modes (`think`, `agent`, `act`). It does not apply to `scripted` nodes -- use a conditional inside the function body instead.
+
+## Context injection with context
+
+Inject verbatim state fields into the LLM prompt alongside typed input. Unlike regular inputs, context values are not type-checked or rendered through the framework's BAML renderer -- they are passed as-is to the prompt compiler.
+
+```python
+from pydantic import BaseModel
+from neograph import node, construct_from_functions, compile, run
+
+class Catalog(BaseModel, frozen=True):
+    content: str
+
+class Claims(BaseModel, frozen=True):
+    items: list[str]
+
+class ScoredClaims(BaseModel, frozen=True):
+    scored: list[dict]
+
+@node(outputs=Catalog)
+def build_catalog() -> Catalog:
+    return Catalog(content=(
+        "=== Graph Catalog (BFS from UC-001) ===\n"
+        "UC-001: User Authentication [auth.py:10-85]\n"
+        "  BR-001: Password min 12 chars\n"
+        "  BR-002: Session timeout 30min\n"
+    ))
+
+@node(outputs=Claims)
+def decompose() -> Claims:
+    return Claims(items=["auth uses SSO", "data encrypted at rest"])
+
+@node(
+    outputs=ScoredClaims,
+    prompt="rw/score",
+    model="reason",
+    context=["build_catalog"],
+)
+def score(decompose: Claims) -> ScoredClaims: ...
+
+pipeline = construct_from_functions("pipeline", [build_catalog, decompose, score])
+```
+
+How it works:
+
+- **`context=`** takes a list of state field names (strings). At runtime, the factory reads each named field from state and passes the values as a `context` dict to the prompt compiler: `invoke_structured(..., context={"build_catalog": <value>})`.
+- Context values bypass the renderer dispatch chain. The prompt compiler receives them verbatim -- no BAML `describe_value`, no XML/JSON wrapping. This is the right choice for pre-formatted content like graph catalogs, domain briefings, or cached summaries that are already crafted for LLM consumption.
+- Context names are validated at compile time. The state model creates fields for each declared context name, and the validator checks that the names correspond to known upstream producers.
+
+Difference from inputs:
+
+| | `inputs` | `context` |
+|---|---|---|
+| Type-checked | Yes (Pydantic model matching) | No (passed as-is) |
+| Rendered | Yes (BAML / renderer chain) | No (verbatim) |
+| Topology wiring | Determines DAG edges | Does not affect topology |
+| Prompt placement | Main input section | Separate `context` dict |
+
+Context fields are forwarded into sub-constructs automatically. If a node inside a sub-construct declares `context=["build_catalog"]`, the parent state value is copied into the sub-graph's state at invocation time. See example 14 (`examples/14_context_injection.py`) for the full pattern with sub-constructs and Each fan-out.
+
+## Loop history with loop_history
+
+Collect every iteration's output into a separate history field for debugging or audit trails.
+
+```python
+from pydantic import BaseModel
+from neograph import node, construct_from_functions, compile, run
+
+class Draft(BaseModel, frozen=True):
+    content: str
+    score: float = 0.0
+    iteration: int = 0
+
+@node(outputs=Draft)
+def seed() -> Draft:
+    return Draft(content="initial", score=0.0)
+
+@node(
+    outputs=Draft,
+    loop_when=lambda d: d is None or d.score < 0.8,
+    max_iterations=5,
+    loop_history=True,
+)
+def refine(draft: Draft) -> Draft:
+    return Draft(
+        content=f"v{draft.iteration + 1}",
+        iteration=draft.iteration + 1,
+        score=draft.score + 0.3,
+    )
+
+pipeline = construct_from_functions("writer", [seed, refine])
+graph = compile(pipeline)
+result = run(graph, input={"node_id": "history-demo"})
+
+# The main output is the append-list of all iterations
+final = result["refine"][-1]
+print(f"Final: score={final.score}")
+
+# The history field collects each iteration independently
+history = result.get("neo_loop_history_refine", [])
+for i, draft in enumerate(history):
+    print(f"  Iteration {i}: score={draft.score}")
+```
+
+How it works:
+
+- **`loop_history=True`** (or `Loop(history=True)` in the programmatic API) creates an additional state field `neo_loop_history_{node_name}` that collects each iteration's output into a list.
+- The history field uses a list reducer -- each iteration appends to it independently. This is separate from the node's main output field (which is also an append-list for Loop nodes).
+- The history field is written by `_build_state_update` in the factory layer alongside the main output and loop counter increment.
+
+When to use:
+
+- Debugging: inspect how the output evolved across iterations.
+- Audit trail: keep a record of each refinement step for compliance or review.
+- Analytics: measure convergence rate or detect oscillation.
+
+Restrictions:
+
+- Only supported on Node-level Loops. Applying `Loop(history=True)` to a Construct raises `ConstructError` at pipe-composition time. For Construct-level loops, collect history inside the sub-construct's internal nodes instead.
+
+The programmatic equivalent:
+
+```python
+from neograph.modifiers import Loop
+
+refine = Node("refine", mode="scripted", outputs=Draft) | Loop(
+    when=lambda d: d is None or d.score < 0.8,
+    max_iterations=5,
+    history=True,
+)
+```
+
+## Fan-out with .map()
+
+The `.map()` method is sugar over `| Each(over=..., key=...)`. It accepts either a lambda or a string path.
+
+### Lambda form (refactor-safe)
+
+```python
+@node(outputs=VerifyResult)
+def verify(cluster: ClusterGroup) -> VerifyResult:
+    return VerifyResult(cluster_label=cluster.label, coverage_pct=85)
+
+verify = verify.map(lambda s: s.discover_clusters.groups, key="label")
+```
+
+The lambda is introspected once at definition time via a recording proxy. Pyright and Pylance catch typos in the attribute chain -- renaming `discover_clusters` to `find_clusters` shows as a red squiggle, unlike a string path.
+
+### String form
+
+```python
+verify = verify.map("discover_clusters.groups", key="label")
+```
+
+Equivalent to `verify | Each(over="discover_clusters.groups", key="label")`. Use this when the string path is computed at runtime or when you do not need static analysis coverage.
+
+### When to use which
+
+| Form | Advantage |
+|---|---|
+| `map_over=` keyword | Inline with `@node(...)`, no separate `.map()` call |
+| `.map(lambda ...)` | Refactor-safe; static analysers catch typos |
+| `.map("string")` | Escape hatch; works with dynamic paths |
+| `\| Each(over=..., key=...)` | Programmatic API; used by LLM-driven runtime construction |
+
+All four produce the same `Each` modifier on the node. The compiler, state builder, and factory see no difference.
 
 ## Programmatic equivalent
 

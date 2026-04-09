@@ -216,6 +216,71 @@ result["verify"]
 
 Keys must be unique across the collection -- if two items share a key, the compiler raises an error.
 
+## Consuming fan-out results as a list
+
+A downstream node can consume an Each-modified upstream's `dict[str, X]` results as `list[X]`. This is useful for order-independent reductions like counting, aggregating, or summarizing:
+
+```python
+from pydantic import BaseModel
+from neograph import node, construct_from_functions, compile, run
+
+class ClusterGroup(BaseModel, frozen=True):
+    label: str
+    claim_ids: list[str]
+
+class Clusters(BaseModel, frozen=True):
+    groups: list[ClusterGroup]
+
+class VerifyResult(BaseModel, frozen=True):
+    cluster_label: str
+    coverage_pct: int
+
+class CoverageReport(BaseModel, frozen=True):
+    total_clusters: int
+    avg_coverage: float
+    passing: int
+
+@node(outputs=Clusters)
+def discover_clusters() -> Clusters:
+    return Clusters(groups=[
+        ClusterGroup(label="authentication", claim_ids=["REQ-1"]),
+        ClusterGroup(label="logging", claim_ids=["REQ-2"]),
+        ClusterGroup(label="performance", claim_ids=["REQ-3"]),
+    ])
+
+@node(outputs=VerifyResult, map_over="discover_clusters.groups", map_key="label")
+def verify(cluster: ClusterGroup) -> VerifyResult:
+    coverage = {"authentication": 85, "logging": 60, "performance": 100}
+    return VerifyResult(cluster_label=cluster.label,
+                        coverage_pct=coverage.get(cluster.label, 0))
+
+@node(outputs=CoverageReport)
+def summarize(verify: list[VerifyResult]) -> CoverageReport:
+    return CoverageReport(
+        total_clusters=len(verify),
+        avg_coverage=sum(v.coverage_pct for v in verify) / len(verify),
+        passing=sum(1 for v in verify if v.coverage_pct >= 80),
+    )
+
+pipeline = construct_from_functions("report", [discover_clusters, verify, summarize])
+graph = compile(pipeline)
+result = run(graph, input={"node_id": "list-demo"})
+
+report = result["summarize"]
+print(f"{report.passing}/{report.total_clusters} passing, avg {report.avg_coverage:.0f}%")
+# 2/3 passing, avg 82%
+```
+
+How it works:
+
+- The `summarize` node declares its parameter as `verify: list[VerifyResult]`. The validator accepts `list[X]` against a producer of `dict[str, X]` when the element types are compatible.
+- At runtime, the factory unwraps the dict via `list(values())` before passing the list to the consumer function.
+- The programmatic equivalent uses `inputs=list[VerifyResult]` on the Node.
+
+:::caution[Ordering]
+`dict.values()` preserves insertion order, but Each's barrier collects `Send()` results in arrival order, not the original collection order. Use `list[X]` for order-independent reductions (counts, aggregates, summaries). If you need deterministic ordering, consume as `dict[str, VerifyResult]` and sort explicitly on the key.
+:::
+
 ## What the compiler generates
 
 When it encounters `map_over=` and `map_key=`, the compiler expands the node into:

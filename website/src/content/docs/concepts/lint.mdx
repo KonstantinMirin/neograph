@@ -1,0 +1,132 @@
+---
+title: Static Linting (lint)
+description: Validate DI bindings against a sample config before runtime — catch missing FromInput/FromConfig keys at check time.
+---
+
+`lint()` walks every node in a Construct and verifies that each `FromInput`/`FromConfig` parameter has a matching key in the provided config dict. It never raises -- it returns a list of `LintIssue` instances describing every binding problem it finds.
+
+## API
+
+```python
+from neograph import lint, LintIssue
+
+issues = lint(pipeline, config={"node_id": "test", "project_root": "/tmp"})
+
+for issue in issues:
+    print(f"[{issue.kind}] {issue.message}")
+```
+
+### Parameters
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `construct` | `Construct` | The pipeline to check |
+| `config` | `dict[str, Any] \| None` | Config dict to validate DI bindings against. When `None`, only structural checks run (required params are flagged as missing since no config is available). |
+
+### Return value
+
+A list of `LintIssue` instances. An empty list means all bindings are satisfied.
+
+## LintIssue fields
+
+```python
+@dataclass
+class LintIssue:
+    node_name: str   # which node has the problem
+    param: str       # which parameter is unresolved
+    kind: str        # "from_input", "from_config", "from_input_model", "from_config_model"
+    message: str     # human-readable description
+    required: bool   # True if the parameter has no default
+```
+
+The `kind` field tells you where the parameter expected to be resolved from:
+
+| Kind | Meaning |
+|------|---------|
+| `from_input` | `Annotated[T, FromInput]` -- resolved from `config["configurable"]`, originally from `run(input={...})` |
+| `from_config` | `Annotated[T, FromConfig]` -- resolved from `config["configurable"]`, passed directly in `config=` |
+| `from_input_model` | Bundled `BaseModel` via `FromInput` -- each model field must exist in config |
+| `from_config_model` | Bundled `BaseModel` via `FromConfig` -- each model field must exist in config |
+
+## What it checks
+
+### Per-parameter DI bindings
+
+For every node with `FromInput` or `FromConfig` parameters, `lint()` checks that the parameter name exists as a key in the config dict:
+
+```python
+@node(output=Result)
+def process(
+    upstream: Claims,
+    topic: Annotated[str, FromInput],           # lint checks: "topic" in config
+    limiter: Annotated[RateLimiter, FromConfig], # lint checks: "limiter" in config
+) -> Result: ...
+```
+
+### Bundled BaseModel fields
+
+When a DI parameter uses a `BaseModel` subclass, the resolver bundles -- it constructs an instance by pulling each model field from config. `lint()` checks every field individually:
+
+```python
+class RunCtx(BaseModel):
+    node_id: str
+    project_root: str
+
+@node(output=Result)
+def process(
+    upstream: Claims,
+    ctx: Annotated[RunCtx, FromInput],  # lint checks: "node_id" AND "project_root" in config
+) -> Result: ...
+```
+
+### merge_fn DI bindings
+
+For nodes with an `Oracle` modifier whose `merge_fn` is a `@merge_fn`-decorated function, `lint()` also checks the merge function's DI parameters:
+
+```python
+@merge_fn
+def weighted_merge(
+    candidates: list[Result],
+    weights: Annotated[list[float], FromConfig],  # lint checks: "weights" in config
+) -> Result: ...
+```
+
+## Example: full lint workflow
+
+```python
+from typing import Annotated
+from pydantic import BaseModel
+from neograph import node, compile, lint, FromInput, FromConfig
+
+class Claims(BaseModel):
+    items: list[str]
+
+class Result(BaseModel):
+    summary: str
+
+@node(output=Result)
+def summarize(
+    claims: Claims,
+    topic: Annotated[str, FromInput],
+    max_len: Annotated[int, FromConfig],
+) -> Result:
+    return Result(summary=f"{topic}: {len(claims.items)} claims (max {max_len})")
+
+# Check with a complete config -- no issues
+issues = lint(pipeline, config={"topic": "AI safety", "max_len": 500})
+assert issues == []
+
+# Check with a missing key -- lint reports the gap
+issues = lint(pipeline, config={"topic": "AI safety"})
+assert len(issues) == 1
+assert issues[0].param == "max_len"
+assert issues[0].kind == "from_config"
+```
+
+## Using with neograph check
+
+`lint()` runs automatically as part of the `neograph check` CLI. See [Pipeline Validation](/concepts/check-cli/) for details on the `--config` and `--setup` flags that supply config to the lint pass.
+
+---
+
+Documentation &copy; 2025-2026 Constantine Mirin, [mirin.pro](https://mirin.pro). Licensed under [CC BY-ND 4.0](https://creativecommons.org/licenses/by-nd/4.0/).

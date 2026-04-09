@@ -284,9 +284,50 @@ construct | Loop(when=lambda d: d is None or d.score < 0.8, max_iterations=10)
 
 **`Operator(when)`** — Human-in-the-loop interrupt. `when` is a registered condition name.
 
-**`Loop(when, max_iterations=10, on_exhaust="error")`** — Cycle modifier. On a Node: self-loop (output feeds back as input). On a Construct: the sub-construct re-runs with its output as the next input. `when` receives the latest output; return `True` to continue. The value may be `None` on the first iteration, so the callable must be None-safe (e.g. `lambda d: d is None or d.score < 0.8`).
+**`Loop(when, max_iterations=10, on_exhaust="error", history=False)`** — Cycle modifier. On a Node: self-loop (output feeds back as input). On a Construct: the sub-construct re-runs with its output as the next input. `when` receives the latest output; return `True` to continue. The value may be `None` on the first iteration, so the callable must be None-safe (e.g. `lambda d: d is None or d.score < 0.8`). When `history=True`, each iteration's output is collected in a state list field (`{node_name}_history`), useful for debugging or post-loop analysis.
 
 The `|` syntax returns a new Node/Construct with the modifier appended. You can chain: `node | Oracle(...) | Operator(...)`.
+
+### `Node.map(source, *, key) -> Node`
+
+Sugar over `| Each(over=..., key=...)` with IDE-friendly lambda introspection. Returns a new Node with an `Each` modifier appended.
+
+```python
+# Lambda form (refactor-safe — Pyright/Pylance catch typos):
+verify.map(lambda s: s.make_clusters.groups, key="label")
+
+# String form (escape hatch, equivalent to | Each(...)):
+verify.map("make_clusters.groups", key="label")
+```
+
+- **`source`** — Either a dotted-path string (`"upstream.field"`) or a lambda that accesses attributes on a state proxy (`lambda s: s.upstream.field`). The lambda must be a pure attribute-access chain; indexing, arithmetic, or underscore-prefixed attributes raise `TypeError`.
+- **`key`** — Field on each iterated item used as the dispatch key (same semantics as `Each.key`).
+
+Both forms compile to the same `Each` modifier. The lambda form gives static analysis coverage: renaming an upstream node surfaces as a type-checker error instead of a silent runtime failure.
+
+### `Construct.renderer`
+
+Default renderer propagated to all child nodes that don't have their own renderer set. Dispatch hierarchy: `model.render_for_prompt()` > `node.renderer` > `construct.renderer` > global default > None.
+
+```python
+pipeline = Construct(
+    "my-pipeline",
+    nodes=[extract, classify],
+    renderer=JsonRenderer(),
+)
+```
+
+### `Construct.llm_config`
+
+Default LLM configuration propagated to all child nodes. Per-node `llm_config` merges over the Construct default (node wins on conflicts). Common use: setting `output_strategy="json_mode"` once for a whole pipeline instead of on every node.
+
+```python
+pipeline = Construct(
+    "my-pipeline",
+    nodes=[generate, classify, summarize],
+    llm_config={"output_strategy": "json_mode", "temperature": 0.2},
+)
+```
 
 ---
 
@@ -307,6 +348,56 @@ graph = compile(pipeline, retry_policy=RetryPolicy(max_attempts=3))
 ### `run(graph, *, input=None, resume=None, config=None) -> dict`
 
 Executes a compiled graph. Use `input=` for the first run, `resume=` to continue from an interrupt. Returns the final state dict with framework internals stripped.
+
+### `describe_graph(compiled) -> str`
+
+Returns a Mermaid diagram string for a compiled graph. Paste the output into any Mermaid renderer (GitHub, docs, mermaid.live).
+
+```python
+graph = compile(pipeline)
+print(describe_graph(graph))
+```
+
+### `lint(construct, *, config=None) -> list[LintIssue]`
+
+Validates DI bindings in a Construct against a sample config dict. Walks every node (recursing into sub-constructs) and checks that every `FromInput`/`FromConfig` parameter has a matching key in the provided config. Returns a list of `LintIssue` instances; an empty list means all bindings are satisfied. Never raises.
+
+When `config` is `None`, only structural checks are performed: required params are flagged as missing since no config is available.
+
+```python
+from neograph import lint
+
+issues = lint(pipeline, config={"topic": "auth", "tracer": my_tracer})
+for issue in issues:
+    print(f"{issue.node_name}.{issue.param}: {issue.message}")
+```
+
+### `LintIssue`
+
+Dataclass representing a single DI binding problem found by `lint()`:
+
+```python
+@dataclass
+class LintIssue:
+    node_name: str       # which node has the problem
+    param: str           # which parameter is unbound
+    kind: str            # "from_input", "from_config", "from_input_model", "from_config_model"
+    message: str         # human-readable description
+    required: bool = False
+```
+
+### `parse_condition(expr) -> Callable[[Any], bool]`
+
+Safe expression evaluator for spec-driven conditions. Parses `field op literal` expressions where `op` is one of `< > <= >= == !=` and `literal` is a number, boolean (`true`/`false`), or a quoted string. Dotted field access is supported.
+
+```python
+from neograph import parse_condition
+
+check = parse_condition("result.score < 0.8")
+check(my_output)  # True if my_output.result.score < 0.8
+```
+
+Raises `ValueError` for any expression that does not match the grammar. Used internally by `load_spec` for string-form conditions in pipeline specs; available for custom runtime routing.
 
 ### `configure_llm(llm_factory, prompt_compiler)`
 

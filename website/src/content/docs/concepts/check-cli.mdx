@@ -1,0 +1,99 @@
+---
+title: Pipeline Validation (neograph check)
+description: CLI command that discovers Constructs in a module, compiles them, and runs lint — no execution required.
+---
+
+`neograph check` validates your pipelines without executing them. It discovers every `Construct` in a Python file (or importable module), runs `compile()` and `lint()` on each one, and reports problems.
+
+## Basic usage
+
+```bash
+neograph check my_pipeline.py
+```
+
+Output:
+
+```
+OK    ingestion (pipeline)
+FAIL  analysis (analysis_pipeline)
+      compile: Node 'score' in construct 'analysis' declares input=RawText but no upstream produces a compatible value.
+
+2 construct(s) checked, 1 passed, 1 failed.
+```
+
+The command accepts a file path or a dotted module name:
+
+```bash
+neograph check my_pipeline.py
+neograph check my_package.pipelines
+```
+
+## Providing config for lint
+
+`lint()` checks that `FromInput` and `FromConfig` DI bindings resolve against a config dict. Without a config, only structural checks run. Two flags supply one:
+
+### --config (inline JSON)
+
+```bash
+neograph check my_pipeline.py --config '{"node_id": "test", "project_root": "/tmp"}'
+```
+
+### --setup (Python module)
+
+For configs that contain non-serializable objects (rate limiters, database pools), point `--setup` at a Python file that exports a `get_check_config()` function:
+
+```python
+# check_config.py
+from my_app.resources import make_limiter
+
+def get_check_config():
+    return {
+        "node_id": "test",
+        "project_root": "/tmp",
+        "rate_limiter": make_limiter(),
+    }
+```
+
+```bash
+neograph check my_pipeline.py --setup check_config.py
+```
+
+## Exit codes
+
+| Code | Meaning |
+|------|---------|
+| 0    | All constructs compiled and linted cleanly |
+| 1    | One or more constructs failed compilation or lint |
+| 2    | Usage error (file not found, invalid JSON, missing `get_check_config`) |
+
+## CI integration
+
+Add a check step to your CI pipeline. The non-zero exit code fails the build on any validation error:
+
+```yaml
+# .github/workflows/check.yml
+name: Pipeline Validation
+on: [push, pull_request]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync
+      - run: uv run neograph check src/my_pipeline.py --config '{"node_id": "test"}'
+```
+
+## What it runs
+
+For each `Construct` found in the target module:
+
+1. **compile()** -- builds the LangGraph `StateGraph`, catching type mismatches, missing upstreams, invalid modifiers, and cycle errors.
+2. **lint()** -- walks every node and checks that DI parameters (`FromInput`, `FromConfig`, bundled models) have matching keys in the provided config. See [Static Linting](/concepts/lint/) for details.
+
+Both checks are assembly-time only -- no LLM calls, no side effects.
+
+---
+
+Documentation &copy; 2025-2026 Constantine Mirin, [mirin.pro](https://mirin.pro). Licensed under [CC BY-ND 4.0](https://creativecommons.org/licenses/by-nd/4.0/).

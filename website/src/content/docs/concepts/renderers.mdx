@@ -1,0 +1,194 @@
+---
+title: Input Renderers
+description: Pluggable renderers convert Pydantic models to LLM-friendly text for prompt insertion.
+sidebar:
+  order: 50
+---
+
+When a node's upstream output is inserted into an LLM prompt, it needs to be serialized to text. Renderers control how that serialization happens. Three built-in renderers cover the common formats; you can also define custom rendering per model.
+
+## Built-in renderers
+
+### XmlRenderer (default)
+
+BAML-style XML elements. Fields become tags; nested models become nested XML; lists become repeated `<item>` elements. Multi-line prose is not JSON-escaped.
+
+```python
+from neograph.renderers import XmlRenderer
+
+renderer = XmlRenderer()
+print(renderer.render(claims))
+```
+
+Output:
+
+```xml
+<items>
+<item>
+<text>The system shall authenticate users via SSO</text>
+<category>authentication</category>
+</item>
+<item>
+<text>All API responses shall include trace IDs</text>
+<category>observability</category>
+</item>
+</items>
+```
+
+The `include_field_info` parameter controls field description emission:
+
+| Value | Behavior |
+|---|---|
+| `'once'` (default) | Description as attribute on first occurrence of each field |
+| `'always'` | Description as attribute on every occurrence |
+| `'never'` | No descriptions |
+
+```python
+renderer = XmlRenderer(include_field_info='always')
+```
+
+### DelimitedRenderer
+
+DSPy-style `[[ ## field ## ]]` headers. Fields get delimited headers; nested models recurse with dotted prefixes; lists use `- ` bullet points.
+
+```python
+from neograph.renderers import DelimitedRenderer
+
+renderer = DelimitedRenderer()
+print(renderer.render(claims))
+```
+
+Output:
+
+```
+[[ ## items ## ]]
+- [[ ## items.text ## ]]
+The system shall authenticate users via SSO
+- [[ ## items.text ## ]]
+All API responses shall include trace IDs
+```
+
+### JsonRenderer
+
+Backward-compatible JSON serialization. Uses `model_dump_json` for Pydantic models, `json.dumps` for everything else.
+
+```python
+from neograph.renderers import JsonRenderer
+
+renderer = JsonRenderer(indent=2)
+print(renderer.render(claims))
+```
+
+## When to use which
+
+| Renderer | Best for |
+|---|---|
+| `XmlRenderer` | Most use cases. LLMs parse XML reliably, and nested structure is preserved without JSON escaping. |
+| `DelimitedRenderer` | DSPy-style prompts. Flat, human-readable, good for simple schemas. |
+| `JsonRenderer` | When the downstream LLM expects JSON input, or for backward compatibility with existing prompts. |
+
+## Setting a renderer
+
+### Per node
+
+Pass `renderer=` when creating a node:
+
+```python
+from neograph import node
+from neograph.renderers import XmlRenderer
+
+@node(outputs=Summary, prompt='rw/summarize', model='reason',
+      renderer=XmlRenderer(include_field_info='never'))
+def summarize(claims: Claims) -> Summary: ...
+```
+
+### Per construct (inheritance)
+
+Set `renderer=` on a Construct. It propagates to every child node that does not have its own renderer set:
+
+```python
+from neograph import Construct
+from neograph.renderers import DelimitedRenderer
+
+pipeline = Construct(
+    "analysis",
+    nodes=[discover, classify, summarize],
+    renderer=DelimitedRenderer(),
+)
+```
+
+The dispatch hierarchy is:
+
+1. `model.render_for_prompt()` (model method wins)
+2. `node.renderer`
+3. `construct.renderer`
+4. `None` (raw value, no rendering)
+
+### Per model: render_for_prompt()
+
+Any Pydantic model can define a `render_for_prompt()` method. When present, this method is called instead of the renderer -- regardless of what renderer is configured on the node or construct.
+
+```python
+from pydantic import BaseModel
+
+class Claims(BaseModel, frozen=True):
+    items: list[str]
+
+    def render_for_prompt(self) -> str:
+        return "\n".join(f"- {item}" for item in self.items)
+```
+
+This is useful when a model knows best how to represent itself for an LLM, independent of the pipeline's default renderer.
+
+## describe_type: schema descriptions for prompts
+
+The `describe_type()` function renders a Pydantic model's schema in TypeScript-style notation. This is used internally for structured output instructions but is also available for custom prompt construction.
+
+```python
+from neograph.describe_type import describe_type
+
+class Claim(BaseModel, frozen=True):
+    text: str
+    category: str
+    confidence: float
+
+class Claims(BaseModel, frozen=True):
+    items: list[Claim]
+
+print(describe_type(Claims))
+```
+
+Output:
+
+```
+Answer in JSON matching this schema:
+{
+  items: [{
+    text: string
+    category: string
+    confidence: float
+  }]
+}
+```
+
+### Auto-hoisting
+
+When a nested type appears two or more times in the schema, `describe_type` automatically hoists it into a top-level `type` declaration to avoid duplication:
+
+```python
+describe_type(Report, hoist_classes='auto')  # default
+```
+
+Control hoisting with:
+
+| Value | Behavior |
+|---|---|
+| `'auto'` (default) | Hoist classes appearing 2+ times |
+| `'all'` | Hoist every nested BaseModel |
+| `['ClassName']` | Hoist only the named classes |
+
+Enum classes are always hoisted by default (`always_hoist_enums=True`).
+
+---
+
+Documentation &copy; 2025-2026 Constantine Mirin, [mirin.pro](https://mirin.pro). Licensed under [CC BY-ND 4.0](https://creativecommons.org/licenses/by-nd/4.0/).

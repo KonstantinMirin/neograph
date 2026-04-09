@@ -49,6 +49,10 @@ export default defineConfig({
 						{ label: 'LLM Configuration', slug: 'concepts/llm-configuration' },
 						{ label: 'Pipeline Spec Format', slug: 'concepts/spec-format' },
 					{ label: 'Testing', slug: 'concepts/testing' },
+					{ label: 'Pipeline Validation (neograph check)', slug: 'concepts/check-cli' },
+					{ label: 'Static Linting (lint)', slug: 'concepts/lint' },
+					{ label: 'Graph Visualization', slug: 'concepts/visualize' },
+					{ label: 'Developer Mode', slug: 'concepts/dev-mode' },
 					],
 				},
 				{
@@ -67,6 +71,7 @@ export default defineConfig({
 						{ label: '4. Each Fan-Out', slug: 'walkthrough/each-fanout' },
 						{ label: '5. Human-in-the-Loop', slug: 'walkthrough/human-in-the-loop' },
 						{ label: '6. Full Pipeline', slug: 'walkthrough/full-pipeline' },
+						{ label: 'More Examples', link: 'https://github.com/KonstantinMirin/neograph/tree/main/examples' },
 					],
 				},
 				{

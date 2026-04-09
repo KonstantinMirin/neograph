@@ -1,0 +1,141 @@
+---
+title: "Merge Functions (@merge_fn)"
+description: Define Oracle merge functions with dependency injection and automatic state wiring.
+sidebar:
+  order: 35
+---
+
+The `@merge_fn` decorator defines merge functions for Oracle ensembles. It provides the same dependency injection as `@node` -- `FromInput`, `FromConfig`, and default constants -- plus automatic state wiring for reading upstream node outputs.
+
+## Basics
+
+A merge function's first parameter always receives the list of variants produced by the Oracle generators. The return type matches the node's output type.
+
+```python
+from neograph import merge_fn
+
+@merge_fn
+def combine(variants: list[Claims]) -> Claims:
+    """Deduplicate claims across all variants."""
+    seen = set()
+    merged = []
+    for variant in variants:
+        for claim in variant.items:
+            if claim not in seen:
+                seen.add(claim)
+                merged.append(claim)
+    return Claims(items=merged)
+
+@node(outputs=Claims, ensemble_n=3, merge_fn="combine")
+def decompose() -> Claims: ...
+```
+
+The decorator auto-registers the function via `register_scripted`, so Oracle's string lookup (`merge_fn="combine"`) finds it. Functions without the decorator -- plain `(variants, config) -> X` signatures -- continue to work unchanged.
+
+## from_state: reading upstream outputs
+
+Parameters after the first that do not have `FromInput` or `FromConfig` markers are automatically wired from graph state by name. The parameter name must match an upstream node's state field name.
+
+```python
+from pydantic import BaseModel
+from neograph import merge_fn, node
+from neograph import Construct, Node, Oracle, compile, run
+from neograph.factory import register_scripted
+
+class Context(BaseModel, frozen=True):
+    topic: str
+
+class Result(BaseModel, frozen=True):
+    text: str
+    topic: str
+
+register_scripted("ctx_fn", lambda i, c: Context(topic="AI safety"))
+register_scripted("gen_fn", lambda i, c: Result(text="draft", topic=""))
+
+@merge_fn
+def merge_with_context(
+    variants: list[Result],
+    context: Context,  # auto-wired from the "context" state field
+) -> Result:
+    return Result(text=variants[0].text, topic=context.topic)
+
+pipeline = Construct("example", nodes=[
+    Node.scripted("context", fn="ctx_fn", outputs=Context),
+    Node.scripted("gen", fn="gen_fn", outputs=Result)
+    | Oracle(n=2, merge_fn="merge_with_context"),
+])
+graph = compile(pipeline)
+result = run(graph, input={"node_id": "demo"})
+# result["gen"].topic == "AI safety"
+```
+
+The `context` parameter reads from the state field written by the upstream `context` node. No annotation needed -- the name match is sufficient.
+
+## Mixing state and DI params
+
+A merge function can combine state params with DI params:
+
+```python
+from typing import Annotated
+from neograph import merge_fn, FromInput
+
+@merge_fn
+def merge_mixed(
+    variants: list[Result],
+    metadata: Metadata,                    # from state (upstream node)
+    node_id: Annotated[str, FromInput],    # from config["configurable"]
+) -> Result:
+    return Result(
+        text=variants[0].text,
+        label=f"{metadata.source}:{node_id}",
+    )
+```
+
+Parameters are resolved in order:
+
+1. `FromInput` / `FromConfig` markers are resolved from `config["configurable"]`.
+2. Unmarked parameters with type annotations are resolved from graph state by name.
+3. Parameters with default values are treated as constants.
+
+## Compile-time validation
+
+The framework validates `@merge_fn` state params at construct assembly time. Three checks run:
+
+**Unknown field.** If a state param name does not match any upstream node's state field, assembly fails:
+
+```
+ConstructError: merge_fn 'merge_missing' param 'nonexistent_field'
+does not match any upstream node. Known producers: ['gen'].
+```
+
+**Self-reference.** A merge function cannot reference the node it merges, because the merge barrier runs before the node's output is written:
+
+```
+ConstructError: merge_fn 'merge_self' param 'gen' references node
+'gen' own output. The merge barrier runs before the node's output
+is written -- this is a self-reference that can never resolve.
+```
+
+**Type mismatch.** If the state param's type annotation does not match the upstream producer's output type, assembly fails:
+
+```
+ConstructError: merge_fn 'merge_typed' param 'context' expects
+Result but 'context' produces Context.
+```
+
+## Named registration
+
+By default, the merge function is registered under its Python name. Pass `name=` to override:
+
+```python
+@merge_fn(name="custom_merge")
+def my_internal_merge(variants: list[Claims]) -> Claims:
+    return variants[0]
+
+@node(outputs=Claims, ensemble_n=3, merge_fn="custom_merge")
+def decompose() -> Claims: ...
+```
+
+---
+
+Documentation &copy; 2025-2026 Constantine Mirin, [mirin.pro](https://mirin.pro). Licensed under [CC BY-ND 4.0](https://creativecommons.org/licenses/by-nd/4.0/).

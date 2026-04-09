@@ -1,0 +1,66 @@
+---
+title: Graph Visualization
+description: Generate Mermaid diagrams from compiled graphs and inspect DAG topology during development.
+---
+
+After compiling a pipeline, `describe_graph()` returns a Mermaid diagram string that shows every node and edge in the compiled graph. Paste it into GitHub Markdown, documentation, or [mermaid.live](https://mermaid.live/) for a visual DAG.
+
+## describe_graph()
+
+```python
+from neograph import compile, describe_graph
+
+graph = compile(pipeline)
+print(describe_graph(graph))
+```
+
+Output (varies by pipeline):
+
+```
+%%{init: {'flowchart': {'curve': 'linear'}}}%%
+graph TD;
+	__start__([<p>__start__</p>])
+	decompose(decompose)
+	classify(classify)
+	report(report)
+	__end__([<p>__end__</p>])
+	__start__ --> decompose;
+	decompose --> classify;
+	classify --> report;
+	report --> __end__;
+```
+
+### Where to paste it
+
+- **GitHub** -- wrap in a ` ```mermaid ` fenced code block in any Markdown file, PR description, or issue.
+- **mermaid.live** -- paste the raw string into the editor for an interactive diagram.
+- **Documentation** -- Starlight, Docusaurus, and other doc frameworks render Mermaid natively.
+- **CLI** -- print to stderr/stdout during development for a quick topology check.
+
+### Error handling
+
+If the compiled graph does not support Mermaid rendering (e.g., a non-standard backend), `describe_graph()` returns `"(graph visualization not available)"` instead of raising.
+
+## Dev-mode DAG summary
+
+Set the `NEOGRAPH_DEV` environment variable to get an automatic DAG summary printed to stderr after every `compile()` call:
+
+```bash
+NEOGRAPH_DEV=1 python my_pipeline.py
+```
+
+Output on stderr:
+
+```
+[neograph-dev] Compiled 'ingestion' (4 nodes):
+  START -> decompose
+  decompose -> classify
+  classify -> report
+  report -> END
+```
+
+This shows every edge in the compiled graph, including conditional edges (marked `[conditional]`). The summary prints automatically -- no code changes required.
+
+---
+
+Documentation &copy; 2025-2026 Constantine Mirin, [mirin.pro](https://mirin.pro). Licensed under [CC BY-ND 4.0](https://creativecommons.org/licenses/by-nd/4.0/).
