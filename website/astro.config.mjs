@@ -8,7 +8,7 @@ export default defineConfig({
 		starlight({
 			plugins: [starlightClientMermaid()],
 			title: 'neograph',
-			description: 'Write Python. Get a production graph. Declarative LLM graph compiler.',
+			description: 'Build production AI agents in Python. Functions are nodes, parameter names are edges. The graph assembles itself.',
 			social: [{ icon: 'github', label: 'GitHub', href: 'https://github.com/KonstantinMirin/neograph' }],
 			customCss: ['./src/styles/custom.css'],
 			components: {
