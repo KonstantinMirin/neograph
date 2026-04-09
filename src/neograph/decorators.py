@@ -338,15 +338,32 @@ def _resolve_di_value(
             )
         return val
     if kind in ("from_input_model", "from_config_model"):
-        model_cls, _required = payload  # payload is (model_cls, required)
+        model_cls, required = payload  # payload is (model_cls, required)
         field_values: dict[str, Any] = {}
         for fname in model_cls.model_fields:
             val = _get_configurable(fname)
             if val is not None:
                 field_values[fname] = val
+        # Enforce required flag for bundled models (neograph-7nzv).
+        if required:
+            missing = [f for f in model_cls.model_fields if f not in field_values]
+            if missing:
+                source = "input" if kind == "from_input_model" else "config"
+                raise _ExecutionError(
+                    f"Required DI bundled model '{pname}' ({model_cls.__name__}) "
+                    f"is missing fields from {source}: {sorted(missing)}. "
+                    f"Provide them via run(input={{...}})."
+                )
         try:
             return model_cls(**field_values)
         except Exception:
+            if required:
+                source = "input" if kind == "from_input_model" else "config"
+                raise _ExecutionError(
+                    f"Required DI bundled model '{pname}' ({model_cls.__name__}) "
+                    f"construction failed. Provide all fields via "
+                    f"run(input={{...}}) or config['configurable']."
+                )
             log = structlog.get_logger(__name__)
             log.warning(
                 "DI model construction failed, returning None",

@@ -1,9 +1,5 @@
-# CHECK_ERROR: required|bundled|model|missing
-# Attack vector: FromInput(required=True) on a bundled BaseModel.
-# The required flag should propagate to all model fields, but does
-# _classify_di_params correctly capture (model_cls, required=True)?
-# At compile time this should arguably flag since a required bundled
-# model has no config to resolve from.
+# Valid: FromInput(required=True) on a bundled BaseModel compiles fine.
+# The required flag is enforced at runtime, not compile time.
 from typing import Annotated
 
 from pydantic import BaseModel
