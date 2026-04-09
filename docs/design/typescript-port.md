@@ -2,9 +2,79 @@
 
 ## Executive Summary
 
-neograph's core architecture (Construct IR -> compile -> LangGraph StateGraph -> run) ports cleanly to TypeScript. LangGraph.js is mature and mirrors the Python API. The highest-risk items are all in the DX layer (@node auto-wiring), not the runtime. The programmatic API (Node + Construct + .pipe()) is the natural TS-first surface.
+neograph's core architecture (Construct IR -> compile -> LangGraph StateGraph -> run) ports cleanly to TypeScript. LangGraph.js is mature and mirrors the Python API.
 
-**Estimated effort**: 8-12 weeks for feature parity on the runtime. The @node DX layer requires a redesign (explicit declarations instead of signature introspection).
+**Key insight**: a TS compiler transformer (ts-patch) can extract function signatures at build time -- preserving the Python "signature IS the DAG" DX with zero runtime overhead. This eliminates the need for explicit Zod declarations on every node.
+
+**Estimated effort**: 8-12 weeks for feature parity.
+
+---
+
+## AD-0: Compiler Transformer for Signature Extraction (CRITICAL DECISION)
+
+### The problem
+
+Python's `inspect.signature` + `get_type_hints` gives neograph full parameter metadata at runtime. TypeScript erases types at runtime. The naive solution (require explicit `inputs: {name: Schema}` on every node) works but degrades the DX.
+
+### The solution: ts-patch transformer
+
+A TypeScript compiler transformer intercepts `@node`-decorated functions during `tsc`, calls `program.getTypeChecker()` to resolve parameter names/types/return type, and emits runtime metadata alongside the function.
+
+**This is proven technology.** [typia](https://github.com/samchon/typia) does exactly this -- it extracts full function signatures (parameter names, types, nested object shapes) at compile time and emits JSON Schema. typia's `llm.application<T>()` is structurally identical to what neograph needs.
+
+### What the user writes (near-identical to Python):
+
+```typescript
+// Python:
+@node(outputs=Claims, model="reason", prompt="decompose")
+def decompose(topic: RawText) -> Claims: ...
+
+// TypeScript (wrapper function -- TS decorators don't work on standalone fns):
+const decompose = node({ model: "reason", prompt: "decompose" },
+  (topic: RawText): Claims => { ... }
+);
+```
+
+### What the transformer emits:
+
+```typescript
+decompose.__neo_meta = {
+  inputs: { topic: { typeName: "RawText", schema: RawTextSchema } },
+  output: { typeName: "Claims", schema: ClaimsSchema },
+  name: "decompose",
+};
+```
+
+### Setup (one-time):
+
+```json
+// tsconfig.json
+{
+  "compilerOptions": {
+    "plugins": [{ "transform": "@neograph/transform" }]
+  }
+}
+```
+
+Or via `@neograph/unplugin` for Vite/Webpack/Bun/Next.js (typia's proven pattern).
+
+### tsgo risk and fallback
+
+TypeScript 7 is being rewritten in Go. The Go version will NOT support JS-based plugins initially (filed as "Post-7.0"). However:
+- TypeScript 6.0 (bridge release) keeps current tsc -- transformer works
+- tsgo initially targets `--noEmit` only -- emit-side plugins irrelevant
+- **Runway: 2-3 years minimum**
+
+**Fallback**: `neograph generate` via ts-morph (TS Compiler API wrapper). Same metadata shape, different extraction mechanism. Reads source files, writes `_neo_generated.ts`. Similar to `prisma generate` but for node signatures.
+
+### Ruled out alternatives
+
+| Approach | Why not |
+|----------|---------|
+| SWC plugins | Syntax-only, no TypeChecker access. Cannot resolve type aliases or follow imports. |
+| TC39 decorator metadata | Spec deliberately excludes `design:paramtypes`. No parameter type capture. |
+| typescript-rtti | Project in hibernation. Maintainer uncertain about future. |
+| `Reflect.metadata` (legacy) | Deprecated, tied to legacy decorator proposal. Not available with Stage 3. |
 
 ---
 
@@ -44,14 +114,23 @@ neograph's core architecture (Construct IR -> compile -> LangGraph StateGraph ->
 
 ### @node Equivalent in TypeScript
 
-Python auto-wires from function signatures. TypeScript erases types at runtime. The TS equivalent uses explicit declarations:
+With the compiler transformer (AD-0), TypeScript preserves Python's "signature IS the DAG" DX:
 
 ```typescript
-// Python
+// Python:
 @node(outputs=Claims, model="reason", prompt="decompose")
 def decompose(topic: RawText) -> Claims: ...
 
-// TypeScript
+// TypeScript (compiler transformer extracts inputs/output from signature):
+const decompose = node({ model: "reason", prompt: "decompose" },
+  (topic: RawText): Claims => { ... }
+);
+// Build step emits: { inputs: { topic: RawText }, output: Claims }
+```
+
+Without the transformer (fallback), explicit declarations are needed:
+
+```typescript
 const decompose = node({
   inputs: { topic: RawTextSchema },
   outputs: ClaimsSchema,
@@ -63,9 +142,9 @@ const decompose = node({
 | @node Feature | Python | TypeScript | Effort |
 |---------------|--------|------------|--------|
 | Mode inference (think/scripted) | Auto from prompt+model presence | Same logic from config fields | Direct |
-| Output type inference | Return annotation | Explicit `outputs:` field | Direct |
-| Input type inference | Parameter annotations | Explicit `inputs:` field | Redesign |
-| Auto-wiring (param name = edge) | `inspect.signature` | Explicit `inputs: {name: Schema}` | Redesign |
+| Output type inference | Return annotation | **Compiler transformer extracts** | Direct (with transformer) |
+| Input type inference | Parameter annotations | **Compiler transformer extracts** | Direct (with transformer) |
+| Auto-wiring (param name = edge) | `inspect.signature` | **Compiler transformer emits `__neo_meta`** | Medium (transformer dev) |
 | Fan-out (`map_over`) | `@node(map_over="x.items")` | `node({mapOver: "x.items", ...})` | Direct |
 | Ensemble (`ensemble_n`) | `@node(ensemble_n=3)` | `node({ensembleN: 3, ...})` | Direct |
 | Interrupt (`interrupt_when`) | `@node(interrupt_when="cond")` | `node({interruptWhen: "cond", ...})` | Direct |
@@ -76,14 +155,25 @@ const decompose = node({
 
 ### DI System
 
+With the compiler transformer, DI markers can use branded types that the transformer recognizes:
+
+```typescript
+import { FromInput, FromConfig } from "@neograph/core";
+
+const myNode = node({ model: "reason", prompt: "test" },
+  (upstream: Claims, topic: FromInput<string>, limiter: FromConfig<RateLimiter>): Result => { ... }
+);
+// Transformer extracts: { upstream: "Claims", topic: { kind: "from_input", type: "string" }, ... }
+```
+
 | Feature | Python | TypeScript | Effort |
 |---------|--------|------------|--------|
-| FromInput (scalar) | `Annotated[str, FromInput]` | `fromInput: { topic: z.string() }` | Redesign |
-| FromConfig (scalar) | `Annotated[T, FromConfig]` | `fromConfig: { limiter: LimiterSchema }` | Redesign |
-| FromInput bundled (BaseModel) | `Annotated[RunCtx, FromInput]` | `fromInput: { ctx: RunCtxSchema }` | Redesign |
-| required=True | `FromInput(required=True)` | `fromInput: { topic: z.string().required() }` | Direct |
+| FromInput (scalar) | `Annotated[str, FromInput]` | `FromInput<string>` branded type | Direct (with transformer) |
+| FromConfig (scalar) | `Annotated[T, FromConfig]` | `FromConfig<T>` branded type | Direct (with transformer) |
+| FromInput bundled (BaseModel) | `Annotated[RunCtx, FromInput]` | `FromInput<RunCtx>` (transformer detects BaseModel-like) | Direct (with transformer) |
+| required=True | `FromInput(required=True)` | `FromInput<string, {required: true}>` | Direct |
 | DI collision check | DI name matches upstream | Same logic | Direct |
-| Double marker rejection | FromInput + FromConfig on same param | N/A (explicit fields can't collide) | Skip |
+| Double marker rejection | FromInput + FromConfig on same param | Transformer rejects at build time | Direct |
 
 ### Compiler Layer
 
@@ -184,15 +274,15 @@ const decompose = node({
 
 Zod is the industry standard for TS runtime validation. LangChain.js uses Zod natively for `withStructuredOutput()`. This means neograph-ts gets structured output for free -- no adapter layer.
 
-### AD-2: Programmatic API is the primary surface
+### AD-2: All three API surfaces supported
 
-The Python `@node` decorator surface relies on runtime introspection that doesn't exist in TS. Instead:
+With the compiler transformer, all three Python surfaces have TS equivalents:
 
-1. **Primary**: `Node({...}).pipe(Oracle({...}))` -- programmatic composition
-2. **Secondary**: `node({inputs, outputs, ...}, fn)` -- wrapper function (not a decorator)
-3. **Tertiary**: YAML spec via `loadSpec()` -- same as Python
+1. **Programmatic**: `Node({...}).pipe(Oracle({...}))` -- runtime composition by LLMs
+2. **node() wrapper**: `node({model, prompt}, (topic: RawText): Claims => {...})` -- transformer extracts signature
+3. **YAML spec**: `loadSpec(yaml, project)` -- same as Python
 
-The programmatic API is already the primary path for LLM-driven runtime pipeline construction, so this aligns with the core use case.
+The DX gap between Python and TS is minimal: `@node(...)` decorator syntax becomes `node({...}, fn)` wrapper syntax. The transformer ensures parameter names/types are still auto-wired.
 
 ### AD-3: Type checking via Zod schema comparison
 
@@ -246,6 +336,8 @@ class MyPipeline extends ForwardConstruct {
 | Error hierarchy | 1 | 0.5 | None |
 | Core IR (Node, Construct, Modifiers, Tool) | 4 | 3 | Zod |
 | Pipe composition (.pipe method) | 1 | 1 | Core IR |
+| **Compiler transformer (@neograph/transform)** | **3** | **8** | **ts-patch, TS Compiler API** |
+| **Unplugin wrapper (@neograph/unplugin)** | **1** | **2** | **Transformer** |
 | Renderers (XML, Delimited, JSON, describe_type) | 2 | 2 | Zod |
 | Spec loader (YAML + type registry) | 3 | 3 | Core IR, Zod, js-yaml, ajv |
 | Validation (_construct_validation equivalent) | 1 | 4 | Core IR, Zod |
@@ -254,54 +346,56 @@ class MyPipeline extends ForwardConstruct {
 | Factory (runtime dispatch, _extract_input) | 1 | 5 | Compiler, LangGraph.js |
 | LLM integration (structured/json/text output) | 1 | 3 | LangChain.js |
 | ReAct tool loop + budget | 1 | 2 | LLM integration |
-| node() wrapper function (TS @node equivalent) | 1 | 3 | Core IR, validation |
-| DI system (fromInput/fromConfig) | 1 | 2 | Factory |
+| node() wrapper function + auto-wiring | 1 | 2 | Core IR, transformer |
+| DI system (FromInput/FromConfig branded types) | 1 | 2 | Factory, transformer |
 | construct_from_functions equivalent | 1 | 2 | node() wrapper |
 | Runner (run + config injection) | 1 | 1 | Compiler |
 | Lint | 1 | 1 | Core IR |
 | CLI (neograph check) | 1 | 1 | Compiler, Lint |
 | ForwardConstruct (Proxy tracing) | 1 | 5 | Compiler |
 | Tests | -- | 10 | All |
-| **Total** | **~24** | **~56 days** | |
+| **Total** | **~27** | **~65 days** | |
 
-**With parallelism (2 engineers)**: ~8 weeks.
-**Solo**: ~12 weeks.
+**With parallelism (2 engineers)**: ~9 weeks.
+**Solo**: ~14 weeks.
+
+The transformer adds ~10 days vs the explicit-declarations approach, but preserves the "signature IS the DAG" DX which is neograph's core differentiator.
 
 ---
 
 ## What Ships in v0.1.0-ts
 
-### Phase 1: Core (weeks 1-4)
-- Node, Construct, Modifiers (all 4), Tool
-- .pipe() composition
+### Phase 1: Core + Transformer (weeks 1-5)
+- Node, Construct, Modifiers (all 4), Tool, .pipe()
+- **@neograph/transform**: compiler transformer for signature extraction
+- **@neograph/unplugin**: Vite/Webpack/Bun adapter
 - compile() -> LangGraph.js StateGraph
 - State model generation via Annotation.Root
 - Factory dispatch (scripted + LLM modes)
-- Basic validation (fan-in, type compat, mutual exclusion)
 - run() + config injection
 - Renderers
 
-### Phase 2: Features (weeks 5-8)
-- node() wrapper function with explicit schemas
-- DI system (fromInput/fromConfig)
+### Phase 2: Features + DX (weeks 6-9)
+- node() wrapper + auto-wiring via transformer metadata
+- DI system (FromInput<T>/FromConfig<T> branded types)
 - construct_from_functions equivalent
 - LLM integration (structured/json/text output strategies)
 - ReAct tool loop + budget tracking
+- Full validation suite
 - Spec loader (YAML/JSON)
-- Lint + CLI
-- Error-feedback retry
+- Lint + CLI + error-feedback retry
 
-### Phase 3: Advanced (weeks 9-12)
+### Phase 3: Advanced (weeks 10-14)
 - ForwardConstruct with JS Proxy + fluent branch API
-- Full validation suite (all checks from Python)
 - Oracle merge_fn with state params
 - Dev-mode warnings
+- ts-morph fallback codegen (`neograph generate` for tsgo future)
 - Test suite (port fixture-based safety net)
 
 ### Not in v0.1.0-ts
-- construct_from_module (no module introspection in TS)
-- Dead-body AST warning (ESLint plugin if needed)
-- Frame stack walking (not needed with explicit declarations)
+- construct_from_module (no module introspection in TS; use explicit lists)
+- Dead-body AST warning (ESLint plugin later)
+- Frame stack walking (transformer eliminates the need)
 
 ---
 
