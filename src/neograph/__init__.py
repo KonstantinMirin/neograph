@@ -22,7 +22,7 @@ from neograph._llm import configure_llm, render_prompt
 from neograph.conditions import parse_condition
 from neograph.describe_type import describe_type, describe_value
 from neograph.loader import load_spec
-from neograph.compiler import compile
+from neograph.compiler import compile, describe_graph
 from neograph.construct import Construct
 from neograph.errors import (
     CompileError,

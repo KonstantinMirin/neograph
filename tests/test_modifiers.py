@@ -2590,6 +2590,266 @@ class TestEachOracleFusion:
 
         assert result["collect"].text == "collected 2 items"
 
+    def test_each_oracle_order_irrelevant_on_node(self):
+        """Node | Oracle | Each produces same result as Node | Each | Oracle."""
+        from pydantic import BaseModel
+        from neograph.factory import register_scripted
+
+        class Tpgi2Chunk(BaseModel, frozen=True):
+            chunk_idx: str
+
+        class Tpgi2ChunkList(BaseModel, frozen=True):
+            items: list[Tpgi2Chunk]
+
+        class Tpgi2Result(BaseModel, frozen=True):
+            label: str
+
+        register_scripted("tpgi2_src", lambda i, c: Tpgi2ChunkList(items=[
+            Tpgi2Chunk(chunk_idx="P"), Tpgi2Chunk(chunk_idx="Q"),
+        ]))
+        register_scripted("tpgi2_gen", lambda i, c: Tpgi2Result(label="gen"))
+        register_scripted("tpgi2_mrg", lambda v, c: Tpgi2Result(
+            label=f"merged({len(v)})",
+        ))
+
+        # Order 1: Oracle first, then Each
+        p1 = Construct("order-oe", nodes=[
+            Node.scripted("chunks", fn="tpgi2_src", outputs=Tpgi2ChunkList),
+            Node.scripted("proc", fn="tpgi2_gen", inputs=Tpgi2Chunk, outputs=Tpgi2Result)
+            | Oracle(n=2, merge_fn="tpgi2_mrg")
+            | Each(over="chunks.items", key="chunk_idx"),
+        ])
+        g1 = compile(p1)
+        r1 = run(g1, input={"node_id": "order-1"})
+
+        # Order 2: Each first, then Oracle
+        p2 = Construct("order-eo", nodes=[
+            Node.scripted("chunks", fn="tpgi2_src", outputs=Tpgi2ChunkList),
+            Node.scripted("proc", fn="tpgi2_gen", inputs=Tpgi2Chunk, outputs=Tpgi2Result)
+            | Each(over="chunks.items", key="chunk_idx")
+            | Oracle(n=2, merge_fn="tpgi2_mrg"),
+        ])
+        g2 = compile(p2)
+        r2 = run(g2, input={"node_id": "order-2"})
+
+        # Both produce same shape and values
+        assert isinstance(r1["proc"], dict)
+        assert isinstance(r2["proc"], dict)
+        assert set(r1["proc"].keys()) == {"P", "Q"}
+        assert set(r2["proc"].keys()) == {"P", "Q"}
+        assert r1["proc"]["P"].label == r2["proc"]["P"].label == "merged(2)"
+        assert r1["proc"]["Q"].label == r2["proc"]["Q"].label == "merged(2)"
+
+    def test_each_oracle_models_routed_to_generators(self):
+        """Oracle models= routes different models to different generators within each item."""
+        from pydantic import BaseModel
+        from neograph.factory import register_scripted
+
+        class Tpgi2Item(BaseModel, frozen=True):
+            item_id: str
+
+        class Tpgi2Items(BaseModel, frozen=True):
+            items: list[Tpgi2Item]
+
+        class Tpgi2ModelResult(BaseModel, frozen=True):
+            model_used: str
+
+        register_scripted("tpgi2_items", lambda i, c: Tpgi2Items(items=[
+            Tpgi2Item(item_id="a"), Tpgi2Item(item_id="b"),
+        ]))
+
+        # Generator captures the oracle model from config
+        register_scripted("tpgi2_model_gen", lambda i, c: Tpgi2ModelResult(
+            model_used=c.get("configurable", {}).get("_oracle_model", "none"),
+        ))
+
+        # Merge collects which models were used
+        def tpgi2_model_merge(variants, c):
+            models = sorted(v.model_used for v in variants)
+            return Tpgi2ModelResult(model_used=",".join(models))
+
+        register_scripted("tpgi2_model_merge", tpgi2_model_merge)
+
+        pipeline = Construct("models-test", nodes=[
+            Node.scripted("items", fn="tpgi2_items", outputs=Tpgi2Items),
+            Node.scripted("proc", fn="tpgi2_model_gen",
+                          inputs=Tpgi2Item, outputs=Tpgi2ModelResult)
+            | Oracle(n=3, models=["reason", "fast", "creative"],
+                     merge_fn="tpgi2_model_merge")
+            | Each(over="items.items", key="item_id"),
+        ])
+        graph = compile(pipeline)
+        result = run(graph, input={"node_id": "models-1"})
+
+        proc = result["proc"]
+        assert isinstance(proc, dict)
+        # Each item got all 3 models
+        for key in ("a", "b"):
+            models = proc[key].model_used.split(",")
+            assert sorted(models) == ["creative", "fast", "reason"]
+
+    def test_each_oracle_single_item_collection(self):
+        """Each with 1-item collection + Oracle still works (M=1, N=3)."""
+        from pydantic import BaseModel
+        from neograph.factory import register_scripted
+
+        class Tpgi2Solo(BaseModel, frozen=True):
+            solo_id: str
+
+        class Tpgi2SoloList(BaseModel, frozen=True):
+            items: list[Tpgi2Solo]
+
+        class Tpgi2SoloResult(BaseModel, frozen=True):
+            count: int
+
+        gen_counter = [0]
+
+        register_scripted("tpgi2_solo_src", lambda i, c: Tpgi2SoloList(
+            items=[Tpgi2Solo(solo_id="only")],
+        ))
+
+        def tpgi2_solo_gen(i, c):
+            gen_counter[0] += 1
+            return Tpgi2SoloResult(count=1)
+
+        register_scripted("tpgi2_solo_gen", tpgi2_solo_gen)
+        register_scripted("tpgi2_solo_merge", lambda v, c: Tpgi2SoloResult(
+            count=len(v),
+        ))
+
+        pipeline = Construct("solo-fusion", nodes=[
+            Node.scripted("source", fn="tpgi2_solo_src", outputs=Tpgi2SoloList),
+            Node.scripted("proc", fn="tpgi2_solo_gen",
+                          inputs=Tpgi2Solo, outputs=Tpgi2SoloResult)
+            | Oracle(n=3, merge_fn="tpgi2_solo_merge")
+            | Each(over="source.items", key="solo_id"),
+        ])
+        graph = compile(pipeline)
+        result = run(graph, input={"node_id": "solo-1"})
+
+        proc = result["proc"]
+        assert isinstance(proc, dict)
+        assert set(proc.keys()) == {"only"}
+        # 3 generators ran, merge saw 3 variants
+        assert proc["only"].count == 3
+        assert gen_counter[0] == 3
+
+    def test_each_oracle_with_decorated_merge_fn(self):
+        """@merge_fn decorator works in fused Each x Oracle topology."""
+        from pydantic import BaseModel
+        from neograph import merge_fn as merge_fn_deco
+        from neograph.factory import register_scripted
+
+        class Tpgi2DIChunk(BaseModel, frozen=True):
+            chunk_idx: str
+
+        class Tpgi2DIChunks(BaseModel, frozen=True):
+            items: list[Tpgi2DIChunk]
+
+        class Tpgi2DIResult(BaseModel, frozen=True):
+            text: str
+            score: float
+
+        register_scripted("tpgi2_di_src", lambda i, c: Tpgi2DIChunks(items=[
+            Tpgi2DIChunk(chunk_idx="X"), Tpgi2DIChunk(chunk_idx="Y"),
+        ]))
+
+        gen_counter = [0]
+
+        def tpgi2_di_gen(i, c):
+            gen_counter[0] += 1
+            return Tpgi2DIResult(text=f"v{gen_counter[0]}", score=gen_counter[0] * 1.0)
+
+        register_scripted("tpgi2_di_gen", tpgi2_di_gen)
+
+        @merge_fn_deco
+        def tpgi2_di_merge(variants: list[Tpgi2DIResult]) -> Tpgi2DIResult:
+            # Pick highest-scored variant (tests that @merge_fn receives real list)
+            best = max(variants, key=lambda v: v.score)
+            return Tpgi2DIResult(
+                text=f"best_of_{len(variants)}",
+                score=best.score,
+            )
+
+        pipeline = Construct("di-fusion", nodes=[
+            Node.scripted("chunks", fn="tpgi2_di_src", outputs=Tpgi2DIChunks),
+            Node.scripted("proc", fn="tpgi2_di_gen",
+                          inputs=Tpgi2DIChunk, outputs=Tpgi2DIResult)
+            | Oracle(n=3, merge_fn="tpgi2_di_merge")
+            | Each(over="chunks.items", key="chunk_idx"),
+        ])
+        graph = compile(pipeline)
+        result = run(graph, input={"node_id": "di-test"})
+
+        proc = result["proc"]
+        assert isinstance(proc, dict)
+        assert set(proc.keys()) == {"X", "Y"}
+        for key in ("X", "Y"):
+            assert proc[key].text == "best_of_3"
+            assert proc[key].score > 0
+        # 2 items × 3 generators = 6 total calls
+        assert gen_counter[0] == 6
+
+    def test_programmatic_pipe_both_orders(self):
+        """Programmatic Node.scripted() | Oracle() | Each() and reverse both compile and run."""
+        from pydantic import BaseModel
+        from neograph.factory import register_scripted
+
+        class Tpgi2ProgItem(BaseModel, frozen=True):
+            prog_id: str
+
+        class Tpgi2ProgList(BaseModel, frozen=True):
+            items: list[Tpgi2ProgItem]
+
+        class Tpgi2ProgResult(BaseModel, frozen=True):
+            value: str
+
+        register_scripted("tpgi2_prog_src", lambda i, c: Tpgi2ProgList(items=[
+            Tpgi2ProgItem(prog_id="r"), Tpgi2ProgItem(prog_id="s"),
+        ]))
+        register_scripted("tpgi2_prog_gen", lambda i, c: Tpgi2ProgResult(
+            value="generated",
+        ))
+        register_scripted("tpgi2_prog_merge", lambda v, c: Tpgi2ProgResult(
+            value=f"merged({len(v)})",
+        ))
+
+        # Order 1: Oracle | Each
+        node_oe = (
+            Node.scripted("proc", fn="tpgi2_prog_gen",
+                          inputs=Tpgi2ProgItem, outputs=Tpgi2ProgResult)
+            | Oracle(n=2, merge_fn="tpgi2_prog_merge")
+            | Each(over="source.items", key="prog_id")
+        )
+        p1 = Construct("prog-oe", nodes=[
+            Node.scripted("source", fn="tpgi2_prog_src", outputs=Tpgi2ProgList),
+            node_oe,
+        ])
+        g1 = compile(p1)
+        r1 = run(g1, input={"node_id": "prog-oe"})
+
+        # Order 2: Each | Oracle
+        node_eo = (
+            Node.scripted("proc", fn="tpgi2_prog_gen",
+                          inputs=Tpgi2ProgItem, outputs=Tpgi2ProgResult)
+            | Each(over="source.items", key="prog_id")
+            | Oracle(n=2, merge_fn="tpgi2_prog_merge")
+        )
+        p2 = Construct("prog-eo", nodes=[
+            Node.scripted("source", fn="tpgi2_prog_src", outputs=Tpgi2ProgList),
+            node_eo,
+        ])
+        g2 = compile(p2)
+        r2 = run(g2, input={"node_id": "prog-eo"})
+
+        # Both produce same dict shape
+        assert isinstance(r1["proc"], dict)
+        assert isinstance(r2["proc"], dict)
+        assert set(r1["proc"].keys()) == {"r", "s"}
+        assert set(r2["proc"].keys()) == {"r", "s"}
+        assert r1["proc"]["r"].value == r2["proc"]["r"].value == "merged(2)"
+        assert r1["proc"]["s"].value == r2["proc"]["s"].value == "merged(2)"
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 # DEV-MODE WARNINGS

@@ -11,6 +11,7 @@ from __future__ import annotations
 from typing import Any
 
 import structlog
+from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Send, interrupt
 
@@ -173,7 +174,51 @@ def compile(construct: Construct, checkpointer: Any = None, retry_policy: Any = 
     # 4. Compile
     compiled = graph.compile(checkpointer=checkpointer)
     compile_log.info("compile_complete", state_fields=list(state_model.model_fields.keys()))
+
+    # 5. Dev-mode DAG visualization (neograph-vxrg)
+    from neograph._dev_warnings import DEV_MODE
+    if DEV_MODE:
+        _print_dag_summary(compiled, construct)
+
     return compiled
+
+
+def describe_graph(compiled: Any) -> str:
+    """Return a Mermaid diagram string for a compiled graph.
+
+    Usage::
+
+        graph = compile(pipeline)
+        print(describe_graph(graph))
+
+    Paste the output into any Mermaid renderer (GitHub, docs, mermaid.live).
+    """
+    try:
+        return compiled.get_graph().draw_mermaid()
+    except Exception:
+        return "(graph visualization not available)"
+
+
+def _print_dag_summary(compiled: Any, construct: Any) -> None:
+    """Print a human-readable DAG summary to stderr in dev mode."""
+    import sys
+    try:
+        lg_graph = compiled.get_graph()
+    except Exception:
+        return
+
+    nodes = [n for n in lg_graph.nodes if n not in ("__start__", "__end__")]
+    edges = lg_graph.edges
+
+    lines = [f"[neograph-dev] Compiled '{construct.name}' ({len(nodes)} nodes):"]
+
+    for edge in edges:
+        src = edge.source.replace("__start__", "START").replace("__end__", "END")
+        tgt = edge.target.replace("__start__", "START").replace("__end__", "END")
+        cond = " [conditional]" if edge.conditional else ""
+        lines.append(f"  {src} -> {tgt}{cond}")
+
+    print("\n".join(lines), file=sys.stderr)
 
 
 def _add_subgraph(
@@ -401,7 +446,7 @@ def _add_each_oracle_fused(
     # Group-merge barrier: partitions by each.key, calls merge_fn per group
     merge_fn_impl = make_oracle_merge_fn(oracle, field_name, collector_field, node.outputs)
 
-    def group_merge_barrier(state: Any, config: RunnableConfig | None = None) -> dict:
+    def group_merge_barrier(state: Any, config: RunnableConfig) -> dict:
         from collections import defaultdict
         collector = getattr(state, collector_field, [])
 
