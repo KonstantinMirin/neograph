@@ -11,7 +11,8 @@ from dataclasses import dataclass
 from typing import Any
 
 from neograph.construct import Construct
-from neograph.decorators import _get_param_resolutions
+from neograph.decorators import _get_param_resolutions, get_merge_fn_metadata
+from neograph.modifiers import Oracle
 from neograph.node import Node
 
 
@@ -126,3 +127,38 @@ def _walk(
                         ),
                     ))
         # Skip 'constant' and 'upstream' kinds — not DI bindings
+
+    # Check merge_fn DI bindings for Oracle nodes (neograph-f70z).
+    oracle = item.get_modifier(Oracle)
+    if oracle is not None and isinstance(oracle.merge_fn, str):
+        meta = get_merge_fn_metadata(oracle.merge_fn)
+        if meta is not None:
+            _, merge_param_res = meta
+            for pname, (kind, payload) in merge_param_res.items():
+                if kind in ("from_input", "from_config"):
+                    required = bool(payload)
+                    if config is not None:
+                        if pname not in config:
+                            issues.append(LintIssue(
+                                node_name=f"{item.name} merge_fn '{oracle.merge_fn}'",
+                                param=pname,
+                                kind=kind,
+                                required=required,
+                                message=(
+                                    f"merge_fn '{oracle.merge_fn}' on node "
+                                    f"'{item.name}': DI parameter '{pname}' "
+                                    f"({kind}) not found in config"
+                                ),
+                            ))
+                    elif required:
+                        issues.append(LintIssue(
+                            node_name=f"{item.name} merge_fn '{oracle.merge_fn}'",
+                            param=pname,
+                            kind=kind,
+                            required=True,
+                            message=(
+                                f"merge_fn '{oracle.merge_fn}' on node "
+                                f"'{item.name}': required DI parameter "
+                                f"'{pname}' ({kind}) has no config"
+                            ),
+                        ))

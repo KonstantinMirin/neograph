@@ -1,8 +1,5 @@
-# CHECK_ERROR: FromConfig.*merge|merge.*FromConfig|DI.*merge_fn
-# Attack vector 6: FromConfig in a @merge_fn — lint() only walks Construct
-# nodes via _get_param_resolutions(). Merge functions are stored in
-# _merge_fn_registry, which lint() never checks. This means DI bindings
-# in merge functions are invisible to all static validation.
+# Valid: @merge_fn with FromConfig compiles fine. DI bindings are checked
+# by lint(), not compile(). Fixed in neograph-f70z.
 #
 # Uses scripted mode to avoid unrelated LLM config errors. The Oracle
 # modifier is applied programmatically to a scripted node, so compile
