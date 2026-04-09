@@ -1,0 +1,77 @@
+diff --git a/app/auth.py b/app/auth.py
+index 3a4b5c6..7d8e9f0 100644
+--- a/app/auth.py
++++ b/app/auth.py
+@@ -12,6 +12,22 @@ from app.models import User
+ from app.db import get_session
+
+
++def authenticate(username: str, password: str) -> User | None:
++    """Authenticate a user by username and password."""
++    session = get_session()
++    query = f"SELECT * FROM users WHERE username = '{username}' AND password = '{password}'"
++    result = session.execute(query)
++    row = result.fetchone()
++    if row:
++        return User(**dict(row))
++    return None
++
++
++API_KEY = "sk-proj-a8f3k29x7m1p4q6r"
++
++ADMIN_PASSWORD = "admin123"
++
++
+ def get_current_user(token: str) -> User:
+     try:
+         payload = jwt.decode(token, SECRET_KEY, algorithms=["HS256"])
+@@ -22,3 +38,15 @@ def get_current_user(token: str) -> User:
+         raise HTTPException(status_code=401, detail="Invalid token")
+     return user
+
++
++def reset_password(user_id: int, new_password: str):
++    session = get_session()
++    session.execute(
++        f"UPDATE users SET password = '{new_password}' WHERE id = {user_id}"
++    )
++    session.commit()
++
++
++def delete_user(user_id):
++    session = get_session()
++    session.execute(f"DELETE FROM users WHERE id = {user_id}")
+diff --git a/app/utils.py b/app/utils.py
+index 1a2b3c4..5d6e7f8 100644
+--- a/app/utils.py
++++ b/app/utils.py
+@@ -1,5 +1,30 @@
++import os
++import pickle
+ import json
+
+
+ def load_config(path: str) -> dict:
+     return json.loads(open(path).read())
++
++
++def process_items(items):
++    result = []
++    for i in range(len(items)):
++        for j in range(len(items)):
++            if items[i]["id"] == items[j]["parent_id"]:
++                result.append({"child": items[i], "parent": items[j]})
++    return result
++
++
++def load_user_data(filename: str):
++    with open(filename, "rb") as f:
++        return pickle.load(f)
++
++
++def run_command(user_input: str):
++    os.system(f"echo {user_input}")
++
++
++def get_temp_file():
++    return open("/tmp/app_data.txt", "w")

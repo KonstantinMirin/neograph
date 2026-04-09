@@ -1,0 +1,26 @@
+[
+  {
+    "name": "Marcus Rivera",
+    "company": "Arcline Systems",
+    "website": "https://arcline.io",
+    "role": "Head of AI Engineering",
+    "industry": "DevTools",
+    "company_size": "50-200"
+  },
+  {
+    "name": "Priya Nair",
+    "company": "Greenfield Analytics",
+    "website": "https://greenfield-analytics.com",
+    "role": "CTO",
+    "industry": "Climate Tech",
+    "company_size": "20-50"
+  },
+  {
+    "name": "James Whitfield",
+    "company": "MedBridge Health",
+    "website": "https://medbridgehealth.com",
+    "role": "VP of Product",
+    "industry": "Healthcare",
+    "company_size": "200-500"
+  }
+]

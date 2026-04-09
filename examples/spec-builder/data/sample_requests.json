@@ -1,0 +1,11 @@
+[
+  {
+    "description": "Build a lead research pipeline. First, scrape a company's website and LinkedIn page to gather raw data. Then extract key facts like company size, recent funding, tech stack, and hiring patterns. Finally, synthesize everything into a structured lead profile with a recommended outreach angle."
+  },
+  {
+    "description": "Create a content pipeline for blog posts. Start by taking a topic and target audience as input. Research the topic by gathering relevant sources and key points. Generate an outline with sections and talking points. Draft the full article based on the outline. Review the draft for tone, accuracy, and SEO, producing a final polished version."
+  },
+  {
+    "description": "Build a customer support triage system. Intake a support ticket with subject, body, and customer tier. Classify the ticket by urgency (critical, high, medium, low) and category (billing, technical, account, feature-request). Route critical tickets to an escalation path that drafts an immediate response. For non-critical tickets, generate a suggested response and tag with relevant knowledge base articles."
+  }
+]
