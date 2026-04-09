@@ -2735,9 +2735,9 @@ class TestEachOracleFusion:
         assert gen_counter[0] == 3
 
     def test_each_oracle_with_decorated_merge_fn(self):
-        """@merge_fn decorator works in fused Each x Oracle topology."""
+        """@merge_fn with FromInput DI works in fused topology."""
         from pydantic import BaseModel
-        from neograph import merge_fn as merge_fn_deco
+        from neograph import FromInput, merge_fn as merge_fn_deco
         from neograph.factory import register_scripted
 
         class Tpgi2DIChunk(BaseModel, frozen=True):
@@ -2748,47 +2748,50 @@ class TestEachOracleFusion:
 
         class Tpgi2DIResult(BaseModel, frozen=True):
             text: str
-            score: float
+            tag: str
 
         register_scripted("tpgi2_di_src", lambda i, c: Tpgi2DIChunks(items=[
             Tpgi2DIChunk(chunk_idx="X"), Tpgi2DIChunk(chunk_idx="Y"),
         ]))
+        register_scripted("tpgi2_di_gen", lambda i, c: Tpgi2DIResult(
+            text="draft", tag="",
+        ))
 
-        gen_counter = [0]
-
-        def tpgi2_di_gen(i, c):
-            gen_counter[0] += 1
-            return Tpgi2DIResult(text=f"v{gen_counter[0]}", score=gen_counter[0] * 1.0)
-
-        register_scripted("tpgi2_di_gen", tpgi2_di_gen)
+        captured_node_ids: list[str] = []
 
         @merge_fn_deco
-        def tpgi2_di_merge(variants: list[Tpgi2DIResult]) -> Tpgi2DIResult:
-            # Pick highest-scored variant (tests that @merge_fn receives real list)
-            best = max(variants, key=lambda v: v.score)
+        def tpgi2_di_merge(
+            variants: list[Tpgi2DIResult],
+            node_id: Annotated[str, FromInput],
+        ) -> Tpgi2DIResult:
+            captured_node_ids.append(node_id)
             return Tpgi2DIResult(
-                text=f"best_of_{len(variants)}",
-                score=best.score,
+                text=f"merged({len(variants)})",
+                tag=f"id={node_id}",
             )
 
         pipeline = Construct("di-fusion", nodes=[
             Node.scripted("chunks", fn="tpgi2_di_src", outputs=Tpgi2DIChunks),
             Node.scripted("proc", fn="tpgi2_di_gen",
                           inputs=Tpgi2DIChunk, outputs=Tpgi2DIResult)
-            | Oracle(n=3, merge_fn="tpgi2_di_merge")
+            | Oracle(n=2, merge_fn="tpgi2_di_merge")
             | Each(over="chunks.items", key="chunk_idx"),
         ])
         graph = compile(pipeline)
-        result = run(graph, input={"node_id": "di-test"})
+        result = run(graph, input={"node_id": "di-test-42"})
 
         proc = result["proc"]
         assert isinstance(proc, dict)
         assert set(proc.keys()) == {"X", "Y"}
+
+        # DI resolved node_id from input for each group's merge
+        assert all(nid == "di-test-42" for nid in captured_node_ids)
+        assert len(captured_node_ids) == 2  # one merge per each-item
+
+        # Merged values reflect the DI-injected node_id
         for key in ("X", "Y"):
-            assert proc[key].text == "best_of_3"
-            assert proc[key].score > 0
-        # 2 items × 3 generators = 6 total calls
-        assert gen_counter[0] == 6
+            assert proc[key].text == "merged(2)"
+            assert proc[key].tag == "id=di-test-42"
 
     def test_programmatic_pipe_both_orders(self):
         """Programmatic Node.scripted() | Oracle() | Each() and reverse both compile and run."""
