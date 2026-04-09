@@ -324,7 +324,6 @@ class TestCmdCheck:
         assert "FAIL" in captured.out
         assert "compile:" in captured.out
 
-    @pytest.mark.skip(reason="monkeypatch collision: neograph.lint module vs function")
     def test_lint_issues_displayed(self, tmp_path, capsys):
         """Lint issues are shown with ERROR/WARN severity."""
         import types
@@ -333,7 +332,7 @@ class TestCmdCheck:
         from neograph import Node, register_scripted
         from neograph.construct import Construct
 
-        # Import lint module properly (not the re-exported function)
+        # Import the actual lint MODULE (not the function re-exported by __init__)
         lint_module = importlib.import_module("neograph.lint")
         from neograph.lint import LintIssue
 
@@ -344,29 +343,26 @@ class TestCmdCheck:
         fake_mod.pipe = Construct("pipe", nodes=[a])
 
         original_import = cli_mod._import_module
+        orig_lint = lint_module.lint
 
         def patched_import(target):
             return fake_mod
 
+        def fake_lint(construct, *, config=None):
+            return [
+                LintIssue(node_name="a", param="p", kind="from_input",
+                          message="missing param p", required=True),
+                LintIssue(node_name="a", param="q", kind="from_config",
+                          message="missing param q", required=False),
+            ]
+
         cli_mod._import_module = patched_import
+        lint_module.lint = fake_lint
         try:
-            orig_lint = lint_module.lint
-
-            def fake_lint(construct, *, config=None):
-                return [
-                    LintIssue(node_name="a", param="p", kind="from_input",
-                              message="missing param p", required=True),
-                    LintIssue(node_name="a", param="q", kind="from_config",
-                              message="missing param q", required=False),
-                ]
-
-            lint_module.lint = fake_lint
-            try:
-                args = argparse.Namespace(target="fake.py", config=None, setup=None)
-                result = cmd_check(args)
-            finally:
-                lint_module.lint = orig_lint
+            args = argparse.Namespace(target="fake.py", config=None, setup=None)
+            result = cmd_check(args)
         finally:
+            lint_module.lint = orig_lint
             cli_mod._import_module = original_import
 
         captured = capsys.readouterr()

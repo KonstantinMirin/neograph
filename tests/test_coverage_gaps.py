@@ -1189,7 +1189,7 @@ class TestSubgraphFactory:
             neo_each_item=(ClusterGroup | None, None),
         )
         state = StateModel(neo_each_item=ClusterGroup(label="a", claim_ids=["1"]))
-        result = redirect_fn(state, {})
+        result = redirect_fn(state, {"configurable": {}})
         # No match on "test" key → returns raw result
         assert result == {"other_key": "value"}
 
@@ -1395,10 +1395,10 @@ class TestBranchArmContextFields:
 
         register_scripted("ctx_seed", lambda _in, _cfg: Draft(content="start", score=0.8))
 
-        # Node in branch arm that declares context
-        ctx_node = Node.scripted(
-            "ctx-node", fn="f", outputs=RawText,
-            context=["external-data"],
+        # Node in branch arm that declares context — use full Node() constructor
+        ctx_node = Node(
+            "ctx-node", mode="scripted", outputs=RawText,
+            scripted_fn="f", context=["external-data"],
         )
 
         seed_node = Node.scripted("seed", fn="ctx_seed", outputs=Draft)
@@ -1435,12 +1435,13 @@ class TestBranchArmContextFields:
             "ccs-sub",
             input=Draft,
             output=SubOutput,
-            nodes=[Node.scripted("ccs-inner", fn="ccs_inner", inputs=Draft, outputs=SubOutput,
-                                 context=["internal-ctx"])],
+            nodes=[Node("ccs-inner", mode="scripted", inputs=Draft, outputs=SubOutput,
+                        scripted_fn="ccs_inner", context=["internal-ctx"])],
         )
 
         # Also add a regular node with context in the same arm
-        ctx_node = Node.scripted("ctx-n", fn="f", outputs=RawText, context=["arm-ctx"])
+        ctx_node = Node("ctx-n", mode="scripted", outputs=RawText,
+                        scripted_fn="f", context=["arm-ctx"])
 
         seed_node = Node.scripted("seed", fn="ccs_seed", outputs=Draft)
 
