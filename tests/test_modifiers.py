@@ -346,15 +346,15 @@ class TestOperator:
             mode="scripted",
             outputs=ValidationResult,
             interrupt_when=lambda state: (
-                {"issues": state.validate.issues}
-                if state.validate and not state.validate.passed
+                {"issues": state.check_quality.issues}
+                if state.check_quality and not state.check_quality.passed
                 else None
             ),
         )
-        def validate() -> ValidationResult:
+        def check_quality() -> ValidationResult:
             return ValidationResult(passed=False, issues=["missing stakeholder coverage"])
 
-        mod.validate = validate
+        mod.check_quality = check_quality
 
         pipeline = construct_from_module(mod, name="test-operator")
         graph = compile(pipeline, checkpointer=MemorySaver())
@@ -365,7 +365,7 @@ class TestOperator:
 
         # Verify the graph paused
         assert "__interrupt__" in result
-        assert result["validate"].passed is False
+        assert result["check_quality"].passed is False
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -395,16 +395,16 @@ class TestOperatorContinues:
             outputs=ValidationResult,
             interrupt_when=lambda state: None,  # always falsy
         )
-        def validate() -> ValidationResult:
+        def check_quality() -> ValidationResult:
             return ValidationResult(passed=True, issues=[])
 
-        mod.validate = validate
+        mod.check_quality = check_quality
 
         pipeline = construct_from_module(mod, name="test-operator-pass")
         graph = compile(pipeline, checkpointer=MemorySaver())
         result = run(graph, input={"node_id": "test-001"}, config={"configurable": {"thread_id": "pass-test"}})
 
-        assert result["validate"].passed is True
+        assert result["check_quality"].passed is True
         assert result.get("human_feedback") is None
 
 

@@ -836,8 +836,8 @@ class TestNodeDecoratorOperator:
         ))
 
         register_condition("validation_failed", lambda state: (
-            {"issues": state.validate.issues}
-            if state.validate and not state.validate.passed
+            {"issues": state.check_quality.issues}
+            if state.check_quality and not state.check_quality.passed
             else None
         ))
 
@@ -851,7 +851,7 @@ class TestNodeDecoratorOperator:
         # for the factory. Build the node directly via the decorator.
 
         n = Node.scripted(
-            "validate", fn="scripted_validate", outputs=ValidationResult,
+            "check-quality", fn="scripted_validate", outputs=ValidationResult,
         ) | Operator(when="validation_failed")
 
         pipeline = Construct("test-node-op-string", nodes=[n])
@@ -861,7 +861,7 @@ class TestNodeDecoratorOperator:
         result = run(graph, input={"node_id": "test-001"}, config=config)
 
         assert "__interrupt__" in result
-        assert result["validate"].passed is False
+        assert result["check_quality"].passed is False
 
     def test_operator_modifier_attached_when_interrupt_when_string(self):
         """@node(interrupt_when='name') results in a node with Operator modifier."""
@@ -949,7 +949,7 @@ class TestNodeDecoratorOperator:
         register_condition("always_falsy", lambda state: None)
 
         n = Node.scripted(
-            "validate", fn="quality_ok", outputs=ValidationResult,
+            "check-quality", fn="quality_ok", outputs=ValidationResult,
         ) | Operator(when="always_falsy")
 
         pipeline = Construct("test-node-op-pass", nodes=[n])
@@ -960,7 +960,7 @@ class TestNodeDecoratorOperator:
             config={"configurable": {"thread_id": "node-op-pass"}},
         )
 
-        assert result["validate"].passed is True
+        assert result["check_quality"].passed is True
         assert result.get("human_feedback") is None
 
     def test_decoration_raises_when_interrupt_when_wrong_type(self):
