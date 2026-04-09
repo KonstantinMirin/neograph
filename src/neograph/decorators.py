@@ -1224,6 +1224,24 @@ def _build_construct_from_decorated(
         if updated:
             _register_param_resolutions(n, param_res)
 
+    # DI param name collision check: raise if any param classified as
+    # from_input/from_config has the same name as a known producer node.
+    # This prevents silent dependency drops (neograph-shsr).
+    for field_name, n in decorated.items():
+        param_res = _get_param_resolutions(n)
+        for pname, (kind, _) in param_res.items():
+            if kind in ("from_input", "from_input_model", "from_config", "from_config_model"):
+                if pname in decorated or pname in sub_by_field:
+                    di_label = "FromInput" if "input" in kind else "FromConfig"
+                    msg = (
+                        f"@node '{n.name}' parameter '{pname}' is annotated as "
+                        f"{di_label}, but '{pname}' is also a known upstream "
+                        f"node/sub-construct. This would silently drop the "
+                        f"dependency edge. Rename either the parameter or the "
+                        f"upstream node."
+                    )
+                    raise ConstructError(msg)
+
     # Sub-constructs participate in adjacency as producers with no deps of
     # their own (they're self-contained — internal wiring is already validated).
     # Track loop self-reference param renames: {field_name: {orig_param: resolved_upstream}}
