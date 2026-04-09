@@ -65,6 +65,16 @@ class Modifiable:
         """Compose modifiers via pipe: obj | Oracle(n=3) | Operator(when=...)"""
         from neograph.errors import ConstructError
 
+        # Duplicate modifier guard (neograph-li9b)
+        mod_type = type(modifier)
+        if self.has_modifier(mod_type):
+            msg = (
+                f"Duplicate {mod_type.__name__} modifier. "
+                f"A {mod_type.__name__} is already applied to this item. "
+                f"Use a sub-construct if you need nested composition."
+            )
+            raise ConstructError(msg)
+
         # Each + Loop mutual exclusion
         if isinstance(modifier, Loop) and self.has_modifier(Each):
             msg = (

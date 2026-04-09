@@ -968,15 +968,12 @@ class TestModifiableMapErrors:
         with pytest.raises(TypeError, match="must access at least one attribute"):
             n.map(lambda s: s, key="label")
 
-    def test_map_applies_second_each_when_called_twice(self):
-        """Calling .map() twice appends a second Each modifier (does not replace)."""
+    def test_map_raises_when_called_twice(self):
+        """Calling .map() twice raises ConstructError — duplicate Each is invalid."""
         n = _consumer("verify", ClusterGroup, MatchResult)
         mapped_once = n.map("a.groups", key="label")
-        mapped_twice = mapped_once.map("b.items", key="id")
-        each_mods = [m for m in mapped_twice.modifiers if isinstance(m, Each)]
-        assert len(each_mods) == 2
-        assert each_mods[0].over == "a.groups"
-        assert each_mods[1].over == "b.items"
+        with pytest.raises(ConstructError, match="Duplicate Each"):
+            mapped_once.map("b.items", key="id")
 
 
 # ═══════════════════════════════════════════════════════════════════════════
