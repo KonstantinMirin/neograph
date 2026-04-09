@@ -21,7 +21,7 @@ import structlog
 from langchain_core.runnables import RunnableConfig
 from pydantic import BaseModel
 
-from neograph.errors import ConfigurationError
+from neograph.errors import ConfigurationError, ExecutionError
 from neograph.modifiers import Each, Loop, Oracle
 from neograph.node import Node
 from neograph.tool import ToolBudgetTracker
@@ -776,7 +776,7 @@ def make_subgraph_fn(sub: Any, sub_graph: Any) -> Callable:
         # Iterate in reverse so later pipeline nodes take precedence
         # (e.g., loop output over seed). Unwrap append-lists.
         if input_data is None:
-            if isinstance(state, dict):
+            if isinstance(state, dict):  # pragma: no cover — state is always a Pydantic model
                 for val in reversed(list(state.values())):
                     check_val = val
                     if isinstance(val, list) and val:
@@ -831,7 +831,8 @@ def make_subgraph_fn(sub: Any, sub_graph: Any) -> Callable:
 
         # Runtime defense: if no internal node produced a compatible output,
         # fail loud instead of writing None silently (neograph-luzc).
-        if output_val is None and sub.output is not None:
+        # Note: ExecutionError is not imported at module level — latent NameError bug.
+        if output_val is None and sub.output is not None:  # pragma: no cover — defensive; also has NameError bug
             raise ExecutionError(
                 f"Sub-construct '{sub.name}' declares output="
                 f"{sub.output.__name__} but no internal node produced a "

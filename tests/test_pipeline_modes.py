@@ -2576,3 +2576,70 @@ class TestToolBudgetTrackerAllExhausted:
         from neograph.tool import ToolBudgetTracker
         tracker = ToolBudgetTracker([])
         assert tracker.all_exhausted() is False
+
+
+class TestReActToolReturnsListOfModels:
+    """Line 562 in _llm.py: tool returns list of BaseModel instances in ReAct loop."""
+
+    def test_tool_returning_list_of_models_renders(self):
+        """When a tool returns list[BaseModel], it's rendered via _render_tool_result_for_llm."""
+        from pydantic import BaseModel as BM
+        from neograph._llm import invoke_with_tools
+        from neograph.tool import ToolBudgetTracker
+        from neograph.factory import register_tool_factory
+        from langchain_core.messages import AIMessage
+
+        # A tool that returns a list of BaseModel instances
+        class SearchResult(BM):
+            title: str
+            score: float
+
+        class ListTool:
+            name = "search"
+            def invoke(self, args):
+                return [SearchResult(title="a", score=0.9), SearchResult(title="b", score=0.8)]
+
+        register_tool_factory("search", lambda cfg, tc: ListTool())
+
+        class ListReActFake:
+            def __init__(self):
+                self._call_idx = 0
+                self._model = None
+                self._structured = False
+
+            def bind_tools(self, tools):
+                return self
+
+            def invoke(self, messages, **kwargs):
+                if self._structured:
+                    return self._model(items=["done"])
+                self._call_idx += 1
+                if self._call_idx == 1:
+                    msg = AIMessage(content="")
+                    msg.tool_calls = [{"name": "search", "args": {"q": "x"}, "id": "1"}]
+                    return msg
+                return AIMessage(content="done")
+
+            def with_structured_output(self, model, **kwargs):
+                clone = ListReActFake()
+                clone._model = model
+                clone._structured = True
+                return clone
+
+        configure_fake_llm(lambda tier: ListReActFake())
+
+        tools = [Tool("search", budget=5)]
+        tracker = ToolBudgetTracker(tools)
+        result, interactions = invoke_with_tools(
+            model_tier="fast",
+            prompt_template="test prompt",
+            input_data="test",
+            output_model=Claims,
+            tools=tools,
+            budget_tracker=tracker,
+            config={"configurable": {}},
+        )
+        assert len(interactions) == 1
+        # The rendered result should contain both items
+        assert "a" in interactions[0].result
+        assert "b" in interactions[0].result

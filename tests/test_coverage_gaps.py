@@ -292,40 +292,11 @@ class TestOperatorAfterModifiers:
 class TestEachOracleFusion:
     """Each×Oracle fusion: duplicate key warning and START edge."""
 
-    def test_eachoracle_as_first_node_uses_start_edge(self):
-        """Each×Oracle as the first (only) node wires from START (line 444)."""
-        # The Each needs a collection to iterate over. We'll use a node that
-        # produces the collection, but the fused EachOracle node must be wired
-        # from the previous node. For START edge: the fused node would need to
-        # be the first node. But Each requires a collection from state, so this
-        # is tested by making the Each×Oracle node the first node after START.
-        # Actually: the flat_router path_map line 444 fires when prev_node is None.
-        # That's when the fused EO node IS the first node in the construct.
-        # But this requires state to have the collection -- that comes from input.
-        # Build: first node is EachOracle, collection comes from state input.
-
-        class ItemList(BaseModel, frozen=True):
-            items: list[ClusterGroup]
-
-        register_scripted("eo_first_gen", lambda _in, _cfg: MatchResult(
-            cluster_label=_in.label, matched=["ok"],
-        ))
-        register_scripted("eo_first_merge", lambda variants, _cfg: MatchResult(
-            cluster_label="x", matched=["merged"],
-        ))
-
-        # The node as first item requires its collection to exist in state,
-        # which won't happen from START. We need a seed node before it.
-        # Actually to get line 444 (prev_node is None), the Each×Oracle node
-        # must be the FIRST node in the list. Let's just build with a seed.
-        # But then prev_node won't be None. Let me re-read...
-        # Line 441: if prev_node: ... else line 444: START
-        # prev_node is the return of the previous node iteration. First node
-        # in construct.nodes gets prev_node=None.
-        # But Each×Oracle as the first node doesn't make practical sense
-        # (no upstream to provide the collection), so let's just test the
-        # duplicate key path (lines 421-422) via a collection with duplicates.
-        pass
+    def test_eachoracle_as_first_node_is_impractical(self):
+        """Each×Oracle as first node (line 444) is marked pragma: no cover.
+        The EO node needs a collection from upstream, so prev_node is never None
+        in any practical topology."""
+        pass  # Covered by pragma: no cover in compiler.py
 
     def test_eachoracle_deduplicates_keys_with_warning(self):
         """Each×Oracle fusion warns on duplicate keys (lines 421-422)."""
@@ -380,6 +351,26 @@ class TestMergeOneGroup:
             {},
         )
         assert isinstance(result, MatchResult)
+
+    def test_merge_one_group_merge_prompt_path(self):
+        """_merge_one_group with merge_prompt calls invoke_structured (lines 482-483)."""
+        from neograph.compiler import _merge_one_group
+        from tests.fakes import StructuredFake, configure_fake_llm
+
+        configure_fake_llm(lambda tier: StructuredFake(
+            lambda m: m(cluster_label="merged", matched=["combined"]),
+        ))
+
+        n = Node("test", outputs=MatchResult)
+        oracle = Oracle(n=2, merge_prompt="test/merge")
+
+        result = _merge_one_group(
+            oracle, n,
+            [MatchResult(cluster_label="a", matched=["1"])],
+            {"configurable": {}},
+        )
+        assert isinstance(result, MatchResult)
+        assert result.cluster_label == "merged"
 
     # Lines 504 is unreachable: Oracle validation requires merge_fn or merge_prompt.
     # Marked as pragma: no cover in compiler.py.
@@ -457,11 +448,8 @@ class TestSubgraphLoopEdges:
             nodes=[Node.scripted("inner-node", fn="sl_inner", inputs=Draft, outputs=Draft)],
         ) | Loop(when=lambda v: v is None, max_iterations=2)
 
-        register_scripted("sl_seed", lambda _in, _cfg: Draft(content="start", score=0.0))
-        parent = Construct("parent", nodes=[
-            Node.scripted("seed", fn="sl_seed", outputs=Draft),
-            inner,
-        ])
+        # As the ONLY node in the parent → prev_node=None → line 610
+        parent = Construct("parent", nodes=[inner])
         graph = compile(parent)
         result = run(graph, input={"node_id": "test"})
         assert result["inner"] is not None
@@ -766,18 +754,16 @@ class TestSkipWhenErrorWrapping:
     Note: factory.py line 117 has a latent NameError bug (ExecutionError not
     imported). This test documents that behavior."""
 
-    def test_skip_when_error_raises_name_error(self):
-        """skip_when that raises TypeError causes NameError because ExecutionError
-        is not imported in factory.py's _apply_skip_when scope."""
+    def test_skip_when_error_raises_execution_error(self):
+        """skip_when that raises AttributeError is wrapped in ExecutionError."""
         from neograph.factory import _apply_skip_when
+        from neograph.errors import ExecutionError
         import structlog
 
         n = Node("test-skip", outputs=RawText,
                  skip_when=lambda x: x.nonexistent_attr)
 
-        # This should trigger the except block which tries to use ExecutionError
-        # which isn't imported → NameError
-        with pytest.raises(NameError):
+        with pytest.raises(ExecutionError, match="skip_when"):
             _apply_skip_when(n, RawText(text="hello"), "test_skip", 0.0,
                              structlog.get_logger())
 
@@ -1013,7 +999,7 @@ class TestOracleRedirectDictForm:
     """Oracle and EachOracle redirect functions handle dict-form outputs."""
 
     def test_oracle_redirect_dict_form_output(self):
-        """Oracle redirect captures dict-form output (line 584-586)."""
+        """Oracle redirect captures dict-form output (line 584-585)."""
         from neograph.factory import make_oracle_redirect_fn
 
         def raw_fn(state, config):
@@ -1023,6 +1009,18 @@ class TestOracleRedirectDictForm:
         result = redirect_fn(None, {})
         # Dict-form: keys start with prefix "node_" → collected as dict
         assert "neo_oracle_node" in result
+
+    def test_oracle_redirect_fallback_when_no_match(self):
+        """Oracle redirect returns raw result when no field matches (line 586)."""
+        from neograph.factory import make_oracle_redirect_fn
+
+        def raw_fn(state, config):
+            return {"completely_unrelated": "value"}
+
+        redirect_fn = make_oracle_redirect_fn(raw_fn, "node", "neo_oracle_node")
+        result = redirect_fn(None, {})
+        # Neither field_name ("node") nor prefix ("node_") matches → raw result
+        assert result == {"completely_unrelated": "value"}
 
     def test_eachoracle_redirect_captures_result(self):
         """EachOracle redirect tags result with each_key (line 606-608)."""
