@@ -1,6 +1,5 @@
-# CHECK_ERROR: nonexistent|AttributeError|skip_when
-# skip_when lambda references a field that doesn't exist on the input type.
-# Ideally caught at assembly/compile time, not deferred to runtime.
+# Valid: skip_when with bad field compiles fine. Error is caught at runtime
+# with a clear ExecutionError (neograph-hr4c).
 from neograph import Construct, Node
 from neograph.factory import register_scripted
 from pydantic import BaseModel

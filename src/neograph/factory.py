@@ -111,7 +111,14 @@ def _apply_skip_when(
     skip_input = input_data
     if isinstance(input_data, dict) and len(input_data) == 1:
         skip_input = next(iter(input_data.values()))
-    if not node.skip_when(skip_input):
+    try:
+        should_skip = node.skip_when(skip_input)
+    except (AttributeError, TypeError, KeyError) as exc:
+        raise ExecutionError(
+            f"Node '{node.name}' skip_when raised {type(exc).__name__}: {exc}. "
+            f"Check that the lambda accesses valid fields on the input type."
+        ) from exc
+    if not should_skip:
         return None
     elapsed = time.monotonic() - t0
     node_log.info("node_skipped", reason="skip_when", duration_s=round(elapsed, 3))

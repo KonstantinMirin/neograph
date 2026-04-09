@@ -80,6 +80,14 @@ def compile(construct: Construct, checkpointer: Any = None, retry_policy: Any = 
                                 for n in construct.nodes
                                 if isinstance(n, Node) and n.modifiers})
 
+    # Validate: Operator string conditions are registered (neograph-6dh9).
+    # Check BEFORE the checkpointer guard so the real error isn't masked.
+    for item in construct.nodes:
+        if isinstance(item, (Node, Construct)):
+            op = item.get_modifier(Operator)
+            if op is not None and isinstance(op.when, str):
+                lookup_condition(op.when)  # raises ConfigurationError if not registered
+
     # Validate: Operator requires checkpointer
     has_operator = any(
         item.has_modifier(Operator) for item in construct.nodes
