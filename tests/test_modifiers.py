@@ -2342,6 +2342,113 @@ class TestOracleMergeFnErrors:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# MERGE_FN STATE PARAMS (neograph-jg2g)
+#
+# @merge_fn can auto-wire params from graph state by name.
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TestMergeFnStateParams:
+    """@merge_fn can access upstream node outputs via state params."""
+
+    def test_merge_fn_receives_upstream_state_value(self):
+        """A @merge_fn param named after an upstream node reads from state."""
+        from typing import Annotated
+        from pydantic import BaseModel
+        from neograph import FromConfig, merge_fn
+        from neograph.factory import register_scripted
+
+        class Context(BaseModel, frozen=True):
+            topic: str
+
+        class Result(BaseModel, frozen=True):
+            text: str
+            topic: str
+
+        register_scripted("jg2g_ctx", lambda i, c: Context(topic="AI safety"))
+        register_scripted("jg2g_gen", lambda i, c: Result(text="draft", topic=""))
+
+        @merge_fn
+        def merge_with_context(
+            variants: list[Result],
+            context: Context,  # auto-wired from state field "context"
+        ) -> Result:
+            return Result(text=variants[0].text, topic=context.topic)
+
+        pipeline = Construct("merge-state", nodes=[
+            Node.scripted("context", fn="jg2g_ctx", outputs=Context),
+            Node.scripted("gen", fn="jg2g_gen", outputs=Result)
+            | Oracle(n=2, merge_fn="merge_with_context"),
+        ])
+        graph = compile(pipeline)
+        result = run(graph, input={"node_id": "jg2g-test"})
+
+        assert result["gen"].topic == "AI safety"
+
+    def test_merge_fn_mixes_state_and_di_params(self):
+        """@merge_fn can have both state params and DI params."""
+        from typing import Annotated
+        from pydantic import BaseModel
+        from neograph import FromInput, merge_fn
+        from neograph.factory import register_scripted
+
+        class Metadata(BaseModel, frozen=True):
+            source: str
+
+        class Result(BaseModel, frozen=True):
+            text: str
+            label: str
+
+        register_scripted("jg2g_meta", lambda i, c: Metadata(source="api"))
+        register_scripted("jg2g_gen2", lambda i, c: Result(text="v1", label=""))
+
+        @merge_fn
+        def merge_mixed(
+            variants: list[Result],
+            metadata: Metadata,  # from state
+            node_id: Annotated[str, FromInput],  # from config
+        ) -> Result:
+            return Result(
+                text=variants[0].text,
+                label=f"{metadata.source}:{node_id}",
+            )
+
+        pipeline = Construct("merge-mixed", nodes=[
+            Node.scripted("metadata", fn="jg2g_meta", outputs=Metadata),
+            Node.scripted("gen2", fn="jg2g_gen2", outputs=Result)
+            | Oracle(n=2, merge_fn="merge_mixed"),
+        ])
+        graph = compile(pipeline)
+        result = run(graph, input={"node_id": "mixed-test"})
+
+        assert result["gen2"].label == "api:mixed-test"
+
+    def test_merge_fn_state_param_rejects_unknown_field(self):
+        """State param for a field not in state raises ConstructError."""
+        from pydantic import BaseModel
+        from neograph import merge_fn
+        from neograph.factory import register_scripted
+
+        class Result(BaseModel, frozen=True):
+            text: str
+
+        register_scripted("jg2g_gen3", lambda i, c: Result(text="ok"))
+
+        @merge_fn
+        def merge_missing(
+            variants: list[Result],
+            nonexistent_field: str | None,  # no upstream with this name
+        ) -> Result:
+            return variants[0]
+
+        with pytest.raises(ConstructError, match="does not match any upstream"):
+            Construct("merge-missing", nodes=[
+                Node.scripted("gen3", fn="jg2g_gen3", outputs=Result)
+                | Oracle(n=2, merge_fn="merge_missing"),
+            ])
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # DEV-MODE WARNINGS
 #
 # NEOGRAPH_DEV=1 emits warnings for ambiguous-but-valid patterns.

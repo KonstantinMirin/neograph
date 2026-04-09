@@ -232,6 +232,52 @@ def _validate_node_chain(construct: Any) -> None:
         # (Loop reenter validation removed — Loop.reenter no longer exists.
         # Multi-node loops use Loop on Construct instead.)
 
+        # Validate @merge_fn state params (neograph-jg2g).
+        # When a merge_fn has from_state params, verify each references a
+        # known upstream producer and the type is compatible.
+        if isinstance(item, Node):
+            oracle = item.get_modifier(Oracle)
+            if oracle is not None and isinstance(getattr(oracle, 'merge_fn', None), str):
+                from neograph.decorators import get_merge_fn_metadata
+                meta = get_merge_fn_metadata(oracle.merge_fn)
+                if meta is not None and meta[1]:
+                    _, merge_param_res = meta
+                    item_field = item.name.replace("-", "_")
+                    known_producers = {fn: (pt, lbl) for fn, pt, lbl in producers}
+                    for pname, (kind, payload) in merge_param_res.items():
+                        if kind != "from_state":
+                            continue
+                        expected_type = payload
+                        # Self-reference: merge runs before node output is written
+                        if pname == item_field:
+                            msg = (
+                                f"merge_fn '{oracle.merge_fn}' param '{pname}' "
+                                f"references node '{item.name}' own output. "
+                                f"The merge barrier runs before the node's "
+                                f"output is written — this is a self-reference "
+                                f"that can never resolve."
+                            )
+                            raise ConstructError(msg)
+                        # Unknown producer
+                        if pname not in known_producers:
+                            msg = (
+                                f"merge_fn '{oracle.merge_fn}' param '{pname}' "
+                                f"does not match any upstream node. "
+                                f"Known producers: {sorted(known_producers.keys())}."
+                            )
+                            raise ConstructError(msg)
+                        # Type mismatch
+                        prod_type, prod_label = known_producers[pname]
+                        if (prod_type is not None
+                                and isinstance(expected_type, type)
+                                and not _types_compatible(prod_type, expected_type)):
+                            msg = (
+                                f"merge_fn '{oracle.merge_fn}' param '{pname}' "
+                                f"expects {_fmt_type(expected_type)} but "
+                                f"{prod_label} produces {_fmt_type(prod_type)}."
+                            )
+                            raise ConstructError(msg)
+
     # Sub-construct output boundary contract: if construct.output is declared,
     # at least one internal node must produce a compatible type.
     # Exclude neo_subgraph_input — the input port is NOT a valid producer

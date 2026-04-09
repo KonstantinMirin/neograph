@@ -393,11 +393,33 @@ def _resolve_di_args(param_res: ParamResolution, config: Any) -> list[Any]:
     """Resolve all DI-classified parameters into a positional args list.
 
     Shared between the @merge_fn legacy shim and factory.make_oracle_merge_fn.
+    Does NOT resolve from_state params — use _resolve_merge_args for those.
     """
     return [
         _resolve_di_value(kind, payload, pname, config)
         for pname, (kind, payload) in param_res.items()
+        if kind != "from_state"
     ]
+
+
+def _resolve_merge_args(
+    param_res: ParamResolution,
+    config: Any,
+    state: Any,
+) -> list[Any]:
+    """Resolve all @merge_fn parameters: DI + state params.
+
+    For from_state params, reads the value from graph state by param name.
+    For DI params (from_input, from_config, etc.), delegates to _resolve_di_value.
+    """
+    args = []
+    for pname, (kind, payload) in param_res.items():
+        if kind == "from_state":
+            val = getattr(state, pname, None)
+            args.append(val)
+        else:
+            args.append(_resolve_di_value(kind, payload, pname, config))
+    return args
 
 
 def _get_node_source(n: Node) -> str | None:
@@ -936,6 +958,35 @@ def merge_fn(
         # frame_depth=2: inside decorator(f), the caller is the user's @merge_fn
         # site. Same rationale as @node.
         param_res = _classify_di_params(f, rest_sig, frame_depth=2)
+
+        # Auto-wire non-DI params from state by name (neograph-jg2g).
+        # Params without FromInput/FromConfig markers that have type
+        # annotations are treated as state params — resolved from graph
+        # state at merge time, matching @node's upstream wiring pattern.
+        # Rebuild param_res in function signature order so positional
+        # args match the function's parameter order.
+        try:
+            import typing as _typing
+            extra_ns = _build_annotation_namespace(f, frame_depth=3)
+            all_hints = _typing.get_type_hints(
+                f, localns=extra_ns, include_extras=False,
+            )
+        except Exception:
+            all_hints = {}
+
+        ordered_res: ParamResolution = {}
+        for p in rest_params:
+            if p.name in param_res:
+                ordered_res[p.name] = param_res[p.name]
+            else:
+                hint = all_hints.get(p.name, p.annotation)
+                if hint is inspect.Parameter.empty:
+                    continue
+                if p.default is not inspect.Parameter.empty:
+                    ordered_res[p.name] = ("constant", p.default)
+                else:
+                    ordered_res[p.name] = ("from_state", hint)
+        param_res = ordered_res
 
         fn_name = name or f.__name__
         _merge_fn_registry[fn_name] = (f, param_res)

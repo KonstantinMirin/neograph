@@ -700,7 +700,7 @@ def make_oracle_merge_fn(
             )
             return _build_oracle_merge_result(merged, field_name, output_model, secondaries)
     else:
-        from neograph.decorators import get_merge_fn_metadata, _resolve_di_args
+        from neograph.decorators import get_merge_fn_metadata, _resolve_merge_args
 
         metadata = get_merge_fn_metadata(oracle.merge_fn)
         if metadata is not None:
@@ -709,7 +709,7 @@ def make_oracle_merge_fn(
             def merge_fn(state: Any, config: RunnableConfig) -> dict:
                 results = getattr(state, collector_field, [])
                 primary, secondaries = _unwrap_oracle_results(results, field_name, output_model)
-                merged = user_fn(primary, *_resolve_di_args(param_res, config))
+                merged = user_fn(primary, *_resolve_merge_args(param_res, config, state))
                 return _build_oracle_merge_result(merged, field_name, output_model, secondaries)
         else:
             scripted_merge = lookup_scripted(oracle.merge_fn)
