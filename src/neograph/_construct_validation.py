@@ -139,6 +139,20 @@ def _validate_node_chain(construct: Any) -> None:
         if input_type is not None:
             _check_item_input(construct, item, input_type, producers)
 
+        # Validate context= references (neograph-r135).
+        # Skip for sub-constructs (input is set) — context comes from parent.
+        if isinstance(item, Node) and item.context and construct.input is None:
+            known_fields = {fn for fn, _, _ in producers}
+            for ctx_name in item.context:
+                if ctx_name not in known_fields:
+                    msg = (
+                        f"Node '{item.name}' references context='{ctx_name}' "
+                        f"but no upstream node produces a field with that name. "
+                        f"Known upstream fields: {sorted(known_fields) or '(none)'}.\n"
+                        f"{_location_suffix()}"
+                    )
+                    raise ConstructError(msg)
+
         # Node uses .outputs (plural); Construct / _BranchNode use .output (singular).
         output_type = item.outputs if isinstance(item, Node) else getattr(item, "output", None)
         name = getattr(item, "name", None)
