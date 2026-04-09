@@ -2117,3 +2117,72 @@ class TestNodeDecoratorInterop:
         assert set(consumer_results.keys()) == {"alpha", "beta"}
         assert consumer_results["alpha"].cluster_label == "test-42:alpha"
         assert consumer_results["beta"].cluster_label == "test-42:beta"
+
+    def test_di_param_resolves_downstream_of_each_barrier(self):
+        """FromInput param resolves correctly in a node AFTER the Each
+        barrier/assemble step (neograph-iio2)."""
+        from neograph import FromInput, compile, construct_from_functions, node, run
+
+        @node(mode="scripted", outputs=Clusters)
+        def producer() -> Clusters:
+            return Clusters(groups=[
+                ClusterGroup(label="alpha", claim_ids=["c1"]),
+            ])
+
+        @node(
+            mode="scripted",
+            outputs=MatchResult,
+            map_over="producer.groups",
+            map_key="label",
+        )
+        def verify(cluster: ClusterGroup) -> MatchResult:
+            return MatchResult(cluster_label=cluster.label, matched=["ok"])
+
+        @node(mode="scripted", outputs=RawText)
+        def summarize(
+            verify: dict[str, MatchResult],
+            pipeline_id: Annotated[str, FromInput],
+        ) -> RawText:
+            return RawText(text=f"{pipeline_id}:{len(verify)}")
+
+        pipeline = construct_from_functions("after_each", [producer, verify, summarize])
+        graph = compile(pipeline)
+        result = run(graph, input={"pipeline_id": "test-99"})
+
+        assert result["summarize"].text == "test-99:1"
+
+    def test_di_bundled_model_resolves_downstream_of_each_barrier(self):
+        """Bundled BaseModel FromInput resolves after Each barrier (neograph-iio2)."""
+        from neograph import FromInput, compile, construct_from_functions, node, run
+
+        class PipeCtx(BaseModel, frozen=True):
+            node_id: str
+            project_root: str = "/tmp"
+
+        @node(mode="scripted", outputs=Clusters)
+        def producer() -> Clusters:
+            return Clusters(groups=[
+                ClusterGroup(label="alpha", claim_ids=["c1"]),
+            ])
+
+        @node(
+            mode="scripted",
+            outputs=MatchResult,
+            map_over="producer.groups",
+            map_key="label",
+        )
+        def verify(cluster: ClusterGroup) -> MatchResult:
+            return MatchResult(cluster_label=cluster.label, matched=["ok"])
+
+        @node(mode="scripted", outputs=RawText)
+        def summarize(
+            verify: dict[str, MatchResult],
+            ctx: Annotated[PipeCtx, FromInput],
+        ) -> RawText:
+            return RawText(text=f"{ctx.node_id}:{len(verify)}")
+
+        pipeline = construct_from_functions("bundled_after_each", [producer, verify, summarize])
+        graph = compile(pipeline)
+        result = run(graph, input={"node_id": "bundled-test", "project_root": "/src"})
+
+        assert result["summarize"].text == "bundled-test:1"
