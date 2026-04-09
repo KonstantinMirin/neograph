@@ -78,7 +78,7 @@ register_scripted("score_claims", score_claims)
 enrich = Construct(
     "enrich",
     input=Claims,
-    outputs=ScoredClaims,
+    output=ScoredClaims,
     nodes=[
         Node.scripted("lookup", fn="lookup_context", inputs=Claims, outputs=Context),
         Node.scripted("score", fn="score_claims", inputs=Claims, outputs=ScoredClaims),

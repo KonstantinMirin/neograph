@@ -378,7 +378,7 @@ from neograph import Construct, Node
 enrich = Construct(
     "enrich",
     input=Claims,
-    outputs=ScoredClaims,
+    output=ScoredClaims,
     nodes=[Node(name="score", mode="think", inputs=Claims, outputs=ScoredClaims, model="fast", prompt="score")],
 )
 

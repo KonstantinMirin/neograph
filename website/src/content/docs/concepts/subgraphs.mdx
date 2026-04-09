@@ -11,7 +11,7 @@ Sub-constructs can be built with `@node` functions or with declarative `Node(...
 
 ### Option A: `@node` functions via `construct_from_functions`
 
-Use `construct_from_functions(name, functions, input=X, outputs=Y)` to build a sub-construct from `@node`-decorated functions. Parameters whose type matches `input=` are automatically wired to the sub-construct's input port:
+Use `construct_from_functions(name, functions, input=X, output=Y)` to build a sub-construct from `@node`-decorated functions. Parameters whose type matches `input=` are automatically wired to the sub-construct's input port:
 
 ```python
 from neograph import node, construct_from_functions, Tool, ToolInteraction

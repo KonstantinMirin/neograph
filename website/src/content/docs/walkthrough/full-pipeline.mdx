@@ -48,7 +48,7 @@ The pipeline:
 
 This example uses `@node` for the top-level decompose (with Oracle kwargs) but drops to declarative `Node` + `Construct` for the rest. Why?
 
-The sub-construct (`enrich`) needs an explicit I/O boundary: `input=Claims, outputs=ScoredClaims`. `construct_from_module` walks a whole module into one flat Construct — it can't inline a sub-pipeline with its own isolated state. That's a legitimate boundary case where the declarative form is the right tool.
+The sub-construct (`enrich`) needs an explicit I/O boundary: `input=Claims, output=ScoredClaims`. `construct_from_module` walks a whole module into one flat Construct — it can't inline a sub-pipeline with its own isolated state. That's a legitimate boundary case where the declarative form is the right tool.
 
 For the other scripted nodes, declarative stays for consistency with the sub-construct. In a pipeline without sub-constructs, every node here could be `@node`-decorated.
 
@@ -105,7 +105,7 @@ def decompose() -> Claims: ...
 enrich = Construct(
     "enrich",
     input=Claims,
-    outputs=ScoredClaims,
+    output=ScoredClaims,
     nodes=[
         Node.scripted("lookup", fn="lookup_context", inputs=Claims, outputs=Context),
         Node.scripted("score", fn="score_claims", inputs=Claims, outputs=ScoredClaims),

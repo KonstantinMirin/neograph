@@ -227,7 +227,7 @@ pipeline = Construct("main", nodes=[decompose, enrich])
 graph = compile(pipeline)
 ```
 
-Sub-constructs are the one place NeoGraph keeps the declarative form — the typed I/O boundary (`input=Claims, outputs=ScoredClaims`) is meaningful metadata that doesn't map cleanly to function signatures.
+Sub-constructs are the one place NeoGraph keeps the declarative form — the typed I/O boundary (`input=Claims, output=ScoredClaims`) is meaningful metadata that doesn't map cleanly to function signatures.
 
 ## When NeoGraph doesn't help
 

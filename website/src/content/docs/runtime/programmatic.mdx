@@ -93,7 +93,7 @@ Modifiers work on both Nodes and Constructs:
 enrich = Construct(
     "enrich",
     input=Claims,
-    outputs=ScoredClaims,
+    output=ScoredClaims,
     nodes=[lookup, verify, score],
 ) | Oracle(n=3, merge_fn="combine_scores")
 ```
