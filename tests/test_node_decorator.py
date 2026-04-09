@@ -2997,6 +2997,7 @@ class TestOutputInferenceFallbackHintsFail:
         assert result.outputs is None
 
 
+@pytest.mark.filterwarnings("ignore:@node.*body of mode='think'.*:UserWarning")
 class TestBodyMergeRuntimeInvocation:
     """Body-merge closure runtime invocation (lines 731, 795)."""
 
