@@ -1512,6 +1512,86 @@ class TestLint:
         params = {i.param for i in issues}
         assert params == {"x", "y"}
 
+    def test_lint_skips_non_node_non_construct_items(self):
+        """lint silently skips items that are neither Node nor Construct."""
+        # Construct.nodes can only hold Node|Construct, but _walk is typed
+        # to accept either. Passing something else should just return early.
+        from neograph.lint import _walk, LintIssue
+        issues: list[LintIssue] = []
+        _walk("not-a-node", None, issues)  # type: ignore[arg-type]
+        assert issues == []
+
+    def test_lint_required_bundled_model_no_config(self):
+        """Required bundled model params are flagged when config is None."""
+        class Ctx(BaseModel):
+            node_id: str
+            project_root: str
+
+        @node(outputs=RawText)
+        def my_node(ctx: Annotated[Ctx, FromInput(required=True)]) -> RawText: ...
+
+        pipeline = construct_from_functions("bundled-no-cfg", [my_node])
+        issues = lint(pipeline)
+        assert len(issues) == 2
+        params = {i.param for i in issues}
+        assert params == {"node_id", "project_root"}
+        assert all(i.required for i in issues)
+        assert all("has no config" in i.message for i in issues)
+
+    def test_lint_merge_fn_di_param_missing_from_config(self):
+        """lint detects missing DI param in @merge_fn when config is provided."""
+        from neograph import merge_fn as merge_fn_deco
+
+        @merge_fn_deco
+        def lint_merge(
+            variants: list[Claims],
+            api_key: Annotated[str, FromConfig],
+        ) -> Claims:
+            return variants[0]
+
+        # Use @node with ensemble_n to get a node with param_resolutions AND Oracle.
+        @node(
+            outputs=Claims,
+            prompt="test", model="fast",
+            ensemble_n=2, merge_fn="lint_merge",
+        )
+        def lint_gen(topic: Annotated[str, FromInput]) -> Claims: ...
+
+        pipeline = construct_from_functions("merge-lint", [lint_gen])
+        # Provide 'topic' so the node itself is satisfied, but not 'api_key'
+        issues = lint(pipeline, config={"topic": "hello"})
+        merge_issues = [i for i in issues if "merge_fn" in i.node_name]
+        assert len(merge_issues) == 1
+        assert merge_issues[0].param == "api_key"
+        assert "not found in config" in merge_issues[0].message
+
+    def test_lint_merge_fn_required_di_param_no_config(self):
+        """lint flags required @merge_fn DI params when config is None."""
+        from neograph import merge_fn as merge_fn_deco
+
+        @merge_fn_deco
+        def lint_merge_req(
+            variants: list[Claims],
+            secret: Annotated[str, FromInput(required=True)],
+        ) -> Claims:
+            return variants[0]
+
+        @node(
+            outputs=Claims,
+            prompt="test", model="fast",
+            ensemble_n=2, merge_fn="lint_merge_req",
+        )
+        def lint_gen2(topic: Annotated[str, FromInput(required=True)]) -> Claims: ...
+
+        pipeline = construct_from_functions("merge-lint-req", [lint_gen2])
+        issues = lint(pipeline)
+        # Both node-level 'topic' and merge_fn-level 'secret' are required
+        merge_issues = [i for i in issues if "merge_fn" in i.node_name]
+        assert len(merge_issues) == 1
+        assert merge_issues[0].param == "secret"
+        assert merge_issues[0].required is True
+        assert "has no config" in merge_issues[0].message
+
 
 class TestFromInputRequired:
     """FromInput(required=True) raises ExecutionError at runtime when missing."""

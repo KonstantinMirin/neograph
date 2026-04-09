@@ -1241,3 +1241,277 @@ class TestLoopBodyValidation:
         loop_entry = pipeline.nodes[1]
         assert isinstance(loop_entry, Construct)
         assert loop_entry.has_modifier(Loop)
+
+
+# =============================================================================
+# Coverage gap tests for forward.py
+# =============================================================================
+
+from neograph.forward import (
+    _BranchNode,
+    _BranchMeta,
+    _ConditionProxy,
+    _ConditionSpec,
+    _Proxy,
+    _Tracer,
+    _ForwardSelf,
+    ForwardConstruct,
+)
+from neograph.errors import ConstructError
+from neograph.modifiers import Loop
+
+
+class TestForwardConstructDirectInstantiation:
+    """Lines 113-117: direct ForwardConstruct() raises TypeError."""
+
+    def test_direct_instantiation_raises_type_error(self):
+        """Instantiating ForwardConstruct directly (not a subclass) raises TypeError."""
+        with pytest.raises(TypeError, match="cannot be instantiated directly"):
+            ForwardConstruct()
+
+
+class TestForwardNotOverridden:
+    """Line 160: forward() not overridden raises NotImplementedError."""
+
+    def test_forward_not_overridden_raises(self):
+        """Subclass without forward() override raises TypeError at init."""
+        class NoForward(ForwardConstruct):
+            a = Node.scripted("a", fn="f", outputs=RawText)
+
+        with pytest.raises(TypeError, match="must override forward"):
+            NoForward()
+
+
+class TestProxyHashBoolIter:
+    """Lines 215, 223, 228, 232-233: __hash__, __bool__/__iter__ outside tracing."""
+
+    def test_proxy_hash(self):
+        """Proxy.__hash__ returns id-based hash (line 215)."""
+        p = _Proxy(source_node=None, name="test")
+        assert hash(p) == id(p)
+
+    def test_proxy_bool_outside_tracing_raises(self):
+        """Proxy.__bool__ outside tracing raises TypeError (line 223)."""
+        p = _Proxy(source_node=None, name="test")
+        with pytest.raises(TypeError, match="outside tracing"):
+            bool(p)
+
+    def test_proxy_iter_outside_tracing_raises(self):
+        """Proxy.__iter__ outside tracing raises TypeError (line 228)."""
+        p = _Proxy(source_node=None, name="test")
+        with pytest.raises(TypeError, match="outside tracing"):
+            iter(p)
+
+
+class TestConditionProxyEmptyAttrChain:
+    """Lines 290-292: ConditionProxy with no prefix match yields empty attr_chain."""
+
+    def test_empty_attr_chain_when_name_doesnt_match_prefix(self):
+        """_build_runtime_condition returns empty attr_chain when proxy name
+        doesn't match the expected prefix pattern (lines 290-292)."""
+        node = Node.scripted("mynode", fn="f", outputs=RawText)
+        p = _Proxy(source_node=node, name="weird_prefix")
+        cond = _ConditionProxy(p, "<", 0.5)
+        spec = cond._build_runtime_condition()
+        assert spec.attr_chain == []
+
+    def test_empty_attr_chain_when_source_is_none(self):
+        """ConditionProxy with source_node=None yields empty attr_chain."""
+        p = _Proxy(source_node=None, name="test_name")
+        cond = _ConditionProxy(p, ">", 0.5)
+        spec = cond._build_runtime_condition()
+        assert spec.attr_chain == []
+
+
+class TestBranchNodeStubs:
+    """Lines 358, 361: _BranchNode.has_modifier/get_modifier stubs."""
+
+    def test_has_modifier_returns_false(self):
+        """_BranchNode.has_modifier always returns False (line 358)."""
+        meta = _BranchMeta(
+            condition_spec=_ConditionSpec(None, [], None, "<", 0.5),
+            true_arm_nodes=[],
+            false_arm_nodes=[],
+        )
+        bn = _BranchNode(meta, 0)
+        assert bn.has_modifier(Loop) is False
+
+    def test_get_modifier_returns_none(self):
+        """_BranchNode.get_modifier always returns None (line 361)."""
+        meta = _BranchMeta(
+            condition_spec=_ConditionSpec(None, [], None, "<", 0.5),
+            true_arm_nodes=[],
+            false_arm_nodes=[],
+        )
+        bn = _BranchNode(meta, 0)
+        assert bn.get_modifier(Loop) is None
+
+
+class TestTracingProxyGetSetAttr:
+    """Lines 628-633: _ForwardSelf __getattr__ and __setattr__."""
+
+    def test_getattr_falls_through_to_real_self(self):
+        """Attribute access on _ForwardSelf falls through to the real instance
+        for non-node attributes (line 628-629)."""
+        # Test the _ForwardSelf directly — the fallthrough reads from real_self
+        node_a = Node.scripted("a", fn="f", outputs=RawText)
+        tracer = _Tracer()
+
+        # Build a minimal real object with a custom attr
+        class Dummy:
+            custom_value = 99
+
+        dummy = Dummy()
+        shim = _ForwardSelf({"a": node_a}, tracer, real_self=dummy)
+        # Node access returns _NodeCall
+        from neograph.forward import _NodeCall
+        assert isinstance(shim.a, _NodeCall)
+        # Non-node access falls through to real_self
+        assert shim.custom_value == 99
+
+    def test_setattr_delegates_to_real_self(self):
+        """__setattr__ on _ForwardSelf sets on the real instance (lines 632-633)."""
+        node_a = Node.scripted("a", fn="f", outputs=RawText)
+        tracer = _Tracer()
+
+        # Use a plain object as real_self to avoid Pydantic validation
+        class PlainObj:
+            pass
+
+        real = PlainObj()
+        shim = _ForwardSelf({"a": node_a}, tracer, real_self=real)
+        shim.custom_attr = "set_value"
+        assert real.custom_attr == "set_value"
+
+
+class TestLoopIterationInputInference:
+    """Lines 429-431, 557, 560: loop iteration/input inference failures."""
+
+    def test_loop_empty_body_raises(self):
+        """self.loop() with empty body raises ConstructError (line 544-545)."""
+        from neograph.forward import _LoopCall, _NodeCall
+        tracer = _Tracer()
+        lc = _LoopCall(
+            body=[],
+            when=lambda r: r is not None and r.score < 0.8,
+            max_iterations=5,
+            on_exhaust="error",
+            tracer=tracer,
+        )
+        p = _Proxy(source_node=None, name="test")
+        with pytest.raises(ConstructError, match="at least one node"):
+            lc(p)
+
+    def test_loop_non_node_call_in_body_raises(self):
+        """self.loop() with non-_NodeCall items raises ConstructError."""
+        from neograph.forward import _LoopCall
+        tracer = _Tracer()
+        lc = _LoopCall(
+            body=["not_a_node_call"],
+            when=lambda r: True,
+            max_iterations=5,
+            on_exhaust="error",
+            tracer=tracer,
+        )
+        p = _Proxy(source_node=None, name="test")
+        with pytest.raises(ConstructError, match="node references"):
+            lc(p)
+
+    def test_loop_input_type_none_raises(self):
+        """When loop can't infer input type, raises ConstructError (line 560)."""
+        from neograph.forward import _LoopCall, _NodeCall
+        tracer = _Tracer()
+
+        # A node with outputs=None
+        bad_node = Node("bad", mode="scripted", outputs=RawText)
+        nc = _NodeCall(bad_node, tracer)
+
+        lc = _LoopCall(
+            body=[nc],
+            when=lambda r: True,
+            max_iterations=5,
+            on_exhaust="error",
+            tracer=tracer,
+        )
+        # Proxy with source_node=None so input_type falls back to output_type
+        # which is RawText, so this actually works. We need a node with outputs=None
+        bad_node2 = Node("bad2", mode="scripted", outputs=None)
+        nc2 = _NodeCall(bad_node2, tracer)
+        lc2 = _LoopCall(
+            body=[nc2],
+            when=lambda r: True,
+            max_iterations=5,
+            on_exhaust="error",
+            tracer=tracer,
+        )
+        p = _Proxy(source_node=None, name="test")
+        with pytest.raises(ConstructError, match="input type could not be inferred"):
+            lc2(p)
+
+
+class TestBranchLoweringEdgeCases:
+    """Lines 788, 845, 873-875, 880-881: branch lowering edge cases."""
+
+    def test_plain_proxy_as_branch_condition_truthy_check(self):
+        """Using a plain _Proxy (not a comparison) as a branch condition
+        produces a truthy-check _ConditionSpec (line 788)."""
+        register_scripted("br_a_fn", lambda _i, _c: Confidence(score=0.9))
+        register_scripted("br_hi_fn", lambda _i, _c: HighResult(label="high"))
+        register_scripted("br_lo_fn", lambda _i, _c: LowResult(label="low"))
+        register_scripted("br_fin_fn", lambda _i, _c: FinalResult(summary="done"))
+
+        class TruthyBranch(ForwardConstruct):
+            check = Node.scripted("check", fn="br_a_fn", outputs=Confidence)
+            hi = Node.scripted("hi", fn="br_hi_fn", outputs=HighResult)
+            lo = Node.scripted("lo", fn="br_lo_fn", outputs=LowResult)
+            fin = Node.scripted("fin", fn="br_fin_fn", outputs=FinalResult)
+
+            def forward(self, topic):
+                c = self.check(topic)
+                if c:  # plain proxy as boolean — not a comparison
+                    h = self.hi(c)
+                else:
+                    h = self.lo(c)
+                return self.fin(h)
+
+        pipe = TruthyBranch()
+        # Should have a _BranchNode in the node list
+        from neograph.forward import _BranchNode
+        has_branch = any(isinstance(n, _BranchNode) for n in pipe.nodes)
+        assert has_branch
+
+    def test_sequential_branches_merge(self):
+        """Two sequential if/else branches produce two _BranchNode sentinels
+        (lines 873-875, 880-881)."""
+        register_scripted("sb_a_fn", lambda _i, _c: Confidence(score=0.5))
+        register_scripted("sb_b_fn", lambda _i, _c: HighResult(label="b"))
+        register_scripted("sb_c_fn", lambda _i, _c: LowResult(label="c"))
+        register_scripted("sb_d_fn", lambda _i, _c: HighResult(label="d"))
+        register_scripted("sb_e_fn", lambda _i, _c: LowResult(label="e"))
+        register_scripted("sb_f_fn", lambda _i, _c: FinalResult(summary="f"))
+
+        class TwoBranches(ForwardConstruct):
+            check1 = Node.scripted("check1", fn="sb_a_fn", outputs=Confidence)
+            b = Node.scripted("b", fn="sb_b_fn", outputs=HighResult)
+            c = Node.scripted("c", fn="sb_c_fn", outputs=LowResult)
+            check2 = Node.scripted("check2", fn="sb_a_fn", outputs=Confidence)
+            d = Node.scripted("d", fn="sb_d_fn", outputs=HighResult)
+            e = Node.scripted("e", fn="sb_e_fn", outputs=LowResult)
+            fin = Node.scripted("fin", fn="sb_f_fn", outputs=FinalResult)
+
+            def forward(self, topic):
+                c1 = self.check1(topic)
+                if c1.score > 0.5:
+                    r1 = self.b(c1)
+                else:
+                    r1 = self.c(c1)
+                c2 = self.check2(r1)
+                if c2.score > 0.7:
+                    r2 = self.d(c2)
+                else:
+                    r2 = self.e(c2)
+                return self.fin(r2)
+
+        pipe = TwoBranches()
+        branch_nodes = [n for n in pipe.nodes if isinstance(n, _BranchNode)]
+        assert len(branch_nodes) == 2

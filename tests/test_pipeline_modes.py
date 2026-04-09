@@ -741,6 +741,42 @@ class TestRunIsolated:
         assert seen_config["node_id"] == "TEST-001"
         assert seen_config["env"] == "staging"
 
+    def test_dict_input_seeded_to_state_when_run_isolated(self):
+        """run_isolated with dict input updates state directly (line 163)."""
+        from neograph import register_scripted
+
+        received_data = {}
+
+        def fn(input_data, config):
+            if isinstance(input_data, dict):
+                received_data.update(input_data)
+            return Claims(items=["from_dict"])
+
+        register_scripted("dict_test", fn)
+        node = Node.scripted("dict-test", fn="dict_test", outputs=Claims)
+
+        result = node.run_isolated(input={"raw_text": "hello", "count": 5})
+        assert isinstance(result, Claims)
+        assert result.items == ["from_dict"]
+
+    def test_missing_configurable_key_in_config_when_run_isolated(self):
+        """run_isolated adds configurable key if missing from config (line 170)."""
+        from neograph import register_scripted
+
+        seen_config = {}
+
+        def fn(input_data, config):
+            seen_config.update(config)
+            return Claims(items=["ok"])
+
+        register_scripted("no_cfg", fn)
+        node = Node.scripted("no-cfg", fn="no_cfg", outputs=Claims)
+
+        # Pass config without 'configurable' key
+        result = node.run_isolated(config={"some_other_key": "val"})
+        assert isinstance(result, Claims)
+        assert "configurable" in seen_config
+
 
 class TestConfigInjectionPatterns:
     """Real-world config injection patterns from piarch consumer."""
@@ -2293,3 +2329,250 @@ class TestConditionErrorHandling:
         graph = compile(pipeline)
         with pytest.raises(ExecutionError, match="condition"):
             run(graph, input={"node_id": "test-loop-type-err"})
+
+
+# =============================================================================
+# _llm.py coverage — edge cases for uncovered lines
+# =============================================================================
+
+
+class TestLlmIntrospectParams:
+    """_accepted_params edge cases (lines 60-62)."""
+
+    def test_c_extension_returns_empty_set(self):
+        """C extension callables with no inspectable signature return empty set."""
+        from neograph._llm import _accepted_params
+        # builtins like len have no inspectable signature in some Python versions
+        result = _accepted_params(len)
+        # Should return empty set or a valid set (not raise)
+        assert isinstance(result, (set, frozenset))
+
+
+class TestLlmNotConfigured:
+    """Lines 123-124, 127: _get_llm when not configured."""
+
+    def test_get_llm_raises_when_not_configured(self):
+        """_get_llm raises ConfigurationError when llm_factory is None."""
+        from neograph._llm import _get_llm
+        with pytest.raises(ConfigurationError, match="not configured"):
+            _get_llm("fast")
+
+    def test_get_llm_accepts_all_kwargs_factory(self):
+        """When factory accepts **kwargs, all kwargs are passed (line 127)."""
+        from neograph._llm import configure_llm, _get_llm
+
+        received = {}
+        def factory(tier, **kwargs):
+            received.update(kwargs)
+            return "fake_llm"
+
+        configure_llm(
+            llm_factory=factory,
+            prompt_compiler=lambda t, d: [{"role": "user", "content": "test"}],
+        )
+        result = _get_llm("fast", node_name="test_node", llm_config={"temp": 0.5})
+        assert result == "fake_llm"
+        assert "node_name" in received
+        assert "llm_config" in received
+
+
+class TestExtractJsonEdgeCases:
+    """Lines 227-228, 230-231, 245-248: _extract_json edge cases."""
+
+    def test_escape_char_in_json_string(self):
+        """Backslash escapes inside JSON strings are handled (lines 227-228, 230-231)."""
+        from neograph._llm import _extract_json
+        text = r'{"key": "value with \" escaped"}'
+        result = _extract_json(text)
+        assert result.startswith("{")
+        assert result.endswith("}")
+
+    def test_unbalanced_braces_first_to_last(self):
+        """Unbalanced braces with closing brace: first-to-last fallback (line 247)."""
+        from neograph._llm import _extract_json
+        # Unbalanced: extra opening brace, but there's a } later
+        text = '{"key": {"nested": "value"} extra stuff}'
+        # The balanced scan finds the first complete match
+        result = _extract_json(text)
+        assert result.startswith("{")
+
+    def test_unbalanced_with_trailing_closing_brace(self):
+        """Unbalanced JSON with a trailing } past the scan falls back (line 247)."""
+        from neograph._llm import _extract_json
+        # The first { starts depth tracking, but escapes/strings cause imbalance
+        # Force unbalanced: an unclosed string with } after it
+        text = '{"key": "unclosed string} more text}'
+        result = _extract_json(text)
+        assert "{" in result
+
+    def test_no_closing_brace_at_all(self):
+        """No closing brace after opening returns stripped text (line 248)."""
+        from neograph._llm import _extract_json
+        text = '{"key": "value'
+        result = _extract_json(text)
+        assert result == text.strip()
+
+
+class TestParseJsonException:
+    """Lines 293-294: generic Exception during JSON parsing."""
+
+    def test_generic_exception_during_parse(self):
+        """Non-ValidationError during parse raises ExecutionError."""
+        from neograph._llm import _parse_json_response
+
+        class BadModel:
+            """A model that raises a generic Exception during validate."""
+            __name__ = "BadModel"
+            @classmethod
+            def model_validate_json(cls, data):
+                raise RuntimeError("unexpected error")
+
+        with pytest.raises(ExecutionError, match="Failed to parse"):
+            _parse_json_response('{"x": 1}', BadModel)
+
+
+class TestCallStructuredUnknownStrategy:
+    """Lines 377-378: unknown output_strategy raises ExecutionError."""
+
+    def test_unknown_strategy_raises(self):
+        """_call_structured with unknown strategy raises ExecutionError."""
+        from neograph._llm import _call_structured
+        with pytest.raises(ExecutionError, match="Unknown output_strategy"):
+            _call_structured(None, [], Claims, "invalid_strategy", {})
+
+
+class TestToolResultRendering:
+    """Lines 452, 562: _render_tool_result_for_llm with plain values and list of models."""
+
+    def test_plain_value_returns_str(self):
+        """Non-Pydantic result returns str() (line 452)."""
+        from neograph._llm import _render_tool_result_for_llm
+        assert _render_tool_result_for_llm(42) == "42"
+        assert _render_tool_result_for_llm("hello") == "hello"
+
+    def test_list_of_models_rendered(self):
+        """List of BaseModel instances uses renderer or describe_value (line 562)."""
+        from neograph._llm import _render_tool_result_for_llm
+        items = [RawText(text="a"), RawText(text="b")]
+        result = _render_tool_result_for_llm(items)
+        assert "a" in result
+        assert "b" in result
+
+
+class TestUnregisteredToolInReact:
+    """Lines 500-501: tool not registered raises ConfigurationError."""
+
+    def test_unregistered_tool_raises(self):
+        """invoke_with_tools with unregistered tool raises ConfigurationError."""
+        from neograph._llm import invoke_with_tools
+        from neograph.tool import ToolBudgetTracker
+
+        configure_fake_llm(lambda tier: StructuredFake(lambda m: m(items=["x"])))
+
+        with pytest.raises(ConfigurationError, match="not registered"):
+            invoke_with_tools(
+                model_tier="fast",
+                prompt_template="test prompt",
+                input_data="test",
+                output_model=Claims,
+                tools=[Tool("nonexistent", budget=5)],
+                budget_tracker=ToolBudgetTracker([Tool("nonexistent", budget=5)]),
+                config={"configurable": {}},
+            )
+
+
+class TestUsageTokenAccumulation:
+    """Lines 621-626, 630: usage token accumulation in invoke_with_tools."""
+
+    def test_usage_tokens_accumulated_from_messages(self):
+        """Token usage from ReAct messages is accumulated (lines 621-626, 630)."""
+        from neograph._llm import invoke_with_tools
+        from neograph.tool import ToolBudgetTracker
+        from neograph.factory import register_tool_factory
+
+        fake_tool = FakeTool("search", response="found it")
+        register_tool_factory("search", lambda cfg, tc: fake_tool)
+
+        # Build a ReActFake that makes one tool call then stops
+        from langchain_core.messages import AIMessage
+        class UsageFake:
+            """Fake LLM that adds usage_metadata to responses."""
+            def __init__(self):
+                self._call_idx = 0
+                self._model = None
+                self._structured = False
+
+            def bind_tools(self, tools):
+                return self
+
+            def invoke(self, messages, **kwargs):
+                if self._structured:
+                    result = Claims(items=["done"])
+                    return {"parsed": result, "raw": AIMessage(
+                        content="",
+                        usage_metadata={"input_tokens": 5, "output_tokens": 3, "total_tokens": 8},
+                    )}
+                self._call_idx += 1
+                if self._call_idx == 1:
+                    msg = AIMessage(content="", usage_metadata={"input_tokens": 10, "output_tokens": 5, "total_tokens": 15})
+                    msg.tool_calls = [{"name": "search", "args": {"q": "x"}, "id": "1"}]
+                    return msg
+                return AIMessage(content="done", usage_metadata={"input_tokens": 20, "output_tokens": 10, "total_tokens": 30})
+
+            def with_structured_output(self, model, **kwargs):
+                clone = UsageFake()
+                clone._model = model
+                clone._structured = True
+                return clone
+
+        configure_fake_llm(lambda tier: UsageFake())
+
+        tools = [Tool("search", budget=5)]
+        tracker = ToolBudgetTracker(tools)
+        result, interactions = invoke_with_tools(
+            model_tier="fast",
+            prompt_template="test prompt",
+            input_data="test",
+            output_model=Claims,
+            tools=tools,
+            budget_tracker=tracker,
+            config={"configurable": {}},
+        )
+        assert isinstance(result, Claims)
+        assert len(interactions) == 1
+
+
+class TestRenderPromptEdgeCases:
+    """Lines 669-670, 707-708: render_prompt not configured + message attr access."""
+
+    def test_render_prompt_not_configured_raises(self):
+        """render_prompt without configure_llm raises ConfigurationError."""
+        from neograph._llm import render_prompt
+        node = Node("test", mode="think", prompt="test", model="fast", outputs=Claims)
+        with pytest.raises(ConfigurationError, match="not configured"):
+            render_prompt(node, {"key": "value"})
+
+    def test_render_prompt_with_message_objects(self):
+        """render_prompt handles LangChain message objects (line 707-708)."""
+        from langchain_core.messages import HumanMessage
+        from neograph._llm import render_prompt, configure_llm
+
+        configure_llm(
+            llm_factory=lambda tier: None,
+            prompt_compiler=lambda t, d, **kw: [HumanMessage(content="hello world")],
+        )
+
+        node = Node("test", mode="think", prompt="test", model="fast", outputs=Claims)
+        result = render_prompt(node, {"key": "value"}, config={"configurable": {}})
+        assert "hello world" in result
+        assert "[human]" in result
+
+
+class TestToolBudgetTrackerAllExhausted:
+    """Line 99 in tool.py: all_exhausted returns False when no tools."""
+
+    def test_all_exhausted_no_tools(self):
+        """ToolBudgetTracker with no tools returns False for all_exhausted."""
+        from neograph.tool import ToolBudgetTracker
+        tracker = ToolBudgetTracker([])
+        assert tracker.all_exhausted() is False

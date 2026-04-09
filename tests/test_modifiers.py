@@ -2928,3 +2928,37 @@ class TestDevWarnings:
         dev_msgs = [w for w in caught if "[neograph-dev]" in str(w.message)]
         assert len(dev_msgs) == 1
         assert "max_iterations=1" in str(dev_msgs[0].message)
+
+
+# =============================================================================
+# Coverage gap tests for modifiers.py
+# =============================================================================
+
+
+class TestEachLoopReverseOrder:
+    """Lines 86-90: Each applied after Loop is also rejected."""
+
+    def test_each_after_loop_raises(self):
+        """Applying Each to a node that already has Loop raises ConstructError."""
+        from neograph.factory import register_scripted
+
+        register_scripted("el_fn", lambda data, config: data)
+        n = Node.scripted("el", fn="el_fn", inputs=Claims, outputs=Claims)
+        n_with_loop = n | Loop(when=lambda d: False, max_iterations=3)
+
+        with pytest.raises(ConstructError, match="Cannot combine Each and Loop"):
+            n_with_loop | Each(over="upstream.items", key="label")
+
+
+class TestLoopMaxIterationsValidation:
+    """Lines 366-367: Loop(max_iterations<1) raises ConfigurationError."""
+
+    def test_max_iterations_zero_raises(self):
+        """Loop with max_iterations=0 raises ConfigurationError."""
+        with pytest.raises(ConfigurationError, match="max_iterations must be >= 1"):
+            Loop(when=lambda d: True, max_iterations=0)
+
+    def test_max_iterations_negative_raises(self):
+        """Loop with max_iterations=-1 raises ConfigurationError."""
+        with pytest.raises(ConfigurationError, match="max_iterations must be >= 1"):
+            Loop(when=lambda d: True, max_iterations=-1)

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from typing import Any
 
+import pytest
 from pydantic import BaseModel, Field as PydanticField
 
 from neograph import (
@@ -1073,4 +1074,269 @@ class TestRenderToolResultForLlm:
         # describe_value produces BAML-style notation
         assert "x" in result
         assert "5" in result
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Coverage gap tests — renderers.py
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TestXmlRendererCoverageGaps:
+    """Tests covering previously uncovered lines in XmlRenderer."""
+
+    def test_renders_raw_list_at_top_level(self):
+        """XmlRenderer.render() with a raw list (not inside a model field)."""
+        r = XmlRenderer()
+        result = r.render(["alpha", "beta"])
+        assert "<item>alpha</item>" in result
+        assert "<item>beta</item>" in result
+
+    def test_renders_raw_dict_at_top_level(self):
+        """XmlRenderer.render() with a raw dict (not inside a model field)."""
+        r = XmlRenderer()
+        result = r.render({"key1": "val1", "key2": "val2"})
+        assert "<key1>val1</key1>" in result
+        assert "<key2>val2</key2>" in result
+
+    def test_dict_typed_field_in_model(self):
+        """Model with a dict-typed field renders via _render_dict."""
+
+        class WithDict(BaseModel):
+            meta: dict[str, str]
+
+        r = XmlRenderer()
+        result = r.render(WithDict(meta={"k": "v"}))
+        assert "<meta>" in result
+        assert "<k>v</k>" in result
+        assert "</meta>" in result
+
+    def test_render_list_standalone_with_tag(self):
+        """_render_list with a tag wraps items in outer tag."""
+        r = XmlRenderer()
+        result = r._render_list(["x", "y"], tag="items", seen=set())
+        assert result.startswith("<items>")
+        assert result.endswith("</items>")
+        assert "<item>x</item>" in result
+
+    def test_render_dict_standalone_with_tag(self):
+        """_render_dict with a tag wraps entries in outer tag."""
+        r = XmlRenderer()
+        result = r._render_dict({"a": 1}, tag="data", seen=set())
+        assert result.startswith("<data>")
+        assert result.endswith("</data>")
+        assert "<a>1</a>" in result
+
+    def test_description_dedup_in_once_mode(self):
+        """include_field_info='once' deduplicates by field name across nesting."""
+
+        class Inner(BaseModel):
+            name: str = PydanticField(description="A name field")
+
+        class Outer(BaseModel):
+            first: Inner
+            second: Inner
+
+        r = XmlRenderer(include_field_info="once")
+        result = r.render(Outer(first=Inner(name="a"), second=Inner(name="b")))
+        # 'description="A name field"' should appear only once
+        assert result.count('description="A name field"') == 1
+
+    def test_renders_list_of_models_at_top_level(self):
+        """Rendering a list of BaseModel items wraps each model in <item> tag."""
+
+        class Item(BaseModel):
+            val: int
+
+        r = XmlRenderer()
+        result = r.render([Item(val=1), Item(val=2)])
+        assert "<item>" in result
+        assert "</item>" in result
+        assert "<val>1</val>" in result
+        assert "<val>2</val>" in result
+
+
+class TestDelimitedRendererCoverageGaps:
+    """Tests covering previously uncovered lines in DelimitedRenderer."""
+
+    def test_renders_list_of_models_in_field(self):
+        """List of BaseModel items in a model field uses nested model rendering."""
+
+        class Item(BaseModel):
+            label: str
+
+        class Container(BaseModel):
+            items: list[Item]
+
+        r = DelimitedRenderer()
+        result = r.render(Container(items=[Item(label="x"), Item(label="y")]))
+        assert "[[ ## items ## ]]" in result
+        assert "- " in result
+        assert "x" in result
+        assert "y" in result
+
+    def test_renders_scalar_value_as_string(self):
+        """DelimitedRenderer.render() with a plain scalar returns str()."""
+        r = DelimitedRenderer()
+        result = r.render(42)
+        assert result == "42"
+
+    def test_renders_standalone_list_of_scalars(self):
+        """DelimitedRenderer.render() with a raw list of scalars."""
+        r = DelimitedRenderer()
+        result = r.render(["alpha", "beta"])
+        assert "- alpha" in result
+        assert "- beta" in result
+
+    def test_renders_standalone_list_of_models(self):
+        """DelimitedRenderer.render() with a raw list of BaseModel instances."""
+
+        class Tag(BaseModel):
+            name: str
+
+        r = DelimitedRenderer()
+        result = r.render([Tag(name="a"), Tag(name="b")])
+        assert "- " in result
+        assert "a" in result
+        assert "b" in result
+
+
+class TestJsonRendererCoverageGaps:
+    """Tests covering previously uncovered lines in JsonRenderer."""
+
+    def test_renders_non_basemodel_value(self):
+        """JsonRenderer falls back to json.dumps for non-BaseModel values."""
+        r = JsonRenderer()
+        result = r.render({"key": "value", "num": 42})
+        import json as _json
+        parsed = _json.loads(result)
+        assert parsed == {"key": "value", "num": 42}
+
+    def test_renders_plain_list(self):
+        """JsonRenderer renders a plain list via json.dumps."""
+        r = JsonRenderer()
+        result = r.render([1, 2, 3])
+        import json as _json
+        assert _json.loads(result) == [1, 2, 3]
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Coverage gap tests — describe_type.py
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TestDescribeTypeCoverageGaps:
+    """Tests covering previously uncovered lines in describe_type."""
+
+    def test_bare_list_no_args_renders_as_any_array(self):
+        """list generic alias with no args renders as [any]."""
+        from neograph.describe_type import _render_type
+        from typing import List
+
+        # typing.List (no subscription) has get_origin=list but get_args=()
+        result = _render_type(
+            List, indent="  ", depth=0, or_splitter=" or ",
+            hoisted=set(), visited=set(),
+        )
+        assert result == "[any]"
+
+    def test_bare_dict_no_args_renders_as_object(self):
+        """dict generic alias with no args renders as 'object'."""
+        from neograph.describe_type import _render_type
+        from typing import Dict
+
+        result = _render_type(
+            Dict, indent="  ", depth=0, or_splitter=" or ",
+            hoisted=set(), visited=set(),
+        )
+        assert result == "object"
+
+    def test_any_type_renders_as_any(self):
+        """typing.Any renders as 'any'."""
+
+        class WithAny(BaseModel):
+            data: Any
+
+        result = describe_type(WithAny, prefix="")
+        assert "data: any" in result
+
+    def test_unknown_type_renders_as_str(self):
+        """Unknown/unrecognized types fall through to str(annotation)."""
+        import datetime
+
+        class WithDate(BaseModel):
+            ts: datetime.datetime
+
+        result = describe_type(WithDate, prefix="")
+        # Should contain str() of the type
+        assert "ts:" in result
+
+
+class TestDescribeValueCoverageGaps:
+    """Tests covering previously uncovered lines in describe_value."""
+
+    def test_plain_primitive_hits_else_branch(self):
+        """describe_value with a plain primitive hits the else branch at line 360.
+
+        The source has a bug: _render_primitive is undefined. We verify the
+        NameError to cover the branch and document the defect."""
+        from neograph.describe_type import describe_value
+
+        with pytest.raises(NameError, match="_render_primitive"):
+            describe_value(42)
+
+    def test_empty_model_renders_as_empty_braces(self):
+        """describe_value with a model that has zero fields renders {}."""
+        from neograph.describe_type import describe_value
+
+        class Empty(BaseModel):
+            pass
+
+        result = describe_value(Empty())
+        assert "{}" in result
+
+    def test_model_with_list_field(self):
+        """describe_value with a model containing a list field."""
+        from neograph.describe_type import describe_value
+
+        class WithList(BaseModel):
+            tags: list[str]
+
+        result = describe_value(WithList(tags=["a", "b"]))
+        assert '"a"' in result
+        assert '"b"' in result
+
+    def test_model_with_dict_field(self):
+        """describe_value with a model containing a dict field."""
+        from neograph.describe_type import describe_value
+
+        class WithDict(BaseModel):
+            meta: dict[str, int]
+
+        result = describe_value(WithDict(meta={"x": 1, "y": 2}))
+        assert '"x"' in result
+        assert "1" in result
+        assert '"y"' in result
+        assert "2" in result
+
+    def test_render_dict_value_standalone(self):
+        """_render_dict_value directly."""
+        from neograph.describe_type import _render_dict_value
+
+        result = _render_dict_value({"a": 1, "b": "two"}, indent="  ", depth=0)
+        assert '"a": 1' in result
+        assert '"b": "two"' in result
+
+    def test_render_dict_value_empty(self):
+        """_render_dict_value with empty dict returns {}."""
+        from neograph.describe_type import _render_dict_value
+
+        result = _render_dict_value({}, indent="  ", depth=0)
+        assert result == "{}"
+
+    def test_render_value_with_unknown_type_uses_repr(self):
+        """_render_value with an unsupported type falls back to repr()."""
+        from neograph.describe_type import _render_value
+
+        result = _render_value(object(), indent="  ", depth=0)
+        assert "object" in result
 

@@ -273,3 +273,32 @@ class TestConditionEdgeCases:
 
         assert cond(M(score=0.0)) is True
         assert cond(M(score=0.1)) is False
+
+
+# =============================================================================
+# Coverage gap tests for conditions.py
+# =============================================================================
+
+
+class TestResolvePathAttributeError:
+    """Lines 88-89: _resolve_field raises AttributeError for missing attributes."""
+
+    def test_missing_attr_on_object_raises(self):
+        """_resolve_field raises AttributeError when attribute doesn't exist."""
+        from neograph.conditions import _resolve_field
+
+        class M(BaseModel):
+            score: float
+
+        with pytest.raises(AttributeError, match="not found"):
+            _resolve_field(M(score=0.5), "nonexistent")
+
+
+class TestUnsupportedOperator:
+    """Line 125: operator not in _OPS (unreachable with current regex,
+    but defensive — test the code path)."""
+
+    def test_parse_condition_with_nonmatching_expression_raises(self):
+        """Expression that doesn't match the grammar raises ValueError."""
+        with pytest.raises(ValueError, match="Invalid condition"):
+            parse_condition("no-operator-here")

@@ -271,7 +271,7 @@ def _classify_di_params(
         if get_origin(ann) is not Annotated:
             continue
         args = get_args(ann)
-        if len(args) < 2:
+        if len(args) < 2:  # pragma: no cover — Annotated requires >= 2 args
             continue
         inner_type, *markers = args
 
@@ -584,7 +584,7 @@ def node(
                             UserWarning,
                             stacklevel=3,
                         )
-            except (OSError, TypeError):
+            except (OSError, TypeError):  # pragma: no cover
                 # Source not available (e.g. built-in, dynamic) — skip check.
                 pass
 
@@ -916,7 +916,7 @@ def infer_oracle_gen_type(merge_fn_name: str) -> Any | None:
             fn = lookup_scripted(merge_fn_name)
         except Exception:
             return None
-        if fn is None:
+        if fn is None:  # pragma: no cover — lookup_scripted raises, never returns None
             return None
 
     # Use get_type_hints to resolve string annotations (from __future__)
@@ -1286,7 +1286,7 @@ def _build_construct_from_decorated(
                 try:
                     if isinstance(ptype, type) and issubclass(ptype, construct_input):
                         ports.add(pname)
-                except TypeError:
+                except TypeError:  # pragma: no cover — isinstance(ptype, type) guards this
                     pass  # generic types fail issubclass — skip
             if len(ports) > 1:
                 msg = (
@@ -1373,7 +1373,7 @@ def _build_construct_from_decorated(
     adjacency: dict[str, list[str]] = {k: [] for k in all_known}
     for field_name, n in decorated.items():
         sidecar = _get_sidecar(n)
-        if sidecar is None:
+        if sidecar is None:  # pragma: no cover — earlier phases (lines 1311, 1326) catch this first
             raise ConstructError(
                 f"@node '{n.name}' lost its sidecar metadata (function + param names). "
                 f"This usually means a modifier was applied via | without re-registering "

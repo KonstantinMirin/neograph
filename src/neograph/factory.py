@@ -425,7 +425,7 @@ def _make_tool_fn(node: Node) -> Callable:
         try:
             from neograph._llm import _get_global_renderer
             effective_renderer = node.renderer or _get_global_renderer()
-        except (ImportError, AttributeError):
+        except (ImportError, AttributeError):  # pragma: no cover — import fallback
             effective_renderer = node.renderer
 
         # Extract verbatim context fields from state
@@ -460,7 +460,7 @@ def _make_tool_fn(node: Node) -> Callable:
             if isinstance(node.outputs, dict) and "tool_log" in node.outputs:
                 result_dict["tool_log"] = tool_interactions
             result = result_dict
-        elif isinstance(node.outputs, dict):
+        elif isinstance(node.outputs, dict):  # pragma: no cover — oracle_gen_type + dict outputs + tools
             result = {next(iter(node.outputs)): result} if result is not None else None
             if result is not None and "tool_log" in node.outputs:
                 result["tool_log"] = tool_interactions

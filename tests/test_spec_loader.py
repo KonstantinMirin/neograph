@@ -802,3 +802,140 @@ class TestLoadSpecErrors:
 
         with pytest.raises(ConfigurationError, match="nonexistent"):
             load_spec(spec)
+
+
+class TestLoadSpecJsonString:
+    """Line 85: JSON string input (not YAML, not dict)."""
+
+    def test_json_string_parses_and_builds(self):
+        """load_spec accepts a JSON string starting with {."""
+        import json as _json
+        from neograph.loader import load_spec
+        from neograph.spec_types import register_type
+
+        register_type("Draft", Draft)
+
+        def json_fn(input_data, config):
+            return Draft(content="from-json", score=1.0)
+
+        register_scripted("json_fn", json_fn)
+
+        spec_dict = {
+            "name": "json-pipeline",
+            "nodes": [
+                {"name": "gen", "mode": "scripted", "scripted_fn": "json_fn", "outputs": "Draft"}
+            ],
+            "pipeline": {"nodes": ["gen"]},
+        }
+
+        construct = load_spec(_json.dumps(spec_dict))
+        graph = compile(construct)
+        result = run(graph, input={"node_id": "test"})
+        assert result["gen"].content == "from-json"
+
+
+class TestLoadSpecInputsDict:
+    """Line 116, 158: explicit inputs in node spec."""
+
+    def test_explicit_inputs_dict_form(self):
+        """Node spec with explicit inputs={...} creates dict-form inputs (line 116)."""
+        from neograph.loader import load_spec
+        from neograph.spec_types import register_type
+
+        register_type("Draft", Draft)
+        register_type("ReviewResult", ReviewResult)
+
+        def seed_fn(input_data, config):
+            return Draft(content="seed", score=0.5)
+
+        def review_fn(input_data, config):
+            return ReviewResult(score=0.9, feedback="ok")
+
+        register_scripted("inp_seed", seed_fn)
+        register_scripted("inp_review", review_fn)
+
+        spec = {
+            "name": "inputs-test",
+            "nodes": [
+                {"name": "seed", "mode": "scripted", "scripted_fn": "inp_seed", "outputs": "Draft"},
+                {
+                    "name": "review",
+                    "mode": "scripted",
+                    "scripted_fn": "inp_review",
+                    "outputs": "ReviewResult",
+                    "inputs": {"seed": "Draft"},
+                },
+            ],
+            "pipeline": {"nodes": ["seed", "review"]},
+        }
+
+        construct = load_spec(spec)
+        graph = compile(construct)
+        result = run(graph, input={"node_id": "test"})
+        assert result["review"].score == 0.9
+
+
+class TestLoadSpecModifiers:
+    """Lines 237-263: _apply_modifiers for oracle/each/loop/operator."""
+
+    def test_each_modifier_from_spec(self):
+        """Each modifier in node spec creates Each-modified node."""
+        from neograph.loader import load_spec
+        from neograph.spec_types import register_type
+        from neograph.modifiers import Each as EachMod
+
+        register_type("Draft", Draft)
+
+        def gen_fn(input_data, config):
+            return Draft(content="items", score=1.0)
+
+        register_scripted("each_gen", gen_fn)
+
+        spec = {
+            "name": "each-test",
+            "nodes": [
+                {
+                    "name": "process",
+                    "mode": "scripted",
+                    "scripted_fn": "each_gen",
+                    "outputs": "Draft",
+                    "each": {"over": "upstream.items", "key": "label"},
+                },
+            ],
+            "pipeline": {"nodes": ["process"]},
+        }
+
+        construct = load_spec(spec)
+        process_node = construct.nodes[0]
+        assert process_node.has_modifier(EachMod)
+
+    def test_operator_modifier_from_spec(self):
+        """Operator modifier in node spec creates Operator-modified node."""
+        from neograph.loader import load_spec
+        from neograph.spec_types import register_type
+        from neograph.modifiers import Operator as OpMod
+
+        register_type("Draft", Draft)
+
+        def op_fn(input_data, config):
+            return Draft(content="op", score=1.0)
+
+        register_scripted("op_fn", op_fn)
+
+        spec = {
+            "name": "op-test",
+            "nodes": [
+                {
+                    "name": "check",
+                    "mode": "scripted",
+                    "scripted_fn": "op_fn",
+                    "outputs": "Draft",
+                    "operator": {"when": "needs_review"},
+                },
+            ],
+            "pipeline": {"nodes": ["check"]},
+        }
+
+        construct = load_spec(spec)
+        check_node = construct.nodes[0]
+        assert check_node.has_modifier(OpMod)

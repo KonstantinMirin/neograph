@@ -308,3 +308,26 @@ class TestLoadProjectTypes:
         # New schema is active
         Pong = lookup_type("Pong")
         assert "b" in Pong.model_fields
+
+
+class TestResolveFieldTypeUnknownSchema:
+    """Line 94: unknown JSON schema type falls back to Any."""
+
+    def test_unknown_json_schema_returns_any(self):
+        """A field with no recognized type/ref falls back to Any."""
+        from typing import Any
+        from neograph.spec_types import _resolve_field_type
+
+        result = _resolve_field_type({"description": "some field"})
+        assert result is Any
+
+    def test_ref_field_type_resolves(self):
+        """A field with $ref resolves to a registered type."""
+        from neograph.spec_types import _resolve_field_type
+
+        class Inner(BaseModel):
+            x: str
+
+        register_type("Inner", Inner)
+        result = _resolve_field_type({"$ref": "Inner"})
+        assert result is Inner
