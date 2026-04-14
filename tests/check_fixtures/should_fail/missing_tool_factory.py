@@ -1,4 +1,4 @@
-# CHECK_ERROR: tool 'ghost_tool'.*no factory
+# CHECK_ERROR: tool 'ghost_tool' has no registered factory
 from neograph import Construct, Node, Tool
 from neograph._llm import configure_llm
 

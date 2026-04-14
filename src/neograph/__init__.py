@@ -19,18 +19,9 @@ sub-constructs), see Node and Construct directly.
 """
 
 from neograph._llm import configure_llm, render_prompt
-from neograph.conditions import parse_condition
-from neograph.describe_type import describe_type, describe_value
-from neograph.loader import load_spec
 from neograph.compiler import compile, describe_graph
+from neograph.conditions import parse_condition
 from neograph.construct import Construct
-from neograph.errors import (
-    CompileError,
-    ConfigurationError,
-    ConstructError,
-    ExecutionError,
-    NeographError,
-)
 from neograph.decorators import (
     FromConfig,
     FromInput,
@@ -39,19 +30,29 @@ from neograph.decorators import (
     merge_fn,
     node,
 )
+from neograph.describe_type import describe_type, describe_value
+from neograph.errors import (
+    CompileError,
+    ConfigurationError,
+    ConstructError,
+    ExecutionError,
+    NeographError,
+)
+from neograph.factory import register_condition, register_scripted, register_tool_factory
 from neograph.forward import ForwardConstruct
 from neograph.lint import LintIssue, lint
-from neograph.factory import register_condition, register_scripted, register_tool_factory
-from neograph.modifiers import Operator, Oracle, Each, Loop
+from neograph.loader import load_spec
+from neograph.modifiers import Each, Loop, ModifierSet, Operator, Oracle
 from neograph.node import Node
-from neograph.spec_types import register_type, lookup_type
 from neograph.renderers import (
     DelimitedRenderer,
     JsonRenderer,
     Renderer,
     XmlRenderer,
+    render_input,
 )
 from neograph.runner import run
+from neograph.spec_types import lookup_type, register_type
 from neograph.tool import Tool, ToolInteraction, tool
 
 __all__ = [
@@ -93,14 +94,13 @@ __all__ = [
     "XmlRenderer",
     "DelimitedRenderer",
     "JsonRenderer",
+    "render_input",
     "register_scripted",
     "register_condition",
     "register_tool_factory",
     # Type registry (spec-based lookup)
     "register_type",
     "lookup_type",
-    # Condition evaluator
-    "parse_condition",
     # Spec loader
     "load_spec",
     # Lint
@@ -108,4 +108,4 @@ __all__ = [
     "LintIssue",
 ]
 
-__version__ = "0.2.0.dev0"
+__version__ = "0.4.0"

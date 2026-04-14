@@ -1,0 +1,4 @@
+# file: /Users/konst/projects/neograph/src/neograph/_dispatch.py
+# hypothesis_version: 6.151.12
+
+['_oracle_model', 'act', 'agent', 'configurable', 'scripted', 'think', 'tool_log']

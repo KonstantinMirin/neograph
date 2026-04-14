@@ -11,8 +11,8 @@ from dataclasses import dataclass
 from typing import Any
 
 from neograph.construct import Construct
-from neograph.decorators import _get_param_resolutions, get_merge_fn_metadata
-from neograph.modifiers import Oracle
+from neograph._sidecar import _get_param_res, get_merge_fn_metadata
+from neograph.di import DIBinding, DIKind
 from neograph.node import Node
 
 
@@ -25,6 +25,76 @@ class LintIssue:
     kind: str  # "from_input", "from_config", "from_input_model", "from_config_model"
     message: str
     required: bool = False
+
+
+def _check_binding(
+    node_label: str,
+    binding: DIBinding,
+    config: dict[str, Any] | None,
+    issues: list[LintIssue],
+) -> None:
+    """Check a single DI binding against config.
+
+    ``node_label`` is pre-formatted by the caller — node and merge_fn paths
+    use different naming conventions, so the caller supplies the label.
+    """
+    kind_str = binding.kind.value
+
+    if binding.kind in (DIKind.FROM_INPUT, DIKind.FROM_CONFIG):
+        if config is not None:
+            if binding.name not in config:
+                issues.append(LintIssue(
+                    node_name=node_label,
+                    param=binding.name,
+                    kind=kind_str,
+                    required=binding.required,
+                    message=(
+                        f"{node_label}: DI parameter '{binding.name}' "
+                        f"({kind_str}) not found in config"
+                    ),
+                ))
+        elif binding.required:
+            issues.append(LintIssue(
+                node_name=node_label,
+                param=binding.name,
+                kind=kind_str,
+                required=True,
+                message=(
+                    f"{node_label}: required DI parameter '{binding.name}' "
+                    f"({kind_str}) has no config to resolve from"
+                ),
+            ))
+
+    elif binding.kind in (DIKind.FROM_INPUT_MODEL, DIKind.FROM_CONFIG_MODEL):
+        model_cls: Any = binding.model_cls or binding.inner_type
+        required = binding.required
+        if config is not None:
+            for fname in model_cls.model_fields:
+                if fname not in config:
+                    issues.append(LintIssue(
+                        node_name=node_label,
+                        param=fname,
+                        kind=kind_str,
+                        required=required,
+                        message=(
+                            f"{node_label}: bundled model field "
+                            f"'{fname}' ({kind_str} via {model_cls.__name__}) "
+                            f"not found in config"
+                        ),
+                    ))
+        elif required:
+            for fname in model_cls.model_fields:
+                issues.append(LintIssue(
+                    node_name=node_label,
+                    param=fname,
+                    kind=kind_str,
+                    required=True,
+                    message=(
+                        f"{node_label}: required bundled model "
+                        f"field '{fname}' ({kind_str} via "
+                        f"{model_cls.__name__}) has no config"
+                    ),
+                ))
 
 
 def lint(
@@ -63,102 +133,19 @@ def _walk(
     if not isinstance(item, Node):
         return
 
-    param_res = _get_param_resolutions(item)
-    if not param_res:
-        return
+    param_res = _get_param_res(item)
+    # Don't return early — merge_fn DI check below doesn't depend on node param_res.
 
-    for pname, (kind, payload) in param_res.items():
-        if kind in ("from_input", "from_config"):
-            required = bool(payload)
-            if config is not None:
-                # Config provided — check the key exists
-                if pname not in config:
-                    issues.append(LintIssue(
-                        node_name=item.name,
-                        param=pname,
-                        kind=kind,
-                        required=required,
-                        message=(
-                            f"Node '{item.name}': DI parameter '{pname}' "
-                            f"({kind}) not found in config"
-                        ),
-                    ))
-            elif required:
-                # No config provided — only flag required params
-                issues.append(LintIssue(
-                    node_name=item.name,
-                    param=pname,
-                    kind=kind,
-                    required=True,
-                    message=(
-                        f"Node '{item.name}': required DI parameter '{pname}' "
-                        f"({kind}) has no config to resolve from"
-                    ),
-                ))
+    node_label = f"Node '{item.name}'"
+    for binding in (param_res or {}).values():
+        _check_binding(node_label, binding, config, issues)
 
-        elif kind in ("from_input_model", "from_config_model"):
-            model_cls, required = payload
-            if config is not None:
-                # Check each model field exists in config
-                for fname in model_cls.model_fields:
-                    if fname not in config:
-                        issues.append(LintIssue(
-                            node_name=item.name,
-                            param=fname,
-                            kind=kind,
-                            required=required,
-                            message=(
-                                f"Node '{item.name}': bundled model field "
-                                f"'{fname}' ({kind} via {model_cls.__name__}) "
-                                f"not found in config"
-                            ),
-                        ))
-            elif required:
-                for fname in model_cls.model_fields:
-                    issues.append(LintIssue(
-                        node_name=item.name,
-                        param=fname,
-                        kind=kind,
-                        required=True,
-                        message=(
-                            f"Node '{item.name}': required bundled model "
-                            f"field '{fname}' ({kind} via "
-                            f"{model_cls.__name__}) has no config"
-                        ),
-                    ))
-        # Skip 'constant' and 'upstream' kinds — not DI bindings
-
-    # Check merge_fn DI bindings for Oracle nodes (neograph-f70z).
-    oracle = item.get_modifier(Oracle)
+    # Check merge_fn DI bindings for Oracle nodes.
+    oracle = item.modifier_set.oracle
     if oracle is not None and isinstance(oracle.merge_fn, str):
         meta = get_merge_fn_metadata(oracle.merge_fn)
         if meta is not None:
             _, merge_param_res = meta
-            for pname, (kind, payload) in merge_param_res.items():
-                if kind in ("from_input", "from_config"):
-                    required = bool(payload)
-                    if config is not None:
-                        if pname not in config:
-                            issues.append(LintIssue(
-                                node_name=f"{item.name} merge_fn '{oracle.merge_fn}'",
-                                param=pname,
-                                kind=kind,
-                                required=required,
-                                message=(
-                                    f"merge_fn '{oracle.merge_fn}' on node "
-                                    f"'{item.name}': DI parameter '{pname}' "
-                                    f"({kind}) not found in config"
-                                ),
-                            ))
-                    elif required:
-                        issues.append(LintIssue(
-                            node_name=f"{item.name} merge_fn '{oracle.merge_fn}'",
-                            param=pname,
-                            kind=kind,
-                            required=True,
-                            message=(
-                                f"merge_fn '{oracle.merge_fn}' on node "
-                                f"'{item.name}': required DI parameter "
-                                f"'{pname}' ({kind}) has no config"
-                            ),
-                        ))
+            merge_label = f"{item.name} merge_fn '{oracle.merge_fn}'"
+            for binding in merge_param_res.values():
+                _check_binding(merge_label, binding, config, issues)

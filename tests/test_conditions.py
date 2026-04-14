@@ -9,7 +9,6 @@ from pydantic import BaseModel
 
 from neograph.conditions import parse_condition
 
-
 # ---- test models -------------------------------------------------------
 
 class Score(BaseModel):

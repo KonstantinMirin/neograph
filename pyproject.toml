@@ -1,6 +1,6 @@
 [project]
 name = "neograph"
-version = "0.3.0"
+version = "0.4.0"
 description = "Write Python. Get a production LLM graph. Declarative LLM graph compiler that compiles @node-decorated functions into LangGraph."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -27,6 +27,7 @@ dependencies = [
     "structlog>=23.0",
     "jsonschema>=4.26.0",
     "json-repair>=0.30",
+    "pyyaml>=6.0",
 ]
 
 [project.optional-dependencies]
@@ -78,7 +79,16 @@ target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E", "W", "F", "I", "B", "C4", "UP"]
-ignore = ["E501"]
+ignore = [
+    "E501",   # line too long (handled by formatter)
+    "E402",   # module-level import not at top (deferred imports for circular dep avoidance)
+    "E741",   # ambiguous variable name (n, l are conventional in this codebase)
+    "F841",   # local variable assigned but never used (common in side-effect tests)
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*.py" = ["B011"]  # assert False is used in structural guards
+"src/neograph/__init__.py" = ["F401"]  # re-exports
 
 [tool.ruff.lint.isort]
 known-first-party = ["neograph"]
@@ -95,5 +105,6 @@ asyncio_mode = "auto"
 
 [dependency-groups]
 dev = [
+    "hypothesis>=6.151.12",
     "pytest-cov>=7.1.0",
 ]

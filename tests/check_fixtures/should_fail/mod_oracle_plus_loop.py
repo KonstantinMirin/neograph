@@ -1,9 +1,10 @@
 # CHECK_ERROR: Cannot combine Oracle and Loop
 # Oracle + Loop on the same node is forbidden (mutual exclusion).
-from neograph import Node
-from neograph.modifiers import Oracle, Loop
-from neograph.factory import register_scripted
 from pydantic import BaseModel
+
+from neograph import Node
+from neograph.factory import register_scripted
+from neograph.modifiers import Loop, Oracle
 
 
 class Draft(BaseModel, frozen=True):

@@ -6,15 +6,13 @@ test_forward_construct_branching.py (8 classes).
 
 from __future__ import annotations
 
-from typing import Any
-
 import pytest
 from pydantic import BaseModel
 
 from neograph import Construct, Each, ForwardConstruct, Node, compile, run
 from neograph.factory import register_scripted
 from tests.fakes import StructuredFake, configure_fake_llm
-from tests.schemas import RawText, Claims, ClassifiedClaims, Clusters, MatchResult
+from tests.schemas import Claims, ClassifiedClaims, Clusters, MatchResult, RawText
 
 
 class Confidence(BaseModel, frozen=True):
@@ -292,7 +290,7 @@ class TestProxyAttributeAccess:
 
         proxy = _Proxy(source_node=None, name="x")
         with pytest.raises(AttributeError):
-            proxy._neo_nonexistent
+            _ = proxy._neo_nonexistent
 
     def test_condition_proxy_returned_when_less_than_used(self):
         """proxy < 0.7 returns a _ConditionProxy, not a plain bool."""
@@ -331,7 +329,7 @@ class TestProxyAttributeAccess:
 
     def test_type_error_raised_when_condition_used_as_bool_outside_tracing(self):
         """Using condition in boolean context outside tracing raises TypeError."""
-        from neograph.forward import _ConditionProxy, _Proxy
+        from neograph.forward import _Proxy
 
         proxy = _Proxy(source_node=None, name="x")
         cond = proxy < 0.5
@@ -435,8 +433,7 @@ class TestIfBranchSimple:
         """Pipeline with if/else compiles to a LangGraph graph."""
         Pipeline = self._make_branching_pipeline()
         pipeline = Pipeline()
-        graph = compile(pipeline)
-        assert graph is not None
+        compile(pipeline)  # succeeds = test passes; raises = test fails
 
     def test_high_path_runs_when_condition_true(self):
         """When condition is true at runtime, high_path runs."""
@@ -551,7 +548,7 @@ class TestBranchCountLimit:
 
         tracer = _Tracer()
         # Simulate 9 branch recordings
-        from neograph.forward import _BranchPoint, _ConditionProxy, _Proxy
+        from neograph.forward import _ConditionProxy, _Proxy
 
         proxy = _Proxy(source_node=None, name="val", tracer=tracer)
         for i in range(8):
@@ -587,7 +584,7 @@ class TestProxyAttributeChains:
 
     def test_deep_path_captured_when_multi_level_chain_compared(self):
         """result.items.first.severity < 3 captures deep chain."""
-        from neograph.forward import _ConditionProxy, _Proxy
+        from neograph.forward import _Proxy
 
         proxy = _Proxy(source_node=None, name="out_of_classify")
         cond = proxy.items.first.severity < 3
@@ -635,8 +632,9 @@ class TestForwardConstructLoops:
                 return self.report(clusters)
 
         pipeline = LoopPipeline()
-        graph = compile(pipeline)
-        assert graph is not None
+        verify_node = next(n for n in pipeline.nodes if n.name == "loop-verify")
+        assert verify_node.has_modifier(Each), "for-loop should trace to Each modifier"
+        compile(pipeline)  # also confirm it compiles cleanly
 
     def test_step_deduped_when_for_loop_over_range(self):
         """for i in range(3): self.step(x) traces step once (dedup). No Each."""
@@ -649,7 +647,7 @@ class TestForwardConstructLoops:
             step = Node.scripted("range-step", fn="range_step", outputs=RawText)
 
             def forward(self, topic):
-                for i in range(3):
+                for _ in range(3):
                     self.step(topic)
                 return topic
 
@@ -872,9 +870,8 @@ class TestForwardConstructExceptions:
         )
         assert "te-final" in node_names, "post-try/except nodes must be traced"
 
-        # The pipeline should still compile successfully
-        graph = compile(pipeline)
-        assert graph is not None
+        # The pipeline should still compile despite dead except-body nodes
+        compile(pipeline)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1247,17 +1244,16 @@ class TestLoopBodyValidation:
 # Coverage gap tests for forward.py
 # =============================================================================
 
+from neograph.errors import ConstructError
 from neograph.forward import (
-    _BranchNode,
     _BranchMeta,
+    _BranchNode,
     _ConditionProxy,
     _ConditionSpec,
+    _ForwardSelf,
     _Proxy,
     _Tracer,
-    _ForwardSelf,
-    ForwardConstruct,
 )
-from neograph.errors import ConstructError
 from neograph.modifiers import Loop
 
 
@@ -1406,7 +1402,7 @@ class TestLoopIterationInputInference:
 
     def test_loop_empty_body_raises(self):
         """self.loop() with empty body raises ConstructError (line 544-545)."""
-        from neograph.forward import _LoopCall, _NodeCall
+        from neograph.forward import _LoopCall
         tracer = _Tracer()
         lc = _LoopCall(
             body=[],

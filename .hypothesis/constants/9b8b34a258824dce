@@ -1,0 +1,4 @@
+# file: /Users/konst/projects/neograph/src/neograph/__main__.py
+# hypothesis_version: 6.151.12
+
+['--config', '--setup', '--version', '.py', '/', 'ERROR', 'WARN', '\\', '__main__', 'check', 'command', 'get_check_config', 'neograph', 'target', 'version']

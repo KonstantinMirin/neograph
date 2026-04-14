@@ -13,11 +13,9 @@ import sys
 import textwrap
 
 import pytest
-
 from pydantic import BaseModel
 
-from neograph.__main__ import _import_module, _discover_constructs, _load_config, cmd_check, main
-
+from neograph.__main__ import _discover_constructs, _import_module, _load_config, cmd_check, main
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Schemas / helpers
@@ -237,11 +235,9 @@ class TestCmdCheck:
         """A construct whose compile() raises CompileError is reported as FAIL.
         We achieve this by using cmd_check with a module that has a patched
         _discover_constructs result."""
-        from neograph.errors import CompileError, ConstructError
-        from neograph.construct import Construct
         from neograph import Node, register_scripted
-        from neograph.compiler import compile as real_compile
-        from neograph.lint import lint
+        from neograph.construct import Construct
+        from neograph.errors import CompileError, ConstructError
 
         register_scripted("ce_fn2", lambda _i, _c: Out(x="ok"))
         a = Node.scripted("a", fn="ce_fn2", outputs=Out)
@@ -272,67 +268,45 @@ class TestCmdCheck:
         assert "[ERROR]" in errors[1]
         assert "[WARN]" in errors[2]
 
-    def test_compile_error_via_file(self, tmp_path, capsys):
+    def test_compile_error_via_file(self, tmp_path, capsys, monkeypatch):
         """A construct that fails compile is shown as FAIL in cmd_check output."""
-        # Create a pipeline file where compile() will raise CompileError
-        # by having an Operator node without a checkpointer.
-        # Actually, let's use the monkeypatch approach more carefully.
-        # Since cmd_check locally imports compile, we need to intercept
-        # at the module level after import.
         import types
+
         import neograph.__main__ as cli_mod
+        import neograph.compiler
         from neograph import Node, register_scripted
         from neograph.construct import Construct
         from neograph.errors import CompileError
 
         register_scripted("cef_fn", lambda _i, _c: Out(x="ok"))
 
-        # Create a fake module with a construct
         fake_mod = types.ModuleType("fake_compile_err")
         a = Node.scripted("a", fn="cef_fn", outputs=Out)
         fake_mod.pipe = Construct("pipe", nodes=[a])
 
-        # Patch _import_module and compile to simulate the error
-        original_import = cli_mod._import_module
+        monkeypatch.setattr(cli_mod, "_import_module", lambda target: fake_mod)
+        monkeypatch.setattr(
+            neograph.compiler, "compile",
+            lambda construct: (_ for _ in ()).throw(CompileError("test error")),
+        )
 
-        def patched_import(target):
-            return fake_mod
-
-        original_cmd_check = cli_mod.cmd_check
-
-        # Inline patching
-        cli_mod._import_module = patched_import
-        try:
-            # Also patch compile inside the cmd_check function
-            import neograph.compiler
-            orig_compile = neograph.compiler.compile
-
-            def bad_compile(construct):
-                raise CompileError("test error")
-
-            neograph.compiler.compile = bad_compile
-            try:
-                args = argparse.Namespace(target="fake.py", config=None, setup=None)
-                result = cmd_check(args)
-            finally:
-                neograph.compiler.compile = orig_compile
-        finally:
-            cli_mod._import_module = original_import
+        args = argparse.Namespace(target="fake.py", config=None, setup=None)
+        result = cmd_check(args)
 
         captured = capsys.readouterr()
         assert result == 1
         assert "FAIL" in captured.out
         assert "compile:" in captured.out
 
-    def test_lint_issues_displayed(self, tmp_path, capsys):
+    def test_lint_issues_displayed(self, tmp_path, capsys, monkeypatch):
         """Lint issues are shown with ERROR/WARN severity."""
-        import types
         import importlib
+        import types
+
         import neograph.__main__ as cli_mod
         from neograph import Node, register_scripted
         from neograph.construct import Construct
 
-        # Import the actual lint MODULE (not the function re-exported by __init__)
         lint_module = importlib.import_module("neograph.lint")
         from neograph.lint import LintIssue
 
@@ -342,28 +316,16 @@ class TestCmdCheck:
         a = Node.scripted("a", fn="li_fn", outputs=Out)
         fake_mod.pipe = Construct("pipe", nodes=[a])
 
-        original_import = cli_mod._import_module
-        orig_lint = lint_module.lint
+        monkeypatch.setattr(cli_mod, "_import_module", lambda target: fake_mod)
+        monkeypatch.setattr(lint_module, "lint", lambda construct, *, config=None: [
+            LintIssue(node_name="a", param="p", kind="from_input",
+                      message="missing param p", required=True),
+            LintIssue(node_name="a", param="q", kind="from_config",
+                      message="missing param q", required=False),
+        ])
 
-        def patched_import(target):
-            return fake_mod
-
-        def fake_lint(construct, *, config=None):
-            return [
-                LintIssue(node_name="a", param="p", kind="from_input",
-                          message="missing param p", required=True),
-                LintIssue(node_name="a", param="q", kind="from_config",
-                          message="missing param q", required=False),
-            ]
-
-        cli_mod._import_module = patched_import
-        lint_module.lint = fake_lint
-        try:
-            args = argparse.Namespace(target="fake.py", config=None, setup=None)
-            result = cmd_check(args)
-        finally:
-            lint_module.lint = orig_lint
-            cli_mod._import_module = original_import
+        args = argparse.Namespace(target="fake.py", config=None, setup=None)
+        result = cmd_check(args)
 
         captured = capsys.readouterr()
         assert result == 1

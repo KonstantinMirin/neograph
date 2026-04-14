@@ -4,19 +4,38 @@ reducer edge cases, dict-form output state/factory, epic acceptance.
 
 from __future__ import annotations
 
-from typing import Annotated, Any
+from typing import Any
 
 import pytest
 from pydantic import BaseModel
 
 from neograph import (
-    Construct, ConstructError, Node, Each, Oracle, Operator, Tool, ToolInteraction,
-    compile, construct_from_functions, construct_from_module,
-    merge_fn, node, run, tool,
-    CompileError, ConfigurationError,
+    CompileError,
+    Construct,
+    ConstructError,
+    Each,
+    Node,
+    Operator,
+    Oracle,
+    Tool,
+    ToolInteraction,
+    compile,
+    construct_from_functions,
+    construct_from_module,
+    merge_fn,
+    node,
+    run,
 )
-from neograph.factory import register_scripted
-from tests.schemas import RawText, Claims, ClassifiedClaims, ClusterGroup, Clusters, MatchResult, MergedResult, ValidationResult
+from neograph.factory import register_condition, register_scripted
+from tests.schemas import (
+    Claims,
+    ClusterGroup,
+    Clusters,
+    MatchResult,
+    MergedResult,
+    RawText,
+    ValidationResult,
+)
 
 
 class TestSubgraph:
@@ -57,7 +76,7 @@ class TestSubgraph:
         result = run(graph, input={"node_id": "test-001"})
 
         # Sub-construct output surfaces under its name
-        assert result["enrich"] is not None
+        assert isinstance(result["enrich"], EnrichOutput)
         assert len(result["enrich"].scored) == 2
         assert result["enrich"].scored[0]["score"] == "high"
 
@@ -130,7 +149,7 @@ class TestSubgraph:
         from neograph.factory import register_scripted
 
         register_scripted("parent_prep", lambda input_data, config: Claims(items=["topic"]))
-        register_scripted("sub_gen", lambda input_data, config: RawText(text=f"variant"))
+        register_scripted("sub_gen", lambda input_data, config: RawText(text="variant"))
 
         def sub_merge(variants, config):
             return RawText(text=f"merged {len(variants)} variants")
@@ -170,9 +189,10 @@ class TestSubgraph:
         register_scripted("sub_verify", lambda input_data, config: MatchResult(
             cluster_label=input_data.label, matched=["ok"],
         ))
-        register_scripted("sub_collect", lambda input_data, config: RawText(
-            text=f"verified {len(input_data)} clusters" if isinstance(input_data, dict) else "verified"
-        ))
+        def _sub_collect(input_data, config):
+            assert isinstance(input_data, dict), f"Expected dict[str, MatchResult] from Each, got {type(input_data)}"
+            return RawText(text=f"verified {len(input_data)} clusters")
+        register_scripted("sub_collect", _sub_collect)
 
         sub = Construct(
             "verify-sub",
@@ -181,7 +201,7 @@ class TestSubgraph:
             nodes=[
                 Node.scripted("verify", fn="sub_verify", inputs=ClusterGroup, outputs=MatchResult)
                 | Each(over="neo_subgraph_input.groups", key="label"),
-                Node.scripted("collect", fn="sub_collect", outputs=RawText),
+                Node.scripted("collect", fn="sub_collect", inputs={"verify": dict}, outputs=RawText),
             ],
         )
 
@@ -192,7 +212,7 @@ class TestSubgraph:
         graph = compile(parent)
         result = run(graph, input={"node_id": "test-001"})
 
-        assert result["verify_sub"] is not None
+        assert isinstance(result["verify_sub"], RawText)
         assert "verified" in result["verify_sub"].text
 
     def test_output_bubbles_when_two_levels_deep(self):
@@ -318,8 +338,64 @@ class TestSubgraph:
             f"Expected {{reason, fast}}, got {seen_models}"
         )
         # Merged output surfaces under sub_a's name
-        assert result["sub_a"] is not None
+        assert isinstance(result["sub_a"], RawText)
         assert "from-reason" in result["sub_a"].text or "from-fast" in result["sub_a"].text
+
+    def test_oracle_gen_id_propagates_to_sub_construct(self):
+        """make_subgraph_fn forwards neo_oracle_gen_id (not just neo_oracle_model).
+
+        neograph-833d: The inline Oracle config block in make_subgraph_fn only
+        forwarded neo_oracle_model but not neo_oracle_gen_id. Sub-constructs
+        under Oracle missed the generator ID. The fix is to use the shared
+        _inject_oracle_config() helper which forwards both.
+        """
+        from neograph.factory import register_scripted
+
+        seen_gen_ids: list[str | None] = []
+
+        # Inner node: captures _generator_id from config
+        def inner_capture_gen_id(input_data, config):
+            gen_id = config.get("configurable", {}).get("_generator_id")
+            seen_gen_ids.append(gen_id)
+            return RawText(text=f"gen-{gen_id}")
+
+        register_scripted("inner_capture_gen_id_833d", inner_capture_gen_id)
+
+        def merge_gen_id(variants, config):
+            return RawText(text=" | ".join(v.text for v in variants))
+
+        register_scripted("merge_gen_id_833d", merge_gen_id)
+
+        sub = Construct(
+            "sub-833d",
+            input=Claims,
+            output=RawText,
+            nodes=[
+                Node.scripted(
+                    "capture", fn="inner_capture_gen_id_833d",
+                    inputs=Claims, outputs=RawText,
+                ),
+            ],
+        ) | Oracle(models=["reason", "fast"], merge_fn="merge_gen_id_833d")
+
+        register_scripted(
+            "seed_833d", lambda input_data, config: Claims(items=["start"]),
+        )
+        parent = Construct("parent-833d", nodes=[
+            Node.scripted("seed", fn="seed_833d", outputs=Claims),
+            sub,
+        ])
+        graph = compile(parent)
+        result = run(graph, input={"node_id": "gen-id-test"})
+
+        # Each Oracle variant must have forwarded a distinct generator ID
+        assert len(seen_gen_ids) == 2, (
+            f"Expected 2 inner calls, got {len(seen_gen_ids)}"
+        )
+        # Generator IDs should not be None — that's the bug
+        assert all(isinstance(gid, str) and gid for gid in seen_gen_ids), (
+            f"Expected non-empty string generator IDs, got {seen_gen_ids}"
+        )
 
     def test_both_outputs_surface_when_two_sub_constructs_in_parent(self):
         """Two sub-constructs in the same parent pipeline."""
@@ -589,9 +665,9 @@ class TestDictOutputsFactory:
 
     def test_per_key_state_written_when_scripted_dict_outputs(self):
         """Scripted node with dict outputs writes each key to its state field."""
-        from neograph import node, construct_from_module, compile, run
-        from neograph.factory import register_scripted
         import types
+
+        from neograph import compile, construct_from_module, node, run
 
         mod = types.ModuleType("test_dict_out_mod")
 
@@ -608,8 +684,9 @@ class TestDictOutputsFactory:
 
     def test_node_name_field_written_when_single_type_at_runtime(self):
         """Single-type outputs still writes to {node_name} at runtime."""
-        from neograph import node, construct_from_module, compile, run
         import types
+
+        from neograph import compile, construct_from_module, node, run
 
         mod = types.ModuleType("test_single_out_mod")
 
@@ -751,7 +828,7 @@ class TestNodeInputsEpicAcceptance:
     def test_fanout_and_upstream_coexist_when_mixed_in_one_node(self):
         """@node with BOTH upstream params AND a fan-out param (Each)
         runs end-to-end — the critical path for kqd.8 unification."""
-        from neograph import compile, run, node
+        from neograph import compile, node, run
         from neograph.decorators import construct_from_functions
 
         @node(outputs=RawText)
@@ -789,7 +866,7 @@ class TestNodeInputsEpicAcceptance:
 
     def test_attach_scripted_raw_fn_absent_from_module(self):
         """_attach_scripted_raw_fn no longer exists — all scripted @node
-        routes through register_scripted + _make_scripted_wrapper."""
+        routes through register_scripted + ScriptedDispatch."""
         import neograph.decorators as dec
         assert not hasattr(dec, "_attach_scripted_raw_fn"), (
             "_attach_scripted_raw_fn still exists — kqd.8 is incomplete"
@@ -809,11 +886,14 @@ class TestNodeInputsEpicAcceptance:
         def consume(produce: Claims) -> MergedResult:
             return MergedResult(final_text=produce.items[0])
 
-        construct_from_functions("raw-fn-check", [produce, consume])
+        pipeline = construct_from_functions("raw-fn-check", [produce, consume])
         assert produce.raw_fn is None, "scripted @node should not set raw_fn"
         assert consume.raw_fn is None, "scripted @node should not set raw_fn"
-        assert produce.scripted_fn is not None
-        assert consume.scripted_fn is not None
+        # After assembly, the Construct's nodes have scripted_fn set (via
+        # model_copy, not mutation of the originals).
+        assembled = {n.name: n for n in pipeline.nodes if isinstance(n, Node)}
+        assert isinstance(assembled["produce"].scripted_fn, str), "scripted_fn should be a registry key string"
+        assert isinstance(assembled["consume"].scripted_fn, str), "scripted_fn should be a registry key string"
 
     def test_fan_in_produces_result_when_programmatic_node_pipe(self):
         """Programmatic Node(inputs={...}) + modifier pipe works end-to-end."""
@@ -1034,7 +1114,8 @@ class TestNodeSubConstruct:
         # With dict-form inputs, _extract_input returns a dict. The scripted
         # fn must unwrap it.
         def parity_score_fn(_in, _cfg):
-            claim = _in["neo_subgraph_input"] if isinstance(_in, dict) else _in
+            assert isinstance(_in, dict), f"Expected dict with neo_subgraph_input key, got {type(_in)}"
+            claim = _in["neo_subgraph_input"]
             return ClaimResult(claim_id=claim.claim_id, disposition="scored")
 
         register_scripted("parity_score", parity_score_fn)
@@ -1240,7 +1321,7 @@ class TestPortParamErrors:
         def ambiguous(first: VerifyClaim, second: VerifyClaim) -> ClaimResult:
             return ClaimResult(claim_id=first.claim_id, disposition="ok")
 
-        with pytest.raises(ConstructError, match="ambiguous.*port"):
+        with pytest.raises(ConstructError, match="parameters match construct input type"):
             construct_from_functions(
                 "bad", [ambiguous], input=VerifyClaim, output=ClaimResult,
             )
@@ -1282,10 +1363,10 @@ class TestMixedNodeAndConstruct:
         register_scripted("dqe_explore", lambda _in, _cfg: ExplorationResult(
             evidence=["e1"], summary="found",
         ))
-        register_scripted("dqe_score", lambda _in, _cfg: ClaimVerdict(
-            claim_id=_in["explore"].claim_id if isinstance(_in, dict) else "?",
-            disposition="confirmed",
-        ))
+        def _dqe_score(_in, _cfg):
+            assert isinstance(_in, ExplorationResult), f"Expected ExplorationResult, got {type(_in)}"
+            return ClaimVerdict(claim_id="scored", disposition="confirmed")
+        register_scripted("dqe_score", _dqe_score)
         verify_sub = Construct(
             "verify", input=VerifyClaim, output=ClaimVerdict,
             nodes=[
@@ -1316,11 +1397,13 @@ class TestMixedNodeAndConstruct:
 
     def test_construct_from_functions_rejects_construct_without_output(self):
         """Construct items must have output declared."""
-        bad_sub = Construct("bad", input=VerifyClaim, nodes=[])
-
         @node(outputs=VerifyClaim)
         def seed() -> VerifyClaim:
             return VerifyClaim(claim_id="x", text="x")
+
+        # Construct with nodes but no output declared
+        inner_node = Node.scripted("inner", fn="noop", inputs=VerifyClaim, outputs=VerifyClaim)
+        bad_sub = Construct("bad", input=VerifyClaim, nodes=[inner_node])
 
         with pytest.raises(ConstructError, match="output"):
             construct_from_functions("fail", [seed, bad_sub])
@@ -1468,7 +1551,7 @@ class TestMixedNodeAndConstruct:
         result = run(graph, input={"node_id": "pq4"})
 
         # The critical assertion: merge ran, flatten got merged result (not None/empty)
-        assert result["flatten"] is not None
+        assert isinstance(result["flatten"], RawText)
         assert "got 4 items" in result["flatten"].text  # 1 "merged-3v" + 3 "variant-item"
         assert result["decompose"].items[0] == "merged-3v"
 
@@ -1639,7 +1722,6 @@ class TestGatherProduceSubConstruct:
 
     def _setup_fakes(self, *, capture_prompt=None):
         """Wire up tier-based fakes: 'research' → ReActFake, 'judge' → StructuredFakeWithRaw."""
-        from neograph import ToolInteraction
         from neograph.factory import register_tool_factory
         from tests.fakes import FakeTool, ReActFake, StructuredFakeWithRaw, configure_fake_llm
 
@@ -1666,7 +1748,7 @@ class TestGatherProduceSubConstruct:
 
     def _build_sub_construct(self):
         """Build the explore→score sub-construct from @node functions."""
-        from neograph import Tool, ToolInteraction, node, construct_from_functions
+        from neograph import Tool, ToolInteraction, construct_from_functions, node
 
         @node(
             mode="agent",
@@ -1706,7 +1788,6 @@ class TestGatherProduceSubConstruct:
         result = run(graph, input={"node_id": "dp5-test"})
 
         # Sub-construct output surfaces
-        assert result["verify"] is not None
         assert isinstance(result["verify"], ClaimVerdict)
         assert result["verify"].disposition == "confirmed"
         # No framework internals leak
@@ -1755,7 +1836,7 @@ class TestGatherProduceSubConstruct:
         self._setup_fakes()
 
         # Need fresh @node definitions for this test (avoid sidecar collisions)
-        from neograph import Tool, ToolInteraction, node, construct_from_functions
+        from neograph import Tool, ToolInteraction, construct_from_functions, node
 
         @node(
             mode="agent",
@@ -1801,7 +1882,7 @@ class TestGatherProduceSubConstruct:
         """Gather node with dict outputs works inside a sub-construct (base case)."""
         self._setup_fakes()
 
-        from neograph import Tool, ToolInteraction, node, construct_from_functions
+        from neograph import Tool, ToolInteraction, construct_from_functions, node
 
         @node(
             mode="agent",
@@ -1827,7 +1908,6 @@ class TestGatherProduceSubConstruct:
         graph = compile(parent)
         result = run(graph, input={"node_id": "dp5-base"})
 
-        assert result["explore_only"] is not None
         assert isinstance(result["explore_only"], ExplorationResult)
         assert result["explore_only"].evidence == ["auth.py:42"]
 
@@ -1835,10 +1915,11 @@ class TestGatherProduceSubConstruct:
         """Typed tool result flows from gather node through sub-construct to
         downstream produce node's prompt compiler. E2E: compile + run.
         neograph-uihu: the downstream sees typed_result, not just str."""
+        from pydantic import BaseModel
+
         from neograph import ToolInteraction
         from neograph.factory import register_tool_factory
         from tests.fakes import ReActFake, StructuredFakeWithRaw, configure_fake_llm
-        from pydantic import BaseModel
 
         class EvidenceHit(BaseModel, frozen=True):
             ref: str
@@ -1901,8 +1982,7 @@ class TestGatherProduceSubConstruct:
         assert "explore_tool_log" in score_data
         tool_log = score_data["explore_tool_log"]
         assert len(tool_log) >= 1
-        assert tool_log[0].typed_result is not None, "typed_result should not be None"
-        assert isinstance(tool_log[0].typed_result, EvidenceHit)
+        assert isinstance(tool_log[0].typed_result, EvidenceHit), "typed_result should be EvidenceHit"
         assert tool_log[0].typed_result.ref == "auth.py:42"
         assert tool_log[0].typed_result.confidence == 0.9
 
@@ -1911,15 +1991,7 @@ class TestGatherProduceSubConstruct:
 # RENDERERS — XmlRenderer, DelimitedRenderer, JsonRenderer
 # ═══════════════════════════════════════════════════════════════════════════
 
-from pydantic import Field as PydanticField
 
-from neograph.renderers import (
-    DelimitedRenderer,
-    JsonRenderer,
-    Renderer,
-    XmlRenderer,
-    render_input,
-)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1928,14 +2000,13 @@ from neograph.renderers import (
 
 
 class TestConstructPropagationTypeErrors:
-    """Lines 98-101, 108-109: llm_config/renderer propagation on frozen nodes."""
+    """Propagation uses model_copy — works on frozen children too."""
 
-    def test_llm_config_propagation_skips_frozen_children(self):
-        """When a child node is frozen (llm_config set fails),
-        Construct init should not raise (lines 98-101)."""
-        from neograph import Node, Construct
+    def test_llm_config_propagation_works_on_frozen_children(self):
+        """model_copy creates a new instance, so even frozen children
+        get the merged config (previously silently skipped)."""
+        from neograph import Construct
 
-        # Use a frozen Pydantic model as a child that has llm_config
         class FrozenChild(BaseModel, frozen=True):
             """Fake node-like object with frozen llm_config."""
             name: str = "frozen"
@@ -1952,15 +2023,14 @@ class TestConstructPropagationTypeErrors:
                 return None
 
         child = FrozenChild()
-        # Construct with llm_config tries to set item.llm_config = merged
-        # but FrozenChild is frozen, so the TypeError is caught
         c = Construct("test", nodes=[child], llm_config={"output_strategy": "json_mode"})
-        # The propagation was skipped, so child still has empty llm_config
-        assert c.nodes[0].llm_config == {}
+        # model_copy produces a new frozen instance with the merged config
+        assert c.nodes[0].llm_config == {"output_strategy": "json_mode"}
 
-    def test_renderer_propagation_skips_frozen_children(self):
-        """When a child node is frozen, renderer propagation is skipped (lines 108-109)."""
-        from neograph import Node, Construct
+    def test_renderer_propagation_works_on_frozen_children(self):
+        """model_copy creates a new instance, so renderer propagates
+        to frozen children (previously silently skipped)."""
+        from neograph import Construct
 
         class FrozenChild(BaseModel, frozen=True):
             """Fake node-like object with frozen renderer."""
@@ -1981,12 +2051,12 @@ class TestConstructPropagationTypeErrors:
         child = FrozenChild()
         sentinel = object()
         c = Construct("test", nodes=[child], renderer=sentinel)
-        # Propagation was skipped, child still has None renderer
-        assert c.nodes[0].renderer is None
+        # model_copy produces a new frozen instance with the renderer
+        assert c.nodes[0].renderer is sentinel
 
     def test_renderer_propagation_to_child_nodes(self):
         """Renderer is propagated to child nodes that don't have their own."""
-        from neograph import Node, Construct
+        from neograph import Construct, Node
 
         a = Node.scripted("a", fn="f", outputs=RawText)
         sentinel = object()
@@ -2000,5 +2070,216 @@ class TestConstructPropagationTypeErrors:
 # skip_when= predicate bypasses LLM call. skip_value= provides the output.
 # Zero LLM tokens consumed when skip fires.
 # ═══════════════════════════════════════════════════════════════════════════
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# ROUND 2 HAMMER REGRESSIONS
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TestSubConstructOperatorNotDropped:
+    """neograph-xw75: Operator must NOT be dropped when Oracle or Each is present."""
+
+    def test_construct_oracle_operator_has_operator_node(self):
+        """Construct | Oracle | Operator must compile with operator check node."""
+        from langgraph.checkpoint.memory import MemorySaver
+
+        register_scripted("xw75_gen", lambda i, c: Claims(items=["v1"]))
+        register_scripted("xw75_merge", lambda v, c: v[0])
+        register_condition("xw75_always_false", lambda s: None)
+
+        sub = Construct(
+            "xw75-sub", input=Claims, output=Claims,
+            nodes=[Node.scripted("gen", fn="xw75_gen", outputs=Claims)],
+        ) | Oracle(n=2, merge_fn="xw75_merge") | Operator(when="xw75_always_false")
+
+        pipeline = Construct("xw75-outer", nodes=[
+            Node.scripted("seed", fn="xw75_gen", outputs=Claims),
+            sub,
+        ])
+        graph = compile(pipeline, checkpointer=MemorySaver())
+        lg_graph = graph.get_graph()
+        node_names = [n for n in lg_graph.nodes if "operator" in n.lower()]
+        assert len(node_names) >= 1, (
+            f"Expected operator check node, got nodes: {list(lg_graph.nodes)}"
+        )
+
+    def test_construct_each_operator_has_operator_node(self):
+        """Construct | Each | Operator must compile with operator check node."""
+        from langgraph.checkpoint.memory import MemorySaver
+
+        register_scripted("xw75e_src", lambda i, c: Clusters(groups=[
+            ClusterGroup(label="a", claim_ids=["1"]),
+        ]))
+        register_scripted("xw75e_proc", lambda i, c: MatchResult(
+            cluster_label="a", matched=["ok"],
+        ))
+        register_condition("xw75e_always_false", lambda s: None)
+
+        sub = Construct(
+            "xw75e-sub", input=ClusterGroup, output=MatchResult,
+            nodes=[Node.scripted("proc", fn="xw75e_proc", outputs=MatchResult)],
+        ) | Each(over="source.groups", key="label") | Operator(when="xw75e_always_false")
+
+        pipeline = Construct("xw75e-outer", nodes=[
+            Node.scripted("source", fn="xw75e_src", outputs=Clusters),
+            sub,
+        ])
+        graph = compile(pipeline, checkpointer=MemorySaver())
+        lg_graph = graph.get_graph()
+        node_names = [n for n in lg_graph.nodes if "operator" in n.lower()]
+        assert len(node_names) >= 1, (
+            f"Expected operator check node, got nodes: {list(lg_graph.nodes)}"
+        )
+
+
+class TestConstructLlmConfigImmutability:
+    """Construct.__init__ must not mutate child Node instances when propagating llm_config."""
+
+    def test_llm_config_propagation_does_not_mutate_original_node(self):
+        """When a Construct has llm_config and propagates to children,
+        the original Node objects must not be mutated. The Construct
+        should use model_copy to create new instances with merged config."""
+        from neograph.factory import register_scripted
+
+        class Claim(BaseModel):
+            text: str
+
+        def claim_fn(input_data, config):
+            return Claim(text="hello")
+
+        register_scripted("bchn_claim_fn", claim_fn)
+
+        node = Node(
+            name="claim",
+            outputs=Claim,
+            scripted_fn="bchn_claim_fn",
+            llm_config={"temperature": 0.5},
+        )
+
+        # Capture original config before Construct construction
+        original_config = node.llm_config.copy()
+
+        pipeline = Construct(
+            name="bchn-test",
+            nodes=[node],
+            llm_config={"model_tier": "pro", "max_retries": 3},
+        )
+
+        # The node INSIDE the construct should have merged config
+        inner_node = pipeline.nodes[0]
+        assert inner_node.llm_config.get("model_tier") == "pro", (
+            "Construct child must inherit parent llm_config"
+        )
+        assert inner_node.llm_config.get("temperature") == 0.5, (
+            "Child's own llm_config must win on conflict"
+        )
+
+        # The ORIGINAL node must be UNCHANGED
+        assert node.llm_config == original_config, (
+            f"Construct.__init__ mutated the original Node.llm_config! "
+            f"Was {original_config!r}, now {node.llm_config!r}. "
+            f"Use model_copy instead of direct assignment."
+        )
+
+    def test_renderer_propagation_does_not_mutate_original_node(self):
+        """Same principle for renderer propagation."""
+        from neograph.factory import register_scripted
+
+        class Item(BaseModel):
+            value: int
+
+        def item_fn(input_data, config):
+            return Item(value=1)
+
+        register_scripted("bchn_item_fn", item_fn)
+
+        node = Node(
+            name="item",
+            outputs=Item,
+            scripted_fn="bchn_item_fn",
+            # No renderer on the node
+        )
+
+        assert node.renderer is None
+
+        pipeline = Construct(
+            name="bchn-renderer",
+            nodes=[node],
+            renderer="xml",
+        )
+
+        # The node inside construct should have the renderer
+        inner_node = pipeline.nodes[0]
+        assert inner_node.renderer == "xml", (
+            "Construct child must inherit parent renderer"
+        )
+
+        # The original node must be unchanged
+        assert node.renderer is None, (
+            f"Construct.__init__ mutated the original Node.renderer! "
+            f"Was None, now {node.renderer!r}. "
+            f"Use model_copy instead of direct assignment."
+        )
+
+
+class TestSubconstructContextTypes:
+    """Context fields in subconstructs must carry concrete types, not Any.
+
+    BUG neograph-49ur: subconstruct state model loses type info for context
+    fields, breaking msgpack allowlist for checkpoint serialization.
+    """
+
+    def test_subgraph_state_model_has_concrete_context_type(self):
+        """Subconstruct's compiled state model has the parent's concrete type
+        for context fields, not typing.Any."""
+        from neograph.state import compile_state_model
+
+        class Catalog(BaseModel, frozen=True):
+            entries: list[str] = []
+
+        class ClaimResult(BaseModel, frozen=True):
+            text: str
+
+        register_scripted("ctx_catalog", lambda _i, _c: Catalog(entries=["a"]))
+        register_scripted("ctx_seed", lambda _i, _c: ClaimResult(text="seed"))
+        register_scripted("ctx_verify", lambda _i, _c: ClaimResult(text="ok"))
+
+        # Parent has build-catalog (produces Catalog) and seed (produces ClaimResult).
+        # Subconstruct has a node that uses context=['build_catalog'] to inject
+        # the Catalog into its prompt alongside its typed ClaimResult input.
+        verify_node = Node.scripted(
+            "verify", fn="ctx_verify",
+            inputs=ClaimResult, outputs=ClaimResult,
+        )
+        verify_node = verify_node.model_copy(update={"context": ["build_catalog"]})
+
+        sub = Construct(
+            "verify-sub",
+            input=ClaimResult, output=ClaimResult,
+            nodes=[verify_node],
+        )
+
+        parent = Construct("parent", nodes=[
+            Node.scripted("build-catalog", fn="ctx_catalog", outputs=Catalog),
+            Node.scripted("seed", fn="ctx_seed", inputs=Catalog, outputs=ClaimResult),
+            sub,
+        ])
+
+        # Compile parent — this triggers subconstruct compilation
+        graph = compile(parent)
+
+        # Verify: the subconstruct's state model should have build_catalog
+        # typed as Catalog (or Catalog | None), NOT typing.Any
+        parent_state = compile_state_model(parent)
+        # Build context_types from parent state
+        ctx_types = {fname: finfo.annotation for fname, finfo in parent_state.model_fields.items()}
+        sub_state = compile_state_model(sub, context_types=ctx_types)
+
+        field_type = sub_state.model_fields["build_catalog"].annotation
+        assert field_type is not Any, (
+            f"Context field 'build_catalog' is typed as Any in subconstruct state model. "
+            f"Expected Catalog or Catalog|None. Got: {field_type}"
+        )
 
 

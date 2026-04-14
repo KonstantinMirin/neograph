@@ -17,7 +17,6 @@ from neograph.renderers import JsonRenderer, XmlRenderer
 from tests.fakes import StructuredFake, TextFake, configure_fake_llm
 from tests.schemas_compat import ContactMethod, Experience, LeadProfile
 
-
 # ---------------------------------------------------------------------------
 # Fixtures: canonical test data
 # ---------------------------------------------------------------------------
@@ -75,8 +74,7 @@ class TestCompileSucceeds:
         configure_fake_llm(lambda tier: StructuredFake(_make_profile_from_model))
 
         pipeline = _make_pipeline(strategy, model_tier)
-        graph = compile(pipeline)
-        assert graph is not None
+        compile(pipeline)  # succeeds = test passes; raises = test fails
 
 
 class TestSchemaRoundTrip:
@@ -144,7 +142,7 @@ class TestXmlRendererComplex:
 
         assert "<name>Alice Chen</name>" in output
         assert "<company>Acme Corp</company>" in output
-        assert "<preferred_contact>ContactMethod.email</preferred_contact>" in output
+        assert "<preferred_contact>email</preferred_contact>" in output
         assert "<experience>" in output
         assert "<item>" in output
         assert "<years>3</years>" in output

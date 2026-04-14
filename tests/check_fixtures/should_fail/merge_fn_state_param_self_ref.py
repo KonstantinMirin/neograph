@@ -3,7 +3,6 @@
 # The merge barrier runs BEFORE the node's output is written to state,
 # so referencing the node's own field is a temporal self-reference that
 # can never resolve.
-from typing import Annotated
 
 from pydantic import BaseModel
 

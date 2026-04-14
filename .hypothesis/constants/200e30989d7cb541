@@ -1,0 +1,4 @@
+# file: /Users/konst/projects/neograph/src/neograph/runner.py
+# hypothesis_version: 6.151.12
+
+['_neo_input', '_neo_required_di', 'config', 'configurable', 'input', 'neo_']

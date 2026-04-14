@@ -94,8 +94,7 @@ if __name__ == "__main__":
     # ── Multi-model ensemble ────────────────────────────────────────────
     # Run the same task on different models and merge. Each generator
     # gets a different model tier via round-robin assignment.
-    from neograph import Construct, Node
-    from neograph.modifiers import Oracle
+    from neograph import Construct, Node, Oracle
 
     seen_models = []
 

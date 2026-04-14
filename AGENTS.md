@@ -210,15 +210,34 @@ Shared between `@node` raw adapters and `@merge_fn` wrappers. One resolver, one 
 
 ## `@node` sidecar pattern
 
-`@node` can't mutate `Node` (pydantic v2 with schema validation). Instead:
+`@node` stores the original function and its metadata on the Node via Pydantic `PrivateAttr` fields:
 
-- `_node_sidecar: dict[id(Node), (fn, param_names, fan_out_param)]` — stores the original function, its parameter tuple, and the fan-out param name (for Each).
-- `_param_resolutions: dict[id(Node), ParamResolution]` — separate sidecar for DI metadata (kept separate so the 3-tuple contract of `_node_sidecar` stays stable).
-- `weakref.finalize(node, pop_id, node_id)` on both — entries evict when the Node is garbage collected.
+- `Node._sidecar: tuple[Callable, tuple[str, ...]] | None` — the original function and its parameter name tuple. Used at assembly time by `_construct_builder.py` to wire the DAG and build scripted shims.
+- `Node._param_res: dict[str, DIBinding] | None` — DI bindings from `_classify_di_params`. Consumed at assembly time for shim construction and at lint time.
 
-**When you apply a modifier via `|`** (e.g., `@node(map_over=...)`, `@node(ensemble_n=...)`, `@node(interrupt_when=...)`), the modifier returns a new `Node` via `model_copy`. The sidecars are keyed by `id()`, so the new instance has no entry. **You must re-register the sidecars on the modified copy.** Grep for `_register_sidecar(n, ...)` after `n = n | Oracle(...)` / `n = n | Each(...)` / `n = n | Operator(...)` — every modifier attachment in `@node` does this.
+Both are `PrivateAttr(default=None)`, preserved by `model_copy` (Pydantic v2 copies `__pydantic_private__`). No global dicts, no `weakref.finalize`, no re-registration needed after `|` — `model_copy` handles it.
 
-This was the cause of `neograph-jyw` before the fix. Any new modifier kwarg you add must follow the same pattern.
+**Storage lives in `_sidecar.py`** (extracted from `decorators.py` to break the circular import). Import graph: `decorators.py → _sidecar.py ← _construct_builder.py` (one-way, no cycles). A structural guard test enforces that `_construct_builder.py` never imports from `decorators.py`.
+
+**Why PrivateAttr, not proper fields**: the sidecar carries a `Callable` (the user's function), which can't go through Pydantic schema validation without `arbitrary_types_allowed` on every downstream consumer. PrivateAttr bypasses schema while staying on the Node instance.
+
+**Why we keep the sidecar rather than eagerly resolving**: the sidecar carries **backend-neutral metadata** (the original function, param names, DI bindings). The LangGraph compiler consumes this to build scripted shims registered by string name. A future backend (direct execution, TypeScript transpilation) would consume the same metadata differently. Eagerly resolving to `scripted_fn` names bakes in LangGraph assumptions.
+
+---
+
+## `describe_type` / `describe_value` — LLM-facing schema rendering
+
+`src/neograph/describe_type.py` (433 lines, 13 functions) renders Pydantic models into a TypeScript-style notation that LLMs parse more reliably than JSON Schema. Used by the factory layer to build structured output instructions.
+
+**Two public functions** (both re-exported from `neograph`):
+- `describe_type(model, prefix=..., hoist_classes=...)` — renders a model class into a schema string with auto-hoisted nested classes
+- `describe_value(instance, prefix=...)` — renders a model *instance* as a typed value literal (for few-shot examples)
+
+**Two-pass architecture**: pass 1 (`_count_classes`) counts how many times each nested class appears across the model tree. Pass 2 (`_render_model_body` / `_render_type`) emits the notation, hoisting classes that appear more than once (or all, per `hoist_classes=`).
+
+**Handles**: primitives, `list[T]`, `dict[K,V]`, `Optional[T]`, `Union[A,B]`, `Literal[...]`, `Enum`, nested `BaseModel`, `tuple[...]`, forward refs, field descriptions, constraints, and defaults.
+
+**Tests**: `test_renderers.py` — 88 tests covering all type combinations, edge cases, and round-trip parsing.
 
 ---
 
@@ -228,17 +247,17 @@ This was the cause of `neograph-jyw` before the fix. Any new modifier kwarg you 
 
 | Mode | When | Body runs? | Dispatch |
 |---|---|---|---|
-| `scripted` | No `prompt=`/`model=` | ✓ | `factory._make_scripted_wrapper` via `raw_fn` |
-| `think` | `prompt=` + `model=` present | ✗ (dead code) | `factory._make_produce_wrapper` |
-| `agent` | Same + `tools=` (read-only) | ✗ | `factory._make_gather_wrapper` |
-| `act` | Same + `tools=` (mutations) | ✗ | `factory._make_execute_wrapper` |
+| `scripted` | No `prompt=`/`model=` | ✓ | `_execute_node` via `ScriptedDispatch` |
+| `think` | `prompt=` + `model=` present | ✗ (dead code) | `_execute_node` via `ThinkDispatch` |
+| `agent` | Same + `tools=` (read-only) | ✗ | `_execute_node` via `ToolDispatch` |
+| `act` | Same + `tools=` (mutations) | ✗ | `_execute_node` via `ToolDispatch` |
 | `raw` | Explicit `mode='raw'` | ✓ | `factory._make_raw_wrapper` via `raw_fn` |
 
 **Mode inference**: if `mode=` is not passed, the decorator looks at other kwargs — `prompt=` + `model=` → `think`; neither → `scripted`. Mode `raw` always requires explicit opt-in (enforces the `(state, config)` signature).
 
 **Dead-body warning**: LLM modes emit a `UserWarning` at decoration time if the function body is non-trivial (not `...`, `pass`, or a bare return). AST-based check — handles common false positives.
 
-**Scripted `@node` dispatches via `register_scripted`.** At construct-assembly time, `_register_node_scripted` in `decorators.py` builds a shim closure that resolves `FromInput`/`FromConfig`/constant params from `config`, reads upstream values from `input_data` (the dict returned by `factory._extract_input`), and calls the user function with positional args. The shim is registered via `register_scripted` under a synthesized name, and `node.scripted_fn` points to it. The factory's `_make_scripted_wrapper` picks it up — **one dispatch path for all scripted nodes**, no more `raw_fn` workaround.
+**Scripted `@node` dispatches via `register_scripted`.** At construct-assembly time, `_register_node_scripted` in `decorators.py` builds a shim closure that resolves `FromInput`/`FromConfig`/constant params from `config`, reads upstream values from `input_data` (the dict returned by `factory._extract_input`), and calls the user function with positional args. The shim is registered via `register_scripted` under a synthesized name, and `node.scripted_fn` points to it. The factory's `_execute_node` picks it up via `ScriptedDispatch` — **one dispatch path for all node modes** (neograph-y8ww).
 
 `Node.fan_out_param` tells `_extract_input` which `inputs` key should read from `state["neo_each_item"]` instead of from a named upstream field. This is the only IR-level concession to the `@node` layer — it applies equally to programmatic `Each` nodes with dict-form inputs.
 
@@ -246,10 +265,10 @@ This was the cause of `neograph-jyw` before the fix. Any new modifier kwarg you 
 
 ## Git workflow
 
-- **`main`** — stable. Only tagged releases and critical hotfix PRs. Currently at v0.1.0.
-- **`develop`** — active development. All new work lands here. Currently at 0.2.0.dev0. Piarch and other downstream consumers pull from this branch via `uv add "neograph @ git+https://github.com/KonstantinMirin/neograph.git@develop"`.
+- **`main`** — stable. Only tagged releases and critical hotfix PRs.
+- **`develop`** — active development. All new work lands here. Currently at 0.3.0. Piarch and other downstream consumers pull from this branch via `uv add "neograph @ git+https://github.com/KonstantinMirin/neograph.git@develop"`.
 - **Release path**: when `develop` is ready, merge to `main`, tag `vX.Y.Z`, push the tag. `.github/workflows/publish.yml` triggers on `v*` tags and publishes to PyPI via Trusted Publishing (no tokens, OIDC-scoped).
-- **Version bumps**: on `develop` we use PEP 440 pre-release markers (`0.2.0.dev0`, `0.2.0.dev1`, ...). On `main` at the release tag we bump to the final version (`0.2.0`).
+- **Version bumps**: on `develop` we increment normally. On `main` at the release tag we tag `vX.Y.Z`.
 
 **Never publish directly.** The GitHub Actions workflow is the only publish path. This gives us a pypi.org Trusted Publisher gate + an optional manual-approval environment reviewer.
 
@@ -257,19 +276,39 @@ This was the cause of `neograph-jyw` before the fix. Any new modifier kwarg you 
 
 ## Test conventions
 
-### Test file layout (9 files)
+### Test file layout (36 files across 5 packages)
+
+**Root tests** (18 files):
 
 | File | Scope | Tests |
 |------|-------|-------|
-| `test_pipeline_modes.py` | Scripted, think, agent, act, raw modes; output strategies; LLM config; config injection; error paths; compile-time checks | ~55 |
-| `test_node_decorator.py` | `@node`, `@tool`, `@merge_fn` decorators; mode inference; fan-out/Oracle/Operator interop; DI; `construct_from_functions`/`construct_from_module` | ~78 |
-| `test_validation.py` | Assembly-time type checking; fan-in validation; `effective_producer_type`; list/dict compat; dict-form outputs; Oracle errors; lint(); Each.key; boundary contracts | ~76 |
-| `test_renderers.py` | `XmlRenderer`, `DelimitedRenderer`, `JsonRenderer`, `describe_type`, render dispatch, json_mode output schema, `render_prompt` | ~54 |
-| `test_forward.py` | `ForwardConstruct` base class, tracer, compilation, branching, loops | ~36 |
-| `test_modifiers.py` | Oracle, Each, Operator, `map()`, deep compositions, Construct-level modifiers, list-over-Each, merge_fn errors | ~36 |
-| `test_composition.py` | Sub-constructs, @node sub-constructs, multi-field input, state hygiene, reducers, dict-form output state/factory | ~36 |
-| `test_loop.py` | Loop modifier: self-loop, Loop-on-Construct, ForwardConstruct, dict-form, skip_when, validation | ~38 |
-| `test_check_fixtures.py` | Compiler safety net: parametrized fixtures (should_fail + should_pass + known_gaps) | ~12 |
+| `test_validation.py` | Assembly-time type checking; fan-in; effective_producer_type; lint(); TypeSpec | ~128 |
+| `test_renderers.py` | XmlRenderer, DelimitedRenderer, JsonRenderer, describe_type, render_prompt | ~88 |
+| `test_forward.py` | ForwardConstruct base class, tracer, compilation, branching, loops | ~67 |
+| `test_composition.py` | Sub-constructs, @node sub-constructs, state hygiene, reducers, dict-form | ~63 |
+| `test_coverage_gaps.py` | Coverage gap tests for uncovered code paths | ~60 |
+| `test_conditions.py` | parse_condition, condition registry | ~45 |
+| `test_loop.py` | Loop modifier: self-loop, Loop-on-Construct, ForwardConstruct, skip_when | ~41 |
+| `test_structural_guards.py` | AST-scanning guards against regressions | ~37 |
+| `test_inline_prompts.py` | Inline prompt compilation, template rendering | ~29 |
+| `test_di.py` | DI bindings, resolution, typed fields | ~27 |
+| `test_spec_loader.py` | YAML/spec loader, type resolution | ~26 |
+| `test_obligation_r1r2.py` | Behavioral obligation tests | ~23 |
+| `test_cli.py` | CLI entry points | ~22 |
+| `test_spec_types.py` | Type registry | ~20 |
+| `test_spec_schema.py` | Spec schema validation | ~14 |
+| `test_model_compat.py` | Pydantic model compatibility | ~14 |
+| `test_fakes.py` | LLM fake infrastructure tests | ~7 |
+| `test_check_fixtures.py` | Compiler safety net (parametrized fixtures) | ~2 |
+
+**Package tests** (18 files in 4 packages):
+
+| Package | Files | Scope | Tests |
+|---------|-------|-------|-------|
+| `decorator/` | 5 files | @node, @tool, @merge_fn decorators; mode inference; DI; construct assembly; edge cases | ~165 |
+| `modes/` | 5 files | Scripted/think/agent/act/raw modes; execution; output strategies; LLM internals; I/O | ~156 |
+| `modifiers/` | 5 files | Oracle, Each, Operator, compositions, modifier edge cases | ~119 |
+| `hypothesis/` | 3 files | Property-based testing: topologies, invariants, regression | ~71 |
 
 Supporting files: `conftest.py` (registry cleanup fixture), `schemas.py` (shared Pydantic models + `_producer`/`_consumer` helpers), `fakes.py` (LLM fakes).
 
@@ -303,7 +342,7 @@ Supporting files: `conftest.py` (registry cleanup fixture), `schemas.py` (shared
 
 ## Examples
 
-13 runnable examples in `examples/`, each narrated as a walkthrough on neograph.pro. Most use `@node` except two that stay declarative (example 10 mixed, example 11 config injection). Sub-constructs (example 05) can now use either `@node` with `construct_from_functions(input=, output=)` or declarative `Construct(input=, output=, nodes=[...])`.
+19 runnable examples in `examples/`, each narrated as a walkthrough on neograph.pro. Most use `@node` except two that stay declarative (example 10 mixed, example 11 config injection). Sub-constructs (example 05) can now use either `@node` with `construct_from_functions(input=, output=)` or declarative `Construct(input=, output=, nodes=[...])`.
 
 **Examples must run end-to-end.** Breaking one is a regression. When you change an API surface, run every example that doesn't require real API keys (01, 01c, 02, 03, 04, 05, 06, 08, 09, 10). Examples 07 and 11 hit real OpenRouter/OpenAI — example 07 has a pre-existing known failure that predates anything in this session, document any new failures separately.
 
@@ -349,7 +388,7 @@ These aren't bugs, just things worth considering for future sessions:
 
 ## User preferences (from the build sessions)
 
-- **Blunt, direct answers preferred over agreement.** If an API has a DX problem, say so. The user will happily refactor at 0.1.0/0.2.0.
+- **Blunt, direct answers preferred over agreement.** If an API has a DX problem, say so. The user will happily refactor at 0.x.
 - **No backwards-compat shims at 0.x.** Breaking changes are fine; deprecation cycles are unnecessary at this scale and one known user.
 - **TDD for bug fixes, always.** Write the failing test first.
 - **Parallel agent teams for multi-file work.** The `/team` slash command invokes a team with scoped file regions. Use it for anything that can be parallelized without file conflicts.

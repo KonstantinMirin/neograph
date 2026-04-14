@@ -8,8 +8,7 @@ from typing import Annotated
 
 from pydantic import BaseModel
 
-from neograph import Construct, FromConfig, merge_fn, node
-from neograph.decorators import construct_from_functions
+from neograph import Construct, FromConfig, merge_fn
 from neograph.factory import register_scripted
 from neograph.modifiers import Oracle
 from neograph.node import Node

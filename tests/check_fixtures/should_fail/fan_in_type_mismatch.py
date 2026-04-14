@@ -1,8 +1,10 @@
 # CHECK_ERROR: TypeB.*produces TypeC|type.*compatible
 # Scenario 15: fan-in where one upstream produces wrong type
+from pydantic import BaseModel
+
 from neograph import Construct, Node
 from neograph.factory import register_scripted
-from pydantic import BaseModel
+
 
 class TypeA(BaseModel, frozen=True):
     x: str

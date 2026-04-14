@@ -1,0 +1,4 @@
+# file: /Users/konst/projects/neograph/.venv/bin/pytest
+# hypothesis_version: 6.151.12
+
+['-script.pyw', '.exe', '__main__']

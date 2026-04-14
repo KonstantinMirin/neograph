@@ -1,0 +1,4 @@
+# file: /Users/konst/projects/neograph/src/neograph/conditions.py
+# hypothesis_version: 6.151.12
+
+['!=', '"', "'", '.', '<', '<=', '==', '>', '>=', '_', 'false', 'field', 'literal', 'op', 'true']

@@ -7,17 +7,23 @@ from __future__ import annotations
 
 from typing import Any
 
-import pytest
-from pydantic import BaseModel, Field as PydanticField
+from pydantic import BaseModel
+from pydantic import Field as PydanticField
 
 from neograph import (
-    Construct, Node, compile, run, configure_llm,
-    XmlRenderer, DelimitedRenderer, JsonRenderer, Renderer,
-    describe_type, render_prompt,
+    Construct,
+    DelimitedRenderer,
+    JsonRenderer,
+    Node,
+    Renderer,
+    XmlRenderer,
+    compile,
+    describe_type,
+    run,
 )
 from neograph.renderers import render_input
 from tests.fakes import StructuredFake, TextFake, configure_fake_llm
-from tests.schemas import RawText, Claims, MatchResult
+from tests.schemas import Claims, MatchResult, RawText
 
 
 class TestXmlRenderer:
@@ -225,6 +231,69 @@ class TestRenderInput:
         result = render_input(Custom(name="test"), renderer=r)
         assert result == "CUSTOM: test"
 
+    def test_render_for_prompt_returning_model_is_re_rendered(self):
+        """render_for_prompt() returning a BaseModel gets BAML-rendered automatically.
+
+        FEATURE neograph-bwbt: typed presentation projections.
+        """
+
+        class Presentation(BaseModel):
+            summary: str
+            score: float
+
+        class FullData(BaseModel):
+            raw: str
+            internal_id: int
+
+            def render_for_prompt(self) -> Presentation:
+                return Presentation(summary=self.raw.upper(), score=0.95)
+
+        r = XmlRenderer()
+        result = render_input(FullData(raw="hello", internal_id=42), renderer=r)
+        # Should be XML-rendered Presentation, not a raw Presentation object
+        assert isinstance(result, str)
+        assert "<summary>" in result
+        assert "HELLO" in result
+        assert "internal_id" not in result  # projection strips internal fields
+
+    def test_exclude_true_fields_omitted_from_describe_type(self):
+        """Fields with exclude=True must not appear in BAML schema.
+
+        BUG neograph-uau8: describe_type renders exclude=True fields,
+        causing LLMs to produce values for pipeline-internal fields.
+        """
+        from neograph import describe_type
+
+        class Item(BaseModel):
+            name: str
+            internal_id: str = PydanticField(exclude=True, default="auto")
+
+        schema = describe_type(Item, prefix="")
+        assert "name" in schema
+        assert "internal_id" not in schema
+
+    def test_exclude_true_fields_omitted_from_xml_renderer(self):
+        """XmlRenderer must skip exclude=True fields."""
+        class Item(BaseModel):
+            name: str
+            internal_id: str = PydanticField(exclude=True, default="set-by-pipeline")
+
+        r = XmlRenderer()
+        result = r.render(Item(name="test", internal_id="abc"))
+        assert "<name>" in result
+        assert "internal_id" not in result
+
+    def test_exclude_true_fields_omitted_from_delimited_renderer(self):
+        """DelimitedRenderer must skip exclude=True fields."""
+        class Item(BaseModel):
+            name: str
+            internal_id: str = PydanticField(exclude=True, default="set-by-pipeline")
+
+        r = DelimitedRenderer()
+        result = r.render(Item(name="test", internal_id="abc"))
+        assert "name" in result
+        assert "internal_id" not in result
+
     def test_custom_class_satisfies_renderer_protocol(self):
         """Any object with render(value) -> str satisfies the Renderer protocol."""
 
@@ -281,12 +350,12 @@ class TestDescribeType:
 
     def test_appends_or_null_when_optional(self):
         """Optional fields (with default None) get ' or null' suffix."""
-        from typing import Optional
+
         from neograph import describe_type
 
         class WithOptional(BaseModel):
             name: str
-            nickname: Optional[str] = None
+            nickname: str | None = None
 
         result = describe_type(WithOptional, prefix="")
         assert "nickname: string or null" in result
@@ -297,11 +366,11 @@ class TestDescribeType:
 
     def test_joins_union_types_with_or_splitter(self):
         """Union[A, B] renders with or_splitter."""
-        from typing import Union
+
         from neograph import describe_type
 
         class WithUnion(BaseModel):
-            value: Union[str, int]
+            value: str | int
 
         result = describe_type(WithUnion, prefix="", or_splitter=" or ")
         assert "value: string or int" in result
@@ -309,6 +378,7 @@ class TestDescribeType:
     def test_renders_literal_values_as_quoted_strings(self):
         """Literal types render as quoted strings joined by or_splitter."""
         from typing import Literal
+
         from neograph import describe_type
 
         class WithLiteral(BaseModel):
@@ -336,6 +406,7 @@ class TestDescribeType:
     def test_renders_field_description_as_inline_comment(self):
         """Field(description=...) renders as an inline // comment."""
         from pydantic import Field
+
         from neograph import describe_type
 
         class Documented(BaseModel):
@@ -399,6 +470,7 @@ class TestDescribeType:
     def test_renders_enum_as_quoted_values_when_not_hoisted(self):
         """Enum types render as inlined quoted values."""
         import enum
+
         from neograph import describe_type
 
         class Color(enum.Enum):
@@ -418,6 +490,7 @@ class TestDescribeType:
     def test_hoists_enum_as_declaration_when_always_hoist_enums(self):
         """always_hoist_enums=True hoists Enum as 'enum Foo { ... }' declaration."""
         import enum
+
         from neograph import describe_type
 
         class Status(enum.Enum):
@@ -436,7 +509,7 @@ class TestDescribeType:
 
         class TreeNode(BaseModel):
             name: str
-            children: list["TreeNode"] = []
+            children: list[TreeNode] = []
 
         TreeNode.model_rebuild()
 
@@ -467,6 +540,7 @@ class TestDescribeType:
     def test_output_shorter_than_json_schema(self):
         """describe_type output is significantly shorter than JSON Schema."""
         import json
+
         from neograph import describe_type
 
         class Education(BaseModel):
@@ -493,6 +567,7 @@ class TestDescribeValue:
     def test_flat_model_exact_output(self):
         """Flat model with Field descriptions produces exact BAML instance notation."""
         from pydantic import Field
+
         from neograph.describe_type import describe_value
 
         class SearchHit(BaseModel, frozen=True):
@@ -640,13 +715,16 @@ class TestRendererDispatch:
         assert n.renderer is xml
 
     def test_construct_propagates_renderer_to_children(self):
-        """Level 3: Construct(renderer=...) propagates to child nodes."""
+        """Level 3: Construct(renderer=...) propagates to child nodes via model_copy."""
         xml = XmlRenderer()
         child = Node.scripted("child", fn="noop", outputs=Claims)
         assert child.renderer is None
 
         pipeline = Construct("prop-test", renderer=xml, nodes=[child])
-        assert child.renderer is xml
+        # Original child is unchanged (immutable IR)
+        assert child.renderer is None
+        # The copy inside the construct has the propagated renderer
+        assert pipeline.nodes[0].renderer is xml
         assert pipeline.renderer is xml
 
     def test_node_renderer_beats_construct_default(self):
@@ -776,7 +854,7 @@ class TestJsonModeOutputSchema:
 
         assert len(compiler_calls) == 1
         schema = compiler_calls[0].get("output_schema")
-        assert schema is not None
+        assert isinstance(schema, str), "output_schema should be a string from describe_type()"
         # describe_type produces TypeScript-style notation containing the field name
         assert "items" in schema
 
@@ -954,7 +1032,7 @@ class TestRenderPromptInspector:
 
         assert len(compiler_kwargs) == 1
         schema = compiler_kwargs[0].get("output_schema")
-        assert schema is not None
+        assert isinstance(schema, str), "output_schema should be a string from describe_type()"
         assert "items" in schema
 
 
@@ -996,19 +1074,22 @@ class TestRendererThreeSurfaces:
         assert pipeline.nodes[0].renderer is xml
 
     def test_renderer_propagates_from_construct_to_children(self):
-        """Construct(renderer=...) propagates through to child nodes without own renderer."""
+        """Construct(renderer=...) propagates via model_copy to child nodes without own renderer."""
         xml = XmlRenderer()
         child = Node.scripted("prog-child", fn="noop", outputs=Claims)
         assert child.renderer is None
 
         pipeline = Construct("prog-test", renderer=xml, nodes=[child])
 
-        # Child should inherit from Construct
-        assert child.renderer is xml
-        # Verify propagation through modifier: Each on Construct level
+        # Original child unchanged (immutable IR)
+        assert child.renderer is None
+        # Copy inside construct has the propagated renderer
+        assert pipeline.nodes[0].renderer is xml
+        # Verify propagation through another construct
         child2 = Node.scripted("prog-child2", fn="noop2", outputs=MatchResult)
         pipeline2 = Construct("prog-test2", renderer=xml, nodes=[child2])
-        assert child2.renderer is xml
+        assert child2.renderer is None
+        assert pipeline2.nodes[0].renderer is xml
 
     def test_renderer_propagates_in_forward_construct(self):
         """ForwardConstruct(renderer=...) propagates renderer to traced nodes."""
@@ -1228,24 +1309,25 @@ class TestDescribeTypeCoverageGaps:
     """Tests covering previously uncovered lines in describe_type."""
 
     def test_bare_list_no_args_renders_as_any_array(self):
-        """list generic alias with no args renders as [any]."""
-        from neograph.describe_type import _render_type
-        from typing import List
+        """typing.List (no subscription) has get_origin=list, get_args=()."""
+        from typing import List  # noqa: UP006, UP035
 
-        # typing.List (no subscription) has get_origin=list but get_args=()
+        from neograph.describe_type import _render_type
+
         result = _render_type(
-            List, indent="  ", depth=0, or_splitter=" or ",
+            List, indent="  ", depth=0, or_splitter=" or ",  # noqa: UP006
             hoisted=set(), visited=set(),
         )
         assert result == "[any]"
 
     def test_bare_dict_no_args_renders_as_object(self):
-        """dict generic alias with no args renders as 'object'."""
+        """typing.Dict (no subscription) has get_origin=dict, get_args=()."""
+        from typing import Dict  # noqa: UP006, UP035
+
         from neograph.describe_type import _render_type
-        from typing import Dict
 
         result = _render_type(
-            Dict, indent="  ", depth=0, or_splitter=" or ",
+            Dict, indent="  ", depth=0, or_splitter=" or ",  # noqa: UP006
             hoisted=set(), visited=set(),
         )
         assert result == "object"
@@ -1275,14 +1357,11 @@ class TestDescribeValueCoverageGaps:
     """Tests covering previously uncovered lines in describe_value."""
 
     def test_plain_primitive_hits_else_branch(self):
-        """describe_value with a plain primitive hits the else branch at line 360.
-
-        The source has a bug: _render_primitive is undefined. We verify the
-        NameError to cover the branch and document the defect."""
+        """describe_value with a plain primitive hits the else branch at line 360."""
         from neograph.describe_type import describe_value
 
-        with pytest.raises(NameError, match="_render_primitive"):
-            describe_value(42)
+        result = describe_value(42)
+        assert result == "42"
 
     def test_empty_model_renders_as_empty_braces(self):
         """describe_value with a model that has zero fields renders {}."""

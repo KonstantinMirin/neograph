@@ -228,9 +228,7 @@ The framework passes all generator outputs to an LLM with the given prompt templ
 Instead of running the same model N times, run different models on the same input. Each generator gets a different model tier:
 
 ```python
-from neograph import Node, Construct, compile, run
-from neograph.modifiers import Oracle
-from neograph.factory import register_scripted
+from neograph import Node, Construct, Oracle, compile, run, register_scripted
 
 def gen(input_data, config):
     model = config.get("configurable", {}).get("_oracle_model", "default")

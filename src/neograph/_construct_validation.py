@@ -20,15 +20,23 @@ from __future__ import annotations
 import os
 import sys
 import types
+from typing import TYPE_CHECKING, Any, ForwardRef, Union, get_args, get_origin, get_type_hints
 
-from typing import Any, ForwardRef, Union, get_args, get_origin, get_type_hints
-
-from neograph.errors import ConstructError
-from neograph.modifiers import Each, Loop, Oracle, split_each_path
+from neograph.di import DIKind as _DIKind
+from neograph.errors import ConstructError, NeographError
+from neograph.modifiers import Each, Modifiable, split_each_path
+from neograph.naming import field_name_for
 from neograph.node import Node
 
+if TYPE_CHECKING:
+    from neograph.construct import Construct
 
-def effective_producer_type(item: Any) -> Any:
+# Type alias for items that appear in Construct.nodes — avoids bare Any.
+# Cannot be a runtime Union due to circular imports (Construct imports us).
+NodeItem = Node | Modifiable  # Node, _BranchNode (via Modifiable), or Construct (subtype of Modifiable)
+
+
+def effective_producer_type(item: NodeItem) -> Any:
     """Return the type this producer writes to the state bus, accounting
     for modifiers.
 
@@ -52,11 +60,11 @@ def effective_producer_type(item: Any) -> Any:
     output = item.outputs if isinstance(item, Node) else getattr(item, "output", None)
     if output is None:
         return None
-    get_mod = getattr(item, "has_modifier", None)
-    if get_mod is None:
+    ms = getattr(item, "modifier_set", None)
+    if ms is None:
         return output
-    if get_mod(Each):
-        return dict[str, output]
+    if ms.each is not None:
+        return dict[str, output]  # type: ignore[valid-type]
     return output
 
 
@@ -66,7 +74,7 @@ def validate_loop_self_edge(node: Node) -> None:
     Called at ``|`` time (from ``Modifiable.__or__``) when a ``Loop`` modifier
     is applied to a Node. Loop on Node always means self-loop.
     """
-    loop = node.get_modifier(Loop)
+    loop = node.modifier_set.loop
     if loop is None:
         return
 
@@ -91,29 +99,30 @@ def validate_loop_self_edge(node: Node) -> None:
         type_list = ", ".join(
             f"{k}={_fmt_type(v)}" for k, v in input_type.items()
         )
-        msg = (
-            f"loop on node '{node.name}' back-edge to '{node.name}': "
-            f"output type {_fmt_type(output_type)} not compatible with "
-            f"reentry input types ({type_list}).\n"
-            f"  hint: the loop's last node output must match the "
-            f"reentry node's input type."
+        raise ConstructError.build(
+            f"loop back-edge: output type {_fmt_type(output_type)} not "
+            f"compatible with any reentry input type",
+            expected=f"one of ({type_list})",
+            found=_fmt_type(output_type),
+            hint="the loop's last node output must match the reentry node's input type",
+            node=node.name,
+            location=_source_location(),
         )
-        raise ConstructError(msg)
         return
 
     # Single-type inputs.
     if not _types_compatible(output_type, input_type):
-        msg = (
-            f"loop on node '{node.name}' back-edge to '{node.name}': "
-            f"output type {_fmt_type(output_type)} not compatible with "
-            f"reentry input type {_fmt_type(input_type)}.\n"
-            f"  hint: the loop's last node output must match the "
-            f"reentry node's input type."
+        raise ConstructError.build(
+            "loop back-edge: output type not compatible with reentry input type",
+            expected=_fmt_type(input_type),
+            found=_fmt_type(output_type),
+            hint="the loop's last node output must match the reentry node's input type",
+            node=node.name,
+            location=_source_location(),
         )
-        raise ConstructError(msg)
 
 
-def _validate_node_chain(construct: Any) -> None:
+def _validate_node_chain(construct: Construct) -> None:
     """Walk the node list, verifying each input has a compatible producer."""
     # Producers: (state_field_name, output_type, human_label)
     producers: list[tuple[str, Any, str]] = []
@@ -138,36 +147,51 @@ def _validate_node_chain(construct: Any) -> None:
             # Construct items use .input (singular boundary port).
             input_type = getattr(item, "input", None)
         if input_type is not None:
+            # Warn on single-type inputs (isinstance scan) — dict-form is safer.
+            if (
+                isinstance(item, Node)
+                and not isinstance(input_type, dict)
+                and producers  # not the first node
+            ):
+                import warnings
+                warnings.warn(
+                    f"Node '{item.name}': single-type inputs={input_type.__name__ if hasattr(input_type, '__name__') else input_type} "
+                    f"relies on O(N) isinstance scan at runtime. "
+                    f"Use dict-form inputs={{'{field_name_for(item.name)}': {input_type.__name__ if hasattr(input_type, '__name__') else input_type}}} "
+                    f"for explicit named resolution.",
+                    DeprecationWarning,
+                    stacklevel=2,
+                )
             _check_item_input(construct, item, input_type, producers)
 
-        # Validate context= references (neograph-r135).
+        # Validate context= references.
         # Skip for sub-constructs (input is set) — context comes from parent.
         if isinstance(item, Node) and item.context and construct.input is None:
             known_fields = {fn for fn, _, _ in producers}
             for ctx_name in item.context:
                 if ctx_name not in known_fields:
-                    msg = (
-                        f"Node '{item.name}' references context='{ctx_name}' "
-                        f"but no upstream node produces a field with that name. "
-                        f"Known upstream fields: {sorted(known_fields) or '(none)'}.\n"
-                        f"{_location_suffix()}"
+                    raise ConstructError.build(
+                        f"references context='{ctx_name}' but no upstream node "
+                        f"produces a field with that name",
+                        found=f"known upstream fields: {sorted(known_fields) or '(none)'}",
+                        node=item.name,
+                        location=_source_location(),
                     )
-                    raise ConstructError(msg)
 
         # Node uses .outputs (plural); Construct / _BranchNode use .output (singular).
         output_type = item.outputs if isinstance(item, Node) else getattr(item, "output", None)
         name = getattr(item, "name", None)
         if output_type is not None and name is not None:
-            field_name = name.replace("-", "_")
+            field_name = field_name_for(name)
 
             # Dict-form outputs (neograph-1bp.4): register one producer per
             # output key, with modifier wrapping applied independently per key.
             if isinstance(item, Node) and isinstance(output_type, dict):
-                has_each = item.has_modifier(Each)
+                has_each = item.modifier_set.each is not None
                 for output_key, key_type in output_type.items():
                     key_field = f"{field_name}_{output_key}"
                     key_label = f"node '{name}' output '{output_key}'"
-                    producer_type = dict[str, key_type] if has_each else key_type
+                    producer_type = dict[str, key_type] if has_each else key_type  # type: ignore[valid-type]
                     producers.append((key_field, producer_type, key_label))
             else:
                 label = (
@@ -178,37 +202,11 @@ def _validate_node_chain(construct: Any) -> None:
                 # Shared helper decides the modifier-adjusted state-bus type.
                 producers.append((field_name, effective_producer_type(item), label))
 
-        # Each + Loop mutual exclusion (belt-and-suspenders: also checked
-        # at | time in Modifiable.__or__, but the programmatic API can bypass
-        # pipe syntax by constructing modifiers lists directly).
-        if isinstance(item, Node):
-            if item.has_modifier(Each) and item.has_modifier(Loop):
-                msg = (
-                    f"Node '{item.name}' has both Each and Loop modifiers. "
-                    f"These cannot be combined on a single node. "
-                    f"Use a sub-construct with Loop inside an Each fan-out instead."
-                )
-                raise ConstructError(msg)
-
-        # Oracle + Loop mutual exclusion (belt-and-suspenders).
-        if isinstance(item, Node):
-            if item.has_modifier(Oracle) and item.has_modifier(Loop):
-                msg = (
-                    f"Node '{item.name}' has both Oracle and Loop modifiers. "
-                    f"These cannot be combined on a single node. "
-                    f"Use a sub-construct: nest the Loop body inside an Oracle "
-                    f"ensemble, or vice versa."
-                )
-                raise ConstructError(msg)
-
-        # Oracle + Each composition is supported via flat M×N fusion
-        # (neograph-tpgi). No mutual exclusion needed.
-
-        # Loop + skip_when without skip_value is surprising (neograph-e2dv).
+        # Loop + skip_when without skip_value is surprising.
         # The counter still increments so the loop exits, but re-entry
         # reads stale state. Warn rather than reject — the behavior is
         # valid, just easy to misuse.
-        if isinstance(item, Node) and item.has_modifier(Loop):
+        if isinstance(item, Node) and item.modifier_set.loop is not None:
             if item.skip_when is not None and item.skip_value is None:
                 import structlog
                 structlog.get_logger(__name__).error(
@@ -224,56 +222,64 @@ def _validate_node_chain(construct: Any) -> None:
         # (Loop reenter validation removed — Loop.reenter no longer exists.
         # Multi-node loops use Loop on Construct instead.)
 
-        # Validate @merge_fn state params (neograph-jg2g).
+        # Validate @merge_fn state params.
         # When a merge_fn has from_state params, verify each references a
         # known upstream producer and the type is compatible.
         if isinstance(item, Node):
-            oracle = item.get_modifier(Oracle)
+            oracle = item.modifier_set.oracle
             if oracle is not None and isinstance(getattr(oracle, 'merge_fn', None), str):
                 from neograph.decorators import get_merge_fn_metadata
+                assert oracle.merge_fn is not None
                 meta = get_merge_fn_metadata(oracle.merge_fn)
                 if meta is not None and meta[1]:
                     _, merge_param_res = meta
-                    item_field = item.name.replace("-", "_")
+                    item_field = field_name_for(item.name)
                     known_producers = {fn: (pt, lbl) for fn, pt, lbl in producers}
-                    for pname, (kind, payload) in merge_param_res.items():
-                        if kind != "from_state":
+                    for pname, binding in merge_param_res.items():
+                        if binding.kind != _DIKind.FROM_STATE:
                             continue
-                        expected_type = payload
+                        expected_type = binding.inner_type
                         # Self-reference: merge runs before node output is written
                         if pname == item_field:
-                            msg = (
+                            raise ConstructError.build(
                                 f"merge_fn '{oracle.merge_fn}' param '{pname}' "
-                                f"references node '{item.name}' own output. "
-                                f"The merge barrier runs before the node's "
-                                f"output is written — this is a self-reference "
-                                f"that can never resolve."
+                                f"references the node's own output",
+                                found=f"self-reference to '{pname}'",
+                                hint="the merge barrier runs before the node's "
+                                     "output is written — this can never resolve",
+                                node=item.name,
+                                construct=construct.name,
+                                location=_source_location(),
                             )
-                            raise ConstructError(msg)
                         # Unknown producer
                         if pname not in known_producers:
-                            msg = (
+                            raise ConstructError.build(
                                 f"merge_fn '{oracle.merge_fn}' param '{pname}' "
-                                f"does not match any upstream node. "
-                                f"Known producers: {sorted(known_producers.keys())}."
+                                f"does not match any upstream node",
+                                found=f"known producers: {sorted(known_producers.keys())}",
+                                node=item.name,
+                                construct=construct.name,
+                                location=_source_location(),
                             )
-                            raise ConstructError(msg)
                         # Type mismatch
                         prod_type, prod_label = known_producers[pname]
                         if (prod_type is not None
                                 and isinstance(expected_type, type)
                                 and not _types_compatible(prod_type, expected_type)):
-                            msg = (
+                            raise ConstructError.build(
                                 f"merge_fn '{oracle.merge_fn}' param '{pname}' "
-                                f"expects {_fmt_type(expected_type)} but "
-                                f"{prod_label} produces {_fmt_type(prod_type)}."
+                                f"type mismatch with {prod_label}",
+                                expected=_fmt_type(expected_type),
+                                found=_fmt_type(prod_type),
+                                node=item.name,
+                                construct=construct.name,
+                                location=_source_location(),
                             )
-                            raise ConstructError(msg)
 
     # Sub-construct output boundary contract: if construct.output is declared,
     # at least one internal node must produce a compatible type.
     # Exclude neo_subgraph_input — the input port is NOT a valid producer
-    # for the output contract (neograph-luzc).
+    # for the output contract.
     if construct.output is not None and producers:
         declared_output = construct.output
         internal_producers = [
@@ -289,42 +295,45 @@ def _validate_node_chain(construct: Any) -> None:
                 for _, t, label in internal_producers
                 if t is not None
             )
-            msg = (
-                f"Construct '{construct.name}' declares "
-                f"output={_fmt_type(declared_output)} but no internal node "
-                f"produces a compatible type.\n"
-                f"  internal producers:\n{producer_summary}\n"
-                f"{_location_suffix()}"
+            raise ConstructError.build(
+                f"declares output={_fmt_type(declared_output)} but no "
+                f"internal node produces a compatible type",
+                expected=_fmt_type(declared_output),
+                found=f"internal producers:\n{producer_summary}",
+                construct=construct.name,
+                location=_source_location(),
             )
-            raise ConstructError(msg)
 
 
-def validate_loop_construct(construct: Any) -> None:
+def validate_loop_construct(construct: Construct) -> None:
     """Validate Loop on a Construct: output must be compatible with input.
 
     Called at ``|`` time from ``Modifiable.__or__`` when a Loop modifier
     is applied to a Construct.
     """
     if construct.output is None or construct.input is None:
-        msg = (
-            f"Loop on construct '{construct.name}' requires both input= "
-            f"and output= declared."
+        raise ConstructError.build(
+            "Loop requires both input= and output= declared",
+            found=f"input={'declared' if construct.input is not None else 'None'}, "
+                  f"output={'declared' if construct.output is not None else 'None'}",
+            hint="declare both input= and output= on the construct for Loop to wire the back-edge",
+            construct=construct.name,
+            location=_source_location(),
         )
-        raise ConstructError(msg)
     if not _types_compatible(construct.output, construct.input):
-        msg = (
-            f"Loop on construct '{construct.name}': output type "
-            f"{_fmt_type(construct.output)} not compatible with input type "
-            f"{_fmt_type(construct.input)}.\n"
-            f"  hint: the loop's output must match the construct's "
-            f"input type for the back-edge."
+        raise ConstructError.build(
+            "Loop output type not compatible with input type for back-edge",
+            expected=_fmt_type(construct.input),
+            found=_fmt_type(construct.output),
+            hint="the loop's output must match the construct's input type for the back-edge",
+            construct=construct.name,
+            location=_source_location(),
         )
-        raise ConstructError(msg)
 
 
 def _check_item_input(
-    construct: Any,
-    item: Any,
+    construct: Construct,
+    item: NodeItem,
     input_type: Any,
     producers: list[tuple[str, Any, str]],
 ) -> None:
@@ -337,6 +346,20 @@ def _check_item_input(
       - Each modifier whose root segment doesn't match a known producer.
     """
     if not producers:
+        # Even with no producers, reject self-referencing dict-form inputs
+        # (a node naming itself as upstream without Loop).
+        if isinstance(input_type, dict):
+            item_field = field_name_for(item.name)
+            ms = getattr(item, "modifier_set", None)
+            has_loop = ms is not None and ms.loop is not None
+            if not has_loop and item_field in input_type:
+                raise ConstructError.build(
+                    f"declares inputs['{item_field}'] referencing itself without a Loop modifier",
+                    hint="self-referencing inputs require Loop(when=...) to create a feedback cycle",
+                    node=item.name,
+                    construct=construct.name,
+                    location=_source_location(),
+                )
         return
     # Fan-in dict instance: inputs={"a": A, "b": B, ...} — validate each
     # (upstream_name, expected_type) pair against the upstream named by the
@@ -363,8 +386,8 @@ def _check_item_input(
         return
 
     # Each modifier rewires the effective input type via the `over` path.
-    get_mod = getattr(item, "get_modifier", None)
-    each = get_mod(Each) if get_mod else None
+    ms = getattr(item, "modifier_set", None)
+    each = ms.each if ms is not None else None
     if each is not None:
         _check_each_path(construct, item, input_type, each, producers)
         return
@@ -374,13 +397,12 @@ def _check_item_input(
         if _types_compatible(producer_type, input_type):
             return
 
-    msg = _format_no_producer_error(construct, item, input_type, producers)
-    raise ConstructError(msg)
+    raise _build_no_producer_error(construct, item, input_type, producers)
 
 
 def _check_fan_in_inputs(
-    construct: Any,
-    item: Any,
+    construct: Construct,
+    item: NodeItem,
     inputs_dict: dict[str, Any],
     producers: list[tuple[str, Any, str]],
 ) -> None:
@@ -401,48 +423,58 @@ def _check_fan_in_inputs(
     #   1. fan_out_param set by @node decoration (via _build_construct_from_decorated)
     #   2. Each modifier present + key not in producers (programmatic API)
     # Both must be handled so the programmatic `Node(inputs=...) | Each(...)`
-    # path works without requiring fan_out_param to be set (neograph-ts7).
+    # path works without requiring fan_out_param to be set.
     fan_out_key = getattr(item, "fan_out_param", None)
-    has_each = False
-    get_mod = getattr(item, "has_modifier", None)
-    if get_mod is not None:
-        has_each = get_mod(Each)
+    ms = getattr(item, "modifier_set", None)
+    has_each = ms is not None and ms.each is not None
     producer_by_name: dict[str, tuple[Any, str]] = {
         field_name: (producer_type, label)
         for field_name, producer_type, label in producers
     }
+    # Track if the Each fan-out receiver slot was consumed.
+    # If fan_out_param is already set (from @node), the slot is pre-consumed.
+    _each_skip_used = (fan_out_key is not None)
     for upstream_name, expected_type in inputs_dict.items():
         if upstream_name == fan_out_key:
             continue
         if upstream_name not in producer_by_name:
-            # If the node has an Each modifier, an unmatched key is the
-            # fan-out item receiver — skip it rather than rejecting.
-            # This handles the programmatic API where fan_out_param isn't set.
-            if has_each:
+            # If the node has an Each modifier, ONE unmatched key is the
+            # fan-out item receiver — skip it. Additional unmatched keys
+            # are real errors (typos) and must be rejected.
+            if has_each and not _each_skip_used:
+                _each_skip_used = True
                 continue
-            msg = (
-                f"Node '{item.name}' in construct '{construct.name}' "
+            # Loop self-reference: key matching the node's own name reads
+            # from the node's own output on re-entry.
+            if ms is not None and ms.loop is not None:
+                item_field = field_name_for(item.name)
+                if upstream_name == item_field:
+                    continue
+            raise ConstructError.build(
                 f"declares inputs['{upstream_name}']={_fmt_type(expected_type)} "
-                f"but no upstream node named '{upstream_name}' exists.\n"
-                f"  available upstreams: {sorted(producer_by_name.keys())}\n"
-                f"{_location_suffix()}"
+                f"but no upstream node named '{upstream_name}' exists",
+                found=f"available upstreams: {sorted(producer_by_name.keys())}",
+                node=item.name,
+                construct=construct.name,
+                location=_source_location(),
             )
-            raise ConstructError(msg)
         producer_type, _label = producer_by_name[upstream_name]
         if not _types_compatible(producer_type, expected_type):
-            msg = (
-                f"Node '{item.name}' in construct '{construct.name}' "
+            raise ConstructError.build(
                 f"declares inputs['{upstream_name}']={_fmt_type(expected_type)} "
                 f"but upstream '{upstream_name}' produces "
-                f"{_fmt_type(producer_type)}.\n"
-                f"{_location_suffix()}"
+                f"{_fmt_type(producer_type)}",
+                expected=_fmt_type(expected_type),
+                found=_fmt_type(producer_type),
+                node=item.name,
+                construct=construct.name,
+                location=_source_location(),
             )
-            raise ConstructError(msg)
 
 
 def _check_each_path(
-    construct: Any,
-    item: Any,
+    construct: Construct,
+    item: NodeItem,
     input_type: Any,
     each: Each,
     producers: list[tuple[str, Any, str]],
@@ -457,10 +489,18 @@ def _check_each_path(
             break
 
     if root_type is None:
-        # Root doesn't name any upstream producer. The collection is likely
-        # pre-seeded by runtime state (e.g. a top-level Each with a state
-        # field supplied via run(input=...)); defer to runtime.
-        return
+        # Allow framework-injected roots (sub-construct port param).
+        if root == "neo_subgraph_input":
+            return
+        known_roots = {fn for fn, _, _ in producers}
+        raise ConstructError.build(
+            f"Each(over='{each.over}') root '{root}' does not match any upstream node",
+            found=f"known producers: {sorted(known_roots)}" if known_roots else "no producers available",
+            node=item.name,
+            construct=construct.name,
+            hint="the first segment of 'over' must name an upstream node (e.g., 'source.items')",
+            location=_source_location(),
+        )
 
     # Walk remaining segments through Pydantic model_fields.
     current_type: Any = root_type
@@ -469,50 +509,50 @@ def _check_each_path(
         walked.append(segment)
         resolved = _resolve_field_annotation(current_type, segment)
         if resolved is _MISSING:
-            msg = (
-                f"Node '{item.name}' in construct '{construct.name}' has "
-                f"Each(over='{each.over}') but '{'.'.join(walked)}' does not "
-                f"resolve: {_fmt_type(current_type)} has no field '{segment}'.\n"
-                f"{_location_suffix()}"
+            raise ConstructError.build(
+                f"Each(over='{each.over}') path '{'.'.join(walked)}' does not resolve",
+                found=f"{_fmt_type(current_type)} has no field '{segment}'",
+                node=item.name,
+                construct=construct.name,
+                location=_source_location(),
             )
-            raise ConstructError(msg)
         current_type = resolved
 
     element_type = _extract_list_element(current_type)
     if element_type is None:
-        msg = (
-            f"Node '{item.name}' in construct '{construct.name}' has "
-            f"Each(over='{each.over}'), but the path resolves to "
-            f"{_fmt_type(current_type)}, not a list.\n"
-            f"  hint: Each fans out over a collection; the terminal field "
-            f"must be a list.\n"
-            f"{_location_suffix()}"
+        raise ConstructError.build(
+            f"Each(over='{each.over}') terminal field is not a list",
+            expected="list[...]",
+            found=_fmt_type(current_type),
+            hint="Each fans out over a collection; the terminal field must be a list",
+            node=item.name,
+            construct=construct.name,
+            location=_source_location(),
         )
-        raise ConstructError(msg)
 
     if not _types_compatible(element_type, input_type):
-        msg = (
-            f"Node '{item.name}' in construct '{construct.name}' declares "
-            f"{'inputs' if isinstance(item, Node) else 'input'}="
-            f"{_fmt_type(input_type)} with Each(over='{each.over}'), "
-            f"but the path resolves to list[{_fmt_type(element_type)}].\n"
-            f"{_location_suffix()}"
+        raise ConstructError.build(
+            f"Each(over='{each.over}') element type mismatch",
+            expected=_fmt_type(input_type),
+            found=f"list[{_fmt_type(element_type)}]",
+            node=item.name,
+            construct=construct.name,
+            location=_source_location(),
         )
-        raise ConstructError(msg)
 
     # Verify each.key names a valid field on the element type.
     # Only check when the element type has model_fields (Pydantic model);
     # primitives (str, int, etc.) defer to runtime str(item) fallback.
     element_fields = getattr(element_type, "model_fields", None)
     if element_fields is not None and each.key not in element_fields:
-        msg = (
-            f"Node '{item.name}' in construct '{construct.name}' has "
-            f"Each(over='{each.over}', key='{each.key}') but "
-            f"{_fmt_type(element_type)} has no field '{each.key}'.\n"
-            f"  available fields: {sorted(element_fields.keys())}\n"
-            f"{_location_suffix()}"
+        raise ConstructError.build(
+            f"Each(over='{each.over}', key='{each.key}') — "
+            f"{_fmt_type(element_type)} has no field '{each.key}'",
+            found=f"available fields: {sorted(element_fields.keys())}",
+            node=item.name,
+            construct=construct.name,
+            location=_source_location(),
         )
-        raise ConstructError(msg)
 
 
 # Sentinel distinguishing "field absent" from "field present but None-valued" —
@@ -537,7 +577,7 @@ def _resolve_field_annotation(model_class: Any, field_name: str) -> Any:
         return _MISSING
     try:
         hints = get_type_hints(model_class)
-    except Exception:
+    except (NameError, AttributeError, TypeError):
         hints = {}
     ann = hints.get(field_name, model_fields[field_name].annotation)
     if ann is None or isinstance(ann, (str, ForwardRef)):
@@ -554,7 +594,7 @@ def _types_compatible(producer: Any, target: Any) -> bool:
         return True
     producer_origin = get_origin(producer)
     target_origin = get_origin(target)
-    # Unwrap Union/Optional types (neograph-pbyz).
+    # Unwrap Union/Optional types.
     # typing.Optional[X] = Union[X, None], PEP 604 X | None = UnionType.
     if producer_origin is Union or producer_origin is types.UnionType:
         prod_args = [a for a in get_args(producer) if a is not type(None)]
@@ -568,19 +608,22 @@ def _types_compatible(producer: Any, target: Any) -> bool:
         # dict[str, X] vs dict → compatible (runtime isinstance handles it)
         if isinstance(target, type) and issubclass(producer_origin, target):
             return True
-        # dict[str, X] vs dict[str, X] → compare origin + args
+        # dict[str, X] vs dict[str, Y] → compare origin + args recursively
         if target_origin is not None and producer_origin is target_origin:
-            return get_args(producer) == get_args(target)
+            p_args, t_args = get_args(producer), get_args(target)
+            if len(p_args) != len(t_args):
+                return False
+            return all(_types_compatible(p, t) for p, t in zip(p_args, t_args, strict=True))
         # dict[str, X] producer ↔ list[Y] consumer — merge-after-fanout
         # (neograph-kqd.2). A downstream node consuming an Each-fanned-out
         # result as list[Y] gets the runtime unwrap via dict.values() in
         # step 5 (factory._extract_input). Element-type compatibility is
         # checked recursively so subclass rules apply consistently.
         if producer_origin is dict and target_origin is list:
-            prod_args = get_args(producer)     # (str, X)
-            target_args = get_args(target)     # (Y,)
-            if len(prod_args) == 2 and len(target_args) == 1:
-                return _types_compatible(prod_args[1], target_args[0])
+            dict_args = get_args(producer)     # (str, X)
+            list_args = get_args(target)       # (Y,)
+            if len(dict_args) == 2 and len(list_args) == 1:
+                return _types_compatible(dict_args[1], list_args[0])
         return False
     if not (isinstance(producer, type) and isinstance(target, type)):
         return False
@@ -616,38 +659,30 @@ def _fmt_type(tp: Any) -> str:
     return repr(tp)
 
 
-def _format_no_producer_error(
-    construct: Any,
-    item: Any,
+def _build_no_producer_error(
+    construct: Construct,
+    item: NodeItem,
     input_type: Any,
     producers: list[tuple[str, Any, str]],
-) -> str:
-    # ConstructError messages deliberately diverge from the package-wide
-    # one-line error shape (see state.py, compiler.py, factory.py). Assembly-
-    # time type mismatches benefit from structured help — a producer inventory,
-    # a `.map()` hint when applicable, and a source-location pointer — that
-    # a terse "Node 'X' has wrong input." would lose. Other errors in the
-    # package either stay single-line by design (missing output type is a
-    # one-fix mistake) or can adopt this richer format deliberately.
+) -> NeographError:
     if producers:
         producer_summary = "\n".join(
-            f"    • {label}: {_fmt_type(t)}"
+            f"    - {label}: {_fmt_type(t)}"
             for _, t, label in producers
         )
     else:
         producer_summary = "    (no upstream producers)"
 
-    hint = _suggest_hint(input_type, producers)
-    hint_line = f"  hint: {hint}\n" if hint else ""
-
-    return (
-        f"Node '{item.name}' in construct '{construct.name}' declares "
+    return ConstructError.build(
+        f"declares "
         f"{'inputs' if isinstance(item, Node) else 'input'}="
         f"{_fmt_type(input_type)} but no upstream produces a "
-        f"compatible value.\n"
-        f"  upstream producers:\n{producer_summary}\n"
-        f"{hint_line}"
-        f"{_location_suffix()}"
+        f"compatible value",
+        found=f"upstream producers:\n{producer_summary}",
+        hint=_suggest_hint(input_type, producers),
+        node=item.name,
+        construct=construct.name,
+        location=_source_location(),
     )
 
 
@@ -709,7 +744,7 @@ def _source_location() -> str | None:
     directory that would otherwise get mis-filtered.
     """
     try:
-        frame = sys._getframe(1)
+        frame: types.FrameType | None = sys._getframe(1)
         while frame is not None:
             module_name = frame.f_globals.get("__name__", "")
             if not (
@@ -721,7 +756,6 @@ def _source_location() -> str | None:
                 if fname and not fname.startswith("<"):
                     return f"{os.path.basename(fname)}:{frame.f_lineno}"
             frame = frame.f_back
-    except Exception:
-        # Best-effort: location lookup must never crash Construct assembly.
+    except (AttributeError, TypeError, ValueError):  # noqa: bare-except — frame walk best-effort
         return None
     return None

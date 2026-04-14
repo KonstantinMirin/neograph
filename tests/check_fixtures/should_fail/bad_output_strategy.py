@@ -1,6 +1,7 @@
-# CHECK_ERROR: output_strategy='yolo'.*Valid values
-from neograph import Construct, Node, configure_llm
+# CHECK_ERROR: invalid output_strategy
 from pydantic import BaseModel
+
+from neograph import Construct, Node, configure_llm
 
 configure_llm(
     llm_factory=lambda tier: None,

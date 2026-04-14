@@ -20,13 +20,13 @@ setup with a simple prompt compiler.
 
 from __future__ import annotations
 
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 from langchain_core.messages import AIMessage
 from pydantic import BaseModel
 
 from neograph import configure_llm
-
 
 # ═══════════════════════════════════════════════════════════════════════════
 # StructuredFake — produce mode
@@ -48,7 +48,7 @@ class StructuredFake:
         self._respond = respond
         self._model: type[BaseModel] | None = None
 
-    def with_structured_output(self, model: type[BaseModel], **kwargs) -> "StructuredFake":
+    def with_structured_output(self, model: type[BaseModel], **kwargs) -> StructuredFake:
         clone = StructuredFake(self._respond)
         clone._model = model
         return clone
@@ -83,7 +83,7 @@ class StructuredFakeWithRaw:
         self._include_raw: bool = False
         self._usage = usage or {"prompt_tokens": 10, "completion_tokens": 20}
 
-    def with_structured_output(self, model: type[BaseModel], **kwargs) -> "StructuredFakeWithRaw":
+    def with_structured_output(self, model: type[BaseModel], **kwargs) -> StructuredFakeWithRaw:
         clone = StructuredFakeWithRaw(self._respond, usage=self._usage)
         clone._model = model
         clone._include_raw = kwargs.get("include_raw", False)
@@ -99,10 +99,7 @@ class StructuredFakeWithRaw:
                 usage_metadata={
                     "input_tokens": self._usage.get("prompt_tokens", 0),
                     "output_tokens": self._usage.get("completion_tokens", 0),
-                    "total_tokens": (
-                        self._usage.get("prompt_tokens", 0)
-                        + self._usage.get("completion_tokens", 0)
-                    ),
+                    "total_tokens": (self._usage.get("prompt_tokens", 0) + self._usage.get("completion_tokens", 0)),
                 },
             )
             return {"parsed": result, "raw": raw_msg}
@@ -145,7 +142,7 @@ class ReActFake:
         self._model: type[BaseModel] | None = None
         self._in_structured_mode = False
 
-    def bind_tools(self, tools: list) -> "ReActFake":
+    def bind_tools(self, tools: list) -> ReActFake:
         # Return self so call counter persists across rebinds
         return self
 
@@ -168,7 +165,7 @@ class ReActFake:
         msg.tool_calls = calls
         return msg
 
-    def with_structured_output(self, model: type[BaseModel], **kwargs) -> "ReActFake":
+    def with_structured_output(self, model: type[BaseModel], **kwargs) -> ReActFake:
         clone = ReActFake(self._tool_calls, self._final)
         clone._call_idx = self._call_idx
         clone._model = model
@@ -218,6 +215,105 @@ class FakeTool:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# GuardFake — ReAct loop guard tests (max_iterations / token_budget)
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class GuardFake:
+    """Fake LLM that returns tool calls when tools are bound, plain response otherwise.
+
+    The factory returns a raw (unbound) fake with has_tools=False.
+    bind_tools(non_empty_list) creates a bound version with has_tools=True.
+    When the ReAct guard unbinds (llm_with_tools = llm), the raw fake returns
+    a plain response (no tool calls), which breaks the loop naturally.
+
+    Args:
+        input_tokens_per_call: If > 0, each invocation includes this many
+            input_tokens in usage_metadata (for token_budget tests).
+    """
+
+    def __init__(self, input_tokens_per_call: int = 0):
+        from langchain_core.messages import AIMessage
+
+        tool_call = {"name": "search", "args": {"q": "x"}, "id": "1"}
+        self._call_counter = [0]
+        self._input_tokens = input_tokens_per_call
+        self._AIMessage = AIMessage
+        self._tool_call = tool_call
+        self._has_tools = False
+        self._model = None
+        self._structured = False
+
+    def bind_tools(self, tools):
+        bound = GuardFake(input_tokens_per_call=self._input_tokens)
+        bound._call_counter = self._call_counter
+        bound._has_tools = bool(tools)
+        return bound
+
+    def invoke(self, messages, **kwargs):
+        if self._structured:
+            return self._model(items=["done"])
+        self._call_counter[0] += 1
+        if self._has_tools:
+            msg = self._AIMessage(content="")
+            msg.tool_calls = [self._tool_call]
+            if self._input_tokens:
+                msg.usage_metadata = {
+                    "input_tokens": self._input_tokens,
+                    "output_tokens": 50,
+                    "total_tokens": self._input_tokens + 50,
+                }
+            return msg
+        return self._AIMessage(content="done")
+
+    def with_structured_output(self, model, **kwargs):
+        clone = GuardFake(input_tokens_per_call=self._input_tokens)
+        clone._call_counter = self._call_counter
+        clone._has_tools = self._has_tools
+        clone._model = model
+        clone._structured = True
+        return clone
+
+    @property
+    def call_count(self):
+        return self._call_counter[0]
+
+
+class StubbornFake:
+    """Fake LLM that ALWAYS returns tool calls, ignoring bind_tools / unbinding.
+
+    Used to verify the _guard_fired safety net: after the guard unbinds tools,
+    if the LLM still returns tool_calls, the loop force-breaks instead of
+    looping forever.
+    """
+
+    def __init__(self):
+        from langchain_core.messages import AIMessage
+
+        self._AIMessage = AIMessage
+        self._model = None
+        self._structured = False
+        self._call_count = 0
+
+    def bind_tools(self, tools):
+        return self  # always returns self — ignores unbinding
+
+    def invoke(self, messages, **kwargs):
+        if self._structured:
+            return self._model(items=["done"])
+        self._call_count += 1
+        msg = self._AIMessage(content="")
+        msg.tool_calls = [{"name": "search", "args": {"q": "x"}, "id": "1"}]
+        return msg
+
+    def with_structured_output(self, model, **kwargs):
+        clone = StubbornFake()
+        clone._model = model
+        clone._structured = True
+        return clone
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # Helpers
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -232,5 +328,6 @@ def configure_fake_llm(
     a single user message with "test" content.
     """
     if prompt_compiler is None:
-        prompt_compiler = lambda template, data, **kw: [{"role": "user", "content": "test"}]
+        def prompt_compiler(template, data, **kw):
+            return [{"role": "user", "content": "test"}]
     configure_llm(llm_factory=factory, prompt_compiler=prompt_compiler)

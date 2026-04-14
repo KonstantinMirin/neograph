@@ -14,7 +14,7 @@ When a node's upstream output is inserted into an LLM prompt, it needs to be ser
 BAML-style XML elements. Fields become tags; nested models become nested XML; lists become repeated `<item>` elements. Multi-line prose is not JSON-escaped.
 
 ```python
-from neograph.renderers import XmlRenderer
+from neograph import XmlRenderer
 
 renderer = XmlRenderer()
 print(renderer.render(claims))
@@ -52,7 +52,7 @@ renderer = XmlRenderer(include_field_info='always')
 DSPy-style `[[ ## field ## ]]` headers. Fields get delimited headers; nested models recurse with dotted prefixes; lists use `- ` bullet points.
 
 ```python
-from neograph.renderers import DelimitedRenderer
+from neograph import DelimitedRenderer
 
 renderer = DelimitedRenderer()
 print(renderer.render(claims))
@@ -73,7 +73,7 @@ All API responses shall include trace IDs
 Backward-compatible JSON serialization. Uses `model_dump_json` for Pydantic models, `json.dumps` for everything else.
 
 ```python
-from neograph.renderers import JsonRenderer
+from neograph import JsonRenderer
 
 renderer = JsonRenderer(indent=2)
 print(renderer.render(claims))
@@ -95,7 +95,7 @@ Pass `renderer=` when creating a node:
 
 ```python
 from neograph import node
-from neograph.renderers import XmlRenderer
+from neograph import XmlRenderer
 
 @node(outputs=Summary, prompt='rw/summarize', model='reason',
       renderer=XmlRenderer(include_field_info='never'))
@@ -108,7 +108,7 @@ Set `renderer=` on a Construct. It propagates to every child node that does not 
 
 ```python
 from neograph import Construct
-from neograph.renderers import DelimitedRenderer
+from neograph import DelimitedRenderer
 
 pipeline = Construct(
     "analysis",
@@ -140,12 +140,48 @@ class Claims(BaseModel, frozen=True):
 
 This is useful when a model knows best how to represent itself for an LLM, independent of the pipeline's default renderer.
 
+### Typed projections: render_for_prompt() returning BaseModel
+
+When `render_for_prompt()` returns a **BaseModel** instead of a string, NeoGraph automatically renders the returned model through the active renderer. This lets you define typed *presentation projections* -- slim views of your data optimized for the LLM -- without manual string formatting.
+
+```python
+from pydantic import BaseModel, Field
+
+class ResearchPresentation(BaseModel, frozen=True):
+    """What the LLM sees -- no internal fields."""
+    content: str
+    confidence: float = Field(description="0.0 to 1.0")
+
+class ResearchData(BaseModel, frozen=True):
+    """Full data for pipeline logic."""
+    raw_text: str
+    source_url: str          # internal -- LLM doesn't need this
+    internal_score: float    # internal -- LLM doesn't need this
+
+    def render_for_prompt(self) -> ResearchPresentation:
+        return ResearchPresentation(
+            content=self.raw_text.strip(),
+            confidence=round(self.internal_score, 2),
+        )
+```
+
+With `XmlRenderer`, the LLM sees:
+
+```xml
+<content>The system uses event sourcing for auditability.</content>
+<confidence description="0.0 to 1.0">0.87</confidence>
+```
+
+The `source_url` and `internal_score` fields never reach the prompt. The projection is typed and validated by Pydantic, so you get IDE autocomplete and type checking on the presentation layer.
+
+See [Example 18](/walkthrough/typed-projections/) for a full runnable demo.
+
 ## describe_type: schema descriptions for prompts
 
 The `describe_type()` function renders a Pydantic model's schema in TypeScript-style notation. This is used internally for structured output instructions but is also available for custom prompt construction.
 
 ```python
-from neograph.describe_type import describe_type
+from neograph import describe_type
 
 class Claim(BaseModel, frozen=True):
     text: str

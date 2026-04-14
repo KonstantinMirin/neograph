@@ -34,7 +34,7 @@ class TestStructuredFakeWithRaw:
         result = structured.invoke([])
 
         raw_msg = result["raw"]
-        assert raw_msg.usage_metadata is not None
+        assert isinstance(raw_msg.usage_metadata, dict)
         assert raw_msg.usage_metadata["input_tokens"] == 10
         assert raw_msg.usage_metadata["output_tokens"] == 20
         assert raw_msg.usage_metadata["total_tokens"] == 30
@@ -79,7 +79,7 @@ class TestStructuredFakeWithRaw:
 
         assert isinstance(result, Items)
         assert result.items == ["done"]
-        assert usage is not None
+        assert isinstance(usage, dict)
         assert usage["input_tokens"] == 10
         assert usage["output_tokens"] == 20
 

@@ -1,8 +1,9 @@
 # CHECK_ERROR: Scripted function.*not registered|merge_fn.*not
 from pydantic import BaseModel
+
 from neograph import Construct, Node
-from neograph.modifiers import Oracle
 from neograph._llm import configure_llm
+from neograph.modifiers import Oracle
 
 configure_llm(
     llm_factory=lambda tier: None,

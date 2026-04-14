@@ -12,10 +12,11 @@
 #
 # Impact: any node with outputs=Optional[X] crashes assembly with a confusing
 # TypeError instead of a clean ConstructError.
-from typing import Optional
+from pydantic import BaseModel
+
 from neograph import Construct, Node
 from neograph.factory import register_scripted
-from pydantic import BaseModel
+
 
 class Claims(BaseModel, frozen=True):
     text: str
@@ -24,6 +25,6 @@ register_scripted("opt_crash_a", lambda i, c: None)
 register_scripted("opt_crash_b", lambda i, c: Claims(text="ok"))
 
 pipeline = Construct("broken", nodes=[
-    Node.scripted("first", fn="opt_crash_a", outputs=Optional[Claims]),
+    Node.scripted("first", fn="opt_crash_a", outputs=Claims | None),
     Node.scripted("second", fn="opt_crash_b", inputs=Claims, outputs=Claims),
 ])

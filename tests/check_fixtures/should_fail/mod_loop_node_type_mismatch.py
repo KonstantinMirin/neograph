@@ -1,10 +1,11 @@
 # CHECK_ERROR: loop.*back-edge|output type.*not compatible.*input
 # Loop on a Node where output type differs from input type.
 # Self-loop requires output -> input compatibility.
-from neograph import Node
-from neograph.modifiers import Loop
-from neograph.factory import register_scripted
 from pydantic import BaseModel
+
+from neograph import Node
+from neograph.factory import register_scripted
+from neograph.modifiers import Loop
 
 
 class Input(BaseModel, frozen=True):

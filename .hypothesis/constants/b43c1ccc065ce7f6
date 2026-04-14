@@ -1,0 +1,4 @@
+# file: /Users/konst/projects/neograph/src/neograph/decorators.py
+# hypothesis_version: 6.151.12
+
+['-', '_', '__name__', 'act', 'agent', 'choose exactly one', 'config', 'error', 'last', 'max_iterations', 'merge_fn', 'merge_prompt', 'models', 'n', 'on_exhaust', 'raw', 'return', 'scripted', 'state', 'think', 'when']

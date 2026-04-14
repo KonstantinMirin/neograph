@@ -20,12 +20,30 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Annotated, Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, BeforeValidator, Field
 
 from neograph._construct_validation import ConstructError, _validate_node_chain
-from neograph.modifiers import Modifiable, Modifier
+from neograph.modifiers import Modifiable, ModifierSet
+
+
+def _validate_node_list(v: Any) -> list[Any]:
+    """Validate that nodes list contains Node, Construct, _BranchNode, or compatible BaseModel.
+
+    Accepts any BaseModel with a ``name`` attribute (covers Node, Construct,
+    _BranchNode via Modifiable, and test fakes). Rejects plain dicts, strings,
+    and other non-model types that would silently break downstream.
+    """
+    if not isinstance(v, list):
+        raise TypeError(f"nodes must be a list, got {type(v).__name__}")
+    for i, item in enumerate(v):
+        if not (isinstance(item, (BaseModel, Modifiable)) and hasattr(item, "name")):
+            raise TypeError(
+                f"nodes[{i}] must be a Node, Construct, or compatible model — "
+                f"got {type(item).__name__}: {item!r}"
+            )
+    return v
 
 __all__ = ["Construct", "ConstructError"]
 
@@ -57,8 +75,9 @@ class Construct(Modifiable, BaseModel):
 
     name: str
     description: str = ""
-    # list[Node | Construct] — Any avoids a circular type reference.
-    nodes: list[Any] = Field(default_factory=list)
+    # list[Node | Construct | _BranchNode] — validated at runtime via BeforeValidator.
+    # Static annotation is list[Any] because _BranchNode isn't a Pydantic model.
+    nodes: Annotated[list[Any], BeforeValidator(_validate_node_list)] = Field(default_factory=list)
 
     # I/O boundary — required when used as a sub-construct
     input: type[BaseModel] | None = None
@@ -75,38 +94,38 @@ class Construct(Modifiable, BaseModel):
     # model.render_for_prompt() > node.renderer > construct.renderer > global > None.
     renderer: Any = None
 
-    # Modifiers applied via | operator
-    modifiers: list[Modifier] = Field(default_factory=list)
+    # Modifiers applied via | operator (typed slots, not a list)
+    modifier_set: ModifierSet = Field(default_factory=ModifierSet)
 
     model_config = {"arbitrary_types_allowed": True}
 
     def __init__(self, name_: str | None = None, /, **kwargs: Any) -> None:
         if name_ is not None:
             kwargs["name"] = name_
+        # Reject legacy modifiers=[...] constructor form.
+        if "modifiers" in kwargs:
+            raise ConstructError.build(
+                "Construct(modifiers=[...]) is no longer supported",
+                hint="use the pipe syntax instead: construct | Oracle(...) | Each(...)",
+            )
         super().__init__(**kwargs)
+        if not self.nodes:
+            raise ConstructError.build(
+                "Construct has no nodes",
+                construct=self.name,
+                hint="add at least one Node or sub-Construct",
+            )
         # Propagate default llm_config to child nodes BEFORE validation so
         # downstream compile() sees the merged config. Per-node llm_config
         # merges over the Construct default (node wins on conflicts).
-        if self.llm_config:
-            for item in self.nodes:
-                if hasattr(item, "llm_config"):
-                    merged = {**self.llm_config, **item.llm_config}
-                    # Node is a frozen-ish pydantic model — use model_copy
-                    # to produce the merged version, then replace in-place.
-                    try:
-                        item.llm_config = merged
-                    except (TypeError, ValueError):
-                        # Frozen model — skip. Sub-constructs inherit via
-                        # their own __init__ merging.
-                        pass
-        # Propagate renderer to child nodes that don't have their own.
-        if self.renderer is not None:
-            for item in self.nodes:
-                if hasattr(item, "renderer") and getattr(item, "renderer", None) is None:
-                    try:
-                        item.renderer = self.renderer
-                    except (TypeError, ValueError):
-                        pass
+        for i, item in enumerate(self.nodes):
+            updates: dict[str, Any] = {}
+            if self.llm_config and hasattr(item, "llm_config"):
+                updates["llm_config"] = {**self.llm_config, **item.llm_config}
+            if self.renderer is not None and hasattr(item, "renderer") and getattr(item, "renderer", None) is None:
+                updates["renderer"] = self.renderer
+            if updates:
+                self.nodes[i] = item.model_copy(update=updates)
         # Validate after pydantic finishes so ConstructError escapes cleanly
         # rather than being wrapped in a pydantic ValidationError. Nested
         # constructs self-validate during their own __init__.

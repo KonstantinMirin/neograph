@@ -5,6 +5,51 @@ All notable changes to NeoGraph will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-04-14
+
+### Breaking
+
+- **`DIBinding.payload` removed** -- replaced with typed `default_value` (CONSTANT) and `model_cls` (MODEL kinds) fields.
+- **`parse_condition` and `ModifierSet` removed from `__all__`** -- still importable, not in `from neograph import *`.
+- **`_validate_type_spec` rejects non-type inputs** -- `Node(inputs="SomeType")` or `Node(outputs=42)` raise `TypeError` at construction time.
+- **`Construct.nodes` validates items** -- rejects non-model types (dicts, strings, ints) at construction time via `BeforeValidator`.
+- **Single-type `inputs=` emits `DeprecationWarning`** -- use dict-form `inputs={"name": SomeType}` for explicit named resolution.
+
+### Added
+
+- **`render_input` in public API** -- `from neograph import render_input`.
+- **`render_for_prompt()` returning BaseModel auto-rendered** -- typed presentation projections get BAML/XML/JSON rendered through the active renderer.
+- **`--version` CLI flag** -- `python -m neograph --version`.
+- **Missing inline prompt `${vars}` emit structlog warning** -- logs `prompt_var_missing` with available keys instead of silent empty-string.
+- **Loader path heuristic hardened** -- newline pre-filter prevents YAML strings from being misidentified as file paths.
+- **Checkpoint crash recovery** -- `run(graph, config=...)` with no input resumes from last checkpoint. Detects existing checkpoints automatically when input is provided.
+- **Null-to-default coercion** -- LLM returning `null` for fields with defaults (e.g., `str = ""`) auto-coerces to the default. Recursive for nested models.
+- **Structured retry with schema** -- retry prompts include `describe_type(output_model)` so the LLM sees the expected structure on self-correction. Default retries bumped from 1 to 2.
+
+### Fixed
+
+- **`exclude=True` fields omitted from schemas and renderers** -- `describe_type`, `XmlRenderer`, `DelimitedRenderer` now skip `Field(exclude=True)` fields. Prevents LLMs from producing pipeline-internal values.
+- **12 bare `except Exception` handlers eliminated** -- narrowed to specific exception types. Structural guard prevents new ones.
+- **Subconstruct context field types preserved** -- parent field types propagated into subconstruct state models instead of erasing to `Any`. Fixes msgpack checkpoint allowlist for context fields.
+- **Checkpoint resume with input** -- `run(graph, input={...}, config=...)` with existing checkpoint now resumes instead of restarting. Input injected into config for DI, `None` passed to `graph.invoke()` for resume.
+- **DI preflight check on crash-recovery path** -- missing FromInput params fail at the gate with a clear error, not deep inside a node.
+
+### Architecture
+
+- **`_sidecar.py` extracted** -- breaks circular import between `decorators.py` and `_construct_builder.py`. Structural guard enforces one-way imports.
+- **`_build_oracle_kwargs` extracted** -- deduplicates Oracle composition in `node()` decorator. Fixes latent bug: fusion path now validates `ensemble_n >= 2`.
+- **`_is_instance_safe` deduplicated** -- `factory.py` imports from `di.py`.
+- **16 deferred imports eliminated** -- leaf-module imports promoted to top-level. Budget guard added (ceiling: 40).
+- **`NodeItem` type alias** -- replaces 10 bare `Any` signatures in validation.
+- **`model_copy` calls batched** -- `_cleanup_inputs_and_register` does one copy per node instead of three.
+
+### Testing
+
+- **1362 tests** (was 999 at 0.3.0). Test suite restructured into 36 files across 5 packages.
+- **Hypothesis property-based testing** -- 95 tests across topology strategies, LLM output parsing, registry interactions, and modifier edge cases.
+- **68 check fixtures** (52 should-fail + 16 should-pass).
+- **Structural guards** -- bare `except Exception`, deferred import budget, no-payload field, sidecar module boundary.
+
 ## [0.3.0] - 2026-04-09
 
 ### Added
@@ -309,6 +354,7 @@ Initial public release.
 
 Optional: `langfuse>=3.0` for observability integration.
 
+[0.4.0]: https://github.com/KonstantinMirin/neograph/releases/tag/v0.4.0
 [0.3.0]: https://github.com/KonstantinMirin/neograph/releases/tag/v0.3.0
 [0.2.0]: https://github.com/KonstantinMirin/neograph/releases/tag/v0.2.0
 [0.1.0]: https://github.com/KonstantinMirin/neograph/releases/tag/v0.1.0

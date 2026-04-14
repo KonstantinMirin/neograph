@@ -3,9 +3,11 @@
 # The input port satisfies the output boundary check (input==output), so assembly
 # passes. At runtime, make_subgraph_fn iterates sub_result.values() looking for
 # isinstance(X, sub.output) — no match → returns None silently.
+from pydantic import BaseModel
+
 from neograph import Construct, Node
 from neograph.factory import register_scripted
-from pydantic import BaseModel
+
 
 class TypeA(BaseModel, frozen=True):
     x: str

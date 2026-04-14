@@ -1,0 +1,4 @@
+# file: /Users/konst/projects/neograph/src/neograph/_wiring.py
+# hypothesis_version: 6.151.12
+
+['each_duplicate_key', 'error', 'human_feedback', 'neo_each_item', 'neo_oracle_gen_id', 'neo_oracle_model']

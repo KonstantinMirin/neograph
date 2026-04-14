@@ -1,10 +1,11 @@
 # CHECK_ERROR: does not resolve|no field
 # Each.over path where the dotted segment points to a field that doesn't exist
 # on the upstream output model. Should fail at assembly-time validation.
-from neograph import Construct, Node
-from neograph.modifiers import Each
-from neograph.factory import register_scripted
 from pydantic import BaseModel
+
+from neograph import Construct, Node
+from neograph.factory import register_scripted
+from neograph.modifiers import Each
 
 
 class Clusters(BaseModel, frozen=True):

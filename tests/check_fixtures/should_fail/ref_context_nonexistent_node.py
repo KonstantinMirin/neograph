@@ -5,6 +5,7 @@
 # A typo in context=["nonexistant_node"] compiles fine but injects None
 # into the LLM prompt at runtime.
 from pydantic import BaseModel
+
 from neograph import Construct, Node
 from neograph._llm import configure_llm
 

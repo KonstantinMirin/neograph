@@ -1,7 +1,9 @@
 # Valid: list[X] consumer of Each-produced dict[str, X] (Scenario 8)
-from neograph import Construct, Node, Each
-from neograph.factory import register_scripted
 from pydantic import BaseModel
+
+from neograph import Construct, Each, Node
+from neograph.factory import register_scripted
+
 
 class ClusterGroup(BaseModel, frozen=True):
     label: str

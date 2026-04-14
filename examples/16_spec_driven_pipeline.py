@@ -31,8 +31,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from neograph import compile, load_spec, register_scripted, run
-from neograph.spec_types import lookup_type
+from neograph import compile, load_spec, lookup_type, register_scripted, run
 
 
 # -- Scripted node implementations -------------------------------------------

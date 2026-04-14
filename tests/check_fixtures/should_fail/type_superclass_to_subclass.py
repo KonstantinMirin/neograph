@@ -1,9 +1,11 @@
 # CHECK_ERROR: type.*compatible|no upstream produces
 # Attack vector 5b: Reverse Liskov — producer is superclass, consumer expects subclass.
 # TypeA is NOT a TypeB. Should fail.
+from pydantic import BaseModel
+
 from neograph import Construct, Node
 from neograph.factory import register_scripted
-from pydantic import BaseModel
+
 
 class TypeA(BaseModel, frozen=True):
     x: str

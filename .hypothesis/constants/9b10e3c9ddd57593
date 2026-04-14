@@ -1,0 +1,4 @@
+# file: /Users/konst/projects/neograph/src/neograph/forward.py
+# hypothesis_version: 6.151.12
+
+['!=', '-', '.', '<', '<=', '<input>', '==', '>', '>=', 'ForwardConstruct', '_left', '_neo_', '_neo_name', '_neo_nodes', '_neo_real', '_neo_source', '_neo_tracer', '_node', '_op', '_right', '_tracer', 'error', 'forward_input', 'ignored_types', 'inputs', 'label', 'name', 'nodes', 'output', 'truthy']

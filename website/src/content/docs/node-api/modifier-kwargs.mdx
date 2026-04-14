@@ -251,7 +251,7 @@ How it works:
 For loops involving multiple nodes (e.g., review + revise), wrap the loop body as a sub-construct with `Loop`:
 
 ```python
-from neograph.modifiers import Loop
+from neograph import Loop
 
 @node(outputs=ReviewResult)
 def review(draft: Draft) -> ReviewResult: ...
@@ -467,7 +467,7 @@ Restrictions:
 The programmatic equivalent:
 
 ```python
-from neograph.modifiers import Loop
+from neograph import Loop
 
 refine = Node("refine", mode="scripted", outputs=Draft) | Loop(
     when=lambda d: d is None or d.score < 0.8,
@@ -517,7 +517,7 @@ Every modifier keyword compiles to the same `Node | Modifier` that the runtime A
 
 ```python
 from neograph import Node, Each, Oracle, Operator
-from neograph.modifiers import Loop
+from neograph import Loop
 
 # Fan-out
 verify = Node("verify", mode="scripted", outputs=VerifyResult) | Each(over="clusters.groups", key="label")

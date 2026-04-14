@@ -10,7 +10,6 @@ import json
 from pathlib import Path
 
 import pytest
-import yaml
 
 SCHEMAS_DIR = Path(__file__).parent.parent / "src" / "neograph" / "schemas"
 
@@ -31,7 +30,7 @@ def project_schema():
 
 def _validate(instance: dict, schema: dict) -> None:
     """Validate a dict against a JSON Schema. Raises on failure."""
-    from jsonschema import validate, ValidationError
+    from jsonschema import validate
     validate(instance=instance, schema=schema)
 
 
@@ -302,6 +301,7 @@ class TestValidateSpecWarnings:
     def test_warns_when_jsonschema_not_installed(self):
         """_validate_spec logs a warning when jsonschema is not importable."""
         import builtins
+
         from neograph.loader import _validate_spec
 
         captured, teardown = self._capture_structlog()
@@ -340,6 +340,7 @@ class TestValidateSpecWarnings:
     def test_invalid_spec_raises_validation_error(self):
         """_validate_spec raises ValidationError for an invalid spec."""
         from jsonschema import ValidationError
+
         from neograph.loader import _validate_spec
 
         bad_spec = {"not": "a valid spec"}

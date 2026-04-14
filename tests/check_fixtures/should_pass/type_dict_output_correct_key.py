@@ -2,9 +2,11 @@
 # source has outputs={"result": Claims, "log": str}.
 # State fields are "source_result" and "source_log".
 # Consumer expects source_result=Claims (correct).
+from pydantic import BaseModel
+
 from neograph import Construct, Node
 from neograph.factory import register_scripted
-from pydantic import BaseModel
+
 
 class Claims(BaseModel, frozen=True):
     text: str

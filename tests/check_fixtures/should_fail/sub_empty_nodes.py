@@ -1,8 +1,10 @@
-# CHECK_ERROR: output.*TypeB.*no.*node.*produces|boundary.*contract
+# CHECK_ERROR: Construct has no nodes
 # Sub-construct with empty nodes list — no output producer
+from pydantic import BaseModel
+
 from neograph import Construct, Node
 from neograph.factory import register_scripted
-from pydantic import BaseModel
+
 
 class TypeA(BaseModel, frozen=True):
     x: str

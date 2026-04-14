@@ -25,6 +25,7 @@ from neograph.conditions import parse_condition
 from neograph.construct import Construct
 from neograph.errors import ConfigurationError
 from neograph.modifiers import Each, Loop, Operator, Oracle
+from neograph.naming import field_name_for
 from neograph.node import Node
 from neograph.spec_types import load_project_types, lookup_type
 
@@ -67,8 +68,8 @@ def _parse_input(source: str | dict[str, Any]) -> dict[str, Any]:
         return source
 
     text = source
-    # Check if it's a file path (only short strings can be paths)
-    if len(source) <= 4096:
+    # Check if it's a file path (only short strings without newlines can be paths)
+    if len(source) <= 4096 and "\n" not in source:
         p = Path(source)
         if p.exists() and p.is_file():
             text = p.read_text()
@@ -110,7 +111,7 @@ def _build_construct(spec: dict[str, Any]) -> Construct:
     explicit_inputs: set[str] = set()
     for node_spec in spec.get("nodes", []):
         node = _build_node(node_spec)
-        field_name = node.name.replace("-", "_")
+        field_name = field_name_for(node.name)
         node_defs[field_name] = node
         if node_spec.get("inputs"):
             explicit_inputs.add(field_name)
@@ -119,23 +120,22 @@ def _build_construct(spec: dict[str, Any]) -> Construct:
     construct_defs: dict[str, Construct] = {}
     for construct_spec in spec.get("constructs", []):
         sub = _build_sub_construct(construct_spec, node_defs, explicit_inputs)
-        field_name = sub.name.replace("-", "_")
+        field_name = field_name_for(sub.name)
         construct_defs[field_name] = sub
 
     # Build pipeline from ordered node/construct references
     pipeline_nodes: list[Any] = []
     for ref in spec["pipeline"]["nodes"]:
-        field_ref = ref.replace("-", "_")
+        field_ref = field_name_for(ref)
         if field_ref in construct_defs:
             pipeline_nodes.append(construct_defs[field_ref])
         elif field_ref in node_defs:
             pipeline_nodes.append(node_defs[field_ref])
         else:
-            msg = (
-                f"Pipeline references '{ref}' but no node or construct "
-                f"with that name exists in the spec."
+            raise ConfigurationError.build(
+                f"pipeline references unknown node or construct '{ref}'",
+                hint="check that the name matches a defined node or construct in the spec",
             )
-            raise ConfigurationError(msg)
 
     return Construct(
         name=spec["name"],
@@ -154,6 +154,7 @@ def _build_node(node_spec: dict[str, Any]) -> Node:
     # outputs type so _extract_input can use type scanning. This works
     # for simple pipelines; sub-constructs override per-node inputs below.
     inputs_spec = node_spec.get("inputs")
+    inputs: Any
     if inputs_spec:
         inputs = {k: lookup_type(v) for k, v in inputs_spec.items()}
     else:
@@ -193,26 +194,26 @@ def _build_sub_construct(
     # Subsequent nodes: inputs from input port + all preceding peer outputs.
     nodes: list[Node] = []
     for i, ref in enumerate(construct_spec["nodes"]):
-        field_ref = ref.replace("-", "_")
+        field_ref = field_name_for(ref)
         if field_ref not in all_nodes:
-            msg = (
-                f"Construct '{name}' references node '{ref}' "
-                f"but no node with that name exists."
+            raise ConfigurationError.build(
+                f"construct references unknown node '{ref}'",
+                hint="check that the node name matches a defined node in the spec",
+                construct=name,
             )
-            raise ConfigurationError(msg)
         node = all_nodes[field_ref]
         if field_ref not in (explicit_inputs or set()):
             if i == 0:
                 # First node: reads from sub-construct input port
-                node.inputs = input_type
+                node = node.model_copy(update={"inputs": input_type})
             else:
                 # Subsequent nodes: dict-form inputs from input port + peers
                 inputs_dict: dict[str, Any] = {"neo_subgraph_input": input_type}
                 for prev_ref in construct_spec["nodes"][:i]:
-                    prev_field = prev_ref.replace("-", "_")
+                    prev_field = field_name_for(prev_ref)
                     prev_node = all_nodes[prev_field]
                     inputs_dict[prev_field] = prev_node.outputs
-                node.inputs = inputs_dict
+                node = node.model_copy(update={"inputs": inputs_dict})
         nodes.append(node)
 
     sub = Construct(

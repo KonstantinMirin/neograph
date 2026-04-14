@@ -6,15 +6,13 @@ Written BEFORE the loader exists (TDD red).
 
 from __future__ import annotations
 
-from typing import Any
-
 import pytest
 from pydantic import BaseModel
 
 from neograph import compile, run
 from neograph.errors import ConfigurationError
 from neograph.factory import register_scripted
-
+from neograph.node import Node
 
 # -- Schemas for loader tests ------------------------------------------------
 
@@ -329,6 +327,7 @@ class TestLoadSpecYamlString:
     def test_yaml_string_parses_and_runs(self):
         """load_spec accepts a YAML string, not just a dict."""
         import yaml as _yaml
+
         from neograph.loader import load_spec
         from neograph.spec_types import register_type
 
@@ -444,8 +443,7 @@ class TestLoadSpecMultiNodeConstruct:
             # Must read review from input_data dict
             assert isinstance(input_data, dict), f"revise expected dict, got {type(input_data).__name__}"
             review = input_data.get("review")
-            assert review is not None, "revise did not receive review output"
-            assert isinstance(review, ReviewResult), f"review is {type(review).__name__}"
+            assert isinstance(review, ReviewResult), f"Expected ReviewResult, got {type(review).__name__}"
             return Draft(content=review.feedback, score=review.score, iteration=1)
 
         def mn_draft(input_data, config):
@@ -529,7 +527,6 @@ class TestLoadSpecDataFlow:
         result = run(graph, input={"node_id": "test"})
 
         inp = captured_input[0]
-        assert inp is not None, "process node received None — input wiring broken"
         assert isinstance(inp, Draft), f"Expected Draft, got {type(inp).__name__}"
         assert inp.score == 0.42, f"Expected score 0.42 from seed, got {inp.score}"
         assert inp.content == "the real content"
@@ -572,7 +569,6 @@ class TestLoadSpecWiringHonesty:
         run(graph, input={"node_id": "test"})
 
         r = received[0]
-        assert r is not None, "Consumer received None — wiring is broken"
         assert isinstance(r, Draft), f"Consumer received {type(r).__name__}, not Draft"
         assert r.content == "unique-marker-xyz", f"Consumer got wrong content: {r.content!r}"
         assert r.score == 0.77
@@ -684,8 +680,7 @@ class TestLoadSpecWiringHonesty:
         run(graph, input={"node_id": "test"})
 
         fi = first_input[0]
-        assert fi is not None, "Loop node received None on first iteration — upstream wiring broken"
-        assert isinstance(fi, Draft), f"Expected Draft, got {type(fi).__name__}"
+        assert isinstance(fi, Draft), f"Expected Draft on first iteration, got {type(fi).__name__}"
         assert fi.content == "seed-output", f"First iteration should receive seed output, got {fi.content!r}"
 
 
@@ -720,6 +715,30 @@ class TestLoadSpecSizeLimit:
         with pytest.raises(Exception) as exc_info:
             load_spec(at_limit)
         assert "exceeds maximum size" not in str(exc_info.value)
+
+
+class TestPathDetectionHeuristic:
+    """Path-vs-string disambiguation in _parse_input.
+
+    BUG neograph-f8ij: short YAML that is also a valid file path could be
+    misinterpreted as a file. Fixed by requiring no newlines in the source.
+    """
+
+    def test_yaml_string_not_misidentified_when_file_exists(self, tmp_path, monkeypatch):
+        """A YAML string must be parsed as content even if a same-named file exists."""
+        from neograph.loader import _parse_input
+
+        # Create a file whose name is a valid YAML fragment
+        decoy = tmp_path / "test"
+        decoy.write_text("name: decoy-from-file")
+
+        # cd into tmp_path so Path("test").exists() would match
+        monkeypatch.chdir(tmp_path)
+
+        # Multi-line YAML string — must parse as content, not read the file
+        yaml_str = "name: from-string\nnodes: []"
+        result = _parse_input(yaml_str)
+        assert result["name"] == "from-string"
 
 
 class TestLoadSpecErrors:
@@ -810,6 +829,7 @@ class TestLoadSpecJsonString:
     def test_json_string_parses_and_builds(self):
         """load_spec accepts a JSON string starting with {."""
         import json as _json
+
         from neograph.loader import load_spec
         from neograph.spec_types import register_type
 
@@ -881,8 +901,8 @@ class TestLoadSpecModifiers:
     def test_each_modifier_from_spec(self):
         """Each modifier in node spec creates Each-modified node."""
         from neograph.loader import load_spec
-        from neograph.spec_types import register_type
         from neograph.modifiers import Each as EachMod
+        from neograph.spec_types import register_type
 
         register_type("Draft", Draft)
 
@@ -912,8 +932,8 @@ class TestLoadSpecModifiers:
     def test_operator_modifier_from_spec(self):
         """Operator modifier in node spec creates Operator-modified node."""
         from neograph.loader import load_spec
-        from neograph.spec_types import register_type
         from neograph.modifiers import Operator as OpMod
+        from neograph.spec_types import register_type
 
         register_type("Draft", Draft)
 
@@ -943,8 +963,8 @@ class TestLoadSpecModifiers:
     def test_oracle_with_n_merge_prompt_merge_model(self):
         """Oracle spec with explicit n, merge_prompt, merge_model (lines 237, 243, 245)."""
         from neograph.loader import load_spec
-        from neograph.spec_types import register_type
         from neograph.modifiers import Oracle as OracleMod
+        from neograph.spec_types import register_type
 
         register_type("Draft", Draft)
 
@@ -978,3 +998,56 @@ class TestLoadSpecModifiers:
         assert oracle.n == 5
         assert oracle.merge_prompt == "combine/them"
         assert oracle.merge_model == "fast"
+
+
+class TestLoaderImmutability:
+    """_build_sub_construct must not mutate shared Node instances."""
+
+    def test_sub_construct_does_not_mutate_shared_node(self):
+        """Building a sub-construct should not mutate the original Node
+        in all_nodes. If a Node is reused across constructs, the second
+        construct must see the original inputs, not the first construct's."""
+        from neograph.loader import _build_sub_construct
+        from neograph.spec_types import register_type
+
+        register_type("Draft", Draft)
+        register_type("ReviewResult", ReviewResult)
+
+        def review_fn(input_data, config):
+            return ReviewResult(score=0.9, feedback="ok")
+
+        review_node = Node(
+            name="review",
+            outputs=ReviewResult,
+            scripted_fn="test_review_shared",
+            # inputs deliberately None — _build_sub_construct should set them
+            # via model_copy, NOT by mutating the original.
+        )
+        register_scripted("test_review_shared", review_fn)
+
+        all_nodes = {"review": review_node}
+
+        # Capture inputs BEFORE _build_sub_construct
+        original_inputs = review_node.inputs
+
+        construct_spec = {
+            "name": "sub1",
+            "input": "Draft",
+            "output": "ReviewResult",
+            "nodes": ["review"],
+        }
+
+        sub = _build_sub_construct(construct_spec, all_nodes)
+
+        # The node INSIDE the sub-construct should have inputs set
+        sub_node = sub.nodes[0]
+        assert sub_node.inputs is Draft, (
+            f"sub-construct node inputs should be Draft (the sub input type), got {sub_node.inputs!r}"
+        )
+
+        # The ORIGINAL node in all_nodes must be UNCHANGED
+        assert review_node.inputs == original_inputs, (
+            f"_build_sub_construct mutated the original Node.inputs! "
+            f"Was {original_inputs!r}, now {review_node.inputs!r}. "
+            f"Use model_copy instead of direct assignment."
+        )

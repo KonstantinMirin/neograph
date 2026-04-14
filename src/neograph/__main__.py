@@ -30,10 +30,16 @@ def _import_module(target: str) -> Any:
             sys.path.insert(0, parent)
         mod_name = path.stem
         spec = importlib.util.spec_from_file_location(mod_name, path)
+        if spec is None:
+            print(f"Error: could not create module spec for: {path}", file=sys.stderr)
+            sys.exit(2)
         mod = importlib.util.module_from_spec(spec)
         # Register so sys.modules[__name__] works inside the module
         sys.modules[mod_name] = mod
-        spec.loader.exec_module(mod)
+        if spec.loader is None:
+            print(f"Error: module spec has no loader for: {path}", file=sys.stderr)
+            sys.exit(2)
+        spec.loader.exec_module(mod)  # type: ignore[union-attr]
         return mod
     else:
         return importlib.import_module(target)
@@ -118,9 +124,14 @@ def cmd_check(args: argparse.Namespace) -> int:
 
 
 def main():
+    from neograph import __version__
+
     parser = argparse.ArgumentParser(
         prog="neograph",
         description="neograph CLI — declarative LLM pipeline compiler",
+    )
+    parser.add_argument(
+        "--version", action="version", version=f"neograph {__version__}",
     )
     sub = parser.add_subparsers(dest="command")
 

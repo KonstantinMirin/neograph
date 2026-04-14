@@ -1,8 +1,10 @@
 # CHECK_ERROR: output.*TypeA.*no.*node.*produces|boundary.*contract
 # Scenario 7 variant: sub-construct declares output=TypeA but no internal node produces TypeA
+from pydantic import BaseModel
+
 from neograph import Construct, Node
 from neograph.factory import register_scripted
-from pydantic import BaseModel
+
 
 class TypeA(BaseModel, frozen=True):
     x: str

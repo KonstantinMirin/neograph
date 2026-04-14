@@ -24,6 +24,49 @@ from __future__ import annotations
 class NeographError(Exception):
     """Base for all neograph-originated errors."""
 
+    @classmethod
+    def build(
+        cls,
+        what: str,
+        *,
+        expected: str | None = None,
+        found: str | None = None,
+        hint: str | None = None,
+        location: str | None = None,
+        node: str | None = None,
+        construct: str | None = None,
+    ) -> NeographError:
+        """Structured error builder. All neograph errors go through here.
+
+        Format::
+
+            [Node 'X' in 'Y'] what
+              expected: ...
+              found: ...
+              hint: ...
+              at file.py:42
+        """
+        parts: list[str] = []
+        if node and construct:
+            parts.append(f"[Node '{node}' in construct '{construct}']")
+        elif node:
+            parts.append(f"[Node '{node}']")
+        elif construct:
+            parts.append(f"[Construct '{construct}']")
+        parts.append(what)
+
+        msg = " ".join(parts)
+        if expected:
+            msg += f"\n  expected: {expected}"
+        if found:
+            msg += f"\n  found: {found}"
+        if hint:
+            msg += f"\n  hint: {hint}"
+        if location:
+            msg += f"\n  at {location}"
+
+        return cls(msg)
+
 
 class ConstructError(NeographError, ValueError):
     """Assembly-time validation errors during Construct creation.
@@ -60,3 +103,38 @@ class ExecutionError(NeographError):
     def __init__(self, *args: object, validation_errors: str | None = None) -> None:
         super().__init__(*args)
         self.validation_errors = validation_errors
+
+    @classmethod
+    def build(
+        cls,
+        what: str,
+        *,
+        expected: str | None = None,
+        found: str | None = None,
+        hint: str | None = None,
+        location: str | None = None,
+        node: str | None = None,
+        construct: str | None = None,
+        validation_errors: str | None = None,
+    ) -> ExecutionError:
+        """Override to pass validation_errors to ExecutionError.__init__."""
+        parts: list[str] = []
+        if node and construct:
+            parts.append(f"[Node '{node}' in construct '{construct}']")
+        elif node:
+            parts.append(f"[Node '{node}']")
+        elif construct:
+            parts.append(f"[Construct '{construct}']")
+        parts.append(what)
+
+        msg = " ".join(parts)
+        if expected:
+            msg += f"\n  expected: {expected}"
+        if found:
+            msg += f"\n  found: {found}"
+        if hint:
+            msg += f"\n  hint: {hint}"
+        if location:
+            msg += f"\n  at {location}"
+
+        return cls(msg, validation_errors=validation_errors)

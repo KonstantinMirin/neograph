@@ -1,32 +1,54 @@
 """Generic node factory — creates LangGraph node functions from Node definitions.
 
-Dispatches by mode:
-    produce       — single LLM call, structured JSON output
-    gather/execute — ReAct tool loop with tools (read-only or mutation)
-    scripted      — deterministic Python function
+All non-raw modes (scripted, think, agent, act) go through a single
+``_execute_node`` path with mode-specific behavior injected via the
+``ModeDispatch`` protocol:
+
+    ScriptedDispatch — deterministic Python function
+    ThinkDispatch    — single LLM call, structured JSON output
+    ToolDispatch     — ReAct tool loop with tools (read-only or mutation)
+
+Raw nodes (``mode='raw'``) get a minimal observability wrapper via
+``_make_raw_wrapper`` — no DI/input/output wrapping.
 
 Also provides higher-order factory functions for modifier wiring:
-    make_oracle_redirect_fn   — redirects node output to collector field
-    make_oracle_merge_fn      — creates the merge barrier function
     make_subgraph_fn          — creates function to run a sub-Construct
-    make_each_redirect_fn     — wraps node output keyed by Each item
+
+Oracle/Each modifier helpers (make_oracle_redirect_fn, make_oracle_merge_fn,
+make_each_redirect_fn, etc.) live in ``_oracle.py`` and are re-exported here
+so that ``compiler.py`` imports remain unchanged.
 """
 
 from __future__ import annotations
 
 import time
-from typing import Any, Callable, get_origin as _get_origin
+from collections.abc import Callable
+from typing import Any
+from typing import get_origin as _get_origin
 
 import structlog
 from langchain_core.runnables import RunnableConfig
 from pydantic import BaseModel
 
+from neograph._dispatch import (  # noqa: F401 — re-exported for tests/backward compat
+    ModeDispatch,
+    NodeInput,
+    NodeOutput,
+    ScriptedDispatch,
+    ThinkDispatch,
+    ToolDispatch,
+    _dispatch_for_mode,
+    _render_input,
+)
+from neograph.di import _unwrap_each_dict, _unwrap_loop_value
 from neograph.errors import ConfigurationError, ExecutionError
-from neograph.modifiers import Each, Loop, Oracle
+from neograph.modifiers import Each, ModifierCombo, classify_modifiers
+from neograph.naming import field_name_for
 from neograph.node import Node
-from neograph.tool import ToolBudgetTracker
 
 log = structlog.get_logger()
+
+
 
 
 def _state_get(state: Any, key: str) -> Any:
@@ -36,42 +58,76 @@ def _state_get(state: Any, key: str) -> Any:
     return getattr(state, key, None)
 
 
-# Registry for scripted functions and condition checks
-_scripted_registry: dict[str, Callable] = {}
-_condition_registry: dict[str, Callable] = {}
-_tool_factory_registry: dict[str, Callable] = {}
+def _inject_oracle_config(state: Any, config: RunnableConfig) -> RunnableConfig:
+    """Inject Oracle generator ID and model override into config if present.
+
+    Reads neo_oracle_gen_id and neo_oracle_model from state, merges them
+    into config['configurable']. Returns the original config unchanged
+    when no oracle fields are present.
+    """
+    oracle_gen_id = _state_get(state, "neo_oracle_gen_id")
+    if oracle_gen_id is None:
+        return config
+    configurable = config.get("configurable", {})
+    extra = {"_generator_id": oracle_gen_id}
+    oracle_model = _state_get(state, "neo_oracle_model")
+    if oracle_model is not None:
+        extra["_oracle_model"] = oracle_model
+    return {**config, "configurable": {**configurable, **extra}}
+
+
+def _extract_context(state: Any, node: Node) -> dict[str, Any] | None:
+    """Extract verbatim context fields from state for LLM nodes.
+
+    Returns a dict of {context_name: state_value} if the node declares
+    context fields, or None if no context is configured.
+    """
+    if not node.context:
+        return None
+    return {
+        name: _state_get(state, field_name_for(name))
+        for name in node.context
+    }
+
+
+# Singleton registry instance — replaces former module-level dicts.
+from neograph._registry import registry
 
 
 def register_scripted(name: str, fn: Callable) -> None:
     """Register a deterministic function for Node.scripted."""
-    _scripted_registry[name] = fn
+    registry.scripted[name] = fn
 
 
 def register_condition(name: str, fn: Callable) -> None:
     """Register a condition function for Operator(when=...)."""
-    _condition_registry[name] = fn
+    registry.condition[name] = fn
 
 
 def register_tool_factory(name: str, fn: Callable) -> None:
     """Register a tool factory that creates LangChain @tool functions."""
-    _tool_factory_registry[name] = fn
+    registry.tool_factory[name] = fn
 
 
 def lookup_condition(name: str) -> Callable:
     """Look up a registered condition function by name. Raises ConfigurationError if missing."""
-    fn = _condition_registry.get(name)
+    fn = registry.condition.get(name)
     if fn is None:
-        msg = f"Condition '{name}' not registered. Use register_condition()."
-        raise ConfigurationError(msg)
+        raise ConfigurationError.build(
+            f"Condition '{name}' not registered",
+            hint="Use register_condition() to register it before compilation",
+        )
     return fn
 
 
 def lookup_scripted(name: str) -> Callable:
     """Look up a registered scripted function by name. Raises ConfigurationError if missing."""
-    fn = _scripted_registry.get(name)
+    fn = registry.scripted.get(name)
     if fn is None:
-        msg = f"Scripted function '{name}' not registered. Use register_scripted()."
-        raise ConfigurationError(msg)
+        raise ConfigurationError.build(
+            f"Scripted function '{name}' not registered",
+            hint="Use register_scripted() to register it before compilation",
+        )
     return fn
 
 
@@ -114,9 +170,10 @@ def _apply_skip_when(
     try:
         should_skip = node.skip_when(skip_input)
     except (AttributeError, TypeError, KeyError) as exc:
-        raise ExecutionError(
-            f"Node '{node.name}' skip_when raised {type(exc).__name__}: {exc}. "
-            f"Check that the lambda accesses valid fields on the input type."
+        raise ExecutionError.build(
+            f"skip_when raised {type(exc).__name__}: {exc}",
+            hint="Check that the lambda accesses valid fields on the input type",
+            node=node.name,
         ) from exc
     if not should_skip:
         return None
@@ -126,9 +183,10 @@ def _apply_skip_when(
         result = node.skip_value(skip_input)
         return _build_state_update(node, field_name, result, state)
     # No skip_value — still need to increment the loop counter so the
-    # loop_router eventually exits (neograph-c4b9).
+    # loop_router eventually exits.
     update: dict[str, Any] = {}
-    loop_mod = node.get_modifier(Loop)
+    _, skip_mods = classify_modifiers(node)
+    loop_mod = skip_mods.get("loop")
     if loop_mod is not None:
         count_field = f"neo_loop_count_{field_name}"
         current_count = _state_get(state, count_field) or 0
@@ -136,43 +194,6 @@ def _apply_skip_when(
     return update
 
 
-def _render_input(node: Node, input_data: Any) -> Any:
-    """Apply renderer dispatch chain: node renderer > global renderer.
-
-    Returns rendered input_data, or the original if no renderer is active.
-    """
-    from neograph.renderers import render_input
-    try:
-        from neograph._llm import _get_global_renderer
-        effective_renderer = node.renderer or _get_global_renderer()
-    except ImportError:
-        effective_renderer = node.renderer
-    if effective_renderer is not None:
-        return render_input(input_data, renderer=effective_renderer)
-    return input_data
-
-
-def _resolve_primary_output(node: Node) -> tuple[Any, str | None]:
-    """Resolve the LLM output model and primary key for dict-form outputs.
-
-    For dict-form outputs, the LLM produces the primary type (first key).
-    Secondary outputs (e.g. tool_log) are framework-collected.
-
-    When ``node.oracle_gen_type`` is set (Oracle with type-transforming merge_fn),
-    the generator type overrides ``node.outputs`` — the LLM should produce the
-    per-variant type, not the post-merge type.
-
-    Returns (output_model, primary_key) where primary_key is None for
-    single-type outputs.
-    """
-    # Oracle generator type override: merge_fn transforms A → B, generators produce A.
-    if node.oracle_gen_type is not None:
-        return node.oracle_gen_type, None
-
-    if isinstance(node.outputs, dict):
-        primary_key = next(iter(node.outputs))
-        return node.outputs[primary_key], primary_key
-    return node.outputs, None
 
 
 def _build_state_update(
@@ -190,14 +211,27 @@ def _build_state_update(
 
     For single-type outputs: writes to ``{field_name}`` as before.
     """
+    from typing import assert_never
+
     if result is None or node.outputs is None:
         return {}
 
-    each_mod = node.get_modifier(Each)
+    combo, mods = classify_modifiers(node)
+
+    # Determine Each wrapping behavior.
     # Skip Each wrapping when Oracle is also present — the Each×Oracle
-    # fusion (neograph-tpgi) handles tagging in the redirect_fn.
-    if each_mod and node.has_modifier(Oracle):
-        each_mod = None
+    # fusion handles tagging in the redirect_fn.
+    each_mod: Each | None = None
+    match combo:
+        case ModifierCombo.EACH | ModifierCombo.EACH_OPERATOR:
+            each_mod = mods["each"]
+        case ModifierCombo.EACH_ORACLE | ModifierCombo.EACH_ORACLE_OPERATOR:
+            each_mod = None  # fusion handles tagging
+        case ModifierCombo.BARE | ModifierCombo.OPERATOR | ModifierCombo.ORACLE | ModifierCombo.ORACLE_OPERATOR | ModifierCombo.LOOP | ModifierCombo.LOOP_OPERATOR:
+            each_mod = None
+        case _ as unreachable:
+            assert_never(unreachable)
+
     each_item = _state_get(state, "neo_each_item")
 
     # Dict-form outputs: per-key state fields (neograph-1bp.3).
@@ -222,7 +256,7 @@ def _build_state_update(
             update = {field_name: result}
 
     # Loop modifier: increment iteration counter and optionally collect history.
-    loop_mod = node.get_modifier(Loop)
+    loop_mod = mods.get("loop")
     if loop_mod is not None:
         count_field = f"neo_loop_count_{field_name}"
         current_count = _state_get(state, count_field) or 0
@@ -234,39 +268,93 @@ def _build_state_update(
     return update
 
 
+
+
+def _execute_node(
+    node: Node,
+    state: BaseModel,
+    config: RunnableConfig,
+    dispatch: ModeDispatch,
+) -> dict[str, Any]:
+    """Single execution path for all non-raw node modes.
+
+    Preamble: log, Oracle config, input extraction, skip_when check.
+    Dispatch: mode-specific logic via ModeDispatch protocol.
+    Postamble: state update, log complete.
+
+    _apply_skip_when has state-writing side effects — if it returns
+    non-None, we return immediately and do NOT call _build_state_update.
+    """
+    field_name = field_name_for(node.name)
+    node_log = log.bind(node=node.name, mode=node.mode)
+    node_log.info("node_start", input_type=_type_name(node.inputs), output_type=_type_name(node.outputs))
+
+    t0 = time.monotonic()
+
+    config = _inject_oracle_config(state, config)
+    raw_input = _extract_input(state, node)
+
+    skip_result = _apply_skip_when(node, raw_input, field_name, t0, node_log, state)
+    if skip_result is not None:
+        return skip_result
+
+    context_data = _extract_context(state, node) if node.mode != "scripted" else None
+
+    if isinstance(raw_input, dict) and isinstance(node.inputs, dict):
+        node_input = NodeInput(fan_in=raw_input)
+    else:
+        node_input = NodeInput(single=raw_input)
+
+    output = dispatch.execute(node, node_input, config, context_data)
+    update = _build_state_update(node, field_name, output.value, state)
+
+    elapsed = time.monotonic() - t0
+    node_log.info("node_complete", duration_s=round(elapsed, 3))
+    return update
+
+
 def make_node_fn(node: Node) -> Callable:
     """Create a LangGraph node function from a Node definition.
 
     This is the core of NeoGraph — the generic factory that eliminates
     the 70% boilerplate from every hand-coded node.
+
+    Raw nodes get a minimal observability wrapper. All other modes
+    (scripted, think, agent, act) go through _execute_node with a
+    mode-specific ModeDispatch.
     """
     # Raw node — wrap with observability so node_start/node_complete fire
     if node.raw_fn is not None:
         return _make_raw_wrapper(node)
 
-    # Scripted node — look up registered function
-    if node.mode == "scripted":
-        if node.scripted_fn not in _scripted_registry:
-            msg = f"Scripted function '{node.scripted_fn}' not registered. Use register_scripted()."
-            raise ConfigurationError(msg)
-        return _make_scripted_wrapper(node)
+    # Validate scripted registration early
+    if node.mode == "scripted" and node.scripted_fn not in registry.scripted:
+        raise ConfigurationError.build(
+            f"Scripted function '{node.scripted_fn}' not registered",
+            hint="Use register_scripted() to register it before compilation",
+            node=node.name,
+        )
 
-    # LLM nodes — dispatch by mode
-    if node.mode == "think":
-        return _make_produce_fn(node)
-    if node.mode in ("agent", "act"):
-        return _make_tool_fn(node)
+    dispatch = _dispatch_for_mode(node)
+    field_name = field_name_for(node.name)
+
+    def node_wrapper(state: BaseModel, config: RunnableConfig) -> dict[str, Any]:
+        return _execute_node(node, state, config, dispatch)
+
+    node_wrapper.__name__ = field_name
+    return node_wrapper
 
 
 def _make_raw_wrapper(node: Node) -> Callable:
     """Wrap a raw_fn dispatch with observability (node_start/node_complete).
 
-    Only used for explicit ``mode='raw'`` escape-hatch nodes. Scripted
-    ``@node`` functions route through ``_make_scripted_wrapper`` via
-    ``register_scripted`` since neograph-kqd.8.
+    Only used for explicit ``mode='raw'`` escape-hatch nodes. Raw nodes
+    bypass the unified _execute_node path — no DI/input/output wrapping,
+    only logging.
     """
+    assert node.raw_fn is not None, f"node '{node.name}' has mode='raw' but no raw_fn"
     raw_fn = node.raw_fn
-    field_name = node.name.replace("-", "_")
+    field_name = field_name_for(node.name)
 
     def raw_node_wrapper(state: BaseModel, config: RunnableConfig) -> dict[str, Any]:
         node_log = log.bind(node=node.name, mode="raw")
@@ -283,470 +371,159 @@ def _make_raw_wrapper(node: Node) -> Callable:
     return raw_node_wrapper
 
 
-def _make_scripted_wrapper(node: Node) -> Callable:
-    """Wrap a scripted function with state extraction and output wiring."""
-    fn = _scripted_registry[node.scripted_fn]
-    field_name = node.name.replace("-", "_")
-
-    def scripted_node(state: BaseModel, config: RunnableConfig) -> dict[str, Any]:
-        node_log = log.bind(node=node.name, mode="scripted", fn=node.scripted_fn)
-        node_log.info("node_start", input_type=_type_name(node.inputs), output_type=_type_name(node.outputs))
-
-        t0 = time.monotonic()
-
-        # Inject oracle generator ID + model override into config if present
-        oracle_gen_id = _state_get(state, "neo_oracle_gen_id")
-        if oracle_gen_id is not None:
-            configurable = config.get("configurable", {})
-            extra = {"_generator_id": oracle_gen_id}
-            oracle_model = _state_get(state, "neo_oracle_model")
-            if oracle_model is not None:
-                extra["_oracle_model"] = oracle_model
-            config = {**config, "configurable": {**configurable, **extra}}
-
-        # Extract input from state if specified
-        input_data = _extract_input(state, node)
-        result = fn(input_data, config)
-
-        update = _build_state_update(node, field_name, result, state)
-
-        elapsed = time.monotonic() - t0
-        node_log.info("node_complete", duration_s=round(elapsed, 3))
-        return update
-
-    scripted_node.__name__ = node.name.replace("-", "_")
-    return scripted_node
+from neograph.di import _isinstance_safe as _is_instance_safe  # noqa: E402
 
 
-def _make_produce_fn(node: Node) -> Callable:
-    """Single LLM call with structured JSON output. No tools."""
-    field_name = node.name.replace("-", "_")
+# ── Input shape dispatch ───────────────────────────────────────────────────
+# _extract_input classifies the input shape and dispatches to a named helper.
+# Same pattern as classify_modifiers: enum + match + assert_never.
 
-    def produce_node(state: BaseModel, config: RunnableConfig) -> dict[str, Any]:
-        from neograph._llm import invoke_structured
-
-        node_log = log.bind(node=node.name, mode="think", model=node.model, prompt=node.prompt)
-        node_log.info("node_start", input_type=_type_name(node.inputs), output_type=_type_name(node.outputs))
-
-        t0 = time.monotonic()
-
-        # Inject oracle generator ID + model override into config if present
-        oracle_gen_id = _state_get(state, "neo_oracle_gen_id")
-        if oracle_gen_id is not None:
-            configurable = config.get("configurable", {})
-            extra = {"_generator_id": oracle_gen_id}
-            oracle_model = _state_get(state, "neo_oracle_model")
-            if oracle_model is not None:
-                extra["_oracle_model"] = oracle_model
-            config = {**config, "configurable": {**configurable, **extra}}
-
-        input_data = _extract_input(state, node)
-
-        skip_result = _apply_skip_when(node, input_data, field_name, t0, node_log, state)
-        if skip_result is not None:
-            return skip_result
-
-        input_data = _render_input(node, input_data)
-        output_model, primary_key = _resolve_primary_output(node)
-
-        # Extract verbatim context fields from state
-        context_data = None
-        if node.context:
-            context_data = {
-                name: _state_get(state, name.replace("-", "_"))
-                for name in node.context
-            }
-
-        # Oracle model override: per-generator model tier from config
-        effective_model = config.get("configurable", {}).get("_oracle_model", node.model)
-
-        result = invoke_structured(
-            model_tier=effective_model,
-            prompt_template=node.prompt,
-            input_data=input_data,
-            output_model=output_model,
-            config=config,
-            node_name=node.name,
-            llm_config=node.llm_config,
-            context=context_data,
-        )
-
-        if primary_key is not None and result is not None:
-            # Wrap single LLM result as a dict so _build_state_update routes per-key
-            result = {primary_key: result}
-
-        update = _build_state_update(node, field_name, result, state)
-
-        elapsed = time.monotonic() - t0
-        node_log.info("node_complete", duration_s=round(elapsed, 3))
-        return update
-
-    produce_node.__name__ = node.name.replace("-", "_")
-    return produce_node
+from enum import Enum
+from typing import assert_never
 
 
-def _make_tool_fn(node: Node) -> Callable:
-    """ReAct tool loop — used for both gather and execute modes."""
-    field_name = node.name.replace("-", "_")
+class InputShape(Enum):
+    """Classification of how a node reads its input from state."""
 
-    def tool_node(state: BaseModel, config: RunnableConfig) -> dict[str, Any]:
-        from neograph._llm import invoke_with_tools
-
-        node_log = log.bind(node=node.name, mode=node.mode, model=node.model, prompt=node.prompt)
-        node_log.info("node_start",
-                      input_type=_type_name(node.inputs), output_type=_type_name(node.outputs),
-                      tools=[t.name for t in node.tools],
-                      budgets={t.name: t.budget for t in node.tools})
-
-        t0 = time.monotonic()
-
-        # Inject oracle generator ID + model override into config if present
-        oracle_gen_id = _state_get(state, "neo_oracle_gen_id")
-        if oracle_gen_id is not None:
-            configurable = config.get("configurable", {})
-            extra = {"_generator_id": oracle_gen_id}
-            oracle_model = _state_get(state, "neo_oracle_model")
-            if oracle_model is not None:
-                extra["_oracle_model"] = oracle_model
-            config = {**config, "configurable": {**configurable, **extra}}
-
-        input_data = _extract_input(state, node)
-
-        skip_result = _apply_skip_when(node, input_data, field_name, t0, node_log, state)
-        if skip_result is not None:
-            return skip_result
-
-        input_data = _render_input(node, input_data)
-        output_model, primary_key = _resolve_primary_output(node)
-
-        budget_tracker = ToolBudgetTracker(node.tools)
-
-        # Resolve renderer for tool result rendering in ToolMessage
-        try:
-            from neograph._llm import _get_global_renderer
-            effective_renderer = node.renderer or _get_global_renderer()
-        except (ImportError, AttributeError):  # pragma: no cover — import fallback
-            effective_renderer = node.renderer
-
-        # Extract verbatim context fields from state
-        context_data = None
-        if node.context:
-            context_data = {
-                name: _state_get(state, name.replace("-", "_"))
-                for name in node.context
-            }
-
-        # Oracle model override: per-generator model tier from config
-        effective_model = config.get("configurable", {}).get("_oracle_model", node.model)
-
-        result, tool_interactions = invoke_with_tools(
-            model_tier=effective_model,
-            prompt_template=node.prompt,
-            input_data=input_data,
-            output_model=output_model,
-            tools=node.tools,
-            budget_tracker=budget_tracker,
-            config=config,
-            node_name=node.name,
-            llm_config=node.llm_config,
-            renderer=effective_renderer,
-            context=context_data,
-        )
-
-        if primary_key is not None and result is not None:
-            # Build a dict with primary LLM result and tool_log if present
-            result_dict: dict[str, Any] = {primary_key: result}
-            # Write tool_log if the node declares it as an output key
-            if isinstance(node.outputs, dict) and "tool_log" in node.outputs:
-                result_dict["tool_log"] = tool_interactions
-            result = result_dict
-        elif isinstance(node.outputs, dict):  # pragma: no cover — oracle_gen_type + dict outputs + tools
-            result = {next(iter(node.outputs)): result} if result is not None else None
-            if result is not None and "tool_log" in node.outputs:
-                result["tool_log"] = tool_interactions
-
-        update = _build_state_update(node, field_name, result, state)
-
-        elapsed = time.monotonic() - t0
-        node_log.info("node_complete", duration_s=round(elapsed, 3))
-        return update
-
-    tool_node.__name__ = node.name.replace("-", "_")
-    return tool_node
+    NONE = "none"
+    LOOP_REENTRY = "loop_reentry"
+    EACH_ITEM = "each_item"
+    FAN_IN_DICT = "fan_in_dict"
+    SINGLE_TYPE = "single_type"
 
 
-def _is_instance_safe(val: Any, type_spec: Any) -> bool:
-    """isinstance() that handles parameterized generics like dict[str, X]."""
-    from typing import get_origin, get_args
-
-    origin = get_origin(type_spec)
-    if origin is not None:
-        # Parameterized generic: check base type (dict, list, etc.)
-        return isinstance(val, origin)
-    try:
-        return isinstance(val, type_spec)
-    except TypeError:
-        return False
-
-
-def _extract_input(state: Any, node: Node) -> Any:
-    """Extract typed input from state based on node's inputs spec."""
+def _classify_input_shape(state: Any, node: Node) -> InputShape:
+    """Determine which extraction strategy applies. Priority order matters."""
     if node.inputs is None:
-        return None
+        return InputShape.NONE
 
-    def _fields() -> list[str]:
-        if isinstance(state, dict):
-            return list(state.keys())
-        return list(state.__class__.model_fields.keys())
-
-    # Loop re-entry: on iteration 1+, read from the node's OWN output field
-    # (an append-list) instead of the upstream. The append-list reducer
-    # accumulates each iteration's result; we unwrap [-1] for the latest.
-    # Dict-form outputs: primary key is {field}_{first_key} (neograph-ltqj).
-    if node.has_modifier(Loop):
-        own_field = node.name.replace("-", "_")
+    combo, _ = classify_modifiers(node)
+    if combo in (ModifierCombo.LOOP, ModifierCombo.LOOP_OPERATOR):
+        own_field = field_name_for(node.name)
         if isinstance(node.outputs, dict):
             primary_key = next(iter(node.outputs))
             own_field = f"{own_field}_{primary_key}"
         own_val = _state_get(state, own_field)
         if isinstance(own_val, list) and own_val:
-            latest = own_val[-1]
-            # For dict-form inputs, wrap in a dict matching the input spec
-            if isinstance(node.inputs, dict):
-                # Use the first input key as the wrapper key
-                first_key = next(iter(node.inputs))
-                return {first_key: latest}
-            return latest
+            return InputShape.LOOP_REENTRY
 
-    # Each fan-out: item is passed via neo_each_item
     replicate_item = _state_get(state, "neo_each_item")
     if replicate_item is not None and _is_instance_safe(replicate_item, node.inputs):
-        return replicate_item
+        return InputShape.EACH_ITEM
 
-    # Fan-in dict: inputs={'upstream_name': expected_type, ...}. Read each
-    # named state field by key. Special cases:
-    #   - fan_out_param key → read from state["neo_each_item"] (neograph-kqd.8)
-    #   - list[X] consumer over dict state → unwrap via list(values()) (kqd.3)
     if isinstance(node.inputs, dict):
-        result = {}
-        for field_name, expected_type in node.inputs.items():
-            if field_name == node.fan_out_param:
-                value = _state_get(state, "neo_each_item")
-            else:
-                state_key = field_name.replace("-", "_")
-                value = _state_get(state, state_key)
-                # Unwrap loop-list fields: upstream was a Loop node, field is
-                # a list from the append reducer. Read [-1] for latest.
-                if isinstance(value, list) and value and not _get_origin(expected_type) is list:
-                    value = value[-1]
-                if (
-                    value is not None
-                    and _get_origin(expected_type) is list
-                    and isinstance(value, dict)
-                ):
-                    value = list(value.values())
-            result[field_name] = value
-        return result
+        return InputShape.FAN_IN_DICT
 
-    # Single type — find matching field in state by type or name
-    for attr_name in _fields():
+    return InputShape.SINGLE_TYPE
+
+
+def _extract_loop_reentry(state: Any, node: Node) -> Any:
+    """Read from the node's own append-list on loop iteration 1+."""
+    own_field = field_name_for(node.name)
+    if isinstance(node.outputs, dict):
+        primary_key = next(iter(node.outputs))
+        own_field = f"{own_field}_{primary_key}"
+    own_val = _state_get(state, own_field)
+    latest = own_val[-1]  # type: ignore[index]
+
+    if not isinstance(node.inputs, dict):
+        return latest
+
+    # Single-key dict: always self-reference
+    if len(node.inputs) == 1:
+        first_key = next(iter(node.inputs))
+        return {first_key: latest}
+
+    # Multi-key dict: self-reference key gets latest, others read from state.
+    result = {}
+    node_own_field = field_name_for(node.name)
+    placed_latest = False
+    for key, expected_type in node.inputs.items():
+        state_key = field_name_for(key)
+        upstream_val = _state_get(state, state_key)
+        if upstream_val is not None and state_key != node_own_field:
+            value = upstream_val
+            if isinstance(value, list) and value and _get_origin(expected_type) is not list:
+                value = value[-1]
+            result[key] = value
+        else:
+            result[key] = latest
+            placed_latest = True
+    if not placed_latest:
+        first_key = next(iter(node.inputs))
+        result[first_key] = latest
+    return result
+
+
+def _extract_each_item(state: Any, node: Node) -> Any:
+    """Read the fan-out item from neo_each_item."""
+    return _state_get(state, "neo_each_item")
+
+
+def _extract_fan_in_dict(state: Any, node: Node) -> dict[str, Any]:
+    """Read each named upstream from state by key."""
+    assert isinstance(node.inputs, dict)
+    result: dict[str, Any] = {}
+    for input_name, expected_type in node.inputs.items():
+        if input_name == node.fan_out_param:
+            value = _state_get(state, "neo_each_item")
+        else:
+            state_key = field_name_for(input_name)
+            value = _state_get(state, state_key)
+            value = _unwrap_loop_value(value, expected_type)
+            if (
+                value is not None
+                and _get_origin(expected_type) is list
+                and isinstance(value, dict)
+            ):
+                value = list(value.values())
+        result[input_name] = value
+    return result
+
+
+def _extract_single_type(state: Any, node: Node) -> Any:
+    """Scan state fields for first value matching the node's input type."""
+    if isinstance(state, dict):
+        fields = list(state.keys())
+    else:
+        fields = list(state.__class__.model_fields.keys())
+
+    for attr_name in fields:
         val = _state_get(state, attr_name)
-        # Unwrap loop-list fields for downstream consumers
-        if isinstance(val, list) and val and not _get_origin(node.inputs) is list:
-            val = val[-1]
+        val = _unwrap_loop_value(val, node.inputs)
+        val = _unwrap_each_dict(val, node.inputs)
         if val is not None and _is_instance_safe(val, node.inputs):
             return val
-
     return None
 
 
-# ── Factory functions for modifier wiring ──────────────────────────────
+def _extract_input(state: Any, node: Node) -> Any:
+    """Extract typed input from state — pure dispatch to shape helpers."""
+    shape = _classify_input_shape(state, node)
+    match shape:
+        case InputShape.NONE:
+            return None
+        case InputShape.LOOP_REENTRY:
+            return _extract_loop_reentry(state, node)
+        case InputShape.EACH_ITEM:
+            return _extract_each_item(state, node)
+        case InputShape.FAN_IN_DICT:
+            return _extract_fan_in_dict(state, node)
+        case InputShape.SINGLE_TYPE:
+            return _extract_single_type(state, node)
+    assert_never(shape)
 
 
-def make_oracle_redirect_fn(raw_fn: Callable, field_name: str, collector_field: str) -> Callable:
-    """Wrap a node function to redirect output from field_name to collector_field.
-
-    Used by Oracle generators: the node writes to the collector (list reducer)
-    instead of the consumer-facing field.
-
-    Handles both single-type outputs (result has field_name key) and dict-form
-    outputs (result has {field_name}_{key} keys). For dict-form, collects the
-    full result dict into the collector so the merge fn can process per-key.
-    """
-    prefix = f"{field_name}_"
-
-    def oracle_redirect_fn(state: Any, config: RunnableConfig) -> dict:
-        result = raw_fn(state, config)
-        val = result.get(field_name)
-        if val is not None:
-            return {collector_field: val}
-        # Dict-form outputs: per-key fields like {field_name}_{key}
-        if any(k.startswith(prefix) for k in result):
-            return {collector_field: result}
-        return result
-
-    oracle_redirect_fn.__name__ = raw_fn.__name__
-    return oracle_redirect_fn
-
-
-def make_eachoracle_redirect_fn(
-    raw_fn: Callable, field_name: str, collector_field: str, each_key: str,
-) -> Callable:
-    """Wrap a node function for Each×Oracle fusion (neograph-tpgi).
-
-    Like make_oracle_redirect_fn, but tags each result with the each_key
-    extracted from neo_each_item. The collector accumulates (key, result) tuples.
-    """
-    def eachoracle_redirect_fn(state: Any, config: RunnableConfig) -> dict:
-        result = raw_fn(state, config)
-        val = result.get(field_name)
-        # Extract the each_key from the item
-        item = _state_get(state, "neo_each_item")
-        key = getattr(item, each_key, str(item)) if item is not None else "unknown"
-        if val is not None:
-            return {collector_field: [(key, val)]}
-        return result
-
-    eachoracle_redirect_fn.__name__ = raw_fn.__name__
-    return eachoracle_redirect_fn
-
-
-def _unwrap_oracle_results(
-    results: list,
-    field_name: str,
-    output_model: Any,
-) -> tuple[list, dict[str, list] | None]:
-    """Unwrap collected Oracle results for the merge function.
-
-    For single-type outputs: results is [val1, val2, ...] — return as-is.
-    For dict-form outputs: results is [{field_result: v1, field_meta: m1}, ...].
-    Extract primary values for the merge fn, collect secondary values.
-
-    Returns (primary_values, secondary_by_key) where secondary_by_key is None
-    for single-type outputs.
-    """
-    if not results or not isinstance(results[0], dict):
-        return results, None
-
-    # Dict-form: extract primary (first key) for merge, collect secondaries
-    prefix = f"{field_name}_"
-    primary_key = None
-    secondary_keys: list[str] = []
-
-    if isinstance(output_model, dict):
-        keys = list(output_model)
-        primary_key = f"{prefix}{keys[0]}"
-        secondary_keys = [f"{prefix}{k}" for k in keys[1:]]
-    else:
-        # Fallback: find keys by prefix
-        for k in results[0]:
-            if k.startswith(prefix):
-                if primary_key is None:
-                    primary_key = k
-                else:
-                    secondary_keys.append(k)
-
-    if primary_key is None:
-        return results, None
-
-    primary_values = [r.get(primary_key) for r in results if r.get(primary_key) is not None]
-    secondaries = {k: [r.get(k) for r in results if r.get(k) is not None] for k in secondary_keys}
-    return primary_values, secondaries
-
-
-def _build_oracle_merge_result(
-    merged: Any,
-    field_name: str,
-    output_model: Any,
-    secondaries: dict[str, list] | None,
-) -> dict:
-    """Build the state update dict after Oracle merge.
-
-    For single-type: {field_name: merged}.
-    For dict-form: {field_name_primary: merged, field_name_secondary: last_value, ...}.
-
-    Validates the merge result against the expected output type. Raises
-    ExecutionError if the merge_fn returns the wrong type — catches silent
-    garbage before it propagates through the pipeline.
-    """
-    expected_type = output_model
-    if isinstance(output_model, dict):
-        expected_type = next(iter(output_model.values()))
-
-    if not isinstance(merged, expected_type):
-        from neograph.errors import ExecutionError
-        raise ExecutionError(
-            f"Oracle merge_fn for '{field_name}' returned {type(merged).__name__}, "
-            f"expected {expected_type.__name__}. "
-            f"The merge function must return an instance of the node's output type."
-        )
-
-    if secondaries is None:
-        return {field_name: merged}
-
-    prefix = f"{field_name}_"
-    if isinstance(output_model, dict):
-        primary_field = f"{prefix}{next(iter(output_model))}"
-    else:
-        primary_field = field_name
-
-    update = {primary_field: merged}
-    for key, values in secondaries.items():
-        if values:
-            update[key] = values[-1]  # take last variant's secondary value
-    return update
-
-
-def make_oracle_merge_fn(
-    oracle: Oracle,
-    field_name: str,
-    collector_field: str,
-    output_model: Any,
-) -> Callable:
-    """Create the merge barrier function for Oracle.
-
-    If oracle.merge_prompt, calls invoke_structured (LLM judge).
-    If oracle.merge_fn, calls the registered scripted function — with
-    FromInput/FromConfig DI if it was declared via ``@merge_fn``.
-    Reads from collector_field, writes to field_name (or per-key fields
-    for dict-form outputs).
-    """
-    if oracle.merge_prompt:
-        def merge_fn(state: Any, config: RunnableConfig) -> dict:
-            from neograph._llm import invoke_structured
-
-            results = getattr(state, collector_field, [])
-            primary, secondaries = _unwrap_oracle_results(results, field_name, output_model)
-            merged = invoke_structured(
-                model_tier=oracle.merge_model,
-                prompt_template=oracle.merge_prompt,
-                input_data=primary,
-                output_model=output_model if not isinstance(output_model, dict) else next(iter(output_model.values())),
-                config=config,
-            )
-            return _build_oracle_merge_result(merged, field_name, output_model, secondaries)
-    else:
-        from neograph.decorators import get_merge_fn_metadata, _resolve_merge_args
-
-        metadata = get_merge_fn_metadata(oracle.merge_fn)
-        if metadata is not None:
-            user_fn, param_res = metadata
-
-            def merge_fn(state: Any, config: RunnableConfig) -> dict:
-                results = getattr(state, collector_field, [])
-                primary, secondaries = _unwrap_oracle_results(results, field_name, output_model)
-                merged = user_fn(primary, *_resolve_merge_args(param_res, config, state))
-                return _build_oracle_merge_result(merged, field_name, output_model, secondaries)
-        else:
-            scripted_merge = lookup_scripted(oracle.merge_fn)
-
-            def merge_fn(state: Any, config: RunnableConfig) -> dict:
-                results = getattr(state, collector_field, [])
-                primary, secondaries = _unwrap_oracle_results(results, field_name, output_model)
-                merged = scripted_merge(primary, config)
-                return _build_oracle_merge_result(merged, field_name, output_model, secondaries)
-
-    return merge_fn
+# ── Oracle & Each modifier wiring (extracted to _oracle.py) ──────────────
+# Re-exported so compiler.py imports remain unchanged.
+from neograph._oracle import (  # noqa: E402, F401
+    _build_oracle_merge_result,
+    _unwrap_oracle_results,
+    make_each_redirect_fn,
+    make_eachoracle_redirect_fn,
+    make_oracle_merge_fn,
+    make_oracle_redirect_fn,
+)
 
 
 def make_subgraph_fn(sub: Any, sub_graph: Any) -> Callable:
@@ -758,9 +535,10 @@ def make_subgraph_fn(sub: Any, sub_graph: Any) -> Callable:
     from neograph.runner import _strip_internals
 
     sub_log = log.bind(subgraph=sub.name)
-    field_name = sub.name.replace("-", "_")
+    field_name = field_name_for(sub.name)
 
-    has_loop = sub.has_modifier(Loop)
+    sub_combo, _ = classify_modifiers(sub)
+    has_loop = sub_combo in (ModifierCombo.LOOP, ModifierCombo.LOOP_OPERATOR)
 
     def subgraph_node(state: Any, config: RunnableConfig) -> dict:
         sub_log.info("subgraph_start")
@@ -803,16 +581,13 @@ def make_subgraph_fn(sub: Any, sub_graph: Any) -> Callable:
         for n in sub.nodes:
             if hasattr(n, "context") and n.context:
                 for ctx_name in n.context:
-                    ctx_field = ctx_name.replace("-", "_")
+                    ctx_field = field_name_for(ctx_name)
                     val = _state_get(state, ctx_field)
                     if val is not None:
                         sub_input[ctx_field] = val
 
-        # Forward Oracle model override from parent state into sub-graph config
-        oracle_model = _state_get(state, "neo_oracle_model")
-        if oracle_model is not None:
-            configurable = config.get("configurable", {})
-            config = {**config, "configurable": {**configurable, "_oracle_model": oracle_model}}
+        # Forward Oracle gen_id + model override from parent state into config
+        config = _inject_oracle_config(state, config)
 
         sub_result = _strip_internals(sub_graph.invoke(sub_input, config=config))
 
@@ -830,14 +605,13 @@ def make_subgraph_fn(sub: Any, sub_graph: Any) -> Callable:
                 break
 
         # Runtime defense: if no internal node produced a compatible output,
-        # fail loud instead of writing None silently (neograph-luzc).
-        # Note: ExecutionError is not imported at module level — latent NameError bug.
-        if output_val is None and sub.output is not None:  # pragma: no cover — defensive; also has NameError bug
-            raise ExecutionError(
-                f"Sub-construct '{sub.name}' declares output="
-                f"{sub.output.__name__} but no internal node produced a "
-                f"compatible value. Check that at least one node writes "
-                f"the declared output type."
+        # fail loud instead of writing None silently.
+        if output_val is None and sub.output is not None:  # pragma: no cover — defensive
+            raise ExecutionError.build(
+                "No internal node produced a compatible output value",
+                expected=sub.output.__name__,
+                hint="Check that at least one node writes the declared output type",
+                construct=sub.name,
             )
 
         sub_log.info("subgraph_complete")
@@ -850,25 +624,3 @@ def make_subgraph_fn(sub: Any, sub_graph: Any) -> Callable:
 
     subgraph_node.__name__ = field_name
     return subgraph_node
-
-
-def make_each_redirect_fn(raw_fn: Callable, field_name: str, each: Each) -> Callable:
-    """Wrap a node function to key the result by the Each item's key field.
-
-    Reads neo_each_item from state, uses each.key to extract the dispatch key.
-    """
-
-    def each_redirect_fn(state: Any, config: RunnableConfig = None) -> dict:
-        # Get the item being processed
-        each_item = _state_get(state, "neo_each_item")
-
-        result = raw_fn(state, config) if config else raw_fn(state)
-        val = result.get(field_name)
-
-        if val is not None and each_item is not None:
-            key_val = getattr(each_item, each.key, str(each_item))
-            return {field_name: {key_val: val}}
-        return result
-
-    each_redirect_fn.__name__ = raw_fn.__name__ if hasattr(raw_fn, '__name__') else field_name
-    return each_redirect_fn

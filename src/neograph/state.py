@@ -8,18 +8,19 @@ from __future__ import annotations
 
 from typing import Annotated, Any
 
-from pydantic import BaseModel, create_model
-
 import structlog
+from pydantic import BaseModel, create_model
 
 from neograph.construct import Construct
 from neograph.errors import CompileError
 from neograph.forward import _BranchNode
+from neograph.naming import field_name_for
 
 log = structlog.get_logger()
-from neograph.modifiers import Oracle, Each, Loop
-from neograph.node import Node
+from typing import assert_never
 
+from neograph.modifiers import ModifierCombo, classify_modifiers
+from neograph.node import Node
 
 
 def _last_write_wins(existing: Any, new: Any) -> Any:
@@ -55,24 +56,42 @@ def _append_tagged(existing: Any, new: Any) -> list:
 def _merge_dicts(existing: Any, new: dict) -> dict:
     """Reducer: merge dicts additively (for fan-out results).
 
-    On duplicate keys, keeps the existing (first) value and logs a warning.
+    On duplicate keys, keeps the existing (first) value. Logs a single
+    summary instead of per-key warnings (neograph-o0tv: noisy on resume).
     """
     if existing is None:
         existing = {}
+    if not isinstance(existing, dict):
+        existing = {}
+    if not isinstance(new, dict):
+        return existing
     merged = {**existing}
+    dupes = []
     for key, val in new.items():
         if key in merged:
-            log.warning("each_duplicate_key", key=key, action="kept_existing")
+            dupes.append(key)
             continue
         merged[key] = val
+    if dupes:
+        log.debug("each_duplicate_keys", count=len(dupes), keys=dupes[:5],
+                  action="kept_existing", truncated=len(dupes) > 5)
     return merged
 
 
-def compile_state_model(construct: Construct) -> type[BaseModel]:
+def compile_state_model(
+    construct: Construct,
+    *,
+    context_types: dict[str, type] | None = None,
+) -> type[BaseModel]:
     """Generate a Pydantic state model from the union of Node I/O fields.
 
     Each Node's output becomes a state field. Fan-out nodes get dict reducers.
     The resulting model is used as the LangGraph StateGraph schema.
+
+    Args:
+        context_types: When compiling a subconstruct, the parent passes concrete
+            types for context fields (instead of Any). Keys are field_name_for'd
+            context names, values are the parent's output types.
     """
     fields: dict[str, Any] = {}
 
@@ -85,11 +104,13 @@ def compile_state_model(construct: Construct) -> type[BaseModel]:
     # which would silently share loop counters, reducers, etc.
     seen_fields: dict[str, str] = {}  # field_name → original node name
     for item in nodes_only + sub_constructs:
-        field_name = item.name.replace("-", "_")
+        field_name = field_name_for(item.name)
         if field_name in seen_fields:
-            raise CompileError(
-                f"Node name collision: '{item.name}' and '{seen_fields[field_name]}' "
-                f"both map to state field '{field_name}'. Rename one of them."
+            raise CompileError.build(
+                "node name collision",
+                expected="unique state field names",
+                found=f"'{item.name}' and '{seen_fields[field_name]}' both map to state field '{field_name}'",
+                hint="rename one of them so the normalized field names differ",
             )
         seen_fields[field_name] = item.name
 
@@ -106,10 +127,11 @@ def compile_state_model(construct: Construct) -> type[BaseModel]:
                 # Construct in branch arm — same handling as sub-constructs
                 if arm_item.output is None:
                     continue
-                field_name = arm_item.name.replace("-", "_")
-                if arm_item.has_modifier(Loop):
+                field_name = field_name_for(arm_item.name)
+                arm_combo, _ = classify_modifiers(arm_item)
+                if arm_combo in (ModifierCombo.LOOP, ModifierCombo.LOOP_OPERATOR):
                     fields[field_name] = (
-                        Annotated[list[arm_item.output], _append_loop_result],
+                        Annotated[list[arm_item.output], _append_loop_result],  # type: ignore[name-defined]
                         [],
                     )
                     fields[f'neo_loop_count_{field_name}'] = (int, 0)
@@ -121,51 +143,75 @@ def compile_state_model(construct: Construct) -> type[BaseModel]:
     # Sub-constructs: handle modifiers same as nodes
     for sub in sub_constructs:
         if sub.output is None:
-            msg = f"Sub-construct '{sub.name}' has no output type. Declare output=SomeModel."
-            raise CompileError(msg)
-        field_name = sub.name.replace("-", "_")
+            raise CompileError.build(
+                "sub-construct has no output type",
+                hint="declare output=SomeModel on the sub-construct",
+                construct=sub.name,
+            )
+        field_name = field_name_for(sub.name)
 
-        if sub.has_modifier(Oracle):
-            # Oracle on Construct: collector + consumer field
-            collector_field = f"neo_oracle_{field_name}"
-            fields[collector_field] = (
-                Annotated[list[sub.output], _collect_oracle_results],
-                [],
-            )
-            fields[field_name] = (sub.output | None, None)
-        elif sub.has_modifier(Each):
-            # Each on Construct: dict field
-            field_type = dict[str, sub.output] | None
-            fields[field_name] = (
-                Annotated[field_type, _merge_dicts],
-                None,
-            )
-        elif sub.has_modifier(Loop):
-            # Loop on Construct: append-list + iteration counter
-            fields[field_name] = (
-                Annotated[list[sub.output], _append_loop_result],
-                [],
-            )
-            fields[f'neo_loop_count_{field_name}'] = (int, 0)
-        else:
-            fields[field_name] = (sub.output | None, None)
+        combo, mods = classify_modifiers(sub)
+        match combo:
+            case ModifierCombo.ORACLE | ModifierCombo.ORACLE_OPERATOR:
+                # Oracle on Construct: collector + consumer field
+                collector_field = f"neo_oracle_{field_name}"
+                fields[collector_field] = (
+                    Annotated[list[sub.output], _collect_oracle_results],  # type: ignore[name-defined]
+                    [],
+                )
+                fields[field_name] = (sub.output | None, None)  # type: ignore[name-defined]
+            case ModifierCombo.EACH | ModifierCombo.EACH_OPERATOR:
+                # Each on Construct: dict field
+                field_type = dict[str, sub.output] | None  # type: ignore[name-defined]
+                fields[field_name] = (
+                    Annotated[field_type, _merge_dicts],
+                    None,
+                )
+            case ModifierCombo.LOOP | ModifierCombo.LOOP_OPERATOR:
+                # Loop on Construct: append-list + iteration counter
+                fields[field_name] = (
+                    Annotated[list[sub.output], _append_loop_result],  # type: ignore[name-defined]
+                    [],
+                )
+                fields[f'neo_loop_count_{field_name}'] = (int, 0)
+            case ModifierCombo.BARE | ModifierCombo.OPERATOR:
+                fields[field_name] = (sub.output | None, None)
+            case ModifierCombo.EACH_ORACLE | ModifierCombo.EACH_ORACLE_OPERATOR:
+                # Each×Oracle on Constructs not supported
+                # Compiler raises earlier; this is a defensive fallback.
+                fields[field_name] = (sub.output | None, None)
+            case _ as unreachable:
+                assert_never(unreachable)
 
     # Oracle support: generator ID + optional model override passed via state
     all_items = nodes_only + sub_constructs
-    if any(item.has_modifier(Oracle) for item in all_items):
+    has_any_oracle = False
+    has_any_each = False
+    for item in all_items:
+        item_combo, _ = classify_modifiers(item)
+        if item_combo in (
+            ModifierCombo.ORACLE, ModifierCombo.ORACLE_OPERATOR,
+            ModifierCombo.EACH_ORACLE, ModifierCombo.EACH_ORACLE_OPERATOR,
+        ):
+            has_any_oracle = True
+        if item_combo in (
+            ModifierCombo.EACH, ModifierCombo.EACH_OPERATOR,
+            ModifierCombo.EACH_ORACLE, ModifierCombo.EACH_ORACLE_OPERATOR,
+        ):
+            has_any_each = True
+    if has_any_oracle:
         fields["neo_oracle_gen_id"] = (str | None, None)
         fields["neo_oracle_model"] = (str | None, None)
-
-    # Each support: current item passed via state
-    if any(item.has_modifier(Each) for item in all_items):
+    if has_any_each:
         fields["neo_each_item"] = (Any, None)
 
     # Loop support: iteration counter per looped node
     for n in nodes_only:
-        if n.has_modifier(Loop):
-            field_name = n.name.replace('-', '_')
+        n_combo, n_mods = classify_modifiers(n)
+        if n_combo in (ModifierCombo.LOOP, ModifierCombo.LOOP_OPERATOR):
+            field_name = field_name_for(n.name)
             fields[f'neo_loop_count_{field_name}'] = (int, 0)
-            loop = n.get_modifier(Loop)
+            loop = n_mods["loop"]
             if loop.history:
                 fields[f'neo_loop_history_{field_name}'] = (
                     Annotated[list, _collect_oracle_results], []
@@ -176,12 +222,17 @@ def compile_state_model(construct: Construct) -> type[BaseModel]:
         fields["neo_subgraph_input"] = (construct.input | None, None)
 
     # Context fields — forwarded from parent state for nodes that declare context=
+    # When context_types is provided (subconstruct compilation), use the concrete
+    # type from the parent instead of Any. This ensures the msgpack allowlist
+    # includes the context field types for checkpoint serialization.
+    _ctx_types = context_types or {}
     for n in nodes_only:
         if n.context:
             for ctx_name in n.context:
-                ctx_field = ctx_name.replace("-", "_")
+                ctx_field = field_name_for(ctx_name)
                 if ctx_field not in fields:
-                    fields[ctx_field] = (Any, None)
+                    ctx_type = _ctx_types.get(ctx_field, Any)
+                    fields[ctx_field] = (ctx_type if ctx_type is not Any else Any, None)
     # Also check branch arm nodes (skip Constructs — they handle context internally)
     for branch in branch_nodes:
         meta = branch._neo_branch_meta
@@ -190,9 +241,10 @@ def compile_state_model(construct: Construct) -> type[BaseModel]:
                 continue
             if arm_node.context:
                 for ctx_name in arm_node.context:
-                    ctx_field = ctx_name.replace("-", "_")
+                    ctx_field = field_name_for(ctx_name)
                     if ctx_field not in fields:
-                        fields[ctx_field] = (Any, None)
+                        ctx_type = _ctx_types.get(ctx_field, Any)
+                        fields[ctx_field] = (ctx_type if ctx_type is not Any else Any, None)
 
     # Framework fields — always present
     # node_id and project_root have defaults so consumers can omit them
@@ -213,28 +265,54 @@ def _add_output_field(node: Node, fields: dict[str, Any]) -> None:
     When outputs is a single type (backward compat), creates ``{node_name}``.
     """
     if node.outputs is None:
-        msg = f"Node '{node.name}' has no output type. Every node must declare outputs=SomeModel."
-        raise CompileError(msg)
+        raise CompileError.build(
+            "node has no output type",
+            hint="every node must declare outputs=SomeModel",
+            node=node.name,
+        )
 
-    field_name = node.name.replace("-", "_")
+    field_name = field_name_for(node.name)
 
     # Dict-form outputs: one state field per key (neograph-1bp.2).
     if isinstance(node.outputs, dict):
-        if node.has_modifier(Oracle):
-            # Oracle + dict-form: single collector for the whole result dict,
-            # per-key consumer fields without per-key collectors (neograph-7ft).
-            collector_field = f"neo_oracle_{field_name}"
-            fields[collector_field] = (
-                Annotated[list[dict], _collect_oracle_results],
-                [],
-            )
-            for output_key, output_type in node.outputs.items():
-                key_field = f"{field_name}_{output_key}"
-                fields[key_field] = (output_type | None, None)
-        else:
-            for output_key, output_type in node.outputs.items():
-                key_field = f"{field_name}_{output_key}"
-                _add_single_output_field(node, key_field, output_type, fields)
+        combo, mods = classify_modifiers(node)
+        match combo:
+            case ModifierCombo.EACH_ORACLE | ModifierCombo.EACH_ORACLE_OPERATOR:
+                # Each×Oracle fusion + dict-form: tagged collector + dict output
+                # per key. Same as single-type fusion but per-key.
+                collector_field = f"neo_eachoracle_{field_name}"
+                fields[collector_field] = (
+                    Annotated[list, _append_tagged],
+                    [],
+                )
+                for output_key, output_type in node.outputs.items():
+                    key_field = f"{field_name}_{output_key}"
+                    field_type = dict[str, output_type] | None  # type: ignore[valid-type]
+                    fields[key_field] = (
+                        Annotated[field_type, _merge_dicts],
+                        None,
+                    )
+            case ModifierCombo.ORACLE | ModifierCombo.ORACLE_OPERATOR:
+                # Oracle + dict-form: single collector for the whole result dict,
+                # per-key consumer fields without per-key collectors.
+                collector_field = f"neo_oracle_{field_name}"
+                fields[collector_field] = (
+                    Annotated[list[dict], _collect_oracle_results],
+                    [],
+                )
+                for output_key, output_type in node.outputs.items():
+                    key_field = f"{field_name}_{output_key}"
+                    fields[key_field] = (output_type | None, None)
+            case (
+                ModifierCombo.BARE | ModifierCombo.OPERATOR
+                | ModifierCombo.EACH | ModifierCombo.EACH_OPERATOR
+                | ModifierCombo.LOOP | ModifierCombo.LOOP_OPERATOR
+            ):
+                for output_key, output_type in node.outputs.items():
+                    key_field = f"{field_name}_{output_key}"
+                    _add_single_output_field(node, key_field, output_type, fields)
+            case _ as unreachable:
+                assert_never(unreachable)
         return
 
     # Single-type outputs (backward compat): one field named after the node.
@@ -248,43 +326,47 @@ def _add_single_output_field(
     fields: dict[str, Any],
 ) -> None:
     """Add one output field to the state model, applying modifier wrapping."""
-    if node.has_modifier(Each) and node.has_modifier(Oracle):
-        # Each×Oracle fusion: tagged collector + dict output (neograph-tpgi)
-        collector_field = f"neo_eachoracle_{field_name}"
-        fields[collector_field] = (
-            Annotated[list, _append_tagged],
-            [],
-        )
-        # Final output: same shape as Each alone (dict[str, merged_type])
-        field_type = dict[str, output_type] | None
-        fields[field_name] = (
-            Annotated[field_type, _merge_dicts],
-            None,
-        )
-    elif node.has_modifier(Each):
-        field_type = dict[str, output_type] | None
-        fields[field_name] = (
-            Annotated[field_type, _merge_dicts],
-            None,
-        )
-    elif node.has_modifier(Oracle):
-        collector_field = f"neo_oracle_{field_name}"
-        # When oracle_gen_type is set, the collector holds per-variant types
-        # (list[gen_type]), not the post-merge type. The consumer-facing field
-        # keeps node.outputs (the post-merge type).
-        collector_type = node.oracle_gen_type if node.oracle_gen_type is not None else output_type
-        fields[collector_field] = (
-            Annotated[list[collector_type], _collect_oracle_results],
-            [],
-        )
-        fields[field_name] = (output_type | None, None)
-    elif node.has_modifier(Loop):
-        # Loop: append-list reducer. Each iteration pushes to the list.
-        # _extract_input unwraps [-1] for the node on re-entry.
-        # Downstream nodes after loop exit see the final value (unwrapped).
-        fields[field_name] = (
-            Annotated[list[output_type], _append_loop_result],
-            [],
-        )
-    else:
-        fields[field_name] = (output_type | None, None)
+    combo, mods = classify_modifiers(node)
+    match combo:
+        case ModifierCombo.EACH_ORACLE | ModifierCombo.EACH_ORACLE_OPERATOR:
+            # Each×Oracle fusion: tagged collector + dict output
+            collector_field = f"neo_eachoracle_{field_name}"
+            fields[collector_field] = (
+                Annotated[list, _append_tagged],
+                [],
+            )
+            # Final output: same shape as Each alone (dict[str, merged_type])
+            field_type = dict[str, output_type] | None  # type: ignore[valid-type]
+            fields[field_name] = (
+                Annotated[field_type, _merge_dicts],
+                None,
+            )
+        case ModifierCombo.EACH | ModifierCombo.EACH_OPERATOR:
+            field_type = dict[str, output_type] | None  # type: ignore[valid-type, misc, assignment]
+            fields[field_name] = (
+                Annotated[field_type, _merge_dicts],
+                None,
+            )
+        case ModifierCombo.ORACLE | ModifierCombo.ORACLE_OPERATOR:
+            collector_field = f"neo_oracle_{field_name}"
+            # When oracle_gen_type is set, the collector holds per-variant types
+            # (list[gen_type]), not the post-merge type. The consumer-facing field
+            # keeps node.outputs (the post-merge type).
+            collector_type = node.oracle_gen_type if node.oracle_gen_type is not None else output_type
+            fields[collector_field] = (
+                Annotated[list[collector_type], _collect_oracle_results],  # type: ignore[valid-type]
+                [],
+            )
+            fields[field_name] = (output_type | None, None)
+        case ModifierCombo.LOOP | ModifierCombo.LOOP_OPERATOR:
+            # Loop: append-list reducer. Each iteration pushes to the list.
+            # _extract_input unwraps [-1] for the node on re-entry.
+            # Downstream nodes after loop exit see the final value (unwrapped).
+            fields[field_name] = (
+                Annotated[list[output_type], _append_loop_result],
+                [],
+            )
+        case ModifierCombo.BARE | ModifierCombo.OPERATOR:
+            fields[field_name] = (output_type | None, None)
+        case _ as unreachable:
+            assert_never(unreachable)

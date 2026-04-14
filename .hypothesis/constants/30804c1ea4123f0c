@@ -1,0 +1,4 @@
+# file: /Users/konst/projects/neograph/src/neograph/_construct_validation.py
+# hypothesis_version: 6.151.12
+
+[', ', '<', 'None', '__name__', 'fan_out_param', 'input', 'inputs', 'list[...]', 'merge_fn', 'model_fields', 'modifier_set', 'name', 'neo_subgraph_input', 'neograph', 'neograph.', 'output', 'pydantic']

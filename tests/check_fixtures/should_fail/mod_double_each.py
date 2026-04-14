@@ -1,10 +1,11 @@
 # CHECK_ERROR: Each.*already|duplicate.*Each|multiple.*Each
 # Two Each modifiers on the same node. Should this be caught?
 # Each wiring assumes one Each per node.
-from neograph import Construct, Node
-from neograph.modifiers import Each
-from neograph.factory import register_scripted
 from pydantic import BaseModel
+
+from neograph import Construct, Node
+from neograph.factory import register_scripted
+from neograph.modifiers import Each
 
 
 class Item(BaseModel, frozen=True):

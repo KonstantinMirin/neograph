@@ -1,7 +1,9 @@
 # Valid: three scripted nodes in a chain
+from pydantic import BaseModel
+
 from neograph import Construct, Node
 from neograph.factory import register_scripted
-from pydantic import BaseModel
+
 
 class A(BaseModel, frozen=True):
     x: str

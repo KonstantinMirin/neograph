@@ -1,8 +1,9 @@
 # CHECK_ERROR: Condition.*not registered
 from pydantic import BaseModel
+
 from neograph import Construct, Node
-from neograph.modifiers import Loop
 from neograph.factory import register_scripted
+from neograph.modifiers import Loop
 
 
 class Draft(BaseModel, frozen=True):

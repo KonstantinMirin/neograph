@@ -1,0 +1,4 @@
+# file: /Users/konst/projects/neograph/src/neograph/node.py
+# hypothesis_version: 6.151.12
+
+['__origin__', '_neo_isolated_input', 'act', 'agent', 'configurable', 'modifiers', 'name', 'scripted', 'skip_value', 'skip_when', 'think']

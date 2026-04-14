@@ -3,9 +3,11 @@
 # Producer has outputs={"result": Claims, "log": str}, state fields are
 # "source_result" and "source_log". Consumer references "source_log" correctly
 # but with wrong type expectation.
+from pydantic import BaseModel
+
 from neograph import Construct, Node
 from neograph.factory import register_scripted
-from pydantic import BaseModel
+
 
 class Claims(BaseModel, frozen=True):
     text: str

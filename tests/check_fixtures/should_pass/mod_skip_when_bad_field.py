@@ -1,8 +1,9 @@
 # Valid: skip_when with bad field compiles fine. Error is caught at runtime
 # with a clear ExecutionError (neograph-hr4c).
+from pydantic import BaseModel
+
 from neograph import Construct, Node
 from neograph.factory import register_scripted
-from pydantic import BaseModel
 
 
 class Claims(BaseModel, frozen=True):

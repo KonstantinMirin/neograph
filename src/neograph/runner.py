@@ -17,12 +17,41 @@ from typing import Any
 
 from langgraph.types import Command
 
+from neograph.errors import ExecutionError
+
 
 def _strip_internals(result: Any) -> Any:
     """Remove neo_* framework plumbing from the result dict."""
     if not isinstance(result, dict):
         return result
     return {k: v for k, v in result.items() if not k.startswith("neo_")}
+
+
+def _preflight_di_check(graph: Any, config: dict[str, Any]) -> None:
+    """Validate that all required DI params are present before starting any node.
+
+    compile() stashes _neo_required_di on the graph — a dict with "input"
+    and "config" sets of required param names. This check runs before
+    graph.invoke() so missing params fail at the gate, not mid-pipeline.
+    """
+    required = getattr(graph, "_neo_required_di", None)
+    if required is None:
+        return  # graph compiled without DI metadata (e.g., raw LangGraph)
+
+    configurable = config.get("configurable", {})
+    missing_input = required.get("input", set()) - set(configurable.keys())
+    missing_config = required.get("config", set()) - set(configurable.keys())
+
+    if missing_input or missing_config:
+        parts = []
+        if missing_input:
+            parts.append(f"missing from run(input=): {sorted(missing_input)}")
+        if missing_config:
+            parts.append(f"missing from config['configurable']: {sorted(missing_config)}")
+        raise ExecutionError.build(
+            f"Required DI parameters not provided: {'; '.join(parts)}",
+            hint="Add the missing keys to run(input={{...}}) or config={{'configurable': {{...}}}}",
+        )
 
 
 def _inject_input_to_config(
@@ -42,6 +71,23 @@ def _inject_input_to_config(
     return {**config, "configurable": merged}
 
 
+def _has_existing_checkpoint(graph: Any, config: dict[str, Any]) -> bool:
+    """Check if a checkpoint exists for this thread_id.
+
+    Returns True if the graph has a checkpointer and it contains saved state
+    for the thread specified in config. Used to decide whether to resume from
+    checkpoint or start a new execution.
+    """
+    checkpointer = getattr(graph, "checkpointer", None)
+    if checkpointer is None:
+        return False
+    try:
+        saved = checkpointer.get_tuple(config)
+        return saved is not None and bool(saved.checkpoint.get("channel_versions"))
+    except (AttributeError, TypeError, KeyError):
+        return False
+
+
 def run(
     graph: Any,
     input: dict[str, Any] | None = None,
@@ -49,6 +95,11 @@ def run(
     config: dict[str, Any] | None = None,
 ) -> Any:
     """Execute a compiled NeoGraph graph.
+
+    Three modes:
+        run(graph, input={...})              -- new execution
+        run(graph, resume={...}, config=...) -- resume after Operator interrupt
+        run(graph, config=...)               -- resume from checkpoint (crash recovery)
 
     Args:
         graph: Compiled LangGraph StateGraph (from compile()).
@@ -59,13 +110,53 @@ def run(
         resume: Human feedback (for resuming after Operator interrupt).
         config: LangGraph RunnableConfig (thread_id, callbacks, etc.).
                Put shared resources in config["configurable"].
+
+    Crash recovery:
+        When both input and resume are None, the graph resumes from its
+        last checkpoint. Requires config with thread_id and a persistent
+        checkpointer (SqliteSaver, PostgresSaver). LangGraph skips completed
+        supersteps and continues from the failure point::
+
+            run(graph, config={"configurable": {"thread_id": "same-id"}})
     """
     if resume is not None:
+        # Re-inject input fields on resume.
+        # The initial run stashes input in the caller's config dict.
+        # On resume, re-inject so FromInput DI resolves for post-interrupt nodes.
+        if config is not None:
+            neo_input = config.get("configurable", {}).get("_neo_input")
+            if neo_input is not None:
+                config = _inject_input_to_config(neo_input, config)
         return _strip_internals(graph.invoke(Command(resume=resume), config=config))
 
     if input is not None:
+        # Stash input in the CALLER'S config so resume can re-inject.
+        if config is None:
+            config = {}
+        configurable = config.setdefault("configurable", {})
+        configurable["_neo_input"] = input
         config = _inject_input_to_config(input, config)
+
+        # Pre-flight: check all required DI params are present
+        _preflight_di_check(graph, config)
+
+        # Check if a checkpoint already exists for this thread.
+        # If yes: this is a resume — inject input into config for DI but
+        # pass None to graph.invoke() so LangGraph resumes from checkpoint.
+        # If no: this is a new execution — pass input normally.
+        if _has_existing_checkpoint(graph, config):
+            return _strip_internals(graph.invoke(None, config=config))
+
         return _strip_internals(graph.invoke(input, config=config))
 
-    msg = "Either input or resume must be provided."
-    raise ValueError(msg)
+    # No input, no resume: resume from checkpoint.
+    # LangGraph's _first() treats invoke(None, config) as "resume from last
+    # checkpoint" when the thread already has saved state. This is the crash
+    # recovery path — skips completed supersteps, continues from failure point.
+    #
+    # DI contract: the caller must re-provide DI values in config['configurable']
+    # because checkpoints do not persist config. This is the same contract as
+    # FromConfig (rate limiters, shared resources are never checkpointed).
+    if config is not None:
+        _preflight_di_check(graph, config)
+    return _strip_internals(graph.invoke(None, config=config))

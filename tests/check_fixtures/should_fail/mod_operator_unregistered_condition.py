@@ -1,10 +1,11 @@
 # CHECK_ERROR: not registered|Condition.*not registered
 # Operator.when with a condition name that was never registered.
 # Uses a fake checkpointer to get past the checkpointer guard.
-from neograph import Construct, Node
-from neograph.modifiers import Operator
-from neograph.factory import register_scripted
 from pydantic import BaseModel
+
+from neograph import Construct, Node
+from neograph.factory import register_scripted
+from neograph.modifiers import Operator
 
 
 class Result(BaseModel, frozen=True):

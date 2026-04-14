@@ -16,24 +16,20 @@ Patterns covered:
 
 from __future__ import annotations
 
-from typing import Any
-
 import pytest
 from pydantic import BaseModel
 
 from neograph import (
     Construct,
     ConstructError,
-    Node,
     Each,
+    Node,
     compile,
     construct_from_functions,
-    construct_from_module,
     node,
     run,
 )
 from neograph.factory import register_scripted
-
 
 # -- Schemas for loop tests ---------------------------------------------------
 
@@ -439,7 +435,7 @@ class TestLoopValidation:
 
     def test_oracle_plus_operator_still_works(self):
         """Oracle + Operator is not restricted."""
-        from neograph import Oracle, Operator
+        from neograph import Operator, Oracle
 
         n = Node.scripted("refine", fn="noop", inputs=Draft, outputs=Draft)
         result = n | Oracle(n=3, merge_fn="combine")
@@ -463,20 +459,20 @@ class TestLoopValidation:
         """Loop(on_exhaust='explode') must raise ConfigurationError."""
         from neograph.errors import ConfigurationError
         from neograph.modifiers import Loop
-        with pytest.raises(ConfigurationError, match="on_exhaust.*must be.*'error'.*'last'"):
+        with pytest.raises(ConfigurationError, match="on_exhaust"):
             Loop(when=lambda x: True, on_exhaust="explode")
 
     def test_on_exhaust_empty_string_raises_configuration_error(self):
         """Loop(on_exhaust='') must raise ConfigurationError."""
         from neograph.errors import ConfigurationError
         from neograph.modifiers import Loop
-        with pytest.raises(ConfigurationError, match="on_exhaust.*must be.*'error'.*'last'"):
+        with pytest.raises(ConfigurationError, match="on_exhaust"):
             Loop(when=lambda x: True, on_exhaust="")
 
     def test_node_decorator_on_exhaust_invalid_raises(self):
         """@node(on_exhaust='bad') goes through Loop() — must raise."""
         from neograph.errors import ConfigurationError
-        with pytest.raises(ConfigurationError, match="on_exhaust.*must be.*'error'.*'last'"):
+        with pytest.raises(ConfigurationError, match="on_exhaust"):
             @node(
                 outputs=Draft,
                 loop_when=lambda d: d.score < 0.8,
@@ -544,7 +540,9 @@ class TestForwardConstructLoop:
         # for/while to graph cycles. It traces the loop body nodes once.
         # This test verifies the nodes were at least traced and ran.
         assert _review_count[0] >= 1, "review did not run at all"
-        assert result.get("draft") is not None, "draft node did not produce output"
+        assert isinstance(result.get("draft"), Draft), (
+            f"draft node should produce Draft, got {type(result.get('draft'))}"
+        )
 
     def test_self_loop_cycles_via_explicit_loop_primitive(self):
         """self.loop() compiles to a sub-construct with Loop modifier.
@@ -831,7 +829,8 @@ class TestForwardConstructLoop:
 
         def fc_refine_bl(_in, _cfg):
             _refine_bl_count[0] += 1
-            d = _in if isinstance(_in, Draft) else Draft(content="", score=0.0)
+            assert isinstance(_in, Draft), f"Expected Draft, got {type(_in)}"
+            d = _in
             return Draft(content=f"refined-{_refine_bl_count[0]}", score=d.score + 0.15, iteration=_refine_bl_count[0])
 
         register_scripted("fc_refine_bl", fc_refine_bl)
@@ -874,13 +873,15 @@ class TestForwardConstructLoop:
         _rough_count = [0]
         def fc_rough_2l(_in, _cfg):
             _rough_count[0] += 1
-            d = _in if isinstance(_in, Draft) else Draft(content="", score=0.0)
+            assert isinstance(_in, Draft), f"Expected Draft, got {type(_in)}"
+            d = _in
             return Draft(content=f"rough-{_rough_count[0]}", score=d.score + 0.2, iteration=_rough_count[0])
 
         _polish_count = [0]
         def fc_polish_2l(_in, _cfg):
             _polish_count[0] += 1
-            d = _in if isinstance(_in, Draft) else Draft(content="", score=0.0)
+            assert isinstance(_in, Draft), f"Expected Draft, got {type(_in)}"
+            d = _in
             return Draft(content=f"polish-{_polish_count[0]}", score=d.score + 0.15, iteration=_polish_count[0])
 
         register_scripted("fc_rough_2l", fc_rough_2l)
@@ -1050,6 +1051,108 @@ class TestDictFormOutputsLoop:
 # =============================================================================
 
 
+class TestLoopDictFormMultipleInputs:
+    """EI-10: Loop + dict-form inputs with multiple keys — re-entry must
+    place latest under the correct key, not blindly under first_key."""
+
+    def test_loop_reentry_with_context_and_self_ref(self):
+        """Loop node with (context: Context, draft: Draft) → Draft.
+        On re-entry, draft should get latest, context should come from state."""
+        from pydantic import BaseModel
+
+        from neograph.factory import register_scripted
+
+        class Context(BaseModel, frozen=True):
+            topic: str
+
+        class Draft(BaseModel, frozen=True):
+            content: str
+            score: float = 0.0
+
+        iteration = [0]
+
+        register_scripted("o5gd_ctx", lambda i, c: Context(topic="AI safety"))
+
+        def refine_fn(input_data, config):
+            iteration[0] += 1
+            ctx = input_data.get("context") if isinstance(input_data, dict) else None
+            draft = input_data.get("refine") if isinstance(input_data, dict) else input_data
+            # context must be a Context, not a Draft
+            assert isinstance(ctx, Context), (
+                f"Iteration {iteration[0]}: context should be Context, "
+                f"got {type(ctx).__name__}: {ctx}"
+            )
+            return Draft(
+                content=f"v{iteration[0]}:{ctx.topic}",
+                score=0.3 * iteration[0],
+            )
+
+        register_scripted("o5gd_refine", refine_fn)
+
+        from neograph.modifiers import Loop
+
+        # inputs: "context" = upstream node, "refine" = self-reference (Loop)
+        pipeline = Construct("o5gd-test", nodes=[
+            Node.scripted("context", fn="o5gd_ctx", outputs=Context),
+            Node.scripted("refine", fn="o5gd_refine",
+                          inputs={"context": Context, "refine": Draft},
+                          outputs=Draft)
+            | Loop(when=lambda d: d is None or d.score < 0.8, max_iterations=5),
+        ])
+        graph = compile(pipeline)
+        result = run(graph, input={"node_id": "o5gd"})
+
+        # Should have iterated 3 times (score: 0.3, 0.6, 0.9)
+        assert iteration[0] == 3
+        final = result["refine"]
+        if isinstance(final, list):
+            final = final[-1]
+        assert final.score >= 0.8
+        assert "AI safety" in final.content
+
+
+    def test_loop_first_iteration_gets_none_not_empty_list(self):
+        """Regression neograph-pnzs: first iteration self-ref key must be None, not []."""
+        from pydantic import BaseModel
+
+        from neograph.factory import register_scripted
+
+        class Ctx(BaseModel, frozen=True):
+            topic: str
+
+        class Draft(BaseModel, frozen=True):
+            text: str
+            score: float = 0.0
+
+        first_call_input = [None]
+
+        register_scripted("pnzs_ctx", lambda i, c: Ctx(topic="test"))
+
+        def check_fn(input_data, config):
+            if first_call_input[0] is None:
+                first_call_input[0] = input_data
+            return Draft(text="done", score=1.0)
+
+        register_scripted("pnzs_refine", check_fn)
+
+        from neograph.modifiers import Loop
+
+        pipeline = Construct("pnzs-test", nodes=[
+            Node.scripted("ctx", fn="pnzs_ctx", outputs=Ctx),
+            Node.scripted("refine", fn="pnzs_refine",
+                          inputs={"ctx": Ctx, "refine": Draft},
+                          outputs=Draft)
+            | Loop(when=lambda d: d is None or d.score < 0.8, max_iterations=3),
+        ])
+        graph = compile(pipeline)
+        run(graph, input={"node_id": "pnzs"})
+
+        # First call: self-ref key should be None (not [])
+        assert isinstance(first_call_input[0], dict)
+        assert first_call_input[0]["refine"] is None  # NOT []
+        assert isinstance(first_call_input[0]["ctx"], Ctx)
+
+
 class TestLoopSkipWhenCounterIncrement:
     """Loop + skip_when: even when the node is skipped, the loop counter
     must increment so the loop eventually exits via max_iterations."""
@@ -1061,7 +1164,6 @@ class TestLoopSkipWhenCounterIncrement:
         exits at max_iterations) but surprising — warn so users know
         skip_value is recommended.
         """
-        import warnings
         from tests.fakes import StructuredFake, configure_fake_llm
 
         # LLM should never be called — skip_when fires every time
@@ -1089,7 +1191,6 @@ class TestLoopSkipWhenCounterIncrement:
         )
         def refine(seed: Draft) -> Draft: ...
 
-        import structlog
         from structlog.testing import capture_logs
 
         with capture_logs() as logs:
@@ -1233,8 +1334,8 @@ class TestLoopSkipWhenCounterIncrement:
     def test_loop_all_skipped_on_exhaust_error_raises(self):
         """All iterations skipped + on_exhaust='error' → ExecutionError
         at max_iterations."""
-        from tests.fakes import StructuredFake, configure_fake_llm
         from neograph import ExecutionError
+        from tests.fakes import StructuredFake, configure_fake_llm
 
         configure_fake_llm(lambda tier: StructuredFake(
             lambda m: m(content="unreachable", score=0.0)

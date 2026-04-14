@@ -7,12 +7,10 @@ from pydantic import BaseModel
 
 from neograph.errors import ConfigurationError
 from neograph.spec_types import (
-    _type_registry,
     load_project_types,
     lookup_type,
     register_type,
 )
-
 
 # -- register + lookup --------------------------------------------------------
 
@@ -316,6 +314,7 @@ class TestResolveFieldTypeUnknownSchema:
     def test_unknown_json_schema_returns_any(self):
         """A field with no recognized type/ref falls back to Any."""
         from typing import Any
+
         from neograph.spec_types import _resolve_field_type
 
         result = _resolve_field_type({"description": "some field"})

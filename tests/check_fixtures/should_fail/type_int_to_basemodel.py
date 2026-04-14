@@ -1,9 +1,11 @@
 # CHECK_ERROR: type.*compatible|no upstream produces
 # Attack vector 2b: int output connected to BaseModel consumer
 # int is not a BaseModel subclass, should fail type check.
+from pydantic import BaseModel
+
 from neograph import Construct, Node
 from neograph.factory import register_scripted
-from pydantic import BaseModel
+
 
 class SomeModel(BaseModel, frozen=True):
     text: str

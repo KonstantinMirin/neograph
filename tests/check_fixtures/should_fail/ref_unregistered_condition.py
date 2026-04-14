@@ -2,11 +2,12 @@
 # NOTE: Operator requires a checkpointer. The fixture harness doesn't pass one,
 # so it hits the checkpointer check first. This fixture validates via direct
 # compile() with a checkpointer in the inline test below.
-from pydantic import BaseModel
-from neograph import Construct, Node, compile
-from neograph.modifiers import Operator
-from neograph.factory import register_scripted
 from langgraph.checkpoint.memory import MemorySaver
+from pydantic import BaseModel
+
+from neograph import Construct, Node, compile
+from neograph.factory import register_scripted
+from neograph.modifiers import Operator
 
 
 class Result(BaseModel, frozen=True):

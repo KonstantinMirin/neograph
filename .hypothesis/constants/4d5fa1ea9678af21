@@ -1,0 +1,4 @@
+# file: /Users/konst/projects/neograph/src/neograph/_llm.py
+# hypothesis_version: 6.151.12
+
+[1000, '"', '${', "'", '.', '; ', 'LLM not configured', 'Tool result:', '[', '\\', '\\$\\{([^}]+)\\}', ']', '__all__', 'all_tools_exhausted', 'args', 'assistant', 'config', 'content', 'context', 'duration_s', 'id', 'input_tokens', 'json_mode', 'llm_call', 'llm_config', 'max_iterations', 'max_retries', 'mode', 'msg', 'name', 'node_name', 'output_model', 'output_schema', 'output_strategy', 'output_tokens', 'outputs', 'parsed', 'prompt', 'prompt_var_missing', 'raw', 'react', 'react_final_response', 'renderer', 'role', 'should be an object', 'structured', 'text', 'think', 'tier', 'token_budget', 'tool_call', 'total_tokens', 'type', 'unknown', 'usage_metadata', 'user', 'validation_errors', '{', '}']

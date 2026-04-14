@@ -1,10 +1,11 @@
 # CHECK_ERROR: not a list|resolves to.*not.*list
 # Each.over path resolves to a plain string field, not a list.
 # Should fail at assembly-time validation.
-from neograph import Construct, Node
-from neograph.modifiers import Each
-from neograph.factory import register_scripted
 from pydantic import BaseModel
+
+from neograph import Construct, Node
+from neograph.factory import register_scripted
+from neograph.modifiers import Each
 
 
 class Info(BaseModel, frozen=True):

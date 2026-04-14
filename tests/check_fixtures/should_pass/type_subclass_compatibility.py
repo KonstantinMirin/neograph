@@ -1,9 +1,11 @@
 # Attack vector 5: Subclass compatibility (Liskov)
 # TypeB inherits from TypeA. Node produces TypeB, consumer expects TypeA.
 # Should pass — Liskov substitution principle.
+from pydantic import BaseModel
+
 from neograph import Construct, Node
 from neograph.factory import register_scripted
-from pydantic import BaseModel
+
 
 class TypeA(BaseModel, frozen=True):
     x: str

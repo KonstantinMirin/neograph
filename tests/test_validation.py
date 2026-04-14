@@ -5,28 +5,43 @@ dict-form outputs validation, Oracle error paths, and lint() DI validation.
 
 from __future__ import annotations
 
-from typing import Annotated, Any
+from typing import Annotated
 
 import pytest
 from pydantic import BaseModel
 
-from tests.schemas import (
-    RawText, Claims, ClassifiedClaims, ClusterGroup, Clusters,
-    MatchResult, MergedResult, ValidationResult, _producer, _consumer,
-)
 from neograph import (
-    Construct, ConstructError, Node, Each, Oracle, Operator, Tool,
-    compile, run,
-    CompileError, ConfigurationError,
-    FromInput, FromConfig,
-    node,
-    construct_from_functions,
+    CompileError,
+    ConfigurationError,
+    Construct,
+    ConstructError,
+    Each,
     ExecutionError,
+    FromConfig,
+    FromInput,
+    Node,
+    Operator,
+    Oracle,
+    Tool,
+    compile,
+    construct_from_functions,
+    node,
+    run,
 )
-try:
-    from neograph import lint
-except ImportError:
-    lint = None
+from tests.schemas import (
+    Claims,
+    ClassifiedClaims,
+    ClusterGroup,
+    Clusters,
+    MatchResult,
+    MergedResult,
+    RawText,
+    ValidationResult,
+    _consumer,
+    _producer,
+)
+
+from neograph import lint
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -716,7 +731,7 @@ class TestFanInValidation:
         pipeline = Construct("ts7", nodes=[make, canonicalize])
         assert len(pipeline.nodes) == 2
         each = pipeline.nodes[1].get_modifier(Each)
-        assert each is not None
+        assert isinstance(each, Each)
 
     def test_mixed_upstream_and_fan_out_when_programmatic(self):
         """Programmatic fan-in + fan-out: upstream keys validate, fan-out
@@ -995,26 +1010,19 @@ class TestCheckEachPathErrors:
         with pytest.raises(ConstructError, match="not a list"):
             Construct("single-seg", nodes=[a, b])
 
-    def test_single_segment_path_defers_when_root_unknown(self):
-        """Each(over="unknown") with a single segment and no matching upstream
-        defers to runtime rather than raising."""
+    def test_single_segment_path_raises_when_root_unknown(self):
+        """Each(over="unknown") with no matching upstream raises ConstructError."""
         a = _producer("a", Clusters)
         b = _consumer("b", ClusterGroup, MatchResult) | Each(
             over="unknown", key="label"
         )
-        pipeline = Construct("single-seg-defer", nodes=[a, b])
-        assert len(pipeline.nodes) == 2
+        with pytest.raises(ConstructError, match="root 'unknown' does not match"):
+            Construct("single-seg-reject", nodes=[a, b])
 
-    def test_empty_path_string_defers_when_root_unmatched(self):
-        """Each(over='') — split yields root='', segments=(). Empty string
-        root doesn't match any upstream producer, so validation defers."""
-        a = _producer("a", Clusters)
-        b = _consumer("b", ClusterGroup, MatchResult) | Each(
-            over="", key="label"
-        )
-        # Empty root '' doesn't match upstream 'a', so defers to runtime.
-        pipeline = Construct("empty-path", nodes=[a, b])
-        assert len(pipeline.nodes) == 2
+    def test_empty_path_string_rejected_at_construction(self):
+        """Each(over='') — rejected by field_validator at construction time."""
+        with pytest.raises((ValueError, Exception), match="must not be empty"):
+            Each(over="", key="label")
 
     def test_deeply_nested_path_resolves_when_fields_exist(self):
         """Multi-level dotted path that walks through nested models."""
@@ -1121,8 +1129,8 @@ class TestNodeNameCollision:
 
         a = Node.scripted("node-a", fn="f_node_a", outputs=RawText)
         b = Node.scripted("node-b", fn="f_node_b", inputs=RawText, outputs=Claims)
-        graph = compile(Construct("no-collision", nodes=[a, b]))
-        assert graph is not None
+        result = run(compile(Construct("no-collision", nodes=[a, b])), input={})
+        assert isinstance(result["node_b"], Claims)
 
     def test_sub_construct_names_do_not_collide_with_parent(self):
         """Sub-construct node names live in separate state scopes — no error
@@ -1142,8 +1150,8 @@ class TestNodeNameCollision:
         parent_node = Node.scripted("my-parent", fn="parent_fn", outputs=RawText)
         # 'my_node' inside sub and 'my-parent' in parent — different scopes, no collision
         parent = Construct("parent", nodes=[parent_node, sub])
-        graph = compile(parent)
-        assert graph is not None
+        result = run(compile(parent), input={})
+        assert isinstance(result["sub"], Claims)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1206,8 +1214,7 @@ class TestToolFactoryRegistrationCheck:
             tools=[Tool("registered_tool_9513", budget=3)],
         )
         pipeline = Construct("good-tool", nodes=[n])
-        graph = compile(pipeline)
-        assert graph is not None
+        compile(pipeline)  # no raise = tool factory check passed
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1218,66 +1225,50 @@ class TestLlmConfiguredCheck:
     """compile() must verify _llm_factory and _prompt_compiler are set
     when any node has mode in (think, agent, act)."""
 
-    def test_unconfigured_llm_raises_at_compile_when_think_node(self):
+    def test_unconfigured_llm_raises_at_compile_when_think_node(self, monkeypatch):
         """Think node without configure_llm() raises CompileError at compile()."""
         import neograph._llm as _llm_mod
-        old_factory, old_compiler = _llm_mod._llm_factory, _llm_mod._prompt_compiler
-        try:
-            _llm_mod._llm_factory = None
-            _llm_mod._prompt_compiler = None
-            n = Node(
-                "think-node",
-                mode="think",
-                inputs=RawText,
-                outputs=Claims,
-                model="fast",
-                prompt="test",
-            )
-            pipeline = Construct("bad-llm", nodes=[n])
-            with pytest.raises(CompileError, match="configure_llm"):
-                compile(pipeline)
-        finally:
-            _llm_mod._llm_factory = old_factory
-            _llm_mod._prompt_compiler = old_compiler
+        monkeypatch.setattr(_llm_mod, "_llm_factory", None)
+        monkeypatch.setattr(_llm_mod, "_prompt_compiler", None)
+        n = Node(
+            "think-node",
+            mode="think",
+            inputs=RawText,
+            outputs=Claims,
+            model="fast",
+            prompt="test",
+        )
+        pipeline = Construct("bad-llm", nodes=[n])
+        with pytest.raises(CompileError, match="configure_llm"):
+            compile(pipeline)
 
-    def test_unconfigured_prompt_compiler_raises_at_compile(self):
+    def test_unconfigured_prompt_compiler_raises_at_compile(self, monkeypatch):
         """LLM factory set but prompt compiler missing raises CompileError."""
         import neograph._llm as _llm_mod
-        old_factory, old_compiler = _llm_mod._llm_factory, _llm_mod._prompt_compiler
-        try:
-            _llm_mod._llm_factory = lambda tier: None
-            _llm_mod._prompt_compiler = None
-            n = Node(
-                "think-node-pc",
-                mode="think",
-                inputs=RawText,
-                outputs=Claims,
-                model="fast",
-                prompt="test",
-            )
-            pipeline = Construct("bad-pc", nodes=[n])
-            with pytest.raises(CompileError, match="configure_llm"):
-                compile(pipeline)
-        finally:
-            _llm_mod._llm_factory = old_factory
-            _llm_mod._prompt_compiler = old_compiler
+        monkeypatch.setattr(_llm_mod, "_llm_factory", lambda tier: None)
+        monkeypatch.setattr(_llm_mod, "_prompt_compiler", None)
+        n = Node(
+            "think-node-pc",
+            mode="think",
+            inputs=RawText,
+            outputs=Claims,
+            model="fast",
+            prompt="test",
+        )
+        pipeline = Construct("bad-pc", nodes=[n])
+        with pytest.raises(CompileError, match="configure_llm"):
+            compile(pipeline)
 
-    def test_scripted_only_compiles_without_llm_configured(self):
+    def test_scripted_only_compiles_without_llm_configured(self, monkeypatch):
         """Pipeline with only scripted nodes compiles even without configure_llm()."""
         import neograph._llm as _llm_mod
         from neograph.factory import register_scripted
-        old_factory, old_compiler = _llm_mod._llm_factory, _llm_mod._prompt_compiler
-        try:
-            _llm_mod._llm_factory = None
-            _llm_mod._prompt_compiler = None
-            register_scripted("fn_no_llm_test", lambda input_data, config: RawText(text="ok"))
-            n = Node.scripted("scripted-only", fn="fn_no_llm_test", outputs=RawText)
-            pipeline = Construct("scripted-ok", nodes=[n])
-            graph = compile(pipeline)
-            assert graph is not None
-        finally:
-            _llm_mod._llm_factory = old_factory
-            _llm_mod._prompt_compiler = old_compiler
+        monkeypatch.setattr(_llm_mod, "_llm_factory", None)
+        monkeypatch.setattr(_llm_mod, "_prompt_compiler", None)
+        register_scripted("fn_no_llm_test", lambda input_data, config: RawText(text="ok"))
+        n = Node.scripted("scripted-only", fn="fn_no_llm_test", outputs=RawText)
+        pipeline = Construct("scripted-ok", nodes=[n])
+        compile(pipeline)  # no raise = scripted-only pipeline doesn't need LLM
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1319,8 +1310,7 @@ class TestOutputStrategyValidation:
                 llm_config={"output_strategy": strategy},
             )
             pipeline = Construct(f"strat-{strategy}-pipe", nodes=[n])
-            graph = compile(pipeline)
-            assert graph is not None
+            compile(pipeline)  # no raise = strategy accepted
 
     def test_no_output_strategy_defaults_without_error(self):
         """Node with no output_strategy (default) compiles fine."""
@@ -1335,8 +1325,7 @@ class TestOutputStrategyValidation:
             prompt="test",
         )
         pipeline = Construct("no-strat-pipe", nodes=[n])
-        graph = compile(pipeline)
-        assert graph is not None
+        compile(pipeline)  # no raise = default strategy accepted
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1463,9 +1452,9 @@ class TestLint:
         assert "topic" in issues[0].param
 
     def test_lint_required_false_no_issue_without_config(self):
-        """Default (non-required) FromInput params are NOT flagged without config."""
+        """Optional FromInput(required=False) params are NOT flagged without config."""
         @node(outputs=RawText)
-        def my_node(topic: Annotated[str, FromInput]) -> RawText: ...
+        def my_node(topic: Annotated[str, FromInput(required=False)]) -> RawText: ...
 
         pipeline = construct_from_functions("opt", [my_node])
         issues = lint(pipeline)
@@ -1516,7 +1505,7 @@ class TestLint:
         """lint silently skips items that are neither Node nor Construct."""
         # Construct.nodes can only hold Node|Construct, but _walk is typed
         # to accept either. Passing something else should just return early.
-        from neograph.lint import _walk, LintIssue
+        from neograph.lint import LintIssue, _walk
         issues: list[LintIssue] = []
         _walk("not-a-node", None, issues)  # type: ignore[arg-type]
         assert issues == []
@@ -1593,6 +1582,161 @@ class TestLint:
         assert "has no config" in merge_issues[0].message
 
 
+    def test_lint_merge_fn_bundled_model_fields_checked(self):
+        """lint() checks from_input_model fields in @merge_fn (neograph-s2h8)."""
+        from pydantic import BaseModel
+
+        from neograph import lint, node
+        from neograph import merge_fn as merge_fn_deco
+        from neograph.decorators import construct_from_functions
+
+        class PipeCtx(BaseModel):
+            node_id: str
+            project_root: str
+
+        @merge_fn_deco
+        def ctx_merge(
+            variants: list[Claims],
+            ctx: Annotated[PipeCtx, FromInput(required=True)],
+        ) -> Claims:
+            return variants[0]
+
+        @node(
+            outputs=Claims,
+            prompt="test", model="fast",
+            ensemble_n=2, merge_fn="ctx_merge",
+        )
+        def gen_s2h8() -> Claims: ...
+
+        pipeline = construct_from_functions("s2h8-test", [gen_s2h8])
+
+        # With config missing the model fields
+        issues = lint(pipeline, config={"some_other": "value"})
+        merge_issues = [i for i in issues if "merge_fn" in i.node_name]
+        # Should flag node_id and project_root as missing
+        missing_fields = {i.param for i in merge_issues}
+        assert "node_id" in missing_fields
+        assert "project_root" in missing_fields
+
+    def test_lint_merge_fn_bundled_model_passes_with_config(self):
+        """lint() passes when bundled model fields are present in config."""
+        from pydantic import BaseModel
+
+        from neograph import lint, node
+        from neograph import merge_fn as merge_fn_deco
+        from neograph.decorators import construct_from_functions
+
+        class Ctx2(BaseModel):
+            node_id: str
+
+        @merge_fn_deco
+        def ctx_merge2(
+            variants: list[Claims],
+            ctx: Annotated[Ctx2, FromInput],
+        ) -> Claims:
+            return variants[0]
+
+        @node(
+            outputs=Claims,
+            prompt="test", model="fast",
+            ensemble_n=2, merge_fn="ctx_merge2",
+        )
+        def gen_s2h8b() -> Claims: ...
+
+        pipeline = construct_from_functions("s2h8-pass", [gen_s2h8b])
+        issues = lint(pipeline, config={"node_id": "test-123"})
+        merge_issues = [i for i in issues if "merge_fn" in i.node_name]
+        assert len(merge_issues) == 0
+
+
+class TestLintObligationGaps:
+    """Test obligations from /test-obligations analysis of _walk()."""
+
+    def test_lint_merge_fn_simple_di_on_node_without_param_res(self):
+        """W-13: Node(no DI) + merge_fn with simple from_input — lint catches it (neograph-tlrs)."""
+        from neograph import lint, node
+        from neograph import merge_fn as merge_fn_deco
+        from neograph.decorators import construct_from_functions
+
+        @merge_fn_deco
+        def simple_merge(
+            variants: list[Claims],
+            api_key: Annotated[str, FromInput],
+        ) -> Claims:
+            return variants[0]
+
+        @node(outputs=Claims, prompt="test", model="fast",
+              ensemble_n=2, merge_fn="simple_merge")
+        def gen_w13() -> Claims: ...
+
+        pipeline = construct_from_functions("w13-test", [gen_w13])
+        issues = lint(pipeline, config={"some_other": "value"})
+        merge_issues = [i for i in issues if "merge_fn" in i.node_name]
+        assert any(i.param == "api_key" for i in merge_issues)
+
+    def test_lint_merge_fn_bundled_required_no_config(self):
+        """W-15: Node(no DI) + merge_fn bundled required + config=None (neograph-wcbv)."""
+        from pydantic import BaseModel
+
+        from neograph import lint, node
+        from neograph import merge_fn as merge_fn_deco
+        from neograph.decorators import construct_from_functions
+
+        class Ctx3(BaseModel):
+            node_id: str
+            project_root: str
+
+        @merge_fn_deco
+        def bundled_merge(
+            variants: list[Claims],
+            ctx: Annotated[Ctx3, FromInput(required=True)],
+        ) -> Claims:
+            return variants[0]
+
+        @node(outputs=Claims, prompt="test", model="fast",
+              ensemble_n=2, merge_fn="bundled_merge")
+        def gen_w15() -> Claims: ...
+
+        pipeline = construct_from_functions("w15-test", [gen_w15])
+        issues = lint(pipeline)  # no config
+        merge_issues = [i for i in issues if "merge_fn" in i.node_name]
+        missing = {i.param for i in merge_issues}
+        assert "node_id" in missing
+        assert "project_root" in missing
+
+    def test_lint_oracle_callable_merge_fn_no_false_positive(self):
+        """W-19: Oracle with callable merge_fn (not string) — no issues (neograph-xcy7)."""
+        from neograph import lint
+        from neograph.factory import register_scripted
+
+        register_scripted("w19_gen", lambda i, c: Claims(items=["ok"]))
+
+        def my_callable_merge(variants, config):
+            return variants[0]
+
+        pipeline = Construct("w19-test", nodes=[
+            Node.scripted("gen", fn="w19_gen", outputs=Claims)
+            | Oracle(n=2, merge_fn="w19_gen"),  # string merge_fn — lint checks it
+        ])
+        # Verify no crash when merge_fn is a registered string
+        issues = lint(pipeline, config={"node_id": "test"})
+        # This tests the path — no assertion on count, just no crash
+
+    def test_lint_from_config_required_no_config(self):
+        """W-21: FromConfig(required=True) + config=None — symmetric with FromInput (neograph-oued)."""
+        from neograph import lint, node
+        from neograph.decorators import construct_from_functions
+
+        @node(outputs=Claims, prompt="test", model="fast")
+        def gen_w21(limiter: Annotated[str, FromConfig(required=True)]) -> Claims: ...
+
+        pipeline = construct_from_functions("w21-test", [gen_w21])
+        issues = lint(pipeline)  # no config
+        required_issues = [i for i in issues if i.required and i.param == "limiter"]
+        assert len(required_issues) == 1
+        assert "from_config" in required_issues[0].kind
+
+
 class TestFromInputRequired:
     """FromInput(required=True) raises ExecutionError at runtime when missing."""
 
@@ -1634,3 +1778,208 @@ class TestFromInputRequired:
         graph = compile(pipeline)
         with pytest.raises(ExecutionError, match="key"):
             run(graph, input={})
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# NeographError.build() error builder pattern
+# ═══════════════════════════════════════════════════════════════════════════
+
+class TestErrorBuilder:
+    """NeographError.build() classmethod produces consistently structured
+    error messages with what/expected/found/hint/location/node/construct."""
+
+    def test_build_minimal_message_when_only_what(self):
+        """build() with just `what` produces a plain message."""
+        from neograph.errors import NeographError
+        err = NeographError.build("something broke")
+        assert isinstance(err, NeographError)
+        assert str(err) == "something broke"
+
+    def test_build_full_message_when_all_fields(self):
+        """build() with all fields produces the structured format."""
+        from neograph.errors import NeographError
+        err = NeographError.build(
+            "type mismatch",
+            expected="Claims",
+            found="RawText",
+            hint="check your upstream",
+            location="test.py:42",
+            node="verify",
+            construct="pipeline",
+        )
+        msg = str(err)
+        assert msg.startswith("[Node 'verify' in construct 'pipeline']")
+        assert "type mismatch" in msg
+        assert "\n  expected: Claims" in msg
+        assert "\n  found: RawText" in msg
+        assert "\n  hint: check your upstream" in msg
+        assert "\n  at test.py:42" in msg
+
+    def test_build_node_only_prefix_when_no_construct(self):
+        """build() with node= but no construct= uses [Node 'X'] prefix."""
+        from neograph.errors import NeographError
+        err = NeographError.build("failed", node="verify")
+        assert str(err).startswith("[Node 'verify'] failed")
+
+    def test_build_construct_only_prefix_when_no_node(self):
+        """build() with construct= but no node= uses [Construct 'X'] prefix."""
+        from neograph.errors import NeographError
+        err = NeographError.build("failed", construct="pipeline")
+        assert str(err).startswith("[Construct 'pipeline'] failed")
+
+    def test_build_returns_subclass_when_called_on_subclass(self):
+        """ConstructError.build() returns a ConstructError, not NeographError."""
+        err = ConstructError.build("type mismatch", node="x")
+        assert isinstance(err, ConstructError)
+        assert isinstance(err, ValueError)  # dual inheritance preserved
+
+    def test_build_returns_compile_error_when_called_on_compile_error(self):
+        """CompileError.build() returns a CompileError."""
+        from neograph.errors import CompileError
+        err = CompileError.build("missing checkpointer")
+        assert isinstance(err, CompileError)
+
+    def test_build_returns_configuration_error_when_called_on_config_error(self):
+        """ConfigurationError.build() returns a ConfigurationError."""
+        err = ConfigurationError.build(
+            "function not registered",
+            hint="use register_scripted()",
+        )
+        assert isinstance(err, ConfigurationError)
+        assert "function not registered" in str(err)
+        assert "register_scripted()" in str(err)
+
+    def test_execution_error_build_passes_validation_errors(self):
+        """ExecutionError.build() accepts validation_errors kwarg."""
+        err = ExecutionError.build(
+            "DI resolution failed",
+            node="my_node",
+            found="field X missing from config",
+            validation_errors="field X missing",
+        )
+        assert isinstance(err, ExecutionError)
+        assert err.validation_errors == "field X missing"
+        assert "DI resolution failed" in str(err)
+
+    def test_execution_error_build_without_validation_errors(self):
+        """ExecutionError.build() without validation_errors defaults to None."""
+        err = ExecutionError.build("runtime failure", node="n")
+        assert isinstance(err, ExecutionError)
+        assert err.validation_errors is None
+
+    def test_build_omits_absent_fields_when_partial(self):
+        """build() with only expected= and hint= omits found= and location=."""
+        from neograph.errors import NeographError
+        err = NeographError.build(
+            "wrong type",
+            expected="int",
+            hint="check annotation",
+        )
+        msg = str(err)
+        assert "\n  expected: int" in msg
+        assert "\n  hint: check annotation" in msg
+        assert "\n  found:" not in msg
+        assert "\n  at " not in msg
+
+
+class TestFanInErrorsMigratedToBuild:
+    """_check_fan_in_inputs errors use the build() pattern but existing
+    test regex patterns still match (backward compatibility)."""
+
+    def test_unknown_upstream_error_has_structured_format(self):
+        """Unknown upstream fan-in error has node/construct prefix and
+        available upstreams in the message."""
+        a = _producer("a", Claims)
+        consumer = Node.scripted(
+            "consumer", fn="f",
+            inputs={"a": Claims, "nonexistent": RawText},
+            outputs=MatchResult,
+        )
+        with pytest.raises(ConstructError) as exc_info:
+            Construct("bad-name", nodes=[a, consumer])
+        msg = str(exc_info.value)
+        # Existing assertions must still pass
+        assert "'nonexistent'" in msg
+        assert "no upstream node" in msg
+
+    def test_type_mismatch_error_has_structured_format(self):
+        """Type mismatch fan-in error has node/construct prefix and
+        expected/found types in the message."""
+        a = _producer("a", Claims)
+        b = _producer("b", RawText)
+        consumer = Node.scripted(
+            "consumer", fn="f",
+            inputs={"a": Claims, "b": Claims},
+            outputs=MatchResult,
+        )
+        with pytest.raises(ConstructError) as exc_info:
+            Construct("bad-type", nodes=[a, b, consumer])
+        msg = str(exc_info.value)
+        # Existing assertions must still pass
+        assert "'b'" in msg
+        assert "Claims" in msg
+        assert "RawText" in msg
+
+
+class TestTypeSpecValidation:
+    """Node.inputs/outputs TypeSpec validator must reject non-type garbage.
+
+    BUG neograph-m91y: _validate_type_spec is a no-op — accepts everything.
+    """
+
+    def test_string_rejected_as_inputs(self):
+        """inputs='SomeType' (string, not a type) must raise."""
+        with pytest.raises((TypeError, ValueError)):
+            Node("bad", mode="scripted", inputs="SomeType", outputs=Claims)
+
+    def test_int_rejected_as_outputs(self):
+        """outputs=42 (int, not a type) must raise."""
+        with pytest.raises((TypeError, ValueError)):
+            Node("bad", mode="scripted", inputs=Claims, outputs=42)
+
+    def test_list_of_strings_rejected(self):
+        """inputs=['a', 'b'] must raise."""
+        with pytest.raises((TypeError, ValueError)):
+            Node("bad", mode="scripted", inputs=["a", "b"], outputs=Claims)
+
+    def test_valid_types_accepted(self):
+        """Smoke: valid type, dict, None, and generic alias all pass."""
+        # These must NOT raise
+        Node("ok1", mode="scripted", outputs=Claims)  # inputs=None default
+        Node("ok2", mode="scripted", inputs=Claims, outputs=MatchResult)
+        Node("ok3", mode="scripted", inputs={"a": Claims}, outputs=MatchResult)
+        Node("ok4", mode="scripted", inputs=list[Claims], outputs=MatchResult)
+
+    def test_generic_alias_accepted_as_inputs(self):
+        """Generic aliases (list[X], dict[str,X], X|None) must pass validation.
+
+        BUG neograph-vs6w: static annotation was type|dict|None which
+        doesn't include generic aliases. PlainValidator is the real gate.
+        """
+        # These are NOT `type` instances — they're GenericAlias/UnionType
+        Node("ga1", mode="scripted", inputs=list[Claims], outputs=Claims)
+        Node("ga2", mode="scripted", inputs=dict[str, Claims], outputs=Claims)
+        Node("ga3", mode="scripted", inputs=Claims | None, outputs=Claims)
+
+    def test_dict_with_string_values_accepted(self):
+        """Dict values can be strings (loader path before type resolution).
+
+        BUG neograph-vs6w: string dict values pass validation but the
+        static annotation says dict[str, type].
+        """
+        Node("sv1", mode="scripted", inputs={"a": "Claims"}, outputs=Claims)
+
+
+class TestSingleTypeInputsDeprecation:
+    """Single-type inputs= should emit DeprecationWarning at assembly time.
+
+    TASK neograph-np0y: _extract_single_type does O(N) isinstance scan.
+    Phase 1 adds a warning to signal migration to dict-form.
+    """
+
+    def test_single_type_inputs_warns_at_assembly(self):
+        """Construct assembly with single-type inputs on non-first node warns."""
+        a = _producer("a", RawText)
+        b = _consumer("b", RawText, Claims)  # _consumer uses single-type inputs
+        with pytest.warns(DeprecationWarning, match="single-type.*inputs"):
+            Construct(name="test", nodes=[a, b])

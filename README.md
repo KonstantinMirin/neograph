@@ -118,7 +118,7 @@ ConstructError: Node 'verify' declares inputs=ClusterGroup but no upstream
   at my_pipeline.py:42
 ```
 
-Types are validated at assembly time — when you define the pipeline, not when you execute it. 48 compile-time checks backed by a rustc-style fixture suite. CLI validation: `neograph check my_pipeline.py`.
+Types are validated at assembly time — when you define the pipeline, not when you execute it. 68 compile-time check fixtures (52 should-fail + 16 should-pass) backed by a rustc-style fixture suite. 1362 tests total, including Hypothesis property-based testing. CLI validation: `neograph check my_pipeline.py`.
 
 ## Visualize the compiled graph
 
@@ -174,7 +174,7 @@ Full documentation is at **[neograph.pro](https://neograph.pro)**:
 
 ## Examples
 
-16 runnable examples in [`examples/`](examples/), 3 multi-file mini-projects ([lead-research](examples/lead-research/), [code-review](examples/code-review/), [spec-builder](examples/spec-builder/)), and 5 side-by-side LangGraph comparisons in [`examples/vs_langgraph/`](examples/vs_langgraph/). Walkthroughs at [neograph.pro](https://neograph.pro/walkthrough/scripted-pipeline/).
+19 runnable examples in [`examples/`](examples/), 3 multi-file mini-projects ([lead-research](examples/lead-research/), [code-review](examples/code-review/), [spec-builder](examples/spec-builder/)), and 5 side-by-side LangGraph comparisons in [`examples/vs_langgraph/`](examples/vs_langgraph/). Walkthroughs at [neograph.pro](https://neograph.pro/walkthrough/scripted-pipeline/).
 
 ## License
 

@@ -1,0 +1,4 @@
+# file: /Users/konst/projects/neograph/src/neograph/factory.py
+# hypothesis_version: 6.151.12
+
+[', ', '__name__', '_generator_id', '_oracle_model', 'configurable', 'context', 'each', 'each_item', 'fan_in_dict', 'loop', 'loop_reentry', 'neo_each_item', 'neo_oracle_gen_id', 'neo_oracle_model', 'neo_subgraph_input', 'node_complete', 'node_id', 'node_skipped', 'node_start', 'none', 'raw', 'scripted', 'single_type', 'skip_when', 'subgraph_complete', 'subgraph_start', '{', '}']

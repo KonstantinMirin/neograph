@@ -15,12 +15,14 @@ from __future__ import annotations
 import inspect
 import re
 import time
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 import structlog
 from langchain_core.runnables import RunnableConfig
 from pydantic import BaseModel, ValidationError
 
+from neograph.describe_type import describe_type
 from neograph.errors import ConfigurationError, ExecutionError
 from neograph.tool import Tool, ToolBudgetTracker
 
@@ -28,14 +30,60 @@ log = structlog.get_logger()
 
 # Consumer-provided LLM factory
 _llm_factory: Callable[[str], Any] | None = None
-_llm_factory_params: set[str] = set()
+_llm_factory_params: set[str] | frozenset[str] = set()
 
 # Consumer-provided prompt compiler
 _prompt_compiler: Callable[[str, Any], list] | None = None
-_prompt_compiler_params: set[str] = set()
+_prompt_compiler_params: set[str] | frozenset[str] = set()
 
 # Consumer-provided renderer (set via configure_llm(renderer=...))
 _global_renderer: Any = None
+
+# Consumer-provided cost callback (set via configure_llm(cost_callback=...))
+_cost_callback: Callable | None = None
+
+
+def _notify_cost(
+    tier: str,
+    usage: dict | None,
+    *,
+    node_name: str | None = None,
+    mode: str | None = None,
+    duration_s: float | None = None,
+) -> None:
+    """Dispatch cost callback if configured.
+
+    Extra kwargs (node_name, mode, duration_s) are passed through to the
+    callback. Old-style callbacks that only accept (tier, input_tokens,
+    output_tokens) are supported via TypeError fallback.
+    """
+    if _cost_callback is None or usage is None:
+        return
+    kwargs: dict = {
+        "tier": tier,
+        "input_tokens": usage.get("input_tokens", 0),
+        "output_tokens": usage.get("output_tokens", 0),
+    }
+    if node_name is not None:
+        kwargs["node_name"] = node_name
+    if mode is not None:
+        kwargs["mode"] = mode
+    if duration_s is not None:
+        kwargs["duration_s"] = duration_s
+    try:
+        _cost_callback(**kwargs)
+    except TypeError:
+        # Old-style callback doesn't accept extra kwargs — fall back
+        try:
+            _cost_callback(
+                tier=tier,
+                input_tokens=kwargs["input_tokens"],
+                output_tokens=kwargs["output_tokens"],
+            )
+        except TypeError as exc:
+            log.warning("cost_callback_failed", error=str(exc))
+    except TypeError as exc:
+        log.warning("cost_callback_failed", error=str(exc))
 
 
 def _get_global_renderer() -> Any:
@@ -46,7 +94,7 @@ def _get_global_renderer() -> Any:
 _ACCEPT_ALL = frozenset({"__all__"})  # sentinel for **kwargs functions
 
 
-def _accepted_params(fn: Callable) -> set[str]:
+def _accepted_params(fn: Callable) -> set[str] | frozenset[str]:
     """Inspect a callable and return the set of parameter names it accepts.
 
     If the function accepts **kwargs, returns a sentinel that matches all keys.
@@ -67,6 +115,7 @@ def configure_llm(
     prompt_compiler: Callable,
     *,
     renderer: Any = None,
+    cost_callback: Callable | None = None,
 ) -> None:
     """Configure NeoGraph's LLM layer.
 
@@ -110,18 +159,21 @@ def configure_llm(
 
         configure_llm(llm_factory=my_factory, prompt_compiler=my_compiler)
     """
-    global _llm_factory, _prompt_compiler, _llm_factory_params, _prompt_compiler_params, _global_renderer  # noqa: PLW0603
+    global _llm_factory, _prompt_compiler, _llm_factory_params, _prompt_compiler_params, _global_renderer, _cost_callback  # noqa: PLW0603
     _llm_factory = llm_factory
     _llm_factory_params = _accepted_params(llm_factory)
     _prompt_compiler = prompt_compiler
     _prompt_compiler_params = _accepted_params(prompt_compiler)
     _global_renderer = renderer
+    _cost_callback = cost_callback
 
 
 def _get_llm(tier: str, node_name: str = "", llm_config: dict | None = None) -> Any:
     if _llm_factory is None:
-        msg = "LLM not configured. Call neograph.configure_llm() first."
-        raise ConfigurationError(msg)
+        raise ConfigurationError.build(
+            "LLM not configured",
+            hint="Call neograph.configure_llm() first.",
+        )
     all_kwargs = {"node_name": node_name, "llm_config": llm_config or {}}
     if _llm_factory_params is _ACCEPT_ALL:
         kwargs = all_kwargs
@@ -155,6 +207,12 @@ def _resolve_var(path: str, input_data: Any) -> str:
     parts = path.split(".")
 
     if isinstance(input_data, dict):
+        if parts[0] not in input_data:
+            log.warning(
+                "prompt_var_missing",
+                var=path,
+                available=sorted(input_data.keys()),
+            )
         root = input_data.get(parts[0], "")
         rest = parts[1:]
     else:
@@ -163,6 +221,8 @@ def _resolve_var(path: str, input_data: Any) -> str:
 
     obj = root
     for attr in rest:
+        if not hasattr(obj, attr):
+            log.warning("prompt_var_missing", var=path, segment=attr)
         obj = getattr(obj, attr, "")
     if obj is None:
         return ""
@@ -179,7 +239,7 @@ def _compile_prompt(
     input_data: Any,
     *,
     node_name: str = "",
-    config: dict | None = None,
+    config: RunnableConfig | dict[str, Any] | None = None,
     output_model: type[BaseModel] | None = None,
     llm_config: dict | None = None,
     output_schema: str | None = None,
@@ -204,6 +264,7 @@ def _compile_prompt(
         kwargs = all_kwargs
     else:
         kwargs = {k: v for k, v in all_kwargs.items() if k in _prompt_compiler_params}
+    assert _prompt_compiler is not None, "prompt compiler not configured; call configure_llm() first"
     return _prompt_compiler(template, input_data, **kwargs)
 
 
@@ -214,38 +275,91 @@ def _extract_json(text: str) -> str:
     Handles markdown fences, thinking tags, prose before/after JSON —
     anything wrapping the actual JSON object.
     """
-    start = text.find("{")
-    if start == -1:
-        return text.strip()
+    # Try each '{' as a potential JSON start. Skip prose braces that
+    # don't look like JSON.
+    pos = 0
+    while True:
+        start = text.find("{", pos)
+        if start == -1:
+            return text.strip()
 
-    depth = 0
-    in_string = False
-    escape = False
-    for i in range(start, len(text)):
-        ch = text[i]
-        if escape:
-            escape = False
+        # Quick check: JSON objects start with {"  or {digit or {[  or { "
+        # Prose braces like {a + b} start with a letter after {.
+        after_brace = text[start + 1 : start + 2].lstrip()
+        if after_brace and after_brace not in ('"', "'", "[", "]", "{", "}", ""):
+            # Likely prose — skip to closing brace and try next
+            pos = start + 1
             continue
-        if ch == "\\":
-            escape = True
-            continue
-        if ch == '"':
-            in_string = not in_string
-            continue
-        if in_string:
-            continue
-        if ch == "{":
-            depth += 1
-        elif ch == "}":
-            depth -= 1
-            if depth == 0:
-                return text[start : i + 1]
+
+        depth = 0
+        in_string = False
+        escape = False
+        for i in range(start, len(text)):
+            ch = text[i]
+            if escape:
+                escape = False
+                continue
+            if ch == "\\":
+                escape = True
+                continue
+            if ch == '"':
+                in_string = not in_string
+                continue
+            if in_string:
+                continue
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    return text[start : i + 1]
+
+        # Unbalanced from this start — try next
+        pos = start + 1
 
     # Unbalanced — fall back to first-to-last (let json_repair handle it)
     last = text.rfind("}")
     if last > start:
         return text[start : last + 1]
     return text.strip()
+
+
+def _apply_null_defaults(data: dict, model: type[BaseModel]) -> None:
+    """Replace null values with field defaults, recursively.
+
+    Mutates *data* in place. Only applies when the field has an explicit
+    default (not PydanticUndefined) and the JSON value is None.
+    Also recurses into nested BaseModel fields and list[BaseModel] items.
+    """
+    from pydantic_core import PydanticUndefined
+
+    for field_name, field_info in model.model_fields.items():
+        if field_name not in data:
+            continue
+        val = data[field_name]
+
+        # Null → default coercion
+        if val is None and field_info.default is not PydanticUndefined:
+            data[field_name] = field_info.default
+            continue
+
+        # Recurse into nested BaseModel
+        annotation = field_info.annotation
+        if isinstance(val, dict) and isinstance(annotation, type) and issubclass(annotation, BaseModel):
+            _apply_null_defaults(val, annotation)
+            continue
+
+        # Recurse into list[BaseModel]
+        if isinstance(val, list):
+            from typing import get_args, get_origin
+            origin = get_origin(annotation)
+            if origin is list:
+                args = get_args(annotation)
+                if args and isinstance(args[0], type) and issubclass(args[0], BaseModel):
+                    inner_model = args[0]
+                    for item in val:
+                        if isinstance(item, dict):
+                            _apply_null_defaults(item, inner_model)
 
 
 def _parse_json_response(text: str, output_model: type[BaseModel]) -> BaseModel:
@@ -270,46 +384,80 @@ def _parse_json_response(text: str, output_model: type[BaseModel]) -> BaseModel:
         not extracted.strip().startswith("{")
         and re.search(r"<[^>]*(?:function_call|invoke|DSML)[^>]*>", text, re.IGNORECASE)
     ):
-        raise ExecutionError(
-            f"LLM returned non-JSON content instead of structured output "
-            f"(expected {output_model.__name__}). "
-            f"Content appears to be XML tool-call markup. "
-            f"Raw content (first 200 chars): {text[:200]!r}"
+        raise ExecutionError.build(
+            "LLM returned non-JSON content instead of structured output",
+            expected=f"JSON object for {output_model.__name__}",
+            found=f"XML tool-call markup (first 200 chars): {text[:200]!r}",
+            hint="Check model compatibility with structured output; some models emit XML tool-call markup after budget exhaustion.",
         )
 
     repaired = repair_json(extracted, return_objects=False)
+
+    # Coerce null → default for fields that have defaults.
+    # LLMs (especially R1 on long prompts) return null for optional-like fields
+    # even when the Pydantic type is `str` (not Optional[str]). Pydantic rejects
+    # null for str. JSON Schema semantics: null + default → use default.
+    import json as _json
+    try:
+        parsed = _json.loads(repaired)
+        if isinstance(parsed, dict) and hasattr(output_model, "model_fields"):
+            _apply_null_defaults(parsed, output_model)
+            repaired = _json.dumps(parsed)
+    except (ValueError, TypeError):
+        pass  # if json.loads fails, let model_validate_json handle it
+
     try:
         return output_model.model_validate_json(repaired)
     except ValidationError as exc:
         # Preserve field-level details for error-feedback retry.
-        details = "; ".join(
-            f"{'.'.join(str(l) for l in e['loc'])}: {e['msg']}"
-            for e in exc.errors()
-        )
-        raise ExecutionError(
-            f"Validation failed for {output_model.__name__}: {details}",
+        details = "; ".join(f"{'.'.join(str(l) for l in e['loc'])}: {e['msg']}" for e in exc.errors())
+        raise ExecutionError.build(
+            f"Validation failed for {output_model.__name__}",
+            expected=f"valid {output_model.__name__} fields",
+            found=details,
+            hint="Check that the LLM response matches the output model schema.",
             validation_errors=str(exc),
         ) from exc
     except Exception as exc:
-        raise ExecutionError(
-            f"Failed to parse LLM response as {output_model.__name__}: {exc}. "
-            f"Extracted JSON (first 200 chars): {repaired[:200]!r}"
+        raise ExecutionError.build(
+            f"Failed to parse LLM response as {output_model.__name__}",
+            expected=f"valid JSON for {output_model.__name__}",
+            found=f"unparseable content (first 200 chars): {repaired[:200]!r}",
+            hint=f"Underlying error: {exc}",
         ) from exc
 
 
-def _build_retry_msg(error: ExecutionError) -> str:
-    """Build a retry message with validation details when available."""
+def _build_retry_msg(
+    error: ExecutionError,
+    output_model: type[BaseModel] | None = None,
+) -> str:
+    """Build a retry message with validation details and schema.
+
+    Includes the full output schema so the LLM sees the expected structure.
+    This is critical when the LLM simplifies nested objects to flat strings
+    on long prompts — the schema shows exactly what fields are required.
+    """
+    schema_block = ""
+    if output_model is not None:
+        schema_block = (
+            f"\n\nExpected output schema:\n{describe_type(output_model, prefix='')}\n"
+        )
+
     details = getattr(error, "validation_errors", None)
     if details:
         return (
-            f"Your response failed validation:\n{details}\n\n"
+            f"Your response failed validation:\n{details}"
+            f"{schema_block}\n"
             "Fix these errors and respond with ONLY the corrected JSON object. "
-            "No markdown fences, no XML, no explanation."
+            "No markdown fences, no XML, no explanation. "
+            "Every nested object MUST include ALL required fields — do not "
+            "simplify objects to plain strings."
         )
     return (
-        "Your previous response could not be parsed as valid JSON. "
+        "Your previous response could not be parsed as valid JSON."
+        f"{schema_block}\n"
         "Respond with ONLY the JSON object. No markdown fences, no XML, "
-        "no explanation. The expected schema was already provided above."
+        "no explanation."
     )
 
 
@@ -318,32 +466,47 @@ def _invoke_json_with_retry(
     messages: list,
     output_model: type[BaseModel],
     config: RunnableConfig,
-    max_retries: int = 1,
+    max_retries: int = 2,
 ) -> tuple[BaseModel, Any]:
     """Invoke LLM for json_mode/text, with error-feedback retries.
 
-    On parse failure, appends the bad response + validation errors
-    and calls the LLM again. The LLM sees exactly what fields failed
-    and why, so it can fix the specific problem.
+    On parse failure, appends the bad response + validation errors + the
+    full output schema and calls the LLM again. The LLM sees exactly what
+    fields failed, why, and what the expected structure looks like.
     """
     response = llm.invoke(messages, config=config)
     raw_text = response.content if hasattr(response, "content") else str(response)
-    usage = getattr(response, "usage_metadata", None)
+    usage = getattr(response, "usage_metadata", None) or {}
+    # Accumulate usage across retries
+    total_input = usage.get("input_tokens", 0)
+    total_output = usage.get("output_tokens", 0)
 
     for _attempt in range(max_retries):
         try:
-            return _parse_json_response(raw_text, output_model), usage
+            combined_usage = {
+                "input_tokens": total_input,
+                "output_tokens": total_output,
+                "total_tokens": total_input + total_output,
+            } if (total_input or total_output) else usage
+            return _parse_json_response(raw_text, output_model), combined_usage
         except ExecutionError as exc:
             retry_messages = messages + [
                 {"role": "assistant", "content": raw_text},
-                {"role": "user", "content": _build_retry_msg(exc)},
+                {"role": "user", "content": _build_retry_msg(exc, output_model)},
             ]
             response = llm.invoke(retry_messages, config=config)
             raw_text = response.content if hasattr(response, "content") else str(response)
-            usage = getattr(response, "usage_metadata", None)
+            retry_usage = getattr(response, "usage_metadata", None) or {}
+            total_input += retry_usage.get("input_tokens", 0)
+            total_output += retry_usage.get("output_tokens", 0)
 
     # Final attempt — no more retries, let it raise
-    return _parse_json_response(raw_text, output_model), usage
+    combined_usage = {
+        "input_tokens": total_input,
+        "output_tokens": total_output,
+        "total_tokens": total_input + total_output,
+    } if (total_input or total_output) else None
+    return _parse_json_response(raw_text, output_model), combined_usage
 
 
 def _call_structured(
@@ -374,8 +537,12 @@ def _call_structured(
     if strategy in ("json_mode", "text"):
         return _invoke_json_with_retry(llm, messages, output_model, config, max_retries=max_retries)
 
-    msg = f"Unknown output_strategy: {strategy}. Use 'structured', 'json_mode', or 'text'."
-    raise ExecutionError(msg)
+    raise ExecutionError.build(
+        "Unknown output_strategy",
+        expected="'structured', 'json_mode', or 'text'",
+        found=repr(strategy),
+        hint="Set output_strategy in llm_config to one of the supported values.",
+    )
 
 
 def invoke_structured(
@@ -407,9 +574,12 @@ def invoke_structured(
 
     llm = _get_llm(model_tier, node_name=node_name, llm_config=llm_config)
     messages = _compile_prompt(
-        prompt_template, input_data,
-        node_name=node_name, config=config,
-        output_model=output_model, llm_config=llm_config,
+        prompt_template,
+        input_data,
+        node_name=node_name,
+        config=config,
+        output_model=output_model,
+        llm_config=llm_config,
         output_schema=output_schema,
         context=context,
     )
@@ -428,6 +598,7 @@ def invoke_structured(
         }
 
     llm_log.info("llm_call", mode="think", duration_s=round(elapsed, 3), **usage_info)
+    _notify_cost(model_tier, usage, node_name=node_name, mode="think", duration_s=round(elapsed, 3))
     return result
 
 
@@ -441,12 +612,11 @@ def _render_tool_result_for_llm(result: Any, renderer: Any = None) -> str:
     """
     from pydantic import BaseModel as _BM
 
-    if isinstance(result, _BM) or (
-        isinstance(result, list) and result and isinstance(result[0], _BM)
-    ):
+    if isinstance(result, _BM) or (isinstance(result, list) and result and isinstance(result[0], _BM)):
         if renderer is not None:
             return renderer.render(result)
         from neograph.describe_type import describe_value
+
         return describe_value(result, prefix="Tool result:")
 
     return str(result)
@@ -470,13 +640,24 @@ def invoke_with_tools(
     Returns (parsed_result, tool_interactions) where tool_interactions is a
     list of ToolInteraction records from the ReAct loop.
 
+    Loop guards (configured via llm_config):
+
+    - ``max_iterations`` (int, default 20): maximum ReAct iterations before
+      forcing a final response. When hit, tool calls are skipped and the LLM
+      is asked to respond immediately.
+    - ``token_budget`` (int or None, default None): if set, abort the loop
+      when cumulative input tokens exceed this threshold. Cumulative input
+      tokens are the sum of ``input_tokens`` across all LLM responses in
+      the loop (each call replays the full conversation, so this tracks
+      total cost linearly).
+
     When ``renderer`` is set, typed tool results (Pydantic models) are
     rendered using ``describe_type`` (schema header) + the renderer
     (instance) instead of raw ``model_dump_json``.
     """
     from langchain_core.messages import ToolMessage
 
-    from neograph.factory import _tool_factory_registry
+    from neograph._registry import registry
 
     llm_log = log.bind(
         tier=model_tier,
@@ -486,20 +667,27 @@ def invoke_with_tools(
     )
 
     llm = _get_llm(model_tier, node_name=node_name, llm_config=llm_config)
-    messages = list(_compile_prompt(
-        prompt_template, input_data,
-        node_name=node_name, config=config,
-        output_model=output_model, llm_config=llm_config,
-        context=context,
-    ))  # copy — the loop appends to this list
+    messages = list(
+        _compile_prompt(
+            prompt_template,
+            input_data,
+            node_name=node_name,
+            config=config,
+            output_model=output_model,
+            llm_config=llm_config,
+            context=context,
+        )
+    )  # copy — the loop appends to this list
 
     # Create tool instances from registered factories
     tool_instances = {}
     for tool_spec in tools:
-        if tool_spec.name not in _tool_factory_registry:
-            msg = f"Tool '{tool_spec.name}' not registered. Use register_tool_factory()."
-            raise ConfigurationError(msg)
-        factory = _tool_factory_registry[tool_spec.name]
+        if tool_spec.name not in registry.tool_factory:
+            raise ConfigurationError.build(
+                f"Tool '{tool_spec.name}' not registered",
+                hint="Call register_tool_factory() to register the tool before using it.",
+            )
+        factory = registry.tool_factory[tool_spec.name]
         tool_instances[tool_spec.name] = factory(config, tool_spec.config)
 
     active_tools = list(tool_instances.values())
@@ -507,9 +695,15 @@ def invoke_with_tools(
 
     from neograph.tool import ToolInteraction
 
+    llm_config = llm_config or {}
+    max_iterations = llm_config.get("max_iterations", 20)
+    token_budget = llm_config.get("token_budget")  # None = no limit
+    cumulative_input_tokens = 0
+
     loop_count = 0
     total_tool_calls = 0
     tool_interactions: list[ToolInteraction] = []
+    _guard_fired = False
     t0 = time.monotonic()
 
     while True:
@@ -517,27 +711,59 @@ def invoke_with_tools(
         response = llm_with_tools.invoke(messages, config=config)
         messages.append(response)
 
+        # Track token usage across iterations
+        response_usage = getattr(response, "usage_metadata", None) or {}
+        cumulative_input_tokens += response_usage.get("input_tokens", 0)
+
         if not response.tool_calls:
             llm_log.debug("react_final_response", loop=loop_count)
             break
 
+        # Safety break: if the guard already fired (tools unbound) but the LLM
+        # still returns tool_calls, force-break instead of looping forever.
+        if _guard_fired:
+            llm_log.warning("react_guard_forced_break", loops=loop_count, tool_calls=total_tool_calls)
+            break
+
+        # Check iteration and token budget guards
+        max_iter_hit = loop_count >= max_iterations
+        budget_hit = token_budget is not None and cumulative_input_tokens > token_budget
+
         for tool_call in response.tool_calls:
             tool_name = tool_call["name"]
 
+            # If we've hit a loop guard, skip execution and tell LLM to wrap up
+            if max_iter_hit or budget_hit:
+                messages.append(
+                    ToolMessage(
+                        content=(
+                            f"React loop limit reached"
+                            f" ({'max iterations' if max_iter_hit else 'token budget'})."
+                            f" Provide your final answer now."
+                        ),
+                        tool_call_id=tool_call["id"],
+                    )
+                )
+                continue
+
             if not budget_tracker.can_call(tool_name):
                 llm_log.info("tool_budget_exhausted", tool=tool_name)
-                messages.append(ToolMessage(
-                    content=f"Tool '{tool_name}' budget exhausted. Use remaining tools or respond.",
-                    tool_call_id=tool_call["id"],
-                ))
+                messages.append(
+                    ToolMessage(
+                        content=f"Tool '{tool_name}' budget exhausted. Use remaining tools or respond.",
+                        tool_call_id=tool_call["id"],
+                    )
+                )
                 continue
 
             tool_fn = tool_instances.get(tool_name)
             if tool_fn is None:
-                messages.append(ToolMessage(
-                    content=f"Unknown tool: {tool_name}",
-                    tool_call_id=tool_call["id"],
-                ))
+                messages.append(
+                    ToolMessage(
+                        content=f"Unknown tool: {tool_name}",
+                        tool_call_id=tool_call["id"],
+                    )
+                )
                 continue
 
             tool_t0 = time.monotonic()
@@ -556,6 +782,7 @@ def invoke_with_tools(
             # Render for LLM: Pydantic → describe_type schema + renderer,
             # list[Pydantic] → schema + rendered items, else str()
             from pydantic import BaseModel as _BM
+
             if isinstance(result, _BM):
                 rendered = _render_tool_result_for_llm(result, renderer)
             elif isinstance(result, list) and result and isinstance(result[0], _BM):
@@ -563,41 +790,57 @@ def invoke_with_tools(
             else:
                 rendered = str(result)
 
-            tool_interactions.append(ToolInteraction(
-                tool_name=tool_name,
-                args=tool_call.get("args", {}),
-                result=rendered,
-                typed_result=result,
-                duration_ms=int(tool_elapsed * 1000),
-            ))
+            tool_interactions.append(
+                ToolInteraction(
+                    tool_name=tool_name,
+                    args=tool_call.get("args", {}),
+                    result=rendered,
+                    typed_result=result,
+                    duration_ms=int(tool_elapsed * 1000),
+                )
+            )
 
-            messages.append(ToolMessage(
-                content=rendered,
-                tool_call_id=tool_call["id"],
-            ))
+            messages.append(
+                ToolMessage(
+                    content=rendered,
+                    tool_call_id=tool_call["id"],
+                )
+            )
+
+        # Unbind tools if a loop guard was hit — next iteration forces final response
+        if max_iter_hit or budget_hit:
+            reason = (
+                "max_iterations+token_budget"
+                if max_iter_hit and budget_hit
+                else ("max_iterations" if max_iter_hit else "token_budget")
+            )
+            llm_log.warning(
+                f"react_{reason}_exceeded",
+                max_iterations=max_iterations,
+                token_budget=token_budget,
+                cumulative_input_tokens=cumulative_input_tokens,
+                loops=loop_count,
+                tool_calls=total_tool_calls,
+            )
+            llm_with_tools = llm
+            _guard_fired = True
+            continue
 
         # Check if all budgeted tools are spent
         if budget_tracker.all_exhausted():
-            llm_log.info("all_tools_exhausted",
-                         exhausted=budget_tracker.exhausted_tools(),
-                         forcing_response=True)
+            llm_log.info("all_tools_exhausted", exhausted=budget_tracker.exhausted_tools(), forcing_response=True)
             llm_with_tools = llm  # unbind tools, force final response
         else:
             # Rebind with only tools that still have budget
-            active_tools = [
-                tool_instances[t.name]
-                for t in tools
-                if budget_tracker.can_call(t.name)
-            ]
+            active_tools = [tool_instances[t.name] for t in tools if budget_tracker.can_call(t.name)]
             llm_with_tools = llm.bind_tools(active_tools)
 
     elapsed = time.monotonic() - t0
 
     # Parse final response as structured output — strategy-aware
-    llm_config = llm_config or {}
     strategy = llm_config.get("output_strategy", "structured")
 
-    max_retries = (llm_config or {}).get("max_retries", 1)
+    max_retries = llm_config.get("max_retries", 1)
 
     if strategy in ("json_mode", "text"):
         # Already have the final response in messages[-1] — try parsing it,
@@ -620,8 +863,10 @@ def invoke_with_tools(
         if msg_usage:
             total_input_tokens += msg_usage.get("input_tokens", 0)
             total_output_tokens += msg_usage.get("output_tokens", 0)
-    # Add final structured parse call
-    if usage:
+    # Add final structured parse call ONLY for the structured strategy path,
+    # which makes a separate LLM call not in the messages list.
+    # json_mode/text path reuses messages[-1] — already counted above.
+    if usage and strategy not in ("json_mode", "text"):
         total_input_tokens += usage.get("input_tokens", 0)
         total_output_tokens += usage.get("output_tokens", 0)
 
@@ -642,6 +887,8 @@ def invoke_with_tools(
         output=output_model.__name__,
         **usage_info,
     )
+    _notify_cost(model_tier, usage_info if usage_info else None,
+                 node_name=node_name, mode="react", duration_s=round(elapsed, 3))
     return parse_result, tool_interactions
 
 
@@ -666,8 +913,10 @@ def render_prompt(
         A human-readable string of the compiled messages.
     """
     if _prompt_compiler is None:
-        msg = "Prompt compiler not configured. Call neograph.configure_llm() first."
-        raise ConfigurationError(msg)
+        raise ConfigurationError.build(
+            "Prompt compiler not configured",
+            hint="Call neograph.configure_llm() first.",
+        )
 
     # Apply renderer dispatch: node.renderer > global > None
     effective_renderer = getattr(node, "renderer", None) or _global_renderer

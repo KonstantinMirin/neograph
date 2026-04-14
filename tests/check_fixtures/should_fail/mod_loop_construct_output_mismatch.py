@@ -1,10 +1,11 @@
 # CHECK_ERROR: output type.*not compatible.*input|Loop.*output.*input
 # Loop on a Construct where output type differs from input type.
 # The loop back-edge requires output == input. Should fail at | time.
-from neograph import Construct, Node
-from neograph.modifiers import Loop
-from neograph.factory import register_scripted
 from pydantic import BaseModel
+
+from neograph import Construct, Node
+from neograph.factory import register_scripted
+from neograph.modifiers import Loop
 
 
 class Draft(BaseModel, frozen=True):

@@ -4,7 +4,7 @@ from typing import Annotated
 
 from pydantic import BaseModel
 
-from neograph import Construct, FromInput, node
+from neograph import FromInput, node
 from neograph.decorators import construct_from_functions
 
 

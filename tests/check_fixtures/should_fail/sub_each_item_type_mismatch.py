@@ -1,8 +1,10 @@
-# CHECK_ERROR: DifferentItem.*Each.*list\[Item\]
+# CHECK_ERROR: Each.*element type mismatch[\s\S]*DifferentItem[\s\S]*list\[Item\]
 # Each on sub-construct where sub-construct.input doesn't match item type
-from neograph import Construct, Node, Each
-from neograph.factory import register_scripted
 from pydantic import BaseModel
+
+from neograph import Construct, Each, Node
+from neograph.factory import register_scripted
+
 
 class Item(BaseModel, frozen=True):
     label: str

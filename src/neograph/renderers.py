@@ -75,6 +75,8 @@ class XmlRenderer:
 
         fields = model.__class__.model_fields
         for field_name, field_info in fields.items():
+            if field_info.exclude:
+                continue
             field_value = getattr(model, field_name)
             desc = self._get_description(field_name, field_info, seen)
             if desc:
@@ -157,7 +159,9 @@ class DelimitedRenderer:
 
     def _render_model(self, model: BaseModel, *, prefix: str = "") -> str:
         lines: list[str] = []
-        for field_name in model.__class__.model_fields:
+        for field_name, field_info in model.__class__.model_fields.items():
+            if field_info.exclude:
+                continue
             field_value = getattr(model, field_name)
             header = f"{prefix}{field_name}" if prefix else field_name
             if isinstance(field_value, BaseModel):
@@ -219,7 +223,15 @@ def render_input(input_data: Any, *, renderer: Renderer | None) -> Any:
 
 
 def _render_single(value: Any, renderer: Renderer) -> Any:
-    """Render a single value, checking for model-level override first."""
+    """Render a single value, checking for model-level override first.
+
+    If render_for_prompt() returns a BaseModel, re-render it through the
+    active renderer (BAML/XML/JSON). This lets models define typed
+    presentation projections without doing string formatting themselves.
+    """
     if hasattr(value, "render_for_prompt") and callable(value.render_for_prompt):
-        return value.render_for_prompt()
+        result = value.render_for_prompt()
+        if isinstance(result, BaseModel):
+            return renderer.render(result)
+        return result
     return renderer.render(value)

@@ -66,9 +66,9 @@ def lookup_type(name: str) -> type[BaseModel]:
     try:
         return _type_registry[name]
     except KeyError:
-        raise ConfigurationError(
-            f"Type {name!r} is not registered. "
-            f"Use register_type() or include it in project types."
+        raise ConfigurationError.build(
+            f"type {name!r} is not registered",
+            hint="use register_type() or include it in project types",
         ) from None
 
 
@@ -79,7 +79,7 @@ def _resolve_field_type(schema: dict[str, Any]) -> Any:
     if json_type == "array":
         items = schema.get("items", {})
         inner = _resolve_field_type(items)
-        return list[inner]
+        return list[inner]  # type: ignore[valid-type]
 
     if json_type in _JSON_SCHEMA_TYPE_MAP:
         return _JSON_SCHEMA_TYPE_MAP[json_type]
@@ -112,9 +112,11 @@ def load_project_types(project_config: dict[str, Any]) -> None:
         required_fields = set(type_def.get("required", []))
         unknown_required = required_fields - set(properties.keys())
         if unknown_required:
-            raise ConfigurationError(
-                f"Type '{type_name}': required fields {sorted(unknown_required)} "
-                f"not found in properties. Available: {sorted(properties.keys())}"
+            raise ConfigurationError.build(
+                f"type '{type_name}' has unknown required fields",
+                expected=f"fields from {sorted(properties.keys())}",
+                found=f"required fields {sorted(unknown_required)} not in properties",
+                hint="check that every required field is also defined in properties",
             )
 
         for field_name, field_schema in properties.items():

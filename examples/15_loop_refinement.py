@@ -29,7 +29,7 @@ from neograph import (
     node,
     run,
 )
-from neograph.modifiers import Loop
+from neograph import Loop
 
 
 # -- Schemas ------------------------------------------------------------------

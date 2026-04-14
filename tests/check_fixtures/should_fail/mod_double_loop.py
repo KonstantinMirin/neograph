@@ -1,9 +1,10 @@
 # CHECK_ERROR: Loop.*already|duplicate.*Loop|multiple.*Loop
 # Two Loop modifiers on the same node. Should this be caught?
-from neograph import Node
-from neograph.modifiers import Loop
-from neograph.factory import register_scripted
 from pydantic import BaseModel
+
+from neograph import Node
+from neograph.factory import register_scripted
+from neograph.modifiers import Loop
 
 
 class Draft(BaseModel, frozen=True):

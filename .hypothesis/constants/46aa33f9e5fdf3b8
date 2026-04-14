@@ -1,0 +1,4 @@
+# file: /Users/konst/projects/neograph/src/neograph/spec_types.py
+# hypothesis_version: 6.151.12
+
+['$ref', 'array', 'boolean', 'integer', 'items', 'number', 'properties', 'required', 'string', 'type', 'types']

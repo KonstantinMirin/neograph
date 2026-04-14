@@ -28,7 +28,7 @@ from neograph import (
     node,
     run,
 )
-from neograph.modifiers import Loop, Oracle
+from neograph import Loop, Oracle
 
 from schemas import EmailState, EmailStates, KeyIdeas, LeadProfile
 

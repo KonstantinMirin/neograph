@@ -21,11 +21,58 @@
 
 from __future__ import annotations
 
-from typing import Any, Callable, Literal
+import inspect
+from collections.abc import Callable
+from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, PlainValidator, PrivateAttr
 
-from neograph.modifiers import Modifiable, Modifier
+from neograph.errors import ConstructError
+
+
+def _validate_type_spec(v: Any) -> Any:
+    """Accept type objects, generic aliases, and dict-form type specs.
+
+    Rejects ints and other non-type garbage that would silently pass through
+    to compile() and produce confusing errors downstream.
+
+    Valid forms: None, concrete type, generic alias (list[X], dict[str,X],
+    Optional[X], X|None), dict[str, type|str|GenericAlias].  Dict values may
+    be strings (loader path uses type names before resolution, and the decorator
+    fallback path produces string annotations when get_type_hints fails).
+    """
+    if v is None:
+        return None
+    if isinstance(v, dict):
+        for key, val in v.items():
+            if not isinstance(key, str):
+                raise TypeError(f"dict-form type spec keys must be strings, got {type(key).__name__}")
+            if not (isinstance(val, (type, str)) or _is_type_like(val)):
+                raise TypeError(f"dict-form type spec value for '{key}' must be a type or type name, got {type(val).__name__}: {val!r}")
+        return v
+    if isinstance(v, type) or _is_type_like(v):
+        return v
+    raise TypeError(f"inputs/outputs must be a type, dict[str, type], or None — got {type(v).__name__}: {v!r}")
+
+
+def _is_type_like(v: Any) -> bool:
+    """Check if v is a generic alias (list[X], dict[str, X], Optional[X], X | None)."""
+    import types as _types
+    import typing
+    return (
+        hasattr(v, "__origin__")
+        or isinstance(v, (typing._GenericAlias, typing._SpecialForm))  # type: ignore[attr-defined]
+        or isinstance(v, _types.UnionType)
+    )
+
+
+# Valid forms: None | type | GenericAlias (list[X], dict[str,X], X|None) |
+# dict[str, type|str|GenericAlias].  Static annotation is Any because Python
+# has no TypeForm (PEP 747). PlainValidator is the real enforcement point.
+TypeSpec = Annotated[Any, PlainValidator(_validate_type_spec)]
+
+from neograph.modifiers import Modifiable, ModifierSet
+from neograph.naming import field_name_for
 from neograph.tool import Tool
 
 
@@ -44,8 +91,8 @@ class Node(Modifiable, BaseModel):
     mode: Literal["think", "agent", "act", "scripted"] = "think"
 
     # Typed contracts — specific Pydantic models, not BaseModel
-    inputs: Any = None   # type[BaseModel] | dict[str, type] | None
-    outputs: Any = None  # type[BaseModel] | dict[str, type] | None
+    inputs: TypeSpec = None
+    outputs: TypeSpec = None
 
     # LLM configuration
     model: str | None = None        # "fast", "reason", "large"
@@ -89,8 +136,15 @@ class Node(Modifiable, BaseModel):
     # converts list[A] → B (= node.outputs). Inferred from merge_fn signature.
     oracle_gen_type: Any = None
 
-    # Modifiers applied via | operator
-    modifiers: list[Modifier] = []
+    # Modifiers applied via | operator (typed slots, not a list)
+    modifier_set: ModifierSet = Field(default_factory=ModifierSet)
+
+    # Sidecar metadata — lives on the Node via PrivateAttr, not in global dicts.
+    # Preserved by model_copy (Pydantic v2 copies __pydantic_private__).
+    # _sidecar: (original_fn, param_names_tuple) from @node decoration.
+    # _param_res: DI bindings from _classify_di_params.
+    _sidecar: tuple[Callable, tuple[str, ...]] | None = PrivateAttr(default=None)
+    _param_res: dict | None = PrivateAttr(default=None)
 
     model_config = {"arbitrary_types_allowed": True}
 
@@ -98,15 +152,50 @@ class Node(Modifiable, BaseModel):
         """Node accepts name positionally or as a keyword argument."""
         if name_ is not None:
             kwargs["name"] = name_
+        # Reject legacy modifiers=[...] constructor form.
+        # modifier_set: ModifierSet replaces the old list field. Passing
+        # modifiers= would be silently ignored — fail loudly instead.
+        if "modifiers" in kwargs:
+
+            raise ConstructError.build(
+                "Node(modifiers=[...]) is no longer supported",
+                hint="Use the pipe syntax instead: node | Oracle(...) | Each(...). "
+                "See AGENTS.md 'Three API surfaces' for details.",
+            )
         super().__init__(**kwargs)
+        self._validate_skip_callables()
+
+    def _validate_skip_callables(self) -> None:
+        """Check skip_when/skip_value accept at least 1 positional arg."""
+        from neograph.errors import ConstructError
+        for attr_name in ("skip_when", "skip_value"):
+            fn = getattr(self, attr_name, None)
+            if fn is None:
+                continue
+            sig = inspect.signature(fn)
+            positional = [
+                p for p in sig.parameters.values()
+                if p.kind in (
+                    inspect.Parameter.POSITIONAL_ONLY,
+                    inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                    inspect.Parameter.VAR_POSITIONAL,
+                )
+                and p.default is inspect.Parameter.empty
+            ]
+            if len(positional) < 1:
+                raise ConstructError.build(
+                    f"{attr_name} must accept at least 1 positional argument (the input data)",
+                    node=self.name,
+                    hint=f"define {attr_name} as: lambda data: ...",
+                )
 
     @classmethod
     def scripted(
         cls,
         name: str,
         fn: str,
-        inputs: Any = None,
-        outputs: Any = None,
+        inputs: TypeSpec = None,
+        outputs: TypeSpec = None,
     ) -> Node:
         """Create a deterministic node — pure Python, no LLM.
 
@@ -147,6 +236,12 @@ class Node(Modifiable, BaseModel):
             result = classify.run_isolated(input=Claims(items=["x"]))
             assert isinstance(result, Classified)
 
+        Note:
+            This uses dict-form state internally (not a compiled Pydantic model).
+            Modifier-bearing nodes (Each, Loop, Oracle) require state fields
+            (neo_each_item, neo_loop_count_*, neo_oracle_*) that run_isolated
+            does not populate. Use compile() + run() for modified nodes.
+
         Args:
             input: Either the typed input instance (e.g. a Claims(...) object)
                    or a dict of field-value pairs to seed the state.
@@ -172,5 +267,5 @@ class Node(Modifiable, BaseModel):
         result = node_fn(state, config)
 
         # node_fn returns a state update dict — extract the output field
-        field_name = self.name.replace("-", "_")
+        field_name = field_name_for(self.name)
         return result.get(field_name)

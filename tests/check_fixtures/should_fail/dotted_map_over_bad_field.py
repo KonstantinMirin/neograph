@@ -1,8 +1,10 @@
 # CHECK_ERROR: conditions.*not found|has no field.*conditions
 # Scenario 5: dotted map_over path references a field that doesn't exist
-from neograph import Construct, Node, Each
-from neograph.factory import register_scripted
 from pydantic import BaseModel
+
+from neograph import Construct, Each, Node
+from neograph.factory import register_scripted
+
 
 class FilterResult(BaseModel, frozen=True):
     uncovered: list[str]  # field is "uncovered", not "conditions"

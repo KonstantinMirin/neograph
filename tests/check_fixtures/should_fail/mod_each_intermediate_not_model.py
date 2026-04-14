@@ -1,10 +1,11 @@
 # CHECK_ERROR: does not resolve|no field|not.*model
 # Each.over path where an intermediate segment is a plain type (str), not a Pydantic
 # model. Path resolution should fail because str has no model_fields.
-from neograph import Construct, Node
-from neograph.modifiers import Each
-from neograph.factory import register_scripted
 from pydantic import BaseModel
+
+from neograph import Construct, Node
+from neograph.factory import register_scripted
+from neograph.modifiers import Each
 
 
 class Outer(BaseModel, frozen=True):

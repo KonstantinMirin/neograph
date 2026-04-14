@@ -14,7 +14,6 @@ from typing import Any, Literal, Union, get_args, get_origin
 from pydantic import BaseModel
 from pydantic.fields import FieldInfo
 
-
 _PRIMITIVE_MAP: dict[type, str] = {
     str: "string",
     int: "int",
@@ -124,6 +123,8 @@ def _count_classes(
     visited.add(model)
 
     for _name, field_info in model.model_fields.items():
+        if field_info.exclude:
+            continue
         _count_annotation(field_info.annotation, counts, enum_classes, visited)
 
 
@@ -192,6 +193,8 @@ def _render_model_body(
     field_lines: list[str] = []
 
     for field_name, field_info in model.model_fields.items():
+        if field_info.exclude:
+            continue
         type_str = _render_type(
             field_info.annotation,
             indent=indent, depth=depth + 1, or_splitter=or_splitter,
@@ -312,7 +315,7 @@ def _field_comment(field_info: FieldInfo) -> str:
 def _render_enum_declaration(cls: type, indent: str) -> str:
     """Render an Enum class as ``enum Foo { A, B, C }``."""
     members = [f'"{m.value}"' if isinstance(m.value, str) else str(m.value)
-               for m in cls]
+               for m in cls]  # type: ignore[attr-defined]
     return f"enum {cls.__name__} {{ {', '.join(members)} }}"
 
 
@@ -357,7 +360,7 @@ def describe_value(
     elif isinstance(value, list):
         lines.append(_render_list_value(value, indent=indent, depth=0))
     else:
-        lines.append(_render_primitive(value))
+        lines.append(repr(value))
 
     return "\n".join(lines)
 
@@ -374,6 +377,8 @@ def _render_instance(
     field_lines: list[str] = []
 
     for field_name, field_info in instance.__class__.model_fields.items():
+        if field_info.exclude:
+            continue
         val = getattr(instance, field_name)
         val_str = _render_value(val, indent=indent, depth=depth + 1)
         comment = _field_comment(field_info)

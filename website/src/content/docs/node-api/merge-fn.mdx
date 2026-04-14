@@ -38,9 +38,8 @@ Parameters after the first that do not have `FromInput` or `FromConfig` markers 
 
 ```python
 from pydantic import BaseModel
-from neograph import merge_fn, node
+from neograph import merge_fn, node, register_scripted
 from neograph import Construct, Node, Oracle, compile, run
-from neograph.factory import register_scripted
 
 class Context(BaseModel, frozen=True):
     topic: str

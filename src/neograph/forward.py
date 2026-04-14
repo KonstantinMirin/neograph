@@ -17,7 +17,7 @@ produces, so compile() works unchanged.
 
 Strategy: Symbolic Proxy — see `.claude/spikes/neograph-pub/design.md`.
 
-Branching support (neograph-w5z):
+Branching support:
     `if` branches in forward() are handled via the **re-trace** strategy
     (torch.fx pattern). The tracer intercepts Proxy.__bool__ to record
     branch points, then re-runs forward() with alternate branch decisions
@@ -51,11 +51,13 @@ from __future__ import annotations
 
 import dataclasses
 import operator as op_module
+from collections.abc import Iterator
 from typing import Any
 
 from neograph.construct import Construct
 from neograph.errors import ConstructError
-from neograph.modifiers import Each, Loop
+from neograph.modifiers import Each, Loop, Modifiable, ModifierSet
+from neograph.naming import field_name_for
 from neograph.node import Node
 
 __all__ = ["ForwardConstruct"]
@@ -178,7 +180,7 @@ class _Proxy:
 
     def __init__(
         self,
-        source_node: Node | None,
+        source_node: Node | Construct | None,
         name: str,
         tracer: _Tracer | None = None,
     ) -> None:
@@ -204,10 +206,10 @@ class _Proxy:
     def __ge__(self, other: Any) -> _ConditionProxy:
         return _ConditionProxy(self, ">=", other)
 
-    def __eq__(self, other: Any) -> _ConditionProxy:
+    def __eq__(self, other: Any) -> _ConditionProxy:  # type: ignore[override]
         return _ConditionProxy(self, "==", other)
 
-    def __ne__(self, other: Any) -> _ConditionProxy:
+    def __ne__(self, other: Any) -> _ConditionProxy:  # type: ignore[override]
         return _ConditionProxy(self, "!=", other)
 
     def __hash__(self) -> int:
@@ -303,7 +305,7 @@ class _ConditionProxy:
 @dataclasses.dataclass(frozen=True)
 class _ConditionSpec:
     """Parsed condition specification for compiler lowering."""
-    source_node: Node | None
+    source_node: Node | Construct | None
     attr_chain: list[str]
     op_fn: Any  # operator callable
     op_str: str  # e.g., "<", ">"
@@ -322,8 +324,8 @@ class _BranchPoint:
 class _BranchTrace:
     """Result of tracing both arms of a branch."""
     branch: _BranchPoint
-    true_nodes: list[Node]
-    false_nodes: list[Node]
+    true_nodes: list[Node | Construct]
+    false_nodes: list[Node | Construct]
 
 
 @dataclasses.dataclass
@@ -335,30 +337,25 @@ class _BranchMeta:
     """
     condition_spec: _ConditionSpec
     # Nodes that only appear in the true arm
-    true_arm_nodes: list[Node]
+    true_arm_nodes: list[Node | Construct]
     # Nodes that only appear in the false arm
-    false_arm_nodes: list[Node]
+    false_arm_nodes: list[Node | Construct]
 
 
-class _BranchNode:
+class _BranchNode(Modifiable):
     """Sentinel that carries _BranchMeta in the node list.
 
     The compiler checks for this type and wires conditional edges instead
     of adding a regular node. It carries a synthetic name for graph wiring.
+
+    Inherits has_modifier, get_modifier, and modifiers from Modifiable.
     """
 
     def __init__(self, branch_meta: _BranchMeta, branch_id: int) -> None:
         self._neo_branch_meta = branch_meta
         self.name = f"__branch_{branch_id}"
-        # Satisfy Construct validation: pretend to be a Node-like
-        self.modifiers = []
+        self.modifier_set = ModifierSet()
         self.output = None
-
-    def has_modifier(self, mod_type: type) -> bool:
-        return False
-
-    def get_modifier(self, mod_type: type) -> None:
-        return None
 
 
 class _Tracer:
@@ -370,7 +367,7 @@ class _Tracer:
     """
 
     def __init__(self, branch_decisions: dict[int, bool] | None = None) -> None:
-        self._ordered: list[Node] = []
+        self._ordered: list[Node | Construct] = []
         self._seen: set[int] = set()
         self._branches: list[_BranchPoint] = []
         self._branch_decisions = branch_decisions or {}
@@ -406,7 +403,7 @@ class _Tracer:
         self._loop_occurrences[body_slug] = count + 1
         return count
 
-    def record_iteration(self, proxy: _Proxy) -> iter:
+    def record_iteration(self, proxy: _Proxy) -> Iterator[_Proxy]:
         """Record a for-loop iteration over a proxy attribute.
 
         Enters loop mode: nodes recorded while in this mode get tagged
@@ -420,7 +417,7 @@ class _Tracer:
 
         if source_node is not None:
             prefix = f"out_of_{source_node.name}"
-            field_name = source_node.name.replace("-", "_")
+            field_name = field_name_for(source_node.name)
             if full_name.startswith(prefix):
                 remainder = full_name[len(prefix):]
                 attr_parts = [p for p in remainder.split(".") if p]
@@ -456,12 +453,12 @@ class _Tracer:
         """
         branch_id = self._next_branch_id
         if branch_id >= _MAX_BRANCHES:
-            msg = (
-                f"Too many branches in forward(): {branch_id + 1} exceeds "
-                f"the limit of {_MAX_BRANCHES}. Simplify your forward() or "
-                "extract sub-pipelines."
+            raise ConstructError.build(
+                "too many branches in forward()",
+                expected=f"at most {_MAX_BRANCHES} branches",
+                found=f"{branch_id + 1} branches",
+                hint="simplify your forward() or extract sub-pipelines",
             )
-            raise ConstructError(msg)
         self._next_branch_id += 1
 
         if branch_id in self._branch_decisions:
@@ -477,7 +474,7 @@ class _Tracer:
         return decision
 
     @property
-    def nodes(self) -> list[Node]:
+    def nodes(self) -> list[Node | Construct]:
         return list(self._ordered)
 
     @property
@@ -534,15 +531,20 @@ class _LoopCall:
         # Validate body items before extracting nodes
         for nc in self._body:
             if not isinstance(nc, _NodeCall):
-                raise ConstructError(
-                    f"self.loop() body must contain node references (self.node_name), "
-                    f"not {type(nc).__name__}. Nested self.loop() is not supported."
+                raise ConstructError.build(
+                    "self.loop() body must contain node references (self.node_name)",
+                    expected="node reference (self.node_name)",
+                    found=type(nc).__name__,
+                    hint="nested self.loop() is not supported",
                 )
 
         body_nodes = [nc._node for nc in self._body]
 
         if not body_nodes:
-            raise ConstructError("self.loop() body must contain at least one node.")
+            raise ConstructError.build(
+                "self.loop() body must contain at least one node",
+                hint="pass at least one node reference: self.loop(body=[self.some_node], ...)",
+            )
 
         # Infer input/output types from the proxy source and last body node.
         # source_node can be None when the proxy comes from a previous
@@ -557,9 +559,9 @@ class _LoopCall:
             input_type = output_type
 
         if input_type is None:
-            raise ConstructError(
-                "self.loop() input type could not be inferred. "
-                "Call self.loop()(proxy) where proxy is a node output."
+            raise ConstructError.build(
+                "self.loop() input type could not be inferred",
+                hint="call self.loop()(proxy) where proxy is a node output",
             )
 
         # Build sub-construct with Loop modifier.
@@ -660,17 +662,17 @@ def _run_trace(
     instance: ForwardConstruct,
     node_attrs: dict[str, Node],
     branch_decisions: dict[int, bool] | None = None,
-) -> tuple[_Tracer, list[Node]]:
+) -> tuple[_Tracer, list[Node | Construct]]:
     """Run a single trace pass of forward() and return (tracer, nodes)."""
     tracer = _Tracer(branch_decisions=branch_decisions)
     shim = _ForwardSelf(node_attrs, tracer, real_self=instance)
     seed = _Proxy(source_node=None, name="forward_input", tracer=tracer)
-    type(instance).forward(shim, seed)
+    type(instance).forward(shim, seed)  # type: ignore[arg-type]
     nodes = _apply_loop_modifiers(tracer)
     return tracer, nodes
 
 
-def _apply_loop_modifiers(tracer: _Tracer) -> list[Node]:
+def _apply_loop_modifiers(tracer: _Tracer) -> list[Node | Construct]:
     """Replace loop-body nodes with Each-modified copies.
 
     Nodes recorded during a for-loop iteration over a proxy get an
@@ -692,7 +694,7 @@ def _apply_loop_modifiers(tracer: _Tracer) -> list[Node]:
 def _trace_forward(
     instance: ForwardConstruct,
     node_attrs: dict[str, Node],
-) -> list[Node]:
+) -> list[Node | Construct]:
     """Trace forward() to discover node call order.
 
     For straight-line pipelines (no if/else), returns nodes in call order.
@@ -728,7 +730,7 @@ def _trace_forward(
 
 
 def _merge_branch_traces(
-    true_nodes: list[Node],
+    true_nodes: list[Node | Construct],
     branch_traces: list[_BranchTrace],
     branches: list[_BranchPoint],
 ) -> list:
@@ -829,7 +831,7 @@ def _merge_sequential_branches(
     result: list = []
     processed_names: set[str] = set()
 
-    for i, (trace, branch) in enumerate(zip(branch_traces, branches)):
+    for _i, (trace, branch) in enumerate(zip(branch_traces, branches, strict=True)):
         true_names = {n.name for n in trace.true_nodes}
         false_names = {n.name for n in trace.false_nodes}
 

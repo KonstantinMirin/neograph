@@ -1,7 +1,9 @@
 # Valid: Each modifier on a sub-construct with proper types
-from neograph import Construct, Node, Each
-from neograph.factory import register_scripted
 from pydantic import BaseModel
+
+from neograph import Construct, Each, Node
+from neograph.factory import register_scripted
+
 
 class Item(BaseModel, frozen=True):
     label: str

@@ -1,6 +1,8 @@
-# CHECK_ERROR: LLM nodes but.*not set.*configure_llm
-from neograph import Construct, Node
+# CHECK_ERROR: LLM nodes require configure_llm
 from pydantic import BaseModel
+
+from neograph import Construct, Node
+
 
 class Result(BaseModel, frozen=True):
     text: str

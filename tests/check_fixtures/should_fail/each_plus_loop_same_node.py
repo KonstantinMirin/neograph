@@ -1,9 +1,11 @@
 # CHECK_ERROR: Cannot combine Each and Loop
 # Each + Loop on the same item is forbidden
-from neograph import Node
-from neograph.modifiers import Each, Loop
-from neograph.factory import register_scripted
 from pydantic import BaseModel
+
+from neograph import Node
+from neograph.factory import register_scripted
+from neograph.modifiers import Each, Loop
+
 
 class Item(BaseModel, frozen=True):
     x: str

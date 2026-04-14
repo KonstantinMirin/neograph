@@ -1,0 +1,4 @@
+# file: /Users/konst/projects/neograph/src/neograph/describe_type.py
+# hypothesis_version: 6.151.12
+
+[' or ', ',\n', '[\n', '[]', ']', 'all', 'any', 'auto', 'bool', 'false', 'float', 'int', 'null', 'object', 'string', 'true', '{\n', '{}', '}']

@@ -104,7 +104,7 @@ if __name__ == "__main__":
 
     # Level 1: model method wins over any renderer
     custom = CustomRendered(name="spec", content="The system shall log all access.")
-    from neograph.renderers import render_input
+    from neograph import render_input
     print("Level 1 (model method):")
     print(render_input(custom, renderer=XmlRenderer()))
     print()

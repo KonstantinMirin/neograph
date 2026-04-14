@@ -6,7 +6,7 @@ the kind of schema complexity that breaks across output strategies.
 
 from __future__ import annotations
 
-from enum import Enum
+from enum import StrEnum
 
 from pydantic import BaseModel
 
@@ -18,7 +18,7 @@ class Experience(BaseModel, frozen=True):
     current: bool = False
 
 
-class ContactMethod(str, Enum):
+class ContactMethod(StrEnum):
     email = "email"
     phone = "phone"
     linkedin = "linkedin"

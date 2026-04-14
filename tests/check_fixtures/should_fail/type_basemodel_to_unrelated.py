@@ -1,8 +1,10 @@
 # CHECK_ERROR: type.*compatible|no upstream produces
 # Attack vector: two unrelated BaseModel subclasses. Claims is not Scores.
+from pydantic import BaseModel
+
 from neograph import Construct, Node
 from neograph.factory import register_scripted
-from pydantic import BaseModel
+
 
 class Claims(BaseModel, frozen=True):
     text: str

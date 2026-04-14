@@ -1,10 +1,11 @@
 # CHECK_ERROR: Loop.*requires both input.*and output|input.*output.*declared
 # Loop on a Construct that has output but no input declared.
 # Back-edge can't wire without both.
-from neograph import Construct, Node
-from neograph.modifiers import Loop
-from neograph.factory import register_scripted
 from pydantic import BaseModel
+
+from neograph import Construct, Node
+from neograph.factory import register_scripted
+from neograph.modifiers import Loop
 
 
 class Draft(BaseModel, frozen=True):

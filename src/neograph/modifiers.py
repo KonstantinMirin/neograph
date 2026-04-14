@@ -7,11 +7,102 @@
 
 from __future__ import annotations
 
+from enum import Enum, auto
 from typing import Any, Self
 
-from pydantic import BaseModel
+from neograph._dev_warnings import dev_warn
 
-from neograph.errors import ConfigurationError
+from pydantic import BaseModel, field_validator
+
+from neograph.errors import ConfigurationError, ConstructError
+
+
+class ModifierCombo(Enum):
+    """Exhaustive enumeration of valid modifier combinations.
+
+    Every dispatch site (compiler, state, factory) matches on this enum
+    instead of ad-hoc has_modifier() chains. Adding a new combo forces
+    handling at every site.
+    """
+    BARE = auto()              # no modifiers
+    EACH = auto()              # Each only
+    ORACLE = auto()            # Oracle only
+    LOOP = auto()              # Loop only
+    OPERATOR = auto()          # Operator only
+    EACH_ORACLE = auto()       # Each + Oracle (fusion)
+    EACH_OPERATOR = auto()     # Each + Operator
+    ORACLE_OPERATOR = auto()   # Oracle + Operator
+    LOOP_OPERATOR = auto()     # Loop + Operator
+    EACH_ORACLE_OPERATOR = auto()  # Each + Oracle + Operator
+
+
+def classify_modifiers(item: Any) -> tuple[ModifierCombo, dict]:
+    """Classify an item's modifiers into a ModifierCombo enum value.
+
+    Returns (combo, modifiers_dict) where modifiers_dict has keys like
+    'each', 'oracle', 'loop', 'operator' mapping to the modifier instances.
+
+    Fast path: when item has a modifier_set attribute (Node/Construct/
+    _BranchNode), reads directly from typed slots. Fallback path: uses
+    get_modifier() for any remaining duck-typed items.
+    """
+    ms = getattr(item, "modifier_set", None)
+    if ms is not None and isinstance(ms, ModifierSet):
+        mods: dict[str, Any] = {}
+        if ms.each is not None:
+            mods["each"] = ms.each
+        if ms.oracle is not None:
+            mods["oracle"] = ms.oracle
+        if ms.loop is not None:
+            mods["loop"] = ms.loop
+        if ms.operator is not None:
+            mods["operator"] = ms.operator
+        return ms.combo, mods
+
+    # Fallback for duck-typed items (e.g. _BranchNode)
+    get_mod = getattr(item, "get_modifier", None)
+    if get_mod is None:
+        return ModifierCombo.BARE, {}
+
+    each = get_mod(Each)
+    oracle = get_mod(Oracle)
+    loop = get_mod(Loop)
+    operator = get_mod(Operator)
+
+    mods = {}
+    if each:
+        mods["each"] = each
+    if oracle:
+        mods["oracle"] = oracle
+    if loop:
+        mods["loop"] = loop
+    if operator:
+        mods["operator"] = operator
+
+    # Map to enum
+    has = frozenset(mods.keys())
+    combo_map = {
+        frozenset(): ModifierCombo.BARE,
+        frozenset({"each"}): ModifierCombo.EACH,
+        frozenset({"oracle"}): ModifierCombo.ORACLE,
+        frozenset({"loop"}): ModifierCombo.LOOP,
+        frozenset({"operator"}): ModifierCombo.OPERATOR,
+        frozenset({"each", "oracle"}): ModifierCombo.EACH_ORACLE,
+        frozenset({"each", "operator"}): ModifierCombo.EACH_OPERATOR,
+        frozenset({"oracle", "operator"}): ModifierCombo.ORACLE_OPERATOR,
+        frozenset({"loop", "operator"}): ModifierCombo.LOOP_OPERATOR,
+        frozenset({"each", "oracle", "operator"}): ModifierCombo.EACH_ORACLE_OPERATOR,
+    }
+
+    combo = combo_map.get(has)
+    if combo is None:
+        raise ConstructError.build(
+            "Invalid modifier combination",
+            found=str(sorted(has)),
+            hint="This combination is not supported",
+            node=getattr(item, "name", "?"),
+        )
+    return combo, mods
 
 
 class Modifier(BaseModel, frozen=True):
@@ -40,7 +131,7 @@ class _PathRecorder:
         # so future attribute access on the recorder records only user names.
         self._neo_path = path
 
-    def __getattr__(self, name: str) -> "_PathRecorder":
+    def __getattr__(self, name: str) -> _PathRecorder:
         # __getattr__ only fires for attrs not found by normal lookup; _neo_path
         # lives in __slots__ so it returns via __getattribute__ and never hits here.
         # Reject leading-underscore names (dunders, privates) so that
@@ -56,60 +147,26 @@ class Modifiable:
 
     Both Node and Construct inherit this. Provides has_modifier(),
     get_modifier(), and __or__() — the pipe composition syntax.
-    Requires a `modifiers: list[Modifier]` field on the subclass.
+    Uses modifier_set: ModifierSet for type-safe modifier storage.
     """
 
-    modifiers: list[Modifier]
+    modifier_set: ModifierSet
+
+    @property
+    def modifiers(self) -> list[Modifier]:
+        """Backward compat bridge: returns modifier_set contents as a list."""
+        return self.modifier_set.to_list()
 
     def __or__(self, modifier: Modifier) -> Self:
         """Compose modifiers via pipe: obj | Oracle(n=3) | Operator(when=...)"""
-        from neograph.errors import ConstructError
 
-        # Duplicate modifier guard (neograph-li9b)
-        mod_type = type(modifier)
-        if self.has_modifier(mod_type):
-            msg = (
-                f"Duplicate {mod_type.__name__} modifier. "
-                f"A {mod_type.__name__} is already applied to this item. "
-                f"Use a sub-construct if you need nested composition."
-            )
-            raise ConstructError(msg)
 
-        # Each + Loop mutual exclusion
-        if isinstance(modifier, Loop) and self.has_modifier(Each):
-            msg = (
-                "Cannot combine Each and Loop on the same item. "
-                "Use a sub-construct with Loop inside an Each fan-out instead."
-            )
-            raise ConstructError(msg)
-        if isinstance(modifier, Each) and self.has_modifier(Loop):
-            msg = (
-                "Cannot combine Each and Loop on the same item. "
-                "Use a sub-construct with Loop inside an Each fan-out instead."
-            )
-            raise ConstructError(msg)
-
-        # Oracle + Loop mutual exclusion
-        if isinstance(modifier, Loop) and self.has_modifier(Oracle):
-            msg = (
-                "Cannot combine Oracle and Loop on the same item. "
-                "Use a sub-construct: nest the Loop body inside an Oracle ensemble, "
-                "or vice versa."
-            )
-            raise ConstructError(msg)
-        if isinstance(modifier, Oracle) and self.has_modifier(Loop):
-            msg = (
-                "Cannot combine Oracle and Loop on the same item. "
-                "Use a sub-construct: nest the Loop body inside an Oracle ensemble, "
-                "or vice versa."
-            )
-            raise ConstructError(msg)
-
-        # Oracle + Each composition is supported via flat M×N fusion
-        # (neograph-tpgi). No mutual exclusion needed.
+        # ModifierSet.with_modifier handles duplicate and illegal-combo
+        # rejection (Each+Loop, Oracle+Loop). The typed slots make
+        # duplicates structurally impossible.
+        new_ms = self.modifier_set.with_modifier(modifier)
 
         # Dev-mode warnings for ambiguous-but-valid patterns
-        from neograph._dev_warnings import dev_warn
 
         if isinstance(modifier, Oracle):
             if modifier.n == 1:
@@ -133,7 +190,7 @@ class Modifiable:
                 f"Did you mean max_iterations=3?"
             )
 
-        result = self.model_copy(update={"modifiers": [*self.modifiers, modifier]})
+        result = self.model_copy(update={"modifier_set": new_ms})  # type: ignore[attr-defined]
         # Loop validation at | time: check type compatibility immediately.
         if isinstance(modifier, Loop):
             if hasattr(result, 'outputs'):
@@ -143,9 +200,9 @@ class Modifiable:
             elif hasattr(result, 'output') and hasattr(result, 'input'):
                 # Construct-level Loop with history=True — not supported yet
                 if modifier.history:
-                    raise ConstructError(
-                        "Loop(history=True) is not supported on Constructs. "
-                        "history tracking is only available on Node-level Loops."
+                    raise ConstructError.build(
+                        "Loop(history=True) is not supported on Constructs",
+                        hint="history tracking is only available on Node-level Loops",
                     )
                 # Construct: validate output compat with input
                 from neograph._construct_validation import validate_loop_construct
@@ -154,13 +211,26 @@ class Modifiable:
 
     def has_modifier(self, modifier_type: type[Modifier]) -> bool:
         """Check if a specific modifier is applied."""
-        return any(isinstance(m, modifier_type) for m in self.modifiers)
+        if modifier_type is Each:
+            return self.modifier_set.each is not None
+        if modifier_type is Oracle:
+            return self.modifier_set.oracle is not None
+        if modifier_type is Loop:
+            return self.modifier_set.loop is not None
+        if modifier_type is Operator:
+            return self.modifier_set.operator is not None
+        return False
 
     def get_modifier(self, modifier_type: type[Modifier]) -> Modifier | None:
-        """Get the first modifier of a given type, or None."""
-        for m in self.modifiers:
-            if isinstance(m, modifier_type):
-                return m
+        """Get the modifier of a given type, or None."""
+        if modifier_type is Each:
+            return self.modifier_set.each
+        if modifier_type is Oracle:
+            return self.modifier_set.oracle
+        if modifier_type is Loop:
+            return self.modifier_set.loop
+        if modifier_type is Operator:
+            return self.modifier_set.operator
         return None
 
     def map(self, source: Any, *, key: str) -> Self:
@@ -236,7 +306,7 @@ class Modifiable:
         return self | Each(over=over, key=key)
 
 
-class Oracle(Modifier):
+class Oracle(Modifier, frozen=True):
     """Ensemble modifier: N parallel generators + judge-merge.
 
     The compiler expands this into:
@@ -263,17 +333,32 @@ class Oracle(Modifier):
     merge_model: str = "reason"
     merge_fn: str | None = None  # registered scripted function name
 
+    @field_validator('n')
+    @classmethod
+    def _validate_n(cls, v: int) -> int:
+        if v < 1:
+            raise ValueError("Oracle n must be >= 1")
+        return v
+
     def model_post_init(self, __context: Any) -> None:
         if not self.merge_prompt and not self.merge_fn:
-            msg = "Oracle requires either merge_prompt (LLM judge) or merge_fn (scripted function)."
-            raise ConfigurationError(msg)
+            raise ConfigurationError.build(
+                "Oracle requires a merge strategy",
+                expected="merge_prompt (LLM judge) or merge_fn (scripted function)",
+                found="neither provided",
+            )
         if self.merge_prompt and self.merge_fn:
-            msg = "Oracle accepts merge_prompt or merge_fn, not both."
-            raise ConfigurationError(msg)
+            raise ConfigurationError.build(
+                "Oracle accepts merge_prompt or merge_fn, not both",
+                found="both merge_prompt and merge_fn provided",
+                hint="Remove one of the two merge strategies",
+            )
         # Empty models list is a user mistake — reject early
         if self.models is not None and len(self.models) == 0:
-            raise ConfigurationError(
-                "Oracle models= must not be empty. Provide at least one model tier."
+            raise ConfigurationError.build(
+                "Oracle models= must not be empty",
+                expected="at least one model tier",
+                found="empty list",
             )
         # Infer n from models length when n wasn't explicitly set
         if self.models is not None and len(self.models) > 0:
@@ -281,7 +366,7 @@ class Oracle(Modifier):
                 object.__setattr__(self, 'n', len(self.models))
 
 
-class Each(Modifier):
+class Each(Modifier, frozen=True):
     """Fan-out modifier: dispatch parallel instances over a collection.
 
     The compiler expands this into:
@@ -296,6 +381,13 @@ class Each(Modifier):
     over: str       # dotted path to collection in state (e.g., "clusters.clusters")
     key: str        # field on each item used as the dispatch key
 
+    @field_validator('over')
+    @classmethod
+    def _validate_over(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError("Each.over must not be empty")
+        return v
+
 
 def split_each_path(over: str) -> tuple[str, tuple[str, ...]]:
     """Parse an `Each.over` dotted path into (root_field, remaining_segments).
@@ -309,7 +401,7 @@ def split_each_path(over: str) -> tuple[str, tuple[str, ...]]:
     return parts[0], tuple(parts[1:])
 
 
-class Operator(Modifier):
+class Operator(Modifier, frozen=True):
     """Human-in-the-loop modifier: pause graph for human review.
 
     The compiler inserts a check node after the modified node.
@@ -325,7 +417,7 @@ class Operator(Modifier):
     when: str       # registered condition function name
 
 
-class Loop(Modifier):
+class Loop(Modifier, frozen=True):
     """Cycle modifier: repeat a node or sub-construct until a condition is met.
 
     On a Node: self-loop (output feeds back as input).
@@ -359,9 +451,155 @@ class Loop(Modifier):
 
     def model_post_init(self, __context: Any) -> None:
         if self.on_exhaust not in ("error", "last"):
-            raise ConfigurationError(
-                f"Loop on_exhaust must be 'error' or 'last', got {self.on_exhaust!r}."
+            raise ConfigurationError.build(
+                "Invalid Loop on_exhaust value",
+                expected="'error' or 'last'",
+                found=repr(self.on_exhaust),
             )
         if self.max_iterations < 1:
-            msg = f"Loop max_iterations must be >= 1, got {self.max_iterations}."
-            raise ConfigurationError(msg)
+            raise ConfigurationError.build(
+                "Loop max_iterations must be >= 1",
+                found=str(self.max_iterations),
+            )
+
+
+class ModifierSet(BaseModel, frozen=True):
+    """Validated, typed modifier configuration.
+
+    Cannot be constructed with an invalid combination -- pydantic
+    model_post_init rejects it. Replaces list[Modifier] everywhere.
+
+    Each slot is a single optional value, so duplicate modifiers are
+    structurally impossible.
+    """
+
+    each: Each | None = None
+    oracle: Oracle | None = None
+    loop: Loop | None = None
+    operator: Operator | None = None
+
+    @property
+    def combo(self) -> ModifierCombo:
+        """Classify this set into a ModifierCombo enum value."""
+        has: set[str] = set()
+        if self.each is not None:
+            has.add("each")
+        if self.oracle is not None:
+            has.add("oracle")
+        if self.loop is not None:
+            has.add("loop")
+        if self.operator is not None:
+            has.add("operator")
+        combo_map = {
+            frozenset(): ModifierCombo.BARE,
+            frozenset({"each"}): ModifierCombo.EACH,
+            frozenset({"oracle"}): ModifierCombo.ORACLE,
+            frozenset({"loop"}): ModifierCombo.LOOP,
+            frozenset({"operator"}): ModifierCombo.OPERATOR,
+            frozenset({"each", "oracle"}): ModifierCombo.EACH_ORACLE,
+            frozenset({"each", "operator"}): ModifierCombo.EACH_OPERATOR,
+            frozenset({"oracle", "operator"}): ModifierCombo.ORACLE_OPERATOR,
+            frozenset({"loop", "operator"}): ModifierCombo.LOOP_OPERATOR,
+            frozenset({"each", "oracle", "operator"}): ModifierCombo.EACH_ORACLE_OPERATOR,
+        }
+        return combo_map[frozenset(has)]
+
+    def model_post_init(self, __context: Any) -> None:
+        # Each + Loop mutual exclusion
+        if self.each is not None and self.loop is not None:
+    
+            raise ConstructError.build(
+                "Cannot combine Each and Loop on the same item",
+                hint="Use a sub-construct with Loop inside an Each fan-out instead",
+            )
+        # Oracle + Loop mutual exclusion
+        if self.oracle is not None and self.loop is not None:
+    
+            raise ConstructError.build(
+                "Cannot combine Oracle and Loop on the same item",
+                hint="Use a sub-construct: nest the Loop body inside an Oracle ensemble, or vice versa",
+            )
+
+    def with_modifier(self, mod: Modifier) -> ModifierSet:
+        """Return a new ModifierSet with the given modifier added.
+
+        Raises ConstructError for duplicate modifiers (slot already occupied)
+        and for illegal combinations (Each+Loop, Oracle+Loop).
+        """
+
+
+        if isinstance(mod, Each):
+            if self.each is not None:
+                raise ConstructError.build(
+                    "Duplicate Each modifier",
+                    found="An Each is already applied to this item",
+                    hint="Use a sub-construct if you need nested composition",
+                )
+            # Each + Loop mutual exclusion
+            if self.loop is not None:
+                raise ConstructError.build(
+                    "Cannot combine Each and Loop on the same item",
+                    hint="Use a sub-construct with Loop inside an Each fan-out instead",
+                )
+            return self.model_copy(update={"each": mod})
+        elif isinstance(mod, Oracle):
+            if self.oracle is not None:
+                raise ConstructError.build(
+                    "Duplicate Oracle modifier",
+                    found="An Oracle is already applied to this item",
+                    hint="Use a sub-construct if you need nested composition",
+                )
+            # Oracle + Loop mutual exclusion
+            if self.loop is not None:
+                raise ConstructError.build(
+                    "Cannot combine Oracle and Loop on the same item",
+                    hint="Use a sub-construct: nest the Loop body inside an Oracle ensemble, or vice versa",
+                )
+            return self.model_copy(update={"oracle": mod})
+        elif isinstance(mod, Loop):
+            if self.loop is not None:
+                raise ConstructError.build(
+                    "Duplicate Loop modifier",
+                    found="A Loop is already applied to this item",
+                    hint="Use a sub-construct if you need nested composition",
+                )
+            # Loop + Each mutual exclusion
+            if self.each is not None:
+                raise ConstructError.build(
+                    "Cannot combine Each and Loop on the same item",
+                    hint="Use a sub-construct with Loop inside an Each fan-out instead",
+                )
+            # Loop + Oracle mutual exclusion
+            if self.oracle is not None:
+                raise ConstructError.build(
+                    "Cannot combine Oracle and Loop on the same item",
+                    hint="Use a sub-construct: nest the Loop body inside an Oracle ensemble, or vice versa",
+                )
+            return self.model_copy(update={"loop": mod})
+        elif isinstance(mod, Operator):
+            if self.operator is not None:
+                raise ConstructError.build(
+                    "Duplicate Operator modifier",
+                    found="An Operator is already applied to this item",
+                    hint="Use a sub-construct if you need nested composition",
+                )
+            return self.model_copy(update={"operator": mod})
+        else:
+            raise ConstructError.build(
+                "Unknown modifier type",
+                expected="Each, Oracle, Loop, or Operator",
+                found=type(mod).__name__,
+            )
+
+    def to_list(self) -> list[Modifier]:
+        """Return modifiers as a list (backward compat bridge)."""
+        result: list[Modifier] = []
+        if self.each is not None:
+            result.append(self.each)
+        if self.oracle is not None:
+            result.append(self.oracle)
+        if self.loop is not None:
+            result.append(self.loop)
+        if self.operator is not None:
+            result.append(self.operator)
+        return result

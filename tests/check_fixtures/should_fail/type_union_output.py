@@ -2,9 +2,11 @@
 # Attack vector 6: Union type output — Claims | str
 # Validator should reject union outputs because the consumer can't be sure
 # which branch it gets at runtime.
+from pydantic import BaseModel
+
 from neograph import Construct, Node
 from neograph.factory import register_scripted
-from pydantic import BaseModel
+
 
 class Claims(BaseModel, frozen=True):
     text: str

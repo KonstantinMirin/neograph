@@ -1,5 +1,6 @@
 # CHECK_ERROR: Scripted function.*not registered
 from pydantic import BaseModel
+
 from neograph import Construct, Node
 
 

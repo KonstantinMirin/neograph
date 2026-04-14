@@ -1,0 +1,4 @@
+# file: /Users/konst/projects/neograph/src/neograph/_construct_builder.py
+# hypothesis_version: 6.151.12
+
+['.', 'FromConfig', 'FromInput', 'black', 'fan_out_param', 'gray', 'input', 'inputs', 'neo_subgraph_input', 'oracle_gen_type', 'scripted', 'scripted_fn']

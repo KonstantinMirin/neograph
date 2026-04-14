@@ -1,9 +1,11 @@
 # CHECK_ERROR: loop.*compatible|output.*not compatible.*input
 # Loop on a Construct where output type doesn't match input type
-from neograph import Construct, Node
-from neograph.modifiers import Loop
-from neograph.factory import register_scripted
 from pydantic import BaseModel
+
+from neograph import Construct, Node
+from neograph.factory import register_scripted
+from neograph.modifiers import Loop
+
 
 class Draft(BaseModel, frozen=True):
     text: str

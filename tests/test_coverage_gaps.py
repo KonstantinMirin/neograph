@@ -6,29 +6,36 @@ organized by module and by the specific code paths they target.
 
 from __future__ import annotations
 
-import dataclasses
 import operator as op_module
 import os
 import types
-from typing import Annotated, Any
 from unittest.mock import patch
 
 import pytest
 from pydantic import BaseModel
 
 from neograph import (
-    Construct, Node, Each, Loop, Oracle, Operator,
-    compile, run, node,
-    CompileError, ConfigurationError, ExecutionError,
+    Construct,
+    Each,
+    ExecutionError,
+    Loop,
+    Node,
+    Operator,
+    Oracle,
+    compile,
     construct_from_functions,
+    node,
+    run,
 )
-from neograph.factory import register_scripted, register_condition
+from neograph.factory import register_condition, register_scripted
 from neograph.forward import _BranchMeta, _BranchNode, _ConditionSpec
 from tests.schemas import (
-    RawText, Claims, ClassifiedClaims, Clusters, ClusterGroup,
-    MatchResult, MergedResult, ValidationResult,
+    Claims,
+    ClusterGroup,
+    Clusters,
+    MatchResult,
+    RawText,
 )
-
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Shared schemas for these tests
@@ -97,7 +104,7 @@ class TestDescribeGraph:
 
         class BadGraph:
             def get_graph(self):
-                raise RuntimeError("no graph")
+                raise AttributeError("no graph")
 
         result = describe_graph(BadGraph())
         assert result == "(graph visualization not available)"
@@ -122,31 +129,28 @@ class TestDescribeGraph:
 
         class BadGraph:
             def get_graph(self):
-                raise RuntimeError("fail")
+                raise AttributeError("fail")
 
         # Should not raise
         _print_dag_summary(BadGraph(), Construct("x", nodes=[
             Node.scripted("n", fn="f", outputs=RawText),
         ]))
 
-    def test_compile_calls_print_dag_summary_when_dev_mode(self):
+    def test_compile_calls_print_dag_summary_when_dev_mode(self, monkeypatch):
         """compile() calls _print_dag_summary when NEOGRAPH_DEV=1."""
         register_scripted("dev_a", lambda _in, _cfg: RawText(text="a"))
         pipeline = Construct("dev-test", nodes=[
             Node.scripted("a", fn="dev_a", outputs=RawText),
         ])
 
+        import neograph._dev_warnings as dw
+        import neograph.compiler as _compiler
+        monkeypatch.setattr(dw, "DEV_MODE", True)
+        monkeypatch.setattr(_compiler, "DEV_MODE", True)
         with patch.dict(os.environ, {"NEOGRAPH_DEV": "1"}):
-            # Need to reimport to pick up the env var
-            import neograph._dev_warnings as dw
-            old_val = dw.DEV_MODE
-            dw.DEV_MODE = True
-            try:
-                with patch("neograph.compiler._print_dag_summary") as mock_print:
-                    graph = compile(pipeline)
-                    mock_print.assert_called_once()
-            finally:
-                dw.DEV_MODE = old_val
+            with patch("neograph.compiler._print_dag_summary") as mock_print:
+                compile(pipeline)
+                mock_print.assert_called_once()
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -281,7 +285,10 @@ class TestOperatorAfterModifiers:
         graph = compile(parent, checkpointer=cp)
         result = run(graph, input={"node_id": "test"},
                      config={"configurable": {"thread_id": "sub-loop-op-1"}})
-        assert result["inner"] is not None
+        inner = result["inner"]
+        final = inner[-1] if isinstance(inner, list) else inner
+        assert isinstance(final, Draft)
+        assert final.content == "done"
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -384,27 +391,6 @@ class TestMergeOneGroup:
 class TestLoopRouterEdgeCases:
     """Loop router: non-list own_val falls through to `latest = own_val` (line 570)."""
 
-    def test_loop_router_handles_non_list_state_value(self):
-        """When the node's own field is not a list, loop router reads it directly."""
-        # This path is hit when the state field hasn't been through the append
-        # reducer yet (or the field is not wrapped in a list). Test via
-        # a carefully constructed pipeline where the loop condition receives
-        # a non-list value.
-        # Actually, the Loop modifier always sets up an append-list reducer,
-        # so the field is always a list. Line 570 (latest = own_val) fires
-        # when own_val is NOT a list -- which happens when state is freshly
-        # initialized and the field is None (but that's handled earlier).
-        # Let me check: lines 563-570 are:
-        #   if isinstance(own_val, list) and own_val: latest = own_val[-1]  # 563-564
-        #   elif isinstance(own_val, list): latest = None  # 565-568
-        #   else: latest = own_val  # 569-570
-        # So line 570 fires when own_val is not a list at all (e.g., None or scalar).
-        # With a proper state model, the initial value is [] (empty list), so
-        # we never naturally hit line 570 unless the state is malformed.
-        # This is essentially a defensive branch. To exercise it, we need
-        # to manipulate state directly.
-        pass  # Defensive branch -- see note. Tested indirectly below.
-
     def test_loop_with_dict_form_outputs_reads_primary_key(self):
         """Loop node with dict-form outputs reads primary key state field."""
         @node(
@@ -425,8 +411,11 @@ class TestLoopRouterEdgeCases:
         pipeline = construct_from_functions("dict-loop", [seed, refine_dict])
         graph = compile(pipeline)
         result = run(graph, input={"node_id": "dict-loop"})
-        # The result key is per the dict output format
-        assert result.get("refine_dict_result") is not None
+        # The result key is per the dict output format; Loop wraps in list
+        raw = result.get("refine_dict_result")
+        final = raw[-1] if isinstance(raw, list) else raw
+        assert isinstance(final, Draft)
+        assert final.score >= 0.8
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -452,7 +441,10 @@ class TestSubgraphLoopEdges:
         parent = Construct("parent", nodes=[inner])
         graph = compile(parent)
         result = run(graph, input={"node_id": "test"})
-        assert result["inner"] is not None
+        inner = result["inner"]
+        final = inner[-1] if isinstance(inner, list) else inner
+        assert isinstance(final, Draft)
+        assert final.score == 1.0
 
     def test_subgraph_loop_with_string_condition(self):
         """Loop on sub-construct with string condition (line 614)."""
@@ -474,7 +466,10 @@ class TestSubgraphLoopEdges:
         graph = compile(parent)
         result = run(graph, input={"node_id": "test"})
         # Loop condition is always false → exits after first iteration
-        assert result["inner"] is not None
+        inner = result["inner"]
+        final = inner[-1] if isinstance(inner, list) else inner
+        assert isinstance(final, Draft)
+        assert final.content == "done"
 
     def test_subgraph_loop_on_exhaust_error(self):
         """Loop on sub-construct with on_exhaust='error' raises (lines 628-632)."""
@@ -516,7 +511,7 @@ class TestSubgraphLoopEdges:
             inner,
         ])
         graph = compile(parent)
-        with pytest.raises(ExecutionError, match="Loop condition.*raised.*AttributeError"):
+        with pytest.raises(ExecutionError, match="loop condition raised AttributeError"):
             run(graph, input={"node_id": "test"})
 
 
@@ -581,7 +576,8 @@ class TestBranchArmsWithConstructs:
         graph = compile(pipeline)
         result = run(graph, input={"node_id": "test"})
         # score=0.8 > 0.5 → true arm → sub-construct runs
-        assert result.get("br_sub") is not None
+        assert isinstance(result.get("br_sub"), SubOutput)
+        assert result["br_sub"].result == "branched"
 
     def test_branch_with_construct_in_false_arm(self):
         """A Construct in the false arm of a branch compiles correctly (lines 809-811)."""
@@ -612,7 +608,8 @@ class TestBranchArmsWithConstructs:
         graph = compile(pipeline)
         result = run(graph, input={"node_id": "test"})
         # score=0.2 not > 0.5 → false arm → sub-construct runs
-        assert result.get("bf_sub") is not None
+        assert isinstance(result.get("bf_sub"), SubOutput)
+        assert result["bf_sub"].result == "false-branched"
 
     def test_branch_with_multi_node_arms_wires_sequential_edges(self):
         """Multiple nodes in each arm get sequential edges (lines 818, 821)."""
@@ -718,7 +715,7 @@ class TestBranchArmsWithConstructs:
 
         pipeline = Construct("ce-test", nodes=[seed_node, branch])
         graph = compile(pipeline)
-        with pytest.raises(ExecutionError, match="Branch condition.*raised.*TypeError"):
+        with pytest.raises(ExecutionError, match="branch condition raised TypeError"):
             run(graph, input={"node_id": "test"})
 
     def test_branch_as_first_node_wires_from_start(self):
@@ -756,9 +753,10 @@ class TestSkipWhenErrorWrapping:
 
     def test_skip_when_error_raises_execution_error(self):
         """skip_when that raises AttributeError is wrapped in ExecutionError."""
-        from neograph.factory import _apply_skip_when
-        from neograph.errors import ExecutionError
         import structlog
+
+        from neograph.errors import ExecutionError
+        from neograph.factory import _apply_skip_when
 
         n = Node("test-skip", outputs=RawText,
                  skip_when=lambda x: x.nonexistent_attr)
@@ -776,27 +774,21 @@ class TestSkipWhenErrorWrapping:
 class TestRendererFallback:
     """Renderer import fallback when _llm module not available."""
 
-    def test_render_input_falls_back_to_node_renderer_when_import_fails(self):
+    def test_render_input_falls_back_to_node_renderer_when_import_fails(self, monkeypatch):
         """When _get_global_renderer import fails, falls back to node.renderer (line 148-149)."""
+        import sys
+
         from neograph.factory import _render_input
         from neograph.renderers import XmlRenderer
-        import sys
 
         n = Node("test-renderer", outputs=RawText, renderer=XmlRenderer())
 
         # Temporarily hide neograph._llm from imports to trigger ImportError
-        saved = sys.modules.get("neograph._llm")
-        sys.modules["neograph._llm"] = None  # type: ignore[assignment]
-        try:
-            result = _render_input(n, {"key": "value"})
-        finally:
-            if saved is not None:
-                sys.modules["neograph._llm"] = saved
-            else:
-                del sys.modules["neograph._llm"]
+        monkeypatch.setitem(sys.modules, "neograph._llm", None)
+        result = _render_input(n, {"key": "value"})
 
-        # XmlRenderer was used as fallback
-        assert result is not None
+        # When _llm import fails, fallback returns the original input unchanged
+        assert result == {"key": "value"}
 
     def test_render_input_returns_original_when_no_renderer(self):
         """When no renderer at all, returns original input_data."""
@@ -810,18 +802,6 @@ class TestRendererFallback:
 
         assert result == {"key": "value"}
 
-    def test_gather_renderer_fallback_on_import_error(self):
-        """Lines 428-429: gather wrapper catches (ImportError, AttributeError)
-        when resolving renderer. This is inside a closure and tested e2e
-        through the gather pipeline with a hidden _llm module."""
-        # Lines 428-429 are inside _make_tool_fn's tool_node closure at runtime.
-        # They use the same pattern as _render_input but with a broader except.
-        # Testing via import hiding like the test above. The _render_input test
-        # exercises the same ImportError fallback pattern. Lines 428-429 are
-        # structurally identical — mark as pragma: no cover if needed, or
-        # exercise via a full gather pipeline test.
-        # For now, verify the pattern works by testing _render_input with ImportError.
-        pass  # Covered by test_render_input_falls_back_to_node_renderer_when_import_fails
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -851,8 +831,9 @@ class TestBuildStateUpdate:
 
     def test_dict_form_each_wraps_per_key(self):
         """Dict-form outputs with Each modifier wraps per-key (lines 211-213)."""
-        from neograph.factory import _build_state_update
         from pydantic import create_model
+
+        from neograph.factory import _build_state_update
 
         n = Node("test", outputs={"result": RawText, "meta": Claims}) \
             | Each(over="items", key="label")
@@ -874,8 +855,9 @@ class TestBuildStateUpdate:
 
     def test_loop_history_field_written(self):
         """Loop with history=True writes to history field (lines 231-232)."""
-        from neograph.factory import _build_state_update
         from pydantic import create_model
+
+        from neograph.factory import _build_state_update
 
         n = Node("test", outputs=RawText) \
             | Loop(when=lambda x: True, max_iterations=3, history=True)
@@ -921,7 +903,8 @@ class TestLLMNodeDictForm:
         pipeline = construct_from_functions("produce-dict", [produce_dict])
         graph = compile(pipeline)
         result = run(graph, input={"node_id": "test"})
-        assert result.get("produce_dict_result") is not None
+        assert isinstance(result.get("produce_dict_result"), RawText)
+        assert result["produce_dict_result"].text == "produced"
 
     # Lines 463-466 (gather dict-form without primary_key) are marked
     # pragma: no cover — they require oracle_gen_type + tools + dict outputs,
@@ -970,8 +953,9 @@ class TestExtractInputEdgeCases:
     def test_unwraps_loop_list_for_single_type_input(self):
         """When a non-Loop downstream reads from a Loop upstream, the
         append-list is unwrapped to the latest value (line 555-556)."""
-        from neograph.factory import _extract_input
         from pydantic import create_model
+
+        from neograph.factory import _extract_input
 
         # Node expects Draft (single type), state has a list from Loop
         n = Node("consumer", inputs=Draft, outputs=RawText)
@@ -986,7 +970,7 @@ class TestExtractInputEdgeCases:
 
         result = _extract_input(state, n)
         # Should unwrap to latest (v2) since it matches Draft type
-        assert result is not None
+        assert isinstance(result, Draft)
         assert result.content == "v2"
 
 
@@ -1024,8 +1008,9 @@ class TestOracleRedirectDictForm:
 
     def test_eachoracle_redirect_captures_result(self):
         """EachOracle redirect tags result with each_key (line 606-608)."""
-        from neograph.factory import make_eachoracle_redirect_fn
         from pydantic import create_model
+
+        from neograph.factory import make_eachoracle_redirect_fn
 
         def raw_fn(state, config):
             return {"node": MatchResult(cluster_label="a", matched=["ok"])}
@@ -1043,8 +1028,9 @@ class TestOracleRedirectDictForm:
 
     def test_eachoracle_redirect_no_match_returns_raw(self):
         """EachOracle redirect returns raw result when field_name not in result (line 608)."""
-        from neograph.factory import make_eachoracle_redirect_fn
         from pydantic import create_model
+
+        from neograph.factory import make_eachoracle_redirect_fn
 
         def raw_fn(state, config):
             return {"other_field": "something"}
@@ -1097,7 +1083,7 @@ class TestUnwrapOracleResults:
         ]
         primary, secondaries = _unwrap_oracle_results(results, "node", RawText)
         assert len(primary) == 2
-        assert secondaries is not None
+        assert isinstance(secondaries, dict)
         assert "node_meta" in secondaries
 
     def test_dict_results_no_prefix_match_returns_full(self):
@@ -1145,19 +1131,11 @@ class TestBuildOracleMergeResult:
 class TestSubgraphFactory:
     """make_subgraph_fn edge cases."""
 
-    def test_subgraph_dict_state_input_extraction(self):
-        """Subgraph input extraction from dict state (line 779-786)."""
-        # This is the dict branch in make_subgraph_fn where state is a dict.
-        # In practice, subgraph state is always a Pydantic model, but
-        # the code has a defensive dict path.
-        # Let's verify the Pydantic model path works by running a normal
-        # sub-construct pipeline — already covered.
-        pass  # Covered by existing sub-construct tests.
-
     def test_each_redirect_fn_without_config(self):
         """each_redirect_fn handles missing config (line 864/870)."""
-        from neograph.factory import make_each_redirect_fn
         from pydantic import create_model
+
+        from neograph.factory import make_each_redirect_fn
 
         def raw_fn(state):
             return {"test": RawText(text="ok")}
@@ -1174,8 +1152,9 @@ class TestSubgraphFactory:
 
     def test_each_redirect_fn_returns_raw_when_no_match(self):
         """each_redirect_fn returns raw result when field_name not in result (line 870)."""
-        from neograph.factory import make_each_redirect_fn
         from pydantic import create_model
+
+        from neograph.factory import make_each_redirect_fn
 
         def raw_fn(state, config):
             return {"other_key": "value"}

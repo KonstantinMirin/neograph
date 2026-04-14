@@ -1,10 +1,11 @@
 # CHECK_ERROR: Oracle.*already|duplicate.*Oracle|multiple.*Oracle
 # Two Oracle modifiers on the same node. Should this be caught?
 # Oracle fan-out + merge wiring assumes one Oracle per node.
-from neograph import Construct, Node
-from neograph.modifiers import Oracle
-from neograph.factory import register_scripted
 from pydantic import BaseModel
+
+from neograph import Construct, Node
+from neograph.factory import register_scripted
+from neograph.modifiers import Oracle
 
 
 class Draft(BaseModel, frozen=True):

@@ -62,8 +62,7 @@ for label, claims in result["decompose"].items():
 ### Programmatic (pipe) form
 
 ```python
-from neograph import Node, Each, Oracle, Construct, compile, run
-from neograph.factory import register_scripted
+from neograph import Node, Each, Oracle, Construct, compile, run, register_scripted
 
 register_scripted("split_fn", lambda i, c: ChunkList(items=[...]))
 register_scripted("decompose_fn", lambda i, c: Claims(text="..."))

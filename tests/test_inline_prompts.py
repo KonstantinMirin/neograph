@@ -12,8 +12,7 @@ from neograph._llm import (
     _resolve_var,
     _substitute_vars,
 )
-from tests.fakes import configure_fake_llm, StructuredFake
-
+from tests.fakes import StructuredFake, configure_fake_llm
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Detection heuristic
@@ -64,9 +63,24 @@ class TestSubstituteVars:
         result = _substitute_vars("No variables here", {"key": "val"})
         assert result == "No variables here"
 
-    def test_missing_key_returns_empty(self):
-        result = _substitute_vars("Hello ${missing}", {"name": "world"})
+    def test_missing_key_returns_empty_with_warning(self, caplog):
+        """Missing var resolves to '' but emits a structlog warning.
+
+        BUG neograph-9pcb: silent empty-string fallback caused 2 prod failures.
+        """
+        import structlog
+        # Capture structlog output via stdlib logging
+        structlog.configure(
+            wrapper_class=structlog.stdlib.BoundLogger,
+            logger_factory=structlog.stdlib.LoggerFactory(),
+        )
+        import logging
+        with caplog.at_level(logging.WARNING):
+            result = _substitute_vars("Hello ${missing}", {"name": "world"})
         assert result == "Hello "
+        assert any("prompt_var_missing" in r.message for r in caplog.records), (
+            f"Expected 'prompt_var_missing' warning, got: {[r.message for r in caplog.records]}"
+        )
 
     def test_single_value_input(self):
         result = _substitute_vars("Value is ${data}", "hello")
