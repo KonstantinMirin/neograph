@@ -294,6 +294,38 @@ class TestRenderInput:
         assert "name" in result
         assert "internal_id" not in result
 
+    def test_exclude_from_output_hidden_in_schema_but_visible_in_renderer(self):
+        """ExcludeFromOutput fields: hidden from describe_type, visible in renderers.
+
+        FEATURE neograph-tpab: pipeline-internal fields should be renderable
+        as input but hidden from LLM output schema.
+        """
+        from typing import Annotated
+        from neograph import describe_type
+        from neograph import ExcludeFromOutput
+
+        class SearchResult(BaseModel):
+            answer: str
+            source_url: Annotated[str, ExcludeFromOutput] = ""
+
+        # Schema (output) — should NOT include source_url
+        schema = describe_type(SearchResult, prefix="")
+        assert "answer" in schema
+        assert "source_url" not in schema
+
+        # XML render (input) — SHOULD include source_url
+        r = XmlRenderer()
+        result = r.render(SearchResult(answer="42", source_url="https://example.com"))
+        assert "<answer>" in result
+        assert "source_url" in result
+        assert "example.com" in result
+
+        # Delimited render (input) — SHOULD include source_url
+        d = DelimitedRenderer()
+        result_d = d.render(SearchResult(answer="42", source_url="https://example.com"))
+        assert "answer" in result_d
+        assert "source_url" in result_d
+
     def test_custom_class_satisfies_renderer_protocol(self):
         """Any object with render(value) -> str satisfies the Renderer protocol."""
 

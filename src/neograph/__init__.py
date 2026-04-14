@@ -30,7 +30,7 @@ from neograph.decorators import (
     merge_fn,
     node,
 )
-from neograph.describe_type import describe_type, describe_value
+from neograph.describe_type import ExcludeFromOutput, describe_type, describe_value
 from neograph.errors import (
     CompileError,
     ConfigurationError,
@@ -87,6 +87,7 @@ __all__ = [
     # Schema rendering
     "describe_type",
     "describe_value",
+    "ExcludeFromOutput",
     # Prompt inspection
     "render_prompt",
     # Renderers

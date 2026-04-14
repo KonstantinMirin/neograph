@@ -14,6 +14,29 @@ from typing import Any, Literal, Union, get_args, get_origin
 from pydantic import BaseModel
 from pydantic.fields import FieldInfo
 
+
+class ExcludeFromOutput:
+    """Marker: field is visible in input rendering but excluded from output schema.
+
+    Use with Annotated on a Pydantic field::
+
+        source_url: Annotated[str, ExcludeFromOutput] = ""
+
+    The field will:
+    - Be rendered when the model is shown as input (XmlRenderer, DelimitedRenderer)
+    - Be EXCLUDED from describe_type() output schema (LLM won't try to produce it)
+    - Must have a default value (since the LLM won't provide it)
+    """
+    pass
+
+
+def _is_output_excluded(field_info: FieldInfo) -> bool:
+    """True if the field carries an ExcludeFromOutput marker in Annotated metadata."""
+    return any(
+        m is ExcludeFromOutput or isinstance(m, ExcludeFromOutput)
+        for m in field_info.metadata
+    )
+
 _PRIMITIVE_MAP: dict[type, str] = {
     str: "string",
     int: "int",
@@ -123,7 +146,7 @@ def _count_classes(
     visited.add(model)
 
     for _name, field_info in model.model_fields.items():
-        if field_info.exclude:
+        if field_info.exclude or _is_output_excluded(field_info):
             continue
         _count_annotation(field_info.annotation, counts, enum_classes, visited)
 
@@ -193,7 +216,7 @@ def _render_model_body(
     field_lines: list[str] = []
 
     for field_name, field_info in model.model_fields.items():
-        if field_info.exclude:
+        if field_info.exclude or _is_output_excluded(field_info):
             continue
         type_str = _render_type(
             field_info.annotation,
