@@ -102,6 +102,9 @@ ignore_missing_imports = true
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+filterwarnings = [
+    "ignore:Node '.*'.*single-type inputs:DeprecationWarning",
+]
 
 [dependency-groups]
 dev = [

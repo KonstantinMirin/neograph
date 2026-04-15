@@ -1,30 +1,32 @@
 """neograph.testing — auto-scaffolded test suites from pipeline definitions.
 
-Introspects a Construct and generates a pytest-compatible test file with
-stubs for every node, edge, sub-construct, and the full pipeline.
+Introspects a Construct and generates a pytest-compatible test file
+structured the way real pipelines are tested:
 
-Three test levels:
-    1. Per-node: scripted nodes get run_isolated() stubs, LLM nodes get
-       metadata assertions. Each has a fixture stub for test data.
-    2. Per-sub-construct: compile + run with fixtures.
-    3. Per-construct: topology checks, compilation smoke, full E2E.
+    1. Topology — structural invariants (auto-verified, zero human input)
+    2. Per-node — one test per node, grouped by position in the pipeline
+       Scripted: _get_sidecar + direct call + isinstance assertion
+       LLM: metadata checks (outputs, mode, prompt)
+    3. Sub-constructs — compile + run stubs
+    4. E2E — full pipeline with fake LLM
+    5. Sync — catches drift when nodes are added/removed
+
+Matches the test patterns proven in production (piarch):
+- Tests grouped by pipeline phase, not by abstract category
+- Scripted nodes tested via _get_sidecar (direct function call)
+- LLM nodes tested via metadata assertions + E2E
+- Each node gets a pytest fixture stub for test data
 
 Usage:
-    # CLI
-    neograph test-scaffold my_pipeline.py --output tests/test_my_pipeline.py
+    neograph test-scaffold my_pipeline.py -o tests/test_my_pipeline.py
 
-    # Programmatic
     from neograph.testing import scaffold_tests
-    scaffold_tests(my_construct, output_path="tests/test_my_pipeline.py")
-
-Generated tests fail by default (pytest.fail, not skip) until implemented.
-A sync meta-test catches drift between the construct and the test file.
+    scaffold_tests(my_construct, output_path="tests/test_pipeline.py")
 """
 
 from __future__ import annotations
 
 import os
-import textwrap
 from typing import Any
 
 from neograph.construct import Construct
@@ -40,6 +42,7 @@ def _node_info(node: Node) -> dict[str, Any]:
         if hasattr(node.outputs, "__name__")
         else repr(node.outputs)
     )
+    input_names = list(inputs_dict.keys()) if inputs_dict else []
     return {
         "name": node.name,
         "field": field_name_for(node.name),
@@ -47,6 +50,7 @@ def _node_info(node: Node) -> dict[str, Any]:
         "outputs": node.outputs,
         "outputs_name": outputs_name,
         "inputs_dict": inputs_dict,
+        "input_names": input_names,
         "is_scripted": node.mode == "scripted",
         "is_llm": node.mode in ("think", "agent", "act"),
         "has_oracle": node.modifier_set.oracle is not None,
@@ -57,34 +61,80 @@ def _node_info(node: Node) -> dict[str, Any]:
     }
 
 
-def _collect_nodes(construct: Construct) -> list[dict[str, Any]]:
-    """Collect node info from a construct, including sub-constructs."""
-    nodes = []
+def _collect_items(construct: Construct) -> list[dict[str, Any]]:
+    """Collect all items (nodes + sub-constructs) from a construct."""
+    items = []
     for item in construct.nodes:
         if isinstance(item, Node):
-            nodes.append(_node_info(item))
+            info = _node_info(item)
+            info["is_subconstruct"] = False
+            items.append(info)
         elif isinstance(item, Construct):
-            # Sub-construct: record as a unit, also recurse
-            nodes.append({
+            items.append({
                 "name": item.name,
                 "field": field_name_for(item.name),
                 "is_subconstruct": True,
                 "input_name": item.input.__name__ if item.input else "None",
                 "output_name": item.output.__name__ if item.output else "None",
+                "node_count": len(item.nodes),
             })
-    return nodes
+    return items
 
 
 def _collect_edges(construct: Construct) -> list[tuple[str, str]]:
-    """Collect declared edges (upstream → downstream) from the construct."""
+    """Collect declared edges (upstream → downstream)."""
     edges = []
     for item in construct.nodes:
-        if not isinstance(item, Node):
+        if not isinstance(item, Node) or not isinstance(item.inputs, dict):
             continue
-        if isinstance(item.inputs, dict):
-            for upstream_name in item.inputs:
-                edges.append((upstream_name, field_name_for(item.name)))
+        for upstream in item.inputs:
+            edges.append((upstream, field_name_for(item.name)))
     return edges
+
+
+def _group_into_phases(
+    items: list[dict[str, Any]],
+    max_phase_size: int = 6,
+) -> list[tuple[str, list[dict[str, Any]]]]:
+    """Group items into phases for test organization.
+
+    Phase boundaries occur at:
+    - Sub-construct boundaries
+    - Each/Oracle modifier boundaries
+    - Every max_phase_size nodes (natural chunking)
+    """
+    phases: list[tuple[str, list[dict[str, Any]]]] = []
+    current: list[dict[str, Any]] = []
+    phase_idx = 0
+
+    for item in items:
+        # Sub-constructs get their own phase
+        if item.get("is_subconstruct"):
+            if current:
+                phases.append((f"phase_{phase_idx}", current))
+                phase_idx += 1
+                current = []
+            phases.append((f"sub_{item['field']}", [item]))
+            continue
+
+        # Modifier boundaries start a new phase
+        if current and (item.get("has_each") or item.get("has_oracle")):
+            phases.append((f"phase_{phase_idx}", current))
+            phase_idx += 1
+            current = []
+
+        current.append(item)
+
+        # Size limit
+        if len(current) >= max_phase_size:
+            phases.append((f"phase_{phase_idx}", current))
+            phase_idx += 1
+            current = []
+
+    if current:
+        phases.append((f"phase_{phase_idx}", current))
+
+    return phases
 
 
 def scaffold_tests(
@@ -97,11 +147,10 @@ def scaffold_tests(
     """Generate a pytest test file from a Construct definition.
 
     Args:
-        construct: The pipeline construct to scaffold tests for.
-        output_path: Where to write the generated test file.
-        construct_import: Python import path for the construct
-            (e.g., "my_app.pipelines.rw_ingestion"). If None, uses a placeholder.
-        overwrite: If True, overwrite existing file. Default False (refuse).
+        construct: The pipeline to scaffold tests for.
+        output_path: Where to write the test file.
+        construct_import: Import path (e.g., "my_app.pipeline"). Placeholder if None.
+        overwrite: Overwrite existing file. Default False.
 
     Returns:
         The generated test file content.
@@ -111,256 +160,227 @@ def scaffold_tests(
             f"{output_path} already exists. Use overwrite=True or delete it first."
         )
 
-    nodes = _collect_nodes(construct)
+    items = _collect_items(construct)
     edges = _collect_edges(construct)
-    real_nodes = [n for n in nodes if not n.get("is_subconstruct")]
-    sub_constructs = [n for n in nodes if n.get("is_subconstruct")]
-    scripted = [n for n in real_nodes if n.get("is_scripted")]
-    llm_nodes = [n for n in real_nodes if n.get("is_llm")]
+    phases = _group_into_phases(items)
+    real_nodes = [i for i in items if not i.get("is_subconstruct")]
+    sub_constructs = [i for i in items if i.get("is_subconstruct")]
+    has_llm = any(i.get("is_llm") for i in real_nodes)
 
-    import_line = construct_import or f"# TODO: import your construct here"
     construct_var = field_name_for(construct.name)
+    mod_import = construct_import or "YOUR_MODULE"
+    L = []  # output lines
 
-    lines: list[str] = []
-
-    # Header
-    lines.append(f'"""Auto-scaffolded tests for construct \'{construct.name}\'.')
-    lines.append("")
-    lines.append(f"Generated by neograph.testing.scaffold_tests().")
-    lines.append(f"Nodes: {len(real_nodes)} | Sub-constructs: {len(sub_constructs)} | Edges: {len(edges)}")
-    lines.append("")
-    lines.append("Tests marked with pytest.fail('TODO') need implementation.")
-    lines.append("The sync test at the bottom catches drift when nodes are added/removed.")
-    lines.append('"""')
-    lines.append("")
-    lines.append("from __future__ import annotations")
-    lines.append("")
-    lines.append("import pytest")
-    lines.append("")
+    # ── Header ───────────────────────────────────────────────────────
+    L.append(f'"""Tests for construct \'{construct.name}\'.')
+    L.append(f"")
+    L.append(f"Auto-scaffolded by neograph.testing.scaffold_tests().")
+    L.append(f"Nodes: {len(real_nodes)} | Sub-constructs: {len(sub_constructs)} | Edges: {len(edges)}")
+    L.append(f"")
+    L.append(f"Structure:")
+    L.append(f"  TestTopology          — structural invariants (auto-verified)")
+    for phase_name, phase_items in phases:
+        node_names = ", ".join(i["name"] for i in phase_items)
+        L.append(f"  Test{_class_name(phase_name):20s} — {node_names}")
+    L.append(f"  TestEndToEnd          — full pipeline with fake LLM")
+    L.append(f"  TestSync              — drift detection")
+    L.append(f"")
+    L.append(f"Tests with pytest.fail('TODO') need implementation.")
+    L.append(f'"""')
+    L.append(f"")
+    L.append(f"from __future__ import annotations")
+    L.append(f"")
+    L.append(f"import pytest")
+    L.append(f"from neograph._sidecar import _get_sidecar")
+    L.append(f"")
     if construct_import:
-        lines.append(f"from {construct_import} import {construct_var}")
+        L.append(f"from {construct_import} import {construct_var}")
     else:
-        lines.append(f"# {import_line}")
-        lines.append(f"# {construct_var} = ...  # your construct")
-    lines.append("")
-    lines.append("")
+        L.append(f"# TODO: fill in imports")
+        L.append(f"# from {mod_import} import {construct_var}")
+        for i in real_nodes:
+            L.append(f"# from {mod_import} import {i['field']}")
+    L.append(f"")
+    L.append(f"")
 
-    # ── Section 1: Topology ──────────────────────────────────────────
-    lines.append("# " + "=" * 70)
-    lines.append("# TOPOLOGY — auto-verified, no human input needed")
-    lines.append("# " + "=" * 70)
-    lines.append("")
-    lines.append("")
-    lines.append("class TestTopology:")
-    lines.append(f'    """Construct \'{construct.name}\' structural invariants."""')
-    lines.append("")
-    lines.append(f"    def test_node_count(self):")
-    lines.append(f'        """Construct has exactly {len(construct.nodes)} nodes."""')
-    lines.append(f"        assert len({construct_var}.nodes) == {len(construct.nodes)}")
-    lines.append("")
+    # ── Topology ─────────────────────────────────────────────────────
+    _section(L, "TOPOLOGY — auto-verified, no human input needed")
+    L.append(f"class TestTopology:")
+    L.append(f'    """Structural invariants for \'{construct.name}\'."""')
+    L.append(f"")
+    L.append(f"    def test_node_count(self):")
+    L.append(f"        assert len({construct_var}.nodes) == {len(construct.nodes)}")
+    L.append(f"")
+    L.append(f"    def test_all_nodes_present(self):")
+    L.append(f"        names = [getattr(n, 'name', '') for n in {construct_var}.nodes]")
+    for i in items:
+        L.append(f'        assert "{i["name"]}" in names')
+    L.append(f"")
 
-    # All nodes present
-    lines.append(f"    def test_all_nodes_present(self):")
-    lines.append(f'        """Every declared node exists in the construct."""')
-    lines.append(f"        names = [n.name for n in {construct_var}.nodes]")
-    for n in nodes:
-        lines.append(f'        assert "{n["name"]}" in names')
-    lines.append("")
-
-    # Topological ordering per edge
     if edges:
-        lines.append(f"    def test_topological_ordering(self):")
-        lines.append(f'        """Upstream nodes appear before their consumers."""')
-        lines.append(f"        names = [getattr(n, 'name', '') for n in {construct_var}.nodes]")
-        for upstream, downstream in edges:
-            up_name = upstream.replace("_", "-")
-            down_name = downstream.replace("_", "-")
-            lines.append(
-                f'        assert names.index("{up_name}") < names.index("{down_name}"), '
-                f'"{up_name} must precede {down_name}"'
-            )
-        lines.append("")
+        L.append(f"    def test_topological_ordering(self):")
+        L.append(f"        names = [getattr(n, 'name', '') for n in {construct_var}.nodes]")
+        for up, down in edges:
+            L.append(f'        assert names.index("{up.replace("_", "-")}") < names.index("{down.replace("_", "-")}")')
+        L.append(f"")
 
-    # Compilation
-    lines.append(f"    def test_compiles(self):")
-    lines.append(f'        """Construct compiles to a LangGraph StateGraph."""')
-    lines.append(f"        from neograph import compile")
-    lines.append(f"        # TODO: configure_llm if construct has LLM nodes")
-    if llm_nodes:
-        lines.append(f"        # This construct has {len(llm_nodes)} LLM node(s) — configure_llm required")
-        lines.append(f'        pytest.fail("TODO: configure_llm and compile")')
+    L.append(f"    def test_compiles(self):")
+    L.append(f"        from neograph import compile")
+    if has_llm:
+        L.append(f"        # {sum(1 for n in real_nodes if n.get('is_llm'))} LLM node(s) — configure_llm required before compile")
+        L.append(f'        pytest.fail("TODO: configure_llm then compile")')
     else:
-        lines.append(f"        graph = compile({construct_var})")
-        lines.append(f"        assert graph is not None")
-    lines.append("")
-    lines.append("")
+        L.append(f"        graph = compile({construct_var})")
+        L.append(f"        assert graph is not None")
+    L.append(f"")
+    L.append(f"")
 
-    # ── Section 2: Per-node metadata (LLM nodes) ────────────────────
-    if llm_nodes:
-        lines.append("# " + "=" * 70)
-        lines.append("# NODE METADATA — auto-verified for LLM nodes")
-        lines.append("# " + "=" * 70)
-        lines.append("")
-        lines.append("")
-        lines.append("class TestNodeMetadata:")
-        lines.append(f'    """Output types, modes, and prompts for LLM nodes."""')
-        lines.append("")
+    # ── Per-phase node tests ─────────────────────────────────────────
+    for phase_name, phase_items in phases:
+        class_name = _class_name(phase_name)
+        node_names = ", ".join(i["name"] for i in phase_items)
+        _section(L, f"{class_name} — {node_names}")
+        L.append(f"class Test{class_name}:")
+        L.append(f'    """Tests for: {node_names}"""')
+        L.append(f"")
 
-        for n in llm_nodes:
-            fname = n["field"]
-            lines.append(f"    def test_{fname}_outputs(self):")
-            lines.append(f'        """Node \'{n["name"]}\' produces {n["outputs_name"]}."""')
-            lines.append(f"        from {construct_import or 'YOUR_MODULE'} import {fname}")
-            lines.append(f"        assert {fname}.outputs is {n['outputs_name']}")
-            lines.append("")
-            lines.append(f"    def test_{fname}_mode(self):")
-            lines.append(f'        """Node \'{n["name"]}\' uses mode=\'{n["mode"]}\'."""')
-            lines.append(f"        from {construct_import or 'YOUR_MODULE'} import {fname}")
-            lines.append(f'        assert {fname}.mode == "{n["mode"]}"')
-            lines.append("")
+        for item in phase_items:
+            if item.get("is_subconstruct"):
+                _gen_subconstruct_tests(L, item)
+            elif item.get("is_scripted"):
+                _gen_scripted_node_test(L, item)
+            elif item.get("is_llm"):
+                _gen_llm_node_test(L, item)
 
-        lines.append("")
+        L.append(f"")
 
-    # ── Section 3: Per-node unit tests (scripted) ────────────────────
-    if scripted:
-        lines.append("# " + "=" * 70)
-        lines.append("# NODE UNIT TESTS — scripted nodes, human provides fixtures")
-        lines.append("# " + "=" * 70)
-        lines.append("")
-        lines.append("")
-        lines.append("class TestScriptedNodes:")
-        lines.append(f'    """Unit tests for scripted nodes via run_isolated()."""')
-        lines.append("")
+    # ── Fixtures ─────────────────────────────────────────────────────
+    _section(L, "FIXTURES — test data for each node")
+    L.append(f"# Fill these in with realistic test data.")
+    L.append(f"# Each fixture returns the input type for a specific node.")
+    L.append(f"")
+    for i in real_nodes:
+        if i.get("is_scripted") and i.get("input_names"):
+            L.append(f"")
+            L.append(f"@pytest.fixture")
+            L.append(f"def {i['field']}_input():")
+            L.append(f'    """Test input for node \'{i["name"]}\'.')
+            L.append(f"    Upstream(s): {', '.join(i['input_names'])}")
+            L.append(f'    """')
+            L.append(f'    pytest.fail("TODO: return {i["input_names"][0]} fixture")')
+    L.append(f"")
+    L.append(f"")
 
-        for n in scripted:
-            fname = n["field"]
-            lines.append(f"    def test_{fname}_produces_{n['outputs_name'].lower()}(self):")
-            lines.append(f'        """Node \'{n["name"]}\' produces {n["outputs_name"]}."""')
-            lines.append(f"        from {construct_import or 'YOUR_MODULE'} import {fname}")
+    # ── E2E ──────────────────────────────────────────────────────────
+    _section(L, "END-TO-END — full pipeline with fake LLM")
+    L.append(f"class TestEndToEnd:")
+    L.append(f'    """Full pipeline E2E."""')
+    L.append(f"")
+    if has_llm:
+        L.append(f"    # Fake response registry — one entry per LLM node:")
+        for n in real_nodes:
+            if n.get("is_llm"):
+                L.append(f'    #   "{n["name"]}": {n["outputs_name"]}(...)')
+        L.append(f"")
+    L.append(f"    def test_full_pipeline(self):")
+    L.append(f'        """Compile and run \'{construct.name}\' end-to-end."""')
+    L.append(f'        pytest.fail("TODO: configure_llm, compile, run, assert outputs")')
+    L.append(f"")
+    L.append(f"")
 
-            if n["inputs_dict"]:
-                input_keys = list(n["inputs_dict"].keys())
-                lines.append(f"        # Inputs: {', '.join(input_keys)}")
-                lines.append(f"        # input_data = ...  # TODO: provide {input_keys[0]} fixture")
-                lines.append(f"        # result = {fname}.run_isolated(input=input_data)")
-                lines.append(f"        # assert isinstance(result, {n['outputs_name']})")
-            else:
-                lines.append(f"        # result = {fname}.run_isolated()")
-                lines.append(f"        # assert isinstance(result, {n['outputs_name']})")
+    # ── Sync ─────────────────────────────────────────────────────────
+    _section(L, "SYNC — catches drift between construct and tests")
+    L.append(f"class TestSync:")
+    L.append(f'    """Fails if nodes are added/removed without updating tests."""')
+    L.append(f"")
+    L.append(f"    EXPECTED_NODES = {{")
+    for i in items:
+        L.append(f'        "{i["name"]}",')
+    L.append(f"    }}")
+    L.append(f"")
+    L.append(f"    def test_no_untested_nodes(self):")
+    L.append(f"        actual = {{getattr(n, 'name', '') for n in {construct_var}.nodes}}")
+    L.append(f"        missing = actual - self.EXPECTED_NODES")
+    L.append(f'        assert not missing, f"New nodes need tests: {{sorted(missing)}}"')
+    L.append(f"")
+    L.append(f"    def test_no_stale_tests(self):")
+    L.append(f"        actual = {{getattr(n, 'name', '') for n in {construct_var}.nodes}}")
+    L.append(f"        stale = self.EXPECTED_NODES - actual")
+    L.append(f'        assert not stale, f"Removed nodes still in tests: {{sorted(stale)}}"')
+    L.append(f"")
 
-            lines.append(f'        pytest.fail("TODO: provide fixture and implement")')
-            lines.append("")
-
-        lines.append("")
-
-    # ── Section 4: Per-node unit tests (LLM — fake response stubs) ──
-    if llm_nodes:
-        lines.append("# " + "=" * 70)
-        lines.append("# LLM NODE STUBS — human provides fake responses")
-        lines.append("# " + "=" * 70)
-        lines.append("")
-        lines.append("")
-        lines.append("class TestLLMNodes:")
-        lines.append(f'    """LLM node tests with fake responses."""')
-        lines.append("")
-        lines.append(f"    # Fake response registry — fill in realistic test data:")
-        lines.append(f"    # FAKE_RESPONSES = {{")
-        for n in llm_nodes:
-            lines.append(f'    #     "{n["name"]}": {n["outputs_name"]}(...),  # TODO')
-        lines.append(f"    # }}")
-        lines.append("")
-
-        for n in llm_nodes:
-            fname = n["field"]
-            lines.append(f"    def test_{fname}_with_fake_llm(self):")
-            lines.append(f'        """Node \'{n["name"]}\' produces {n["outputs_name"]} with fake LLM."""')
-            lines.append(f'        pytest.fail("TODO: configure fake LLM, compile, run_isolated or full pipeline")')
-            lines.append("")
-
-        lines.append("")
-
-    # ── Section 5: Sub-construct tests ───────────────────────────────
-    if sub_constructs:
-        lines.append("# " + "=" * 70)
-        lines.append("# SUB-CONSTRUCT TESTS")
-        lines.append("# " + "=" * 70)
-        lines.append("")
-        lines.append("")
-        lines.append("class TestSubConstructs:")
-        lines.append(f'    """Sub-construct compilation and integration."""')
-        lines.append("")
-
-        for sc in sub_constructs:
-            fname = sc["field"]
-            lines.append(f"    def test_{fname}_compiles(self):")
-            lines.append(f'        """Sub-construct \'{sc["name"]}\' (input={sc["input_name"]}, output={sc["output_name"]}) compiles."""')
-            lines.append(f'        pytest.fail("TODO: compile sub-construct")')
-            lines.append("")
-            lines.append(f"    def test_{fname}_e2e(self):")
-            lines.append(f'        """Sub-construct \'{sc["name"]}\' runs end-to-end with fixtures."""')
-            lines.append(f'        pytest.fail("TODO: provide {sc["input_name"]} fixture, run, assert {sc["output_name"]}")')
-            lines.append("")
-
-        lines.append("")
-
-    # ── Section 6: E2E ───────────────────────────────────────────────
-    lines.append("# " + "=" * 70)
-    lines.append("# END-TO-END — full pipeline with all fixtures")
-    lines.append("# " + "=" * 70)
-    lines.append("")
-    lines.append("")
-    lines.append("class TestEndToEnd:")
-    lines.append(f'    """Full pipeline E2E with fake LLM."""')
-    lines.append("")
-    lines.append(f"    def test_full_pipeline_runs(self):")
-    lines.append(f'        """Compile and run \'{construct.name}\' end-to-end."""')
-    lines.append(f'        pytest.fail("TODO: configure_llm, compile, run, assert outputs")')
-    lines.append("")
-    lines.append("")
-
-    # ── Section 7: Sync meta-test ────────────────────────────────────
-    lines.append("# " + "=" * 70)
-    lines.append("# SYNC — catches drift between construct and tests")
-    lines.append("# " + "=" * 70)
-    lines.append("")
-    lines.append("")
-    lines.append("class TestSync:")
-    lines.append(f'    """Ensure this test file stays in sync with the construct."""')
-    lines.append("")
-    lines.append(f"    EXPECTED_NODES = {{")
-    for n in nodes:
-        lines.append(f'        "{n["name"]}",')
-    lines.append(f"    }}")
-    lines.append("")
-    lines.append(f"    def test_no_untested_nodes(self):")
-    lines.append(f'        """Every node in the construct has a corresponding test."""')
-    lines.append(f"        actual = {{")
-    lines.append(f"            getattr(n, 'name', getattr(n, 'name', '?'))")
-    lines.append(f"            for n in {construct_var}.nodes")
-    lines.append(f"        }}")
-    lines.append(f"        missing = actual - self.EXPECTED_NODES")
-    lines.append(f"        assert not missing, (")
-    lines.append(f'            f"{{len(missing)}} node(s) added to construct but not to tests: {{sorted(missing)}}. "')
-    lines.append(f'            f"Run: neograph test-scaffold ... --update"')
-    lines.append(f"        )")
-    lines.append("")
-    lines.append(f"    def test_no_stale_tests(self):")
-    lines.append(f'        """No tests reference nodes that were removed from the construct."""')
-    lines.append(f"        actual = {{")
-    lines.append(f"            getattr(n, 'name', getattr(n, 'name', '?'))")
-    lines.append(f"            for n in {construct_var}.nodes")
-    lines.append(f"        }}")
-    lines.append(f"        stale = self.EXPECTED_NODES - actual")
-    lines.append(f"        assert not stale, (")
-    lines.append(f'            f"{{len(stale)}} node(s) removed from construct but still in tests: {{sorted(stale)}}. "')
-    lines.append(f'            f"Remove their test stubs."')
-    lines.append(f"        )")
-    lines.append("")
-
-    content = "\n".join(lines)
-
+    content = "\n".join(L)
     os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
     with open(output_path, "w") as f:
         f.write(content)
-
     return content
+
+
+# ── Helpers ──────────────────────────────────────────────────────────────
+
+def _section(lines: list[str], title: str) -> None:
+    lines.append(f"# {'=' * 70}")
+    lines.append(f"# {title}")
+    lines.append(f"# {'=' * 70}")
+    lines.append(f"")
+    lines.append(f"")
+
+def _class_name(phase: str) -> str:
+    return "".join(word.capitalize() for word in phase.split("_"))
+
+
+def _gen_scripted_node_test(L: list[str], n: dict) -> None:
+    """Generate test stub for a scripted node using _get_sidecar."""
+    fname = n["field"]
+    L.append(f"    def test_{fname}(self):")
+    L.append(f'        """Node \'{n["name"]}\' (scripted) → {n["outputs_name"]}"""')
+    L.append(f"        fn, _ = _get_sidecar({fname})")
+    L.append(f"        assert fn is not None, 'no sidecar — was @node used?'")
+
+    if n["input_names"]:
+        L.append(f"        # Inputs: {', '.join(n['input_names'])}")
+        L.append(f"        # result = fn({', '.join(n['input_names'])})")
+        L.append(f"        # assert isinstance(result, {n['outputs_name']})")
+    else:
+        L.append(f"        # result = fn()")
+        L.append(f"        # assert isinstance(result, {n['outputs_name']})")
+
+    L.append(f'        pytest.fail("TODO: provide inputs, call fn, assert result")')
+    L.append(f"")
+
+
+def _gen_llm_node_test(L: list[str], n: dict) -> None:
+    """Generate metadata test for an LLM node."""
+    fname = n["field"]
+    modifiers = []
+    if n.get("has_oracle"):
+        modifiers.append("Oracle")
+    if n.get("has_each"):
+        modifiers.append("Each")
+    if n.get("has_loop"):
+        modifiers.append("Loop")
+    mod_str = f" | {' | '.join(modifiers)}" if modifiers else ""
+
+    L.append(f"    def test_{fname}(self):")
+    L.append(f'        """Node \'{n["name"]}\' ({n["mode"]}{mod_str}) → {n["outputs_name"]}"""')
+    L.append(f"        assert {fname}.outputs is {n['outputs_name']}")
+    L.append(f'        assert {fname}.mode == "{n["mode"]}"')
+    if n.get("prompt"):
+        L.append(f'        assert {fname}.prompt == "{n["prompt"]}"')
+    if n.get("model"):
+        L.append(f'        assert {fname}.model == "{n["model"]}"')
+    L.append(f"")
+
+
+def _gen_subconstruct_tests(L: list[str], sc: dict) -> None:
+    """Generate compile + E2E stubs for a sub-construct."""
+    fname = sc["field"]
+    L.append(f"    def test_{fname}_compiles(self):")
+    L.append(f'        """Sub-construct \'{sc["name"]}\' ({sc["node_count"]} nodes, '
+             f'input={sc["input_name"]}, output={sc["output_name"]}) compiles."""')
+    L.append(f'        pytest.fail("TODO: compile sub-construct")')
+    L.append(f"")
+    L.append(f"    def test_{fname}_e2e(self):")
+    L.append(f'        """Sub-construct \'{sc["name"]}\' runs end-to-end."""')
+    L.append(f'        pytest.fail("TODO: provide {sc["input_name"]} fixture, run, assert {sc["output_name"]}")')
+    L.append(f"")
