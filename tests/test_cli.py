@@ -402,7 +402,13 @@ class TestKnownTemplateVarsFromSetup:
     """get_known_template_vars() in --setup module provides known vars to lint."""
 
     def test_setup_module_provides_known_vars(self, tmp_path, capsys):
-        """Setup module with get_known_template_vars() suppresses placeholder errors."""
+        """Setup module with get_known_template_vars() suppresses placeholder errors.
+
+        Without setup vars, ${domain_briefing} would be an ERROR (not found).
+        With setup vars, it becomes a WARN (known_vars only). Verify by
+        checking that "not found" does NOT appear for domain_briefing, but
+        "known_vars" DOES (it's a WARN, not an ERROR).
+        """
         setup = tmp_path / "setup_vars.py"
         setup.write_text(textwrap.dedent("""\
             def get_check_config():
@@ -430,17 +436,36 @@ class TestKnownTemplateVarsFromSetup:
                         model="default", outputs=B, inputs={"seed": A})
             pipe = Construct("pipe", nodes=[seed, proc])
         """))
-        args = argparse.Namespace(
+        # WITH setup vars
+        args_with = argparse.Namespace(
             target=str(pipeline), config=None,
             setup=str(setup), known_vars=None,
         )
-        result = cmd_check(args)
-        captured = capsys.readouterr()
-        # domain_briefing from setup module — no ERROR
-        assert "unresolvable" not in captured.out.lower()
+        cmd_check(args_with)
+        out_with = capsys.readouterr().out
+
+        # WITHOUT setup vars — domain_briefing is an ERROR (not found in input keys)
+        args_without = argparse.Namespace(
+            target=str(pipeline), config=None,
+            setup=None, known_vars=None,
+        )
+        cmd_check(args_without)
+        out_without = capsys.readouterr().out
+
+        # With setup: domain_briefing is WARN (known_vars), not ERROR (not found)
+        assert "known_vars" in out_with, f"Expected WARN for domain_briefing, got:\n{out_with}"
+        assert "[WARN]" in out_with
+        # Without setup: domain_briefing is ERROR (not found in any key set)
+        assert "not found" in out_without, f"Expected ERROR without setup, got:\n{out_without}"
+        assert "[ERROR]" in out_without
 
     def test_setup_and_cli_vars_merged(self, tmp_path, capsys):
-        """Both --known-vars CLI and get_known_template_vars() are unioned."""
+        """Both --known-vars CLI and get_known_template_vars() are unioned.
+
+        from_setup comes from setup module, from_cli from --known-vars.
+        Both should be accepted (as WARN, not ERROR). Neither should show
+        'not found in predicted input keys'.
+        """
         setup = tmp_path / "setup_merge.py"
         setup.write_text(textwrap.dedent("""\
             def get_check_config():
@@ -473,10 +498,13 @@ class TestKnownTemplateVarsFromSetup:
             target=str(pipeline), config=None,
             setup=str(setup), known_vars="from_cli",
         )
-        result = cmd_check(args)
-        captured = capsys.readouterr()
-        # Neither from_setup nor from_cli should be unresolvable ERROR
-        assert "unresolvable" not in captured.out.lower()
+        cmd_check(args)
+        captured = capsys.readouterr().out
+
+        # Both from_setup and from_cli should be WARN (known_vars_only), not ERROR
+        # "not found" appears in ERROR messages but not in WARN messages
+        error_lines = [l for l in captured.split("\n") if "[ERROR]" in l]
+        assert not error_lines, f"Should have no ERRORs but got:\n" + "\n".join(error_lines)
 
     def test_setup_without_known_vars_still_works(self, tmp_path):
         """Setup module with only get_check_config() — no regression."""
