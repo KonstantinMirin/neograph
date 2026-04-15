@@ -318,7 +318,7 @@ class TestCmdCheck:
         fake_mod.pipe = Construct("pipe", nodes=[a])
 
         monkeypatch.setattr(cli_mod, "_import_module", lambda target: fake_mod)
-        monkeypatch.setattr(lint_module, "lint", lambda construct, *, config=None, known_template_vars=None: [
+        monkeypatch.setattr(lint_module, "lint", lambda construct, *, config=None, known_template_vars=None, template_resolver=None: [
             LintIssue(node_name="a", param="p", kind="from_input",
                       message="missing param p", required=True),
             LintIssue(node_name="a", param="q", kind="from_config",

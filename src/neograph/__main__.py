@@ -78,6 +78,16 @@ def _load_config(args: argparse.Namespace) -> dict[str, Any] | None:
     return None
 
 
+def _load_template_resolver(args: argparse.Namespace):
+    """Load template_resolver from --setup module if available."""
+    if args.setup:
+        mod = _import_module(args.setup)
+        fn = getattr(mod, "get_template_resolver", None)
+        if fn is not None:
+            return fn()
+    return None
+
+
 def cmd_check(args: argparse.Namespace) -> int:
     """Run compile() + lint() on all constructs in the target module."""
     from neograph.compiler import compile
@@ -93,6 +103,7 @@ def cmd_check(args: argparse.Namespace) -> int:
 
     config = _load_config(args)
     known_vars = set(args.known_vars.split(",")) if args.known_vars else None
+    template_resolver = _load_template_resolver(args)
     failed = 0
 
     for var_name, construct in constructs:
@@ -117,7 +128,8 @@ def cmd_check(args: argparse.Namespace) -> int:
             errors.append(f"compile: {exc}")
 
         # 2. Lint
-        issues = lint(construct, config=config, known_template_vars=known_vars)
+        issues = lint(construct, config=config, known_template_vars=known_vars,
+                      template_resolver=template_resolver)
         for issue in issues:
             severity = "ERROR" if issue.required else "WARN"
             errors.append(f"lint [{severity}]: {issue.message}")

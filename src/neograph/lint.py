@@ -10,6 +10,8 @@ Returns a list of LintIssue dataclass instances (never raises — reports all pr
 from __future__ import annotations
 
 import re
+import string
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -113,24 +115,33 @@ def lint(
     *,
     config: dict[str, Any] | None = None,
     known_template_vars: set[str] | None = None,
+    template_resolver: Callable[[str], str | None] | None = None,
 ) -> list[LintIssue]:
     """Validate DI bindings and template placeholders in *construct*.
 
     Walks every node (recursing into sub-constructs). Checks:
     1. FromInput/FromConfig parameters exist in the provided config dict.
     2. Inline prompt ``${var}`` placeholders resolve to known input keys.
+    3. Template-ref prompt ``{placeholder}`` names resolve when a
+       *template_resolver* is provided.
 
     *known_template_vars* is a set of extra variable names the consumer's
     prompt pipeline provides (e.g., ``{"topic", "json_schema"}``). These
     are accepted as valid alongside the standard framework extras
     (node_id, project_root, human_feedback).
 
+    *template_resolver* maps a template name (e.g., ``"rw/summarize"``) to
+    the template text string, or ``None`` if the template can't be found.
+    When provided, lint reads the template text, extracts ``{placeholder}``
+    names, and validates them against predicted input keys.
+
     Returns a list of LintIssue instances. An empty list means all bindings
     are satisfied.
     """
     issues: list[LintIssue] = []
     all_known = _KNOWN_EXTRAS | (known_template_vars or set())
-    _walk(construct, config, issues, known_vars=all_known)
+    _walk(construct, config, issues, known_vars=all_known,
+          template_resolver=template_resolver)
     return issues
 
 
@@ -140,11 +151,13 @@ def _walk(
     issues: list[LintIssue],
     *,
     known_vars: frozenset[str] | set[str] = _KNOWN_EXTRAS,
+    template_resolver: Callable[[str], str | None] | None = None,
 ) -> None:
     """Recursively walk a construct and check DI bindings + template placeholders."""
     if isinstance(item, Construct):
         for child in item.nodes:
-            _walk(child, config, issues, known_vars=known_vars)
+            _walk(child, config, issues, known_vars=known_vars,
+                  template_resolver=template_resolver)
         return
 
     if not isinstance(item, Node):
@@ -167,8 +180,9 @@ def _walk(
             for binding in merge_param_res.values():
                 _check_binding(merge_label, binding, config, issues)
 
-    # 2. Template placeholder checks (new)
-    _check_template_placeholders(item, issues, known_vars=known_vars)
+    # 2. Template placeholder checks
+    _check_template_placeholders(item, issues, known_vars=known_vars,
+                                 template_resolver=template_resolver)
 
 
 def _check_template_placeholders(
@@ -176,35 +190,40 @@ def _check_template_placeholders(
     issues: list[LintIssue],
     *,
     known_vars: frozenset[str] | set[str],
+    template_resolver: Callable[[str], str | None] | None = None,
 ) -> None:
-    """Check that inline prompt ${var} placeholders resolve to known input keys.
+    """Check that prompt placeholders resolve to known input keys.
 
-    Only checks inline prompts (containing space or ${}).
-    Template-ref prompts are opaque — the consumer's prompt_compiler resolves them.
+    Two modes:
+    - Inline prompts (space or ${} in prompt): extract ${var} placeholders.
+    - Template-ref prompts (bare name like "rw/summarize"): if template_resolver
+      is provided, read the template text and extract {placeholder} names.
     """
     prompt = node.prompt
     if not prompt or node.mode == "scripted":
         return
 
-    # Only check inline prompts
-    if " " not in prompt and "${" not in prompt:
-        return
+    is_inline = " " in prompt or "${" in prompt
 
-    # Extract ${var} and ${var.field} placeholders
-    placeholders = _PLACEHOLDER_RE.findall(prompt)
+    if is_inline:
+        placeholders = _PLACEHOLDER_RE.findall(prompt)
+    else:
+        # Template-ref prompt — resolve text if resolver available
+        if template_resolver is None:
+            return
+        text = template_resolver(prompt)
+        if text is None:
+            return
+        placeholders = _extract_format_placeholders(text)
+
     if not placeholders:
         return
 
-    # Predict runtime input keys
     predicted_keys = _predict_input_keys(node)
-
-    # Validate each placeholder's first segment
     valid_keys = predicted_keys | known_vars
     node_label = f"Node '{node.name}'"
-
-    # Separate known_vars from framework extras + input keys
-    # to detect placeholders that are ONLY resolvable via known_vars
     consumer_known = known_vars - _KNOWN_EXTRAS - predicted_keys
+    placeholder_syntax = "${%s}" if is_inline else "{%s}"
 
     for placeholder in placeholders:
         first_segment = placeholder.split(".")[0]
@@ -215,7 +234,8 @@ def _check_template_placeholders(
                 kind="template_placeholder_unresolvable",
                 required=True,
                 message=(
-                    f"{node_label}: inline prompt placeholder '${{{first_segment}}}' "
+                    f"{node_label}: prompt placeholder "
+                    f"'{placeholder_syntax % first_segment}' "
                     f"not found in predicted input keys {sorted(predicted_keys)} "
                     f"or known extras {sorted(_KNOWN_EXTRAS)} "
                     f"(prompt: {prompt!r})"
@@ -228,12 +248,27 @@ def _check_template_placeholders(
                 kind="template_placeholder_known_vars_only",
                 required=False,
                 message=(
-                    f"{node_label}: placeholder '${{{first_segment}}}' resolved only "
+                    f"{node_label}: placeholder "
+                    f"'{placeholder_syntax % first_segment}' resolved only "
                     f"via known_vars — verify consumer bridge supplies it at runtime. "
                     f"Consider using the actual @node parameter name instead of a "
                     f"bridge alias."
                 ),
             ))
+
+
+def _extract_format_placeholders(text: str) -> list[str]:
+    """Extract {placeholder} names from Python str.format-style template text.
+
+    Returns a list of field names (may include dotted paths like 'claim.text').
+    Skips empty/None field names (literal braces, positional args).
+    """
+    formatter = string.Formatter()
+    names = []
+    for _, field_name, _, _ in formatter.parse(text):
+        if field_name is not None and field_name != "":
+            names.append(field_name)
+    return names
 
 
 def _predict_input_keys(node: Node) -> set[str]:
