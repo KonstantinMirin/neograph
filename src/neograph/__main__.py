@@ -88,6 +88,16 @@ def _load_template_resolver(args: argparse.Namespace):
     return None
 
 
+def _load_known_template_vars(args: argparse.Namespace) -> set[str] | None:
+    """Load known_template_vars from --setup module if available."""
+    if args.setup:
+        mod = _import_module(args.setup)
+        fn = getattr(mod, "get_known_template_vars", None)
+        if fn is not None:
+            return set(fn())
+    return None
+
+
 def cmd_check(args: argparse.Namespace) -> int:
     """Run compile() + lint() on all constructs in the target module."""
     from neograph.compiler import compile
@@ -102,7 +112,9 @@ def cmd_check(args: argparse.Namespace) -> int:
         return 1
 
     config = _load_config(args)
-    known_vars = set(args.known_vars.split(",")) if args.known_vars else None
+    cli_vars = set(args.known_vars.split(",")) if args.known_vars else None
+    setup_vars = _load_known_template_vars(args)
+    known_vars = (cli_vars or set()) | (setup_vars or set()) or None
     template_resolver = _load_template_resolver(args)
     failed = 0
 

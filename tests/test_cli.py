@@ -398,6 +398,115 @@ class TestCmdCheckOperatorAutoCheckpointer:
         assert cmd_check(args) == 0
 
 
+class TestKnownTemplateVarsFromSetup:
+    """get_known_template_vars() in --setup module provides known vars to lint."""
+
+    def test_setup_module_provides_known_vars(self, tmp_path, capsys):
+        """Setup module with get_known_template_vars() suppresses placeholder errors."""
+        setup = tmp_path / "setup_vars.py"
+        setup.write_text(textwrap.dedent("""\
+            def get_check_config():
+                return {"node_id": "test"}
+
+            def get_known_template_vars():
+                return {"domain_briefing", "max_tool_calls"}
+        """))
+
+        pipeline = tmp_path / "pipe_vars.py"
+        pipeline.write_text(textwrap.dedent("""\
+            from pydantic import BaseModel
+            from neograph import Node, register_scripted
+            from neograph.construct import Construct
+
+            class A(BaseModel):
+                x: str
+
+            class B(BaseModel):
+                y: str
+
+            register_scripted("sv_seed", lambda _i, _c: A(x="ok"))
+            seed = Node.scripted("seed", fn="sv_seed", outputs=A)
+            proc = Node("proc", prompt="Brief: ${domain_briefing}, data: ${seed}",
+                        model="default", outputs=B, inputs={"seed": A})
+            pipe = Construct("pipe", nodes=[seed, proc])
+        """))
+        args = argparse.Namespace(
+            target=str(pipeline), config=None,
+            setup=str(setup), known_vars=None,
+        )
+        result = cmd_check(args)
+        captured = capsys.readouterr()
+        # domain_briefing from setup module — no ERROR
+        assert "unresolvable" not in captured.out.lower()
+
+    def test_setup_and_cli_vars_merged(self, tmp_path, capsys):
+        """Both --known-vars CLI and get_known_template_vars() are unioned."""
+        setup = tmp_path / "setup_merge.py"
+        setup.write_text(textwrap.dedent("""\
+            def get_check_config():
+                return {}
+
+            def get_known_template_vars():
+                return {"from_setup"}
+        """))
+
+        pipeline = tmp_path / "pipe_merge.py"
+        pipeline.write_text(textwrap.dedent("""\
+            from pydantic import BaseModel
+            from neograph import Node, register_scripted
+            from neograph.construct import Construct
+
+            class A(BaseModel):
+                x: str
+
+            class B(BaseModel):
+                y: str
+
+            register_scripted("mg_seed", lambda _i, _c: A(x="ok"))
+            seed = Node.scripted("seed", fn="mg_seed", outputs=A)
+            proc = Node("proc",
+                        prompt="A: ${from_setup}, B: ${from_cli}, C: ${seed}",
+                        model="default", outputs=B, inputs={"seed": A})
+            pipe = Construct("pipe", nodes=[seed, proc])
+        """))
+        args = argparse.Namespace(
+            target=str(pipeline), config=None,
+            setup=str(setup), known_vars="from_cli",
+        )
+        result = cmd_check(args)
+        captured = capsys.readouterr()
+        # Neither from_setup nor from_cli should be unresolvable ERROR
+        assert "unresolvable" not in captured.out.lower()
+
+    def test_setup_without_known_vars_still_works(self, tmp_path):
+        """Setup module with only get_check_config() — no regression."""
+        setup = tmp_path / "setup_basic.py"
+        setup.write_text(textwrap.dedent("""\
+            def get_check_config():
+                return {"node_id": "test"}
+        """))
+
+        pipeline = tmp_path / "pipe_basic.py"
+        pipeline.write_text(textwrap.dedent("""\
+            from pydantic import BaseModel
+            from neograph import Node, register_scripted
+            from neograph.construct import Construct
+
+            class Out(BaseModel):
+                x: str
+
+            register_scripted("sb_fn", lambda _i, _c: Out(x="ok"))
+            pipe = Construct("pipe", nodes=[
+                Node.scripted("a", fn="sb_fn", outputs=Out),
+            ])
+        """))
+        args = argparse.Namespace(
+            target=str(pipeline), config=None,
+            setup=str(setup), known_vars=None,
+        )
+        assert cmd_check(args) == 0
+
+
 class TestCmdCheckTemplateLint:
     """cmd_check with template placeholder lint (neograph-0h3x)."""
 
