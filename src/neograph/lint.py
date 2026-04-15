@@ -219,11 +219,23 @@ def _check_template_placeholders(
     if not placeholders:
         return
 
-    predicted_keys = _predict_input_keys(node)
-    valid_keys = predicted_keys | known_vars
     node_label = f"Node '{node.name}'"
-    consumer_known = known_vars - _KNOWN_EXTRAS - predicted_keys
     placeholder_syntax = "${%s}" if is_inline else "{%s}"
+
+    if is_inline:
+        # Inline prompts only have access to raw input dict keys.
+        # Flattened fields from render_for_prompt are NOT available (inline
+        # skips _render_with_flattening). Known extras (node_id etc) are NOT
+        # available (_resolve_var has no config/state access).
+        predicted_keys = _predict_input_keys(node, include_flattened=False)
+        valid_keys = predicted_keys | (known_vars - _KNOWN_EXTRAS)
+    else:
+        # Template-ref prompts get rendered data: flattened fields, known
+        # extras, framework extras are all available to the prompt_compiler.
+        predicted_keys = _predict_input_keys(node)
+        valid_keys = predicted_keys | known_vars
+
+    consumer_known = known_vars - _KNOWN_EXTRAS - predicted_keys
 
     for placeholder in placeholders:
         first_segment = placeholder.split(".")[0]
@@ -271,12 +283,14 @@ def _extract_format_placeholders(text: str) -> list[str]:
     return names
 
 
-def _predict_input_keys(node: Node) -> set[str]:
+def _predict_input_keys(node: Node, *, include_flattened: bool = True) -> set[str]:
     """Predict the dict keys that _extract_input will produce for this node.
 
-    For dict-form inputs: keys are the dict keys PLUS any flattened field
-    names from ``render_for_prompt()`` return annotations on input types.
-    This mirrors what ``_render_with_flattening`` produces at runtime.
+    For dict-form inputs: keys are the dict keys. When *include_flattened* is
+    True (default), also adds flattened field names from ``render_for_prompt()``
+    return annotations — these are available for template-ref prompts where
+    ``_render_with_flattening`` runs. Set *include_flattened=False* for inline
+    prompts, which skip flattening and only see raw input dict keys.
 
     For single-type or None inputs: empty set (isinstance scan, no dict).
     """
@@ -284,8 +298,9 @@ def _predict_input_keys(node: Node) -> set[str]:
         return set()
     if isinstance(node.inputs, dict):
         keys = set(node.inputs.keys())
-        for input_type in node.inputs.values():
-            keys |= _get_flattened_field_names(input_type)
+        if include_flattened:
+            for input_type in node.inputs.values():
+                keys |= _get_flattened_field_names(input_type)
         return keys
     # Single-type inputs: no dict keys predictable
     return set()

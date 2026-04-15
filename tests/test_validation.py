@@ -2119,8 +2119,9 @@ class TestTemplatePlaceholderLint:
 
     # ── Known extras & custom vars ──────────────────────────────────────
 
-    def test_known_extras_not_flagged(self):
-        """Placeholder referencing node_id, project_root, human_feedback → no issue."""
+    def test_known_extras_not_flagged_in_template_ref(self):
+        """Template-ref {node_id}, {project_root} are framework extras -> no issue.
+        Note: these are NOT available in inline prompts (no config access)."""
         from neograph.lint import lint
 
         class A(BaseModel):
@@ -2131,12 +2132,14 @@ class TestTemplatePlaceholderLint:
 
         c = Construct("test", nodes=[
             Node.scripted("seed", fn="noop", outputs=A),
-            Node("proc", prompt="ID: ${node_id}, root: ${project_root}, data: ${seed}",
+            Node("proc", prompt="rw/analyze",
                  model="default", outputs=B, inputs={"seed": A}),
         ])
-        issues = lint(c)
+        resolver = lambda name: "ID: {node_id}, root: {project_root}, data: {seed}" if name == "rw/analyze" else None
+        issues = lint(c, template_resolver=resolver)
         template_issues = [i for i in issues if "template" in i.kind]
-        assert template_issues == []
+        errors = [i for i in template_issues if i.required]
+        assert errors == []
 
     def test_custom_known_vars_prevents_error_but_warns(self):
         """Consumer-supplied known_template_vars prevents ERROR but emits WARN."""
@@ -2232,7 +2235,7 @@ class TestTemplatePlaceholderLint:
         assert template_issues == []
 
     def test_known_vars_overlapping_framework_extra_no_warn(self):
-        """known_vars that overlap with framework extras (node_id) → no warning."""
+        """known_vars that overlap with framework extras (node_id) in template-ref -> no warning."""
         from neograph.lint import lint
 
         class A(BaseModel):
@@ -2243,11 +2246,11 @@ class TestTemplatePlaceholderLint:
 
         c = Construct("test", nodes=[
             Node.scripted("seed", fn="noop", outputs=A),
-            Node("proc", prompt="ID: ${node_id}",
+            Node("proc", prompt="rw/proc",
                  model="default", outputs=B, inputs={"seed": A}),
         ])
-        # "node_id" is a framework extra AND in known_vars — no warning
-        issues = lint(c, known_template_vars={"node_id"})
+        resolver = lambda name: "ID: {node_id}" if name == "rw/proc" else None
+        issues = lint(c, known_template_vars={"node_id"}, template_resolver=resolver)
         template_issues = [i for i in issues if "template" in i.kind]
         assert template_issues == []
 
@@ -2383,18 +2386,20 @@ class TestTemplatePlaceholderLint:
         assert len(template_issues) == 1
         assert "topic" in template_issues[0].message
 
-    def test_node_with_no_inputs_known_extra_ok(self):
-        """Source node with ${node_id} — no input keys, but known extra is fine."""
+    def test_node_with_no_inputs_known_extra_ok_in_template_ref(self):
+        """Source node with template-ref {node_id} — framework extra is fine.
+        Note: ${node_id} in inline prompts IS flagged (no config access)."""
         from neograph.lint import lint
 
         class B(BaseModel):
             y: str
 
         c = Construct("test", nodes=[
-            Node("gen", prompt="Generate for: ${node_id}",
+            Node("gen", prompt="rw/gen",
                  model="default", outputs=B, inputs=None),
         ])
-        issues = lint(c)
+        resolver = lambda name: "Generate for: {node_id}" if name == "rw/gen" else None
+        issues = lint(c, template_resolver=resolver)
         template_issues = [i for i in issues if "template" in i.kind]
         assert template_issues == []
 
@@ -2544,9 +2549,9 @@ class TestTemplatePlaceholderLint:
         keys = _predict_input_keys(n)
         assert keys == {"data"}  # no extra — can't introspect without annotation
 
-    def test_lint_accepts_flattened_placeholder(self):
-        """lint() should not flag {claim_statement} when input model's
-        render_for_prompt returns a ViewModel with that field."""
+    def test_lint_accepts_flattened_placeholder_in_template_ref(self):
+        """lint() should not flag {claim_statement} in a template-ref prompt when
+        input model's render_for_prompt returns a ViewModel with that field."""
         from neograph.lint import lint
 
         class ViewModel(BaseModel):
@@ -2560,15 +2565,118 @@ class TestTemplatePlaceholderLint:
 
         c = Construct("test", nodes=[
             Node.scripted("seed", fn="noop", outputs=FullModel),
-            Node("proc", prompt="Claim: ${claim_statement}",
+            Node("proc", prompt="rw/claim",
                  model="default", outputs=FullModel,
                  inputs={"seed": FullModel}),
         ])
+        resolver = lambda name: "Claim: {claim_statement}" if name == "rw/claim" else None
+        issues = lint(c, template_resolver=resolver)
+        template_issues = [i for i in issues if "template" in i.kind]
+        errors = [i for i in template_issues if i.required]
+        assert errors == [], (
+            f"Flattened field in template-ref should be valid: {errors}"
+        )
+
+    # ── Inline vs template-ref key set distinction ─────────────────────
+
+    def test_inline_prompt_rejects_flattened_field(self):
+        """Inline ${summary} referencing a flattened field from render_for_prompt
+        must be flagged -- inline prompts skip flattening."""
+        from neograph.lint import lint
+
+        class Presentation(BaseModel):
+            summary: str
+
+        class Claims(BaseModel):
+            raw: str
+
+            def render_for_prompt(self) -> Presentation:
+                return Presentation(summary=self.raw.upper())
+
+        class Result(BaseModel):
+            text: str
+
+        c = Construct("test", nodes=[
+            Node.scripted("seed", fn="noop", outputs=Claims),
+            Node("proc", prompt="Summarize: ${summary}",
+                 model="default", outputs=Result, inputs={"seed": Claims}),
+        ])
         issues = lint(c)
         template_issues = [i for i in issues if "template" in i.kind]
-        assert template_issues == [], (
-            f"Flattened field should be valid: {template_issues}"
+        flagged = {i.param for i in template_issues}
+        assert "summary" in flagged, (
+            f"Flattened field in inline prompt should be flagged: {template_issues}"
         )
+
+    def test_template_ref_still_accepts_flattened_field(self):
+        """Template-ref {summary} referencing a flattened field IS valid."""
+        from neograph.lint import lint
+
+        class Presentation(BaseModel):
+            summary: str
+
+        class Claims(BaseModel):
+            raw: str
+
+            def render_for_prompt(self) -> Presentation:
+                return Presentation(summary=self.raw.upper())
+
+        class Result(BaseModel):
+            text: str
+
+        c = Construct("test", nodes=[
+            Node.scripted("seed", fn="noop", outputs=Claims),
+            Node("proc", prompt="rw/summarize",
+                 model="default", outputs=Result, inputs={"seed": Claims}),
+        ])
+        resolver = lambda name: "Summary: {summary}" if name == "rw/summarize" else None
+        issues = lint(c, template_resolver=resolver)
+        template_issues = [i for i in issues if "template" in i.kind]
+        errors = [i for i in template_issues if i.required]
+        assert not errors, f"Template-ref flattened field should be valid: {errors}"
+
+    def test_inline_prompt_rejects_known_extras(self):
+        """Inline ${node_id} must be flagged -- _resolve_var has no config access."""
+        from neograph.lint import lint
+
+        class A(BaseModel):
+            x: str
+
+        class B(BaseModel):
+            y: str
+
+        c = Construct("test", nodes=[
+            Node.scripted("seed", fn="noop", outputs=A),
+            Node("proc", prompt="ID: ${node_id}, data: ${seed}",
+                 model="default", outputs=B, inputs={"seed": A}),
+        ])
+        issues = lint(c)
+        template_issues = [i for i in issues if "template" in i.kind]
+        flagged = {i.param for i in template_issues}
+        assert "node_id" in flagged, (
+            f"Known extra in inline prompt should be flagged: {template_issues}"
+        )
+
+    def test_template_ref_still_accepts_known_extras(self):
+        """Template-ref {node_id} IS valid -- prompt_compiler has config access."""
+        from neograph.lint import lint
+
+        class A(BaseModel):
+            x: str
+
+        class B(BaseModel):
+            y: str
+
+        c = Construct("test", nodes=[
+            Node.scripted("seed", fn="noop", outputs=A),
+            Node("proc", prompt="rw/analyze",
+                 model="default", outputs=B, inputs={"seed": A}),
+        ])
+        resolver = lambda name: "ID: {node_id}, data: {seed}" if name == "rw/analyze" else None
+        issues = lint(c, template_resolver=resolver)
+        template_issues = [i for i in issues if "template" in i.kind]
+        errors = [i for i in template_issues if i.required]
+        assert not errors, f"Known extra in template-ref should be valid: {errors}"
 
     # ── Consumer integration: template-ref prompt validation ────────────
 
