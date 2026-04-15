@@ -22,7 +22,7 @@ import structlog
 from langchain_core.runnables import RunnableConfig
 from pydantic import BaseModel, ValidationError
 
-from neograph.describe_type import describe_type
+from neograph.describe_type import describe_type, describe_value
 from neograph.errors import ConfigurationError, ExecutionError
 from neograph.tool import Tool, ToolBudgetTracker
 
@@ -203,7 +203,13 @@ def _resolve_var(path: str, input_data: Any) -> str:
     When *input_data* is a dict the first segment is looked up as a key;
     when it is a single value (non-dict) the whole value is used as the root,
     and subsequent segments are resolved via ``getattr``.
+
+    BaseModel values at any resolution stage are BAML-rendered via
+    describe_value() instead of using str() (which gives Pydantic repr).
+    This makes inline prompt output symmetric with template-ref rendering.
     """
+    from pydantic import BaseModel as _BM
+
     parts = path.split(".")
 
     if isinstance(input_data, dict):
@@ -226,6 +232,9 @@ def _resolve_var(path: str, input_data: Any) -> str:
         obj = getattr(obj, attr, "")
     if obj is None:
         return ""
+    # BAML-render Pydantic models instead of using repr
+    if isinstance(obj, _BM):
+        return describe_value(obj)
     return str(obj)
 
 
@@ -615,8 +624,6 @@ def _render_tool_result_for_llm(result: Any, renderer: Any = None) -> str:
     if isinstance(result, _BM) or (isinstance(result, list) and result and isinstance(result[0], _BM)):
         if renderer is not None:
             return renderer.render(result)
-        from neograph.describe_type import describe_value
-
         return describe_value(result, prefix="Tool result:")
 
     return str(result)

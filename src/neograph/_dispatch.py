@@ -17,6 +17,7 @@ from typing import Any, Protocol
 from langchain_core.runnables import RunnableConfig
 from pydantic import BaseModel
 
+from neograph._llm import _is_inline_prompt
 from neograph.errors import ConfigurationError
 from neograph.node import Node
 
@@ -215,9 +216,19 @@ class ToolDispatch:
 def _render_input(node: Node, input_data: Any) -> Any:
     """Apply renderer dispatch chain: node renderer > global renderer > BAML default.
 
-    Always calls render_input — when renderer is None, Pydantic models get
-    BAML rendering via describe_value(), symmetric with tool-result rendering.
+    For inline prompts (containing spaces or ${} markers), returns raw input
+    unchanged — inline var substitution needs raw model access for dotted paths
+    like ${claim.text}. The _resolve_var function handles BAML rendering of
+    resolved BaseModel values individually.
+
+    For template-ref prompts, always renders via render_input — the prompt
+    compiler receives rendered (BAML/XML/JSON) strings.
     """
+    # Inline prompts need raw data for dotted var access
+    prompt = node.prompt or ""
+    if _is_inline_prompt(prompt):
+        return input_data
+
     from neograph.renderers import render_input
     try:
         from neograph._llm import _get_global_renderer

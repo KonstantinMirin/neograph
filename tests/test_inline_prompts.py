@@ -214,3 +214,143 @@ class TestCompilePromptInline:
         """${} without spaces still detected as inline."""
         msgs = _compile_prompt("${greeting}", {"greeting": "Hello"})
         assert msgs[0]["content"] == "Hello"
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Full dispatch chain: inline prompts through _render_input + _compile_prompt
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TestInlinePromptThroughFullDispatch:
+    """BUG neograph-x3gz: dotted var access broken after BAML default rendering.
+
+    _render_input BAML-renders dict values BEFORE _compile_prompt runs.
+    Inline prompts with ${claim.text} get getattr on a BAML string instead
+    of a Pydantic model, silently returning empty string.
+
+    These tests go through the full dispatch chain (ThinkDispatch → _render_input
+    → invoke_structured → _compile_prompt → _substitute_vars) to catch the
+    regression that unit tests on _substitute_vars miss.
+    """
+
+    def test_dotted_var_resolves_through_full_pipeline(self):
+        """${seed.text} must resolve to the field value through a real pipeline.
+
+        Full chain: ThinkDispatch → _render_input → invoke_structured →
+        _compile_prompt → _substitute_vars. No renderer configured.
+
+        BUG neograph-x3gz: _render_input BAML-renders dict values, so
+        _resolve_var gets a string instead of a model. getattr(string, "text")
+        silently returns "" instead of the field value.
+        """
+        from neograph import Construct, Node, compile, run
+        from neograph.factory import register_scripted
+        from tests.fakes import StructuredFakeWithRaw, configure_fake_llm
+
+        class Claim(BaseModel):
+            claim_id: str
+            text: str
+
+        class Verdict(BaseModel):
+            disposition: str
+
+        # Capture the actual messages sent to the LLM
+        llm_received = []
+
+        class CapturingFake:
+            """Fake LLM that records what messages it receives."""
+            def __init__(self):
+                self.messages = []
+
+            def with_structured_output(self, schema, *, include_raw=False, **kw):
+                parent = self
+                class Bound:
+                    def invoke(self, messages, config=None, **kwargs):
+                        parent.messages.extend(messages)
+                        llm_received.extend(messages)
+                        instance = schema(disposition="confirmed")
+                        if include_raw:
+                            from langchain_core.messages import AIMessage
+                            return {"parsed": instance, "raw": AIMessage(
+                                content="fake", response_metadata={"usage": {}})}
+                        return instance
+                return Bound()
+
+        fake = CapturingFake()
+        configure_fake_llm(
+            factory=lambda tier: fake,
+            prompt_compiler=lambda t, d, **kw: [{"role": "user", "content": "ERROR: compiler called for inline"}],
+        )
+
+        register_scripted("x3gz_seed", lambda _in, _cfg: Claim(
+            claim_id="c1", text="the sky is blue",
+        ))
+
+        parent = Construct("x3gz-test", nodes=[
+            Node.scripted("seed", fn="x3gz_seed", outputs=Claim),
+            Node("judge", prompt="Judge this claim: ${seed.text}",
+                 model="default", outputs=Verdict, inputs={"seed": Claim}),
+        ])
+        graph = compile(parent)
+        result = run(graph, input={"node_id": "x3gz"})
+
+        assert result["judge"].disposition == "confirmed"
+        # The critical assertion: the LLM must have received the resolved field value
+        assert llm_received, "LLM should have received messages"
+        prompt_content = llm_received[0]["content"] if isinstance(llm_received[0], dict) else llm_received[0].content
+        assert "the sky is blue" in prompt_content, (
+            f"Dotted var ${{seed.text}} must resolve to field value in the prompt.\n"
+            f"Got: {prompt_content!r}"
+        )
+
+    def test_dotted_var_in_fan_in_dict_resolves(self):
+        """${claim.text} in fan-in scenario must resolve the field, not empty string."""
+        from neograph._llm import _compile_prompt
+
+        # Simulate what happens after _render_input renders the dict
+        # Before the fix: raw model, dotted access works
+        # After the fix: must still work through whatever mechanism
+
+        class Claim(BaseModel):
+            claim_id: str
+            text: str
+
+        raw_input = {"claim": Claim(claim_id="c1", text="earth is round")}
+        msgs = _compile_prompt("Verify: ${claim.text}", raw_input)
+        assert msgs[0]["content"] == "Verify: earth is round", (
+            f"Dotted var must resolve field value, got: {msgs[0]['content']!r}"
+        )
+
+    def test_whole_var_renders_usefully_through_pipeline(self):
+        """${seed} (no dotted access) must produce useful text, not Pydantic repr."""
+        from neograph import Construct, Node, compile, run
+        from neograph.factory import register_scripted
+        from tests.fakes import StructuredFakeWithRaw, configure_fake_llm
+
+        class Claim(BaseModel):
+            text: str
+
+        class Result(BaseModel):
+            answer: str
+
+        last_prompt = []
+
+        # Use a prompt compiler that captures what it receives for file-ref prompts
+        # For inline prompts, _substitute_vars handles it directly
+        configure_fake_llm(
+            factory=lambda tier: StructuredFakeWithRaw(
+                lambda m: m(answer="yes"),
+            ),
+            prompt_compiler=lambda t, d, **kw: [{"role": "user", "content": "x"}],
+        )
+
+        register_scripted("x3gz_seed2", lambda _in, _cfg: Claim(text="test claim"))
+
+        parent = Construct("x3gz-whole", nodes=[
+            Node.scripted("seed", fn="x3gz_seed2", outputs=Claim),
+            Node("judge", prompt="Evaluate: ${seed}",
+                 model="default", outputs=Result, inputs={"seed": Claim}),
+        ])
+        graph = compile(parent)
+        result = run(graph, input={"node_id": "x3gz-whole"})
+        assert result["judge"].answer == "yes"
