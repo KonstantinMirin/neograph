@@ -1970,6 +1970,173 @@ class TestTypeSpecValidation:
         Node("sv1", mode="scripted", inputs={"a": "Claims"}, outputs=Claims)
 
 
+class TestTemplatePlaceholderLint:
+    """lint() validates inline prompt ${var} placeholders against predicted input keys.
+
+    TASK neograph-0h3x: a template referencing ${original_param} inside a sub-construct
+    crashes at runtime because the key is neo_subgraph_input. lint must catch this.
+    """
+
+    def test_valid_inline_placeholder_no_issue(self):
+        """Inline prompt ${seed} matching input key → no lint issue."""
+        from neograph.lint import lint
+
+        class Claims(BaseModel):
+            items: list[str]
+
+        class Summary(BaseModel):
+            text: str
+
+        c = Construct("test", nodes=[
+            Node.scripted("seed", fn="noop", outputs=Claims),
+            Node("summarize", prompt="Summarize: ${seed}",
+                 model="default", outputs=Summary, inputs={"seed": Claims}),
+        ])
+        issues = lint(c)
+        template_issues = [i for i in issues if "template" in i.kind]
+        assert template_issues == [], f"Valid placeholder should not produce issues: {template_issues}"
+
+    def test_invalid_inline_placeholder_flagged(self):
+        """Inline prompt ${nonexistent} not matching any input key → lint issue."""
+        from neograph.lint import lint
+
+        class Claims(BaseModel):
+            items: list[str]
+
+        class Summary(BaseModel):
+            text: str
+
+        c = Construct("test", nodes=[
+            Node.scripted("seed", fn="noop", outputs=Claims),
+            Node("summarize", prompt="Summarize: ${nonexistent}",
+                 model="default", outputs=Summary, inputs={"seed": Claims}),
+        ])
+        issues = lint(c)
+        template_issues = [i for i in issues if "template" in i.kind]
+        assert len(template_issues) == 1
+        assert "nonexistent" in template_issues[0].message
+        assert template_issues[0].required is True  # will crash at runtime
+
+    def test_sub_construct_port_remapping_flagged(self):
+        """Inside a sub-construct, placeholder referencing original param name
+        that was remapped to neo_subgraph_input → lint issue."""
+        from neograph.lint import lint
+
+        class Input(BaseModel):
+            text: str
+
+        class Output(BaseModel):
+            result: str
+
+        # The node declares neo_subgraph_input as the input key (correct for IR),
+        # but the inline prompt references ${original_param} which won't exist
+        sub = Construct("sub", input=Input, output=Output, nodes=[
+            Node("proc", prompt="Process: ${original_param}",
+                 model="default", outputs=Output,
+                 inputs={"neo_subgraph_input": Input}),
+        ])
+        parent = Construct("parent", nodes=[
+            Node.scripted("seed", fn="noop", outputs=Input),
+            sub,
+        ])
+        issues = lint(parent)
+        template_issues = [i for i in issues if "template" in i.kind]
+        # ${original_param} doesn't match any input key or known extra
+        assert len(template_issues) >= 1
+        assert "original_param" in template_issues[0].message
+
+    def test_known_extras_not_flagged(self):
+        """Placeholder referencing a known extra like node_id → no issue."""
+        from neograph.lint import lint
+
+        class Claims(BaseModel):
+            items: list[str]
+
+        class Summary(BaseModel):
+            text: str
+
+        c = Construct("test", nodes=[
+            Node.scripted("seed", fn="noop", outputs=Claims),
+            Node("summarize", prompt="ID: ${node_id}, data: ${seed}",
+                 model="default", outputs=Summary, inputs={"seed": Claims}),
+        ])
+        issues = lint(c)
+        template_issues = [i for i in issues if "template" in i.kind]
+        assert template_issues == [], f"Known extras should not be flagged: {template_issues}"
+
+    def test_dotted_placeholder_validates_first_segment(self):
+        """Inline prompt ${seed.items} — first segment 'seed' must match input key."""
+        from neograph.lint import lint
+
+        class Claims(BaseModel):
+            items: list[str]
+
+        class Summary(BaseModel):
+            text: str
+
+        c = Construct("test", nodes=[
+            Node.scripted("seed", fn="noop", outputs=Claims),
+            Node("summarize", prompt="Items: ${seed.items}",
+                 model="default", outputs=Summary, inputs={"seed": Claims}),
+        ])
+        issues = lint(c)
+        template_issues = [i for i in issues if "template" in i.kind]
+        assert template_issues == [], f"Valid dotted placeholder should not produce issues: {template_issues}"
+
+    def test_scripted_node_skipped(self):
+        """Scripted nodes have no prompt — lint should not check them for templates."""
+        from neograph.lint import lint
+
+        class A(BaseModel):
+            x: str
+
+        c = Construct("test", nodes=[
+            Node.scripted("seed", fn="noop", outputs=A),
+        ])
+        issues = lint(c)
+        template_issues = [i for i in issues if "template" in i.kind]
+        assert template_issues == []
+
+    def test_template_ref_prompt_skipped(self):
+        """Template-ref prompts (no space, no ${}) are not lintable — skip them."""
+        from neograph.lint import lint
+
+        class A(BaseModel):
+            x: str
+
+        class B(BaseModel):
+            y: str
+
+        c = Construct("test", nodes=[
+            Node.scripted("seed", fn="noop", outputs=A),
+            Node("proc", prompt="rw/summarize",
+                 model="default", outputs=B, inputs={"seed": A}),
+        ])
+        issues = lint(c)
+        template_issues = [i for i in issues if "template" in i.kind]
+        assert template_issues == []
+
+    def test_custom_known_vars_not_flagged(self):
+        """Consumer-supplied known_template_vars are accepted as valid."""
+        from neograph.lint import lint
+
+        class A(BaseModel):
+            x: str
+
+        class B(BaseModel):
+            y: str
+
+        c = Construct("test", nodes=[
+            Node.scripted("seed", fn="noop", outputs=A),
+            Node("proc", prompt="Topic: ${topic}, data: ${seed}",
+                 model="default", outputs=B, inputs={"seed": A}),
+        ])
+        # Without known_template_vars, ${topic} would be flagged
+        issues = lint(c, known_template_vars={"topic"})
+        template_issues = [i for i in issues if "template" in i.kind]
+        assert template_issues == [], f"Custom known vars should not be flagged: {template_issues}"
+
+
 class TestSingleTypeInputsDeprecation:
     """Single-type inputs= should emit DeprecationWarning at assembly time.
 
