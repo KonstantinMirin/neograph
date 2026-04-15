@@ -1746,6 +1746,95 @@ class TestRenderForPromptFieldFlattening:
         assert "score" not in result  # score is a field inside b, not a top-level key
 
 
+class TestFieldFlatteningPreservesBaseModelChildren:
+    """BUG neograph-4vtb: BaseModel children in flattened fields must be preserved
+    as objects for {var.attr} dotted template access.
+
+    _render_with_flattening calls _render_single on every field, which
+    stringifies BaseModel children via describe_value(). Templates using
+    {rep_a.statement} then crash with AttributeError on the string.
+    """
+
+    def test_basemodel_child_preserved_as_object(self):
+        """Flattened BaseModel child field is preserved as model instance, not string."""
+        class Inner(BaseModel):
+            statement: str
+            context_quote: str
+
+        class View(BaseModel):
+            rep: Inner
+            score: float
+
+        class Source(BaseModel):
+            rep: Inner
+            score: float
+
+            def render_for_prompt(self) -> View:
+                return View(rep=self.rep, score=self.score)
+
+        result = render_input(
+            {"data": Source(rep=Inner(statement="X", context_quote="Y"), score=0.9)},
+            renderer=None,
+        )
+        # rep must be a BaseModel instance, not a string
+        assert "rep" in result
+        assert isinstance(result["rep"], Inner), (
+            f"Expected BaseModel instance, got {type(result['rep']).__name__}: {result['rep']!r}"
+        )
+        assert result["rep"].statement == "X"
+
+    def test_dotted_template_access_works(self):
+        """str.format with {rep.statement} against flattened output succeeds."""
+        class Inner(BaseModel):
+            statement: str
+            context_quote: str
+
+        class View(BaseModel):
+            rep_a: Inner
+            rep_b: Inner
+            similarity: float
+
+        class Source(BaseModel):
+            rep_a: Inner
+            rep_b: Inner
+            similarity: float
+
+            def render_for_prompt(self) -> View:
+                return View(rep_a=self.rep_a, rep_b=self.rep_b, similarity=self.similarity)
+
+        result = render_input(
+            {"pair": Source(
+                rep_a=Inner(statement="claim A", context_quote="ctx A"),
+                rep_b=Inner(statement="claim B", context_quote="ctx B"),
+                similarity=0.85,
+            )},
+            renderer=None,
+        )
+        # Simulate what a consumer's prompt_compiler does
+        template = "A: {rep_a.statement}, B: {rep_b.statement}, sim: {similarity}"
+        rendered = template.format(**result)
+        assert "claim A" in rendered
+        assert "claim B" in rendered
+        assert "0.85" in rendered
+
+    def test_primitive_fields_still_rendered(self):
+        """Primitive fields (str, int, float) are still rendered, not preserved as-is."""
+        class View(BaseModel):
+            title: str
+            count: int
+
+        class Source(BaseModel):
+            raw: str
+
+            def render_for_prompt(self) -> View:
+                return View(title=self.raw.upper(), count=42)
+
+        result = render_input({"src": Source(raw="hello")}, renderer=None)
+        # Primitives pass through _render_single (which returns them as-is for primitives)
+        assert result["title"] == "hello" or result["title"] == "HELLO"
+        assert result["count"] == 42 or result["count"] == "42"
+
+
 class TestRenderingModeDispatch:
     """Rendering obligation: think and agent modes produce BAML for prompt compiler.
 

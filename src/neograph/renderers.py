@@ -255,7 +255,11 @@ def _render_with_flattening(
                 if finfo.exclude:
                     continue
                 fval = getattr(result, fname)
-                fields[fname] = _render_single(fval, renderer)
+                # Preserve BaseModel children for {var.attr} dotted template access
+                if isinstance(fval, BaseModel):
+                    fields[fname] = fval
+                else:
+                    fields[fname] = _render_single(fval, renderer)
             return whole, fields
         if isinstance(result, str):
             return result, {}
