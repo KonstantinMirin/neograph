@@ -1604,6 +1604,103 @@ class TestRenderForPromptUnconditional:
         assert "y" in result["b"]
 
 
+class TestRenderedInputContract:
+    """RenderedInput dataclass contract tests.
+
+    These tests verify the RenderedInput abstraction provides both raw and
+    rendered views from a single build call, with correct key sets for
+    inline vs template-ref prompts.
+    """
+
+    def test_build_rendered_input_exists(self):
+        """build_rendered_input is importable from renderers."""
+        from neograph.renderers import build_rendered_input
+        assert callable(build_rendered_input)
+
+    def test_rendered_input_has_raw_and_rendered(self):
+        """RenderedInput carries both raw and rendered views."""
+        from neograph.renderers import build_rendered_input
+
+        class A(BaseModel):
+            x: str
+
+        ri = build_rendered_input({"key": A(x="val")}, renderer=None)
+        # raw preserves Pydantic model
+        assert isinstance(ri.raw["key"], BaseModel)
+        # rendered has BAML string
+        assert isinstance(ri.rendered["key"], str)
+        assert "x" in ri.rendered["key"]
+
+    def test_rendered_input_for_template_ref_includes_flattened(self):
+        """for_template_ref merges rendered + flattened fields."""
+        from neograph.renderers import build_rendered_input
+
+        class View(BaseModel):
+            summary: str
+
+        class Source(BaseModel):
+            raw: str
+
+            def render_for_prompt(self) -> View:
+                return View(summary=self.raw.upper())
+
+        ri = build_rendered_input({"src": Source(raw="hello")}, renderer=None)
+        tmpl = ri.for_template_ref
+        assert "src" in tmpl
+        assert "summary" in tmpl
+        assert "HELLO" in str(tmpl["summary"])
+
+    def test_rendered_input_raw_no_flattening(self):
+        """raw view has only original dict keys — no flattening."""
+        from neograph.renderers import build_rendered_input
+
+        class View(BaseModel):
+            summary: str
+
+        class Source(BaseModel):
+            raw: str
+
+            def render_for_prompt(self) -> View:
+                return View(summary=self.raw.upper())
+
+        ri = build_rendered_input({"src": Source(raw="hello")}, renderer=None)
+        assert "src" in ri.raw
+        assert "summary" not in ri.raw
+
+    def test_rendered_input_single_value(self):
+        """Single-value (non-dict) input produces consistent raw/rendered."""
+        from neograph.renderers import build_rendered_input
+
+        class A(BaseModel):
+            x: str
+
+        ri = build_rendered_input(A(x="val"), renderer=None)
+        # raw is the model
+        assert isinstance(ri.raw, BaseModel)
+        # rendered is BAML string
+        assert isinstance(ri.rendered, str)
+
+    def test_rendered_input_key_sets(self):
+        """available_keys_inline and available_keys_template differ correctly."""
+        from neograph.renderers import build_rendered_input
+
+        class View(BaseModel):
+            summary: str
+
+        class Source(BaseModel):
+            raw: str
+
+            def render_for_prompt(self) -> View:
+                return View(summary=self.raw.upper())
+
+        ri = build_rendered_input({"src": Source(raw="hello")}, renderer=None)
+        # inline keys: only raw dict keys
+        assert ri.available_keys_inline == {"src"}
+        # template keys: raw + flattened
+        assert "src" in ri.available_keys_template
+        assert "summary" in ri.available_keys_template
+
+
 class TestRenderForPromptFieldFlattening:
     """render_for_prompt() returning BaseModel flattens fields into template vars.
 

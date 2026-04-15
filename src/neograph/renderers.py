@@ -19,12 +19,49 @@ Dispatch helper for the factory layer:
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass, field
 from html import escape as _xml_escape
 from typing import Any, Literal, Protocol, runtime_checkable
 
 from pydantic import BaseModel
 
 from neograph.describe_type import describe_value
+
+
+@dataclass
+class RenderedInput:
+    """Unified representation of input data for prompt insertion.
+
+    Carries both raw (for inline ``${var.field}`` dotted access) and rendered
+    (for template-ref prompt_compiler) views of the same data. Built once via
+    ``build_rendered_input()``, consumed by dispatch and lint.
+    """
+
+    raw: dict[str, Any] | Any
+    """Raw Pydantic models — for inline prompt var substitution."""
+
+    rendered: dict[str, Any] | Any
+    """BAML/rendered strings — for template-ref prompt_compiler."""
+
+    flattened: dict[str, Any] = field(default_factory=dict)
+    """Extra fields from render_for_prompt BaseModel returns (template-ref only)."""
+
+    available_keys_inline: set[str] = field(default_factory=set)
+    """Keys valid for inline ${var} — raw dict keys only."""
+
+    available_keys_template: set[str] = field(default_factory=set)
+    """Keys valid for template-ref {var} — raw + flattened."""
+
+    @property
+    def for_template_ref(self) -> dict[str, Any] | Any:
+        """What the prompt_compiler receives: rendered values + flattened fields."""
+        if isinstance(self.rendered, dict):
+            merged = dict(self.rendered)
+            for k, v in self.flattened.items():
+                if k not in merged:
+                    merged[k] = v
+            return merged
+        return self.rendered
 
 
 @runtime_checkable
@@ -236,6 +273,48 @@ def render_input(input_data: Any, *, renderer: Renderer | None) -> Any:
         return result
 
     return _render_single(input_data, renderer)
+
+
+def build_rendered_input(
+    input_data: Any,
+    renderer: Renderer | None = None,
+) -> RenderedInput:
+    """Build a RenderedInput carrying both raw and rendered views.
+
+    Single entry point for all rendering. The caller picks the appropriate
+    view based on prompt type (inline vs template-ref).
+    """
+    if isinstance(input_data, dict):
+        raw_dict = dict(input_data)
+        rendered_dict: dict[str, Any] = {}
+        flattened: dict[str, Any] = {}
+
+        for k, v in input_data.items():
+            rendered_val, extra = _render_with_flattening(v, renderer)
+            rendered_dict[k] = rendered_val
+            for fname, fval in extra.items():
+                if fname not in flattened and fname not in rendered_dict:
+                    flattened[fname] = fval
+
+        inline_keys = set(raw_dict.keys())
+        template_keys = inline_keys | set(flattened.keys())
+
+        return RenderedInput(
+            raw=raw_dict,
+            rendered=rendered_dict,
+            flattened=flattened,
+            available_keys_inline=inline_keys,
+            available_keys_template=template_keys,
+        )
+
+    # Single value (non-dict)
+    rendered = _render_single(input_data, renderer)
+    return RenderedInput(
+        raw=input_data,
+        rendered=rendered,
+        available_keys_inline=set(),
+        available_keys_template=set(),
+    )
 
 
 def _render_with_flattening(

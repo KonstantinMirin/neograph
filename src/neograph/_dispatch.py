@@ -214,28 +214,26 @@ class ToolDispatch:
 
 
 def _render_input(node: Node, input_data: Any) -> Any:
-    """Apply renderer dispatch chain: node renderer > global renderer > BAML default.
+    """Apply renderer dispatch chain via RenderedInput.
 
-    For inline prompts (containing spaces or ${} markers), returns raw input
-    unchanged — inline var substitution needs raw model access for dotted paths
-    like ${claim.text}. The _resolve_var function handles BAML rendering of
-    resolved BaseModel values individually.
-
-    For template-ref prompts, always renders via render_input — the prompt
-    compiler receives rendered (BAML/XML/JSON) strings.
+    Builds a RenderedInput carrying both raw and rendered views, then
+    returns the appropriate view based on prompt type:
+    - Inline prompts: raw data (for ${var.field} dotted access)
+    - Template-ref prompts: rendered + flattened (for prompt_compiler)
     """
-    # Inline prompts need raw data for dotted var access
-    prompt = node.prompt or ""
-    if _is_inline_prompt(prompt):
-        return input_data
-
-    from neograph.renderers import render_input
+    from neograph.renderers import build_rendered_input
     try:
         from neograph._llm import _get_global_renderer
         effective_renderer = node.renderer or _get_global_renderer()
     except ImportError:
         effective_renderer = node.renderer
-    return render_input(input_data, renderer=effective_renderer)
+
+    ri = build_rendered_input(input_data, renderer=effective_renderer)
+
+    prompt = node.prompt or ""
+    if _is_inline_prompt(prompt):
+        return ri.raw
+    return ri.for_template_ref
 
 
 def _resolve_primary_output(node: Node) -> tuple[Any, str | None]:
