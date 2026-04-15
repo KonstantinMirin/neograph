@@ -202,6 +202,10 @@ def _check_template_placeholders(
     valid_keys = predicted_keys | known_vars
     node_label = f"Node '{node.name}'"
 
+    # Separate known_vars from framework extras + input keys
+    # to detect placeholders that are ONLY resolvable via known_vars
+    consumer_known = known_vars - _KNOWN_EXTRAS - predicted_keys
+
     for placeholder in placeholders:
         first_segment = placeholder.split(".")[0]
         if first_segment not in valid_keys:
@@ -211,10 +215,24 @@ def _check_template_placeholders(
                 kind="template_placeholder_unresolvable",
                 required=True,
                 message=(
-                    f"{node_label}: inline prompt placeholder '${{{{{{first_segment}}}}}}'  "
-                    f"not found in predicted input keys {sorted(valid_keys)} "
+                    f"{node_label}: inline prompt placeholder '${{{first_segment}}}' "
+                    f"not found in predicted input keys {sorted(predicted_keys)} "
+                    f"or known extras {sorted(_KNOWN_EXTRAS)} "
                     f"(prompt: {prompt!r})"
-                ).replace("{{", "{").replace("}}", "}"),
+                ),
+            ))
+        elif first_segment in consumer_known and first_segment not in predicted_keys and first_segment not in _KNOWN_EXTRAS:
+            issues.append(LintIssue(
+                node_name=node_label,
+                param=first_segment,
+                kind="template_placeholder_known_vars_only",
+                required=False,
+                message=(
+                    f"{node_label}: placeholder '${{{first_segment}}}' resolved only "
+                    f"via known_vars — verify consumer bridge supplies it at runtime. "
+                    f"Consider using the actual @node parameter name instead of a "
+                    f"bridge alias."
+                ),
             ))
 
 

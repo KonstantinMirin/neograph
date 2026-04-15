@@ -435,11 +435,11 @@ class TestCmdCheckTemplateLint:
         assert "nonexistent" in captured.out
         assert "ERROR" in captured.out
 
-    def test_check_known_vars_suppresses_template_issue(self, tmp_path, capsys):
-        """--known-vars=topic suppresses ${topic} template lint error.
+    def test_check_known_vars_downgrades_to_warn(self, tmp_path, capsys):
+        """--known-vars=topic downgrades ${topic} from ERROR to WARN.
 
-        Compile still fails (LLM nodes), so the test checks that the template
-        issue specifically is NOT in the output — only the compile error.
+        The placeholder is not unresolvable (no ERROR) but IS flagged as
+        WARN because it's only satisfiable via known_vars.
         """
         pipeline = tmp_path / "known_var.py"
         pipeline.write_text(textwrap.dedent("""\
@@ -463,9 +463,12 @@ class TestCmdCheckTemplateLint:
             target=str(pipeline), config=None, setup=None, known_vars="topic",
         )
         result = cmd_check(args)
-        # Fails due to compile (LLM needs configure_llm), but NO template issues
         captured = capsys.readouterr()
-        assert "topic" not in captured.out  # known var suppressed
+        # No ERROR for topic (known_vars prevents that)
+        assert "[ERROR]" not in captured.out or "topic" not in captured.out.split("[ERROR]")[-1]
+        # WARN for topic (known_vars-only)
+        assert "WARN" in captured.out
+        assert "topic" in captured.out
 
     def test_check_valid_placeholder_no_template_issue(self, tmp_path, capsys):
         """Valid ${seed} placeholder does not produce a template lint error."""

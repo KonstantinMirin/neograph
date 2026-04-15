@@ -2138,8 +2138,8 @@ class TestTemplatePlaceholderLint:
         template_issues = [i for i in issues if "template" in i.kind]
         assert template_issues == []
 
-    def test_custom_known_vars_not_flagged(self):
-        """Consumer-supplied known_template_vars accepted as valid."""
+    def test_custom_known_vars_prevents_error_but_warns(self):
+        """Consumer-supplied known_template_vars prevents ERROR but emits WARN."""
         from neograph.lint import lint
 
         class A(BaseModel):
@@ -2155,7 +2155,13 @@ class TestTemplatePlaceholderLint:
         ])
         issues = lint(c, known_template_vars={"topic"})
         template_issues = [i for i in issues if "template" in i.kind]
-        assert template_issues == []
+        # ${topic} is not an ERROR (not unresolvable) but IS a WARN (known_vars only)
+        errors = [i for i in template_issues if i.required]
+        warns = [i for i in template_issues if not i.required]
+        assert errors == [], "Should not be an ERROR"
+        assert len(warns) == 1
+        assert "topic" in warns[0].message
+        assert "known_vars" in warns[0].kind
 
     def test_custom_known_vars_not_supplied_flagged(self):
         """Without known_template_vars, consumer-specific var IS flagged."""
@@ -2176,6 +2182,74 @@ class TestTemplatePlaceholderLint:
         template_issues = [i for i in issues if "template" in i.kind]
         assert len(template_issues) == 1
         assert "topic" in template_issues[0].message
+
+    def test_known_vars_only_placeholder_warns(self):
+        """BUG neograph-yws3: placeholder resolved ONLY via known_vars (not
+        in input keys or framework extras) should emit WARN, not silently pass.
+
+        This catches the piarch pattern where bridge aliases like
+        {research_packet} passed lint via --known-vars but crashed at runtime.
+        """
+        from neograph.lint import lint
+
+        class A(BaseModel):
+            x: str
+
+        class B(BaseModel):
+            y: str
+
+        c = Construct("test", nodes=[
+            Node.scripted("seed", fn="noop", outputs=A),
+            Node("proc", prompt="Packet: ${research_packet}, data: ${seed}",
+                 model="default", outputs=B, inputs={"seed": A}),
+        ])
+        # ${research_packet} only resolvable via known_vars, not input keys
+        issues = lint(c, known_template_vars={"research_packet"})
+        template_issues = [i for i in issues if "template" in i.kind]
+        assert len(template_issues) == 1
+        assert "research_packet" in template_issues[0].message
+        assert template_issues[0].required is False  # WARN, not ERROR
+        assert "known_vars" in template_issues[0].kind
+
+    def test_known_vars_overlapping_input_key_no_warn(self):
+        """known_vars that overlap with actual input keys → no warning (redundant but harmless)."""
+        from neograph.lint import lint
+
+        class A(BaseModel):
+            x: str
+
+        class B(BaseModel):
+            y: str
+
+        c = Construct("test", nodes=[
+            Node.scripted("seed", fn="noop", outputs=A),
+            Node("proc", prompt="Data: ${seed}",
+                 model="default", outputs=B, inputs={"seed": A}),
+        ])
+        # "seed" is both an input key AND in known_vars — no warning
+        issues = lint(c, known_template_vars={"seed"})
+        template_issues = [i for i in issues if "template" in i.kind]
+        assert template_issues == []
+
+    def test_known_vars_overlapping_framework_extra_no_warn(self):
+        """known_vars that overlap with framework extras (node_id) → no warning."""
+        from neograph.lint import lint
+
+        class A(BaseModel):
+            x: str
+
+        class B(BaseModel):
+            y: str
+
+        c = Construct("test", nodes=[
+            Node.scripted("seed", fn="noop", outputs=A),
+            Node("proc", prompt="ID: ${node_id}",
+                 model="default", outputs=B, inputs={"seed": A}),
+        ])
+        # "node_id" is a framework extra AND in known_vars — no warning
+        issues = lint(c, known_template_vars={"node_id"})
+        template_issues = [i for i in issues if "template" in i.kind]
+        assert template_issues == []
 
     # ── Dotted access ───────────────────────────────────────────────────
 
