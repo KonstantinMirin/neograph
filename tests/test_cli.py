@@ -288,7 +288,7 @@ class TestCmdCheck:
         monkeypatch.setattr(cli_mod, "_import_module", lambda target: fake_mod)
         monkeypatch.setattr(
             neograph.compiler, "compile",
-            lambda construct: (_ for _ in ()).throw(CompileError("test error")),
+            lambda construct, **kw: (_ for _ in ()).throw(CompileError("test error")),
         )
 
         args = argparse.Namespace(target="fake.py", config=None, setup=None, known_vars=None)
@@ -338,6 +338,65 @@ class TestCmdCheck:
 # ═══════════════════════════════════════════════════════════════════════════
 # main
 # ═══════════════════════════════════════════════════════════════════════════
+
+class TestCmdCheckOperatorAutoCheckpointer:
+    """BUG neograph-7uti: cmd_check must auto-supply MemorySaver for Operator constructs."""
+
+    def test_operator_construct_does_not_false_fail(self, tmp_path, capsys):
+        """Construct with Operator modifier should not fail with 'requires a checkpointer'."""
+        pipeline = tmp_path / "operator_pipe.py"
+        pipeline.write_text(textwrap.dedent("""\
+            from pydantic import BaseModel
+            from neograph import Node, Operator, register_scripted
+            from neograph.construct import Construct
+            from neograph.factory import register_condition
+
+            class Draft(BaseModel):
+                content: str
+                approved: bool = False
+
+            register_scripted("op_seed", lambda _i, _c: Draft(content="test"))
+            register_scripted("op_review", lambda _i, _c: Draft(content="reviewed", approved=True))
+            register_condition("is_approved", lambda d: d is not None and d.approved)
+
+            seed = Node.scripted("seed", fn="op_seed", outputs=Draft)
+            review = Node.scripted("review", fn="op_review", inputs={"seed": Draft}, outputs=Draft)
+            review_op = review | Operator(when="is_approved")
+
+            pipe = Construct("op-pipe", nodes=[seed, review_op])
+        """))
+        args = argparse.Namespace(
+            target=str(pipeline), config=None, setup=None, known_vars=None,
+        )
+        result = cmd_check(args)
+        captured = capsys.readouterr()
+        # Must NOT contain the false "requires a checkpointer" error
+        assert "requires a checkpointer" not in captured.out, (
+            f"Operator construct should not false-fail. Output:\n{captured.out}"
+        )
+        assert result == 0
+
+    def test_non_operator_construct_unaffected(self, tmp_path):
+        """Construct without Operator still compiles without checkpointer."""
+        pipeline = tmp_path / "no_op.py"
+        pipeline.write_text(textwrap.dedent("""\
+            from pydantic import BaseModel
+            from neograph import Node, register_scripted
+            from neograph.construct import Construct
+
+            class Out(BaseModel):
+                x: str
+
+            register_scripted("noop_fn", lambda _i, _c: Out(x="ok"))
+            pipe = Construct("simple", nodes=[
+                Node.scripted("a", fn="noop_fn", outputs=Out),
+            ])
+        """))
+        args = argparse.Namespace(
+            target=str(pipeline), config=None, setup=None, known_vars=None,
+        )
+        assert cmd_check(args) == 0
+
 
 class TestCmdCheckTemplateLint:
     """cmd_check with template placeholder lint (neograph-0h3x)."""

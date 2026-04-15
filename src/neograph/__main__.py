@@ -99,9 +99,20 @@ def cmd_check(args: argparse.Namespace) -> int:
         label = f"{construct.name} ({var_name})"
         errors = []
 
-        # 1. Compile
+        # 1. Compile (auto-supply MemorySaver for Operator constructs)
+        checkpointer = None
+        from neograph.compiler import classify_modifiers
+        has_operator = any(
+            "operator" in classify_modifiers(item)[1]
+            for item in construct.nodes
+            if hasattr(item, "modifiers")
+        )
+        if has_operator:
+            from langgraph.checkpoint.memory import MemorySaver
+            checkpointer = MemorySaver()
+
         try:
-            compile(construct)
+            compile(construct, checkpointer=checkpointer)
         except (CompileError, ConstructError) as exc:
             errors.append(f"compile: {exc}")
 
