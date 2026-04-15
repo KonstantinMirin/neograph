@@ -8,7 +8,7 @@ from __future__ import annotations
 from typing import Annotated
 
 import pytest
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from neograph import (
     CompileError,
@@ -2460,6 +2460,115 @@ class TestTemplatePlaceholderLint:
         # DeprecationWarning fires at Construct assembly, not Node creation
         n = Node("test", outputs=B, inputs=A)
         assert _predict_input_keys(n) == set()
+
+    # ── render_for_prompt return annotation introspection ─────────────
+
+    def test_predict_input_keys_includes_flattened_fields(self):
+        """_predict_input_keys includes fields from render_for_prompt() return model."""
+        from neograph.lint import _predict_input_keys
+
+        class ViewModel(BaseModel):
+            claim_statement: str
+            score: float
+
+        class FullModel(BaseModel):
+            raw: str
+            internal_id: int
+
+            def render_for_prompt(self) -> ViewModel:
+                return ViewModel(claim_statement=self.raw, score=0.0)
+
+        n = Node("test", outputs=FullModel, inputs={"data": FullModel})
+        keys = _predict_input_keys(n)
+        # Must include the input key AND the flattened fields from ViewModel
+        assert "data" in keys
+        assert "claim_statement" in keys
+        assert "score" in keys
+        # Internal fields of FullModel should NOT be included
+        assert "internal_id" not in keys
+
+    def test_predict_input_keys_no_render_for_prompt_no_extra(self):
+        """Without render_for_prompt, only the input dict keys are returned."""
+        from neograph.lint import _predict_input_keys
+
+        class Plain(BaseModel):
+            x: str
+
+        n = Node("test", outputs=Plain, inputs={"item": Plain})
+        assert _predict_input_keys(n) == {"item"}
+
+    def test_predict_input_keys_str_return_no_extra(self):
+        """render_for_prompt returning str — no flattening, no extra keys."""
+        from neograph.lint import _predict_input_keys
+
+        class WithStr(BaseModel):
+            x: str
+
+            def render_for_prompt(self) -> str:
+                return f"CUSTOM: {self.x}"
+
+        n = Node("test", outputs=WithStr, inputs={"data": WithStr})
+        keys = _predict_input_keys(n)
+        assert keys == {"data"}  # no extra fields from str return
+
+    def test_predict_input_keys_exclude_fields_skipped(self):
+        """Excluded fields on the return model are not added to predicted keys."""
+        from neograph.lint import _predict_input_keys
+
+        class View(BaseModel):
+            visible: str
+            hidden: str = Field(exclude=True, default="x")
+
+        class Source(BaseModel):
+            raw: str
+
+            def render_for_prompt(self) -> View:
+                return View(visible=self.raw)
+
+        n = Node("test", outputs=Source, inputs={"src": Source})
+        keys = _predict_input_keys(n)
+        assert "visible" in keys
+        assert "hidden" not in keys
+
+    def test_predict_input_keys_no_return_annotation_fallback(self):
+        """render_for_prompt with no return annotation — graceful fallback."""
+        from neograph.lint import _predict_input_keys
+
+        class NoAnnotation(BaseModel):
+            x: str
+
+            def render_for_prompt(self):
+                return "plain"
+
+        n = Node("test", outputs=NoAnnotation, inputs={"data": NoAnnotation})
+        keys = _predict_input_keys(n)
+        assert keys == {"data"}  # no extra — can't introspect without annotation
+
+    def test_lint_accepts_flattened_placeholder(self):
+        """lint() should not flag {claim_statement} when input model's
+        render_for_prompt returns a ViewModel with that field."""
+        from neograph.lint import lint
+
+        class ViewModel(BaseModel):
+            claim_statement: str
+
+        class FullModel(BaseModel):
+            raw: str
+
+            def render_for_prompt(self) -> ViewModel:
+                return ViewModel(claim_statement=self.raw)
+
+        c = Construct("test", nodes=[
+            Node.scripted("seed", fn="noop", outputs=FullModel),
+            Node("proc", prompt="Claim: ${claim_statement}",
+                 model="default", outputs=FullModel,
+                 inputs={"seed": FullModel}),
+        ])
+        issues = lint(c)
+        template_issues = [i for i in issues if "template" in i.kind]
+        assert template_issues == [], (
+            f"Flattened field should be valid: {template_issues}"
+        )
 
     # ── Consumer integration: template-ref prompt validation ────────────
 

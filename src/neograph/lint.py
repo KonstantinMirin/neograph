@@ -274,12 +274,81 @@ def _extract_format_placeholders(text: str) -> list[str]:
 def _predict_input_keys(node: Node) -> set[str]:
     """Predict the dict keys that _extract_input will produce for this node.
 
-    For dict-form inputs: keys are the dict keys.
+    For dict-form inputs: keys are the dict keys PLUS any flattened field
+    names from ``render_for_prompt()`` return annotations on input types.
+    This mirrors what ``_render_with_flattening`` produces at runtime.
+
     For single-type or None inputs: empty set (isinstance scan, no dict).
     """
     if node.inputs is None:
         return set()
     if isinstance(node.inputs, dict):
-        return set(node.inputs.keys())
+        keys = set(node.inputs.keys())
+        for input_type in node.inputs.values():
+            keys |= _get_flattened_field_names(input_type)
+        return keys
     # Single-type inputs: no dict keys predictable
     return set()
+
+
+def _get_flattened_field_names(input_type: Any) -> set[str]:
+    """Extract field names from a type's render_for_prompt() return annotation.
+
+    If the type has ``render_for_prompt`` with a return annotation that is a
+    BaseModel subclass, returns the non-excluded field names of that model.
+    Otherwise returns an empty set.
+    """
+    import typing
+
+    from pydantic import BaseModel as _BM
+
+    rfp = getattr(input_type, "render_for_prompt", None)
+    if rfp is None:
+        return set()
+
+    ret_type = _resolve_return_type(rfp, input_type)
+    if ret_type is None:
+        return set()
+    if not (isinstance(ret_type, type) and issubclass(ret_type, _BM)):
+        return set()
+    return {
+        fname for fname, finfo in ret_type.model_fields.items()
+        if not finfo.exclude
+    }
+
+
+def _resolve_return_type(fn: Any, owner_cls: Any) -> Any:
+    """Resolve the return type annotation of a method.
+
+    ``from __future__ import annotations`` turns annotations into strings.
+    ``typing.get_type_hints`` resolves them from ``fn.__globals__`` but fails
+    when the return type is defined in a local scope (e.g., inside a test).
+
+    Fallback: scan the caller's frame stack (up to 10 frames) for the name.
+    This mirrors the technique Pydantic and neograph's ``_di_classify.py``
+    use for forward-ref resolution.
+    """
+    import sys
+    import typing
+
+    # Fast path: get_type_hints works for module-scoped types
+    try:
+        hints = typing.get_type_hints(fn)
+        return hints.get("return")
+    except (NameError, AttributeError, TypeError):
+        pass
+
+    # Fallback: resolve string annotation from frame locals
+    raw = getattr(fn, "__annotations__", {}).get("return")
+    if raw is None or not isinstance(raw, str):
+        return raw
+
+    # Walk caller frames to find the name (handles test-local classes)
+    frame = sys._getframe(0)
+    for _ in range(10):
+        frame = frame.f_back
+        if frame is None:
+            break
+        if raw in frame.f_locals:
+            return frame.f_locals[raw]
+    return None
