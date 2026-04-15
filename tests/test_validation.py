@@ -2387,6 +2387,53 @@ class TestTemplatePlaceholderLint:
         n = Node("test", outputs=B, inputs=A)
         assert _predict_input_keys(n) == set()
 
+    # ── Consumer integration: template-ref prompt validation ────────────
+
+    def test_consumer_validates_template_ref_with_predicted_keys(self):
+        """Consumer uses _predict_input_keys to validate template-ref prompt
+        placeholders — the pattern piarch needs for its prompt_compiler.
+
+        This simulates a consumer who:
+        1. Loads a template file with {placeholder} markers
+        2. Uses _predict_input_keys to get the runtime dict keys
+        3. Validates template placeholders against those keys
+        """
+        import re
+        from neograph.lint import _predict_input_keys
+
+        class Research(BaseModel):
+            findings: str
+
+        class Draft(BaseModel):
+            content: str
+
+        class Review(BaseModel):
+            score: float
+
+        # Consumer's template (loaded from file)
+        template_content = "Review this draft: {draft}\nBased on: {research}"
+        template_placeholders = set(re.findall(r"\{(\w+)\}", template_content))
+        # → {"draft", "research"}
+
+        # Node with matching fan-in inputs
+        good_node = Node("review", prompt="rw/review", model="default",
+                         outputs=Review,
+                         inputs={"draft": Draft, "research": Research})
+        predicted = _predict_input_keys(good_node)
+        assert template_placeholders <= predicted, (
+            f"Template needs {template_placeholders} but node provides {predicted}"
+        )
+
+        # Node with MISMATCHED inputs (the piarch bug pattern)
+        bad_node = Node("review", prompt="rw/review", model="default",
+                        outputs=Review,
+                        inputs={"neo_subgraph_input": Draft})
+        predicted_bad = _predict_input_keys(bad_node)
+        unresolvable = template_placeholders - predicted_bad
+        assert unresolvable == {"draft", "research"}, (
+            f"Expected unresolvable placeholders, got {unresolvable}"
+        )
+
 
 class TestSingleTypeInputsDeprecation:
     """Single-type inputs= should emit DeprecationWarning at assembly time.

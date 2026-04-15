@@ -162,21 +162,21 @@ class TestCmdCheck:
             a = Node.scripted("a", fn="cc_ok_fn", outputs=Out)
             pipe = Construct("pipe", nodes=[a])
         """))
-        args = argparse.Namespace(target=str(pipeline), config=None, setup=None)
+        args = argparse.Namespace(target=str(pipeline), config=None, setup=None, known_vars=None)
         assert cmd_check(args) == 0
 
     def test_no_constructs_returns_1(self, tmp_path):
         """A file with no Constructs returns 1."""
         pipeline = tmp_path / "empty.py"
         pipeline.write_text("x = 42\n")
-        args = argparse.Namespace(target=str(pipeline), config=None, setup=None)
+        args = argparse.Namespace(target=str(pipeline), config=None, setup=None, known_vars=None)
         assert cmd_check(args) == 1
 
     def test_import_error_propagates(self, tmp_path):
         """A file with an import error propagates the exception."""
         pipeline = tmp_path / "bad_import.py"
         pipeline.write_text("import nonexistent_module_xyz_42\n")
-        args = argparse.Namespace(target=str(pipeline), config=None, setup=None)
+        args = argparse.Namespace(target=str(pipeline), config=None, setup=None, known_vars=None)
         with pytest.raises(ModuleNotFoundError):
             cmd_check(args)
 
@@ -199,6 +199,7 @@ class TestCmdCheck:
             target=str(pipeline),
             config='{"key": "value"}',
             setup=None,
+            known_vars=None,
         )
         assert cmd_check(args) == 0
 
@@ -219,7 +220,7 @@ class TestCmdCheck:
             pipe1 = Construct("pipe1", nodes=[a])
             pipe2 = Construct("pipe2", nodes=[b])
         """))
-        args = argparse.Namespace(target=str(pipeline), config=None, setup=None)
+        args = argparse.Namespace(target=str(pipeline), config=None, setup=None, known_vars=None)
         result = cmd_check(args)
         captured = capsys.readouterr()
         assert "2 construct(s) checked" in captured.out
@@ -227,7 +228,7 @@ class TestCmdCheck:
 
     def test_dotted_module_import(self):
         """A dotted module name uses importlib.import_module."""
-        args = argparse.Namespace(target="json", config=None, setup=None)
+        args = argparse.Namespace(target="json", config=None, setup=None, known_vars=None)
         # json has no Constructs, so returns 1
         assert cmd_check(args) == 1
 
@@ -290,7 +291,7 @@ class TestCmdCheck:
             lambda construct: (_ for _ in ()).throw(CompileError("test error")),
         )
 
-        args = argparse.Namespace(target="fake.py", config=None, setup=None)
+        args = argparse.Namespace(target="fake.py", config=None, setup=None, known_vars=None)
         result = cmd_check(args)
 
         captured = capsys.readouterr()
@@ -317,14 +318,14 @@ class TestCmdCheck:
         fake_mod.pipe = Construct("pipe", nodes=[a])
 
         monkeypatch.setattr(cli_mod, "_import_module", lambda target: fake_mod)
-        monkeypatch.setattr(lint_module, "lint", lambda construct, *, config=None: [
+        monkeypatch.setattr(lint_module, "lint", lambda construct, *, config=None, known_template_vars=None: [
             LintIssue(node_name="a", param="p", kind="from_input",
                       message="missing param p", required=True),
             LintIssue(node_name="a", param="q", kind="from_config",
                       message="missing param q", required=False),
         ])
 
-        args = argparse.Namespace(target="fake.py", config=None, setup=None)
+        args = argparse.Namespace(target="fake.py", config=None, setup=None, known_vars=None)
         result = cmd_check(args)
 
         captured = capsys.readouterr()
@@ -337,6 +338,104 @@ class TestCmdCheck:
 # ═══════════════════════════════════════════════════════════════════════════
 # main
 # ═══════════════════════════════════════════════════════════════════════════
+
+class TestCmdCheckTemplateLint:
+    """cmd_check with template placeholder lint (neograph-0h3x)."""
+
+    def test_check_flags_invalid_placeholder(self, tmp_path, capsys):
+        """neograph check flags ${nonexistent} placeholder as lint error.
+
+        Note: compile also fails (LLM nodes need configure_llm), but lint
+        runs independently and adds its own issues.
+        """
+        pipeline = tmp_path / "bad_tmpl.py"
+        pipeline.write_text(textwrap.dedent("""\
+            from pydantic import BaseModel
+            from neograph import Node, register_scripted
+            from neograph.construct import Construct
+
+            class A(BaseModel):
+                x: str
+
+            class B(BaseModel):
+                y: str
+
+            register_scripted("tmpl_seed", lambda _i, _c: A(x="ok"))
+            seed = Node.scripted("seed", fn="tmpl_seed", outputs=A)
+            proc = Node("proc", prompt="Do: ${nonexistent}", model="default",
+                        outputs=B, inputs={"seed": A})
+            pipe = Construct("pipe", nodes=[seed, proc])
+        """))
+        args = argparse.Namespace(
+            target=str(pipeline), config=None, setup=None, known_vars=None,
+        )
+        result = cmd_check(args)
+        assert result == 1
+        captured = capsys.readouterr()
+        # Lint surfaces the template issue alongside compile error
+        assert "nonexistent" in captured.out
+        assert "ERROR" in captured.out
+
+    def test_check_known_vars_suppresses_template_issue(self, tmp_path, capsys):
+        """--known-vars=topic suppresses ${topic} template lint error.
+
+        Compile still fails (LLM nodes), so the test checks that the template
+        issue specifically is NOT in the output — only the compile error.
+        """
+        pipeline = tmp_path / "known_var.py"
+        pipeline.write_text(textwrap.dedent("""\
+            from pydantic import BaseModel
+            from neograph import Node, register_scripted
+            from neograph.construct import Construct
+
+            class A(BaseModel):
+                x: str
+
+            class B(BaseModel):
+                y: str
+
+            register_scripted("kv_seed", lambda _i, _c: A(x="ok"))
+            seed = Node.scripted("seed", fn="kv_seed", outputs=A)
+            proc = Node("proc", prompt="Topic: ${topic}, data: ${seed}",
+                        model="default", outputs=B, inputs={"seed": A})
+            pipe = Construct("pipe", nodes=[seed, proc])
+        """))
+        args = argparse.Namespace(
+            target=str(pipeline), config=None, setup=None, known_vars="topic",
+        )
+        result = cmd_check(args)
+        # Fails due to compile (LLM needs configure_llm), but NO template issues
+        captured = capsys.readouterr()
+        assert "topic" not in captured.out  # known var suppressed
+
+    def test_check_valid_placeholder_no_template_issue(self, tmp_path, capsys):
+        """Valid ${seed} placeholder does not produce a template lint error."""
+        pipeline = tmp_path / "valid_tmpl.py"
+        pipeline.write_text(textwrap.dedent("""\
+            from pydantic import BaseModel
+            from neograph import Node, register_scripted
+            from neograph.construct import Construct
+
+            class A(BaseModel):
+                x: str
+
+            class B(BaseModel):
+                y: str
+
+            register_scripted("vt_seed", lambda _i, _c: A(x="ok"))
+            seed = Node.scripted("seed", fn="vt_seed", outputs=A)
+            proc = Node("proc", prompt="Summarize: ${seed}", model="default",
+                        outputs=B, inputs={"seed": A})
+            pipe = Construct("pipe", nodes=[seed, proc])
+        """))
+        args = argparse.Namespace(
+            target=str(pipeline), config=None, setup=None, known_vars=None,
+        )
+        result = cmd_check(args)
+        captured = capsys.readouterr()
+        # May fail due to compile, but NO template placeholder issues
+        assert "template" not in captured.out.lower() or "placeholder" not in captured.out.lower()
+
 
 class TestMain:
     """main() — argument parsing and dispatch."""

@@ -92,6 +92,7 @@ def cmd_check(args: argparse.Namespace) -> int:
         return 1
 
     config = _load_config(args)
+    known_vars = set(args.known_vars.split(",")) if args.known_vars else None
     failed = 0
 
     for var_name, construct in constructs:
@@ -105,7 +106,7 @@ def cmd_check(args: argparse.Namespace) -> int:
             errors.append(f"compile: {exc}")
 
         # 2. Lint
-        issues = lint(construct, config=config)
+        issues = lint(construct, config=config, known_template_vars=known_vars)
         for issue in issues:
             severity = "ERROR" if issue.required else "WARN"
             errors.append(f"lint [{severity}]: {issue.message}")
@@ -182,6 +183,10 @@ def main():
     check_p.add_argument(
         "--setup",
         help="Python module exporting get_check_config() for lint with real objects",
+    )
+    check_p.add_argument(
+        "--known-vars",
+        help="Comma-separated extra template variable names (e.g., 'topic,json_schema')",
     )
 
     scaffold_p = sub.add_parser(
