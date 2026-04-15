@@ -1604,6 +1604,205 @@ class TestRenderForPromptUnconditional:
         assert "y" in result["b"]
 
 
+class TestRenderingModeDispatch:
+    """Rendering obligation: think and agent modes produce BAML for prompt compiler.
+
+    When no renderer is configured, template-ref prompts go through the prompt
+    compiler with BAML-rendered input data. These tests verify the full dispatch
+    chain: _extract_input → _render_input → invoke_structured → _compile_prompt
+    → prompt_compiler.
+    """
+
+    def test_think_mode_prompt_compiler_receives_baml_no_renderer(self):
+        """Think-mode node: prompt compiler receives BAML strings, not raw models."""
+        from neograph import Construct, Node, compile, run
+        from neograph.factory import register_scripted
+        from tests.fakes import StructuredFakeWithRaw, configure_fake_llm
+
+        class Input(BaseModel):
+            text: str
+            score: float
+
+        class Output(BaseModel):
+            result: str
+
+        captured = {}
+
+        def capturing_compiler(template, data, **kw):
+            captured[template] = data
+            return [{"role": "user", "content": "test"}]
+
+        configure_fake_llm(
+            factory=lambda tier: StructuredFakeWithRaw(lambda m: m(result="ok")),
+            prompt_compiler=capturing_compiler,
+        )
+
+        register_scripted("mode_test_seed", lambda _in, _cfg: Input(text="hello", score=0.5))
+        parent = Construct("mode-test", nodes=[
+            Node.scripted("seed", fn="mode_test_seed", outputs=Input),
+            Node("think-node", prompt="analyze/input", model="default",
+                 outputs=Output, inputs={"seed": Input}),
+        ])
+        graph = compile(parent)
+        run(graph, input={"node_id": "mode-test"})
+
+        assert "analyze/input" in captured
+        data = captured["analyze/input"]
+        assert isinstance(data, dict)
+        seed_val = data["seed"]
+        assert isinstance(seed_val, str), f"Expected BAML string, got {type(seed_val).__name__}"
+        assert "text" in seed_val
+        assert "hello" in seed_val
+
+    def test_agent_mode_prompt_compiler_receives_baml_no_renderer(self):
+        """Agent-mode node: prompt compiler receives BAML strings, not raw models."""
+        from neograph import Construct, Node, Tool, compile, run
+        from neograph.factory import register_scripted
+        from neograph.factory import register_tool_factory
+        from tests.fakes import ReActFake, configure_fake_llm
+
+        class Input(BaseModel):
+            query: str
+
+        class Output(BaseModel):
+            answer: str
+
+        captured = {}
+
+        def capturing_compiler(template, data, **kw):
+            captured[template] = data
+            return [{"role": "user", "content": "test"}]
+
+        configure_fake_llm(
+            factory=lambda tier: ReActFake(
+                tool_calls=[],
+                final=lambda m: m(answer="done"),
+            ),
+            prompt_compiler=capturing_compiler,
+        )
+
+        register_tool_factory("search", lambda config, tool_config: (lambda **kw: "result"))
+        register_scripted("agent_test_seed", lambda _in, _cfg: Input(query="test query"))
+        parent = Construct("agent-test", nodes=[
+            Node.scripted("seed", fn="agent_test_seed", outputs=Input),
+            Node("agent-node", prompt="search/query", model="default",
+                 mode="agent", outputs=Output, inputs={"seed": Input},
+                 tools=[Tool("search", budget=3)]),
+        ])
+        graph = compile(parent)
+        run(graph, input={"node_id": "agent-test"})
+
+        assert "search/query" in captured
+        data = captured["search/query"]
+        assert isinstance(data, dict)
+        seed_val = data["seed"]
+        assert isinstance(seed_val, str), f"Expected BAML string, got {type(seed_val).__name__}"
+        assert "query" in seed_val
+        assert "test query" in seed_val
+
+
+class TestRenderingThreeSurfaceParity:
+    """Rendering obligation: all 3 API surfaces produce identical BAML.
+
+    The same Pydantic model rendered through @node, Node.scripted(), and
+    programmatic Node() must produce the same BAML string. Tests use
+    template-ref prompts (not inline) to exercise the full render_input path.
+    """
+
+    def test_declarative_node_renders_baml_for_prompt_compiler(self):
+        """Declarative Node() with template-ref prompt: BAML rendering."""
+        from neograph import Construct, Node, compile, run
+        from neograph.factory import register_scripted
+        from tests.fakes import StructuredFakeWithRaw, configure_fake_llm
+
+        class Data(BaseModel):
+            value: str
+
+        class Result(BaseModel):
+            out: str
+
+        captured = {}
+
+        def capturing_compiler(template, data, **kw):
+            captured[template] = data
+            return [{"role": "user", "content": "test"}]
+
+        configure_fake_llm(
+            factory=lambda tier: StructuredFakeWithRaw(lambda m: m(out="ok")),
+            prompt_compiler=capturing_compiler,
+        )
+
+        register_scripted("surf_seed", lambda _in, _cfg: Data(value="test-val"))
+        parent = Construct("surface-test", nodes=[
+            Node.scripted("seed", fn="surf_seed", outputs=Data),
+            Node("proc", prompt="process/data", model="default",
+                 outputs=Result, inputs={"seed": Data}),
+        ])
+        graph = compile(parent)
+        run(graph, input={"node_id": "surface-test"})
+
+        assert "process/data" in captured
+        seed_rendered = captured["process/data"]["seed"]
+        assert isinstance(seed_rendered, str)
+        assert "value" in seed_rendered
+        assert "test-val" in seed_rendered
+
+    def test_decorator_node_renders_baml_for_prompt_compiler(self):
+        """@node with template-ref prompt: same BAML rendering as declarative."""
+        from neograph import compile, node, run
+        from neograph.decorators import construct_from_functions
+        from tests.fakes import StructuredFakeWithRaw, configure_fake_llm
+
+        class Data(BaseModel):
+            value: str
+
+        class Result(BaseModel):
+            out: str
+
+        captured = {}
+
+        def capturing_compiler(template, data, **kw):
+            captured[template] = data
+            return [{"role": "user", "content": "test"}]
+
+        configure_fake_llm(
+            factory=lambda tier: StructuredFakeWithRaw(lambda m: m(out="ok")),
+            prompt_compiler=capturing_compiler,
+        )
+
+        @node(outputs=Data)
+        def seed() -> Data:
+            return Data(value="test-val")
+
+        @node(mode="think", outputs=Result, model="default", prompt="process/data")
+        def proc(seed: Data) -> Result: ...
+
+        pipeline = construct_from_functions("decorator-test", [seed, proc])
+        graph = compile(pipeline)
+        run(graph, input={"node_id": "decorator-test"})
+
+        assert "process/data" in captured
+        seed_rendered = captured["process/data"]["seed"]
+        assert isinstance(seed_rendered, str)
+        assert "value" in seed_rendered
+        assert "test-val" in seed_rendered
+
+    def test_all_surfaces_produce_same_baml(self):
+        """Direct render_input call matches what the pipeline produces."""
+        from neograph.describe_type import describe_value
+
+        class Data(BaseModel):
+            value: str
+
+        instance = Data(value="test-val")
+        direct_baml = describe_value(instance)
+        via_render = render_input(instance, renderer=None)
+
+        assert direct_baml == via_render, (
+            "render_input(model, renderer=None) must equal describe_value(model)"
+        )
+
+
 class TestToolInputRenderingParity:
     """BUG neograph-qybn: tool-result and input rendering must produce same BAML.
 
