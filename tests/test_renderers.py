@@ -193,15 +193,17 @@ class TestJsonRenderer:
 class TestRenderInput:
     """render_input() dispatch helper."""
 
-    def test_returns_raw_value_when_renderer_is_none(self):
-        """When renderer is None, raw value returned unchanged."""
+    def test_returns_baml_when_renderer_is_none(self):
+        """When renderer is None, Pydantic models get BAML rendering (neograph-qybn)."""
 
         class Info(BaseModel):
             name: str
 
         obj = Info(name="raw")
         result = render_input(obj, renderer=None)
-        assert result is obj
+        assert isinstance(result, str)
+        assert "name" in result
+        assert "raw" in result
 
     def test_renders_each_value_independently_when_dict_input(self):
         """Dict input (fan-in) renders each value independently."""
@@ -785,15 +787,17 @@ class TestRendererDispatch:
         result = render_input(Info(name="test"), renderer=xml)
         assert "<name>test</name>" in result
 
-    def test_returns_raw_object_when_no_renderer(self):
-        """Level 5: no renderer = raw passthrough (identical to pre-renderer behavior)."""
+    def test_returns_baml_when_no_renderer(self):
+        """Level 5: no renderer = BAML default (symmetric with tool-result rendering, neograph-qybn)."""
 
         class Info(BaseModel):
             name: str
 
         instance = Info(name="test")
         result = render_input(instance, renderer=None)
-        assert result is instance  # exact same object, no transformation
+        assert isinstance(result, str)
+        assert "name" in result
+        assert "test" in result
 
     def test_renders_each_dict_value_independently_when_fan_in(self):
         """Fan-in dict: each value rendered independently."""
@@ -1450,4 +1454,222 @@ class TestDescribeValueCoverageGaps:
 
         result = _render_value(object(), indent="  ", depth=0)
         assert "object" in result
+
+
+class TestRenderInputBAMLDefault:
+    """BUG neograph-qybn: render_input must BAML-render Pydantic models by default.
+
+    When no renderer is configured, render_input currently returns the raw
+    Pydantic object. Tool results fall back to describe_value() BAML. This
+    class tests that input rendering matches tool-result rendering.
+    """
+
+    def test_baml_default_for_pydantic_model(self):
+        """render_input(model, renderer=None) returns BAML string, not raw model."""
+        class Draft(BaseModel):
+            content: str
+            score: float
+
+        instance = Draft(content="hello world", score=0.95)
+        result = render_input(instance, renderer=None)
+
+        # Must be a string (BAML notation), NOT a raw Pydantic object
+        assert isinstance(result, str), (
+            f"Expected BAML string, got {type(result).__name__}. "
+            f"render_input must not return raw Pydantic models when renderer=None."
+        )
+        assert "content" in result
+        assert "hello world" in result
+        assert "score" in result
+
+    def test_baml_default_for_list_of_models(self):
+        """render_input([model, ...], renderer=None) returns BAML string for lists."""
+        class Item(BaseModel):
+            name: str
+
+        items = [Item(name="a"), Item(name="b")]
+        result = render_input(items, renderer=None)
+
+        assert isinstance(result, str), (
+            f"Expected BAML string for list of models, got {type(result).__name__}."
+        )
+        assert "a" in result
+        assert "b" in result
+
+    def test_baml_default_for_fan_in_dict(self):
+        """render_input({k: model}, renderer=None) BAML-renders each value."""
+        class A(BaseModel):
+            x: str
+
+        class B(BaseModel):
+            y: int
+
+        result = render_input({"a": A(x="hello"), "b": B(y=42)}, renderer=None)
+        assert isinstance(result, dict)
+        assert isinstance(result["a"], str), "Fan-in dict values must be BAML strings"
+        assert "hello" in result["a"]
+        assert isinstance(result["b"], str)
+        assert "42" in result["b"]
+
+    def test_primitives_pass_through(self):
+        """render_input with primitives still passes them through unchanged."""
+        assert render_input("hello", renderer=None) == "hello"
+        assert render_input(42, renderer=None) == 42
+
+    def test_exclude_true_honored_in_baml_default(self):
+        """Fields with exclude=True are omitted from BAML default rendering."""
+        class Secret(BaseModel):
+            visible: str
+            hidden: str = PydanticField(exclude=True, default="secret")
+
+        result = render_input(Secret(visible="shown"), renderer=None)
+        assert isinstance(result, str)
+        assert "visible" in result
+        assert "hidden" not in result
+        assert "secret" not in result
+
+
+class TestRenderForPromptUnconditional:
+    """BUG neograph-qybn: render_for_prompt() must fire regardless of renderer config.
+
+    Currently render_for_prompt() only runs inside _render_single(), which is
+    only called when a Renderer is active. With renderer=None the whole
+    render_for_prompt chain is dead code.
+    """
+
+    def test_render_for_prompt_fires_without_renderer(self):
+        """render_for_prompt() must be called even when renderer=None."""
+        class Projected(BaseModel):
+            summary: str
+
+        class Full(BaseModel):
+            raw: str
+            internal_id: int
+
+            def render_for_prompt(self) -> str:
+                return f"PROJECTED: {self.raw}"
+
+        result = render_input(Full(raw="data", internal_id=99), renderer=None)
+        assert result == "PROJECTED: data", (
+            "render_for_prompt() must run without a renderer configured"
+        )
+
+    def test_render_for_prompt_returning_model_baml_rendered_without_renderer(self):
+        """render_for_prompt() returning BaseModel gets BAML-rendered even without renderer."""
+        class Presentation(BaseModel):
+            summary: str
+            score: float
+
+        class Full(BaseModel):
+            raw: str
+            internal_id: int
+
+            def render_for_prompt(self) -> "Presentation":
+                return Presentation(summary=self.raw.upper(), score=0.95)
+
+        result = render_input(Full(raw="hello", internal_id=42), renderer=None)
+        assert isinstance(result, str), (
+            f"Expected BAML string, got {type(result).__name__}"
+        )
+        assert "HELLO" in result
+        assert "summary" in result
+        assert "internal_id" not in result  # projection strips internal fields
+
+    def test_render_for_prompt_wins_over_baml_default(self):
+        """render_for_prompt() takes precedence over automatic BAML rendering."""
+        class Custom(BaseModel):
+            name: str
+
+            def render_for_prompt(self) -> str:
+                return "CUSTOM_WINS"
+
+        result = render_input(Custom(name="test"), renderer=None)
+        assert result == "CUSTOM_WINS"
+
+    def test_render_for_prompt_in_fan_in_dict_without_renderer(self):
+        """render_for_prompt() fires per-value in fan-in dict without renderer."""
+        class A(BaseModel):
+            x: str
+
+            def render_for_prompt(self) -> str:
+                return f"A:{self.x}"
+
+        class B(BaseModel):
+            y: str
+
+        result = render_input({"a": A(x="1"), "b": B(y="2")}, renderer=None)
+        assert isinstance(result, dict)
+        assert result["a"] == "A:1"  # render_for_prompt wins
+        assert isinstance(result["b"], str)  # B gets BAML default
+        assert "y" in result["b"]
+
+
+class TestToolInputRenderingParity:
+    """BUG neograph-qybn: tool-result and input rendering must produce same BAML.
+
+    _render_tool_result_for_llm falls back to describe_value() for Pydantic models.
+    render_input must produce the same BAML format for the same model instance.
+    """
+
+    def test_same_model_same_baml(self):
+        """Same Pydantic instance → same BAML from both paths (minus prefix)."""
+        from neograph._llm import _render_tool_result_for_llm
+        from neograph.describe_type import describe_value
+
+        class Result(BaseModel):
+            answer: str
+            confidence: float
+
+        instance = Result(answer="yes", confidence=0.9)
+
+        tool_result = _render_tool_result_for_llm(instance, renderer=None)
+        input_result = render_input(instance, renderer=None)
+
+        # Tool result has "Tool result:" prefix, input doesn't
+        # Both must contain the same BAML body
+        expected_baml = describe_value(instance)
+        assert isinstance(input_result, str)
+        assert expected_baml == input_result, (
+            f"Input BAML must match describe_value output.\n"
+            f"Got: {input_result!r}\n"
+            f"Expected: {expected_baml!r}"
+        )
+
+    def test_parity_with_exclude_fields(self):
+        """Both paths honor exclude=True identically."""
+        from neograph._llm import _render_tool_result_for_llm
+        from neograph.describe_type import describe_value
+
+        class Data(BaseModel):
+            visible: str
+            hidden: str = PydanticField(exclude=True, default="nope")
+
+        instance = Data(visible="shown")
+
+        tool_result = _render_tool_result_for_llm(instance, renderer=None)
+        input_result = render_input(instance, renderer=None)
+
+        # Neither should contain "hidden"
+        assert "hidden" not in tool_result
+        assert isinstance(input_result, str)
+        assert "hidden" not in input_result
+
+    def test_parity_with_list_of_models(self):
+        """Both paths handle list[BaseModel] identically."""
+        from neograph._llm import _render_tool_result_for_llm
+        from neograph.describe_type import describe_value
+
+        class Item(BaseModel):
+            name: str
+
+        items = [Item(name="a"), Item(name="b")]
+
+        tool_result = _render_tool_result_for_llm(items, renderer=None)
+        input_result = render_input(items, renderer=None)
+
+        expected_baml = describe_value(items)
+        assert isinstance(input_result, str)
+        # Tool result has prefix, strip it for comparison
+        tool_body = tool_result.replace("Tool result:\n", "")
+        assert tool_body == input_result or expected_baml == input_result
 

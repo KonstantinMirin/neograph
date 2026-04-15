@@ -23,6 +23,8 @@ from typing import Any, Literal, Protocol, runtime_checkable
 
 from pydantic import BaseModel
 
+from neograph.describe_type import describe_value
+
 
 @runtime_checkable
 class Renderer(Protocol):
@@ -208,30 +210,49 @@ class JsonRenderer:
 def render_input(input_data: Any, *, renderer: Renderer | None) -> Any:
     """Dispatch helper: render input data for prompt insertion.
 
-    - If renderer is None: return raw value unchanged (backward compat).
-    - For dict-form (fan-in): render each value independently.
-    - Checks hasattr(value, 'render_for_prompt') first (model method wins).
-    - For single value: render directly.
-    """
-    if renderer is None:
-        return input_data
+    Default rendering is BAML via ``describe_value()`` — the same format used
+    for tool results, so input and tool-result rendering are symmetric.
 
+    Dispatch precedence per value:
+      1. ``model.render_for_prompt()`` wins (str verbatim, BaseModel re-rendered).
+      2. Explicit renderer (XmlRenderer / DelimitedRenderer / JsonRenderer).
+      3. BAML via ``describe_value()`` for Pydantic models / list[BaseModel].
+      4. Primitives / non-Pydantic values pass through unchanged.
+
+    For dict-form (fan-in): each value is rendered independently.
+    """
     if isinstance(input_data, dict):
         return {k: _render_single(v, renderer) for k, v in input_data.items()}
 
     return _render_single(input_data, renderer)
 
 
-def _render_single(value: Any, renderer: Renderer) -> Any:
+def _render_single(value: Any, renderer: Renderer | None) -> Any:
     """Render a single value, checking for model-level override first.
 
-    If render_for_prompt() returns a BaseModel, re-render it through the
-    active renderer (BAML/XML/JSON). This lets models define typed
-    presentation projections without doing string formatting themselves.
+    When renderer is None, Pydantic models are BAML-rendered via
+    describe_value() — symmetric with tool-result rendering.
     """
+    # 1. render_for_prompt() always wins, regardless of renderer config
     if hasattr(value, "render_for_prompt") and callable(value.render_for_prompt):
         result = value.render_for_prompt()
+        if isinstance(result, str):
+            return result
         if isinstance(result, BaseModel):
-            return renderer.render(result)
+            if renderer is not None:
+                return renderer.render(result)
+            return describe_value(result)
         return result
-    return renderer.render(value)
+
+    # 2. Explicit renderer
+    if renderer is not None:
+        return renderer.render(value)
+
+    # 3. BAML default for Pydantic models and lists of models
+    if isinstance(value, BaseModel):
+        return describe_value(value)
+    if isinstance(value, list) and value and isinstance(value[0], BaseModel):
+        return describe_value(value)
+
+    # 4. Primitives pass through
+    return value

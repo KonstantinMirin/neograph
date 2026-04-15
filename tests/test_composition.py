@@ -1217,12 +1217,14 @@ class TestNodeSubConstruct:
 
         # Result surfaces correctly
         assert result["llm_sub"].disposition == "llm-scored"
-        # Prompt compiler received the port input
+        # Prompt compiler received the port input (BAML-rendered, neograph-qybn)
         assert "jc3/score" in captured
         score_data = captured["jc3/score"]
         assert "neo_subgraph_input" in score_data
-        assert isinstance(score_data["neo_subgraph_input"], VerifyClaim)
-        assert score_data["neo_subgraph_input"].claim_id == "jc3"
+        rendered = score_data["neo_subgraph_input"]
+        assert isinstance(rendered, str), "Port input must be BAML-rendered"
+        assert "jc3" in rendered
+        assert "claim_id" in rendered
 
 
     def test_construct_from_module_with_input_output_builds_sub_construct(self):
@@ -1817,19 +1819,18 @@ class TestGatherProduceSubConstruct:
         graph = compile(parent)
         run(graph, input={"node_id": "dp5-capture"})
 
-        # The score node (prompt="verify/score") should have received tool_log
+        # The score node (prompt="verify/score") should have received tool_log (BAML-rendered, neograph-qybn)
         assert "verify/score" in captured, f"Expected verify/score in captured, got: {list(captured.keys())}"
         score_input = captured["verify/score"]
         assert "explore_tool_log" in score_input
-        tool_log = score_input["explore_tool_log"]
-        assert isinstance(tool_log, list)
-        assert len(tool_log) >= 1
-        assert isinstance(tool_log[0], ToolInteraction)
-        assert tool_log[0].tool_name == "search_evidence"
-        assert "evidence found" in tool_log[0].result
-        # Also verify explore_result was passed
+        tool_log_rendered = score_input["explore_tool_log"]
+        assert isinstance(tool_log_rendered, str), "tool_log must be BAML-rendered"
+        assert "search_evidence" in tool_log_rendered
+        assert "evidence found" in tool_log_rendered
+        # Also verify explore_result was passed (BAML-rendered)
         assert "explore_result" in score_input
-        assert isinstance(score_input["explore_result"], ExplorationResult)
+        assert isinstance(score_input["explore_result"], str), "explore_result must be BAML-rendered"
+        assert "evidence" in score_input["explore_result"]
 
     def test_each_fans_out_when_gather_produce_sub_construct_mapped(self):
         """Sub-construct with gather→produce fanned out via .map() over claims."""
@@ -1976,15 +1977,13 @@ class TestGatherProduceSubConstruct:
         graph = compile(parent)
         run(graph, input={"node_id": "uihu"})
 
-        # The downstream score node received tool_log with typed_result
+        # The downstream score node received tool_log (BAML-rendered, neograph-qybn)
         assert "v/score" in captured
         score_data = captured["v/score"]
         assert "explore_tool_log" in score_data
-        tool_log = score_data["explore_tool_log"]
-        assert len(tool_log) >= 1
-        assert isinstance(tool_log[0].typed_result, EvidenceHit), "typed_result should be EvidenceHit"
-        assert tool_log[0].typed_result.ref == "auth.py:42"
-        assert tool_log[0].typed_result.confidence == 0.9
+        tool_log_rendered = score_data["explore_tool_log"]
+        assert isinstance(tool_log_rendered, str), "tool_log must be BAML-rendered"
+        assert "find_evidence" in tool_log_rendered
 
 
 # ═══════════════════════════════════════════════════════════════════════════

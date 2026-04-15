@@ -918,12 +918,11 @@ def render_prompt(
             hint="Call neograph.configure_llm() first.",
         )
 
-    # Apply renderer dispatch: node.renderer > global > None
-    effective_renderer = getattr(node, "renderer", None) or _global_renderer
-    if effective_renderer is not None:
-        from neograph.renderers import render_input
+    # Apply renderer dispatch: node.renderer > global > BAML default
+    from neograph.renderers import render_input
 
-        input_data = render_input(input_data, renderer=effective_renderer)
+    effective_renderer = getattr(node, "renderer", None) or _global_renderer
+    input_data = render_input(input_data, renderer=effective_renderer)
 
     # Generate output_schema for json_mode
     output_schema = None

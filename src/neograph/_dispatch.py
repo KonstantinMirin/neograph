@@ -213,9 +213,10 @@ class ToolDispatch:
 
 
 def _render_input(node: Node, input_data: Any) -> Any:
-    """Apply renderer dispatch chain: node renderer > global renderer.
+    """Apply renderer dispatch chain: node renderer > global renderer > BAML default.
 
-    Returns rendered input_data, or the original if no renderer is active.
+    Always calls render_input — when renderer is None, Pydantic models get
+    BAML rendering via describe_value(), symmetric with tool-result rendering.
     """
     from neograph.renderers import render_input
     try:
@@ -223,9 +224,7 @@ def _render_input(node: Node, input_data: Any) -> Any:
         effective_renderer = node.renderer or _get_global_renderer()
     except ImportError:
         effective_renderer = node.renderer
-    if effective_renderer is not None:
-        return render_input(input_data, renderer=effective_renderer)
-    return input_data
+    return render_input(input_data, renderer=effective_renderer)
 
 
 def _resolve_primary_output(node: Node) -> tuple[Any, str | None]:
