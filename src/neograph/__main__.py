@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from neograph.construct import Construct
+from neograph.naming import field_name_for
 
 
 def _import_module(target: str) -> Any:
@@ -123,6 +124,37 @@ def cmd_check(args: argparse.Namespace) -> int:
     return 1 if failed else 0
 
 
+def cmd_test_scaffold(args: argparse.Namespace) -> int:
+    """Generate test scaffold from Construct definitions in a module."""
+    from neograph.testing import scaffold_tests
+
+    mod = _import_module(args.target)
+    constructs = _discover_constructs(mod)
+
+    if not constructs:
+        print(f"No Construct objects found in {args.target}")
+        return 1
+
+    for var_name, construct in constructs:
+        output = args.output or f"tests/test_{field_name_for(construct.name)}.py"
+        try:
+            content = scaffold_tests(
+                construct,
+                output_path=output,
+                construct_import=None,  # user fills in
+                overwrite=args.overwrite,
+            )
+            node_count = len(construct.nodes)
+            print(f"OK  {construct.name} ({node_count} nodes) → {output}")
+        except FileExistsError:
+            print(f"SKIP  {output} already exists (use --overwrite)")
+        except Exception as exc:
+            print(f"FAIL  {construct.name}: {exc}")
+            return 1
+
+    return 0
+
+
 def main():
     from neograph import __version__
 
@@ -152,10 +184,30 @@ def main():
         help="Python module exporting get_check_config() for lint with real objects",
     )
 
+    scaffold_p = sub.add_parser(
+        "test-scaffold",
+        help="Generate test file from pipeline construct definitions",
+    )
+    scaffold_p.add_argument(
+        "target",
+        help="Python file or module containing Construct definitions",
+    )
+    scaffold_p.add_argument(
+        "--output", "-o",
+        help="Output test file path (default: tests/test_{construct_name}.py)",
+    )
+    scaffold_p.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Overwrite existing test file",
+    )
+
     args = parser.parse_args()
 
     if args.command == "check":
         sys.exit(cmd_check(args))
+    elif args.command == "test-scaffold":
+        sys.exit(cmd_test_scaffold(args))
     else:
         parser.print_help()
         sys.exit(0)
