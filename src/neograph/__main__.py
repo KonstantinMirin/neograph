@@ -136,18 +136,18 @@ def cmd_test_scaffold(args: argparse.Namespace) -> int:
         return 1
 
     for var_name, construct in constructs:
-        output = args.output or f"tests/test_{field_name_for(construct.name)}.py"
+        output_dir = args.output or f"tests/{field_name_for(construct.name)}/"
         try:
-            content = scaffold_tests(
+            written = scaffold_tests(
                 construct,
-                output_path=output,
-                construct_import=None,  # user fills in
+                output_dir=output_dir,
+                construct_import=None,
                 overwrite=args.overwrite,
             )
             node_count = len(construct.nodes)
-            print(f"OK  {construct.name} ({node_count} nodes) → {output}")
+            print(f"OK  {construct.name} ({node_count} nodes) → {output_dir} ({len(written)} files)")
         except FileExistsError:
-            print(f"SKIP  {output} already exists (use --overwrite)")
+            print(f"SKIP  {output_dir} already exists (use --overwrite)")
         except Exception as exc:
             print(f"FAIL  {construct.name}: {exc}")
             return 1
