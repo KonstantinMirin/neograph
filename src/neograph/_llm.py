@@ -926,10 +926,12 @@ def render_prompt(
         )
 
     # Apply renderer dispatch: node.renderer > global > BAML default
-    from neograph.renderers import render_input
-
-    effective_renderer = getattr(node, "renderer", None) or _global_renderer
-    input_data = render_input(input_data, renderer=effective_renderer)
+    # For inline prompts, skip rendering (var substitution needs raw data)
+    prompt = getattr(node, "prompt", "") or ""
+    if not _is_inline_prompt(prompt):
+        from neograph.renderers import render_input
+        effective_renderer = getattr(node, "renderer", None) or _global_renderer
+        input_data = render_input(input_data, renderer=effective_renderer)
 
     # Generate output_schema for json_mode
     output_schema = None

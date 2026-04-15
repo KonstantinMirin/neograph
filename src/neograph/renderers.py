@@ -19,6 +19,7 @@ Dispatch helper for the factory layer:
 from __future__ import annotations
 
 import json
+from html import escape as _xml_escape
 from typing import Any, Literal, Protocol, runtime_checkable
 
 from pydantic import BaseModel
@@ -64,8 +65,8 @@ class XmlRenderer:
             return self._render_list(value, tag=tag, seen=seen)
         if isinstance(value, dict):
             return self._render_dict(value, tag=tag, seen=seen)
-        # Scalar — render as text (no JSON escaping)
-        text = str(value)
+        # Scalar — render as text with XML escaping for special chars
+        text = _xml_escape(str(value), quote=False)
         if tag is not None:
             return f"<{tag}>{text}</{tag}>"
         return text
@@ -82,7 +83,7 @@ class XmlRenderer:
             field_value = getattr(model, field_name)
             desc = self._get_description(field_name, field_info, seen)
             if desc:
-                attr = f' description="{desc}"'
+                attr = f' description="{_xml_escape(desc, quote=True)}"'
             else:
                 attr = ""
 
@@ -103,8 +104,8 @@ class XmlRenderer:
                 lines.append(inner)
                 lines.append(f"</{field_name}>")
             else:
-                # Scalar — render directly, no JSON escaping
-                lines.append(f"<{field_name}{attr}>{field_value}</{field_name}>")
+                # Scalar — render with XML escaping
+                lines.append(f"<{field_name}{attr}>{_xml_escape(str(field_value), quote=False)}</{field_name}>")
 
         if tag is not None:
             lines.append(f"</{tag}>")
@@ -255,14 +256,21 @@ def _render_with_flattening(
                 if finfo.exclude:
                     continue
                 fval = getattr(result, fname)
-                # Preserve BaseModel children for {var.attr} dotted template access
+                # Preserve BaseModel and list[BaseModel] children for dotted
+                # template access ({var.attr} and {items[0].source})
                 if isinstance(fval, BaseModel):
+                    fields[fname] = fval
+                elif isinstance(fval, list) and fval and isinstance(fval[0], BaseModel):
                     fields[fname] = fval
                 else:
                     fields[fname] = _render_single(fval, renderer)
             return whole, fields
         if isinstance(result, str):
             return result, {}
+        # list[BaseModel] or other non-str/non-BaseModel returns: render via _render_single
+        if isinstance(result, list) and result and isinstance(result[0], BaseModel):
+            rendered = renderer.render(result) if renderer else describe_value(result)
+            return rendered, {}
         return result, {}
     return _render_single(value, renderer), {}
 
@@ -279,6 +287,10 @@ def _render_single(value: Any, renderer: Renderer | None) -> Any:
         if isinstance(result, str):
             return result
         if isinstance(result, BaseModel):
+            if renderer is not None:
+                return renderer.render(result)
+            return describe_value(result)
+        if isinstance(result, list) and result and isinstance(result[0], BaseModel):
             if renderer is not None:
                 return renderer.render(result)
             return describe_value(result)
