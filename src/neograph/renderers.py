@@ -214,17 +214,53 @@ def render_input(input_data: Any, *, renderer: Renderer | None) -> Any:
     for tool results, so input and tool-result rendering are symmetric.
 
     Dispatch precedence per value:
-      1. ``model.render_for_prompt()`` wins (str verbatim, BaseModel re-rendered).
+      1. ``model.render_for_prompt()`` wins (str verbatim, BaseModel
+         re-rendered with field flattening for dict-form inputs).
       2. Explicit renderer (XmlRenderer / DelimitedRenderer / JsonRenderer).
       3. BAML via ``describe_value()`` for Pydantic models / list[BaseModel].
       4. Primitives / non-Pydantic values pass through unchanged.
 
-    For dict-form (fan-in): each value is rendered independently.
+    For dict-form (fan-in): each value is rendered independently. When
+    ``render_for_prompt()`` returns a BaseModel, its fields are flattened
+    into the parent dict as individually addressable template vars.
     """
     if isinstance(input_data, dict):
-        return {k: _render_single(v, renderer) for k, v in input_data.items()}
+        result: dict[str, Any] = {}
+        for k, v in input_data.items():
+            rendered, extra = _render_with_flattening(v, renderer)
+            result[k] = rendered
+            for fname, fval in extra.items():
+                if fname not in result:
+                    result[fname] = fval
+        return result
 
     return _render_single(input_data, renderer)
+
+
+def _render_with_flattening(
+    value: Any, renderer: Renderer | None,
+) -> tuple[Any, dict[str, Any]]:
+    """Render a value and extract flattened fields if render_for_prompt returns a model.
+
+    Returns (rendered_value, extra_fields). extra_fields is empty unless
+    render_for_prompt() returned a BaseModel, in which case it maps each
+    non-excluded field name to its individually rendered value.
+    """
+    if hasattr(value, "render_for_prompt") and callable(value.render_for_prompt):
+        result = value.render_for_prompt()
+        if isinstance(result, BaseModel):
+            whole = renderer.render(result) if renderer else describe_value(result)
+            fields: dict[str, Any] = {}
+            for fname, finfo in result.__class__.model_fields.items():
+                if finfo.exclude:
+                    continue
+                fval = getattr(result, fname)
+                fields[fname] = _render_single(fval, renderer)
+            return whole, fields
+        if isinstance(result, str):
+            return result, {}
+        return result, {}
+    return _render_single(value, renderer), {}
 
 
 def _render_single(value: Any, renderer: Renderer | None) -> Any:

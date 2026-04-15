@@ -1604,6 +1604,148 @@ class TestRenderForPromptUnconditional:
         assert "y" in result["b"]
 
 
+class TestRenderForPromptFieldFlattening:
+    """render_for_prompt() returning BaseModel flattens fields into template vars.
+
+    FEATURE neograph-j3hw: when a fan-in value's render_for_prompt() returns a
+    BaseModel, its fields become individual template vars alongside the
+    whole-model rendering.
+    """
+
+    def test_fields_flattened_into_dict(self):
+        """render_for_prompt() returning BaseModel → fields become separate dict entries."""
+        class Presentation(BaseModel):
+            summary: str
+            score: float
+
+        class Full(BaseModel):
+            raw: str
+            internal_id: int
+
+            def render_for_prompt(self) -> Presentation:
+                return Presentation(summary=self.raw.upper(), score=0.95)
+
+        result = render_input({"data": Full(raw="hello", internal_id=42)}, renderer=None)
+        assert isinstance(result, dict)
+        # Whole model under original key
+        assert "data" in result
+        assert isinstance(result["data"], str)
+        assert "summary" in result["data"]
+        # Individual fields flattened
+        assert "summary" in result
+        assert "HELLO" in str(result["summary"])
+        assert "score" in result
+        assert result["score"] == 0.95 or "0.95" in str(result["score"])
+        # Internal fields NOT flattened (they're on Full, not Presentation)
+        assert "internal_id" not in result
+        assert "raw" not in result
+
+    def test_no_render_for_prompt_no_flattening(self):
+        """Without render_for_prompt(), no field flattening occurs."""
+        class Plain(BaseModel):
+            x: str
+            y: int
+
+        result = render_input({"item": Plain(x="val", y=42)}, renderer=None)
+        assert isinstance(result, dict)
+        assert "item" in result
+        # No flattening — only the original key
+        assert "x" not in result
+        assert "y" not in result
+
+    def test_str_return_no_flattening(self):
+        """render_for_prompt() returning str → no flattening (str is verbatim)."""
+        class Custom(BaseModel):
+            name: str
+
+            def render_for_prompt(self) -> str:
+                return f"CUSTOM: {self.name}"
+
+        result = render_input({"item": Custom(name="test")}, renderer=None)
+        assert result == {"item": "CUSTOM: test"}
+        assert "name" not in result
+
+    def test_exclude_fields_not_flattened(self):
+        """Fields with exclude=True on the returned model are not flattened."""
+        class Projected(BaseModel):
+            visible: str
+            hidden: str = PydanticField(exclude=True, default="secret")
+
+        class Source(BaseModel):
+            data: str
+
+            def render_for_prompt(self) -> Projected:
+                return Projected(visible=self.data, hidden="secret")
+
+        result = render_input({"src": Source(data="hello")}, renderer=None)
+        assert "visible" in result
+        assert "hidden" not in result
+
+    def test_no_overwrite_existing_keys(self):
+        """Flattened field names must not overwrite existing fan-in keys."""
+        class Projected(BaseModel):
+            value: str
+
+        class A(BaseModel):
+            x: str
+
+            def render_for_prompt(self) -> Projected:
+                return Projected(value="from_projection")
+
+        class B(BaseModel):
+            value: str  # same field name as Projected.value
+
+        result = render_input(
+            {"a": A(x="orig"), "value": B(value="upstream")},
+            renderer=None,
+        )
+        # "value" key already exists from upstream B — must not be overwritten
+        assert isinstance(result["value"], str)
+        assert "upstream" in result["value"]
+
+    def test_single_input_no_flattening(self):
+        """Single-input (non-dict) nodes: no flattening even with render_for_prompt."""
+        class Projected(BaseModel):
+            summary: str
+
+        class Full(BaseModel):
+            raw: str
+
+            def render_for_prompt(self) -> Projected:
+                return Projected(summary=self.raw.upper())
+
+        result = render_input(Full(raw="hello"), renderer=None)
+        # Single input → just the rendered value, no dict with flattened fields
+        assert isinstance(result, str)
+        assert "HELLO" in result
+
+    def test_multiple_fan_in_only_render_for_prompt_flattened(self):
+        """In a fan-in dict, only values with render_for_prompt get flattened."""
+        class Projected(BaseModel):
+            title: str
+
+        class WithProjection(BaseModel):
+            raw: str
+
+            def render_for_prompt(self) -> Projected:
+                return Projected(title=self.raw.upper())
+
+        class Plain(BaseModel):
+            score: float
+
+        result = render_input(
+            {"a": WithProjection(raw="hello"), "b": Plain(score=0.5)},
+            renderer=None,
+        )
+        # a gets flattened
+        assert "a" in result
+        assert "title" in result
+        assert "HELLO" in result["title"]
+        # b does NOT get flattened (no render_for_prompt)
+        assert "b" in result
+        assert "score" not in result  # score is a field inside b, not a top-level key
+
+
 class TestRenderingModeDispatch:
     """Rendering obligation: think and agent modes produce BAML for prompt compiler.
 
