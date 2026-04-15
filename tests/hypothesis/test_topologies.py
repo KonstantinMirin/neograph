@@ -64,7 +64,7 @@ def dict_output_pipeline(draw):
 
 
 @st.composite
-def sub_construct_pipeline(draw):
+def sub_construct_pipeline(draw):  # noqa: ARG001
     """Pipeline with a sub-construct (nested Construct with input=/output=)."""
     tag = _uid()
 
@@ -448,7 +448,7 @@ def sub_construct_with_each(draw):
 
 
 @st.composite
-def nested_sub_construct(draw):
+def nested_sub_construct(draw):  # noqa: ARG001
     """Sub-construct inside sub-construct — tests recursive make_subgraph_fn."""
     tag = _uid()
 
