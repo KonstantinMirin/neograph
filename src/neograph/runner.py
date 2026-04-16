@@ -17,7 +17,7 @@ from typing import Any
 
 from langgraph.types import Command
 
-from neograph.errors import ExecutionError
+from neograph.errors import CheckpointSchemaError, ExecutionError
 
 
 def _strip_internals(result: Any) -> Any:
@@ -69,6 +69,45 @@ def _inject_input_to_config(
     # Input fields become configurable (input takes precedence)
     merged = {**configurable, **input}
     return {**config, "configurable": merged}
+
+
+def _verify_checkpoint_schema(graph: Any, config: dict[str, Any]) -> None:
+    """Verify checkpoint state schema matches the current graph.
+
+    Compares the neo_schema_fingerprint stored in the checkpoint against
+    the fingerprint computed at compile time. Raises CheckpointSchemaError
+    if they differ — preventing silent Pydantic coercion of stale state.
+    """
+    current_fp = getattr(graph, "_neo_schema_fingerprint", None)
+    if current_fp is None:
+        return  # no fingerprint on graph (pre-feature compile)
+
+    checkpointer = getattr(graph, "checkpointer", None)
+    if checkpointer is None:
+        return
+
+    saved = checkpointer.get_tuple(config)
+    if saved is None:
+        return
+
+    # Extract fingerprint from checkpoint's channel values
+    channel_values = saved.checkpoint.get("channel_values", {})
+    stored_fp = None
+    if isinstance(channel_values, dict):
+        stored_fp = channel_values.get("neo_schema_fingerprint")
+    elif hasattr(channel_values, "get"):
+        stored_fp = channel_values.get("neo_schema_fingerprint")
+
+    if stored_fp is None or stored_fp == "":
+        return  # checkpoint from before fingerprinting was added
+
+    if stored_fp != current_fp:
+        raise CheckpointSchemaError(
+            f"Checkpoint schema fingerprint mismatch: "
+            f"stored={stored_fp!r}, current={current_fp!r}. "
+            f"Construct topology has changed since the checkpoint was written. "
+            f"Invalidate the checkpoint or migrate the state."
+        )
 
 
 def _has_existing_checkpoint(graph: Any, config: dict[str, Any]) -> bool:
@@ -137,6 +176,11 @@ def run(
         configurable["_neo_input"] = input
         config = _inject_input_to_config(input, config)
 
+        # Inject schema fingerprint into initial state for checkpoint storage
+        fp = getattr(graph, "_neo_schema_fingerprint", None)
+        if fp is not None:
+            input["neo_schema_fingerprint"] = fp
+
         # Pre-flight: check all required DI params are present
         _preflight_di_check(graph, config)
 
@@ -145,6 +189,7 @@ def run(
         # pass None to graph.invoke() so LangGraph resumes from checkpoint.
         # If no: this is a new execution — pass input normally.
         if _has_existing_checkpoint(graph, config):
+            _verify_checkpoint_schema(graph, config)
             return _strip_internals(graph.invoke(None, config=config))
 
         return _strip_internals(graph.invoke(input, config=config))
@@ -159,4 +204,6 @@ def run(
     # FromConfig (rate limiters, shared resources are never checkpointed).
     if config is not None:
         _preflight_di_check(graph, config)
+    if _has_existing_checkpoint(graph, config or {}):
+        _verify_checkpoint_schema(graph, config or {})
     return _strip_internals(graph.invoke(None, config=config))

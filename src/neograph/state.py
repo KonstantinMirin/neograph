@@ -253,8 +253,28 @@ def compile_state_model(
     fields["node_id"] = (str, "")
     fields["project_root"] = (str, "")
     fields["human_feedback"] = (dict[str, Any] | None, None)
+    fields["neo_schema_fingerprint"] = (str, "")
 
     return create_model(f"{construct.name}State", **fields)
+
+
+def compute_schema_fingerprint(state_model: type) -> str:
+    """Compute a stable fingerprint from the state model's non-framework fields.
+
+    The fingerprint changes when node output types change (field added/removed,
+    type changed, class renamed). Framework fields (neo_*, node_id, project_root,
+    human_feedback) are excluded — they change with modifier config, not schema.
+    """
+    import hashlib
+    _FRAMEWORK_PREFIXES = ("neo_", "node_id", "project_root", "human_feedback")
+    items = []
+    for fname, finfo in state_model.model_fields.items():
+        if any(fname.startswith(p) or fname == p for p in _FRAMEWORK_PREFIXES):
+            continue
+        items.append((fname, str(finfo.annotation)))
+    items.sort()
+    raw = repr(items).encode()
+    return hashlib.sha256(raw).hexdigest()[:16]
 
 
 def _add_output_field(node: Node, fields: dict[str, Any]) -> None:

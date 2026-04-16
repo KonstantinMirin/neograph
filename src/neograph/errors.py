@@ -138,3 +138,17 @@ class ExecutionError(NeographError):
             msg += f"\n  at {location}"
 
         return cls(msg, validation_errors=validation_errors)
+
+
+class CheckpointSchemaError(NeographError):
+    """Checkpoint state schema does not match the current graph.
+
+    Raised when resuming from a checkpoint whose state model has a different
+    fingerprint than the current compiled graph. This prevents silent coercion
+    where Pydantic fills defaults for missing fields and ignores extras,
+    producing ghost state that looks "complete" but contains stale data.
+    """
+
+    def __init__(self, *args: object, invalidated_nodes: set[str] | None = None) -> None:
+        super().__init__(*args)
+        self.invalidated_nodes = invalidated_nodes or set()

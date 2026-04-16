@@ -32,6 +32,7 @@ from neograph.decorators import (
 )
 from neograph.describe_type import ExcludeFromOutput, describe_type, describe_value
 from neograph.errors import (
+    CheckpointSchemaError,
     CompileError,
     ConfigurationError,
     ConstructError,

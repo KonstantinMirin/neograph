@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+from pydantic import BaseModel
 
 from neograph import (
     CompileError,
@@ -940,5 +941,114 @@ class TestConfigInjectionPatterns:
         for seen in nodes_seen:
             assert seen["node_id"] == "REQ-001"
             assert seen["env"] == "staging"
+
+
+class TestCheckpointSchemaValidation:
+    """Checkpoint resume must detect schema changes and refuse silent coercion.
+
+    TASK neograph-05lv: Pipeline "succeeded" with 0 LLM calls because Pydantic
+    silently coerced old-format state. The resume path must fingerprint the
+    state schema and raise on mismatch.
+    """
+
+    def test_schema_change_raises_on_resume(self):
+        """After changing a node's output model fields, resume must raise."""
+        from langgraph.checkpoint.memory import MemorySaver
+        from neograph.errors import CheckpointSchemaError
+        from neograph.factory import register_scripted
+
+        class V1Output(BaseModel):
+            content: str
+
+        class V2Output(BaseModel):
+            content: str
+            score: float = 0.0  # new field
+
+        register_scripted("sv1_a", lambda _i, _c: V1Output(content="hello"))
+
+        # Run 1: compile + run with V1 schema
+        checkpointer = MemorySaver()
+        config = {"configurable": {"thread_id": "schema-test-1"}}
+
+        pipe_v1 = Construct("sv-pipe", nodes=[
+            Node.scripted("a", fn="sv1_a", outputs=V1Output),
+        ])
+        graph_v1 = compile(pipe_v1, checkpointer=checkpointer)
+        run(graph_v1, input={"node_id": "test"}, config=config)
+
+        # Run 2: compile with V2 schema (added field), same thread_id
+        register_scripted("sv2_a", lambda _i, _c: V2Output(content="hello", score=0.9))
+        pipe_v2 = Construct("sv-pipe", nodes=[
+            Node.scripted("a", fn="sv2_a", outputs=V2Output),
+        ])
+        graph_v2 = compile(pipe_v2, checkpointer=checkpointer)
+
+        with pytest.raises(CheckpointSchemaError, match="schema.*changed|fingerprint"):
+            run(graph_v2, input={"node_id": "test"}, config=config)
+
+    def test_identical_schema_resumes_normally(self):
+        """Same schema on both runs — resume proceeds without error."""
+        from langgraph.checkpoint.memory import MemorySaver
+        from neograph.factory import register_scripted
+
+        class StableOutput(BaseModel):
+            content: str
+
+        call_count = [0]
+        def counting_fn(_i, _c):
+            call_count[0] += 1
+            return StableOutput(content="hello")
+
+        register_scripted("stable_a", counting_fn)
+
+        checkpointer = MemorySaver()
+        config = {"configurable": {"thread_id": "schema-test-2"}}
+
+        pipe = Construct("stable-pipe", nodes=[
+            Node.scripted("a", fn="stable_a", outputs=StableOutput),
+        ])
+
+        # Run 1
+        graph = compile(pipe, checkpointer=checkpointer)
+        run(graph, input={"node_id": "test"}, config=config)
+        assert call_count[0] == 1
+
+        # Run 2 — same schema, should resume (node already complete)
+        graph2 = compile(pipe, checkpointer=checkpointer)
+        run(graph2, input={"node_id": "test"}, config=config)
+        # Node should NOT re-execute (already checkpointed)
+        assert call_count[0] == 1
+
+    def test_class_rename_detected(self):
+        """Renaming the output class (same fields) still triggers detection."""
+        from langgraph.checkpoint.memory import MemorySaver
+        from neograph.errors import CheckpointSchemaError
+        from neograph.factory import register_scripted
+
+        class OriginalName(BaseModel):
+            content: str
+
+        class RenamedClass(BaseModel):
+            content: str  # same fields, different class name
+
+        register_scripted("rn_a1", lambda _i, _c: OriginalName(content="hello"))
+        register_scripted("rn_a2", lambda _i, _c: RenamedClass(content="hello"))
+
+        checkpointer = MemorySaver()
+        config = {"configurable": {"thread_id": "schema-test-3"}}
+
+        pipe1 = Construct("rn-pipe", nodes=[
+            Node.scripted("a", fn="rn_a1", outputs=OriginalName),
+        ])
+        graph1 = compile(pipe1, checkpointer=checkpointer)
+        run(graph1, input={"node_id": "test"}, config=config)
+
+        pipe2 = Construct("rn-pipe", nodes=[
+            Node.scripted("a", fn="rn_a2", outputs=RenamedClass),
+        ])
+        graph2 = compile(pipe2, checkpointer=checkpointer)
+
+        with pytest.raises(CheckpointSchemaError):
+            run(graph2, input={"node_id": "test"}, config=config)
 
 
