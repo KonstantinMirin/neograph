@@ -1499,3 +1499,96 @@ class TestLoopInputNotEqualOutput:
         final = result["exhaust_last"][-1]
         assert isinstance(final, Validated)
         assert final.errors == ["not great"]  # last result, errors still present
+
+    def test_programmatic_api_loop_input_neq_output(self):
+        """Programmatic Construct(nodes=[Node.scripted(...)]) | Loop with input != output.
+
+        Three-surface parity: same behavior as @node surface above.
+        """
+        call_count = {"produce": 0}
+
+        def _produce(input_data, config):
+            call_count["produce"] += 1
+            if call_count["produce"] == 1:
+                return ProduceOutput(text="bad", iteration=1)
+            return ProduceOutput(text="good", iteration=2)
+
+        def _validate(input_data, config):
+            out = input_data["produce"] if isinstance(input_data, dict) else input_data
+            errors = ["nope"] if "bad" in out.text else []
+            return Validated(output=out, errors=errors)
+
+        register_scripted("_pv_produce", _produce)
+        register_scripted("_pv_validate", _validate)
+
+        sub = Construct(
+            "pv-sub",
+            input=ProduceInput,
+            output=Validated,
+            nodes=[
+                Node.scripted("produce", fn="_pv_produce", outputs=ProduceOutput),
+                Node.scripted("validate", fn="_pv_validate",
+                              inputs={"produce": ProduceOutput}, outputs=Validated),
+            ],
+        ) | Loop(when=lambda v: v is None or bool(v.errors), max_iterations=5)
+
+        pipeline = Construct("pv-outer", nodes=[sub])
+        graph = compile(pipeline)
+        result = run(graph, input={
+            "node_id": "prog-1",
+            "neo_subgraph_input": ProduceInput(topic="T", context="C"),
+        })
+
+        assert call_count["produce"] == 2
+        final = result["pv_sub"][-1]
+        assert isinstance(final, Validated)
+        assert final.errors == []
+
+    def test_forward_construct_loop_input_neq_output(self):
+        """ForwardConstruct self.loop() with input != output.
+
+        Three-surface parity: the produce+validate pattern works via
+        ForwardConstruct tracing, not just @node or programmatic API.
+        """
+        from neograph import ForwardConstruct
+
+        fc_call_count = {"produce": 0}
+
+        class ProduceValidateFlow(ForwardConstruct):
+            seed = Node.scripted("seed", fn="_fc_seed", outputs=ProduceInput)
+            produce = Node.scripted("produce", fn="_fc_produce", outputs=ProduceOutput)
+            check = Node.scripted("check", fn="_fc_check",
+                                  inputs={"produce": ProduceOutput}, outputs=Validated)
+
+            def forward(self, topic):
+                s = self.seed(topic)
+                result = self.loop(
+                    body=[self.produce, self.check],
+                    when=lambda v: v is None or bool(v.errors),
+                    max_iterations=5,
+                )(s)
+                return result
+
+        def _fc_seed(input_data, config):
+            return ProduceInput(topic="test", context="ctx")
+
+        def _fc_produce(input_data, config):
+            fc_call_count["produce"] += 1
+            if fc_call_count["produce"] == 1:
+                return ProduceOutput(text="bad", iteration=1)
+            return ProduceOutput(text="good", iteration=2)
+
+        def _fc_check(input_data, config):
+            out = input_data.get("produce") if isinstance(input_data, dict) else input_data
+            errors = ["fail"] if "bad" in out.text else []
+            return Validated(output=out, errors=errors)
+
+        register_scripted("_fc_seed", _fc_seed)
+        register_scripted("_fc_produce", _fc_produce)
+        register_scripted("_fc_check", _fc_check)
+
+        flow = ProduceValidateFlow()
+        graph = compile(flow)
+        result = run(graph, input={"node_id": "fc-1"})
+
+        assert fc_call_count["produce"] == 2

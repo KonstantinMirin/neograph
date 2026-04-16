@@ -1,6 +1,6 @@
-# CHECK_ERROR: output type.*not compatible.*input|Loop.*output.*input
 # Loop on a Construct where output type differs from input type.
-# The loop back-edge requires output == input. Should fail at | time.
+# Since neograph-vt4y, this is the produce+validate pattern — the loop
+# re-reads original inputs on each iteration.
 from pydantic import BaseModel
 
 from neograph import Construct, Node
@@ -28,6 +28,5 @@ sub = Construct(
     ],
 )
 
-# This should fail: Loop requires output to be compatible with input,
-# but Report is not compatible with Draft.
+# Allowed: Loop with input != output (produce+validate pattern).
 pipeline_node = sub | Loop(when=lambda d: d.score < 0.8, max_iterations=5)

@@ -1,5 +1,6 @@
-# CHECK_ERROR: loop.*compatible|output.*not compatible.*input
-# Loop on a Construct where output type doesn't match input type
+# Loop on a Construct where output type differs from input type.
+# Since neograph-vt4y, this is allowed — the loop re-reads original inputs
+# from parent state on each iteration instead of feeding output back.
 from pydantic import BaseModel
 
 from neograph import Construct, Node
@@ -15,11 +16,11 @@ class Review(BaseModel, frozen=True):
 
 register_scripted("lt_review", lambda i, c: Review(score=0.5))
 
-pipeline = Construct("broken", nodes=[
+pipeline = Construct("valid", nodes=[
     Construct(
         "refine",
         input=Draft,
-        output=Review,  # Review != Draft — can't loop
+        output=Review,  # Review != Draft — produce+validate pattern
         nodes=[
             Node.scripted("review", fn="lt_review", outputs=Review),
         ],

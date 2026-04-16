@@ -549,13 +549,14 @@ class _LoopCall:
         # Infer input/output types from the proxy source and last body node.
         # source_node can be None when the proxy comes from a previous
         # self.loop() or a branch — fall back to the last body node's
-        # output type (Loop requires output compatible with input).
+        # output type so the construct compiles.  Input and output can
+        # differ (produce+validate pattern, neograph-vt4y).
         source_node = input_proxy._neo_source
         output_type = body_nodes[-1].outputs
         if source_node is not None:
             input_type = source_node.outputs if isinstance(source_node, Node) else getattr(source_node, 'output', None)
         else:
-            # Fallback: use output_type (Loop's input = output constraint)
+            # Fallback: use output_type (no source node to infer from)
             input_type = output_type
 
         if input_type is None:
