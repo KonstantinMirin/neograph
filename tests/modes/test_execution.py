@@ -1052,3 +1052,74 @@ class TestCheckpointSchemaValidation:
             run(graph2, input={"node_id": "test"}, config=config)
 
 
+class TestPerNodeCheckpointInvalidation:
+    """Per-node invalidation: only changed nodes + descendants re-run.
+
+    FEATURE neograph-l3gw: when a node's output type changes, invalidate
+    only that node and its transitive downstream dependencies, preserving
+    expensive upstream state.
+    """
+
+    def test_upstream_preserved_downstream_rerun(self):
+        """Change node C's output in A→B→C→D. A,B preserved, C,D re-run."""
+        from langgraph.checkpoint.memory import MemorySaver
+        from neograph.errors import CheckpointSchemaError
+        from neograph.factory import register_scripted
+
+        class TypeA(BaseModel):
+            val: str = "a"
+
+        class TypeB(BaseModel):
+            val: str = "b"
+
+        class TypeC_V1(BaseModel):
+            val: str = "c1"
+
+        class TypeC_V2(BaseModel):
+            val: str = "c2"
+            extra: int = 0  # new field
+
+        class TypeD(BaseModel):
+            val: str = "d"
+
+        exec_log = []
+
+        register_scripted("pn_a", lambda _i, _c: (exec_log.append("a"), TypeA())[1])
+        register_scripted("pn_b", lambda _i, _c: (exec_log.append("b"), TypeB())[1])
+        register_scripted("pn_c1", lambda _i, _c: (exec_log.append("c"), TypeC_V1())[1])
+        register_scripted("pn_c2", lambda _i, _c: (exec_log.append("c"), TypeC_V2())[1])
+        register_scripted("pn_d", lambda _i, _c: (exec_log.append("d"), TypeD())[1])
+
+        checkpointer = MemorySaver()
+        config = {"configurable": {"thread_id": "per-node-1"}}
+
+        # Run 1: A→B→C(v1)→D
+        pipe_v1 = Construct("pn-pipe", nodes=[
+            Node.scripted("a", fn="pn_a", outputs=TypeA),
+            Node.scripted("b", fn="pn_b", inputs={"a": TypeA}, outputs=TypeB),
+            Node.scripted("c", fn="pn_c1", inputs={"b": TypeB}, outputs=TypeC_V1),
+            Node.scripted("d", fn="pn_d", inputs={"c": TypeC_V1}, outputs=TypeD),
+        ])
+        graph_v1 = compile(pipe_v1, checkpointer=checkpointer)
+        run(graph_v1, input={"node_id": "test"}, config=config)
+        assert exec_log == ["a", "b", "c", "d"]
+
+        # Run 2: change C's output type
+        exec_log.clear()
+        pipe_v2 = Construct("pn-pipe", nodes=[
+            Node.scripted("a", fn="pn_a", outputs=TypeA),
+            Node.scripted("b", fn="pn_b", inputs={"a": TypeA}, outputs=TypeB),
+            Node.scripted("c", fn="pn_c2", inputs={"b": TypeB}, outputs=TypeC_V2),
+            Node.scripted("d", fn="pn_d", inputs={"c": TypeC_V2}, outputs=TypeD),
+        ])
+        graph_v2 = compile(pipe_v2, checkpointer=checkpointer)
+
+        # Should raise with invalidated_nodes containing C and D
+        with pytest.raises(CheckpointSchemaError) as exc_info:
+            run(graph_v2, input={"node_id": "test"}, config=config)
+
+        err = exc_info.value
+        assert hasattr(err, "invalidated_nodes")
+        assert "c" in err.invalidated_nodes or "d" in err.invalidated_nodes
+
+

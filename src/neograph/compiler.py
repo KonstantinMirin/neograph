@@ -42,7 +42,7 @@ from neograph.forward import _BranchNode
 from neograph.modifiers import ModifierCombo, classify_modifiers
 from neograph.naming import field_name_for
 from neograph.node import Node
-from neograph.state import compile_state_model, compute_schema_fingerprint
+from neograph.state import compile_state_model, compute_node_fingerprints, compute_schema_fingerprint
 
 log = structlog.get_logger()
 
@@ -202,6 +202,7 @@ def compile(construct: Construct, checkpointer: Any = None, retry_policy: Any = 
 
     # 6. Schema fingerprint for checkpoint validation
     compiled._neo_schema_fingerprint = compute_schema_fingerprint(state_model)  # type: ignore[attr-defined]
+    compiled._neo_node_fingerprints = compute_node_fingerprints(construct)  # type: ignore[attr-defined]
 
     # 7. Dev-mode DAG visualization
     if DEV_MODE:

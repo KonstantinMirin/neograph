@@ -254,8 +254,45 @@ def compile_state_model(
     fields["project_root"] = (str, "")
     fields["human_feedback"] = (dict[str, Any] | None, None)
     fields["neo_schema_fingerprint"] = (str, "")
+    fields["neo_node_fingerprints"] = (dict[str, str], {})
 
     return create_model(f"{construct.name}State", **fields)
+
+
+def compute_node_fingerprints(construct: Any) -> dict[str, str]:
+    """Compute per-node output type fingerprints for checkpoint invalidation.
+
+    Returns {field_name: sha256_prefix} for each node in the construct.
+    Used to identify which specific nodes changed between runs.
+    """
+    import hashlib
+    from neograph.naming import field_name_for
+
+    result = {}
+    for item in construct.nodes:
+        if hasattr(item, "outputs") and item.outputs is not None:
+            fname = field_name_for(item.name)
+            if isinstance(item.outputs, dict):
+                # Dict-form outputs: fingerprint each key
+                for key, typ in item.outputs.items():
+                    full_name = f"{fname}_{key}"
+                    result[full_name] = hashlib.sha256(
+                        f"{full_name}:{type(typ).__name__ if isinstance(typ, type) else str(typ)}".encode()
+                    ).hexdigest()[:12]
+            else:
+                typ = item.outputs
+                result[fname] = hashlib.sha256(
+                    f"{fname}:{typ.__qualname__ if isinstance(typ, type) else str(typ)}".encode()
+                ).hexdigest()[:12]
+        elif hasattr(item, "nodes"):
+            # Sub-construct: fingerprint its output
+            fname = field_name_for(item.name)
+            if hasattr(item, "output") and item.output is not None:
+                typ = item.output
+                result[fname] = hashlib.sha256(
+                    f"{fname}:{typ.__qualname__ if isinstance(typ, type) else str(typ)}".encode()
+                ).hexdigest()[:12]
+    return result
 
 
 def compute_schema_fingerprint(state_model: type) -> str:

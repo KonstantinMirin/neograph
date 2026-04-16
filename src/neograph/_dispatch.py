@@ -20,6 +20,7 @@ from pydantic import BaseModel
 from neograph._llm import _is_inline_prompt
 from neograph.errors import ConfigurationError
 from neograph.node import Node
+from neograph.renderers import build_rendered_input
 
 # ── Typed dispatch containers (architecture-v2 section 1) ────────────────
 #
@@ -221,7 +222,6 @@ def _render_input(node: Node, input_data: Any) -> Any:
     - Inline prompts: raw data (for ${var.field} dotted access)
     - Template-ref prompts: rendered + flattened (for prompt_compiler)
     """
-    from neograph.renderers import build_rendered_input
     try:
         from neograph._llm import _get_global_renderer
         effective_renderer = node.renderer or _get_global_renderer()
