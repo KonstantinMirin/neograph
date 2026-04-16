@@ -23,6 +23,7 @@ from neograph import (
     Construct,
     ConstructError,
     Each,
+    ExecutionError,
     Node,
     compile,
     construct_from_functions,
@@ -30,6 +31,7 @@ from neograph import (
     run,
 )
 from neograph.factory import register_scripted
+from neograph.modifiers import Loop
 
 # -- Schemas for loop tests ---------------------------------------------------
 
@@ -1362,3 +1364,138 @@ class TestLoopSkipWhenCounterIncrement:
 
         with pytest.raises(ExecutionError, match="max_iterations"):
             run(graph, input={"node_id": "all-skip-err-1"})
+
+
+# -- Loop on Construct with input != output (produce+validate pattern) --------
+
+
+class ProduceInput(BaseModel, frozen=True):
+    """Input to the producer node."""
+    topic: str
+    context: str
+
+
+class ProduceOutput(BaseModel, frozen=True):
+    """Raw producer output — pre-validation."""
+    text: str
+    iteration: int = 0
+
+
+class Validated(BaseModel, frozen=True):
+    """Validator output — wraps producer output + error list."""
+    output: ProduceOutput
+    errors: list[str]
+
+
+class TestLoopInputNotEqualOutput:
+    """Loop on a sub-construct where input type differs from output type.
+
+    The common 'produce + validate + retry on errors' pattern:
+    - Producer takes rich inputs (ProduceInput)
+    - Validator wraps output + errors (Validated)
+    - Loop condition checks errors; retries if non-empty
+    - On retry, producer sees same original inputs
+    """
+
+    def test_construct_loop_input_neq_output_compiles(self):
+        """Construct | Loop should accept input != output."""
+        call_count = {"produce": 0, "validate": 0}
+
+        @node(outputs=ProduceOutput)
+        def produce(seed: ProduceInput) -> ProduceOutput:
+            call_count["produce"] += 1
+            if call_count["produce"] == 1:
+                return ProduceOutput(text="bad draft", iteration=1)
+            return ProduceOutput(text="good draft", iteration=2)
+
+        @node(outputs=Validated)
+        def validate(produce: ProduceOutput) -> Validated:
+            call_count["validate"] += 1
+            errors = ["too short"] if "bad" in produce.text else []
+            return Validated(output=produce, errors=errors)
+
+        sub = construct_from_functions(
+            "produce-and-validate", [produce, validate],
+            input=ProduceInput, output=Validated,
+        ) | Loop(
+            when=lambda v: v is None or bool(v.errors),
+            max_iterations=5,
+        )
+
+        pipeline = Construct("outer", nodes=[sub])
+        graph = compile(pipeline)
+        result = run(graph, input={
+            "node_id": "test-1",
+            "neo_subgraph_input": ProduceInput(topic="AI", context="safety"),
+        })
+
+        # Producer ran twice (bad draft → retry → good draft)
+        assert call_count["produce"] == 2
+        assert call_count["validate"] == 2
+
+        # Final output is the clean Validated with no errors.
+        # Loop sub-constructs use an append-list reducer; [-1] is the latest.
+        final = result["produce_and_validate"][-1]
+        assert isinstance(final, Validated)
+        assert final.errors == []
+        assert final.output.text == "good draft"
+
+    def test_construct_loop_input_neq_output_max_iterations(self):
+        """max_iterations + on_exhaust='error' works with input != output."""
+
+        @node(outputs=ProduceOutput)
+        def produce_bad(seed: ProduceInput) -> ProduceOutput:
+            return ProduceOutput(text="always bad")
+
+        @node(outputs=Validated)
+        def validate_strict(produce_bad: ProduceOutput) -> Validated:
+            return Validated(output=produce_bad, errors=["always fails"])
+
+        sub = construct_from_functions(
+            "always-fail", [produce_bad, validate_strict],
+            input=ProduceInput, output=Validated,
+        ) | Loop(
+            when=lambda v: v is None or bool(v.errors),
+            max_iterations=3,
+            on_exhaust="error",
+        )
+
+        pipeline = Construct("outer", nodes=[sub])
+        graph = compile(pipeline)
+
+        with pytest.raises(ExecutionError, match="max_iterations"):
+            run(graph, input={
+                "node_id": "test-2",
+                "neo_subgraph_input": ProduceInput(topic="X", context="Y"),
+            })
+
+    def test_construct_loop_input_neq_output_on_exhaust_last(self):
+        """on_exhaust='last' returns the last result even with errors."""
+
+        @node(outputs=ProduceOutput)
+        def produce_always(seed: ProduceInput) -> ProduceOutput:
+            return ProduceOutput(text="mediocre")
+
+        @node(outputs=Validated)
+        def validate_always(produce_always: ProduceOutput) -> Validated:
+            return Validated(output=produce_always, errors=["not great"])
+
+        sub = construct_from_functions(
+            "exhaust-last", [produce_always, validate_always],
+            input=ProduceInput, output=Validated,
+        ) | Loop(
+            when=lambda v: v is None or bool(v.errors),
+            max_iterations=2,
+            on_exhaust="last",
+        )
+
+        pipeline = Construct("outer", nodes=[sub])
+        graph = compile(pipeline)
+        result = run(graph, input={
+            "node_id": "test-3",
+            "neo_subgraph_input": ProduceInput(topic="X", context="Y"),
+        })
+
+        final = result["exhaust_last"][-1]
+        assert isinstance(final, Validated)
+        assert final.errors == ["not great"]  # last result, errors still present

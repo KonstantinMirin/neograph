@@ -306,10 +306,18 @@ def _validate_node_chain(construct: Construct) -> None:
 
 
 def validate_loop_construct(construct: Construct) -> None:
-    """Validate Loop on a Construct: output must be compatible with input.
+    """Validate Loop on a Construct: both input and output must be declared.
 
     Called at ``|`` time from ``Modifiable.__or__`` when a Loop modifier
     is applied to a Construct.
+
+    When output is compatible with input, the loop feeds each iteration's
+    output back as the next iteration's input (classic refine pattern).
+
+    When output differs from input (produce+validate pattern), the loop
+    re-reads original inputs from parent state on each iteration instead
+    of feeding output back.  The condition callable still receives the
+    output type.
     """
     if construct.output is None or construct.input is None:
         raise ConstructError.build(
@@ -317,15 +325,6 @@ def validate_loop_construct(construct: Construct) -> None:
             found=f"input={'declared' if construct.input is not None else 'None'}, "
                   f"output={'declared' if construct.output is not None else 'None'}",
             hint="declare both input= and output= on the construct for Loop to wire the back-edge",
-            construct=construct.name,
-            location=_source_location(),
-        )
-    if not _types_compatible(construct.output, construct.input):
-        raise ConstructError.build(
-            "Loop output type not compatible with input type for back-edge",
-            expected=_fmt_type(construct.input),
-            found=_fmt_type(construct.output),
-            hint="the loop's output must match the construct's input type for the back-edge",
             construct=construct.name,
             location=_source_location(),
         )

@@ -543,14 +543,21 @@ def make_subgraph_fn(sub: Any, sub_graph: Any) -> Callable:
     def subgraph_node(state: Any, config: RunnableConfig) -> dict:
         sub_log.info("subgraph_start")
 
-        # Loop re-entry: on iteration 2+, read from own append-list
+        # Loop re-entry: on iteration 2+, read from own append-list.
+        # When output type matches input type (classic refine pattern),
+        # feed the output back as input.  When output differs from input
+        # (produce+validate pattern), skip the shortcut and re-read
+        # original inputs from parent state.
         input_data = None
         if has_loop:
             own_val = _state_get(state, field_name)
             if isinstance(own_val, list) and own_val:
-                input_data = own_val[-1]
+                latest = own_val[-1]
+                if sub.input is None or isinstance(latest, sub.input):
+                    input_data = latest
 
-        # First iteration or non-loop: extract input by type.
+        # First iteration, non-loop, or input!=output loop re-entry:
+        # extract input by type from parent state.
         # Iterate in reverse so later pipeline nodes take precedence
         # (e.g., loop output over seed). Unwrap append-lists.
         if input_data is None:
