@@ -241,6 +241,70 @@ Both are `PrivateAttr(default=None)`, preserved by `model_copy` (Pydantic v2 cop
 
 ---
 
+## RenderedInput — single rendering abstraction
+
+`src/neograph/renderers.py` (dataclass at line 32). The single object that bundles all rendering artifacts for prompt construction. Produced by `build_rendered_input(input_data, renderer=None)`.
+
+**Five fields**:
+- `raw: dict[str, Any] | Any` — original Pydantic models, used by inline `${var}` prompts for dotted attribute access
+- `rendered: dict[str, Any] | Any` — BAML-rendered strings, used by template-ref prompts via `prompt_compiler`
+- `flattened: dict[str, Any]` — extra fields from `render_for_prompt()` BaseModel returns, available only in template-ref prompts
+- `available_keys_inline: set[str]` — keys valid for inline `${var}` (raw dict keys only, no flattened, no framework extras)
+- `available_keys_template: set[str]` — keys valid for template-ref `{var}` (raw + flattened + framework extras)
+
+**`for_template_ref` property** — merges `rendered` and `flattened` dicts, with `rendered` keys taking precedence. This is what the `prompt_compiler` receives.
+
+**Consumers**: `_dispatch.py:_render_input()` (mode dispatch layer) and `_llm.py:render_prompt()` (prompt inspection).
+
+**The inline/template-ref split**: inline prompts (`${var}`) get `ri.raw` — raw Pydantic objects for `getattr` chains. Template-ref prompts get `ri.for_template_ref` — pre-rendered strings + flattened fields. Flattened fields and framework extras (`node_id`, `project_root`) are NOT available in inline prompts.
+
+---
+
+## Checkpoint resume — schema-aware auto-rewind
+
+When a pipeline runs with a checkpointer and the same `thread_id`, neograph detects schema changes and automatically rewinds to re-execute only the affected nodes.
+
+**Schema fingerprinting** (`state.py`):
+- `compute_schema_fingerprint(state_model)` — SHA-256 prefix of sorted `(field_name, annotation_string)` pairs, excluding framework fields (`neo_*`). Attached to compiled graph as `_neo_schema_fingerprint`.
+- `compute_node_fingerprints(construct)` — `dict[str, str]` mapping each node's state field to a SHA-256 prefix of `"{field_name}:{type.__qualname__}"`. Attached as `_neo_node_fingerprints`.
+
+**At compile time** (`compiler.py:204-205`): both fingerprints are stashed on the compiled graph.
+
+**At run time** (`runner.py:267-272`): fingerprints are injected into the initial state dict so they persist in the checkpoint.
+
+**On resume** (`runner.py:_verify_checkpoint_schema`): stored fingerprints are compared against current. If they differ:
+- `_compute_invalidated_nodes()` diffs per-node fingerprints to find which nodes changed
+- `auto_resume=True` (default): `_auto_resume_from_divergence()` walks `get_state_history()` backwards, finds the checkpoint where the earliest changed node was in `.next`, injects that `checkpoint_id` into config, and `invoke(None)` resumes from there
+- `auto_resume=False`: raises `CheckpointSchemaError(invalidated_nodes=...)` for explicit handling
+
+**What triggers invalidation**: output class renamed, field added/removed/type-changed. Prompt text changes do NOT trigger invalidation (fingerprints are type-based, not content-based).
+
+---
+
+## Lint: template placeholder validation
+
+`lint()` (`src/neograph/lint.py`) now validates template placeholders in addition to DI bindings. Full signature:
+
+```python
+lint(construct, *, config=None, known_template_vars=None, template_resolver=None)
+```
+
+**Three check categories**:
+1. DI binding checks (original) — `FromInput`/`FromConfig` params vs config dict
+2. Inline prompt placeholder checks — `${var}` against predicted input dict keys (no flattened, no framework extras)
+3. Template-ref placeholder checks — `{var}` against predicted input keys + flattened fields + known extras (requires `template_resolver`)
+
+**The inline/template-ref key asymmetry** is the most common lint confusion. Inline prompts see fewer keys because they resolve via raw attribute access (no rendering pipeline). Template-ref prompts see more keys because the rendering pipeline produces flattened fields and framework extras.
+
+**`_predict_input_keys(node, include_flattened=True)`** — internal helper that computes what keys a node will see at runtime. `include_flattened=False` for inline, `True` for template-ref.
+
+**Setup module exports** for `neograph check --setup`:
+- `get_check_config()` — config dict (required)
+- `get_template_resolver()` — `Callable[[str], str | None]` (optional)
+- `get_known_template_vars()` — iterable of extra var names (optional)
+
+---
+
 ## Modes and mode inference
 
 `@node` supports five execution modes:

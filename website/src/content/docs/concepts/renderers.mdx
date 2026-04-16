@@ -5,11 +5,55 @@ sidebar:
   order: 50
 ---
 
-When a node's upstream output is inserted into an LLM prompt, it needs to be serialized to text. Renderers control how that serialization happens. Three built-in renderers cover the common formats; you can also define custom rendering per model.
+When a node's upstream output is inserted into an LLM prompt, it needs to be serialized to text. Renderers control how that serialization happens. When no renderer is configured, BaseModel values are rendered in TypeScript-style BAML notation via `describe_value()`. Three built-in renderers are available when you want a different format; you can also define custom rendering per model.
+
+## Default rendering (BAML)
+
+When no renderer is configured on the node or construct, Pydantic BaseModel values are rendered via `describe_value()` -- the same TypeScript-style notation used for structured output instructions. This is the default for all LLM-mode nodes.
+
+```python
+from pydantic import BaseModel
+
+class Claim(BaseModel, frozen=True):
+    text: str
+    category: str
+    confidence: float
+
+class Claims(BaseModel, frozen=True):
+    items: list[Claim]
+
+claims = Claims(items=[
+    Claim(text="The system shall authenticate users via SSO",
+          category="authentication", confidence=0.95),
+    Claim(text="All API responses shall include trace IDs",
+          category="observability", confidence=0.88),
+])
+```
+
+The default BAML rendering produces:
+
+```
+{
+  items: [
+    {
+      text: "The system shall authenticate users via SSO"
+      category: "authentication"
+      confidence: 0.95
+    },
+    {
+      text: "All API responses shall include trace IDs"
+      category: "observability"
+      confidence: 0.88
+    }
+  ]
+}
+```
+
+This notation is the same format LLMs see in structured output instructions (`describe_type()`), so input rendering and output schema rendering are symmetric. Lists of BaseModels (`list[BaseModel]`) are also rendered via `describe_value()` in the same notation.
 
 ## Built-in renderers
 
-### XmlRenderer (default)
+### XmlRenderer
 
 BAML-style XML elements. Fields become tags; nested models become nested XML; lists become repeated `<item>` elements. Multi-line prose is not JSON-escaped.
 
@@ -83,7 +127,8 @@ print(renderer.render(claims))
 
 | Renderer | Best for |
 |---|---|
-| `XmlRenderer` | Most use cases. LLMs parse XML reliably, and nested structure is preserved without JSON escaping. |
+| None (BAML default) | Most use cases. TypeScript-style notation is symmetric with structured output schema instructions. No configuration needed. |
+| `XmlRenderer` | When you want XML structure. LLMs parse XML reliably, and nested structure is preserved without JSON escaping. |
 | `DelimitedRenderer` | DSPy-style prompts. Flat, human-readable, good for simple schemas. |
 | `JsonRenderer` | When the downstream LLM expects JSON input, or for backward compatibility with existing prompts. |
 
@@ -122,7 +167,8 @@ The dispatch hierarchy is:
 1. `model.render_for_prompt()` (model method wins)
 2. `node.renderer`
 3. `construct.renderer`
-4. `None` (raw value, no rendering)
+4. BAML default (`describe_value()` -- TypeScript-style notation)
+5. Primitives pass through unchanged
 
 ### Per model: render_for_prompt()
 
@@ -142,7 +188,7 @@ This is useful when a model knows best how to represent itself for an LLM, indep
 
 ### Typed projections: render_for_prompt() returning BaseModel
 
-When `render_for_prompt()` returns a **BaseModel** instead of a string, NeoGraph automatically renders the returned model through the active renderer. This lets you define typed *presentation projections* -- slim views of your data optimized for the LLM -- without manual string formatting.
+When `render_for_prompt()` returns a **BaseModel** instead of a string, NeoGraph automatically renders the returned model through the active renderer (or BAML default if none is configured). This lets you define typed *presentation projections* -- slim views of your data optimized for the LLM -- without manual string formatting.
 
 ```python
 from pydantic import BaseModel, Field
@@ -174,7 +220,54 @@ With `XmlRenderer`, the LLM sees:
 
 The `source_url` and `internal_score` fields never reach the prompt. The projection is typed and validated by Pydantic, so you get IDE autocomplete and type checking on the presentation layer.
 
+#### Field flattening
+
+When `render_for_prompt()` returns a BaseModel, each field of the returned model becomes an individually addressable template variable in template-ref prompts. This means a projection like `ResearchPresentation` above exposes both `{content}` and `{confidence}` as separate template variables, in addition to the whole rendered model.
+
+BaseModel children and `list[BaseModel]` children within the returned model are preserved as objects (not string-rendered), so you can use dotted access like `{items[0].source}` in template-ref prompts. Scalar fields are rendered through the active renderer (or BAML default).
+
+Flattened fields are only available in template-ref prompts, not in inline prompts.
+
 See [Example 18](/walkthrough/typed-projections/) for a full runnable demo.
+
+## RenderedInput
+
+`RenderedInput` is the internal dataclass that bundles raw values, rendered values, and flattened fields into a single object. It is built once per node execution and consumed by the dispatch and prompt compilation layers.
+
+`build_rendered_input(input_data, renderer=None)` is the single entry point that produces it. When `renderer` is `None`, BaseModel values are BAML-rendered via `describe_value()`.
+
+Fields:
+
+| Field | Type | Purpose |
+|---|---|---|
+| `raw` | `dict[str, Any] \| Any` | Raw Pydantic models -- for inline prompt `${var.field}` dotted access |
+| `rendered` | `dict[str, Any] \| Any` | BAML/rendered strings -- for template-ref prompt compilation |
+| `flattened` | `dict[str, Any]` | Extra fields from `render_for_prompt()` BaseModel returns (template-ref only) |
+| `available_keys_inline` | `set[str]` | Keys valid for inline `${var}` -- raw dict keys only |
+| `available_keys_template` | `set[str]` | Keys valid for template-ref `{var}` -- raw keys + flattened keys |
+
+The `for_template_ref` property merges `rendered` and `flattened` dicts into a single namespace for the prompt compiler. Flattened keys do not overwrite rendered keys if they share a name.
+
+## Inline vs template-ref prompts
+
+NeoGraph supports two prompt styles, and they receive different views of the rendered input:
+
+**Inline prompts** (`prompt="Summarize: ${claims}"`) get raw Pydantic objects. Variable resolution uses `getattr` chains, so `${claims.items[0].text}` traverses the live model. This means full Python-level access to nested fields.
+
+**Template-ref prompts** (`prompt="rw/summarize"`) get BAML-rendered strings plus flattened fields from `render_for_prompt()` BaseModel returns. Template variables like `{claims}` resolve to the rendered string; flattened fields like `{content}` are available as separate variables.
+
+Key differences:
+
+| | Inline `${var}` | Template-ref `{var}` |
+|---|---|---|
+| Values received | Raw Pydantic objects | BAML-rendered strings |
+| Dotted access | `${var.field}` via getattr | Limited to flattened fields |
+| Flattened fields | Not available | Available as top-level vars |
+| Framework extras (`node_id`, `project_root`) | Not available | Available via config injection |
+
+## list[BaseModel] handling
+
+Lists of BaseModel instances are rendered via `describe_value()` in the same BAML notation as single models, producing an array of typed objects. When an explicit renderer is configured, the renderer's `render()` method handles the list instead.
 
 ## describe_type: schema descriptions for prompts
 

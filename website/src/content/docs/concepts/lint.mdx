@@ -1,16 +1,21 @@
 ---
 title: Static Linting (lint)
-description: Validate DI bindings against a sample config before runtime — catch missing FromInput/FromConfig keys at check time.
+description: Validate DI bindings and template placeholder resolution against a sample config before runtime — catch missing keys at check time.
 ---
 
-`lint()` walks every node in a Construct and verifies that each `FromInput`/`FromConfig` parameter has a matching key in the provided config dict. It never raises -- it returns a list of `LintIssue` instances describing every binding problem it finds.
+`lint()` walks every node in a Construct and verifies that each `FromInput`/`FromConfig` parameter has a matching key in the provided config dict and that prompt placeholders resolve to known input keys. It never raises -- it returns a list of `LintIssue` instances describing every binding problem it finds.
 
 ## API
 
 ```python
 from neograph import lint, LintIssue
 
-issues = lint(pipeline, config={"node_id": "test", "project_root": "/tmp"})
+issues = lint(
+    pipeline,
+    config={"node_id": "test", "project_root": "/tmp"},
+    known_template_vars={"topic", "json_schema"},
+    template_resolver=my_resolver,
+)
 
 for issue in issues:
     print(f"[{issue.kind}] {issue.message}")
@@ -22,6 +27,20 @@ for issue in issues:
 |-----------|------|-------------|
 | `construct` | `Construct` | The pipeline to check |
 | `config` | `dict[str, Any] \| None` | Config dict to validate DI bindings against. When `None`, only structural checks run (required params are flagged as missing since no config is available). |
+| `known_template_vars` | `set[str] \| None` | Set of extra variable names the consumer's prompt pipeline provides. Merged with framework extras (`node_id`, `project_root`, `human_feedback`). |
+| `template_resolver` | `Callable[[str], str \| None] \| None` | Callable mapping template-ref names to template text strings. Returns `None` if the template is not found. Required for template-ref placeholder validation; when absent, template-ref prompts are skipped. |
+
+### Signature
+
+```python
+def lint(
+    construct: Construct,
+    *,
+    config: dict[str, Any] | None = None,
+    known_template_vars: set[str] | None = None,
+    template_resolver: Callable[[str], str | None] | None = None,
+) -> list[LintIssue]:
+```
 
 ### Return value
 
@@ -34,19 +53,22 @@ A list of `LintIssue` instances. An empty list means all bindings are satisfied.
 class LintIssue:
     node_name: str   # which node has the problem
     param: str       # which parameter is unresolved
-    kind: str        # "from_input", "from_config", "from_input_model", "from_config_model"
+    kind: str        # "from_input", "from_config", "from_input_model", "from_config_model",
+                     # "template_placeholder_unresolvable", "template_placeholder_known_vars_only"
     message: str     # human-readable description
     required: bool   # True if the parameter has no default
 ```
 
 The `kind` field tells you where the parameter expected to be resolved from:
 
-| Kind | Meaning |
-|------|---------|
-| `from_input` | `Annotated[T, FromInput]` -- resolved from `config["configurable"]`, originally from `run(input={...})` |
-| `from_config` | `Annotated[T, FromConfig]` -- resolved from `config["configurable"]`, passed directly in `config=` |
-| `from_input_model` | Bundled `BaseModel` via `FromInput` -- each model field must exist in config |
-| `from_config_model` | Bundled `BaseModel` via `FromConfig` -- each model field must exist in config |
+| Kind | Severity | Meaning |
+|------|----------|---------|
+| `from_input` | ERROR | `Annotated[T, FromInput]` -- resolved from `config["configurable"]`, originally from `run(input={...})` |
+| `from_config` | ERROR | `Annotated[T, FromConfig]` -- resolved from `config["configurable"]`, passed directly in `config=` |
+| `from_input_model` | ERROR | Bundled `BaseModel` via `FromInput` -- each model field must exist in config |
+| `from_config_model` | ERROR | Bundled `BaseModel` via `FromConfig` -- each model field must exist in config |
+| `template_placeholder_unresolvable` | ERROR | Prompt placeholder not found in predicted input keys or known extras |
+| `template_placeholder_known_vars_only` | WARN | Placeholder only resolvable via `known_template_vars`, not from actual `@node` parameter names. Advisory: verify the consumer bridge supplies it at runtime. |
 
 ## What it checks
 
@@ -91,6 +113,26 @@ def weighted_merge(
 ) -> Result: ...
 ```
 
+### Template placeholder validation
+
+Lint validates placeholders in both inline prompts and template-ref prompts. The two kinds use different placeholder syntax and see different key sets.
+
+**Inline prompts** use `${var}` syntax. A prompt string that contains whitespace or `${` is classified as inline. Lint extracts every `${var}` placeholder and validates it against predicted input dict keys only. Flattened fields from `render_for_prompt` are NOT available. Framework extras (`node_id`, `project_root`, `human_feedback`) are NOT available. This is because inline prompts skip the `_render_with_flattening` path and the resolver has no config/state access.
+
+**Template-ref prompts** are bare names like `"rw/summarize"`. Lint uses the `template_resolver` callable to read the template text, then extracts `{placeholder}` names (Python `str.format` syntax). These are validated against predicted input keys plus flattened fields from `render_for_prompt` plus framework extras. Template-ref prompts go through `_render_with_flattening` at runtime, so they have access to the full key set.
+
+If no `template_resolver` is provided, template-ref prompts are silently skipped.
+
+### Inline vs template-ref key differences
+
+| Aspect | Inline `${var}` | Template-ref `{var}` |
+|--------|-----------------|----------------------|
+| Flattened fields | Not available | Available |
+| Framework extras | Not available | Available |
+| `render_for_prompt` fields | Not available | Available (as top-level vars) |
+
+This distinction matters because a placeholder that resolves correctly in a template-ref prompt may fail in an inline prompt, and vice versa.
+
 ## Example: full lint workflow
 
 ```python
@@ -126,6 +168,28 @@ assert issues[0].kind == "from_config"
 ## Using with neograph check
 
 `lint()` runs automatically as part of the `neograph check` CLI. See [Pipeline Validation](/concepts/check-cli/) for details on the `--config` and `--setup` flags that supply config to the lint pass.
+
+The CLI also supports template validation:
+
+- **`--known-vars`** — comma-separated extra template variable names (e.g., `--known-vars topic,json_schema`). These are merged with framework extras and passed as `known_template_vars`.
+- **`--setup` module exports** — if your setup module (passed via `--setup`) exports `get_template_resolver()`, the CLI calls it to obtain a `template_resolver` callable. If it exports `get_known_template_vars()`, the CLI calls it and merges the returned names with any `--known-vars` from the command line.
+
+```python
+# my_setup.py — setup module for neograph check --setup my_setup
+def get_check_config():
+    return {"node_id": "test", "project_root": "/tmp"}
+
+def get_template_resolver():
+    """Return a callable that maps template names to template text."""
+    def resolver(name: str) -> str | None:
+        templates = {"rw/summarize": "Summarize {claims} about {topic}."}
+        return templates.get(name)
+    return resolver
+
+def get_known_template_vars():
+    """Return extra variable names the consumer bridge provides."""
+    return {"topic", "json_schema"}
+```
 
 ---
 

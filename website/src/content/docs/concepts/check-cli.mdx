@@ -8,6 +8,12 @@ description: CLI command that discovers Constructs in a module, compiles them, a
 ## Basic usage
 
 ```bash
+neograph check <target> [--config JSON] [--setup MODULE] [--known-vars VARS]
+```
+
+Example:
+
+```bash
 neograph check my_pipeline.py
 ```
 
@@ -40,11 +46,26 @@ neograph check my_pipeline.py --config '{"node_id": "test", "project_root": "/tm
 
 ### --setup (Python module)
 
-For configs that contain non-serializable objects (rate limiters, database pools), point `--setup` at a Python file that exports a `get_check_config()` function:
+For configs that contain non-serializable objects (rate limiters, database pools), point `--setup` at a Python file. The module can export up to three functions:
+
+| Export | Returns | Required? |
+|--------|---------|-----------|
+| `get_check_config()` | `dict` -- config values for DI lint | Yes (when `--setup` is used) |
+| `get_template_resolver()` | `Callable[[str], str \| None]` -- maps template names to template text | Optional |
+| `get_known_template_vars()` | `Iterable[str]` -- extra variable names accepted during placeholder validation | Optional |
+
+`get_template_resolver()` enables template placeholder validation during lint. The resolver receives a template name and returns the template text (or `None` if unknown). When a resolver is available, lint checks that every `{placeholder}` in prompt templates maps to a known upstream field, DI binding, or declared known variable.
+
+`get_known_template_vars()` declares variable names that are valid but not discoverable from the pipeline graph alone (e.g., variables injected at runtime by middleware). These are merged with any names passed via `--known-vars`.
+
+Example setup module with all three exports:
 
 ```python
 # check_config.py
+from pathlib import Path
 from my_app.resources import make_limiter
+
+TEMPLATE_DIR = Path("prompts/")
 
 def get_check_config():
     return {
@@ -52,11 +73,30 @@ def get_check_config():
         "project_root": "/tmp",
         "rate_limiter": make_limiter(),
     }
+
+def get_template_resolver():
+    def resolve(name: str) -> str | None:
+        path = TEMPLATE_DIR / f"{name}.txt"
+        return path.read_text() if path.exists() else None
+    return resolve
+
+def get_known_template_vars():
+    return ["topic", "json_schema"]
 ```
 
 ```bash
 neograph check my_pipeline.py --setup check_config.py
 ```
+
+### --known-vars (extra template variable names)
+
+Declares extra template variable names that should be accepted as valid during placeholder validation. Comma-separated, no spaces:
+
+```bash
+neograph check my_pipeline.py --known-vars topic,json_schema
+```
+
+These are merged with any variables returned by `get_known_template_vars()` in the setup module. Use this flag when you need to whitelist a few names without creating a full setup module.
 
 ## Exit codes
 
@@ -90,9 +130,19 @@ jobs:
 For each `Construct` found in the target module:
 
 1. **compile()** -- builds the LangGraph `StateGraph`, catching type mismatches, missing upstreams, invalid modifiers, and cycle errors.
-2. **lint()** -- walks every node and checks that DI parameters (`FromInput`, `FromConfig`, bundled models) have matching keys in the provided config. See [Static Linting](/concepts/lint/) for details.
+2. **lint()** -- walks every node and checks:
+   - DI parameters (`FromInput`, `FromConfig`, bundled models) have matching keys in the provided config.
+   - Template placeholders in prompt templates map to known upstream fields, DI bindings, or declared known variables (when a `template_resolver` is available via `--setup`).
+   
+   See [Static Linting](/concepts/lint/) for details.
 
 Both checks are assembly-time only -- no LLM calls, no side effects.
+
+### Operator auto-checkpointer
+
+Constructs that contain `Operator` nodes require a checkpointer to compile (LangGraph needs one for the conversational message-list state that Operator uses). When `neograph check` detects Operator nodes in a construct, it automatically supplies a `MemorySaver` so compilation succeeds without requiring you to pass a checkpointer.
+
+This is specific to the `check` command. When calling `compile()` directly in your own code, you must still pass an explicit `checkpointer=` for constructs that use Operator.
 
 ---
 

@@ -30,8 +30,10 @@ from neograph import (
     Renderer, XmlRenderer, DelimitedRenderer, JsonRenderer,
     # Shared
     compile, run, configure_llm,
+    RenderedInput, build_rendered_input, ExcludeFromOutput,
     # Errors
-    NeographError, ConstructError, CompileError, ConfigurationError, ExecutionError,
+    NeographError, ConstructError, CompileError, ConfigurationError,
+    CheckpointSchemaError, ExecutionError,
     # Registries (for runtime construction)
     register_scripted, register_condition, register_tool_factory,
     # Spec loader
@@ -345,9 +347,11 @@ from langgraph.types import RetryPolicy
 graph = compile(pipeline, retry_policy=RetryPolicy(max_attempts=3))
 ```
 
-### `run(graph, *, input=None, resume=None, config=None) -> dict`
+### `run(graph, *, input=None, resume=None, config=None, auto_resume=True) -> dict`
 
 Executes a compiled graph. Use `input=` for the first run, `resume=` to continue from an interrupt. Returns the final state dict with framework internals stripped.
+
+- **`auto_resume`** — When `True` (default), automatically rewinds to the checkpoint before the earliest changed node when schema fingerprints mismatch. When `False`, raises `CheckpointSchemaError` instead. Based on the Prefect cache-miss model. See [Checkpoint Resume](/concepts/checkpoint-resume/) for details.
 
 ### `describe_graph(compiled) -> str`
 
@@ -358,11 +362,14 @@ graph = compile(pipeline)
 print(describe_graph(graph))
 ```
 
-### `lint(construct, *, config=None) -> list[LintIssue]`
+### `lint(construct, *, config=None, known_template_vars=None, template_resolver=None) -> list[LintIssue]`
 
 Validates DI bindings in a Construct against a sample config dict. Walks every node (recursing into sub-constructs) and checks that every `FromInput`/`FromConfig` parameter has a matching key in the provided config. Returns a list of `LintIssue` instances; an empty list means all bindings are satisfied. Never raises.
 
 When `config` is `None`, only structural checks are performed: required params are flagged as missing since no config is available.
+
+- **`known_template_vars`** (`set[str] | None`) — Extra variable names the consumer's prompt pipeline provides. These are treated as valid template placeholders in addition to the ones inferred from the construct's state model.
+- **`template_resolver`** (`Callable[[str], str | None] | None`) — Maps template-ref names to template text for placeholder validation. When provided, `lint()` resolves each node's `prompt=` template ref through this callable and validates that the template's placeholders are satisfiable.
 
 ```python
 from neograph import lint
@@ -469,6 +476,45 @@ Used for tool result rendering in ToolMessage content.
 
 Returns the exact prompt that would be sent to the LLM, without calling the LLM. For debugging and testing prompt templates.
 
+### `RenderedInput`
+
+Dataclass bundling rendered prompt input for a node. Provides both raw Pydantic models and their rendered string forms, letting the factory choose the right representation for inline vs template-ref prompts.
+
+```python
+@dataclass
+class RenderedInput:
+    raw: dict[str, Any] | Any
+    rendered: dict[str, Any] | Any
+    flattened: dict[str, Any]
+    available_keys_inline: set[str]
+    available_keys_template: set[str]
+```
+
+- **`raw`** — Raw Pydantic models (or dicts) for inline `${var}` dotted access in prompts.
+- **`rendered`** — BAML-rendered strings for template-ref prompts (each model passed through `describe_value`).
+- **`flattened`** — Extra fields surfaced by `render_for_prompt()` BaseModel returns. Merged into the template namespace.
+- **`available_keys_inline`** — Valid variable names for inline prompts (`${key}` or `${key.field}`).
+- **`available_keys_template`** — Valid variable names for template-ref prompts.
+- **`for_template_ref`** (property) — Merges `rendered` and `flattened` dicts into a single namespace for template-ref rendering.
+
+### `build_rendered_input(input_data, renderer=None) -> RenderedInput`
+
+Constructs a `RenderedInput` from raw input data. Applies the optional renderer (or BAML default) to produce rendered string forms of each input model. Used internally by the factory; available publicly for prompt debugging and custom integrations.
+
+### `ExcludeFromOutput`
+
+Marker for `typing.Annotated` on Pydantic model fields. Fields annotated with `ExcludeFromOutput` are visible in input rendering (the LLM sees them as context) but excluded from the `describe_type()` output schema, so the LLM will not attempt to produce them. Fields with this marker must have a default value.
+
+```python
+from typing import Annotated
+from neograph import ExcludeFromOutput
+
+class AnalysisResult(BaseModel):
+    summary: str
+    confidence: float
+    source_doc: Annotated[str, ExcludeFromOutput] = ""  # visible as input, hidden from output schema
+```
+
 ### Error Hierarchy
 
 ```
@@ -476,10 +522,13 @@ NeographError (base)
   ├── ConstructError (ValueError)  — assembly-time validation failures
   ├── CompileError                 — compilation failures
   ├── ConfigurationError           — missing LLM config, unregistered tools
+  ├── CheckpointSchemaError        — checkpoint state schema mismatch on resume
   └── ExecutionError               — runtime failures (duplicate keys, reducer errors)
 ```
 
-All errors are importable: `from neograph import ConstructError, CompileError, ConfigurationError, ExecutionError`.
+**`CheckpointSchemaError`** — raised when resuming from a checkpoint whose state schema fingerprint differs from the current graph. Has an `invalidated_nodes: set[str]` attribute listing which state fields changed. Only raised when `auto_resume=False`; when `auto_resume=True` (the default), `run()` automatically rewinds instead.
+
+All errors are importable: `from neograph import ConstructError, CompileError, ConfigurationError, CheckpointSchemaError, ExecutionError`.
 
 ### Registries
 
