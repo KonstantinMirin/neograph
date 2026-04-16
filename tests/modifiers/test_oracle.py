@@ -6,6 +6,8 @@ from typing import Annotated
 
 import pytest
 
+from pydantic import BaseModel
+
 from neograph import (
     ConfigurationError,
     Construct,
@@ -937,6 +939,177 @@ class TestMergeFnStateParams:
             f"Expected Ctx, got {type(captured_ctx[0])}: {captured_ctx[0]}"
         )
         assert captured_ctx[0].topic == "safety"
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# MERGE_PROMPT UPSTREAM CONTEXT (neograph-26eg)
+#
+# merge_prompt receives upstream context alongside variant list.
+# Templates reference ${variants} for the N drafts and ${upstream.field}
+# for upstream data via dotted access.
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class UpstreamContext(BaseModel, frozen=True):
+    site_name: str
+    tone: str
+
+
+class Draft(BaseModel, frozen=True):
+    text: str
+
+
+class TestMergePromptUpstreamContext:
+    """merge_prompt should receive upstream context alongside variant list."""
+
+    @staticmethod
+    def _fresh_module(name: str):
+        import types as _types
+        return _types.ModuleType(name)
+
+    def test_merge_prompt_receives_upstream_context_as_dict(self):
+        """merge_prompt input_data should be dict with 'variants' + upstream keys."""
+        captured_input = {}
+
+        class CaptureMerge:
+            """Fake that captures the merge prompt's input."""
+            def __init__(self, tier):
+                self._tier = tier
+
+            def with_structured_output(self, model, **kw):
+                self._model = model
+                return self
+
+            def invoke(self, messages, **kw):
+                # Capture merge call (tier="reason") vs generator calls
+                if self._tier == "reason":
+                    captured_input["messages"] = messages
+                return self._model(text="merged")
+
+        configure_fake_llm(lambda tier: CaptureMerge(tier))
+
+        @node(outputs=UpstreamContext)
+        def enrich() -> UpstreamContext:
+            return UpstreamContext(site_name="Acme Corp", tone="professional")
+
+        @node(outputs=Draft, ensemble_n=2,
+              merge_prompt="Pick the best considering ${enrich.site_name}: ${variants}")
+        def write(enrich: UpstreamContext) -> Draft: ...
+
+        mod = self._fresh_module("test_merge_ctx")
+        mod.enrich = enrich
+        mod.write = write
+
+        from neograph import construct_from_module
+        pipeline = construct_from_module(mod, name="merge-ctx")
+        graph = compile(pipeline)
+        result = run(graph, input={"node_id": "t1"})
+
+        # The merge prompt should have received upstream context
+        msgs = captured_input.get("messages", [])
+        prompt_text = msgs[0]["content"] if msgs else ""
+        # The upstream 'enrich' value should appear in the prompt
+        assert "Acme Corp" in prompt_text, (
+            f"Upstream context 'Acme Corp' not found in merge prompt: {prompt_text}"
+        )
+
+    def test_merge_prompt_variants_key_contains_all_variants(self):
+        """The 'variants' key should contain all N generator outputs."""
+        captured_data = {}
+
+        class InspectMerge:
+            def __init__(self, tier):
+                self._tier = tier
+
+            def with_structured_output(self, model, **kw):
+                self._model = model
+                return self
+
+            def invoke(self, messages, **kw):
+                if self._tier == "reason":
+                    captured_data["prompt"] = messages[0]["content"] if messages else ""
+                return self._model(text="variant-output")
+
+        configure_fake_llm(lambda tier: InspectMerge(tier))
+
+        @node(outputs=Draft, ensemble_n=3, merge_prompt="Judge: ${variants}",
+              prompt="generate a draft", model="fast")
+        def generate() -> Draft: ...
+
+        mod = self._fresh_module("test_variants")
+        mod.generate = generate
+
+        from neograph import construct_from_module
+        pipeline = construct_from_module(mod, name="variants-test")
+        graph = compile(pipeline)
+        result = run(graph, input={"node_id": "t2"})
+
+        # Variants should be rendered in the prompt (BAML notation of Draft list)
+        prompt = captured_data.get("prompt", "")
+        assert "variant-output" in prompt, f"Variants not rendered: {prompt}"
+
+    def test_merge_fn_path_unchanged(self):
+        """@merge_fn still receives raw list, not dict."""
+        captured_args = {}
+
+        @merge_fn
+        def pick_best(variants: list[Draft]) -> Draft:
+            captured_args["type"] = type(variants).__name__
+            captured_args["len"] = len(variants)
+            return variants[0] if variants else Draft(text="empty")
+
+        @node(outputs=Draft, ensemble_n=2, merge_fn="pick_best")
+        def generate() -> Draft:
+            return Draft(text="v1")
+
+        mod = self._fresh_module("test_mfn")
+        mod.generate = generate
+
+        from neograph import construct_from_module
+        pipeline = construct_from_module(mod, name="mfn-test")
+        graph = compile(pipeline)
+        result = run(graph, input={"node_id": "t3"})
+
+        # merge_fn should still receive list, not dict
+        assert captured_args["type"] == "list"
+        assert captured_args["len"] == 2
+
+    def test_programmatic_oracle_merge_prompt_gets_upstream(self):
+        """Programmatic Node | Oracle(merge_prompt=...) also gets upstream context."""
+        captured_input = {}
+
+        class CaptureMerge3:
+            def __init__(self, tier):
+                self._tier = tier
+
+            def with_structured_output(self, model, **kw):
+                self._model = model
+                return self
+
+            def invoke(self, messages, **kw):
+                if self._tier == "reason":
+                    captured_input["prompt"] = messages[0]["content"] if messages else ""
+                return self._model(text="merged")
+
+        configure_fake_llm(lambda tier: CaptureMerge3(tier))
+
+        register_scripted("_mp_seed", lambda i, c: UpstreamContext(site_name="Test Site", tone="casual"))
+
+        seed = Node.scripted("seed", fn="_mp_seed", outputs=UpstreamContext)
+        writer = Node(
+            "writer", mode="think", outputs=Draft,
+            inputs={"seed": UpstreamContext},
+            prompt="write", model="fast",
+        ) | Oracle(n=2, merge_prompt="Pick best: ${seed.site_name} ${variants}")
+
+        pipeline = Construct("prog-merge", nodes=[seed, writer])
+        graph = compile(pipeline)
+        result = run(graph, input={"node_id": "t4"})
+
+        prompt = captured_input.get("prompt", "")
+        assert "Test Site" in prompt, (
+            f"Upstream context 'Test Site' missing from programmatic merge prompt: {prompt}"
+        )
 
 
 # ═══════════════════════════════════════════════════════════════════════════

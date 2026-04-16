@@ -248,7 +248,8 @@ def _add_each_oracle_fused(
         graph.add_conditional_edges(START, flat_router, path_map=[gen_name, empty_name])
 
     # Group-merge barrier: partitions by each.key, calls merge_fn per group
-    merge_fn_impl = make_oracle_merge_fn(oracle, field_name, collector_field, node.outputs)
+    merge_fn_impl = make_oracle_merge_fn(oracle, field_name, collector_field, node.outputs,
+                                        node_inputs=node.inputs)
 
     def group_merge_barrier(state: Any, config: RunnableConfig) -> dict:
         from collections import defaultdict

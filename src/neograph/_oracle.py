@@ -13,6 +13,8 @@ from typing import Any
 
 from langchain_core.runnables import RunnableConfig
 
+from neograph.naming import field_name_for
+
 from neograph.errors import ExecutionError
 from neograph.modifiers import Each, Oracle
 
@@ -176,6 +178,7 @@ def make_oracle_merge_fn(
     field_name: str,
     collector_field: str,
     output_model: Any,
+    node_inputs: dict[str, Any] | None = None,
 ) -> Callable:
     """Create the merge barrier function for Oracle.
 
@@ -184,7 +187,13 @@ def make_oracle_merge_fn(
     FromInput/FromConfig DI if it was declared via ``@merge_fn``.
     Reads from collector_field, writes to field_name (or per-key fields
     for dict-form outputs).
+
+    When *node_inputs* is provided (dict-form inputs from the node),
+    upstream values are extracted from state and passed alongside the
+    variant list as a dict: ``{"variants": [...], upstream_key: val, ...}``.
     """
+    _node_inputs = node_inputs if isinstance(node_inputs, dict) else None
+
     if oracle.merge_prompt:
         assert oracle.merge_prompt is not None  # narrowing for mypy
         _merge_prompt: str = oracle.merge_prompt
@@ -194,10 +203,19 @@ def make_oracle_merge_fn(
 
             results = getattr(state, collector_field, [])
             primary, secondaries = _unwrap_oracle_results(results, field_name, output_model)
+
+            # Build input dict: variants + upstream context from state
+            input_data: dict[str, Any] = {"variants": primary}
+            if _node_inputs:
+                for key in _node_inputs:
+                    val = getattr(state, field_name_for(key), None)
+                    if val is not None:
+                        input_data[key] = val
+
             merged = invoke_structured(
                 model_tier=oracle.merge_model,
                 prompt_template=_merge_prompt,
-                input_data=primary,
+                input_data=input_data,
                 output_model=output_model if not isinstance(output_model, dict) else next(iter(output_model.values())),
                 config=config,
             )

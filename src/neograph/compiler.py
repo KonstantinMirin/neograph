@@ -437,7 +437,8 @@ def _add_oracle_nodes(
 
     raw_fn = make_node_fn(node)
     redirect_fn = make_oracle_redirect_fn(raw_fn, field_name, collector_field)
-    merge_fn = make_oracle_merge_fn(oracle, field_name, collector_field, node.outputs)
+    merge_fn = make_oracle_merge_fn(oracle, field_name, collector_field, node.outputs,
+                                    node_inputs=node.inputs)
 
     return _wire_oracle(graph, node.name, redirect_fn, merge_fn, oracle, prev_node, retry_policy=retry_policy)
 
