@@ -984,7 +984,7 @@ class TestCheckpointSchemaValidation:
         graph_v2 = compile(pipe_v2, checkpointer=checkpointer)
 
         with pytest.raises(CheckpointSchemaError, match="schema.*changed|fingerprint"):
-            run(graph_v2, input={"node_id": "test"}, config=config)
+            run(graph_v2, input={"node_id": "test"}, config=config, auto_resume=False)
 
     def test_identical_schema_resumes_normally(self):
         """Same schema on both runs — resume proceeds without error."""
@@ -1049,7 +1049,7 @@ class TestCheckpointSchemaValidation:
         graph2 = compile(pipe2, checkpointer=checkpointer)
 
         with pytest.raises(CheckpointSchemaError):
-            run(graph2, input={"node_id": "test"}, config=config)
+            run(graph2, input={"node_id": "test"}, config=config, auto_resume=False)
 
 
 class TestPerNodeCheckpointInvalidation:
@@ -1116,10 +1116,187 @@ class TestPerNodeCheckpointInvalidation:
 
         # Should raise with invalidated_nodes containing C and D
         with pytest.raises(CheckpointSchemaError) as exc_info:
-            run(graph_v2, input={"node_id": "test"}, config=config)
+            run(graph_v2, input={"node_id": "test"}, config=config, auto_resume=False)
 
         err = exc_info.value
         assert hasattr(err, "invalidated_nodes")
         assert "c" in err.invalidated_nodes or "d" in err.invalidated_nodes
+
+
+class TestAutoResumeFromSchemaDivergence:
+    """Auto-resume: detect schema change, rewind to divergence point, continue.
+
+    FEATURE neograph-tf0q: run(auto_resume=True) uses LangGraph time-travel
+    to rewind to the checkpoint before the earliest changed node, then
+    re-executes from there. Upstream nodes preserved.
+    """
+
+    def test_auto_resume_reruns_changed_node_preserves_upstream(self):
+        """Linear A->B->C->D. Change C's output. auto_resume=True re-runs C+D, preserves A+B."""
+        from langgraph.checkpoint.memory import MemorySaver
+        from neograph.factory import register_scripted
+
+        class TypeA(BaseModel):
+            val: str = "a"
+
+        class TypeB(BaseModel):
+            val: str = "b"
+
+        class TypeC_V1(BaseModel):
+            val: str = "c1"
+
+        class TypeC_V2(BaseModel):
+            val: str = "c2"
+            extra: int = 0
+
+        class TypeD(BaseModel):
+            val: str = "d"
+
+        exec_log = []
+
+        register_scripted("ar_a", lambda _i, _c: (exec_log.append("a"), TypeA())[1])
+        register_scripted("ar_b", lambda _i, _c: (exec_log.append("b"), TypeB())[1])
+        register_scripted("ar_c1", lambda _i, _c: (exec_log.append("c"), TypeC_V1())[1])
+        register_scripted("ar_c2", lambda _i, _c: (exec_log.append("c"), TypeC_V2())[1])
+        register_scripted("ar_d", lambda _i, _c: (exec_log.append("d"), TypeD())[1])
+
+        checkpointer = MemorySaver()
+        config = {"configurable": {"thread_id": "auto-resume-1"}}
+
+        # Run 1: full pipeline
+        pipe_v1 = Construct("ar-pipe", nodes=[
+            Node.scripted("a", fn="ar_a", outputs=TypeA),
+            Node.scripted("b", fn="ar_b", inputs={"a": TypeA}, outputs=TypeB),
+            Node.scripted("c", fn="ar_c1", inputs={"b": TypeB}, outputs=TypeC_V1),
+            Node.scripted("d", fn="ar_d", inputs={"c": TypeC_V1}, outputs=TypeD),
+        ])
+        graph_v1 = compile(pipe_v1, checkpointer=checkpointer)
+        run(graph_v1, input={"node_id": "test"}, config=config)
+        assert exec_log == ["a", "b", "c", "d"]
+
+        # Run 2: change C, auto_resume=True
+        exec_log.clear()
+        pipe_v2 = Construct("ar-pipe", nodes=[
+            Node.scripted("a", fn="ar_a", outputs=TypeA),
+            Node.scripted("b", fn="ar_b", inputs={"a": TypeA}, outputs=TypeB),
+            Node.scripted("c", fn="ar_c2", inputs={"b": TypeB}, outputs=TypeC_V2),
+            Node.scripted("d", fn="ar_d", inputs={"c": TypeC_V2}, outputs=TypeD),
+        ])
+        graph_v2 = compile(pipe_v2, checkpointer=checkpointer)
+        result = run(graph_v2, input={"node_id": "test"}, config=config, auto_resume=True)
+
+        # A and B should NOT re-execute (preserved from checkpoint)
+        assert "a" not in exec_log, f"A should be preserved, exec_log={exec_log}"
+        assert "b" not in exec_log, f"B should be preserved, exec_log={exec_log}"
+        # C and D should re-execute
+        assert "c" in exec_log, f"C should re-run, exec_log={exec_log}"
+        assert "d" in exec_log, f"D should re-run, exec_log={exec_log}"
+
+    def test_auto_resume_false_raises_error(self):
+        """auto_resume=False preserves current behavior: raises CheckpointSchemaError."""
+        from langgraph.checkpoint.memory import MemorySaver
+        from neograph.errors import CheckpointSchemaError
+        from neograph.factory import register_scripted
+
+        class V1(BaseModel):
+            x: str = "v1"
+
+        class V2(BaseModel):
+            x: str = "v2"
+            y: int = 0
+
+        register_scripted("af_a1", lambda _i, _c: V1())
+        register_scripted("af_a2", lambda _i, _c: V2())
+
+        checkpointer = MemorySaver()
+        config = {"configurable": {"thread_id": "auto-resume-2"}}
+
+        pipe1 = Construct("af-pipe", nodes=[Node.scripted("a", fn="af_a1", outputs=V1)])
+        graph1 = compile(pipe1, checkpointer=checkpointer)
+        run(graph1, input={"node_id": "test"}, config=config)
+
+        pipe2 = Construct("af-pipe", nodes=[Node.scripted("a", fn="af_a2", outputs=V2)])
+        graph2 = compile(pipe2, checkpointer=checkpointer)
+
+        with pytest.raises(CheckpointSchemaError):
+            run(graph2, input={"node_id": "test"}, config=config, auto_resume=False)
+
+    def test_no_schema_change_resumes_normally(self):
+        """Same schema, auto_resume=True — normal resume, no re-execution."""
+        from langgraph.checkpoint.memory import MemorySaver
+        from neograph.factory import register_scripted
+
+        class Stable(BaseModel):
+            val: str = "ok"
+
+        call_count = [0]
+        def counting(_i, _c):
+            call_count[0] += 1
+            return Stable()
+
+        register_scripted("nr_a", counting)
+
+        checkpointer = MemorySaver()
+        config = {"configurable": {"thread_id": "auto-resume-3"}}
+
+        pipe = Construct("nr-pipe", nodes=[Node.scripted("a", fn="nr_a", outputs=Stable)])
+        graph = compile(pipe, checkpointer=checkpointer)
+        run(graph, input={"node_id": "test"}, config=config)
+        assert call_count[0] == 1
+
+        # Run 2 — same schema, should NOT re-execute
+        graph2 = compile(pipe, checkpointer=checkpointer)
+        run(graph2, input={"node_id": "test"}, config=config, auto_resume=True)
+        assert call_count[0] == 1  # still 1, not re-executed
+
+    def test_leaf_change_only_reruns_leaf(self):
+        """A->B->C. Change only C. A and B preserved, only C re-runs."""
+        from langgraph.checkpoint.memory import MemorySaver
+        from neograph.factory import register_scripted
+
+        class TypeA(BaseModel):
+            val: str = "a"
+
+        class TypeB(BaseModel):
+            val: str = "b"
+
+        class TypeC_V1(BaseModel):
+            val: str = "c1"
+
+        class TypeC_V2(BaseModel):
+            val: str = "c2"
+            new_field: str = "new"
+
+        exec_log = []
+
+        register_scripted("lc_a", lambda _i, _c: (exec_log.append("a"), TypeA())[1])
+        register_scripted("lc_b", lambda _i, _c: (exec_log.append("b"), TypeB())[1])
+        register_scripted("lc_c1", lambda _i, _c: (exec_log.append("c"), TypeC_V1())[1])
+        register_scripted("lc_c2", lambda _i, _c: (exec_log.append("c"), TypeC_V2())[1])
+
+        checkpointer = MemorySaver()
+        config = {"configurable": {"thread_id": "auto-resume-4"}}
+
+        pipe_v1 = Construct("lc-pipe", nodes=[
+            Node.scripted("a", fn="lc_a", outputs=TypeA),
+            Node.scripted("b", fn="lc_b", inputs={"a": TypeA}, outputs=TypeB),
+            Node.scripted("c", fn="lc_c1", inputs={"b": TypeB}, outputs=TypeC_V1),
+        ])
+        graph_v1 = compile(pipe_v1, checkpointer=checkpointer)
+        run(graph_v1, input={"node_id": "test"}, config=config)
+        assert exec_log == ["a", "b", "c"]
+
+        exec_log.clear()
+        pipe_v2 = Construct("lc-pipe", nodes=[
+            Node.scripted("a", fn="lc_a", outputs=TypeA),
+            Node.scripted("b", fn="lc_b", inputs={"a": TypeA}, outputs=TypeB),
+            Node.scripted("c", fn="lc_c2", inputs={"b": TypeB}, outputs=TypeC_V2),
+        ])
+        graph_v2 = compile(pipe_v2, checkpointer=checkpointer)
+        result = run(graph_v2, input={"node_id": "test"}, config=config, auto_resume=True)
+
+        assert "a" not in exec_log
+        assert "b" not in exec_log
+        assert "c" in exec_log
 
 

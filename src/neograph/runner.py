@@ -71,12 +71,13 @@ def _inject_input_to_config(
     return {**config, "configurable": merged}
 
 
-def _verify_checkpoint_schema(graph: Any, config: dict[str, Any]) -> None:
+def _verify_checkpoint_schema(graph: Any, config: dict[str, Any], *, auto_resume: bool = True) -> None:
     """Verify checkpoint state schema matches the current graph.
 
     Compares the neo_schema_fingerprint stored in the checkpoint against
-    the fingerprint computed at compile time. Raises CheckpointSchemaError
-    if they differ — preventing silent Pydantic coercion of stale state.
+    the fingerprint computed at compile time. When auto_resume is True,
+    rewinds to the checkpoint before the earliest changed node and re-invokes.
+    When False, raises CheckpointSchemaError.
     """
     current_fp = getattr(graph, "_neo_schema_fingerprint", None)
     if current_fp is None:
@@ -102,16 +103,55 @@ def _verify_checkpoint_schema(graph: Any, config: dict[str, Any]) -> None:
         return  # checkpoint from before fingerprinting was added
 
     if stored_fp != current_fp:
-        # Compute per-node invalidation set
         invalidated = _compute_invalidated_nodes(graph, channel_values)
-        raise CheckpointSchemaError(
-            f"Checkpoint schema fingerprint mismatch: "
-            f"stored={stored_fp!r}, current={current_fp!r}. "
-            f"Construct topology has changed since the checkpoint was written. "
-            f"Invalidated nodes: {sorted(invalidated) if invalidated else 'all'}. "
-            f"Invalidate the checkpoint or migrate the state.",
-            invalidated_nodes=invalidated,
+
+        if not auto_resume:
+            raise CheckpointSchemaError(
+                f"Checkpoint schema fingerprint mismatch: "
+                f"stored={stored_fp!r}, current={current_fp!r}. "
+                f"Invalidated nodes: {sorted(invalidated) if invalidated else 'all'}. "
+                f"Invalidate the checkpoint or migrate the state.",
+                invalidated_nodes=invalidated,
+            )
+
+        # Auto-resume: rewind to before the earliest changed node
+        import structlog
+        log = structlog.get_logger()
+        log.info(
+            "auto_resume_schema_change",
+            invalidated=sorted(invalidated),
+            stored_fp=stored_fp,
+            current_fp=current_fp,
         )
+        _auto_resume_from_divergence(graph, config, invalidated)
+
+
+def _auto_resume_from_divergence(
+    graph: Any, config: dict[str, Any], invalidated: set[str],
+) -> None:
+    """Rewind checkpoint to before the earliest invalidated node.
+
+    Uses LangGraph time-travel: walks state_history to find the checkpoint
+    where the earliest invalidated node was about to execute (in ``next``).
+    Overwrites the main config's checkpoint_id to point to that checkpoint,
+    so the subsequent ``invoke(None, config)`` resumes from the rewind point.
+    """
+    if not invalidated:
+        return
+
+    # Walk state history to find the checkpoint where an invalidated node
+    # was about to execute — this is the rewind point
+    for state_snapshot in graph.get_state_history(config):
+        next_nodes = set(state_snapshot.next)
+        if next_nodes & invalidated:
+            # Found it. Extract the checkpoint_id and inject into the caller's config
+            # so invoke(None, config) resumes from here.
+            rewind_checkpoint_id = state_snapshot.config.get("configurable", {}).get("checkpoint_id")
+            if rewind_checkpoint_id is not None:
+                config.setdefault("configurable", {})["checkpoint_id"] = rewind_checkpoint_id
+            return
+
+    # Can't find rewind point — fall through to normal resume
 
 
 def _compute_invalidated_nodes(graph: Any, channel_values: Any) -> set[str]:
@@ -174,6 +214,7 @@ def run(
     input: dict[str, Any] | None = None,
     resume: dict[str, Any] | None = None,
     config: dict[str, Any] | None = None,
+    auto_resume: bool = True,
 ) -> Any:
     """Execute a compiled NeoGraph graph.
 
@@ -191,6 +232,10 @@ def run(
         resume: Human feedback (for resuming after Operator interrupt).
         config: LangGraph RunnableConfig (thread_id, callbacks, etc.).
                Put shared resources in config["configurable"].
+        auto_resume: When True (default), automatically rewind to the
+               checkpoint before the earliest changed node and re-execute
+               from there. When False, raise CheckpointSchemaError on
+               schema mismatch. Based on the Prefect cache-miss model.
 
     Crash recovery:
         When both input and resume are None, the graph resumes from its
@@ -234,7 +279,7 @@ def run(
         # pass None to graph.invoke() so LangGraph resumes from checkpoint.
         # If no: this is a new execution — pass input normally.
         if _has_existing_checkpoint(graph, config):
-            _verify_checkpoint_schema(graph, config)
+            _verify_checkpoint_schema(graph, config, auto_resume=auto_resume)
             return _strip_internals(graph.invoke(None, config=config))
 
         return _strip_internals(graph.invoke(input, config=config))
@@ -250,5 +295,5 @@ def run(
     if config is not None:
         _preflight_di_check(graph, config)
     if _has_existing_checkpoint(graph, config or {}):
-        _verify_checkpoint_schema(graph, config or {})
+        _verify_checkpoint_schema(graph, config or {}, auto_resume=auto_resume)
     return _strip_internals(graph.invoke(None, config=config))
