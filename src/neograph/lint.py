@@ -155,6 +155,8 @@ def _walk(
 ) -> None:
     """Recursively walk a construct and check DI bindings + template placeholders."""
     if isinstance(item, Construct):
+        # Check Loop condition on the Construct itself (Construct | Loop)
+        _check_loop_condition(item, issues)
         for child in item.nodes:
             _walk(child, config, issues, known_vars=known_vars,
                   template_resolver=template_resolver)
@@ -183,6 +185,9 @@ def _walk(
     # 2. Template placeholder checks
     _check_template_placeholders(item, issues, known_vars=known_vars,
                                  template_resolver=template_resolver)
+
+    # 3. Loop condition checks
+    _check_loop_condition(item, issues)
 
 
 def _check_template_placeholders(
@@ -265,6 +270,87 @@ def _check_template_placeholders(
                     f"via known_vars — verify consumer bridge supplies it at runtime. "
                     f"Consider using the actual @node parameter name instead of a "
                     f"bridge alias."
+                ),
+            ))
+
+
+def _check_loop_condition(
+    item: Construct | Node,
+    issues: list[LintIssue],
+) -> None:
+    """Check Loop modifier's when-condition for common issues.
+
+    Three checks:
+    1. String condition not registered in the condition registry (ERROR).
+    2. Callable condition not None-safe — first iteration value is None (WARN).
+    3. Registered string condition that resolves to a parse_condition result,
+       which is inherently None-unsafe (ERROR).
+    """
+    from neograph._registry import registry
+
+    ms = getattr(item, "modifier_set", None)
+    if ms is None:
+        return
+    loop = ms.loop
+    if loop is None:
+        return
+
+    item_label = (
+        f"Construct '{item.name}'" if isinstance(item, Construct)
+        else f"Node '{item.name}'"
+    )
+    condition = loop.when
+
+    if isinstance(condition, str):
+        # Check 1: is the string condition registered?
+        resolved = registry.condition.get(condition)
+        if resolved is None:
+            issues.append(LintIssue(
+                node_name=item_label,
+                param="loop.when",
+                kind="loop_condition_unregistered",
+                required=True,
+                message=(
+                    f"Loop condition '{condition}' is not registered. "
+                    f"Register it via register_condition('{condition}', fn) "
+                    f"before compile()."
+                ),
+            ))
+            return  # can't test None-safety without the callable
+
+        # Check 3: registered string condition — smoke-test with None.
+        # parse_condition results always crash on None (getattr on None).
+        # This is ERROR (required=True) because it WILL crash on first iteration.
+        try:
+            resolved(None)
+        except (AttributeError, TypeError):
+            issues.append(LintIssue(
+                node_name=item_label,
+                param="loop.when",
+                kind="loop_condition_none_unsafe",
+                required=True,
+                message=(
+                    f"Loop condition '{condition}' raises when called with None. "
+                    f"The first iteration's value may be None. Use a None-safe "
+                    f"wrapper: lambda d: d is None or {condition}(d)"
+                ),
+            ))
+    elif callable(condition):
+        # Check 2: callable condition — smoke-test with None.
+        # WARN (required=False) because the callable might handle None
+        # via other means we can't statically verify.
+        try:
+            condition(None)
+        except (AttributeError, TypeError):
+            issues.append(LintIssue(
+                node_name=item_label,
+                param="loop.when",
+                kind="loop_condition_none_unsafe",
+                required=False,
+                message=(
+                    "Loop condition raises when called with None. "
+                    "The first iteration's value may be None — add a "
+                    "None guard: lambda d: d is None or <condition>"
                 ),
             ))
 

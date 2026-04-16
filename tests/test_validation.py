@@ -2948,3 +2948,170 @@ class TestSingleTypeInputsDeprecation:
         b = _consumer("b", RawText, Claims)  # _consumer uses single-type inputs
         with pytest.warns(DeprecationWarning, match="single-type.*inputs"):
             Construct(name="test", nodes=[a, b])
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Loop condition lint checks
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TestLoopConditionLint:
+    """lint() should catch Loop when-condition issues statically.
+
+    Three checks:
+    1. String condition not registered in the condition registry
+    2. Callable condition that is not None-safe (crashes on first iteration)
+    3. String conditions from parse_condition are inherently None-unsafe
+    """
+
+    # -- 1. Unregistered string condition ----------------------------------
+
+    def test_lint_reports_unregistered_loop_condition_on_node(self):
+        """Loop(when='nonexistent') on a Node should lint as ERROR."""
+        from neograph.modifiers import Loop
+
+        a = _producer("seed", RawText)
+        b = Node("refine", mode="think", outputs=RawText,
+                 prompt="refine", model="fast")
+        b = b | Loop(when="totally_missing", max_iterations=3)
+
+        pipeline = Construct("test", nodes=[a, b])
+        issues = lint(pipeline)
+        loop_issues = [i for i in issues if "loop" in i.kind]
+        assert len(loop_issues) >= 1
+        assert any(i.kind == "loop_condition_unregistered" for i in loop_issues)
+        assert any("totally_missing" in i.message for i in loop_issues)
+        assert any(i.required is True for i in loop_issues)  # ERROR, not WARN
+
+    def test_lint_reports_unregistered_loop_condition_on_construct(self):
+        """Loop(when='nonexistent') on a Construct should lint as ERROR."""
+        from neograph.modifiers import Loop
+        from neograph.factory import register_scripted
+
+        register_scripted("_lc_inner", lambda i, c: RawText(text="ok"))
+        sub = Construct(
+            "sub", input=RawText, output=RawText,
+            nodes=[Node.scripted("inner", fn="_lc_inner", outputs=RawText)],
+        ) | Loop(when="also_missing", max_iterations=3)
+
+        pipeline = Construct("test", nodes=[sub])
+        issues = lint(pipeline)
+        loop_issues = [i for i in issues if "loop" in i.kind]
+        assert len(loop_issues) >= 1
+        assert any(i.kind == "loop_condition_unregistered" for i in loop_issues)
+
+    def test_lint_no_issue_for_registered_loop_condition(self):
+        """Registered string condition should not trigger lint issue."""
+        from neograph.modifiers import Loop
+        from neograph import register_condition
+
+        register_condition("_lint_test_cond", lambda d: d is None or d.text == "")
+
+        a = _producer("seed", RawText)
+        b = Node("refine", mode="think", outputs=RawText,
+                 prompt="refine", model="fast")
+        b = b | Loop(when="_lint_test_cond", max_iterations=3)
+
+        pipeline = Construct("test", nodes=[a, b])
+        issues = lint(pipeline)
+        loop_issues = [i for i in issues if "loop" in i.kind]
+        assert loop_issues == []
+
+    # -- 2. Callable None-unsafe -------------------------------------------
+
+    def test_lint_reports_none_unsafe_callable(self):
+        """lambda d: d.score < 0.8 crashes on None — lint should WARN."""
+        from neograph.modifiers import Loop
+
+        a = _producer("seed", RawText)
+        b = Node("refine", mode="think", outputs=RawText,
+                 prompt="refine", model="fast")
+        b = b | Loop(when=lambda d: d.score < 0.8, max_iterations=3)
+
+        pipeline = Construct("test", nodes=[a, b])
+        issues = lint(pipeline)
+        loop_issues = [i for i in issues if "loop" in i.kind]
+        assert len(loop_issues) >= 1
+        assert any(i.kind == "loop_condition_none_unsafe" for i in loop_issues)
+        assert any(i.required is False for i in loop_issues)  # WARN, not ERROR
+
+    def test_lint_no_issue_for_none_safe_callable(self):
+        """lambda d: d is None or d.score < 0.8 is safe — no lint issue."""
+        from neograph.modifiers import Loop
+
+        a = _producer("seed", RawText)
+        b = Node("refine", mode="think", outputs=RawText,
+                 prompt="refine", model="fast")
+        b = b | Loop(when=lambda d: d is None or d.score < 0.8, max_iterations=3)
+
+        pipeline = Construct("test", nodes=[a, b])
+        issues = lint(pipeline)
+        loop_issues = [i for i in issues if "loop" in i.kind]
+        assert loop_issues == []
+
+    def test_lint_reports_none_unsafe_callable_on_construct(self):
+        """None-unsafe condition on Construct|Loop should also WARN."""
+        from neograph.modifiers import Loop
+        from neograph.factory import register_scripted
+
+        register_scripted("_lc_inner2", lambda i, c: RawText(text="ok"))
+        sub = Construct(
+            "sub", input=RawText, output=RawText,
+            nodes=[Node.scripted("inner", fn="_lc_inner2", outputs=RawText)],
+        ) | Loop(when=lambda d: d.text == "done", max_iterations=3)
+
+        pipeline = Construct("test", nodes=[sub])
+        issues = lint(pipeline)
+        loop_issues = [i for i in issues if "loop" in i.kind]
+        assert len(loop_issues) >= 1
+        assert any(i.kind == "loop_condition_none_unsafe" for i in loop_issues)
+
+    def test_lint_none_unsafe_attribute_error(self):
+        """Catches AttributeError from None.some_attr."""
+        from neograph.modifiers import Loop
+
+        a = _producer("seed", RawText)
+        b = Node("refine", mode="think", outputs=RawText,
+                 prompt="refine", model="fast")
+        b = b | Loop(when=lambda d: len(d.items) > 0, max_iterations=3)
+
+        pipeline = Construct("test", nodes=[a, b])
+        issues = lint(pipeline)
+        loop_issues = [i for i in issues if i.kind == "loop_condition_none_unsafe"]
+        assert len(loop_issues) >= 1
+
+    def test_lint_none_unsafe_type_error(self):
+        """Catches TypeError from None < 0.8."""
+        from neograph.modifiers import Loop
+
+        a = _producer("seed", RawText)
+        b = Node("refine", mode="think", outputs=RawText,
+                 prompt="refine", model="fast")
+        b = b | Loop(when=lambda d: d < 0.8, max_iterations=3)
+
+        pipeline = Construct("test", nodes=[a, b])
+        issues = lint(pipeline)
+        loop_issues = [i for i in issues if i.kind == "loop_condition_none_unsafe"]
+        assert len(loop_issues) >= 1
+
+    # -- 3. String condition (parse_condition) always None-unsafe -----------
+
+    def test_lint_reports_parse_condition_string_as_none_unsafe(self):
+        """parse_condition('score < 0.8') always crashes on None — ERROR."""
+        from neograph import register_condition, parse_condition
+        from neograph.modifiers import Loop
+
+        register_condition("_pc_score", parse_condition("score < 0.8"))
+
+        a = _producer("seed", RawText)
+        b = Node("refine", mode="think", outputs=RawText,
+                 prompt="refine", model="fast")
+        b = b | Loop(when="_pc_score", max_iterations=3)
+
+        pipeline = Construct("test", nodes=[a, b])
+        issues = lint(pipeline)
+        loop_issues = [i for i in issues if "loop" in i.kind]
+        assert len(loop_issues) >= 1
+        # This should be ERROR (required=True) since it ALWAYS crashes
+        assert any(i.kind == "loop_condition_none_unsafe" for i in loop_issues)
+        assert any(i.required is True for i in loop_issues)
