@@ -1,0 +1,106 @@
+---
+title: Checkpoint Resume
+description: Schema-aware checkpoint resume — automatically detect what changed and re-run only the affected nodes.
+sidebar:
+  order: 55
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+When you run a pipeline with a checkpointer (MemorySaver, SqliteSaver, PostgresSaver), neograph automatically handles three resume scenarios:
+
+## Normal resume (crash recovery)
+
+If a pipeline crashes mid-execution, re-run with the same `thread_id`. Completed nodes are skipped; execution resumes from the failure point.
+
+```python
+from langgraph.checkpoint.memory import MemorySaver
+
+checkpointer = MemorySaver()
+graph = compile(pipeline, checkpointer=checkpointer)
+config = {"configurable": {"thread_id": "my-pipeline-001"}}
+
+# First run — crashes at node 4
+run(graph, input={"node_id": "BR-001"}, config=config)
+
+# Second run — same config, resumes from node 4
+run(graph, input={"node_id": "BR-001"}, config=config)
+```
+
+## Auto-resume after schema changes
+
+This is the key feature. If you change a node's output model between runs, neograph detects the change and re-executes only the affected nodes. Expensive upstream work is preserved.
+
+```python
+# Run 1: full pipeline (A -> B -> C -> D)
+graph_v1 = compile(pipeline_v1, checkpointer=checkpointer)
+run(graph_v1, input={"node_id": "BR-001"}, config=config)
+# All 4 nodes execute: A, B, C, D
+
+# You refactor node C's output model (add a field, rename a class, etc.)
+
+# Run 2: only C and D re-execute
+graph_v2 = compile(pipeline_v2, checkpointer=checkpointer)
+run(graph_v2, input={"node_id": "BR-001"}, config=config)
+# A and B preserved from checkpoint — C and D re-run
+```
+
+<Aside type="tip">
+This follows the Prefect cache-miss model: when the schema fingerprint changes, neograph automatically rewinds to the checkpoint before the earliest changed node and resumes from there. No manual intervention needed.
+</Aside>
+
+### What triggers re-execution
+
+| Change | Detected? | Behavior |
+|--------|-----------|----------|
+| Field added to output model | Yes | Rewind to changed node |
+| Field removed | Yes | Rewind |
+| Field type changed | Yes | Rewind |
+| Class renamed (same fields) | Yes | Rewind |
+| Wrapper type swap (T -> ValidatedT) | Yes | Rewind |
+| Node added/removed from pipeline | Yes | Full re-run (topology change) |
+| Prompt text changed (same types) | No | Normal resume |
+| Logic changed (same output type) | No | Normal resume |
+
+### How it works
+
+1. **At compile time**: neograph computes a SHA-256 fingerprint of each node's output type and stores it on the compiled graph.
+2. **At run time**: the fingerprints are written to the checkpoint alongside node outputs.
+3. **On resume**: neograph compares stored fingerprints against current ones. If any differ, it uses LangGraph's time-travel API to rewind to the checkpoint before the earliest changed node.
+4. **Re-execution**: `invoke(None)` from the rewind point naturally re-executes the changed node and everything downstream.
+
+## Strict mode
+
+If you want explicit control instead of automatic rewind, use `auto_resume=False`:
+
+```python
+from neograph import CheckpointSchemaError
+
+try:
+    run(graph_v2, input={"node_id": "BR-001"}, config=config, auto_resume=False)
+except CheckpointSchemaError as e:
+    print(f"Changed nodes: {e.invalidated_nodes}")
+    # e.invalidated_nodes = {"write_overview", "validate_completeness"}
+    # You decide: delete checkpoint, migrate, or handle manually
+```
+
+`CheckpointSchemaError.invalidated_nodes` tells you exactly which nodes changed, so you can make an informed decision.
+
+## Pre-fingerprint checkpoints
+
+Checkpoints created before fingerprinting was added (pre-0.5) don't have stored fingerprints. Neograph handles this gracefully: it treats the checkpoint as valid and resumes normally. No false errors.
+
+## Best practices
+
+- **Use persistent checkpointers for expensive pipelines.** SqliteSaver for local dev, PostgresSaver for production.
+- **Keep `auto_resume=True`** (the default). It saves you from manually deleting checkpoints every time you refactor a node.
+- **Use `auto_resume=False`** in CI/production if you want explicit control over schema migrations.
+- **Don't worry about prompt changes.** Schema fingerprints are based on output types, not prompt text. You can iterate on prompts freely without invalidating checkpoints.
+
+---
+
+*Built on LangGraph's time-travel API (`get_state_history` + `update_state`). No custom checkpoint store manipulation.*
+
+<p style="font-size: 0.8em; color: #666; margin-top: 2em;">
+Documentation: CC BY-ND 4.0, &copy; Constantine Mirin, mirin.pro
+</p>
