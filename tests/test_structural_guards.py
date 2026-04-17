@@ -961,9 +961,9 @@ class TestDeferredImportBudget:
                     # by seeing if it has col_offset > 0 (indented)
                     if node.col_offset > 0:
                         count += 1
-        # Budget: 42 (was 56→40→41, +1 for lint Loop condition registry check).
-        assert count <= 42, (
-            f"Deferred import count is {count}, budget is 42. "
+        # Budget: 45 (was 56→40→41→42, +3 for verify.py deferred imports).
+        assert count <= 45, (
+            f"Deferred import count is {count}, budget is 45. "
             f"Move registry ops to _registry.py and promote leaf-module imports to reduce."
         )
 

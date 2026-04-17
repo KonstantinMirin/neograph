@@ -204,7 +204,10 @@ def compile(construct: Construct, checkpointer: Any = None, retry_policy: Any = 
     compiled._neo_schema_fingerprint = compute_schema_fingerprint(state_model)  # type: ignore[attr-defined]
     compiled._neo_node_fingerprints = compute_node_fingerprints(construct)  # type: ignore[attr-defined]
 
-    # 7. Dev-mode DAG visualization
+    # 7. Stash Construct for post-compile verification (verify_compiled)
+    compiled._neo_construct = construct  # type: ignore[attr-defined]
+
+    # 8. Dev-mode DAG visualization
     if DEV_MODE:
         _print_dag_summary(compiled, construct)
 

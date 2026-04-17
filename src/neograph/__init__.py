@@ -43,6 +43,7 @@ from neograph.factory import register_condition, register_scripted, register_too
 from neograph.forward import ForwardConstruct
 from neograph.lint import LintIssue, lint
 from neograph.loader import load_spec
+from neograph.verify import VerifyIssue, verify_compiled
 from neograph.modifiers import Each, Loop, ModifierSet, Operator, Oracle
 from neograph.node import Node
 from neograph.renderers import (
@@ -108,6 +109,9 @@ __all__ = [
     # Lint
     "lint",
     "LintIssue",
+    # Verify
+    "verify_compiled",
+    "VerifyIssue",
 ]
 
 __version__ = "0.4.0"
