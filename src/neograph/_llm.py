@@ -278,59 +278,90 @@ def _compile_prompt(
 
 
 def _extract_json(text: str) -> str:
-    """Extract the first balanced JSON object from LLM response text.
+    """Extract the first balanced JSON value (object or array) from LLM text.
 
-    Finds the first '{' and tracks brace depth to find its matching '}'.
-    Handles markdown fences, thinking tags, prose before/after JSON —
-    anything wrapping the actual JSON object.
+    Finds the first '{' or '[' and tracks depth to find the matching closer.
+    Handles markdown fences, thinking tags, prose before/after JSON.
+    When both '{' and '[' are present, picks whichever comes first.
     """
-    # Try each '{' as a potential JSON start. Skip prose braces that
-    # don't look like JSON.
+    # Find earliest potential JSON start — either '{' or '['
+    brace_pos = text.find("{")
+    bracket_pos = text.find("[")
+
+    # Try array first if '[' comes before '{' (or '{' is absent)
+    if bracket_pos != -1 and (brace_pos == -1 or bracket_pos < brace_pos):
+        result = _extract_balanced(text, bracket_pos, "[", "]")
+        if result is not None:
+            return result
+
+    # Try object extraction
     pos = 0
     while True:
         start = text.find("{", pos)
         if start == -1:
-            return text.strip()
+            break
 
         # Quick check: JSON objects start with {"  or {digit or {[  or { "
         # Prose braces like {a + b} start with a letter after {.
         after_brace = text[start + 1 : start + 2].lstrip()
         if after_brace and after_brace not in ('"', "'", "[", "]", "{", "}", ""):
-            # Likely prose — skip to closing brace and try next
             pos = start + 1
             continue
 
-        depth = 0
-        in_string = False
-        escape = False
-        for i in range(start, len(text)):
-            ch = text[i]
-            if escape:
-                escape = False
-                continue
-            if ch == "\\":
-                escape = True
-                continue
-            if ch == '"':
-                in_string = not in_string
-                continue
-            if in_string:
-                continue
-            if ch == "{":
-                depth += 1
-            elif ch == "}":
-                depth -= 1
-                if depth == 0:
-                    return text[start : i + 1]
+        result = _extract_balanced(text, start, "{", "}")
+        if result is not None:
+            return result
 
-        # Unbalanced from this start — try next
         pos = start + 1
 
     # Unbalanced — fall back to first-to-last (let json_repair handle it)
-    last = text.rfind("}")
-    if last > start:
-        return text[start : last + 1]
+    first_open = brace_pos if brace_pos != -1 else bracket_pos
+    if first_open != -1:
+        close_char = "}" if first_open == brace_pos else "]"
+        last = text.rfind(close_char)
+        if last > first_open:
+            return text[first_open : last + 1]
     return text.strip()
+
+
+def _extract_balanced(text: str, start: int, open_ch: str, close_ch: str) -> str | None:
+    """Extract a balanced JSON value starting at *start* with given delimiters."""
+    depth = 0
+    in_string = False
+    escape = False
+    for i in range(start, len(text)):
+        ch = text[i]
+        if escape:
+            escape = False
+            continue
+        if ch == "\\":
+            escape = True
+            continue
+        if ch == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if ch == open_ch:
+            depth += 1
+        elif ch == close_ch:
+            depth -= 1
+            if depth == 0:
+                return text[start : i + 1]
+    return None
+
+
+def _is_list_annotation(annotation: Any) -> bool:
+    """Check if a type annotation is a list type (list[X], List[X], etc.)."""
+    import typing
+    origin = getattr(annotation, "__origin__", None)
+    if origin is list:
+        return True
+    # Handle Optional[list[X]] → Union[list[X], None]
+    if origin is typing.Union:
+        args = getattr(annotation, "__args__", ())
+        return any(_is_list_annotation(a) for a in args if a is not type(None))
+    return annotation is list
 
 
 def _apply_null_defaults(data: dict, model: type[BaseModel]) -> None:
@@ -389,8 +420,9 @@ def _parse_json_response(text: str, output_model: type[BaseModel]) -> BaseModel:
 
     # Detect non-JSON content: empty result or XML-like tool-call markup.
     # DeepSeek R1 emits <｜DSML｜function_calls>... after budget exhaustion.
-    if not extracted.strip() or (
-        not extracted.strip().startswith("{")
+    stripped = extracted.strip()
+    if not stripped or (
+        not stripped.startswith(("{", "["))
         and re.search(r"<[^>]*(?:function_call|invoke|DSML)[^>]*>", text, re.IGNORECASE)
     ):
         raise ExecutionError.build(
@@ -412,6 +444,27 @@ def _parse_json_response(text: str, output_model: type[BaseModel]) -> BaseModel:
         if isinstance(parsed, dict) and hasattr(output_model, "model_fields"):
             _apply_null_defaults(parsed, output_model)
             repaired = _json.dumps(parsed)
+        elif isinstance(parsed, list) and hasattr(output_model, "model_fields"):
+            # Bare array auto-wrap: if the model has exactly one list field,
+            # wrap the array into {"field_name": array}.
+            list_fields = [
+                fname for fname, finfo in output_model.model_fields.items()
+                if _is_list_annotation(finfo.annotation)
+            ]
+            if len(list_fields) == 1:
+                wrapped = {list_fields[0]: parsed}
+                _apply_null_defaults(wrapped, output_model)
+                repaired = _json.dumps(wrapped)
+            else:
+                raise ExecutionError.build(
+                    f"LLM returned a bare JSON array but {output_model.__name__} "
+                    f"has {len(list_fields)} list fields (expected exactly 1 for auto-wrap)",
+                    expected=f"JSON object for {output_model.__name__}",
+                    found=f"bare array (first 200 chars): {repaired[:200]!r}",
+                    hint="Either make the LLM return a JSON object, or ensure the model has exactly one list field.",
+                )
+    except ExecutionError:
+        raise
     except (ValueError, TypeError):
         pass  # if json.loads fails, let model_validate_json handle it
 

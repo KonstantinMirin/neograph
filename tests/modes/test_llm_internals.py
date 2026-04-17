@@ -1663,3 +1663,84 @@ class TestReActTokenBudgetGuard:
         assert len(interactions) == 1  # tool executes normally
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# BUG neograph-53lz: _extract_json drops bare-array LLM responses
+#
+# _extract_json only looks for '{' as JSON start. When the LLM returns a
+# bare array ([{...}, {...}]), it falls through and returns raw text.
+# _parse_json_response then silently defaults to empty lists.
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TestBareArrayExtraction:
+    """_extract_json must handle bare JSON arrays, not just objects."""
+
+    def test_extract_json_finds_bare_array(self):
+        """Bare array [{"key": "val"}] should be extracted, not dropped."""
+        from neograph._llm import _extract_json
+
+        text = '[{"claim_id": "R1", "classification": "business-rule"}, {"claim_id": "R2", "classification": "functional"}]'
+        result = _extract_json(text)
+        assert result.startswith("["), f"Expected array, got: {result[:50]}"
+        assert "R1" in result
+
+    def test_extract_json_bare_array_with_markdown_fence(self):
+        """Bare array inside ```json fence should be extracted."""
+        from neograph._llm import _extract_json
+
+        text = '```json\n[{"id": 1}, {"id": 2}]\n```'
+        result = _extract_json(text)
+        assert result.startswith("["), f"Expected array, got: {result[:50]}"
+        assert '"id": 1' in result or '"id":1' in result
+
+    def test_extract_json_bare_array_with_prose(self):
+        """Bare array preceded by prose text should be extracted."""
+        from neograph._llm import _extract_json
+
+        text = 'Here are the results:\n[{"name": "Alice"}, {"name": "Bob"}]\nDone.'
+        result = _extract_json(text)
+        assert result.startswith("["), f"Expected array, got: {result[:50]}"
+        assert "Alice" in result
+
+    def test_parse_json_response_bare_array_auto_wraps(self):
+        """When output model has a single list field and LLM returns bare array, auto-wrap."""
+        from neograph._llm import _parse_json_response
+        from pydantic import BaseModel
+
+        class Claim(BaseModel):
+            claim_id: str
+            classification: str
+
+        class ClassificationResult(BaseModel):
+            classified_claims: list[Claim]
+
+        text = '[{"claim_id": "R1", "classification": "business-rule"}, {"claim_id": "R2", "classification": "functional"}]'
+        result = _parse_json_response(text, ClassificationResult)
+        assert isinstance(result, ClassificationResult)
+        assert len(result.classified_claims) == 2
+        assert result.classified_claims[0].claim_id == "R1"
+
+    def test_parse_json_response_bare_array_multi_field_model_raises(self):
+        """Bare array with multi-field model should raise, not silently default."""
+        from neograph._llm import _parse_json_response
+        from neograph import ExecutionError
+        from pydantic import BaseModel
+
+        class MultiField(BaseModel):
+            items: list[str]
+            count: int
+
+        text = '["a", "b", "c"]'
+        # Multi-field model can't auto-wrap — should raise, not silently produce defaults
+        with pytest.raises(ExecutionError):
+            _parse_json_response(text, MultiField)
+
+    def test_extract_json_prefers_object_over_array(self):
+        """When both { and [ exist, prefer { if it comes first."""
+        from neograph._llm import _extract_json
+
+        text = '{"items": [1, 2, 3]}'
+        result = _extract_json(text)
+        assert result.startswith("{"), f"Expected object, got: {result[:50]}"
+
+
