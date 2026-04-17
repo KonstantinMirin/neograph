@@ -280,13 +280,15 @@ node | Loop(when=lambda d: d is None or d.score < 0.8, max_iterations=5)
 construct | Loop(when=lambda d: d is None or d.score < 0.8, max_iterations=10)
 ```
 
-**`Oracle(n=3, models=None, merge_fn=None, merge_prompt=None)`** — N-way ensemble. Exactly one of `merge_fn` / `merge_prompt` required. `models=` assigns model tiers round-robin; infers `n` from `len(models)`.
+**`Oracle(n=3, models=None, merge_fn=None, merge_prompt=None)`** — N-way ensemble. Exactly one of `merge_fn` / `merge_prompt` required. `models=` assigns model tiers round-robin; infers `n` from `len(models)`. The `merge_prompt` receives upstream context as a dict `{"variants": [...], upstream_key: val, ...}` instead of a bare variant list. Templates use `${variants}` for the variant list and `${upstream.field}` for upstream data.
 
 **`Each(over, key)`** — Fan-out over a dotted-path collection. Results keyed by `getattr(item, key)`.
 
 **`Operator(when)`** — Human-in-the-loop interrupt. `when` is a registered condition name.
 
 **`Loop(when, max_iterations=10, on_exhaust="error", history=False)`** — Cycle modifier. On a Node: self-loop (output feeds back as input). On a Construct: the sub-construct re-runs with its output as the next input. `when` receives the latest output; return `True` to continue. The value may be `None` on the first iteration, so the callable must be None-safe (e.g. `lambda d: d is None or d.score < 0.8`). When `history=True`, each iteration's output is collected in a state list field (`{node_name}_history`), useful for debugging or post-loop analysis.
+
+When `output != input` on a Construct Loop, the sub-construct re-reads original inputs from parent state on each iteration instead of feeding output back. This enables produce+validate patterns where the loop body generates a new result each time and the condition evaluates the output type.
 
 The `|` syntax returns a new Node/Construct with the modifier appended. You can chain: `node | Oracle(...) | Operator(...)`.
 
@@ -381,17 +383,28 @@ for issue in issues:
 
 ### `LintIssue`
 
-Dataclass representing a single DI binding problem found by `lint()`:
+Dataclass representing a single lint problem found by `lint()`:
 
 ```python
 @dataclass
 class LintIssue:
     node_name: str       # which node has the problem
     param: str           # which parameter is unbound
-    kind: str            # "from_input", "from_config", "from_input_model", "from_config_model"
+    kind: str            # issue kind (see table below)
     message: str         # human-readable description
     required: bool = False
 ```
+
+**Issue kinds:**
+
+| Kind | Severity | Meaning |
+|------|----------|---------|
+| `from_input` | varies | `FromInput` param missing from config |
+| `from_config` | varies | `FromConfig` param missing from config |
+| `from_input_model` | varies | `FromInput` bundled model field missing from config |
+| `from_config_model` | varies | `FromConfig` bundled model field missing from config |
+| `loop_condition_unregistered` | ERROR | Loop `when=` string not in condition registry |
+| `loop_condition_none_unsafe` | WARN/ERROR | Loop `when=` callable/condition crashes when called with `None` (first iteration value). WARN for callables, ERROR for registered string conditions (which always crash) |
 
 ### `parse_condition(expr) -> Callable[[Any], bool]`
 

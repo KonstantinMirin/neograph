@@ -303,6 +303,12 @@ lint(construct, *, config=None, known_template_vars=None, template_resolver=None
 - `get_template_resolver()` — `Callable[[str], str | None]` (optional)
 - `get_known_template_vars()` — iterable of extra var names (optional)
 
+**Loop condition checks** (neograph-sfj8): lint also validates Loop `when` conditions:
+- `loop_condition_unregistered` (ERROR): string condition not in registry
+- `loop_condition_none_unsafe` (WARN for callables, ERROR for string conditions): smoke-tests `when(None)` to catch the most common Loop bug -- `lambda d: d.score < 0.8` without a `d is None or` guard
+
+**Oracle merge_prompt upstream context**: `merge_prompt` now passes upstream context alongside the variant list. `make_oracle_merge_fn` accepts a `node_inputs` parameter and builds `{"variants": primary, **upstream_from_state}` as input_data. Templates use `${variants}` for the variant list and `${upstream.field}` for upstream data.
+
 ---
 
 ## Modes and mode inference

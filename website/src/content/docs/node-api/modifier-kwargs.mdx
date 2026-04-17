@@ -92,7 +92,7 @@ The merge step can be either scripted or LLM-powered:
 | Keyword | What it does |
 |---|---|
 | `merge_fn="name"` | Call a registered scripted function. Receives `(variants, config)`. |
-| `merge_prompt="template"` | Call an LLM with the variants as context. Uses the node's `model=`. |
+| `merge_prompt="template"` | Call an LLM with variants + upstream context. The template receives `${variants}` (the N variant outputs) and upstream values by name (e.g., `${enrich.site_name}`). |
 
 Exactly one of `merge_fn` or `merge_prompt` is required. Setting both raises `ConstructError`.
 
@@ -106,6 +106,31 @@ For LLM-mode nodes, the ensemble runs the same prompt N times (useful with non-z
       ensemble_n=3, merge_fn="merge_claims")
 def decompose() -> Claims: ...
 ```
+
+### Upstream context in merge_prompt
+
+When a node has upstream inputs, the merge prompt receives them alongside the variant list. The template can reference both:
+
+```python
+@node(outputs=UpstreamCtx)
+def enrich() -> UpstreamCtx:
+    return UpstreamCtx(site_name="Acme Corp", tone="professional")
+
+@node(outputs=Draft, ensemble_n=3,
+      merge_prompt="Pick the best draft for ${enrich.site_name}: ${variants}",
+      prompt="write a draft", model="fast")
+def write(enrich: UpstreamCtx) -> Draft: ...
+```
+
+The merge prompt sees:
+
+- `${variants}` -- BAML-rendered list of all N generator outputs
+- `${enrich}` -- the upstream node's output (raw Pydantic object for inline dotted access)
+- `${enrich.site_name}` -- dotted field access on the upstream value
+
+For template-ref merge prompts, the prompt compiler receives a dict with `"variants"` and upstream keys as named entries.
+
+The `@merge_fn` path is unchanged -- it still receives the raw variant list as its first parameter, with DI providing any additional context.
 
 ### Multi-model ensemble with models=
 
@@ -268,6 +293,53 @@ pipeline = construct_from_functions("writer", [seed, refine, finalize])
 ```
 
 The parent pipeline sees only `Draft -> Draft`. The iteration is hidden inside the sub-construct.
+
+### Produce+validate loop (input != output)
+
+For the common "produce, validate, retry on errors" pattern, the sub-construct's output type can differ from its input type. On each iteration, the sub-construct re-reads its original inputs from parent state instead of feeding the output back.
+
+```python
+from pydantic import BaseModel
+from neograph import node, construct_from_functions, compile, run
+from neograph.modifiers import Loop
+
+class ProduceInput(BaseModel, frozen=True):
+    topic: str
+    context: str
+
+class Output(BaseModel, frozen=True):
+    text: str
+
+class Validated(BaseModel, frozen=True):
+    output: Output
+    errors: list[str]
+
+@node(outputs=Output)
+def produce(seed: ProduceInput) -> Output:
+    return Output(text="draft content")
+
+@node(outputs=Validated)
+def validate(produce: Output) -> Validated:
+    errors = ["too short"] if len(produce.text) < 20 else []
+    return Validated(output=produce, errors=errors)
+
+sub = construct_from_functions(
+    "produce-and-validate", [produce, validate],
+    input=ProduceInput, output=Validated,
+) | Loop(
+    when=lambda v: v is None or bool(v.errors),
+    max_iterations=5,
+)
+```
+
+How it works:
+
+- The sub-construct takes `ProduceInput` (input) and produces `Validated` (output) -- different types.
+- On each iteration, the producer re-reads its original inputs from parent state (unchanged).
+- The Loop condition evaluates the `Validated` output -- return `True` to retry, `False` to exit.
+- The result is an append-list of `Validated` objects. Access the final result via `result["produce_and_validate"][-1]`.
+
+To give the producer feedback from the validator on retry, use `context=` on the producer node -- the previous iteration's validator output appears in the prompt context.
 
 ### ForwardConstruct equivalent
 
@@ -539,6 +611,11 @@ refine = Node("refine", mode="scripted", outputs=Draft) | Loop(when=lambda d: d 
 # Loop (on sub-construct)
 body = Construct("refine", input=Draft, output=Draft, nodes=[review, revise])
 body = body | Loop(when=lambda d: d is None or d.score < 0.8, max_iterations=10)
+
+# Ensemble with merge_prompt (upstream context available)
+writer = Node("writer", mode="think", outputs=Draft,
+              inputs={"seed": UpstreamCtx},
+              prompt="write", model="fast") | Oracle(n=3, merge_prompt="Pick best for ${seed.site_name}: ${variants}")
 ```
 
 ---

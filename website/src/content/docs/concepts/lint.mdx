@@ -69,6 +69,8 @@ The `kind` field tells you where the parameter expected to be resolved from:
 | `from_config_model` | ERROR | Bundled `BaseModel` via `FromConfig` -- each model field must exist in config |
 | `template_placeholder_unresolvable` | ERROR | Prompt placeholder not found in predicted input keys or known extras |
 | `template_placeholder_known_vars_only` | WARN | Placeholder only resolvable via `known_template_vars`, not from actual `@node` parameter names. Advisory: verify the consumer bridge supplies it at runtime. |
+| `loop_condition_unregistered` | ERROR | Loop `when` is a string that is not registered in the condition registry |
+| `loop_condition_none_unsafe` | ERROR/WARN | Loop `when` callable raises when called with `None`. ERROR for registered string conditions (always crash), WARN for user-supplied callables (may handle None via other means). |
 
 ## What it checks
 
@@ -132,6 +134,43 @@ If no `template_resolver` is provided, template-ref prompts are silently skipped
 | `render_for_prompt` fields | Not available | Available (as top-level vars) |
 
 This distinction matters because a placeholder that resolves correctly in a template-ref prompt may fail in an inline prompt, and vice versa.
+
+### Loop condition checks
+
+`lint()` validates Loop modifier `when` conditions for common issues that would crash at runtime.
+
+#### Unregistered string condition
+
+```python
+node = Node("refine", ...) | Loop(when="nonexistent", max_iterations=3)
+pipeline = Construct("test", nodes=[seed, node])
+issues = lint(pipeline)
+# LintIssue(kind="loop_condition_unregistered", required=True,
+#           message="Loop condition 'nonexistent' is not registered...")
+```
+
+#### None-unsafe callable
+
+The most common Loop bug: `lambda d: d.score < 0.8` crashes on the first iteration because the value is `None` before the node has produced output.
+
+```python
+node = Node("refine", ...) | Loop(when=lambda d: d.score < 0.8, max_iterations=3)
+issues = lint(pipeline)
+# LintIssue(kind="loop_condition_none_unsafe", required=False,
+#           message="Loop condition raises when called with None...")
+```
+
+Fix: `lambda d: d is None or d.score < 0.8`
+
+#### String conditions from parse_condition
+
+`parse_condition("score < 0.8")` produces a callable that always crashes on None (it calls `getattr(None, "score")`). When registered as a Loop condition, lint reports this as ERROR:
+
+```python
+register_condition("score_check", parse_condition("score < 0.8"))
+node = Node("refine", ...) | Loop(when="score_check", max_iterations=3)
+# LintIssue(kind="loop_condition_none_unsafe", required=True, ...)
+```
 
 ## Example: full lint workflow
 

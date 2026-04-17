@@ -14,6 +14,7 @@ Patterns demonstrated:
   2. Multi-node loop body as sub-construct with Loop
   3. Loop inside a sub-construct (parent sees clean I/O)
   4. ForwardConstruct with self.loop() — explicit cycle primitive
+  5. Produce + validate with Loop (input != output)
 
 Run:
     python examples/15_loop_refinement.py
@@ -288,9 +289,117 @@ def demo_forward_loop():
 
 
 # =============================================================================
+# Pattern 5: Produce + Validate with Loop (input != output)
+# =============================================================================
+#
+# Graph: start -> seed -> [produce_validate: produce -> validate] -(loop)-> report -> end
+#
+# The sub-construct takes ProduceInput and returns Validated — different types.
+# The producer fails on the first call (simulating a transient error) and
+# succeeds on the second. The validator checks for errors. The Loop condition
+# retries until validation passes or max iterations are exhausted.
+
+def demo_produce_validate():
+    """Produce + validate with Loop — input != output, retry on failure."""
+
+    class ProduceInput(BaseModel, frozen=True):
+        request_id: str
+        payload: str
+
+    class ProduceOutput(BaseModel, frozen=True):
+        request_id: str
+        data: str
+        error: str | None = None
+
+    class Validated(BaseModel, frozen=True):
+        request_id: str
+        data: str
+        errors: list[str]
+
+    class Report(BaseModel, frozen=True):
+        request_id: str
+        data: str
+        attempts: int
+
+    produce_calls = [0]
+
+    @node(outputs=ProduceOutput)
+    def produce(topic: ProduceInput) -> ProduceOutput:
+        """Fails on first call, succeeds on second."""
+        produce_calls[0] += 1
+        if produce_calls[0] == 1:
+            return ProduceOutput(
+                request_id=topic.request_id,
+                data="",
+                error="transient failure: service unavailable",
+            )
+        return ProduceOutput(
+            request_id=topic.request_id,
+            data=f"generated data for '{topic.payload}'",
+            error=None,
+        )
+
+    @node(outputs=Validated)
+    def check(produce: ProduceOutput) -> Validated:
+        """Check the produced output for errors."""
+        errors: list[str] = []
+        if produce.error:
+            errors.append(produce.error)
+        if not produce.data:
+            errors.append("empty data")
+        return Validated(
+            request_id=produce.request_id,
+            data=produce.data,
+            errors=errors,
+        )
+
+    # Sub-construct: ProduceInput -> Validated (different types)
+    produce_validate = construct_from_functions(
+        "produce_validate", [produce, check],
+        input=ProduceInput, output=Validated,
+    ) | Loop(
+        when=lambda v: v is None or bool(v.errors),
+        max_iterations=5,
+    )
+
+    @node(outputs=ProduceInput)
+    def seed() -> ProduceInput:
+        return ProduceInput(request_id="req-42", payload="quarterly report")
+
+    @node(outputs=Report)
+    def report(produce_validate: Validated) -> Report:
+        return Report(
+            request_id=produce_validate.request_id,
+            data=produce_validate.data,
+            attempts=produce_calls[0],
+        )
+
+    pipeline = construct_from_functions(
+        "produce-pipeline", [seed, produce_validate, report],
+    )
+    graph = compile(pipeline)
+    result = run(graph, input={"node_id": "produce-validate-demo"})
+
+    history = result["produce_validate"]
+    final_report = result["report"]
+
+    print("\n" + "=" * 60)
+    print("PRODUCE+VALIDATE LOOP (input != output)")
+    print("=" * 60)
+    print(f"Producer calls: {produce_calls[0]}")
+    for i, v in enumerate(history):
+        status = "PASS" if not v.errors else f"FAIL ({', '.join(v.errors)})"
+        print(f"  [{i+1}] {status} data={v.data!r}")
+    print(f"Final report: request_id={final_report.request_id}, "
+          f"data={final_report.data!r}, attempts={final_report.attempts}")
+    print()
+
+
+# =============================================================================
 
 if __name__ == "__main__":
     demo_self_loop()
     demo_multi_node_loop()
     demo_loop_in_sub_construct()
     demo_forward_loop()
+    demo_produce_validate()
