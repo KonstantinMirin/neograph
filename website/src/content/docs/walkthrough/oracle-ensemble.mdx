@@ -311,6 +311,60 @@ When it encounters `ensemble_n=3, merge_fn="merge_claims"`, the compiler expands
 
 You never see this expansion. You write one `@node` with `ensemble_n=` and get the full topology.
 
+## Real-world pattern: generate + evaluate in 10 lines
+
+The most powerful Oracle pattern combines LLM generation with LLM evaluation and domain hooks. This replaces 60+ lines of manual `@merge_fn` code that calls LLMs directly.
+
+```python
+from neograph import node, construct_from_module, compile, run
+
+# Domain hooks -- the only custom logic you write:
+
+def tag_variants(variants: list[ProductDescription]) -> dict:
+    """Number variants so the judge can reference them."""
+    tagged = [f"[{i+1}] {v.headline}: {v.body}" for i, v in enumerate(variants)]
+    return {"numbered_variants": "\n".join(tagged)}
+
+def ensure_cta(result: ProductDescription, variants: list[ProductDescription]) -> ProductDescription:
+    """Self-healing: if the judge omitted the CTA, pull one from a variant."""
+    if not result.cta:
+        for v in variants:
+            if v.cta:
+                return result.model_copy(update={"cta": v.cta})
+    return result
+
+def fallback(variants: list[ProductDescription], error: Exception) -> ProductDescription:
+    """On LLM failure, pick the variant with the longest body."""
+    return max(variants, key=lambda v: len(v.body))
+
+# The pipeline -- generate + evaluate + self-heal:
+
+@node(outputs=ProductDescription,
+      prompt="write-product-description",
+      model="fast",
+      ensemble_n=3,
+      merge_prompt="rw/pick-best-description",
+      merge_pre_process=tag_variants,
+      merge_post_process=ensure_cta,
+      merge_fallback=fallback)
+def write_description() -> ProductDescription: ...
+```
+
+What NeoGraph gives you for free on the merge LLM call:
+
+- BAML rendering of the variant list (typed, structured, LLM-friendly)
+- Schema injection into the system message
+- `invoke_structured` with retry-on-error-feedback (up to 2 retries -- the LLM sees its own validation failure each time)
+- JSON repair for malformed output
+- Null-to-default coercion
+- Cost tracking via configured callbacks
+- Langfuse/LangSmith spans via configured callbacks
+- Structured logging of duration and tokens
+
+Your hooks handle only the domain logic: what the judge should see (`pre_process`), what invariants to enforce (`post_process`), and what to do when the LLM fails (`fallback`).
+
+See `examples/20_oracle_merge_hooks.py` for a complete runnable version.
+
 ---
 
 Documentation &copy; 2025-2026 Constantine Mirin, [mirin.pro](https://mirin.pro). Licensed under [CC BY-ND 4.0](https://creativecommons.org/licenses/by-nd/4.0/).
