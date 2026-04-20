@@ -1274,6 +1274,34 @@ class TestMergeHooks:
         assert len(post_called) == 1
         assert post_called[0] == 2
 
+    def test_declarative_node_with_hooks(self):
+        """Declarative Node.scripted() + Oracle with hooks (three-surface rule)."""
+        configure_fake_llm(lambda tier: StructuredFake(lambda m: m(text="llm-out")))
+
+        post_called = []
+
+        def track_post(result, variants):
+            post_called.append(True)
+            return Draft(text=result.text + "-post")
+
+        register_scripted("_decl_hook_gen", lambda i, c: Draft(text="gen"))
+
+        writer = Node(
+            "writer", mode="think", outputs=Draft,
+            prompt="write", model="fast",
+        ) | Oracle(
+            n=2,
+            merge_prompt="merge: ${variants}",
+            merge_post_process=track_post,
+        )
+
+        pipeline = Construct("decl-hook", nodes=[writer])
+        graph = compile(pipeline)
+        result = run(graph, input={"node_id": "t-decl"})
+
+        assert len(post_called) == 1
+        assert result["writer"].text == "llm-out-post"
+
     def test_merge_prompt_without_hooks_unchanged(self):
         """merge_prompt without hooks works exactly as before (regression guard)."""
         captured_input = {}
