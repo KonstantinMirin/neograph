@@ -1274,6 +1274,91 @@ class TestMergeHooks:
         assert len(post_called) == 1
         assert post_called[0] == 2
 
+    def test_pre_process_displaces_upstream_context(self):
+        """When pre_process is set, upstream context is NOT auto-injected."""
+        captured = {}
+
+        class CaptureMerge:
+            def __init__(self, tier):
+                self._tier = tier
+
+            def with_structured_output(self, model, **kw):
+                self._model = model
+                return self
+
+            def invoke(self, messages, **kw):
+                if self._tier == "reason":
+                    captured["prompt"] = messages[0]["content"] if messages else ""
+                return self._model(text="merged")
+
+        configure_fake_llm(lambda tier: CaptureMerge(tier))
+
+        def custom_pre(variants):
+            return {"custom_key": "custom_value"}
+
+        @node(outputs=UpstreamContext)
+        def enrich() -> UpstreamContext:
+            return UpstreamContext(site_name="ShouldNotAppear", tone="x")
+
+        @node(outputs=Draft, ensemble_n=2,
+              prompt="gen", model="fast",
+              merge_prompt="Merge: ${custom_key}",
+              merge_pre_process=custom_pre)
+        def write(enrich: UpstreamContext) -> Draft: ...
+
+        mod = self._fresh_module("test_displace")
+        mod.enrich = enrich
+        mod.write = write
+
+        pipeline = construct_from_module(mod, name="displace-test")
+        graph = compile(pipeline)
+        run(graph, input={"node_id": "t-disp"})
+
+        prompt = captured.get("prompt", "")
+        assert "custom_value" in prompt, f"pre_process key missing: {prompt}"
+        assert "ShouldNotAppear" not in prompt, (
+            f"Upstream context should be displaced by pre_process: {prompt}"
+        )
+
+    def test_upstream_context_preserved_without_pre_process(self):
+        """Without pre_process, upstream context still auto-injected into merge prompt."""
+        captured = {}
+
+        class CaptureMerge:
+            def __init__(self, tier):
+                self._tier = tier
+
+            def with_structured_output(self, model, **kw):
+                self._model = model
+                return self
+
+            def invoke(self, messages, **kw):
+                if self._tier == "reason":
+                    captured["prompt"] = messages[0]["content"] if messages else ""
+                return self._model(text="merged")
+
+        configure_fake_llm(lambda tier: CaptureMerge(tier))
+
+        @node(outputs=UpstreamContext)
+        def enrich() -> UpstreamContext:
+            return UpstreamContext(site_name="AcmeCorp", tone="formal")
+
+        @node(outputs=Draft, ensemble_n=2,
+              prompt="gen", model="fast",
+              merge_prompt="Merge considering ${enrich.site_name}: ${variants}")
+        def write(enrich: UpstreamContext) -> Draft: ...
+
+        mod = self._fresh_module("test_preserve")
+        mod.enrich = enrich
+        mod.write = write
+
+        pipeline = construct_from_module(mod, name="preserve-test")
+        graph = compile(pipeline)
+        run(graph, input={"node_id": "t-pres"})
+
+        prompt = captured.get("prompt", "")
+        assert "AcmeCorp" in prompt, f"Upstream context missing: {prompt}"
+
     def test_all_three_hooks_success_path(self):
         """All hooks set, LLM succeeds: pre + post called, fallback NOT called."""
         configure_fake_llm(lambda tier: StructuredFake(lambda m: m(text="llm")))
