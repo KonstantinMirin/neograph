@@ -1274,6 +1274,36 @@ class TestMergeHooks:
         assert len(post_called) == 1
         assert post_called[0] == 2
 
+    def test_dict_form_outputs_with_post_process(self):
+        """post_process receives primary values from dict-form outputs."""
+        configure_fake_llm(lambda tier: StructuredFake(lambda m: m(text="llm")))
+
+        post_variants = []
+
+        def track_post(result, variants):
+            post_variants.extend(variants)
+            return Draft(text=result.text + "-pp")
+
+        writer = Node(
+            "writer", mode="think",
+            outputs={"result": Draft, "meta": Draft},
+            prompt="write", model="fast",
+        ) | Oracle(
+            n=2,
+            merge_prompt="merge: ${variants}",
+            merge_post_process=track_post,
+        )
+
+        pipeline = Construct("dict-hook", nodes=[writer])
+        graph = compile(pipeline)
+        result = run(graph, input={"node_id": "t-dict"})
+
+        # post_process should have received primary values (Draft instances)
+        assert len(post_variants) == 2
+        assert all(isinstance(v, Draft) for v in post_variants)
+        # The merged result goes to the primary field
+        assert result["writer_result"].text == "llm-pp"
+
     def test_body_as_merge_with_hooks_rejected(self):
         """body-as-merge converts to merge_fn; hooks should be rejected."""
         with pytest.raises(ConfigurationError, match="merge hooks"):
