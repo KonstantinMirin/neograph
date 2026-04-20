@@ -1308,6 +1308,39 @@ class TestMergeHooks:
         prompt = captured_input.get("prompt", "")
         assert "Judge:" in prompt
 
+    def test_post_process_error_not_caught_by_fallback(self):
+        """post_process errors must propagate, NOT be caught by fallback."""
+        configure_fake_llm(lambda tier: StructuredFake(lambda m: m(text="ok")))
+
+        fallback_called = []
+
+        def bad_post_process(result, variants):
+            raise ValueError("post_process bug")
+
+        def track_fallback(variants, error):
+            fallback_called.append(str(error))
+            return Draft(text="fallback")
+
+        @node(outputs=Draft, ensemble_n=2,
+              prompt="gen", model="fast",
+              merge_prompt="merge: ${variants}",
+              merge_post_process=bad_post_process,
+              merge_fallback=track_fallback)
+        def write() -> Draft: ...
+
+        mod = self._fresh_module("test_pp_err")
+        mod.write = write
+
+        pipeline = construct_from_module(mod, name="pp-err-test")
+        graph = compile(pipeline)
+
+        with pytest.raises(ValueError, match="post_process bug"):
+            run(graph, input={"node_id": "t-pp-err"})
+
+        assert fallback_called == [], (
+            f"fallback should NOT catch post_process errors, but got: {fallback_called}"
+        )
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 # EACH×ORACLE FUSION (neograph-tpgi)

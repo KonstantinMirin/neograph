@@ -226,13 +226,14 @@ def make_oracle_merge_fn(
                     output_model=output_model if not isinstance(output_model, dict) else next(iter(output_model.values())),
                     config=config,
                 )
-                if _post_process is not None:
-                    merged = _post_process(merged, primary)
             except Exception as exc:
                 if _fallback is not None:
                     merged = _fallback(primary, exc)
                 else:
                     raise
+
+            if _post_process is not None:
+                merged = _post_process(merged, primary)
 
             return _build_oracle_merge_result(merged, field_name, output_model, secondaries)
     else:

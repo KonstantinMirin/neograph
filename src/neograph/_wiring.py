@@ -312,13 +312,14 @@ def _merge_one_group(oracle: Oracle, node: Node, variants: list, config: Any) ->
                 output_model=output_model,  # type: ignore[arg-type]
                 config=config,
             )
-            if oracle.merge_post_process is not None:
-                merged = oracle.merge_post_process(merged, variants)
         except Exception as exc:
             if oracle.merge_fallback is not None:
                 merged = oracle.merge_fallback(variants, exc)
             else:
                 raise
+
+        if oracle.merge_post_process is not None:
+            merged = oracle.merge_post_process(merged, variants)
 
         return merged
 
