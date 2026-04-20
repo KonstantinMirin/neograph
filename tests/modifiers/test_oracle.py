@@ -1343,9 +1343,155 @@ class TestMergeHooks:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# EACH×ORACLE FUSION (neograph-tpgi)
+# EACH×ORACLE FUSION WITH HOOKS
 #
-# map_over + ensemble_n on the same @node: flat M×N Send topology.
+# map_over + ensemble_n + merge hooks on the same @node.
+# Tests the _merge_one_group path in _wiring.py.
 # ═══════════════════════════════════════════════════════════════════════════
+
+
+class ChunkItem(BaseModel, frozen=True):
+    idx: str
+    text: str
+
+
+class ChunkList(BaseModel, frozen=True):
+    items: list[ChunkItem]
+
+
+class ChunkResult(BaseModel, frozen=True):
+    summary: str
+
+
+class TestEachOracleFusionHooks:
+    """Hooks on the EachxOracle fused path (_merge_one_group)."""
+
+    @staticmethod
+    def _fresh_module(name: str):
+        import types as _types
+        return _types.ModuleType(name)
+
+    def test_post_process_in_fused_path(self):
+        """merge_post_process works in EachxOracle fused path."""
+        configure_fake_llm(lambda tier: StructuredFake(lambda m: m(summary="raw")))
+
+        post_calls = []
+
+        def upper_post(result, variants):
+            post_calls.append(len(variants))
+            return ChunkResult(summary=result.summary.upper())
+
+        @node(outputs=ChunkList)
+        def make_chunks() -> ChunkList:
+            return ChunkList(items=[
+                ChunkItem(idx="A", text="alpha"),
+                ChunkItem(idx="B", text="beta"),
+            ])
+
+        @node(outputs=ChunkResult, prompt="score", model="fast",
+              map_over="make_chunks.items", map_key="idx",
+              ensemble_n=2, merge_prompt="merge: ${variants}",
+              merge_post_process=upper_post)
+        def score(chunk: ChunkItem) -> ChunkResult: ...
+
+        mod = self._fresh_module("test_fused_post")
+        mod.make_chunks = make_chunks
+        mod.score = score
+
+        pipeline = construct_from_module(mod, name="fused-post")
+        graph = compile(pipeline)
+        result = run(graph, input={"node_id": "f-post"})
+
+        scores = result["score"]
+        assert isinstance(scores, dict)
+        assert scores["A"].summary == "RAW"
+        assert scores["B"].summary == "RAW"
+        assert len(post_calls) == 2  # once per Each group
+
+    def test_fallback_in_fused_path(self):
+        """merge_fallback works in EachxOracle fused path."""
+        class FailOnMerge:
+            def __init__(self, tier):
+                self._tier = tier
+
+            def with_structured_output(self, model, **kw):
+                self._model = model
+                return self
+
+            def invoke(self, messages, **kw):
+                if self._tier == "reason":
+                    raise RuntimeError("fused merge failed")
+                return self._model(summary="gen")
+
+        configure_fake_llm(lambda tier: FailOnMerge(tier))
+
+        def fused_fallback(variants, error):
+            return ChunkResult(summary=f"fb-{len(variants)}")
+
+        @node(outputs=ChunkList)
+        def make_chunks() -> ChunkList:
+            return ChunkList(items=[ChunkItem(idx="X", text="x")])
+
+        @node(outputs=ChunkResult, prompt="score", model="fast",
+              map_over="make_chunks.items", map_key="idx",
+              ensemble_n=2, merge_prompt="merge: ${variants}",
+              merge_fallback=fused_fallback)
+        def score(chunk: ChunkItem) -> ChunkResult: ...
+
+        mod = self._fresh_module("test_fused_fb")
+        mod.make_chunks = make_chunks
+        mod.score = score
+
+        pipeline = construct_from_module(mod, name="fused-fb")
+        graph = compile(pipeline)
+        result = run(graph, input={"node_id": "f-fb"})
+
+        scores = result["score"]
+        assert scores["X"].summary == "fb-2"
+
+    def test_pre_process_in_fused_path(self):
+        """merge_pre_process works in EachxOracle fused path."""
+        captured = {}
+
+        class CaptureMerge:
+            def __init__(self, tier):
+                self._tier = tier
+
+            def with_structured_output(self, model, **kw):
+                self._model = model
+                return self
+
+            def invoke(self, messages, **kw):
+                if self._tier == "reason":
+                    captured.setdefault("prompts", []).append(
+                        messages[0]["content"] if messages else "")
+                return self._model(summary="merged")
+
+        configure_fake_llm(lambda tier: CaptureMerge(tier))
+
+        def tag_pre(variants):
+            return {"tagged": f"count={len(variants)}"}
+
+        @node(outputs=ChunkList)
+        def make_chunks() -> ChunkList:
+            return ChunkList(items=[ChunkItem(idx="Z", text="z")])
+
+        @node(outputs=ChunkResult, prompt="score", model="fast",
+              map_over="make_chunks.items", map_key="idx",
+              ensemble_n=2, merge_prompt="Merge tagged: ${tagged}",
+              merge_pre_process=tag_pre)
+        def score(chunk: ChunkItem) -> ChunkResult: ...
+
+        mod = self._fresh_module("test_fused_pre")
+        mod.make_chunks = make_chunks
+        mod.score = score
+
+        pipeline = construct_from_module(mod, name="fused-pre")
+        graph = compile(pipeline)
+        result = run(graph, input={"node_id": "f-pre"})
+
+        assert any("count=2" in p for p in captured.get("prompts", [])), (
+            f"pre_process tag not in prompts: {captured}"
+        )
 
 
