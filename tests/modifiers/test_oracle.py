@@ -1274,6 +1274,37 @@ class TestMergeHooks:
         assert len(post_called) == 1
         assert post_called[0] == 2
 
+    def test_no_fallback_error_propagates(self):
+        """Without fallback, LLM errors propagate with original type and message."""
+        class FailMerge:
+            def __init__(self, tier):
+                self._tier = tier
+
+            def with_structured_output(self, model, **kw):
+                self._model = model
+                return self
+
+            def invoke(self, messages, **kw):
+                if self._tier == "reason":
+                    raise RuntimeError("LLM unavailable")
+                return self._model(text="v")
+
+        configure_fake_llm(lambda tier: FailMerge(tier))
+
+        @node(outputs=Draft, ensemble_n=2,
+              prompt="gen", model="fast",
+              merge_prompt="merge: ${variants}")
+        def write() -> Draft: ...
+
+        mod = self._fresh_module("test_nofb")
+        mod.write = write
+
+        pipeline = construct_from_module(mod, name="nofb-test")
+        graph = compile(pipeline)
+
+        with pytest.raises(RuntimeError, match="LLM unavailable"):
+            run(graph, input={"node_id": "t-nofb"})
+
     def test_dict_form_outputs_with_post_process(self):
         """post_process receives primary values from dict-form outputs."""
         configure_fake_llm(lambda tier: StructuredFake(lambda m: m(text="llm")))
