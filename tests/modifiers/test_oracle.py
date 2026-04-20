@@ -1831,3 +1831,68 @@ class TestEachOracleFusionHooks:
         )
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# ORACLE MERGE LLM_CONFIG PROPAGATION (neograph-63g9)
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TestOracleMergeLlmConfig:
+    """Oracle merge_prompt must propagate the node's llm_config to invoke_structured."""
+
+    @staticmethod
+    def _fresh_module(name: str):
+        import types as _types
+        return _types.ModuleType(name)
+
+    def test_merge_prompt_receives_node_llm_config(self, monkeypatch):
+        """invoke_structured in the merge path should receive node.llm_config."""
+        captured_calls = []
+
+        configure_fake_llm(lambda tier: StructuredFake(lambda m: m(text="out")))
+
+        # Patch _llm.invoke_structured to capture all calls
+        from neograph import _llm
+        original = _llm.invoke_structured
+
+        def capture_invoke(
+            model_tier, prompt_template, input_data, output_model, config,
+            node_name="", llm_config=None, context=None,
+        ):
+            captured_calls.append({
+                "model_tier": model_tier,
+                "prompt_template": prompt_template,
+                "llm_config": llm_config,
+            })
+            return output_model(text="fake")
+
+        monkeypatch.setattr(_llm, "invoke_structured", capture_invoke)
+
+        @node(outputs=Draft, ensemble_n=2,
+              prompt="gen", model="fast",
+              merge_prompt="merge: ${variants}",
+              llm_config={"output_strategy": "json_mode", "temperature": 0.5})
+        def write() -> Draft: ...
+
+        mod = self._fresh_module("test_llm_cfg")
+        mod.write = write
+
+        pipeline = construct_from_module(mod, name="llm-cfg-test")
+        graph = compile(pipeline)
+        run(graph, input={"node_id": "t-cfg"})
+
+        # Should have 3 calls: 2 generators + 1 merge
+        assert len(captured_calls) == 3, f"Expected 3 calls, got {len(captured_calls)}"
+
+        # The merge call is the last one (tier="reason", prompt contains "merge")
+        merge_call = captured_calls[-1]
+        assert merge_call["model_tier"] == "reason", f"Last call should be merge: {merge_call}"
+
+        merge_llm_config = merge_call["llm_config"]
+        assert merge_llm_config is not None, (
+            "merge invoke_structured did not receive llm_config"
+        )
+        assert merge_llm_config.get("output_strategy") == "json_mode", (
+            f"merge should inherit node's output_strategy, got: {merge_llm_config}"
+        )
+
+

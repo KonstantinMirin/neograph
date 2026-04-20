@@ -249,7 +249,8 @@ def _add_each_oracle_fused(
 
     # Group-merge barrier: partitions by each.key, calls merge_fn per group
     merge_fn_impl = make_oracle_merge_fn(oracle, field_name, collector_field, node.outputs,
-                                        node_inputs=node.inputs)
+                                        node_inputs=node.inputs,
+                                        llm_config=node.llm_config or None)
 
     def group_merge_barrier(state: Any, config: RunnableConfig) -> dict:
         from collections import defaultdict
@@ -312,6 +313,7 @@ def _merge_one_group(oracle: Oracle, node: Node, variants: list, config: Any) ->
                 input_data=input_data,
                 output_model=output_model,  # type: ignore[arg-type]
                 config=config,
+                llm_config=node.llm_config or None,
             )
         except Exception as exc:
             if oracle.merge_fallback is not None:

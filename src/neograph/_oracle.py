@@ -179,6 +179,7 @@ def make_oracle_merge_fn(
     collector_field: str,
     output_model: Any,
     node_inputs: dict[str, Any] | None = None,
+    llm_config: dict[str, Any] | None = None,
 ) -> Callable:
     """Create the merge barrier function for Oracle.
 
@@ -201,6 +202,7 @@ def make_oracle_merge_fn(
       errors. Returns a deterministic result instead of raising.
     """
     _node_inputs = node_inputs if isinstance(node_inputs, dict) else None
+    _llm_config = llm_config
 
     if oracle.merge_prompt:
         assert oracle.merge_prompt is not None  # narrowing for mypy
@@ -234,6 +236,7 @@ def make_oracle_merge_fn(
                     input_data=input_data,
                     output_model=output_model if not isinstance(output_model, dict) else next(iter(output_model.values())),
                     config=config,
+                    llm_config=_llm_config,
                 )
             except Exception as exc:
                 if _fallback is not None:

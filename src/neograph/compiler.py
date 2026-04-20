@@ -351,7 +351,8 @@ def _add_subgraph(
             oracle = mods["oracle"]
             collector_field = f"neo_oracle_{field_name}"
             redirect_fn = make_oracle_redirect_fn(subgraph_fn, field_name, collector_field)
-            merge_fn = make_oracle_merge_fn(oracle, field_name, collector_field, sub.output)
+            merge_fn = make_oracle_merge_fn(oracle, field_name, collector_field, sub.output,
+                                               llm_config=sub.llm_config or None)
             last_name = _wire_oracle(graph, sub.name, redirect_fn, merge_fn, oracle, prev_node)
         case ModifierCombo.EACH | ModifierCombo.EACH_OPERATOR:
             each = mods["each"]
@@ -441,7 +442,8 @@ def _add_oracle_nodes(
     raw_fn = make_node_fn(node)
     redirect_fn = make_oracle_redirect_fn(raw_fn, field_name, collector_field)
     merge_fn = make_oracle_merge_fn(oracle, field_name, collector_field, node.outputs,
-                                    node_inputs=node.inputs)
+                                    node_inputs=node.inputs,
+                                    llm_config=node.llm_config or None)
 
     return _wire_oracle(graph, node.name, redirect_fn, merge_fn, oracle, prev_node, retry_policy=retry_policy)
 
