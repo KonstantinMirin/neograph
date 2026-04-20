@@ -123,6 +123,9 @@ def _build_oracle_kwargs(
     merge_prompt: str | None,
     models: list[str] | None,
     ensemble_n: int | None,
+    merge_pre_process: Callable | None = None,
+    merge_post_process: Callable | None = None,
+    merge_fallback: Callable | None = None,
 ) -> dict[str, Any]:
     """Build and validate Oracle modifier kwargs from @node decorator arguments.
 
@@ -181,6 +184,12 @@ def _build_oracle_kwargs(
         oracle_kw["models"] = models
     if ensemble_n is not None:
         oracle_kw["n"] = ensemble_n
+    if merge_pre_process is not None:
+        oracle_kw["merge_pre_process"] = merge_pre_process
+    if merge_post_process is not None:
+        oracle_kw["merge_post_process"] = merge_post_process
+    if merge_fallback is not None:
+        oracle_kw["merge_fallback"] = merge_fallback
     return oracle_kw
 
 
@@ -201,6 +210,9 @@ def node(
     models: list[str] | None = None,
     merge_fn: str | None = None,
     merge_prompt: str | None = None,
+    merge_pre_process: Callable | None = None,
+    merge_post_process: Callable | None = None,
+    merge_fallback: Callable | None = None,
     interrupt_when: str | Callable | None = None,
     renderer: Any = None,
     context: list[str] | None = None,
@@ -503,6 +515,9 @@ def node(
             oracle_kw = _build_oracle_kwargs(
                 node_label=node_label, f=f, merge_fn=merge_fn,
                 merge_prompt=merge_prompt, models=models, ensemble_n=ensemble_n,
+                merge_pre_process=merge_pre_process,
+                merge_post_process=merge_post_process,
+                merge_fallback=merge_fallback,
             )
             n = n | Oracle(**oracle_kw)
             n = n | Each(over=map_over, key=map_key)  # type: ignore[arg-type]
@@ -535,6 +550,9 @@ def node(
             oracle_kw = _build_oracle_kwargs(
                 node_label=node_label, f=f, merge_fn=merge_fn,
                 merge_prompt=merge_prompt, models=models, ensemble_n=ensemble_n,
+                merge_pre_process=merge_pre_process,
+                merge_post_process=merge_post_process,
+                merge_fallback=merge_fallback,
             )
             n = n | Oracle(**oracle_kw)
             _register_sidecar(n, f, param_names)

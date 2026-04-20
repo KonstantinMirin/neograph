@@ -197,6 +197,9 @@ def make_oracle_merge_fn(
     if oracle.merge_prompt:
         assert oracle.merge_prompt is not None  # narrowing for mypy
         _merge_prompt: str = oracle.merge_prompt
+        _pre_process = oracle.merge_pre_process
+        _post_process = oracle.merge_post_process
+        _fallback = oracle.merge_fallback
 
         def merge_fn(state: Any, config: RunnableConfig) -> dict:
             from neograph._llm import invoke_structured
@@ -204,21 +207,33 @@ def make_oracle_merge_fn(
             results = getattr(state, collector_field, [])
             primary, secondaries = _unwrap_oracle_results(results, field_name, output_model)
 
-            # Build input dict: variants + upstream context from state
-            input_data: dict[str, Any] = {"variants": primary}
-            if _node_inputs:
-                for key in _node_inputs:
-                    val = getattr(state, field_name_for(key), None)
-                    if val is not None:
-                        input_data[key] = val
+            # Pre-process hook replaces default input_data construction
+            if _pre_process is not None:
+                input_data = _pre_process(primary)
+            else:
+                input_data: dict[str, Any] = {"variants": primary}
+                if _node_inputs:
+                    for key in _node_inputs:
+                        val = getattr(state, field_name_for(key), None)
+                        if val is not None:
+                            input_data[key] = val
 
-            merged = invoke_structured(
-                model_tier=oracle.merge_model,
-                prompt_template=_merge_prompt,
-                input_data=input_data,
-                output_model=output_model if not isinstance(output_model, dict) else next(iter(output_model.values())),
-                config=config,
-            )
+            try:
+                merged = invoke_structured(
+                    model_tier=oracle.merge_model,
+                    prompt_template=_merge_prompt,
+                    input_data=input_data,
+                    output_model=output_model if not isinstance(output_model, dict) else next(iter(output_model.values())),
+                    config=config,
+                )
+                if _post_process is not None:
+                    merged = _post_process(merged, primary)
+            except Exception as exc:
+                if _fallback is not None:
+                    merged = _fallback(primary, exc)
+                else:
+                    raise
+
             return _build_oracle_merge_result(merged, field_name, output_model, secondaries)
     else:
         from neograph.decorators import _resolve_merge_args, get_merge_fn_metadata

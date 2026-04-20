@@ -298,13 +298,29 @@ def _merge_one_group(oracle: Oracle, node: Node, variants: list, config: Any) ->
 
     if oracle.merge_prompt:
         from neograph._llm import invoke_structured
-        return invoke_structured(
-            model_tier=oracle.merge_model,
-            prompt_template=oracle.merge_prompt,
-            input_data=variants[0] if variants else None,
-            output_model=output_model,  # type: ignore[arg-type]
-            config=config,
-        )
+
+        if oracle.merge_pre_process is not None:
+            input_data = oracle.merge_pre_process(variants)
+        else:
+            input_data = variants[0] if variants else None
+
+        try:
+            merged = invoke_structured(
+                model_tier=oracle.merge_model,
+                prompt_template=oracle.merge_prompt,
+                input_data=input_data,
+                output_model=output_model,  # type: ignore[arg-type]
+                config=config,
+            )
+            if oracle.merge_post_process is not None:
+                merged = oracle.merge_post_process(merged, variants)
+        except Exception as exc:
+            if oracle.merge_fallback is not None:
+                merged = oracle.merge_fallback(variants, exc)
+            else:
+                raise
+
+        return merged
 
     if oracle.merge_fn:
         meta = get_merge_fn_metadata(oracle.merge_fn)

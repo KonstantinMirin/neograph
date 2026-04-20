@@ -8,11 +8,12 @@
 from __future__ import annotations
 
 from enum import Enum, auto
+from collections.abc import Callable
 from typing import Any, Self
 
 from neograph._dev_warnings import dev_warn
 
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, ConfigDict, field_validator
 
 from neograph.errors import ConfigurationError, ConstructError
 
@@ -327,11 +328,18 @@ class Oracle(Modifier, frozen=True):
         node | Oracle(n=9, models=["reason", "fast", "creative"], merge_fn="pick_best")
     """
 
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
     n: int = 3
     models: list[str] | None = None  # per-generator model tiers (round-robin)
     merge_prompt: str | None = None
     merge_model: str = "reason"
     merge_fn: str | None = None  # registered scripted function name
+
+    # Optional hooks for merge_prompt path
+    merge_pre_process: Callable | None = None   # fn(variants) -> dict (input_data)
+    merge_post_process: Callable | None = None  # fn(result, variants) -> result
+    merge_fallback: Callable | None = None      # fn(variants, error) -> result
 
     @field_validator('n')
     @classmethod
@@ -352,6 +360,14 @@ class Oracle(Modifier, frozen=True):
                 "Oracle accepts merge_prompt or merge_fn, not both",
                 found="both merge_prompt and merge_fn provided",
                 hint="Remove one of the two merge strategies",
+            )
+        # Hooks are only valid with merge_prompt, not merge_fn
+        if self.merge_fn and (self.merge_pre_process or self.merge_post_process or self.merge_fallback):
+            raise ConfigurationError.build(
+                "merge hooks (merge_pre_process, merge_post_process, merge_fallback) "
+                "are only valid with merge_prompt, not merge_fn",
+                found="merge_fn with merge hooks",
+                hint="Use merge_prompt with hooks, or handle pre/post logic inside merge_fn",
             )
         # Empty models list is a user mistake — reject early
         if self.models is not None and len(self.models) == 0:

@@ -1113,6 +1113,203 @@ class TestMergePromptUpstreamContext:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# MERGE HOOKS: pre_process, post_process, fallback (neograph-apki)
+#
+# Optional callbacks that bracket the merge_prompt LLM dispatch.
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TestMergeHooks:
+    """merge_pre_process, merge_post_process, merge_fallback on Oracle."""
+
+    @staticmethod
+    def _fresh_module(name: str):
+        import types as _types
+        return _types.ModuleType(name)
+
+    def test_pre_process_transforms_variants_before_llm(self):
+        """merge_pre_process should replace default input_data for the merge prompt."""
+        captured_input = {}
+
+        class CaptureMerge:
+            def __init__(self, tier):
+                self._tier = tier
+
+            def with_structured_output(self, model, **kw):
+                self._model = model
+                return self
+
+            def invoke(self, messages, **kw):
+                if self._tier == "reason":
+                    captured_input["prompt"] = messages[0]["content"] if messages else ""
+                return self._model(text="merged")
+
+        configure_fake_llm(lambda tier: CaptureMerge(tier))
+
+        def tag_variants(variants):
+            tagged = [f"[v{i}] {v.text}" for i, v in enumerate(variants)]
+            return {"tagged_items": "\n".join(tagged)}
+
+        @node(outputs=Draft, ensemble_n=2,
+              prompt="generate draft", model="fast",
+              merge_prompt="Merge these tagged items: ${tagged_items}",
+              merge_pre_process=tag_variants)
+        def write() -> Draft: ...
+
+        mod = self._fresh_module("test_pre")
+        mod.write = write
+
+        pipeline = construct_from_module(mod, name="pre-test")
+        graph = compile(pipeline)
+        result = run(graph, input={"node_id": "t-pre"})
+
+        prompt = captured_input.get("prompt", "")
+        assert "[v0]" in prompt, f"Pre-processed tag not in prompt: {prompt}"
+        assert "[v1]" in prompt, f"Pre-processed tag not in prompt: {prompt}"
+
+    def test_post_process_transforms_merged_result(self):
+        """merge_post_process should transform the LLM result before state write."""
+        configure_fake_llm(lambda tier: StructuredFake(lambda m: m(text="draft-output")))
+
+        post_called = []
+
+        def uppercase_result(result, variants):
+            post_called.append(True)
+            return Draft(text=result.text.upper())
+
+        @node(outputs=Draft, ensemble_n=2,
+              prompt="generate draft", model="fast",
+              merge_prompt="pick best: ${variants}",
+              merge_post_process=uppercase_result)
+        def write() -> Draft: ...
+
+        mod = self._fresh_module("test_post")
+        mod.write = write
+
+        pipeline = construct_from_module(mod, name="post-test")
+        graph = compile(pipeline)
+        result = run(graph, input={"node_id": "t-post"})
+
+        assert len(post_called) == 1, "post_process should have been called once"
+        assert result["write"].text == "DRAFT-OUTPUT"
+
+    def test_fallback_catches_llm_error(self):
+        """merge_fallback should catch LLM errors and return a deterministic result."""
+        class FailOnMerge:
+            def __init__(self, tier):
+                self._tier = tier
+
+            def with_structured_output(self, model, **kw):
+                self._model = model
+                return self
+
+            def invoke(self, messages, **kw):
+                if self._tier == "reason":
+                    raise RuntimeError("LLM merge failed")
+                return self._model(text="variant")
+
+        configure_fake_llm(lambda tier: FailOnMerge(tier))
+
+        def fallback_fn(variants, error):
+            return Draft(text=f"fallback-{len(variants)}")
+
+        @node(outputs=Draft, ensemble_n=2,
+              prompt="generate draft", model="fast",
+              merge_prompt="merge: ${variants}",
+              merge_fallback=fallback_fn)
+        def write() -> Draft: ...
+
+        mod = self._fresh_module("test_fallback")
+        mod.write = write
+
+        pipeline = construct_from_module(mod, name="fallback-test")
+        graph = compile(pipeline)
+        result = run(graph, input={"node_id": "t-fb"})
+
+        assert result["write"].text == "fallback-2"
+
+    def test_hooks_rejected_with_merge_fn(self):
+        """Hooks must raise ConfigurationError when combined with merge_fn."""
+        with pytest.raises(ConfigurationError):
+            Oracle(
+                merge_fn="some_fn",
+                merge_pre_process=lambda v: {"x": v},
+            )
+
+        with pytest.raises(ConfigurationError):
+            Oracle(
+                merge_fn="some_fn",
+                merge_post_process=lambda r, v: r,
+            )
+
+        with pytest.raises(ConfigurationError):
+            Oracle(
+                merge_fn="some_fn",
+                merge_fallback=lambda v, e: v[0],
+            )
+
+    def test_programmatic_oracle_with_hooks(self):
+        """Programmatic Node | Oracle(merge_prompt=..., hooks=...) should work."""
+        configure_fake_llm(lambda tier: StructuredFake(lambda m: m(text="gen-output")))
+
+        post_called = []
+
+        def track_post(result, variants):
+            post_called.append(len(variants))
+            return result
+
+        writer = Node(
+            "writer", mode="think", outputs=Draft,
+            prompt="write", model="fast",
+        ) | Oracle(
+            n=2,
+            merge_prompt="merge: ${variants}",
+            merge_post_process=track_post,
+        )
+
+        pipeline = Construct("hook-prog", nodes=[writer])
+        graph = compile(pipeline)
+        result = run(graph, input={"node_id": "t-prog"})
+
+        assert len(post_called) == 1
+        assert post_called[0] == 2
+
+    def test_merge_prompt_without_hooks_unchanged(self):
+        """merge_prompt without hooks works exactly as before (regression guard)."""
+        captured_input = {}
+
+        class CaptureMerge:
+            def __init__(self, tier):
+                self._tier = tier
+
+            def with_structured_output(self, model, **kw):
+                self._model = model
+                return self
+
+            def invoke(self, messages, **kw):
+                if self._tier == "reason":
+                    captured_input["prompt"] = messages[0]["content"] if messages else ""
+                return self._model(text="merged")
+
+        configure_fake_llm(lambda tier: CaptureMerge(tier))
+
+        @node(outputs=Draft, ensemble_n=2,
+              prompt="generate draft", model="fast",
+              merge_prompt="Judge: ${variants}")
+        def write() -> Draft: ...
+
+        mod = self._fresh_module("test_nochange")
+        mod.write = write
+
+        pipeline = construct_from_module(mod, name="nochange-test")
+        graph = compile(pipeline)
+        result = run(graph, input={"node_id": "t-nc"})
+
+        prompt = captured_input.get("prompt", "")
+        assert "Judge:" in prompt
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # EACH×ORACLE FUSION (neograph-tpgi)
 #
 # map_over + ensemble_n on the same @node: flat M×N Send topology.
