@@ -218,6 +218,7 @@ def make_oracle_merge_fn(
                         if val is not None:
                             input_data[key] = val
 
+            used_fallback = False
             try:
                 merged = invoke_structured(
                     model_tier=oracle.merge_model,
@@ -229,10 +230,11 @@ def make_oracle_merge_fn(
             except Exception as exc:
                 if _fallback is not None:
                     merged = _fallback(primary, exc)
+                    used_fallback = True
                 else:
                     raise
 
-            if _post_process is not None:
+            if _post_process is not None and not used_fallback:
                 merged = _post_process(merged, primary)
 
             return _build_oracle_merge_result(merged, field_name, output_model, secondaries)

@@ -1274,6 +1274,91 @@ class TestMergeHooks:
         assert len(post_called) == 1
         assert post_called[0] == 2
 
+    def test_all_three_hooks_success_path(self):
+        """All hooks set, LLM succeeds: pre + post called, fallback NOT called."""
+        configure_fake_llm(lambda tier: StructuredFake(lambda m: m(text="llm")))
+
+        call_log = []
+
+        def pre(variants):
+            call_log.append("pre")
+            return {"items": str(len(variants))}
+
+        def post(result, variants):
+            call_log.append("post")
+            return Draft(text=result.text + "-post")
+
+        def fb(variants, error):
+            call_log.append("fallback")
+            return Draft(text="fb")
+
+        @node(outputs=Draft, ensemble_n=2,
+              prompt="gen", model="fast",
+              merge_prompt="Merge ${items}",
+              merge_pre_process=pre,
+              merge_post_process=post,
+              merge_fallback=fb)
+        def write() -> Draft: ...
+
+        mod = self._fresh_module("test_all3_ok")
+        mod.write = write
+
+        pipeline = construct_from_module(mod, name="all3-ok")
+        graph = compile(pipeline)
+        result = run(graph, input={"node_id": "t-3ok"})
+
+        assert call_log == ["pre", "post"]
+        assert result["write"].text == "llm-post"
+
+    def test_all_three_hooks_failure_path(self):
+        """All hooks set, LLM fails: pre + fallback called, post NOT called."""
+        class FailMerge:
+            def __init__(self, tier):
+                self._tier = tier
+
+            def with_structured_output(self, model, **kw):
+                self._model = model
+                return self
+
+            def invoke(self, messages, **kw):
+                if self._tier == "reason":
+                    raise RuntimeError("boom")
+                return self._model(text="v")
+
+        configure_fake_llm(lambda tier: FailMerge(tier))
+
+        call_log = []
+
+        def pre(variants):
+            call_log.append("pre")
+            return {"items": str(len(variants))}
+
+        def post(result, variants):
+            call_log.append("post")
+            return result
+
+        def fb(variants, error):
+            call_log.append("fallback")
+            return Draft(text="fb")
+
+        @node(outputs=Draft, ensemble_n=2,
+              prompt="gen", model="fast",
+              merge_prompt="Merge ${items}",
+              merge_pre_process=pre,
+              merge_post_process=post,
+              merge_fallback=fb)
+        def write() -> Draft: ...
+
+        mod = self._fresh_module("test_all3_fail")
+        mod.write = write
+
+        pipeline = construct_from_module(mod, name="all3-fail")
+        graph = compile(pipeline)
+        result = run(graph, input={"node_id": "t-3f"})
+
+        assert call_log == ["pre", "fallback"]
+        assert result["write"].text == "fb"
+
     def test_programmatic_pre_process(self):
         """Programmatic Node | Oracle with merge_pre_process."""
         captured = {}

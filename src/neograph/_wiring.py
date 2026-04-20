@@ -304,6 +304,7 @@ def _merge_one_group(oracle: Oracle, node: Node, variants: list, config: Any) ->
         else:
             input_data = variants[0] if variants else None
 
+        used_fallback = False
         try:
             merged = invoke_structured(
                 model_tier=oracle.merge_model,
@@ -315,10 +316,11 @@ def _merge_one_group(oracle: Oracle, node: Node, variants: list, config: Any) ->
         except Exception as exc:
             if oracle.merge_fallback is not None:
                 merged = oracle.merge_fallback(variants, exc)
+                used_fallback = True
             else:
                 raise
 
-        if oracle.merge_post_process is not None:
+        if oracle.merge_post_process is not None and not used_fallback:
             merged = oracle.merge_post_process(merged, variants)
 
         return merged
