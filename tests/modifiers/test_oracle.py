@@ -1274,6 +1274,14 @@ class TestMergeHooks:
         assert len(post_called) == 1
         assert post_called[0] == 2
 
+    def test_body_as_merge_with_hooks_rejected(self):
+        """body-as-merge converts to merge_fn; hooks should be rejected."""
+        with pytest.raises(ConfigurationError, match="merge hooks"):
+            @node(outputs=Draft, models=["fast", "reason"],
+                  merge_pre_process=lambda v: {"x": v})
+            def write(variants) -> Draft:
+                return variants[0]
+
     def test_pre_process_displaces_upstream_context(self):
         """When pre_process is set, upstream context is NOT auto-injected."""
         captured = {}
