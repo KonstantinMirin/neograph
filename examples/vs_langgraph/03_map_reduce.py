@@ -121,6 +121,10 @@ def run_neograph():
         model="fast",
         prompt="generate",
     ) | Oracle(n=3, merge_prompt="pick-best")
+    # Optional hooks for the merge_prompt path:
+    #   merge_pre_process=fn    -- transform variants before LLM
+    #   merge_post_process=fn   -- transform result after LLM
+    #   merge_fallback=fn       -- deterministic fallback on LLM error
 
     pipeline = Construct("joke-contest", nodes=[generate])
     graph = compile(pipeline)

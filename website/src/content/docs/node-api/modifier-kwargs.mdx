@@ -93,6 +93,9 @@ The merge step can be either scripted or LLM-powered:
 |---|---|
 | `merge_fn="name"` | Call a registered scripted function. Receives `(variants, config)`. |
 | `merge_prompt="template"` | Call an LLM with variants + upstream context. The template receives `${variants}` (the N variant outputs) and upstream values by name (e.g., `${enrich.site_name}`). |
+| `merge_pre_process=fn` | (Optional, `merge_prompt` only) Transform variants into custom input_data for the prompt. |
+| `merge_post_process=fn` | (Optional, `merge_prompt` only) Transform the LLM result before state write. |
+| `merge_fallback=fn` | (Optional, `merge_prompt` only) Catch LLM errors, return deterministic result. |
 
 Exactly one of `merge_fn` or `merge_prompt` is required. Setting both raises `ConstructError`.
 
@@ -131,6 +134,48 @@ The merge prompt sees:
 For template-ref merge prompts, the prompt compiler receives a dict with `"variants"` and upstream keys as named entries.
 
 The `@merge_fn` path is unchanged -- it still receives the raw variant list as its first parameter, with DI providing any additional context.
+
+### Merge hooks: pre_process, post_process, fallback
+
+When using `merge_prompt`, optional hooks let you customize the merge without dropping down to `@merge_fn`:
+
+```python
+def tag_with_gen_ids(variants: list[DecompositionResult]) -> dict:
+    """Transform raw variants into custom prompt input."""
+    tagged = [{"gen_id": f"gen-{i}", **v.model_dump()} for i, v in enumerate(variants)]
+    return {"tagged_claims": tagged}
+
+def ensure_all_grouped(result: GroupingResult, variants: list[DecompositionResult]) -> GroupingResult:
+    """Self-healing: ensure every input claim appears in the output."""
+    # ... validation and gap-filling logic
+    return result
+
+def singleton_fallback(variants: list[DecompositionResult], error: Exception) -> GroupingResult:
+    """On LLM failure, each claim gets its own group."""
+    return GroupingResult(groups=[Group(members=[v]) for v in variants])
+
+@node(outputs=GroupingResult, prompt='rw/decompose', model='reason',
+      ensemble_n=3, merge_prompt='rw/group-claims',
+      merge_pre_process=tag_with_gen_ids,
+      merge_post_process=ensure_all_grouped,
+      merge_fallback=singleton_fallback)
+def decompose() -> GroupingResult: ...
+```
+
+| Hook | Signature | When it runs |
+|------|-----------|-------------|
+| `merge_pre_process` | `fn(variants: list[T]) -> dict` | Before LLM call. Replaces the default `{"variants": ..., **upstream}` input_data entirely. |
+| `merge_post_process` | `fn(result: T, variants: list[T]) -> T` | After successful LLM call. Skipped when fallback fires. |
+| `merge_fallback` | `fn(variants: list[T], error: Exception) -> T` | When `invoke_structured` raises. Returns a deterministic result. |
+
+All three are optional and independent. They are only valid with `merge_prompt` -- passing any hook with `merge_fn` raises `ConfigurationError`. The programmatic equivalent:
+
+```python
+node | Oracle(n=3, merge_prompt="rw/group-claims",
+              merge_pre_process=tag_with_gen_ids,
+              merge_post_process=ensure_all_grouped,
+              merge_fallback=singleton_fallback)
+```
 
 ### Multi-model ensemble with models=
 

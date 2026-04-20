@@ -253,6 +253,19 @@ def node(
     Exactly one of ``merge_fn`` or ``merge_prompt`` is required; ``ensemble_n``
     defaults to 3 if omitted.
 
+    Merge hooks (``merge_prompt`` path only)::
+
+        @node(outputs=Claims, prompt='rw/decompose', model='reason',
+              ensemble_n=3, merge_prompt='rw/merge',
+              merge_pre_process=tag_variants,     # fn(variants) -> dict
+              merge_post_process=validate_result,  # fn(result, variants) -> result
+              merge_fallback=deterministic_merge)  # fn(variants, error) -> result
+
+    ``merge_pre_process`` replaces the default input_data construction.
+    ``merge_post_process`` transforms the LLM result (skipped on fallback).
+    ``merge_fallback`` catches LLM errors and returns a deterministic result.
+    All three are optional and invalid with ``merge_fn``.
+
     Human-in-the-loop via Operator::
 
         @node(mode='scripted', outputs=ValidationResult,

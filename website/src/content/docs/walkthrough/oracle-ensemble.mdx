@@ -223,6 +223,25 @@ def decompose() -> Claims: ...
 
 The framework passes all generator outputs to an LLM with the given prompt template. The LLM produces the final merged result as structured output. Use this when merging requires judgment (picking the best analysis, synthesizing contradictory results).
 
+### Merge hooks
+
+The `merge_prompt` path supports optional hooks that bracket the LLM call. These let you customize the merge without dropping down to `@merge_fn` and losing NeoGraph's built-in LLM dispatch (retry, rendering, schema enforcement).
+
+```python
+@node(outputs=GroupingResult, prompt="decompose", model="reason",
+      ensemble_n=3, merge_prompt="rw/group-claims",
+      merge_pre_process=tag_with_gen_ids,
+      merge_post_process=ensure_all_grouped,
+      merge_fallback=singleton_fallback)
+def decompose() -> GroupingResult: ...
+```
+
+- **`merge_pre_process(variants) -> dict`** -- transform raw variants into custom input_data for the merge prompt. Replaces the default `{"variants": [...], **upstream}` entirely.
+- **`merge_post_process(result, variants) -> result`** -- transform the parsed LLM output before it is written to state (e.g., self-healing invariants, ID remapping). Only runs on LLM success.
+- **`merge_fallback(variants, error) -> result`** -- catch LLM/parse errors and return a deterministic result (e.g., treat each variant as its own group).
+
+All three are optional and only valid with `merge_prompt`. Passing any hook with `merge_fn` raises `ConfigurationError`.
+
 ## Multi-model ensemble with models=
 
 Instead of running the same model N times, run different models on the same input. Each generator gets a different model tier:

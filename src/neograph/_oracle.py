@@ -191,6 +191,14 @@ def make_oracle_merge_fn(
     When *node_inputs* is provided (dict-form inputs from the node),
     upstream values are extracted from state and passed alongside the
     variant list as a dict: ``{"variants": [...], upstream_key: val, ...}``.
+
+    Merge hooks (merge_prompt path only):
+    - ``merge_pre_process(variants) -> dict``: replaces default input_data.
+      When set, upstream context auto-injection is skipped.
+    - ``merge_post_process(result, variants) -> result``: transforms the
+      parsed LLM result. Only runs on LLM success (skipped when fallback fires).
+    - ``merge_fallback(variants, error) -> result``: catches invoke_structured
+      errors. Returns a deterministic result instead of raising.
     """
     _node_inputs = node_inputs if isinstance(node_inputs, dict) else None
 

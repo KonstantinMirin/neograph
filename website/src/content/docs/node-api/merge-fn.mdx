@@ -135,6 +135,15 @@ def my_internal_merge(variants: list[Claims]) -> Claims:
 def decompose() -> Claims: ...
 ```
 
+## When to use @merge_fn vs merge hooks
+
+| Approach | When to use |
+|----------|-------------|
+| `@merge_fn` | Full control over merge logic. You call the LLM (or don't) yourself. Supports DI (`FromInput`, `FromConfig`) and state wiring. |
+| `merge_prompt` + hooks | Let NeoGraph handle the LLM call (retry, rendering, schema enforcement). Use hooks for pre/post transformation and error fallback. |
+
+If your merge just needs to transform the variant list before the LLM sees it, validate the result after, or provide a fallback on failure, prefer `merge_prompt` with hooks. Reserve `@merge_fn` for merges that need custom LLM invocation, non-LLM logic, or DI beyond what the prompt template provides. See [Modifier kwargs](/node-api/modifier-kwargs/#merge-hooks-pre_process-post_process-fallback) for hook details.
+
 ---
 
 Documentation &copy; 2025-2026 Constantine Mirin, [mirin.pro](https://mirin.pro). Licensed under [CC BY-ND 4.0](https://creativecommons.org/licenses/by-nd/4.0/).

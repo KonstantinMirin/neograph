@@ -66,6 +66,9 @@ Decorator that turns a function into a Node with signature-inferred dependencies
     models: list[str] | None = None,
     merge_fn: str | None = None,
     merge_prompt: str | None = None,
+    merge_pre_process: Callable | None = None,
+    merge_post_process: Callable | None = None,
+    merge_fallback: Callable | None = None,
     interrupt_when: str | Callable | None = None,
     loop_when: str | Callable | None = None,
     max_iterations: int | None = None,
@@ -82,6 +85,9 @@ Decorator that turns a function into a Node with signature-inferred dependencies
 - **`inputs`** — Explicit `dict[str, type]` input spec. Usually inferred from param annotations.
 - **`map_over`** / **`map_key`** — Fan-out: run this node once per item in the referenced collection.
 - **`ensemble_n`** / **`merge_fn`** / **`merge_prompt`** — Oracle ensemble: N parallel generators plus a scripted or LLM merge.
+- **`merge_pre_process`** — `fn(variants) -> dict`. Replaces the default input_data for the merge prompt. Only valid with `merge_prompt`.
+- **`merge_post_process`** — `fn(result, variants) -> result`. Transforms the LLM merge result before state write. Skipped when fallback fires.
+- **`merge_fallback`** — `fn(variants, error) -> result`. Catches LLM errors during merge and returns a deterministic result.
 - **`models`** — Multi-model ensemble: list of model tiers. Each generator gets a different model round-robin. Infers `ensemble_n` from `len(models)`. When `models=` is set without `merge_fn`/`merge_prompt`, the function body IS the merge.
 - **`interrupt_when`** — Human-in-the-loop: inline callable or registered condition name.
 - **`loop_when`** — Loop: callable or registered condition name. Return `True` to continue looping. The value may be `None` on the first iteration, so the callable must be None-safe.

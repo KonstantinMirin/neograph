@@ -324,8 +324,21 @@ class Oracle(Modifier, frozen=True):
         # Multi-model ensemble (one per model):
         node | Oracle(models=["reason", "fast", "creative"], merge_fn="pick_best")
 
-        # Multi-model with redundancy (round-robin):
-        node | Oracle(n=9, models=["reason", "fast", "creative"], merge_fn="pick_best")
+        # LLM merge with hooks:
+        node | Oracle(n=3, merge_prompt="rw/merge",
+                       merge_pre_process=transform_variants,
+                       merge_post_process=validate_result,
+                       merge_fallback=deterministic_merge)
+
+    Merge hooks (merge_prompt path only):
+        merge_pre_process(variants: list[T]) -> dict
+            Transform raw variants into the input_data dict for the prompt.
+            Replaces the default ``{"variants": variants, ...upstream}`` construction.
+        merge_post_process(result: T, variants: list[T]) -> T
+            Transform the parsed LLM result before writing to state.
+            Only runs on LLM success, NOT on fallback results.
+        merge_fallback(variants: list[T], error: Exception) -> T
+            Called when invoke_structured raises. Returns a deterministic result.
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
