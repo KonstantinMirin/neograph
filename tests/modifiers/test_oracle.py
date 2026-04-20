@@ -1274,6 +1274,75 @@ class TestMergeHooks:
         assert len(post_called) == 1
         assert post_called[0] == 2
 
+    def test_programmatic_pre_process(self):
+        """Programmatic Node | Oracle with merge_pre_process."""
+        captured = {}
+
+        class CaptureMerge:
+            def __init__(self, tier):
+                self._tier = tier
+
+            def with_structured_output(self, model, **kw):
+                self._model = model
+                return self
+
+            def invoke(self, messages, **kw):
+                if self._tier == "reason":
+                    captured["prompt"] = messages[0]["content"] if messages else ""
+                return self._model(text="merged")
+
+        configure_fake_llm(lambda tier: CaptureMerge(tier))
+
+        def pre(variants):
+            return {"count": str(len(variants))}
+
+        writer = Node(
+            "writer", mode="think", outputs=Draft,
+            prompt="write", model="fast",
+        ) | Oracle(
+            n=2,
+            merge_prompt="Merge ${count} variants",
+            merge_pre_process=pre,
+        )
+
+        pipeline = Construct("prog-pre", nodes=[writer])
+        graph = compile(pipeline)
+        run(graph, input={"node_id": "t-pp"})
+
+        assert "2" in captured.get("prompt", ""), f"pre_process not applied: {captured}"
+
+    def test_programmatic_fallback(self):
+        """Programmatic Node | Oracle with merge_fallback."""
+        class FailMerge:
+            def __init__(self, tier):
+                self._tier = tier
+
+            def with_structured_output(self, model, **kw):
+                self._model = model
+                return self
+
+            def invoke(self, messages, **kw):
+                if self._tier == "reason":
+                    raise RuntimeError("merge boom")
+                return self._model(text="v")
+
+        configure_fake_llm(lambda tier: FailMerge(tier))
+
+        writer = Node(
+            "writer", mode="think", outputs=Draft,
+            prompt="write", model="fast",
+        ) | Oracle(
+            n=2,
+            merge_prompt="merge: ${variants}",
+            merge_fallback=lambda v, e: Draft(text=f"fb-{len(v)}"),
+        )
+
+        pipeline = Construct("prog-fb", nodes=[writer])
+        graph = compile(pipeline)
+        result = run(graph, input={"node_id": "t-pfb"})
+
+        assert result["writer"].text == "fb-2"
+
     def test_declarative_node_with_hooks(self):
         """Declarative Node.scripted() + Oracle with hooks (three-surface rule)."""
         configure_fake_llm(lambda tier: StructuredFake(lambda m: m(text="llm-out")))
