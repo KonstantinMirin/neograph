@@ -6,8 +6,10 @@ claim lists. A merge function combines and deduplicates them into a
 single consensus list.
 
 This demonstrates the Oracle modifier via @node kwargs: run a node N
-times in parallel, then merge results. The merge can be scripted
-(deterministic function) or LLM-powered (judge prompt).
+times in parallel, then merge results. The merge can be:
+1. Scripted — deterministic function (merge_fn)
+2. LLM-powered — judge prompt (merge_prompt)
+3. LLM with hooks — merge_prompt + pre_process/post_process/fallback
 
 Run:
     python examples/03_oracle_ensemble.py
@@ -127,4 +129,77 @@ if __name__ == "__main__":
     print(f"Models used: {seen_models}")
     print(f"Merged claims:")
     for claim in multi_merged.items:
+        print(f"  - {claim}")
+    print()
+
+    # ── Merge hooks: pre_process, post_process, fallback ────────────────
+    # When using merge_prompt (LLM judge), optional hooks let you
+    # customize the merge without dropping to @merge_fn.
+    #
+    # This demo uses merge_fallback to show the pattern without requiring
+    # an LLM key — the fallback fires because no LLM is configured.
+
+    from neograph import configure_llm
+
+    # Configure with a prompt compiler that just returns the template.
+    # No real LLM — invoke_structured will fail, triggering our fallback.
+    configure_llm(
+        llm_factory=lambda tier: None,  # type: ignore[arg-type]
+        prompt_compiler=lambda tmpl, data, **kw: [{"role": "user", "content": tmpl}],
+    )
+
+    def tag_variants(variants: list) -> dict:
+        """Pre-process: tag each variant with a generator ID."""
+        tagged = [
+            {"gen_id": f"gen-{i}", "claims": v.items}
+            for i, v in enumerate(variants)
+        ]
+        return {"tagged_claims": tagged}
+
+    def validate_merge(result, variants: list):
+        """Post-process: ensure every input claim appears in the output."""
+        all_input = {c for v in variants for c in v.items}
+        missing = all_input - set(result.items)
+        if missing:
+            return Claims(items=result.items + sorted(missing))
+        return result
+
+    def deterministic_fallback(variants: list, error: Exception) -> Claims:
+        """Fallback: on LLM failure, deduplicate deterministically."""
+        seen = set()
+        merged = []
+        for v in variants:
+            for claim in v.items:
+                if claim not in seen:
+                    seen.add(claim)
+                    merged.append(claim)
+        return Claims(items=merged)
+
+    def hooks_gen(input_data, config):
+        with _gen_counter_lock:
+            idx = _gen_counter[0] % len(_perspectives)
+            _gen_counter[0] += 1
+        return Claims(items=_perspectives[idx])
+
+    register_scripted("hooks_gen", hooks_gen)
+
+    _gen_counter[0] = 0  # reset
+    hooks_node = (
+        Node.scripted("decompose-hooks", fn="hooks_gen", outputs=Claims)
+        | Oracle(
+            n=3,
+            merge_prompt="Pick the best decomposition: ${tagged_claims}",
+            merge_pre_process=tag_variants,
+            merge_post_process=validate_merge,
+            merge_fallback=deterministic_fallback,
+        )
+    )
+    hooks_pipeline = Construct("hooks-demo", nodes=[hooks_node])
+    hooks_graph = compile(hooks_pipeline)
+    hooks_result = run(hooks_graph, input={"node_id": "REQ-003"})
+
+    hooks_merged = hooks_result["decompose_hooks"]
+    print(f"=== Merge hooks (fallback fires — no LLM configured) ===")
+    print(f"Fallback produced {len(hooks_merged.items)} claims:")
+    for claim in hooks_merged.items:
         print(f"  - {claim}")
