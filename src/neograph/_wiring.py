@@ -303,7 +303,11 @@ def _merge_one_group(oracle: Oracle, node: Node, variants: list, config: Any) ->
         if oracle.merge_pre_process is not None:
             input_data = oracle.merge_pre_process(variants)
         else:
-            input_data = variants[0] if variants else None
+            # Symmetric with make_oracle_merge_fn (construct-level): wrap
+            # variants as a dict so template placeholders like ``{variants}``
+            # resolve naturally. Passing variants[0] would make a merge prompt
+            # see only one of N variants, defeating the purpose of ensemble.
+            input_data = {"variants": variants}
 
         used_fallback = False
         try:
