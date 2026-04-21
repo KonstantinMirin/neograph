@@ -583,3 +583,185 @@ class TestResolveImageErrors:
             assert base64.b64decode(encoded) == b"\x89PNG\r\n\x1a\nimage-bytes"
         finally:
             Path(tmp).unlink(missing_ok=True)
+
+
+# ═════════════���══════════════════════════��══════════════════════════════════
+# render_prompt with multimodal content
+# ════���═══════════════���══════════════════════════════════════════════════════
+
+
+class TestRenderPromptMultimodal:
+    """render_prompt produces readable output for multimodal messages."""
+
+    def test_render_prompt_shows_image_placeholder(self):
+        """render_prompt on a node with ${image:...} should show [image] in output."""
+        from neograph._llm import render_prompt
+        from neograph import Node
+
+        configure_fake_llm(
+            lambda tier: None,
+            prompt_compiler=lambda t, d, **kw: [{"role": "user", "content": t}],
+        )
+
+        b64 = base64.b64encode(b"img").decode()
+        n = Node("score", mode="think", outputs=BaseModel,
+                 prompt="Rate: ${image:photo}", model="fast")
+        result = render_prompt(n, {"photo": b64})
+        assert "[image]" in result
+
+
+# ═════���════════════════════════════════════════════════��════════════════════
+# Image-only prompt (no text)
+# ══════════��════════════════════════════════════════════════════════════════
+
+
+class TestImageOnlyPrompt:
+    """Prompt with only ${image:...} and no text."""
+
+    def test_image_only_prompt(self):
+        """A prompt of just '${image:photo}' produces a single image_url block."""
+        b64 = base64.b64encode(b"solo-img").decode()
+        msgs = _compile_prompt("${image:photo}", {"photo": b64})
+        content = msgs[0]["content"]
+        assert isinstance(content, list)
+        assert len(content) == 1
+        assert content[0]["type"] == "image_url"
+
+
+# ═���═════════════════════��═══════════════════════════════════════════════════
+# json_mode + multimodal interaction
+# ═══════════════════��═══════════════════════════════════════════════════════
+
+
+class TestJsonModeMultimodal:
+    """json_mode output strategy coexists with multimodal content blocks."""
+
+    def test_json_mode_with_image_prompt(self):
+        """invoke_structured with json_mode + ${image:...} produces content blocks."""
+        captured = []
+
+        class CaptureLLM:
+            def __init__(self, tier):
+                pass
+
+            def invoke(self, messages, **kw):
+                captured.append(messages)
+                from langchain_core.messages import AIMessage
+                return AIMessage(content='{"score": 0.9}')
+
+        configure_fake_llm(lambda tier: CaptureLLM(tier))
+
+        from neograph._llm import invoke_structured
+
+        class Score(BaseModel):
+            score: float
+
+        b64 = base64.b64encode(b"test-img").decode()
+        result = invoke_structured(
+            model_tier="fast",
+            prompt_template="Rate: ${image:photo}",
+            input_data={"photo": b64},
+            output_model=Score,
+            config={"configurable": {}},
+            llm_config={"output_strategy": "json_mode"},
+        )
+
+        assert result.score == 0.9
+        # The LLM should have received content blocks
+        user_msg = captured[0][0]
+        content = user_msg["content"] if isinstance(user_msg, dict) else user_msg.content
+        assert isinstance(content, list)
+        assert any(b["type"] == "image_url" for b in content)
+
+
+# ���═════════════════════════��════════════════════════���═══════════════════════
+# MIME detection variety
+# ══════════════════════���══════════════════════════════��═════════════════════
+
+
+class TestMimeDetection:
+    """_resolve_image detects MIME types from file extensions."""
+
+    def _make_temp(self, suffix, content=b"fake"):
+        f = tempfile.NamedTemporaryFile(suffix=suffix, delete=False)
+        f.write(content)
+        f.close()
+        return f.name
+
+    def test_jpeg_mime(self):
+        tmp = self._make_temp(".jpg")
+        try:
+            result = _resolve_image(tmp)
+            assert result.startswith("data:image/jpeg;base64,")
+        finally:
+            Path(tmp).unlink()
+
+    def test_gif_mime(self):
+        tmp = self._make_temp(".gif")
+        try:
+            result = _resolve_image(tmp)
+            assert result.startswith("data:image/gif;base64,")
+        finally:
+            Path(tmp).unlink()
+
+    def test_webp_mime(self):
+        tmp = self._make_temp(".webp")
+        try:
+            result = _resolve_image(tmp)
+            # webp may not be registered on all systems; fallback to image/png is acceptable
+            assert result.startswith("data:image/")
+        finally:
+            Path(tmp).unlink()
+
+    def test_svg_mime(self):
+        tmp = self._make_temp(".svg", b"<svg></svg>")
+        try:
+            result = _resolve_image(tmp)
+            assert result.startswith("data:image/svg")
+        finally:
+            Path(tmp).unlink()
+
+
+# ══════════════════════════════��═════════════════════════���══════════════════
+# resolve_image public API
+# ═══════════════════���═══════════════════════════════════════════════════════
+
+
+class TestResolveImagePublicAPI:
+    """resolve_image is importable from neograph."""
+
+    def test_import_from_neograph(self):
+        from neograph import resolve_image
+        b64 = base64.b64encode(b"public-api").decode()
+        result = resolve_image(b64)
+        assert result == f"data:image/png;base64,{b64}"
+
+    def test_same_function(self):
+        from neograph import resolve_image
+        assert resolve_image is _resolve_image
+
+
+# ═════════════��═════════════════════════════════════════════════════════════
+# Template-ref boundary
+# ════════════════���══════════════════════════════════════════════════════════
+
+
+class TestTemplateRefBoundary:
+    """Template-ref prompts do not trigger multimodal detection."""
+
+    def test_template_ref_not_processed_as_multimodal(self):
+        """A template name without spaces/${} goes to prompt_compiler unchanged."""
+        compiler_calls = []
+
+        def mock_compiler(template, input_data, **kw):
+            compiler_calls.append(template)
+            return [{"role": "user", "content": "compiled"}]
+
+        configure_fake_llm(
+            lambda tier: None,
+            prompt_compiler=mock_compiler,
+        )
+
+        msgs = _compile_prompt("rw/score-image", {"photo": "base64data"})
+        assert compiler_calls == ["rw/score-image"]
+        assert msgs[0]["content"] == "compiled"
