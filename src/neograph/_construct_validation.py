@@ -17,9 +17,11 @@ Defers to runtime isinstance-scanning when evidence is insufficient:
 
 from __future__ import annotations
 
+import inspect
 import os
 import sys
 import types
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, ForwardRef, Union, get_args, get_origin, get_type_hints
 
 from neograph.di import DIKind as _DIKind
@@ -120,6 +122,115 @@ def validate_loop_self_edge(node: Node) -> None:
             node=node.name,
             location=_source_location(),
         )
+
+
+def _validate_merge_hooks(oracle: Any, node: Node, construct_name: str) -> None:
+    """Validate arity and type annotations of merge hook callables.
+
+    Checks merge_pre_process, merge_post_process, merge_fallback signatures
+    against the node's output type (or oracle_gen_type if set). Skips type
+    checks when annotations are absent (lambdas). Never raises for missing
+    annotations — only for provably wrong ones.
+    """
+    # Resolve the variant type (what the hooks receive as list elements)
+    gen_type = getattr(node, 'oracle_gen_type', None) or node.outputs
+    if isinstance(gen_type, dict):
+        gen_type = next(iter(gen_type.values()))
+
+    # The post-merge output type (what post_process/fallback must return)
+    output_type = node.outputs
+    if isinstance(output_type, dict):
+        output_type = next(iter(output_type.values()))
+
+    hooks: list[tuple[str, Callable | None, int]] = [
+        ("merge_pre_process", oracle.merge_pre_process, 1),
+        ("merge_post_process", oracle.merge_post_process, 2),
+        ("merge_fallback", oracle.merge_fallback, 2),
+    ]
+
+    for hook_name, hook_fn, expected_arity in hooks:
+        if hook_fn is None:
+            continue
+
+        # Arity check
+        try:
+            sig = inspect.signature(hook_fn)
+        except (ValueError, TypeError):
+            continue  # built-in or unresolvable — skip
+
+        positional = [
+            p for p in sig.parameters.values()
+            if p.kind in (
+                inspect.Parameter.POSITIONAL_ONLY,
+                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            )
+        ]
+        required = [p for p in positional if p.default is inspect.Parameter.empty]
+
+        if len(required) < expected_arity:
+            raise ConstructError.build(
+                f"{hook_name} requires {expected_arity} positional parameter(s), "
+                f"got {len(required)}",
+                expected=f"{expected_arity} params",
+                found=f"{len(required)} required params: {[p.name for p in required]}",
+                node=node.name,
+                construct=construct_name,
+            )
+
+        # Type annotation check (best-effort — lambdas have no annotations)
+        try:
+            hints = get_type_hints(hook_fn, include_extras=False)
+        except (NameError, AttributeError, TypeError):
+            continue  # unresolvable annotations (lambdas, closures) — skip type check
+
+        if not hints:
+            continue
+
+        param_names = [p.name for p in positional]
+
+        # Check variants param:
+        # pre_process: first param is variants
+        # post_process: second param is variants (first is result)
+        # fallback: first param is variants
+        variants_idx = 1 if hook_name == "merge_post_process" else 0
+        if len(param_names) > variants_idx:
+            variants_hint = hints.get(param_names[variants_idx])
+            if variants_hint is not None:
+                # Expect list[T] where T is compatible with gen_type
+                origin = get_origin(variants_hint)
+                if origin is list:
+                    args = get_args(variants_hint)
+                    if args and args[0] is not Any:
+                        elem_type = args[0]
+                        if isinstance(elem_type, type) and isinstance(gen_type, type):
+                            if not _types_compatible(gen_type, elem_type):
+                                raise ConstructError.build(
+                                    f"{hook_name} variants param '{param_names[0]}' "
+                                    f"type mismatch: declared list[{_fmt_type(elem_type)}] "
+                                    f"but Oracle generates {_fmt_type(gen_type)}",
+                                    expected=f"list[{_fmt_type(gen_type)}]",
+                                    found=f"list[{_fmt_type(elem_type)}]",
+                                    node=node.name,
+                                    construct=construct_name,
+                                )
+
+        # Check return type (post_process and fallback must return output_type)
+        if hook_name in ("merge_post_process", "merge_fallback"):
+            return_hint = hints.get("return")
+            if (return_hint is not None
+                    and return_hint is not Any
+                    and isinstance(return_hint, type)
+                    and isinstance(output_type, type)
+                    and not _types_compatible(output_type, return_hint)
+                    and not _types_compatible(return_hint, output_type)):
+                raise ConstructError.build(
+                    f"{hook_name} return type mismatch: declared "
+                    f"{_fmt_type(return_hint)} but node outputs {_fmt_type(output_type)}",
+                    expected=_fmt_type(output_type),
+                    found=_fmt_type(return_hint),
+                    node=node.name,
+                    construct=construct_name,
+                )
 
 
 def _validate_node_chain(construct: Construct) -> None:
@@ -275,6 +386,13 @@ def _validate_node_chain(construct: Construct) -> None:
                                 construct=construct.name,
                                 location=_source_location(),
                             )
+
+        # Validate merge hook signatures (merge_pre_process, merge_post_process,
+        # merge_fallback) when Oracle has merge_prompt set.
+        if isinstance(item, Node):
+            oracle = item.modifier_set.oracle
+            if oracle is not None and oracle.merge_prompt is not None:
+                _validate_merge_hooks(oracle, item, construct.name)
 
     # Sub-construct output boundary contract: if construct.output is declared,
     # at least one internal node must produce a compatible type.
