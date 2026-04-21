@@ -1,0 +1,116 @@
+---
+title: "Multimodal Vision"
+description: "Send images to VLMs alongside text prompts using ${image:field}."
+---
+
+NeoGraph supports multimodal prompts — send images alongside text to vision-language models (Gemini, GPT-4o, Claude). The `${image:field}` syntax produces LangChain multimodal content blocks. Everything else — structured output, retry, observability — works unchanged.
+
+## Basic usage
+
+```python
+@node(outputs=ProductMetadata,
+      prompt="Classify this product: ${image:photo.image_data}",
+      model="fast")
+def classify(photo: ProductPhoto) -> ProductMetadata: ...
+```
+
+`${image:photo.image_data}` resolves the `image_data` field from the upstream `photo` node, converts it to a `data:` URI, and places it in an `image_url` content block. The resulting message:
+
+```python
+[{"role": "user", "content": [
+    {"type": "text", "text": "Classify this product:"},
+    {"type": "image_url", "image_url": {"url": "data:image/png;base64,..."}}
+]}]
+```
+
+## Three input forms
+
+The image field value can be any of:
+
+| Input | What happens |
+|-------|-------------|
+| File path (`/data/images/photo.png`) | Read from disk, base64-encode, detect MIME from extension + magic bytes |
+| Raw base64 string | Wrapped as `data:image/png;base64,...` |
+| Pre-formed data URI (`data:image/jpeg;base64,...`) | Passed through unchanged |
+
+## Multiple images
+
+```python
+@node(outputs=Comparison,
+      prompt="Compare before ${image:before} and after ${image:after}",
+      model="fast")
+def compare(before: str, after: str) -> Comparison: ...
+```
+
+Each `${image:...}` becomes a separate `image_url` content block. Text between images becomes text blocks. Order is preserved.
+
+## Mixed text and images
+
+```python
+@node(outputs=Analysis,
+      prompt="Product: ${product.name}\n${image:product.photo}\nRate quality and relevance.",
+      model="fast")
+def analyze(product: ProductData) -> Analysis: ...
+```
+
+Text-only segments are rendered normally (with `${var}` substitution). Image segments become content blocks. The prompt becomes three content blocks: text, image, text.
+
+## Security: configure_image
+
+When image field values come from untrusted input (user uploads, API requests), lock down file access:
+
+```python
+from neograph import configure_image
+
+configure_image(
+    allowed_dirs=["/data/uploads", "/tmp/processed"],  # only read from these
+    max_size_bytes=10_000_000,                          # 10MB limit
+    validate_format=True,                               # reject non-image files
+)
+```
+
+| Setting | Default | What it does |
+|---------|---------|-------------|
+| `allowed_dirs` | `None` (allow all) | Restrict file reads to specific directories. Uses `Path.is_relative_to()` — immune to prefix attacks. |
+| `max_size_bytes` | 20MB | Reject files exceeding this size. Prevents memory exhaustion. |
+| `validate_format` | `True` | Check magic bytes for known image formats (PNG, JPEG, GIF, WebP, BMP, SVG). Reject unrecognized files. |
+
+All validation is graceful — blocked files produce a structlog warning and the image block is skipped. The pipeline continues without the image.
+
+## Graceful degradation
+
+When an image field is missing, empty, or blocked by validation, the image block is omitted entirely (not sent as a corrupt empty URI). The LLM receives only the text blocks:
+
+```python
+# If photo is None or missing:
+prompt = "Rate: ${image:photo}"
+# Produces: [{"role": "user", "content": []}]  ← no image block
+# The LLM sees no image and responds accordingly
+```
+
+## resolve_image utility
+
+For template-ref prompt consumers who build their own multimodal messages, `resolve_image` is exported as a public utility:
+
+```python
+from neograph import resolve_image
+
+uri = resolve_image("/data/uploads/photo.png")
+# Returns: "data:image/png;base64,iVBOR..."
+
+# Use in your prompt_compiler:
+messages = [{"role": "user", "content": [
+    {"type": "text", "text": "Analyze this:"},
+    {"type": "image_url", "image_url": {"url": uri}},
+]}]
+```
+
+## Text-only prompts are unaffected
+
+The `${image:...}` detection is a fast-path check (`_IMAGE_RE.search(template)`). Prompts without `${image:...}` take the existing text-only path with zero overhead.
+
+See `examples/21_multimodal_vision.py` for a full runnable example and `examples/22_image_security.py` for security configuration.
+
+---
+
+Documentation &copy; 2025-2026 Constantine Mirin, [mirin.pro](https://mirin.pro). Licensed under [CC BY-ND 4.0](https://creativecommons.org/licenses/by-nd/4.0/).
