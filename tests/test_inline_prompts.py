@@ -13,6 +13,7 @@ from pydantic import BaseModel
 from neograph._llm import (
     _compile_prompt,
     _is_inline_prompt,
+    _resolve_image,
     _resolve_var,
     _substitute_vars,
 )
@@ -459,3 +460,53 @@ class TestMultimodalPrompt:
         assert isinstance(content, list)
         img_block = next(b for b in content if b["type"] == "image_url")
         assert "base64" in img_block["image_url"]["url"]
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# _resolve_image error paths
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TestResolveImageErrors:
+    """_resolve_image should warn on suspicious input, not crash."""
+
+    def test_empty_string_returns_data_uri(self):
+        """Empty string should produce a (corrupt) data URI, not crash."""
+        result = _resolve_image("")
+        assert result == "data:image/png;base64,"
+
+    def test_whitespace_only_returns_data_uri(self):
+        """Whitespace-only string should produce a data URI, not crash."""
+        result = _resolve_image("   ")
+        assert result == "data:image/png;base64,"
+
+    def test_nonexistent_file_path_wraps_as_base64(self):
+        """A path-like string that doesn't exist wraps as base64 (with warning via structlog)."""
+        result = _resolve_image("/nonexistent/photo.png")
+        assert result.startswith("data:image/png;base64,")
+        assert "/nonexistent/photo.png" in result  # the path is the "base64" content
+
+    def test_valid_base64_wraps_correctly(self):
+        """Valid base64 should wrap in data URI."""
+        b64 = base64.b64encode(b"valid-image-data").decode()
+        result = _resolve_image(b64)
+        assert result == f"data:image/png;base64,{b64}"
+
+    def test_data_uri_passes_through(self):
+        """Pre-formed data URI is returned unchanged."""
+        uri = "data:image/jpeg;base64,/9j/4AAQ"
+        assert _resolve_image(uri) == uri
+
+    def test_real_file_reads_and_encodes(self):
+        """An actual file on disk is read, base64-encoded, and MIME-detected."""
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
+            f.write(b"\x89PNG\r\n\x1a\nimage-bytes")
+            tmp = f.name
+        try:
+            result = _resolve_image(tmp)
+            assert result.startswith("data:image/png;base64,")
+            # Decode and verify roundtrip
+            encoded = result.split(",", 1)[1]
+            assert base64.b64decode(encoded) == b"\x89PNG\r\n\x1a\nimage-bytes"
+        finally:
+            Path(tmp).unlink(missing_ok=True)
