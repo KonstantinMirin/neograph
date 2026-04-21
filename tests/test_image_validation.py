@@ -618,3 +618,259 @@ class TestF12MissingFieldSkipsImageBlock:
         assert len(img_blocks) == 0, (
             f"None field should not produce an image block: {img_blocks}"
         )
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# F2: macOS symlink resolution in allowed_dirs
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TestF2SymlinkResolution:
+    """F2: Both file path and allowed_dir go through Path.resolve()."""
+
+    def test_resolve_normalizes_both_sides(self):
+        """allowed_dirs and file path both resolve symlinks before comparison."""
+        # Create a real dir and a symlink to it
+        real_dir = tempfile.mkdtemp()
+        link_dir = real_dir + "_link"
+        os.symlink(real_dir, link_dir)
+
+        img_file = os.path.join(real_dir, "test.png")
+        Path(img_file).write_bytes(b"\x89PNG\r\n\x1a\ndata")
+
+        try:
+            # Allow via the symlink path — the real file is in real_dir
+            configure_image(allowed_dirs=[link_dir])
+            result = resolve_image(img_file)
+            # Should be allowed because both sides resolve to the same physical path
+            assert result != "data:image/png;base64,", "File should be allowed via symlink dir"
+        finally:
+            Path(img_file).unlink(missing_ok=True)
+            os.unlink(link_dir)
+            os.rmdir(real_dir)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# F5: Retry path with multimodal content blocks
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TestF5RetryWithMultimodal:
+    """F5: json_mode retry with multimodal initial message."""
+
+    def test_retry_after_multimodal_initial_message(self):
+        """Retry appends string messages after content-block message — must not crash."""
+        from langchain_core.messages import AIMessage
+        from neograph._llm import invoke_structured
+
+        call_count = [0]
+
+        class RetryLLM:
+            def __init__(self, tier):
+                pass
+
+            def invoke(self, messages, **kw):
+                call_count[0] += 1
+                if call_count[0] == 1:
+                    return AIMessage(content="not valid json")
+                return AIMessage(content='{"score": 0.8}')
+
+        configure_fake_llm(lambda tier: RetryLLM(tier))
+
+        b64 = base64.b64encode(b"test-img").decode()
+        result = invoke_structured(
+            model_tier="fast",
+            prompt_template="Rate: ${image:photo}",
+            input_data={"photo": b64},
+            output_model=Score,
+            config={"configurable": {}},
+            llm_config={"output_strategy": "json_mode", "max_retries": 2},
+        )
+        assert result.score == 0.8
+        assert call_count[0] == 2  # initial + 1 retry
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# F6: with_structured_output + multimodal (document limitation)
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TestF6StructuredOutputMultimodal:
+    """F6: structured output strategy with multimodal — verify messages reach the LLM."""
+
+    def test_structured_strategy_receives_content_blocks(self):
+        """with_structured_output().invoke() receives content blocks, not flat string."""
+        received = []
+
+        class InspectLLM:
+            def __init__(self, tier):
+                pass
+
+            def with_structured_output(self, model, **kw):
+                self._model = model
+                return self
+
+            def invoke(self, messages, **kw):
+                received.append(messages)
+                return self._model(score=0.5)
+
+        configure_fake_llm(lambda tier: InspectLLM(tier))
+
+        from neograph._llm import invoke_structured
+
+        b64 = base64.b64encode(b"img").decode()
+        invoke_structured(
+            model_tier="fast",
+            prompt_template="Rate: ${image:photo}",
+            input_data={"photo": b64},
+            output_model=Score,
+            config={"configurable": {}},
+            llm_config={"output_strategy": "structured"},
+        )
+
+        user_msg = received[0][0]
+        content = user_msg["content"] if isinstance(user_msg, dict) else user_msg.content
+        assert isinstance(content, list), "structured output should receive content blocks"
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# F7: ${image:} empty field name
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TestF7EmptyFieldName:
+    """F7: ${image:} (no field name) falls through to text var path."""
+
+    def test_empty_image_field_treated_as_text_var(self):
+        """${image:} does not match _IMAGE_RE (requires 1+ chars)."""
+        from neograph._llm import _compile_prompt
+
+        data = {"question": "hello"}
+        msgs = _compile_prompt("${question} ${image:}", data)
+        content = msgs[0]["content"]
+        # ${image:} doesn't match _IMAGE_RE, so entire prompt is text-only
+        assert isinstance(content, str), (
+            f"${'{image:}'} should fall through to text path: {content}"
+        )
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# F8: ${IMAGE:photo} case sensitivity
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TestF8CaseSensitivity:
+    """F8: ${IMAGE:photo} not recognized as image placeholder."""
+
+    def test_uppercase_image_not_matched(self):
+        """${IMAGE:photo} is treated as a text variable, not an image."""
+        from neograph._llm import _compile_prompt
+
+        b64 = base64.b64encode(b"test").decode()
+        data = {"photo": b64}
+        msgs = _compile_prompt("Rate ${IMAGE:photo}", data)
+        content = msgs[0]["content"]
+        # Should be flat string (no image blocks) — IMAGE: is case-sensitive
+        assert isinstance(content, str), (
+            f"Uppercase IMAGE: should not trigger multimodal: {content}"
+        )
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# F11: .strip() drops whitespace-only text blocks between images
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TestF11WhitespaceStripping:
+    """F11: whitespace-only text between images is stripped."""
+
+    def test_whitespace_between_images_produces_adjacent_blocks(self):
+        """'${image:a} ${image:b}' — the space is stripped, blocks are adjacent."""
+        from neograph._llm import _compile_prompt
+
+        b64a = base64.b64encode(b"a").decode()
+        b64b = base64.b64encode(b"b").decode()
+        data = {"a": b64a, "b": b64b}
+
+        msgs = _compile_prompt("${image:a} ${image:b}", data)
+        content = msgs[0]["content"]
+        assert isinstance(content, list)
+        # Only image blocks — the space between is stripped
+        types = [b["type"] for b in content]
+        assert types == ["image_url", "image_url"], (
+            f"Expected two adjacent image blocks: {types}"
+        )
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# F13: multimodal in agent/act mode (tool loop) — document limitation
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TestF13AgentModeMultimodal:
+    """F13: ${image:...} in agent mode — messages flow through tool loop."""
+
+    def test_agent_mode_multimodal_compiles_prompt(self):
+        """Verify _compile_prompt produces content blocks for agent-mode prompts."""
+        from neograph._llm import _compile_prompt
+
+        b64 = base64.b64encode(b"agent-img").decode()
+        data = {"photo": b64}
+        msgs = _compile_prompt("Analyze this ${image:photo} and use tools", data)
+        content = msgs[0]["content"]
+        assert isinstance(content, list)
+        assert any(b["type"] == "image_url" for b in content)
+        assert any(b["type"] == "text" and "tools" in b["text"] for b in content)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# F14: BMP false positives
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TestF14BMPFalsePositives:
+    """F14: BMP magic needs secondary validation."""
+
+    def test_text_starting_with_BM_not_classified_as_bmp(self):
+        """A text file starting with 'BM' should not be classified as BMP."""
+        from neograph._image import _check_magic_bytes
+        # Text starting with "BM" but no valid BMP file size header
+        data = b"BMI data for patient records, this is not an image"
+        result = _check_magic_bytes(data)
+        # Should be None (not recognized) or at least not "image/bmp"
+        # because the file size field (bytes 2-5) would be garbage
+        assert result != "image/bmp" or result is None, (
+            f"Text starting with 'BM' classified as BMP: {result}"
+        )
+
+    def test_real_bmp_header_classified(self):
+        """A proper BMP file header is classified correctly."""
+        import struct
+        from neograph._image import _check_magic_bytes
+        # BM + file_size matching data length + reserved + offset + padding
+        data_len = 100
+        header = b"BM" + struct.pack("<I", data_len) + b"\x00" * (data_len - 6)
+        result = _check_magic_bytes(header)
+        assert result == "image/bmp"
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# F15: no escape mechanism for ${image:...}
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TestF15NoEscapeMechanism:
+    """F15: document that \\${image:...} is still matched (known limitation)."""
+
+    def test_backslash_does_not_escape_image_placeholder(self):
+        r"""\\${image:photo} is still matched as an image placeholder."""
+        from neograph._llm import _compile_prompt
+
+        b64 = base64.b64encode(b"test").decode()
+        data = {"photo": b64}
+        msgs = _compile_prompt(r"Literal: \${image:photo}", data)
+        content = msgs[0]["content"]
+        # Known limitation: the backslash does NOT escape the image placeholder
+        assert isinstance(content, list), (
+            "Known limitation: backslash does not escape ${image:...}"
+        )

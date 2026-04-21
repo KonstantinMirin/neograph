@@ -49,11 +49,11 @@ def _check_magic_bytes(data: bytes) -> str | None:
     # WebP: RIFF header + "WEBP" at bytes 8-12 (distinguishes from WAV/AVI)
     if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
         return "image/webp"
-    # BMP: "BM" + valid file size in next 4 bytes (>= 14 bytes for header)
+    # BMP: "BM" + file size field (bytes 2-5) must roughly match actual data length
     if data[:2] == b"BM" and len(data) >= 14:
         import struct
         file_size = struct.unpack_from("<I", data, 2)[0]
-        if file_size >= 14:
+        if 14 <= file_size <= len(data) * 2:
             return "image/bmp"
     # SVG: look for <svg or <?xml in the first 512 bytes
     head = data[:512]
