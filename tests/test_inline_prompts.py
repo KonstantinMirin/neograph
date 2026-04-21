@@ -497,6 +497,25 @@ class TestResolveImageErrors:
         uri = "data:image/jpeg;base64,/9j/4AAQ"
         assert _resolve_image(uri) == uri
 
+    def test_missing_field_in_compile_prompt(self):
+        """${image:missing} in _compile_prompt produces content blocks without crashing."""
+        data = {"question": "What is this?"}  # no 'photo' key
+        msgs = _compile_prompt("${question} ${image:photo}", data)
+        content = msgs[0]["content"]
+        assert isinstance(content, list)
+        # Should have a text block and an image block (with empty/corrupt data URI)
+        img_blocks = [b for b in content if b["type"] == "image_url"]
+        assert len(img_blocks) == 1
+        # The image block has an empty base64 (from _resolve_image(""))
+        assert img_blocks[0]["image_url"]["url"] == "data:image/png;base64,"
+
+    def test_none_field_in_compile_prompt(self):
+        """${image:field} where field is None produces content blocks without crashing."""
+        data = {"photo": None}
+        msgs = _compile_prompt("Score ${image:photo}", data)
+        content = msgs[0]["content"]
+        assert isinstance(content, list)
+
     def test_real_file_reads_and_encodes(self):
         """An actual file on disk is read, base64-encoded, and MIME-detected."""
         with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
