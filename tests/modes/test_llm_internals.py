@@ -1101,6 +1101,53 @@ class TestParseJsonException:
             _parse_json_response('{"x": 1}', BadModel)
 
 
+class TestTruncatedArraySilentEmpty:
+    """neograph-wvrp: truncated array must NOT silently return empty result."""
+
+    def test_truncated_array_raises_not_empty_result(self):
+        """Truncated array (no closing ]) must raise ExecutionError, not return empty list."""
+        from pydantic import BaseModel, Field
+
+        from neograph._llm import _parse_json_response
+
+        class Item(BaseModel):
+            id: str
+            value: str
+
+        class Result(BaseModel):
+            items: list[Item] = Field(default_factory=list)
+
+        truncated = '''[
+  {"id": "A", "value": "alpha"},
+  {"id": "B", "value": "beta"},
+  {"id": "C", "value": "gam'''
+
+        # This MUST either raise ExecutionError (triggering retry) or
+        # return a Result with items populated. It must NOT silently
+        # return Result(items=[]).
+        try:
+            r = _parse_json_response(truncated, Result)
+            # If it parses without error, it must have items (from json_repair)
+            assert len(r.items) > 0, (
+                f"Truncated array silently produced empty result: {r}. "
+                f"Expected either ExecutionError or non-empty items."
+            )
+        except ExecutionError:
+            pass  # correct — retry path will fire
+
+    def test_truncated_array_extract_json_does_not_return_inner_dict(self):
+        """_extract_json on truncated array must not return first inner object."""
+        from neograph._llm import _extract_json
+
+        truncated = '[{"id": "A", "value": "alpha"}, {"id": "B", "value": "be'
+
+        result = _extract_json(truncated)
+        # Must NOT be just the first inner dict
+        assert not result.strip().startswith('{"id"'), (
+            f"_extract_json fell back to inner dict from truncated array: {result[:60]}"
+        )
+
+
 class TestCallStructuredUnknownStrategy:
     """Lines 377-378: unknown output_strategy raises ExecutionError."""
 

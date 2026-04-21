@@ -361,6 +361,11 @@ def _extract_json(text: str) -> str:
         result = _extract_balanced(text, bracket_pos, "[", "]")
         if result is not None:
             return result
+        # Array was truncated (no closing ]). Do NOT fall through to object
+        # extraction — that would return the first inner dict, causing silent
+        # empty results for list-field target models. Return the raw text and
+        # let json_repair handle truncation recovery.
+        return text.strip()
 
     # Try object extraction
     pos = 0
