@@ -10,10 +10,10 @@ from pathlib import Path
 
 from pydantic import BaseModel
 
+from neograph._image import resolve_image as _resolve_image
 from neograph._llm import (
     _compile_prompt,
     _is_inline_prompt,
-    _resolve_image,
     _resolve_var,
     _substitute_vars,
 )
@@ -744,6 +744,94 @@ class TestResolveImagePublicAPI:
 # ═════════════��═════════════════════════════════════════════════════════════
 # Template-ref boundary
 # ════════════════���══════════════════════════════════════════════════════════
+
+
+class TestImageValidation:
+    """Image validation guards in the _image module."""
+
+    def test_file_size_limit_rejects_oversized(self):
+        """Files exceeding max_size_bytes should be rejected with a warning."""
+        from neograph._image import configure_image, resolve_image
+
+        configure_image(max_size_bytes=100)  # 100 bytes limit
+        try:
+            with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
+                f.write(b"\x89PNG" + b"x" * 200)  # 204 bytes > 100 limit
+                tmp = f.name
+            result = resolve_image(tmp)
+            # Should return empty/placeholder data URI, not the oversized file
+            assert "x" * 200 not in result, "Oversized file should not be fully encoded"
+        finally:
+            Path(tmp).unlink(missing_ok=True)
+            configure_image()  # reset to defaults
+
+    def test_file_size_limit_allows_small_files(self):
+        """Files within max_size_bytes should be accepted."""
+        from neograph._image import configure_image, resolve_image
+
+        configure_image(max_size_bytes=10_000)
+        try:
+            with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
+                f.write(b"\x89PNG" + b"x" * 50)
+                tmp = f.name
+            result = resolve_image(tmp)
+            assert result.startswith("data:image/png;base64,")
+            encoded = result.split(",", 1)[1]
+            assert len(base64.b64decode(encoded)) == 54  # 4 + 50
+        finally:
+            Path(tmp).unlink(missing_ok=True)
+            configure_image()
+
+    def test_allowed_dirs_blocks_outside_paths(self):
+        """Files outside allowed_dirs should be rejected."""
+        from neograph._image import configure_image, resolve_image
+
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False, dir="/tmp") as f:
+            f.write(b"\x89PNGdata")
+            tmp = f.name
+        try:
+            configure_image(allowed_dirs=["/nonexistent/safe_dir"])
+            result = resolve_image(tmp)
+            # Should NOT read the file — not in allowed dirs
+            assert "PNGdata" not in base64.b64decode(
+                result.split(",", 1)[1] if "," in result else ""
+            ).decode("latin-1", errors="replace")
+        finally:
+            Path(tmp).unlink(missing_ok=True)
+            configure_image()
+
+    def test_allowed_dirs_permits_within(self):
+        """Files inside allowed_dirs should be accepted."""
+        from neograph._image import configure_image, resolve_image
+
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False, dir="/tmp") as f:
+            f.write(b"\x89PNGok")
+            tmp = f.name
+        try:
+            configure_image(allowed_dirs=["/tmp"])
+            result = resolve_image(tmp)
+            assert result.startswith("data:image/png;base64,")
+        finally:
+            Path(tmp).unlink(missing_ok=True)
+            configure_image()
+
+    def test_toctou_file_deleted_after_check(self):
+        """If file is deleted between is_file() and read_bytes(), don't crash."""
+        from neograph._image import resolve_image
+
+        # Create then immediately delete — resolve_image should handle gracefully
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
+            f.write(b"\x89PNGdata")
+            tmp = f.name
+        Path(tmp).unlink()  # delete before resolve
+        # Should not raise — returns a fallback
+        result = resolve_image(tmp)
+        assert result.startswith("data:")
+
+    def test_configure_image_imported_from_neograph(self):
+        """configure_image is importable from the public API."""
+        from neograph import configure_image
+        assert callable(configure_image)
 
 
 class TestTemplateRefBoundary:

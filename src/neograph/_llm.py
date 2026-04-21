@@ -22,6 +22,7 @@ import structlog
 from langchain_core.runnables import RunnableConfig
 from pydantic import BaseModel, ValidationError
 
+from neograph._image import resolve_image
 from neograph.describe_type import describe_type, describe_value
 from neograph.errors import ConfigurationError, ExecutionError
 from neograph.tool import Tool, ToolBudgetTracker
@@ -196,44 +197,6 @@ _VAR_RE = re.compile(r"\$\{([^}]+)\}")
 _IMAGE_RE = re.compile(r"\$\{image:([^}]+)\}")
 
 
-def _resolve_image(path_or_b64: str) -> str:
-    """Convert a file path, raw base64, or data URI to a data-URI string.
-
-    Handles three forms:
-    - ``data:image/...;base64,...`` — returned as-is
-    - A file path that exists on disk — read, base64-encode, MIME-detect
-    - Anything else — assumed raw base64, wrapped as ``data:image/png;base64,...``
-
-    Logs warnings for suspicious inputs (empty strings, path-like values
-    that don't exist on disk) but never raises — the LLM will fail
-    gracefully with a corrupt image.
-    """
-    import base64 as _b64
-    import mimetypes
-    from pathlib import Path as _Path
-
-    if not path_or_b64 or not path_or_b64.strip():
-        log.warning("image_resolve_empty", hint="image field is empty or whitespace")
-        return "data:image/png;base64,"
-
-    if path_or_b64.startswith("data:"):
-        return path_or_b64
-
-    p = _Path(path_or_b64)
-    if p.is_file():
-        mime = mimetypes.guess_type(str(p))[0] or "image/png"
-        data = _b64.b64encode(p.read_bytes()).decode()
-        return f"data:{mime};base64,{data}"
-
-    # Warn if the value looks like a file path but doesn't exist
-    if "/" in path_or_b64 or "\\" in path_or_b64:
-        log.warning("image_path_not_found", path=path_or_b64,
-                     hint="value looks like a file path but file not found; treating as raw base64")
-
-    # Assume raw base64
-    return f"data:image/png;base64,{path_or_b64}"
-
-
 def _compile_multimodal_prompt(template: str, input_data: Any) -> list[dict[str, Any]]:
     """Compile an inline prompt that contains ``${image:...}`` placeholders.
 
@@ -253,7 +216,7 @@ def _compile_multimodal_prompt(template: str, input_data: Any) -> list[dict[str,
         else:
             # Image variable name — resolve the value and convert to data URI
             raw_val = _resolve_var(part, input_data)
-            uri = _resolve_image(str(raw_val))
+            uri = resolve_image(str(raw_val))
             content_blocks.append({
                 "type": "image_url",
                 "image_url": {"url": uri},
