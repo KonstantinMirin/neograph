@@ -193,6 +193,60 @@ def _is_inline_prompt(template: str) -> bool:
 
 
 _VAR_RE = re.compile(r"\$\{([^}]+)\}")
+_IMAGE_RE = re.compile(r"\$\{image:([^}]+)\}")
+
+
+def _resolve_image(path_or_b64: str) -> str:
+    """Convert a file path, raw base64, or data URI to a data-URI string.
+
+    Handles three forms:
+    - ``data:image/...;base64,...`` — returned as-is
+    - A file path that exists on disk — read, base64-encode, MIME-detect
+    - Anything else — assumed raw base64, wrapped as ``data:image/png;base64,...``
+    """
+    import base64 as _b64
+    import mimetypes
+    from pathlib import Path as _Path
+
+    if path_or_b64.startswith("data:"):
+        return path_or_b64
+
+    p = _Path(path_or_b64)
+    if p.is_file():
+        mime = mimetypes.guess_type(str(p))[0] or "image/png"
+        data = _b64.b64encode(p.read_bytes()).decode()
+        return f"data:{mime};base64,{data}"
+
+    # Assume raw base64
+    return f"data:image/png;base64,{path_or_b64}"
+
+
+def _compile_multimodal_prompt(template: str, input_data: Any) -> list[dict[str, Any]]:
+    """Compile an inline prompt that contains ``${image:...}`` placeholders.
+
+    Splits the template into alternating text / image-var segments, resolves
+    each, and returns a single user message with content blocks.
+    """
+    parts = _IMAGE_RE.split(template)
+    # re.split with a capturing group: [text, img_var, text, img_var, ...]
+    content_blocks: list[dict[str, Any]] = []
+
+    for i, part in enumerate(parts):
+        if i % 2 == 0:
+            # Text segment — substitute remaining ${var} placeholders
+            rendered = _substitute_vars(part, input_data).strip()
+            if rendered:
+                content_blocks.append({"type": "text", "text": rendered})
+        else:
+            # Image variable name — resolve the value and convert to data URI
+            raw_val = _resolve_var(part, input_data)
+            uri = _resolve_image(str(raw_val))
+            content_blocks.append({
+                "type": "image_url",
+                "image_url": {"url": uri},
+            })
+
+    return [{"role": "user", "content": content_blocks}]
 
 
 def _resolve_var(path: str, input_data: Any) -> str:
@@ -256,6 +310,8 @@ def _compile_prompt(
 ) -> list:
     # Inline prompt — resolve ${} variables and return directly
     if _is_inline_prompt(template):
+        if _IMAGE_RE.search(template):
+            return _compile_multimodal_prompt(template, input_data)
         rendered = _substitute_vars(template, input_data)
         return [{"role": "user", "content": rendered}]
 
@@ -1018,6 +1074,20 @@ def render_prompt(
         else:
             role = getattr(msg, "type", "unknown")
             content = getattr(msg, "content", str(msg))
+        # Multimodal content blocks → readable summary
+        if isinstance(content, list):
+            block_parts = []
+            for block in content:
+                if isinstance(block, dict):
+                    if block.get("type") == "text":
+                        block_parts.append(block.get("text", ""))
+                    elif block.get("type") == "image_url":
+                        block_parts.append("[image]")
+                    else:
+                        block_parts.append(str(block))
+                else:
+                    block_parts.append(str(block))
+            content = " ".join(block_parts)
         parts.append(f"[{role}]\n{content}")
 
     return "\n\n".join(parts)

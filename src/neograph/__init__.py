@@ -18,7 +18,7 @@ For advanced use (IR-level tests, programmatic construction from config,
 sub-constructs), see Node and Construct directly.
 """
 
-from neograph._llm import configure_llm, render_prompt
+from neograph._llm import _resolve_image as resolve_image, configure_llm, render_prompt
 from neograph.compiler import compile, describe_graph
 from neograph.conditions import parse_condition
 from neograph.construct import Construct
@@ -92,6 +92,8 @@ __all__ = [
     "ExcludeFromOutput",
     # Prompt inspection
     "render_prompt",
+    # Multimodal utilities
+    "resolve_image",
     # Renderers
     "Renderer",
     "XmlRenderer",

@@ -4,6 +4,10 @@ variable substitution, and backward compatibility with file references.
 
 from __future__ import annotations
 
+import base64
+import tempfile
+from pathlib import Path
+
 from pydantic import BaseModel
 
 from neograph._llm import (
@@ -354,3 +358,104 @@ class TestInlinePromptThroughFullDispatch:
         graph = compile(parent)
         result = run(graph, input={"node_id": "x3gz-whole"})
         assert result["judge"].answer == "yes"
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Multimodal / vision prompts
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TestMultimodalPrompt:
+    """${image:field} in inline prompts produces multimodal content blocks."""
+
+    def test_image_placeholder_produces_content_blocks(self):
+        """${image:photo} should produce a content block list, not a flat string."""
+        b64 = base64.b64encode(b"fake-png-data").decode()
+        data = {"photo": b64, "question": "What is this?"}
+
+        msgs = _compile_prompt("${question} ${image:photo}", data)
+        content = msgs[0]["content"]
+
+        assert isinstance(content, list), f"Expected content blocks, got {type(content)}: {content}"
+        types = [block["type"] for block in content]
+        assert "text" in types
+        assert "image_url" in types
+
+    def test_image_from_file_path(self):
+        """${image:path} with a file path reads and base64-encodes the file."""
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
+            f.write(b"\x89PNG\r\n\x1a\nfake-image-data")
+            tmp_path = f.name
+
+        try:
+            data = {"photo": tmp_path}
+            msgs = _compile_prompt("Describe: ${image:photo}", data)
+            content = msgs[0]["content"]
+
+            assert isinstance(content, list)
+            img_block = next(b for b in content if b["type"] == "image_url")
+            assert img_block["image_url"]["url"].startswith("data:image/png;base64,")
+        finally:
+            Path(tmp_path).unlink(missing_ok=True)
+
+    def test_preformed_data_uri_passes_through(self):
+        """${image:field} with a data:... URI passes through without re-encoding."""
+        uri = "data:image/jpeg;base64,/9j/4AAQ"
+        data = {"img": uri}
+
+        msgs = _compile_prompt("Score: ${image:img}", data)
+        content = msgs[0]["content"]
+
+        img_block = next(b for b in content if b["type"] == "image_url")
+        assert img_block["image_url"]["url"] == uri
+
+    def test_mixed_text_and_images_preserve_order(self):
+        """Text-image-text produces content blocks in correct order."""
+        b64 = base64.b64encode(b"img").decode()
+        data = {"photo": b64, "name": "sunset"}
+
+        msgs = _compile_prompt("Name: ${name} ${image:photo} Score it.", data)
+        content = msgs[0]["content"]
+
+        assert len(content) == 3, f"Expected 3 blocks, got {len(content)}: {content}"
+        assert content[0]["type"] == "text"
+        assert "sunset" in content[0]["text"]
+        assert content[1]["type"] == "image_url"
+        assert content[2]["type"] == "text"
+        assert "Score it" in content[2]["text"]
+
+    def test_multiple_images(self):
+        """Multiple ${image:...} in one prompt each become a content block."""
+        b64a = base64.b64encode(b"img-a").decode()
+        b64b = base64.b64encode(b"img-b").decode()
+        data = {"before": b64a, "after": b64b}
+
+        msgs = _compile_prompt("Compare ${image:before} vs ${image:after}", data)
+        content = msgs[0]["content"]
+
+        img_blocks = [b for b in content if b["type"] == "image_url"]
+        assert len(img_blocks) == 2
+
+    def test_text_only_prompt_unchanged(self):
+        """A prompt without ${image:...} still returns flat string content."""
+        data = {"topic": "cats"}
+        msgs = _compile_prompt("Tell me about ${topic}", data)
+
+        assert isinstance(msgs[0]["content"], str)
+        assert "cats" in msgs[0]["content"]
+
+    def test_image_dotted_path(self):
+        """${image:obj.field} resolves via dotted attribute access."""
+
+        class Photo(BaseModel):
+            url: str
+
+        b64 = base64.b64encode(b"photo-data").decode()
+        data = {"photo": Photo(url=b64)}
+
+        msgs = _compile_prompt("Describe ${image:photo.url}", data)
+        content = msgs[0]["content"]
+
+        assert isinstance(content, list)
+        img_block = next(b for b in content if b["type"] == "image_url")
+        assert "base64" in img_block["image_url"]["url"]
