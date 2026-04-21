@@ -516,6 +516,60 @@ class TestResolveImageErrors:
         content = msgs[0]["content"]
         assert isinstance(content, list)
 
+    def test_e2e_multimodal_through_dispatch(self):
+        """Full pipeline: @node with ${image:...} → compile → run → LLM receives content blocks."""
+        from neograph import compile, construct_from_module, node, run
+
+        captured_messages = []
+
+        class CaptureMultimodalLLM:
+            def __init__(self, tier):
+                self._tier = tier
+
+            def with_structured_output(self, model, **kw):
+                self._model = model
+                return self
+
+            def invoke(self, messages, **kw):
+                captured_messages.append(messages)
+                return self._model(score=0.9)
+
+        class ImageData(BaseModel, frozen=True):
+            photo: str
+
+        class Score(BaseModel, frozen=True):
+            score: float
+
+        configure_fake_llm(lambda tier: CaptureMultimodalLLM(tier))
+
+        b64 = base64.b64encode(b"test-image").decode()
+
+        @node(outputs=ImageData)
+        def seed() -> ImageData:
+            return ImageData(photo=b64)
+
+        @node(outputs=Score, prompt="Rate this image: ${image:seed.photo}", model="fast")
+        def score_image(seed: ImageData) -> Score: ...
+
+        import types
+        mod = types.ModuleType("test_e2e_mm")
+        mod.seed = seed
+        mod.score_image = score_image
+
+        pipeline = construct_from_module(mod, name="e2e-multimodal")
+        graph = compile(pipeline)
+        result = run(graph, input={"node_id": "e2e-mm"})
+
+        assert result["score_image"].score == 0.9
+        # The LLM should have received multimodal content blocks
+        assert len(captured_messages) > 0
+        last_msgs = captured_messages[-1]
+        user_msg = last_msgs[0]
+        content = user_msg["content"] if isinstance(user_msg, dict) else user_msg.content
+        assert isinstance(content, list), f"Expected content blocks, got {type(content)}: {content}"
+        types_found = [b["type"] for b in content]
+        assert "image_url" in types_found
+
     def test_real_file_reads_and_encodes(self):
         """An actual file on disk is read, base64-encoded, and MIME-detected."""
         with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
