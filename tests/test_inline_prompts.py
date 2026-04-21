@@ -498,23 +498,23 @@ class TestResolveImageErrors:
         assert _resolve_image(uri) == uri
 
     def test_missing_field_in_compile_prompt(self):
-        """${image:missing} in _compile_prompt produces content blocks without crashing."""
+        """${image:missing} omits the image block entirely."""
         data = {"question": "What is this?"}  # no 'photo' key
         msgs = _compile_prompt("${question} ${image:photo}", data)
         content = msgs[0]["content"]
         assert isinstance(content, list)
-        # Should have a text block and an image block (with empty/corrupt data URI)
+        # Missing field → image block should be omitted, not produced with corrupt data
         img_blocks = [b for b in content if b["type"] == "image_url"]
-        assert len(img_blocks) == 1
-        # The image block has an empty base64 (from _resolve_image(""))
-        assert img_blocks[0]["image_url"]["url"] == "data:image/png;base64,"
+        assert len(img_blocks) == 0
 
     def test_none_field_in_compile_prompt(self):
-        """${image:field} where field is None produces content blocks without crashing."""
+        """${image:field} where field is None omits the image block."""
         data = {"photo": None}
         msgs = _compile_prompt("Score ${image:photo}", data)
         content = msgs[0]["content"]
         assert isinstance(content, list)
+        img_blocks = [b for b in content if b["type"] == "image_url"]
+        assert len(img_blocks) == 0
 
     def test_e2e_multimodal_through_dispatch(self):
         """Full pipeline: @node with ${image:...} → compile → run → LLM receives content blocks."""

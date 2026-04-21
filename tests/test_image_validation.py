@@ -457,3 +457,164 @@ class TestConfigIsGlobal:
         from neograph._image import _config as same_ref
         assert same_ref.max_size_bytes == 42
         assert same_ref is _config
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# ADVERSARIAL FINDINGS (F1-F15)
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TestF1PathPrefixAttack:
+    """F1: allowed_dirs=['/tmp/foo'] must NOT allow /tmp/foobar/image.png."""
+
+    def test_prefix_collision_blocked(self):
+        """Path that shares prefix but is not a descendant must be blocked."""
+        # Create /tmp/foobar/ directory and file
+        sibling_dir = tempfile.mkdtemp(prefix="foobar")
+        foo_dir = sibling_dir.rstrip("r")  # e.g., /tmp/xxxfoobar -> /tmp/xxxfooba (wrong approach)
+
+        # Better: create two dirs explicitly
+        base = tempfile.mkdtemp()
+        allowed = os.path.join(base, "safe")
+        attacker = os.path.join(base, "safe_evil")
+        os.makedirs(allowed, exist_ok=True)
+        os.makedirs(attacker, exist_ok=True)
+
+        attack_file = os.path.join(attacker, "secret.png")
+        Path(attack_file).write_bytes(b"\x89PNGsecret")
+
+        try:
+            configure_image(allowed_dirs=[allowed])
+            result = resolve_image(attack_file)
+
+            # The file is in "safe_evil" which starts with "safe" string-wise
+            # but is NOT a child of "safe". Must be blocked.
+            assert result == "data:image/png;base64,", (
+                f"Path prefix attack succeeded: {attacker} was allowed by {allowed}"
+            )
+        finally:
+            Path(attack_file).unlink(missing_ok=True)
+            os.rmdir(attacker)
+            os.rmdir(allowed)
+            os.rmdir(base)
+
+
+class TestF3FormatValidationRejects:
+    """F3: validate_format=True should reject non-image files, not just warn."""
+
+    def test_text_file_rejected_when_validation_on(self):
+        """A .txt file with no image magic bytes should be rejected."""
+        with tempfile.NamedTemporaryFile(suffix=".txt", delete=False) as f:
+            f.write(b"this is not an image at all")
+            tmp = f.name
+        try:
+            configure_image(validate_format=True)
+            result = resolve_image(tmp)
+            assert result == "data:image/png;base64,", (
+                f"Non-image file should be rejected, got: {result[:60]}..."
+            )
+        finally:
+            Path(tmp).unlink()
+
+    def test_png_with_txt_extension_uses_magic_mime(self):
+        """A file with PNG magic bytes but .txt extension should use image/png MIME."""
+        with tempfile.NamedTemporaryFile(suffix=".txt", delete=False) as f:
+            f.write(b"\x89PNG\r\n\x1a\nreal-png-data")
+            tmp = f.name
+        try:
+            result = resolve_image(tmp)
+            assert result.startswith("data:image/png;base64,"), (
+                f"Magic bytes should override extension MIME, got: {result[:60]}"
+            )
+        finally:
+            Path(tmp).unlink()
+
+
+class TestF4RIFFNotWebP:
+    """F4: RIFF magic should only match WebP, not WAV/AVI."""
+
+    def test_wav_file_not_classified_as_webp(self):
+        """A WAV file (RIFF + WAVE) should not be classified as WebP."""
+        from neograph._image import _check_magic_bytes
+        wav_header = b"RIFF" + b"\x00" * 4 + b"WAVE" + b"\x00" * 20
+        result = _check_magic_bytes(wav_header)
+        assert result != "image/webp", f"WAV classified as WebP: {result}"
+
+    def test_real_webp_classified_correctly(self):
+        """A WebP file (RIFF + WEBP) should be classified as image/webp."""
+        from neograph._image import _check_magic_bytes
+        webp_header = b"RIFF" + b"\x00" * 4 + b"WEBP" + b"\x00" * 20
+        result = _check_magic_bytes(webp_header)
+        assert result == "image/webp"
+
+    def test_avi_file_not_classified_as_webp(self):
+        """An AVI file (RIFF + AVI) should not be classified as WebP."""
+        from neograph._image import _check_magic_bytes
+        avi_header = b"RIFF" + b"\x00" * 4 + b"AVI " + b"\x00" * 20
+        result = _check_magic_bytes(avi_header)
+        assert result != "image/webp", f"AVI classified as WebP: {result}"
+
+
+class TestF9MaxSizeValidation:
+    """F9: max_size_bytes must be > 0."""
+
+    def test_zero_raises(self):
+        with pytest.raises(ValueError, match="must be > 0"):
+            configure_image(max_size_bytes=0)
+
+    def test_negative_raises(self):
+        with pytest.raises(ValueError, match="must be > 0"):
+            configure_image(max_size_bytes=-1)
+
+    def test_positive_accepted(self):
+        configure_image(max_size_bytes=1)
+        from neograph._image import _config
+        assert _config.max_size_bytes == 1
+
+
+class TestF10BaseModelAsImagePath:
+    """F10: ${image:model} where model is a BaseModel should warn, not produce garbage."""
+
+    def test_basemodel_image_field_warns_and_skips(self):
+        from neograph._llm import _compile_prompt
+
+        class Photo(BaseModel):
+            url: str
+
+        data = {"photo": Photo(url="/tmp/test.png")}
+        msgs = _compile_prompt("Rate: ${image:photo}", data)
+        content = msgs[0]["content"]
+        assert isinstance(content, list)
+        # The image block should be SKIPPED (BaseModel is not a valid image ref)
+        img_blocks = [b for b in content if b["type"] == "image_url"]
+        assert len(img_blocks) == 0, (
+            f"BaseModel should not produce an image block: {img_blocks}"
+        )
+
+
+class TestF12MissingFieldSkipsImageBlock:
+    """F12: missing/empty image field should omit the image block entirely."""
+
+    def test_missing_field_omits_image_block(self):
+        from neograph._llm import _compile_prompt
+
+        data = {"question": "What is this?"}  # no 'photo' key
+        msgs = _compile_prompt("${question} ${image:photo}", data)
+        content = msgs[0]["content"]
+        assert isinstance(content, list)
+        img_blocks = [b for b in content if b["type"] == "image_url"]
+        assert len(img_blocks) == 0, (
+            f"Missing field should not produce an image block: {img_blocks}"
+        )
+
+    def test_none_field_omits_image_block(self):
+        from neograph._llm import _compile_prompt
+
+        data = {"photo": None}
+        msgs = _compile_prompt("Score: ${image:photo}", data)
+        content = msgs[0]["content"]
+        assert isinstance(content, list)
+        img_blocks = [b for b in content if b["type"] == "image_url"]
+        assert len(img_blocks) == 0, (
+            f"None field should not produce an image block: {img_blocks}"
+        )

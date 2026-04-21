@@ -36,8 +36,6 @@ _IMAGE_MAGIC: dict[bytes, str] = {
     b"\x89PNG": "image/png",
     b"\xff\xd8\xff": "image/jpeg",
     b"GIF8": "image/gif",
-    b"BM": "image/bmp",
-    b"RIFF": "image/webp",  # RIFF....WEBP — simplified check
 }
 
 _IMAGE_MIME_PREFIXES = frozenset(["image/"])
@@ -48,6 +46,15 @@ def _check_magic_bytes(data: bytes) -> str | None:
     for magic, mime in _IMAGE_MAGIC.items():
         if data[:len(magic)] == magic:
             return mime
+    # WebP: RIFF header + "WEBP" at bytes 8-12 (distinguishes from WAV/AVI)
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "image/webp"
+    # BMP: "BM" + valid file size in next 4 bytes (>= 14 bytes for header)
+    if data[:2] == b"BM" and len(data) >= 14:
+        import struct
+        file_size = struct.unpack_from("<I", data, 2)[0]
+        if file_size >= 14:
+            return "image/bmp"
     # SVG: look for <svg or <?xml in the first 512 bytes
     head = data[:512]
     if b"<svg" in head or (b"<?xml" in head and b"<svg" in data[:4096]):
@@ -85,6 +92,8 @@ def configure_image(
 
     Call with no arguments to reset to defaults.
     """
+    if max_size_bytes <= 0:
+        raise ValueError(f"max_size_bytes must be > 0, got {max_size_bytes}")
     global _config
     _config = ImageConfig(
         max_size_bytes=max_size_bytes,
@@ -134,7 +143,7 @@ def _read_and_encode_file(p: Path) -> str:
     if _config.allowed_dirs is not None:
         resolved = p.resolve()
         allowed = any(
-            str(resolved).startswith(str(Path(d).resolve()))
+            resolved.is_relative_to(Path(d).resolve())
             for d in _config.allowed_dirs
         )
         if not allowed:
@@ -158,18 +167,19 @@ def _read_and_encode_file(p: Path) -> str:
                      hint="file exceeds max_size_bytes; skipping")
         return "data:image/png;base64,"
 
-    # Format validation
-    if _config.validate_format:
-        detected = _check_magic_bytes(data)
-        if detected is None:
-            mime_guess = mimetypes.guess_type(str(p))[0] or ""
-            if not any(mime_guess.startswith(pre) for pre in _IMAGE_MIME_PREFIXES):
-                log.warning("image_format_unknown", path=str(p),
-                            mime_guess=mime_guess,
-                            hint="file does not look like a known image format")
+    # Format validation + MIME detection
+    detected_mime = _check_magic_bytes(data) if _config.validate_format else None
+    extension_mime = mimetypes.guess_type(str(p))[0] or ""
 
-    # MIME detection
-    mime = mimetypes.guess_type(str(p))[0] or "image/png"
+    if _config.validate_format and detected_mime is None:
+        if not any(extension_mime.startswith(pre) for pre in _IMAGE_MIME_PREFIXES):
+            log.warning("image_format_rejected", path=str(p),
+                        mime_guess=extension_mime,
+                        hint="file does not look like a known image format; skipping")
+            return "data:image/png;base64,"
+
+    # Prefer magic-bytes MIME (accurate) over extension MIME (guesswork)
+    mime = detected_mime or extension_mime or "image/png"
 
     encoded = base64.b64encode(data).decode()
     return f"data:{mime};base64,{encoded}"

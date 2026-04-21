@@ -214,9 +214,20 @@ def _compile_multimodal_prompt(template: str, input_data: Any) -> list[dict[str,
             if rendered:
                 content_blocks.append({"type": "text", "text": rendered})
         else:
-            # Image variable name — resolve the value and convert to data URI
-            raw_val = _resolve_var(part, input_data)
-            uri = resolve_image(str(raw_val))
+            # Image variable name — resolve the raw value (not BAML-rendered)
+            raw_val = _resolve_var_raw(part, input_data)
+            if isinstance(raw_val, BaseModel):
+                log.warning("image_resolved_to_model", var=part,
+                            model_type=type(raw_val).__name__,
+                            hint="image field resolved to a BaseModel, not a string; "
+                                 "use dotted access like ${image:model.field}")
+                continue  # skip — don't produce a corrupt image block
+            val_str = str(raw_val) if raw_val is not None else ""
+            if not val_str or not val_str.strip():
+                log.warning("image_field_empty", var=part,
+                            hint="image field is empty or None; skipping image block")
+                continue  # skip — don't produce an empty image block
+            uri = resolve_image(val_str)
             content_blocks.append({
                 "type": "image_url",
                 "image_url": {"url": uri},
@@ -266,6 +277,31 @@ def _resolve_var(path: str, input_data: Any) -> str:
     if isinstance(obj, _BM):
         return describe_value(obj)
     return str(obj)
+
+
+def _resolve_var_raw(path: str, input_data: Any) -> Any:
+    """Like _resolve_var but returns the raw object without BAML rendering.
+
+    Used for image resolution where the resolved value must be a string
+    (file path or base64), not a BAML-rendered model description.
+    """
+    parts = path.split(".")
+
+    if isinstance(input_data, dict):
+        if parts[0] not in input_data:
+            log.warning("prompt_var_missing", var=path, available=sorted(input_data.keys()))
+        root = input_data.get(parts[0], "")
+        rest = parts[1:]
+    else:
+        root = input_data
+        rest = parts[1:]
+
+    obj = root
+    for attr in rest:
+        if not hasattr(obj, attr):
+            log.warning("prompt_var_missing", var=path, segment=attr)
+        obj = getattr(obj, attr, "")
+    return obj
 
 
 def _substitute_vars(template: str, input_data: Any) -> str:
