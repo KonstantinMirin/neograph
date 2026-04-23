@@ -2387,74 +2387,22 @@ class TestDSMLAllRetriesFail:
         assert call_count[0] >= 3
 
 
-class TestNonDSMLParseFailureTakesGenericRetry:
-    """neograph-gxv8 (axis 5): plain garbled JSON bypasses the DSML-specific retry."""
-
-    def test_garbled_plain_text_goes_to_generic_retry_no_dsml_warning(self, caplog):
-        import logging
-
-        from langchain_core.messages import AIMessage
-        from pydantic import BaseModel as _BM
-
-        from neograph import Tool, configure_llm
-        from neograph._tool_loop import invoke_with_tools
-        from neograph.factory import register_tool_factory
-        from neograph.tool import ToolBudgetTracker
-
-        caplog.set_level(logging.WARNING)
-        call_count = [0]
-
-        class GarbledPlainFake:
-            def bind_tools(self, tools):
-                return self
-
-            def invoke(self, messages, **kw):
-                call_count[0] += 1
-                if call_count[0] == 1:
-                    msg = AIMessage(content="")
-                    msg.tool_calls = [{"name": "search", "args": {"q": "test"}, "id": "c1"}]
-                    return msg
-                if call_count[0] == 2:
-                    return AIMessage(content="not json at all {{{ \x00 garbled")
-                return AIMessage(content='{"answer": "recovered via generic retry"}')
-
-            def with_structured_output(self, model, **kw):
-                return self
-
-        def search_factory(config, tool_config):
-            from langchain_core.tools import StructuredTool
-            return StructuredTool.from_function(
-                lambda q: f"found {q}", name="search", description="search"
-            )
-
-        register_tool_factory("search", search_factory)
-        configure_llm(
-            llm_factory=lambda tier: GarbledPlainFake(),
-            prompt_compiler=lambda t, d, **kw: [{"role": "user", "content": "test"}],
-        )
-
-        class Answer(_BM):
-            answer: str
-
-        tools = [Tool(name="search", description="search")]
-        budget = ToolBudgetTracker(tools)
-
-        parsed, interactions = invoke_with_tools(
-            model_tier="fast",
-            prompt_template="test",
-            input_data={},
-            output_model=Answer,
-            config={"configurable": {}},
-            tools=tools,
-            budget_tracker=budget,
-            llm_config={"output_strategy": "json_mode", "max_retries": 2},
-        )
-
-        assert parsed.answer == "recovered via generic retry"
-        assert len(interactions) == 1
-        assert "trailing_tool_call_markup" not in caplog.text
-        assert "DSML" not in caplog.text
-        assert call_count[0] == 3
+# REMOVED: TestNonDSMLParseFailureTakesGenericRetry (neograph-gxv8, axis 5)
+# Reason: mutation audit exposed two defects:
+#   1. `caplog.text` doesn't capture neograph's structlog output (structlog
+#      isn't routed through stdlib; `log.warning()` goes straight to its own
+#      renderer). The `"trailing_tool_call_markup" not in caplog.text` and
+#      `"DSML" not in caplog.text` assertions are always trivially true —
+#      widening the regex in production so plain text enters the DSML branch
+#      did NOT cause the test to fail.
+#   2. The `call_count == 3` assertion doesn't discriminate paths: with
+#      max_retries=2 the generic retry succeeds on its first inner call
+#      (call 3), and the DSML targeted retry also succeeds on call 3.
+#      Both branches produce exactly 3 LLM invocations, so this assertion
+#      can't distinguish whether the plain-text path actually bypassed the
+#      DSML-specific branch.
+# neograph-gxv8 reopened for re-execution using structlog.testing.capture_logs()
+# (or a stdlib-routed structlog fixture) and a discriminating call-count setup.
 
 
 class TestE2EDSMLRecoveryViaAgentMode:
@@ -2631,67 +2579,18 @@ class TestCoercingToolWrapperGenerateRaises:
         assert "simulated network failure" in event.get("error", "")
 
 
-class TestCoercingToolWrapperMixedDictAndStringArgs:
-    """neograph-2od5 (axis 10): mixed valid/unparseable tool_call args.
-
-    LangChain's default_tool_parser routes unparseable arguments to
-    `.invalid_tool_calls`, not `.tool_calls` — so the wrapper's dict-coercion
-    loop never sees them. Valid JSON args are preserved as dicts. This pins
-    the observed surface contract so any change to the wrapper trips these
-    assertions.
-    """
-
-    def test_mixed_dict_and_string_args_all_coerced_to_dict(self):
-        from types import SimpleNamespace
-
-        from langchain_core.messages import AIMessage
-
-        from neograph._tool_loop import _CoercingToolWrapper
-
-        class MixedArgsFake:
-            def invoke(self, messages, **kw):
-                # Constructor itself raises ValidationError on args[1] string.
-                AIMessage(
-                    content="",
-                    tool_calls=[
-                        {"name": "search", "args": {"query": "first"}, "id": "c1"},
-                        {"name": "search", "args": "raw string value", "id": "c2"},
-                        {"name": "search", "args": {"query": "third"}, "id": "c3"},
-                    ],
-                )
-
-            def _generate(self, messages, *, run_manager=None, **kw):
-                msg = AIMessage(
-                    content="",
-                    additional_kwargs={
-                        "tool_calls": [
-                            {"id": "c1", "type": "function",
-                             "function": {"name": "search",
-                                          "arguments": '{"query": "first"}'}},
-                            {"id": "c2", "type": "function",
-                             "function": {"name": "search",
-                                          "arguments": "raw string value"}},
-                            {"id": "c3", "type": "function",
-                             "function": {"name": "search",
-                                          "arguments": '{"query": "third"}'}},
-                        ]
-                    },
-                )
-                return SimpleNamespace(generations=[SimpleNamespace(message=msg)])
-
-        wrapper = _CoercingToolWrapper(MixedArgsFake())
-        response = wrapper.invoke([])
-
-        assert hasattr(response, "tool_calls")
-        args_by_id = {tc["id"]: tc["args"] for tc in response.tool_calls}
-        assert args_by_id["c1"] == {"query": "first"}
-        assert args_by_id["c3"] == {"query": "third"}
-
-        # Observed contract: unparseable c2 is routed to invalid_tool_calls,
-        # not surfaced via .tool_calls where the dict-coercion loop runs.
-        assert len(response.tool_calls) == 2
-        assert {tc["id"] for tc in response.tool_calls} == {"c1", "c3"}
-        assert hasattr(response, "invalid_tool_calls")
-        invalid_by_id = {tc["id"]: tc for tc in response.invalid_tool_calls}
-        assert "c2" in invalid_by_id
-        assert invalid_by_id["c2"]["args"] == "raw string value"
+# REMOVED: TestCoercingToolWrapperMixedDictAndStringArgs (neograph-2od5, axis 10)
+# Reason: mutation audit exposed the test was exercising LangChain, not the
+# wrapper. When `_generate()` returns an AIMessage built from
+# `additional_kwargs={"tool_calls": [{"function": {"arguments": "..."}}, ...]}`,
+# LangChain's `default_tool_parser` runs inside the AIMessage constructor and
+# has already converted valid JSON argument strings into dicts, while routing
+# unparseable strings to `.invalid_tool_calls`. By the time the wrapper's own
+# explicit `for tc in raw_msg.tool_calls: if isinstance(tc.get("args"), str):
+# tc["args"] = _json.loads(...)` loop runs, every entry in `.tool_calls` is
+# already a dict — the wrapper's loop is a no-op on this input shape.
+# Removing the wrapper's coercion loop entirely did NOT make the test fail.
+# neograph-2od5 reopened for re-execution with an input that actually exercises
+# the wrapper's coercion (e.g. a raw_msg.tool_calls that still contains a
+# string-args entry after construction, or direct assertions on LangChain's
+# routing contract rather than the wrapper's behavior).
