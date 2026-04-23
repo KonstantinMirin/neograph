@@ -1153,7 +1153,7 @@ class TestToolCallArgsCoercion:
 
     def test_string_args_retried_and_recovered(self):
         """ValidationError from string tool_calls.args triggers retry, not crash."""
-        from neograph._llm import invoke_with_tools
+        from neograph._tool_loop import invoke_with_tools
         from neograph import Tool, configure_llm
         from neograph.factory import register_tool_factory
         from tests.fakes import StringArgsFake
@@ -1210,7 +1210,7 @@ class TestToolCallArgsCoercion:
 
     def test_consistent_string_args_always_coerced(self):
         """Even at 100% string-args rate, coercion handles every call."""
-        from neograph._llm import invoke_with_tools
+        from neograph._tool_loop import invoke_with_tools
         from neograph import Tool, configure_llm
         from neograph.factory import register_tool_factory
         from neograph.tool import ToolBudgetTracker
@@ -1267,7 +1267,7 @@ class TestToolCallArgsCoercion:
         """ValidationError NOT related to tool_calls.args is re-raised."""
         from pydantic import ValidationError
 
-        from neograph._llm import _CoercingToolWrapper
+        from neograph._tool_loop import _CoercingToolWrapper
 
         class BadLLM:
             def invoke(self, messages, **kw):
@@ -1289,7 +1289,7 @@ class TestToolCallArgsCoercion:
 
     def test_multiple_tool_calls_mixed_args(self):
         """Multiple tool_calls where some have dict args and some have string args."""
-        from neograph._llm import invoke_with_tools
+        from neograph._tool_loop import invoke_with_tools
         from neograph import Tool, configure_llm
         from neograph.factory import register_tool_factory
         from neograph.tool import ToolBudgetTracker
@@ -1341,7 +1341,7 @@ class TestToolCallArgsCoercion:
 
     def test_coerced_args_parsed_correctly(self):
         """Coerced tool args must be proper dicts with correct values."""
-        from neograph._llm import invoke_with_tools
+        from neograph._tool_loop import invoke_with_tools
         from neograph import Tool, configure_llm
         from neograph.factory import register_tool_factory
         from neograph.tool import ToolBudgetTracker
@@ -1391,7 +1391,7 @@ class TestToolCallArgsCoercion:
 
     def test_malformed_json_in_string_args(self):
         """Unparseable string args degrade to empty dict, tool still called."""
-        from neograph._llm import _CoercingToolWrapper
+        from neograph._tool_loop import _CoercingToolWrapper
         from langchain_core.messages import AIMessage
         from types import SimpleNamespace
         import json
@@ -1421,7 +1421,7 @@ class TestToolCallArgsCoercion:
 
     def test_empty_string_args(self):
         """Empty string args degrade to empty dict."""
-        from neograph._llm import _CoercingToolWrapper
+        from neograph._tool_loop import _CoercingToolWrapper
         from langchain_core.messages import AIMessage
         from types import SimpleNamespace
 
@@ -1462,14 +1462,14 @@ class TestToolResultRendering:
 
     def test_plain_value_returns_str(self):
         """Non-Pydantic result returns str() (line 452)."""
-        from neograph._llm import _render_tool_result_for_llm
+        from neograph._tool_loop import _render_tool_result_for_llm
 
         assert _render_tool_result_for_llm(42) == "42"
         assert _render_tool_result_for_llm("hello") == "hello"
 
     def test_list_of_models_rendered(self):
         """List of BaseModel instances uses renderer or describe_value (line 562)."""
-        from neograph._llm import _render_tool_result_for_llm
+        from neograph._tool_loop import _render_tool_result_for_llm
 
         items = [RawText(text="a"), RawText(text="b")]
         result = _render_tool_result_for_llm(items)
@@ -1482,7 +1482,7 @@ class TestUnregisteredToolInReact:
 
     def test_unregistered_tool_raises(self):
         """invoke_with_tools with unregistered tool raises ConfigurationError."""
-        from neograph._llm import invoke_with_tools
+        from neograph._tool_loop import invoke_with_tools
         from neograph.tool import ToolBudgetTracker
 
         configure_fake_llm(lambda tier: StructuredFake(lambda m: m(items=["x"])))
@@ -1504,7 +1504,7 @@ class TestUsageTokenAccumulation:
 
     def test_usage_tokens_accumulated_from_messages(self):
         """Token usage from ReAct messages is accumulated (lines 621-626, 630)."""
-        from neograph._llm import invoke_with_tools
+        from neograph._tool_loop import invoke_with_tools
         from neograph.factory import register_tool_factory
         from neograph.tool import ToolBudgetTracker
 
@@ -1616,7 +1616,7 @@ class TestReActToolReturnsListOfModels:
         from langchain_core.messages import AIMessage
         from pydantic import BaseModel as BM
 
-        from neograph._llm import invoke_with_tools
+        from neograph._tool_loop import invoke_with_tools
         from neograph.factory import register_tool_factory
         from neograph.tool import ToolBudgetTracker
 
@@ -1682,7 +1682,7 @@ class TestReActMaxIterationsGuard:
 
     def test_max_iterations_default_stops_at_20(self):
         """Default max_iterations=20 stops an infinite tool-calling loop."""
-        from neograph._llm import invoke_with_tools
+        from neograph._tool_loop import invoke_with_tools
         from neograph.factory import register_tool_factory
         from neograph.tool import ToolBudgetTracker
 
@@ -1712,7 +1712,7 @@ class TestReActMaxIterationsGuard:
 
     def test_max_iterations_custom_value(self):
         """Custom max_iterations in llm_config overrides the default."""
-        from neograph._llm import invoke_with_tools
+        from neograph._tool_loop import invoke_with_tools
         from neograph.factory import register_tool_factory
         from neograph.tool import ToolBudgetTracker
 
@@ -1743,7 +1743,7 @@ class TestReActMaxIterationsGuard:
 
     def test_max_iterations_does_not_affect_normal_completion(self):
         """When the LLM finishes before max_iterations, the guard is irrelevant."""
-        from neograph._llm import invoke_with_tools
+        from neograph._tool_loop import invoke_with_tools
         from neograph.factory import register_tool_factory
         from neograph.tool import ToolBudgetTracker
 
@@ -1777,7 +1777,7 @@ class TestReActMaxIterationsGuard:
 
     def test_max_iterations_equals_one(self):
         """Degenerate case: max_iterations=1 means the first tool-calling iteration triggers the guard."""
-        from neograph._llm import invoke_with_tools
+        from neograph._tool_loop import invoke_with_tools
         from neograph.factory import register_tool_factory
         from neograph.tool import ToolBudgetTracker
 
@@ -1809,7 +1809,7 @@ class TestReActMaxIterationsGuard:
         """After guard fires and tools are unbound, if the LLM still returns
         tool_calls on the next invocation, the loop force-breaks instead of
         looping forever (the _guard_fired safety net)."""
-        from neograph._llm import invoke_with_tools
+        from neograph._tool_loop import invoke_with_tools
         from neograph.factory import register_tool_factory
         from neograph.tool import ToolBudgetTracker
 
@@ -1841,7 +1841,7 @@ class TestReActMaxIterationsGuard:
         """When max_iterations is exceeded, a warning is logged with the reason."""
         from structlog.testing import capture_logs
 
-        from neograph._llm import invoke_with_tools
+        from neograph._tool_loop import invoke_with_tools
         from neograph.factory import register_tool_factory
         from neograph.tool import ToolBudgetTracker
 
@@ -1875,7 +1875,7 @@ class TestReActTokenBudgetGuard:
 
     def test_token_budget_stops_loop(self):
         """token_budget in llm_config stops the loop when input tokens exceed threshold."""
-        from neograph._llm import invoke_with_tools
+        from neograph._tool_loop import invoke_with_tools
         from neograph.factory import register_tool_factory
         from neograph.tool import ToolBudgetTracker
 
@@ -1907,7 +1907,7 @@ class TestReActTokenBudgetGuard:
 
     def test_token_budget_none_is_no_limit(self):
         """token_budget=None (default) means no token budget enforcement."""
-        from neograph._llm import invoke_with_tools
+        from neograph._tool_loop import invoke_with_tools
         from neograph.factory import register_tool_factory
         from neograph.tool import ToolBudgetTracker
 
@@ -1941,7 +1941,7 @@ class TestReActTokenBudgetGuard:
 
     def test_both_guards_fire_simultaneously(self):
         """When max_iterations and token_budget are both exceeded, loop still terminates."""
-        from neograph._llm import invoke_with_tools
+        from neograph._tool_loop import invoke_with_tools
         from neograph.factory import register_tool_factory
         from neograph.tool import ToolBudgetTracker
 
@@ -1972,7 +1972,7 @@ class TestReActTokenBudgetGuard:
 
     def test_token_budget_missing_usage_metadata(self):
         """When responses lack usage_metadata, token_budget never fires (correct behavior)."""
-        from neograph._llm import invoke_with_tools
+        from neograph._tool_loop import invoke_with_tools
         from neograph.factory import register_tool_factory
         from neograph.tool import ToolBudgetTracker
 

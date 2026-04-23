@@ -1153,7 +1153,7 @@ class TestRenderToolResultForLlm:
 
     def test_renderer_used_for_pydantic_model(self):
         """When a renderer is supplied, it should be used instead of describe_value."""
-        from neograph._llm import _render_tool_result_for_llm
+        from neograph._tool_loop import _render_tool_result_for_llm
 
         class Result(BaseModel):
             score: int = 42
@@ -1167,7 +1167,7 @@ class TestRenderToolResultForLlm:
 
     def test_renderer_used_for_list_of_models(self):
         """When a renderer is supplied for a list of models, it should be used."""
-        from neograph._llm import _render_tool_result_for_llm
+        from neograph._tool_loop import _render_tool_result_for_llm
 
         class Item(BaseModel):
             label: str
@@ -1182,7 +1182,7 @@ class TestRenderToolResultForLlm:
 
     def test_fallback_to_describe_value_when_no_renderer(self):
         """Without renderer, Pydantic models still use describe_value (default)."""
-        from neograph._llm import _render_tool_result_for_llm
+        from neograph._tool_loop import _render_tool_result_for_llm
 
         class Simple(BaseModel):
             x: int = 5
@@ -2140,7 +2140,7 @@ class TestToolInputRenderingParity:
 
     def test_same_model_same_baml(self):
         """Same Pydantic instance → same BAML from both paths (minus prefix)."""
-        from neograph._llm import _render_tool_result_for_llm
+        from neograph._tool_loop import _render_tool_result_for_llm
         from neograph.describe_type import describe_value
 
         class Result(BaseModel):
@@ -2164,7 +2164,7 @@ class TestToolInputRenderingParity:
 
     def test_parity_with_exclude_fields(self):
         """Both paths honor exclude=True identically."""
-        from neograph._llm import _render_tool_result_for_llm
+        from neograph._tool_loop import _render_tool_result_for_llm
         from neograph.describe_type import describe_value
 
         class Data(BaseModel):
@@ -2183,7 +2183,7 @@ class TestToolInputRenderingParity:
 
     def test_parity_with_list_of_models(self):
         """Both paths handle list[BaseModel] identically."""
-        from neograph._llm import _render_tool_result_for_llm
+        from neograph._tool_loop import _render_tool_result_for_llm
         from neograph.describe_type import describe_value
 
         class Item(BaseModel):

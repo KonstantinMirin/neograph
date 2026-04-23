@@ -164,7 +164,7 @@ class ToolDispatch:
         config: RunnableConfig,
         context_data: dict[str, Any] | None,
     ) -> NodeOutput:
-        from neograph._llm import invoke_with_tools
+        from neograph._tool_loop import invoke_with_tools
         from neograph.tool import ToolBudgetTracker
 
         rendered = _render_input(node, input_data.value)
