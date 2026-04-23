@@ -2223,3 +2223,475 @@ class TestDSMLTrailingToolCallRecovery:
         retry_msg = captured_messages[-1]
         content = retry_msg["content"] if isinstance(retry_msg, dict) else retry_msg.content if hasattr(retry_msg, "content") else str(retry_msg)
         assert "CUSTOM" in content
+
+
+# =============================================================================
+# tool_loop coverage gaps: DSML retry axes (3, 4, 5, 12) + CoercingToolWrapper (8, 9, 10)
+# Filed as neograph-tjhe, -44eq, -gxv8, -xrrt, -bd18, -n4hu, -2od5
+# =============================================================================
+
+
+class TestDSMLDoubleFailure:
+    """neograph-tjhe (axis 3): targeted DSML retry returns DSML → generic retry recovers.
+
+    Call sequence:
+        1: successful tool call (search)
+        2: DSML as "final" response (triggers targeted retry)
+        3: targeted retry ALSO returns DSML (double failure)
+        4: generic _invoke_json_with_retry first invoke → valid JSON
+    """
+
+    def test_double_dsml_falls_through_to_generic_retry(self):
+        from langchain_core.messages import AIMessage
+        from pydantic import BaseModel as _BM
+
+        from neograph import Tool, configure_llm
+        from neograph._tool_loop import invoke_with_tools
+        from neograph.factory import register_tool_factory
+        from neograph.tool import ToolBudgetTracker
+
+        call_count = [0]
+        dsml_payload = (
+            '<｜DSML｜tool_calls>\n'
+            '<｜DSML｜invoke name="search">\n'
+            '<｜DSML｜parameter name="q">more search</｜DSML｜parameter>\n'
+            '</｜DSML｜invoke>\n'
+            '</｜DSML｜tool_calls>'
+        )
+
+        class DoubleDSMLFake:
+            def bind_tools(self, tools):
+                return self
+
+            def invoke(self, messages, **kw):
+                call_count[0] += 1
+                if call_count[0] == 1:
+                    msg = AIMessage(content="")
+                    msg.tool_calls = [{"name": "search", "args": {"q": "test"}, "id": "c1"}]
+                    return msg
+                if call_count[0] == 2:
+                    return AIMessage(content=dsml_payload)
+                if call_count[0] == 3:
+                    return AIMessage(content=dsml_payload)
+                return AIMessage(content='{"answer": "recovered-via-generic"}')
+
+            def with_structured_output(self, model, **kw):
+                return self
+
+        def search_factory(config, tool_config):
+            from langchain_core.tools import StructuredTool
+            return StructuredTool.from_function(
+                lambda q: f"found {q}", name="search", description="search"
+            )
+
+        register_tool_factory("search", search_factory)
+        configure_llm(
+            llm_factory=lambda tier: DoubleDSMLFake(),
+            prompt_compiler=lambda t, d, **kw: [{"role": "user", "content": "test"}],
+        )
+
+        class Answer(_BM):
+            answer: str
+
+        tools = [Tool(name="search", description="search")]
+        budget = ToolBudgetTracker(tools)
+
+        parsed, interactions = invoke_with_tools(
+            model_tier="fast",
+            prompt_template="test",
+            input_data={},
+            output_model=Answer,
+            config={"configurable": {}},
+            tools=tools,
+            budget_tracker=budget,
+            llm_config={"output_strategy": "json_mode"},
+        )
+
+        assert parsed.answer == "recovered-via-generic"
+        assert len(interactions) == 1
+        assert call_count[0] == 4
+
+
+class TestDSMLAllRetriesFail:
+    """neograph-44eq (axis 4): every retry returns DSML → ExecutionError with hint.
+
+    Default max_retries=1 chain: tool call → DSML → targeted retry DSML →
+    generic retry invoke → generic retry invoke → ExecutionError.
+    """
+
+    def test_exhausted_retries_raise_execution_error_with_dsml_hint(self):
+        from langchain_core.messages import AIMessage
+        from pydantic import BaseModel as _BM
+
+        from neograph import Tool, configure_llm
+        from neograph._tool_loop import invoke_with_tools
+        from neograph.errors import ExecutionError
+        from neograph.factory import register_tool_factory
+        from neograph.tool import ToolBudgetTracker
+
+        call_count = [0]
+        dsml_payload = (
+            '<｜DSML｜tool_calls>\n'
+            '<｜DSML｜invoke name="search">\n'
+            '<｜DSML｜parameter name="q">more search</｜DSML｜parameter>\n'
+            '</｜DSML｜invoke>\n'
+            '</｜DSML｜tool_calls>'
+        )
+
+        class AllDSMLFake:
+            def bind_tools(self, tools):
+                return self
+
+            def invoke(self, messages, **kw):
+                call_count[0] += 1
+                if call_count[0] == 1:
+                    msg = AIMessage(content="")
+                    msg.tool_calls = [{"name": "search", "args": {"q": "test"}, "id": "c1"}]
+                    return msg
+                return AIMessage(content=dsml_payload)
+
+            def with_structured_output(self, model, **kw):
+                return self
+
+        def search_factory(config, tool_config):
+            from langchain_core.tools import StructuredTool
+            return StructuredTool.from_function(
+                lambda q: f"found {q}", name="search", description="search"
+            )
+
+        register_tool_factory("search", search_factory)
+        configure_llm(
+            llm_factory=lambda tier: AllDSMLFake(),
+            prompt_compiler=lambda t, d, **kw: [{"role": "user", "content": "test"}],
+        )
+
+        class Answer(_BM):
+            answer: str
+
+        tools = [Tool(name="search", description="search")]
+        budget = ToolBudgetTracker(tools)
+
+        with pytest.raises(ExecutionError, match=r"(?i)(tool-?call markup|DSML)") as exc_info:
+            invoke_with_tools(
+                model_tier="fast",
+                prompt_template="test",
+                input_data={},
+                output_model=Answer,
+                config={"configurable": {}},
+                tools=tools,
+                budget_tracker=budget,
+                llm_config={"output_strategy": "json_mode"},
+            )
+
+        assert str(exc_info.value).strip()
+        assert call_count[0] >= 3
+
+
+class TestNonDSMLParseFailureTakesGenericRetry:
+    """neograph-gxv8 (axis 5): plain garbled JSON bypasses the DSML-specific retry."""
+
+    def test_garbled_plain_text_goes_to_generic_retry_no_dsml_warning(self, caplog):
+        import logging
+
+        from langchain_core.messages import AIMessage
+        from pydantic import BaseModel as _BM
+
+        from neograph import Tool, configure_llm
+        from neograph._tool_loop import invoke_with_tools
+        from neograph.factory import register_tool_factory
+        from neograph.tool import ToolBudgetTracker
+
+        caplog.set_level(logging.WARNING)
+        call_count = [0]
+
+        class GarbledPlainFake:
+            def bind_tools(self, tools):
+                return self
+
+            def invoke(self, messages, **kw):
+                call_count[0] += 1
+                if call_count[0] == 1:
+                    msg = AIMessage(content="")
+                    msg.tool_calls = [{"name": "search", "args": {"q": "test"}, "id": "c1"}]
+                    return msg
+                if call_count[0] == 2:
+                    return AIMessage(content="not json at all {{{ \x00 garbled")
+                return AIMessage(content='{"answer": "recovered via generic retry"}')
+
+            def with_structured_output(self, model, **kw):
+                return self
+
+        def search_factory(config, tool_config):
+            from langchain_core.tools import StructuredTool
+            return StructuredTool.from_function(
+                lambda q: f"found {q}", name="search", description="search"
+            )
+
+        register_tool_factory("search", search_factory)
+        configure_llm(
+            llm_factory=lambda tier: GarbledPlainFake(),
+            prompt_compiler=lambda t, d, **kw: [{"role": "user", "content": "test"}],
+        )
+
+        class Answer(_BM):
+            answer: str
+
+        tools = [Tool(name="search", description="search")]
+        budget = ToolBudgetTracker(tools)
+
+        parsed, interactions = invoke_with_tools(
+            model_tier="fast",
+            prompt_template="test",
+            input_data={},
+            output_model=Answer,
+            config={"configurable": {}},
+            tools=tools,
+            budget_tracker=budget,
+            llm_config={"output_strategy": "json_mode", "max_retries": 2},
+        )
+
+        assert parsed.answer == "recovered via generic retry"
+        assert len(interactions) == 1
+        assert "trailing_tool_call_markup" not in caplog.text
+        assert "DSML" not in caplog.text
+        assert call_count[0] == 3
+
+
+class TestE2EDSMLRecoveryViaAgentMode:
+    """neograph-xrrt (axis 12): full E2E recovery through compile()/run().
+
+    Verifies the DSML fix propagates through @node → construct_from_module →
+    compile → run, not just the low-level invoke_with_tools call.
+    """
+
+    def test_agent_mode_recovers_from_dsml_after_budget_exhaustion_e2e(self):
+        import types as _types
+
+        from langchain_core.messages import AIMessage
+        from pydantic import BaseModel as _BM
+
+        from neograph import (
+            Tool,
+            compile,
+            configure_llm,
+            construct_from_module,
+            node,
+            run,
+        )
+        from neograph.factory import register_tool_factory
+
+        class Answer(_BM):
+            answer: str
+
+        call_count = [0]
+        dsml_payload = (
+            '<｜DSML｜tool_calls>\n'
+            '<｜DSML｜invoke name="search">\n'
+            '<｜DSML｜parameter name="q">more search</｜DSML｜parameter>\n'
+            '</｜DSML｜invoke>\n'
+            '</｜DSML｜tool_calls>'
+        )
+
+        class DSMLFake:
+            def bind_tools(self, tools):
+                return self
+
+            def invoke(self, messages, **kw):
+                call_count[0] += 1
+                if call_count[0] == 1:
+                    msg = AIMessage(content="")
+                    msg.tool_calls = [{"name": "search", "args": {"q": "test"}, "id": "c1"}]
+                    return msg
+                if call_count[0] == 2:
+                    return AIMessage(content=dsml_payload)
+                return AIMessage(content='{"answer": "recovered-e2e"}')
+
+            def with_structured_output(self, model, **kw):
+                return self
+
+        def search_factory(config, tool_config):
+            from langchain_core.tools import StructuredTool
+            return StructuredTool.from_function(
+                lambda q: f"found {q}", name="search", description="search"
+            )
+
+        register_tool_factory("search", search_factory)
+        configure_llm(
+            llm_factory=lambda tier: DSMLFake(),
+            prompt_compiler=lambda t, d, **kw: [{"role": "user", "content": "test"}],
+        )
+
+        mod = _types.ModuleType("test_xrrt_e2e_dsml_mod")
+
+        @node(
+            mode="agent",
+            outputs=Answer,
+            model="fast",
+            prompt="test/research",
+            tools=[Tool(name="search", description="search", budget=1)],
+            llm_config={"output_strategy": "json_mode"},
+        )
+        def research() -> Answer: ...
+
+        mod.research = research
+        pipeline = construct_from_module(mod, name="test-xrrt-e2e")
+        graph = compile(pipeline)
+        result = run(graph, input={"node_id": "test-xrrt"})
+
+        assert result["research"].answer == "recovered-e2e"
+        assert call_count[0] == 3
+
+
+class TestCoercingToolWrapperGenerateNotAvailable:
+    """neograph-bd18 (axis 8): LLM has no _generate() → fall back to empty AIMessage."""
+
+    def test_generate_not_available_falls_back_to_empty(self, caplog):
+        import logging
+
+        import structlog
+        from langchain_core.messages import AIMessage
+        from pydantic import ValidationError
+
+        from neograph._tool_loop import _CoercingToolWrapper
+
+        structlog.configure(
+            wrapper_class=structlog.stdlib.BoundLogger,
+            logger_factory=structlog.stdlib.LoggerFactory(),
+        )
+
+        class NoGenerateFake:
+            def invoke(self, messages, **kw):
+                raise ValidationError.from_exception_data(
+                    title="AIMessage",
+                    line_errors=[{
+                        "type": "dict_type",
+                        "loc": ("tool_calls", 0, "args"),
+                        "msg": "Input should be a valid dictionary",
+                        "input": "not a dict",
+                    }],
+                )
+
+        assert not hasattr(NoGenerateFake(), "_generate")
+
+        wrapper = _CoercingToolWrapper(NoGenerateFake())
+        with caplog.at_level(logging.WARNING):
+            response = wrapper.invoke([])
+
+        assert isinstance(response, AIMessage)
+        assert response.content == ""
+        assert getattr(response, "tool_calls", []) == []
+        assert any(
+            "tool_calls_coercion_generate_failed" in r.message
+            for r in caplog.records
+        ), f"missing warning; got: {[r.message for r in caplog.records]}"
+
+
+class TestCoercingToolWrapperGenerateRaises:
+    """neograph-n4hu (axis 9): _generate() raises → wrapper catches, falls back."""
+
+    def test_generate_raises_exception_falls_back_to_empty(self):
+        from structlog.testing import capture_logs
+
+        from langchain_core.messages import AIMessage
+        from pydantic import ValidationError
+
+        from neograph._tool_loop import _CoercingToolWrapper
+
+        class GenerateRaisesFake:
+            def invoke(self, messages, **kw):
+                raise ValidationError.from_exception_data(
+                    title="AIMessage",
+                    line_errors=[{
+                        "type": "dict_type",
+                        "loc": ("tool_calls", 0, "args"),
+                        "msg": "Input should be a valid dictionary",
+                        "input": "bad",
+                    }],
+                )
+
+            def _generate(self, messages, *, run_manager=None, **kw):
+                raise RuntimeError("simulated network failure")
+
+        wrapper = _CoercingToolWrapper(GenerateRaisesFake())
+
+        with capture_logs() as cap:
+            response = wrapper.invoke([])
+
+        assert isinstance(response, AIMessage)
+        assert response.content == ""
+        assert getattr(response, "tool_calls", []) == []
+
+        failure_events = [
+            e for e in cap
+            if e.get("event") == "tool_calls_coercion_generate_failed"
+        ]
+        assert len(failure_events) >= 1, f"missing warning; got {cap}"
+        event = failure_events[0]
+        assert event.get("log_level") == "warning"
+        assert "simulated network failure" in event.get("error", "")
+
+
+class TestCoercingToolWrapperMixedDictAndStringArgs:
+    """neograph-2od5 (axis 10): mixed valid/unparseable tool_call args.
+
+    LangChain's default_tool_parser routes unparseable arguments to
+    `.invalid_tool_calls`, not `.tool_calls` — so the wrapper's dict-coercion
+    loop never sees them. Valid JSON args are preserved as dicts. This pins
+    the observed surface contract so any change to the wrapper trips these
+    assertions.
+    """
+
+    def test_mixed_dict_and_string_args_all_coerced_to_dict(self):
+        from types import SimpleNamespace
+
+        from langchain_core.messages import AIMessage
+
+        from neograph._tool_loop import _CoercingToolWrapper
+
+        class MixedArgsFake:
+            def invoke(self, messages, **kw):
+                # Constructor itself raises ValidationError on args[1] string.
+                AIMessage(
+                    content="",
+                    tool_calls=[
+                        {"name": "search", "args": {"query": "first"}, "id": "c1"},
+                        {"name": "search", "args": "raw string value", "id": "c2"},
+                        {"name": "search", "args": {"query": "third"}, "id": "c3"},
+                    ],
+                )
+
+            def _generate(self, messages, *, run_manager=None, **kw):
+                msg = AIMessage(
+                    content="",
+                    additional_kwargs={
+                        "tool_calls": [
+                            {"id": "c1", "type": "function",
+                             "function": {"name": "search",
+                                          "arguments": '{"query": "first"}'}},
+                            {"id": "c2", "type": "function",
+                             "function": {"name": "search",
+                                          "arguments": "raw string value"}},
+                            {"id": "c3", "type": "function",
+                             "function": {"name": "search",
+                                          "arguments": '{"query": "third"}'}},
+                        ]
+                    },
+                )
+                return SimpleNamespace(generations=[SimpleNamespace(message=msg)])
+
+        wrapper = _CoercingToolWrapper(MixedArgsFake())
+        response = wrapper.invoke([])
+
+        assert hasattr(response, "tool_calls")
+        args_by_id = {tc["id"]: tc["args"] for tc in response.tool_calls}
+        assert args_by_id["c1"] == {"query": "first"}
+        assert args_by_id["c3"] == {"query": "third"}
+
+        # Observed contract: unparseable c2 is routed to invalid_tool_calls,
+        # not surfaced via .tool_calls where the dict-coercion loop runs.
+        assert len(response.tool_calls) == 2
+        assert {tc["id"] for tc in response.tool_calls} == {"c1", "c3"}
+        assert hasattr(response, "invalid_tool_calls")
+        invalid_by_id = {tc["id"]: tc for tc in response.invalid_tool_calls}
+        assert "c2" in invalid_by_id
+        assert invalid_by_id["c2"]["args"] == "raw string value"
