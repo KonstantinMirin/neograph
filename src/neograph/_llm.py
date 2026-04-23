@@ -755,54 +755,98 @@ def _render_tool_result_for_llm(result: Any, renderer: Any = None) -> str:
     return str(result)
 
 
-def _safe_tool_invoke(llm_with_tools: Any, messages: list, config: Any) -> Any:
-    """Invoke the tool-bound LLM with resilience against provider quirks.
+class _CoercingToolWrapper:
+    """Wraps a tool-bound LLM to coerce string tool_calls.args to dicts.
 
     Some providers (DeepSeek R1 via OpenRouter) emit tool_calls with
-    ``args`` as a JSON string instead of a parsed dict. LangChain's
-    AIMessage Pydantic validation rejects this with ``ValidationError``.
+    ``args`` as a JSON string. LangChain AIMessage Pydantic validation
+    rejects this. This wrapper catches the ValidationError and
+    reconstructs the AIMessage via the ``additional_kwargs`` path which
+    handles string arguments correctly (``default_tool_parser`` calls
+    ``json.loads`` on them).
 
-    Fix: catch the error, construct an AIMessage without tool_calls
-    (bypassing Pydantic validation), then mutate ``tool_calls`` with
-    coerced dict args after construction.
+    Usage (automatic — applied by ``invoke_with_tools``)::
+
+        wrapped = _CoercingToolWrapper(llm.bind_tools(tools))
+        response = wrapped.invoke(messages)  # never raises for string args
     """
-    import json as _json
 
-    from langchain_core.messages import AIMessage
-    from pydantic import ValidationError
+    def __init__(self, bound_llm: Any):
+        self._bound = bound_llm
 
-    try:
-        return llm_with_tools.invoke(messages, config=config)
-    except ValidationError as exc:
-        # Only handle tool_calls.args type mismatch
-        errors = exc.errors()
-        if not any("tool_calls" in str(e.get("loc", "")) and e.get("type") == "dict_type"
-                    for e in errors):
-            raise
+    def invoke(self, messages: list, **kwargs: Any) -> Any:
+        import json as _json
 
-        log.warning("tool_calls_args_coercion",
-                     hint="provider returned tool_calls.args as JSON string; coercing to dict")
+        from langchain_core.messages import AIMessage
+        from pydantic import ValidationError
 
-        # Extract the raw tool_calls from the exception's input context.
-        # Pydantic v2 stores the full input on the parent ValidationError.
-        raw_data = exc.errors()[0].get("ctx", {}) if exc.errors() else {}
-
-        # The input to AIMessage.__init__ is available via exc itself.
-        # We need to reconstruct. Parse the original kwargs from the error.
-        # Unfortunately Pydantic v2 doesn't expose the raw input dict.
-        # Pragmatic approach: re-invoke the underlying model's _generate
-        # is not accessible. Instead, ask the LLM again — the provider quirk
-        # is intermittent (~1 in 20 calls per the bug description).
-        # One retry is almost always sufficient.
         try:
-            return llm_with_tools.invoke(messages, config=config)
-        except ValidationError:
-            # Second failure — construct a graceful fallback.
-            # Return an AIMessage with no tool_calls so the loop exits
-            # and falls back to the final structured parse.
-            log.warning("tool_calls_args_coercion_retry_failed",
-                         hint="retry also failed; falling back to no-tool response")
+            return self._bound.invoke(messages, **kwargs)
+        except ValidationError as exc:
+            errors = exc.errors()
+            tool_call_errors = [
+                e for e in errors
+                if "tool_calls" in str(e.get("loc", "")) and e.get("type") == "dict_type"
+            ]
+            if not tool_call_errors:
+                raise
+
+            log.warning("tool_calls_args_coercion",
+                         error_count=len(tool_call_errors),
+                         hint="provider returned tool_calls.args as JSON string; "
+                              "reconstructing via additional_kwargs path")
+
+            # The direct tool_calls path failed because args are strings.
+            # Use the additional_kwargs path instead — it handles string
+            # arguments correctly via LangChain's default_tool_parser.
+            # We need the full tool_call structures (name, args-as-string, id).
+            # These are NOT in the Pydantic error. But the bound model's
+            # underlying HTTP response has them. Use _generate() to get raw.
+            try:
+                from langchain_core.messages import HumanMessage
+
+                lc_messages = []
+                for m in messages:
+                    if isinstance(m, dict):
+                        role = m.get("role", "user")
+                        content = m.get("content", "")
+                        if role == "user":
+                            lc_messages.append(HumanMessage(content=content))
+                        else:
+                            lc_messages.append(AIMessage(content=content) if role == "assistant" else m)
+                    else:
+                        lc_messages.append(m)
+
+                raw_result = self._bound._generate(lc_messages, run_manager=None)
+                if raw_result.generations:
+                    gen = raw_result.generations[0]
+                    raw_msg = gen.message if hasattr(gen, 'message') else gen
+                    # The message from _generate uses additional_kwargs path
+                    # which correctly parses string args via default_tool_parser.
+                    # If tool_calls have string args, coerce them.
+                    if hasattr(raw_msg, 'tool_calls'):
+                        for tc in raw_msg.tool_calls:
+                            if isinstance(tc.get("args"), str):
+                                try:
+                                    tc["args"] = _json.loads(tc["args"])
+                                except (_json.JSONDecodeError, TypeError):
+                                    tc["args"] = {}
+                    return raw_msg
+            except Exception as inner:
+                log.warning("tool_calls_coercion_generate_failed",
+                             error=str(inner),
+                             hint="falling back to empty response")
+
+            # Last resort: empty AIMessage so tool loop exits gracefully
             return AIMessage(content="")
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._bound, name)
+
+
+def _safe_tool_invoke(llm_with_tools: Any, messages: list, config: Any) -> Any:
+    """Invoke a _CoercingToolWrapper (or raw LLM) for the tool loop."""
+    return llm_with_tools.invoke(messages, config=config)
 
 
 def invoke_with_tools(
@@ -874,7 +918,7 @@ def invoke_with_tools(
         tool_instances[tool_spec.name] = factory(config, tool_spec.config)
 
     active_tools = list(tool_instances.values())
-    llm_with_tools = llm.bind_tools(active_tools)
+    llm_with_tools = _CoercingToolWrapper(llm.bind_tools(active_tools))
 
     from neograph.tool import ToolInteraction
 
@@ -1016,7 +1060,7 @@ def invoke_with_tools(
         else:
             # Rebind with only tools that still have budget
             active_tools = [tool_instances[t.name] for t in tools if budget_tracker.can_call(t.name)]
-            llm_with_tools = llm.bind_tools(active_tools)
+            llm_with_tools = _CoercingToolWrapper(llm.bind_tools(active_tools))
 
     elapsed = time.monotonic() - t0
 

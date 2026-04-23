@@ -174,29 +174,41 @@ class ReActFake:
 
 
 class StringArgsFake:
-    """Fake LLM that simulates DeepSeek R1 emitting tool_calls.args as JSON strings.
+    """Fake LLM that simulates providers emitting tool_calls.args as JSON strings.
 
-    First invoke raises ValidationError (simulating the provider bug).
-    Second invoke succeeds with proper dict args (simulating retry success).
-    Used to test _safe_tool_invoke resilience.
+    Every invoke() raises ValidationError (consistent provider behavior).
+    Provides _generate() fallback that returns the response via
+    additional_kwargs (which handles string args correctly).
+    Used to test _CoercingToolWrapper resilience.
+
+    Args:
+        tool_calls: list of per-invocation tool call lists
+        final: callable for structured output parse
+        always_fail: if True, every invoke raises (default); if False,
+            first invoke raises, subsequent succeed (intermittent mode)
     """
 
     def __init__(
         self,
         tool_calls: list[list[dict]],
         final: Callable[[type[BaseModel]], BaseModel] | None = None,
+        *,
+        always_fail: bool = True,
     ):
         self._tool_calls = tool_calls
         self._final = final
         self._call_idx = 0
         self._model: type[BaseModel] | None = None
         self._in_structured_mode = False
-        self._first_call = True
+        self._always_fail = always_fail
+        self._fail_count = 0
 
     def bind_tools(self, tools: list) -> StringArgsFake:
         return self
 
     def invoke(self, messages: list, **kwargs) -> Any:
+        import json as _json
+
         if self._in_structured_mode:
             assert self._final is not None
             return self._final(self._model)
@@ -210,33 +222,61 @@ class StringArgsFake:
             self._call_idx += 1
             return AIMessage(content="done")
 
-        # First call: raise ValidationError simulating string args
-        if self._first_call:
-            self._first_call = False
+        should_fail = self._always_fail or self._fail_count == 0
+        if should_fail:
+            self._fail_count += 1
             from pydantic import ValidationError
-
-            # Construct with string args — this triggers Pydantic ValidationError
+            # Raise the exact ValidationError that real providers produce
             try:
                 AIMessage(
                     content="",
-                    tool_calls=[{**tc, "args": str(tc["args"]) if isinstance(tc["args"], dict) else tc["args"]}
+                    tool_calls=[{**tc, "args": _json.dumps(tc["args"]) if isinstance(tc["args"], dict) else tc["args"]}
                                 for tc in calls],
                 )
             except ValidationError:
                 raise
-            # Shouldn't reach here, but if AIMessage accepts strings, fall through
-            # to normal path
 
-        # Retry: return valid response with dict args
+        # Non-failing path (intermittent mode, subsequent calls)
         self._call_idx += 1
         msg = AIMessage(content="")
         msg.tool_calls = calls
         return msg
 
+    def _generate(self, messages: list, *, run_manager: Any = None, **kwargs) -> Any:
+        """Fallback for _CoercingToolWrapper — returns response via additional_kwargs."""
+        import json as _json
+        from types import SimpleNamespace
+
+        if self._call_idx >= len(self._tool_calls):
+            msg = AIMessage(content="done")
+            return SimpleNamespace(generations=[SimpleNamespace(message=msg)])
+
+        calls = self._tool_calls[self._call_idx]
+        self._call_idx += 1
+
+        if not calls:
+            msg = AIMessage(content="done")
+            return SimpleNamespace(generations=[SimpleNamespace(message=msg)])
+
+        # Build via additional_kwargs — handles string args correctly
+        ak_tool_calls = [
+            {
+                "id": tc.get("id", f"call_{i}"),
+                "type": "function",
+                "function": {
+                    "name": tc["name"],
+                    "arguments": _json.dumps(tc["args"]) if isinstance(tc["args"], dict) else tc["args"],
+                },
+            }
+            for i, tc in enumerate(calls)
+        ]
+        msg = AIMessage(content="", additional_kwargs={"tool_calls": ak_tool_calls})
+        return SimpleNamespace(generations=[SimpleNamespace(message=msg)])
+
     def with_structured_output(self, model: type[BaseModel], **kwargs) -> StringArgsFake:
-        clone = StringArgsFake(self._tool_calls, self._final)
+        clone = StringArgsFake(self._tool_calls, self._final, always_fail=self._always_fail)
         clone._call_idx = self._call_idx
-        clone._first_call = self._first_call
+        clone._fail_count = self._fail_count
         clone._model = model
         clone._in_structured_mode = True
         return clone
