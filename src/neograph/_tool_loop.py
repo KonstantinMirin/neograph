@@ -344,8 +344,33 @@ def invoke_with_tools(
         raw_text = last_msg.content if hasattr(last_msg, "content") else str(last_msg)
         try:
             parse_result = _parse_json_response(raw_text, output_model)
-        except ExecutionError:
-            parse_result, _ = _invoke_json_with_retry(llm, messages, output_model, config, max_retries=max_retries)
+        except ExecutionError as parse_exc:
+            # Layer C: DSML/XML tool-call markup in final response — targeted retry
+            import re as _re
+            if _re.search(r"<[^>]*(?:function_call|invoke|DSML)[^>]*>", raw_text, _re.IGNORECASE):
+                log.warning("trailing_tool_call_markup",
+                             hint="model emitted tool-call markup after budget exhaustion; "
+                                  "retrying with targeted directive")
+                budget_msg = llm_config.get(
+                    "budget_exhausted_message",
+                    "Your previous response contained tool-call markup. "
+                    "All tool budgets are exhausted. Do NOT invoke any more tools. "
+                    f"Produce the final response as a {output_model.__name__} object. "
+                    "No markup, no tool calls. Output ONLY the structured response.",
+                )
+                messages.append({"role": "assistant", "content": raw_text})
+                messages.append({"role": "user", "content": budget_msg})
+                try:
+                    retry_response = llm.invoke(messages, config=config)
+                    retry_text = retry_response.content if hasattr(retry_response, "content") else str(retry_response)
+                    parse_result = _parse_json_response(retry_text, output_model)
+                except ExecutionError:
+                    # Layer B: targeted retry also failed — use generic retry path
+                    parse_result, _ = _invoke_json_with_retry(
+                        llm, messages, output_model, config, max_retries=max_retries,
+                    )
+            else:
+                parse_result, _ = _invoke_json_with_retry(llm, messages, output_model, config, max_retries=max_retries)
         usage = getattr(last_msg, "usage_metadata", None)
     else:
         parse_result, usage = _call_structured(llm, messages, output_model, strategy, config, max_retries=max_retries)

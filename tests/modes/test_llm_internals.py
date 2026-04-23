@@ -2089,3 +2089,137 @@ class TestBareArrayExtraction:
         assert result.startswith("{"), f"Expected object, got: {result[:50]}"
 
 
+class TestDSMLTrailingToolCallRecovery:
+    """neograph-vj2z: DSML markup in final response after budget exhaustion."""
+
+    def test_dsml_markup_retried_with_targeted_directive(self):
+        """Model emitting DSML after budget → targeted retry → success."""
+        from langchain_core.messages import AIMessage
+        from pydantic import BaseModel as _BM
+
+        from neograph import Tool, configure_llm
+        from neograph._tool_loop import invoke_with_tools
+        from neograph.factory import register_tool_factory
+        from neograph.tool import ToolBudgetTracker
+
+        call_count = [0]
+
+        class DSMLFake:
+            def bind_tools(self, tools):
+                return self
+
+            def invoke(self, messages, **kw):
+                call_count[0] += 1
+                if call_count[0] == 1:
+                    # First call: successful tool call
+                    msg = AIMessage(content="")
+                    msg.tool_calls = [{"name": "search", "args": {"q": "test"}, "id": "c1"}]
+                    return msg
+                if call_count[0] == 2:
+                    # After tool execution: budget exhausted, emit DSML markup
+                    return AIMessage(content=(
+                        '<\uff5cDSML\uff5ctool_calls>\n'
+                        '<\uff5cDSML\uff5cinvoke name="search">\n'
+                        '<\uff5cDSML\uff5cparameter name="q">more search</\uff5cDSML\uff5cparameter>\n'
+                        '</\uff5cDSML\uff5cinvoke>\n'
+                        '</\uff5cDSML\uff5ctool_calls>'
+                    ))
+                # Targeted retry: produce valid JSON
+                return AIMessage(content='{"answer": "recovered"}')
+
+            def with_structured_output(self, model, **kw):
+                return self
+
+        def search_factory(config, tool_config):
+            from langchain_core.tools import StructuredTool
+            return StructuredTool.from_function(
+                lambda q: f"found {q}", name="search", description="search"
+            )
+
+        register_tool_factory("search", search_factory)
+        configure_llm(
+            llm_factory=lambda tier: DSMLFake(),
+            prompt_compiler=lambda t, d, **kw: [{"role": "user", "content": "test"}],
+        )
+
+        class Answer(_BM):
+            answer: str
+
+        tools = [Tool(name="search", description="search")]
+        budget = ToolBudgetTracker(tools)
+
+        parsed, interactions = invoke_with_tools(
+            model_tier="fast",
+            prompt_template="test",
+            input_data={},
+            output_model=Answer,
+            config={"configurable": {}},
+            tools=tools,
+            budget_tracker=budget,
+            llm_config={"output_strategy": "json_mode"},
+        )
+
+        assert parsed.answer == "recovered"
+        assert len(interactions) == 1  # one tool call succeeded before DSML
+
+    def test_custom_budget_exhausted_message(self):
+        """User-provided budget_exhausted_message is used in the retry."""
+        from langchain_core.messages import AIMessage
+        from pydantic import BaseModel as _BM
+
+        from neograph import Tool, configure_llm
+        from neograph._tool_loop import invoke_with_tools
+        from neograph.factory import register_tool_factory
+        from neograph.tool import ToolBudgetTracker
+
+        captured_messages = []
+        call_count = [0]
+
+        class CaptureFake:
+            def bind_tools(self, tools):
+                return self
+
+            def invoke(self, messages, **kw):
+                call_count[0] += 1
+                captured_messages.append(messages[-1] if messages else None)
+                if call_count[0] == 1:
+                    return AIMessage(content='<\uff5cDSML\uff5cinvoke name="x"/>')
+                return AIMessage(content='{"answer": "ok"}')
+
+            def with_structured_output(self, model, **kw):
+                return self
+
+        register_tool_factory("x", lambda c, tc: __import__(
+            "langchain_core.tools", fromlist=["StructuredTool"]
+        ).StructuredTool.from_function(lambda q="": "ok", name="x", description="x"))
+
+        configure_llm(
+            llm_factory=lambda tier: CaptureFake(),
+            prompt_compiler=lambda t, d, **kw: [{"role": "user", "content": "test"}],
+        )
+
+        class Answer(_BM):
+            answer: str
+
+        tools = [Tool(name="x", description="x")]
+        budget = ToolBudgetTracker(tools)
+
+        parsed, _ = invoke_with_tools(
+            model_tier="fast",
+            prompt_template="test",
+            input_data={},
+            output_model=Answer,
+            config={"configurable": {}},
+            tools=tools,
+            budget_tracker=budget,
+            llm_config={
+                "output_strategy": "json_mode",
+                "budget_exhausted_message": "CUSTOM: stop calling tools, produce the answer",
+            },
+        )
+
+        assert parsed.answer == "ok"
+        # The custom message should have been used in the retry
+        retry_msg = captured_messages[-1]
+        content = retry_msg["content"] if isinstance(retry_msg, dict) else retry_msg.content if hasattr(retry_msg, "content") else str(retry_msg)
+        assert "CUSTOM" in content
