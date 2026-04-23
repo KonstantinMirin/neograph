@@ -1007,3 +1007,73 @@ class TestNoBareExceptException:
             + "\n".join(violations)
             + "\n\nFix: catch specific exceptions, or use 'except Exception as exc:' and re-raise/log."
         )
+
+
+class TestLLMModuleSymbolsMovedToToolLoop:
+    """neograph-smjo: confirm _tool_loop.py split is stable.
+
+    After the _llm.py -> _tool_loop.py extraction (commit 63ada61), the
+    tool-loop symbols must not reappear as module-level definitions in
+    _llm.py. A regression here means someone reintroduced the cycle.
+
+    Mutation-verified: adding `def invoke_with_tools(): pass` to _llm.py
+    makes this test fail with the exact symbol name in the error.
+    """
+
+    FORBIDDEN = {
+        "invoke_with_tools",
+        "_CoercingToolWrapper",
+        "_render_tool_result_for_llm",
+        "_safe_tool_invoke",
+    }
+
+    def test_forbidden_names_absent_from_llm_module(self):
+        src = pathlib.Path("src/neograph/_llm.py").read_text()
+        tree = ast.parse(src)
+        top_level_names: set[str] = set()
+        for node in tree.body:
+            if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
+                top_level_names.add(node.name)
+            elif isinstance(node, ast.Assign):
+                for target in node.targets:
+                    if isinstance(target, ast.Name):
+                        top_level_names.add(target.id)
+        leaked = self.FORBIDDEN & top_level_names
+        assert not leaked, (
+            f"_llm.py defines symbols that must live in _tool_loop.py: {sorted(leaked)}. "
+            f"Move them back to _tool_loop.py or update the guard."
+        )
+
+
+class TestToolLoopImportGraph:
+    """neograph-b3nh: _tool_loop.py has a strictly one-way dependency on _llm.py.
+
+    Importing from higher layers (dispatch/factory/compiler/construct) would
+    create a cycle and violate the layering documented in AGENTS.md.
+
+    Mutation-verified: adding `from neograph.factory import register_scripted`
+    to _tool_loop.py makes this test fail reporting neograph.factory.
+    """
+
+    FORBIDDEN_MODULES = {
+        "neograph._dispatch",
+        "neograph.factory",
+        "neograph.compiler",
+        "neograph.construct",
+    }
+
+    def test_tool_loop_does_not_import_from_higher_layers(self):
+        src = pathlib.Path("src/neograph/_tool_loop.py").read_text()
+        tree = ast.parse(src)
+        imports: set[str] = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.module:
+                imports.add(node.module)
+            elif isinstance(node, ast.Import):
+                for alias in node.names:
+                    imports.add(alias.name)
+        leaked = self.FORBIDDEN_MODULES & imports
+        assert not leaked, (
+            f"_tool_loop.py imports from higher layers: {sorted(leaked)}. "
+            f"Layer discipline: _tool_loop -> _llm (one-way)."
+        )

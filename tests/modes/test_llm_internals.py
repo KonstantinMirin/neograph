@@ -2770,3 +2770,504 @@ class TestCoercingToolWrapperMixedDictAndStringArgs:
 
         assert tcs[3]["args"] == {"query": "fourth"}
         assert isinstance(tcs[3]["args"], dict)
+
+
+# =============================================================================
+# DSML retry — additional axes (6, 7, 8, 9)
+# Filed as neograph-bxxf, -tdp3, -xkyk, -d5nm. All mutation-verified.
+# =============================================================================
+
+
+class TestDSMLInStructuredStrategyPath:
+    """neograph-bxxf (axis 6): structured strategy has NO DSML recovery.
+
+    The json_mode/text path has a DSML-detection regex + targeted retry
+    (_tool_loop.py lines 348-373). The structured path at line 376 calls
+    _call_structured, which has NO DSML handling. The only retry there is
+    a LangChain-compat fallback that catches TypeError from the first invoke
+    (to support providers that reject include_raw=True). If DSML content
+    triggers TypeError in with_structured_output, the compat fallback fires
+    EXACTLY once and then the error bubbles — no DSML recovery.
+
+    This is a documented parity gap vs json_mode/text.
+
+    Mutation-verified: removing the `except TypeError` compat fallback in
+    _call_structured makes this test fail (structured_calls goes from 2 to 1).
+    """
+
+    def test_structured_path_has_no_dsml_recovery_when_provider_returns_dsml(self):
+        import pytest as _pytest
+        from langchain_core.messages import AIMessage
+        from pydantic import BaseModel as _BM
+
+        from neograph import Tool, configure_llm
+        from neograph._tool_loop import invoke_with_tools
+        from neograph.factory import register_tool_factory
+        from neograph.tool import ToolBudgetTracker
+
+        DSML_MARKUP = (
+            '<｜DSML｜tool_calls>\n'
+            '<｜DSML｜invoke name="search">\n'
+            '<｜DSML｜parameter name="q">more</｜DSML｜parameter>\n'
+            '</｜DSML｜invoke>\n'
+            '</｜DSML｜tool_calls>'
+        )
+
+        class Answer(_BM):
+            answer: str
+
+        call_count = [0]
+        structured_calls = [0]
+
+        class DSMLFake:
+            def bind_tools(self, tools):
+                return self
+
+            def invoke(self, messages, **kw):
+                call_count[0] += 1
+                if call_count[0] == 1:
+                    msg = AIMessage(content="")
+                    msg.tool_calls = [{"name": "search", "args": {"q": "x"}, "id": "c1"}]
+                    return msg
+                return AIMessage(content=DSML_MARKUP)
+
+            def with_structured_output(self, model, **kw):
+                class _StructuredWrap:
+                    def invoke(self, messages, **kw2):
+                        structured_calls[0] += 1
+                        raise TypeError(
+                            "Expected Answer but got non-JSON content: " + DSML_MARKUP[:50]
+                        )
+
+                return _StructuredWrap()
+
+        def search_factory(config, tool_config):
+            from langchain_core.tools import StructuredTool
+            return StructuredTool.from_function(
+                lambda q: f"found {q}", name="search", description="search"
+            )
+
+        register_tool_factory("search", search_factory)
+        configure_llm(
+            llm_factory=lambda tier: DSMLFake(),
+            prompt_compiler=lambda t, d, **kw: [{"role": "user", "content": "test"}],
+        )
+
+        tools = [Tool(name="search", description="search")]
+        budget = ToolBudgetTracker(tools)
+
+        with _pytest.raises(TypeError) as excinfo:
+            invoke_with_tools(
+                model_tier="fast",
+                prompt_template="test",
+                input_data={},
+                output_model=Answer,
+                config={"configurable": {}},
+                tools=tools,
+                budget_tracker=budget,
+                llm_config={"output_strategy": "structured"},
+            )
+
+        assert "Expected Answer" in str(excinfo.value)
+        assert structured_calls[0] == 2, (
+            "with_structured_output().invoke() must fire EXACTLY twice — once "
+            "for the include_raw=True attempt, once for the except-TypeError "
+            f"compat fallback. Got {structured_calls[0]}."
+        )
+        assert call_count[0] == 2
+
+    def test_structured_path_happy_baseline_no_dsml(self):
+        """Control: structured strategy works when provider returns valid model."""
+        from langchain_core.messages import AIMessage
+        from pydantic import BaseModel as _BM
+
+        from neograph import Tool, configure_llm
+        from neograph._tool_loop import invoke_with_tools
+        from neograph.factory import register_tool_factory
+        from neograph.tool import ToolBudgetTracker
+
+        class Answer(_BM):
+            answer: str
+
+        call_count = [0]
+        structured_calls = [0]
+
+        class HappyFake:
+            def bind_tools(self, tools):
+                return self
+
+            def invoke(self, messages, **kw):
+                call_count[0] += 1
+                if call_count[0] == 1:
+                    msg = AIMessage(content="")
+                    msg.tool_calls = [{"name": "search", "args": {"q": "x"}, "id": "c1"}]
+                    return msg
+                return AIMessage(content="")
+
+            def with_structured_output(self, model, include_raw=False, **kw):
+                outer_model = model
+                inc = include_raw
+
+                class _StructuredWrap:
+                    def invoke(self, messages, **kw2):
+                        structured_calls[0] += 1
+                        parsed = outer_model(answer="ok")
+                        if inc:
+                            return {"parsed": parsed, "raw": AIMessage(content="fake")}
+                        return parsed
+
+                return _StructuredWrap()
+
+        def search_factory(config, tool_config):
+            from langchain_core.tools import StructuredTool
+            return StructuredTool.from_function(
+                lambda q: f"found {q}", name="search", description="search"
+            )
+
+        register_tool_factory("search", search_factory)
+        configure_llm(
+            llm_factory=lambda tier: HappyFake(),
+            prompt_compiler=lambda t, d, **kw: [{"role": "user", "content": "test"}],
+        )
+
+        tools = [Tool(name="search", description="search")]
+        budget = ToolBudgetTracker(tools)
+
+        parsed, interactions = invoke_with_tools(
+            model_tier="fast",
+            prompt_template="test",
+            input_data={},
+            output_model=Answer,
+            config={"configurable": {}},
+            tools=tools,
+            budget_tracker=budget,
+            llm_config={"output_strategy": "structured"},
+        )
+
+        assert parsed.answer == "ok"
+        assert structured_calls[0] == 1
+        assert len(interactions) == 1
+
+
+class TestDSMLAfterMaxIterationsGuard:
+    """neograph-tdp3 (axis 7): DSML after max_iterations guard unbinds tools.
+
+    Flow with max_iterations=1:
+      call 1: tool_call emitted -> guard fires, tools unbound, loop continues
+      call 2: DSML content (forced final) -> loop exits, parse fails
+      call 3: targeted retry via raw llm.invoke -> valid JSON -> recovered
+
+    Mutation-verified: `if False:` on the DSML regex makes this test fail
+    because no `trailing_tool_call_markup` event is logged.
+    """
+
+    def test_dsml_after_max_iterations_recovers_via_targeted_retry(self):
+        from langchain_core.messages import AIMessage
+        from pydantic import BaseModel as _BM
+        from structlog.testing import capture_logs
+
+        from neograph import Tool, configure_llm
+        from neograph._tool_loop import invoke_with_tools
+        from neograph.factory import register_tool_factory
+        from neograph.tool import ToolBudgetTracker
+
+        class Answer(_BM):
+            answer: str
+
+        call_count = [0]
+        dsml_payload = (
+            '<｜DSML｜tool_calls>\n'
+            '<｜DSML｜invoke name="search">\n'
+            '<｜DSML｜parameter name="q">more</｜DSML｜parameter>\n'
+            '</｜DSML｜invoke>\n'
+            '</｜DSML｜tool_calls>'
+        )
+
+        class MaxIterDSMLFake:
+            def bind_tools(self, tools):
+                return self
+
+            def invoke(self, messages, **kw):
+                call_count[0] += 1
+                if call_count[0] == 1:
+                    msg = AIMessage(content="")
+                    msg.tool_calls = [{"name": "search", "args": {"q": "x"}, "id": "c1"}]
+                    return msg
+                if call_count[0] == 2:
+                    return AIMessage(content=dsml_payload)
+                return AIMessage(content='{"answer": "recovered"}')
+
+            def with_structured_output(self, model, **kw):
+                return self
+
+        def search_factory(config, tool_config):
+            from langchain_core.tools import StructuredTool
+            return StructuredTool.from_function(
+                lambda q: f"found {q}", name="search", description="search"
+            )
+
+        register_tool_factory("search", search_factory)
+        configure_llm(
+            llm_factory=lambda tier: MaxIterDSMLFake(),
+            prompt_compiler=lambda t, d, **kw: [{"role": "user", "content": "test"}],
+        )
+
+        tools = [Tool(name="search", description="search")]
+        budget = ToolBudgetTracker(tools)
+
+        with capture_logs() as logs:
+            parsed, interactions = invoke_with_tools(
+                model_tier="fast",
+                prompt_template="test",
+                input_data={},
+                output_model=Answer,
+                config={"configurable": {}},
+                tools=tools,
+                budget_tracker=budget,
+                llm_config={"output_strategy": "json_mode", "max_iterations": 1},
+            )
+
+        assert parsed.answer == "recovered"
+        assert call_count[0] == 3
+        # Tool call on iteration 1 is skipped by the guard — no interaction recorded.
+        assert interactions == []
+
+        events = {e.get("event") for e in logs}
+        assert "react_max_iterations_exceeded" in events, (
+            f"expected react_max_iterations_exceeded event, got {events}"
+        )
+        assert "trailing_tool_call_markup" in events, (
+            f"expected trailing_tool_call_markup event, got {events}"
+        )
+
+
+class TestDSMLAfterTokenBudget:
+    """neograph-xkyk (axis 8): DSML after token_budget guard unbinds tools.
+
+    Flow with token_budget=10:
+      iter 1: tool_call, input_tokens=5, cumulative=5, tool runs
+      iter 2: tool_call, input_tokens=20, cumulative=25 > 10 -> guard fires
+      iter 3 (unbound): DSML content -> loop exits, parse fails
+      retry: valid JSON -> recovered
+
+    Mutation-verified: `if False:` on DSML regex makes both assertions fail.
+    """
+
+    def test_dsml_after_token_budget_recovered_via_targeted_retry(self):
+        from langchain_core.messages import AIMessage
+        from pydantic import BaseModel as _BM
+        from structlog.testing import capture_logs
+
+        from neograph import Tool, configure_llm
+        from neograph._tool_loop import invoke_with_tools
+        from neograph.factory import register_tool_factory
+        from neograph.tool import ToolBudgetTracker
+
+        class Answer(_BM):
+            answer: str
+
+        call_count = [0]
+
+        class TokenBudgetDSMLFake:
+            def bind_tools(self, tools):
+                return self
+
+            def invoke(self, messages, **kw):
+                call_count[0] += 1
+                if call_count[0] == 1:
+                    msg = AIMessage(content="")
+                    msg.tool_calls = [{"name": "search", "args": {"q": "first"}, "id": "c1"}]
+                    msg.usage_metadata = {"input_tokens": 5, "output_tokens": 10, "total_tokens": 15}
+                    return msg
+                if call_count[0] == 2:
+                    msg = AIMessage(content="")
+                    msg.tool_calls = [{"name": "search", "args": {"q": "second"}, "id": "c2"}]
+                    msg.usage_metadata = {"input_tokens": 20, "output_tokens": 10, "total_tokens": 30}
+                    return msg
+                if call_count[0] == 3:
+                    return AIMessage(content=(
+                        '<｜DSML｜tool_calls>\n'
+                        '<｜DSML｜invoke name="search">\n'
+                        '<｜DSML｜parameter name="q">blocked</｜DSML｜parameter>\n'
+                        '</｜DSML｜invoke>\n'
+                        '</｜DSML｜tool_calls>'
+                    ))
+                return AIMessage(content='{"answer": "recovered-after-token-budget"}')
+
+            def with_structured_output(self, model, **kw):
+                return self
+
+        def search_factory(config, tool_config):
+            from langchain_core.tools import StructuredTool
+            return StructuredTool.from_function(
+                lambda q: f"found {q}", name="search", description="search"
+            )
+
+        register_tool_factory("search", search_factory)
+        configure_llm(
+            llm_factory=lambda tier: TokenBudgetDSMLFake(),
+            prompt_compiler=lambda t, d, **kw: [{"role": "user", "content": "test"}],
+        )
+
+        tools = [Tool(name="search", description="search")]
+        budget = ToolBudgetTracker(tools)
+
+        with capture_logs() as cap:
+            parsed, interactions = invoke_with_tools(
+                model_tier="fast",
+                prompt_template="test",
+                input_data={},
+                output_model=Answer,
+                config={"configurable": {}},
+                tools=tools,
+                budget_tracker=budget,
+                llm_config={
+                    "output_strategy": "json_mode",
+                    "token_budget": 10,
+                    "max_iterations": 50,
+                },
+            )
+
+        assert parsed.answer == "recovered-after-token-budget"
+        assert len(interactions) == 1
+        assert call_count[0] == 4
+        events = [e.get("event", "") for e in cap]
+        assert any("react_token_budget_exceeded" in e for e in events), (
+            f"expected token_budget guard event; events: {events}"
+        )
+        assert any("trailing_tool_call_markup" in e for e in events), (
+            f"expected DSML retry event; events: {events}"
+        )
+        # Token-budget path must NOT fire max_iterations event.
+        assert not any("react_max_iterations_exceeded" in e for e in events), (
+            f"max_iterations should not fire; events: {events}"
+        )
+
+
+class TestMultipleIndependentDSMLRecoveries:
+    """neograph-d5nm (axis 9): two sequential invoke_with_tools calls each recover independently.
+
+    Discriminates state leakage by using DIFFERENT tool names and DIFFERENT
+    answers across the two calls. A shared mutable (interactions list, retry
+    counter, budget tracker) would surface as wrong call 2 result, duplicated
+    interactions, or shared-object identity.
+
+    Mutation-verified: replacing `tool_interactions: list = []` with a
+    module-level `_LEAKY_INTERACTIONS` shared across calls makes this test
+    fail on `len(interactions2) == 1` (it becomes 2).
+    """
+
+    def test_two_sequential_calls_recover_independently(self):
+        from langchain_core.messages import AIMessage
+        from langchain_core.tools import StructuredTool
+        from pydantic import BaseModel as _BM
+
+        from neograph import Tool, configure_llm
+        from neograph._tool_loop import invoke_with_tools
+        from neograph.factory import register_tool_factory
+        from neograph.tool import ToolBudgetTracker
+
+        class Answer(_BM):
+            answer: str
+
+        dsml_template = (
+            '<｜DSML｜tool_calls>\n'
+            '<｜DSML｜invoke name="{tool}">\n'
+            '<｜DSML｜parameter name="q">more</｜DSML｜parameter>\n'
+            '</｜DSML｜invoke>\n'
+            '</｜DSML｜tool_calls>'
+        )
+
+        class DSMLThenJsonFake:
+            def __init__(self, tool_name: str, answer: str):
+                self._tool_name = tool_name
+                self._answer = answer
+                self.calls = 0
+
+            def bind_tools(self, tools):
+                return self
+
+            def with_structured_output(self, model, **kw):
+                return self
+
+            def invoke(self, messages, **kw):
+                self.calls += 1
+                if self.calls == 1:
+                    msg = AIMessage(content="")
+                    msg.tool_calls = [{"name": self._tool_name, "args": {"q": "x"}, "id": f"c-{self._tool_name}"}]
+                    return msg
+                if self.calls == 2:
+                    return AIMessage(content=dsml_template.format(tool=self._tool_name))
+                return AIMessage(content=f'{{"answer": "{self._answer}"}}')
+
+        def make_tool_factory(tool_name):
+            def factory(config, tool_config):
+                return StructuredTool.from_function(
+                    lambda q="": f"{tool_name}-result",
+                    name=tool_name,
+                    description=tool_name,
+                )
+            return factory
+
+        # --- Call 1: tool "search", answer "first-recovered" ---
+        fake1 = DSMLThenJsonFake("search", "first-recovered")
+        register_tool_factory("search", make_tool_factory("search"))
+        configure_llm(
+            llm_factory=lambda tier: fake1,
+            prompt_compiler=lambda t, d, **kw: [{"role": "user", "content": "test-1"}],
+        )
+
+        tools1 = [Tool(name="search", description="search", budget=1)]
+        budget1 = ToolBudgetTracker(tools1)
+
+        parsed1, interactions1 = invoke_with_tools(
+            model_tier="fast",
+            prompt_template="p1",
+            input_data={},
+            output_model=Answer,
+            config={"configurable": {}},
+            tools=tools1,
+            budget_tracker=budget1,
+            llm_config={"output_strategy": "json_mode"},
+        )
+
+        assert parsed1.answer == "first-recovered"
+        assert len(interactions1) == 1
+        assert interactions1[0].tool_name == "search"
+        assert fake1.calls == 3
+
+        # --- Call 2: tool "lookup", answer "second-recovered" ---
+        fake2 = DSMLThenJsonFake("lookup", "second-recovered")
+        register_tool_factory("lookup", make_tool_factory("lookup"))
+        configure_llm(
+            llm_factory=lambda tier: fake2,
+            prompt_compiler=lambda t, d, **kw: [{"role": "user", "content": "test-2"}],
+        )
+
+        tools2 = [Tool(name="lookup", description="lookup", budget=1)]
+        budget2 = ToolBudgetTracker(tools2)
+
+        parsed2, interactions2 = invoke_with_tools(
+            model_tier="fast",
+            prompt_template="p2",
+            input_data={},
+            output_model=Answer,
+            config={"configurable": {}},
+            tools=tools2,
+            budget_tracker=budget2,
+            llm_config={"output_strategy": "json_mode"},
+        )
+
+        assert parsed2.answer == "second-recovered"
+        assert len(interactions2) == 1
+        assert interactions2[0].tool_name == "lookup"
+        assert fake2.calls == 3
+
+        # Cross-call independence: distinct identity + distinct contents.
+        assert interactions1 is not interactions2
+        assert interactions1[0].tool_name != interactions2[0].tool_name
+        assert fake1.calls == 3  # first fake untouched after second call
+        assert set(budget1.exhausted_tools()) == {"search"}
+        assert set(budget2.exhausted_tools()) == {"lookup"}
+        assert "lookup" not in set(budget1.exhausted_tools())
+        assert "search" not in set(budget2.exhausted_tools())
