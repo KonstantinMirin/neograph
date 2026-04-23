@@ -173,6 +173,75 @@ class ReActFake:
         return clone
 
 
+class StringArgsFake:
+    """Fake LLM that simulates DeepSeek R1 emitting tool_calls.args as JSON strings.
+
+    First invoke raises ValidationError (simulating the provider bug).
+    Second invoke succeeds with proper dict args (simulating retry success).
+    Used to test _safe_tool_invoke resilience.
+    """
+
+    def __init__(
+        self,
+        tool_calls: list[list[dict]],
+        final: Callable[[type[BaseModel]], BaseModel] | None = None,
+    ):
+        self._tool_calls = tool_calls
+        self._final = final
+        self._call_idx = 0
+        self._model: type[BaseModel] | None = None
+        self._in_structured_mode = False
+        self._first_call = True
+
+    def bind_tools(self, tools: list) -> StringArgsFake:
+        return self
+
+    def invoke(self, messages: list, **kwargs) -> Any:
+        if self._in_structured_mode:
+            assert self._final is not None
+            return self._final(self._model)
+
+        if self._call_idx >= len(self._tool_calls):
+            return AIMessage(content="done")
+
+        calls = self._tool_calls[self._call_idx]
+
+        if not calls:
+            self._call_idx += 1
+            return AIMessage(content="done")
+
+        # First call: raise ValidationError simulating string args
+        if self._first_call:
+            self._first_call = False
+            from pydantic import ValidationError
+
+            # Construct with string args — this triggers Pydantic ValidationError
+            try:
+                AIMessage(
+                    content="",
+                    tool_calls=[{**tc, "args": str(tc["args"]) if isinstance(tc["args"], dict) else tc["args"]}
+                                for tc in calls],
+                )
+            except ValidationError:
+                raise
+            # Shouldn't reach here, but if AIMessage accepts strings, fall through
+            # to normal path
+
+        # Retry: return valid response with dict args
+        self._call_idx += 1
+        msg = AIMessage(content="")
+        msg.tool_calls = calls
+        return msg
+
+    def with_structured_output(self, model: type[BaseModel], **kwargs) -> StringArgsFake:
+        clone = StringArgsFake(self._tool_calls, self._final)
+        clone._call_idx = self._call_idx
+        clone._first_call = self._first_call
+        clone._model = model
+        clone._in_structured_mode = True
+        return clone
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # TextFake — json_mode / text output strategies
 # ═══════════════════════════════════════════════════════════════════════════

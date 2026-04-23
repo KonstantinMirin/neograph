@@ -1148,6 +1148,67 @@ class TestTruncatedArraySilentEmpty:
         )
 
 
+class TestToolCallArgsCoercion:
+    """neograph-d8y5: tool_calls.args as JSON string must not crash pipeline."""
+
+    def test_string_args_retried_and_recovered(self):
+        """ValidationError from string tool_calls.args triggers retry, not crash."""
+        from neograph._llm import invoke_with_tools
+        from neograph import Tool, configure_llm
+        from neograph.factory import register_tool_factory
+        from tests.fakes import StringArgsFake
+
+        tool_invoked = []
+
+        def search_factory(config, tool_config):
+            from langchain_core.tools import StructuredTool
+            def search_fn(q: str) -> str:
+                tool_invoked.append(q)
+                return f"result for {q}"
+            return StructuredTool.from_function(search_fn, name="search", description="search")
+
+        register_tool_factory("search", search_factory)
+
+        fake = StringArgsFake(
+            tool_calls=[
+                [{"name": "search", "args": {"q": "test query"}, "id": "call_1"}],
+                [],  # final — no more tool calls
+            ],
+            final=lambda m: m(answer="done"),
+        )
+
+        configure_llm(
+            llm_factory=lambda tier: fake,
+            prompt_compiler=lambda t, d, **kw: [{"role": "user", "content": "test"}],
+        )
+
+        from pydantic import BaseModel as _BM
+
+        class Answer(_BM):
+            answer: str
+
+        from neograph.tool import ToolBudgetTracker
+
+        tools = [Tool(name="search", description="search")]
+        budget = ToolBudgetTracker(tools)
+
+        # Should NOT raise — _safe_tool_invoke catches ValidationError and retries
+        result = invoke_with_tools(
+            model_tier="fast",
+            prompt_template="test prompt",
+            input_data={},
+            output_model=Answer,
+            config={"configurable": {}},
+            tools=tools,
+            budget_tracker=budget,
+        )
+
+        parsed, interactions = result
+        assert parsed.answer == "done"
+        # The tool should have been invoked after the retry succeeded
+        assert len(tool_invoked) > 0
+
+
 class TestCallStructuredUnknownStrategy:
     """Lines 377-378: unknown output_strategy raises ExecutionError."""
 
