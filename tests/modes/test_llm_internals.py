@@ -3271,3 +3271,483 @@ class TestMultipleIndependentDSMLRecoveries:
         assert set(budget2.exhausted_tools()) == {"lookup"}
         assert "lookup" not in set(budget1.exhausted_tools())
         assert "search" not in set(budget2.exhausted_tools())
+
+
+# =============================================================================
+# Round 3 — budget_exhausted_message + guard-break + tool-exception + tool_calls shape
+# Filed as neograph-h5d7, -z429, -4skw, -3ne3, -9lfh. All mutation-verified.
+# =============================================================================
+
+
+class TestBudgetExhaustedMessageFallback:
+    """neograph-h5d7 (axis 10): budget_exhausted_message behavior for missing/empty/None.
+
+    Documents current `dict.get("budget_exhausted_message", default)` semantics:
+      - missing key → default used (good)
+      - empty string → "" appended verbatim (no fallback)
+      - None → None appended verbatim (no fallback)
+
+    The empty/None cases are GAPS: production should arguably fall back to the
+    default when the value is falsy, but currently does not. These tests pin the
+    actual behavior so any future change trips them.
+
+    Mutation-verified: replacing the default f-string with "MUTATION: default
+    removed" makes the missing-key test fail.
+    """
+
+    @staticmethod
+    def _extract_retry_content(captured):
+        retry_msg = captured[-1]
+        if isinstance(retry_msg, dict):
+            return retry_msg.get("content")
+        if hasattr(retry_msg, "content"):
+            return retry_msg.content
+        return str(retry_msg)
+
+    @staticmethod
+    def _invoke_with_llm_config(llm_config_extras):
+        from langchain_core.messages import AIMessage
+        from pydantic import BaseModel as _BM
+
+        from neograph import Tool, configure_llm
+        from neograph._tool_loop import invoke_with_tools
+        from neograph.factory import register_tool_factory
+        from neograph.tool import ToolBudgetTracker
+
+        captured = []
+        call_count = [0]
+
+        class CaptureFake:
+            def bind_tools(self, tools):
+                return self
+
+            def invoke(self, messages, **kw):
+                call_count[0] += 1
+                captured.append(messages[-1] if messages else None)
+                if call_count[0] == 1:
+                    return AIMessage(content='<｜DSML｜invoke name="x"/>')
+                return AIMessage(content='{"answer": "ok"}')
+
+            def with_structured_output(self, model, **kw):
+                return self
+
+        register_tool_factory("x", lambda c, tc: __import__(
+            "langchain_core.tools", fromlist=["StructuredTool"]
+        ).StructuredTool.from_function(lambda q="": "ok", name="x", description="x"))
+
+        configure_llm(
+            llm_factory=lambda tier: CaptureFake(),
+            prompt_compiler=lambda t, d, **kw: [{"role": "user", "content": "test"}],
+        )
+
+        class Answer(_BM):
+            answer: str
+
+        tools = [Tool(name="x", description="x")]
+        budget = ToolBudgetTracker(tools)
+        llm_config = {"output_strategy": "json_mode"}
+        llm_config.update(llm_config_extras)
+
+        parsed, _ = invoke_with_tools(
+            model_tier="fast",
+            prompt_template="test",
+            input_data={},
+            output_model=Answer,
+            config={"configurable": {}},
+            tools=tools,
+            budget_tracker=budget,
+            llm_config=llm_config,
+        )
+        return parsed, captured
+
+    def test_missing_key_uses_default_message(self):
+        parsed, captured = self._invoke_with_llm_config({})
+        assert parsed.answer == "ok"
+        content = self._extract_retry_content(captured)
+        assert content is not None
+        assert "tool-call markup" in content
+        assert "All tool budgets are exhausted" in content
+        assert "Answer" in content
+
+    def test_empty_string_is_appended_verbatim_no_fallback(self):
+        parsed, captured = self._invoke_with_llm_config({"budget_exhausted_message": ""})
+        assert parsed.answer == "ok"
+        assert self._extract_retry_content(captured) == ""
+
+    def test_none_is_appended_verbatim_no_fallback(self):
+        parsed, captured = self._invoke_with_llm_config({"budget_exhausted_message": None})
+        assert parsed.answer == "ok"
+        assert self._extract_retry_content(captured) is None
+
+
+class TestDefaultBudgetExhaustedMessageRendersModelName:
+    """neograph-z429 (axis 11): default budget_exhausted_message resolves output_model.__name__.
+
+    The default is an f-string. Verify the retry message includes the actual
+    model class name EXACTLY once, and that the full default phrase is present.
+
+    Mutation-verified: removing the default f-string makes this test fail.
+    """
+
+    def test_default_message_includes_output_model_name(self):
+        from langchain_core.messages import AIMessage
+        from pydantic import BaseModel as _BM
+
+        from neograph import Tool, configure_llm
+        from neograph._tool_loop import invoke_with_tools
+        from neograph.factory import register_tool_factory
+        from neograph.tool import ToolBudgetTracker
+
+        captured_messages = []
+        call_count = [0]
+
+        class CaptureFake:
+            def bind_tools(self, tools):
+                return self
+
+            def invoke(self, messages, **kw):
+                call_count[0] += 1
+                captured_messages.append(list(messages))
+                if call_count[0] == 1:
+                    return AIMessage(content='<｜DSML｜invoke name="x"/>')
+                return AIMessage(content='{"answer": "ok"}')
+
+            def with_structured_output(self, model, **kw):
+                return self
+
+        register_tool_factory("x", lambda c, tc: __import__(
+            "langchain_core.tools", fromlist=["StructuredTool"]
+        ).StructuredTool.from_function(lambda q="": "ok", name="x", description="x"))
+        configure_llm(
+            llm_factory=lambda tier: CaptureFake(),
+            prompt_compiler=lambda t, d, **kw: [{"role": "user", "content": "test"}],
+        )
+
+        class ExplorationResult(_BM):
+            answer: str
+
+        tools = [Tool(name="x", description="x")]
+        budget = ToolBudgetTracker(tools)
+
+        parsed, _ = invoke_with_tools(
+            model_tier="fast",
+            prompt_template="test",
+            input_data={},
+            output_model=ExplorationResult,
+            config={"configurable": {}},
+            tools=tools,
+            budget_tracker=budget,
+            llm_config={"output_strategy": "json_mode"},
+        )
+
+        assert parsed.answer == "ok"
+        retry_msg = captured_messages[-1][-1]
+        content = retry_msg["content"] if isinstance(retry_msg, dict) else retry_msg.content
+        assert content.count("ExplorationResult") == 1, (
+            f"expected 'ExplorationResult' exactly once, got {content.count('ExplorationResult')}"
+        )
+        assert "Produce the final response as a ExplorationResult object" in content
+
+
+class TestSafetyBreakOnGuardWithRogueToolCalls:
+    """neograph-4skw (axis 8): safety break fires when guard set but LLM still emits tool_calls.
+
+    Rogue LLM scenario: after max_iterations=1 sets _guard_fired on iter 1, the
+    LLM emits tool_calls again on iter 2. The safety break at _tool_loop.py:233
+    must fire before any rogue dispatch, log react_guard_forced_break, and exit
+    the loop so the parse phase can run against messages[-1].
+
+    Mutation-verified: removing the log.warning (keeping break) makes the test
+    fail on the event-count assertion. Removing the break entirely creates an
+    infinite loop (which itself confirms the safety break's purpose).
+    """
+
+    def test_safety_break_fires_when_guard_set_but_rogue_llm_emits_tool_calls(self):
+        from langchain_core.messages import AIMessage
+        from langchain_core.tools import StructuredTool
+        from pydantic import BaseModel as _BM
+        from structlog.testing import capture_logs
+
+        from neograph import Tool, configure_llm
+        from neograph._tool_loop import invoke_with_tools
+        from neograph.factory import register_tool_factory
+        from neograph.tool import ToolBudgetTracker
+
+        class Result(_BM):
+            answer: str
+
+        class RogueFake:
+            def __init__(self):
+                self.calls = 0
+
+            def bind_tools(self, tools):
+                return self
+
+            def invoke(self, messages, **kw):
+                self.calls += 1
+                if self.calls == 1:
+                    msg = AIMessage(content="")
+                    msg.tool_calls = [{"name": "search", "args": {"q": "x"}, "id": "c1"}]
+                    return msg
+                msg = AIMessage(content='{"answer": "breakthrough"}')
+                msg.tool_calls = [{"name": "search", "args": {"q": "again"}, "id": "c2"}]
+                return msg
+
+            def with_structured_output(self, model, **kw):
+                return self
+
+        fake = RogueFake()
+        dispatched = []
+
+        def _search_impl(q: str = "") -> str:
+            dispatched.append(q)
+            return f"result for {q}"
+
+        register_tool_factory(
+            "search",
+            lambda c, tc: StructuredTool.from_function(
+                _search_impl, name="search", description="search tool"
+            ),
+        )
+        configure_llm(
+            llm_factory=lambda tier: fake,
+            prompt_compiler=lambda t, d, **kw: [{"role": "user", "content": "test"}],
+        )
+
+        tools = [Tool(name="search", description="search tool")]
+        budget = ToolBudgetTracker(tools)
+
+        with capture_logs() as cap_logs:
+            parsed, interactions = invoke_with_tools(
+                model_tier="fast",
+                prompt_template="test",
+                input_data={},
+                output_model=Result,
+                config={"configurable": {}},
+                tools=tools,
+                budget_tracker=budget,
+                llm_config={"max_iterations": 1, "output_strategy": "json_mode"},
+            )
+
+        assert parsed.answer == "breakthrough"
+        assert fake.calls == 2
+
+        forced_break_events = [
+            e for e in cap_logs if e.get("event") == "react_guard_forced_break"
+        ]
+        assert len(forced_break_events) == 1
+        evt = forced_break_events[0]
+        assert evt["log_level"] == "warning"
+        assert "loops" in evt and "tool_calls" in evt
+
+        # Safety break must prevent rogue dispatch on iteration 2.
+        assert interactions == []
+        assert dispatched == []
+
+
+class TestToolExceptionPropagates:
+    """neograph-3ne3 (axis 12): tool_fn.invoke exceptions propagate uncaught.
+
+    Production at _tool_loop.py:278 has no try/except around tool_fn.invoke.
+    LangChain's StructuredTool by default re-raises the tool function's
+    exception (handle_tool_error=False). The result: any tool-side crash
+    propagates out of invoke_with_tools, taking down the ReAct loop with no
+    chance for the LLM to observe a ToolMessage error and recover.
+
+    This is a documented GAP. The test pins current behavior; if production
+    gains try/except + ToolMessage injection, update this test to assert the
+    error-message path.
+
+    Mutation-verified: wrapping tool_fn.invoke in try/except makes this test
+    fail with "DID NOT RAISE".
+    """
+
+    def test_tool_exception_propagates_out_of_invoke_with_tools(self):
+        import pytest as _pytest
+        from langchain_core.messages import AIMessage
+        from langchain_core.tools import StructuredTool
+        from pydantic import BaseModel as _BM
+
+        from neograph import Tool, configure_llm
+        from neograph._tool_loop import invoke_with_tools
+        from neograph.factory import register_tool_factory
+        from neograph.tool import ToolBudgetTracker
+
+        class Answer(_BM):
+            answer: str
+
+        class ToolCallingFake:
+            def __init__(self):
+                self._calls = 0
+
+            def bind_tools(self, tools):
+                return self
+
+            def invoke(self, messages, **kw):
+                self._calls += 1
+                if self._calls == 1:
+                    msg = AIMessage(content="")
+                    msg.tool_calls = [{"name": "boom", "args": {"q": "hi"}, "id": "1"}]
+                    return msg
+                return AIMessage(content='{"answer": "unreachable"}')
+
+            def with_structured_output(self, model, **kw):
+                return self
+
+        def _boom(q: str = "") -> str:
+            raise RuntimeError("tool-3ne3-kaboom")
+
+        register_tool_factory(
+            "boom",
+            lambda config, tool_config: StructuredTool.from_function(
+                _boom, name="boom", description="raises"
+            ),
+        )
+        configure_llm(
+            llm_factory=lambda tier: ToolCallingFake(),
+            prompt_compiler=lambda t, d, **kw: [{"role": "user", "content": "go"}],
+        )
+
+        tools = [Tool(name="boom", description="raises")]
+        budget = ToolBudgetTracker(tools)
+
+        with _pytest.raises(RuntimeError, match="tool-3ne3-kaboom"):
+            invoke_with_tools(
+                model_tier="fast",
+                prompt_template="test",
+                input_data={},
+                output_model=Answer,
+                config={"configurable": {}},
+                tools=tools,
+                budget_tracker=budget,
+                llm_config={"output_strategy": "json_mode"},
+            )
+
+
+class TestToolCallsShapeEdgeCases:
+    """neograph-9lfh (axis 14): response.tool_calls == [] vs attribute absent.
+
+    - Empty list: loop exit at `if not response.tool_calls: break` fires correctly.
+    - Absent attribute: direct attribute access raises AttributeError (no getattr
+      guard). AIMessage always has tool_calls (Pydantic default []), so absent
+      only reaches production for non-AIMessage response objects.
+
+    Mutation-verified: `if False:` on the exit check makes the empty-list test
+    fail via a bounded loop-runaway assertion (fake raises on call #2).
+    """
+
+    class _MutationProofBound(Exception):
+        pass
+
+    def test_empty_list_exits_loop_on_first_iteration(self):
+        from langchain_core.messages import AIMessage
+        from langchain_core.tools import StructuredTool
+        from pydantic import BaseModel as _BM
+
+        from neograph import Tool, configure_llm
+        from neograph._tool_loop import invoke_with_tools
+        from neograph.factory import register_tool_factory
+        from neograph.tool import ToolBudgetTracker
+
+        class Answer(_BM):
+            answer: str
+
+        call_count = [0]
+        Bound = self._MutationProofBound
+
+        class EmptyListFake:
+            def bind_tools(self, tools):
+                return self
+
+            def invoke(self, messages, **kw):
+                call_count[0] += 1
+                if call_count[0] > 1:
+                    raise Bound(f"loop did not exit on iteration 1; on call #{call_count[0]}")
+                msg = AIMessage(content='{"answer": "done"}')
+                assert msg.tool_calls == []
+                return msg
+
+            def with_structured_output(self, model, **kw):
+                return self
+
+        register_tool_factory(
+            "x",
+            lambda c, tc: StructuredTool.from_function(
+                lambda q="": "ok", name="x", description="x"
+            ),
+        )
+        configure_llm(
+            llm_factory=lambda tier: EmptyListFake(),
+            prompt_compiler=lambda t, d, **kw: [{"role": "user", "content": "test"}],
+        )
+
+        tools = [Tool(name="x", description="x")]
+        budget = ToolBudgetTracker(tools)
+
+        parsed, interactions = invoke_with_tools(
+            model_tier="fast",
+            prompt_template="test",
+            input_data={},
+            output_model=Answer,
+            config={"configurable": {}},
+            tools=tools,
+            budget_tracker=budget,
+            llm_config={"output_strategy": "json_mode"},
+        )
+
+        assert call_count[0] == 1
+        assert parsed.answer == "done"
+        assert interactions == []
+
+    def test_absent_attribute_current_behavior_raises_attribute_error(self):
+        from types import SimpleNamespace
+
+        import pytest as _pytest
+        from langchain_core.tools import StructuredTool
+        from pydantic import BaseModel as _BM
+
+        from neograph import Tool, configure_llm
+        from neograph._tool_loop import invoke_with_tools
+        from neograph.factory import register_tool_factory
+        from neograph.tool import ToolBudgetTracker
+
+        class Answer(_BM):
+            answer: str
+
+        class AbsentAttrFake:
+            def bind_tools(self, tools):
+                return self
+
+            def invoke(self, messages, **kw):
+                resp = SimpleNamespace(content='{"answer": "done"}')
+                assert not hasattr(resp, "tool_calls")
+                return resp
+
+            def with_structured_output(self, model, **kw):
+                return self
+
+        register_tool_factory(
+            "x",
+            lambda c, tc: StructuredTool.from_function(
+                lambda q="": "ok", name="x", description="x"
+            ),
+        )
+        configure_llm(
+            llm_factory=lambda tier: AbsentAttrFake(),
+            prompt_compiler=lambda t, d, **kw: [{"role": "user", "content": "test"}],
+        )
+
+        tools = [Tool(name="x", description="x")]
+        budget = ToolBudgetTracker(tools)
+
+        with _pytest.raises(AttributeError, match="tool_calls"):
+            invoke_with_tools(
+                model_tier="fast",
+                prompt_template="test",
+                input_data={},
+                output_model=Answer,
+                config={"configurable": {}},
+                tools=tools,
+                budget_tracker=budget,
+                llm_config={"output_strategy": "json_mode"},
+            )
