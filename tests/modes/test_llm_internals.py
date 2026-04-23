@@ -2387,22 +2387,135 @@ class TestDSMLAllRetriesFail:
         assert call_count[0] >= 3
 
 
-# REMOVED: TestNonDSMLParseFailureTakesGenericRetry (neograph-gxv8, axis 5)
-# Reason: mutation audit exposed two defects:
-#   1. `caplog.text` doesn't capture neograph's structlog output (structlog
-#      isn't routed through stdlib; `log.warning()` goes straight to its own
-#      renderer). The `"trailing_tool_call_markup" not in caplog.text` and
-#      `"DSML" not in caplog.text` assertions are always trivially true —
-#      widening the regex in production so plain text enters the DSML branch
-#      did NOT cause the test to fail.
-#   2. The `call_count == 3` assertion doesn't discriminate paths: with
-#      max_retries=2 the generic retry succeeds on its first inner call
-#      (call 3), and the DSML targeted retry also succeeds on call 3.
-#      Both branches produce exactly 3 LLM invocations, so this assertion
-#      can't distinguish whether the plain-text path actually bypassed the
-#      DSML-specific branch.
-# neograph-gxv8 reopened for re-execution using structlog.testing.capture_logs()
-# (or a stdlib-routed structlog fixture) and a discriminating call-count setup.
+class TestNonDSMLParseFailureTakesGenericRetry:
+    """neograph-gxv8 (axis 5): plain non-DSML parse failure → generic retry path.
+
+    When the final response is unparseable JSON that contains NO DSML/XML/
+    tool-call markup, the DSML-specific targeted retry branch must NOT fire.
+    Control must flow to `_invoke_json_with_retry`.
+
+    Discriminators used:
+      * `structlog.testing.capture_logs()` captures structlog events directly
+        (stdlib caplog does not — `log = structlog.get_logger()` is not routed
+        through stdlib logging). Verifies no `trailing_tool_call_markup` event.
+      * The captured messages from each `invoke` call are inspected for the
+        DSML-branch-only phrase "contained tool-call markup" (from the default
+        `budget_exhausted_message`). Absence proves the DSML-branch user-message
+        append at `_tool_loop.py:362` never ran.
+    """
+
+    def test_plain_json_parse_failure_bypasses_dsml_branch(self):
+        from structlog.testing import capture_logs
+
+        from langchain_core.messages import AIMessage
+        from pydantic import BaseModel as _BM
+
+        from neograph import Tool, configure_llm
+        from neograph._tool_loop import invoke_with_tools
+        from neograph.factory import register_tool_factory
+        from neograph.tool import ToolBudgetTracker
+
+        call_count = [0]
+        captured_messages: list[list[str]] = []
+
+        # Plain, unparseable text with NO DSML/XML markers — must bypass the
+        # `<...function_call|invoke|DSML...>` regex in the targeted retry branch.
+        garbled_plain = "this is not json and has no tags at all"
+
+        class GarbledPlainFake:
+            def bind_tools(self, tools):
+                return self
+
+            def invoke(self, messages, **kw):
+                call_count[0] += 1
+                batch: list[str] = []
+                for m in messages:
+                    if isinstance(m, dict):
+                        c = m.get("content", "")
+                    else:
+                        c = getattr(m, "content", str(m))
+                    batch.append(c if isinstance(c, str) else str(c))
+                captured_messages.append(batch)
+
+                if call_count[0] == 1:
+                    msg = AIMessage(content="")
+                    msg.tool_calls = [{"name": "search", "args": {"q": "test"}, "id": "c1"}]
+                    return msg
+                # Calls 2 and 3: garbled plain text. Forces both:
+                #   - the outer dispatch parse (call 2 → throws)
+                #   - the first inner invoke inside _invoke_json_with_retry
+                #     (call 3 → throws → triggers the retry branch with
+                #     _build_retry_msg, which we assert against)
+                if call_count[0] in (2, 3):
+                    return AIMessage(content=garbled_plain)
+                return AIMessage(content='{"answer": "recovered-via-generic"}')
+
+            def with_structured_output(self, model, **kw):
+                return self
+
+        def search_factory(config, tool_config):
+            from langchain_core.tools import StructuredTool
+            return StructuredTool.from_function(
+                lambda q: f"found {q}", name="search", description="search"
+            )
+
+        register_tool_factory("search", search_factory)
+        configure_llm(
+            llm_factory=lambda tier: GarbledPlainFake(),
+            prompt_compiler=lambda t, d, **kw: [{"role": "user", "content": "test"}],
+        )
+
+        class Answer(_BM):
+            answer: str
+
+        tools = [Tool(name="search", description="search")]
+        budget = ToolBudgetTracker(tools)
+
+        with capture_logs() as cap:
+            parsed, interactions = invoke_with_tools(
+                model_tier="fast",
+                prompt_template="test",
+                input_data={},
+                output_model=Answer,
+                config={"configurable": {}},
+                tools=tools,
+                budget_tracker=budget,
+                llm_config={"output_strategy": "json_mode", "max_retries": 2},
+            )
+
+        # Sanity: recovery through the generic path succeeded.
+        assert parsed.answer == "recovered-via-generic"
+        assert len(interactions) == 1
+
+        # Discriminator 1: structlog event emitted only by the DSML branch
+        # (see _tool_loop.py:351) must not be present.
+        events = [e.get("event") for e in cap]
+        assert "trailing_tool_call_markup" not in events, (
+            f"DSML branch fired on plain-text parse failure; events={events}"
+        )
+
+        # Discriminator 2: the DSML branch's budget_exhausted_message
+        # (_tool_loop.py:354-360) contains "contained tool-call markup".
+        # If the DSML branch ran, that phrase would appear in the messages
+        # list passed to the targeted retry `llm.invoke` call.
+        all_content = "\n".join(c for batch in captured_messages for c in batch)
+        assert "contained tool-call markup" not in all_content, (
+            "DSML targeted-retry user message appeared in invoke messages; "
+            "plain-text parse failure incorrectly routed through DSML branch"
+        )
+
+        # Discriminator 3: the generic retry path appends a validation-failure
+        # user message (_build_retry_msg via _invoke_json_with_retry). Its
+        # opening phrase must appear in the messages of the final invoke,
+        # proving the generic path actually ran.
+        assert any(
+            "could not be parsed as valid JSON" in c or "failed validation" in c
+            for batch in captured_messages
+            for c in batch
+        ), (
+            "Generic _invoke_json_with_retry user message not found; "
+            "neither DSML nor generic retry fired on parse failure"
+        )
 
 
 class TestE2EDSMLRecoveryViaAgentMode:
@@ -2594,3 +2707,66 @@ class TestCoercingToolWrapperGenerateRaises:
 # the wrapper's coercion (e.g. a raw_msg.tool_calls that still contains a
 # string-args entry after construction, or direct assertions on LangChain's
 # routing contract rather than the wrapper's behavior).
+
+
+class TestCoercingToolWrapperMixedDictAndStringArgs:
+    """neograph-2od5 (axis 10): wrapper's own coercion loop converts string
+    tool_calls.args to dicts and maps unparseable strings to {}.
+
+    Bypasses LangChain's AIMessage constructor (which would run
+    ``default_tool_parser`` and mutate args before our loop sees them) by
+    returning a ``SimpleNamespace`` with a raw ``.tool_calls`` list from
+    ``_generate()``. This forces the wrapper's loop at
+    ``_tool_loop.py:121-127`` to perform the coercion itself.
+    """
+
+    def test_mixed_dict_and_string_args_are_all_coerced_to_dicts(self):
+        from types import SimpleNamespace
+
+        from pydantic import ValidationError
+
+        from neograph._tool_loop import _CoercingToolWrapper
+
+        class MixedArgsFake:
+            def invoke(self, messages, **kw):
+                raise ValidationError.from_exception_data(
+                    title="AIMessage",
+                    line_errors=[{
+                        "type": "dict_type",
+                        "loc": ("tool_calls", 1, "args"),
+                        "msg": "Input should be a valid dictionary",
+                        "input": '{"query": "second-json"}',
+                    }],
+                )
+
+            def _generate(self, messages, *, run_manager=None, **kw):
+                fake_msg = SimpleNamespace(
+                    tool_calls=[
+                        {"name": "search", "args": {"query": "first"}, "id": "c1"},
+                        {"name": "search", "args": '{"query": "second-json"}', "id": "c2"},
+                        {"name": "search", "args": "unparseable", "id": "c3"},
+                        {"name": "search", "args": {"query": "fourth"}, "id": "c4"},
+                    ]
+                )
+                return SimpleNamespace(
+                    generations=[SimpleNamespace(message=fake_msg)]
+                )
+
+        wrapper = _CoercingToolWrapper(MixedArgsFake())
+        response = wrapper.invoke([])
+
+        assert hasattr(response, "tool_calls")
+        tcs = response.tool_calls
+        assert len(tcs) == 4
+
+        assert tcs[0]["args"] == {"query": "first"}
+        assert isinstance(tcs[0]["args"], dict)
+
+        assert tcs[1]["args"] == {"query": "second-json"}
+        assert isinstance(tcs[1]["args"], dict)
+
+        assert tcs[2]["args"] == {}
+        assert isinstance(tcs[2]["args"], dict)
+
+        assert tcs[3]["args"] == {"query": "fourth"}
+        assert isinstance(tcs[3]["args"], dict)
