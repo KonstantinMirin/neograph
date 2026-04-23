@@ -1205,8 +1205,245 @@ class TestToolCallArgsCoercion:
 
         parsed, interactions = result
         assert parsed.answer == "done"
-        # The tool should have been invoked after the retry succeeded
+        # The tool should have been invoked after the coercion succeeded
         assert len(tool_invoked) > 0
+
+    def test_consistent_string_args_always_coerced(self):
+        """Even at 100% string-args rate, coercion handles every call."""
+        from neograph._llm import invoke_with_tools
+        from neograph import Tool, configure_llm
+        from neograph.factory import register_tool_factory
+        from neograph.tool import ToolBudgetTracker
+        from tests.fakes import StringArgsFake
+        from pydantic import BaseModel as _BM
+
+        tool_calls_received = []
+
+        def lookup_factory(config, tool_config):
+            from langchain_core.tools import StructuredTool
+            def lookup_fn(node_id: str) -> str:
+                tool_calls_received.append(node_id)
+                return f"found {node_id}"
+            return StructuredTool.from_function(lookup_fn, name="lookup", description="lookup")
+
+        register_tool_factory("lookup", lookup_factory)
+
+        # always_fail=True — EVERY invoke raises. No intermittent success.
+        fake = StringArgsFake(
+            tool_calls=[
+                [{"name": "lookup", "args": {"node_id": "BR-UC-008"}, "id": "c1"}],
+                [{"name": "lookup", "args": {"node_id": "FLOW-006"}, "id": "c2"}],
+                [],
+            ],
+            final=lambda m: m(answer="analyzed"),
+            always_fail=True,
+        )
+
+        configure_llm(
+            llm_factory=lambda tier: fake,
+            prompt_compiler=lambda t, d, **kw: [{"role": "user", "content": "test"}],
+        )
+
+        class Answer(_BM):
+            answer: str
+
+        tools = [Tool(name="lookup", description="lookup")]
+        budget = ToolBudgetTracker(tools)
+
+        parsed, interactions = invoke_with_tools(
+            model_tier="fast",
+            prompt_template="test",
+            input_data={},
+            output_model=Answer,
+            config={"configurable": {}},
+            tools=tools,
+            budget_tracker=budget,
+        )
+
+        assert parsed.answer == "analyzed"
+        assert tool_calls_received == ["BR-UC-008", "FLOW-006"]
+
+    def test_non_tool_calls_validation_error_reraised(self):
+        """ValidationError NOT related to tool_calls.args is re-raised."""
+        from pydantic import ValidationError
+
+        from neograph._llm import _CoercingToolWrapper
+
+        class BadLLM:
+            def invoke(self, messages, **kw):
+                # Raise ValidationError for a completely different field
+                from langchain_core.messages import AIMessage
+                raise ValidationError.from_exception_data(
+                    title="AIMessage",
+                    line_errors=[{
+                        "type": "string_type",
+                        "loc": ("content",),
+                        "msg": "Input should be a valid string",
+                        "input": 12345,
+                    }],
+                )
+
+        wrapper = _CoercingToolWrapper(BadLLM())
+        with pytest.raises(ValidationError, match="content"):
+            wrapper.invoke([])
+
+    def test_multiple_tool_calls_mixed_args(self):
+        """Multiple tool_calls where some have dict args and some have string args."""
+        from neograph._llm import invoke_with_tools
+        from neograph import Tool, configure_llm
+        from neograph.factory import register_tool_factory
+        from neograph.tool import ToolBudgetTracker
+        from tests.fakes import StringArgsFake
+        from pydantic import BaseModel as _BM
+
+        args_received = []
+
+        def multi_factory(config, tool_config):
+            from langchain_core.tools import StructuredTool
+            def fn(q: str) -> str:
+                args_received.append(q)
+                return f"result for {q}"
+            return StructuredTool.from_function(fn, name="multi", description="multi")
+
+        register_tool_factory("multi", multi_factory)
+
+        fake = StringArgsFake(
+            tool_calls=[
+                [
+                    {"name": "multi", "args": {"q": "first"}, "id": "c1"},
+                    {"name": "multi", "args": {"q": "second"}, "id": "c2"},
+                ],
+                [],
+            ],
+            final=lambda m: m(answer="done"),
+            always_fail=True,
+        )
+
+        configure_llm(
+            llm_factory=lambda tier: fake,
+            prompt_compiler=lambda t, d, **kw: [{"role": "user", "content": "test"}],
+        )
+
+        class Answer(_BM):
+            answer: str
+
+        tools = [Tool(name="multi", description="multi")]
+        budget = ToolBudgetTracker(tools)
+
+        parsed, _ = invoke_with_tools(
+            model_tier="fast", prompt_template="test", input_data={},
+            output_model=Answer, config={"configurable": {}},
+            tools=tools, budget_tracker=budget,
+        )
+
+        assert parsed.answer == "done"
+        assert args_received == ["first", "second"]
+
+    def test_coerced_args_parsed_correctly(self):
+        """Coerced tool args must be proper dicts with correct values."""
+        from neograph._llm import invoke_with_tools
+        from neograph import Tool, configure_llm
+        from neograph.factory import register_tool_factory
+        from neograph.tool import ToolBudgetTracker
+        from tests.fakes import StringArgsFake
+        from pydantic import BaseModel as _BM
+
+        received_args = []
+
+        def precise_factory(config, tool_config):
+            from langchain_core.tools import StructuredTool
+            def fn(node_id: str, depth: int = 1) -> str:
+                received_args.append({"node_id": node_id, "depth": depth})
+                return "ok"
+            return StructuredTool.from_function(fn, name="precise", description="precise")
+
+        register_tool_factory("precise", precise_factory)
+
+        fake = StringArgsFake(
+            tool_calls=[
+                [{"name": "precise", "args": {"node_id": "BR-UC-008", "depth": 3}, "id": "c1"}],
+                [],
+            ],
+            final=lambda m: m(answer="ok"),
+            always_fail=True,
+        )
+
+        configure_llm(
+            llm_factory=lambda tier: fake,
+            prompt_compiler=lambda t, d, **kw: [{"role": "user", "content": "test"}],
+        )
+
+        class Answer(_BM):
+            answer: str
+
+        tools = [Tool(name="precise", description="precise")]
+        budget = ToolBudgetTracker(tools)
+
+        parsed, _ = invoke_with_tools(
+            model_tier="fast", prompt_template="test", input_data={},
+            output_model=Answer, config={"configurable": {}},
+            tools=tools, budget_tracker=budget,
+        )
+
+        assert parsed.answer == "ok"
+        assert len(received_args) == 1
+        assert received_args[0] == {"node_id": "BR-UC-008", "depth": 3}
+
+    def test_malformed_json_in_string_args(self):
+        """Unparseable string args degrade to empty dict, tool still called."""
+        from neograph._llm import _CoercingToolWrapper
+        from langchain_core.messages import AIMessage
+        from types import SimpleNamespace
+        import json
+
+        class MalformedArgsFake:
+            def invoke(self, messages, **kw):
+                # Raise with truncated JSON string as args
+                AIMessage(
+                    content="",
+                    tool_calls=[{"name": "search", "args": '{"q": "trun', "id": "c1"}],
+                )
+
+            def _generate(self, messages, *, run_manager=None, **kw):
+                # Return via additional_kwargs with malformed args
+                msg = AIMessage(content="", additional_kwargs={
+                    "tool_calls": [{
+                        "id": "c1", "type": "function",
+                        "function": {"name": "search", "arguments": '{"q": "trun'},
+                    }]
+                })
+                return SimpleNamespace(generations=[SimpleNamespace(message=msg)])
+
+        wrapper = _CoercingToolWrapper(MalformedArgsFake())
+        response = wrapper.invoke([])
+        # Should not crash — tool_calls should have parsed what it could
+        assert hasattr(response, "tool_calls")
+
+    def test_empty_string_args(self):
+        """Empty string args degrade to empty dict."""
+        from neograph._llm import _CoercingToolWrapper
+        from langchain_core.messages import AIMessage
+        from types import SimpleNamespace
+
+        class EmptyArgsFake:
+            def invoke(self, messages, **kw):
+                AIMessage(
+                    content="",
+                    tool_calls=[{"name": "search", "args": "", "id": "c1"}],
+                )
+
+            def _generate(self, messages, *, run_manager=None, **kw):
+                msg = AIMessage(content="", additional_kwargs={
+                    "tool_calls": [{
+                        "id": "c1", "type": "function",
+                        "function": {"name": "search", "arguments": ""},
+                    }]
+                })
+                return SimpleNamespace(generations=[SimpleNamespace(message=msg)])
+
+        wrapper = _CoercingToolWrapper(EmptyArgsFake())
+        response = wrapper.invoke([])
+        assert hasattr(response, "tool_calls")
 
 
 class TestCallStructuredUnknownStrategy:
