@@ -28,6 +28,7 @@ from neograph._llm_config import LlmConfig
 from neograph._registry import registry
 from neograph.describe_type import describe_value
 from neograph.errors import ConfigurationError, ExecutionError
+from neograph.renderers import Renderer
 from neograph.tool import Tool, ToolBudgetTracker, ToolInteraction
 
 log = structlog.get_logger()
@@ -38,7 +39,7 @@ log = structlog.get_logger()
 # ═══════════════════════════════════════════════════════════════════════════
 
 
-def _render_tool_result_for_llm(result: Any, renderer: Any = None) -> str:
+def _render_tool_result_for_llm(result: Any, renderer: Renderer | None = None) -> str:
     """Render a typed tool result for the LLM's ToolMessage content.
 
     When ``renderer`` is provided, it is used for Pydantic models and lists
@@ -153,7 +154,7 @@ def invoke_with_tools(
     config: RunnableConfig,
     node_name: str = "",
     llm_config: LlmConfig | dict | None = None,
-    renderer: Any = None,
+    renderer: Renderer | None = None,
     context: dict[str, Any] | None = None,
 ) -> tuple[BaseModel | None, list]:
     """ReAct tool loop with per-tool budget enforcement. Mode: agent/act.

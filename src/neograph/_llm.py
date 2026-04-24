@@ -26,6 +26,7 @@ from neograph._image import resolve_image
 from neograph._llm_config import LlmConfig
 from neograph.describe_type import describe_type, describe_value
 from neograph.errors import ConfigurationError, ExecutionError
+from neograph.renderers import Renderer
 
 log = structlog.get_logger()
 
@@ -38,7 +39,7 @@ _prompt_compiler: Callable[[str, Any], list] | None = None
 _prompt_compiler_params: set[str] | frozenset[str] = set()
 
 # Consumer-provided renderer (set via configure_llm(renderer=...))
-_global_renderer: Any = None
+_global_renderer: Renderer | None = None
 
 # Consumer-provided cost callback (set via configure_llm(cost_callback=...))
 _cost_callback: Callable | None = None
@@ -113,7 +114,7 @@ def configure_llm(
     llm_factory: Callable,
     prompt_compiler: Callable,
     *,
-    renderer: Any = None,
+    renderer: Renderer | None = None,
     cost_callback: Callable | None = None,
 ) -> None:
     """Configure NeoGraph's LLM layer.

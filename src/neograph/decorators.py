@@ -89,6 +89,7 @@ from neograph._sidecar import (  # noqa: F401 — re-exported for backward compa
 from neograph.di import DIBinding, DIKind
 from neograph.modifiers import Each, Loop, Operator, Oracle
 from neograph.node import Node
+from neograph.renderers import Renderer
 from neograph.tool import Tool
 
 
@@ -215,7 +216,7 @@ def node(
     merge_post_process: Callable | None = None,
     merge_fallback: Callable | None = None,
     interrupt_when: str | Callable | None = None,
-    renderer: Any = None,
+    renderer: Renderer | None = None,
     context: list[str] | None = None,
     skip_when: Callable | None = None,
     skip_value: Callable | None = None,

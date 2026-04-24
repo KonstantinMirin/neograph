@@ -149,7 +149,11 @@ class TestLLMSurfaceConfigPropagation:
         child = Node.scripted("rend-child", fn="noop", outputs=Alpha)
         assert child.renderer is None
 
-        sentinel = object()
+        class _ProbeRenderer:
+            def render(self, value):
+                return str(value)
+
+        sentinel = _ProbeRenderer()
         pipeline = Construct("rend-test", nodes=[child], renderer=sentinel)
 
         # Original unchanged

@@ -27,6 +27,7 @@ from pydantic import BaseModel, BeforeValidator, Field
 from neograph._construct_validation import ConstructError, _validate_node_chain
 from neograph._llm_config import LlmConfig
 from neograph.modifiers import Modifiable, ModifierSet
+from neograph.renderers import Renderer
 
 
 def _validate_node_list(v: Any) -> list[Any]:
@@ -93,7 +94,7 @@ class Construct(Modifiable, BaseModel):
     # Default renderer for all child nodes. Propagated to children that don't
     # have their own renderer set. Dispatch hierarchy:
     # model.render_for_prompt() > node.renderer > construct.renderer > global > None.
-    renderer: Any = None
+    renderer: Renderer | None = None
 
     # Modifiers applied via | operator (typed slots, not a list)
     modifier_set: ModifierSet = Field(default_factory=ModifierSet)

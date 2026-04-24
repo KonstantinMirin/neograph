@@ -29,6 +29,7 @@ from pydantic import BaseModel, Field, PlainValidator, PrivateAttr
 
 from neograph._llm_config import LlmConfig
 from neograph.errors import ConstructError
+from neograph.renderers import Renderer
 
 
 def _validate_type_spec(v: Any) -> Any:
@@ -118,7 +119,7 @@ class Node(Modifiable, BaseModel):
     # Pluggable prompt-input renderer. When set, the factory layer renders
     # input data through this renderer before prompt insertion. Dispatch
     # hierarchy: model.render_for_prompt() > node.renderer > global > None.
-    renderer: Any = None
+    renderer: Renderer | None = None
 
     # Verbatim state fields injected into the prompt alongside typed input.
     # Values are passed as-is (not BAML-rendered). Use for pre-formatted

@@ -2049,7 +2049,12 @@ class TestConstructPropagationTypeErrors:
                 return None
 
         child = FrozenChild()
-        sentinel = object()
+
+        class _ProbeRenderer:
+            def render(self, v):
+                return str(v)
+
+        sentinel = _ProbeRenderer()
         c = Construct("test", nodes=[child], renderer=sentinel)
         # model_copy produces a new frozen instance with the renderer
         assert c.nodes[0].renderer is sentinel
@@ -2059,7 +2064,12 @@ class TestConstructPropagationTypeErrors:
         from neograph import Construct, Node
 
         a = Node.scripted("a", fn="f", outputs=RawText)
-        sentinel = object()
+
+        class _ProbeRenderer:
+            def render(self, v):
+                return str(v)
+
+        sentinel = _ProbeRenderer()
         c = Construct("test", nodes=[a], renderer=sentinel)
         assert c.nodes[0].renderer is sentinel
 
@@ -2206,15 +2216,17 @@ class TestConstructLlmConfigImmutability:
 
         assert node.renderer is None
 
+        from neograph import XmlRenderer
+        parent_renderer = XmlRenderer()
         pipeline = Construct(
             name="bchn-renderer",
             nodes=[node],
-            renderer="xml",
+            renderer=parent_renderer,
         )
 
         # The node inside construct should have the renderer
         inner_node = pipeline.nodes[0]
-        assert inner_node.renderer == "xml", (
+        assert inner_node.renderer is parent_renderer, (
             "Construct child must inherit parent renderer"
         )
 

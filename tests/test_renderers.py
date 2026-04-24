@@ -2198,3 +2198,103 @@ class TestToolInputRenderingParity:
         tool_body = tool_result.replace("Tool result:\n", "")
         assert tool_body == input_result or expected_baml == input_result
 
+
+# ═══════════════════════════════════════════════════════════════════════════
+# TEST: neograph-l9qb -- Renderer Protocol typed on Node/Construct IR
+# ═══════════════════════════════════════════════════════════════════════════
+class TestRendererAsIRType:
+    """neograph-l9qb: Node.renderer and Construct.renderer are typed
+    ``Renderer | None`` (was ``Any``).
+
+    The Renderer Protocol already exists at renderers.py:67; this class
+    pins that the IR field type uses it, and that non-conforming values
+    raise at construction instead of surfacing at first use.
+    """
+
+    def test_non_renderer_at_node_raises_validation_error(self):
+        """Node(renderer='not-a-renderer') raises: strings have no .render method."""
+        import pytest
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError):
+            Node(
+                "probe",
+                mode="think",
+                inputs=RawText,
+                outputs=Claims,
+                model="fast",
+                prompt="p",
+                renderer="xml",  # string is not a Renderer
+            )
+
+    def test_xml_renderer_accepted_at_node_construction(self):
+        """Node(renderer=XmlRenderer()) succeeds and preserves the instance."""
+        r = XmlRenderer()
+        n = Node(
+            "probe",
+            mode="think",
+            inputs=RawText,
+            outputs=Claims,
+            model="fast",
+            prompt="p",
+            renderer=r,
+        )
+        assert n.renderer is r
+
+    def test_node_renderer_field_type_is_renderer(self):
+        """The typed field annotation is Renderer | None, not Any."""
+        import typing
+
+        from neograph.node import Node as _Node
+
+        ann = _Node.model_fields["renderer"].annotation
+        # Renderer | None expands to typing.Union or UnionType. Extract args.
+        origin = typing.get_origin(ann)
+        # Could be types.UnionType (|) or typing.Union
+        args = typing.get_args(ann)
+        assert origin is not None, f"Expected a Union type, got plain {ann}"
+        assert Renderer in args, f"Renderer not in field annotation args: {args}"
+        assert type(None) in args
+
+    def test_construct_renderer_field_type_is_renderer(self):
+        """Construct.renderer is typed Renderer | None."""
+        import typing
+
+        from neograph.construct import Construct as _Construct
+
+        ann = _Construct.model_fields["renderer"].annotation
+        origin = typing.get_origin(ann)
+        args = typing.get_args(ann)
+        assert origin is not None
+        assert Renderer in args
+        assert type(None) in args
+
+    def test_propagation_preserves_typed_renderer(self):
+        """Construct(renderer=X) propagates X instance to children via model_copy."""
+        from neograph.factory import register_scripted
+
+        register_scripted("l9qb_noop", lambda i, c: Claims(items=["x"]))
+        child = Node.scripted("l9qb-child", fn="l9qb_noop", outputs=Claims)
+        r = XmlRenderer()
+        pipeline = Construct("l9qb-prop", renderer=r, nodes=[child])
+        assert pipeline.nodes[0].renderer is r
+
+    def test_duck_typed_mock_renderer_accepted(self):
+        """Any object with .render(value) -> str satisfies runtime_checkable Protocol."""
+
+        class _ProbeRenderer:
+            def render(self, value):
+                return f"probe:{value}"
+
+        r = _ProbeRenderer()
+        n = Node(
+            "duck",
+            mode="think",
+            inputs=RawText,
+            outputs=Claims,
+            model="fast",
+            prompt="p",
+            renderer=r,
+        )
+        assert n.renderer is r
+

@@ -154,7 +154,11 @@ class TestNodeImmutabilityInvariant:
             node = _apply_spec_modifiers(node, ns, f"rnd_{t}")
             nodes.append(node)
 
-        sentinel = object()
+        class _ProbeRenderer:
+            def render(self, v):
+                return str(v)
+
+        sentinel = _ProbeRenderer()
         Construct(spec.name, nodes=nodes, renderer=sentinel)
 
         for node in nodes:
