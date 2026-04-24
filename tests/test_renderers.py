@@ -303,8 +303,8 @@ class TestRenderInput:
         as input but hidden from LLM output schema.
         """
         from typing import Annotated
-        from neograph import describe_type
-        from neograph import ExcludeFromOutput
+
+        from neograph import ExcludeFromOutput, describe_type
 
         class SearchResult(BaseModel):
             answer: str
@@ -1564,7 +1564,7 @@ class TestRenderForPromptUnconditional:
             raw: str
             internal_id: int
 
-            def render_for_prompt(self) -> "Presentation":
+            def render_for_prompt(self) -> Presentation:
                 return Presentation(summary=self.raw.upper(), score=0.95)
 
         result = render_input(Full(raw="hello", internal_id=42), renderer=None)
@@ -1985,8 +1985,7 @@ class TestRenderingModeDispatch:
     def test_agent_mode_prompt_compiler_receives_baml_no_renderer(self):
         """Agent-mode node: prompt compiler receives BAML strings, not raw models."""
         from neograph import Construct, Node, Tool, compile, run
-        from neograph.factory import register_scripted
-        from neograph.factory import register_tool_factory
+        from neograph.factory import register_scripted, register_tool_factory
         from tests.fakes import ReActFake, configure_fake_llm
 
         class Input(BaseModel):
@@ -2165,7 +2164,6 @@ class TestToolInputRenderingParity:
     def test_parity_with_exclude_fields(self):
         """Both paths honor exclude=True identically."""
         from neograph._tool_loop import _render_tool_result_for_llm
-        from neograph.describe_type import describe_value
 
         class Data(BaseModel):
             visible: str

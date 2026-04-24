@@ -5,7 +5,6 @@ from __future__ import annotations
 from typing import Annotated
 
 import pytest
-
 from pydantic import BaseModel
 
 from neograph import (

@@ -250,7 +250,7 @@ class TestInlinePromptThroughFullDispatch:
         """
         from neograph import Construct, Node, compile, run
         from neograph.factory import register_scripted
-        from tests.fakes import StructuredFakeWithRaw, configure_fake_llm
+        from tests.fakes import configure_fake_llm
 
         class Claim(BaseModel):
             claim_id: str
@@ -595,8 +595,8 @@ class TestRenderPromptMultimodal:
 
     def test_render_prompt_shows_image_placeholder(self):
         """render_prompt on a node with ${image:...} should show [image] in output."""
-        from neograph._llm import render_prompt
         from neograph import Node
+        from neograph._llm import render_prompt
 
         configure_fake_llm(
             lambda tier: None,

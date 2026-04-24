@@ -17,7 +17,6 @@ if TYPE_CHECKING:
     from pydantic import BaseModel
 
 from neograph._construct_validation import ConstructError
-from neograph.construct import Construct
 from neograph._sidecar import (
     _get_node_source,
     _get_param_res,
@@ -25,6 +24,7 @@ from neograph._sidecar import (
     _set_param_res,
     infer_oracle_gen_type,
 )
+from neograph.construct import Construct
 from neograph.di import DIBinding, DIKind
 from neograph.naming import field_name_for
 from neograph.node import Node

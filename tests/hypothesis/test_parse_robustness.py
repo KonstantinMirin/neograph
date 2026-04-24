@@ -12,13 +12,11 @@ from __future__ import annotations
 import json
 
 import hypothesis.strategies as st
-import pytest
 from hypothesis import given, settings
 from pydantic import BaseModel, Field
 
 from neograph._llm import _apply_null_defaults, _build_retry_msg, _parse_json_response
 from neograph.errors import ExecutionError
-
 
 # ── Fixed test models (varying complexity) ────────────────────────────────
 

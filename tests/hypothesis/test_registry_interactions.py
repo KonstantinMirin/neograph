@@ -19,10 +19,9 @@ from hypothesis import given, settings
 from pydantic import BaseModel
 
 from neograph import Construct, Node, compile, run
-from neograph._registry import Registry, registry
+from neograph._registry import registry
 from neograph.errors import ConfigurationError
 from neograph.factory import lookup_scripted, register_scripted
-
 
 # ── Test models ───────────────────────────────────────────────────────────
 
@@ -55,7 +54,8 @@ class TestRegistryWriteReadContract:
     @settings(max_examples=50)
     def test_register_then_lookup_returns_same_function(self, name):
         """Registered function is retrievable by name."""
-        sentinel = lambda _i, _c: Output(result="x")
+        def sentinel(_i, _c):
+            return Output(result="x")
         register_scripted(name, sentinel)
         assert lookup_scripted(name) is sentinel
 
@@ -72,8 +72,10 @@ class TestRegistryWriteReadContract:
     @settings(max_examples=30)
     def test_overwrite_replaces_previous(self, name):
         """Re-registering the same name replaces the function."""
-        fn1 = lambda _i, _c: Output(result="first")
-        fn2 = lambda _i, _c: Output(result="second")
+        def fn1(_i, _c):
+            return Output(result="first")
+        def fn2(_i, _c):
+            return Output(result="second")
         register_scripted(name, fn1)
         register_scripted(name, fn2)
         assert lookup_scripted(name) is fn2

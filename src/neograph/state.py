@@ -266,6 +266,7 @@ def compute_node_fingerprints(construct: Any) -> dict[str, str]:
     Used to identify which specific nodes changed between runs.
     """
     import hashlib
+
     from neograph.naming import field_name_for
 
     result = {}
@@ -295,7 +296,7 @@ def compute_node_fingerprints(construct: Any) -> dict[str, str]:
     return result
 
 
-def compute_schema_fingerprint(state_model: type) -> str:
+def compute_schema_fingerprint(state_model: type[BaseModel]) -> str:
     """Compute a stable fingerprint from the state model's non-framework fields.
 
     The fingerprint changes when node output types change (field added/removed,

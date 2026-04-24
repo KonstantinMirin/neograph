@@ -938,7 +938,7 @@ class TestSidecarModule:
                     f"  _construct_builder.py:{node.lineno}: from neograph.decorators import {', '.join(names)}"
                 )
         assert violations == [], (
-            f"\n_construct_builder.py still imports from decorators.py:\n"
+            "\n_construct_builder.py still imports from decorators.py:\n"
             + "\n".join(violations)
             + "\n\nThese should import from neograph._sidecar instead."
         )

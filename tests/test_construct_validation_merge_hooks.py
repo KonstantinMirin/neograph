@@ -13,7 +13,6 @@ from pydantic import BaseModel
 
 from neograph import Construct, ConstructError, Node, Oracle
 
-
 # ── Schemas ──────────────────────────────────────────────────────────────
 
 class ModelA(BaseModel, frozen=True):

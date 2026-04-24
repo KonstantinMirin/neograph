@@ -25,6 +25,7 @@ from neograph import (
     Tool,
     compile,
     construct_from_functions,
+    lint,
     node,
     run,
 )
@@ -40,9 +41,6 @@ from tests.schemas import (
     _consumer,
     _producer,
 )
-
-from neograph import lint
-
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Construct assembly-time validation
@@ -2135,7 +2133,8 @@ class TestTemplatePlaceholderLint:
             Node("proc", prompt="rw/analyze",
                  model="default", outputs=B, inputs={"seed": A}),
         ])
-        resolver = lambda name: "ID: {node_id}, root: {project_root}, data: {seed}" if name == "rw/analyze" else None
+        def resolver(name):
+            return "ID: {node_id}, root: {project_root}, data: {seed}" if name == "rw/analyze" else None
         issues = lint(c, template_resolver=resolver)
         template_issues = [i for i in issues if "template" in i.kind]
         errors = [i for i in template_issues if i.required]
@@ -2249,7 +2248,8 @@ class TestTemplatePlaceholderLint:
             Node("proc", prompt="rw/proc",
                  model="default", outputs=B, inputs={"seed": A}),
         ])
-        resolver = lambda name: "ID: {node_id}" if name == "rw/proc" else None
+        def resolver(name):
+            return "ID: {node_id}" if name == "rw/proc" else None
         issues = lint(c, known_template_vars={"node_id"}, template_resolver=resolver)
         template_issues = [i for i in issues if "template" in i.kind]
         assert template_issues == []
@@ -2398,7 +2398,8 @@ class TestTemplatePlaceholderLint:
             Node("gen", prompt="rw/gen",
                  model="default", outputs=B, inputs=None),
         ])
-        resolver = lambda name: "Generate for: {node_id}" if name == "rw/gen" else None
+        def resolver(name):
+            return "Generate for: {node_id}" if name == "rw/gen" else None
         issues = lint(c, template_resolver=resolver)
         template_issues = [i for i in issues if "template" in i.kind]
         assert template_issues == []
@@ -2569,7 +2570,8 @@ class TestTemplatePlaceholderLint:
                  model="default", outputs=FullModel,
                  inputs={"seed": FullModel}),
         ])
-        resolver = lambda name: "Claim: {claim_statement}" if name == "rw/claim" else None
+        def resolver(name):
+            return "Claim: {claim_statement}" if name == "rw/claim" else None
         issues = lint(c, template_resolver=resolver)
         template_issues = [i for i in issues if "template" in i.kind]
         errors = [i for i in template_issues if i.required]
@@ -2629,7 +2631,8 @@ class TestTemplatePlaceholderLint:
             Node("proc", prompt="rw/summarize",
                  model="default", outputs=Result, inputs={"seed": Claims}),
         ])
-        resolver = lambda name: "Summary: {summary}" if name == "rw/summarize" else None
+        def resolver(name):
+            return "Summary: {summary}" if name == "rw/summarize" else None
         issues = lint(c, template_resolver=resolver)
         template_issues = [i for i in issues if "template" in i.kind]
         errors = [i for i in template_issues if i.required]
@@ -2672,7 +2675,8 @@ class TestTemplatePlaceholderLint:
             Node("proc", prompt="rw/analyze",
                  model="default", outputs=B, inputs={"seed": A}),
         ])
-        resolver = lambda name: "ID: {node_id}, data: {seed}" if name == "rw/analyze" else None
+        def resolver(name):
+            return "ID: {node_id}, data: {seed}" if name == "rw/analyze" else None
         issues = lint(c, template_resolver=resolver)
         template_issues = [i for i in issues if "template" in i.kind]
         errors = [i for i in template_issues if i.required]
@@ -2690,6 +2694,7 @@ class TestTemplatePlaceholderLint:
         3. Validates template placeholders against those keys
         """
         import re
+
         from neograph.lint import _predict_input_keys
 
         class Research(BaseModel):
@@ -2985,8 +2990,8 @@ class TestLoopConditionLint:
 
     def test_lint_reports_unregistered_loop_condition_on_construct(self):
         """Loop(when='nonexistent') on a Construct should lint as ERROR."""
-        from neograph.modifiers import Loop
         from neograph.factory import register_scripted
+        from neograph.modifiers import Loop
 
         register_scripted("_lc_inner", lambda i, c: RawText(text="ok"))
         sub = Construct(
@@ -3002,8 +3007,8 @@ class TestLoopConditionLint:
 
     def test_lint_no_issue_for_registered_loop_condition(self):
         """Registered string condition should not trigger lint issue."""
-        from neograph.modifiers import Loop
         from neograph import register_condition
+        from neograph.modifiers import Loop
 
         register_condition("_lint_test_cond", lambda d: d is None or d.text == "")
 
@@ -3051,8 +3056,8 @@ class TestLoopConditionLint:
 
     def test_lint_reports_none_unsafe_callable_on_construct(self):
         """None-unsafe condition on Construct|Loop should also WARN."""
-        from neograph.modifiers import Loop
         from neograph.factory import register_scripted
+        from neograph.modifiers import Loop
 
         register_scripted("_lc_inner2", lambda i, c: RawText(text="ok"))
         sub = Construct(
@@ -3098,7 +3103,7 @@ class TestLoopConditionLint:
 
     def test_lint_reports_parse_condition_string_as_none_unsafe(self):
         """parse_condition('score < 0.8') always crashes on None — ERROR."""
-        from neograph import register_condition, parse_condition
+        from neograph import parse_condition, register_condition
         from neograph.modifiers import Loop
 
         register_condition("_pc_score", parse_condition("score < 0.8"))

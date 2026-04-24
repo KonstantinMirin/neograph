@@ -650,6 +650,7 @@ class TestRetryPromptIncludesSchema:
     def test_default_max_retries_is_2(self):
         """_invoke_json_with_retry defaults to max_retries=2."""
         import inspect
+
         from neograph._llm import _invoke_json_with_retry
         sig = inspect.signature(_invoke_json_with_retry)
         assert sig.parameters["max_retries"].default == 2
@@ -1153,8 +1154,8 @@ class TestToolCallArgsCoercion:
 
     def test_string_args_retried_and_recovered(self):
         """ValidationError from string tool_calls.args triggers retry, not crash."""
-        from neograph._tool_loop import invoke_with_tools
         from neograph import Tool, configure_llm
+        from neograph._tool_loop import invoke_with_tools
         from neograph.factory import register_tool_factory
         from tests.fakes import StringArgsFake
 
@@ -1210,12 +1211,13 @@ class TestToolCallArgsCoercion:
 
     def test_consistent_string_args_always_coerced(self):
         """Even at 100% string-args rate, coercion handles every call."""
-        from neograph._tool_loop import invoke_with_tools
+        from pydantic import BaseModel as _BM
+
         from neograph import Tool, configure_llm
+        from neograph._tool_loop import invoke_with_tools
         from neograph.factory import register_tool_factory
         from neograph.tool import ToolBudgetTracker
         from tests.fakes import StringArgsFake
-        from pydantic import BaseModel as _BM
 
         tool_calls_received = []
 
@@ -1272,7 +1274,6 @@ class TestToolCallArgsCoercion:
         class BadLLM:
             def invoke(self, messages, **kw):
                 # Raise ValidationError for a completely different field
-                from langchain_core.messages import AIMessage
                 raise ValidationError.from_exception_data(
                     title="AIMessage",
                     line_errors=[{
@@ -1289,12 +1290,13 @@ class TestToolCallArgsCoercion:
 
     def test_multiple_tool_calls_mixed_args(self):
         """Multiple tool_calls where some have dict args and some have string args."""
-        from neograph._tool_loop import invoke_with_tools
+        from pydantic import BaseModel as _BM
+
         from neograph import Tool, configure_llm
+        from neograph._tool_loop import invoke_with_tools
         from neograph.factory import register_tool_factory
         from neograph.tool import ToolBudgetTracker
         from tests.fakes import StringArgsFake
-        from pydantic import BaseModel as _BM
 
         args_received = []
 
@@ -1341,12 +1343,13 @@ class TestToolCallArgsCoercion:
 
     def test_coerced_args_parsed_correctly(self):
         """Coerced tool args must be proper dicts with correct values."""
-        from neograph._tool_loop import invoke_with_tools
+        from pydantic import BaseModel as _BM
+
         from neograph import Tool, configure_llm
+        from neograph._tool_loop import invoke_with_tools
         from neograph.factory import register_tool_factory
         from neograph.tool import ToolBudgetTracker
         from tests.fakes import StringArgsFake
-        from pydantic import BaseModel as _BM
 
         received_args = []
 
@@ -1391,10 +1394,11 @@ class TestToolCallArgsCoercion:
 
     def test_malformed_json_in_string_args(self):
         """Unparseable string args degrade to empty dict, tool still called."""
-        from neograph._tool_loop import _CoercingToolWrapper
-        from langchain_core.messages import AIMessage
         from types import SimpleNamespace
-        import json
+
+        from langchain_core.messages import AIMessage
+
+        from neograph._tool_loop import _CoercingToolWrapper
 
         class MalformedArgsFake:
             def invoke(self, messages, **kw):
@@ -1421,9 +1425,11 @@ class TestToolCallArgsCoercion:
 
     def test_empty_string_args(self):
         """Empty string args degrade to empty dict."""
-        from neograph._tool_loop import _CoercingToolWrapper
-        from langchain_core.messages import AIMessage
         from types import SimpleNamespace
+
+        from langchain_core.messages import AIMessage
+
+        from neograph._tool_loop import _CoercingToolWrapper
 
         class EmptyArgsFake:
             def invoke(self, messages, **kw):
@@ -2049,8 +2055,9 @@ class TestBareArrayExtraction:
 
     def test_parse_json_response_bare_array_auto_wraps(self):
         """When output model has a single list field and LLM returns bare array, auto-wrap."""
-        from neograph._llm import _parse_json_response
         from pydantic import BaseModel
+
+        from neograph._llm import _parse_json_response
 
         class Claim(BaseModel):
             claim_id: str
@@ -2067,9 +2074,10 @@ class TestBareArrayExtraction:
 
     def test_parse_json_response_bare_array_multi_field_model_raises(self):
         """Bare array with multi-field model should raise, not silently default."""
-        from neograph._llm import _parse_json_response
-        from neograph import ExecutionError
         from pydantic import BaseModel
+
+        from neograph import ExecutionError
+        from neograph._llm import _parse_json_response
 
         class MultiField(BaseModel):
             items: list[str]
@@ -2405,10 +2413,9 @@ class TestNonDSMLParseFailureTakesGenericRetry:
     """
 
     def test_plain_json_parse_failure_bypasses_dsml_branch(self):
-        from structlog.testing import capture_logs
-
         from langchain_core.messages import AIMessage
         from pydantic import BaseModel as _BM
+        from structlog.testing import capture_logs
 
         from neograph import Tool, configure_llm
         from neograph._tool_loop import invoke_with_tools
@@ -2651,10 +2658,9 @@ class TestCoercingToolWrapperGenerateRaises:
     """neograph-n4hu (axis 9): _generate() raises → wrapper catches, falls back."""
 
     def test_generate_raises_exception_falls_back_to_empty(self):
-        from structlog.testing import capture_logs
-
         from langchain_core.messages import AIMessage
         from pydantic import ValidationError
+        from structlog.testing import capture_logs
 
         from neograph._tool_loop import _CoercingToolWrapper
 

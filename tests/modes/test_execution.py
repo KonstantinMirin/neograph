@@ -525,7 +525,6 @@ class TestCheckpointResume:
         from langgraph.checkpoint.memory import MemorySaver
 
         from neograph import FromInput, node
-        from neograph.factory import register_scripted
 
         @node(outputs=Claims)
         def needs_di(topic: Annotated[str, FromInput]) -> Claims:
@@ -584,8 +583,8 @@ class TestCheckpointResume:
 
     def test_checkpoint_check_returns_false_without_checkpointer(self):
         """_has_existing_checkpoint returns False when no checkpointer (path 2c)."""
-        from neograph.runner import _has_existing_checkpoint
         from neograph.factory import register_scripted
+        from neograph.runner import _has_existing_checkpoint
 
         register_scripted("no_ckpt", lambda _i, _c: RawText(text="x"))
         pipeline = Construct("no-ckpt", nodes=[
@@ -954,6 +953,7 @@ class TestCheckpointSchemaValidation:
     def test_schema_change_raises_on_resume(self):
         """After changing a node's output model fields, resume must raise."""
         from langgraph.checkpoint.memory import MemorySaver
+
         from neograph.errors import CheckpointSchemaError
         from neograph.factory import register_scripted
 
@@ -989,6 +989,7 @@ class TestCheckpointSchemaValidation:
     def test_identical_schema_resumes_normally(self):
         """Same schema on both runs — resume proceeds without error."""
         from langgraph.checkpoint.memory import MemorySaver
+
         from neograph.factory import register_scripted
 
         class StableOutput(BaseModel):
@@ -1022,6 +1023,7 @@ class TestCheckpointSchemaValidation:
     def test_class_rename_detected(self):
         """Renaming the output class (same fields) still triggers detection."""
         from langgraph.checkpoint.memory import MemorySaver
+
         from neograph.errors import CheckpointSchemaError
         from neograph.factory import register_scripted
 
@@ -1063,6 +1065,7 @@ class TestPerNodeCheckpointInvalidation:
     def test_upstream_preserved_downstream_rerun(self):
         """Change node C's output in A→B→C→D. A,B preserved, C,D re-run."""
         from langgraph.checkpoint.memory import MemorySaver
+
         from neograph.errors import CheckpointSchemaError
         from neograph.factory import register_scripted
 
@@ -1134,6 +1137,7 @@ class TestAutoResumeFromSchemaDivergence:
     def test_auto_resume_reruns_changed_node_preserves_upstream(self):
         """Linear A->B->C->D. Change C's output. auto_resume=True re-runs C+D, preserves A+B."""
         from langgraph.checkpoint.memory import MemorySaver
+
         from neograph.factory import register_scripted
 
         class TypeA(BaseModel):
@@ -1195,6 +1199,7 @@ class TestAutoResumeFromSchemaDivergence:
     def test_auto_resume_false_raises_error(self):
         """auto_resume=False preserves current behavior: raises CheckpointSchemaError."""
         from langgraph.checkpoint.memory import MemorySaver
+
         from neograph.errors import CheckpointSchemaError
         from neograph.factory import register_scripted
 
@@ -1224,6 +1229,7 @@ class TestAutoResumeFromSchemaDivergence:
     def test_no_schema_change_resumes_normally(self):
         """Same schema, auto_resume=True — normal resume, no re-execution."""
         from langgraph.checkpoint.memory import MemorySaver
+
         from neograph.factory import register_scripted
 
         class Stable(BaseModel):
@@ -1252,6 +1258,7 @@ class TestAutoResumeFromSchemaDivergence:
     def test_leaf_change_only_reruns_leaf(self):
         """A->B->C. Change only C. A and B preserved, only C re-runs."""
         from langgraph.checkpoint.memory import MemorySaver
+
         from neograph.factory import register_scripted
 
         class TypeA(BaseModel):

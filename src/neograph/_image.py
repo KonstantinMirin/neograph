@@ -24,7 +24,6 @@ import base64
 import dataclasses
 import mimetypes
 from pathlib import Path
-from typing import Any
 
 import structlog
 

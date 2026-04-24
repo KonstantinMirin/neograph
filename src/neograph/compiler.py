@@ -14,7 +14,9 @@ from typing import Any
 
 import structlog
 from langgraph.graph import END, START, StateGraph
+from pydantic import BaseModel
 
+from neograph._dev_warnings import DEV_MODE
 from neograph._registry import registry
 from neograph._wiring import (  # noqa: F401 — re-exported for backward compat
     _add_branch_to_graph,
@@ -26,7 +28,6 @@ from neograph._wiring import (  # noqa: F401 — re-exported for backward compat
     _wire_each,
     _wire_oracle,
 )
-from neograph._dev_warnings import DEV_MODE
 from neograph.construct import Construct
 from neograph.di import DIKind
 from neograph.errors import CompileError
@@ -324,7 +325,8 @@ def _add_subgraph(
     if parent_state_model is not None:
         _context_types = {}
         for fname, finfo in parent_state_model.model_fields.items():
-            _context_types[fname] = finfo.annotation
+            if finfo.annotation is not None:
+                _context_types[fname] = finfo.annotation
 
     # Compile the sub-construct into its own graph (recursive, thread checkpointer)
     sub_graph = compile(sub, checkpointer=checkpointer, retry_policy=retry_policy, _context_types=_context_types)

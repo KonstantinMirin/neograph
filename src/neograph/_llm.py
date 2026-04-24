@@ -25,7 +25,6 @@ from pydantic import BaseModel, ValidationError
 from neograph._image import resolve_image
 from neograph.describe_type import describe_type, describe_value
 from neograph.errors import ConfigurationError, ExecutionError
-from neograph.tool import Tool, ToolBudgetTracker
 
 log = structlog.get_logger()
 
@@ -83,8 +82,6 @@ def _notify_cost(
             )
         except TypeError as exc:
             log.warning("cost_callback_failed", error=str(exc))
-    except TypeError as exc:
-        log.warning("cost_callback_failed", error=str(exc))
 
 
 def _get_global_renderer() -> Any:

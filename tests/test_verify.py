@@ -6,7 +6,6 @@ Written BEFORE implementation.
 
 from __future__ import annotations
 
-import pytest
 from pydantic import BaseModel
 
 from neograph import (
@@ -15,7 +14,6 @@ from neograph import (
     compile,
     construct_from_functions,
     node,
-    run,
 )
 from neograph.factory import register_scripted
 from neograph.modifiers import Loop
@@ -49,8 +47,8 @@ class TestVerifyCompiled:
 
     def test_detects_missing_scripted_fn_after_registry_clear(self):
         """If registry is cleared after compile, verify catches missing fn."""
-        from neograph.verify import verify_compiled
         from neograph._registry import registry
+        from neograph.verify import verify_compiled
 
         register_scripted("_vc_temp", lambda i, c: RawText(text="ok"))
         a = Node.scripted("temp-node", fn="_vc_temp", outputs=RawText)
@@ -70,9 +68,9 @@ class TestVerifyCompiled:
 
     def test_detects_missing_loop_condition(self):
         """Verify catches unregistered Loop condition post-compile."""
-        from neograph.verify import verify_compiled
         from neograph import register_condition
         from neograph._registry import registry
+        from neograph.verify import verify_compiled
 
         register_condition("_vc_cond", lambda d: d is None or d.text == "")
         register_scripted("_vc_loop", lambda i, c: RawText(text="ok"))
@@ -101,8 +99,6 @@ class TestVerifyCompiled:
         pipeline = Construct("llm-test", nodes=[think_node])
 
         # Compile requires LLM factory — need to set one up then clear
-        from neograph._llm import _llm_factory
-        from neograph import configure_llm
         from tests.fakes import StructuredFake, configure_fake_llm
 
         configure_fake_llm(lambda tier: StructuredFake(lambda m: m(items=["x"])))

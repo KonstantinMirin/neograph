@@ -12,11 +12,11 @@ from __future__ import annotations
 import re
 import string
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
-from neograph.construct import Construct
 from neograph._sidecar import _get_param_res, get_merge_fn_metadata
+from neograph.construct import Construct
 from neograph.di import DIBinding, DIKind
 from neograph.node import Node
 
@@ -399,7 +399,6 @@ def _get_flattened_field_names(input_type: Any) -> set[str]:
     BaseModel subclass, returns the non-excluded field names of that model.
     Otherwise returns an empty set.
     """
-    import typing
 
     from pydantic import BaseModel as _BM
 
@@ -430,6 +429,7 @@ def _resolve_return_type(fn: Any, owner_cls: Any) -> Any:
     use for forward-ref resolution.
     """
     import sys
+    import types
     import typing
 
     # Fast path: get_type_hints works for module-scoped types
@@ -445,9 +445,9 @@ def _resolve_return_type(fn: Any, owner_cls: Any) -> Any:
         return raw
 
     # Walk caller frames to find the name (handles test-local classes)
-    frame = sys._getframe(0)
+    frame: types.FrameType | None = sys._getframe(0)
     for _ in range(10):
-        frame = frame.f_back
+        frame = frame.f_back if frame is not None else None
         if frame is None:
             break
         if raw in frame.f_locals:

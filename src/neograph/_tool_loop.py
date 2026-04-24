@@ -9,7 +9,6 @@ Import graph: _tool_loop → _llm (one-way, no cycles).
 from __future__ import annotations
 
 import time
-from collections.abc import Callable
 from typing import Any
 
 import structlog
@@ -100,9 +99,9 @@ class _CoercingToolWrapper:
                               "reconstructing via additional_kwargs path")
 
             try:
-                from langchain_core.messages import HumanMessage
+                from langchain_core.messages import BaseMessage, HumanMessage
 
-                lc_messages = []
+                lc_messages: list[BaseMessage | dict] = []
                 for m in messages:
                     if isinstance(m, dict):
                         role = m.get("role", "user")

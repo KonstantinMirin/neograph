@@ -17,8 +17,7 @@ from pydantic import BaseModel
 
 from neograph import compile, construct_from_module, node, run
 from neograph._image import configure_image, resolve_image
-from tests.fakes import StructuredFake, configure_fake_llm
-
+from tests.fakes import configure_fake_llm
 
 # ── Schemas ──────────────────────────────────────────────────────────────
 
@@ -290,7 +289,6 @@ class TestConfigReset:
     """configure_image() with no args resets to defaults."""
 
     def test_reset_restores_defaults(self):
-        from neograph._image import _config
 
         configure_image(max_size_bytes=42, allowed_dirs=["/x"], validate_format=False)
         configure_image()  # reset
@@ -661,6 +659,7 @@ class TestF5RetryWithMultimodal:
     def test_retry_after_multimodal_initial_message(self):
         """Retry appends string messages after content-block message — must not crash."""
         from langchain_core.messages import AIMessage
+
         from neograph._llm import invoke_structured
 
         call_count = [0]
@@ -846,6 +845,7 @@ class TestF14BMPFalsePositives:
     def test_real_bmp_header_classified(self):
         """A proper BMP file header is classified correctly."""
         import struct
+
         from neograph._image import _check_magic_bytes
         # BM + file_size matching data length + reserved + offset + padding
         data_len = 100

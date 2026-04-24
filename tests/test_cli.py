@@ -504,7 +504,7 @@ class TestKnownTemplateVarsFromSetup:
         # Both from_setup and from_cli should be WARN (known_vars_only), not ERROR
         # "not found" appears in ERROR messages but not in WARN messages
         error_lines = [l for l in captured.split("\n") if "[ERROR]" in l]
-        assert not error_lines, f"Should have no ERRORs but got:\n" + "\n".join(error_lines)
+        assert not error_lines, "Should have no ERRORs but got:\n" + "\n".join(error_lines)
 
     def test_setup_without_known_vars_still_works(self, tmp_path):
         """Setup module with only get_check_config() — no regression."""

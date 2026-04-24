@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import hypothesis.strategies as st
 import pytest
-from hypothesis import given, settings, assume
+from hypothesis import given, settings
 from pydantic import BaseModel, Field
 
 from neograph import (
@@ -22,7 +22,6 @@ from neograph import (
     run,
 )
 from neograph.factory import register_scripted
-
 
 # ── Test models ───────────────────────────────────────────────────────────
 

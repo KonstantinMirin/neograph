@@ -371,15 +371,13 @@ def _make_raw_wrapper(node: Node) -> Callable:
     return raw_node_wrapper
 
 
-from neograph.di import _isinstance_safe as _is_instance_safe  # noqa: E402
-
-
 # ── Input shape dispatch ───────────────────────────────────────────────────
 # _extract_input classifies the input shape and dispatches to a named helper.
 # Same pattern as classify_modifiers: enum + match + assert_never.
-
 from enum import Enum
 from typing import assert_never
+
+from neograph.di import _isinstance_safe as _is_instance_safe  # noqa: E402
 
 
 class InputShape(Enum):

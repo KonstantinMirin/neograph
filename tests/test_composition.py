@@ -1797,7 +1797,6 @@ class TestGatherProduceSubConstruct:
 
     def test_tool_log_received_when_produce_consumes_gather_output_inside_sub_construct(self):
         """Score node's prompt compiler receives tool_log with real ToolInteraction data."""
-        from neograph import ToolInteraction
 
         captured = {}
 

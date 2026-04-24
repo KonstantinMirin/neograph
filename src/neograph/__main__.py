@@ -171,7 +171,7 @@ def cmd_test_scaffold(args: argparse.Namespace) -> int:
         print(f"No Construct objects found in {args.target}")
         return 1
 
-    for var_name, construct in constructs:
+    for _var_name, construct in constructs:
         output_dir = args.output or f"tests/{field_name_for(construct.name)}/"
         try:
             written = scaffold_tests(

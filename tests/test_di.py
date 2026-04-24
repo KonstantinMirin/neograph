@@ -325,8 +325,9 @@ class TestDIBindingTypedFields:
 
     def test_no_payload_field(self):
         """DIBinding must not have a 'payload' field after xklx."""
-        from neograph.di import DIBinding
         import dataclasses
+
+        from neograph.di import DIBinding
         field_names = {f.name for f in dataclasses.fields(DIBinding)}
         assert "payload" not in field_names, (
             "DIBinding still has 'payload' — should be replaced with typed fields"

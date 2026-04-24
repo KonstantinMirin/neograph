@@ -13,10 +13,9 @@ from typing import Any
 
 from langchain_core.runnables import RunnableConfig
 
-from neograph.naming import field_name_for
-
 from neograph.errors import ExecutionError
 from neograph.modifiers import Each, Oracle
+from neograph.naming import field_name_for
 
 
 def _state_get(state: Any, key: str) -> Any:
@@ -218,10 +217,11 @@ def make_oracle_merge_fn(
             primary, secondaries = _unwrap_oracle_results(results, field_name, output_model)
 
             # Pre-process hook replaces default input_data construction
+            input_data: dict[str, Any]
             if _pre_process is not None:
                 input_data = _pre_process(primary)
             else:
-                input_data: dict[str, Any] = {"variants": primary}
+                input_data = {"variants": primary}
                 if _node_inputs:
                     for key in _node_inputs:
                         val = getattr(state, field_name_for(key), None)

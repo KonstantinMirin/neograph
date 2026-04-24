@@ -6,18 +6,14 @@ actually produces at runtime for any valid pipeline topology.
 
 from __future__ import annotations
 
-import re
-
 import hypothesis.strategies as st
 from hypothesis import given, settings
-from pydantic import BaseModel
 
-from neograph import Construct, Node, compile
+from neograph import Construct, Node
 from neograph.factory import register_scripted
 from neograph.lint import _predict_input_keys, lint
 
 from .conftest import Alpha, Beta, Gamma, _make_fn, _uid
-
 
 # ── Strategies ──────────────────────────────────────────────────────────
 

@@ -7,14 +7,13 @@
 
 from __future__ import annotations
 
-from enum import Enum, auto
 from collections.abc import Callable
+from enum import Enum, auto
 from typing import Any, Self
-
-from neograph._dev_warnings import dev_warn
 
 from pydantic import BaseModel, ConfigDict, field_validator
 
+from neograph._dev_warnings import dev_warn
 from neograph.errors import ConfigurationError, ConstructError
 
 
@@ -151,6 +150,10 @@ class Modifiable:
     Uses modifier_set: ModifierSet for type-safe modifier storage.
     """
 
+    # Every concrete subclass (Node, Construct, _BranchNode) assigns a
+    # non-empty string name. Declared here so union narrowing (Node | Modifiable)
+    # keeps .name access type-checkable.
+    name: str
     modifier_set: ModifierSet
 
     @property
@@ -536,14 +539,14 @@ class ModifierSet(BaseModel, frozen=True):
     def model_post_init(self, __context: Any) -> None:
         # Each + Loop mutual exclusion
         if self.each is not None and self.loop is not None:
-    
+
             raise ConstructError.build(
                 "Cannot combine Each and Loop on the same item",
                 hint="Use a sub-construct with Loop inside an Each fan-out instead",
             )
         # Oracle + Loop mutual exclusion
         if self.oracle is not None and self.loop is not None:
-    
+
             raise ConstructError.build(
                 "Cannot combine Oracle and Loop on the same item",
                 hint="Use a sub-construct: nest the Loop body inside an Oracle ensemble, or vice versa",

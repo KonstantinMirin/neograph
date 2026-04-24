@@ -31,7 +31,6 @@ from neograph.construct import Construct
 from neograph.naming import field_name_for
 from neograph.node import Node
 
-
 # ── Node introspection ───────────────────────────────────────────────────
 
 def _node_info(node: Node) -> dict[str, Any]:
@@ -185,10 +184,10 @@ def _gen_topology(construct_var: str, nodes: list[dict], subs: list[dict],
         'class TestTopology:',
         f'    """Structural invariants — {total_count} nodes, {len(edges)} edges."""',
         '',
-        f'    def test_node_count(self):',
+        '    def test_node_count(self):',
         f'        assert len({construct_var}.nodes) == {total_count}',
         '',
-        f'    def test_all_nodes_present(self):',
+        '    def test_all_nodes_present(self):',
         f'        names = [getattr(n, "name", "") for n in {construct_var}.nodes]',
     ]
     for i in items:
@@ -196,22 +195,22 @@ def _gen_topology(construct_var: str, nodes: list[dict], subs: list[dict],
     L.append('')
 
     if edges:
-        L.append(f'    def test_topological_ordering(self):')
+        L.append('    def test_topological_ordering(self):')
         L.append(f'        names = [getattr(n, "name", "") for n in {construct_var}.nodes]')
         for up, down in edges:
             L.append(f'        assert names.index("{up.replace("_", "-")}") < names.index("{down.replace("_", "-")}")')
         L.append('')
 
     L.extend([
-        f'    def test_compiles(self):',
-        f'        from neograph import compile',
+        '    def test_compiles(self):',
+        '        from neograph import compile',
     ])
     if has_llm:
-        L.append(f'        # LLM nodes present — configure_llm required')
-        L.append(f'        pytest.fail("TODO: configure_llm then compile")')
+        L.append('        # LLM nodes present — configure_llm required')
+        L.append('        pytest.fail("TODO: configure_llm then compile")')
     else:
         L.append(f'        graph = compile({construct_var})')
-        L.append(f'        assert graph is not None')
+        L.append('        assert graph is not None')
     L.append('')
     return '\n'.join(L)
 
@@ -238,7 +237,7 @@ def _gen_modifiers(nodes: list[dict]) -> str | None:
         if n["oracle"]:
             o = n["oracle"]
             L.append(f'        oracle = {fname}.modifier_set.oracle')
-            L.append(f'        assert oracle is not None')
+            L.append('        assert oracle is not None')
             L.append(f'        assert oracle.n == {o["n"]}')
             if o["merge_fn"]:
                 L.append(f'        assert oracle.merge_fn == "{o["merge_fn"]}"')
@@ -247,13 +246,13 @@ def _gen_modifiers(nodes: list[dict]) -> str | None:
         if n["each"]:
             e = n["each"]
             L.append(f'        each = {fname}.modifier_set.each')
-            L.append(f'        assert each is not None')
+            L.append('        assert each is not None')
             L.append(f'        assert each.over == "{e["over"]}"')
             L.append(f'        assert each.key == "{e["key"]}"')
         if n["loop"]:
             lp = n["loop"]
             L.append(f'        loop = {fname}.modifier_set.loop')
-            L.append(f'        assert loop is not None')
+            L.append('        assert loop is not None')
             L.append(f'        assert loop.max_iterations == {lp["max_iterations"]}')
         if n["operator"]:
             L.append(f'        assert {fname}.modifier_set.operator is not None')
@@ -321,19 +320,19 @@ def _gen_node_stubs(nodes: list[dict]) -> str:
             L.append(f'        """{n["name"]} (scripted) → {n["outputs_name"]}')
             if n["input_names"]:
                 L.append(f'        Inputs: {", ".join(n["input_names"])}')
-            L.append(f'        """')
+            L.append('        """')
             L.append(f'        fn, _ = _get_sidecar({fname})')
-            L.append(f'        assert fn is not None, "no sidecar — is @node applied?"')
+            L.append('        assert fn is not None, "no sidecar — is @node applied?"')
             if n["input_names"]:
-                L.append(f'        # TODO: build input fixtures')
+                L.append('        # TODO: build input fixtures')
                 for inp in n["input_names"]:
                     L.append(f'        # {inp} = ...  # upstream output type')
                 L.append(f'        # result = fn({", ".join(n["input_names"])})')
             else:
-                L.append(f'        # result = fn()')
+                L.append('        # result = fn()')
             L.append(f'        # assert isinstance(result, {n["outputs_name"]})')
             L.append(f'        pytest.fail("TODO: build input of {n["input_names"][0] if n["input_names"] else "no input"}, assert {n["outputs_name"]}")')
-            L.append(f'')
+            L.append('')
 
     if llm_think:
         L.extend([
@@ -346,14 +345,14 @@ def _gen_node_stubs(nodes: list[dict]) -> str:
             fname = n["field"]
             L.append(f'    def test_{fname}_with_fake_llm(self):')
             L.append(f'        """{n["name"]} ({n["mode"]}, prompt={n["prompt"]}) → {n["outputs_name"]}"""')
-            L.append(f'        # configure_llm(llm_factory=lambda tier: FakeLLM({{')
+            L.append('        # configure_llm(llm_factory=lambda tier: FakeLLM({')
             L.append(f'        #     {n["outputs_name"]}: lambda: {n["outputs_name"]}(...)')
-            L.append(f'        # }}), prompt_compiler=fake_prompt_compiler)')
+            L.append('        # }), prompt_compiler=fake_prompt_compiler)')
             L.append(f'        # c = construct_from_functions("test-{fname}", [{fname}])')
-            L.append(f'        # result = compile(c).invoke(...)')
+            L.append('        # result = compile(c).invoke(...)')
             L.append(f'        # assert isinstance(result["{fname}"], {n["outputs_name"]})')
             L.append(f'        pytest.fail("TODO: provide FakeLLM response for {n["outputs_name"]}")')
-            L.append(f'')
+            L.append('')
 
     if agents:
         L.extend([
@@ -368,18 +367,18 @@ def _gen_node_stubs(nodes: list[dict]) -> str:
             L.append(f'        """{n["name"]} ({n["mode"]}) → {n["outputs_name"]}')
             if n["tools"]:
                 L.append(f'        Tools: {", ".join(t["name"] + "(budget=" + str(t["budget"]) + ")" for t in n["tools"])}')
-            L.append(f'        """')
+            L.append('        """')
             for t in n["tools"]:
                 L.append(f'        # register_tool_factory("{t["name"]}", lambda config: ...)')
-            L.append(f'        # configure_llm(...)')
-            L.append(f'        # result = ...')
+            L.append('        # configure_llm(...)')
+            L.append('        # result = ...')
             L.append(f'        # assert isinstance(result["{fname}"], {n["outputs_name"]})')
             if n["tools"]:
                 for t in n["tools"]:
                     if t["budget"]:
                         L.append(f'        # assert tool call count for "{t["name"]}" <= {t["budget"]}')
             L.append(f'        pytest.fail("TODO: provide FakeLLM + tool factories for {n["name"]}")')
-            L.append(f'')
+            L.append('')
 
     return '\n'.join(L)
 
@@ -397,43 +396,43 @@ def _gen_subgraph(sc: dict) -> str:
         'from neograph._sidecar import _get_sidecar',
         '',
         '',
-        f'class TestTopology:',
-        f'    """Sub-construct structural invariants."""',
+        'class TestTopology:',
+        '    """Sub-construct structural invariants."""',
         '',
-        f'    def test_node_count(self):',
+        '    def test_node_count(self):',
         f'        assert len({fname}.nodes) == {sc["node_count"]}',
         '',
-        f'    def test_compiles(self):',
-        f'        from neograph import compile',
-        f'        pytest.fail("TODO: compile sub-construct")',
+        '    def test_compiles(self):',
+        '        from neograph import compile',
+        '        pytest.fail("TODO: compile sub-construct")',
         '',
     ]
 
     # Per-node stubs for the sub-construct
     for n in sc.get("nodes", []):
         nf = n["field"]
-        L.append(f'')
+        L.append('')
         if n["is_scripted"]:
             L.append(f'class Test{_class_name(nf)}:')
             L.append(f'    def test_{nf}(self):')
             L.append(f'        """{n["name"]} (scripted) → {n["outputs_name"]}"""')
             L.append(f'        fn, _ = _get_sidecar({nf})')
-            L.append(f'        assert fn is not None')
-            L.append(f'        pytest.fail("TODO: build input, call fn, assert result")')
-            L.append(f'')
+            L.append('        assert fn is not None')
+            L.append('        pytest.fail("TODO: build input, call fn, assert result")')
+            L.append('')
         else:
             L.append(f'class Test{_class_name(nf)}:')
             L.append(f'    def test_{nf}(self):')
             L.append(f'        """{n["name"]} ({n["mode"]}) → {n["outputs_name"]}"""')
             L.append(f'        assert {nf}.outputs is {n["outputs_name"]}')
             L.append(f'        assert {nf}.mode == "{n["mode"]}"')
-            L.append(f'')
+            L.append('')
 
     L.extend([
         '',
-        f'class TestE2E:',
+        'class TestE2E:',
         f'    def test_{fname}_e2e(self):',
-        f'        """Run sub-construct end-to-end."""',
+        '        """Run sub-construct end-to-end."""',
         f'        pytest.fail("TODO: provide {sc["input_name"]} fixture, run, assert {sc["output_name"]}")',
         '',
     ])
@@ -455,14 +454,14 @@ def _gen_e2e(construct_var: str, construct_name: str, nodes: list[dict]) -> str:
         '',
     ]
     if llm_nodes:
-        L.append(f'    # Fake response registry — one entry per LLM node:')
+        L.append('    # Fake response registry — one entry per LLM node:')
         for n in llm_nodes:
             L.append(f'    #   "{n["name"]}": {n["outputs_name"]}(...)')
-        L.append(f'')
+        L.append('')
     L.extend([
-        f'    def test_full_pipeline(self):',
+        '    def test_full_pipeline(self):',
         f'        """Compile and run \'{construct_name}\' end-to-end."""',
-        f'        pytest.fail("TODO: configure_llm, compile, run, assert outputs")',
+        '        pytest.fail("TODO: configure_llm, compile, run, assert outputs")',
         '',
     ])
     return '\n'.join(L)
@@ -494,67 +493,67 @@ def _gen_sync(construct_var: str, nodes: list[dict], subs: list[dict]) -> str:
         'class TestSync:',
         f'    """Drift detection for \'{construct_var}\'."""',
         '',
-        f'    EXPECTED_NODES = {{',
+        '    EXPECTED_NODES = {',
     ]
     for i in all_items:
         L.append(f'        "{i["name"]}",')
     L.extend([
-        f'    }}',
-        f'',
-        f'    EXPECTED_SCRIPTED = {{',
+        '    }',
+        '',
+        '    EXPECTED_SCRIPTED = {',
     ])
     for name in sorted(scripted_names):
         L.append(f'        "{name}",')
     L.extend([
-        f'    }}',
-        f'',
-        f'    EXPECTED_LLM = {{',
+        '    }',
+        '',
+        '    EXPECTED_LLM = {',
     ])
     for name in sorted(llm_names):
         L.append(f'        "{name}",')
     L.extend([
-        f'    }}',
-        f'',
-        f'    EXPECTED_MODIFIED = {{',
+        '    }',
+        '',
+        '    EXPECTED_MODIFIED = {',
     ])
     for name in sorted(modifier_names):
         L.append(f'        "{name}",')
     L.extend([
-        f'    }}',
-        f'',
-        f'    def test_no_untested_nodes(self):',
+        '    }',
+        '',
+        '    def test_no_untested_nodes(self):',
         f'        actual = {{getattr(n, "name", "") for n in {construct_var}.nodes}}',
-        f'        missing = actual - self.EXPECTED_NODES',
-        f'        assert not missing, f"New nodes need tests: {{sorted(missing)}}"',
-        f'',
-        f'    def test_no_stale_tests(self):',
+        '        missing = actual - self.EXPECTED_NODES',
+        '        assert not missing, f"New nodes need tests: {sorted(missing)}"',
+        '',
+        '    def test_no_stale_tests(self):',
         f'        actual = {{getattr(n, "name", "") for n in {construct_var}.nodes}}',
-        f'        stale = self.EXPECTED_NODES - actual',
-        f'        assert not stale, f"Removed nodes still in tests: {{sorted(stale)}}"',
-        f'',
-        f'    def test_no_tier_drift(self):',
-        f'        """Detect nodes that changed between scripted and LLM."""',
+        '        stale = self.EXPECTED_NODES - actual',
+        '        assert not stale, f"Removed nodes still in tests: {sorted(stale)}"',
+        '',
+        '    def test_no_tier_drift(self):',
+        '        """Detect nodes that changed between scripted and LLM."""',
         f'        for item in {construct_var}.nodes:',
-        f'            if not isinstance(item, Node):',
-        f'                continue',
-        f'            name = item.name',
-        f'            if name in self.EXPECTED_SCRIPTED and item.mode != "scripted":',
-        f'                assert False, f"{{name}} was scripted, now {{item.mode}} — move its test stub"',
-        f'            if name in self.EXPECTED_LLM and item.mode == "scripted":',
-        f'                assert False, f"{{name}} was LLM, now scripted — move its test stub"',
-        f'',
-        f'    def test_no_modifier_drift(self):',
-        f'        """Detect nodes that gained/lost modifiers."""',
+        '            if not isinstance(item, Node):',
+        '                continue',
+        '            name = item.name',
+        '            if name in self.EXPECTED_SCRIPTED and item.mode != "scripted":',
+        '                assert False, f"{name} was scripted, now {item.mode} — move its test stub"',
+        '            if name in self.EXPECTED_LLM and item.mode == "scripted":',
+        '                assert False, f"{name} was LLM, now scripted — move its test stub"',
+        '',
+        '    def test_no_modifier_drift(self):',
+        '        """Detect nodes that gained/lost modifiers."""',
         f'        for item in {construct_var}.nodes:',
-        f'            if not isinstance(item, Node):',
-        f'                continue',
-        f'            has_mod = bool(item.modifier_set.oracle or item.modifier_set.each',
-        f'                          or item.modifier_set.loop or item.modifier_set.operator)',
-        f'            if item.name in self.EXPECTED_MODIFIED and not has_mod:',
-        f'                assert False, f"{{item.name}} lost its modifier — update test_modifiers.py"',
-        f'            if item.name not in self.EXPECTED_MODIFIED and has_mod:',
-        f'                assert False, f"{{item.name}} gained a modifier — add to test_modifiers.py"',
-        f'',
+        '            if not isinstance(item, Node):',
+        '                continue',
+        '            has_mod = bool(item.modifier_set.oracle or item.modifier_set.each',
+        '                          or item.modifier_set.loop or item.modifier_set.operator)',
+        '            if item.name in self.EXPECTED_MODIFIED and not has_mod:',
+        '                assert False, f"{item.name} lost its modifier — update test_modifiers.py"',
+        '            if item.name not in self.EXPECTED_MODIFIED and has_mod:',
+        '                assert False, f"{item.name} gained a modifier — add to test_modifiers.py"',
+        '',
     ])
     return '\n'.join(L)
 
