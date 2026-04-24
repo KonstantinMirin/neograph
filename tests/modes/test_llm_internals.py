@@ -3286,16 +3286,12 @@ class TestMultipleIndependentDSMLRecoveries:
 
 
 class TestBudgetExhaustedMessageFallback:
-    """neograph-h5d7 (axis 10): budget_exhausted_message behavior for missing/empty/None.
+    """neograph-h5d7 / neograph-rnjw: budget_exhausted_message fallback semantics.
 
-    Documents current `dict.get("budget_exhausted_message", default)` semantics:
-      - missing key → default used (good)
-      - empty string → "" appended verbatim (no fallback)
-      - None → None appended verbatim (no fallback)
-
-    The empty/None cases are GAPS: production should arguably fall back to the
-    default when the value is falsy, but currently does not. These tests pin the
-    actual behavior so any future change trips them.
+    After the LlmConfig refactor, all three inputs (missing, empty, None)
+    resolve to the default template via LlmConfig.resolved_budget_exhausted_message.
+    The empty/None cases are now covered by TestBudgetExhaustedMessageFallbackPostRnjw
+    below; this class keeps the missing-key test as the positive-path pin.
 
     Mutation-verified: replacing the default f-string with "MUTATION: default
     removed" makes the missing-key test fail.
@@ -3375,15 +3371,96 @@ class TestBudgetExhaustedMessageFallback:
         assert "All tool budgets are exhausted" in content
         assert "Answer" in content
 
-    def test_empty_string_is_appended_verbatim_no_fallback(self):
-        parsed, captured = self._invoke_with_llm_config({"budget_exhausted_message": ""})
-        assert parsed.answer == "ok"
-        assert self._extract_retry_content(captured) == ""
 
-    def test_none_is_appended_verbatim_no_fallback(self):
-        parsed, captured = self._invoke_with_llm_config({"budget_exhausted_message": None})
+class TestBudgetExhaustedMessageFallbackPostRnjw:
+    """neograph-rnjw: budget_exhausted_message=None/'' MUST fall back to default.
+
+    These are the TDD-red tests for the LlmConfig refactor. Against current
+    (pre-fix) code they FAIL: invoke_with_tools uses dict.get(key, default)
+    which forwards None/'' verbatim instead of resolving the default.
+
+    Post-fix: both None and '' resolve through LlmConfig.resolved_budget_exhausted_message
+    to the hardcoded default template (which interpolates output_model.__name__).
+
+    Sibling of TestBudgetExhaustedMessageFallback above -- that class pins the
+    buggy behavior and gets deleted when this class passes.
+    """
+
+    def test_none_falls_back_to_default_message(self):
+        parsed, captured = TestBudgetExhaustedMessageFallback._invoke_with_llm_config(
+            {"budget_exhausted_message": None}
+        )
         assert parsed.answer == "ok"
-        assert self._extract_retry_content(captured) is None
+        content = TestBudgetExhaustedMessageFallback._extract_retry_content(captured)
+        assert content is not None, (
+            "budget_exhausted_message=None must fall back to the default template, "
+            "not pass None through to chat messages"
+        )
+        assert "tool-call markup" in content
+        assert "All tool budgets are exhausted" in content
+        assert "Answer" in content
+
+    def test_empty_string_falls_back_to_default_message(self):
+        parsed, captured = TestBudgetExhaustedMessageFallback._invoke_with_llm_config(
+            {"budget_exhausted_message": ""}
+        )
+        assert parsed.answer == "ok"
+        content = TestBudgetExhaustedMessageFallback._extract_retry_content(captured)
+        assert content, (
+            "budget_exhausted_message='' must fall back to the default template, "
+            "not pass empty string through to chat messages"
+        )
+        assert "tool-call markup" in content
+        assert "All tool budgets are exhausted" in content
+        assert "Answer" in content
+
+
+class TestLlmConfigTypedView:
+    """neograph-rnjw: LlmConfig is the typed view over the raw llm_config dict.
+
+    Covers the invariants the refactor relies on:
+      - Pydantic rejects wrong types on known framework fields (stops silent
+        degradation that used to survive dict.get).
+      - Unknown keys (provider-specific knobs like temperature) are preserved
+        so the llm_factory callback's pass-through contract is safe.
+    """
+
+    def test_rejects_wrong_type_on_known_field(self):
+        from neograph._llm_config import normalize_llm_config
+        from neograph.errors import ConfigurationError
+
+        with pytest.raises(ConfigurationError, match="invalid llm_config"):
+            normalize_llm_config({"max_retries": "not-an-int"}, node_name="probe")
+
+    def test_preserves_unknown_keys_for_provider_passthrough(self):
+        from neograph._llm_config import normalize_llm_config
+
+        cfg = normalize_llm_config({"temperature": 0.7, "max_tokens": 512})
+        dumped = cfg.model_dump()
+        assert dumped["temperature"] == 0.7
+        assert dumped["max_tokens"] == 512
+
+    def test_none_budget_message_resolves_to_default(self):
+        from neograph._llm_config import LlmConfig
+
+        cfg = LlmConfig(budget_exhausted_message=None)
+        resolved = cfg.resolved_budget_exhausted_message("MyOutput")
+        assert "tool-call markup" in resolved
+        assert "MyOutput" in resolved
+
+    def test_empty_budget_message_resolves_to_default(self):
+        from neograph._llm_config import LlmConfig
+
+        cfg = LlmConfig(budget_exhausted_message="")
+        resolved = cfg.resolved_budget_exhausted_message("MyOutput")
+        assert "tool-call markup" in resolved
+        assert "MyOutput" in resolved
+
+    def test_nonempty_budget_message_is_returned_verbatim(self):
+        from neograph._llm_config import LlmConfig
+
+        cfg = LlmConfig(budget_exhausted_message="CUSTOM DIRECTIVE")
+        assert cfg.resolved_budget_exhausted_message("X") == "CUSTOM DIRECTIVE"
 
 
 class TestDefaultBudgetExhaustedMessageRendersModelName:

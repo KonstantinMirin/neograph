@@ -23,6 +23,7 @@ from neograph._llm import (
     _notify_cost,
     _parse_json_response,
 )
+from neograph._llm_config import normalize_llm_config
 from neograph._registry import registry
 from neograph.describe_type import describe_value
 from neograph.errors import ConfigurationError, ExecutionError
@@ -204,8 +205,9 @@ def invoke_with_tools(
     llm_with_tools = _CoercingToolWrapper(llm.bind_tools(active_tools))
 
     llm_config = llm_config or {}
-    max_iterations = llm_config.get("max_iterations", 20)
-    token_budget = llm_config.get("token_budget")
+    cfg = normalize_llm_config(llm_config, node_name=node_name)
+    max_iterations = cfg.max_iterations
+    token_budget = cfg.token_budget
     cumulative_input_tokens = 0
 
     loop_count = 0
@@ -335,8 +337,8 @@ def invoke_with_tools(
     elapsed = time.monotonic() - t0
 
     # Parse final response as structured output — strategy-aware
-    strategy = llm_config.get("output_strategy", "structured")
-    max_retries = llm_config.get("max_retries", 1)
+    strategy = cfg.output_strategy
+    max_retries = cfg.max_retries
 
     if strategy in ("json_mode", "text"):
         last_msg = messages[-1]
@@ -350,13 +352,7 @@ def invoke_with_tools(
                 log.warning("trailing_tool_call_markup",
                              hint="model emitted tool-call markup after budget exhaustion; "
                                   "retrying with targeted directive")
-                budget_msg = llm_config.get(
-                    "budget_exhausted_message",
-                    "Your previous response contained tool-call markup. "
-                    "All tool budgets are exhausted. Do NOT invoke any more tools. "
-                    f"Produce the final response as a {output_model.__name__} object. "
-                    "No markup, no tool calls. Output ONLY the structured response.",
-                )
+                budget_msg = cfg.resolved_budget_exhausted_message(output_model.__name__)
                 messages.append({"role": "assistant", "content": raw_text})
                 messages.append({"role": "user", "content": budget_msg})
                 try:

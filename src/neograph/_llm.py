@@ -23,6 +23,7 @@ from langchain_core.runnables import RunnableConfig
 from pydantic import BaseModel, ValidationError
 
 from neograph._image import resolve_image
+from neograph._llm_config import normalize_llm_config
 from neograph.describe_type import describe_type, describe_value
 from neograph.errors import ConfigurationError, ExecutionError
 
@@ -695,7 +696,8 @@ def invoke_structured(
         "text"       — LLM returns plain text, framework extracts and parses JSON from it
     """
     llm_config = llm_config or {}
-    strategy = llm_config.get("output_strategy", "structured")
+    cfg = normalize_llm_config(llm_config, node_name=node_name)
+    strategy = cfg.output_strategy
     llm_log = log.bind(tier=model_tier, prompt=prompt_template, output=output_model.__name__, strategy=strategy)
 
     output_schema = None
@@ -716,7 +718,7 @@ def invoke_structured(
         context=context,
     )
 
-    max_retries = llm_config.get("max_retries", 1)
+    max_retries = cfg.max_retries
     t0 = time.monotonic()
     result, usage = _call_structured(llm, messages, output_model, strategy, config, max_retries=max_retries)
     elapsed = time.monotonic() - t0
@@ -773,7 +775,8 @@ def render_prompt(
     # Generate output_schema for json_mode
     output_schema = None
     llm_config = getattr(node, "llm_config", None) or {}
-    strategy = llm_config.get("output_strategy", "structured")
+    cfg = normalize_llm_config(llm_config, node_name=getattr(node, "name", ""))
+    strategy = cfg.output_strategy
     output_model = getattr(node, "outputs", None)
     if strategy == "json_mode" and output_model is not None:
         from neograph.describe_type import describe_type
