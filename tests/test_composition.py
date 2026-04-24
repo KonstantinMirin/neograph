@@ -2004,11 +2004,12 @@ class TestConstructPropagationTypeErrors:
         """model_copy creates a new instance, so even frozen children
         get the merged config (previously silently skipped)."""
         from neograph import Construct
+        from neograph._llm_config import LlmConfig
 
         class FrozenChild(BaseModel, frozen=True):
             """Fake node-like object with frozen llm_config."""
             name: str = "frozen"
-            llm_config: dict = {}
+            llm_config: LlmConfig = LlmConfig()
             outputs: type = RawText
             modifiers: list = []
             inputs: Any = None
@@ -2023,12 +2024,13 @@ class TestConstructPropagationTypeErrors:
         child = FrozenChild()
         c = Construct("test", nodes=[child], llm_config={"output_strategy": "json_mode"})
         # model_copy produces a new frozen instance with the merged config
-        assert c.nodes[0].llm_config == {"output_strategy": "json_mode"}
+        assert c.nodes[0].llm_config.output_strategy == "json_mode"
 
     def test_renderer_propagation_works_on_frozen_children(self):
         """model_copy creates a new instance, so renderer propagates
         to frozen children (previously silently skipped)."""
         from neograph import Construct
+        from neograph._llm_config import LlmConfig
 
         class FrozenChild(BaseModel, frozen=True):
             """Fake node-like object with frozen renderer."""
@@ -2038,7 +2040,7 @@ class TestConstructPropagationTypeErrors:
             modifiers: list = []
             inputs: Any = None
             output: Any = None
-            llm_config: dict = {}
+            llm_config: LlmConfig = LlmConfig()
 
             def has_modifier(self, mod_type):
                 return False
@@ -2152,25 +2154,28 @@ class TestConstructLlmConfigImmutability:
             name="claim",
             outputs=Claim,
             scripted_fn="bchn_claim_fn",
-            llm_config={"temperature": 0.5},
+            llm_config={"provider_kwargs": {"temperature": 0.5}},
         )
 
-        # Capture original config before Construct construction
-        original_config = node.llm_config.copy()
+        # Snapshot original config before Construct construction
+        original_config = node.llm_config.model_copy(deep=True)
 
         pipeline = Construct(
             name="bchn-test",
             nodes=[node],
-            llm_config={"model_tier": "pro", "max_retries": 3},
+            llm_config={"max_retries": 3, "provider_kwargs": {"model_tier": "pro"}},
         )
 
-        # The node INSIDE the construct should have merged config
+        # The node INSIDE the construct has the merged config
         inner_node = pipeline.nodes[0]
-        assert inner_node.llm_config.get("model_tier") == "pro", (
+        assert inner_node.llm_config.max_retries == 3, (
             "Construct child must inherit parent llm_config"
         )
-        assert inner_node.llm_config.get("temperature") == 0.5, (
-            "Child's own llm_config must win on conflict"
+        assert inner_node.llm_config.provider_kwargs.get("temperature") == 0.5, (
+            "Child's own provider_kwargs must survive merge"
+        )
+        assert inner_node.llm_config.provider_kwargs.get("model_tier") == "pro", (
+            "Disjoint parent provider_kwargs must be merged in"
         )
 
         # The ORIGINAL node must be UNCHANGED

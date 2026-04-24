@@ -1035,7 +1035,7 @@ class TestLlmNotConfigured:
             llm_factory=factory,
             prompt_compiler=lambda t, d: [{"role": "user", "content": "test"}],
         )
-        result = _get_llm("fast", node_name="test_node", llm_config={"temp": 0.5})
+        result = _get_llm("fast", node_name="test_node", llm_config={"provider_kwargs": {"temp": 0.5}})
         assert result == "fake_llm"
         assert "node_name" in received
         assert "llm_config" in received
@@ -3347,8 +3347,11 @@ class TestBudgetExhaustedMessageFallback:
 
         tools = [Tool(name="x", description="x")]
         budget = ToolBudgetTracker(tools)
-        llm_config = {"output_strategy": "json_mode"}
-        llm_config.update(llm_config_extras)
+        from neograph._llm_config import LlmConfig as _LlmConfig
+
+        kwargs = {"output_strategy": "json_mode"}
+        kwargs.update(llm_config_extras)
+        llm_config = _LlmConfig(**kwargs)
 
         parsed, _ = invoke_with_tools(
             model_tier="fast",
@@ -3416,29 +3419,35 @@ class TestBudgetExhaustedMessageFallbackPostRnjw:
 
 
 class TestLlmConfigTypedView:
-    """neograph-rnjw: LlmConfig is the typed view over the raw llm_config dict.
+    """neograph-rnjw / neograph-pej0: LlmConfig is the IR type for llm_config.
 
-    Covers the invariants the refactor relies on:
-      - Pydantic rejects wrong types on known framework fields (stops silent
-        degradation that used to survive dict.get).
-      - Unknown keys (provider-specific knobs like temperature) are preserved
-        so the llm_factory callback's pass-through contract is safe.
+    Post-pej0 semantics:
+      - Pydantic rejects wrong types on known framework fields.
+      - ``extra='forbid'`` rejects unknown TOP-level keys; provider knobs
+        must live in the ``provider_kwargs`` namespace.
     """
 
     def test_rejects_wrong_type_on_known_field(self):
-        from neograph._llm_config import normalize_llm_config
-        from neograph.errors import ConfigurationError
+        from pydantic import ValidationError
 
-        with pytest.raises(ConfigurationError, match="invalid llm_config"):
-            normalize_llm_config({"max_retries": "not-an-int"}, node_name="probe")
+        from neograph._llm_config import LlmConfig
 
-    def test_preserves_unknown_keys_for_provider_passthrough(self):
-        from neograph._llm_config import normalize_llm_config
+        with pytest.raises(ValidationError):
+            LlmConfig(max_retries="not-an-int")
 
-        cfg = normalize_llm_config({"temperature": 0.7, "max_tokens": 512})
-        dumped = cfg.model_dump()
-        assert dumped["temperature"] == 0.7
-        assert dumped["max_tokens"] == 512
+    def test_rejects_unknown_top_level_key(self):
+        from pydantic import ValidationError
+
+        from neograph._llm_config import LlmConfig
+
+        with pytest.raises(ValidationError):
+            LlmConfig(temperature=0.7)  # belongs in provider_kwargs
+
+    def test_provider_kwargs_round_trips(self):
+        from neograph._llm_config import LlmConfig
+
+        cfg = LlmConfig(provider_kwargs={"temperature": 0.7, "max_tokens": 512})
+        assert cfg.provider_kwargs == {"temperature": 0.7, "max_tokens": 512}
 
     def test_none_budget_message_resolves_to_default(self):
         from neograph._llm_config import LlmConfig
@@ -3834,3 +3843,291 @@ class TestToolCallsShapeEdgeCases:
                 budget_tracker=budget,
                 llm_config={"output_strategy": "json_mode"},
             )
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# TEST: neograph-pej0 -- LlmConfig promoted from runtime view to IR type
+# ═══════════════════════════════════════════════════════════════════════════
+class TestLlmConfigAsIRType:
+    """neograph-pej0: LlmConfig is the IR type carried by Node and Construct.
+
+    Pins the architectural invariants:
+      - Node.llm_config / Construct.llm_config are LlmConfig instances, not dicts
+      - extra='forbid' rejects typos at Node construction (not at first invoke)
+      - provider_kwargs is a separate namespace for provider-specific knobs
+      - merged_with implements typed merge for Construct propagation
+      - as_factory_kwargs flattens for the user llm_factory boundary
+      - Pydantic dict coercion preserves model_fields_set (the merge relies on it)
+      - Three-surface parity: @node, declarative Node, programmatic Node|Modifier
+    """
+
+    def test_typo_on_known_field_raises_at_node_construction(self):
+        """`max_retires` (typo) must surface at Node construction, not silently default."""
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError):
+            Node(
+                name="probe",
+                mode="think",
+                inputs=Claims,
+                outputs=MergedResult,
+                model="fast",
+                prompt="p",
+                llm_config={"max_retires": 5},  # typo!
+            )
+
+    def test_provider_kwarg_at_top_level_raises_after_promotion(self):
+        """temperature/max_tokens at top-level must use provider_kwargs namespace."""
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError):
+            Node(
+                name="probe",
+                mode="think",
+                inputs=Claims,
+                outputs=MergedResult,
+                model="fast",
+                prompt="p",
+                llm_config={"temperature": 0.7},  # belongs in provider_kwargs
+            )
+
+    def test_provider_kwargs_namespace_round_trips(self):
+        """provider_kwargs preserves arbitrary provider knobs."""
+        from neograph._llm_config import LlmConfig
+
+        cfg = LlmConfig(provider_kwargs={"temperature": 0.7, "max_tokens": 512})
+        assert cfg.provider_kwargs == {"temperature": 0.7, "max_tokens": 512}
+
+    def test_dict_input_preserves_model_fields_set(self):
+        """The merge logic depends on model_fields_set surviving Pydantic coercion."""
+        n = Node(
+            name="x",
+            mode="think",
+            inputs=Claims,
+            outputs=MergedResult,
+            model="fast",
+            prompt="p",
+            llm_config={"max_retries": 5},
+        )
+        from neograph._llm_config import LlmConfig
+
+        assert isinstance(n.llm_config, LlmConfig)
+        assert n.llm_config.model_fields_set == {"max_retries"}
+        assert n.llm_config.max_retries == 5
+        assert n.llm_config.max_iterations == 20  # untouched default
+
+    def test_default_factory_produces_empty_model_fields_set(self):
+        """Default-constructed LlmConfig has no fields set -- enables 'inherit parent' semantics."""
+        from neograph._llm_config import LlmConfig
+
+        n = Node(
+            name="x",
+            mode="think",
+            inputs=Claims,
+            outputs=MergedResult,
+            model="fast",
+            prompt="p",
+        )
+        assert isinstance(n.llm_config, LlmConfig)
+        assert n.llm_config.model_fields_set == set()
+
+    def test_as_factory_kwargs_flattens_provider_into_top_level(self):
+        """as_factory_kwargs returns the dict the user llm_factory expects."""
+        from neograph._llm_config import LlmConfig
+
+        cfg = LlmConfig(max_retries=3, provider_kwargs={"temperature": 0.7})
+        flat = cfg.as_factory_kwargs()
+        # Framework keys present
+        assert flat["max_retries"] == 3
+        assert flat["output_strategy"] == "structured"
+        # Provider kwargs flattened to top
+        assert flat["temperature"] == 0.7
+        # provider_kwargs key itself is NOT in the flat dict
+        assert "provider_kwargs" not in flat
+
+    def test_as_factory_kwargs_framework_takes_precedence_on_collision(self):
+        """If a provider_kwarg shadows a framework key, framework wins (semantics authoritative)."""
+        from neograph._llm_config import LlmConfig
+
+        cfg = LlmConfig(max_retries=3, provider_kwargs={"max_retries": 99})
+        flat = cfg.as_factory_kwargs()
+        assert flat["max_retries"] == 3
+
+    def test_merged_with_child_wins_on_set_fields(self):
+        """Construct propagation: child override beats parent default."""
+        from neograph._llm_config import LlmConfig
+
+        parent = LlmConfig(max_retries=3, max_iterations=15)
+        child = LlmConfig(max_retries=7)  # only max_retries set
+        merged = parent.merged_with(child)
+        assert merged.max_retries == 7  # child wins
+        assert merged.max_iterations == 15  # parent retained (child unset)
+
+    def test_merged_with_child_unset_inherits_parent(self):
+        """Default-constructed child inherits all parent fields."""
+        from neograph._llm_config import LlmConfig
+
+        parent = LlmConfig(max_retries=3, max_iterations=15, token_budget=1000)
+        child = LlmConfig()
+        merged = parent.merged_with(child)
+        assert merged.max_retries == 3
+        assert merged.max_iterations == 15
+        assert merged.token_budget == 1000
+
+    def test_merged_with_provider_kwargs_collision_child_wins(self):
+        """provider_kwargs merge: child wins on key collision."""
+        from neograph._llm_config import LlmConfig
+
+        parent = LlmConfig(provider_kwargs={"temperature": 0.5})
+        child = LlmConfig(provider_kwargs={"temperature": 0.9})
+        merged = parent.merged_with(child)
+        assert merged.provider_kwargs["temperature"] == 0.9
+
+    def test_merged_with_provider_kwargs_disjoint_unions(self):
+        """Disjoint provider_kwargs from parent and child both survive."""
+        from neograph._llm_config import LlmConfig
+
+        parent = LlmConfig(provider_kwargs={"temperature": 0.5})
+        child = LlmConfig(provider_kwargs={"max_tokens": 512})
+        merged = parent.merged_with(child)
+        assert merged.provider_kwargs == {"temperature": 0.5, "max_tokens": 512}
+
+    def test_invalid_output_strategy_raises_at_node_construction(self):
+        """compiler.py:163 runtime check is replaced by Pydantic Literal at Node ctor."""
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError):
+            Node(
+                name="probe",
+                mode="think",
+                inputs=Claims,
+                outputs=MergedResult,
+                model="fast",
+                prompt="p",
+                llm_config={"output_strategy": "banana"},
+            )
+
+    def test_construct_propagation_uses_typed_merge(self):
+        """Construct.llm_config flows to children via merged_with, not dict spread."""
+        from neograph._llm_config import LlmConfig
+
+        n = Node(
+            name="child",
+            mode="think",
+            inputs=Claims,
+            outputs=MergedResult,
+            model="fast",
+            prompt="p",
+            llm_config={"max_retries": 7},
+        )
+        c = Construct(
+            "p",
+            llm_config={"max_iterations": 25, "max_retries": 3},
+            nodes=[n],
+        )
+        propagated = c.nodes[0].llm_config
+        assert isinstance(propagated, LlmConfig)
+        assert propagated.max_retries == 7  # child wins
+        assert propagated.max_iterations == 25  # inherited from parent
+
+    def test_node_llm_config_is_typed_field(self):
+        """Node.llm_config is annotated as LlmConfig in the IR."""
+        from neograph._llm_config import LlmConfig
+        from neograph.node import Node as _Node
+
+        ann = _Node.model_fields["llm_config"].annotation
+        # Field annotation must be exactly LlmConfig (not dict, not Any)
+        assert ann is LlmConfig
+
+    def test_construct_llm_config_is_typed_field(self):
+        """Construct.llm_config is annotated as LlmConfig in the IR."""
+        from neograph._llm_config import LlmConfig
+        from neograph.construct import Construct as _Construct
+
+        ann = _Construct.model_fields["llm_config"].annotation
+        assert ann is LlmConfig
+
+    def test_normalize_llm_config_not_referenced_in_src(self):
+        """Guard: deletion of normalize_llm_config is permanent across the source tree."""
+        import subprocess
+        from pathlib import Path
+
+        src_dir = Path(__file__).resolve().parents[2] / "src" / "neograph"
+        result = subprocess.run(
+            ["grep", "-rn", "--include=*.py", "normalize_llm_config", str(src_dir)],
+            capture_output=True,
+            text=True,
+        )
+        matches = [
+            line for line in result.stdout.splitlines()
+            # Allow the LlmConfig module itself to keep the symbol if needed
+            # for backward-compat re-export, but disallow active use elsewhere.
+            if line and "_llm_config.py" not in line
+        ]
+        assert matches == [], f"normalize_llm_config still used in src/: {matches}"
+
+    def test_factory_receives_full_typed_config_as_dict(self):
+        """The user llm_factory boundary still receives a flat dict (preserved contract)."""
+        from neograph._llm import _get_llm
+
+        captured: dict = {}
+
+        def fake_factory(tier, *, node_name="", llm_config):
+            captured.update(llm_config)
+            return object()  # any sentinel
+
+        from neograph import configure_llm
+
+        configure_llm(
+            llm_factory=fake_factory,
+            prompt_compiler=lambda t, d, **kw: [{"role": "user", "content": "x"}],
+        )
+        from neograph._llm_config import LlmConfig
+
+        cfg = LlmConfig(max_retries=4, provider_kwargs={"temperature": 0.3})
+        _get_llm("fast", node_name="n", llm_config=cfg)
+        assert captured["max_retries"] == 4
+        assert captured["temperature"] == 0.3
+        # Default-set framework keys are now visible to the factory
+        assert captured["output_strategy"] == "structured"
+
+    def test_three_surface_parity_decorative_declarative_programmatic(self):
+        """All three API surfaces produce the same typed IR for llm_config."""
+        from neograph._llm_config import LlmConfig
+        from neograph.decorators import node as node_decorator
+
+        # Surface 1: @node decorator with dict shorthand
+        @node_decorator(
+            outputs=MergedResult,
+            model="fast",
+            prompt="p",
+            llm_config={"max_retries": 7},
+        )
+        def n1(claims: Claims) -> MergedResult: ...
+
+        # Surface 2: declarative Node(...) with LlmConfig instance
+        n2 = Node(
+            name="n2",
+            mode="think",
+            inputs=Claims,
+            outputs=MergedResult,
+            model="fast",
+            prompt="p",
+            llm_config=LlmConfig(max_retries=7),
+        )
+
+        # Surface 3: programmatic Node | Oracle (modifier flow)
+        n3_base = Node(
+            name="n3",
+            mode="think",
+            inputs=Claims,
+            outputs=MergedResult,
+            model="fast",
+            prompt="p",
+            llm_config=LlmConfig(max_retries=7),
+        )
+
+        # All three carry typed LlmConfig with max_retries=7
+        for n in (n1, n2, n3_base):
+            assert isinstance(n.llm_config, LlmConfig)
+            assert n.llm_config.max_retries == 7

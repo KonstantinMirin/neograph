@@ -25,6 +25,7 @@ from typing import Annotated, Any
 from pydantic import BaseModel, BeforeValidator, Field
 
 from neograph._construct_validation import ConstructError, _validate_node_chain
+from neograph._llm_config import LlmConfig
 from neograph.modifiers import Modifiable, ModifierSet
 
 
@@ -84,10 +85,10 @@ class Construct(Modifiable, BaseModel):
     output: type[BaseModel] | None = None
 
     # Default LLM config inherited by every node. Per-node llm_config merges
-    # over this (node wins on conflicts). Common use: setting
-    # output_strategy="json_mode" once for a whole pipeline instead of on
-    # every produce node.
-    llm_config: dict[str, Any] = Field(default_factory=dict)
+    # over this via LlmConfig.merged_with (node wins on conflicts). Common
+    # use: setting output_strategy="json_mode" once for a whole pipeline
+    # instead of on every produce node.
+    llm_config: LlmConfig = Field(default_factory=LlmConfig)
 
     # Default renderer for all child nodes. Propagated to children that don't
     # have their own renderer set. Dispatch hierarchy:
@@ -118,10 +119,17 @@ class Construct(Modifiable, BaseModel):
         # Propagate default llm_config to child nodes BEFORE validation so
         # downstream compile() sees the merged config. Per-node llm_config
         # merges over the Construct default (node wins on conflicts).
+        # Propagate parent defaults only when the parent has something to
+        # contribute -- either an explicit framework field or any provider
+        # knob. Skipping the no-op case preserves `is`-identity for
+        # child nodes under a bare Construct (matches pre-pej0 behavior).
+        parent_has_overrides = bool(
+            self.llm_config.model_fields_set or self.llm_config.provider_kwargs
+        )
         for i, item in enumerate(self.nodes):
             updates: dict[str, Any] = {}
-            if self.llm_config and hasattr(item, "llm_config"):
-                updates["llm_config"] = {**self.llm_config, **item.llm_config}
+            if parent_has_overrides and hasattr(item, "llm_config"):
+                updates["llm_config"] = self.llm_config.merged_with(item.llm_config)
             if self.renderer is not None and hasattr(item, "renderer") and getattr(item, "renderer", None) is None:
                 updates["renderer"] = self.renderer
             if updates:

@@ -17,10 +17,10 @@ from pathlib import Path
 from typing import Any
 
 import structlog
-import yaml
+import yaml  # type: ignore[import-untyped]
+from pydantic import ValidationError
 
-log = structlog.get_logger()
-
+from neograph._llm_config import LlmConfig
 from neograph.conditions import parse_condition
 from neograph.construct import Construct
 from neograph.errors import ConfigurationError
@@ -28,6 +28,8 @@ from neograph.modifiers import Each, Loop, Operator, Oracle
 from neograph.naming import field_name_for
 from neograph.node import Node
 from neograph.spec_types import load_project_types, lookup_type
+
+log = structlog.get_logger()
 
 
 def load_spec(
@@ -144,6 +146,18 @@ def _build_construct(spec: dict[str, Any]) -> Construct:
     )
 
 
+def _parse_llm_config(node_spec: dict[str, Any]) -> LlmConfig:
+    """Parse the llm_config block, wrapping validation errors with node context."""
+    raw = node_spec.get("llm_config", {}) or {}
+    try:
+        return LlmConfig(**raw)
+    except ValidationError as exc:
+        raise ConfigurationError.build(
+            f"invalid llm_config for node {node_spec.get('name', '<unknown>')!r}",
+            hint=str(exc),
+        ) from exc
+
+
 def _build_node(node_spec: dict[str, Any]) -> Node:
     """Build a Node from a node spec dict."""
     name = node_spec["name"]
@@ -169,7 +183,7 @@ def _build_node(node_spec: dict[str, Any]) -> Node:
         model=node_spec.get("model"),
         scripted_fn=node_spec.get("scripted_fn"),
         context=node_spec.get("context"),
-        llm_config=node_spec.get("llm_config", {}),
+        llm_config=_parse_llm_config(node_spec),
     )
 
     # Apply modifiers

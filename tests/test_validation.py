@@ -1274,24 +1274,28 @@ class TestLlmConfiguredCheck:
 # ═══════════════════════════════════════════════════════════════════════════
 
 class TestOutputStrategyValidation:
-    """compile() must verify output_strategy values are valid."""
+    """output_strategy must be one of the allowed literals.
 
-    def test_invalid_output_strategy_raises_at_compile(self):
-        """Node with bogus output_strategy raises CompileError at compile()."""
+    Post-pej0 the LlmConfig Literal field enforces this at Node construction
+    -- strictly earlier than the previous compile-time check.
+    """
+
+    def test_invalid_output_strategy_raises_at_node_construction(self):
+        """Node with bogus output_strategy raises ValidationError at construction."""
+        from pydantic import ValidationError
+
         from tests.fakes import StructuredFake, configure_fake_llm
         configure_fake_llm(lambda tier: StructuredFake(lambda m: m()))
-        n = Node(
-            "bad-strat",
-            mode="think",
-            inputs=RawText,
-            outputs=Claims,
-            model="fast",
-            prompt="test",
-            llm_config={"output_strategy": "banana"},
-        )
-        pipeline = Construct("bad-strat-pipe", nodes=[n])
-        with pytest.raises(CompileError, match="banana"):
-            compile(pipeline)
+        with pytest.raises(ValidationError, match="output_strategy"):
+            Node(
+                "bad-strat",
+                mode="think",
+                inputs=RawText,
+                outputs=Claims,
+                model="fast",
+                prompt="test",
+                llm_config={"output_strategy": "banana"},
+            )
 
     def test_valid_output_strategies_pass_compile(self):
         """Nodes with valid output_strategy values compile without error."""

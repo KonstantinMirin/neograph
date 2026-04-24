@@ -27,6 +27,7 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, Field, PlainValidator, PrivateAttr
 
+from neograph._llm_config import LlmConfig
 from neograph.errors import ConstructError
 
 
@@ -97,7 +98,7 @@ class Node(Modifiable, BaseModel):
     # LLM configuration
     model: str | None = None        # "fast", "reason", "large"
     prompt: str | None = None       # template name in prompt registry
-    llm_config: dict[str, Any] = Field(default_factory=dict)  # temperature, max_tokens, output_strategy, etc.
+    llm_config: LlmConfig = Field(default_factory=LlmConfig)  # framework knobs + provider_kwargs (typed)
 
     # Tools with per-tool budgets
     tools: list[Tool] = []

@@ -1869,7 +1869,10 @@ class TestOracleMergeLlmConfig:
         @node(outputs=Draft, ensemble_n=2,
               prompt="gen", model="fast",
               merge_prompt="merge: ${variants}",
-              llm_config={"output_strategy": "json_mode", "temperature": 0.5})
+              llm_config={
+                  "output_strategy": "json_mode",
+                  "provider_kwargs": {"temperature": 0.5},
+              })
         def write() -> Draft: ...
 
         mod = self._fresh_module("test_llm_cfg")
@@ -1890,7 +1893,8 @@ class TestOracleMergeLlmConfig:
         assert merge_llm_config is not None, (
             "merge invoke_structured did not receive llm_config"
         )
-        assert merge_llm_config.get("output_strategy") == "json_mode", (
+        # Post-pej0: llm_config is a typed LlmConfig at this boundary.
+        assert merge_llm_config.output_strategy == "json_mode", (
             f"merge should inherit node's output_strategy, got: {merge_llm_config}"
         )
 

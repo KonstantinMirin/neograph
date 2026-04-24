@@ -74,6 +74,7 @@ from neograph._di_classify import (  # noqa: F401 — re-exported for backward c
     _resolve_di_args,
     _resolve_merge_args,
 )
+from neograph._llm_config import LlmConfig
 from neograph._sidecar import (  # noqa: F401 — re-exported for backward compat
     _get_node_source,
     _get_param_res,
@@ -201,7 +202,7 @@ def node(
     outputs: Any = None,
     model: str | None = None,
     prompt: str | None = None,
-    llm_config: dict[str, Any] | None = None,
+    llm_config: dict[str, Any] | LlmConfig | None = None,
     tools: list[Tool] | None = None,
     name: str | None = None,
     map_over: str | None = None,
@@ -508,7 +509,11 @@ def node(
             outputs=inferred_output,
             model=model,
             prompt=prompt,
-            llm_config=llm_config or {},
+            llm_config=(
+                llm_config
+                if isinstance(llm_config, LlmConfig)
+                else LlmConfig(**(llm_config or {}))
+            ),
             tools=tools or [],
             raw_fn=f if effective_mode == "raw" else None,
             renderer=renderer,

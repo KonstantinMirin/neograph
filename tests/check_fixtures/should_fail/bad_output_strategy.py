@@ -1,4 +1,4 @@
-# CHECK_ERROR: invalid output_strategy
+# CHECK_ERROR: output_strategy
 from pydantic import BaseModel
 
 from neograph import Construct, Node, configure_llm

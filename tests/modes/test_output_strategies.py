@@ -300,14 +300,21 @@ class TestPromptCompilerReceivesOutputModel:
             outputs=Claims,
             model="fast",
             prompt="test",
-            llm_config={"output_strategy": "json_mode", "temperature": 0.5},
+            llm_config={
+                "output_strategy": "json_mode",
+                "provider_kwargs": {"temperature": 0.5},
+            },
         )
         pipeline = Construct("test", nodes=[node])
         graph = compile(pipeline)
         run(graph, input={"node_id": "test"})
 
         assert len(compiler_calls) == 1
-        assert compiler_calls[0].get("llm_config") == {"output_strategy": "json_mode", "temperature": 0.5}
+        # Post-pej0: as_factory_kwargs flattens framework keys + provider_kwargs
+        # into a flat dict the compiler receives.
+        compiler_cfg = compiler_calls[0].get("llm_config")
+        assert compiler_cfg["output_strategy"] == "json_mode"
+        assert compiler_cfg["temperature"] == 0.5
         assert compiler_calls[0].get("output_model") is Claims
 
     def test_schema_injected_when_compiler_uses_json_mode(self):

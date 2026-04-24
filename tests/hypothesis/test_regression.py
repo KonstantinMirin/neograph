@@ -115,12 +115,15 @@ class TestLLMSurfaceConfigPropagation:
         child = Node(
             "cfg-child", mode="think", model="fast",
             prompt="test", outputs=Alpha,
-            llm_config={"temperature": 0.7},
+            llm_config={"provider_kwargs": {"temperature": 0.7}},
         )
-        original_config = child.llm_config.copy()
+        original_config = child.llm_config.model_copy(deep=True)
 
         pipeline = Construct("cfg-test", nodes=[child],
-                             llm_config={"temperature": 0.3, "max_retries": 5})
+                             llm_config={
+                                 "max_retries": 5,
+                                 "provider_kwargs": {"temperature": 0.3},
+                             })
         graph = compile(pipeline)
         run(graph, input={"node_id": "test"})
 
@@ -131,10 +134,10 @@ class TestLLMSurfaceConfigPropagation:
 
         # Inner node has merged config (child wins on temperature)
         inner = pipeline.nodes[0]
-        assert inner.llm_config["temperature"] == 0.7, "Child must win on conflict"
-        assert inner.llm_config["max_retries"] == 5, "Parent field must propagate"
+        assert inner.llm_config.provider_kwargs["temperature"] == 0.7, "Child must win on conflict"
+        assert inner.llm_config.max_retries == 5, "Parent field must propagate"
 
-        # Factory received the merged config
+        # Factory received the flattened merged config
         assert len(received_configs) >= 1, "Factory was never called"
         factory_config = received_configs[0]
         assert factory_config.get("temperature") == 0.7

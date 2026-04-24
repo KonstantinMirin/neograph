@@ -276,44 +276,43 @@ class TestConstructLlmConfigDefault:
 
         pipeline = Construct(
             "with-default",
-            llm_config={"output_strategy": "json_mode", "temperature": 0.5},
+            llm_config={
+                "output_strategy": "json_mode",
+                "provider_kwargs": {"temperature": 0.5},
+            },
             nodes=[a, b],
         )
 
-        # Both nodes should have inherited the Construct default
-        assert pipeline.nodes[0].llm_config == {
-            "output_strategy": "json_mode",
-            "temperature": 0.5,
-        }
-        assert pipeline.nodes[1].llm_config == {
-            "output_strategy": "json_mode",
-            "temperature": 0.5,
-        }
+        # Both nodes inherit the construct default. provider_kwargs merged.
+        for n in pipeline.nodes[:2]:
+            assert n.llm_config.output_strategy == "json_mode"
+            assert n.llm_config.provider_kwargs == {"temperature": 0.5}
 
     def test_node_config_wins_when_merging_with_construct_default(self):
         """Per-node llm_config merges with Construct default; node wins on conflicts."""
         from neograph import Construct, Node
 
         a = Node("a", mode="think", outputs=Claims, model="fast", prompt="p",
-                 llm_config={"temperature": 0.9, "max_tokens": 1000})
+                 llm_config={"provider_kwargs": {"temperature": 0.9, "max_tokens": 1000}})
 
         pipeline = Construct(
             "merged",
-            llm_config={"output_strategy": "json_mode", "temperature": 0.2},
+            llm_config={
+                "output_strategy": "json_mode",
+                "provider_kwargs": {"temperature": 0.2},
+            },
             nodes=[a],
         )
 
         # Construct default provides output_strategy.
         # Node explicit temperature (0.9) overrides construct default (0.2).
         # Node max_tokens passes through.
-        assert pipeline.nodes[0].llm_config == {
-            "output_strategy": "json_mode",
-            "temperature": 0.9,
-            "max_tokens": 1000,
-        }
+        merged = pipeline.nodes[0].llm_config
+        assert merged.output_strategy == "json_mode"
+        assert merged.provider_kwargs == {"temperature": 0.9, "max_tokens": 1000}
 
     def test_scripted_nodes_get_config_when_construct_has_default(self):
-        """Scripted nodes don't get llm_config inheritance (they don't use it)."""
+        """Scripted nodes get llm_config inheritance uniformly."""
         from neograph import Construct, Node
 
         register_scripted("noop_k7k", lambda input_data, config: Claims(items=["x"]))
@@ -327,18 +326,22 @@ class TestConstructLlmConfigDefault:
 
         # Scripted nodes get the default applied (harmless — they don't use it)
         # but the propagation is uniform to keep the merge logic simple.
-        assert pipeline.nodes[0].llm_config == {"output_strategy": "json_mode"}
+        assert pipeline.nodes[0].llm_config.output_strategy == "json_mode"
 
     def test_node_config_unchanged_when_no_construct_default(self):
         """When Construct has no llm_config, nodes keep their original config unchanged."""
         from neograph import Construct, Node
 
         a = Node("a", mode="think", outputs=Claims, model="fast", prompt="p",
-                 llm_config={"temperature": 0.7})
+                 llm_config={"provider_kwargs": {"temperature": 0.7}})
 
         pipeline = Construct("no-default", nodes=[a])
 
-        assert pipeline.nodes[0].llm_config == {"temperature": 0.7}
+        # Parent has default LlmConfig() -- merged_with leaves framework fields
+        # at their defaults and keeps the child's provider_kwargs.
+        merged = pipeline.nodes[0].llm_config
+        assert merged.provider_kwargs == {"temperature": 0.7}
+        assert merged.output_strategy == "structured"  # default (no construct override)
 
     def test_decorator_inherits_config_when_using_construct_from_functions(self):
         """@node functions inherit the Construct default via construct_from_functions."""
@@ -347,22 +350,27 @@ class TestConstructLlmConfigDefault:
         def cff_default_a() -> Claims: ...
 
         @node(outputs=Claims, prompt="p", model="fast",
-              llm_config={"temperature": 0.9})
+              llm_config={"provider_kwargs": {"temperature": 0.9}})
         def cff_default_b(cff_default_a: Claims) -> Claims: ...
 
         pipeline = construct_from_functions(
             "default-cff",
             [cff_default_a, cff_default_b],
-            llm_config={"output_strategy": "json_mode", "temperature": 0.2},
+            llm_config={
+                "output_strategy": "json_mode",
+                "provider_kwargs": {"temperature": 0.2},
+            },
         )
 
         # cff_default_a inherits both fields
         a_node = pipeline.nodes[0]
-        assert a_node.llm_config == {"output_strategy": "json_mode", "temperature": 0.2}
+        assert a_node.llm_config.output_strategy == "json_mode"
+        assert a_node.llm_config.provider_kwargs == {"temperature": 0.2}
 
         # cff_default_b inherits output_strategy, overrides temperature
         b_node = pipeline.nodes[1]
-        assert b_node.llm_config == {"output_strategy": "json_mode", "temperature": 0.9}
+        assert b_node.llm_config.output_strategy == "json_mode"
+        assert b_node.llm_config.provider_kwargs == {"temperature": 0.9}
 
 
 

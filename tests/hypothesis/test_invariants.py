@@ -84,7 +84,7 @@ class TestNodeImmutabilityInvariant:
             # Snapshot mutable fields BEFORE Construct
             snapshots.append({
                 "inputs": node.inputs,
-                "llm_config": node.llm_config.copy(),
+                "llm_config": node.llm_config.model_copy(deep=True),
                 "renderer": node.renderer,
             })
 
@@ -118,13 +118,14 @@ class TestNodeImmutabilityInvariant:
             register_scripted(fn_name, ns.fn)
             node = Node(ns.name, mode="scripted", scripted_fn=fn_name,
                         inputs=ns.input_type, outputs=ns.output_type,
-                        llm_config={"temperature": 0.5})
+                        llm_config={"provider_kwargs": {"temperature": 0.5}})
             node = _apply_spec_modifiers(node, ns, f"cfg_{t}")
             nodes.append(node)
-            original_configs.append(node.llm_config.copy())
+            original_configs.append(node.llm_config.model_copy(deep=True))
 
         pipeline = Construct(spec.name, nodes=nodes,
-                             llm_config={"max_retries": 3, "model_tier": "pro"})
+                             llm_config={"max_retries": 3,
+                                         "provider_kwargs": {"model_tier": "pro"}})
 
         for i, node in enumerate(nodes):
             assert node.llm_config == original_configs[i], (
@@ -135,7 +136,7 @@ class TestNodeImmutabilityInvariant:
         # Inner nodes SHOULD have merged config
         for inner in pipeline.nodes:
             if hasattr(inner, "llm_config"):
-                assert inner.llm_config.get("max_retries") == 3, (
+                assert inner.llm_config.max_retries == 3, (
                     f"Inner node '{inner.name}' missing parent llm_config"
                 )
 

@@ -13,6 +13,7 @@ from typing import Any
 
 from langchain_core.runnables import RunnableConfig
 
+from neograph._llm_config import LlmConfig
 from neograph.errors import ExecutionError
 from neograph.modifiers import Each, Oracle
 from neograph.naming import field_name_for
@@ -178,7 +179,7 @@ def make_oracle_merge_fn(
     collector_field: str,
     output_model: Any,
     node_inputs: dict[str, Any] | None = None,
-    llm_config: dict[str, Any] | None = None,
+    llm_config: LlmConfig | None = None,
 ) -> Callable:
     """Create the merge barrier function for Oracle.
 

@@ -23,7 +23,7 @@ from langchain_core.runnables import RunnableConfig
 from pydantic import BaseModel, ValidationError
 
 from neograph._image import resolve_image
-from neograph._llm_config import normalize_llm_config
+from neograph._llm_config import LlmConfig
 from neograph.describe_type import describe_type, describe_value
 from neograph.errors import ConfigurationError, ExecutionError
 
@@ -167,13 +167,28 @@ def configure_llm(
     _cost_callback = cost_callback
 
 
-def _get_llm(tier: str, node_name: str = "", llm_config: dict | None = None) -> Any:
+def _coerce_llm_config(llm_config: LlmConfig | dict | None) -> LlmConfig:
+    """Internal helper: accept LlmConfig/dict/None and produce LlmConfig.
+
+    Test harnesses and external callers often pass dicts; internal pipelines
+    pass typed LlmConfig. This keeps the entry points ergonomic while the
+    rest of the module operates on the typed form.
+    """
+    if llm_config is None:
+        return LlmConfig()
+    if isinstance(llm_config, LlmConfig):
+        return llm_config
+    return LlmConfig(**llm_config)
+
+
+def _get_llm(tier: str, node_name: str = "", llm_config: LlmConfig | dict | None = None) -> Any:
     if _llm_factory is None:
         raise ConfigurationError.build(
             "LLM not configured",
             hint="Call neograph.configure_llm() first.",
         )
-    all_kwargs = {"node_name": node_name, "llm_config": llm_config or {}}
+    cfg = _coerce_llm_config(llm_config)
+    all_kwargs = {"node_name": node_name, "llm_config": cfg.as_factory_kwargs()}
     if _llm_factory_params is _ACCEPT_ALL:
         kwargs = all_kwargs
     else:
@@ -314,7 +329,7 @@ def _compile_prompt(
     node_name: str = "",
     config: RunnableConfig | dict[str, Any] | None = None,
     output_model: type[BaseModel] | None = None,
-    llm_config: dict | None = None,
+    llm_config: LlmConfig | dict | None = None,
     output_schema: str | None = None,
     context: dict[str, Any] | None = None,
 ) -> list:
@@ -325,11 +340,12 @@ def _compile_prompt(
         rendered = _substitute_vars(template, input_data)
         return [{"role": "user", "content": rendered}]
 
+    cfg = _coerce_llm_config(llm_config)
     all_kwargs = {
         "node_name": node_name,
         "config": config,
         "output_model": output_model,
-        "llm_config": llm_config,
+        "llm_config": cfg.as_factory_kwargs(),
         "output_schema": output_schema,
     }
     if context is not None:
@@ -685,18 +701,17 @@ def invoke_structured(
     output_model: type[BaseModel],
     config: RunnableConfig,
     node_name: str = "",
-    llm_config: dict | None = None,
+    llm_config: LlmConfig | dict | None = None,
     context: dict[str, Any] | None = None,
 ) -> BaseModel:
     """Single LLM call with structured JSON output. Mode: produce.
 
-    Output strategy (from llm_config["output_strategy"]):
+    Output strategy (from llm_config.output_strategy):
         "structured" — llm.with_structured_output(model) (default, widest LangChain support)
         "json_mode"  — inject schema into prompt, LLM returns raw JSON, framework parses
         "text"       — LLM returns plain text, framework extracts and parses JSON from it
     """
-    llm_config = llm_config or {}
-    cfg = normalize_llm_config(llm_config, node_name=node_name)
+    cfg = _coerce_llm_config(llm_config)
     strategy = cfg.output_strategy
     llm_log = log.bind(tier=model_tier, prompt=prompt_template, output=output_model.__name__, strategy=strategy)
 
@@ -706,14 +721,14 @@ def invoke_structured(
 
         output_schema = describe_type(output_model)
 
-    llm = _get_llm(model_tier, node_name=node_name, llm_config=llm_config)
+    llm = _get_llm(model_tier, node_name=node_name, llm_config=cfg)
     messages = _compile_prompt(
         prompt_template,
         input_data,
         node_name=node_name,
         config=config,
         output_model=output_model,
-        llm_config=llm_config,
+        llm_config=cfg,
         output_schema=output_schema,
         context=context,
     )
@@ -774,8 +789,7 @@ def render_prompt(
 
     # Generate output_schema for json_mode
     output_schema = None
-    llm_config = getattr(node, "llm_config", None) or {}
-    cfg = normalize_llm_config(llm_config, node_name=getattr(node, "name", ""))
+    cfg = _coerce_llm_config(getattr(node, "llm_config", None))
     strategy = cfg.output_strategy
     output_model = getattr(node, "outputs", None)
     if strategy == "json_mode" and output_model is not None:
@@ -789,7 +803,7 @@ def render_prompt(
         node_name=getattr(node, "name", ""),
         config=config,
         output_model=output_model,
-        llm_config=llm_config,
+        llm_config=cfg,
         output_schema=output_schema,
     )
 

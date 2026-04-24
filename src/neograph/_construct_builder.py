@@ -17,6 +17,7 @@ if TYPE_CHECKING:
     from pydantic import BaseModel
 
 from neograph._construct_validation import ConstructError
+from neograph._llm_config import LlmConfig
 from neograph._sidecar import (
     _get_node_source,
     _get_param_res,
@@ -34,7 +35,7 @@ def construct_from_module(
     mod: Any,
     name: str | None = None,
     *,
-    llm_config: dict[str, Any] | None = None,
+    llm_config: dict[str, Any] | LlmConfig | None = None,
     input: type[BaseModel] | None = None,
     output: type[BaseModel] | None = None,
 ) -> Construct:
@@ -80,7 +81,7 @@ def construct_from_functions(
     name: str,
     functions: list[Any],
     *,
-    llm_config: dict[str, Any] | None = None,
+    llm_config: dict[str, Any] | LlmConfig | None = None,
     input: type[BaseModel] | None = None,
     output: type[BaseModel] | None = None,
 ) -> Construct:
@@ -586,7 +587,7 @@ def _build_construct_from_decorated(
     nodes: list[Node],
     construct_name: str,
     source_label: str,
-    llm_config: dict[str, Any] | None,
+    llm_config: dict[str, Any] | LlmConfig | None,
     construct_input: type[BaseModel] | None = None,
     construct_output: type[BaseModel] | None = None,
     sub_constructs: list[Construct] | None = None,
@@ -628,7 +629,11 @@ def _build_construct_from_decorated(
     return Construct(
         name=construct_name,
         nodes=ordered,
-        llm_config=llm_config or {},
+        llm_config=(
+            llm_config
+            if isinstance(llm_config, LlmConfig)
+            else LlmConfig(**(llm_config or {}))
+        ),
         input=construct_input,
         output=construct_output,
     )

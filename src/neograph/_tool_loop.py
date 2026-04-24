@@ -17,13 +17,14 @@ from pydantic import BaseModel
 
 from neograph._llm import (
     _call_structured,
+    _coerce_llm_config,
     _compile_prompt,
     _get_llm,
     _invoke_json_with_retry,
     _notify_cost,
     _parse_json_response,
 )
-from neograph._llm_config import normalize_llm_config
+from neograph._llm_config import LlmConfig
 from neograph._registry import registry
 from neograph.describe_type import describe_value
 from neograph.errors import ConfigurationError, ExecutionError
@@ -151,7 +152,7 @@ def invoke_with_tools(
     budget_tracker: ToolBudgetTracker,
     config: RunnableConfig,
     node_name: str = "",
-    llm_config: dict | None = None,
+    llm_config: LlmConfig | dict | None = None,
     renderer: Any = None,
     context: dict[str, Any] | None = None,
 ) -> tuple[BaseModel | None, list]:
@@ -177,7 +178,8 @@ def invoke_with_tools(
         budgets={t.name: t.budget for t in tools},
     )
 
-    llm = _get_llm(model_tier, node_name=node_name, llm_config=llm_config)
+    cfg = _coerce_llm_config(llm_config)
+    llm = _get_llm(model_tier, node_name=node_name, llm_config=cfg)
     messages = list(
         _compile_prompt(
             prompt_template,
@@ -185,7 +187,7 @@ def invoke_with_tools(
             node_name=node_name,
             config=config,
             output_model=output_model,
-            llm_config=llm_config,
+            llm_config=cfg,
             context=context,
         )
     )
@@ -204,8 +206,6 @@ def invoke_with_tools(
     active_tools = list(tool_instances.values())
     llm_with_tools = _CoercingToolWrapper(llm.bind_tools(active_tools))
 
-    llm_config = llm_config or {}
-    cfg = normalize_llm_config(llm_config, node_name=node_name)
     max_iterations = cfg.max_iterations
     token_budget = cfg.token_budget
     cumulative_input_tokens = 0

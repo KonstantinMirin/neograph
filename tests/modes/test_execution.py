@@ -330,14 +330,15 @@ class TestLLMConfig:
             outputs=Claims,
             model="reason",
             prompt="test",
-            llm_config={"temperature": 0.9, "max_tokens": 2000},
+            llm_config={"provider_kwargs": {"temperature": 0.9, "max_tokens": 2000}},
         )
 
         pipeline = Construct("test-llm-config", nodes=[node])
         graph = compile(pipeline)
         run(graph, input={"node_id": "test-001"})
 
-        # Factory was called with the node's llm_config
+        # Factory receives the flattened LlmConfig: provider_kwargs are
+        # hoisted to top-level so the consumer contract is preserved.
         assert len(factory_calls) == 1
         assert factory_calls[0]["tier"] == "reason"
         assert factory_calls[0]["node_name"] == "custom-llm"
@@ -355,7 +356,7 @@ class TestLLMConfig:
             outputs=Claims,
             model="fast",
             prompt="test",
-            llm_config={"temperature": 0.5},  # this won't crash old factory
+            llm_config={"provider_kwargs": {"temperature": 0.5}},  # this won't crash old factory
         )
 
         pipeline = Construct("test-compat", nodes=[node])

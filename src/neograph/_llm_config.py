@@ -1,43 +1,50 @@
-"""Typed view over the dict-valued `llm_config` that Nodes and Constructs carry.
+"""Typed IR for LLM configuration.
 
-The public surface (Node.llm_config, Construct.llm_config, the llm_factory
-callback) stays a dict for provider-knob pass-through (temperature,
-max_tokens, etc.). This module provides the internal typed view used by
-invoke_structured / invoke_with_tools / render_prompt so framework-read
-keys get one normalized source of truth for defaults and type rejection.
+``LlmConfig`` is the IR type carried by ``Node.llm_config`` and
+``Construct.llm_config``. It parses inputs at construction time and rejects
+unknown keys via ``extra='forbid'`` -- typos like ``max_retires`` surface at
+Node construction instead of silently defaulting.
 
-Core invariant: the raw dict is never mutated. LlmConfig is read-only.
+Provider-specific knobs (``temperature``, ``max_tokens``, ``model_tier``, ...)
+live in the separate ``provider_kwargs`` namespace and cannot collide with
+framework keys.
+
+At the ``llm_factory`` / ``prompt_compiler`` boundary, :py:meth:`as_factory_kwargs`
+flattens framework fields and provider knobs into a single dict to preserve
+the documented consumer contract.
 """
 
 from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, ValidationError
-
-from neograph.errors import ConfigurationError
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class LlmConfig(BaseModel):
-    """Typed view over the llm_config dict. Internal consumers only.
+    """Typed IR for the per-Node / per-Construct LLM configuration.
 
-    Pydantic validation rejects wrong types on known fields (``max_retries=``
-    ``"five"`` raises, instead of silently degrading downstream). Unknown
-    keys are preserved via ``extra="allow"`` so provider-specific knobs
-    (temperature, max_tokens, model_tier) survive the round-trip any
-    downstream consumer might need.
+    Framework fields live here as typed attributes. Provider knobs go into
+    ``provider_kwargs``. Pydantic's ``extra='forbid'`` ensures any unknown
+    top-level key (including typos) raises ``ValidationError`` at Node
+    construction time.
     """
 
-    model_config = ConfigDict(extra="allow")
+    model_config = ConfigDict(extra="forbid")
 
+    # Known framework fields -- the ONLY place defaults live.
     output_strategy: Literal["structured", "json_mode", "text"] = "structured"
     max_retries: int = 1
     max_iterations: int = 20
     token_budget: int | None = None
-    # ``None`` is the only legitimate sentinel here — it means
-    # ``use the framework default, interpolated with output_model_name``.
-    # Resolver method handles None and "" symmetrically.
+    # ``None`` means "use the framework default template, interpolated with
+    # the output model name". ``""`` also falls back to the default.
     budget_exhausted_message: str | None = None
+
+    # Separate namespace for provider-specific knobs (temperature, max_tokens,
+    # top_p, stop, model_tier, ...). Kept distinct so framework keys cannot
+    # accidentally shadow or be shadowed by provider keys.
+    provider_kwargs: dict[str, Any] = Field(default_factory=dict)
 
     def resolved_budget_exhausted_message(self, output_model_name: str) -> str:
         """Return the effective message for the Layer-C retry branch.
@@ -52,26 +59,29 @@ class LlmConfig(BaseModel):
             "No markup, no tool calls. Output ONLY the structured response."
         )
 
+    def as_factory_kwargs(self) -> dict[str, Any]:
+        """Flatten to a dict for the user ``llm_factory`` / ``prompt_compiler``.
 
-def normalize_llm_config(
-    raw: dict[str, Any] | None,
-    *,
-    node_name: str = "",
-) -> LlmConfig:
-    """Construct an LlmConfig from a raw dict, raising a friendly error on failure.
+        Framework fields take precedence over ``provider_kwargs`` on key
+        collision -- framework semantics are authoritative, so a user cannot
+        shadow ``max_retries`` with a provider knob.
+        """
+        framework = self.model_dump(exclude={"provider_kwargs"})
+        return {**self.provider_kwargs, **framework}
 
-    Wraps pydantic.ValidationError in ConfigurationError so users see which
-    node produced the bad config and what was expected. Returns a typed view
-    over the dict; callers continue to pass the raw dict to the llm_factory
-    callback and the prompt compiler -- those surfaces stay dict.
-    """
-    try:
-        return LlmConfig.model_validate(raw or {})
-    except ValidationError as exc:
-        raise ConfigurationError.build(
-            "invalid llm_config",
-            node=node_name or None,
-            found=str(raw),
-            hint=f"pydantic: {exc.errors()[0]['msg']} on field "
-                 f"'{'.'.join(str(p) for p in exc.errors()[0]['loc'])}'",
-        ) from exc
+    def merged_with(self, child: LlmConfig) -> LlmConfig:
+        """Construct-level propagation: parent default + child overrides.
+
+        Child wins on every framework field it sets explicitly (tracked via
+        ``model_fields_set``). Unset child fields inherit the parent value.
+        ``provider_kwargs`` are merged with child winning on key collisions.
+
+        The result has ``model_fields_set`` populated for every framework
+        field written -- callers that chain further merges see the full set
+        of "has been configured" markers.
+        """
+        parent_dump = self.model_dump(exclude={"provider_kwargs"})
+        child_overrides = child.model_dump(exclude_unset=True, exclude={"provider_kwargs"})
+        merged_framework = {**parent_dump, **child_overrides}
+        merged_provider = {**self.provider_kwargs, **child.provider_kwargs}
+        return LlmConfig(provider_kwargs=merged_provider, **merged_framework)

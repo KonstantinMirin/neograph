@@ -156,19 +156,9 @@ def compile(construct: Construct, checkpointer: Any = None, retry_policy: Any = 
                         construct=construct.name,
                     )
 
-    # Validate: output_strategy values
-    _VALID_STRATEGIES = {"structured", "json_mode", "text"}
-    for item in construct.nodes:
-        if isinstance(item, Node) and item.mode in ("think", "agent", "act"):
-            strategy = item.llm_config.get("output_strategy")
-            if strategy is not None and strategy not in _VALID_STRATEGIES:
-                raise CompileError.build(
-                    "invalid output_strategy",
-                    expected=f"one of {', '.join(sorted(_VALID_STRATEGIES))}",
-                    found=f"output_strategy='{strategy}'",
-                    node=item.name,
-                    construct=construct.name,
-                )
+    # output_strategy values are now enforced at Node construction via the
+    # typed LlmConfig.output_strategy Literal field (pej0). The prior runtime
+    # _VALID_STRATEGIES check is redundant and was removed.
 
     # 1. Generate state model from node I/O
     state_model = compile_state_model(construct, context_types=_context_types)
