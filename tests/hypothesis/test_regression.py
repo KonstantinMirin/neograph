@@ -23,6 +23,7 @@ class TestYAMLSurfaceSharedNodeImmutability:
         """A node used in a YAML sub-construct must not have its inputs
         mutated in the all_nodes dict. Before gy9r fix, _build_sub_construct
         mutated the shared Node.inputs directly."""
+        from neograph._spec_schema import ConstructSpec
         from neograph.loader import _build_sub_construct
         from neograph.spec_types import register_type
 
@@ -42,8 +43,8 @@ class TestYAMLSurfaceSharedNodeImmutability:
 
         # First sub-construct wires the node
         sub_a = _build_sub_construct(
-            {"name": "sub-a", "input": "SubInput", "output": "SubOutput",
-             "nodes": ["worker"]},
+            ConstructSpec(name="sub-a", input="SubInput", output="SubOutput",
+                          nodes=["worker"]),
             all_nodes,
         )
 

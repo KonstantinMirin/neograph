@@ -177,6 +177,7 @@ class TestYAMLLoaderImmutabilityInvariant:
     def test_loader_sub_construct_does_not_mutate_all_nodes(self, spec):
         """Build nodes, put them in all_nodes, call _build_sub_construct,
         verify all_nodes entries unchanged."""
+        from neograph._spec_schema import ConstructSpec
         from neograph.loader import _build_sub_construct
 
         _register_type_safe(SubInput)
@@ -194,8 +195,8 @@ class TestYAMLLoaderImmutabilityInvariant:
         original_inputs = worker.inputs
 
         _build_sub_construct(
-            {"name": f"sub-{t}", "input": "SubInput", "output": "SubOutput",
-             "nodes": [f"w-{t}"]},
+            ConstructSpec(name=f"sub-{t}", input="SubInput", output="SubOutput",
+                          nodes=[f"w-{t}"]),
             all_nodes,
         )
 

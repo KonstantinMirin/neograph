@@ -1,212 +1,515 @@
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://neograph.pro/schemas/neograph-pipeline.schema.json",
-  "title": "neograph pipeline spec",
-  "description": "Declarative pipeline definition for neograph. Validated at load time, compiled to LangGraph StateGraph.",
-  "type": "object",
-  "required": ["name", "nodes", "pipeline"],
-  "additionalProperties": false,
-  "properties": {
-    "name": {
-      "type": "string",
-      "description": "Pipeline name. Used as the Construct name."
-    },
-    "description": {
-      "type": "string",
-      "description": "Human-readable description of the pipeline's purpose."
-    },
-    "nodes": {
-      "type": "array",
-      "description": "Node definitions. Each node is a processing step.",
-      "items": { "$ref": "#/$defs/NodeSpec" },
-      "minItems": 1
-    },
-    "constructs": {
-      "type": "array",
-      "description": "Sub-construct definitions. Groups of nodes with isolated state.",
-      "items": { "$ref": "#/$defs/ConstructSpec" }
-    },
-    "pipeline": {
-      "$ref": "#/$defs/PipelineSpec"
-    }
-  },
   "$defs": {
-    "NodeSpec": {
-      "type": "object",
-      "required": ["name", "outputs"],
-      "additionalProperties": false,
-      "properties": {
-        "name": {
-          "type": "string",
-          "description": "Node name. Must be unique within the pipeline."
-        },
-        "mode": {
-          "type": "string",
-          "enum": ["scripted", "think", "agent", "act", "raw"],
-          "default": "scripted",
-          "description": "Execution mode. 'think' = single LLM call, 'agent' = ReAct tool loop (read-only), 'act' = ReAct with mutations, 'scripted' = deterministic function."
-        },
-        "model": {
-          "type": "string",
-          "description": "Model tier name (resolved from project surface). Required for think/agent/act modes."
-        },
-        "prompt": {
-          "type": "string",
-          "description": "Prompt template. Inline text with ${node.field} substitution, or a registered template name."
-        },
-        "outputs": {
-          "type": "string",
-          "description": "Output type name (resolved from project surface type registry)."
-        },
-        "inputs": {
-          "type": "object",
-          "description": "Explicit input spec: {upstream_name: type_name}. Usually inferred from pipeline wiring.",
-          "additionalProperties": { "type": "string" }
-        },
-        "tools": {
-          "type": "array",
-          "description": "Tool names (resolved from project surface). For agent/act modes.",
-          "items": { "type": "string" }
-        },
-        "scripted_fn": {
-          "type": "string",
-          "description": "Registered scripted function name. For scripted mode."
-        },
-        "oracle": { "$ref": "#/$defs/OracleSpec" },
-        "each": { "$ref": "#/$defs/EachSpec" },
-        "loop": { "$ref": "#/$defs/LoopSpec" },
-        "operator": { "$ref": "#/$defs/OperatorSpec" },
-        "context": {
-          "type": "array",
-          "description": "State field names injected verbatim into the prompt.",
-          "items": { "type": "string" }
-        },
-        "llm_config": {
-          "type": "object",
-          "description": "Per-node LLM settings (temperature, max_tokens, etc.).",
-          "additionalProperties": true
-        }
-      }
-    },
     "ConstructSpec": {
-      "type": "object",
-      "required": ["name", "input", "output", "nodes"],
       "additionalProperties": false,
+      "description": "A sub-Construct definition.\n\n``nodes`` references top-level :class:`NodeSpec` names by string;\nsub-constructs share the global node pool by reference, not by\ncontainment. Recursive ``NodeSpec`` nesting is not part of the spec\nformat.",
       "properties": {
         "name": {
-          "type": "string",
-          "description": "Sub-construct name."
+          "title": "Name",
+          "type": "string"
         },
         "input": {
-          "type": "string",
-          "description": "Input type name (boundary port)."
+          "title": "Input",
+          "type": "string"
         },
         "output": {
-          "type": "string",
-          "description": "Output type name (boundary port)."
+          "title": "Output",
+          "type": "string"
         },
         "nodes": {
-          "type": "array",
-          "description": "Node names (references to nodes defined in the top-level nodes array).",
-          "items": { "type": "string" },
-          "minItems": 1
+          "items": {
+            "type": "string"
+          },
+          "title": "Nodes",
+          "type": "array"
         },
-        "oracle": { "$ref": "#/$defs/OracleSpec" },
-        "each": { "$ref": "#/$defs/EachSpec" },
-        "loop": { "$ref": "#/$defs/LoopSpec" },
-        "operator": { "$ref": "#/$defs/OperatorSpec" }
-      }
-    },
-    "PipelineSpec": {
-      "type": "object",
-      "required": ["nodes"],
-      "additionalProperties": false,
-      "properties": {
-        "nodes": {
-          "type": "array",
-          "description": "Ordered list of node/construct names forming the pipeline.",
-          "items": { "type": "string" },
-          "minItems": 1
+        "oracle": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OracleSpec"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "each": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EachSpec"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "loop": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LoopSpec"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "operator": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OperatorSpec"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         }
-      }
-    },
-    "OracleSpec": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "n": {
-          "type": "integer",
-          "minimum": 2,
-          "description": "Number of parallel generators. Inferred from len(models) if models is set."
-        },
-        "models": {
-          "type": "array",
-          "description": "Model tiers for multi-model ensemble. Round-robin assignment.",
-          "items": { "type": "string" },
-          "minItems": 1
-        },
-        "merge_fn": {
-          "type": "string",
-          "description": "Registered scripted merge function name."
-        },
-        "merge_prompt": {
-          "type": "string",
-          "description": "LLM merge prompt template."
-        },
-        "merge_model": {
-          "type": "string",
-          "description": "Model tier for LLM merge. Default: 'reason'."
-        }
-      }
+      },
+      "required": [
+        "name",
+        "input",
+        "output",
+        "nodes"
+      ],
+      "title": "ConstructSpec",
+      "type": "object"
     },
     "EachSpec": {
-      "type": "object",
-      "required": ["over", "key"],
       "additionalProperties": false,
+      "description": "Each (fan-out) modifier in a node or sub-construct spec.",
       "properties": {
         "over": {
-          "type": "string",
-          "description": "Dotted path to the collection in state (e.g. 'claims.items')."
+          "title": "Over",
+          "type": "string"
         },
         "key": {
-          "type": "string",
-          "description": "Field on each item used as the dispatch key."
+          "title": "Key",
+          "type": "string"
         }
-      }
+      },
+      "required": [
+        "over",
+        "key"
+      ],
+      "title": "EachSpec",
+      "type": "object"
     },
-    "LoopSpec": {
-      "type": "object",
-      "required": ["when"],
+    "LlmConfig": {
       "additionalProperties": false,
+      "description": "Typed IR for the per-Node / per-Construct LLM configuration.\n\nFramework fields live here as typed attributes. Provider knobs go into\n``provider_kwargs``. Pydantic's ``extra='forbid'`` ensures any unknown\ntop-level key (including typos) raises ``ValidationError`` at Node\nconstruction time.",
       "properties": {
-        "when": {
-          "type": "string",
-          "description": "Condition expression. Evaluated against the node's output. True = continue looping."
+        "output_strategy": {
+          "default": "structured",
+          "enum": [
+            "structured",
+            "json_mode",
+            "text"
+          ],
+          "title": "Output Strategy",
+          "type": "string"
+        },
+        "max_retries": {
+          "default": 1,
+          "title": "Max Retries",
+          "type": "integer"
         },
         "max_iterations": {
-          "type": "integer",
-          "minimum": 1,
-          "default": 10,
-          "description": "Maximum loop iterations."
+          "default": 20,
+          "title": "Max Iterations",
+          "type": "integer"
         },
-        "on_exhaust": {
-          "type": "string",
-          "enum": ["error", "last"],
-          "default": "error",
-          "description": "'error' raises ExecutionError, 'last' returns the last result."
+        "token_budget": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Token Budget"
+        },
+        "budget_exhausted_message": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Budget Exhausted Message"
+        },
+        "provider_kwargs": {
+          "additionalProperties": true,
+          "title": "Provider Kwargs",
+          "type": "object"
         }
-      }
+      },
+      "title": "LlmConfig",
+      "type": "object"
     },
-    "OperatorSpec": {
-      "type": "object",
-      "required": ["when"],
+    "LoopSpec": {
       "additionalProperties": false,
+      "description": "Loop modifier with parsed ``when`` condition.",
       "properties": {
         "when": {
-          "type": "string",
-          "description": "Registered condition name. When truthy, interrupt for human review."
+          "title": "When",
+          "type": "string"
+        },
+        "max_iterations": {
+          "default": 10,
+          "title": "Max Iterations",
+          "type": "integer"
+        },
+        "on_exhaust": {
+          "default": "error",
+          "enum": [
+            "error",
+            "last"
+          ],
+          "title": "On Exhaust",
+          "type": "string"
         }
-      }
+      },
+      "required": [
+        "when"
+      ],
+      "title": "LoopSpec",
+      "type": "object"
+    },
+    "NodeSpec": {
+      "additionalProperties": false,
+      "description": "A single node definition in a spec.",
+      "properties": {
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "mode": {
+          "default": "scripted",
+          "enum": [
+            "think",
+            "agent",
+            "act",
+            "scripted",
+            "raw"
+          ],
+          "title": "Mode",
+          "type": "string"
+        },
+        "inputs": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Inputs"
+        },
+        "outputs": {
+          "title": "Outputs",
+          "type": "string"
+        },
+        "prompt": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Prompt"
+        },
+        "model": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Model"
+        },
+        "scripted_fn": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Scripted Fn"
+        },
+        "context": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Context"
+        },
+        "llm_config": {
+          "$ref": "#/$defs/LlmConfig"
+        },
+        "tools": {
+          "items": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "$ref": "#/$defs/ToolSpec"
+              }
+            ]
+          },
+          "title": "Tools",
+          "type": "array"
+        },
+        "oracle": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OracleSpec"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "each": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/EachSpec"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "loop": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LoopSpec"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "operator": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OperatorSpec"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "name",
+        "outputs"
+      ],
+      "title": "NodeSpec",
+      "type": "object"
+    },
+    "OperatorSpec": {
+      "additionalProperties": false,
+      "description": "Operator modifier with registered condition name.",
+      "properties": {
+        "when": {
+          "title": "When",
+          "type": "string"
+        }
+      },
+      "required": [
+        "when"
+      ],
+      "title": "OperatorSpec",
+      "type": "object"
+    },
+    "OracleSpec": {
+      "additionalProperties": false,
+      "description": "Oracle modifier in a node or sub-construct spec.",
+      "properties": {
+        "n": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "N"
+        },
+        "models": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Models"
+        },
+        "merge_fn": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Merge Fn"
+        },
+        "merge_prompt": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Merge Prompt"
+        },
+        "merge_model": {
+          "default": "reason",
+          "title": "Merge Model",
+          "type": "string"
+        }
+      },
+      "title": "OracleSpec",
+      "type": "object"
+    },
+    "PipelineRef": {
+      "additionalProperties": false,
+      "description": "Ordered reference list that defines the final pipeline composition.",
+      "properties": {
+        "nodes": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Nodes",
+          "type": "array"
+        }
+      },
+      "required": [
+        "nodes"
+      ],
+      "title": "PipelineRef",
+      "type": "object"
+    },
+    "ToolSpec": {
+      "additionalProperties": false,
+      "description": "Per-tool budget and config (forward-compatible alternative to bare strings).",
+      "properties": {
+        "name": {
+          "title": "Name",
+          "type": "string"
+        },
+        "budget": {
+          "default": 0,
+          "title": "Budget",
+          "type": "integer"
+        },
+        "config": {
+          "additionalProperties": true,
+          "title": "Config",
+          "type": "object"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "title": "ToolSpec",
+      "type": "object"
     }
-  }
+  },
+  "additionalProperties": false,
+  "description": "Top-level pipeline spec.",
+  "properties": {
+    "name": {
+      "title": "Name",
+      "type": "string"
+    },
+    "description": {
+      "default": "",
+      "title": "Description",
+      "type": "string"
+    },
+    "types": {
+      "additionalProperties": {
+        "additionalProperties": true,
+        "type": "object"
+      },
+      "title": "Types",
+      "type": "object"
+    },
+    "nodes": {
+      "items": {
+        "$ref": "#/$defs/NodeSpec"
+      },
+      "title": "Nodes",
+      "type": "array"
+    },
+    "constructs": {
+      "items": {
+        "$ref": "#/$defs/ConstructSpec"
+      },
+      "title": "Constructs",
+      "type": "array"
+    },
+    "pipeline": {
+      "$ref": "#/$defs/PipelineRef"
+    }
+  },
+  "required": [
+    "name",
+    "pipeline"
+  ],
+  "title": "Spec",
+  "type": "object"
 }

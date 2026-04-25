@@ -1007,6 +1007,7 @@ class TestLoaderImmutability:
         """Building a sub-construct should not mutate the original Node
         in all_nodes. If a Node is reused across constructs, the second
         construct must see the original inputs, not the first construct's."""
+        from neograph._spec_schema import ConstructSpec
         from neograph.loader import _build_sub_construct
         from neograph.spec_types import register_type
 
@@ -1030,12 +1031,12 @@ class TestLoaderImmutability:
         # Capture inputs BEFORE _build_sub_construct
         original_inputs = review_node.inputs
 
-        construct_spec = {
-            "name": "sub1",
-            "input": "Draft",
-            "output": "ReviewResult",
-            "nodes": ["review"],
-        }
+        construct_spec = ConstructSpec(
+            name="sub1",
+            input="Draft",
+            output="ReviewResult",
+            nodes=["review"],
+        )
 
         sub = _build_sub_construct(construct_spec, all_nodes)
 
@@ -1050,4 +1051,267 @@ class TestLoaderImmutability:
             f"_build_sub_construct mutated the original Node.inputs! "
             f"Was {original_inputs!r}, now {review_node.inputs!r}. "
             f"Use model_copy instead of direct assignment."
+        )
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# TEST: neograph-bha9 -- Pydantic schema for spec loader
+# ═══════════════════════════════════════════════════════════════════════════
+class TestSpecPydanticSchema:
+    """neograph-bha9: User specs are parsed into typed Pydantic Spec models.
+
+    Pins:
+      - extra='forbid' at every Spec level rejects typos at load time
+      - tools field reaches Node.tools (closes the documented silent-drop bug)
+      - tools accepts both bare strings and ToolSpec dicts (forward compat)
+      - JSON schema is generated from Spec.model_json_schema() (single source)
+      - llm_config typo inside spec raises (already does post-pej0; verify)
+    """
+
+    @staticmethod
+    def _project():
+        return {
+            "types": {
+                "Draft": {
+                    "properties": {
+                        "content": {"type": "string"},
+                        "score": {"type": "number"},
+                        "iteration": {"type": "integer"},
+                    },
+                    "required": ["content"],
+                }
+            }
+        }
+
+    def test_typoed_top_level_field_raises(self):
+        """A root-level typo (pipline) raises ConfigurationError."""
+        from neograph.loader import load_spec
+
+        spec = {
+            "name": "p",
+            "nodes": [],
+            "pipline": {"nodes": []},  # typo
+        }
+        with pytest.raises(ConfigurationError):
+            load_spec(spec, project=self._project())
+
+    def test_typoed_node_field_raises(self):
+        """A node spec typo (outpus) raises with field path or field name in the message."""
+        from neograph.loader import load_spec
+
+        spec = {
+            "name": "p",
+            "nodes": [
+                {"name": "x", "mode": "scripted", "outpus": "Draft", "scripted_fn": "noop"},
+            ],
+            "pipeline": {"nodes": ["x"]},
+        }
+        with pytest.raises(ConfigurationError) as exc_info:
+            load_spec(spec, project=self._project())
+        msg = str(exc_info.value)
+        assert "outpus" in msg or "nodes" in msg or "outputs" in msg
+
+    def test_typoed_modifier_field_raises(self):
+        """An oracle spec typo (merge_promp) raises."""
+        from neograph.loader import load_spec
+
+        spec = {
+            "name": "p",
+            "nodes": [
+                {
+                    "name": "x",
+                    "mode": "think",
+                    "outputs": "Draft",
+                    "model": "fast",
+                    "prompt": "p",
+                    "oracle": {"n": 2, "merge_promp": "merge"},
+                },
+            ],
+            "pipeline": {"nodes": ["x"]},
+        }
+        with pytest.raises(ConfigurationError):
+            load_spec(spec, project=self._project())
+
+    def test_extra_field_in_oracle_block_raises(self):
+        """Oracle with unknown field raises."""
+        from neograph.loader import load_spec
+
+        spec = {
+            "name": "p",
+            "nodes": [
+                {
+                    "name": "x",
+                    "mode": "think",
+                    "outputs": "Draft",
+                    "model": "fast",
+                    "prompt": "p",
+                    "oracle": {"n": 2, "merge_fn": "m", "garbage_field": True},
+                },
+            ],
+            "pipeline": {"nodes": ["x"]},
+        }
+        with pytest.raises(ConfigurationError):
+            load_spec(spec, project=self._project())
+
+    def test_missing_required_node_name_raises(self):
+        """Node spec without name raises."""
+        from neograph.loader import load_spec
+
+        spec = {
+            "name": "p",
+            "nodes": [{"mode": "scripted", "outputs": "Draft", "scripted_fn": "noop"}],
+            "pipeline": {"nodes": ["x"]},
+        }
+        with pytest.raises(ConfigurationError):
+            load_spec(spec, project=self._project())
+
+    def test_unknown_loop_field_raises(self):
+        """Loop with 'when_expr' instead of 'when' raises."""
+        from neograph.loader import load_spec
+
+        spec = {
+            "name": "p",
+            "nodes": [
+                {
+                    "name": "x",
+                    "mode": "scripted",
+                    "outputs": "Draft",
+                    "scripted_fn": "noop",
+                    "loop": {"when_expr": "x.score < 0.5"},
+                },
+            ],
+            "pipeline": {"nodes": ["x"]},
+        }
+        with pytest.raises(ConfigurationError):
+            load_spec(spec, project=self._project())
+
+    def test_tools_string_form_resolves_to_typed_tool(self):
+        """tools=['name'] in spec produces Node.tools=[Tool(name='name')] (closes silent-drop bug)."""
+        from neograph.factory import register_tool_factory
+        from neograph.loader import load_spec
+
+        # Tool factory must be registered for resolution to succeed
+        register_tool_factory("bha9_search", lambda cfg, tc: object())
+
+        spec = {
+            "name": "p",
+            "nodes": [
+                {
+                    "name": "x",
+                    "mode": "agent",
+                    "outputs": "Draft",
+                    "model": "fast",
+                    "prompt": "p",
+                    "tools": ["bha9_search"],
+                },
+            ],
+            "pipeline": {"nodes": ["x"]},
+        }
+        construct = load_spec(spec, project=self._project())
+        node = construct.nodes[0]
+        assert len(node.tools) == 1
+        assert node.tools[0].name == "bha9_search"
+
+    def test_tools_dict_form_with_budget(self):
+        """tools=[{'name':...,'budget':3}] produces Tool with budget."""
+        from neograph.factory import register_tool_factory
+        from neograph.loader import load_spec
+
+        register_tool_factory("bha9_lookup", lambda cfg, tc: object())
+
+        spec = {
+            "name": "p",
+            "nodes": [
+                {
+                    "name": "x",
+                    "mode": "agent",
+                    "outputs": "Draft",
+                    "model": "fast",
+                    "prompt": "p",
+                    "tools": [{"name": "bha9_lookup", "budget": 3}],
+                },
+            ],
+            "pipeline": {"nodes": ["x"]},
+        }
+        construct = load_spec(spec, project=self._project())
+        node = construct.nodes[0]
+        assert len(node.tools) == 1
+        assert node.tools[0].name == "bha9_lookup"
+        assert node.tools[0].budget == 3
+
+    def test_unknown_tool_raises(self):
+        """tools=['nonexistent'] raises ConfigurationError at load time."""
+        from neograph.loader import load_spec
+
+        spec = {
+            "name": "p",
+            "nodes": [
+                {
+                    "name": "x",
+                    "mode": "agent",
+                    "outputs": "Draft",
+                    "model": "fast",
+                    "prompt": "p",
+                    "tools": ["nonexistent_tool_bha9"],
+                },
+            ],
+            "pipeline": {"nodes": ["x"]},
+        }
+        with pytest.raises(ConfigurationError):
+            load_spec(spec, project=self._project())
+
+    def test_llm_config_typo_in_spec_raises(self):
+        """llm_config typos surface at load time (already does post-pej0; pin the path)."""
+        from neograph.loader import load_spec
+
+        spec = {
+            "name": "p",
+            "nodes": [
+                {
+                    "name": "x",
+                    "mode": "think",
+                    "outputs": "Draft",
+                    "model": "fast",
+                    "prompt": "p",
+                    "llm_config": {"max_retires": 5},  # typo
+                },
+            ],
+            "pipeline": {"nodes": ["x"]},
+        }
+        with pytest.raises(ConfigurationError):
+            load_spec(spec, project=self._project())
+
+    def test_unknown_root_field_raises(self):
+        """Unknown field at the root spec level raises."""
+        from neograph.loader import load_spec
+
+        spec = {
+            "name": "p",
+            "nodes": [],
+            "pipeline": {"nodes": []},
+            "garbage_root_field": "nope",
+        }
+        with pytest.raises(ConfigurationError):
+            load_spec(spec, project=self._project())
+
+    def test_pipeline_schema_in_sync(self):
+        """The on-disk JSON schema must match Spec.model_json_schema() byte-for-byte.
+
+        This test asserts auto-generation contract -- when Spec changes, the
+        regen script must run before commit. Drift fails this test loudly.
+        """
+        import json
+        from pathlib import Path
+
+        from neograph._spec_schema import Spec
+
+        schema_path = (
+            Path(__file__).resolve().parents[1]
+            / "src" / "neograph" / "schemas" / "neograph-pipeline.schema.json"
+        )
+        on_disk = json.loads(schema_path.read_text())
+        generated = Spec.model_json_schema()
+        assert on_disk == generated, (
+            "Pipeline JSON schema drifted from Spec.model_json_schema(). "
+            "Run scripts/regen_schema.py to regenerate."
         )

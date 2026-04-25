@@ -1,6 +1,7 @@
 """Test fixtures — registry isolation between tests."""
 
 import pytest
+import structlog
 
 
 @pytest.fixture(autouse=True)
@@ -19,4 +20,8 @@ def _clean_registries():
     _llm._global_renderer = None
     _merge_fn_registry.clear()
     _type_registry.clear()
+    # Reset structlog to defaults so tests that capture warnings via stdout
+    # (capsys) are not affected by an earlier test's reconfigure (e.g.
+    # tests that route structlog through stdlib logging).
+    structlog.reset_defaults()
     yield

@@ -1,13 +1,14 @@
-"""Spec loader — YAML/JSON pipeline spec -> Construct IR.
+"""Spec loader -- YAML/JSON pipeline spec -> Construct IR.
 
     from neograph.loader import load_spec
     construct = load_spec("pipeline.yaml")
     graph = compile(construct)
     result = run(graph, input={...})
 
-The spec format is validated against neograph-pipeline.schema.json.
-Types, tools, and models are resolved from a project surface file
-or from pre-registered entries.
+The spec is parsed into a typed ``Spec`` Pydantic model from
+``_spec_schema``; typos and unknown fields raise ``ConfigurationError``
+at load time. Types are resolved from a project surface or via
+pre-registered entries.
 """
 
 from __future__ import annotations
@@ -20,7 +21,13 @@ import structlog
 import yaml  # type: ignore[import-untyped]
 from pydantic import ValidationError
 
-from neograph._llm_config import LlmConfig
+from neograph._registry import registry
+from neograph._spec_schema import (
+    ConstructSpec,
+    NodeSpec,
+    Spec,
+    ToolSpec,
+)
 from neograph.conditions import parse_condition
 from neograph.construct import Construct
 from neograph.errors import ConfigurationError
@@ -28,6 +35,7 @@ from neograph.modifiers import Each, Loop, Operator, Oracle
 from neograph.naming import field_name_for
 from neograph.node import Node
 from neograph.spec_types import load_project_types, lookup_type
+from neograph.tool import Tool
 
 log = structlog.get_logger()
 
@@ -42,20 +50,24 @@ def load_spec(
         spec: Pipeline spec as a YAML/JSON string, a file path, or a
               pre-parsed dict.
         project: Project surface (types/tools/models) as a YAML/JSON
-                 string, file path, or pre-parsed dict. Optional —
+                 string, file path, or pre-parsed dict. Optional --
                  types can also be pre-registered via ``register_type``.
 
     Returns:
         A ``Construct`` ready for ``compile()``.
     """
     spec_dict = _parse_input(spec)
-    _validate_spec(spec_dict)
 
+    # Project types must be registered before _validate_spec converts
+    # spec into the typed Spec model, so lookup_type can resolve them
+    # during the build phase. (Pydantic itself does not call lookup_type
+    # -- it only validates the spec shape.)
     if project is not None:
         project_dict = _parse_input(project)
         load_project_types(project_dict)
 
-    return _build_construct(spec_dict)
+    typed_spec = _validate_spec(spec_dict)
+    return _build_construct(typed_spec)
 
 
 # -- Parsing -----------------------------------------------------------------
@@ -70,7 +82,6 @@ def _parse_input(source: str | dict[str, Any]) -> dict[str, Any]:
         return source
 
     text = source
-    # Check if it's a file path (only short strings without newlines can be paths)
     if len(source) <= 4096 and "\n" not in source:
         p = Path(source)
         if p.exists() and p.is_file():
@@ -82,52 +93,50 @@ def _parse_input(source: str | dict[str, Any]) -> dict[str, Any]:
             f"Refusing to parse."
         )
 
-    # Try JSON first, then YAML
     text = text.strip()
     if text.startswith("{") or text.startswith("["):
         return json.loads(text)
     return yaml.safe_load(text)
 
 
-def _validate_spec(spec: dict[str, Any]) -> None:
-    """Validate spec against the JSON Schema (best-effort)."""
-    schema_path = Path(__file__).parent / "schemas" / "neograph-pipeline.schema.json"
-    if not schema_path.exists():
-        log.warning("spec_validation_skipped", reason="schema file not found")
-        return
+def _validate_spec(raw: dict[str, Any]) -> Spec:
+    """Parse the raw dict into a typed ``Spec`` model.
+
+    Pydantic raises on unknown fields, type mismatches, and missing
+    required fields. The resulting typed model removes every
+    ``.get(key, default)`` site from the build phase.
+    """
     try:
-        from jsonschema import validate
-        schema = json.loads(schema_path.read_text())
-        validate(instance=spec, schema=schema)
-    except ImportError:
-        log.warning("spec_validation_skipped", reason="jsonschema not installed")
+        return Spec.model_validate(raw)
+    except ValidationError as exc:
+        raise ConfigurationError.build(
+            "invalid spec",
+            hint=str(exc),
+        ) from exc
 
 
 # -- Builder -----------------------------------------------------------------
 
 
-def _build_construct(spec: dict[str, Any]) -> Construct:
-    """Build a Construct from a validated spec dict."""
-    # Build all node definitions. Track which have explicit inputs.
+def _build_construct(spec: Spec) -> Construct:
+    """Build a Construct from a validated Spec."""
     node_defs: dict[str, Node] = {}
     explicit_inputs: set[str] = set()
-    for node_spec in spec.get("nodes", []):
+    for node_spec in spec.nodes:
         node = _build_node(node_spec)
         field_name = field_name_for(node.name)
         node_defs[field_name] = node
-        if node_spec.get("inputs"):
+        if node_spec.inputs:
             explicit_inputs.add(field_name)
 
-    # Build sub-constructs
     construct_defs: dict[str, Construct] = {}
-    for construct_spec in spec.get("constructs", []):
+    for construct_spec in spec.constructs:
         sub = _build_sub_construct(construct_spec, node_defs, explicit_inputs)
         field_name = field_name_for(sub.name)
         construct_defs[field_name] = sub
 
-    # Build pipeline from ordered node/construct references
     pipeline_nodes: list[Any] = []
-    for ref in spec["pipeline"]["nodes"]:
+    for ref in spec.pipeline.nodes:
         field_ref = field_name_for(ref)
         if field_ref in construct_defs:
             pipeline_nodes.append(construct_defs[field_ref])
@@ -140,74 +149,70 @@ def _build_construct(spec: dict[str, Any]) -> Construct:
             )
 
     return Construct(
-        name=spec["name"],
-        description=spec.get("description", ""),
+        name=spec.name,
+        description=spec.description,
         nodes=pipeline_nodes,
     )
 
 
-def _parse_llm_config(node_spec: dict[str, Any]) -> LlmConfig:
-    """Parse the llm_config block, wrapping validation errors with node context."""
-    raw = node_spec.get("llm_config", {}) or {}
-    try:
-        return LlmConfig(**raw)
-    except ValidationError as exc:
+def _resolve_tool(t: str | ToolSpec) -> Tool:
+    """Normalize bare-string and dict-form tool entries into a typed Tool.
+
+    Bare strings: ``Tool(name=t)``.
+    Dict form: ``Tool(name, budget, config)``.
+
+    Unknown tool names (no registered factory) raise ``ConfigurationError``
+    with a hint pointing to ``register_tool_factory``.
+    """
+    spec = ToolSpec(name=t) if isinstance(t, str) else t
+    if spec.name not in registry.tool_factory:
         raise ConfigurationError.build(
-            f"invalid llm_config for node {node_spec.get('name', '<unknown>')!r}",
-            hint=str(exc),
-        ) from exc
+            f"unknown tool {spec.name!r}",
+            hint="register the tool factory via register_tool_factory()",
+        )
+    return Tool(name=spec.name, budget=spec.budget, config=spec.config)
 
 
-def _build_node(node_spec: dict[str, Any]) -> Node:
-    """Build a Node from a node spec dict."""
-    name = node_spec["name"]
-    mode = node_spec.get("mode", "scripted")
-    outputs = lookup_type(node_spec["outputs"])
+def _build_node(node_spec: NodeSpec) -> Node:
+    """Build a Node from a typed NodeSpec."""
+    outputs = lookup_type(node_spec.outputs)
 
-    # Resolve explicit inputs if provided. When omitted, default to
-    # outputs type so _extract_input can use type scanning. This works
-    # for simple pipelines; sub-constructs override per-node inputs below.
-    inputs_spec = node_spec.get("inputs")
     inputs: Any
-    if inputs_spec:
-        inputs = {k: lookup_type(v) for k, v in inputs_spec.items()}
+    if isinstance(node_spec.inputs, dict):
+        inputs = {k: lookup_type(v) for k, v in node_spec.inputs.items()}
+    elif isinstance(node_spec.inputs, str):
+        inputs = lookup_type(node_spec.inputs)
     else:
-        inputs = outputs  # single-type: _extract_input does type scanning
+        inputs = outputs  # single-type fallback for type-scan extraction
 
     node = Node(
-        name=name,
-        mode=mode,
+        name=node_spec.name,
+        mode=node_spec.mode,
         inputs=inputs,
         outputs=outputs,
-        prompt=node_spec.get("prompt"),
-        model=node_spec.get("model"),
-        scripted_fn=node_spec.get("scripted_fn"),
-        context=node_spec.get("context"),
-        llm_config=_parse_llm_config(node_spec),
+        prompt=node_spec.prompt,
+        model=node_spec.model,
+        scripted_fn=node_spec.scripted_fn,
+        context=node_spec.context,
+        llm_config=node_spec.llm_config,
+        tools=[_resolve_tool(t) for t in node_spec.tools],
     )
 
-    # Apply modifiers
-    node = _apply_modifiers(node, node_spec)
-
-    return node
+    return _apply_modifiers(node, node_spec)
 
 
 def _build_sub_construct(
-    construct_spec: dict[str, Any],
+    construct_spec: ConstructSpec,
     all_nodes: dict[str, Node],
     explicit_inputs: set[str] | None = None,
 ) -> Construct:
-    """Build a sub-Construct from a construct spec dict."""
-    name = construct_spec["name"]
-    input_type = lookup_type(construct_spec["input"])
-    output_type = lookup_type(construct_spec["output"])
+    """Build a sub-Construct from a ConstructSpec."""
+    name = construct_spec.name
+    input_type = lookup_type(construct_spec.input)
+    output_type = lookup_type(construct_spec.output)
 
-    # Collect nodes for this sub-construct. Wire inputs so that each node
-    # can see the input port AND all preceding peer nodes via dict-form inputs.
-    # First node: inputs from sub-construct input port (neo_subgraph_input).
-    # Subsequent nodes: inputs from input port + all preceding peer outputs.
     nodes: list[Node] = []
-    for i, ref in enumerate(construct_spec["nodes"]):
+    for i, ref in enumerate(construct_spec.nodes):
         field_ref = field_name_for(ref)
         if field_ref not in all_nodes:
             raise ConfigurationError.build(
@@ -218,12 +223,10 @@ def _build_sub_construct(
         node = all_nodes[field_ref]
         if field_ref not in (explicit_inputs or set()):
             if i == 0:
-                # First node: reads from sub-construct input port
                 node = node.model_copy(update={"inputs": input_type})
             else:
-                # Subsequent nodes: dict-form inputs from input port + peers
                 inputs_dict: dict[str, Any] = {"neo_subgraph_input": input_type}
-                for prev_ref in construct_spec["nodes"][:i]:
+                for prev_ref in construct_spec.nodes[:i]:
                     prev_field = field_name_for(prev_ref)
                     prev_node = all_nodes[prev_field]
                     inputs_dict[prev_field] = prev_node.outputs
@@ -237,44 +240,38 @@ def _build_sub_construct(
         nodes=nodes,
     )
 
-    # Apply construct-level modifiers
-    sub = _apply_modifiers(sub, construct_spec)
-
-    return sub
+    return _apply_modifiers(sub, construct_spec)
 
 
-def _apply_modifiers(item: Any, spec: dict[str, Any]) -> Any:
-    """Apply oracle/each/loop/operator modifiers from the spec."""
-    oracle_spec = spec.get("oracle")
-    if oracle_spec:
+def _apply_modifiers(item: Any, spec: NodeSpec | ConstructSpec) -> Any:
+    """Apply oracle/each/loop/operator modifiers from the typed spec."""
+    if spec.oracle is not None:
         kwargs: dict[str, Any] = {}
-        if "n" in oracle_spec:
-            kwargs["n"] = oracle_spec["n"]
-        if "models" in oracle_spec:
-            kwargs["models"] = oracle_spec["models"]
-        if "merge_fn" in oracle_spec:
-            kwargs["merge_fn"] = oracle_spec["merge_fn"]
-        if "merge_prompt" in oracle_spec:
-            kwargs["merge_prompt"] = oracle_spec["merge_prompt"]
-        if "merge_model" in oracle_spec:
-            kwargs["merge_model"] = oracle_spec["merge_model"]
+        if spec.oracle.n is not None:
+            kwargs["n"] = spec.oracle.n
+        if spec.oracle.models is not None:
+            kwargs["models"] = spec.oracle.models
+        if spec.oracle.merge_fn is not None:
+            kwargs["merge_fn"] = spec.oracle.merge_fn
+        if spec.oracle.merge_prompt is not None:
+            kwargs["merge_prompt"] = spec.oracle.merge_prompt
+        # merge_model has a Pydantic default; only forward when set explicitly
+        if "merge_model" in spec.oracle.model_fields_set:
+            kwargs["merge_model"] = spec.oracle.merge_model
         item = item | Oracle(**kwargs)
 
-    each_spec = spec.get("each")
-    if each_spec:
-        item = item | Each(over=each_spec["over"], key=each_spec["key"])
+    if spec.each is not None:
+        item = item | Each(over=spec.each.over, key=spec.each.key)
 
-    loop_spec = spec.get("loop")
-    if loop_spec:
-        condition = parse_condition(loop_spec["when"])
+    if spec.loop is not None:
+        condition = parse_condition(spec.loop.when)
         item = item | Loop(
             when=condition,
-            max_iterations=loop_spec.get("max_iterations", 10),
-            on_exhaust=loop_spec.get("on_exhaust", "error"),
+            max_iterations=spec.loop.max_iterations,
+            on_exhaust=spec.loop.on_exhaust,
         )
 
-    operator_spec = spec.get("operator")
-    if operator_spec:
-        item = item | Operator(when=operator_spec["when"])
+    if spec.operator is not None:
+        item = item | Operator(when=spec.operator.when)
 
     return item
