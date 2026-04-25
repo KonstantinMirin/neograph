@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from langchain_core.runnables import RunnableConfig
 from langgraph.types import Command
 
 from neograph.errors import CheckpointSchemaError, ExecutionError
@@ -27,7 +28,7 @@ def _strip_internals(result: Any) -> Any:
     return {k: v for k, v in result.items() if not k.startswith("neo_")}
 
 
-def _preflight_di_check(graph: Any, config: dict[str, Any]) -> None:
+def _preflight_di_check(graph: Any, config: RunnableConfig) -> None:
     """Validate that all required DI params are present before starting any node.
 
     compile() stashes _neo_required_di on the graph — a dict with "input"
@@ -56,8 +57,8 @@ def _preflight_di_check(graph: Any, config: dict[str, Any]) -> None:
 
 def _inject_input_to_config(
     input: dict[str, Any],
-    config: dict[str, Any] | None,
-) -> dict[str, Any]:
+    config: RunnableConfig | None,
+) -> RunnableConfig:
     """Merge initial input fields into config["configurable"].
 
     Every node function receives config — this ensures pipeline metadata
@@ -71,7 +72,7 @@ def _inject_input_to_config(
     return {**config, "configurable": merged}
 
 
-def _verify_checkpoint_schema(graph: Any, config: dict[str, Any], *, auto_resume: bool = True) -> None:
+def _verify_checkpoint_schema(graph: Any, config: RunnableConfig, *, auto_resume: bool = True) -> None:
     """Verify checkpoint state schema matches the current graph.
 
     Compares the neo_schema_fingerprint stored in the checkpoint against
@@ -127,7 +128,7 @@ def _verify_checkpoint_schema(graph: Any, config: dict[str, Any], *, auto_resume
 
 
 def _auto_resume_from_divergence(
-    graph: Any, config: dict[str, Any], invalidated: set[str],
+    graph: Any, config: RunnableConfig, invalidated: set[str],
 ) -> None:
     """Rewind checkpoint to before the earliest invalidated node.
 
@@ -192,7 +193,7 @@ def _compute_invalidated_nodes(graph: Any, channel_values: Any) -> set[str]:
     return changed
 
 
-def _has_existing_checkpoint(graph: Any, config: dict[str, Any]) -> bool:
+def _has_existing_checkpoint(graph: Any, config: RunnableConfig) -> bool:
     """Check if a checkpoint exists for this thread_id.
 
     Returns True if the graph has a checkpointer and it contains saved state
@@ -213,7 +214,7 @@ def run(
     graph: Any,
     input: dict[str, Any] | None = None,
     resume: dict[str, Any] | None = None,
-    config: dict[str, Any] | None = None,
+    config: RunnableConfig | None = None,
     auto_resume: bool = True,
 ) -> Any:
     """Execute a compiled NeoGraph graph.

@@ -392,7 +392,7 @@ def _compile_prompt(
     input_data: Any,
     *,
     node_name: str = "",
-    config: RunnableConfig | dict[str, Any] | None = None,
+    config: RunnableConfig | None = None,
     output_model: type[BaseModel] | None = None,
     llm_config: LlmConfig | dict | None = None,
     output_schema: str | None = None,
@@ -820,7 +820,7 @@ def render_prompt(
     node: Any,
     input_data: Any,
     *,
-    config: dict | None = None,
+    config: RunnableConfig | None = None,
 ) -> str:
     """Render the exact prompt a node would send to the LLM, without calling it.
 
