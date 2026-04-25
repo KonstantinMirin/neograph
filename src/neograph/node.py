@@ -23,13 +23,44 @@ from __future__ import annotations
 
 import inspect
 from collections.abc import Callable
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, Protocol, runtime_checkable
 
+from langchain_core.runnables import RunnableConfig
 from pydantic import BaseModel, Field, PlainValidator, PrivateAttr
 
 from neograph._llm_config import LlmConfig
 from neograph.errors import ConstructError
 from neograph.renderers import Renderer
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Node lifecycle Protocols
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+@runtime_checkable
+class SkipPredicate(Protocol):
+    """Returns True to bypass the LLM call. Receives extracted ``input_data``
+    (after ``_extract_input``, before renderer dispatch).
+    """
+
+    def __call__(self, input_data: Any) -> bool: ...
+
+
+@runtime_checkable
+class SkipValueFactory(Protocol):
+    """Produces the output value when ``skip_when`` fires. Receives the same
+    ``input_data`` shape as ``skip_when``. If absent, the node returns an
+    empty state update.
+    """
+
+    def __call__(self, input_data: Any) -> Any: ...
+
+
+@runtime_checkable
+class RawNodeFn(Protocol):
+    """Raw escape hatch for ``mode='raw'``. Direct LangGraph node signature."""
+
+    def __call__(self, state: BaseModel, config: RunnableConfig) -> dict[str, Any]: ...
 
 
 def _validate_type_spec(v: Any) -> Any:
@@ -108,7 +139,7 @@ class Node(Modifiable, BaseModel):
     scripted_fn: str | None = None
 
     # Raw node function — explicit mode='raw' escape hatch only.
-    raw_fn: Callable | None = None
+    raw_fn: RawNodeFn | None = None
 
     # Which inputs key receives the Each fan-out item (neo_each_item) instead
     # of reading from the named upstream state field. Set by @node decoration
@@ -130,8 +161,8 @@ class Node(Modifiable, BaseModel):
     # skip_when receives the extracted input_data (after _extract_input, before
     # renderer). skip_value produces the output when skipped; if None, the node
     # returns an empty state update.
-    skip_when: Callable | None = None
-    skip_value: Callable | None = None
+    skip_when: SkipPredicate | None = None
+    skip_value: SkipValueFactory | None = None
 
     # Oracle generator output type — when merge_fn transforms types (A → B),
     # this is A (per-variant type). The LLM produces this type, the merge_fn

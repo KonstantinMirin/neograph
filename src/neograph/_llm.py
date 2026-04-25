@@ -16,7 +16,7 @@ import inspect
 import re
 import time
 from collections.abc import Callable
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
 
 import structlog
 from langchain_core.runnables import RunnableConfig
@@ -28,21 +28,85 @@ from neograph.describe_type import describe_type, describe_value
 from neograph.errors import ConfigurationError, ExecutionError
 from neograph.renderers import Renderer
 
+# ═══════════════════════════════════════════════════════════════════════════
+# Typed callback Protocols
+#
+# Replace bare ``Callable`` annotations on user-supplied callback slots so
+# mypy + IDEs enforce the contract at declaration time. Protocols are
+# structural and erased at runtime; ``_accepted_params`` introspection still
+# works against the underlying function.
+#
+# ``runtime_checkable`` is used for parity with the Renderer Protocol and to
+# permit ``isinstance(fn, ProtocolName)`` checks in tests.
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+@runtime_checkable
+class LlmFactory(Protocol):
+    """Factory callback for creating LLM client instances per node tier.
+
+    Backward-compatible with both shapes documented in ``configure_llm``:
+
+    * Simple:   ``(tier) -> BaseChatModel``
+    * Advanced: ``(tier, *, node_name=, llm_config=) -> BaseChatModel``
+
+    Uses ``*args``/``**kwargs`` catch so the Simple form (no kwargs) still
+    satisfies the Protocol structurally. ``_accepted_params`` filters
+    actual kwargs at call site.
+    """
+
+    def __call__(self, tier: str, *args: Any, **kwargs: Any) -> Any: ...
+
+
+@runtime_checkable
+class PromptCompiler(Protocol):
+    """Builds message lists for LLM calls.
+
+    Backward-compatible with both shapes:
+
+    * Simple:   ``(template, input_data) -> list``
+    * Advanced: ``(template, input_data, *, node_name=, config=, ...) -> list``
+    """
+
+    def __call__(self, template: str, input_data: Any, *args: Any, **kwargs: Any) -> list[Any]: ...
+
+
+@runtime_checkable
+class CostCallback(Protocol):
+    """Cost telemetry hook called after each LLM invocation.
+
+    Modern shape (preferred): keyword-only -- mypy validates the required
+    keys. The legacy 3-arg fallback at ``_notify_cost`` catches ``TypeError``
+    for callbacks that only accept ``(tier, input_tokens, output_tokens)``.
+    """
+
+    def __call__(
+        self,
+        *,
+        tier: str,
+        input_tokens: int,
+        output_tokens: int,
+        node_name: str = ...,
+        mode: str = ...,
+        duration_s: float = ...,
+        **kw: Any,
+    ) -> None: ...
+
 log = structlog.get_logger()
 
 # Consumer-provided LLM factory
-_llm_factory: Callable[[str], Any] | None = None
+_llm_factory: LlmFactory | None = None
 _llm_factory_params: set[str] | frozenset[str] = set()
 
 # Consumer-provided prompt compiler
-_prompt_compiler: Callable[[str, Any], list] | None = None
+_prompt_compiler: PromptCompiler | None = None
 _prompt_compiler_params: set[str] | frozenset[str] = set()
 
 # Consumer-provided renderer (set via configure_llm(renderer=...))
 _global_renderer: Renderer | None = None
 
 # Consumer-provided cost callback (set via configure_llm(cost_callback=...))
-_cost_callback: Callable | None = None
+_cost_callback: CostCallback | None = None
 
 
 def _notify_cost(
@@ -111,11 +175,11 @@ def _accepted_params(fn: Callable) -> set[str] | frozenset[str]:
 
 
 def configure_llm(
-    llm_factory: Callable,
-    prompt_compiler: Callable,
+    llm_factory: LlmFactory,
+    prompt_compiler: PromptCompiler,
     *,
     renderer: Renderer | None = None,
-    cost_callback: Callable | None = None,
+    cost_callback: CostCallback | None = None,
 ) -> None:
     """Configure NeoGraph's LLM layer.
 

@@ -19,7 +19,7 @@ sub-constructs), see Node and Construct directly.
 """
 
 from neograph._image import configure_image, resolve_image
-from neograph._llm import configure_llm, render_prompt
+from neograph._llm import CostCallback, LlmFactory, PromptCompiler, configure_llm, render_prompt
 from neograph.compiler import compile, describe_graph
 from neograph.conditions import parse_condition
 from neograph.construct import Construct
@@ -44,8 +44,17 @@ from neograph.factory import register_condition, register_scripted, register_too
 from neograph.forward import ForwardConstruct
 from neograph.lint import LintIssue, lint
 from neograph.loader import load_spec
-from neograph.modifiers import Each, Loop, ModifierSet, Operator, Oracle
-from neograph.node import Node
+from neograph.modifiers import (
+    Each,
+    Loop,
+    MergeFallback,
+    MergePostProcess,
+    MergePreProcess,
+    ModifierSet,
+    Operator,
+    Oracle,
+)
+from neograph.node import Node, RawNodeFn, SkipPredicate, SkipValueFactory
 from neograph.renderers import (
     DelimitedRenderer,
     JsonRenderer,
@@ -116,6 +125,16 @@ __all__ = [
     # Verify
     "verify_compiled",
     "VerifyIssue",
+    # Callback Protocols (typed user-supplied callback contracts)
+    "LlmFactory",
+    "PromptCompiler",
+    "CostCallback",
+    "MergePreProcess",
+    "MergePostProcess",
+    "MergeFallback",
+    "SkipPredicate",
+    "SkipValueFactory",
+    "RawNodeFn",
 ]
 
 __version__ = "0.4.0"

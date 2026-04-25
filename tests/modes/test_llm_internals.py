@@ -4131,3 +4131,163 @@ class TestLlmConfigAsIRType:
         for n in (n1, n2, n3_base):
             assert isinstance(n.llm_config, LlmConfig)
             assert n.llm_config.max_retries == 7
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# TEST: neograph-2ur4 -- Typed Protocols for user-supplied callback slots
+# ═══════════════════════════════════════════════════════════════════════════
+class TestCallbackProtocols:
+    """neograph-2ur4: 9 callback slots carry @runtime_checkable Protocols.
+
+    Pins the IR-level type promotion:
+      - configure_llm signature uses LlmFactory / PromptCompiler / CostCallback
+      - Oracle.merge_pre_process / merge_post_process / merge_fallback are typed
+      - Node.skip_when / skip_value / raw_fn carry their Protocol types
+      - Existing runtime introspection (_accepted_params,
+        _validate_skip_callables) survives intact
+      - Backward-compatible: documented Simple `lambda tier: ...` form still
+        satisfies LlmFactory structurally
+    """
+
+    def test_llm_factory_protocol_field_type(self):
+        import typing
+
+        from neograph._llm import LlmFactory, configure_llm
+
+        hints = typing.get_type_hints(configure_llm)
+        assert hints["llm_factory"] is LlmFactory
+
+    def test_prompt_compiler_protocol_field_type(self):
+        import typing
+
+        from neograph._llm import PromptCompiler, configure_llm
+
+        hints = typing.get_type_hints(configure_llm)
+        assert hints["prompt_compiler"] is PromptCompiler
+
+    def test_cost_callback_protocol_field_type(self):
+        import typing
+
+        from neograph._llm import CostCallback, configure_llm
+
+        hints = typing.get_type_hints(configure_llm)
+        # CostCallback | None
+        args = typing.get_args(hints["cost_callback"])
+        assert CostCallback in args
+        assert type(None) in args
+
+    def test_oracle_merge_hooks_protocol_field_types(self):
+        import typing
+
+        from neograph.modifiers import (
+            MergeFallback,
+            MergePostProcess,
+            MergePreProcess,
+            Oracle,
+        )
+
+        for fname, proto in [
+            ("merge_pre_process", MergePreProcess),
+            ("merge_post_process", MergePostProcess),
+            ("merge_fallback", MergeFallback),
+        ]:
+            ann = Oracle.model_fields[fname].annotation
+            args = typing.get_args(ann)
+            assert proto in args, f"{fname} annotation missing {proto.__name__}: {ann}"
+            assert type(None) in args
+
+    def test_node_skip_predicate_protocol_field_type(self):
+        import typing
+
+        from neograph.node import Node as _Node
+        from neograph.node import SkipPredicate
+
+        ann = _Node.model_fields["skip_when"].annotation
+        args = typing.get_args(ann)
+        assert SkipPredicate in args
+
+    def test_node_skip_value_protocol_field_type(self):
+        import typing
+
+        from neograph.node import Node as _Node
+        from neograph.node import SkipValueFactory
+
+        ann = _Node.model_fields["skip_value"].annotation
+        args = typing.get_args(ann)
+        assert SkipValueFactory in args
+
+    def test_node_raw_fn_protocol_field_type(self):
+        import typing
+
+        from neograph.node import Node as _Node
+        from neograph.node import RawNodeFn
+
+        ann = _Node.model_fields["raw_fn"].annotation
+        args = typing.get_args(ann)
+        assert RawNodeFn in args
+
+    def test_runtime_checkable_isinstance_works(self):
+        from neograph.node import SkipPredicate
+
+        def good(value):
+            return True
+
+        bad = "not a callable"
+        assert isinstance(good, SkipPredicate)
+        assert not isinstance(bad, SkipPredicate)
+
+    def test_simple_lambda_factory_satisfies_protocol(self):
+        """Documented `lambda tier: ChatOpenAI(...)` form must still pass."""
+        from neograph._llm import LlmFactory
+
+        simple = lambda tier: object()  # noqa: E731
+        # Protocol with *args/**kwargs catch -- structural match preserved.
+        assert isinstance(simple, LlmFactory)
+
+    def test_kwargs_factory_satisfies_protocol(self):
+        from neograph._llm import LlmFactory
+
+        def advanced(tier, *, node_name="", llm_config=None):
+            return object()
+
+        assert isinstance(advanced, LlmFactory)
+
+    def test_protocols_publicly_exported(self):
+        # Top-level re-export so users can `from neograph import LlmFactory`
+        from neograph import (  # noqa: F401
+            CostCallback,
+            LlmFactory,
+            MergeFallback,
+            MergePostProcess,
+            MergePreProcess,
+            PromptCompiler,
+            RawNodeFn,
+            SkipPredicate,
+            SkipValueFactory,
+        )
+
+    def test_existing_runtime_introspection_unchanged(self):
+        """Protocol-annotated callables still introspect via inspect.signature."""
+        from neograph._llm import _accepted_params
+
+        def factory(tier, *, node_name="", llm_config=None):
+            return None
+
+        params = _accepted_params(factory)
+        assert params == {"tier", "node_name", "llm_config"}
+
+    def test_validate_skip_callables_still_runs(self):
+        """Zero-arg lambdas in skip_when must still raise at Node construction."""
+        from neograph import Node
+        from neograph.errors import ConstructError
+
+        with pytest.raises(ConstructError):
+            Node(
+                "bad-skip",
+                mode="think",
+                inputs=Claims,
+                outputs=Claims,
+                model="fast",
+                prompt="p",
+                skip_when=lambda: True,  # zero-arg -- must raise
+            )

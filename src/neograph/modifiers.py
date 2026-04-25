@@ -7,14 +7,43 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from enum import Enum, auto
-from typing import Any, Self
+from typing import Any, Protocol, Self, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, field_validator
 
 from neograph._dev_warnings import dev_warn
 from neograph.errors import ConfigurationError, ConstructError
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Oracle merge-hook Protocols
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+@runtime_checkable
+class MergePreProcess(Protocol):
+    """Replaces the default ``{variants: ..., **upstream}`` input_data
+    construction for the ``merge_prompt`` path. Returns the data passed
+    verbatim to ``invoke_structured`` -- which accepts ``BaseModel | dict | str``.
+    """
+
+    def __call__(self, variants: list[Any]) -> Any: ...
+
+
+@runtime_checkable
+class MergePostProcess(Protocol):
+    """Transforms the parsed LLM merge result before it is written to state."""
+
+    def __call__(self, result: Any, variants: list[Any]) -> Any: ...
+
+
+@runtime_checkable
+class MergeFallback(Protocol):
+    """Catches errors from ``invoke_structured`` during merge. Returns a
+    deterministic fallback result instead of propagating the exception.
+    """
+
+    def __call__(self, variants: list[Any], error: Exception) -> Any: ...
 
 
 class ModifierCombo(Enum):
@@ -353,9 +382,9 @@ class Oracle(Modifier, frozen=True):
     merge_fn: str | None = None  # registered scripted function name
 
     # Optional hooks for merge_prompt path
-    merge_pre_process: Callable | None = None   # fn(variants) -> dict (input_data)
-    merge_post_process: Callable | None = None  # fn(result, variants) -> result
-    merge_fallback: Callable | None = None      # fn(variants, error) -> result
+    merge_pre_process: MergePreProcess | None = None   # fn(variants) -> input_data
+    merge_post_process: MergePostProcess | None = None  # fn(result, variants) -> result
+    merge_fallback: MergeFallback | None = None      # fn(variants, error) -> result
 
     @field_validator('n')
     @classmethod
