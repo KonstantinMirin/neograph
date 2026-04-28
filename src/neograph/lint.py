@@ -125,6 +125,12 @@ def lint(
     3. Template-ref prompt ``{placeholder}`` names resolve when a
        *template_resolver* is provided.
 
+    *config* is the FLAT inner configurable mapping that DI bindings
+    resolve against (e.g., ``{"node_id": "x", "project_root": "/p"}``),
+    NOT a full LangChain ``RunnableConfig`` envelope. This is intentional
+    -- lint validates the user's resolved config payload, not the
+    transport shape. Hence ``dict[str, Any]`` rather than ``RunnableConfig``.
+
     *known_template_vars* is a set of extra variable names the consumer's
     prompt pipeline provides (e.g., ``{"topic", "json_schema"}``). These
     are accepted as valid alongside the standard framework extras
