@@ -128,6 +128,10 @@ class Spec(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
+    # Forward-compat versioning gate. Future format-breaking changes bump
+    # this to '2' and add new Literal entries; specs with an unknown
+    # version raise ValidationError at load time.
+    version: Literal["1"] = "1"
     name: str
     description: str = ""
     types: dict[str, dict[str, Any]] = Field(default_factory=dict)

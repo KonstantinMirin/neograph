@@ -1315,3 +1315,39 @@ class TestSpecPydanticSchema:
             "Pipeline JSON schema drifted from Spec.model_json_schema(). "
             "Run scripts/regen_schema.py to regenerate."
         )
+
+    @staticmethod
+    def _minimal_versioned_spec(version: str | None = None) -> dict:
+        spec: dict = {
+            "name": "p",
+            "nodes": [
+                {"name": "x", "mode": "scripted", "outputs": "Draft", "scripted_fn": "noop"},
+            ],
+            "pipeline": {"nodes": ["x"]},
+        }
+        if version is not None:
+            spec["version"] = version
+        return spec
+
+    def test_spec_without_version_loads_with_default_1(self):
+        """Backward compat: specs without an explicit version field default to '1'."""
+        from neograph._spec_schema import Spec
+        from neograph.loader import load_spec
+
+        load_spec(self._minimal_versioned_spec(), project=self._project())
+        # Verify the parsed Spec carries version='1'
+        parsed = Spec.model_validate(self._minimal_versioned_spec())
+        assert parsed.version == "1"
+
+    def test_spec_with_explicit_version_1_loads(self):
+        """Explicit version='1' loads cleanly."""
+        from neograph.loader import load_spec
+
+        load_spec(self._minimal_versioned_spec("1"), project=self._project())
+
+    def test_spec_with_unknown_version_2_raises(self):
+        """Forward gate: version='2' raises until Spec adds it as a Literal entry."""
+        from neograph.loader import load_spec
+
+        with pytest.raises(ConfigurationError):
+            load_spec(self._minimal_versioned_spec("2"), project=self._project())

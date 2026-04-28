@@ -471,6 +471,12 @@
   "additionalProperties": false,
   "description": "Top-level pipeline spec.",
   "properties": {
+    "version": {
+      "const": "1",
+      "default": "1",
+      "title": "Version",
+      "type": "string"
+    },
     "name": {
       "title": "Name",
       "type": "string"
