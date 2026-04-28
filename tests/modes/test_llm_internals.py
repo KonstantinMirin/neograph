@@ -4291,3 +4291,126 @@ class TestCallbackProtocols:
                 prompt="p",
                 skip_when=lambda: True,  # zero-arg -- must raise
             )
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# TEST: neograph-xmm8 -- typo rejection at the invoke_* dict boundary
+# ═══════════════════════════════════════════════════════════════════════════
+class TestDictCoercionTypoRejection:
+    """neograph-xmm8: dict-form llm_config at invoke_* / render_prompt
+    boundaries must route through LlmConfig.model_validate so typos surface
+    as ValidationError BEFORE any LLM call.
+
+    Two layers of typo protection exist post-pej0:
+      1. Construction-time -- Node/Construct field rejects typoed dicts.
+      2. Direct-call boundary -- when something bypasses Node and calls
+         invoke_structured / invoke_with_tools / render_prompt with a raw
+         dict, _coerce_llm_config still validates. This class pins layer 2:
+         if _coerce_llm_config is ever 'optimized' to skip validation,
+         these tests fail loudly.
+    """
+
+    def test_invoke_structured_rejects_dict_with_typo(self):
+        from pydantic import BaseModel as _BM
+        from pydantic import ValidationError as _VE
+
+        from neograph import configure_llm
+        from neograph._llm import invoke_structured
+
+        # Mock LLM should never be called -- the typo must raise first.
+        called = [False]
+
+        class _NeverCalled:
+            def with_structured_output(self, *args, **kwargs):
+                called[0] = True
+                return self
+
+            def invoke(self, *args, **kwargs):
+                called[0] = True
+                return None
+
+        configure_llm(
+            llm_factory=lambda tier, **kw: _NeverCalled(),
+            prompt_compiler=lambda t, d, **kw: [{"role": "user", "content": "x"}],
+        )
+
+        class Out(_BM):
+            text: str
+
+        with pytest.raises(_VE):
+            invoke_structured(
+                model_tier="fast",
+                prompt_template="p",
+                input_data={},
+                output_model=Out,
+                config={"configurable": {}},
+                llm_config={"max_retires": 5},  # typo
+            )
+
+        assert called[0] is False, (
+            "LLM was reached -- typo rejection must happen at the "
+            "_coerce_llm_config boundary, before any factory or invoke call."
+        )
+
+    def test_invoke_with_tools_rejects_dict_with_typo(self):
+        from pydantic import BaseModel as _BM
+        from pydantic import ValidationError as _VE
+
+        from neograph import Tool, configure_llm
+        from neograph._tool_loop import invoke_with_tools
+        from neograph.factory import register_tool_factory
+        from neograph.tool import ToolBudgetTracker
+
+        called = [False]
+
+        class _NeverCalled:
+            def bind_tools(self, *args, **kwargs):
+                called[0] = True
+                return self
+
+            def invoke(self, *args, **kwargs):
+                called[0] = True
+                return None
+
+            def with_structured_output(self, *args, **kwargs):
+                called[0] = True
+                return self
+
+        configure_llm(
+            llm_factory=lambda tier, **kw: _NeverCalled(),
+            prompt_compiler=lambda t, d, **kw: [{"role": "user", "content": "x"}],
+        )
+        register_tool_factory("xmm8_probe", lambda c, tc: object())
+
+        class Out(_BM):
+            text: str
+
+        tools = [Tool(name="xmm8_probe", description="x")]
+        budget = ToolBudgetTracker(tools)
+
+        with pytest.raises(_VE):
+            invoke_with_tools(
+                model_tier="fast",
+                prompt_template="p",
+                input_data={},
+                output_model=Out,
+                tools=tools,
+                budget_tracker=budget,
+                config={"configurable": {}},
+                llm_config={"max_iterstions": 3},  # typo (max_iterations)
+            )
+
+        assert called[0] is False, (
+            "LLM was reached -- typo rejection must happen at the "
+            "_coerce_llm_config boundary, before any factory or invoke call."
+        )
+
+    def test_coerce_llm_config_rejects_dict_with_typo_directly(self):
+        """Direct unit test on the helper -- the smallest possible regression
+        gate. If _coerce_llm_config ever skips validation, this fails first."""
+        from pydantic import ValidationError as _VE
+
+        from neograph._llm import _coerce_llm_config
+
+        with pytest.raises(_VE):
+            _coerce_llm_config({"max_retires": 5})
