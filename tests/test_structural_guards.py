@@ -1077,3 +1077,53 @@ class TestToolLoopImportGraph:
             f"_tool_loop.py imports from higher layers: {sorted(leaked)}. "
             f"Layer discipline: _tool_loop -> _llm (one-way)."
         )
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# TEST: neograph-l2vr -- Tool.config remains pass-through (no framework reads)
+# ═══════════════════════════════════════════════════════════════════════════
+class TestToolConfigOnlyPassedPositionally:
+    """neograph-l2vr / mlxg: Tool.config is a dynamic dict pass-through to
+    user-supplied tool factories.
+
+    Mlxg's audit established that the framework never reads keys from
+    tool.config / tool_spec.config -- it forwards the dict verbatim to the
+    factory at _tool_loop.py:205. This guard rejects any future regression
+    where a helper grows a tool_spec.config[...] / tool.config.get(...)
+    read, which would silently re-introduce the same bug class that
+    pej0/rnjw closed for llm_config.
+    """
+
+    def test_no_framework_reads_on_tool_spec_config(self):
+        import re
+        from pathlib import Path
+
+        src_dir = Path(__file__).resolve().parents[1] / "src" / "neograph"
+        forbidden = [
+            re.compile(r"\btool_spec\.config\["),
+            re.compile(r"\btool_spec\.config\.get\("),
+            re.compile(r"\btool\.config\["),
+            re.compile(r"\btool\.config\.get\("),
+        ]
+
+        violations: list[str] = []
+        for py_file in src_dir.rglob("*.py"):
+            text = py_file.read_text()
+            for line_no, line in enumerate(text.splitlines(), start=1):
+                # Skip docstring-style comments and example blocks.
+                stripped = line.lstrip()
+                if stripped.startswith(("#", "//", "*", '"', "'")):
+                    continue
+                for pattern in forbidden:
+                    if pattern.search(line):
+                        violations.append(
+                            f"{py_file.name}:{line_no} -- {line.strip()}"
+                        )
+
+        assert not violations, (
+            "Framework code now reads keys from tool_spec.config / tool.config. "
+            "mlxg accepted Tool.config as a dynamic pass-through dict; any "
+            "framework-side .get() / [...] access reintroduces the typo / "
+            "default-drift bug class that LlmConfig closed for llm_config. "
+            f"Violations:\n{chr(10).join(violations)}"
+        )
