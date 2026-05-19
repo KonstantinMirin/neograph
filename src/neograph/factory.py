@@ -40,6 +40,7 @@ from neograph._dispatch import (  # noqa: F401 — re-exported for tests/backwar
     _dispatch_for_mode,
     _render_input,
 )
+from neograph._normalize import normalize_inputs, normalize_outputs
 from neograph.di import _unwrap_each_dict, _unwrap_loop_value
 from neograph.errors import ConfigurationError, ExecutionError
 from neograph.modifiers import Each, ModifierCombo, classify_modifiers
@@ -235,9 +236,10 @@ def _build_state_update(
     each_item = _state_get(state, "neo_each_item")
 
     # Dict-form outputs: per-key state fields (neograph-1bp.3).
-    if isinstance(node.outputs, dict) and isinstance(result, dict):
+    no = normalize_outputs(node.outputs)
+    if no.is_dict_form and isinstance(result, dict):
         update: dict[str, Any] = {}
-        for key in node.outputs:
+        for key in no.all_keys:
             val = result.get(key)
             if val is None:
                 continue
@@ -300,7 +302,7 @@ def _execute_node(
 
     context_data = _extract_context(state, node) if node.mode != "scripted" else None
 
-    if isinstance(raw_input, dict) and isinstance(node.inputs, dict):
+    if isinstance(raw_input, dict) and normalize_inputs(node.inputs).is_dict_form:
         node_input = NodeInput(fan_in=raw_input)
     else:
         node_input = NodeInput(single=raw_input)
@@ -398,9 +400,9 @@ def _classify_input_shape(state: Any, node: Node) -> InputShape:
     combo, _ = classify_modifiers(node)
     if combo in (ModifierCombo.LOOP, ModifierCombo.LOOP_OPERATOR):
         own_field = field_name_for(node.name)
-        if isinstance(node.outputs, dict):
-            primary_key = next(iter(node.outputs))
-            own_field = f"{own_field}_{primary_key}"
+        no = normalize_outputs(node.outputs)
+        if no.is_dict_form:
+            own_field = f"{own_field}_{no.primary_key}"
         own_val = _state_get(state, own_field)
         if isinstance(own_val, list) and own_val:
             return InputShape.LOOP_REENTRY
@@ -409,7 +411,7 @@ def _classify_input_shape(state: Any, node: Node) -> InputShape:
     if replicate_item is not None and _is_instance_safe(replicate_item, node.inputs):
         return InputShape.EACH_ITEM
 
-    if isinstance(node.inputs, dict):
+    if normalize_inputs(node.inputs).is_dict_form:
         return InputShape.FAN_IN_DICT
 
     return InputShape.SINGLE_TYPE
@@ -418,25 +420,27 @@ def _classify_input_shape(state: Any, node: Node) -> InputShape:
 def _extract_loop_reentry(state: Any, node: Node) -> Any:
     """Read from the node's own append-list on loop iteration 1+."""
     own_field = field_name_for(node.name)
-    if isinstance(node.outputs, dict):
-        primary_key = next(iter(node.outputs))
-        own_field = f"{own_field}_{primary_key}"
+    no_out = normalize_outputs(node.outputs)
+    if no_out.is_dict_form:
+        own_field = f"{own_field}_{no_out.primary_key}"
     own_val = _state_get(state, own_field)
     latest = own_val[-1]  # type: ignore[index]
 
-    if not isinstance(node.inputs, dict):
+    ni = normalize_inputs(node.inputs)
+    if not ni.is_dict_form:
         return latest
 
+    by_name = ni.by_name
     # Single-key dict: always self-reference
-    if len(node.inputs) == 1:
-        first_key = next(iter(node.inputs))
+    if len(by_name) == 1:
+        first_key = next(iter(by_name))
         return {first_key: latest}
 
     # Multi-key dict: self-reference key gets latest, others read from state.
     result = {}
     node_own_field = field_name_for(node.name)
     placed_latest = False
-    for key, expected_type in node.inputs.items():
+    for key, expected_type in by_name.items():
         state_key = field_name_for(key)
         upstream_val = _state_get(state, state_key)
         if upstream_val is not None and state_key != node_own_field:
@@ -448,7 +452,7 @@ def _extract_loop_reentry(state: Any, node: Node) -> Any:
             result[key] = latest
             placed_latest = True
     if not placed_latest:
-        first_key = next(iter(node.inputs))
+        first_key = next(iter(by_name))
         result[first_key] = latest
     return result
 
@@ -460,9 +464,10 @@ def _extract_each_item(state: Any, node: Node) -> Any:
 
 def _extract_fan_in_dict(state: Any, node: Node) -> dict[str, Any]:
     """Read each named upstream from state by key."""
-    assert isinstance(node.inputs, dict)
+    ni = normalize_inputs(node.inputs)
+    assert ni.is_dict_form
     result: dict[str, Any] = {}
-    for input_name, expected_type in node.inputs.items():
+    for input_name, expected_type in ni.by_name.items():
         if input_name == node.fan_out_param:
             value = _state_get(state, "neo_each_item")
         else:

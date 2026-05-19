@@ -27,6 +27,7 @@ from __future__ import annotations
 import os
 from typing import Any
 
+from neograph._normalize import normalize_inputs
 from neograph.construct import Construct
 from neograph.naming import field_name_for
 from neograph.node import Node
@@ -34,7 +35,7 @@ from neograph.node import Node
 # ── Node introspection ───────────────────────────────────────────────────
 
 def _node_info(node: Node) -> dict[str, Any]:
-    inputs_dict = node.inputs if isinstance(node.inputs, dict) else {}
+    inputs_dict = normalize_inputs(node.inputs).by_name
     outputs_name = (
         node.outputs.__name__
         if hasattr(node.outputs, "__name__")
@@ -87,9 +88,11 @@ def _collect_items(construct: Construct) -> tuple[list[dict], list[dict]]:
 def _collect_edges(construct: Construct) -> list[tuple[str, str]]:
     edges = []
     for item in construct.nodes:
-        if isinstance(item, Node) and isinstance(item.inputs, dict):
-            for up in item.inputs:
-                edges.append((up, field_name_for(item.name)))
+        if isinstance(item, Node):
+            ni = normalize_inputs(item.inputs)
+            if ni.is_dict_form:
+                for up in ni.by_name:
+                    edges.append((up, field_name_for(item.name)))
     return edges
 
 

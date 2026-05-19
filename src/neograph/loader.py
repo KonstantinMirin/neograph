@@ -178,10 +178,11 @@ def _build_node(node_spec: NodeSpec) -> Node:
     outputs = lookup_type(node_spec.outputs)
 
     inputs: Any
-    if isinstance(node_spec.inputs, dict):
-        inputs = {k: lookup_type(v) for k, v in node_spec.inputs.items()}
-    elif isinstance(node_spec.inputs, str):
-        inputs = lookup_type(node_spec.inputs)
+    spec_inputs = node_spec.inputs
+    if isinstance(spec_inputs, dict):
+        inputs = {k: lookup_type(v) for k, v in spec_inputs.items()}
+    elif isinstance(spec_inputs, str):
+        inputs = lookup_type(spec_inputs)
     else:
         inputs = outputs  # single-type fallback for type-scan extraction
 

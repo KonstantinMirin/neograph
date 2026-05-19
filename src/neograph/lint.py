@@ -15,6 +15,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
+from neograph._normalize import normalize_inputs
 from neograph._sidecar import _get_param_res, get_merge_fn_metadata
 from neograph.construct import Construct
 from neograph.di import DIBinding, DIKind
@@ -386,12 +387,13 @@ def _predict_input_keys(node: Node, *, include_flattened: bool = True) -> set[st
 
     For single-type or None inputs: empty set (isinstance scan, no dict).
     """
-    if node.inputs is None:
+    ni = normalize_inputs(node.inputs)
+    if ni.is_none:
         return set()
-    if isinstance(node.inputs, dict):
-        keys = set(node.inputs.keys())
+    if ni.is_dict_form:
+        keys = set(ni.by_name.keys())
         if include_flattened:
-            for input_type in node.inputs.values():
+            for input_type in ni.by_name.values():
                 keys |= _get_flattened_field_names(input_type)
         return keys
     # Single-type inputs: no dict keys predictable

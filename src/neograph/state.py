@@ -19,6 +19,7 @@ from neograph.naming import field_name_for
 log = structlog.get_logger()
 from typing import assert_never
 
+from neograph._normalize import normalize_outputs
 from neograph.modifiers import ModifierCombo, classify_modifiers
 from neograph.node import Node
 
@@ -273,15 +274,16 @@ def compute_node_fingerprints(construct: Any) -> dict[str, str]:
     for item in construct.nodes:
         if hasattr(item, "outputs") and item.outputs is not None:
             fname = field_name_for(item.name)
-            if isinstance(item.outputs, dict):
+            no = normalize_outputs(item.outputs)
+            if no.is_dict_form:
                 # Dict-form outputs: fingerprint each key
-                for key, typ in item.outputs.items():
+                for key, typ in no.all_keys.items():
                     full_name = f"{fname}_{key}"
                     result[full_name] = hashlib.sha256(
                         f"{full_name}:{type(typ).__name__ if isinstance(typ, type) else str(typ)}".encode()
                     ).hexdigest()[:12]
             else:
-                typ = item.outputs
+                typ = no.primary
                 result[fname] = hashlib.sha256(
                     f"{fname}:{typ.__qualname__ if isinstance(typ, type) else str(typ)}".encode()
                 ).hexdigest()[:12]
@@ -330,9 +332,10 @@ def _add_output_field(node: Node, fields: dict[str, Any]) -> None:
         )
 
     field_name = field_name_for(node.name)
+    no = normalize_outputs(node.outputs)
 
     # Dict-form outputs: one state field per key (neograph-1bp.2).
-    if isinstance(node.outputs, dict):
+    if no.is_dict_form:
         combo, mods = classify_modifiers(node)
         match combo:
             case ModifierCombo.EACH_ORACLE | ModifierCombo.EACH_ORACLE_OPERATOR:
@@ -343,7 +346,7 @@ def _add_output_field(node: Node, fields: dict[str, Any]) -> None:
                     Annotated[list, _append_tagged],
                     [],
                 )
-                for output_key, output_type in node.outputs.items():
+                for output_key, output_type in no.all_keys.items():
                     key_field = f"{field_name}_{output_key}"
                     field_type = dict[str, output_type] | None  # type: ignore[valid-type]
                     fields[key_field] = (
@@ -358,7 +361,7 @@ def _add_output_field(node: Node, fields: dict[str, Any]) -> None:
                     Annotated[list[dict], _collect_oracle_results],
                     [],
                 )
-                for output_key, output_type in node.outputs.items():
+                for output_key, output_type in no.all_keys.items():
                     key_field = f"{field_name}_{output_key}"
                     fields[key_field] = (output_type | None, None)
             case (
@@ -366,7 +369,7 @@ def _add_output_field(node: Node, fields: dict[str, Any]) -> None:
                 | ModifierCombo.EACH | ModifierCombo.EACH_OPERATOR
                 | ModifierCombo.LOOP | ModifierCombo.LOOP_OPERATOR
             ):
-                for output_key, output_type in node.outputs.items():
+                for output_key, output_type in no.all_keys.items():
                     key_field = f"{field_name}_{output_key}"
                     _add_single_output_field(node, key_field, output_type, fields)
             case _ as unreachable:
@@ -374,7 +377,7 @@ def _add_output_field(node: Node, fields: dict[str, Any]) -> None:
         return
 
     # Single-type outputs (backward compat): one field named after the node.
-    _add_single_output_field(node, field_name, node.outputs, fields)
+    _add_single_output_field(node, field_name, no.primary, fields)
 
 
 def _add_single_output_field(

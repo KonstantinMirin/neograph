@@ -739,3 +739,134 @@ class TestEachOracleFusionValidationParity:
             def bad(item: RawText) -> Claims: ...
 
 
+class TestBodyMergeShimNameUniqueness:
+    """neograph-xdvt: body-as-merge shim names must NOT be derived from id(f).
+
+    id() returns a memory address; addresses are reused after garbage
+    collection. If two functions with the same node label happen to land at
+    the same address, their shim names collide and the second silently
+    overwrites the first in the global scripted registry.
+
+    Fix: use secrets.token_hex(8) — cryptographically random, address-
+    independent, collision-free.
+    """
+
+    def test_repeated_body_merge_registrations_use_distinct_shim_names(self):
+        """Decorating many @nodes with body-as-merge under the same label and
+        forcing gc between each must register each shim under a distinct name.
+
+        Under id(f): addresses can be reused after gc → collisions possible.
+        Under secrets.token_hex(8): 64-bit random → collisions vanishingly rare
+        (≈ 0 in any practical run).
+        """
+        import gc
+
+        from neograph._registry import registry
+
+        shim_names: list[str] = []
+        prefix = "_body_merge_oracle-merged"
+
+        # Snapshot existing shims with this prefix so we only inspect newly
+        # registered names below.
+        before = {k for k in registry.scripted if k.startswith(prefix)}
+
+        for _ in range(50):
+            # Build a structurally-identical lambda + @node each iteration.
+            # We deliberately use the same label so any collision in the
+            # second `_{id}` segment would overwrite the previous registration.
+            @node(
+                outputs=Claims,
+                model="fast",
+                prompt="test",
+                models=["fast", "reason"],
+                name="oracle-merged",
+            )
+            def oracle_merged(topic: RawText) -> Claims:
+                ...
+
+            # Force gc of the decorated function (the Node spec still holds the
+            # sidecar but the *original* function object can be collected if no
+            # other reference remains). Under id(f), the next iteration may
+            # observe the same address.
+            del oracle_merged
+            gc.collect()
+
+        after = {k for k in registry.scripted if k.startswith(prefix)}
+        shim_names = sorted(after - before)
+
+        # Every iteration must have registered a distinct shim name.
+        assert len(shim_names) == 50, (
+            f"Expected 50 distinct shim names from 50 decorations, got "
+            f"{len(shim_names)}. id(f)-based naming reuses addresses after gc "
+            f"and silently overwrites earlier registrations."
+        )
+
+    def test_interrupt_when_shim_names_are_distinct_per_decoration(self):
+        """Same hazard at decorators.py:592 — interrupt_when callable shim
+        names were also derived from id(f).
+        """
+        import gc
+
+        from neograph._registry import registry
+
+        prefix = "_node_interrupt_intr-target"
+        before = {k for k in registry.scripted if k.startswith(prefix)}
+        # interrupt conditions live in registry.condition, not scripted; use
+        # the proper registry. Snapshot conditions instead.
+        cond_before = {k for k in registry.condition if k.startswith(prefix)}
+
+        for _ in range(50):
+            @node(
+                outputs=Claims,
+                interrupt_when=lambda state: False,
+                name="intr-target",
+            )
+            def intr_target(topic: RawText) -> Claims:
+                return Claims(items=[])
+
+            del intr_target
+            gc.collect()
+
+        cond_after = {k for k in registry.condition if k.startswith(prefix)}
+        names = sorted(cond_after - cond_before)
+        assert len(names) == 50, (
+            f"Expected 50 distinct interrupt-condition names from 50 "
+            f"decorations, got {len(names)}. id(f)-based naming reuses "
+            f"addresses after gc."
+        )
+
+    def test_shim_name_format_does_not_use_id(self):
+        """Structural guard: the generated shim name suffix must not be a
+        memory address hex string. After the fix, suffix is a 16-char hex
+        token from secrets.token_hex(8).
+        """
+        from neograph._registry import registry
+
+        @node(
+            outputs=Claims,
+            model="fast",
+            prompt="test",
+            models=["fast", "reason"],
+            name="format-check",
+        )
+        def format_check(topic: RawText) -> Claims:
+            ...
+
+        prefix = "_body_merge_format-check_"
+        keys = [k for k in registry.scripted if k.startswith(prefix)]
+        assert keys, "body-merge shim should be registered"
+        # secrets.token_hex(8) → 16 hex chars. id(f):x → varies by platform
+        # (usually 12 on 64-bit, but always pointer-derived). Asserting the
+        # suffix length is 16 hex chars guards against regressing to id(f).
+        suffix = keys[0][len(prefix):]
+        assert len(suffix) == 16, (
+            f"Expected 16-char hex suffix from secrets.token_hex(8), got "
+            f"{len(suffix)}-char {suffix!r}. Did the implementation regress "
+            f"to id(f)?"
+        )
+        # All chars must be lowercase hex.
+        assert all(c in "0123456789abcdef" for c in suffix), (
+            f"Suffix {suffix!r} must be lowercase hex"
+        )
+
+

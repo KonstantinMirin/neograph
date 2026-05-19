@@ -18,6 +18,7 @@ if TYPE_CHECKING:
 
 from neograph._construct_validation import ConstructError
 from neograph._llm_config import LlmConfig
+from neograph._normalize import normalize_inputs, normalize_outputs
 from neograph._sidecar import (
     _get_node_source,
     _get_param_res,
@@ -154,10 +155,14 @@ def _resolve_dict_output_param(
     """
     for upstream_name, upstream_node in decorated.items():
         prefix = f"{upstream_name}_"
-        if pname.startswith(prefix) and isinstance(upstream_node.outputs, dict):
-            output_key = pname[len(prefix):]
-            if output_key in upstream_node.outputs:
-                return upstream_name
+        if not pname.startswith(prefix):
+            continue
+        up_no = normalize_outputs(upstream_node.outputs)
+        if not up_no.is_dict_form:
+            continue
+        output_key = pname[len(prefix):]
+        if output_key in up_no.all_keys:
+            return upstream_name
     return None
 
 
@@ -175,9 +180,10 @@ def _resolve_loop_self_param(
     """
     from neograph._construct_validation import _types_compatible, effective_producer_type
 
-    if not isinstance(node.inputs, dict):
+    ni = normalize_inputs(node.inputs)
+    if not ni.is_dict_form:
         return None
-    param_type = node.inputs.get(pname)
+    param_type = ni.by_name.get(pname)
     if param_type is None:
         return None
 
@@ -258,10 +264,11 @@ def _identify_port_params(
     if construct_input is None:
         return port_params
     for field_name, n in decorated.items():
-        if not isinstance(n.inputs, dict):
+        ni = normalize_inputs(n.inputs)
+        if not ni.is_dict_form:
             continue
         ports: set[str] = set()
-        for pname, ptype in n.inputs.items():
+        for pname, ptype in ni.by_name.items():
             if pname in decorated:
                 continue  # peer @node takes priority
             try:
@@ -401,8 +408,9 @@ def _build_adjacency(
     for field_name, n in decorated.items():
         if field_name in plain_fields:
             # Plain Node — derive adjacency from dict-form inputs keys.
-            if isinstance(n.inputs, dict):
-                for dep_name in n.inputs:
+            n_inputs_norm = normalize_inputs(n.inputs)
+            if n_inputs_norm.is_dict_form:
+                for dep_name in n_inputs_norm.by_name:
                     dep_field = field_name_for(dep_name)
                     if dep_field in decorated or dep_field in sub_by_field:
                         adjacency[field_name].append(dep_field)
@@ -532,12 +540,13 @@ def _cleanup_inputs_and_register(
         updates: dict[str, Any] = {}
 
         # Phase 1: Strip DI params, rewrite port/loop keys, set fan_out_param.
-        if isinstance(n.inputs, dict):
+        ni = normalize_inputs(n.inputs)
+        if ni.is_dict_form:
             skip = fan_out_params.get(field, set())
             _ports = port_params.get(field, set())
             renames = loop_param_renames.get(field, {})
             filtered: dict[str, Any] = {}
-            for k, v in n.inputs.items():
+            for k, v in ni.by_name.items():
                 if k in _ports:
                     filtered["neo_subgraph_input"] = v
                 elif k in renames:
@@ -549,7 +558,7 @@ def _cleanup_inputs_and_register(
                     or _resolve_dict_output_param(k, decorated) is not None
                 ):
                     filtered[k] = v
-            if filtered != n.inputs:
+            if filtered != ni.by_name:
                 updates["inputs"] = filtered
             if skip:
                 updates["fan_out_param"] = next(iter(skip))

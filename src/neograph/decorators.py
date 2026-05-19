@@ -53,6 +53,7 @@ from __future__ import annotations
 
 import ast
 import inspect
+import secrets
 import sys
 import textwrap
 import warnings
@@ -148,7 +149,7 @@ def _build_oracle_kwargs(
             UserWarning,
             stacklevel=4,
         )
-        body_merge_name = f"_body_merge_{node_label}_{id(f):x}"
+        body_merge_name = f"_body_merge_{node_label}_{secrets.token_hex(8)}"
         from neograph.factory import register_scripted as _reg_scripted
 
         def _make_body_merge(user_fn: Callable) -> Callable:
@@ -589,7 +590,7 @@ def node(
             if isinstance(interrupt_when, str):
                 condition_name = interrupt_when
             elif callable(interrupt_when):
-                condition_name = f"_node_interrupt_{node_label}_{id(f):x}"
+                condition_name = f"_node_interrupt_{node_label}_{secrets.token_hex(8)}"
                 register_condition(condition_name, interrupt_when)
             else:
                 raise ConstructError.build(

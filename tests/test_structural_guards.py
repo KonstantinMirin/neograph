@@ -1196,3 +1196,86 @@ class TestToolConfigOnlyPassedPositionally:
             "default-drift bug class that LlmConfig closed for llm_config. "
             f"Violations:\n{chr(10).join(violations)}"
         )
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# TEST: neograph-mqr3 -- Node.outputs / Node.inputs polymorphism is normalized
+# ═══════════════════════════════════════════════════════════════════════════
+class TestNodeIOPolymorphismNormalized:
+    """neograph-mqr3: ``Node.outputs`` / ``Node.inputs`` are polymorphic
+    (``type | dict[str, type] | None``). The discrimination must happen in
+    exactly one place — ``src/neograph/_normalize.py``. Every other module
+    consumes the normalized view (``NormalizedOutputs`` / ``NormalizedInputs``)
+    instead of re-deriving the trichotomy via ``isinstance(...,  dict)``.
+
+    Why: 18+ ``isinstance(node.outputs, dict)`` / ``isinstance(node.inputs, dict)``
+    sites existed before the normalizer. Each was a place where mypy couldn't
+    help (TypeSpec is statically Any) and where a future fourth form would
+    silently slip through. Centralizing keeps the polymorphism in one spot.
+    """
+
+    def test_no_outputs_dict_isinstance_outside_normalizer(self):
+        violations = self._scan_isinstance("outputs")
+        assert not violations, (
+            f"\n{len(violations)} isinstance(<expr>.outputs, dict) site(s) outside _normalize.py:\n"
+            + "\n".join(violations)
+            + "\n\nUse `normalize_outputs(node.outputs)` from neograph._normalize "
+              "and consume the NormalizedOutputs view (primary / primary_key / "
+              "secondary / all_keys / is_dict_form / is_none) instead."
+        )
+
+    def test_no_inputs_dict_isinstance_outside_normalizer(self):
+        violations = self._scan_isinstance("inputs")
+        assert not violations, (
+            f"\n{len(violations)} isinstance(<expr>.inputs, dict) site(s) outside _normalize.py:\n"
+            + "\n".join(violations)
+            + "\n\nUse `normalize_inputs(node.inputs)` from neograph._normalize "
+              "and consume the NormalizedInputs view (by_name / single_type / "
+              "is_dict_form / is_none) instead."
+        )
+
+    @staticmethod
+    def _scan_isinstance(attr: str) -> list[str]:
+        """AST-scan src/neograph/*.py for isinstance(<expr>.{attr}, dict).
+
+        Skips _normalize.py (the only legitimate location).
+        """
+        violations: list[str] = []
+        for py_file in sorted(SRC_DIR.rglob("*.py")):
+            if py_file.name == "_normalize.py":
+                continue
+            try:
+                tree = ast.parse(py_file.read_text(), filename=str(py_file))
+            except SyntaxError:
+                continue
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.Call):
+                    continue
+                func = node.func
+                # Only isinstance(...)
+                if not (isinstance(func, ast.Name) and func.id == "isinstance"):
+                    continue
+                # Need exactly two args, where:
+                #   arg[0] is an Attribute access ending in `.<attr>`
+                #   arg[1] mentions ``dict``
+                if len(node.args) != 2:
+                    continue
+                target, classinfo = node.args
+                if not (isinstance(target, ast.Attribute) and target.attr == attr):
+                    continue
+                if not TestNodeIOPolymorphismNormalized._mentions_dict(classinfo):
+                    continue
+                violations.append(
+                    f"  {py_file.relative_to(SRC_DIR.parent)}:{node.lineno}: "
+                    f"isinstance(<expr>.{attr}, dict)"
+                )
+        return violations
+
+    @staticmethod
+    def _mentions_dict(node: ast.expr) -> bool:
+        """True if the classinfo arg of isinstance references the builtin ``dict``."""
+        if isinstance(node, ast.Name) and node.id == "dict":
+            return True
+        if isinstance(node, ast.Tuple):
+            return any(TestNodeIOPolymorphismNormalized._mentions_dict(e) for e in node.elts)
+        return False

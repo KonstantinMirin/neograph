@@ -18,6 +18,7 @@ from langchain_core.runnables import RunnableConfig
 from pydantic import BaseModel
 
 from neograph._llm import _is_inline_prompt
+from neograph._normalize import normalize_outputs
 from neograph.errors import ConfigurationError
 from neograph.node import Node
 from neograph.renderers import build_rendered_input
@@ -169,6 +170,7 @@ class ToolDispatch:
 
         rendered = _render_input(node, input_data.value)
         output_model, primary_key = _resolve_primary_output(node)
+        no = normalize_outputs(node.outputs)
 
         budget_tracker = ToolBudgetTracker(node.tools)
 
@@ -183,8 +185,8 @@ class ToolDispatch:
 
         # Resolve oracle_gen_type for dict-form outputs with tools
         oracle_gen_type = output_model
-        if isinstance(node.outputs, dict) and primary_key is not None:
-            oracle_gen_type = node.outputs[primary_key]
+        if no.is_dict_form and primary_key is not None:
+            oracle_gen_type = no.all_keys[primary_key]
 
         result, tool_interactions = invoke_with_tools(
             model_tier=effective_model,
@@ -202,13 +204,14 @@ class ToolDispatch:
 
         if primary_key is not None and result is not None:
             result_dict: dict[str, Any] = {primary_key: result}
-            if isinstance(node.outputs, dict) and "tool_log" in node.outputs:
+            if no.is_dict_form and "tool_log" in no.all_keys:
                 result_dict["tool_log"] = tool_interactions
             return NodeOutput(multi=result_dict)
-        elif isinstance(node.outputs, dict):
-            pk = next(iter(node.outputs))
+        elif no.is_dict_form:
+            pk = no.primary_key
+            assert pk is not None  # is_dict_form implies primary_key is set
             result_dict = {pk: result} if result is not None else {}
-            if result is not None and "tool_log" in node.outputs:
+            if result is not None and "tool_log" in no.all_keys:
                 result_dict["tool_log"] = tool_interactions
             return NodeOutput(multi=result_dict) if result_dict else NodeOutput()
         return NodeOutput(single=result)
@@ -253,10 +256,8 @@ def _resolve_primary_output(node: Node) -> tuple[Any, str | None]:
     if node.oracle_gen_type is not None:
         return node.oracle_gen_type, None
 
-    if isinstance(node.outputs, dict):
-        primary_key = next(iter(node.outputs))
-        return node.outputs[primary_key], primary_key
-    return node.outputs, None
+    no = normalize_outputs(node.outputs)
+    return no.primary, no.primary_key
 
 
 def _dispatch_for_mode(node: Node) -> ModeDispatch:

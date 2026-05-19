@@ -14,6 +14,7 @@ from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Send, interrupt
 
+from neograph._normalize import normalize_outputs
 from neograph.construct import Construct
 from neograph.di import _unwrap_loop_value
 from neograph.errors import ExecutionError
@@ -268,7 +269,7 @@ def _add_each_oracle_fused(
             merged[key] = _merge_one_group(oracle, node, variants, config)
 
         # For dict-form outputs: write to per-key fields
-        if isinstance(node.outputs, dict):
+        if normalize_outputs(node.outputs).is_dict_form:
             update: dict[str, Any] = {}
             for each_key, per_item_result in merged.items():
                 if isinstance(per_item_result, dict):
@@ -292,9 +293,7 @@ def _merge_one_group(oracle: Oracle, node: Node, variants: list, config: Any) ->
     from neograph.decorators import _resolve_merge_args, get_merge_fn_metadata
     from neograph.factory import lookup_scripted
 
-    output_model = node.outputs
-    if isinstance(output_model, dict):
-        output_model = next(iter(output_model.values()))
+    output_model = normalize_outputs(node.outputs).primary
     assert output_model is not None, f"Oracle merge on '{node.name}' requires outputs"
 
     if oracle.merge_prompt:
@@ -404,9 +403,9 @@ def _node_loop_unwrap(node: Node, field_name: str) -> Any:
 
     def unwrap(state: Any, _field_name: str) -> Any:
         # Dict-form outputs: primary key is {field}_{first_key}.
-        if isinstance(node.outputs, dict):
-            primary_key = next(iter(node.outputs))
-            state_field = f"{_field_name}_{primary_key}"
+        no = normalize_outputs(node.outputs)
+        if no.is_dict_form:
+            state_field = f"{_field_name}_{no.primary_key}"
         else:
             state_field = _field_name
         own_val = getattr(state, state_field, None)
