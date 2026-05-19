@@ -895,63 +895,6 @@ class TestR1XmlAfterBudgetExhaustion:
             run(graph, input={"node_id": "test"})
 
 
-# =============================================================================
-# BUG REGRESSION: neograph-g1ip
-# Compiler should register output model types with LangGraph msgpack allowlist
-# =============================================================================
-
-
-class TestMsgpackTypeRegistration:
-    """When compile() receives a checkpointer, it should register all node
-    output types with the checkpointer's serializer so LangGraph doesn't
-    emit 'Deserializing unregistered type' warnings on resume."""
-
-    def test_output_types_registered_when_compiled_with_checkpointer(self):
-        """compile() with MemorySaver should convert the serde from
-        allow-all (True) to an explicit allowlist containing the node
-        output Pydantic models."""
-        from langgraph.checkpoint.memory import MemorySaver
-
-        from neograph.factory import register_scripted
-
-        register_scripted("dummy_a", lambda input_data, config: Claims(items=["x"]))
-        register_scripted(
-            "dummy_b",
-            lambda input_data, config: MatchResult(
-                cluster_label="test",
-                coverage_pct=90,
-                gaps=[],
-            ),
-        )
-
-        pipeline = Construct(
-            "test-msgpack",
-            nodes=[
-                Node.scripted("a", fn="dummy_a", outputs=Claims),
-                Node.scripted("b", fn="dummy_b", inputs=Claims, outputs=MatchResult),
-            ],
-        )
-
-        checkpointer = MemorySaver()
-
-        # Before compile: serde allows all (True = warn mode)
-        assert checkpointer.serde._allowed_msgpack_modules is True
-
-        graph = compile(pipeline, checkpointer=checkpointer)
-
-        # After compile: serde should have an explicit allowlist (set/frozenset),
-        # not True. The allowlist must include our output model types.
-        allowlist = checkpointer.serde._allowed_msgpack_modules
-        assert allowlist is not True, (
-            "compile() should convert the serde from allow-all (True) to an "
-            "explicit allowlist containing node output types"
-        )
-        # The allowlist should contain tuples of (module, classname)
-        type_names = {name for (_mod, name) in allowlist}
-        assert "Claims" in type_names, f"Claims not in allowlist: {type_names}"
-        assert "MatchResult" in type_names, f"MatchResult not in allowlist: {type_names}"
-
-
 # ═══════════════════════════════════════════════════════════════════════════
 # Runtime: Loop/branch condition error handling (neograph-d19r)
 # ═══════════════════════════════════════════════════════════════════════════

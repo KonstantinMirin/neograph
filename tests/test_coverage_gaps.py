@@ -57,26 +57,6 @@ class SubOutput(BaseModel, frozen=True):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# compiler.py — _register_msgpack_types (lines 49-50, 54) → pragma: no cover
-# ═══════════════════════════════════════════════════════════════════════════
-
-
-class TestRegisterSerde:
-    """Lines 49-50 and 54 are LangGraph serde internals that depend on
-    private LangGraph APIs. Mark them with pragma: no cover."""
-
-    def test_register_serde_returns_none_when_checkpointer_has_no_serde(self):
-        """_register_msgpack_types exits early when checkpointer has no serde."""
-        from neograph.compiler import _register_msgpack_types
-
-        class FakeCheckpointer:
-            pass
-
-        # Should not raise — exits at `not isinstance(serde, JsonPlusSerializer)`
-        _register_msgpack_types(FakeCheckpointer(), BaseModel)
-
-
-# ═══════════════════════════════════════════════════════════════════════════
 # compiler.py — describe_graph + _print_dag_summary (lines 181, 196-221)
 # ═══════════════════════════════════════════════════════════════════════════
 

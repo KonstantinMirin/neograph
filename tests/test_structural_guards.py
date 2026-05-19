@@ -1079,6 +1079,75 @@ class TestToolLoopImportGraph:
         )
 
 
+class TestNoPrivateLanggraphImports:
+    """LangGraph is a committed dependency, but only its PUBLIC API is allowed.
+
+    Per docs/design/architecture-decisions.md §1: any `_`-prefixed module
+    segment in a `langgraph.*` import path is private and forbidden. Examples:
+
+    Forbidden:
+        from langgraph._internal._serde import build_serde_allowlist
+        from langgraph.checkpoint.serde._msgpack import SAFE_MSGPACK_TYPES
+        import langgraph._internal
+
+    Allowed:
+        from langgraph.graph import END, START, StateGraph
+        from langgraph.types import Send, Command, interrupt
+        from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
+
+    Private modules can break or vanish between LangGraph versions without
+    notice. If you need behavior only available there, file a beads task to
+    upstream a public API or vendor the logic locally — do not import it.
+    """
+
+    def test_no_private_langgraph_imports(self):
+        violations = []
+
+        for py_file in sorted(SRC_DIR.glob("*.py")):
+            source = py_file.read_text()
+            try:
+                tree = ast.parse(source, filename=str(py_file))
+            except SyntaxError:
+                continue
+
+            for node in ast.walk(tree):
+                # `from langgraph.<...> import ...`
+                if isinstance(node, ast.ImportFrom) and node.module:
+                    if not node.module.startswith("langgraph"):
+                        continue
+                    segments = node.module.split(".")
+                    private = [s for s in segments if s.startswith("_")]
+                    if private:
+                        violations.append(
+                            f"  {py_file.name}:{node.lineno}: "
+                            f"from {node.module} import ... "
+                            f"(private segment(s): {', '.join(private)})"
+                        )
+                # `import langgraph.<...>` / `import langgraph.<...> as <...>`
+                elif isinstance(node, ast.Import):
+                    for alias in node.names:
+                        name = alias.name
+                        if not name.startswith("langgraph"):
+                            continue
+                        segments = name.split(".")
+                        private = [s for s in segments if s.startswith("_")]
+                        if private:
+                            violations.append(
+                                f"  {py_file.name}:{node.lineno}: "
+                                f"import {name} "
+                                f"(private segment(s): {', '.join(private)})"
+                            )
+
+        assert violations == [], (
+            f"\n{len(violations)} private langgraph import(s):\n"
+            + "\n".join(violations)
+            + "\n\nLangGraph private APIs (`_`-prefixed module segments) are "
+            "off-limits — they can break between versions without notice. "
+            "Use only public `langgraph.<public>` paths. "
+            "See docs/design/architecture-decisions.md §1."
+        )
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # TEST: neograph-l2vr -- Tool.config remains pass-through (no framework reads)
 # ═══════════════════════════════════════════════════════════════════════════

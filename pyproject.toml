@@ -22,8 +22,9 @@ classifiers = [
 ]
 dependencies = [
     "pydantic>=2.0",
-    "langgraph>=0.2",
-    "langchain-core>=0.3",
+    "langgraph>=1.1,<2.0",
+    "langgraph-checkpoint>=4.0,<5.0",
+    "langchain-core>=1.2,<2.0",
     "structlog>=23.0",
     "jsonschema>=4.26.0",
     "json-repair>=0.30",

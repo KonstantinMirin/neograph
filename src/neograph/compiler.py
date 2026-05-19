@@ -48,37 +48,6 @@ from neograph.state import compile_state_model, compute_node_fingerprints, compu
 log = structlog.get_logger()
 
 
-def _register_msgpack_types(checkpointer: Any, state_model: type) -> None:
-    """Register node output types with the checkpointer's msgpack serializer.
-
-    Converts the serializer from warn-all mode (allowed_msgpack_modules=True)
-    to an explicit allowlist so LangGraph doesn't emit 'Deserializing
-    unregistered type' warnings on checkpoint resume.
-    """
-    try:
-        from langgraph._internal._serde import build_serde_allowlist
-        from langgraph.checkpoint.serde._msgpack import SAFE_MSGPACK_TYPES
-        from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
-    except ImportError:  # pragma: no cover
-        return  # LangGraph version doesn't have this API
-
-    serde = getattr(checkpointer, "serde", None)
-    if not isinstance(serde, JsonPlusSerializer):
-        return  # pragma: no cover
-
-    # Collect types from the state model (includes nested Pydantic models)
-    allowlist = build_serde_allowlist(schemas=[state_model])
-    allowlist = allowlist | SAFE_MSGPACK_TYPES
-
-    # Merge with existing allowlist if present
-    existing = getattr(serde, "_allowed_msgpack_modules", None)
-    if isinstance(existing, (set, frozenset)):
-        allowlist = allowlist | existing
-
-    # Replace serde with the combined allowlist
-    checkpointer.serde = JsonPlusSerializer(allowed_msgpack_modules=allowlist)
-
-
 def compile(construct: Construct, checkpointer: Any = None, retry_policy: Any = None, _context_types: dict[str, type] | None = None) -> Any:
     """Compile a Construct into an executable LangGraph StateGraph.
 
@@ -180,25 +149,27 @@ def compile(construct: Construct, checkpointer: Any = None, retry_policy: Any = 
     if prev_node:
         graph.add_edge(prev_node, END)
 
-    # 3. Register output types with checkpointer's msgpack serializer
-    if checkpointer is not None:
-        _register_msgpack_types(checkpointer, state_model)
-
-    # 4. Compile
+    # 3. Compile
+    # NOTE: LangGraph 1.x has no public API for narrowing the checkpointer's
+    # msgpack allowlist (only langgraph._internal._serde.build_serde_allowlist
+    # exists, which is private and explicitly off-limits per architecture
+    # decision §1). We accept the default warn-all behavior; "Deserializing
+    # unregistered type" warnings on checkpoint resume are expected. Revisit
+    # if LangGraph exposes a public allowlist API.
     compiled = graph.compile(checkpointer=checkpointer)
     compile_log.info("compile_complete", state_fields=list(state_model.model_fields.keys()))
 
-    # 5. Collect required DI params for pre-flight validation in run()
+    # 4. Collect required DI params for pre-flight validation in run()
     compiled._neo_required_di = _collect_required_di(construct)  # type: ignore[attr-defined]
 
-    # 6. Schema fingerprint for checkpoint validation
+    # 5. Schema fingerprint for checkpoint validation
     compiled._neo_schema_fingerprint = compute_schema_fingerprint(state_model)  # type: ignore[attr-defined]
     compiled._neo_node_fingerprints = compute_node_fingerprints(construct)  # type: ignore[attr-defined]
 
-    # 7. Stash Construct for post-compile verification (verify_compiled)
+    # 6. Stash Construct for post-compile verification (verify_compiled)
     compiled._neo_construct = construct  # type: ignore[attr-defined]
 
-    # 8. Dev-mode DAG visualization
+    # 7. Dev-mode DAG visualization
     if DEV_MODE:
         _print_dag_summary(compiled, construct)
 

@@ -221,7 +221,7 @@ Both are `PrivateAttr(default=None)`, preserved by `model_copy` (Pydantic v2 cop
 
 **Why PrivateAttr, not proper fields**: the sidecar carries a `Callable` (the user's function), which can't go through Pydantic schema validation without `arbitrary_types_allowed` on every downstream consumer. PrivateAttr bypasses schema while staying on the Node instance.
 
-**Why we keep the sidecar rather than eagerly resolving**: the sidecar carries **backend-neutral metadata** (the original function, param names, DI bindings). The LangGraph compiler consumes this to build scripted shims registered by string name. A future backend (direct execution, TypeScript transpilation) would consume the same metadata differently. Eagerly resolving to `scripted_fn` names bakes in LangGraph assumptions.
+**Why we keep the sidecar rather than eagerly resolving**: the sidecar carries the IR-level metadata that the compiler needs (the original function, param names, DI bindings). The Python compiler consumes this to build scripted shims registered by string name into LangGraph. The TypeScript port (over LangGraphJS) consumes the same conceptual metadata via its own pipeline. Eagerly resolving to LangGraph-Python `scripted_fn` registry names at IR construction time would bake the Python runtime's registration mechanics into the IR; keeping the sidecar separates "what the node is" from "how this runtime invokes it".
 
 ---
 
