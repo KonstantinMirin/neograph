@@ -90,7 +90,7 @@ class TestCostCallback:
         from langchain_core.messages import AIMessage
         from pydantic import BaseModel
 
-        from neograph._llm import _invoke_json_with_retry
+        from neograph._llm_retry import _invoke_json_with_retry
 
         class Result(BaseModel):
             value: str

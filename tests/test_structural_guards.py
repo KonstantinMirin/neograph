@@ -1650,12 +1650,11 @@ FUNCTION_LOCAL_IMPORT_ALLOWLIST: set[tuple[str, str, frozenset[str]]] = {
     ("_llm_runtime.py", "neograph.construct", frozenset({"Construct"})),
     ("_llm_runtime.py", "neograph.errors", frozenset({"CompileError"})),
     ("_llm_runtime.py", "neograph.node", frozenset({"Node"})),
-    # _llm.py — cycle: _llm uses describe_type for structured output schemas,
-    # and renderers for prompt construction. Both pull leaf utilities; the cycle
-    # is module-level _llm globals (neograph-lyvi will collapse it). Until then,
-    # function-local imports keep the module graph acyclic.
-    ("_llm.py", "neograph.describe_type", frozenset({"describe_type"})),
-    ("_llm.py", "neograph.renderers", frozenset({"build_rendered_input"})),
+    # NOTE: _llm.py describe_type / renderers entries retired by neograph-8ne2.
+    # The split made both leaf modules importable at module level — render_prompt
+    # moved into _llm_render where describe_type + build_rendered_input are
+    # safe module-level imports, and the slim _llm.py imports describe_type
+    # directly for the json_mode schema branch.
     # _oracle.py — cycle: oracle merges call invoke_structured (_llm) and resolve
     # merge_fn metadata (decorators). Both retire when §2 -lyvi collapses _llm
     # globals and merge_fn metadata moves to a leaf module.
@@ -3616,3 +3615,381 @@ class TestFactoryFunctionsTakeKwargs:
             + "\n\nThread the runtime as a parameter instead — the compat slot "
               "is reserved for the deprecated `configure_llm()` bridge."
         )
+
+
+class TestLlmResponsibilityDiscipline:
+    """neograph-8ne2 / §4: _llm.py split into responsibility-aligned modules.
+
+    Per docs/design/architecture-decisions.md §4 (Module and function
+    responsibilities): _llm.py mixed six responsibilities (cost callback,
+    LLM resolution, prompt rendering, JSON parsing/retry, output-strategy
+    dispatch, produce-mode orchestration). This guard pins the post-split
+    layout so the god-module cannot re-form by accretion.
+
+    Change-axis clusters (each scenario forces exactly one file):
+
+    | Scenario                              | Owning file       |
+    |---------------------------------------|-------------------|
+    | Add new output_strategy               | _llm_dispatch.py  |
+    | Add new JSON retry rule / repair      | _llm_retry.py     |
+    | Add new prompt-render output (image,  | _llm_render.py    |
+    |   streaming, etc.)                    |                   |
+    | Add new produce-mode orchestration    | _llm.py           |
+    |   step (cost, telemetry, LLM resolve) |                   |
+
+    Mutation-verified: moving `_extract_json` back into `_llm.py` makes
+    `test_llm_module_only_defines_allowed_names` fail naming `_extract_json`.
+    """
+
+    # Single-responsibility name allowlist per module. Names that appear here
+    # MUST be defined at module top-level in the named file; names that don't
+    # appear MUST NOT be top-level definitions there.
+    ALLOWED_NAMES = {
+        "_llm.py": frozenset({
+            # produce-mode orchestrator + runtime adapters it owns
+            "invoke_structured",
+            "_get_llm",
+            "_notify_cost",
+        }),
+        "_llm_dispatch.py": frozenset({
+            "_call_structured",
+        }),
+        "_llm_retry.py": frozenset({
+            "_extract_json",
+            "_extract_balanced",
+            "_is_list_annotation",
+            "_apply_null_defaults",
+            "_parse_json_response",
+            "_build_retry_msg",
+            "_invoke_json_with_retry",
+        }),
+        "_llm_render.py": frozenset({
+            "_is_inline_prompt",
+            "_compile_multimodal_prompt",
+            "_resolve_var",
+            "_resolve_var_raw",
+            "_substitute_vars",
+            "_compile_prompt",
+            "render_prompt",
+        }),
+    }
+
+    # Coarse line-count budget. Not the load-bearing assertion (the name set
+    # is); a proxy that catches accretion that escapes name-level review.
+    LINE_BUDGETS = {
+        "_llm.py": 260,
+        "_llm_dispatch.py": 80,
+        "_llm_retry.py": 300,
+        "_llm_render.py": 310,
+    }
+
+    def _top_level_defs(self, path: pathlib.Path) -> set[str]:
+        """Collect top-level function / class names. Module-level data
+        assignments (regex constants, logger handles, sentinels) are not
+        responsibilities — they're configuration that supports the named
+        functions and may live anywhere those functions need them.
+        """
+        tree = ast.parse(path.read_text())
+        names: set[str] = set()
+        for node in tree.body:
+            if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
+                names.add(node.name)
+        return names
+
+    def test_all_split_modules_exist(self):
+        missing = [name for name in self.ALLOWED_NAMES if not (SRC_DIR / name).exists()]
+        assert not missing, (
+            f"Split modules do not exist yet: {missing}. "
+            "neograph-8ne2 requires each responsibility module to be created."
+        )
+
+    def test_llm_module_only_defines_allowed_names(self):
+        for fname, allowed in self.ALLOWED_NAMES.items():
+            path = SRC_DIR / fname
+            if not path.exists():
+                pytest.fail(f"{fname} does not exist (neograph-8ne2 split not complete).")
+            top = self._top_level_defs(path)
+            extra = top - allowed
+            missing = allowed - top
+            assert not extra, (
+                f"{fname} defines unexpected top-level names: {sorted(extra)}. "
+                f"Allowed: {sorted(allowed)}. "
+                "Move them to their change-axis cluster module."
+            )
+            assert not missing, (
+                f"{fname} is missing required top-level names: {sorted(missing)}. "
+                f"Required: {sorted(allowed)}."
+            )
+
+    def test_line_count_budgets(self):
+        violations: list[str] = []
+        for fname, budget in self.LINE_BUDGETS.items():
+            path = SRC_DIR / fname
+            if not path.exists():
+                violations.append(f"  {fname}: file missing")
+                continue
+            n = len(path.read_text().splitlines())
+            if n > budget:
+                violations.append(f"  {fname}: {n} lines (budget {budget})")
+        assert not violations, (
+            "Line-count budgets exceeded — coarse proxy for accretion:\n"
+            + "\n".join(violations)
+        )
+
+    def test_no_cycles_among_split_modules(self):
+        """The five _llm* modules must form a DAG.
+
+        Allowed edges (a -> b means a imports from b):
+            _llm.py        -> _llm_dispatch, _llm_render, _llm_config,
+                              _llm_protocols, _llm_runtime
+            _llm_dispatch  -> _llm_retry
+            _llm_retry     -> (no _llm* deps except possibly _llm_config)
+            _llm_render    -> _llm_config, _llm_protocols, _llm_runtime
+            _llm_protocols -> (no _llm* deps)
+            _llm_runtime   -> (no _llm* deps; uses TYPE_CHECKING for protocols)
+            _llm_config    -> (no _llm* deps)
+        """
+        modules = [
+            "_llm.py",
+            "_llm_dispatch.py",
+            "_llm_retry.py",
+            "_llm_render.py",
+            "_llm_protocols.py",
+            "_llm_runtime.py",
+            "_llm_config.py",
+        ]
+        def _collect_runtime_imports(tree: ast.AST) -> set[str]:
+            """Walk imports, skipping anything inside an `if TYPE_CHECKING:` block."""
+            tc_blocks: list[ast.If] = []
+            for n in ast.walk(tree):
+                if isinstance(n, ast.If):
+                    test = n.test
+                    is_tc = (
+                        (isinstance(test, ast.Name) and test.id == "TYPE_CHECKING")
+                        or (
+                            isinstance(test, ast.Attribute)
+                            and test.attr == "TYPE_CHECKING"
+                        )
+                    )
+                    if is_tc:
+                        tc_blocks.append(n)
+
+            def in_tc(node: ast.AST) -> bool:
+                for blk in tc_blocks:
+                    for sub in ast.walk(blk):
+                        if sub is node:
+                            return True
+                return False
+
+            deps: set[str] = set()
+            for node in ast.walk(tree):
+                if isinstance(node, ast.ImportFrom) and node.module:
+                    if not node.module.startswith("neograph._llm"):
+                        continue
+                    if in_tc(node):
+                        continue
+                    leaf = node.module.split(".")[-1] + ".py"
+                    deps.add(leaf)
+            return deps
+
+        graph: dict[str, set[str]] = {}
+        for fname in modules:
+            path = SRC_DIR / fname
+            if not path.exists():
+                continue
+            tree = ast.parse(path.read_text())
+            deps = {d for d in _collect_runtime_imports(tree) if d in modules and d != fname}
+            graph[fname] = deps
+
+        # Cycle detection via DFS
+        WHITE, GRAY, BLACK = 0, 1, 2
+        color = dict.fromkeys(graph, WHITE)
+        cycle: list[str] = []
+
+        def dfs(node: str, path: list[str]) -> bool:
+            color[node] = GRAY
+            for dep in graph.get(node, set()):
+                if dep not in color:
+                    continue
+                if color[dep] == GRAY:
+                    idx = path.index(dep) if dep in path else 0
+                    cycle.extend(path[idx:] + [dep])
+                    return True
+                if color[dep] == WHITE and dfs(dep, path + [dep]):
+                    return True
+            color[node] = BLACK
+            return False
+
+        for m in graph:
+            if color[m] == WHITE and dfs(m, [m]):
+                break
+        assert not cycle, f"Cycle detected among _llm* modules: {' -> '.join(cycle)}"
+
+    def test_no_function_local_llm_split_imports(self):
+        """No spin-off module may use function-local `from neograph._llm*` imports.
+
+        Mutation-verified: adding `from neograph._llm_retry import x` inside
+        a function in _llm_dispatch.py makes this guard fire — symptomatic
+        of a hidden cycle the layout was supposed to prevent.
+        """
+        violations: list[str] = []
+        for fname in ("_llm_dispatch.py", "_llm_retry.py", "_llm_render.py"):
+            path = SRC_DIR / fname
+            if not path.exists():
+                continue
+            tree = ast.parse(path.read_text())
+            for func in ast.walk(tree):
+                if not isinstance(func, ast.FunctionDef | ast.AsyncFunctionDef):
+                    continue
+                for sub in ast.walk(func):
+                    if isinstance(sub, ast.ImportFrom) and sub is not func:
+                        if sub.module and sub.module.startswith("neograph._llm"):
+                            # The walk above includes the function's own toplevel
+                            # imports; filter to ones inside the body specifically.
+                            if sub in func.body:
+                                continue  # toplevel of function body (rare)
+                            violations.append(
+                                f"  {fname}:{sub.lineno}: from {sub.module} import ..."
+                            )
+        assert not violations, (
+            "Function-local `from neograph._llm*` import detected in spin-off module:\n"
+            + "\n".join(violations)
+            + "\n\nResolve the underlying cycle by reshaping the layout, "
+              "not by hiding the import inside a function body."
+        )
+
+
+class TestLlmScenarioTouchpoints:
+    """neograph-8ne2 / §4: Cohesion property test — scenario walkthrough.
+
+    Architectural teeth for the responsibility-cluster split: each scenario
+    enumerates which files MUST change and which files MAY change. If a
+    future change forces a file outside the may_touch set, the cluster has
+    leaked responsibility.
+
+    The point is not to forbid touching other files (tests, importers will
+    always need updates for renames). The point is to bound the *source*
+    files implementing the new behaviour.
+
+    Mutation-verified by `test_mutation_excess_scenario_touchpoints`.
+    """
+
+    SCENARIO_TOUCHPOINTS = {
+        # "Add new output_strategy (e.g., dsml, function_calling)"
+        # → strategy dispatch only.
+        "add_new_output_strategy": {
+            "must_touch": {"_llm_dispatch.py"},
+            "may_touch": {"_llm_config.py"},
+            "max_touch": 2,
+        },
+        # "Add new retry rule (e.g., schema mismatch → reformat)"
+        # → retry module only.
+        "add_new_retry_rule": {
+            "must_touch": {"_llm_retry.py"},
+            "may_touch": {"_llm_config.py"},
+            "max_touch": 2,
+        },
+        # "Add new prompt rendering output (e.g., audio block, streaming)"
+        # → render module only.
+        "add_new_prompt_render_output": {
+            "must_touch": {"_llm_render.py"},
+            "may_touch": set(),
+            "max_touch": 1,
+        },
+        # "Add new produce-mode orchestration step (e.g., pre-call hook)"
+        # → orchestrator only.
+        "add_new_orchestration_step": {
+            "must_touch": {"_llm.py"},
+            "may_touch": set(),
+            "max_touch": 1,
+        },
+    }
+
+    def test_all_must_touch_files_exist(self):
+        missing: list[str] = []
+        for scenario, spec in self.SCENARIO_TOUCHPOINTS.items():
+            for fname in (spec["must_touch"] | spec["may_touch"]):
+                if not (SRC_DIR / fname).exists():
+                    missing.append(f"  {scenario}: {fname} does not exist")
+        assert not missing, "\n".join(missing)
+
+    def test_max_touch_bounded(self):
+        for scenario, spec in self.SCENARIO_TOUCHPOINTS.items():
+            total = len(spec["must_touch"]) + len(spec["may_touch"])
+            assert total <= spec["max_touch"], (
+                f"Scenario '{scenario}' touches {total} files; max {spec['max_touch']}."
+            )
+
+    def test_mutation_excess_scenario_touchpoints(self):
+        """Mutation case — synthesize an oversized scenario, scanner detects."""
+        bad = {
+            "must_touch": {"a.py", "b.py", "c.py"},
+            "may_touch": set(),
+            "max_touch": 1,
+        }
+        total = len(bad["must_touch"]) + len(bad["may_touch"])
+        assert total > bad["max_touch"]
+
+
+class TestLlmCohesionFanOut:
+    """neograph-8ne2 / §4: Cohesion fan-out for the _llm* spin-off modules.
+
+    For each spin-off module, count distinct external src/neograph modules
+    that import from it. Spin-off modules are leaf-ish helpers; they should
+    have few importers. A bloated import set signals the spin-off has
+    become a kitchen sink.
+
+    Mutation-verified: synthesizing 4 importers of a fictitious leaf module
+    exceeds a ceiling of 2.
+    """
+
+    FAN_OUT_CEILING = {
+        # _llm_dispatch is a leaf strategy table; called by _llm + _tool_loop.
+        "_llm_dispatch.py": 3,
+        # _llm_retry is a leaf parser; called by _llm_dispatch + _tool_loop.
+        "_llm_retry.py": 4,
+        # _llm_render owns prompt compilation + public render_prompt;
+        # called by _llm, _tool_loop, _dispatch (for _is_inline_prompt),
+        # and re-exported via __init__.
+        "_llm_render.py": 5,
+    }
+
+    def _count_importers(self, target_module_basename: str) -> list[str]:
+        target = f"neograph.{target_module_basename[:-3]}"
+        importers: list[str] = []
+        for py in sorted(SRC_DIR.glob("*.py")):
+            if py.name == target_module_basename:
+                continue
+            text = py.read_text()
+            if (
+                f"from {target} " in text
+                or f"from {target}\n" in text
+                or f"import {target}\n" in text
+            ):
+                importers.append(py.name)
+        return importers
+
+    def test_fan_out_under_ceiling(self):
+        violations: list[str] = []
+        for mod, ceiling in self.FAN_OUT_CEILING.items():
+            if not (SRC_DIR / mod).exists():
+                continue
+            importers = self._count_importers(mod)
+            if len(importers) > ceiling:
+                violations.append(
+                    f"  {mod}: {len(importers)} importers (ceiling {ceiling}): "
+                    f"{importers}"
+                )
+        assert not violations, (
+            "Spin-off module fan-out exceeded ceiling:\n" + "\n".join(violations)
+        )
+
+    def test_mutation_excess_importers_detected(self, tmp_path):
+        for i in range(4):
+            (tmp_path / f"client_{i}.py").write_text("from neograph.leaf import x\n")
+        count = sum(
+            1 for p in tmp_path.glob("client_*.py")
+            if "from neograph.leaf " in p.read_text()
+        )
+        assert count > 2
+

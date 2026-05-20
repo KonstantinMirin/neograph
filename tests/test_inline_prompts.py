@@ -11,7 +11,7 @@ from pathlib import Path
 from pydantic import BaseModel
 
 from neograph._image import resolve_image as _resolve_image
-from neograph._llm import (
+from neograph._llm_render import (
     _compile_prompt,
     _is_inline_prompt,
     _resolve_var,

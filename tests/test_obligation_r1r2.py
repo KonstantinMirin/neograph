@@ -323,21 +323,21 @@ class TestExtractJsonEdgeCases:
 
     def test_empty_string(self):
         """Empty input should not infinite-loop."""
-        from neograph._llm import _extract_json
+        from neograph._llm_retry import _extract_json
 
         result = _extract_json("")
         assert result == ""
 
     def test_no_json_at_all(self):
         """Pure prose with no braces should return stripped text, not loop."""
-        from neograph._llm import _extract_json
+        from neograph._llm_retry import _extract_json
 
         result = _extract_json("This is just plain text with no JSON.")
         assert result == "This is just plain text with no JSON."
 
     def test_prose_with_braces_but_no_json(self):
         """Prose containing {variable} style interpolation."""
-        from neograph._llm import _extract_json
+        from neograph._llm_retry import _extract_json
 
         text = "The result of {a + b} is 42. And {x * y} is 100."
         result = _extract_json(text)
@@ -346,7 +346,7 @@ class TestExtractJsonEdgeCases:
 
     def test_json_starts_with_bracket_inside(self):
         """JSON object containing array: {"data": [1, 2, 3]}."""
-        from neograph._llm import _extract_json
+        from neograph._llm_retry import _extract_json
 
         text = 'Here is the result: {"data": [1, 2, 3]}'
         result = _extract_json(text)
@@ -355,7 +355,7 @@ class TestExtractJsonEdgeCases:
     def test_prose_double_quote_brace(self):
         """Prose containing {" which looks like JSON start but isn't really.
         The after_brace check sees '"' and tries to parse it as JSON."""
-        from neograph._llm import _extract_json
+        from neograph._llm_retry import _extract_json
 
         text = 'She said {"hello"} and left. The real JSON is {"name": "Alice"}'
         result = _extract_json(text)
@@ -365,7 +365,7 @@ class TestExtractJsonEdgeCases:
 
     def test_unbalanced_single_open_brace(self):
         """Text with a single { and no closing }."""
-        from neograph._llm import _extract_json
+        from neograph._llm_retry import _extract_json
 
         text = 'Unbalanced { but no close'
         result = _extract_json(text)
@@ -374,7 +374,7 @@ class TestExtractJsonEdgeCases:
 
     def test_response_with_json_after_prose_braces(self):
         """Prose braces followed by real JSON — must find the JSON."""
-        from neograph._llm import _extract_json
+        from neograph._llm_retry import _extract_json
 
         text = 'Calculate {a + b} first. Result: {"value": 42}'
         result = _extract_json(text)
@@ -382,7 +382,7 @@ class TestExtractJsonEdgeCases:
 
     def test_deeply_nested_json(self):
         """Deeply nested JSON object."""
-        from neograph._llm import _extract_json
+        from neograph._llm_retry import _extract_json
 
         text = '{"a": {"b": {"c": {"d": 1}}}}'
         result = _extract_json(text)
@@ -390,7 +390,7 @@ class TestExtractJsonEdgeCases:
 
     def test_json_with_escaped_quotes(self):
         """JSON with escaped quotes in string values."""
-        from neograph._llm import _extract_json
+        from neograph._llm_retry import _extract_json
 
         text = r'{"key": "value with \"escaped\" quotes"}'
         result = _extract_json(text)
@@ -398,7 +398,7 @@ class TestExtractJsonEdgeCases:
 
     def test_multiple_json_objects_returns_first(self):
         """Multiple JSON objects — should return the first balanced one."""
-        from neograph._llm import _extract_json
+        from neograph._llm_retry import _extract_json
 
         text = '{"first": 1} {"second": 2}'
         result = _extract_json(text)

@@ -356,14 +356,14 @@ class TestSkipWhenOnToolNodes:
 class TestExtractJsonEdgeCases:
     def test_plain_json_parsed_when_no_wrapping(self):
         """Plain JSON string is returned as-is."""
-        from neograph._llm import _extract_json
+        from neograph._llm_retry import _extract_json
 
         result = _extract_json('{"key": "value"}')
         assert result == '{"key": "value"}'
 
     def test_json_extracted_when_wrapped_in_markdown_fences(self):
         """JSON wrapped in ```json ... ``` is extracted."""
-        from neograph._llm import _extract_json
+        from neograph._llm_retry import _extract_json
 
         text = '```json\n{"key": "value"}\n```'
         result = _extract_json(text)
@@ -379,7 +379,7 @@ class TestExtractJsonEdgeCases:
         """When multiple JSON objects exist, brace-counting extracts the first balanced one."""
         import json
 
-        from neograph._llm import _extract_json
+        from neograph._llm_retry import _extract_json
 
         text = 'Here is result: {"first": 1} and also {"second": 2}'
         result = _extract_json(text)
@@ -390,7 +390,7 @@ class TestExtractJsonEdgeCases:
         """JSON with nested braces parses correctly."""
         import json
 
-        from neograph._llm import _extract_json
+        from neograph._llm_retry import _extract_json
 
         text = '{"outer": {"inner": "value"}}'
         result = _extract_json(text)
@@ -399,7 +399,7 @@ class TestExtractJsonEdgeCases:
 
     def test_text_returned_when_no_json_present(self):
         """When no JSON is present, the cleaned text is returned."""
-        from neograph._llm import _extract_json
+        from neograph._llm_retry import _extract_json
 
         result = _extract_json("no json here at all")
         assert result == "no json here at all"
@@ -408,7 +408,7 @@ class TestExtractJsonEdgeCases:
         """JSON embedded in prose text is extracted."""
         import json
 
-        from neograph._llm import _extract_json
+        from neograph._llm_retry import _extract_json
 
         text = 'The answer is: {"items": ["a", "b"]} as shown above.'
         result = _extract_json(text)
@@ -432,7 +432,7 @@ class TestParseJsonResponseLenientParsing:
         """Control characters inside JSON string values should not crash parsing."""
         from pydantic import BaseModel
 
-        from neograph._llm import _parse_json_response
+        from neograph._llm_retry import _parse_json_response
 
         class SimpleModel(BaseModel):
             content: str
@@ -450,7 +450,7 @@ class TestParseJsonResponseLenientParsing:
         """
         from pydantic import BaseModel, Field
 
-        from neograph._llm import _parse_json_response
+        from neograph._llm_retry import _parse_json_response
 
         class StepCheck(BaseModel):
             score: float
@@ -465,7 +465,7 @@ class TestParseJsonResponseLenientParsing:
         """null → default coercion should work recursively in nested models."""
         from pydantic import BaseModel, Field
 
-        from neograph._llm import _parse_json_response
+        from neograph._llm_retry import _parse_json_response
 
         class Inner(BaseModel):
             name: str
@@ -483,7 +483,7 @@ class TestParseJsonResponseLenientParsing:
         """null for a required field (no default) should still raise."""
         from pydantic import BaseModel
 
-        from neograph._llm import _parse_json_response
+        from neograph._llm_retry import _parse_json_response
         from neograph.errors import ExecutionError
 
         class Required(BaseModel):
@@ -497,7 +497,7 @@ class TestParseJsonResponseLenientParsing:
         """Trailing commas in JSON objects should not crash parsing."""
         from pydantic import BaseModel
 
-        from neograph._llm import _parse_json_response
+        from neograph._llm_retry import _parse_json_response
 
         class SimpleModel(BaseModel):
             name: str
@@ -512,7 +512,7 @@ class TestParseJsonResponseLenientParsing:
         """Single-quoted JSON strings should not crash parsing."""
         from pydantic import BaseModel
 
-        from neograph._llm import _parse_json_response
+        from neograph._llm_retry import _parse_json_response
 
         class SimpleModel(BaseModel):
             name: str
@@ -525,7 +525,7 @@ class TestParseJsonResponseLenientParsing:
         """Literal newlines inside JSON string values should not crash parsing."""
         from pydantic import BaseModel
 
-        from neograph._llm import _parse_json_response
+        from neograph._llm_retry import _parse_json_response
 
         class SimpleModel(BaseModel):
             content: str
@@ -550,7 +550,7 @@ class TestCallStructuredFallback:
         """_call_structured retries without include_raw when TypeError is raised."""
         from unittest.mock import MagicMock
 
-        from neograph._llm import _call_structured
+        from neograph._llm_dispatch import _call_structured
 
         expected = Claims(items=["fallback-result"])
 
@@ -582,7 +582,7 @@ class TestCallStructuredFallback:
         """_call_structured returns parsed result when include_raw works."""
         from unittest.mock import MagicMock
 
-        from neograph._llm import _call_structured
+        from neograph._llm_dispatch import _call_structured
 
         expected = Claims(items=["direct-result"])
 
@@ -610,7 +610,7 @@ class TestRetryPromptIncludesSchema:
         """_build_retry_msg with output_model includes the full schema."""
         from pydantic import BaseModel
 
-        from neograph._llm import _build_retry_msg
+        from neograph._llm_retry import _build_retry_msg
         from neograph.errors import ExecutionError
 
         class Actor(BaseModel):
@@ -633,7 +633,7 @@ class TestRetryPromptIncludesSchema:
 
     def test_retry_msg_without_model_still_works(self):
         """_build_retry_msg without output_model doesn't crash."""
-        from neograph._llm import _build_retry_msg
+        from neograph._llm_retry import _build_retry_msg
         from neograph.errors import ExecutionError
 
         err = ExecutionError("parse failed")
@@ -644,7 +644,7 @@ class TestRetryPromptIncludesSchema:
         """_invoke_json_with_retry defaults to max_retries=2."""
         import inspect
 
-        from neograph._llm import _invoke_json_with_retry
+        from neograph._llm_retry import _invoke_json_with_retry
         sig = inspect.signature(_invoke_json_with_retry)
         assert sig.parameters["max_retries"].default == 2
 
@@ -885,7 +885,7 @@ class TestExtractJsonEdgeCases2:
 
     def test_escape_char_in_json_string(self):
         """Backslash escapes inside JSON strings are handled (lines 227-228, 230-231)."""
-        from neograph._llm import _extract_json
+        from neograph._llm_retry import _extract_json
 
         text = r'{"key": "value with \" escaped"}'
         result = _extract_json(text)
@@ -894,7 +894,7 @@ class TestExtractJsonEdgeCases2:
 
     def test_unbalanced_braces_first_to_last(self):
         """Unbalanced braces with closing brace: first-to-last fallback (line 247)."""
-        from neograph._llm import _extract_json
+        from neograph._llm_retry import _extract_json
 
         # Unbalanced: extra opening brace, but there's a } later
         text = '{"key": {"nested": "value"} extra stuff}'
@@ -904,7 +904,7 @@ class TestExtractJsonEdgeCases2:
 
     def test_unbalanced_with_trailing_closing_brace(self):
         """Unbalanced JSON with a trailing } past the scan falls back (line 247)."""
-        from neograph._llm import _extract_json
+        from neograph._llm_retry import _extract_json
 
         # The first { starts depth tracking, but escapes/strings cause imbalance
         # Force unbalanced: an unclosed string with } after it
@@ -914,7 +914,7 @@ class TestExtractJsonEdgeCases2:
 
     def test_no_closing_brace_at_all(self):
         """No closing brace after opening returns stripped text (line 248)."""
-        from neograph._llm import _extract_json
+        from neograph._llm_retry import _extract_json
 
         text = '{"key": "value'
         result = _extract_json(text)
@@ -926,7 +926,7 @@ class TestParseJsonException:
 
     def test_generic_exception_during_parse(self):
         """Non-ValidationError during parse raises ExecutionError."""
-        from neograph._llm import _parse_json_response
+        from neograph._llm_retry import _parse_json_response
 
         class BadModel:
             """A model that raises a generic Exception during validate."""
@@ -948,7 +948,7 @@ class TestTruncatedArraySilentEmpty:
         """Truncated array (no closing ]) must raise ExecutionError, not return empty list."""
         from pydantic import BaseModel, Field
 
-        from neograph._llm import _parse_json_response
+        from neograph._llm_retry import _parse_json_response
 
         class Item(BaseModel):
             id: str
@@ -977,7 +977,7 @@ class TestTruncatedArraySilentEmpty:
 
     def test_truncated_array_extract_json_does_not_return_inner_dict(self):
         """_extract_json on truncated array must not return first inner object."""
-        from neograph._llm import _extract_json
+        from neograph._llm_retry import _extract_json
 
         truncated = '[{"id": "A", "value": "alpha"}, {"id": "B", "value": "be'
 
@@ -1278,7 +1278,7 @@ class TestCallStructuredUnknownStrategy:
 
     def test_unknown_strategy_raises(self):
         """_call_structured with unknown strategy raises ExecutionError."""
-        from neograph._llm import _call_structured
+        from neograph._llm_dispatch import _call_structured
 
         with pytest.raises(ExecutionError, match="Unknown output_strategy"):
             _call_structured(None, [], Claims, "invalid_strategy", {})
@@ -1866,7 +1866,7 @@ class TestBareArrayExtraction:
 
     def test_extract_json_finds_bare_array(self):
         """Bare array [{"key": "val"}] should be extracted, not dropped."""
-        from neograph._llm import _extract_json
+        from neograph._llm_retry import _extract_json
 
         text = '[{"claim_id": "R1", "classification": "business-rule"}, {"claim_id": "R2", "classification": "functional"}]'
         result = _extract_json(text)
@@ -1875,7 +1875,7 @@ class TestBareArrayExtraction:
 
     def test_extract_json_bare_array_with_markdown_fence(self):
         """Bare array inside ```json fence should be extracted."""
-        from neograph._llm import _extract_json
+        from neograph._llm_retry import _extract_json
 
         text = '```json\n[{"id": 1}, {"id": 2}]\n```'
         result = _extract_json(text)
@@ -1884,7 +1884,7 @@ class TestBareArrayExtraction:
 
     def test_extract_json_bare_array_with_prose(self):
         """Bare array preceded by prose text should be extracted."""
-        from neograph._llm import _extract_json
+        from neograph._llm_retry import _extract_json
 
         text = 'Here are the results:\n[{"name": "Alice"}, {"name": "Bob"}]\nDone.'
         result = _extract_json(text)
@@ -1895,7 +1895,7 @@ class TestBareArrayExtraction:
         """When output model has a single list field and LLM returns bare array, auto-wrap."""
         from pydantic import BaseModel
 
-        from neograph._llm import _parse_json_response
+        from neograph._llm_retry import _parse_json_response
 
         class Claim(BaseModel):
             claim_id: str
@@ -1915,7 +1915,7 @@ class TestBareArrayExtraction:
         from pydantic import BaseModel
 
         from neograph import ExecutionError
-        from neograph._llm import _parse_json_response
+        from neograph._llm_retry import _parse_json_response
 
         class MultiField(BaseModel):
             items: list[str]
@@ -1928,7 +1928,7 @@ class TestBareArrayExtraction:
 
     def test_extract_json_prefers_object_over_array(self):
         """When both { and [ exist, prefer { if it comes first."""
-        from neograph._llm import _extract_json
+        from neograph._llm_retry import _extract_json
 
         text = '{"items": [1, 2, 3]}'
         result = _extract_json(text)
@@ -4162,7 +4162,7 @@ class TestDictCoercionTypoRejection:
         gate. If _coerce_llm_config ever skips validation, this fails first."""
         from pydantic import ValidationError as _VE
 
-        from neograph._llm import _coerce_llm_config
+        from neograph._llm_config import _coerce_llm_config
 
         with pytest.raises(_VE):
             _coerce_llm_config({"max_retires": 5})

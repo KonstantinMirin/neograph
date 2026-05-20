@@ -18,7 +18,7 @@ from langchain_core.runnables import RunnableConfig
 from pydantic import BaseModel
 
 from neograph import _llm, _tool_loop
-from neograph._llm import _is_inline_prompt
+from neograph._llm_render import _is_inline_prompt
 from neograph._llm_runtime import EMPTY_RUNTIME, LlmRuntime
 from neograph._normalize import normalize_outputs
 from neograph.errors import ConfigurationError

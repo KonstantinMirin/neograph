@@ -69,7 +69,7 @@ class TestStructuredFakeWithRaw:
         """Test the _call_structured code path with StructuredFakeWithRaw."""
         from langchain_core.runnables import RunnableConfig
 
-        from neograph._llm import _call_structured
+        from neograph._llm_dispatch import _call_structured
 
         fake = StructuredFakeWithRaw(lambda model: model(items=["done"]))
         config = RunnableConfig(configurable={})

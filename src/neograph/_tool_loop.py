@@ -15,16 +15,11 @@ import structlog
 from langchain_core.runnables import RunnableConfig
 from pydantic import BaseModel
 
-from neograph._llm import (
-    _call_structured,
-    _coerce_llm_config,
-    _compile_prompt,
-    _get_llm,
-    _invoke_json_with_retry,
-    _notify_cost,
-    _parse_json_response,
-)
-from neograph._llm_config import LlmConfig
+from neograph._llm import _get_llm, _notify_cost
+from neograph._llm_config import LlmConfig, _coerce_llm_config
+from neograph._llm_dispatch import _call_structured
+from neograph._llm_render import _compile_prompt
+from neograph._llm_retry import _invoke_json_with_retry, _parse_json_response
 from neograph._llm_runtime import EMPTY_RUNTIME, LlmRuntime
 from neograph.describe_type import describe_value
 from neograph.errors import ConfigurationError, ExecutionError

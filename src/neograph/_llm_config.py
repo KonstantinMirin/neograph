@@ -85,3 +85,17 @@ class LlmConfig(BaseModel):
         merged_framework = {**parent_dump, **child_overrides}
         merged_provider = {**self.provider_kwargs, **child.provider_kwargs}
         return LlmConfig(provider_kwargs=merged_provider, **merged_framework)
+
+
+def _coerce_llm_config(llm_config: LlmConfig | dict | None) -> LlmConfig:
+    """Accept ``LlmConfig`` / ``dict`` / ``None`` and produce ``LlmConfig``.
+
+    Test harnesses and external callers often pass dicts; internal pipelines
+    pass typed ``LlmConfig``. This keeps entry points ergonomic while the
+    rest of the codebase operates on the typed form.
+    """
+    if llm_config is None:
+        return LlmConfig()
+    if isinstance(llm_config, LlmConfig):
+        return llm_config
+    return LlmConfig(**llm_config)

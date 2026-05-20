@@ -11,7 +11,7 @@ import hypothesis.strategies as st
 from hypothesis import given, settings
 from pydantic import BaseModel, Field
 
-from neograph._llm import _resolve_var
+from neograph._llm_render import _resolve_var
 from neograph._tool_loop import _render_tool_result_for_llm
 from neograph.describe_type import describe_value
 from neograph.renderers import _render_single, render_input
