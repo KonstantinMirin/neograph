@@ -1327,12 +1327,7 @@ ANY_ALLOWLIST: dict[str, str] = {
     # _resolve_field_annotation:return, _types_compatible:producer/target,
     # _extract_list_element:tp/return, _fmt_type:tp, _build_no_producer_error:input_type,
     # _suggest_hint:input_type) migrated to TypeSpecStatic in Batch 1 (neograph-86r1).
-    "_construct_validation.py:_check_item_input:producers": "list of (name, user-declared-type, source) tuples for diagnostics",
-    "_construct_validation.py:_check_fan_in_inputs:producers": "list of (name, user-declared-type, source) tuples for diagnostics",
-    "_construct_validation.py:_check_each_path:producers": "list of (name, user-declared-type, source) tuples for diagnostics",
     "_construct_validation.py:_resolve_field_annotation:model_class": "user-declared Pydantic model class",
-    "_construct_validation.py:_build_no_producer_error:producers": "list of (name, user-declared-type, source) tuples for diagnostics",
-    "_construct_validation.py:_suggest_hint:producers": "list of (name, user-declared-type, source) tuples for diagnostics",
     # ── factory.py — state bus polymorphism (state is BaseModel | dict[str, Any]) ──
     # Untypable boundary: state is sometimes a compiled Pydantic model and
     # sometimes a dict during sub-graph dispatch / isolated execution. Adding
@@ -1375,9 +1370,6 @@ ANY_ALLOWLIST: dict[str, str] = {
     "_oracle.py:_state_get:return": "state field value, type declared by user node outputs",
     # _oracle.py:_unwrap_oracle_results:output_model migrated to TypeSpecStatic in Batch 1 (neograph-86r1).
     "_oracle.py:_build_oracle_merge_result:merged": "user-supplied merge result; type declared by node.outputs",
-    "_oracle.py:_build_oracle_merge_result:output_model": "user-declared output model class (PEP 747 TypeForm unavailable)",
-    "_oracle.py:make_oracle_merge_fn:output_model": "user-declared output model class (PEP 747 TypeForm unavailable)",
-    "_oracle.py:make_oracle_merge_fn:node_inputs": "user-declared inputs dict; values are TypeSpec types",
     # ── _wiring.py — Callable fn pointers, state bus polymorphism, LangGraph retry_policy ──
     # gen_fn / merge_fn / fan_fn / subgraph_fn are runtime-built closures whose
     # precise signatures are determined by the user's modifier configuration.

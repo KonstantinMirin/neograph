@@ -9,7 +9,7 @@ and Each-keyed redirect wrappers.
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Any
+from typing import Any, cast
 
 from langchain_core.runnables import RunnableConfig
 from pydantic import BaseModel
@@ -134,7 +134,7 @@ def _unwrap_oracle_results(
 def _build_oracle_merge_result(
     merged: Any,
     field_name: str,
-    output_model: Any,
+    output_model: TypeSpecStatic,
     secondaries: dict[str, list] | None,
 ) -> dict:
     """Build the state update dict after Oracle merge.
@@ -146,9 +146,10 @@ def _build_oracle_merge_result(
     ExecutionError if the merge_fn returns the wrong type -- catches silent
     garbage before it propagates through the pipeline.
     """
-    expected_type = output_model
     if isinstance(output_model, dict):
-        expected_type = next(iter(output_model.values()))
+        expected_type = cast(type, next(iter(output_model.values())))
+    else:
+        expected_type = cast(type, output_model)
 
     if not isinstance(merged, expected_type):
         raise ExecutionError.build(
@@ -179,8 +180,8 @@ def make_oracle_merge_fn(
     oracle: Oracle,
     field_name: str,
     collector_field: str,
-    output_model: Any,
-    node_inputs: dict[str, Any] | None = None,
+    output_model: TypeSpecStatic,
+    node_inputs: dict[str, TypeSpecStatic] | None = None,
     llm_config: LlmConfig | None = None,
 ) -> Callable:
     """Create the merge barrier function for Oracle.
@@ -234,11 +235,15 @@ def make_oracle_merge_fn(
 
             used_fallback = False
             try:
+                if isinstance(output_model, dict):
+                    primary_output_model = cast(type[BaseModel], next(iter(output_model.values())))
+                else:
+                    primary_output_model = cast(type[BaseModel], output_model)
                 merged = invoke_structured(
                     model_tier=oracle.merge_model,
                     prompt_template=_merge_prompt,
                     input_data=input_data,
-                    output_model=output_model if not isinstance(output_model, dict) else next(iter(output_model.values())),
+                    output_model=primary_output_model,
                     config=config,
                     llm_config=_llm_config,
                 )
