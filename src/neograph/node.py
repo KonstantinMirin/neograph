@@ -179,6 +179,9 @@ class Node(Modifiable, BaseModel):
     _sidecar: tuple[Callable, tuple[str, ...]] | None = PrivateAttr(default=None)
     _param_res: dict | None = PrivateAttr(default=None)
 
+    # arbitrary_types_allowed: required for the runtime_checkable Protocol
+    # fields ``raw_fn``, ``renderer``, ``skip_when``, ``skip_value`` (none of
+    # which are Pydantic models) and the ``tools`` list of ``Tool`` runnables.
     model_config = {"arbitrary_types_allowed": True}
 
     def __init__(self, name_: str | None = None, /, **kwargs):

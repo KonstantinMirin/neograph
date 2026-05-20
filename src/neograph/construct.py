@@ -99,6 +99,9 @@ class Construct(Modifiable, BaseModel):
     # Modifiers applied via | operator (typed slots, not a list)
     modifier_set: ModifierSet = Field(default_factory=ModifierSet)
 
+    # arbitrary_types_allowed: required for ``nodes`` (holds the ``_BranchNode``
+    # sentinel from ForwardConstruct, which is not a Pydantic model) and
+    # ``renderer`` (a runtime_checkable Protocol, not a BaseModel).
     model_config = {"arbitrary_types_allowed": True}
 
     def __init__(self, name_: str | None = None, /, **kwargs: Any) -> None:

@@ -557,11 +557,13 @@ class TestF9MaxSizeValidation:
     """F9: max_size_bytes must be > 0."""
 
     def test_zero_raises(self):
-        with pytest.raises(ValueError, match="must be > 0"):
+        from neograph.errors import ConfigurationError
+        with pytest.raises(ConfigurationError, match="must be > 0"):
             configure_image(max_size_bytes=0)
 
     def test_negative_raises(self):
-        with pytest.raises(ValueError, match="must be > 0"):
+        from neograph.errors import ConfigurationError
+        with pytest.raises(ConfigurationError, match="must be > 0"):
             configure_image(max_size_bytes=-1)
 
     def test_positive_accepted(self):

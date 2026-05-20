@@ -88,9 +88,9 @@ def _parse_input(source: str | dict[str, Any]) -> dict[str, Any]:
             text = p.read_text()
 
     if len(text) > MAX_SPEC_SIZE:
-        raise ValueError(
-            f"Spec exceeds maximum size ({MAX_SPEC_SIZE} bytes). "
-            f"Refusing to parse."
+        raise ConfigurationError.build(
+            f"Spec exceeds maximum size ({MAX_SPEC_SIZE} bytes)",
+            hint="Refusing to parse; reduce spec size or split into multiple specs.",
         )
 
     text = text.strip()

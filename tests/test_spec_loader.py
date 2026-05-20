@@ -688,20 +688,22 @@ class TestLoadSpecSizeLimit:
     """YAML bomb DoS protection — neograph-cfrd."""
 
     def test_rejects_oversized_string_input(self):
-        """A string spec exceeding MAX_SPEC_SIZE raises ValueError."""
+        """A string spec exceeding MAX_SPEC_SIZE raises ConfigurationError."""
+        from neograph.errors import ConfigurationError
         from neograph.loader import load_spec
 
         oversized = "a" * (1_048_576 + 1)
-        with pytest.raises(ValueError, match="exceeds maximum size"):
+        with pytest.raises(ConfigurationError, match="exceeds maximum size"):
             load_spec(oversized)
 
     def test_rejects_oversized_file_input(self, tmp_path):
-        """A file spec exceeding MAX_SPEC_SIZE raises ValueError."""
+        """A file spec exceeding MAX_SPEC_SIZE raises ConfigurationError."""
+        from neograph.errors import ConfigurationError
         from neograph.loader import load_spec
 
         big_file = tmp_path / "bomb.yaml"
         big_file.write_text("a" * (1_048_576 + 1))
-        with pytest.raises(ValueError, match="exceeds maximum size"):
+        with pytest.raises(ConfigurationError, match="exceeds maximum size"):
             load_spec(str(big_file))
 
     def test_accepts_input_at_size_limit(self):

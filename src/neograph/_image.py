@@ -27,6 +27,8 @@ from pathlib import Path
 
 import structlog
 
+from neograph.errors import ConfigurationError
+
 log = structlog.get_logger()
 
 # ── Magic bytes for common image formats ─────────────────────────────────
@@ -92,7 +94,11 @@ def configure_image(
     Call with no arguments to reset to defaults.
     """
     if max_size_bytes <= 0:
-        raise ValueError(f"max_size_bytes must be > 0, got {max_size_bytes}")
+        raise ConfigurationError.build(
+            "max_size_bytes must be > 0",
+            expected="positive integer",
+            found=str(max_size_bytes),
+        )
     global _config
     _config = ImageConfig(
         max_size_bytes=max_size_bytes,

@@ -102,9 +102,11 @@ class ForwardConstruct(Construct):
         try/except does not compile to a fallback graph in v1.
     """
 
-    # Tell Pydantic to ignore Node instances as class attributes — they are
-    # pipeline declarations, not model fields. Without this, Pydantic raises
-    # "non-annotated attribute" errors for Node class attrs on subclasses.
+    # arbitrary_types_allowed: inherited need from Construct (``nodes`` holds
+    # the ``_BranchNode`` sentinel, ``renderer`` is a Protocol). Also required
+    # so the ``ignored_types=(Node,)`` config can keep Node class attributes —
+    # pipeline declarations, not model fields — without Pydantic raising
+    # "non-annotated attribute" errors on ForwardConstruct subclasses.
     model_config = {"arbitrary_types_allowed": True, "ignored_types": (Node,)}
 
     def __init__(self, name_: str | None = None, /, **kwargs: Any) -> None:

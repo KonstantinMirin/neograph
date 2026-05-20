@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from typing import get_origin as _get_origin
 
 import structlog
@@ -41,11 +41,15 @@ from neograph._dispatch import (  # noqa: F401 — re-exported for tests/backwar
     _render_input,
 )
 from neograph._normalize import normalize_inputs, normalize_outputs
+from neograph.construct import Construct
 from neograph.di import _unwrap_each_dict, _unwrap_loop_value
 from neograph.errors import ConfigurationError, ExecutionError
 from neograph.modifiers import Each, ModifierCombo, classify_modifiers
 from neograph.naming import field_name_for
 from neograph.node import Node
+
+if TYPE_CHECKING:
+    from langgraph.graph.state import CompiledStateGraph
 
 log = structlog.get_logger()
 
@@ -529,7 +533,7 @@ from neograph._oracle import (  # noqa: E402, F401
 )
 
 
-def make_subgraph_fn(sub: Any, sub_graph: Any) -> Callable:
+def make_subgraph_fn(sub: Construct, sub_graph: CompiledStateGraph) -> Callable:
     """Create a function that runs a sub-Construct in isolation.
 
     Extracts input from parent state by type, runs sub_graph,
@@ -563,13 +567,14 @@ def make_subgraph_fn(sub: Any, sub_graph: Any) -> Callable:
         # extract input by type from parent state.
         # Iterate in reverse so later pipeline nodes take precedence
         # (e.g., loop output over seed). Unwrap append-lists.
-        if input_data is None:
+        if input_data is None and sub.input is not None:
+            sub_input_type = sub.input
             if isinstance(state, dict):  # pragma: no cover — state is always a Pydantic model
                 for val in reversed(list(state.values())):
                     check_val = val
                     if isinstance(val, list) and val:
                         check_val = val[-1]
-                    if check_val is not None and isinstance(check_val, sub.input):
+                    if check_val is not None and isinstance(check_val, sub_input_type):
                         input_data = check_val
                         break
             else:
@@ -578,7 +583,7 @@ def make_subgraph_fn(sub: Any, sub_graph: Any) -> Callable:
                     check_val = val
                     if isinstance(val, list) and val:
                         check_val = val[-1]
-                    if check_val is not None and isinstance(check_val, sub.input):
+                    if check_val is not None and isinstance(check_val, sub_input_type):
                         input_data = check_val
                         break
 
@@ -606,13 +611,15 @@ def make_subgraph_fn(sub: Any, sub_graph: Any) -> Callable:
         # Unwrap loop append-lists: Loop nodes have list[T] from the
         # append-list reducer; check val[-1] against the output type.
         output_val = None
-        for val in reversed(list(sub_result.values())):
-            check_val = val
-            if isinstance(val, list) and val:
-                check_val = val[-1]
-            if isinstance(check_val, sub.output):
-                output_val = check_val
-                break
+        if sub.output is not None:
+            sub_output_type = sub.output
+            for val in reversed(list(sub_result.values())):
+                check_val = val
+                if isinstance(val, list) and val:
+                    check_val = val[-1]
+                if isinstance(check_val, sub_output_type):
+                    output_val = check_val
+                    break
 
         # Runtime defense: if no internal node produced a compatible output,
         # fail loud instead of writing None silently.

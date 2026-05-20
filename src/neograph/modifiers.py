@@ -373,6 +373,9 @@ class Oracle(Modifier, frozen=True):
             Called when invoke_structured raises. Returns a deterministic result.
     """
 
+    # arbitrary_types_allowed: required for the runtime_checkable Protocol
+    # callback fields ``merge_pre_process``, ``merge_post_process``,
+    # ``merge_fallback`` (Callables exposed by name; not Pydantic models).
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     n: int = 3

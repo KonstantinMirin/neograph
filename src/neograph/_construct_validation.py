@@ -26,7 +26,7 @@ from typing import TYPE_CHECKING, Any, ForwardRef, Union, get_args, get_origin, 
 
 from neograph.di import DIKind as _DIKind
 from neograph.errors import ConstructError, NeographError
-from neograph.modifiers import Each, Modifiable, split_each_path
+from neograph.modifiers import Each, Modifiable, Oracle, split_each_path
 from neograph.naming import field_name_for
 from neograph.node import Node
 
@@ -124,7 +124,7 @@ def validate_loop_self_edge(node: Node) -> None:
         )
 
 
-def _validate_merge_hooks(oracle: Any, node: Node, construct_name: str) -> None:
+def _validate_merge_hooks(oracle: Oracle, node: Node, construct_name: str) -> None:
     """Validate arity and type annotations of merge hook callables.
 
     Checks merge_pre_process, merge_post_process, merge_fallback signatures
