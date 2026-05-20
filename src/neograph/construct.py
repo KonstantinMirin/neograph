@@ -25,12 +25,13 @@ from typing import Annotated, Any
 from pydantic import BaseModel, BeforeValidator, Field
 
 from neograph._construct_validation import ConstructError, _validate_node_chain
+from neograph._ir_protocols import ConstructItem
 from neograph._llm_config import LlmConfig
 from neograph.modifiers import Modifiable, ModifierSet
 from neograph.renderers import Renderer
 
 
-def _validate_node_list(v: Any) -> list[Any]:
+def _validate_node_list(v: Any) -> list[ConstructItem]:
     """Validate that nodes list contains Node, Construct, _BranchNode, or compatible BaseModel.
 
     Accepts any BaseModel with a ``name`` attribute (covers Node, Construct,
@@ -77,9 +78,11 @@ class Construct(Modifiable, BaseModel):
 
     name: str
     description: str = ""
-    # list[Node | Construct | _BranchNode] — validated at runtime via BeforeValidator.
-    # Static annotation is list[Any] because _BranchNode isn't a Pydantic model.
-    nodes: Annotated[list[Any], BeforeValidator(_validate_node_list)] = Field(default_factory=list)
+    # ConstructItem is a runtime_checkable Protocol over name/modifier_set —
+    # covers Node, Construct, and the non-Pydantic _BranchNode sentinel uniformly.
+    # The BeforeValidator still enforces actual acceptance rules at runtime;
+    # see neograph._ir_protocols for the Protocol definition.
+    nodes: Annotated[list[ConstructItem], BeforeValidator(_validate_node_list)] = Field(default_factory=list)
 
     # I/O boundary — required when used as a sub-construct
     input: type[BaseModel] | None = None
@@ -137,6 +140,9 @@ class Construct(Modifiable, BaseModel):
             if self.renderer is not None and hasattr(item, "renderer") and getattr(item, "renderer", None) is None:
                 updates["renderer"] = self.renderer
             if updates:
+                # All paths that populate `updates` first gate on hasattr for
+                # the field — both gates only fire on BaseModel children.
+                assert isinstance(item, BaseModel)
                 self.nodes[i] = item.model_copy(update=updates)
         # Validate after pydantic finishes so ConstructError escapes cleanly
         # rather than being wrapped in a pydantic ValidationError. Nested

@@ -12,7 +12,7 @@ from typing import Any
 import structlog
 from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END, START, StateGraph
-from langgraph.types import Send, interrupt
+from langgraph.types import RetryPolicy, Send, interrupt
 
 from neograph._normalize import normalize_outputs
 from neograph.construct import Construct
@@ -39,7 +39,7 @@ def _wire_oracle(
     merge_fn: Any,
     oracle: Oracle,
     prev_node: str | None,
-    retry_policy: Any = None,
+    retry_policy: RetryPolicy | None = None,
 ) -> str:
     """Shared Oracle wiring used by both Node and Construct paths.
 
@@ -88,7 +88,7 @@ def _wire_each(
     fan_fn: Any,
     each: Each,
     prev_node: str | None,
-    retry_policy: Any = None,
+    retry_policy: RetryPolicy | None = None,
 ) -> str:
     """Shared Each wiring used by both Node and Construct paths.
 
@@ -173,7 +173,7 @@ def _add_each_oracle_fused(
     each: Each,
     oracle: Oracle,
     prev_node: str | None,
-    retry_policy: Any = None,
+    retry_policy: RetryPolicy | None = None,
 ) -> str:
     """Each x Oracle fusion: flat M x N Send topology.
 
@@ -288,7 +288,7 @@ def _add_each_oracle_fused(
     return barrier_name
 
 
-def _merge_one_group(oracle: Oracle, node: Node, variants: list, config: Any) -> Any:
+def _merge_one_group(oracle: Oracle, node: Node, variants: list, config: RunnableConfig) -> Any:
     """Merge one group of Oracle variants (used by Each x Oracle fusion)."""
     from neograph.decorators import _resolve_merge_args, get_merge_fn_metadata
     from neograph.factory import lookup_scripted
@@ -432,7 +432,7 @@ def _add_loop_back_edge(
     node: Node,
     loop: Loop,
     prev_node: str | None,
-    retry_policy: Any = None,
+    retry_policy: RetryPolicy | None = None,
 ) -> str:
     """Wire Loop modifier: conditional back-edge with iteration tracking.
 

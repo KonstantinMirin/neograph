@@ -2005,13 +2005,14 @@ class TestConstructPropagationTypeErrors:
         get the merged config (previously silently skipped)."""
         from neograph import Construct
         from neograph._llm_config import LlmConfig
+        from neograph.modifiers import ModifierSet
 
         class FrozenChild(BaseModel, frozen=True):
             """Fake node-like object with frozen llm_config."""
             name: str = "frozen"
             llm_config: LlmConfig = LlmConfig()
             outputs: type = RawText
-            modifiers: list = []
+            modifier_set: ModifierSet = ModifierSet()
             inputs: Any = None
             output: Any = None
 
@@ -2031,13 +2032,14 @@ class TestConstructPropagationTypeErrors:
         to frozen children (previously silently skipped)."""
         from neograph import Construct
         from neograph._llm_config import LlmConfig
+        from neograph.modifiers import ModifierSet
 
         class FrozenChild(BaseModel, frozen=True):
             """Fake node-like object with frozen renderer."""
             name: str = "frozen"
             renderer: Any = None
             outputs: type = RawText
-            modifiers: list = []
+            modifier_set: ModifierSet = ModifierSet()
             inputs: Any = None
             output: Any = None
             llm_config: LlmConfig = LlmConfig()

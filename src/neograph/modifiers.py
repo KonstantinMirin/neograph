@@ -8,12 +8,15 @@
 from __future__ import annotations
 
 from enum import Enum, auto
-from typing import Any, Protocol, Self, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, Self, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, field_validator
 
 from neograph._dev_warnings import dev_warn
 from neograph.errors import ConfigurationError, ConstructError
+
+if TYPE_CHECKING:
+    from neograph._ir_protocols import ConstructItem
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Oracle merge-hook Protocols
@@ -65,7 +68,7 @@ class ModifierCombo(Enum):
     EACH_ORACLE_OPERATOR = auto()  # Each + Oracle + Operator
 
 
-def classify_modifiers(item: Any) -> tuple[ModifierCombo, dict]:
+def classify_modifiers(item: ConstructItem) -> tuple[ModifierCombo, dict]:
     """Classify an item's modifiers into a ModifierCombo enum value.
 
     Returns (combo, modifiers_dict) where modifiers_dict has keys like

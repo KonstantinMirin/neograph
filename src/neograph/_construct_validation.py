@@ -24,18 +24,20 @@ import types
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, ForwardRef, Union, get_args, get_origin, get_type_hints
 
+from neograph._ir_protocols import ConstructItem
 from neograph.di import DIKind as _DIKind
 from neograph.errors import ConstructError, NeographError
-from neograph.modifiers import Each, Modifiable, Oracle, split_each_path
+from neograph.modifiers import Each, Oracle, split_each_path
 from neograph.naming import field_name_for
 from neograph.node import Node
 
 if TYPE_CHECKING:
     from neograph.construct import Construct
 
-# Type alias for items that appear in Construct.nodes — avoids bare Any.
-# Cannot be a runtime Union due to circular imports (Construct imports us).
-NodeItem = Node | Modifiable  # Node, _BranchNode (via Modifiable), or Construct (subtype of Modifiable)
+# Items that appear in Construct.nodes — Node, Construct, or the _BranchNode
+# sentinel. Aliased to the structural Protocol so this module's helpers share
+# one polymorphic shape with Construct.nodes (see neograph._ir_protocols).
+NodeItem = ConstructItem
 
 
 def effective_producer_type(item: NodeItem) -> Any:

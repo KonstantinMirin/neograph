@@ -143,6 +143,7 @@ def compile(construct: Construct, checkpointer: Any = None, retry_policy: Any = 
         elif isinstance(item, Construct):
             prev_node = _add_subgraph(graph, item, prev_node, checkpointer=checkpointer, retry_policy=retry_policy, parent_state_model=state_model)
         else:
+            assert isinstance(item, Node)  # narrow ConstructItem Protocol to Node
             prev_node = _add_node_to_graph(graph, item, prev_node, retry_policy=retry_policy)
 
     # Final edge to END

@@ -15,6 +15,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
+from neograph._ir_protocols import ConstructItem
 from neograph._normalize import normalize_inputs
 from neograph._sidecar import _get_param_res, get_merge_fn_metadata
 from neograph.construct import Construct
@@ -153,7 +154,7 @@ def lint(
 
 
 def _walk(
-    item: Construct | Node,
+    item: ConstructItem,
     config: dict[str, Any] | None,
     issues: list[LintIssue],
     *,

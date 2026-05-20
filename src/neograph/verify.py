@@ -12,6 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from neograph._ir_protocols import ConstructItem
 from neograph.construct import Construct
 from neograph.naming import field_name_for
 from neograph.node import Node
@@ -69,7 +70,7 @@ def verify_compiled(graph: Any) -> list[VerifyIssue]:
 
 
 def _walk(
-    item: Construct | Node,
+    item: ConstructItem,
     issues: list[VerifyIssue],
     state_fields: set[str],
     *,

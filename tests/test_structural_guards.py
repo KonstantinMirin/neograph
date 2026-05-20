@@ -1318,8 +1318,6 @@ ANY_ALLOWLIST: dict[str, str] = {
     "node.py:Node.run_isolated:return": "user-supplied output value; type declared by node.outputs",
     # ── construct.py — node list validator boundary and dynamic kwargs ──
     "construct.py:_validate_node_list:v": "Pydantic BeforeValidator boundary; raw input is untyped",
-    "construct.py:_validate_node_list:return": "list of Node | Construct | _BranchNode; _BranchNode sentinel forbids precise typing",
-    "construct.py:Construct.nodes": "list of Node | Construct | _BranchNode; _BranchNode sentinel forbids precise typing",
     "construct.py:Construct.__init__:kwargs": "Pydantic BaseModel kwargs passthrough boundary",
     # ── modifiers.py — Protocol signatures for user merge/fallback callbacks ──
     "modifiers.py:MergePreProcess.__call__:variants": "user-supplied variant list; element type declared by node.oracle_gen_type",
@@ -1334,7 +1332,6 @@ ANY_ALLOWLIST: dict[str, str] = {
     "modifiers.py:Loop.model_post_init:__context": "Pydantic model_post_init context payload; framework-internal",
     "modifiers.py:ModifierSet.model_post_init:__context": "Pydantic model_post_init context payload; framework-internal",
     "modifiers.py:Loop.when": "user-supplied loop condition: str (registry name) or Callable predicate",
-    "modifiers.py:classify_modifiers:item": "polymorphic IR item (Node | Construct | _BranchNode | ForwardConstruct)",
     # ── _construct_validation.py — IR introspection over user-declared types ──
     "_construct_validation.py:effective_producer_type:return": "user-declared output type, computed per modifier rules",
     "_construct_validation.py:_check_item_input:input_type": "user-declared consumer input type",
@@ -1405,11 +1402,7 @@ ANY_ALLOWLIST: dict[str, str] = {
     # retry_policy is a LangGraph internal type not in our public surface.
     "_wiring.py:_wire_oracle:gen_fn": "framework-built closure; signature varies by modifier configuration",
     "_wiring.py:_wire_oracle:merge_fn": "framework-built closure; signature varies by modifier configuration",
-    "_wiring.py:_wire_oracle:retry_policy": "LangGraph internal retry policy; not in neograph public surface",
     "_wiring.py:_wire_each:fan_fn": "framework-built closure; signature varies by modifier configuration",
-    "_wiring.py:_wire_each:retry_policy": "LangGraph internal retry policy; not in neograph public surface",
-    "_wiring.py:_add_each_oracle_fused:retry_policy": "LangGraph internal retry policy; not in neograph public surface",
-    "_wiring.py:_merge_one_group:config": "LangGraph RunnableConfig dict; not statically typed at this boundary",
     "_wiring.py:_merge_one_group:return": "user-supplied merge result; type declared by node.outputs",
     "_wiring.py:_make_loop_router:condition": "user-supplied loop condition: str (registry name) or Callable predicate",
     "_wiring.py:_make_loop_router:unwrap_fn": "framework-built closure; reads loop state for the router",
@@ -1417,7 +1410,6 @@ ANY_ALLOWLIST: dict[str, str] = {
     "_wiring.py:_node_loop_unwrap:return": "framework-built closure; reads loop state for the router",
     "_wiring.py:_construct_loop_unwrap:state": "state bus polymorphism: BaseModel | dict[str, Any]",
     "_wiring.py:_construct_loop_unwrap:return": "user-supplied loop value; type declared by the sub-construct output",
-    "_wiring.py:_add_loop_back_edge:retry_policy": "LangGraph internal retry policy; not in neograph public surface",
     "_wiring.py:_add_subgraph_loop:subgraph_fn": "framework-built closure; runs the sub-graph in isolation",
     "_wiring.py:_add_operator_check:operator": "user-supplied Operator modifier; type-narrowed at call site",
 }
@@ -1741,7 +1733,7 @@ def _has_arbitrary_types_justification(
 # reason still applies.
 NEOGRAPH_ERROR_ALLOWLIST: dict[str, str] = {
     # ── _construct_validation.py — helper that returns ConstructError ──
-    "_construct_validation.py:517": "factory helper returns ConstructError; verified by reading the function body",
+    "_construct_validation.py:519": "factory helper returns ConstructError; verified by reading the function body",
 
     # ── conditions.py — string-grammar parser (stdlib parser contract) ──
     # parse_condition() implements a tiny expression grammar; ValueError is
@@ -1758,8 +1750,8 @@ NEOGRAPH_ERROR_ALLOWLIST: dict[str, str] = {
     # ── construct.py — Pydantic BeforeValidator boundary ──
     # _validate_node_list runs inside Pydantic field validation; Pydantic
     # catches TypeError/ValueError and rolls them into ValidationError.
-    "construct.py:41": "Pydantic BeforeValidator boundary; TypeError is rolled into ValidationError",
-    "construct.py:44": "Pydantic BeforeValidator boundary; TypeError is rolled into ValidationError",
+    "construct.py:42": "Pydantic BeforeValidator boundary; TypeError is rolled into ValidationError",
+    "construct.py:45": "Pydantic BeforeValidator boundary; TypeError is rolled into ValidationError",
 
     # ── forward.py — proxy / tracer / abstract-method contracts ──
     # ForwardConstruct constructor TypeErrors document misuse at the public
@@ -1781,13 +1773,13 @@ NEOGRAPH_ERROR_ALLOWLIST: dict[str, str] = {
     # @field_validator boundaries catch ValueError into ValidationError.
     # Modifiable.map() TypeErrors document type-contract violations of the
     # user-supplied lambda; tests assert TypeError.
-    "modifiers.py:170": "AttributeError is the Python attribute-protocol contract (private-attr guard)",
-    "modifiers.py:317": "TypeError documents map() lambda contract; tests assert TypeError",
-    "modifiers.py:323": "TypeError documents map() lambda contract; tests assert TypeError",
-    "modifiers.py:330": "TypeError documents map() lambda contract; tests assert TypeError",
-    "modifiers.py:337": "TypeError documents map() source-type contract; tests assert TypeError",
-    "modifiers.py:396": "Pydantic @field_validator boundary; ValueError is rolled into ValidationError",
-    "modifiers.py:452": "Pydantic @field_validator boundary; ValueError is rolled into ValidationError",
+    "modifiers.py:173": "AttributeError is the Python attribute-protocol contract (private-attr guard)",
+    "modifiers.py:320": "TypeError documents map() lambda contract; tests assert TypeError",
+    "modifiers.py:326": "TypeError documents map() lambda contract; tests assert TypeError",
+    "modifiers.py:333": "TypeError documents map() lambda contract; tests assert TypeError",
+    "modifiers.py:340": "TypeError documents map() source-type contract; tests assert TypeError",
+    "modifiers.py:399": "Pydantic @field_validator boundary; ValueError is rolled into ValidationError",
+    "modifiers.py:455": "Pydantic @field_validator boundary; ValueError is rolled into ValidationError",
 
     # ── node.py — Pydantic BeforeValidator boundary ──
     # _validate_type_spec runs inside Pydantic field validation; Pydantic
