@@ -74,10 +74,11 @@ class TestErrorBuilderEnforcement:
 
 
 class TestFileSplitEnforcement:
-    """Functions extracted from decorators.py and factory.py must not drift back.
+    """Functions extracted from decorators.py must not drift back.
 
-    Wave 1 split 4 groups of functions into dedicated modules. If someone
-    adds a new function to the wrong file, these tests catch it.
+    The decorators.py splits are still ad-hoc per-symbol rules. Factory.py
+    drift is now enforced by TestFactoryResponsibilityDiscipline, which
+    whitelists factory.py's public surface instead of blacklisting symbols.
     """
 
     # (function_or_class_name, must_be_in, must_NOT_be_in)
@@ -93,17 +94,6 @@ class TestFileSplitEnforcement:
         ("def construct_from_functions", "_construct_builder.py", "decorators.py"),
         ("def _build_construct_from_decorated", "_construct_builder.py", "decorators.py"),
         ("def _register_node_scripted", "_construct_builder.py", "decorators.py"),
-        # factory.py → _dispatch.py
-        ("class ScriptedDispatch", "_dispatch.py", "factory.py"),
-        ("class ThinkDispatch", "_dispatch.py", "factory.py"),
-        ("class ToolDispatch", "_dispatch.py", "factory.py"),
-        ("class ModeDispatch", "_dispatch.py", "factory.py"),
-        ("def _dispatch_for_mode", "_dispatch.py", "factory.py"),
-        # factory.py → _oracle.py
-        ("def make_oracle_redirect_fn", "_oracle.py", "factory.py"),
-        ("def make_eachoracle_redirect_fn", "_oracle.py", "factory.py"),
-        ("def make_oracle_merge_fn", "_oracle.py", "factory.py"),
-        ("def make_each_redirect_fn", "_oracle.py", "factory.py"),
     ]
 
     def test_extracted_functions_in_correct_module(self):
@@ -128,6 +118,111 @@ class TestFileSplitEnforcement:
         assert violations == [], (
             f"\n{len(violations)} file-split violation(s):\n"
             + "\n".join(violations)
+        )
+
+
+class TestFactoryResponsibilityDiscipline:
+    """factory.py has one named responsibility: node-function construction.
+
+    Per docs/design/architecture-decisions.md §4, factory.py was a god-module
+    mixing six responsibilities. The cgkl ticket split it into:
+        factory.py         — make_node_fn, make_subgraph_fn (the named public surface)
+        _state_io.py       — state read/write helpers (_build_state_update, _inject_oracle_config)
+        _modifier_io.py    — modifier-aware input extraction (_extract_input + shape dispatch)
+        _observability.py  — log/context helpers (_extract_context)
+    Oracle plumbing already lives in _oracle.py.
+
+    Each new module carries a one-line docstring stating its single responsibility.
+    factory.py keeps thin re-exports for backward compatibility with `compiler.py`,
+    `_wiring.py`, and tests — the re-exports are explicit and named so drift back
+    is obvious.
+
+    This guard whitelists the names factory.py is allowed to *define* at module
+    scope. Re-exports (imported then bound) are tolerated; defining a function
+    or class outside the whitelist fails the guard.
+    """
+
+    # The only top-level *definitions* allowed in factory.py. Anything else
+    # must move to one of the responsibility-aligned modules.
+    FACTORY_DEFINITION_WHITELIST = frozenset({
+        # public node-function construction
+        "make_node_fn",
+        "make_subgraph_fn",
+        # private helpers used solely by the constructors above
+        "_make_raw_wrapper",
+        "_execute_node",
+        "_type_name",
+        # module-level objects
+        "log",
+    })
+
+    # Maximum line count for factory.py — was 601, target is well under 300.
+    FACTORY_LINE_BUDGET = 300
+
+    def test_factory_defines_only_whitelisted_names(self):
+        """factory.py must define only the node-function construction surface."""
+        factory_path = SRC_DIR / "factory.py"
+        tree = ast.parse(factory_path.read_text())
+
+        defined: list[tuple[str, int]] = []
+        for stmt in tree.body:
+            if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                defined.append((stmt.name, stmt.lineno))
+            elif isinstance(stmt, ast.ClassDef):
+                defined.append((stmt.name, stmt.lineno))
+            elif isinstance(stmt, ast.Assign):
+                for target in stmt.targets:
+                    if isinstance(target, ast.Name):
+                        defined.append((target.id, stmt.lineno))
+
+        unauthorized = [
+            (name, lineno) for (name, lineno) in defined
+            if name not in self.FACTORY_DEFINITION_WHITELIST and not name.startswith("__")
+        ]
+        assert unauthorized == [], (
+            f"\n{len(unauthorized)} non-whitelisted definition(s) in factory.py:\n"
+            + "\n".join(f"  factory.py:{lineno}: '{name}'" for (name, lineno) in unauthorized)
+            + "\n\nfactory.py is for node-function construction only "
+            f"({sorted(self.FACTORY_DEFINITION_WHITELIST)}). Move other definitions "
+            "to _state_io.py, _modifier_io.py, _observability.py, or _oracle.py."
+        )
+
+    def test_factory_under_line_budget(self):
+        """factory.py must stay under FACTORY_LINE_BUDGET lines."""
+        factory_path = SRC_DIR / "factory.py"
+        line_count = len(factory_path.read_text().splitlines())
+        assert line_count < self.FACTORY_LINE_BUDGET, (
+            f"factory.py is {line_count} lines; budget is {self.FACTORY_LINE_BUDGET}. "
+            "Move definitions to the responsibility-aligned siblings "
+            "(_state_io.py, _modifier_io.py, _observability.py)."
+        )
+
+    def test_responsibility_modules_exist_with_docstrings(self):
+        """Each new module must exist and carry a one-line responsibility docstring."""
+        modules = {
+            "_state_io.py": "state",
+            "_modifier_io.py": "modifier",
+            "_observability.py": "observability",
+        }
+        missing: list[str] = []
+        for mod, expected_keyword in modules.items():
+            path = SRC_DIR / mod
+            if not path.exists():
+                missing.append(f"  {mod}: file does not exist")
+                continue
+            tree = ast.parse(path.read_text())
+            docstring = ast.get_docstring(tree)
+            if not docstring:
+                missing.append(f"  {mod}: module-level docstring missing")
+                continue
+            if expected_keyword.lower() not in docstring.lower():
+                missing.append(
+                    f"  {mod}: docstring does not mention '{expected_keyword}' "
+                    f"(got: {docstring[:80]!r})"
+                )
+        assert missing == [], (
+            f"\n{len(missing)} responsibility-module issue(s):\n"
+            + "\n".join(missing)
         )
 
 
@@ -615,7 +710,7 @@ class TestExtractInputDispatch:
 
     def test_extract_input_body_is_short(self):
         """_extract_input body must be < 30 lines (pure dispatch)."""
-        source = (SRC_DIR / "factory.py").read_text()
+        source = (SRC_DIR / "_modifier_io.py").read_text()
         tree = ast.parse(source)
 
         for node in ast.walk(tree):
@@ -627,18 +722,18 @@ class TestExtractInputDispatch:
                 )
                 return
 
-        pytest.fail("_extract_input function not found in factory.py")
+        pytest.fail("_extract_input function not found in _modifier_io.py")
 
     def test_input_shape_enum_exists(self):
         """InputShape enum must exist for exhaustive dispatch."""
-        source = (SRC_DIR / "factory.py").read_text()
+        source = (SRC_DIR / "_modifier_io.py").read_text()
         tree = ast.parse(source)
         class_names = {
             n.name for n in ast.walk(tree)
             if isinstance(n, ast.ClassDef)
         }
         assert "InputShape" in class_names, (
-            "InputShape enum must exist in factory.py for exhaustive "
+            "InputShape enum must exist in _modifier_io.py for exhaustive "
             "_extract_input dispatch."
         )
 
@@ -944,27 +1039,269 @@ class TestSidecarModule:
         )
 
 
-class TestDeferredImportBudget:
-    """Track deferred imports — they should decrease, not increase.
+# Allowlist of accepted function-local `from neograph...` imports.
+#
+# Per docs/design/architecture-decisions.md §4: function-local imports break
+# import cycles and are tolerated but not preferred. The list shrinks as cycle
+# break-up tickets land — it must never grow. Each entry names the cycle (or
+# CLI-deferral justification) and the ticket that will retire it.
+#
+# Key shape: (file_relative_to_src_neograph, imported_module, frozenset_of_names).
+# Names are included so a NEW import in an allowlisted file/module pairing
+# still trips the guard.
+FUNCTION_LOCAL_IMPORT_ALLOWLIST: set[tuple[str, str, frozenset[str]]] = {
+    # __main__.py — CLI command bodies defer heavy graph imports to keep
+    # `neograph --help` startup fast. Justification: import latency, not cycle.
+    ("__main__.py", "neograph.compiler", frozenset({"compile"})),
+    ("__main__.py", "neograph.errors", frozenset({"CompileError", "ConstructError"})),
+    ("__main__.py", "neograph.lint", frozenset({"lint"})),
+    ("__main__.py", "neograph.compiler", frozenset({"classify_modifiers"})),
+    ("__main__.py", "neograph.testing", frozenset({"scaffold_tests"})),
+    ("__main__.py", "neograph", frozenset({"__version__"})),
+    # _construct_builder.py — cycle: _construct_builder imports validation/factory
+    # which themselves transitively touch decorator metadata. Break tracked by
+    # the §4 epic (neograph-pgso).
+    (
+        "_construct_builder.py",
+        "neograph._construct_validation",
+        frozenset({"_types_compatible", "effective_producer_type"}),
+    ),
+    ("_construct_builder.py", "neograph.factory", frozenset({"register_scripted"})),
+    # _construct_validation.py — cycle: validation reads merge_fn metadata that
+    # lives in decorators.py. Resolved when DI/merge metadata moves into a leaf.
+    (
+        "_construct_validation.py",
+        "neograph.decorators",
+        frozenset({"get_merge_fn_metadata"}),
+    ),
+    # _dispatch.py — cycle: dispatch resolves scripted shims from the registry,
+    # whose module imports IR types. Will resolve via _runtime_registry split.
+    ("_dispatch.py", "neograph._registry", frozenset({"registry"})),
+    # _llm.py — cycle: _llm uses describe_type for structured output schemas,
+    # and renderers for prompt construction. Both pull leaf utilities; the cycle
+    # is module-level _llm globals (neograph-lyvi will collapse it). Until then,
+    # function-local imports keep the module graph acyclic.
+    ("_llm.py", "neograph.describe_type", frozenset({"describe_type"})),
+    ("_llm.py", "neograph.renderers", frozenset({"build_rendered_input"})),
+    # _oracle.py — cycle: oracle merges call invoke_structured (_llm) and resolve
+    # merge_fn metadata (decorators). Both retire when §2 -lyvi collapses _llm
+    # globals and merge_fn metadata moves to a leaf module.
+    ("_oracle.py", "neograph._llm", frozenset({"invoke_structured"})),
+    (
+        "_oracle.py",
+        "neograph.decorators",
+        frozenset({"_resolve_merge_args", "get_merge_fn_metadata"}),
+    ),
+    # _sidecar.py — cycle: sidecar storage references factory's scripted lookup
+    # for shim attachment. Will retire when factory.py is split (cgkl).
+    ("_sidecar.py", "neograph.factory", frozenset({"lookup_scripted"})),
+    # _wiring.py — cycle: wiring composes Each-Oracle redirects from factory,
+    # resolves merge metadata from decorators, calls compile() recursively for
+    # nested constructs. Multiple cycles converging in one module; will resolve
+    # piecewise as factory.py and decorators.py are split.
+    (
+        "_wiring.py",
+        "neograph.factory",
+        frozenset({"make_eachoracle_redirect_fn"}),
+    ),
+    (
+        "_wiring.py",
+        "neograph.decorators",
+        frozenset({"_resolve_merge_args", "get_merge_fn_metadata"}),
+    ),
+    ("_wiring.py", "neograph.factory", frozenset({"lookup_scripted"})),
+    ("_wiring.py", "neograph._llm", frozenset({"invoke_structured"})),
+    ("_wiring.py", "neograph.compiler", frozenset({"compile"})),
+    # compiler.py — cycle: compile() reads module-level _llm globals to wire the
+    # llm_factory / prompt_compiler closures. Retires with §2 -lyvi.
+    (
+        "compiler.py",
+        "neograph._llm",
+        frozenset({"_llm_factory", "_prompt_compiler"}),
+    ),
+    # factory.py — cycle: factory's state-update path strips internal fields that
+    # runner.py owns. Will retire when state writeback moves to _state_io (cgkl).
+    ("factory.py", "neograph.runner", frozenset({"_strip_internals"})),
+    # lint.py — cycle: lint inspects the runtime registry to check whether
+    # scripted shims exist. Retires with _runtime_registry split.
+    ("lint.py", "neograph._registry", frozenset({"registry"})),
+    # modifiers.py — cycle: Loop validation lives in _construct_validation,
+    # which imports modifier types. Function-local import keeps modifiers.py a
+    # leaf. Retires when validation rules move out of _construct_validation.
+    (
+        "modifiers.py",
+        "neograph._construct_validation",
+        frozenset({"validate_loop_self_edge"}),
+    ),
+    (
+        "modifiers.py",
+        "neograph._construct_validation",
+        frozenset({"validate_loop_construct"}),
+    ),
+    # node.py — cycle: Node.compile() ultimately calls make_node_fn; raising a
+    # typed ConstructError requires errors.py which transitively re-touches node.
+    # Both retire when Node loses its compile()/run() convenience methods.
+    ("node.py", "neograph.errors", frozenset({"ConstructError"})),
+    ("node.py", "neograph.factory", frozenset({"make_node_fn"})),
+    # state.py — cycle: state.py owns field naming logic which naming.py wraps
+    # for legacy callers. Trivial; can be flattened anytime.
+    ("state.py", "neograph.naming", frozenset({"field_name_for"})),
+    # tool.py — cycle: @tool decorator registers tool factories; the registry
+    # lives in factory.py. Retires when tool registration moves to its own
+    # leaf module.
+    ("tool.py", "neograph.factory", frozenset({"register_tool_factory"})),
+    # verify.py — cycle: verify uses _llm globals and the runtime registry.
+    # Retires with §2 -lyvi (for _llm) and _runtime_registry split.
+    ("verify.py", "neograph._llm", frozenset({"_llm_factory"})),
+    ("verify.py", "neograph._registry", frozenset({"registry"})),
+    ("verify.py", "neograph._registry", frozenset({"registry"})),
+}
 
-    TASK neograph-2cb2: move registry ops to _registry.py to eliminate deferred imports.
+
+def _scan_function_local_neograph_imports(
+    src_dir: pathlib.Path,
+) -> list[tuple[str, int, str, frozenset[str]]]:
+    """Walk every .py file under src_dir and return function-local `from neograph...`
+    imports as (filename, lineno, module, frozenset_of_imported_names).
+
+    An import is function-local iff it appears inside a (possibly nested)
+    FunctionDef or AsyncFunctionDef body. Class-body and module-level imports
+    are NOT flagged. TYPE_CHECKING blocks at module top-level are also not
+    flagged (they live in If nodes outside FunctionDef).
     """
 
-    def test_deferred_import_count_within_budget(self):
-        """Deferred imports across src/neograph/*.py must stay within budget."""
-        count = 0
-        for py_file in sorted(SRC_DIR.glob("*.py")):
-            tree = ast.parse(py_file.read_text())
-            for node in ast.walk(tree):
-                if isinstance(node, ast.ImportFrom) and node.module and node.module.startswith("neograph."):
-                    # Check if this import is inside a function (deferred)
-                    # by seeing if it has col_offset > 0 (indented)
-                    if node.col_offset > 0:
-                        count += 1
-        # Budget: 45 (was 56→40→41→42, +3 for verify.py deferred imports).
-        assert count <= 45, (
-            f"Deferred import count is {count}, budget is 45. "
-            f"Move registry ops to _registry.py and promote leaf-module imports to reduce."
+    class _Scanner(ast.NodeVisitor):
+        def __init__(self, filename: str) -> None:
+            self.filename = filename
+            self._depth = 0
+            self.found: list[tuple[str, int, str, frozenset[str]]] = []
+
+        def visit_FunctionDef(self, fn: ast.FunctionDef) -> None:
+            self._depth += 1
+            try:
+                self.generic_visit(fn)
+            finally:
+                self._depth -= 1
+
+        def visit_AsyncFunctionDef(self, fn: ast.AsyncFunctionDef) -> None:
+            self._depth += 1
+            try:
+                self.generic_visit(fn)
+            finally:
+                self._depth -= 1
+
+        def visit_ImportFrom(self, imp: ast.ImportFrom) -> None:
+            if self._depth > 0 and imp.module and (
+                imp.module.startswith("neograph.") or imp.module == "neograph"
+            ):
+                self.found.append(
+                    (
+                        self.filename,
+                        imp.lineno,
+                        imp.module,
+                        frozenset(a.name for a in imp.names),
+                    )
+                )
+
+    out: list[tuple[str, int, str, frozenset[str]]] = []
+    for py_file in sorted(src_dir.glob("*.py")):
+        scanner = _Scanner(py_file.name)
+        scanner.visit(ast.parse(py_file.read_text()))
+        out.extend(scanner.found)
+    return out
+
+
+class TestFunctionLocalImportAllowlist:
+    """Function-local `from neograph...` imports must be explicitly allowlisted.
+
+    Replaces the old numeric budget guard (which counted indented imports
+    without naming them). Per docs/design/architecture-decisions.md §4, every
+    function-local `from neograph...` import is an unresolved cycle. The
+    allowlist freezes today's snapshot with one entry per (file, module, names)
+    tuple and a comment naming the cycle it breaks. Cycle-break tickets in the
+    §4 epic shrink the list; new entries are forbidden without an accompanying
+    justification comment.
+
+    Mutation-verified: removing an entry from the allowlist while keeping the
+    import in src/ makes the main scan fail with that exact tuple in the diff.
+    Adding a synthetic function-local `from neograph._llm import X` to a temp
+    file (passed directly to the scanner) flags it. The allowlist is the
+    backlog: the goal is len == 0.
+    """
+
+    def test_no_unallowlisted_function_local_neograph_imports(self):
+        """Every function-local `from neograph...` import must be in the allowlist."""
+        observed = _scan_function_local_neograph_imports(SRC_DIR)
+        observed_keys = {(f, m, n) for (f, _, m, n) in observed}
+
+        unauthorized = sorted(observed_keys - {(f, m, n) for (f, m, n) in FUNCTION_LOCAL_IMPORT_ALLOWLIST})
+        stale = sorted({(f, m, n) for (f, m, n) in FUNCTION_LOCAL_IMPORT_ALLOWLIST} - observed_keys)
+
+        msg_parts = []
+        if unauthorized:
+            msg_parts.append(
+                f"{len(unauthorized)} NEW function-local `from neograph...` import(s) "
+                "not in the allowlist:\n"
+                + "\n".join(
+                    f"  {f}: from {m} import {', '.join(sorted(n))}"
+                    for (f, m, n) in unauthorized
+                )
+                + "\n\nFunction-local imports are accepted only to break a cycle. "
+                "Either restructure to eliminate the cycle, or add the entry to "
+                "FUNCTION_LOCAL_IMPORT_ALLOWLIST with a justification comment "
+                "naming the cycle and the ticket that will retire it."
+            )
+        if stale:
+            msg_parts.append(
+                f"{len(stale)} stale allowlist entry/entries (no matching import in src/):\n"
+                + "\n".join(
+                    f"  {f}: from {m} import {', '.join(sorted(n))}"
+                    for (f, m, n) in stale
+                )
+                + "\n\nRemove from FUNCTION_LOCAL_IMPORT_ALLOWLIST — the cycle is broken."
+            )
+        assert not msg_parts, "\n\n".join(msg_parts)
+
+    def test_scanner_detects_injected_function_local_neograph_import(
+        self, tmp_path: pathlib.Path
+    ):
+        """Mutation: a synthetic module with a function-local import must be flagged."""
+        synthetic_dir = tmp_path / "neograph_fake"
+        synthetic_dir.mkdir()
+        synthetic = synthetic_dir / "fakemod.py"
+        synthetic.write_text(
+            "from __future__ import annotations\n"
+            "\n"
+            "def make_node():\n"
+            "    from neograph._llm import invoke_structured\n"
+            "    return invoke_structured\n"
+        )
+        found = _scan_function_local_neograph_imports(synthetic_dir)
+        assert any(
+            m == "neograph._llm" and "invoke_structured" in n for (_, _, m, n) in found
+        ), f"scanner failed to detect injected function-local import; found={found}"
+
+    def test_scanner_ignores_module_level_and_type_checking_imports(
+        self, tmp_path: pathlib.Path
+    ):
+        """Module-level imports and TYPE_CHECKING-block imports must NOT be flagged."""
+        synthetic_dir = tmp_path / "neograph_fake"
+        synthetic_dir.mkdir()
+        synthetic = synthetic_dir / "fakemod.py"
+        synthetic.write_text(
+            "from __future__ import annotations\n"
+            "from typing import TYPE_CHECKING\n"
+            "from neograph._llm import invoke_structured\n"
+            "\n"
+            "if TYPE_CHECKING:\n"
+            "    from neograph.factory import lookup_scripted\n"
+            "\n"
+            "def make_node():\n"
+            "    return invoke_structured\n"
+        )
+        found = _scan_function_local_neograph_imports(synthetic_dir)
+        assert found == [], (
+            f"scanner false-positive on module-level / TYPE_CHECKING imports; found={found}"
         )
 
 
