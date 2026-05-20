@@ -17,8 +17,8 @@ from neograph import (
     compile,
     run,
 )
-from neograph.factory import register_condition, register_scripted
 from neograph.modifiers import Loop, Operator
+from tests.fakes import build_test_compile_kwargs, register_condition, register_scripted
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Shared schemas
@@ -68,7 +68,7 @@ class TestLoopDictFormEdgeCases:
                           outputs=Beta)
             | Loop(when=lambda d: d is None or d.score < 0.8, max_iterations=5),
         ])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "hyp"})
         assert iteration[0] >= 2
 
@@ -100,7 +100,7 @@ class TestLoopDictFormEdgeCases:
                           outputs=Beta)
             | Loop(when=lambda d: d is None or d.score < 0.8, max_iterations=5),
         ])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "last"})
         assert iteration[0] >= 2
 
@@ -132,7 +132,7 @@ class TestLoopDictFormEdgeCases:
                           outputs=Beta)
             | Loop(when=lambda d: d is None or d.score < 0.8, max_iterations=5),
         ])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "same"})
         assert iteration[0] >= 2
 
@@ -448,7 +448,7 @@ class TestOperatorOnSubConstruct:
             inner_with_op,
         ])
         checkpointer = MemorySaver()
-        graph = compile(parent, checkpointer=checkpointer)
+        graph = compile(parent, checkpointer=checkpointer, **build_test_compile_kwargs())
         result = run(
             graph,
             input={"node_id": "op-loop"},

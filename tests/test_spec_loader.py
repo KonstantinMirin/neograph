@@ -11,8 +11,8 @@ from pydantic import BaseModel
 
 from neograph import compile, run
 from neograph.errors import ConfigurationError
-from neograph.factory import register_scripted
 from neograph.node import Node
+from tests.fakes import build_test_compile_kwargs, register_scripted
 
 # -- Schemas for loader tests ------------------------------------------------
 
@@ -92,7 +92,7 @@ class TestLoadSpecBasic:
         }
 
         construct = load_spec(spec)
-        graph = compile(construct)
+        graph = compile(construct, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "test"})
 
         assert call_count[0] == 1
@@ -125,7 +125,7 @@ class TestLoadSpecBasic:
         }
 
         construct = load_spec(spec)
-        graph = compile(construct)
+        graph = compile(construct, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "test"})
 
         assert result["refine"].score == 0.5
@@ -151,7 +151,7 @@ class TestLoadSpecBasic:
         }
 
         construct = load_spec(spec, project=SIMPLE_PROJECT)
-        graph = compile(construct)
+        graph = compile(construct, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "test"})
 
         assert result["gen"].content == "generated"
@@ -202,7 +202,7 @@ class TestLoadSpecWithLoop:
         }
 
         construct = load_spec(spec)
-        graph = compile(construct)
+        graph = compile(construct, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "test"})
 
         # Seed starts at 0.1, each iteration adds 0.3: 0.1→0.4→0.7→1.0
@@ -257,7 +257,7 @@ class TestLoadSpecWithConstruct:
         }
 
         construct = load_spec(spec)
-        graph = compile(construct)
+        graph = compile(construct, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "test"})
 
         # Seed at 0.15, +0.3 each: 0.15→0.45→0.75→1.05 (3 iterations)
@@ -310,7 +310,7 @@ class TestLoadSpecOracle:
         }
 
         construct = load_spec(spec)
-        graph = compile(construct)
+        graph = compile(construct, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "test"})
 
         # Both models were dispatched
@@ -347,7 +347,7 @@ class TestLoadSpecYamlString:
         })
 
         construct = load_spec(yaml_str)
-        graph = compile(construct)
+        graph = compile(construct, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "test"})
 
         assert result["gen"].content == "from-yaml"
@@ -399,7 +399,7 @@ class TestLoadSpecLoopHistory:
         }
 
         construct = load_spec(spec)
-        graph = compile(construct)
+        graph = compile(construct, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "test"})
 
         history = result["refine"]
@@ -473,7 +473,7 @@ class TestLoadSpecMultiNodeConstruct:
         }
 
         construct = load_spec(spec)
-        graph = compile(construct)
+        graph = compile(construct, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "test"})
 
         # review ran 3 times (0.0+0.3=0.3, 0.3+0.3=0.6, 0.6+0.3=0.9)
@@ -523,7 +523,7 @@ class TestLoadSpecDataFlow:
         }
 
         construct = load_spec(spec)
-        graph = compile(construct)
+        graph = compile(construct, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "test"})
 
         inp = captured_input[0]
@@ -565,7 +565,7 @@ class TestLoadSpecWiringHonesty:
         }
 
         construct = load_spec(spec)
-        graph = compile(construct)
+        graph = compile(construct, **build_test_compile_kwargs())
         run(graph, input={"node_id": "test"})
 
         r = received[0]
@@ -625,7 +625,7 @@ class TestLoadSpecWiringHonesty:
         }
 
         construct = load_spec(spec)
-        graph = compile(construct)
+        graph = compile(construct, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "test"})
 
         # The real assertion: revise must have received the review output
@@ -676,7 +676,7 @@ class TestLoadSpecWiringHonesty:
         }
 
         construct = load_spec(spec)
-        graph = compile(construct)
+        graph = compile(construct, **build_test_compile_kwargs())
         run(graph, input={"node_id": "test"})
 
         fi = first_input[0]
@@ -851,7 +851,7 @@ class TestLoadSpecJsonString:
         }
 
         construct = load_spec(_json.dumps(spec_dict))
-        graph = compile(construct)
+        graph = compile(construct, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "test"})
         assert result["gen"].content == "from-json"
 
@@ -892,7 +892,7 @@ class TestLoadSpecInputsDict:
         }
 
         construct = load_spec(spec)
-        graph = compile(construct)
+        graph = compile(construct, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "test"})
         assert result["review"].score == 0.9
 
@@ -1189,8 +1189,8 @@ class TestSpecPydanticSchema:
 
     def test_tools_string_form_resolves_to_typed_tool(self):
         """tools=['name'] in spec produces Node.tools=[Tool(name='name')] (closes silent-drop bug)."""
-        from neograph.factory import register_tool_factory
         from neograph.loader import load_spec
+        from tests.fakes import register_tool_factory
 
         # Tool factory must be registered for resolution to succeed
         register_tool_factory("bha9_search", lambda cfg, tc: object())
@@ -1216,8 +1216,8 @@ class TestSpecPydanticSchema:
 
     def test_tools_dict_form_with_budget(self):
         """tools=[{'name':...,'budget':3}] produces Tool with budget."""
-        from neograph.factory import register_tool_factory
         from neograph.loader import load_spec
+        from tests.fakes import register_tool_factory
 
         register_tool_factory("bha9_lookup", lambda cfg, tc: object())
 
@@ -1242,7 +1242,8 @@ class TestSpecPydanticSchema:
         assert node.tools[0].budget == 3
 
     def test_unknown_tool_raises(self):
-        """tools=['nonexistent'] raises ConfigurationError at load time."""
+        """tools=['nonexistent'] raises CompileError at compile() (post-§2)."""
+        from neograph import CompileError, compile
         from neograph.loader import load_spec
 
         spec = {
@@ -1259,8 +1260,14 @@ class TestSpecPydanticSchema:
             ],
             "pipeline": {"nodes": ["x"]},
         }
-        with pytest.raises(ConfigurationError):
-            load_spec(spec, project=self._project())
+        # Post-§2: tool factories are validated at compile(), not load_spec.
+        construct = load_spec(spec, project=self._project())
+        with pytest.raises(CompileError, match="nonexistent_tool_bha9"):
+            compile(
+                construct,
+                llm_factory=lambda tier: None,
+                prompt_compiler=lambda t, d, **kw: [],
+            )
 
     def test_llm_config_typo_in_spec_raises(self):
         """llm_config typos surface at load time (already does post-pej0; pin the path)."""

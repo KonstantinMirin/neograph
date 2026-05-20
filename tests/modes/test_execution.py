@@ -18,7 +18,7 @@ from neograph import (
     compile,
     run,
 )
-from tests.fakes import FakeTool, ReActFake, StructuredFake, configure_fake_llm
+from tests.fakes import FakeTool, ReActFake, StructuredFake, build_test_compile_kwargs, configure_fake_llm
 from tests.schemas import (
     Claims,
     ClusterGroup,
@@ -40,7 +40,7 @@ class TestExecuteMode:
         import types as _types
 
         from neograph import construct_from_module, node
-        from neograph.factory import register_tool_factory
+        from tests.fakes import register_tool_factory
 
         write_tool = FakeTool("write_file", response="written")
         register_tool_factory("write_file", lambda config, tool_config: write_tool)
@@ -52,7 +52,7 @@ class TestExecuteMode:
             ],
             final=lambda m: m(text="done"),
         )
-        configure_fake_llm(lambda tier: fake)
+        _llm_kw = configure_fake_llm(lambda tier: fake)
 
         mod = _types.ModuleType("test_execute_mode_mod")
 
@@ -68,7 +68,7 @@ class TestExecuteMode:
         mod.writer = writer
 
         pipeline = construct_from_module(mod, name="test-execute")
-        graph = compile(pipeline)
+        graph = compile(pipeline, **_llm_kw, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "test-001"})
 
         assert len(write_tool.calls) == 1
@@ -79,12 +79,12 @@ class TestErrorPaths:
     """Every error path the framework raises."""
 
     def test_compile_raises_when_llm_not_configured(self):
-        """Produce node without configure_llm() raises CompileError at compile()."""
+        """Produce node without llm_factory= kwarg raises CompileError at compile()."""
         node = Node(name="fail", mode="think", outputs=Claims, model="fast", prompt="x")
         pipeline = Construct("test-no-llm", nodes=[node])
 
-        with pytest.raises(CompileError, match="configure_llm"):
-            compile(pipeline)
+        with pytest.raises(CompileError, match="llm_factory"):
+            compile(pipeline, **build_test_compile_kwargs())
 
     def test_compile_raises_when_scripted_fn_not_registered(self):
         """Referencing unregistered scripted function raises ConfigurationError."""
@@ -92,11 +92,11 @@ class TestErrorPaths:
         pipeline = Construct("test-bad-fn", nodes=[node])
 
         with pytest.raises(ConfigurationError, match="not registered"):
-            compile(pipeline)
+            compile(pipeline, **build_test_compile_kwargs())
 
     def test_compile_raises_when_oracle_merge_fn_not_registered(self):
         """Oracle with unregistered merge_fn raises ConfigurationError at compile."""
-        from neograph.factory import register_scripted
+        from tests.fakes import register_scripted
 
         register_scripted("gen", lambda input_data, config: Claims(items=["x"]))
 
@@ -105,13 +105,13 @@ class TestErrorPaths:
         pipeline = Construct("test-bad-merge", nodes=[node])
 
         with pytest.raises(ConfigurationError, match="not registered"):
-            compile(pipeline)
+            compile(pipeline, **build_test_compile_kwargs())
 
     def test_compile_raises_when_operator_condition_not_registered(self):
         """Operator with unregistered condition raises ConfigurationError at compile."""
         from langgraph.checkpoint.memory import MemorySaver
 
-        from neograph.factory import register_scripted
+        from tests.fakes import register_scripted
 
         register_scripted("something", lambda input_data, config: Claims(items=[]))
 
@@ -120,11 +120,11 @@ class TestErrorPaths:
         pipeline = Construct("test-bad-condition", nodes=[node])
 
         with pytest.raises(ConfigurationError, match="not registered"):
-            compile(pipeline, checkpointer=MemorySaver())
+            compile(pipeline, checkpointer=MemorySaver(), **build_test_compile_kwargs())
 
     def test_compile_raises_when_tool_factory_not_registered(self):
         """Agent node with unregistered tool factory raises CompileError at compile()."""
-        configure_fake_llm(lambda tier: ReActFake(tool_calls=[[]]))
+        _llm_kw = configure_fake_llm(lambda tier: ReActFake(tool_calls=[[]]))
 
         node = Node(
             name="explore",
@@ -138,7 +138,7 @@ class TestErrorPaths:
         pipeline = Construct("test-bad-tool", nodes=[node])
 
         with pytest.raises(CompileError, match="ghost_tool"):
-            compile(pipeline)
+            compile(pipeline, **_llm_kw, **build_test_compile_kwargs())
 
     def test_run_without_input_or_checkpoint_raises(self):
         """run() with no input, no resume, no checkpoint raises LangGraph error.
@@ -149,12 +149,12 @@ class TestErrorPaths:
         """
         from langgraph.errors import EmptyInputError
 
-        from neograph.factory import register_scripted
+        from tests.fakes import register_scripted
 
         register_scripted("noop_resume", lambda input_data, config: Claims(items=[]))
         node = Node.scripted("noop", fn="noop_resume", outputs=Claims)
         pipeline = Construct("test-no-args", nodes=[node])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
 
         # No checkpointer, no input → LangGraph raises EmptyInputError
         with pytest.raises(EmptyInputError):
@@ -162,12 +162,12 @@ class TestErrorPaths:
 
     def test_compile_raises_when_node_missing_output_type(self):
         """Node with no output type raises CompileError at compile."""
-        configure_fake_llm(lambda tier: StructuredFake(lambda m: m()))
+        _llm_kw = configure_fake_llm(lambda tier: StructuredFake(lambda m: m()))
         node = Node(name="bad-node", mode="think", model="fast", prompt="x")
         pipeline = Construct("test-no-output", nodes=[node])
 
         with pytest.raises(CompileError, match="no output type"):
-            compile(pipeline)
+            compile(pipeline, **_llm_kw, **build_test_compile_kwargs())
 
 
 class TestLLMUnknownToolCall:
@@ -177,8 +177,7 @@ class TestLLMUnknownToolCall:
         """Framework responds with error message, doesn't crash."""
         from langchain_core.messages import AIMessage
 
-        from neograph._llm import configure_llm
-        from neograph.factory import register_tool_factory
+        from tests.fakes import register_tool_factory
 
         search_tool = FakeTool("search", response="found it")
         register_tool_factory("search", lambda config, tool_config: search_tool)
@@ -209,10 +208,6 @@ class TestLLMUnknownToolCall:
                 clone._model = model
                 return clone
 
-        configure_llm(
-            llm_factory=lambda tier: FakeLLMHallucinator(),
-            prompt_compiler=lambda template, data: [{"role": "user", "content": "test"}],
-        )
 
         node = Node(
             name="explore",
@@ -224,7 +219,7 @@ class TestLLMUnknownToolCall:
         )
 
         pipeline = Construct("test-hallucinated-tool", nodes=[node])
-        graph = compile(pipeline)
+        graph = compile(pipeline, llm_factory=lambda tier: FakeLLMHallucinator(), prompt_compiler=lambda template, data: [{"role": "user", "content": "test"}], **build_test_compile_kwargs())
         # Should complete without crashing — unknown tool gets error message
         result = run(graph, input={"node_id": "test-001"})
         assert isinstance(result["explore"], Claims)
@@ -236,7 +231,7 @@ class TestFirstNodeEdgeCases:
 
     def test_sub_construct_runs_when_first_node_in_parent(self):
         """Sub-construct as the very first node — no upstream data."""
-        from neograph.factory import register_scripted
+        from tests.fakes import register_scripted
 
         register_scripted("self_seed", lambda input_data, config: Claims(items=["self-seeded"]))
 
@@ -249,14 +244,14 @@ class TestFirstNodeEdgeCases:
 
         # Sub-construct is the ONLY node — wired from START
         parent = Construct("parent", nodes=[sub])
-        graph = compile(parent)
+        graph = compile(parent, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "test-001"})
 
         assert result["first_sub"].items == ["self-seeded"]
 
     def test_oracle_construct_runs_when_first_node_in_parent(self):
         """Construct | Oracle as the first node — router wired from START."""
-        from neograph.factory import register_scripted
+        from tests.fakes import register_scripted
 
         register_scripted("gen_first", lambda input_data, config: Claims(items=["v"]))
 
@@ -273,14 +268,14 @@ class TestFirstNodeEdgeCases:
         ) | Oracle(n=2, merge_fn="merge_first")
 
         parent = Construct("parent", nodes=[sub])
-        graph = compile(parent)
+        graph = compile(parent, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "test-001"})
 
         assert result["oracle_first"].items == ["merged-2"]
 
     def test_each_construct_compiles_when_first_node_in_parent(self):
         """Construct | Each as the first node — needs collection in state."""
-        from neograph.factory import register_scripted
+        from tests.fakes import register_scripted
 
         # For Each to work as first node, the collection must come from
         # somewhere. In practice this means the state is pre-seeded.
@@ -297,7 +292,7 @@ class TestFirstNodeEdgeCases:
 
         parent = Construct("parent", nodes=[sub])
         # Compile succeeds — Each wired from START
-        graph = compile(parent)
+        graph = compile(parent, **build_test_compile_kwargs())
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -322,7 +317,7 @@ class TestLLMConfig:
             )
             return StructuredFake(lambda m: m(items=["result"]))
 
-        configure_fake_llm(tracking_factory)
+        _llm_kw = configure_fake_llm(tracking_factory)
 
         node = Node(
             name="custom-llm",
@@ -334,7 +329,7 @@ class TestLLMConfig:
         )
 
         pipeline = Construct("test-llm-config", nodes=[node])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **_llm_kw, **build_test_compile_kwargs())
         run(graph, input={"node_id": "test-001"})
 
         # Factory receives the flattened LlmConfig: provider_kwargs are
@@ -348,7 +343,7 @@ class TestLLMConfig:
     def test_old_factory_works_when_llm_config_present(self):
         """Old-style factory(tier) still works without llm_config."""
         # Old-style factory: only accepts tier
-        configure_fake_llm(lambda tier: StructuredFake(lambda m: m(items=["ok"])))
+        _llm_kw = configure_fake_llm(lambda tier: StructuredFake(lambda m: m(items=["ok"])))
 
         node = Node(
             name="old-style",
@@ -360,14 +355,14 @@ class TestLLMConfig:
         )
 
         pipeline = Construct("test-compat", nodes=[node])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **_llm_kw, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "test-001"})
 
         assert result["old_style"].items == ["ok"]
 
     def test_configurable_has_fields_when_input_provided(self):
         """Pipeline input fields (node_id, project_root) accessible via config["configurable"]."""
-        from neograph.factory import register_scripted
+        from tests.fakes import register_scripted
 
         config_seen = {}
 
@@ -382,7 +377,7 @@ class TestLLMConfig:
 
         node = Node.scripted("capture", fn="capture", outputs=Claims)
         pipeline = Construct("test-config-inject", nodes=[node])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
 
         result = run(
             graph,
@@ -410,14 +405,14 @@ class TestLLMConfig:
             )
             return [{"role": "user", "content": "test"}]
 
-        configure_fake_llm(
+        _llm_kw = configure_fake_llm(
             lambda tier: StructuredFake(lambda m: m(items=["result"])),
             prompt_compiler=tracking_compiler,
         )
 
         node = Node(name="analyze", mode="think", outputs=Claims, model="fast", prompt="rw/analyze")
         pipeline = Construct("test-prompt-ctx", nodes=[node])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **_llm_kw, **build_test_compile_kwargs())
         run(graph, input={"node_id": "BR-001", "project_root": "/proj"})
 
         assert len(compiler_calls) == 1
@@ -438,7 +433,7 @@ class TestCheckpointResume:
         """run(graph, config=...) with no input resumes from checkpoint."""
         from langgraph.checkpoint.memory import MemorySaver
 
-        from neograph.factory import register_scripted
+        from tests.fakes import register_scripted
 
         call_log = []
         register_scripted("ckpt_a", lambda _i, _c: (call_log.append("a"), RawText(text="a"))[1])
@@ -450,7 +445,7 @@ class TestCheckpointResume:
         ])
 
         checkpointer = MemorySaver()
-        graph = compile(pipeline, checkpointer=checkpointer)
+        graph = compile(pipeline, checkpointer=checkpointer, **build_test_compile_kwargs())
         config = {"configurable": {"thread_id": "test-resume"}}
 
         # First run — both nodes execute
@@ -473,7 +468,7 @@ class TestCheckpointResume:
         """
         from langgraph.checkpoint.memory import MemorySaver
 
-        from neograph.factory import register_scripted
+        from tests.fakes import register_scripted
 
         call_log = []
         crash_on_first = [True]
@@ -498,7 +493,7 @@ class TestCheckpointResume:
         ])
 
         checkpointer = MemorySaver()
-        graph = compile(pipeline, checkpointer=checkpointer)
+        graph = compile(pipeline, checkpointer=checkpointer, **build_test_compile_kwargs())
         config = {"configurable": {"thread_id": "test-crash-resume"}}
 
         # First run — A succeeds, B crashes
@@ -535,7 +530,7 @@ class TestCheckpointResume:
         pipeline = construct_from_functions("di-resume", [needs_di])
 
         checkpointer = MemorySaver()
-        graph = compile(pipeline, checkpointer=checkpointer)
+        graph = compile(pipeline, checkpointer=checkpointer, **build_test_compile_kwargs())
         config = {"configurable": {"thread_id": "test-di-resume"}}
 
         # First run with DI values — succeeds
@@ -555,7 +550,7 @@ class TestCheckpointResume:
         """
         from langgraph.checkpoint.memory import MemorySaver
 
-        from neograph.factory import register_condition, register_scripted
+        from tests.fakes import register_condition, register_scripted
 
         call_log = []
         register_scripted("op_a", lambda _i, _c: (call_log.append("a"), RawText(text="a"))[1])
@@ -567,7 +562,7 @@ class TestCheckpointResume:
         ])
 
         checkpointer = MemorySaver()
-        graph = compile(pipeline, checkpointer=checkpointer)
+        graph = compile(pipeline, checkpointer=checkpointer, **build_test_compile_kwargs())
         config = {"configurable": {"thread_id": "test-op-resume"}}
 
         # First run hits the interrupt
@@ -584,14 +579,14 @@ class TestCheckpointResume:
 
     def test_checkpoint_check_returns_false_without_checkpointer(self):
         """_has_existing_checkpoint returns False when no checkpointer (path 2c)."""
-        from neograph.factory import register_scripted
         from neograph.runner import _has_existing_checkpoint
+        from tests.fakes import register_scripted
 
         register_scripted("no_ckpt", lambda _i, _c: RawText(text="x"))
         pipeline = Construct("no-ckpt", nodes=[
             Node.scripted("a", fn="no_ckpt", outputs=RawText),
         ])
-        graph = compile(pipeline)  # no checkpointer
+        graph = compile(pipeline, **build_test_compile_kwargs())  # no checkpointer
         assert not _has_existing_checkpoint(graph, {"configurable": {"thread_id": "x"}})
 
     def test_checkpoint_check_handles_broken_checkpointer(self):
@@ -611,13 +606,13 @@ class TestCheckpointResume:
         """run(graph) with config=None skips preflight, passes to LangGraph (path 3c)."""
         from langgraph.errors import EmptyInputError
 
-        from neograph.factory import register_scripted
+        from tests.fakes import register_scripted
 
         register_scripted("p3c", lambda _i, _c: RawText(text="x"))
         pipeline = Construct("p3c-test", nodes=[
             Node.scripted("a", fn="p3c", outputs=RawText),
         ])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
 
         # No checkpointer + no input + config=None → LangGraph EmptyInputError
         with pytest.raises(EmptyInputError):
@@ -627,7 +622,7 @@ class TestCheckpointResume:
         """run(graph, input={...}) without checkpoint is a normal new run (path 2b)."""
         from langgraph.checkpoint.memory import MemorySaver
 
-        from neograph.factory import register_scripted
+        from tests.fakes import register_scripted
 
         call_log = []
         register_scripted("new_a", lambda _i, _c: (call_log.append("a"), RawText(text="a"))[1])
@@ -636,7 +631,7 @@ class TestCheckpointResume:
             Node.scripted("a", fn="new_a", outputs=RawText),
         ])
         checkpointer = MemorySaver()
-        graph = compile(pipeline, checkpointer=checkpointer)
+        graph = compile(pipeline, checkpointer=checkpointer, **build_test_compile_kwargs())
 
         # Fresh thread_id — no checkpoint exists
         config = {"configurable": {"thread_id": "brand-new-thread"}}
@@ -646,11 +641,11 @@ class TestCheckpointResume:
 
 
 class TestRunIsolated:
-    """Node.run_isolated() — direct invocation for unit testing."""
+    """Node.run_isolated(**build_test_compile_kwargs()) — direct invocation for unit testing."""
 
     def test_result_returned_when_scripted_node_run_isolated(self):
         """Scripted nodes can be tested without compile()/run()."""
-        from neograph import register_scripted
+        from tests.fakes import register_scripted
 
         register_scripted(
             "upper", lambda input_data, config: RawText(text=input_data.text.upper() if input_data else "NONE")
@@ -659,25 +654,25 @@ class TestRunIsolated:
         upper_node = Node.scripted("upper", fn="upper", inputs=RawText, outputs=RawText)
 
         # Direct invocation — no pipeline, no compile, no run
-        result = upper_node.run_isolated(input=RawText(text="hello"))
+        result = upper_node.run_isolated(**build_test_compile_kwargs(), input=RawText(text="hello"))
 
         assert isinstance(result, RawText)
         assert result.text == "HELLO"
 
     def test_result_returned_when_produce_node_run_isolated(self):
         """Produce nodes can be tested with a fake LLM."""
-        configure_fake_llm(lambda tier: StructuredFake(lambda model: model(items=["isolated-result"])))
+        _llm_kw = configure_fake_llm(lambda tier: StructuredFake(lambda model: model(items=["isolated-result"])))
 
         decompose = Node("decompose", mode="think", outputs=Claims, model="fast", prompt="test")
 
-        result = decompose.run_isolated()
+        result = decompose.run_isolated(**build_test_compile_kwargs(), **_llm_kw)
 
         assert isinstance(result, Claims)
         assert result.items == ["isolated-result"]
 
     def test_config_passed_through_when_run_isolated_with_config(self):
         """run_isolated passes config through to the node function."""
-        from neograph import register_scripted
+        from tests.fakes import register_scripted
 
         seen_config = {}
 
@@ -688,7 +683,7 @@ class TestRunIsolated:
         register_scripted("cfg_test", fn)
         node = Node.scripted("cfg-test", fn="cfg_test", outputs=Claims)
 
-        result = node.run_isolated(config={"configurable": {"node_id": "TEST-001", "env": "staging"}})
+        result = node.run_isolated(**build_test_compile_kwargs(), config={"configurable": {"node_id": "TEST-001", "env": "staging"}})
 
         assert result.items == ["ok"]
         assert seen_config["node_id"] == "TEST-001"
@@ -696,7 +691,7 @@ class TestRunIsolated:
 
     def test_dict_input_seeded_to_state_when_run_isolated(self):
         """run_isolated with dict input updates state directly (line 163)."""
-        from neograph import register_scripted
+        from tests.fakes import register_scripted
 
         received_data = {}
 
@@ -708,13 +703,13 @@ class TestRunIsolated:
         register_scripted("dict_test", fn)
         node = Node.scripted("dict-test", fn="dict_test", outputs=Claims)
 
-        result = node.run_isolated(input={"raw_text": "hello", "count": 5})
+        result = node.run_isolated(**build_test_compile_kwargs(), input={"raw_text": "hello", "count": 5})
         assert isinstance(result, Claims)
         assert result.items == ["from_dict"]
 
     def test_missing_configurable_key_in_config_when_run_isolated(self):
         """run_isolated adds configurable key if missing from config (line 170)."""
-        from neograph import register_scripted
+        from tests.fakes import register_scripted
 
         seen_config = {}
 
@@ -726,7 +721,7 @@ class TestRunIsolated:
         node = Node.scripted("no-cfg", fn="no_cfg", outputs=Claims)
 
         # Pass config without 'configurable' key
-        result = node.run_isolated(config={"some_other_key": "val"})
+        result = node.run_isolated(**build_test_compile_kwargs(), config={"some_other_key": "val"})
         assert isinstance(result, Claims)
         assert "configurable" in seen_config
 
@@ -736,26 +731,28 @@ class TestRunIsolated:
         missing from the state update, run_isolated must refuse the result rather
         than mask the bug.
         """
-        from neograph import NeographError, register_scripted
+        from neograph import NeographError
+        from tests.fakes import register_scripted
 
         # Function returns None despite declared output type — common bug.
         register_scripted("none_returner", lambda input_data, config: None)
         n = Node.scripted("none-returner", fn="none_returner", outputs=Claims)
 
         with pytest.raises(NeographError, match="none-returner"):
-            n.run_isolated(input=Claims(items=["x"]))
+            n.run_isolated(**build_test_compile_kwargs(), input=Claims(items=["x"]))
 
     def test_run_isolated_error_names_node_and_field(self):
         """The NeographError message must name the node and identify the missing
         output field so the caller can diagnose the cause without printing state.
         """
-        from neograph import NeographError, register_scripted
+        from neograph import NeographError
+        from tests.fakes import register_scripted
 
         register_scripted("silent_node", lambda input_data, config: None)
         n = Node.scripted("silent-node", fn="silent_node", outputs=Claims)
 
         with pytest.raises(NeographError) as exc_info:
-            n.run_isolated(input=Claims(items=["x"]))
+            n.run_isolated(**build_test_compile_kwargs(), input=Claims(items=["x"]))
 
         msg = str(exc_info.value)
         # Names the node
@@ -767,7 +764,8 @@ class TestRunIsolated:
         """Dict-form outputs: if the @node body returns a dict that omits the
         primary output key, run_isolated must raise. Today returns None silently.
         """
-        from neograph import NeographError, register_scripted
+        from neograph import NeographError
+        from tests.fakes import register_scripted
 
         # Scripted node with dict-form outputs; function returns a dict but the
         # primary output field (node-name) is not populated.
@@ -775,7 +773,7 @@ class TestRunIsolated:
         n = Node.scripted("partial-dict", fn="partial_dict", outputs={"result": Claims})
 
         with pytest.raises(NeographError, match="partial-dict"):
-            n.run_isolated(input=Claims(items=["x"]))
+            n.run_isolated(**build_test_compile_kwargs(), input=Claims(items=["x"]))
 
 
 class TestStateGet:
@@ -815,7 +813,7 @@ class TestConfigInjectionPatterns:
 
     def test_resource_invoked_when_passed_via_config(self):
         """Consumer passes shared infrastructure (rate limiter, tracer) via config."""
-        from neograph.factory import register_scripted
+        from tests.fakes import register_scripted
 
         class FakeRateLimiter:
             def __init__(self):
@@ -839,7 +837,7 @@ class TestConfigInjectionPatterns:
                 Node.scripted("step", fn="resourced", outputs=Claims),
             ],
         )
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(
             graph,
             input={"node_id": "test"},
@@ -851,7 +849,7 @@ class TestConfigInjectionPatterns:
 
     def test_sub_node_sees_config_when_parent_passes_it(self):
         """Config flows through to sub-construct node functions."""
-        from neograph.factory import register_scripted
+        from tests.fakes import register_scripted
 
         seen_in_sub = {}
 
@@ -877,7 +875,7 @@ class TestConfigInjectionPatterns:
                 sub,
             ],
         )
-        graph = compile(parent)
+        graph = compile(parent, **build_test_compile_kwargs())
         run(graph, input={"node_id": "BR-042"}, config={"configurable": {"custom": "my-value"}})
 
         # Sub-construct node function received both pipeline input and custom config
@@ -886,7 +884,7 @@ class TestConfigInjectionPatterns:
 
     def test_all_generators_see_config_when_oracle_with_metadata(self):
         """Each Oracle generator sees config with node_id and custom fields."""
-        from neograph.factory import register_scripted
+        from tests.fakes import register_scripted
 
         gen_configs = []
 
@@ -909,7 +907,7 @@ class TestConfigInjectionPatterns:
         node = Node.scripted("gen", fn="cfg_gen", outputs=Claims) | Oracle(n=3, merge_fn="cfg_merge")
 
         pipeline = Construct("test-oracle-config", nodes=[node])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         run(graph, input={"node_id": "BR-099", "project_root": "/proj"}, config={})
 
         # All 3 generators saw the pipeline metadata
@@ -921,7 +919,7 @@ class TestConfigInjectionPatterns:
 
     def test_each_invocation_sees_config_when_metadata_present(self):
         """Each fan-out node sees config with node_id."""
-        from neograph.factory import register_scripted
+        from tests.fakes import register_scripted
 
         each_configs = []
 
@@ -949,7 +947,7 @@ class TestConfigInjectionPatterns:
         )
 
         pipeline = Construct("test-each-config", nodes=[make, verify])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         run(graph, input={"node_id": "BR-050"})
 
         # Both fan-out invocations saw node_id
@@ -960,7 +958,7 @@ class TestConfigInjectionPatterns:
 
     def test_every_node_sees_config_when_multi_step_pipeline(self):
         """Every node in a multi-step pipeline sees the same config metadata."""
-        from neograph.factory import register_scripted
+        from tests.fakes import register_scripted
 
         nodes_seen = []
 
@@ -985,7 +983,7 @@ class TestConfigInjectionPatterns:
                 Node.scripted("c", fn="track_c", outputs=Claims),
             ],
         )
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         run(graph, input={"node_id": "REQ-001"}, config={"configurable": {"env": "staging"}})
 
         assert len(nodes_seen) == 3
@@ -1007,7 +1005,7 @@ class TestCheckpointSchemaValidation:
         from langgraph.checkpoint.memory import MemorySaver
 
         from neograph.errors import CheckpointSchemaError
-        from neograph.factory import register_scripted
+        from tests.fakes import register_scripted
 
         class V1Output(BaseModel):
             content: str
@@ -1025,7 +1023,7 @@ class TestCheckpointSchemaValidation:
         pipe_v1 = Construct("sv-pipe", nodes=[
             Node.scripted("a", fn="sv1_a", outputs=V1Output),
         ])
-        graph_v1 = compile(pipe_v1, checkpointer=checkpointer)
+        graph_v1 = compile(pipe_v1, checkpointer=checkpointer, **build_test_compile_kwargs())
         run(graph_v1, input={"node_id": "test"}, config=config)
 
         # Run 2: compile with V2 schema (added field), same thread_id
@@ -1033,7 +1031,7 @@ class TestCheckpointSchemaValidation:
         pipe_v2 = Construct("sv-pipe", nodes=[
             Node.scripted("a", fn="sv2_a", outputs=V2Output),
         ])
-        graph_v2 = compile(pipe_v2, checkpointer=checkpointer)
+        graph_v2 = compile(pipe_v2, checkpointer=checkpointer, **build_test_compile_kwargs())
 
         with pytest.raises(CheckpointSchemaError, match="schema.*changed|fingerprint"):
             run(graph_v2, input={"node_id": "test"}, config=config, auto_resume=False)
@@ -1042,7 +1040,7 @@ class TestCheckpointSchemaValidation:
         """Same schema on both runs — resume proceeds without error."""
         from langgraph.checkpoint.memory import MemorySaver
 
-        from neograph.factory import register_scripted
+        from tests.fakes import register_scripted
 
         class StableOutput(BaseModel):
             content: str
@@ -1062,12 +1060,12 @@ class TestCheckpointSchemaValidation:
         ])
 
         # Run 1
-        graph = compile(pipe, checkpointer=checkpointer)
+        graph = compile(pipe, checkpointer=checkpointer, **build_test_compile_kwargs())
         run(graph, input={"node_id": "test"}, config=config)
         assert call_count[0] == 1
 
         # Run 2 — same schema, should resume (node already complete)
-        graph2 = compile(pipe, checkpointer=checkpointer)
+        graph2 = compile(pipe, checkpointer=checkpointer, **build_test_compile_kwargs())
         run(graph2, input={"node_id": "test"}, config=config)
         # Node should NOT re-execute (already checkpointed)
         assert call_count[0] == 1
@@ -1077,7 +1075,7 @@ class TestCheckpointSchemaValidation:
         from langgraph.checkpoint.memory import MemorySaver
 
         from neograph.errors import CheckpointSchemaError
-        from neograph.factory import register_scripted
+        from tests.fakes import register_scripted
 
         class OriginalName(BaseModel):
             content: str
@@ -1094,13 +1092,13 @@ class TestCheckpointSchemaValidation:
         pipe1 = Construct("rn-pipe", nodes=[
             Node.scripted("a", fn="rn_a1", outputs=OriginalName),
         ])
-        graph1 = compile(pipe1, checkpointer=checkpointer)
+        graph1 = compile(pipe1, checkpointer=checkpointer, **build_test_compile_kwargs())
         run(graph1, input={"node_id": "test"}, config=config)
 
         pipe2 = Construct("rn-pipe", nodes=[
             Node.scripted("a", fn="rn_a2", outputs=RenamedClass),
         ])
-        graph2 = compile(pipe2, checkpointer=checkpointer)
+        graph2 = compile(pipe2, checkpointer=checkpointer, **build_test_compile_kwargs())
 
         with pytest.raises(CheckpointSchemaError):
             run(graph2, input={"node_id": "test"}, config=config, auto_resume=False)
@@ -1119,7 +1117,7 @@ class TestPerNodeCheckpointInvalidation:
         from langgraph.checkpoint.memory import MemorySaver
 
         from neograph.errors import CheckpointSchemaError
-        from neograph.factory import register_scripted
+        from tests.fakes import register_scripted
 
         class TypeA(BaseModel):
             val: str = "a"
@@ -1155,7 +1153,7 @@ class TestPerNodeCheckpointInvalidation:
             Node.scripted("c", fn="pn_c1", inputs={"b": TypeB}, outputs=TypeC_V1),
             Node.scripted("d", fn="pn_d", inputs={"c": TypeC_V1}, outputs=TypeD),
         ])
-        graph_v1 = compile(pipe_v1, checkpointer=checkpointer)
+        graph_v1 = compile(pipe_v1, checkpointer=checkpointer, **build_test_compile_kwargs())
         run(graph_v1, input={"node_id": "test"}, config=config)
         assert exec_log == ["a", "b", "c", "d"]
 
@@ -1167,7 +1165,7 @@ class TestPerNodeCheckpointInvalidation:
             Node.scripted("c", fn="pn_c2", inputs={"b": TypeB}, outputs=TypeC_V2),
             Node.scripted("d", fn="pn_d", inputs={"c": TypeC_V2}, outputs=TypeD),
         ])
-        graph_v2 = compile(pipe_v2, checkpointer=checkpointer)
+        graph_v2 = compile(pipe_v2, checkpointer=checkpointer, **build_test_compile_kwargs())
 
         # Should raise with invalidated_nodes containing C and D
         with pytest.raises(CheckpointSchemaError) as exc_info:
@@ -1190,7 +1188,7 @@ class TestAutoResumeFromSchemaDivergence:
         """Linear A->B->C->D. Change C's output. auto_resume=True re-runs C+D, preserves A+B."""
         from langgraph.checkpoint.memory import MemorySaver
 
-        from neograph.factory import register_scripted
+        from tests.fakes import register_scripted
 
         class TypeA(BaseModel):
             val: str = "a"
@@ -1226,7 +1224,7 @@ class TestAutoResumeFromSchemaDivergence:
             Node.scripted("c", fn="ar_c1", inputs={"b": TypeB}, outputs=TypeC_V1),
             Node.scripted("d", fn="ar_d", inputs={"c": TypeC_V1}, outputs=TypeD),
         ])
-        graph_v1 = compile(pipe_v1, checkpointer=checkpointer)
+        graph_v1 = compile(pipe_v1, checkpointer=checkpointer, **build_test_compile_kwargs())
         run(graph_v1, input={"node_id": "test"}, config=config)
         assert exec_log == ["a", "b", "c", "d"]
 
@@ -1238,7 +1236,7 @@ class TestAutoResumeFromSchemaDivergence:
             Node.scripted("c", fn="ar_c2", inputs={"b": TypeB}, outputs=TypeC_V2),
             Node.scripted("d", fn="ar_d", inputs={"c": TypeC_V2}, outputs=TypeD),
         ])
-        graph_v2 = compile(pipe_v2, checkpointer=checkpointer)
+        graph_v2 = compile(pipe_v2, checkpointer=checkpointer, **build_test_compile_kwargs())
         result = run(graph_v2, input={"node_id": "test"}, config=config, auto_resume=True)
 
         # A and B should NOT re-execute (preserved from checkpoint)
@@ -1253,7 +1251,7 @@ class TestAutoResumeFromSchemaDivergence:
         from langgraph.checkpoint.memory import MemorySaver
 
         from neograph.errors import CheckpointSchemaError
-        from neograph.factory import register_scripted
+        from tests.fakes import register_scripted
 
         class V1(BaseModel):
             x: str = "v1"
@@ -1269,11 +1267,11 @@ class TestAutoResumeFromSchemaDivergence:
         config = {"configurable": {"thread_id": "auto-resume-2"}}
 
         pipe1 = Construct("af-pipe", nodes=[Node.scripted("a", fn="af_a1", outputs=V1)])
-        graph1 = compile(pipe1, checkpointer=checkpointer)
+        graph1 = compile(pipe1, checkpointer=checkpointer, **build_test_compile_kwargs())
         run(graph1, input={"node_id": "test"}, config=config)
 
         pipe2 = Construct("af-pipe", nodes=[Node.scripted("a", fn="af_a2", outputs=V2)])
-        graph2 = compile(pipe2, checkpointer=checkpointer)
+        graph2 = compile(pipe2, checkpointer=checkpointer, **build_test_compile_kwargs())
 
         with pytest.raises(CheckpointSchemaError):
             run(graph2, input={"node_id": "test"}, config=config, auto_resume=False)
@@ -1282,7 +1280,7 @@ class TestAutoResumeFromSchemaDivergence:
         """Same schema, auto_resume=True — normal resume, no re-execution."""
         from langgraph.checkpoint.memory import MemorySaver
 
-        from neograph.factory import register_scripted
+        from tests.fakes import register_scripted
 
         class Stable(BaseModel):
             val: str = "ok"
@@ -1298,12 +1296,12 @@ class TestAutoResumeFromSchemaDivergence:
         config = {"configurable": {"thread_id": "auto-resume-3"}}
 
         pipe = Construct("nr-pipe", nodes=[Node.scripted("a", fn="nr_a", outputs=Stable)])
-        graph = compile(pipe, checkpointer=checkpointer)
+        graph = compile(pipe, checkpointer=checkpointer, **build_test_compile_kwargs())
         run(graph, input={"node_id": "test"}, config=config)
         assert call_count[0] == 1
 
         # Run 2 — same schema, should NOT re-execute
-        graph2 = compile(pipe, checkpointer=checkpointer)
+        graph2 = compile(pipe, checkpointer=checkpointer, **build_test_compile_kwargs())
         run(graph2, input={"node_id": "test"}, config=config, auto_resume=True)
         assert call_count[0] == 1  # still 1, not re-executed
 
@@ -1311,7 +1309,7 @@ class TestAutoResumeFromSchemaDivergence:
         """A->B->C. Change only C. A and B preserved, only C re-runs."""
         from langgraph.checkpoint.memory import MemorySaver
 
-        from neograph.factory import register_scripted
+        from tests.fakes import register_scripted
 
         class TypeA(BaseModel):
             val: str = "a"
@@ -1341,7 +1339,7 @@ class TestAutoResumeFromSchemaDivergence:
             Node.scripted("b", fn="lc_b", inputs={"a": TypeA}, outputs=TypeB),
             Node.scripted("c", fn="lc_c1", inputs={"b": TypeB}, outputs=TypeC_V1),
         ])
-        graph_v1 = compile(pipe_v1, checkpointer=checkpointer)
+        graph_v1 = compile(pipe_v1, checkpointer=checkpointer, **build_test_compile_kwargs())
         run(graph_v1, input={"node_id": "test"}, config=config)
         assert exec_log == ["a", "b", "c"]
 
@@ -1351,7 +1349,7 @@ class TestAutoResumeFromSchemaDivergence:
             Node.scripted("b", fn="lc_b", inputs={"a": TypeA}, outputs=TypeB),
             Node.scripted("c", fn="lc_c2", inputs={"b": TypeB}, outputs=TypeC_V2),
         ])
-        graph_v2 = compile(pipe_v2, checkpointer=checkpointer)
+        graph_v2 = compile(pipe_v2, checkpointer=checkpointer, **build_test_compile_kwargs())
         result = run(graph_v2, input={"node_id": "test"}, config=config, auto_resume=True)
 
         assert "a" not in exec_log

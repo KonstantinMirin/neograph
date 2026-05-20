@@ -2,13 +2,7 @@
 from pydantic import BaseModel
 
 from neograph import Construct, Node
-from neograph._llm import configure_llm
 from neograph.modifiers import Oracle
-
-configure_llm(
-    llm_factory=lambda tier: None,
-    prompt_compiler=lambda t, d: [{"role": "user", "content": "x"}],
-)
 
 
 class Result(BaseModel, frozen=True):

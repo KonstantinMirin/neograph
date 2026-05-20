@@ -22,7 +22,7 @@ from neograph import (
     run,
 )
 from neograph.renderers import render_input
-from tests.fakes import StructuredFake, TextFake, configure_fake_llm
+from tests.fakes import StructuredFake, TextFake, build_test_compile_kwargs, configure_fake_llm
 from tests.schemas import Claims, MatchResult, RawText
 
 
@@ -871,7 +871,7 @@ class TestJsonModeOutputSchema:
             compiler_calls.append(kw)
             return [{"role": "user", "content": "test"}]
 
-        configure_fake_llm(
+        _llm_kw = configure_fake_llm(
             lambda tier: TextFake('{"items": ["schema-test"]}'),
             prompt_compiler=tracking_compiler,
         )
@@ -885,7 +885,7 @@ class TestJsonModeOutputSchema:
             llm_config={"output_strategy": "json_mode"},
         )
         pipeline = Construct("test-schema", nodes=[n])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **_llm_kw, **build_test_compile_kwargs())
         run(graph, input={"node_id": "test"})
 
         assert len(compiler_calls) == 1
@@ -902,7 +902,7 @@ class TestJsonModeOutputSchema:
             compiler_calls.append(kw)
             return [{"role": "user", "content": "test"}]
 
-        configure_fake_llm(
+        _llm_kw = configure_fake_llm(
             lambda tier: StructuredFake(lambda model: model(items=["ok"])),
             prompt_compiler=tracking_compiler,
         )
@@ -916,7 +916,7 @@ class TestJsonModeOutputSchema:
             llm_config={"output_strategy": "structured"},
         )
         pipeline = Construct("test-no-schema", nodes=[n])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **_llm_kw, **build_test_compile_kwargs())
         run(graph, input={"node_id": "test"})
 
         assert len(compiler_calls) == 1
@@ -930,7 +930,7 @@ class TestJsonModeOutputSchema:
             compiler_calls.append(kw)
             return [{"role": "user", "content": "test"}]
 
-        configure_fake_llm(
+        _llm_kw = configure_fake_llm(
             lambda tier: TextFake('{"items": ["text-test"]}'),
             prompt_compiler=tracking_compiler,
         )
@@ -944,7 +944,7 @@ class TestJsonModeOutputSchema:
             llm_config={"output_strategy": "text"},
         )
         pipeline = Construct("test-text-no-schema", nodes=[n])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **_llm_kw, **build_test_compile_kwargs())
         run(graph, input={"node_id": "test"})
 
         assert len(compiler_calls) == 1
@@ -955,7 +955,7 @@ class TestJsonModeOutputSchema:
         def old_compiler(template, data, *, node_name=None, config=None):
             return [{"role": "user", "content": "test"}]
 
-        configure_fake_llm(
+        _llm_kw = configure_fake_llm(
             lambda tier: TextFake('{"items": ["compat"]}'),
             prompt_compiler=old_compiler,
         )
@@ -969,7 +969,7 @@ class TestJsonModeOutputSchema:
             llm_config={"output_strategy": "json_mode"},
         )
         pipeline = Construct("test-compat", nodes=[n])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **_llm_kw, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "test"})
 
         # Still works — old compiler just doesn't receive output_schema
@@ -986,18 +986,20 @@ class TestRenderPromptInspector:
 
     def test_returns_formatted_messages_without_llm_call(self):
         """render_prompt returns formatted messages from the prompt compiler."""
-        from neograph._llm import configure_llm, render_prompt
+        from neograph._llm import render_prompt
+        from tests.fakes import build_fake_runtime
 
-        configure_llm(
-            llm_factory=lambda tier: None,
-            prompt_compiler=lambda template, data, **kw: [
+        def echo_compiler(template, data, **kw):
+            return [
                 {"role": "system", "content": f"Template: {template}"},
                 {"role": "user", "content": str(data)},
-            ],
-        )
+            ]
 
         n = Node(name="test-node", mode="think", outputs=Claims, model="fast", prompt="my/template")
-        result = render_prompt(n, "hello world")
+        result = render_prompt(
+            n, "hello world",
+            runtime=build_fake_runtime(prompt_compiler=echo_compiler),
+        )
 
         assert "[system]" in result
         assert "Template: my/template" in result
@@ -1006,8 +1008,9 @@ class TestRenderPromptInspector:
 
     def test_applies_node_renderer_before_compilation(self):
         """render_prompt applies node.renderer before compilation."""
-        from neograph._llm import configure_llm, render_prompt
+        from neograph._llm import render_prompt
         from neograph.renderers import XmlRenderer
+        from tests.fakes import build_fake_runtime
 
         compiled_data = []
 
@@ -1015,10 +1018,6 @@ class TestRenderPromptInspector:
             compiled_data.append(data)
             return [{"role": "user", "content": str(data)}]
 
-        configure_llm(
-            llm_factory=lambda tier: None,
-            prompt_compiler=capturing_compiler,
-        )
 
         class MyInput(BaseModel):
             name: str
@@ -1032,7 +1031,11 @@ class TestRenderPromptInspector:
             prompt="test",
             renderer=XmlRenderer(),
         )
-        result = render_prompt(n, MyInput(name="Alice", value=42))
+        result = render_prompt(
+            n,
+            MyInput(name="Alice", value=42),
+            runtime=build_fake_runtime(prompt_compiler=capturing_compiler),
+        )
 
         assert len(compiled_data) == 1
         # XmlRenderer produces XML-tagged output
@@ -1043,7 +1046,8 @@ class TestRenderPromptInspector:
 
     def test_passes_output_schema_to_compiler_when_json_mode(self):
         """render_prompt for json_mode node passes output_schema to compiler."""
-        from neograph._llm import configure_llm, render_prompt
+        from neograph._llm import render_prompt
+        from tests.fakes import build_fake_runtime
 
         compiler_kwargs = []
 
@@ -1051,10 +1055,6 @@ class TestRenderPromptInspector:
             compiler_kwargs.append(kw)
             return [{"role": "user", "content": "test"}]
 
-        configure_llm(
-            llm_factory=lambda tier: None,
-            prompt_compiler=tracking_compiler,
-        )
 
         n = Node(
             name="json-node",
@@ -1064,7 +1064,11 @@ class TestRenderPromptInspector:
             prompt="test",
             llm_config={"output_strategy": "json_mode"},
         )
-        render_prompt(n, "some input")
+        render_prompt(
+            n,
+            "some input",
+            runtime=build_fake_runtime(prompt_compiler=tracking_compiler),
+        )
 
         assert len(compiler_kwargs) == 1
         schema = compiler_kwargs[0].get("output_schema")
@@ -1944,8 +1948,7 @@ class TestRenderingModeDispatch:
     def test_think_mode_prompt_compiler_receives_baml_no_renderer(self):
         """Think-mode node: prompt compiler receives BAML strings, not raw models."""
         from neograph import Construct, Node, compile, run
-        from neograph.factory import register_scripted
-        from tests.fakes import StructuredFakeWithRaw, configure_fake_llm
+        from tests.fakes import StructuredFakeWithRaw, configure_fake_llm, register_scripted
 
         class Input(BaseModel):
             text: str
@@ -1960,7 +1963,7 @@ class TestRenderingModeDispatch:
             captured[template] = data
             return [{"role": "user", "content": "test"}]
 
-        configure_fake_llm(
+        _llm_kw = configure_fake_llm(
             factory=lambda tier: StructuredFakeWithRaw(lambda m: m(result="ok")),
             prompt_compiler=capturing_compiler,
         )
@@ -1971,7 +1974,7 @@ class TestRenderingModeDispatch:
             Node("think-node", prompt="analyze/input", model="default",
                  outputs=Output, inputs={"seed": Input}),
         ])
-        graph = compile(parent)
+        graph = compile(parent, **_llm_kw, **build_test_compile_kwargs())
         run(graph, input={"node_id": "mode-test"})
 
         assert "analyze/input" in captured
@@ -1985,8 +1988,7 @@ class TestRenderingModeDispatch:
     def test_agent_mode_prompt_compiler_receives_baml_no_renderer(self):
         """Agent-mode node: prompt compiler receives BAML strings, not raw models."""
         from neograph import Construct, Node, Tool, compile, run
-        from neograph.factory import register_scripted, register_tool_factory
-        from tests.fakes import ReActFake, configure_fake_llm
+        from tests.fakes import ReActFake, configure_fake_llm, register_scripted, register_tool_factory
 
         class Input(BaseModel):
             query: str
@@ -2000,7 +2002,7 @@ class TestRenderingModeDispatch:
             captured[template] = data
             return [{"role": "user", "content": "test"}]
 
-        configure_fake_llm(
+        _llm_kw = configure_fake_llm(
             factory=lambda tier: ReActFake(
                 tool_calls=[],
                 final=lambda m: m(answer="done"),
@@ -2016,7 +2018,7 @@ class TestRenderingModeDispatch:
                  mode="agent", outputs=Output, inputs={"seed": Input},
                  tools=[Tool("search", budget=3)]),
         ])
-        graph = compile(parent)
+        graph = compile(parent, **_llm_kw, **build_test_compile_kwargs())
         run(graph, input={"node_id": "agent-test"})
 
         assert "search/query" in captured
@@ -2039,8 +2041,7 @@ class TestRenderingThreeSurfaceParity:
     def test_declarative_node_renders_baml_for_prompt_compiler(self):
         """Declarative Node() with template-ref prompt: BAML rendering."""
         from neograph import Construct, Node, compile, run
-        from neograph.factory import register_scripted
-        from tests.fakes import StructuredFakeWithRaw, configure_fake_llm
+        from tests.fakes import StructuredFakeWithRaw, configure_fake_llm, register_scripted
 
         class Data(BaseModel):
             value: str
@@ -2054,7 +2055,7 @@ class TestRenderingThreeSurfaceParity:
             captured[template] = data
             return [{"role": "user", "content": "test"}]
 
-        configure_fake_llm(
+        _llm_kw = configure_fake_llm(
             factory=lambda tier: StructuredFakeWithRaw(lambda m: m(out="ok")),
             prompt_compiler=capturing_compiler,
         )
@@ -2065,7 +2066,7 @@ class TestRenderingThreeSurfaceParity:
             Node("proc", prompt="process/data", model="default",
                  outputs=Result, inputs={"seed": Data}),
         ])
-        graph = compile(parent)
+        graph = compile(parent, **_llm_kw, **build_test_compile_kwargs())
         run(graph, input={"node_id": "surface-test"})
 
         assert "process/data" in captured
@@ -2092,7 +2093,7 @@ class TestRenderingThreeSurfaceParity:
             captured[template] = data
             return [{"role": "user", "content": "test"}]
 
-        configure_fake_llm(
+        _llm_kw = configure_fake_llm(
             factory=lambda tier: StructuredFakeWithRaw(lambda m: m(out="ok")),
             prompt_compiler=capturing_compiler,
         )
@@ -2105,7 +2106,7 @@ class TestRenderingThreeSurfaceParity:
         def proc(seed: Data) -> Result: ...
 
         pipeline = construct_from_functions("decorator-test", [seed, proc])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **_llm_kw, **build_test_compile_kwargs())
         run(graph, input={"node_id": "decorator-test"})
 
         assert "process/data" in captured
@@ -2271,7 +2272,7 @@ class TestRendererAsIRType:
 
     def test_propagation_preserves_typed_renderer(self):
         """Construct(renderer=X) propagates X instance to children via model_copy."""
-        from neograph.factory import register_scripted
+        from tests.fakes import register_scripted
 
         register_scripted("l9qb_noop", lambda i, c: Claims(items=["x"]))
         child = Node.scripted("l9qb-child", fn="l9qb_noop", outputs=Claims)

@@ -10,8 +10,8 @@ import hypothesis.strategies as st
 from hypothesis import given, settings
 
 from neograph import Construct, Node
-from neograph.factory import register_scripted
 from neograph.lint import _predict_input_keys, lint
+from tests.fakes import register_scripted
 
 from .conftest import Alpha, Beta, Gamma, _make_fn, _uid
 

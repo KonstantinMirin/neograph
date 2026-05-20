@@ -19,6 +19,7 @@ from pydantic import BaseModel
 
 from neograph import _llm, _tool_loop
 from neograph._llm import _is_inline_prompt
+from neograph._llm_runtime import EMPTY_RUNTIME, LlmRuntime
 from neograph._normalize import normalize_outputs
 from neograph.errors import ConfigurationError
 from neograph.node import Node, TypeSpecStatic
@@ -122,6 +123,9 @@ class ThinkDispatch:
     invoke_structured call, dict-form primary key wrapping.
     """
 
+    def __init__(self, runtime: LlmRuntime = EMPTY_RUNTIME) -> None:
+        self.runtime = runtime
+
     def execute(
         self,
         node: Node,
@@ -129,7 +133,7 @@ class ThinkDispatch:
         config: RunnableConfig,
         context_data: dict[str, str] | None,
     ) -> NodeOutput:
-        rendered = _render_input(node, input_data.value)
+        rendered = _render_input(node, input_data.value, runtime=self.runtime)
         output_model, primary_key = _resolve_primary_output(node)
         effective_model = config.get("configurable", {}).get("_oracle_model", node.model) or ""
 
@@ -137,6 +141,7 @@ class ThinkDispatch:
         # (TypeSpecStatic includes dict-form for multi-output Nodes; the
         # primary key resolution above unwraps it).
         result = _llm.invoke_structured(
+            self.runtime,
             model_tier=effective_model,
             prompt_template=node.prompt or "",
             input_data=rendered,
@@ -156,10 +161,18 @@ class ToolDispatch:
     """Dispatch for agent/act modes — ReAct tool loop.
 
     Handles: rendering, output model resolution, ToolBudgetTracker creation,
-    dual-path renderer resolution (node.renderer > global), Oracle model
-    override, oracle_gen_type resolution for dict-form outputs with tools,
-    invoke_with_tools call, tool_log wiring.
+    dual-path renderer resolution (node.renderer > runtime.renderer), Oracle
+    model override, oracle_gen_type resolution for dict-form outputs with
+    tools, invoke_with_tools call, tool_log wiring.
     """
+
+    def __init__(
+        self,
+        runtime: LlmRuntime = EMPTY_RUNTIME,
+        tool_factory_lookup: dict[str, Callable] | None = None,
+    ) -> None:
+        self.runtime = runtime
+        self.tool_factory_lookup = tool_factory_lookup or {}
 
     def execute(
         self,
@@ -168,14 +181,14 @@ class ToolDispatch:
         config: RunnableConfig,
         context_data: dict[str, str] | None,
     ) -> NodeOutput:
-        rendered = _render_input(node, input_data.value)
+        rendered = _render_input(node, input_data.value, runtime=self.runtime)
         output_model, primary_key = _resolve_primary_output(node)
         no = normalize_outputs(node.outputs)
 
         budget_tracker = ToolBudgetTracker(node.tools)
 
-        # Renderer resolution: node-level renderer takes priority, then global
-        effective_renderer = node.renderer or _llm._get_global_renderer()
+        # Renderer resolution: node-level renderer takes priority, then runtime
+        effective_renderer = node.renderer or self.runtime.renderer
 
         effective_model = config.get("configurable", {}).get("_oracle_model", node.model) or ""
 
@@ -185,6 +198,7 @@ class ToolDispatch:
             oracle_gen_type = no.all_keys[primary_key]
 
         result, tool_interactions = _tool_loop.invoke_with_tools(
+            self.runtime,
             model_tier=effective_model,
             prompt_template=node.prompt or "",
             input_data=rendered,
@@ -196,6 +210,7 @@ class ToolDispatch:
             llm_config=node.llm_config,
             renderer=effective_renderer,
             context=context_data,
+            tool_factory_lookup=self.tool_factory_lookup,
         )
 
         if primary_key is not None and result is not None:
@@ -213,7 +228,12 @@ class ToolDispatch:
         return NodeOutput(single=result)
 
 
-def _render_input(node: Node, input_data: Any) -> Any:
+def _render_input(
+    node: Node,
+    input_data: Any,
+    *,
+    runtime: LlmRuntime = EMPTY_RUNTIME,
+) -> Any:
     """Apply renderer dispatch chain via RenderedInput.
 
     Builds a RenderedInput carrying both raw and rendered views, then
@@ -221,7 +241,7 @@ def _render_input(node: Node, input_data: Any) -> Any:
     - Inline prompts: raw data (for ${var.field} dotted access)
     - Template-ref prompts: rendered + flattened (for prompt_compiler)
     """
-    effective_renderer = node.renderer or _llm._get_global_renderer()
+    effective_renderer = node.renderer or runtime.renderer
 
     ri = build_rendered_input(input_data, renderer=effective_renderer)
 
@@ -252,27 +272,39 @@ def _resolve_primary_output(node: Node) -> tuple[TypeSpecStatic, str | None]:
     return no.primary, no.primary_key
 
 
-def _dispatch_for_mode(node: Node) -> ModeDispatch:
+def _dispatch_for_mode(
+    node: Node,
+    *,
+    runtime: LlmRuntime = EMPTY_RUNTIME,
+    scripted_lookup: dict[str, Callable] | None = None,
+    tool_factory_lookup: dict[str, Callable] | None = None,
+) -> ModeDispatch:
     """Resolve the ModeDispatch for a node based on its mode.
 
-    Scripted: delegates to registered function via ScriptedDispatch.
-    Think: single LLM call via ThinkDispatch.
-    Agent/Act: ReAct tool loop via ToolDispatch.
+    Scripted: delegates to the registered function via ScriptedDispatch.
+    The function is looked up in ``scripted_lookup`` (per-compile dict).
+    Think: single LLM call via ThinkDispatch (captures runtime).
+    Agent/Act: ReAct tool loop via ToolDispatch (captures runtime).
     """
-    from neograph._registry import registry
-
     if node.mode == "scripted":
         if node.scripted_fn is None:
             raise ConfigurationError.build(
                 "Scripted node has no scripted_fn registered",
                 node=node.name,
             )
-        fn = registry.scripted[node.scripted_fn]
+        per_compile = scripted_lookup or {}
+        fn = per_compile.get(node.scripted_fn)
+        if fn is None:
+            raise ConfigurationError.build(
+                f"Scripted function '{node.scripted_fn}' not registered",
+                hint=f"Pass scripted={{'{node.scripted_fn}': fn}} to compile().",
+                node=node.name,
+            )
         return ScriptedDispatch(fn)
     if node.mode == "think":
-        return ThinkDispatch()
+        return ThinkDispatch(runtime)
     if node.mode in ("agent", "act"):
-        return ToolDispatch()
+        return ToolDispatch(runtime, tool_factory_lookup=tool_factory_lookup)
     raise ConfigurationError.build(
         f"Unknown mode '{node.mode}'",
         expected="scripted, think, agent, or act",

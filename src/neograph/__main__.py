@@ -98,6 +98,40 @@ def _load_known_template_vars(args: argparse.Namespace) -> set[str] | None:
     return None
 
 
+def _load_compile_kwargs(args: argparse.Namespace) -> dict[str, Any]:
+    """Load the post-§2 compile() runtime kwargs from --setup module.
+
+    Looks for optional `get_scripted()`, `get_tool_factories()`,
+    `get_conditions()`, `get_llm_factory()`, `get_prompt_compiler()` hooks
+    on the setup module. Missing hooks default to empty/None and are
+    omitted from the returned dict so compile() applies its own defaults.
+    """
+    out: dict[str, Any] = {}
+    if not args.setup:
+        return out
+    mod = _import_module(args.setup)
+    for hook_name, kwarg in (
+        ("get_scripted", "scripted"),
+        ("get_tool_factories", "tool_factories"),
+        ("get_conditions", "conditions"),
+    ):
+        fn = getattr(mod, hook_name, None)
+        if fn is not None:
+            value = fn()
+            if value:
+                out[kwarg] = value
+    for hook_name, kwarg in (
+        ("get_llm_factory", "llm_factory"),
+        ("get_prompt_compiler", "prompt_compiler"),
+    ):
+        fn = getattr(mod, hook_name, None)
+        if fn is not None:
+            value = fn()
+            if value is not None:
+                out[kwarg] = value
+    return out
+
+
 def cmd_check(args: argparse.Namespace) -> int:
     """Run compile() + lint() on all constructs in the target module."""
     from neograph.compiler import compile
@@ -116,6 +150,7 @@ def cmd_check(args: argparse.Namespace) -> int:
     setup_vars = _load_known_template_vars(args)
     known_vars = (cli_vars or set()) | (setup_vars or set()) or None
     template_resolver = _load_template_resolver(args)
+    compile_kwargs = _load_compile_kwargs(args)
     failed = 0
 
     for var_name, construct in constructs:
@@ -135,13 +170,23 @@ def cmd_check(args: argparse.Namespace) -> int:
             checkpointer = MemorySaver()
 
         try:
-            compile(construct, checkpointer=checkpointer)
+            compile(construct, checkpointer=checkpointer, **compile_kwargs)
         except (CompileError, ConstructError) as exc:
             errors.append(f"compile: {exc}")
 
         # 2. Lint
-        issues = lint(construct, config=config, known_template_vars=known_vars,
-                      template_resolver=template_resolver)
+        lint_kwargs: dict[str, Any] = {
+            "config": config,
+            "known_template_vars": known_vars,
+            "template_resolver": template_resolver,
+        }
+        if "llm_factory" in compile_kwargs:
+            lint_kwargs["llm_factory"] = compile_kwargs["llm_factory"]
+        if "prompt_compiler" in compile_kwargs:
+            lint_kwargs["prompt_compiler"] = compile_kwargs["prompt_compiler"]
+        if "conditions" in compile_kwargs:
+            lint_kwargs["conditions"] = compile_kwargs["conditions"]
+        issues = lint(construct, **lint_kwargs)
         for issue in issues:
             severity = "ERROR" if issue.required else "WARN"
             errors.append(f"lint [{severity}]: {issue.message}")

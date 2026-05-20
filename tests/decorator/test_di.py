@@ -16,6 +16,7 @@ from neograph import (
     node,
     run,
 )
+from tests.fakes import build_test_compile_kwargs
 from tests.schemas import (
     Claims,
     RawText,
@@ -38,7 +39,7 @@ class TestFromInputPydanticModel:
             return RawText(text=f"{ctx.node_id}|{ctx.project_root}")
 
         pipeline = construct_from_functions("fipb", [fipb_produce])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(
             graph,
             input={"node_id": "REQ-001", "project_root": "/tmp/repo"},
@@ -61,7 +62,7 @@ class TestFromInputPydanticModel:
             return RawText(text=f"{ctx.node_id}: {','.join(fipb2_source.items)}")
 
         pipeline = construct_from_functions("fipb2", [fipb2_source, fipb2_join])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "X-42"})
         assert result["fipb2_join"].text == "X-42: a,b"
 
@@ -78,7 +79,7 @@ class TestFromInputPydanticModel:
             return RawText(text=f"id={ctx.node_id!r},root={ctx.project_root!r}")
 
         pipeline = construct_from_functions("fipbm", [fipbm_read])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "only-this"})
         assert result["fipbm_read"].text == "id='only-this',root=None"
 
@@ -96,7 +97,7 @@ class TestFromInputPydanticModel:
             return RawText(text=f"{shared.tenant}:{shared.max_items}")
 
         pipeline = construct_from_functions("fcb", [fcb_read])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(
             graph,
             input={"node_id": "x"},
@@ -117,8 +118,8 @@ class TestOracleMergeFnDI:
         from neograph import (
             FromConfig,
             merge_fn,
-            register_scripted,
         )
+        from tests.fakes import build_test_compile_kwargs, register_scripted
 
         class SharedResources(BaseModel):
             prefix: str
@@ -146,7 +147,7 @@ class TestOracleMergeFnDI:
         )
 
         pipeline = Construct("omfd-test", nodes=[gen])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         # Bundled form: SharedResources has a single field `prefix`, so we
         # provide it directly in configurable under that key name.
         result = run(
@@ -163,8 +164,8 @@ class TestOracleMergeFnDI:
         from neograph import (
             FromInput,
             merge_fn,
-            register_scripted,
         )
+        from tests.fakes import register_scripted
 
         @merge_fn
         def tagged_merge(
@@ -185,16 +186,14 @@ class TestOracleMergeFnDI:
         )
 
         pipeline = Construct("omfdi-test", nodes=[gen])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "REQ-99"})
 
         assert result["omfdi_gen"].items == ["REQ-99:x"]
 
     def test_plain_merge_fn_works_when_no_decorator(self):
         """Back-compat: plain (variants, config) merge_fn still works."""
-        from neograph import (
-            register_scripted,
-        )
+        from tests.fakes import register_scripted
 
         def plain_merge(variants, config):
             # Old-style signature — two positional args, no decorator.
@@ -213,7 +212,7 @@ class TestOracleMergeFnDI:
         )
 
         pipeline = Construct("pmg-test", nodes=[gen])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "pmg-001"})
         assert result["pmg_gen"].items == ["one", "two"]
 

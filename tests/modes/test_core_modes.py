@@ -7,7 +7,7 @@ from neograph import (
     compile,
     run,
 )
-from tests.fakes import FakeTool, ReActFake, StructuredFake, configure_fake_llm
+from tests.fakes import FakeTool, ReActFake, StructuredFake, build_test_compile_kwargs, configure_fake_llm
 from tests.schemas import (
     Claims,
     ClassifiedClaims,
@@ -49,7 +49,7 @@ class TestScriptedPipeline:
         mod.classify = classify
 
         pipeline = construct_from_module(mod, name="test-scripted")
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "test-001"})
 
         # Verify data flowed through all three nodes
@@ -75,7 +75,7 @@ class TestProduceMode:
 
         from neograph import construct_from_module, node
 
-        configure_fake_llm(
+        __llm_kw = configure_fake_llm(
             lambda tier: StructuredFake(lambda m: m(items=["extracted-1", "extracted-2", "extracted-3"]))
         )
 
@@ -87,7 +87,7 @@ class TestProduceMode:
         mod.extract = extract
 
         pipeline = construct_from_module(mod, name="test-produce")
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs(), **__llm_kw)
         result = run(graph, input={"node_id": "test-001"})
 
         assert isinstance(result["extract"], Claims)
@@ -111,7 +111,7 @@ class TestGatherMode:
         import types as _types
 
         from neograph import construct_from_module, node
-        from neograph.factory import register_tool_factory
+        from tests.fakes import register_tool_factory
 
         search_tool = FakeTool("search_nodes", response="found")
         register_tool_factory("search_nodes", lambda config, tool_config: search_tool)
@@ -125,7 +125,7 @@ class TestGatherMode:
             ],
             final=lambda m: m(items=["done researching"]),
         )
-        configure_fake_llm(lambda tier: fake)
+        __llm_kw = configure_fake_llm(lambda tier: fake)
 
         mod = _types.ModuleType("test_gather_budget_mod")
 
@@ -141,7 +141,7 @@ class TestGatherMode:
         mod.explore = explore
 
         pipeline = construct_from_module(mod, name="test-gather")
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs(), **__llm_kw)
         result = run(graph, input={"node_id": "test-001"})
 
         # Tool was called exactly twice (budget=2)
@@ -152,7 +152,7 @@ class TestGatherMode:
         import types as _types
 
         from neograph import construct_from_module, node
-        from neograph.factory import register_tool_factory
+        from tests.fakes import register_tool_factory
 
         lookup_tool = FakeTool("lookup", response="result")
         register_tool_factory("lookup", lambda config, tool_config: lookup_tool)
@@ -168,7 +168,7 @@ class TestGatherMode:
             ],
             final=lambda m: m(items=["done"]),
         )
-        configure_fake_llm(lambda tier: fake)
+        __llm_kw = configure_fake_llm(lambda tier: fake)
 
         mod = _types.ModuleType("test_gather_unlimited_mod")
 
@@ -184,7 +184,7 @@ class TestGatherMode:
         mod.scan = scan
 
         pipeline = construct_from_module(mod, name="test-unlimited")
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs(), **__llm_kw)
         result = run(graph, input={"node_id": "test-001"})
 
         # Tool was called 5 times — budget=0 never blocked it
@@ -225,7 +225,7 @@ class TestRawNode:
         mod.filter_claims = filter_claims
 
         pipeline = construct_from_module(mod, name="test-raw")
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "test-001"})
 
         # Raw node filtered out "b"
@@ -262,7 +262,7 @@ class TestMiniRWPipeline:
                 )
             return model()
 
-        configure_fake_llm(lambda tier: StructuredFake(respond))
+        __llm_kw = configure_fake_llm(lambda tier: StructuredFake(respond))
 
         mod = _types.ModuleType("test_mini_rw_mod")
 
@@ -281,7 +281,7 @@ class TestMiniRWPipeline:
         mod.catalog = catalog
 
         pipeline = construct_from_module(mod, name="mini-rw")
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs(), **__llm_kw)
         result = run(graph, input={"node_id": "BR-RW-042"})
 
         # All three nodes produced output

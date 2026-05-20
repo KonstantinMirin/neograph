@@ -76,7 +76,31 @@ from neograph._di_classify import (  # noqa: F401 — re-exported for backward c
     _resolve_merge_args,
 )
 from neograph._llm_config import LlmConfig
-from neograph._runtime_registry import register_condition, register_scripted
+
+# Decorator-side shim registry. The decorators emit shims for inline
+# body-merge functions (`@node(merge_fn=callable)`) and for inline
+# interrupt-when conditions (`@node(interrupt_when=callable)`). compile()
+# picks these up via the `_decorator_scripted` / `_decorator_conditions`
+# accessor below. The dicts are module-scoped because @decorator runs at
+# import time, before compile() is called.
+_decorator_scripted: dict[str, Callable] = {}
+_decorator_conditions: dict[str, Callable] = {}
+_decorator_tool_factories: dict[str, Callable] = {}
+
+
+def register_scripted(name: str, fn: Callable) -> None:
+    """Decorator-side scripted-shim store. Internal to neograph.decorators."""
+    _decorator_scripted[name] = fn
+
+
+def register_condition(name: str, fn: Callable) -> None:
+    """Decorator-side condition-shim store. Internal to neograph.decorators."""
+    _decorator_conditions[name] = fn
+
+
+def register_tool_factory(name: str, fn: Callable) -> None:
+    """Decorator-side tool-factory store. Internal to neograph.decorators."""
+    _decorator_tool_factories[name] = fn
 from neograph._sidecar import (  # noqa: F401 — re-exported for backward compat
     _get_node_source,
     _get_param_res,

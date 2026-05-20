@@ -13,7 +13,7 @@ from neograph import (
     node,
     run,
 )
-from neograph.factory import register_scripted
+from tests.fakes import build_test_compile_kwargs, register_scripted
 from tests.schemas import (
     Claims,
     RawText,
@@ -64,7 +64,7 @@ class TestOperator:
         mod.check_quality = check_quality
 
         pipeline = construct_from_module(mod, name="test-operator")
-        graph = compile(pipeline, checkpointer=MemorySaver())
+        graph = compile(pipeline, checkpointer=MemorySaver(), **build_test_compile_kwargs())
 
         # Run — with checkpointer, interrupt returns result with __interrupt__
         config = {"configurable": {"thread_id": "test-interrupt"}}
@@ -119,7 +119,7 @@ class TestOperatorContinues:
         mod.check_quality = check_quality
 
         pipeline = construct_from_module(mod, name="test-operator-pass")
-        graph = compile(pipeline, checkpointer=MemorySaver())
+        graph = compile(pipeline, checkpointer=MemorySaver(), **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "test-001"}, config={"configurable": {"thread_id": "pass-test"}})
 
         assert result["check_quality"].passed is True
@@ -157,7 +157,7 @@ class TestOperatorResume:
         mod.validate_thing = validate_thing
 
         pipeline = construct_from_module(mod, name="test-resume")
-        graph = compile(pipeline, checkpointer=MemorySaver())
+        graph = compile(pipeline, checkpointer=MemorySaver(), **build_test_compile_kwargs())
 
         config = {"configurable": {"thread_id": "resume-test"}}
 
@@ -208,7 +208,7 @@ class TestOperatorResumeFromInput:
         mod.after_gate = after_gate
 
         pipeline = construct_from_module(mod, name="test-pd8j")
-        graph = compile(pipeline, checkpointer=MemorySaver())
+        graph = compile(pipeline, checkpointer=MemorySaver(), **build_test_compile_kwargs())
 
         config = {"configurable": {"thread_id": "pd8j-test"}}
         result = run(graph, input={"node_id": "pd8j", "pipeline_id": "my-run-123"}, config=config)
@@ -256,7 +256,7 @@ class TestResumeWithFreshConfig:
         mod.after_gate = after_gate
 
         pipeline = construct_from_module(mod, name="test-r04")
-        graph = compile(pipeline, checkpointer=MemorySaver())
+        graph = compile(pipeline, checkpointer=MemorySaver(), **build_test_compile_kwargs())
 
         # First run with one config
         config1 = {"configurable": {"thread_id": "r04-test"}}
@@ -299,7 +299,7 @@ class TestResumeWithFreshConfig:
         mod.after_gate = after_gate
 
         pipeline = construct_from_module(mod, name="test-r04b")
-        graph = compile(pipeline, checkpointer=MemorySaver())
+        graph = compile(pipeline, checkpointer=MemorySaver(), **build_test_compile_kwargs())
 
         config = {"configurable": {"thread_id": "r04b-test"}}
         result = run(graph, input={"node_id": "r04b", "pipeline_id": "kept"}, config=config)
@@ -317,7 +317,7 @@ class TestResumeWithFreshConfig:
         pipeline = Construct("se1-test", nodes=[
             Node.scripted("a", fn="se1_fn", outputs=RawText),
         ])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
 
         config = {"configurable": {"thread_id": "se1"}}
         run(graph, input={"node_id": "se1", "custom_field": "hello"}, config=config)
@@ -338,7 +338,7 @@ class TestConstructOperator:
         """Sub-pipeline runs, then Operator checks and interrupts."""
         from langgraph.checkpoint.memory import MemorySaver
 
-        from neograph.factory import register_condition
+        from tests.fakes import register_condition
 
         register_scripted("sub_validate", lambda input_data, config: ValidationResult(
             passed=False, issues=["coverage gap"],
@@ -363,7 +363,7 @@ class TestConstructOperator:
             Node.scripted("seed", fn="seed", outputs=Claims),
             sub,
         ])
-        graph = compile(parent, checkpointer=MemorySaver())
+        graph = compile(parent, checkpointer=MemorySaver(), **build_test_compile_kwargs())
         config = {"configurable": {"thread_id": "construct-op-test"}}
 
         result = run(graph, input={"node_id": "test-001"}, config=config)
@@ -378,7 +378,7 @@ class TestConstructOperator:
         """Sub-pipeline runs, condition is falsy, graph continues."""
         from langgraph.checkpoint.memory import MemorySaver
 
-        from neograph.factory import register_condition
+        from tests.fakes import register_condition
 
         register_scripted("sub_ok", lambda input_data, config: ValidationResult(
             passed=True, issues=[],
@@ -401,7 +401,7 @@ class TestConstructOperator:
             sub,
             Node.scripted("done", fn="done", outputs=RawText),
         ])
-        graph = compile(parent, checkpointer=MemorySaver())
+        graph = compile(parent, checkpointer=MemorySaver(), **build_test_compile_kwargs())
         config = {"configurable": {"thread_id": "construct-op-pass"}}
         result = run(graph, input={"node_id": "test-001"}, config=config)
 

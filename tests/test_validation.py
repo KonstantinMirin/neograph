@@ -29,6 +29,7 @@ from neograph import (
     node,
     run,
 )
+from tests.fakes import build_test_compile_kwargs
 from tests.schemas import (
     Claims,
     ClassifiedClaims,
@@ -284,7 +285,7 @@ class TestConstructOracleErrors:
 
     def test_unregistered_merge_fn_raises_when_compiled(self):
         """Construct | Oracle with unregistered merge_fn raises at compile."""
-        from neograph.factory import register_scripted
+        from tests.fakes import build_test_compile_kwargs, register_scripted
 
         register_scripted("gen_err", lambda input_data, config: Claims(items=[]))
 
@@ -298,7 +299,7 @@ class TestConstructOracleErrors:
         parent = Construct("parent", nodes=[sub])
 
         with pytest.raises(ConfigurationError, match="not registered"):
-            compile(parent)
+            compile(parent, **build_test_compile_kwargs())
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -494,7 +495,7 @@ class TestNodeDecoratorFanInEachInterop:
             "fie-summarize",
         ]
 
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "fie-001"})
 
         assert isinstance(result["fie_summarize"], ClassifiedClaims)
@@ -1117,23 +1118,23 @@ class TestNodeNameCollision:
         a = _producer("my-node", RawText)
         b = _producer("my_node", Claims)
         with pytest.raises(CompileError, match="name collision"):
-            compile(Construct("collision", nodes=[a, b]))
+            compile(Construct("collision", nodes=[a, b]), **build_test_compile_kwargs())
 
     def test_no_collision_when_names_differ(self):
         """Two nodes with genuinely different names compile fine."""
-        from neograph.factory import register_scripted
+        from tests.fakes import register_scripted
         register_scripted("f_node_a", lambda input_data, config: RawText(text="a"))
         register_scripted("f_node_b", lambda input_data, config: Claims(items=["b"]))
 
         a = Node.scripted("node-a", fn="f_node_a", outputs=RawText)
         b = Node.scripted("node-b", fn="f_node_b", inputs=RawText, outputs=Claims)
-        result = run(compile(Construct("no-collision", nodes=[a, b])), input={})
+        result = run(compile(Construct("no-collision", nodes=[a, b]), **build_test_compile_kwargs()), input={})
         assert isinstance(result["node_b"], Claims)
 
     def test_sub_construct_names_do_not_collide_with_parent(self):
         """Sub-construct node names live in separate state scopes — no error
         even if a parent node and sub-construct-internal node share a name."""
-        from neograph.factory import register_scripted
+        from tests.fakes import register_scripted
 
         register_scripted("inner_fn", lambda input_data, config: Claims(items=["ok"]))
         register_scripted("parent_fn", lambda input_data, config: RawText(text="raw"))
@@ -1148,7 +1149,7 @@ class TestNodeNameCollision:
         parent_node = Node.scripted("my-parent", fn="parent_fn", outputs=RawText)
         # 'my_node' inside sub and 'my-parent' in parent — different scopes, no collision
         parent = Construct("parent", nodes=[parent_node, sub])
-        result = run(compile(parent), input={})
+        result = run(compile(parent, **build_test_compile_kwargs()), input={})
         assert isinstance(result["sub"], Claims)
 
 
@@ -1163,7 +1164,7 @@ class TestToolFactoryRegistrationCheck:
     def test_unregistered_tool_raises_at_compile_when_agent_mode(self):
         """Agent node with unregistered tool raises CompileError at compile()."""
         from tests.fakes import StructuredFake, configure_fake_llm
-        configure_fake_llm(lambda tier: StructuredFake(lambda m: m()))
+        __llm_kw = configure_fake_llm(lambda tier: StructuredFake(lambda m: m()))
         n = Node(
             "research",
             mode="agent",
@@ -1175,12 +1176,12 @@ class TestToolFactoryRegistrationCheck:
         )
         pipeline = Construct("bad-tool", nodes=[n])
         with pytest.raises(CompileError, match="nonexistent_tool_9513"):
-            compile(pipeline)
+            compile(pipeline, **build_test_compile_kwargs(), **__llm_kw)
 
     def test_unregistered_tool_raises_at_compile_when_act_mode(self):
         """Act node with unregistered tool raises CompileError at compile()."""
         from tests.fakes import StructuredFake, configure_fake_llm
-        configure_fake_llm(lambda tier: StructuredFake(lambda m: m()))
+        __llm_kw = configure_fake_llm(lambda tier: StructuredFake(lambda m: m()))
         n = Node(
             "actor",
             mode="act",
@@ -1192,14 +1193,13 @@ class TestToolFactoryRegistrationCheck:
         )
         pipeline = Construct("bad-act-tool", nodes=[n])
         with pytest.raises(CompileError, match="missing_tool_9513"):
-            compile(pipeline)
+            compile(pipeline, **build_test_compile_kwargs(), **__llm_kw)
 
     def test_registered_tool_passes_compile_when_agent_mode(self):
         """Agent node with registered tool compiles without error."""
-        from neograph.factory import register_tool_factory
-        from tests.fakes import StructuredFake, configure_fake_llm
+        from tests.fakes import StructuredFake, configure_fake_llm, register_tool_factory
 
-        configure_fake_llm(lambda tier: StructuredFake(lambda m: m()))
+        __llm_kw = configure_fake_llm(lambda tier: StructuredFake(lambda m: m()))
         register_tool_factory("registered_tool_9513", lambda config, tool_config: None)
 
         n = Node(
@@ -1212,7 +1212,7 @@ class TestToolFactoryRegistrationCheck:
             tools=[Tool("registered_tool_9513", budget=3)],
         )
         pipeline = Construct("good-tool", nodes=[n])
-        compile(pipeline)  # no raise = tool factory check passed
+        compile(pipeline, **build_test_compile_kwargs(), **__llm_kw)  # no raise = tool factory check passed
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1223,11 +1223,8 @@ class TestLlmConfiguredCheck:
     """compile() must verify _llm_factory and _prompt_compiler are set
     when any node has mode in (think, agent, act)."""
 
-    def test_unconfigured_llm_raises_at_compile_when_think_node(self, monkeypatch):
-        """Think node without configure_llm() raises CompileError at compile()."""
-        import neograph._llm as _llm_mod
-        monkeypatch.setattr(_llm_mod, "_llm_factory", None)
-        monkeypatch.setattr(_llm_mod, "_prompt_compiler", None)
+    def test_unconfigured_llm_raises_at_compile_when_think_node(self):
+        """Think node compiled without llm_factory= kwarg raises CompileError."""
         n = Node(
             "think-node",
             mode="think",
@@ -1237,14 +1234,11 @@ class TestLlmConfiguredCheck:
             prompt="test",
         )
         pipeline = Construct("bad-llm", nodes=[n])
-        with pytest.raises(CompileError, match="configure_llm"):
-            compile(pipeline)
+        with pytest.raises(CompileError, match="llm_factory"):
+            compile(pipeline, **build_test_compile_kwargs())
 
-    def test_unconfigured_prompt_compiler_raises_at_compile(self, monkeypatch):
-        """LLM factory set but prompt compiler missing raises CompileError."""
-        import neograph._llm as _llm_mod
-        monkeypatch.setattr(_llm_mod, "_llm_factory", lambda tier: None)
-        monkeypatch.setattr(_llm_mod, "_prompt_compiler", None)
+    def test_unconfigured_prompt_compiler_raises_at_compile(self):
+        """llm_factory= passed but prompt_compiler= missing raises CompileError."""
         n = Node(
             "think-node-pc",
             mode="think",
@@ -1254,19 +1248,20 @@ class TestLlmConfiguredCheck:
             prompt="test",
         )
         pipeline = Construct("bad-pc", nodes=[n])
-        with pytest.raises(CompileError, match="configure_llm"):
-            compile(pipeline)
+        with pytest.raises(CompileError, match="prompt_compiler"):
+            compile(
+                pipeline,
+                llm_factory=lambda tier: None,
+                **build_test_compile_kwargs(),
+            )
 
-    def test_scripted_only_compiles_without_llm_configured(self, monkeypatch):
-        """Pipeline with only scripted nodes compiles even without configure_llm()."""
-        import neograph._llm as _llm_mod
-        from neograph.factory import register_scripted
-        monkeypatch.setattr(_llm_mod, "_llm_factory", None)
-        monkeypatch.setattr(_llm_mod, "_prompt_compiler", None)
+    def test_scripted_only_compiles_without_llm_configured(self):
+        """Pipeline with only scripted nodes compiles even without LLM kwargs."""
+        from tests.fakes import register_scripted
         register_scripted("fn_no_llm_test", lambda input_data, config: RawText(text="ok"))
         n = Node.scripted("scripted-only", fn="fn_no_llm_test", outputs=RawText)
         pipeline = Construct("scripted-ok", nodes=[n])
-        compile(pipeline)  # no raise = scripted-only pipeline doesn't need LLM
+        compile(pipeline, **build_test_compile_kwargs())  # no raise = scripted-only pipeline doesn't need LLM
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1285,7 +1280,7 @@ class TestOutputStrategyValidation:
         from pydantic import ValidationError
 
         from tests.fakes import StructuredFake, configure_fake_llm
-        configure_fake_llm(lambda tier: StructuredFake(lambda m: m()))
+        __llm_kw = configure_fake_llm(lambda tier: StructuredFake(lambda m: m()))
         with pytest.raises(ValidationError, match="output_strategy"):
             Node(
                 "bad-strat",
@@ -1297,10 +1292,10 @@ class TestOutputStrategyValidation:
                 llm_config={"output_strategy": "banana"},
             )
 
-    def test_valid_output_strategies_pass_compile(self):
+    def test_valid_output_strategies_pass_compile(self, **__llm_kw):
         """Nodes with valid output_strategy values compile without error."""
         from tests.fakes import StructuredFake, configure_fake_llm
-        configure_fake_llm(lambda tier: StructuredFake(lambda m: m()))
+        __llm_kw = configure_fake_llm(lambda tier: StructuredFake(lambda m: m()))
         for strategy in ("structured", "json_mode", "text"):
             n = Node(
                 f"strat-{strategy}",
@@ -1312,12 +1307,12 @@ class TestOutputStrategyValidation:
                 llm_config={"output_strategy": strategy},
             )
             pipeline = Construct(f"strat-{strategy}-pipe", nodes=[n])
-            compile(pipeline)  # no raise = strategy accepted
+            compile(pipeline, **build_test_compile_kwargs(), **__llm_kw)  # no raise = strategy accepted
 
     def test_no_output_strategy_defaults_without_error(self):
         """Node with no output_strategy (default) compiles fine."""
         from tests.fakes import StructuredFake, configure_fake_llm
-        configure_fake_llm(lambda tier: StructuredFake(lambda m: m()))
+        __llm_kw = configure_fake_llm(lambda tier: StructuredFake(lambda m: m()))
         n = Node(
             "no-strat",
             mode="think",
@@ -1327,7 +1322,7 @@ class TestOutputStrategyValidation:
             prompt="test",
         )
         pipeline = Construct("no-strat-pipe", nodes=[n])
-        compile(pipeline)  # no raise = default strategy accepted
+        compile(pipeline, **build_test_compile_kwargs(), **__llm_kw)  # no raise = default strategy accepted
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1709,7 +1704,7 @@ class TestLintObligationGaps:
     def test_lint_oracle_callable_merge_fn_no_false_positive(self):
         """W-19: Oracle with callable merge_fn (not string) — no issues (neograph-xcy7)."""
         from neograph import lint
-        from neograph.factory import register_scripted
+        from tests.fakes import register_scripted
 
         register_scripted("w19_gen", lambda i, c: Claims(items=["ok"]))
 
@@ -1751,7 +1746,7 @@ class TestFromInputRequired:
             return RawText(text=topic)
 
         pipeline = construct_from_functions("req", [my_node])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         with pytest.raises(ExecutionError, match="topic"):
             run(graph, input={})
 
@@ -1764,7 +1759,7 @@ class TestFromInputRequired:
             return RawText(text=topic)
 
         pipeline = construct_from_functions("req-ok", [my_node])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"topic": "hello"})
         assert result["my_node"].text == "hello"
 
@@ -1777,7 +1772,7 @@ class TestFromInputRequired:
             return RawText(text=key)
 
         pipeline = construct_from_functions("req-cfg", [my_node])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         with pytest.raises(ExecutionError, match="key"):
             run(graph, input={})
 
@@ -2994,8 +2989,8 @@ class TestLoopConditionLint:
 
     def test_lint_reports_unregistered_loop_condition_on_construct(self):
         """Loop(when='nonexistent') on a Construct should lint as ERROR."""
-        from neograph.factory import register_scripted
         from neograph.modifiers import Loop
+        from tests.fakes import register_scripted
 
         register_scripted("_lc_inner", lambda i, c: RawText(text="ok"))
         sub = Construct(
@@ -3011,10 +3006,10 @@ class TestLoopConditionLint:
 
     def test_lint_no_issue_for_registered_loop_condition(self):
         """Registered string condition should not trigger lint issue."""
-        from neograph import register_condition
         from neograph.modifiers import Loop
 
-        register_condition("_lint_test_cond", lambda d: d is None or d.text == "")
+        def cond_fn(d):
+            return d is None or d.text == ""
 
         a = _producer("seed", RawText)
         b = Node("refine", mode="think", outputs=RawText,
@@ -3022,7 +3017,7 @@ class TestLoopConditionLint:
         b = b | Loop(when="_lint_test_cond", max_iterations=3)
 
         pipeline = Construct("test", nodes=[a, b])
-        issues = lint(pipeline)
+        issues = lint(pipeline, conditions={"_lint_test_cond": cond_fn})
         loop_issues = [i for i in issues if "loop" in i.kind]
         assert loop_issues == []
 
@@ -3060,8 +3055,8 @@ class TestLoopConditionLint:
 
     def test_lint_reports_none_unsafe_callable_on_construct(self):
         """None-unsafe condition on Construct|Loop should also WARN."""
-        from neograph.factory import register_scripted
         from neograph.modifiers import Loop
+        from tests.fakes import register_scripted
 
         register_scripted("_lc_inner2", lambda i, c: RawText(text="ok"))
         sub = Construct(
@@ -3107,10 +3102,8 @@ class TestLoopConditionLint:
 
     def test_lint_reports_parse_condition_string_as_none_unsafe(self):
         """parse_condition('score < 0.8') always crashes on None — ERROR."""
-        from neograph import parse_condition, register_condition
+        from neograph import parse_condition
         from neograph.modifiers import Loop
-
-        register_condition("_pc_score", parse_condition("score < 0.8"))
 
         a = _producer("seed", RawText)
         b = Node("refine", mode="think", outputs=RawText,
@@ -3118,7 +3111,10 @@ class TestLoopConditionLint:
         b = b | Loop(when="_pc_score", max_iterations=3)
 
         pipeline = Construct("test", nodes=[a, b])
-        issues = lint(pipeline)
+        issues = lint(
+            pipeline,
+            conditions={"_pc_score": parse_condition("score < 0.8")},
+        )
         loop_issues = [i for i in issues if "loop" in i.kind]
         assert len(loop_issues) >= 1
         # This should be ERROR (required=True) since it ALWAYS crashes

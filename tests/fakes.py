@@ -21,12 +21,101 @@ setup with a simple prompt compiler.
 from __future__ import annotations
 
 from collections.abc import Callable
+
+# Post-§2 (ticket ezqz): `configure_llm` no longer exists. Tests pass LLM
+# configuration as kwargs to `compile()`. Helpers below return those kwargs
+# instead of mutating module state.
+#
+# `register_scripted`/`register_condition`/`register_tool_factory` were also
+# removed from src/neograph/. They now live HERE as test-only convenience
+# that writes to test-local dicts. compile() reads them via the `scripted=`,
+# `conditions=`, `tool_factories=` kwargs (tests splat via
+# `compile(c, **build_test_compile_kwargs())` or pass dicts explicitly).
+from collections.abc import Callable as _Callable
 from typing import Any
 
 from langchain_core.messages import AIMessage
 from pydantic import BaseModel
 
-from neograph import configure_llm
+_TEST_SCRIPTED: dict[str, _Callable] = {}
+_TEST_CONDITIONS: dict[str, _Callable] = {}
+_TEST_TOOL_FACTORIES: dict[str, _Callable] = {}
+
+
+def register_scripted(name: str, fn: _Callable) -> None:
+    """Test-side scripted-shim registration (post-§2).
+
+    Writes into a test-local dict in `tests/fakes.py`; the autouse fixture in
+    `tests/conftest.py` resets these dicts between tests. Tests pass the
+    accumulated registrations to compile() via `**build_test_compile_kwargs()`.
+    """
+    _TEST_SCRIPTED[name] = fn
+
+
+def register_condition(name: str, fn: _Callable) -> None:
+    """Test-side condition registration. See `register_scripted` for context."""
+    _TEST_CONDITIONS[name] = fn
+
+
+def register_tool_factory(name: str, fn: _Callable) -> None:
+    """Test-side tool-factory registration. See `register_scripted` for context."""
+    _TEST_TOOL_FACTORIES[name] = fn
+
+
+def build_test_compile_kwargs(**extra) -> dict[str, Any]:
+    """Build compile() kwargs from the test-local registration dicts.
+
+    Tests that registered scripted/conditions/tool_factories pass the result
+    to `compile(c, **build_test_compile_kwargs())`. Extra kwargs (e.g.
+    `llm_factory=...`) are merged on top.
+    """
+    out: dict[str, Any] = {}
+    if _TEST_SCRIPTED:
+        out["scripted"] = dict(_TEST_SCRIPTED)
+    if _TEST_CONDITIONS:
+        out["conditions"] = dict(_TEST_CONDITIONS)
+    if _TEST_TOOL_FACTORIES:
+        out["tool_factories"] = dict(_TEST_TOOL_FACTORIES)
+    out.update(extra)
+    return out
+
+
+def reset_test_registry() -> None:
+    """Clear the test-local registration dicts. Called by conftest fixture."""
+    _TEST_SCRIPTED.clear()
+    _TEST_CONDITIONS.clear()
+    _TEST_TOOL_FACTORIES.clear()
+
+
+def lookup_scripted(name: str) -> _Callable:
+    """Test-only mirror of the removed src/ helper.
+
+    Looks up in both the test-local dict AND the decorator-side dict
+    (which holds inline body-merge / @merge_fn / interrupt shims).
+    """
+    from neograph.decorators import _decorator_scripted
+    from neograph.errors import ConfigurationError
+    fn = _TEST_SCRIPTED.get(name) or _decorator_scripted.get(name)
+    if fn is None:
+        raise ConfigurationError.build(
+            f"Scripted function '{name}' not registered",
+            hint="Use tests.fakes.register_scripted() or pass scripted= to compile().",
+        )
+    return fn
+
+
+def lookup_condition(name: str) -> _Callable:
+    """Test-only mirror of the removed src/ helper."""
+    from neograph.decorators import _decorator_conditions
+    from neograph.errors import ConfigurationError
+    fn = _TEST_CONDITIONS.get(name) or _decorator_conditions.get(name)
+    if fn is None:
+        raise ConfigurationError.build(
+            f"Condition '{name}' not registered",
+            hint="Use tests.fakes.register_condition() or pass conditions= to compile().",
+        )
+    return fn
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 # StructuredFake — produce mode
@@ -427,16 +516,89 @@ class StubbornFake:
 # ═══════════════════════════════════════════════════════════════════════════
 
 
+def _default_fake_prompt_compiler(template, data, **kw):
+    """A minimal prompt compiler that returns a single user message.
+    Test sites that need a custom compiler pass their own."""
+    return [{"role": "user", "content": "test"}]
+
+
+def build_fake_llm_kwargs(
+    factory: Callable,
+    prompt_compiler: Callable | None = None,
+    *,
+    cost_callback: Callable | None = None,
+    renderer: Any = None,
+) -> dict[str, Any]:
+    """Build the LLM kwargs dict that gets splatted into `compile(c, **kwargs)`.
+
+    Replaces the old `configure_fake_llm(...)` (which mutated module state).
+    Test sites that previously did::
+
+        configure_fake_llm(lambda tier: fake)
+        graph = compile(pipeline)
+
+    now do::
+
+        graph = compile(pipeline, **build_fake_llm_kwargs(lambda tier: fake))
+    """
+    pc = prompt_compiler if prompt_compiler is not None else _default_fake_prompt_compiler
+    kwargs: dict[str, Any] = {
+        "llm_factory": factory,
+        "prompt_compiler": pc,
+    }
+    if cost_callback is not None:
+        kwargs["cost_callback"] = cost_callback
+    if renderer is not None:
+        kwargs["renderer"] = renderer
+    return kwargs
+
+
+# Backward-compat alias to ease the migration. New code prefers
+# `build_fake_llm_kwargs(...)`. The name `configure_fake_llm` no longer
+# mutates anything — it now returns the same kwargs dict.
 def configure_fake_llm(
     factory: Callable,
     prompt_compiler: Callable | None = None,
-) -> None:
-    """Configure NeoGraph with a fake LLM factory and a minimal prompt compiler.
+) -> dict[str, Any]:
+    """Migration alias for `build_fake_llm_kwargs`.
 
-    If prompt_compiler is not provided, a default one is used that returns
-    a single user message with "test" content.
+    Old shape mutated module state via `configure_llm`. New shape returns
+    a kwargs dict — every old call site must add `**` to splat the result
+    into `compile()` or accept the dict and pass it explicitly.
     """
+    return build_fake_llm_kwargs(factory, prompt_compiler)
+
+
+def build_fake_runtime(
+    factory: Callable | None = None,
+    prompt_compiler: Callable | None = None,
+    *,
+    cost_callback: Callable | None = None,
+    renderer: Any = None,
+) -> Any:
+    """Build an `LlmRuntime` backed by fakes — for tests that call helpers
+    like `invoke_structured(runtime, ...)` directly without going through
+    `compile()`.
+    """
+    from neograph._llm_runtime import LlmRuntime
+
+    if factory is None:
+        factory = lambda tier: StructuredFake(lambda m: m())  # noqa: E731
     if prompt_compiler is None:
-        def prompt_compiler(template, data, **kw):
-            return [{"role": "user", "content": "test"}]
-    configure_llm(llm_factory=factory, prompt_compiler=prompt_compiler)
+        prompt_compiler = _default_fake_prompt_compiler
+    return LlmRuntime.build(
+        llm_factory=factory,
+        prompt_compiler=prompt_compiler,
+        cost_callback=cost_callback,
+        renderer=renderer,
+    )
+
+
+def build_fake_tool_lookup() -> dict[str, _Callable]:
+    """Snapshot of the test-local tool-factory registry.
+
+    For tests that call `invoke_with_tools(...)` directly (without going
+    through `compile()`), pass the result as `tool_factory_lookup=`. Mirrors
+    what `compile()` would have built from `tool_factories=` kwarg.
+    """
+    return dict(_TEST_TOOL_FACTORIES)

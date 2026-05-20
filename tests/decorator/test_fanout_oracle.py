@@ -18,7 +18,7 @@ from neograph import (
     node,
     run,
 )
-from neograph.factory import register_scripted
+from tests.fakes import build_test_compile_kwargs, register_scripted
 from tests.schemas import (
     Claims,
     ClusterGroup,
@@ -71,7 +71,7 @@ class TestNodeDecoratorFanout:
         assert each.over == "make_clusters.groups"
         assert each.key == "label"
 
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "fanout-e2e"})
 
         # Fan-out fired for BOTH clusters — pin cardinality and payload
@@ -354,7 +354,7 @@ class TestNodeDecoratorOperator:
         """@node(interrupt_when='name') attaches Operator and interrupt fires end-to-end."""
         from langgraph.checkpoint.memory import MemorySaver
 
-        from neograph.factory import register_condition, register_scripted
+        from tests.fakes import register_condition, register_scripted
 
         register_scripted("scripted_validate", lambda input_data, config: ValidationResult(
             passed=False,
@@ -381,7 +381,7 @@ class TestNodeDecoratorOperator:
         ) | Operator(when="validation_failed")
 
         pipeline = Construct("test-node-op-string", nodes=[n])
-        graph = compile(pipeline, checkpointer=MemorySaver())
+        graph = compile(pipeline, checkpointer=MemorySaver(), **build_test_compile_kwargs())
 
         config = {"configurable": {"thread_id": "test-node-op-string"}}
         result = run(graph, input={"node_id": "test-001"}, config=config)
@@ -391,7 +391,7 @@ class TestNodeDecoratorOperator:
 
     def test_operator_modifier_attached_when_interrupt_when_string(self):
         """@node(interrupt_when='name') results in a node with Operator modifier."""
-        from neograph.factory import register_condition
+        from tests.fakes import register_condition
 
         register_condition("some_check", lambda state: None)
 
@@ -421,7 +421,7 @@ class TestNodeDecoratorOperator:
         assert op.when.startswith("_node_interrupt_validate_")
 
         # Verify the callable was actually registered
-        from neograph.factory import lookup_condition
+        from tests.fakes import lookup_condition
         resolved = lookup_condition(op.when)
         assert resolved is cond_fn
 
@@ -429,7 +429,7 @@ class TestNodeDecoratorOperator:
         """@node interrupt + resume flow: graph pauses then resumes with feedback."""
         from langgraph.checkpoint.memory import MemorySaver
 
-        from neograph.factory import register_condition, register_scripted
+        from tests.fakes import register_condition, register_scripted
 
         register_scripted("validate_resume_test", lambda input_data, config: ValidationResult(
             passed=False, issues=["bad coverage"],
@@ -446,7 +446,7 @@ class TestNodeDecoratorOperator:
         ) | Operator(when="needs_review_deco")
 
         pipeline = Construct("test-node-op-resume", nodes=[n])
-        graph = compile(pipeline, checkpointer=MemorySaver())
+        graph = compile(pipeline, checkpointer=MemorySaver(), **build_test_compile_kwargs())
 
         config = {"configurable": {"thread_id": "node-op-resume"}}
 
@@ -463,7 +463,7 @@ class TestNodeDecoratorOperator:
         """Condition returns None — graph runs through without interrupt."""
         from langgraph.checkpoint.memory import MemorySaver
 
-        from neograph.factory import register_condition, register_scripted
+        from tests.fakes import register_condition, register_scripted
 
         register_scripted("quality_ok", lambda input_data, config: ValidationResult(
             passed=True, issues=[],
@@ -476,7 +476,7 @@ class TestNodeDecoratorOperator:
         ) | Operator(when="always_falsy")
 
         pipeline = Construct("test-node-op-pass", nodes=[n])
-        graph = compile(pipeline, checkpointer=MemorySaver())
+        graph = compile(pipeline, checkpointer=MemorySaver(), **build_test_compile_kwargs())
         result = run(
             graph,
             input={"node_id": "test-001"},
@@ -596,11 +596,15 @@ class TestEachOracleFusionDecoratorPath:
 
     def test_each_oracle_fusion_infers_gen_type_from_merge_fn(self):
         """Line 759: merge_fn with list[T] param infers oracle_gen_type."""
-        from neograph.factory import register_scripted
+        from neograph.decorators import register_scripted as _dec_register_scripted
+        from tests.fakes import register_scripted
 
         def my_merge(variants: list[Claims], config: Any) -> Claims:
             return variants[0]
         register_scripted("my_fuse_merge", my_merge)
+        # Also visible to decoration-time infer_oracle_gen_type (post-§2 the
+        # inference reads decorator-side _decorator_scripted).
+        _dec_register_scripted("my_fuse_merge", my_merge)
 
         @node(
             outputs=MatchResult,
@@ -662,7 +666,7 @@ class TestBodyMergeRuntimeInvocation:
 
     def test_fused_body_merge_invoked_at_runtime(self):
         """Line 731: the fused body-merge closure is actually called."""
-        from neograph.factory import lookup_scripted
+        from tests.fakes import lookup_scripted
 
         call_log = []
         @node(
@@ -679,8 +683,8 @@ class TestBodyMergeRuntimeInvocation:
 
         # The body_merge shim was registered. Find it.
         # The name is _body_merge_{node_label}_{id}
-        from neograph._registry import registry
-        body_merge_keys = [k for k in registry.scripted if k.startswith("_body_merge_fused")]
+        from neograph.decorators import _decorator_scripted as _scripted_dict
+        body_merge_keys = [k for k in _scripted_dict if k.startswith("_body_merge_fused")]
         assert body_merge_keys, "Body merge should be registered"
         shim = lookup_scripted(body_merge_keys[0])
         result = shim([Claims(items=["v1"]), Claims(items=["v2"])], {})
@@ -688,7 +692,7 @@ class TestBodyMergeRuntimeInvocation:
 
     def test_oracle_only_body_merge_invoked_at_runtime(self):
         """Line 795: the Oracle-only body-merge closure is called."""
-        from neograph.factory import lookup_scripted
+        from tests.fakes import lookup_scripted
 
         call_log = []
         @node(
@@ -701,8 +705,8 @@ class TestBodyMergeRuntimeInvocation:
             call_log.append("called")
             return Claims(items=["merged"])
 
-        from neograph._registry import registry
-        body_merge_keys = [k for k in registry.scripted if k.startswith("_body_merge_oracle-merged")]
+        from neograph.decorators import _decorator_scripted as _scripted_dict
+        body_merge_keys = [k for k in _scripted_dict if k.startswith("_body_merge_oracle-merged")]
         assert body_merge_keys
         shim = lookup_scripted(body_merge_keys[0])
         result = shim([Claims(items=["v1"])], {})
@@ -761,14 +765,14 @@ class TestBodyMergeShimNameUniqueness:
         """
         import gc
 
-        from neograph._registry import registry
+        from neograph.decorators import _decorator_scripted as _scripted_dict
 
         shim_names: list[str] = []
         prefix = "_body_merge_oracle-merged"
 
         # Snapshot existing shims with this prefix so we only inspect newly
         # registered names below.
-        before = {k for k in registry.scripted if k.startswith(prefix)}
+        before = {k for k in _scripted_dict if k.startswith(prefix)}
 
         for _ in range(50):
             # Build a structurally-identical lambda + @node each iteration.
@@ -791,7 +795,7 @@ class TestBodyMergeShimNameUniqueness:
             del oracle_merged
             gc.collect()
 
-        after = {k for k in registry.scripted if k.startswith(prefix)}
+        after = {k for k in _scripted_dict if k.startswith(prefix)}
         shim_names = sorted(after - before)
 
         # Every iteration must have registered a distinct shim name.
@@ -807,13 +811,14 @@ class TestBodyMergeShimNameUniqueness:
         """
         import gc
 
-        from neograph._registry import registry
+        from neograph.decorators import _decorator_conditions as _condition_dict
+        from neograph.decorators import _decorator_scripted as _scripted_dict
 
         prefix = "_node_interrupt_intr-target"
-        before = {k for k in registry.scripted if k.startswith(prefix)}
-        # interrupt conditions live in registry.condition, not scripted; use
+        before = {k for k in _scripted_dict if k.startswith(prefix)}
+        # interrupt conditions live in _condition_dict, not scripted; use
         # the proper registry. Snapshot conditions instead.
-        cond_before = {k for k in registry.condition if k.startswith(prefix)}
+        cond_before = {k for k in _condition_dict if k.startswith(prefix)}
 
         for _ in range(50):
             @node(
@@ -827,7 +832,7 @@ class TestBodyMergeShimNameUniqueness:
             del intr_target
             gc.collect()
 
-        cond_after = {k for k in registry.condition if k.startswith(prefix)}
+        cond_after = {k for k in _condition_dict if k.startswith(prefix)}
         names = sorted(cond_after - cond_before)
         assert len(names) == 50, (
             f"Expected 50 distinct interrupt-condition names from 50 "
@@ -840,7 +845,7 @@ class TestBodyMergeShimNameUniqueness:
         memory address hex string. After the fix, suffix is a 16-char hex
         token from secrets.token_hex(8).
         """
-        from neograph._registry import registry
+        from neograph.decorators import _decorator_scripted as _scripted_dict
 
         @node(
             outputs=Claims,
@@ -853,7 +858,7 @@ class TestBodyMergeShimNameUniqueness:
             ...
 
         prefix = "_body_merge_format-check_"
-        keys = [k for k in registry.scripted if k.startswith(prefix)]
+        keys = [k for k in _scripted_dict if k.startswith(prefix)]
         assert keys, "body-merge shim should be registered"
         # secrets.token_hex(8) → 16 hex chars. id(f):x → varies by platform
         # (usually 12 on 64-bit, but always pointer-derived). Asserting the

@@ -26,7 +26,7 @@ from neograph import (
     node,
     run,
 )
-from neograph.factory import register_condition, register_scripted
+from tests.fakes import build_test_compile_kwargs, register_condition, register_scripted
 from tests.schemas import (
     Claims,
     ClusterGroup,
@@ -43,7 +43,7 @@ class TestSubgraph:
 
     def test_output_surfaces_when_sub_construct_runs_with_isolated_state(self):
         """Sub-construct runs with isolated state, only output surfaces."""
-        from neograph.factory import register_scripted
+        from tests.fakes import register_scripted
 
         # Parent: produces claims
         register_scripted("decompose", lambda input_data, config: EnrichInput(
@@ -72,7 +72,7 @@ class TestSubgraph:
         # Parent pipeline
         decompose = Node.scripted("decompose", fn="decompose", outputs=EnrichInput)
         parent = Construct("parent", nodes=[decompose, enrich])
-        graph = compile(parent)
+        graph = compile(parent, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "test-001"})
 
         # Sub-construct output surfaces under its name
@@ -86,7 +86,7 @@ class TestSubgraph:
 
     def test_no_collision_when_parent_and_sub_share_node_name(self):
         """Sub-construct's internal fields don't collide with parent fields."""
-        from neograph.factory import register_scripted
+        from tests.fakes import register_scripted
 
         # Both parent and sub-construct have a node named "process"
         register_scripted("parent_process", lambda input_data, config: Claims(items=["parent"]))
@@ -106,7 +106,7 @@ class TestSubgraph:
             Node.scripted("process", fn="parent_process", outputs=Claims),
             sub,
         ])
-        graph = compile(parent)
+        graph = compile(parent, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "test-001"})
 
         # Parent's "process" node output
@@ -116,7 +116,7 @@ class TestSubgraph:
 
     def test_compile_raises_when_sub_construct_missing_input(self):
         """Sub-construct without declared input raises at compile."""
-        from neograph.factory import register_scripted
+        from tests.fakes import register_scripted
 
         register_scripted("noop", lambda input_data, config: Claims(items=[]))
 
@@ -127,11 +127,11 @@ class TestSubgraph:
         parent = Construct("parent", nodes=[sub])
 
         with pytest.raises(CompileError, match="has no input type"):
-            compile(parent)
+            compile(parent, **build_test_compile_kwargs())
 
     def test_compile_raises_when_sub_construct_missing_output(self):
         """Sub-construct without declared output raises at compile."""
-        from neograph.factory import register_scripted
+        from tests.fakes import register_scripted
 
         register_scripted("noop", lambda input_data, config: Claims(items=[]))
 
@@ -142,11 +142,11 @@ class TestSubgraph:
         parent = Construct("parent", nodes=[sub])
 
         with pytest.raises(CompileError, match="has no output type"):
-            compile(parent)
+            compile(parent, **build_test_compile_kwargs())
 
     def test_oracle_merges_when_inside_sub_construct(self):
         """Oracle inside a sub-construct — fan-out happens in isolated state."""
-        from neograph.factory import register_scripted
+        from tests.fakes import register_scripted
 
         register_scripted("parent_prep", lambda input_data, config: Claims(items=["topic"]))
         register_scripted("sub_gen", lambda input_data, config: RawText(text="variant"))
@@ -169,7 +169,7 @@ class TestSubgraph:
             Node.scripted("prep", fn="parent_prep", outputs=Claims),
             sub,
         ])
-        graph = compile(parent)
+        graph = compile(parent, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "test-001"})
 
         assert result["oracle_sub"].text == "merged 3 variants"
@@ -178,7 +178,7 @@ class TestSubgraph:
 
     def test_each_fans_out_when_inside_sub_construct(self):
         """Each inside a sub-construct — fan-out in isolated state."""
-        from neograph.factory import register_scripted
+        from tests.fakes import register_scripted
 
         # Each produces dict[str, MatchResult]. The sub-construct's output
         # must be the dict type, not MatchResult, because that's what Each writes.
@@ -209,7 +209,7 @@ class TestSubgraph:
             Node.scripted("make-clusters", fn="parent_clusters", outputs=Clusters),
             sub,
         ])
-        graph = compile(parent)
+        graph = compile(parent, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "test-001"})
 
         assert isinstance(result["verify_sub"], RawText)
@@ -217,7 +217,7 @@ class TestSubgraph:
 
     def test_output_bubbles_when_two_levels_deep(self):
         """Construct inside Construct inside Construct — two levels deep."""
-        from neograph.factory import register_scripted
+        from tests.fakes import register_scripted
 
         register_scripted("l0_start", lambda input_data, config: Claims(items=["raw"]))
         register_scripted("l1_process", lambda input_data, config: Claims(items=["l1-processed"]))
@@ -249,7 +249,7 @@ class TestSubgraph:
             Node.scripted("finish", fn="l0_finish", inputs=RawText, outputs=RawText),
         ])
 
-        graph = compile(parent)
+        graph = compile(parent, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "test-001"})
 
         # Level1's output is RawText (from level2 bubbling up)
@@ -269,7 +269,7 @@ class TestSubgraph:
         (not state) carries the model tier. This test verifies the full chain:
           Oracle Send → sub_a make_subgraph_fn → sub_b make_subgraph_fn → inner node config.
         """
-        from neograph.factory import register_scripted
+        from tests.fakes import register_scripted
 
         seen_models = []
 
@@ -326,7 +326,7 @@ class TestSubgraph:
             Node.scripted("seed", fn="nested_seed", outputs=Claims),
             sub_a,
         ])
-        graph = compile(parent)
+        graph = compile(parent, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "nested-oracle-test"})
 
         # Each Oracle variant must have forwarded a distinct model to the
@@ -349,7 +349,7 @@ class TestSubgraph:
         under Oracle missed the generator ID. The fix is to use the shared
         _inject_oracle_config() helper which forwards both.
         """
-        from neograph.factory import register_scripted
+        from tests.fakes import register_scripted
 
         seen_gen_ids: list[str | None] = []
 
@@ -385,7 +385,7 @@ class TestSubgraph:
             Node.scripted("seed", fn="seed_833d", outputs=Claims),
             sub,
         ])
-        graph = compile(parent)
+        graph = compile(parent, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "gen-id-test"})
 
         # Each Oracle variant must have forwarded a distinct generator ID
@@ -399,7 +399,7 @@ class TestSubgraph:
 
     def test_both_outputs_surface_when_two_sub_constructs_in_parent(self):
         """Two sub-constructs in the same parent pipeline."""
-        from neograph.factory import register_scripted
+        from tests.fakes import register_scripted
 
         register_scripted("make_input", lambda input_data, config: Claims(items=["a", "b"]))
         register_scripted("enrich_fn", lambda input_data, config: RawText(text="enriched"))
@@ -425,7 +425,7 @@ class TestSubgraph:
             validate_sub,
         ])
 
-        graph = compile(parent)
+        graph = compile(parent, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "test-001"})
 
         assert result["enrich"].text == "enriched"
@@ -433,7 +433,7 @@ class TestSubgraph:
 
     def test_compile_raises_when_operator_without_checkpointer(self):
         """Operator node without checkpointer raises ValueError at compile."""
-        from neograph.factory import register_condition, register_scripted
+        from tests.fakes import register_condition, register_scripted
 
         register_scripted("x", lambda input_data, config: Claims(items=[]))
         register_condition("always", lambda state: True)
@@ -442,7 +442,7 @@ class TestSubgraph:
         pipeline = Construct("test-no-cp", nodes=[node])
 
         with pytest.raises(CompileError, match="checkpointer"):
-            compile(pipeline)
+            compile(pipeline, **build_test_compile_kwargs())
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -457,7 +457,7 @@ class TestMultiFieldInput:
 
     def test_node_receives_multiple_fields_when_dict_inputs_declared(self):
         """Node receives multiple typed fields from state."""
-        from neograph.factory import register_scripted
+        from tests.fakes import register_scripted
 
         register_scripted("make_claims", lambda input_data, config: Claims(items=["a", "b"]))
         register_scripted("make_raw", lambda input_data, config: RawText(text="hello"))
@@ -478,7 +478,7 @@ class TestMultiFieldInput:
         )
 
         pipeline = Construct("test-multi-input", nodes=[step_a, step_b, step_c])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "test-001"})
 
         assert result["step_c"].text == "hello: 2 items"
@@ -531,14 +531,14 @@ class TestStateHygiene:
 
     def test_neo_keys_absent_when_oracle_pipeline_completes(self):
         """Oracle collector and gen_id are not in the result."""
-        from neograph.factory import register_scripted
+        from tests.fakes import register_scripted
 
         register_scripted("g", lambda input_data, config: Claims(items=["x"]))
         register_scripted("m", lambda variants, config: Claims(items=["merged"]))
 
         node = Node.scripted("gen", fn="g", outputs=Claims) | Oracle(n=2, merge_fn="m")
         pipeline = Construct("test-hygiene-oracle", nodes=[node])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "test-001"})
 
         # Consumer sees the merged result under the node's name
@@ -548,7 +548,7 @@ class TestStateHygiene:
 
     def test_neo_keys_absent_when_each_pipeline_completes(self):
         """Each item plumbing is not in the result."""
-        from neograph.factory import register_scripted
+        from tests.fakes import register_scripted
 
         register_scripted("make", lambda input_data, config: Clusters(
             groups=[ClusterGroup(label="a", claim_ids=["1"])]
@@ -563,7 +563,7 @@ class TestStateHygiene:
         ) | Each(over="make.groups", key="label")
 
         pipeline = Construct("test-hygiene-each", nodes=[make, proc])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "test-001"})
 
         # Consumer sees dict keyed by label
@@ -573,7 +573,7 @@ class TestStateHygiene:
 
     def test_reducer_dedup_when_each_keys_duplicate(self):
         """Each fan-out with duplicate dispatch keys dedupes (keeps first), no crash."""
-        from neograph.factory import register_scripted
+        from tests.fakes import register_scripted
 
         # Collection with duplicate labels
         register_scripted("make_dupes", lambda input_data, config: Clusters(
@@ -592,7 +592,7 @@ class TestStateHygiene:
         ) | Each(over="make_dupes.groups", key="label")
 
         pipeline = Construct("test-dupe-key", nodes=[make, proc])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
 
         result = run(graph, input={"node_id": "test-001"})
         # First occurrence kept
@@ -645,7 +645,7 @@ class TestRunDoesNotMutateCallerInput:
 
         mod.emit = emit
         pipeline = construct_from_module(mod)
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
 
         original = {"topic": "x"}
         snapshot = dict(original)
@@ -715,7 +715,7 @@ class TestDictOutputsFactory:
 
         mod.analyze = analyze
         pipeline = construct_from_module(mod)
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={})
         assert result["analyze_summary"] == RawText(text="hello")
         assert result["analyze_count"] == Claims(items=["a"])
@@ -734,7 +734,7 @@ class TestDictOutputsFactory:
 
         mod.extract = extract
         pipeline = construct_from_module(mod)
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={})
         assert result["extract"] == RawText(text="world")
 
@@ -756,7 +756,7 @@ class TestNodeInputsEpicAcceptance:
         dict with string type names, resolves them via a type registry,
         and compiles — validator catches any mismatches."""
         from neograph import compile, run
-        from neograph.factory import register_scripted
+        from tests.fakes import register_scripted
 
         # Type registry — what the LLM's string type names resolve to.
         type_registry: dict[str, type] = {
@@ -814,7 +814,7 @@ class TestNodeInputsEpicAcceptance:
 
         nodes = [build_node(e) for e in spec]
         pipeline = Construct("l7-llm-spec", nodes=nodes)
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "l7"})
         assert result["combine"].final_text == "hello:a,b"
 
@@ -894,7 +894,7 @@ class TestNodeInputsEpicAcceptance:
         pipeline = construct_from_functions(
             "mixed-e2e", [context_source, make_clusters, verify],
         )
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "kqd8"})
         # verify is Each-modified → result is dict[str, MatchResult]
         assert isinstance(result["verify"], dict)
@@ -936,7 +936,7 @@ class TestNodeInputsEpicAcceptance:
     def test_fan_in_produces_result_when_programmatic_node_pipe(self):
         """Programmatic Node(inputs={...}) + modifier pipe works end-to-end."""
         from neograph import compile, run
-        from neograph.factory import register_scripted
+        from tests.fakes import register_scripted
 
         register_scripted("l7_a", lambda _i, _c: Claims(items=["a1"]))
         register_scripted("l7_b", lambda _i, _c: RawText(text="b1"))
@@ -958,7 +958,7 @@ class TestNodeInputsEpicAcceptance:
         # Piping a modifier onto the merger should preserve the inputs shape
         # (Oracle on a fan-in merger is unusual but validates the path).
         pipeline = Construct("l7-prog", nodes=[a, b, merger])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "l7"})
         assert result["merger"].final_text == "a1-b1"
 
@@ -1021,7 +1021,7 @@ class TestNodeSubConstruct:
             Node.scripted("make-claim", fn="make_claim", outputs=VerifyClaim),
             sub,
         ])
-        graph = compile(parent)
+        graph = compile(parent, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "test-port"})
 
         assert result["judge_sub"].disposition == "valid"
@@ -1078,7 +1078,7 @@ class TestNodeSubConstruct:
             Node.scripted("seed-claim", fn="seed_claim", outputs=VerifyClaim),
             sub,
         ])
-        graph = compile(parent)
+        graph = compile(parent, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "dict-out-sub"})
 
         assert result["eval_sub"].disposition == "found for c1 (high)"
@@ -1107,7 +1107,7 @@ class TestNodeSubConstruct:
             Node.scripted("make-claims", fn="make_batch", outputs=ClaimBatch),
             sub,
         ])
-        graph = compile(parent)
+        graph = compile(parent, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "each-sub"})
 
         assert isinstance(result["verify"], dict)
@@ -1141,7 +1141,7 @@ class TestNodeSubConstruct:
             Node.scripted("make-one-claim", fn="make_one_claim", outputs=VerifyClaim),
             sub,
         ])
-        graph = compile(parent)
+        graph = compile(parent, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "oracle-sub"})
 
         assert result["assess_sub"].disposition == "merged 3 variants"
@@ -1172,7 +1172,7 @@ class TestNodeSubConstruct:
             Node.scripted("seed", fn="parity_seed", outputs=VerifyClaim),
             decl_sub,
         ])
-        decl_graph = compile(decl_parent)
+        decl_graph = compile(decl_parent, **build_test_compile_kwargs())
         decl_result = run(decl_graph, input={"node_id": "parity"})
 
         # --- @node path ---
@@ -1188,7 +1188,7 @@ class TestNodeSubConstruct:
             Node.scripted("seed", fn="parity_seed", outputs=VerifyClaim),
             node_sub,
         ])
-        node_graph = compile(node_parent)
+        node_graph = compile(node_parent, **build_test_compile_kwargs())
         node_result = run(node_graph, input={"node_id": "parity"})
 
         # --- Programmatic path (Node() directly, no @node or Node.scripted) ---
@@ -1208,7 +1208,7 @@ class TestNodeSubConstruct:
             Node.scripted("seed", fn="parity_seed", outputs=VerifyClaim),
             prog_sub,
         ])
-        prog_graph = compile(prog_parent)
+        prog_graph = compile(prog_parent, **build_test_compile_kwargs())
         prog_result = run(prog_graph, input={"node_id": "parity"})
 
         # All three surfaces produce identical results
@@ -1228,7 +1228,7 @@ class TestNodeSubConstruct:
             captured[template] = data
             return [{"role": "user", "content": "test"}]
 
-        configure_fake_llm(
+        __llm_kw = configure_fake_llm(
             lambda tier: StructuredFakeWithRaw(
                 lambda model: model(claim_id="c1", disposition="llm-scored"),
             ),
@@ -1250,7 +1250,7 @@ class TestNodeSubConstruct:
             Node.scripted("seed", fn="jc3_seed", outputs=VerifyClaim),
             sub,
         ])
-        graph = compile(parent)
+        graph = compile(parent, **build_test_compile_kwargs(), **__llm_kw)
         result = run(graph, input={"node_id": "jc3"})
 
         # Result surfaces correctly
@@ -1289,7 +1289,7 @@ class TestNodeSubConstruct:
             Node.scripted("seed", fn="xjt_seed", outputs=VerifyClaim),
             sub,
         ])
-        graph = compile(parent)
+        graph = compile(parent, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "xjt"})
 
         assert result[sub.name].claim_id == "xjt"
@@ -1306,7 +1306,7 @@ class TestNodeSubConstruct:
             captured[template] = {"data": data, "kw": kw}
             return [{"role": "user", "content": "test"}]
 
-        configure_fake_llm(
+        __llm_kw = configure_fake_llm(
             lambda tier: StructuredFakeWithRaw(
                 lambda m: m(claim_id="c1", disposition="ctx-confirmed"),
             ),
@@ -1338,7 +1338,7 @@ class TestNodeSubConstruct:
             Node.scripted("seed", fn="j66_seed", outputs=VerifyClaim),
             sub,
         ])
-        graph = compile(parent)
+        graph = compile(parent, **build_test_compile_kwargs(), **__llm_kw)
         result = run(graph, input={"node_id": "j66"})
 
         # The sub-construct node should have received the catalog via context
@@ -1429,7 +1429,7 @@ class TestMixedNodeAndConstruct:
         pipeline = construct_from_functions(
             "mixed", [make_claim, verify_sub, summarize],
         )
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "dqe"})
 
         assert result["verify"].disposition == "confirmed"
@@ -1482,14 +1482,13 @@ class TestMixedNodeAndConstruct:
         all assembled via construct_from_functions.
         """
         from neograph import ToolInteraction
-        from neograph.factory import register_tool_factory
-        from tests.fakes import FakeTool, ReActFake, StructuredFakeWithRaw, configure_fake_llm
+        from tests.fakes import FakeTool, ReActFake, StructuredFakeWithRaw, configure_fake_llm, register_tool_factory
 
         # -- Fake LLMs: "research" → ReActFake, "judge" → StructuredFakeWithRaw
         fake_tool = FakeTool("search", response="found ref")
         register_tool_factory("search", lambda cfg, tc: fake_tool)
 
-        configure_fake_llm(lambda tier: (
+        __llm_kw = configure_fake_llm(lambda tier: (
             ReActFake(
                 tool_calls=[[{"name": "search", "args": {"q": "x"}, "id": "t1"}], []],
                 final=lambda m: m(evidence=["ref1"], summary="ok"),
@@ -1536,7 +1535,7 @@ class TestMixedNodeAndConstruct:
         pipeline = construct_from_functions(
             "rw-ingestion", [flatten_claims, verify_claim, deterministic_merge],
         )
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs(), **__llm_kw)
         result = run(graph, input={"node_id": "piarch-rw"})
 
         # Sub-construct fanned out over 2 claims, merged by deterministic_merge
@@ -1551,7 +1550,7 @@ class TestMixedNodeAndConstruct:
         broke Oracle barrier assembly."""
         from tests.fakes import StructuredFakeWithRaw, configure_fake_llm
 
-        configure_fake_llm(lambda tier: StructuredFakeWithRaw(
+        __llm_kw = configure_fake_llm(lambda tier: StructuredFakeWithRaw(
             lambda m: m(items=["variant-item"]),
         ))
 
@@ -1587,7 +1586,7 @@ class TestMixedNodeAndConstruct:
         pipeline = construct_from_functions(
             "oracle-sub-test", [decompose, flatten, make_claim, sub],
         )
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs(), **__llm_kw)
         result = run(graph, input={"node_id": "pq4"})
 
         # The critical assertion: merge ran, flatten got merged result (not None/empty)
@@ -1617,7 +1616,7 @@ class TestMixedNodeAndConstruct:
             # PostMerge, it'll fail Pydantic validation (the bug)
             return PerVariant(raw_claims=["claim-1"])
 
-        configure_fake_llm(lambda tier: StructuredFakeWithRaw(tracking_factory))
+        __llm_kw = configure_fake_llm(lambda tier: StructuredFakeWithRaw(tracking_factory))
 
         @merge_fn
         def group_variants(variants: list[PerVariant]) -> PostMerge:
@@ -1632,7 +1631,7 @@ class TestMixedNodeAndConstruct:
         mod = t.ModuleType("test_oracle_type_mod")
         mod.decompose = decompose
         pipeline = construct_from_module(mod)
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs(), **__llm_kw)
         result = run(graph, input={"node_id": "o1m"})
 
         # The critical assertion: generators should have been asked to produce
@@ -1665,7 +1664,7 @@ class TestMixedNodeAndConstruct:
             requested_types.append(model)
             return GenType(raw=["x"])
 
-        configure_fake_llm(lambda tier: StructuredFakeWithRaw(tracking_factory))
+        __llm_kw = configure_fake_llm(lambda tier: StructuredFakeWithRaw(tracking_factory))
 
         # KEY: @node BEFORE @merge_fn — simulates the file ordering bug
         @node(outputs=MergedType, model="fast", prompt="gen",
@@ -1688,7 +1687,7 @@ class TestMixedNodeAndConstruct:
             f"oracle_gen_type should be GenType, got {gen_node.oracle_gen_type}"
         )
 
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs(), **__llm_kw)
         result = run(graph, input={"node_id": "b9p"})
 
         assert all(rt is GenType for rt in requested_types), (
@@ -1701,7 +1700,7 @@ class TestMixedNodeAndConstruct:
         Tests the second failure mode from the consumer report."""
         from tests.fakes import StructuredFakeWithRaw, configure_fake_llm
 
-        configure_fake_llm(lambda tier: StructuredFakeWithRaw(
+        __llm_kw = configure_fake_llm(lambda tier: StructuredFakeWithRaw(
             lambda m: m(items=["v-item"]),
         ))
 
@@ -1727,7 +1726,7 @@ class TestMixedNodeAndConstruct:
         pipeline = construct_from_functions(
             "sub-before-oracle", [seed, sub, generate],
         )
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs(), **__llm_kw)
         result = run(graph, input={"node_id": "pq4b"})
 
         assert result["generate"].items == ["merged-2"]
@@ -1762,8 +1761,7 @@ class TestGatherProduceSubConstruct:
 
     def _setup_fakes(self, *, capture_prompt=None):
         """Wire up tier-based fakes: 'research' → ReActFake, 'judge' → StructuredFakeWithRaw."""
-        from neograph.factory import register_tool_factory
-        from tests.fakes import FakeTool, ReActFake, StructuredFakeWithRaw, configure_fake_llm
+        from tests.fakes import FakeTool, ReActFake, StructuredFakeWithRaw, configure_fake_llm, register_tool_factory
 
         fake_tool = FakeTool("search_evidence", response="evidence found: auth.py:42")
         register_tool_factory("search_evidence", lambda config, tool_config: fake_tool)
@@ -1783,8 +1781,8 @@ class TestGatherProduceSubConstruct:
             )
 
         compiler = capture_prompt if capture_prompt else None
-        configure_fake_llm(llm_factory, prompt_compiler=compiler)
-        return fake_tool
+        llm_kw = configure_fake_llm(llm_factory, prompt_compiler=compiler)
+        return fake_tool, llm_kw
 
     def _build_sub_construct(self):
         """Build the explore→score sub-construct from @node functions."""
@@ -1814,7 +1812,7 @@ class TestGatherProduceSubConstruct:
 
     def test_result_surfaces_when_gather_feeds_produce_inside_sub_construct(self):
         """Gather→produce chain inside @node sub-construct: result surfaces to parent."""
-        self._setup_fakes()
+        _, llm_kw = self._setup_fakes()
         sub = self._build_sub_construct()
 
         register_scripted("dp5_seed", lambda _in, _cfg: VerifyClaim(
@@ -1824,7 +1822,7 @@ class TestGatherProduceSubConstruct:
             Node.scripted("seed", fn="dp5_seed", outputs=VerifyClaim),
             sub,
         ])
-        graph = compile(parent)
+        graph = compile(parent, **build_test_compile_kwargs(), **llm_kw)
         result = run(graph, input={"node_id": "dp5-test"})
 
         # Sub-construct output surfaces
@@ -1843,7 +1841,7 @@ class TestGatherProduceSubConstruct:
             captured[template] = data
             return [{"role": "user", "content": "test"}]
 
-        self._setup_fakes(capture_prompt=capturing_compiler)
+        _, llm_kw = self._setup_fakes(capture_prompt=capturing_compiler)
         sub = self._build_sub_construct()
 
         register_scripted("dp5_seed2", lambda _in, _cfg: VerifyClaim(
@@ -1853,7 +1851,7 @@ class TestGatherProduceSubConstruct:
             Node.scripted("seed", fn="dp5_seed2", outputs=VerifyClaim),
             sub,
         ])
-        graph = compile(parent)
+        graph = compile(parent, **build_test_compile_kwargs(), **llm_kw)
         run(graph, input={"node_id": "dp5-capture"})
 
         # The score node (prompt="verify/score") should have received tool_log (BAML-rendered, neograph-qybn)
@@ -1871,7 +1869,7 @@ class TestGatherProduceSubConstruct:
 
     def test_each_fans_out_when_gather_produce_sub_construct_mapped(self):
         """Sub-construct with gather→produce fanned out via .map() over claims."""
-        self._setup_fakes()
+        _, llm_kw = self._setup_fakes()
 
         # Need fresh @node definitions for this test (avoid sidecar collisions)
         from neograph import Tool, ToolInteraction, construct_from_functions, node
@@ -1909,7 +1907,7 @@ class TestGatherProduceSubConstruct:
             Node.scripted("seed", fn="dp5_batch", outputs=ClaimBatch),
             sub,
         ])
-        graph = compile(parent)
+        graph = compile(parent, **build_test_compile_kwargs(), **llm_kw)
         result = run(graph, input={"node_id": "dp5-each"})
 
         assert isinstance(result["verify"], dict)
@@ -1918,7 +1916,7 @@ class TestGatherProduceSubConstruct:
 
     def test_gather_dict_outputs_written_when_inside_sub_construct(self):
         """Gather node with dict outputs works inside a sub-construct (base case)."""
-        self._setup_fakes()
+        _, llm_kw = self._setup_fakes()
 
         from neograph import Tool, ToolInteraction, construct_from_functions, node
 
@@ -1943,7 +1941,7 @@ class TestGatherProduceSubConstruct:
             Node.scripted("seed", fn="dp5_seed_base", outputs=VerifyClaim),
             sub,
         ])
-        graph = compile(parent)
+        graph = compile(parent, **build_test_compile_kwargs(), **llm_kw)
         result = run(graph, input={"node_id": "dp5-base"})
 
         assert isinstance(result["explore_only"], ExplorationResult)
@@ -1956,8 +1954,7 @@ class TestGatherProduceSubConstruct:
         from pydantic import BaseModel
 
         from neograph import ToolInteraction
-        from neograph.factory import register_tool_factory
-        from tests.fakes import ReActFake, StructuredFakeWithRaw, configure_fake_llm
+        from tests.fakes import ReActFake, StructuredFakeWithRaw, configure_fake_llm, register_tool_factory
 
         class EvidenceHit(BaseModel, frozen=True):
             ref: str
@@ -1976,7 +1973,7 @@ class TestGatherProduceSubConstruct:
             captured[template] = data
             return [{"role": "user", "content": "test"}]
 
-        configure_fake_llm(
+        __llm_kw = configure_fake_llm(
             lambda tier: (
                 ReActFake(
                     tool_calls=[[{"name": "find_evidence", "args": {}, "id": "t1"}], []],
@@ -2011,7 +2008,7 @@ class TestGatherProduceSubConstruct:
             Node.scripted("seed", fn="uihu_seed", outputs=VerifyClaim),
             sub,
         ])
-        graph = compile(parent)
+        graph = compile(parent, **build_test_compile_kwargs(), **__llm_kw)
         run(graph, input={"node_id": "uihu"})
 
         # The downstream score node received tool_log (BAML-rendered, neograph-qybn)
@@ -2147,7 +2144,7 @@ class TestSubConstructOperatorNotDropped:
             Node.scripted("seed", fn="xw75_gen", outputs=Claims),
             sub,
         ])
-        graph = compile(pipeline, checkpointer=MemorySaver())
+        graph = compile(pipeline, checkpointer=MemorySaver(), **build_test_compile_kwargs())
         lg_graph = graph.get_graph()
         node_names = [n for n in lg_graph.nodes if "operator" in n.lower()]
         assert len(node_names) >= 1, (
@@ -2175,7 +2172,7 @@ class TestSubConstructOperatorNotDropped:
             Node.scripted("source", fn="xw75e_src", outputs=Clusters),
             sub,
         ])
-        graph = compile(pipeline, checkpointer=MemorySaver())
+        graph = compile(pipeline, checkpointer=MemorySaver(), **build_test_compile_kwargs())
         lg_graph = graph.get_graph()
         node_names = [n for n in lg_graph.nodes if "operator" in n.lower()]
         assert len(node_names) >= 1, (
@@ -2190,7 +2187,7 @@ class TestConstructLlmConfigImmutability:
         """When a Construct has llm_config and propagates to children,
         the original Node objects must not be mutated. The Construct
         should use model_copy to create new instances with merged config."""
-        from neograph.factory import register_scripted
+        from tests.fakes import register_scripted
 
         class Claim(BaseModel):
             text: str
@@ -2237,7 +2234,7 @@ class TestConstructLlmConfigImmutability:
 
     def test_renderer_propagation_does_not_mutate_original_node(self):
         """Same principle for renderer propagation."""
-        from neograph.factory import register_scripted
+        from tests.fakes import register_scripted
 
         class Item(BaseModel):
             value: int
@@ -2322,7 +2319,7 @@ class TestSubconstructContextTypes:
         ])
 
         # Compile parent — this triggers subconstruct compilation
-        graph = compile(parent)
+        graph = compile(parent, **build_test_compile_kwargs())
 
         # Verify: the subconstruct's state model should have build_catalog
         # typed as Catalog (or Catalog | None), NOT typing.Any

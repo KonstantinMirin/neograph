@@ -46,24 +46,32 @@ neograph check my_pipeline.py --config '{"node_id": "test", "project_root": "/tm
 
 ### --setup (Python module)
 
-For configs that contain non-serializable objects (rate limiters, database pools), point `--setup` at a Python file. The module can export up to three functions:
+For configs that contain non-serializable objects (rate limiters, database pools), point `--setup` at a Python file. The module can export these functions:
 
 | Export | Returns | Required? |
 |--------|---------|-----------|
 | `get_check_config()` | `dict` -- config values for DI lint | Yes (when `--setup` is used) |
 | `get_template_resolver()` | `Callable[[str], str \| None]` -- maps template names to template text | Optional |
 | `get_known_template_vars()` | `Iterable[str]` -- extra variable names accepted during placeholder validation | Optional |
+| `get_scripted()` | `dict[str, Callable]` -- name → scripted shim for `Node.scripted(fn="...")` references | Optional |
+| `get_tool_factories()` | `dict[str, ToolFactory]` -- name → factory for `tools=[Tool("name")]` references | Optional |
+| `get_conditions()` | `dict[str, ConditionFn]` -- name → condition for `Loop(when="name")` / `Operator(when="name")` references | Optional |
+| `get_llm_factory()` | `Callable[[str], BaseChatModel] \| None` -- tier-to-model factory for LLM-mode nodes | Optional |
+| `get_prompt_compiler()` | `Callable[[str, Any], list] \| None` -- template-name + input → message list | Optional |
 
 `get_template_resolver()` enables template placeholder validation during lint. The resolver receives a template name and returns the template text (or `None` if unknown). When a resolver is available, lint checks that every `{placeholder}` in prompt templates maps to a known upstream field, DI binding, or declared known variable.
 
 `get_known_template_vars()` declares variable names that are valid but not discoverable from the pipeline graph alone (e.g., variables injected at runtime by middleware). These are merged with any names passed via `--known-vars`.
 
-Example setup module with all three exports:
+`get_scripted()` / `get_tool_factories()` / `get_conditions()` provide the runtime registrations that `compile()` requires post-§2 (when string-keyed scripted nodes, tools, or conditions appear in the pipeline). `get_llm_factory()` and `get_prompt_compiler()` supply the LLM configuration that `compile()` and `lint()` need when any LLM-mode (`think`/`agent`/`act`) node is present.
+
+Example setup module with the runtime hooks:
 
 ```python
 # check_config.py
 from pathlib import Path
-from my_app.resources import make_limiter
+from my_app.resources import make_limiter, make_search_tool
+from my_app.shims import seed_fn, score_fn
 
 TEMPLATE_DIR = Path("prompts/")
 
@@ -82,6 +90,23 @@ def get_template_resolver():
 
 def get_known_template_vars():
     return ["topic", "json_schema"]
+
+def get_scripted():
+    return {"seed": seed_fn, "score": score_fn}
+
+def get_tool_factories():
+    return {"search": make_search_tool}
+
+def get_conditions():
+    return {"is_approved": lambda d: bool(d.approved)}
+
+def get_llm_factory():
+    from my_app.llm import build_chat_model
+    return build_chat_model  # signature: (tier: str) -> BaseChatModel
+
+def get_prompt_compiler():
+    from my_app.prompts import compile_prompt
+    return compile_prompt  # signature: (template: str, data, **kw) -> list[dict]
 ```
 
 ```bash

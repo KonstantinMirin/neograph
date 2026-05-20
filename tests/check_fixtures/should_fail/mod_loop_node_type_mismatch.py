@@ -4,8 +4,8 @@
 from pydantic import BaseModel
 
 from neograph import Node
-from neograph.factory import register_scripted
 from neograph.modifiers import Loop
+from tests.fakes import register_scripted
 
 
 class Input(BaseModel, frozen=True):

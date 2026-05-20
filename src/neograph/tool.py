@@ -133,7 +133,7 @@ def tool(
     """
     def decorator(f: Callable) -> Tool:
         # Avoid circular import
-        from neograph.factory import register_tool_factory
+        from neograph.decorators import register_tool_factory
 
         tool_name = name or f.__name__
 

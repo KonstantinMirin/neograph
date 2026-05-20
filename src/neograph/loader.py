@@ -21,7 +21,6 @@ import structlog
 import yaml  # type: ignore[import-untyped]
 from pydantic import ValidationError
 
-from neograph._registry import registry
 from neograph._spec_schema import (
     ConstructSpec,
     NodeSpec,
@@ -166,11 +165,8 @@ def _resolve_tool(t: str | ToolSpec) -> Tool:
     with a hint pointing to ``register_tool_factory``.
     """
     spec = ToolSpec(name=t) if isinstance(t, str) else t
-    if spec.name not in registry.tool_factory:
-        raise ConfigurationError.build(
-            f"unknown tool {spec.name!r}",
-            hint="register the tool factory via register_tool_factory()",
-        )
+    # No factory check here — compile() validates tool factories via
+    # the per-compile tool_factories= kwarg.
     return Tool(name=spec.name, budget=spec.budget, config=spec.config)
 
 

@@ -2,8 +2,8 @@
 from pydantic import BaseModel
 
 from neograph import Construct, Node
-from neograph.factory import register_scripted
 from neograph.modifiers import Loop
+from tests.fakes import register_scripted
 
 
 class Draft(BaseModel, frozen=True):

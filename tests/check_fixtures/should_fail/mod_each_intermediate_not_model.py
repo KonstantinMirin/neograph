@@ -4,8 +4,8 @@
 from pydantic import BaseModel
 
 from neograph import Construct, Node
-from neograph.factory import register_scripted
 from neograph.modifiers import Each
+from tests.fakes import register_scripted
 
 
 class Outer(BaseModel, frozen=True):

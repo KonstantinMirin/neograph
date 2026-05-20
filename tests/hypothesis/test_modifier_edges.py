@@ -21,7 +21,7 @@ from neograph import (
     compile,
     run,
 )
-from neograph.factory import register_scripted
+from tests.fakes import build_test_compile_kwargs, register_scripted
 
 # ── Test models ───────────────────────────────────────────────────────────
 
@@ -67,7 +67,7 @@ class TestEachBoundaryConditions:
             Node.scripted("proc", fn="each_proc", inputs=Item, outputs=Result)
             | Each(over="src.items", key="key"),
         ])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "test"})
 
         proc_result = result.get("proc")
@@ -97,7 +97,7 @@ class TestEachBoundaryConditions:
             Node.scripted("proc", fn="key_proc", inputs=Item, outputs=Result)
             | Each(over="src.items", key="key"),
         ])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "test"})
 
         proc_result = result["proc"]
@@ -126,7 +126,7 @@ class TestLoopBoundaryConditions:
             Node.scripted("loop", fn="imm_loop", inputs=Draft, outputs=Draft)
             | Loop(when=lambda d: d is None, max_iterations=10),  # False after first run (d is not None)
         ])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "test"})
 
         assert call_count[0] == 1  # body ran once, condition was False, loop exited
@@ -150,7 +150,7 @@ class TestLoopBoundaryConditions:
             Node.scripted("loop", fn="max_loop", inputs=Draft, outputs=Draft)
             | Loop(when=lambda d: True, max_iterations=max_iter, on_exhaust="last"),
         ])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "test"})
         assert call_count[0] == max_iter
 
@@ -168,7 +168,7 @@ class TestLoopBoundaryConditions:
             Node.scripted("loop", fn="err_loop", inputs=Draft, outputs=Draft)
             | Loop(when=lambda d: True, max_iterations=max_iter),  # default on_exhaust="error"
         ])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         with pytest.raises(ExecutionError, match="max_iterations"):
             run(graph, input={"node_id": "test"})
 
@@ -201,7 +201,7 @@ class TestLoopBoundaryConditions:
             loop_node_with_skip,
         ])
 
-        graph = compile(pipeline_with_skip)
+        graph = compile(pipeline_with_skip, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "test"})
 
         # Body should never be called (always skipped)
@@ -221,7 +221,7 @@ class TestOracleBoundaryConditions:
         from neograph.errors import ExecutionError
         from tests.fakes import StructuredFake, configure_fake_llm
 
-        configure_fake_llm(lambda tier: StructuredFake(lambda model: model(text="gen", count=1)))
+        __llm_kw = configure_fake_llm(lambda tier: StructuredFake(lambda model: model(text="gen", count=1)))
 
         def type_shift_merge(variants, config):
             """Returns Draft instead of Result — wrong type."""
@@ -234,7 +234,7 @@ class TestOracleBoundaryConditions:
                  llm_config={"output_strategy": "structured"})
             | Oracle(n=2, merge_fn="shift_merge"),
         ])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs(), **__llm_kw)
         with pytest.raises(ExecutionError, match="wrong type"):
             run(graph, input={"node_id": "test"})
 
@@ -242,7 +242,7 @@ class TestOracleBoundaryConditions:
         """Oracle merge_fn returning the declared output type succeeds."""
         from tests.fakes import StructuredFake, configure_fake_llm
 
-        configure_fake_llm(lambda tier: StructuredFake(lambda model: model(text="gen", count=1)))
+        __llm_kw = configure_fake_llm(lambda tier: StructuredFake(lambda model: model(text="gen", count=1)))
 
         def correct_merge(variants, config):
             return Result(text=f"merged-{len(variants)}", count=len(variants))
@@ -254,7 +254,7 @@ class TestOracleBoundaryConditions:
                  llm_config={"output_strategy": "structured"})
             | Oracle(n=2, merge_fn="correct_merge"),
         ])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs(), **__llm_kw)
         result = run(graph, input={"node_id": "test"})
 
         assert isinstance(result["gen"], Result)

@@ -1635,7 +1635,6 @@ FUNCTION_LOCAL_IMPORT_ALLOWLIST: set[tuple[str, str, frozenset[str]]] = {
         "neograph._construct_validation",
         frozenset({"_types_compatible", "effective_producer_type"}),
     ),
-    ("_construct_builder.py", "neograph.factory", frozenset({"register_scripted"})),
     # _construct_validation.py — cycle: validation reads merge_fn metadata that
     # lives in decorators.py. Resolved when DI/merge metadata moves into a leaf.
     (
@@ -1643,9 +1642,14 @@ FUNCTION_LOCAL_IMPORT_ALLOWLIST: set[tuple[str, str, frozenset[str]]] = {
         "neograph.decorators",
         frozenset({"get_merge_fn_metadata"}),
     ),
-    # _dispatch.py — cycle: dispatch resolves scripted shims from the registry,
-    # whose module imports IR types. Will resolve via _runtime_registry split.
-    ("_dispatch.py", "neograph._registry", frozenset({"registry"})),
+    # _llm_runtime.py — cycle: check_llm_kwargs_or_raise walks the construct
+    # for LLM-mode nodes, but Construct/Node themselves import from _llm_runtime
+    # (via factory.py through compiler.py). Function-local imports keep
+    # _llm_runtime a leaf. Retires when the construct-walking helper moves
+    # to a non-leaf module (e.g., a new _llm_check.py).
+    ("_llm_runtime.py", "neograph.construct", frozenset({"Construct"})),
+    ("_llm_runtime.py", "neograph.errors", frozenset({"CompileError"})),
+    ("_llm_runtime.py", "neograph.node", frozenset({"Node"})),
     # _llm.py — cycle: _llm uses describe_type for structured output schemas,
     # and renderers for prompt construction. Both pull leaf utilities; the cycle
     # is module-level _llm globals (neograph-lyvi will collapse it). Until then,
@@ -1661,9 +1665,12 @@ FUNCTION_LOCAL_IMPORT_ALLOWLIST: set[tuple[str, str, frozenset[str]]] = {
         "neograph.decorators",
         frozenset({"_resolve_merge_args", "get_merge_fn_metadata"}),
     ),
-    # _sidecar.py — cycle: sidecar storage references factory's scripted lookup
-    # for shim attachment. Will retire when factory.py is split (cgkl).
-    ("_sidecar.py", "neograph.factory", frozenset({"lookup_scripted"})),
+    # _sidecar.py — cycle: infer_oracle_gen_type peeks the decorator-side
+    # scripted dict to type-infer Oracle's per-generator output. decorators.py
+    # imports node.py which imports _sidecar.py for PrivateAttr storage; the
+    # reverse must stay function-local. Will retire when decorator-side dicts
+    # move into a leaf module shared by both.
+    ("_sidecar.py", "neograph.decorators", frozenset({"_decorator_scripted"})),
     # _wiring.py — cycle: wiring composes Each-Oracle redirects from factory,
     # resolves merge metadata from decorators, calls compile() recursively for
     # nested constructs. Multiple cycles converging in one module; will resolve
@@ -1678,23 +1685,12 @@ FUNCTION_LOCAL_IMPORT_ALLOWLIST: set[tuple[str, str, frozenset[str]]] = {
         "neograph.decorators",
         frozenset({"_resolve_merge_args", "get_merge_fn_metadata"}),
     ),
-    ("_wiring.py", "neograph.factory", frozenset({"lookup_scripted"})),
     ("_wiring.py", "neograph._llm", frozenset({"invoke_structured"})),
     ("_wiring.py", "neograph.compiler", frozenset({"compile"})),
-    # compiler.py — cycle: compile() reads module-level _llm globals to wire the
-    # llm_factory / prompt_compiler closures. Retires with §2 -lyvi.
-    (
-        "compiler.py",
-        "neograph._llm",
-        frozenset({"_llm_factory", "_prompt_compiler"}),
-    ),
     # _subconstruct.py — cycle: sub-construct invocation strips internal fields
     # that runner.py owns. Inherited from factory.py when make_subgraph_fn moved
     # out (gm-4). Will retire when runner.py loses its internal-field knowledge.
     ("_subconstruct.py", "neograph.runner", frozenset({"_strip_internals"})),
-    # lint.py — cycle: lint inspects the runtime registry to check whether
-    # scripted shims exist. Retires with _runtime_registry split.
-    ("lint.py", "neograph._registry", frozenset({"registry"})),
     # modifiers.py — cycle: Loop validation lives in _construct_validation,
     # which imports modifier types. Function-local import keeps modifiers.py a
     # leaf. Retires when validation rules move out of _construct_validation.
@@ -1713,18 +1709,24 @@ FUNCTION_LOCAL_IMPORT_ALLOWLIST: set[tuple[str, str, frozenset[str]]] = {
     # Both retire when Node loses its compile()/run() convenience methods.
     ("node.py", "neograph.errors", frozenset({"ConstructError"})),
     ("node.py", "neograph.factory", frozenset({"make_node_fn"})),
+    # node.py — Node.run_isolated() falls back to decorator-side defaults for
+    # scripted/tool-factory lookups when the caller hasn't passed scripted=/
+    # tool_factories= kwargs. decorators.py imports node.py at module top
+    # (Node is referenced for sidecar storage), so the reverse must stay
+    # function-local. Will retire when decorator-side dicts move into a leaf
+    # module owned by node.py and decorators.py both.
+    (
+        "node.py",
+        "neograph.decorators",
+        frozenset({"_decorator_scripted", "_decorator_tool_factories"}),
+    ),
     # state.py — cycle: state.py owns field naming logic which naming.py wraps
     # for legacy callers. Trivial; can be flattened anytime.
     ("state.py", "neograph.naming", frozenset({"field_name_for"})),
-    # tool.py — cycle: @tool decorator registers tool factories; the registry
-    # lives in factory.py. Retires when tool registration moves to its own
-    # leaf module.
-    ("tool.py", "neograph.factory", frozenset({"register_tool_factory"})),
-    # verify.py — cycle: verify uses _llm globals and the runtime registry.
-    # Retires with §2 -lyvi (for _llm) and _runtime_registry split.
-    ("verify.py", "neograph._llm", frozenset({"_llm_factory"})),
-    ("verify.py", "neograph._registry", frozenset({"registry"})),
-    ("verify.py", "neograph._registry", frozenset({"registry"})),
+    # tool.py — cycle: @tool decorator registers into decorators.py's
+    # _decorator_tool_factories. Function-local import keeps tool.py a leaf
+    # while it depends on decorators.py for registration storage.
+    ("tool.py", "neograph.decorators", frozenset({"register_tool_factory"})),
 }
 
 
@@ -1923,7 +1925,7 @@ class TestLLMModuleSymbolsMovedToToolLoop:
     tool-loop symbols must not reappear as module-level definitions in
     _llm.py. A regression here means someone reintroduced the cycle.
 
-    Mutation-verified: adding `def invoke_with_tools(): pass` to _llm.py
+    Mutation-verified: adding `def invoke_with_tools(...)` back to _llm.py
     makes this test fail with the exact symbol name in the error.
     """
 
@@ -2641,9 +2643,9 @@ NEOGRAPH_ERROR_ALLOWLIST: dict[str, str] = {
     # ── node.py — Pydantic BeforeValidator boundary ──
     # _validate_type_spec runs inside Pydantic field validation; Pydantic
     # catches TypeError and rolls it into ValidationError.
-    "node.py:92": "Pydantic BeforeValidator boundary; TypeError is rolled into ValidationError",
-    "node.py:94": "Pydantic BeforeValidator boundary; TypeError is rolled into ValidationError",
-    "node.py:98": "Pydantic BeforeValidator boundary; TypeError is rolled into ValidationError",
+    "node.py:93": "Pydantic BeforeValidator boundary; TypeError is rolled into ValidationError",
+    "node.py:95": "Pydantic BeforeValidator boundary; TypeError is rolled into ValidationError",
+    "node.py:99": "Pydantic BeforeValidator boundary; TypeError is rolled into ValidationError",
 }
 
 
@@ -3319,3 +3321,298 @@ class TestNeoStateKeysCentralized:
         hits = self._scan(bad)
         assert hits, "scanner failed to detect injected `neo_*` f-string fragment"
         assert any("neo_synthetic_" in h[1] for h in hits)
+
+
+class TestNoLlmModuleGlobals:
+    """LLM runtime configuration must not live in module-level mutable state.
+
+    Per docs/design/architecture-decisions.md §2: compile() reads inputs from
+    keyword arguments and closes them over into factory closures. Six
+    module-level mutables in `_llm.py` (`_llm_factory`, `_llm_factory_params`,
+    `_prompt_compiler`, `_prompt_compiler_params`, `_global_renderer`,
+    `_cost_callback`) violated that — two `compile()` calls in the same
+    process could collide.
+
+    This guard AST-scans `_llm.py` and asserts that none of those names
+    appear as module-level Assign targets.
+    """
+
+    FORBIDDEN_NAMES = frozenset({
+        "_llm_factory",
+        "_llm_factory_params",
+        "_prompt_compiler",
+        "_prompt_compiler_params",
+        "_global_renderer",
+        "_cost_callback",
+    })
+
+    def test_no_module_level_llm_globals(self):
+        llm_path = SRC_DIR / "_llm.py"
+        source = llm_path.read_text()
+        tree = ast.parse(source, filename=str(llm_path))
+
+        violations: list[str] = []
+        for node in tree.body:  # top-level only — not ast.walk
+            targets: list[ast.expr] = []
+            if isinstance(node, ast.Assign):
+                targets = list(node.targets)
+            elif isinstance(node, ast.AnnAssign):
+                targets = [node.target]
+            for tgt in targets:
+                if isinstance(tgt, ast.Name) and tgt.id in self.FORBIDDEN_NAMES:
+                    violations.append(f"  _llm.py:{node.lineno}: {tgt.id}")
+
+        assert violations == [], (
+            f"\n{len(violations)} module-level LLM global(s) remain in _llm.py:\n"
+            + "\n".join(violations)
+            + "\n\nMove these into a closure-captured LlmRuntime per §2."
+        )
+
+    def test_no_global_in_configure_llm(self):
+        """The `global` statement listing those names must also be gone."""
+        llm_path = SRC_DIR / "_llm.py"
+        source = llm_path.read_text()
+        tree = ast.parse(source, filename=str(llm_path))
+
+        violations: list[str] = []
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Global):
+                offenders = [n for n in node.names if n in self.FORBIDDEN_NAMES]
+                if offenders:
+                    violations.append(
+                        f"  _llm.py:{node.lineno}: global {', '.join(offenders)}"
+                    )
+
+        assert violations == [], (
+            f"\n{len(violations)} `global` statement(s) target forbidden LLM names:\n"
+            + "\n".join(violations)
+        )
+
+
+class TestNoModuleLevelRegistration:
+    """Public registration API must not exist on the `neograph` package surface.
+
+    Per docs/design/architecture-decisions.md §2: `compile()` is the sole
+    entry point for runtime configuration. The legacy module-level helpers
+    `configure_llm`, `register_scripted`, `register_condition`, and
+    `register_tool_factory` are removed in ticket `neograph-ezqz`.
+
+    This guard AST-scans `src/neograph/` for top-level function definitions
+    bearing any of those names AND checks `__init__.py` for re-exports.
+    """
+
+    FORBIDDEN_NAMES = frozenset({
+        "configure_llm",
+        "register_scripted",
+        "register_condition",
+        "register_tool_factory",
+    })
+
+    def test_no_top_level_function_defs(self):
+        """No `src/neograph/*.py` should define `configure_llm` at module level.
+
+        `register_scripted`/`register_condition`/`register_tool_factory` MAY
+        appear in `decorators.py` (internal use by `@node`/`@tool` decorators
+        that need to capture inline shims at decoration time) — they are NOT
+        exported from `neograph/__init__.py`. The `test_no_reexport_in_init`
+        guard enforces the public-surface boundary instead.
+        """
+        violations: list[str] = []
+        for py_file in sorted(SRC_DIR.glob("*.py")):
+            tree = ast.parse(py_file.read_text(), filename=str(py_file))
+            for node in tree.body:
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    if node.name == "configure_llm":
+                        violations.append(f"  {py_file.name}:{node.lineno}: def {node.name}")
+        assert violations == [], (
+            f"\n{len(violations)} forbidden `configure_llm` definition(s) in src/:\n"
+            + "\n".join(violations)
+            + "\n\nPass llm_factory/prompt_compiler as kwargs to compile() instead."
+        )
+
+    def test_no_reexport_in_init(self):
+        """`neograph/__init__.py` must not import or re-export the helpers."""
+        path = SRC_DIR / "__init__.py"
+        text = path.read_text()
+        violations: list[str] = []
+        for i, line in enumerate(text.splitlines(), 1):
+            stripped = line.lstrip()
+            if stripped.startswith("#"):
+                continue
+            for name in self.FORBIDDEN_NAMES:
+                if name in line and ("import" in line or '"' + name + '"' in line):
+                    violations.append(f"  __init__.py:{i}: {stripped[:90]}")
+                    break
+        assert violations == [], (
+            f"\n{len(violations)} re-export(s) of removed helpers in __init__.py:\n"
+            + "\n".join(violations)
+        )
+
+    def test_configure_llm_no_longer_importable(self):
+        """`from neograph import configure_llm` must raise ImportError."""
+        import importlib
+
+        with pytest.raises((ImportError, AttributeError)):
+            mod = importlib.import_module("neograph")
+            _ = mod.configure_llm  # noqa
+
+
+class TestNoGlobalRegistry:
+    """`_registry.py` must not hold a process-global singleton.
+
+    Per docs/design/architecture-decisions.md §2: `compile()` builds a
+    fresh per-compile Registry; factory closures capture that instance.
+    Two `compile()` calls produce two independent registries that cannot
+    collide.
+
+    This guard AST-scans `_registry.py` for the module-level
+    `registry = Registry()` instantiation. The `Registry` class itself
+    may remain as a per-compile container.
+    """
+
+    def test_no_module_level_registry_singleton(self):
+        path = SRC_DIR / "_registry.py"
+        source = path.read_text()
+        tree = ast.parse(source, filename=str(path))
+
+        violations: list[str] = []
+        for node in tree.body:  # top-level only
+            if isinstance(node, ast.Assign):
+                for tgt in node.targets:
+                    if (
+                        isinstance(tgt, ast.Name)
+                        and tgt.id == "registry"
+                        and isinstance(node.value, ast.Call)
+                        and isinstance(node.value.func, ast.Name)
+                        and node.value.func.id == "Registry"
+                    ):
+                        violations.append(
+                            f"  _registry.py:{node.lineno}: registry = Registry()"
+                        )
+
+        assert violations == [], (
+            f"\n{len(violations)} module-level Registry singleton(s) remain:\n"
+            + "\n".join(violations)
+            + "\n\nBuild a fresh Registry per `compile()` and thread it via closures."
+        )
+
+
+class TestFactoryFunctionsTakeKwargs:
+    """Factory functions must not import the removed LLM globals.
+
+    Per docs/design/architecture-decisions.md §2: factory functions
+    (`make_node_fn`, `make_subgraph_fn`, `make_oracle_*`) close over the
+    `LlmRuntime` bundle passed at compile time instead of reading from
+    module-level state in `_llm.py`. This guard AST-scans `factory.py`
+    and `_oracle.py` for any import of the six forbidden names.
+    """
+
+    FORBIDDEN_NAMES = frozenset({
+        "_llm_factory",
+        "_llm_factory_params",
+        "_prompt_compiler",
+        "_prompt_compiler_params",
+        "_global_renderer",
+        "_cost_callback",
+        "_get_global_renderer",
+    })
+
+    FACTORY_FILES = ("factory.py", "_oracle.py", "_dispatch.py", "_execute.py",
+                     "_state_write.py", "_input_shape.py", "_subconstruct.py",
+                     "_wiring.py")
+
+    def test_factory_files_do_not_import_forbidden_names(self):
+        violations: list[str] = []
+        for fname in self.FACTORY_FILES:
+            path = SRC_DIR / fname
+            if not path.exists():  # pragma: no cover
+                continue
+            tree = ast.parse(path.read_text(), filename=str(path))
+            for node in ast.walk(tree):
+                if isinstance(node, ast.ImportFrom):
+                    if node.module and "neograph._llm" in node.module:
+                        for alias in node.names:
+                            if alias.name in self.FORBIDDEN_NAMES:
+                                violations.append(
+                                    f"  {fname}:{node.lineno}: "
+                                    f"from {node.module} import {alias.name}"
+                                )
+
+        assert violations == [], (
+            f"\n{len(violations)} factory file(s) still import removed LLM globals:\n"
+            + "\n".join(violations)
+            + "\n\nClose over the LlmRuntime passed at compile time instead."
+        )
+
+    def test_factory_files_do_not_use_get_global_renderer(self):
+        """No factory file should call `_get_global_renderer()` — that name is gone."""
+        violations: list[str] = []
+        for fname in self.FACTORY_FILES:
+            path = SRC_DIR / fname
+            if not path.exists():  # pragma: no cover
+                continue
+            text = path.read_text()
+            if "_get_global_renderer" in text:
+                for i, line in enumerate(text.splitlines(), 1):
+                    if "_get_global_renderer" in line and not line.lstrip().startswith("#"):
+                        violations.append(f"  {fname}:{i}: {line.strip()[:80]}")
+
+        assert violations == [], (
+            f"\n{len(violations)} reference(s) to `_get_global_renderer` remain:\n"
+            + "\n".join(violations)
+            + "\n\nUse `runtime.renderer` (closure-captured) instead."
+        )
+
+    def test_no_id_keying_in_construct_builder(self):
+        """`_register_node_scripted` must NOT use `id(n)` to mint shim keys.
+
+        `id(n)` is recycled by Python and silently shadows shims when two
+        Nodes happen to land at the same memory address. Use a fresh
+        `secrets.token_hex` value per shim (or a per-compile dict — which
+        eliminates the collision risk entirely).
+        """
+        path = SRC_DIR / "_construct_builder.py"
+        text = path.read_text()
+        violations: list[str] = []
+        for i, line in enumerate(text.splitlines(), 1):
+            stripped = line.lstrip()
+            if stripped.startswith("#"):
+                continue
+            # Reject `id(n)` or `id(node)` patterns used to mint shim names.
+            if "id(n)" in line or "id(node)" in line:
+                violations.append(f"  _construct_builder.py:{i}: {stripped[:80]}")
+        assert violations == [], (
+            f"\n{len(violations)} `id()`-keyed shim name(s) remain:\n"
+            + "\n".join(violations)
+            + "\n\nUse a per-compile dict or `secrets.token_hex` for shim names."
+        )
+
+    def test_factory_files_do_not_reach_into_compat_slot(self):
+        """No factory file should read from `_legacy_config.get_compat_runtime`.
+
+        Factory functions must receive their runtime as a parameter, not
+        consult the legacy compat slot directly. Reading from `get_compat_runtime`
+        in a factory closure would re-introduce the same multi-tenant
+        contamination risk the §2 work eliminated — even if the call sits
+        downstream of a closure.
+
+        Only `compile()` itself (in `compiler.py`) and the deprecated public
+        wrappers (`Node.run_isolated`, `render_prompt`) may consult the slot —
+        everything else should take a runtime parameter.
+        """
+        violations: list[str] = []
+        for fname in self.FACTORY_FILES:
+            path = SRC_DIR / fname
+            if not path.exists():  # pragma: no cover
+                continue
+            text = path.read_text()
+            for i, line in enumerate(text.splitlines(), 1):
+                if "get_compat_runtime" in line and not line.lstrip().startswith("#"):
+                    violations.append(f"  {fname}:{i}: {line.strip()[:80]}")
+
+        assert violations == [], (
+            f"\n{len(violations)} factory file(s) reach into the compat runtime "
+            "slot:\n" + "\n".join(violations)
+            + "\n\nThread the runtime as a parameter instead — the compat slot "
+              "is reserved for the deprecated `configure_llm()` bridge."
+        )

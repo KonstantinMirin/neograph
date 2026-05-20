@@ -10,8 +10,7 @@ import pytest
 from pydantic import BaseModel
 
 from neograph import Construct, ConstructError, Each, ForwardConstruct, Node, compile, run
-from neograph.factory import register_scripted
-from tests.fakes import StructuredFake, configure_fake_llm
+from tests.fakes import StructuredFake, build_test_compile_kwargs, configure_fake_llm, register_scripted
 from tests.schemas import Claims, ClassifiedClaims, Clusters, MatchResult, RawText
 
 
@@ -176,7 +175,7 @@ class TestForwardConstructCompile:
     def test_pipeline_produces_output_when_compiled_and_run(self):
         """Full end-to-end: ForwardConstruct with 2 scripted nodes, compile, run."""
         from neograph import ForwardConstruct, Node, compile, run
-        from neograph.factory import register_scripted
+        from tests.fakes import register_scripted
 
         register_scripted("fc_extract", lambda input_data, config: RawText(text="hello world"))
         register_scripted("fc_split", lambda input_data, config: Claims(items=["claim-1", "claim-2"]))
@@ -190,7 +189,7 @@ class TestForwardConstructCompile:
                 return self.split(raw)
 
         pipeline = ScriptedPipeline()
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "fc-test-001"})
 
         assert isinstance(result["fc_split"], Claims)
@@ -201,12 +200,12 @@ class TestForwardConstructCompile:
     def test_produce_node_runs_when_forward_construct_with_fake_llm(self):
         """ForwardConstruct with a produce node + FakeLLM."""
         from neograph import ForwardConstruct, Node, compile, run
-        from neograph.factory import register_scripted
+        from tests.fakes import register_scripted
 
         register_scripted("fc_prep", lambda input_data, config: RawText(text="topic"))
 
         fake = StructuredFake(lambda model: model(items=["classified-a", "classified-b"]))
-        configure_fake_llm(lambda tier: fake)
+        _llm_kw = configure_fake_llm(lambda tier: fake)
 
         class ProducePipeline(ForwardConstruct):
             prep = Node.scripted("fc-prep", fn="fc_prep", outputs=RawText)
@@ -217,7 +216,7 @@ class TestForwardConstructCompile:
                 return self.classify(raw)
 
         pipeline = ProducePipeline()
-        graph = compile(pipeline)
+        graph = compile(pipeline, **_llm_kw, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "fc-test-002"})
 
         assert isinstance(result["fc_classify"], Claims)
@@ -226,7 +225,7 @@ class TestForwardConstructCompile:
     def test_output_identical_when_compared_to_declarative_construct(self):
         """Same pipeline as ForwardConstruct and Construct(nodes=[...]) — identical output."""
         from neograph import Construct, ForwardConstruct, Node, compile, run
-        from neograph.factory import register_scripted
+        from tests.fakes import register_scripted
 
         register_scripted("fc_equiv_a", lambda input_data, config: RawText(text="extracted"))
         register_scripted("fc_equiv_b", lambda input_data, config: Claims(items=["x", "y"]))
@@ -236,7 +235,7 @@ class TestForwardConstructCompile:
 
         # Declarative
         declarative = Construct("fc-equiv-test", nodes=[node_a, node_b])
-        graph_decl = compile(declarative)
+        graph_decl = compile(declarative, **build_test_compile_kwargs())
         result_decl = run(graph_decl, input={"node_id": "equiv-001"})
 
         # ForwardConstruct
@@ -249,7 +248,7 @@ class TestForwardConstructCompile:
                 return self.b(raw)
 
         forward_pipe = ForwardPipeline()
-        graph_fwd = compile(forward_pipe)
+        graph_fwd = compile(forward_pipe, **build_test_compile_kwargs())
         result_fwd = run(graph_fwd, input={"node_id": "equiv-001"})
 
         # Both produce identical output
@@ -433,7 +432,7 @@ class TestIfBranchSimple:
         """Pipeline with if/else compiles to a LangGraph graph."""
         Pipeline = self._make_branching_pipeline()
         pipeline = Pipeline()
-        compile(pipeline)  # succeeds = test passes; raises = test fails
+        compile(pipeline, **build_test_compile_kwargs())  # succeeds = test passes; raises = test fails
 
     def test_high_path_runs_when_condition_true(self):
         """When condition is true at runtime, high_path runs."""
@@ -444,7 +443,7 @@ class TestIfBranchSimple:
         )
         Pipeline = self._make_branching_pipeline()
         pipeline = Pipeline()
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "br-true-test"})
         assert "br_high" in result
         assert result["br_high"].label == "high-confidence"
@@ -459,7 +458,7 @@ class TestIfBranchSimple:
             "br_check",
             lambda input_data, config: Confidence(score=0.2),
         )
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "br-false-test"})
         assert "br_low" in result
         assert result["br_low"].label == "low-confidence"
@@ -522,7 +521,7 @@ class TestSequentialBranches:
                     return self.d(r2)
 
         pipeline = TwoBranch()
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "seq-test"})
 
         # check1 returns 0.9 (> 0.5) → seq-a, check2 returns 0.3 (<= 0.5) → seq-d
@@ -634,7 +633,7 @@ class TestForwardConstructLoops:
         pipeline = LoopPipeline()
         verify_node = next(n for n in pipeline.nodes if n.name == "loop-verify")
         assert verify_node.has_modifier(Each), "for-loop should trace to Each modifier"
-        compile(pipeline)  # also confirm it compiles cleanly
+        compile(pipeline, **build_test_compile_kwargs())  # also confirm it compiles cleanly
 
     def test_step_deduped_when_for_loop_over_range(self):
         """for i in range(3): self.step(x) traces step once (dedup). No Each."""
@@ -871,7 +870,7 @@ class TestForwardConstructExceptions:
         assert "te-final" in node_names, "post-try/except nodes must be traced"
 
         # The pipeline should still compile despite dead except-body nodes
-        compile(pipeline)
+        compile(pipeline, **build_test_compile_kwargs())
 
 
 # ═══════════════════════════════════════════════════════════════════════════

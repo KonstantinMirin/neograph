@@ -9,7 +9,15 @@ from neograph import (
     compile,
     run,
 )
-from tests.fakes import FakeTool, ReActFake, StructuredFake, TextFake, configure_fake_llm
+from tests.fakes import (
+    FakeTool,
+    ReActFake,
+    StructuredFake,
+    TextFake,
+    build_test_compile_kwargs,
+    configure_fake_llm,
+    register_tool_factory,
+)
 from tests.schemas import (
     Claims,
 )
@@ -24,11 +32,11 @@ class TestOutputStrategyStructured:
 
     def test_structured_output_used_when_no_strategy_specified(self):
         """Produce node uses with_structured_output by default."""
-        configure_fake_llm(lambda tier: StructuredFake(lambda m: m(items=["via-structured"])))
+        _llm_kw = configure_fake_llm(lambda tier: StructuredFake(lambda m: m(items=["via-structured"])))
 
         node = Node(name="extract", mode="think", outputs=Claims, model="fast", prompt="test")
         pipeline = Construct("test-structured", nodes=[node])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **_llm_kw, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "test"})
 
         assert result["extract"].items == ["via-structured"]
@@ -45,7 +53,7 @@ class TestOutputStrategyJsonMode:
             compiler_calls.append(kw)
             return [{"role": "user", "content": "test"}]
 
-        configure_fake_llm(
+        _llm_kw = configure_fake_llm(
             lambda tier: TextFake('{"items": ["via-json-mode"]}'),
             prompt_compiler=tracking_compiler,
         )
@@ -59,7 +67,7 @@ class TestOutputStrategyJsonMode:
             llm_config={"output_strategy": "json_mode"},
         )
         pipeline = Construct("test-json-mode", nodes=[node])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **_llm_kw, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "test"})
 
         # Parsed correctly from raw JSON
@@ -67,7 +75,7 @@ class TestOutputStrategyJsonMode:
 
     def test_fences_stripped_when_json_response_wrapped_in_markdown(self):
         """json_mode: strips markdown code fences before parsing."""
-        configure_fake_llm(lambda tier: TextFake('```json\n{"items": ["fenced"]}\n```'))
+        _llm_kw = configure_fake_llm(lambda tier: TextFake('```json\n{"items": ["fenced"]}\n```'))
 
         node = Node(
             name="extract",
@@ -78,7 +86,7 @@ class TestOutputStrategyJsonMode:
             llm_config={"output_strategy": "json_mode"},
         )
         pipeline = Construct("test-json-fence", nodes=[node])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **_llm_kw, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "test"})
 
         assert result["extract"].items == ["fenced"]
@@ -100,7 +108,7 @@ class TestOutputStrategyJsonMode:
                 # Second call (after error feedback): valid JSON
                 return AIMessage(content='{"items": ["recovered"]}')
 
-        configure_fake_llm(lambda tier: RetryableFake())
+        _llm_kw = configure_fake_llm(lambda tier: RetryableFake())
 
         node = Node(
             name="extract",
@@ -111,7 +119,7 @@ class TestOutputStrategyJsonMode:
             llm_config={"output_strategy": "json_mode"},
         )
         pipeline = Construct("test-retry-feedback", nodes=[node])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **_llm_kw, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "test"})
 
         assert result["extract"].items == ["recovered"]
@@ -135,7 +143,7 @@ class TestOutputStrategyJsonMode:
                 # First call: valid JSON but wrong type (items should be list[str])
                 return AIMessage(content='{"items": "not-a-list"}')
 
-        configure_fake_llm(lambda tier: ValidationRetryFake())
+        _llm_kw = configure_fake_llm(lambda tier: ValidationRetryFake())
 
         node = Node(
             name="extract",
@@ -146,7 +154,7 @@ class TestOutputStrategyJsonMode:
             llm_config={"output_strategy": "json_mode"},
         )
         pipeline = Construct("test-validation-retry", nodes=[node])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **_llm_kw, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "test"})
 
         assert result["extract"].items == ["fixed"]
@@ -167,7 +175,7 @@ class TestOutputStrategyJsonMode:
                     return AIMessage(content="still garbage")
                 return AIMessage(content='{"items": ["third-time"]}')
 
-        configure_fake_llm(lambda tier: ThreeAttemptFake())
+        _llm_kw = configure_fake_llm(lambda tier: ThreeAttemptFake())
 
         node = Node(
             name="extract",
@@ -178,7 +186,7 @@ class TestOutputStrategyJsonMode:
             llm_config={"output_strategy": "json_mode", "max_retries": 2},
         )
         pipeline = Construct("test-max-retries", nodes=[node])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **_llm_kw, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "test"})
 
         assert result["extract"].items == ["third-time"]
@@ -190,7 +198,7 @@ class TestOutputStrategyText:
 
     def test_json_extracted_when_text_strategy_with_embedded_json(self):
         """text mode: LLM returns text containing JSON, framework extracts and parses."""
-        configure_fake_llm(lambda tier: TextFake('Here is my analysis:\n{"items": ["from-text"]}\nDone.'))
+        _llm_kw = configure_fake_llm(lambda tier: TextFake('Here is my analysis:\n{"items": ["from-text"]}\nDone.'))
 
         node = Node(
             name="extract",
@@ -201,7 +209,7 @@ class TestOutputStrategyText:
             llm_config={"output_strategy": "text"},
         )
         pipeline = Construct("test-text", nodes=[node])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **_llm_kw, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "test"})
 
         assert result["extract"].items == ["from-text"]
@@ -214,11 +222,9 @@ class TestOutputStrategyOnGather:
         """Gather node with json_mode parses the final structured output from raw JSON."""
         from langchain_core.messages import AIMessage
 
-        from neograph._llm import configure_llm
-        from neograph.factory import register_tool_factory
 
         lookup_tool = FakeTool("lookup", response="found")
-        register_tool_factory("lookup", lambda config, tool_config: lookup_tool)
+        register_tool_factory("lookup", lambda cfg, tc: lookup_tool)
 
         # Custom fake: json_mode gather requires specific JSON text as final response,
         # which ReActFake's hardcoded "done" text can't provide.
@@ -236,10 +242,6 @@ class TestOutputStrategyOnGather:
                     return msg
                 return AIMessage(content='{"items": ["gathered-json"]}')
 
-        configure_llm(
-            llm_factory=lambda tier: FakeGatherLLM(),
-            prompt_compiler=lambda template, data, **kw: [{"role": "user", "content": "go"}],
-        )
 
         node = Node(
             name="research",
@@ -251,7 +253,7 @@ class TestOutputStrategyOnGather:
             llm_config={"output_strategy": "json_mode"},
         )
         pipeline = Construct("test-gather-json", nodes=[node])
-        graph = compile(pipeline)
+        graph = compile(pipeline, llm_factory=lambda tier: FakeGatherLLM(), prompt_compiler=lambda template, data, **kw: [{"role": "user", "content": "go"}], **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "test"})
 
         assert result["research"].items == ["gathered-json"]
@@ -268,14 +270,14 @@ class TestPromptCompilerReceivesOutputModel:
             compiler_calls.append(kw)
             return [{"role": "user", "content": "test"}]
 
-        configure_fake_llm(
+        _llm_kw = configure_fake_llm(
             lambda tier: StructuredFake(lambda m: m(items=["ok"])),
             prompt_compiler=tracking_compiler,
         )
 
         node = Node(name="x", mode="think", outputs=Claims, model="fast", prompt="test")
         pipeline = Construct("test", nodes=[node])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **_llm_kw, **build_test_compile_kwargs())
         run(graph, input={"node_id": "test"})
 
         assert len(compiler_calls) == 1
@@ -289,7 +291,7 @@ class TestPromptCompilerReceivesOutputModel:
             compiler_calls.append(kw)
             return [{"role": "user", "content": "test"}]
 
-        configure_fake_llm(
+        _llm_kw = configure_fake_llm(
             lambda tier: TextFake('{"items": ["ok"]}'),
             prompt_compiler=tracking_compiler,
         )
@@ -306,7 +308,7 @@ class TestPromptCompilerReceivesOutputModel:
             },
         )
         pipeline = Construct("test", nodes=[node])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **_llm_kw, **build_test_compile_kwargs())
         run(graph, input={"node_id": "test"})
 
         assert len(compiler_calls) == 1
@@ -336,7 +338,7 @@ class TestPromptCompilerReceivesOutputModel:
             injected_prompts.append(prompt)
             return [{"role": "user", "content": prompt}]
 
-        configure_fake_llm(
+        _llm_kw = configure_fake_llm(
             lambda tier: TextFake('{"items": ["schema-injected"]}'),
             prompt_compiler=schema_injecting_compiler,
         )
@@ -350,7 +352,7 @@ class TestPromptCompilerReceivesOutputModel:
             llm_config={"output_strategy": "json_mode"},
         )
         pipeline = Construct("test", nodes=[node])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **_llm_kw, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "test"})
 
         assert result["x"].items == ["schema-injected"]
@@ -377,10 +379,9 @@ class TestGatherToolCollection:
         import types
 
         from neograph import ToolInteraction, compile, construct_from_module, node, run
-        from neograph.factory import register_tool_factory
         from tests.fakes import FakeTool, configure_fake_llm
 
-        configure_fake_llm(
+        _llm_kw = configure_fake_llm(
             lambda tier: ReActFake(
                 tool_calls=[
                     [{"name": "search", "args": {"q": "test"}, "id": "tc1"}],
@@ -392,7 +393,7 @@ class TestGatherToolCollection:
 
         # Register a tool factory that returns a fake tool
         fake_tool = FakeTool("search", response="found it")
-        register_tool_factory("search", lambda config, tool_config: fake_tool)
+        register_tool_factory("search", lambda cfg, tc: fake_tool)
 
         mod = types.ModuleType("test_tool_collection_mod")
 
@@ -409,7 +410,7 @@ class TestGatherToolCollection:
 
         mod.explore = explore
         pipeline = construct_from_module(mod)
-        graph = compile(pipeline)
+        graph = compile(pipeline, **_llm_kw, **build_test_compile_kwargs())
         result = run(graph, input={})
         assert result.get("explore_result") == Claims(items=["result"])
         tool_log = result.get("explore_tool_log")
@@ -425,7 +426,6 @@ class TestGatherToolCollection:
         from pydantic import BaseModel
 
         from neograph import ToolInteraction, compile, construct_from_module, node, run
-        from neograph.factory import register_tool_factory
         from tests.fakes import configure_fake_llm
 
         class SearchHit(BaseModel, frozen=True):
@@ -439,7 +439,9 @@ class TestGatherToolCollection:
             def invoke(self, args):
                 return SearchHit(node_id="UC-001", score=0.95)
 
-        configure_fake_llm(
+        register_tool_factory("typed_search", lambda cfg, tc: TypedFakeTool())
+
+        _llm_kw = configure_fake_llm(
             lambda tier: ReActFake(
                 tool_calls=[
                     [{"name": "typed_search", "args": {"q": "test"}, "id": "tc1"}],
@@ -448,7 +450,6 @@ class TestGatherToolCollection:
                 final=lambda m: Claims(items=["found"]),
             )
         )
-        register_tool_factory("typed_search", lambda cfg, tc: TypedFakeTool())
 
         mod = types.ModuleType("test_typed_tool_mod")
 
@@ -463,7 +464,7 @@ class TestGatherToolCollection:
 
         mod.explore = explore
         pipeline = construct_from_module(mod)
-        graph = compile(pipeline)
+        graph = compile(pipeline, **_llm_kw, **build_test_compile_kwargs())
         result = run(graph, input={})
 
         tool_log = result.get("explore_tool_log")
@@ -481,10 +482,11 @@ class TestGatherToolCollection:
         import types
 
         from neograph import ToolInteraction, compile, construct_from_module, node, run
-        from neograph.factory import register_tool_factory
-        from tests.fakes import FakeTool, configure_fake_llm
+        from tests.fakes import configure_fake_llm
 
-        configure_fake_llm(
+        register_tool_factory("str_tool", lambda cfg, tc: FakeTool("str_tool", response="plain text"))
+
+        _llm_kw = configure_fake_llm(
             lambda tier: ReActFake(
                 tool_calls=[
                     [{"name": "str_tool", "args": {}, "id": "tc1"}],
@@ -493,7 +495,6 @@ class TestGatherToolCollection:
                 final=lambda m: Claims(items=["done"]),
             )
         )
-        register_tool_factory("str_tool", lambda cfg, tc: FakeTool("str_tool", response="plain text"))
 
         mod = types.ModuleType("test_str_tool_mod")
 
@@ -508,7 +509,7 @@ class TestGatherToolCollection:
 
         mod.gather = gather
         pipeline = construct_from_module(mod)
-        graph = compile(pipeline)
+        graph = compile(pipeline, **_llm_kw, **build_test_compile_kwargs())
         result = run(graph, input={})
 
         tool_log = result.get("gather_tool_log")
@@ -525,7 +526,6 @@ class TestGatherToolCollection:
         from pydantic import BaseModel, Field
 
         from neograph import ToolInteraction, XmlRenderer, compile, construct_from_module, node, run
-        from neograph.factory import register_tool_factory
 
         class SearchHit(BaseModel, frozen=True):
             node_id: str = Field(description="Graph node identifier")
@@ -536,6 +536,8 @@ class TestGatherToolCollection:
 
             def invoke(self, args):
                 return SearchHit(node_id="UC-042", score=0.9)
+
+        register_tool_factory("schema_search", lambda cfg, tc: TypedTool())
 
         # Capture what the LLM sees in the ToolMessage
         tool_messages_seen: list[str] = []
@@ -548,16 +550,7 @@ class TestGatherToolCollection:
                         tool_messages_seen.append(m.content)
                 return super().invoke(messages, **kwargs)
 
-        from neograph import configure_llm
 
-        configure_llm(
-            llm_factory=lambda tier: CapturingReActFake(
-                tool_calls=[[{"name": "schema_search", "args": {}, "id": "t1"}], []],
-                final=lambda m: Claims(items=["done"]),
-            ),
-            prompt_compiler=lambda t, d, **kw: [{"role": "user", "content": "test"}],
-        )
-        register_tool_factory("schema_search", lambda cfg, tc: TypedTool())
 
         mod = types.ModuleType("test_schema_render_mod")
 
@@ -573,7 +566,10 @@ class TestGatherToolCollection:
 
         mod.explore = explore
         pipeline = construct_from_module(mod)
-        graph = compile(pipeline)
+        graph = compile(pipeline, llm_factory=lambda tier: CapturingReActFake(
+                tool_calls=[[{"name": "schema_search", "args": {}, "id": "t1"}], []],
+                final=lambda m: Claims(items=["done"]),
+            ), prompt_compiler=lambda t, d, **kw: [{"role": "user", "content": "test"}], **build_test_compile_kwargs())
         run(graph, input={})
 
         # The ToolMessage content should have describe_type schema + rendered instance

@@ -9,8 +9,8 @@ gy9r (YAML mutation) and bchn (Construct propagation).
 from __future__ import annotations
 
 from neograph import Construct, Node, compile, run
-from neograph.factory import register_condition, register_scripted
 from neograph.modifiers import Each, Loop, Oracle
+from tests.fakes import build_test_compile_kwargs, register_condition, register_scripted
 
 from .conftest import Alpha, Beta, FanCollection, FanItem, Gamma, SubInput, SubOutput
 
@@ -89,7 +89,7 @@ class TestYAMLSurfaceSharedNodeImmutability:
         }
 
         construct = load_spec(spec)
-        graph = compile(construct)
+        graph = compile(construct, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "test"})
 
         assert "process" in result
@@ -111,7 +111,7 @@ class TestLLMSurfaceConfigPropagation:
             received_configs.append(kw.get("llm_config", {}))
             return StructuredFake(respond=lambda model: model())
 
-        configure_fake_llm(tracking_factory)
+        __llm_kw = configure_fake_llm(tracking_factory)
 
         child = Node(
             "cfg-child", mode="think", model="fast",
@@ -125,7 +125,7 @@ class TestLLMSurfaceConfigPropagation:
                                  "max_retries": 5,
                                  "provider_kwargs": {"temperature": 0.3},
                              })
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs(), **__llm_kw)
         run(graph, input={"node_id": "test"})
 
         # Original node unchanged (immutable IR)
@@ -178,7 +178,7 @@ class TestLLMSurfaceOracleCallCount:
             return model()
 
         fake = StructuredFake(respond=counting_respond)
-        configure_fake_llm(lambda _tier, **kw: fake)
+        __llm_kw = configure_fake_llm(lambda _tier, **kw: fake)
 
         register_scripted("oracle_merge_count", lambda _i, _c: Beta())
 
@@ -189,7 +189,7 @@ class TestLLMSurfaceOracleCallCount:
                  prompt="produce", inputs=Alpha, outputs=Beta)
             | Oracle(n=3, merge_fn="oracle_merge_count"),
         ])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs(), **__llm_kw)
         call_count[0] = 0
         run(graph, input={"node_id": "test"})
 
@@ -217,7 +217,7 @@ class TestCrossSurfaceValueEquivalence:
             Node.scripted("equiv-xform", fn="equiv_xform",
                           inputs=Alpha, outputs=Beta),
         ])
-        g1 = compile(scripted_pipe)
+        g1 = compile(scripted_pipe, **build_test_compile_kwargs())
         r1 = run(g1, input={"node_id": "test"})
 
         # Decorator surface — same functions
@@ -230,7 +230,7 @@ class TestCrossSurfaceValueEquivalence:
             return Beta(score=99.5, iteration=7)
 
         dec_pipe = construct_from_functions("equiv-dec", [equiv_dec_src, equiv_dec_xform])
-        g2 = compile(dec_pipe)
+        g2 = compile(dec_pipe, **build_test_compile_kwargs())
         r2 = run(g2, input={"node_id": "test"})
 
         # VALUES must match, not just types
@@ -265,7 +265,7 @@ class TestEachKeyParityAcrossSurfaces:
                           inputs=FanItem, outputs=Beta)
             | Each(over="ek_src.items", key="item_id"),
         ])
-        g1 = compile(scripted_pipe)
+        g1 = compile(scripted_pipe, **build_test_compile_kwargs())
         r1 = run(g1, input={"node_id": "test"})
         scripted_keys = set(r1["ek_proc"].keys())
 
@@ -287,7 +287,7 @@ class TestEachKeyParityAcrossSurfaces:
             "pipeline": {"nodes": ["ek-src-y", "ek-proc-y"]},
         }
         construct = load_spec(spec)
-        g2 = compile(construct)
+        g2 = compile(construct, **build_test_compile_kwargs())
         r2 = run(g2, input={"node_id": "test"})
         yaml_keys = set(r2["ek_proc_y"].keys())
 
@@ -324,7 +324,7 @@ class TestLoopIterationParityAcrossSurfaces:
                           inputs=Beta, outputs=Beta)
             | Loop(when="lip_cond", max_iterations=10),
         ])
-        g1 = compile(prog_pipe)
+        g1 = compile(prog_pipe, **build_test_compile_kwargs())
         r1 = run(g1, input={"node_id": "test"})
 
         # --- ForwardConstruct surface ---
@@ -344,7 +344,7 @@ class TestLoopIterationParityAcrossSurfaces:
                     max_iterations=10,
                 )(s)
 
-        g2 = compile(LoopFwd("lip-fwd"))
+        g2 = compile(LoopFwd("lip-fwd"), **build_test_compile_kwargs())
         r2 = run(g2, input={"node_id": "test"})
 
         assert prog_count[0] == fwd_count[0], (
@@ -369,7 +369,7 @@ class TestLLMSurfaceEachOracleCallCount:
             return model()
 
         fake = StructuredFake(respond=counting_respond)
-        configure_fake_llm(lambda _tier, **kw: fake)
+        __llm_kw = configure_fake_llm(lambda _tier, **kw: fake)
 
         items = [FanItem(item_id=f"eo{i}") for i in range(3)]
         register_scripted("eo_count_merge", lambda _i, _c: Gamma(tags=[str(len(_i))]))
@@ -398,7 +398,7 @@ class TestLLMSurfaceEachOracleCallCount:
             | Each(over="eo_src.items", key="item_id"),
         ])
 
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs(), **__llm_kw)
         call_count[0] = 0
         result = run(graph, input={"node_id": "test"})
 

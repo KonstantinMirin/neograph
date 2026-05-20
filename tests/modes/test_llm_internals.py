@@ -16,7 +16,17 @@ from neograph import (
     compile,
     run,
 )
-from tests.fakes import FakeTool, GuardFake, ReActFake, StructuredFake, StubbornFake, configure_fake_llm
+from tests.fakes import (
+    FakeTool,
+    GuardFake,
+    ReActFake,
+    StructuredFake,
+    StubbornFake,
+    build_fake_runtime,
+    build_fake_tool_lookup,
+    build_test_compile_kwargs,
+    configure_fake_llm,
+)
 from tests.schemas import (
     Claims,
     ClusterGroup,
@@ -41,20 +51,14 @@ class TestNodeContext:
         from neograph import compile, construct_from_module, node, run
         from tests.fakes import StructuredFake, configure_fake_llm
 
-        configure_fake_llm(
-            lambda tier: StructuredFake(lambda m: m(items=["done"])),
-        )
-
         captured = {}
 
         def capturing_compiler(template, data, **kw):
             captured[template] = {"data": data, "kw": kw}
             return [{"role": "user", "content": "test"}]
 
-        from neograph import configure_llm
-
-        configure_llm(
-            llm_factory=lambda tier: StructuredFake(lambda m: m(items=["done"])),
+        _llm_kw = configure_fake_llm(
+            lambda tier: StructuredFake(lambda m: m(items=["done"])),
             prompt_compiler=capturing_compiler,
         )
 
@@ -76,7 +80,7 @@ class TestNodeContext:
         mod.build_catalog = build_catalog
         mod.analyze = analyze
         pipeline = construct_from_module(mod)
-        graph = compile(pipeline)
+        graph = compile(pipeline, **_llm_kw, **build_test_compile_kwargs())
         run(graph, input={"node_id": "ctx-test"})
 
         assert "with-context" in captured
@@ -101,12 +105,7 @@ class TestNodeContext:
             captured[template] = kw
             return [{"role": "user", "content": "test"}]
 
-        from neograph import configure_llm
 
-        configure_llm(
-            llm_factory=lambda tier: StructuredFake(lambda m: m(items=["x"])),
-            prompt_compiler=capturing_compiler,
-        )
 
         mod = types.ModuleType("test_no_ctx_mod")
 
@@ -115,7 +114,7 @@ class TestNodeContext:
 
         mod.simple = simple
         pipeline = construct_from_module(mod)
-        graph = compile(pipeline)
+        graph = compile(pipeline, llm_factory=lambda tier: StructuredFake(lambda m: m(items=["x"])), prompt_compiler=capturing_compiler, **build_test_compile_kwargs())
         run(graph, input={})
 
         assert "no-context" in captured
@@ -126,8 +125,7 @@ class TestNodeContext:
         import types
 
         from neograph import ToolInteraction, compile, construct_from_module, node, run
-        from neograph.factory import register_tool_factory
-        from tests.fakes import FakeTool, ReActFake
+        from tests.fakes import FakeTool, ReActFake, register_tool_factory
 
         captured = {}
 
@@ -135,15 +133,7 @@ class TestNodeContext:
             captured[template] = {"data": data, "kw": kw}
             return [{"role": "user", "content": "test"}]
 
-        from neograph import configure_llm
 
-        configure_llm(
-            llm_factory=lambda tier: ReActFake(
-                tool_calls=[[{"name": "ctx_tool", "args": {}, "id": "t1"}], []],
-                final=lambda m: m(items=["found"]),
-            ),
-            prompt_compiler=capturing_compiler,
-        )
         register_tool_factory("ctx_tool", lambda cfg, tc: FakeTool("ctx_tool", response="ok"))
 
         mod = types.ModuleType("test_agent_ctx_mod")
@@ -165,7 +155,10 @@ class TestNodeContext:
         mod.catalog = catalog
         mod.explore = explore
         pipeline = construct_from_module(mod)
-        graph = compile(pipeline)
+        graph = compile(pipeline, llm_factory=lambda tier: ReActFake(
+                tool_calls=[[{"name": "ctx_tool", "args": {}, "id": "t1"}], []],
+                final=lambda m: m(items=["found"]),
+            ), prompt_compiler=capturing_compiler, **build_test_compile_kwargs())
         run(graph, input={})
 
         assert "agent-with-ctx" in captured
@@ -193,7 +186,7 @@ class TestToolRegistrationError:
             tool_calls=[[], []],
             final=lambda m: m(items=["x"]),
         )
-        configure_fake_llm(lambda tier: fake)
+        _llm_kw = configure_fake_llm(lambda tier: fake)
 
         mod = _types.ModuleType("test_unreg_tool_mod")
 
@@ -211,7 +204,7 @@ class TestToolRegistrationError:
         pipeline = construct_from_module(mod, name="test-unreg-tool")
 
         with pytest.raises(CompileError, match="nonexistent_tool"):
-            compile(pipeline)
+            compile(pipeline, **_llm_kw, **build_test_compile_kwargs())
 
     def test_clear_error_raised_when_execute_tool_not_registered(self):
         """Execute node with unregistered tool raises CompileError at compile()."""
@@ -223,7 +216,7 @@ class TestToolRegistrationError:
             tool_calls=[[], []],
             final=lambda m: m(text="x"),
         )
-        configure_fake_llm(lambda tier: fake)
+        _llm_kw = configure_fake_llm(lambda tier: fake)
 
         mod = _types.ModuleType("test_unreg_exec_mod")
 
@@ -241,7 +234,7 @@ class TestToolRegistrationError:
         pipeline = construct_from_module(mod, name="test-unreg-exec")
 
         with pytest.raises(CompileError, match="missing_exec_tool"):
-            compile(pipeline)
+            compile(pipeline, **_llm_kw, **build_test_compile_kwargs())
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -258,7 +251,7 @@ class TestSkipWhenOnToolNodes:
         import types as _types
 
         from neograph import construct_from_module, node
-        from neograph.factory import register_tool_factory
+        from tests.fakes import register_tool_factory
 
         # Register tool factory so it doesn't fail on missing tool
         fake_tool = FakeTool("lookup", response="found")
@@ -266,7 +259,7 @@ class TestSkipWhenOnToolNodes:
 
         # LLM should NOT be called — if it is, the test will still pass
         # but we verify via the skip_value output
-        configure_fake_llm(
+        _llm_kw = configure_fake_llm(
             lambda tier: ReActFake(
                 tool_calls=[[], []],
                 final=lambda m: m(items=["should-not-appear"]),
@@ -294,7 +287,7 @@ class TestSkipWhenOnToolNodes:
         mod.gatherer = gatherer
 
         pipeline = construct_from_module(mod, name="test-skip-gather")
-        graph = compile(pipeline)
+        graph = compile(pipeline, **_llm_kw, **build_test_compile_kwargs())
         result = run(graph, input={})
 
         # Node was skipped — skip_value produced the output
@@ -307,12 +300,12 @@ class TestSkipWhenOnToolNodes:
         import types as _types
 
         from neograph import construct_from_module, node
-        from neograph.factory import register_tool_factory
+        from tests.fakes import register_tool_factory
 
         fake_tool = FakeTool("lookup", response="result")
         register_tool_factory("lookup", lambda config, tool_config: fake_tool)
 
-        configure_fake_llm(
+        _llm_kw = configure_fake_llm(
             lambda tier: ReActFake(
                 tool_calls=[
                     [{"name": "lookup", "args": {"q": "test"}, "id": "tc1"}],
@@ -343,7 +336,7 @@ class TestSkipWhenOnToolNodes:
         mod.gatherer = gatherer
 
         pipeline = construct_from_module(mod, name="test-noskip-gather")
-        graph = compile(pipeline)
+        graph = compile(pipeline, **_llm_kw, **build_test_compile_kwargs())
         result = run(graph, input={})
 
         # skip_when was False → LLM ran, tool was called
@@ -673,7 +666,7 @@ class TestGetGraphEdges:
         the first chain terminating at __end__.
         """
         from neograph.decorators import _merge_fn_registry
-        from neograph.factory import register_scripted
+        from tests.fakes import register_scripted
 
         register_scripted("viz_pre", lambda _in, _cfg: RawText(text="input"))
         register_scripted("viz_gen", lambda _in, _cfg: Claims(items=["x"]))
@@ -690,7 +683,7 @@ class TestGetGraphEdges:
         post = Node.scripted("post", fn="viz_post", inputs=Claims, outputs=RawText)
 
         pipeline = Construct("test-viz-oracle", nodes=[pre, gen, post])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
 
         dg = graph.get_graph()
         edge_set = {(e.source, e.target) for e in dg.edges}
@@ -701,7 +694,7 @@ class TestGetGraphEdges:
 
     def test_each_edges_visible_in_get_graph(self):
         """Nodes after an Each fan-out must appear in get_graph().edges."""
-        from neograph.factory import register_scripted
+        from tests.fakes import register_scripted
 
         register_scripted("viz_make", lambda _in, _cfg: Clusters(groups=[ClusterGroup(label="a", claim_ids=["1"])]))
         register_scripted("viz_verify", lambda _in, _cfg: MatchResult(cluster_label="a", matched=["ok"]))
@@ -722,7 +715,7 @@ class TestGetGraphEdges:
         )
 
         pipeline = Construct("test-viz-each", nodes=[make, verify, summary])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
 
         dg = graph.get_graph()
         edge_set = {(e.source, e.target) for e in dg.edges}
@@ -752,8 +745,7 @@ class TestR1XmlAfterBudgetExhaustion:
         """
         from langchain_core.messages import AIMessage
 
-        from neograph._llm import configure_llm
-        from neograph.factory import register_tool_factory
+        from tests.fakes import register_tool_factory
 
         lookup_tool = FakeTool("lookup", response="found")
         register_tool_factory("lookup", lambda config, tool_config: lookup_tool)
@@ -783,10 +775,6 @@ class TestR1XmlAfterBudgetExhaustion:
                 # After budget exhaustion: XML instead of JSON
                 return AIMessage(content=XML_CONTENT)
 
-        configure_llm(
-            llm_factory=lambda tier: FakeR1(),
-            prompt_compiler=lambda template, data, **kw: [{"role": "user", "content": "go"}],
-        )
 
         node = Node(
             name="research",
@@ -798,7 +786,7 @@ class TestR1XmlAfterBudgetExhaustion:
             llm_config={"output_strategy": "json_mode"},
         )
         pipeline = Construct("test-r1-xml", nodes=[node])
-        graph = compile(pipeline)
+        graph = compile(pipeline, llm_factory=lambda tier: FakeR1(), prompt_compiler=lambda template, data, **kw: [{"role": "user", "content": "go"}], **build_test_compile_kwargs())
 
         # Should raise ExecutionError (clear message), not ValidationError (cryptic)
         with pytest.raises(ExecutionError, match="(?i)structured output|json|xml"):
@@ -817,8 +805,8 @@ class TestConditionErrorHandling:
 
     def test_loop_condition_wraps_attribute_error_when_value_is_none(self):
         """Loop condition accessing .score on None raises ExecutionError."""
-        from neograph.factory import register_scripted
         from neograph.modifiers import Loop
+        from tests.fakes import register_scripted
 
         register_scripted("d19r_attr_fn", lambda input_data, config: RawText(text="hello"))
 
@@ -826,14 +814,14 @@ class TestConditionErrorHandling:
             when=lambda draft: draft.score < 0.8, max_iterations=3
         )
         pipeline = Construct("loop-err", nodes=[n])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         with pytest.raises(ExecutionError, match="condition"):
             run(graph, input={"node_id": "test-loop-err"})
 
     def test_loop_condition_wraps_type_error_when_value_is_none(self):
         """Loop condition doing comparison on None raises ExecutionError."""
-        from neograph.factory import register_scripted
         from neograph.modifiers import Loop
+        from tests.fakes import register_scripted
 
         register_scripted("d19r_type_fn", lambda input_data, config: RawText(text="hello"))
 
@@ -841,7 +829,7 @@ class TestConditionErrorHandling:
             when=lambda draft: draft < 0.8, max_iterations=3
         )
         pipeline = Construct("loop-type-err", nodes=[n])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         with pytest.raises(ExecutionError, match="condition"):
             run(graph, input={"node_id": "test-loop-type-err"})
 
@@ -876,7 +864,8 @@ class TestLlmNotConfigured:
 
     def test_get_llm_accepts_all_kwargs_factory(self):
         """When factory accepts **kwargs, all kwargs are passed (line 127)."""
-        from neograph._llm import _get_llm, configure_llm
+        from neograph._llm import _get_llm
+        from tests.fakes import build_fake_runtime
 
         received = {}
 
@@ -884,11 +873,8 @@ class TestLlmNotConfigured:
             received.update(kwargs)
             return "fake_llm"
 
-        configure_llm(
-            llm_factory=factory,
-            prompt_compiler=lambda t, d: [{"role": "user", "content": "test"}],
-        )
-        result = _get_llm("fast", node_name="test_node", llm_config={"provider_kwargs": {"temp": 0.5}})
+        runtime = build_fake_runtime(factory=factory)
+        result = _get_llm(runtime, "fast", node_name="test_node", llm_config={"provider_kwargs": {"temp": 0.5}})
         assert result == "fake_llm"
         assert "node_name" in received
         assert "llm_config" in received
@@ -1007,10 +993,9 @@ class TestToolCallArgsCoercion:
 
     def test_string_args_retried_and_recovered(self):
         """ValidationError from string tool_calls.args triggers retry, not crash."""
-        from neograph import Tool, configure_llm
+        from neograph import Tool
         from neograph._tool_loop import invoke_with_tools
-        from neograph.factory import register_tool_factory
-        from tests.fakes import StringArgsFake
+        from tests.fakes import StringArgsFake, register_tool_factory
 
         tool_invoked = []
 
@@ -1031,10 +1016,6 @@ class TestToolCallArgsCoercion:
             final=lambda m: m(answer="done"),
         )
 
-        configure_llm(
-            llm_factory=lambda tier: fake,
-            prompt_compiler=lambda t, d, **kw: [{"role": "user", "content": "test"}],
-        )
 
         from pydantic import BaseModel as _BM
 
@@ -1048,6 +1029,7 @@ class TestToolCallArgsCoercion:
 
         # Should NOT raise — _safe_tool_invoke catches ValidationError and retries
         result = invoke_with_tools(
+            runtime=build_fake_runtime(lambda tier: fake),
             model_tier="fast",
             prompt_template="test prompt",
             input_data={},
@@ -1055,6 +1037,7 @@ class TestToolCallArgsCoercion:
             config={"configurable": {}},
             tools=tools,
             budget_tracker=budget,
+            tool_factory_lookup=build_fake_tool_lookup(),
         )
 
         parsed, interactions = result
@@ -1066,11 +1049,10 @@ class TestToolCallArgsCoercion:
         """Even at 100% string-args rate, coercion handles every call."""
         from pydantic import BaseModel as _BM
 
-        from neograph import Tool, configure_llm
+        from neograph import Tool
         from neograph._tool_loop import invoke_with_tools
-        from neograph.factory import register_tool_factory
         from neograph.tool import ToolBudgetTracker
-        from tests.fakes import StringArgsFake
+        from tests.fakes import StringArgsFake, register_tool_factory
 
         tool_calls_received = []
 
@@ -1094,10 +1076,6 @@ class TestToolCallArgsCoercion:
             always_fail=True,
         )
 
-        configure_llm(
-            llm_factory=lambda tier: fake,
-            prompt_compiler=lambda t, d, **kw: [{"role": "user", "content": "test"}],
-        )
 
         class Answer(_BM):
             answer: str
@@ -1113,7 +1091,7 @@ class TestToolCallArgsCoercion:
             config={"configurable": {}},
             tools=tools,
             budget_tracker=budget,
-        )
+         runtime=build_fake_runtime(lambda tier: fake), tool_factory_lookup=build_fake_tool_lookup())
 
         assert parsed.answer == "analyzed"
         assert tool_calls_received == ["BR-UC-008", "FLOW-006"]
@@ -1145,11 +1123,10 @@ class TestToolCallArgsCoercion:
         """Multiple tool_calls where some have dict args and some have string args."""
         from pydantic import BaseModel as _BM
 
-        from neograph import Tool, configure_llm
+        from neograph import Tool
         from neograph._tool_loop import invoke_with_tools
-        from neograph.factory import register_tool_factory
         from neograph.tool import ToolBudgetTracker
-        from tests.fakes import StringArgsFake
+        from tests.fakes import StringArgsFake, register_tool_factory
 
         args_received = []
 
@@ -1174,10 +1151,6 @@ class TestToolCallArgsCoercion:
             always_fail=True,
         )
 
-        configure_llm(
-            llm_factory=lambda tier: fake,
-            prompt_compiler=lambda t, d, **kw: [{"role": "user", "content": "test"}],
-        )
 
         class Answer(_BM):
             answer: str
@@ -1189,7 +1162,7 @@ class TestToolCallArgsCoercion:
             model_tier="fast", prompt_template="test", input_data={},
             output_model=Answer, config={"configurable": {}},
             tools=tools, budget_tracker=budget,
-        )
+         runtime=build_fake_runtime(lambda tier: fake), tool_factory_lookup=build_fake_tool_lookup())
 
         assert parsed.answer == "done"
         assert args_received == ["first", "second"]
@@ -1198,11 +1171,10 @@ class TestToolCallArgsCoercion:
         """Coerced tool args must be proper dicts with correct values."""
         from pydantic import BaseModel as _BM
 
-        from neograph import Tool, configure_llm
+        from neograph import Tool
         from neograph._tool_loop import invoke_with_tools
-        from neograph.factory import register_tool_factory
         from neograph.tool import ToolBudgetTracker
-        from tests.fakes import StringArgsFake
+        from tests.fakes import StringArgsFake, register_tool_factory
 
         received_args = []
 
@@ -1224,10 +1196,6 @@ class TestToolCallArgsCoercion:
             always_fail=True,
         )
 
-        configure_llm(
-            llm_factory=lambda tier: fake,
-            prompt_compiler=lambda t, d, **kw: [{"role": "user", "content": "test"}],
-        )
 
         class Answer(_BM):
             answer: str
@@ -1239,7 +1207,7 @@ class TestToolCallArgsCoercion:
             model_tier="fast", prompt_template="test", input_data={},
             output_model=Answer, config={"configurable": {}},
             tools=tools, budget_tracker=budget,
-        )
+         runtime=build_fake_runtime(lambda tier: fake), tool_factory_lookup=build_fake_tool_lookup())
 
         assert parsed.answer == "ok"
         assert len(received_args) == 1
@@ -1344,10 +1312,10 @@ class TestUnregisteredToolInReact:
         from neograph._tool_loop import invoke_with_tools
         from neograph.tool import ToolBudgetTracker
 
-        configure_fake_llm(lambda tier: StructuredFake(lambda m: m(items=["x"])))
+        _llm_kw = configure_fake_llm(lambda tier: StructuredFake(lambda m: m(items=["x"])))
 
         with pytest.raises(ConfigurationError, match="not registered"):
-            invoke_with_tools(
+            invoke_with_tools(runtime=build_fake_runtime(_llm_kw['llm_factory'], _llm_kw['prompt_compiler']),
                 model_tier="fast",
                 prompt_template="test prompt",
                 input_data="test",
@@ -1355,6 +1323,7 @@ class TestUnregisteredToolInReact:
                 tools=[Tool("nonexistent", budget=5)],
                 budget_tracker=ToolBudgetTracker([Tool("nonexistent", budget=5)]),
                 config={"configurable": {}},
+                tool_factory_lookup=build_fake_tool_lookup(),
             )
 
 
@@ -1364,8 +1333,8 @@ class TestUsageTokenAccumulation:
     def test_usage_tokens_accumulated_from_messages(self):
         """Token usage from ReAct messages is accumulated (lines 621-626, 630)."""
         from neograph._tool_loop import invoke_with_tools
-        from neograph.factory import register_tool_factory
         from neograph.tool import ToolBudgetTracker
+        from tests.fakes import register_tool_factory
 
         fake_tool = FakeTool("search", response="found it")
         register_tool_factory("search", lambda cfg, tc: fake_tool)
@@ -1411,11 +1380,11 @@ class TestUsageTokenAccumulation:
                 clone._structured = True
                 return clone
 
-        configure_fake_llm(lambda tier: UsageFake())
+        _llm_kw = configure_fake_llm(lambda tier: UsageFake())
 
         tools = [Tool("search", budget=5)]
         tracker = ToolBudgetTracker(tools)
-        result, interactions = invoke_with_tools(
+        result, interactions = invoke_with_tools(runtime=build_fake_runtime(_llm_kw['llm_factory'], _llm_kw['prompt_compiler']),
             model_tier="fast",
             prompt_template="test prompt",
             input_data="test",
@@ -1423,6 +1392,7 @@ class TestUsageTokenAccumulation:
             tools=tools,
             budget_tracker=tracker,
             config={"configurable": {}},
+            tool_factory_lookup=build_fake_tool_lookup(),
         )
         assert isinstance(result, Claims)
         assert len(interactions) == 1
@@ -1441,17 +1411,21 @@ class TestRenderPromptEdgeCases:
 
     def test_render_prompt_with_message_objects(self):
         """render_prompt handles LangChain message objects (line 707-708)."""
+
         from langchain_core.messages import HumanMessage
 
-        from neograph._llm import configure_llm, render_prompt
+        from neograph._llm import render_prompt
 
-        configure_llm(
-            llm_factory=lambda tier: None,
-            prompt_compiler=lambda t, d, **kw: [HumanMessage(content="hello world")],
-        )
+        def msg_compiler(template, data, **kw):
+            return [HumanMessage(content="hello world")]
 
         node = Node("test", mode="think", prompt="test", model="fast", outputs=Claims)
-        result = render_prompt(node, {"key": "value"}, config={"configurable": {}})
+        result = render_prompt(
+            node,
+            {"key": "value"},
+            config={"configurable": {}},
+            runtime=build_fake_runtime(prompt_compiler=msg_compiler),
+        )
         assert "hello world" in result
         assert "[human]" in result
 
@@ -1476,8 +1450,8 @@ class TestReActToolReturnsListOfModels:
         from pydantic import BaseModel as BM
 
         from neograph._tool_loop import invoke_with_tools
-        from neograph.factory import register_tool_factory
         from neograph.tool import ToolBudgetTracker
+        from tests.fakes import register_tool_factory
 
         # A tool that returns a list of BaseModel instances
         class SearchResult(BM):
@@ -1517,11 +1491,11 @@ class TestReActToolReturnsListOfModels:
                 clone._structured = True
                 return clone
 
-        configure_fake_llm(lambda tier: ListReActFake())
+        _llm_kw = configure_fake_llm(lambda tier: ListReActFake())
 
         tools = [Tool("search", budget=5)]
         tracker = ToolBudgetTracker(tools)
-        result, interactions = invoke_with_tools(
+        result, interactions = invoke_with_tools(runtime=build_fake_runtime(_llm_kw['llm_factory'], _llm_kw['prompt_compiler']),
             model_tier="fast",
             prompt_template="test prompt",
             input_data="test",
@@ -1529,6 +1503,7 @@ class TestReActToolReturnsListOfModels:
             tools=tools,
             budget_tracker=tracker,
             config={"configurable": {}},
+            tool_factory_lookup=build_fake_tool_lookup(),
         )
         assert len(interactions) == 1
         # The rendered result should contain both items
@@ -1542,18 +1517,18 @@ class TestReActMaxIterationsGuard:
     def test_max_iterations_default_stops_at_20(self):
         """Default max_iterations=20 stops an infinite tool-calling loop."""
         from neograph._tool_loop import invoke_with_tools
-        from neograph.factory import register_tool_factory
         from neograph.tool import ToolBudgetTracker
+        from tests.fakes import register_tool_factory
 
         fake_tool = FakeTool("search", response="found")
         register_tool_factory("search", lambda cfg, tc: fake_tool)
 
         fake = GuardFake()
-        configure_fake_llm(lambda tier: fake)
+        _llm_kw = configure_fake_llm(lambda tier: fake)
 
         tools = [Tool("search", budget=0)]  # unlimited per-tool budget
         tracker = ToolBudgetTracker(tools)
-        result, interactions = invoke_with_tools(
+        result, interactions = invoke_with_tools(runtime=build_fake_runtime(_llm_kw['llm_factory'], _llm_kw['prompt_compiler']),
             model_tier="fast",
             prompt_template="test",
             input_data="test",
@@ -1561,6 +1536,7 @@ class TestReActMaxIterationsGuard:
             tools=tools,
             budget_tracker=tracker,
             config={"configurable": {}},
+            tool_factory_lookup=build_fake_tool_lookup(),
         )
         assert isinstance(result, Claims)
         # Iterations 1-19 execute tools (19 interactions). Iteration 20 hits
@@ -1572,20 +1548,20 @@ class TestReActMaxIterationsGuard:
     def test_max_iterations_custom_value(self):
         """Custom max_iterations in llm_config overrides the default."""
         from neograph._tool_loop import invoke_with_tools
-        from neograph.factory import register_tool_factory
         from neograph.tool import ToolBudgetTracker
+        from tests.fakes import register_tool_factory
 
         fake_tool = FakeTool("search", response="found")
         register_tool_factory("search", lambda cfg, tc: fake_tool)
 
         fake = GuardFake()
-        configure_fake_llm(lambda tier: fake)
+        _llm_kw = configure_fake_llm(lambda tier: fake)
 
         tools = [Tool("search", budget=0)]
         tracker = ToolBudgetTracker(tools)
 
         # max_iterations=3 — guard fires on iteration 3
-        result, interactions = invoke_with_tools(
+        result, interactions = invoke_with_tools(runtime=build_fake_runtime(_llm_kw['llm_factory'], _llm_kw['prompt_compiler']),
             model_tier="fast",
             prompt_template="test",
             input_data="test",
@@ -1594,6 +1570,7 @@ class TestReActMaxIterationsGuard:
             budget_tracker=tracker,
             config={"configurable": {}},
             llm_config={"max_iterations": 3},
+            tool_factory_lookup=build_fake_tool_lookup(),
         )
         assert isinstance(result, Claims)
         # Iterations 1-2 execute tools, iteration 3 hits guard (skips).
@@ -1603,8 +1580,8 @@ class TestReActMaxIterationsGuard:
     def test_max_iterations_does_not_affect_normal_completion(self):
         """When the LLM finishes before max_iterations, the guard is irrelevant."""
         from neograph._tool_loop import invoke_with_tools
-        from neograph.factory import register_tool_factory
         from neograph.tool import ToolBudgetTracker
+        from tests.fakes import register_tool_factory
 
         fake_tool = FakeTool("search", response="found")
         register_tool_factory("search", lambda cfg, tc: fake_tool)
@@ -1616,12 +1593,12 @@ class TestReActMaxIterationsGuard:
             ],
             final=lambda model: model(items=["done"]),
         )
-        configure_fake_llm(lambda tier: fake)
+        _llm_kw = configure_fake_llm(lambda tier: fake)
 
         tools = [Tool("search", budget=5)]
         tracker = ToolBudgetTracker(tools)
 
-        result, interactions = invoke_with_tools(
+        result, interactions = invoke_with_tools(runtime=build_fake_runtime(_llm_kw['llm_factory'], _llm_kw['prompt_compiler']),
             model_tier="fast",
             prompt_template="test",
             input_data="test",
@@ -1630,6 +1607,7 @@ class TestReActMaxIterationsGuard:
             budget_tracker=tracker,
             config={"configurable": {}},
             llm_config={"max_iterations": 20},
+            tool_factory_lookup=build_fake_tool_lookup(),
         )
         assert isinstance(result, Claims)
         assert len(interactions) == 1
@@ -1637,19 +1615,19 @@ class TestReActMaxIterationsGuard:
     def test_max_iterations_equals_one(self):
         """Degenerate case: max_iterations=1 means the first tool-calling iteration triggers the guard."""
         from neograph._tool_loop import invoke_with_tools
-        from neograph.factory import register_tool_factory
         from neograph.tool import ToolBudgetTracker
+        from tests.fakes import register_tool_factory
 
         fake_tool = FakeTool("search", response="found")
         register_tool_factory("search", lambda cfg, tc: fake_tool)
 
         fake = GuardFake()
-        configure_fake_llm(lambda tier: fake)
+        _llm_kw = configure_fake_llm(lambda tier: fake)
 
         tools = [Tool("search", budget=0)]
         tracker = ToolBudgetTracker(tools)
 
-        result, interactions = invoke_with_tools(
+        result, interactions = invoke_with_tools(runtime=build_fake_runtime(_llm_kw['llm_factory'], _llm_kw['prompt_compiler']),
             model_tier="fast",
             prompt_template="test",
             input_data="test",
@@ -1658,6 +1636,7 @@ class TestReActMaxIterationsGuard:
             budget_tracker=tracker,
             config={"configurable": {}},
             llm_config={"max_iterations": 1},
+            tool_factory_lookup=build_fake_tool_lookup(),
         )
         assert isinstance(result, Claims)
         # Iteration 1: LLM calls tool, guard hits immediately (loop_count=1 >= 1).
@@ -1669,20 +1648,20 @@ class TestReActMaxIterationsGuard:
         tool_calls on the next invocation, the loop force-breaks instead of
         looping forever (the _guard_fired safety net)."""
         from neograph._tool_loop import invoke_with_tools
-        from neograph.factory import register_tool_factory
         from neograph.tool import ToolBudgetTracker
+        from tests.fakes import register_tool_factory
 
         fake_tool = FakeTool("search", response="found")
         register_tool_factory("search", lambda cfg, tc: fake_tool)
 
-        configure_fake_llm(lambda tier: StubbornFake())
+        _llm_kw = configure_fake_llm(lambda tier: StubbornFake())
 
         tools = [Tool("search", budget=0)]
         tracker = ToolBudgetTracker(tools)
 
         # With max_iterations=1, guard fires on first iteration,
         # but the LLM keeps calling tools — should force-break, not infinite loop
-        result, interactions = invoke_with_tools(
+        result, interactions = invoke_with_tools(runtime=build_fake_runtime(_llm_kw['llm_factory'], _llm_kw['prompt_compiler']),
             model_tier="fast",
             prompt_template="test",
             input_data="test",
@@ -1691,6 +1670,7 @@ class TestReActMaxIterationsGuard:
             budget_tracker=tracker,
             config={"configurable": {}},
             llm_config={"max_iterations": 1},
+            tool_factory_lookup=build_fake_tool_lookup(),
         )
         # Loop terminates despite LLM never stopping tool calls
         assert isinstance(result, Claims)
@@ -1701,20 +1681,20 @@ class TestReActMaxIterationsGuard:
         from structlog.testing import capture_logs
 
         from neograph._tool_loop import invoke_with_tools
-        from neograph.factory import register_tool_factory
         from neograph.tool import ToolBudgetTracker
+        from tests.fakes import register_tool_factory
 
         fake_tool = FakeTool("search", response="found")
         register_tool_factory("search", lambda cfg, tc: fake_tool)
 
         fake = GuardFake()
-        configure_fake_llm(lambda tier: fake)
+        _llm_kw = configure_fake_llm(lambda tier: fake)
 
         tools = [Tool("search", budget=0)]
         tracker = ToolBudgetTracker(tools)
 
         with capture_logs() as cap:
-            invoke_with_tools(
+            invoke_with_tools(runtime=build_fake_runtime(_llm_kw['llm_factory'], _llm_kw['prompt_compiler']),
                 model_tier="fast",
                 prompt_template="test",
                 input_data="test",
@@ -1723,6 +1703,7 @@ class TestReActMaxIterationsGuard:
                 budget_tracker=tracker,
                 config={"configurable": {}},
                 llm_config={"max_iterations": 2},
+                tool_factory_lookup=build_fake_tool_lookup(),
             )
         guard_events = [e for e in cap if "react_max_iterations_exceeded" in e.get("event", "")]
         assert len(guard_events) >= 1
@@ -1735,20 +1716,20 @@ class TestReActTokenBudgetGuard:
     def test_token_budget_stops_loop(self):
         """token_budget in llm_config stops the loop when input tokens exceed threshold."""
         from neograph._tool_loop import invoke_with_tools
-        from neograph.factory import register_tool_factory
         from neograph.tool import ToolBudgetTracker
+        from tests.fakes import register_tool_factory
 
         fake_tool = FakeTool("search", response="found")
         register_tool_factory("search", lambda cfg, tc: fake_tool)
 
         fake = GuardFake(input_tokens_per_call=1000)
-        configure_fake_llm(lambda tier: fake)
+        _llm_kw = configure_fake_llm(lambda tier: fake)
 
         tools = [Tool("search", budget=0)]  # unlimited
         tracker = ToolBudgetTracker(tools)
 
         # token_budget=2500 — after 3 iterations (3000 cumulative), guard fires
-        result, interactions = invoke_with_tools(
+        result, interactions = invoke_with_tools(runtime=build_fake_runtime(_llm_kw['llm_factory'], _llm_kw['prompt_compiler']),
             model_tier="fast",
             prompt_template="test",
             input_data="test",
@@ -1757,6 +1738,7 @@ class TestReActTokenBudgetGuard:
             budget_tracker=tracker,
             config={"configurable": {}},
             llm_config={"max_iterations": 50, "token_budget": 2500},
+            tool_factory_lookup=build_fake_tool_lookup(),
         )
         assert isinstance(result, Claims)
         # Iterations 1-2 execute tools (cumulative: 2000 < 2500). Iteration 3
@@ -1767,8 +1749,8 @@ class TestReActTokenBudgetGuard:
     def test_token_budget_none_is_no_limit(self):
         """token_budget=None (default) means no token budget enforcement."""
         from neograph._tool_loop import invoke_with_tools
-        from neograph.factory import register_tool_factory
         from neograph.tool import ToolBudgetTracker
+        from tests.fakes import register_tool_factory
 
         fake_tool = FakeTool("search", response="found")
         register_tool_factory("search", lambda cfg, tc: fake_tool)
@@ -1780,12 +1762,12 @@ class TestReActTokenBudgetGuard:
             ],
             final=lambda model: model(items=["done"]),
         )
-        configure_fake_llm(lambda tier: fake)
+        _llm_kw = configure_fake_llm(lambda tier: fake)
 
         tools = [Tool("search", budget=5)]
         tracker = ToolBudgetTracker(tools)
 
-        result, interactions = invoke_with_tools(
+        result, interactions = invoke_with_tools(runtime=build_fake_runtime(_llm_kw['llm_factory'], _llm_kw['prompt_compiler']),
             model_tier="fast",
             prompt_template="test",
             input_data="test",
@@ -1794,6 +1776,7 @@ class TestReActTokenBudgetGuard:
             budget_tracker=tracker,
             config={"configurable": {}},
             # No token_budget — default None means unlimited
+            tool_factory_lookup=build_fake_tool_lookup(),
         )
         assert isinstance(result, Claims)
         assert len(interactions) == 1
@@ -1801,20 +1784,20 @@ class TestReActTokenBudgetGuard:
     def test_both_guards_fire_simultaneously(self):
         """When max_iterations and token_budget are both exceeded, loop still terminates."""
         from neograph._tool_loop import invoke_with_tools
-        from neograph.factory import register_tool_factory
         from neograph.tool import ToolBudgetTracker
+        from tests.fakes import register_tool_factory
 
         fake_tool = FakeTool("search", response="found")
         register_tool_factory("search", lambda cfg, tc: fake_tool)
 
         fake = GuardFake(input_tokens_per_call=1000)
-        configure_fake_llm(lambda tier: fake)
+        _llm_kw = configure_fake_llm(lambda tier: fake)
 
         tools = [Tool("search", budget=0)]
         tracker = ToolBudgetTracker(tools)
 
         # max_iterations=3 and token_budget=2500: both fire on iteration 3
-        result, interactions = invoke_with_tools(
+        result, interactions = invoke_with_tools(runtime=build_fake_runtime(_llm_kw['llm_factory'], _llm_kw['prompt_compiler']),
             model_tier="fast",
             prompt_template="test",
             input_data="test",
@@ -1823,6 +1806,7 @@ class TestReActTokenBudgetGuard:
             budget_tracker=tracker,
             config={"configurable": {}},
             llm_config={"max_iterations": 3, "token_budget": 2500},
+            tool_factory_lookup=build_fake_tool_lookup(),
         )
         assert isinstance(result, Claims)
         # Iterations 1-2 execute (cumulative 2000 < 2500). Iteration 3 hits both
@@ -1832,8 +1816,8 @@ class TestReActTokenBudgetGuard:
     def test_token_budget_missing_usage_metadata(self):
         """When responses lack usage_metadata, token_budget never fires (correct behavior)."""
         from neograph._tool_loop import invoke_with_tools
-        from neograph.factory import register_tool_factory
         from neograph.tool import ToolBudgetTracker
+        from tests.fakes import register_tool_factory
 
         fake_tool = FakeTool("search", response="found")
         register_tool_factory("search", lambda cfg, tc: fake_tool)
@@ -1847,12 +1831,12 @@ class TestReActTokenBudgetGuard:
         )
         # ReActFake doesn't include usage_metadata on responses,
         # so cumulative_input_tokens stays 0, and token_budget never triggers
-        configure_fake_llm(lambda tier: fake)
+        _llm_kw = configure_fake_llm(lambda tier: fake)
 
         tools = [Tool("search", budget=5)]
         tracker = ToolBudgetTracker(tools)
 
-        result, interactions = invoke_with_tools(
+        result, interactions = invoke_with_tools(runtime=build_fake_runtime(_llm_kw['llm_factory'], _llm_kw['prompt_compiler']),
             model_tier="fast",
             prompt_template="test",
             input_data="test",
@@ -1862,6 +1846,7 @@ class TestReActTokenBudgetGuard:
             config={"configurable": {}},
             # token_budget=100, but responses have no usage_metadata, so it never fires
             llm_config={"token_budget": 100},
+            tool_factory_lookup=build_fake_tool_lookup(),
         )
         assert isinstance(result, Claims)
         assert len(interactions) == 1  # tool executes normally
@@ -1958,10 +1943,10 @@ class TestDSMLTrailingToolCallRecovery:
         from langchain_core.messages import AIMessage
         from pydantic import BaseModel as _BM
 
-        from neograph import Tool, configure_llm
+        from neograph import Tool
         from neograph._tool_loop import invoke_with_tools
-        from neograph.factory import register_tool_factory
         from neograph.tool import ToolBudgetTracker
+        from tests.fakes import register_tool_factory
 
         call_count = [0]
 
@@ -1998,10 +1983,6 @@ class TestDSMLTrailingToolCallRecovery:
             )
 
         register_tool_factory("search", search_factory)
-        configure_llm(
-            llm_factory=lambda tier: DSMLFake(),
-            prompt_compiler=lambda t, d, **kw: [{"role": "user", "content": "test"}],
-        )
 
         class Answer(_BM):
             answer: str
@@ -2018,7 +1999,7 @@ class TestDSMLTrailingToolCallRecovery:
             tools=tools,
             budget_tracker=budget,
             llm_config={"output_strategy": "json_mode"},
-        )
+         runtime=build_fake_runtime(lambda tier: DSMLFake()), tool_factory_lookup=build_fake_tool_lookup())
 
         assert parsed.answer == "recovered"
         assert len(interactions) == 1  # one tool call succeeded before DSML
@@ -2028,10 +2009,10 @@ class TestDSMLTrailingToolCallRecovery:
         from langchain_core.messages import AIMessage
         from pydantic import BaseModel as _BM
 
-        from neograph import Tool, configure_llm
+        from neograph import Tool
         from neograph._tool_loop import invoke_with_tools
-        from neograph.factory import register_tool_factory
         from neograph.tool import ToolBudgetTracker
+        from tests.fakes import register_tool_factory
 
         captured_messages = []
         call_count = [0]
@@ -2054,10 +2035,6 @@ class TestDSMLTrailingToolCallRecovery:
             "langchain_core.tools", fromlist=["StructuredTool"]
         ).StructuredTool.from_function(lambda q="": "ok", name="x", description="x"))
 
-        configure_llm(
-            llm_factory=lambda tier: CaptureFake(),
-            prompt_compiler=lambda t, d, **kw: [{"role": "user", "content": "test"}],
-        )
 
         class Answer(_BM):
             answer: str
@@ -2077,7 +2054,7 @@ class TestDSMLTrailingToolCallRecovery:
                 "output_strategy": "json_mode",
                 "budget_exhausted_message": "CUSTOM: stop calling tools, produce the answer",
             },
-        )
+         runtime=build_fake_runtime(lambda tier: CaptureFake()), tool_factory_lookup=build_fake_tool_lookup())
 
         assert parsed.answer == "ok"
         # The custom message should have been used in the retry
@@ -2106,10 +2083,10 @@ class TestDSMLDoubleFailure:
         from langchain_core.messages import AIMessage
         from pydantic import BaseModel as _BM
 
-        from neograph import Tool, configure_llm
+        from neograph import Tool
         from neograph._tool_loop import invoke_with_tools
-        from neograph.factory import register_tool_factory
         from neograph.tool import ToolBudgetTracker
+        from tests.fakes import register_tool_factory
 
         call_count = [0]
         dsml_payload = (
@@ -2146,10 +2123,6 @@ class TestDSMLDoubleFailure:
             )
 
         register_tool_factory("search", search_factory)
-        configure_llm(
-            llm_factory=lambda tier: DoubleDSMLFake(),
-            prompt_compiler=lambda t, d, **kw: [{"role": "user", "content": "test"}],
-        )
 
         class Answer(_BM):
             answer: str
@@ -2166,7 +2139,7 @@ class TestDSMLDoubleFailure:
             tools=tools,
             budget_tracker=budget,
             llm_config={"output_strategy": "json_mode"},
-        )
+         runtime=build_fake_runtime(lambda tier: DoubleDSMLFake()), tool_factory_lookup=build_fake_tool_lookup())
 
         assert parsed.answer == "recovered-via-generic"
         assert len(interactions) == 1
@@ -2184,11 +2157,11 @@ class TestDSMLAllRetriesFail:
         from langchain_core.messages import AIMessage
         from pydantic import BaseModel as _BM
 
-        from neograph import Tool, configure_llm
+        from neograph import Tool
         from neograph._tool_loop import invoke_with_tools
         from neograph.errors import ExecutionError
-        from neograph.factory import register_tool_factory
         from neograph.tool import ToolBudgetTracker
+        from tests.fakes import register_tool_factory
 
         call_count = [0]
         dsml_payload = (
@@ -2221,10 +2194,6 @@ class TestDSMLAllRetriesFail:
             )
 
         register_tool_factory("search", search_factory)
-        configure_llm(
-            llm_factory=lambda tier: AllDSMLFake(),
-            prompt_compiler=lambda t, d, **kw: [{"role": "user", "content": "test"}],
-        )
 
         class Answer(_BM):
             answer: str
@@ -2242,7 +2211,7 @@ class TestDSMLAllRetriesFail:
                 tools=tools,
                 budget_tracker=budget,
                 llm_config={"output_strategy": "json_mode"},
-            )
+             runtime=build_fake_runtime(lambda tier: AllDSMLFake()), tool_factory_lookup=build_fake_tool_lookup())
 
         assert str(exc_info.value).strip()
         assert call_count[0] >= 3
@@ -2270,10 +2239,10 @@ class TestNonDSMLParseFailureTakesGenericRetry:
         from pydantic import BaseModel as _BM
         from structlog.testing import capture_logs
 
-        from neograph import Tool, configure_llm
+        from neograph import Tool
         from neograph._tool_loop import invoke_with_tools
-        from neograph.factory import register_tool_factory
         from neograph.tool import ToolBudgetTracker
+        from tests.fakes import register_tool_factory
 
         call_count = [0]
         captured_messages: list[list[str]] = []
@@ -2320,10 +2289,6 @@ class TestNonDSMLParseFailureTakesGenericRetry:
             )
 
         register_tool_factory("search", search_factory)
-        configure_llm(
-            llm_factory=lambda tier: GarbledPlainFake(),
-            prompt_compiler=lambda t, d, **kw: [{"role": "user", "content": "test"}],
-        )
 
         class Answer(_BM):
             answer: str
@@ -2341,7 +2306,7 @@ class TestNonDSMLParseFailureTakesGenericRetry:
                 tools=tools,
                 budget_tracker=budget,
                 llm_config={"output_strategy": "json_mode", "max_retries": 2},
-            )
+             runtime=build_fake_runtime(lambda tier: GarbledPlainFake()), tool_factory_lookup=build_fake_tool_lookup())
 
         # Sanity: recovery through the generic path succeeded.
         assert parsed.answer == "recovered-via-generic"
@@ -2379,7 +2344,7 @@ class TestNonDSMLParseFailureTakesGenericRetry:
 
 
 class TestE2EDSMLRecoveryViaAgentMode:
-    """neograph-xrrt (axis 12): full E2E recovery through compile()/run().
+    """neograph-xrrt (axis 12): full E2E recovery through compile(**_llm_kw, llm_factory=lambda tier: GarbledPlainFake(), prompt_compiler=lambda t, d, **kw: [{"role": "user", "content": "test"}], **build_test_compile_kwargs())/run().
 
     Verifies the DSML fix propagates through @node → construct_from_module →
     compile → run, not just the low-level invoke_with_tools call.
@@ -2394,12 +2359,11 @@ class TestE2EDSMLRecoveryViaAgentMode:
         from neograph import (
             Tool,
             compile,
-            configure_llm,
             construct_from_module,
             node,
             run,
         )
-        from neograph.factory import register_tool_factory
+        from tests.fakes import register_tool_factory
 
         class Answer(_BM):
             answer: str
@@ -2437,10 +2401,6 @@ class TestE2EDSMLRecoveryViaAgentMode:
             )
 
         register_tool_factory("search", search_factory)
-        configure_llm(
-            llm_factory=lambda tier: DSMLFake(),
-            prompt_compiler=lambda t, d, **kw: [{"role": "user", "content": "test"}],
-        )
 
         mod = _types.ModuleType("test_xrrt_e2e_dsml_mod")
 
@@ -2456,7 +2416,7 @@ class TestE2EDSMLRecoveryViaAgentMode:
 
         mod.research = research
         pipeline = construct_from_module(mod, name="test-xrrt-e2e")
-        graph = compile(pipeline)
+        graph = compile(pipeline, llm_factory=lambda tier: DSMLFake(), prompt_compiler=lambda t, d, **kw: [{"role": "user", "content": "test"}], **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "test-xrrt"})
 
         assert result["research"].answer == "recovered-e2e"
@@ -2659,10 +2619,10 @@ class TestDSMLInStructuredStrategyPath:
         from langchain_core.messages import AIMessage
         from pydantic import BaseModel as _BM
 
-        from neograph import Tool, configure_llm
+        from neograph import Tool
         from neograph._tool_loop import invoke_with_tools
-        from neograph.factory import register_tool_factory
         from neograph.tool import ToolBudgetTracker
+        from tests.fakes import register_tool_factory
 
         DSML_MARKUP = (
             '<｜DSML｜tool_calls>\n'
@@ -2707,10 +2667,6 @@ class TestDSMLInStructuredStrategyPath:
             )
 
         register_tool_factory("search", search_factory)
-        configure_llm(
-            llm_factory=lambda tier: DSMLFake(),
-            prompt_compiler=lambda t, d, **kw: [{"role": "user", "content": "test"}],
-        )
 
         tools = [Tool(name="search", description="search")]
         budget = ToolBudgetTracker(tools)
@@ -2725,7 +2681,7 @@ class TestDSMLInStructuredStrategyPath:
                 tools=tools,
                 budget_tracker=budget,
                 llm_config={"output_strategy": "structured"},
-            )
+             runtime=build_fake_runtime(lambda tier: DSMLFake()), tool_factory_lookup=build_fake_tool_lookup())
 
         assert "Expected Answer" in str(excinfo.value)
         assert structured_calls[0] == 2, (
@@ -2740,10 +2696,10 @@ class TestDSMLInStructuredStrategyPath:
         from langchain_core.messages import AIMessage
         from pydantic import BaseModel as _BM
 
-        from neograph import Tool, configure_llm
+        from neograph import Tool
         from neograph._tool_loop import invoke_with_tools
-        from neograph.factory import register_tool_factory
         from neograph.tool import ToolBudgetTracker
+        from tests.fakes import register_tool_factory
 
         class Answer(_BM):
             answer: str
@@ -2784,10 +2740,6 @@ class TestDSMLInStructuredStrategyPath:
             )
 
         register_tool_factory("search", search_factory)
-        configure_llm(
-            llm_factory=lambda tier: HappyFake(),
-            prompt_compiler=lambda t, d, **kw: [{"role": "user", "content": "test"}],
-        )
 
         tools = [Tool(name="search", description="search")]
         budget = ToolBudgetTracker(tools)
@@ -2801,7 +2753,7 @@ class TestDSMLInStructuredStrategyPath:
             tools=tools,
             budget_tracker=budget,
             llm_config={"output_strategy": "structured"},
-        )
+         runtime=build_fake_runtime(lambda tier: HappyFake()), tool_factory_lookup=build_fake_tool_lookup())
 
         assert parsed.answer == "ok"
         assert structured_calls[0] == 1
@@ -2825,10 +2777,10 @@ class TestDSMLAfterMaxIterationsGuard:
         from pydantic import BaseModel as _BM
         from structlog.testing import capture_logs
 
-        from neograph import Tool, configure_llm
+        from neograph import Tool
         from neograph._tool_loop import invoke_with_tools
-        from neograph.factory import register_tool_factory
         from neograph.tool import ToolBudgetTracker
+        from tests.fakes import register_tool_factory
 
         class Answer(_BM):
             answer: str
@@ -2866,10 +2818,6 @@ class TestDSMLAfterMaxIterationsGuard:
             )
 
         register_tool_factory("search", search_factory)
-        configure_llm(
-            llm_factory=lambda tier: MaxIterDSMLFake(),
-            prompt_compiler=lambda t, d, **kw: [{"role": "user", "content": "test"}],
-        )
 
         tools = [Tool(name="search", description="search")]
         budget = ToolBudgetTracker(tools)
@@ -2884,7 +2832,7 @@ class TestDSMLAfterMaxIterationsGuard:
                 tools=tools,
                 budget_tracker=budget,
                 llm_config={"output_strategy": "json_mode", "max_iterations": 1},
-            )
+             runtime=build_fake_runtime(lambda tier: MaxIterDSMLFake()), tool_factory_lookup=build_fake_tool_lookup())
 
         assert parsed.answer == "recovered"
         assert call_count[0] == 3
@@ -2917,10 +2865,10 @@ class TestDSMLAfterTokenBudget:
         from pydantic import BaseModel as _BM
         from structlog.testing import capture_logs
 
-        from neograph import Tool, configure_llm
+        from neograph import Tool
         from neograph._tool_loop import invoke_with_tools
-        from neograph.factory import register_tool_factory
         from neograph.tool import ToolBudgetTracker
+        from tests.fakes import register_tool_factory
 
         class Answer(_BM):
             answer: str
@@ -2963,10 +2911,6 @@ class TestDSMLAfterTokenBudget:
             )
 
         register_tool_factory("search", search_factory)
-        configure_llm(
-            llm_factory=lambda tier: TokenBudgetDSMLFake(),
-            prompt_compiler=lambda t, d, **kw: [{"role": "user", "content": "test"}],
-        )
 
         tools = [Tool(name="search", description="search")]
         budget = ToolBudgetTracker(tools)
@@ -2985,7 +2929,7 @@ class TestDSMLAfterTokenBudget:
                     "token_budget": 10,
                     "max_iterations": 50,
                 },
-            )
+             runtime=build_fake_runtime(lambda tier: TokenBudgetDSMLFake()), tool_factory_lookup=build_fake_tool_lookup())
 
         assert parsed.answer == "recovered-after-token-budget"
         assert len(interactions) == 1
@@ -3021,10 +2965,10 @@ class TestMultipleIndependentDSMLRecoveries:
         from langchain_core.tools import StructuredTool
         from pydantic import BaseModel as _BM
 
-        from neograph import Tool, configure_llm
+        from neograph import Tool
         from neograph._tool_loop import invoke_with_tools
-        from neograph.factory import register_tool_factory
         from neograph.tool import ToolBudgetTracker
+        from tests.fakes import register_tool_factory
 
         class Answer(_BM):
             answer: str
@@ -3071,10 +3015,6 @@ class TestMultipleIndependentDSMLRecoveries:
         # --- Call 1: tool "search", answer "first-recovered" ---
         fake1 = DSMLThenJsonFake("search", "first-recovered")
         register_tool_factory("search", make_tool_factory("search"))
-        configure_llm(
-            llm_factory=lambda tier: fake1,
-            prompt_compiler=lambda t, d, **kw: [{"role": "user", "content": "test-1"}],
-        )
 
         tools1 = [Tool(name="search", description="search", budget=1)]
         budget1 = ToolBudgetTracker(tools1)
@@ -3088,7 +3028,7 @@ class TestMultipleIndependentDSMLRecoveries:
             tools=tools1,
             budget_tracker=budget1,
             llm_config={"output_strategy": "json_mode"},
-        )
+         runtime=build_fake_runtime(lambda tier: fake1), tool_factory_lookup=build_fake_tool_lookup())
 
         assert parsed1.answer == "first-recovered"
         assert len(interactions1) == 1
@@ -3098,10 +3038,6 @@ class TestMultipleIndependentDSMLRecoveries:
         # --- Call 2: tool "lookup", answer "second-recovered" ---
         fake2 = DSMLThenJsonFake("lookup", "second-recovered")
         register_tool_factory("lookup", make_tool_factory("lookup"))
-        configure_llm(
-            llm_factory=lambda tier: fake2,
-            prompt_compiler=lambda t, d, **kw: [{"role": "user", "content": "test-2"}],
-        )
 
         tools2 = [Tool(name="lookup", description="lookup", budget=1)]
         budget2 = ToolBudgetTracker(tools2)
@@ -3115,7 +3051,7 @@ class TestMultipleIndependentDSMLRecoveries:
             tools=tools2,
             budget_tracker=budget2,
             llm_config={"output_strategy": "json_mode"},
-        )
+         runtime=build_fake_runtime(lambda tier: fake2), tool_factory_lookup=build_fake_tool_lookup())
 
         assert parsed2.answer == "second-recovered"
         assert len(interactions2) == 1
@@ -3164,10 +3100,10 @@ class TestBudgetExhaustedMessageFallback:
         from langchain_core.messages import AIMessage
         from pydantic import BaseModel as _BM
 
-        from neograph import Tool, configure_llm
+        from neograph import Tool
         from neograph._tool_loop import invoke_with_tools
-        from neograph.factory import register_tool_factory
         from neograph.tool import ToolBudgetTracker
+        from tests.fakes import register_tool_factory
 
         captured = []
         call_count = [0]
@@ -3190,10 +3126,6 @@ class TestBudgetExhaustedMessageFallback:
             "langchain_core.tools", fromlist=["StructuredTool"]
         ).StructuredTool.from_function(lambda q="": "ok", name="x", description="x"))
 
-        configure_llm(
-            llm_factory=lambda tier: CaptureFake(),
-            prompt_compiler=lambda t, d, **kw: [{"role": "user", "content": "test"}],
-        )
 
         class Answer(_BM):
             answer: str
@@ -3207,6 +3139,7 @@ class TestBudgetExhaustedMessageFallback:
         llm_config = _LlmConfig(**kwargs)
 
         parsed, _ = invoke_with_tools(
+            runtime=build_fake_runtime(lambda tier: CaptureFake()),
             model_tier="fast",
             prompt_template="test",
             input_data={},
@@ -3215,6 +3148,7 @@ class TestBudgetExhaustedMessageFallback:
             tools=tools,
             budget_tracker=budget,
             llm_config=llm_config,
+            tool_factory_lookup=build_fake_tool_lookup(),
         )
         return parsed, captured
 
@@ -3338,10 +3272,10 @@ class TestDefaultBudgetExhaustedMessageRendersModelName:
         from langchain_core.messages import AIMessage
         from pydantic import BaseModel as _BM
 
-        from neograph import Tool, configure_llm
+        from neograph import Tool
         from neograph._tool_loop import invoke_with_tools
-        from neograph.factory import register_tool_factory
         from neograph.tool import ToolBudgetTracker
+        from tests.fakes import register_tool_factory
 
         captured_messages = []
         call_count = [0]
@@ -3363,10 +3297,6 @@ class TestDefaultBudgetExhaustedMessageRendersModelName:
         register_tool_factory("x", lambda c, tc: __import__(
             "langchain_core.tools", fromlist=["StructuredTool"]
         ).StructuredTool.from_function(lambda q="": "ok", name="x", description="x"))
-        configure_llm(
-            llm_factory=lambda tier: CaptureFake(),
-            prompt_compiler=lambda t, d, **kw: [{"role": "user", "content": "test"}],
-        )
 
         class ExplorationResult(_BM):
             answer: str
@@ -3383,7 +3313,7 @@ class TestDefaultBudgetExhaustedMessageRendersModelName:
             tools=tools,
             budget_tracker=budget,
             llm_config={"output_strategy": "json_mode"},
-        )
+         runtime=build_fake_runtime(lambda tier: CaptureFake()), tool_factory_lookup=build_fake_tool_lookup())
 
         assert parsed.answer == "ok"
         retry_msg = captured_messages[-1][-1]
@@ -3413,10 +3343,10 @@ class TestSafetyBreakOnGuardWithRogueToolCalls:
         from pydantic import BaseModel as _BM
         from structlog.testing import capture_logs
 
-        from neograph import Tool, configure_llm
+        from neograph import Tool
         from neograph._tool_loop import invoke_with_tools
-        from neograph.factory import register_tool_factory
         from neograph.tool import ToolBudgetTracker
+        from tests.fakes import register_tool_factory
 
         class Result(_BM):
             answer: str
@@ -3454,10 +3384,6 @@ class TestSafetyBreakOnGuardWithRogueToolCalls:
                 _search_impl, name="search", description="search tool"
             ),
         )
-        configure_llm(
-            llm_factory=lambda tier: fake,
-            prompt_compiler=lambda t, d, **kw: [{"role": "user", "content": "test"}],
-        )
 
         tools = [Tool(name="search", description="search tool")]
         budget = ToolBudgetTracker(tools)
@@ -3472,7 +3398,7 @@ class TestSafetyBreakOnGuardWithRogueToolCalls:
                 tools=tools,
                 budget_tracker=budget,
                 llm_config={"max_iterations": 1, "output_strategy": "json_mode"},
-            )
+             runtime=build_fake_runtime(lambda tier: fake), tool_factory_lookup=build_fake_tool_lookup())
 
         assert parsed.answer == "breakthrough"
         assert fake.calls == 2
@@ -3513,10 +3439,10 @@ class TestToolExceptionPropagates:
         from langchain_core.tools import StructuredTool
         from pydantic import BaseModel as _BM
 
-        from neograph import Tool, configure_llm
+        from neograph import Tool
         from neograph._tool_loop import invoke_with_tools
-        from neograph.factory import register_tool_factory
         from neograph.tool import ToolBudgetTracker
+        from tests.fakes import register_tool_factory
 
         class Answer(_BM):
             answer: str
@@ -3548,10 +3474,6 @@ class TestToolExceptionPropagates:
                 _boom, name="boom", description="raises"
             ),
         )
-        configure_llm(
-            llm_factory=lambda tier: ToolCallingFake(),
-            prompt_compiler=lambda t, d, **kw: [{"role": "user", "content": "go"}],
-        )
 
         tools = [Tool(name="boom", description="raises")]
         budget = ToolBudgetTracker(tools)
@@ -3566,7 +3488,7 @@ class TestToolExceptionPropagates:
                 tools=tools,
                 budget_tracker=budget,
                 llm_config={"output_strategy": "json_mode"},
-            )
+             runtime=build_fake_runtime(lambda tier: ToolCallingFake()), tool_factory_lookup=build_fake_tool_lookup())
 
 
 class TestToolCallsShapeEdgeCases:
@@ -3589,10 +3511,10 @@ class TestToolCallsShapeEdgeCases:
         from langchain_core.tools import StructuredTool
         from pydantic import BaseModel as _BM
 
-        from neograph import Tool, configure_llm
+        from neograph import Tool
         from neograph._tool_loop import invoke_with_tools
-        from neograph.factory import register_tool_factory
         from neograph.tool import ToolBudgetTracker
+        from tests.fakes import register_tool_factory
 
         class Answer(_BM):
             answer: str
@@ -3621,10 +3543,6 @@ class TestToolCallsShapeEdgeCases:
                 lambda q="": "ok", name="x", description="x"
             ),
         )
-        configure_llm(
-            llm_factory=lambda tier: EmptyListFake(),
-            prompt_compiler=lambda t, d, **kw: [{"role": "user", "content": "test"}],
-        )
 
         tools = [Tool(name="x", description="x")]
         budget = ToolBudgetTracker(tools)
@@ -3638,7 +3556,7 @@ class TestToolCallsShapeEdgeCases:
             tools=tools,
             budget_tracker=budget,
             llm_config={"output_strategy": "json_mode"},
-        )
+         runtime=build_fake_runtime(lambda tier: EmptyListFake()), tool_factory_lookup=build_fake_tool_lookup())
 
         assert call_count[0] == 1
         assert parsed.answer == "done"
@@ -3651,10 +3569,10 @@ class TestToolCallsShapeEdgeCases:
         from langchain_core.tools import StructuredTool
         from pydantic import BaseModel as _BM
 
-        from neograph import Tool, configure_llm
+        from neograph import Tool
         from neograph._tool_loop import invoke_with_tools
-        from neograph.factory import register_tool_factory
         from neograph.tool import ToolBudgetTracker
+        from tests.fakes import register_tool_factory
 
         class Answer(_BM):
             answer: str
@@ -3677,10 +3595,6 @@ class TestToolCallsShapeEdgeCases:
                 lambda q="": "ok", name="x", description="x"
             ),
         )
-        configure_llm(
-            llm_factory=lambda tier: AbsentAttrFake(),
-            prompt_compiler=lambda t, d, **kw: [{"role": "user", "content": "test"}],
-        )
 
         tools = [Tool(name="x", description="x")]
         budget = ToolBudgetTracker(tools)
@@ -3695,7 +3609,7 @@ class TestToolCallsShapeEdgeCases:
                 tools=tools,
                 budget_tracker=budget,
                 llm_config={"output_strategy": "json_mode"},
-            )
+             runtime=build_fake_runtime(lambda tier: AbsentAttrFake()), tool_factory_lookup=build_fake_tool_lookup())
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -3922,6 +3836,7 @@ class TestLlmConfigAsIRType:
     def test_factory_receives_full_typed_config_as_dict(self):
         """The user llm_factory boundary still receives a flat dict (preserved contract)."""
         from neograph._llm import _get_llm
+        from tests.fakes import build_fake_runtime
 
         captured: dict = {}
 
@@ -3929,16 +3844,11 @@ class TestLlmConfigAsIRType:
             captured.update(llm_config)
             return object()  # any sentinel
 
-        from neograph import configure_llm
-
-        configure_llm(
-            llm_factory=fake_factory,
-            prompt_compiler=lambda t, d, **kw: [{"role": "user", "content": "x"}],
-        )
+        runtime = build_fake_runtime(factory=fake_factory)
         from neograph._llm_config import LlmConfig
 
         cfg = LlmConfig(max_retries=4, provider_kwargs={"temperature": 0.3})
-        _get_llm("fast", node_name="n", llm_config=cfg)
+        _get_llm(runtime, "fast", node_name="n", llm_config=cfg)
         assert captured["max_retries"] == 4
         assert captured["temperature"] == 0.3
         # Default-set framework keys are now visible to the factory
@@ -4003,31 +3913,26 @@ class TestCallbackProtocols:
     """
 
     def test_llm_factory_protocol_field_type(self):
-        import typing
+        """LlmFactory Protocol is runtime-checkable and accepts the documented shape."""
+        from neograph._llm import LlmFactory
 
-        from neograph._llm import LlmFactory, configure_llm
-
-        hints = typing.get_type_hints(configure_llm)
-        assert hints["llm_factory"] is LlmFactory
+        f = lambda tier: None  # noqa: E731
+        assert isinstance(f, LlmFactory)
 
     def test_prompt_compiler_protocol_field_type(self):
-        import typing
+        """PromptCompiler Protocol is runtime-checkable."""
+        from neograph._llm import PromptCompiler
 
-        from neograph._llm import PromptCompiler, configure_llm
-
-        hints = typing.get_type_hints(configure_llm)
-        assert hints["prompt_compiler"] is PromptCompiler
+        f = lambda template, data, **kw: []  # noqa: E731
+        assert isinstance(f, PromptCompiler)
 
     def test_cost_callback_protocol_field_type(self):
-        import typing
+        """CostCallback Protocol is runtime-checkable."""
+        from neograph._llm import CostCallback
 
-        from neograph._llm import CostCallback, configure_llm
-
-        hints = typing.get_type_hints(configure_llm)
-        # CostCallback | None
-        args = typing.get_args(hints["cost_callback"])
-        assert CostCallback in args
-        assert type(None) in args
+        def cb(*, tier, input_tokens, output_tokens, **kw):
+            pass
+        assert isinstance(cb, CostCallback)
 
     def test_oracle_merge_hooks_protocol_field_types(self):
         import typing
@@ -4167,7 +4072,6 @@ class TestDictCoercionTypoRejection:
         from pydantic import BaseModel as _BM
         from pydantic import ValidationError as _VE
 
-        from neograph import configure_llm
         from neograph._llm import invoke_structured
 
         # Mock LLM should never be called -- the typo must raise first.
@@ -4182,10 +4086,6 @@ class TestDictCoercionTypoRejection:
                 called[0] = True
                 return None
 
-        configure_llm(
-            llm_factory=lambda tier, **kw: _NeverCalled(),
-            prompt_compiler=lambda t, d, **kw: [{"role": "user", "content": "x"}],
-        )
 
         class Out(_BM):
             text: str
@@ -4198,6 +4098,7 @@ class TestDictCoercionTypoRejection:
                 output_model=Out,
                 config={"configurable": {}},
                 llm_config={"max_retires": 5},  # typo
+                runtime=build_fake_runtime(),
             )
 
         assert called[0] is False, (
@@ -4209,10 +4110,10 @@ class TestDictCoercionTypoRejection:
         from pydantic import BaseModel as _BM
         from pydantic import ValidationError as _VE
 
-        from neograph import Tool, configure_llm
+        from neograph import Tool
         from neograph._tool_loop import invoke_with_tools
-        from neograph.factory import register_tool_factory
         from neograph.tool import ToolBudgetTracker
+        from tests.fakes import register_tool_factory
 
         called = [False]
 
@@ -4229,10 +4130,6 @@ class TestDictCoercionTypoRejection:
                 called[0] = True
                 return self
 
-        configure_llm(
-            llm_factory=lambda tier, **kw: _NeverCalled(),
-            prompt_compiler=lambda t, d, **kw: [{"role": "user", "content": "x"}],
-        )
         register_tool_factory("xmm8_probe", lambda c, tc: object())
 
         class Out(_BM):
@@ -4251,6 +4148,8 @@ class TestDictCoercionTypoRejection:
                 budget_tracker=budget,
                 config={"configurable": {}},
                 llm_config={"max_iterstions": 3},  # typo (max_iterations)
+                runtime=build_fake_runtime(),
+                tool_factory_lookup=build_fake_tool_lookup(),
             )
 
         assert called[0] is False, (

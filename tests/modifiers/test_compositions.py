@@ -21,8 +21,14 @@ from neograph import (
     node,
     run,
 )
-from neograph.factory import register_scripted, register_tool_factory
-from tests.fakes import FakeTool, ReActFake, configure_fake_llm
+from tests.fakes import (
+    FakeTool,
+    ReActFake,
+    build_test_compile_kwargs,
+    configure_fake_llm,
+    register_scripted,
+    register_tool_factory,
+)
 from tests.schemas import (
     Claims,
     ClusterGroup,
@@ -86,7 +92,7 @@ class TestNodeMap:
 
     def test_fanout_runs_when_map_sugar_used(self):
         """.map() drives the same fan-out/collect behavior as | Each(...)."""
-        from neograph.factory import register_scripted
+        from tests.fakes import register_scripted
 
         register_scripted("make_clusters", lambda input_data, config: Clusters(
             groups=[
@@ -105,7 +111,7 @@ class TestNodeMap:
         ).map(lambda s: s.make_clusters.groups, key="label")
 
         pipeline = Construct("test-map", nodes=[make, verify])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "test-001"})
 
         # Fan-out fired for BOTH clusters — pin cardinality and payload
@@ -195,7 +201,7 @@ class TestModifierAsFirstNode:
 
     def test_oracle_wires_from_start_when_first_node(self):
         """Oracle as the first (and only) node — router wired from START."""
-        from neograph.factory import register_scripted
+        from tests.fakes import register_scripted
 
         register_scripted("gen_start", lambda input_data, config: Claims(items=["from-start"]))
 
@@ -212,7 +218,7 @@ class TestModifierAsFirstNode:
         ) | Oracle(n=2, merge_fn="merge_start")
 
         pipeline = Construct("test-oracle-start", nodes=[node])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "test-001"})
 
         merged = result.get("gen")
@@ -224,12 +230,10 @@ class TestModifierAsFirstNode:
         from langgraph.graph import END, StateGraph
 
         from neograph.compiler import _add_node_to_graph
-        from neograph.factory import register_scripted
         from neograph.state import compile_state_model
 
-        register_scripted("process_item", lambda input_data, config: MatchResult(
-            cluster_label=input_data.label, matched=["done"],
-        ))
+        def process_item(input_data, config):
+            return MatchResult(cluster_label=input_data.label, matched=["done"])
 
         process = Node.scripted(
             "process", fn="process_item", inputs=ClusterGroup, outputs=MatchResult
@@ -238,7 +242,10 @@ class TestModifierAsFirstNode:
         pipeline = Construct("test-each-start", nodes=[process])
         state_model = compile_state_model(pipeline)
         graph = StateGraph(state_model)
-        prev = _add_node_to_graph(graph, process, None)
+        prev = _add_node_to_graph(
+            graph, process, None,
+            scripted_lookup={"process_item": process_item},
+        )
         graph.add_edge(prev, END)
         compiled = graph.compile()
         # Compilation succeeded — Each wired from START without crash
@@ -259,7 +266,7 @@ class TestDeepCompositions:
 
     def test_oracle_runs_per_item_when_nested_inside_each(self):
         """Each item gets Oracle ensemble — fan-out inside fan-out."""
-        from neograph.factory import register_scripted
+        from tests.fakes import register_scripted
 
         register_scripted("make_items", lambda input_data, config: Clusters(
             groups=[ClusterGroup(label="x", claim_ids=["1"]), ClusterGroup(label="y", claim_ids=["2"])]
@@ -296,7 +303,7 @@ class TestDeepCompositions:
             inner | Each(over="make.groups", key="label"),
         ])
 
-        graph = compile(parent)
+        graph = compile(parent, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "test-001"})
 
         # Each cluster got Oracle'd — 2 clusters × 2 generators = 4 total
@@ -306,7 +313,7 @@ class TestDeepCompositions:
 
     def test_tool_budget_enforced_when_gather_inside_subgraph(self):
         """Gather node inside subgraph exhausts tool budget, forced to respond."""
-        from neograph.factory import register_scripted
+        from tests.fakes import register_scripted
 
         deep_search_tool = FakeTool("deep_search", response="found")
         register_tool_factory("deep_search", lambda config, tool_config: deep_search_tool)
@@ -322,7 +329,7 @@ class TestDeepCompositions:
             ],
             final=lambda m: m(text="search complete"),
         )
-        configure_fake_llm(lambda tier: fake)
+        __llm_kw = configure_fake_llm(lambda tier: fake)
 
         register_scripted("prep_search", lambda input_data, config: Claims(items=["query"]))
 
@@ -347,7 +354,7 @@ class TestDeepCompositions:
             Node.scripted("prep", fn="prep_search", outputs=Claims),
             sub,
         ])
-        graph = compile(parent)
+        graph = compile(parent, **build_test_compile_kwargs(), **__llm_kw)
         result = run(graph, input={"node_id": "test-001"})
 
         # Tool budget was 3, so exactly 3 calls made despite LLM wanting 5
@@ -359,7 +366,7 @@ class TestDeepCompositions:
         """Operator inside a sub-construct pauses the entire parent pipeline."""
         from langgraph.checkpoint.memory import MemorySaver
 
-        from neograph.factory import register_condition, register_scripted
+        from tests.fakes import register_condition, register_scripted
 
         register_scripted("sub_check", lambda input_data, config: ValidationResult(
             passed=False, issues=["needs human"],
@@ -393,7 +400,7 @@ class TestDeepCompositions:
         # Operator lives inside sub-construct — parent needs checkpointer
         # so the recursive compile of the sub-construct gets it
 
-        graph = compile(parent, checkpointer=MemorySaver())
+        graph = compile(parent, checkpointer=MemorySaver(), **build_test_compile_kwargs())
         config = {"configurable": {"thread_id": "inner-op-test"}}
         result = run(graph, input={"node_id": "test-001"}, config=config)
 
@@ -535,7 +542,7 @@ class TestThreeSurfaceParity:
     def test_each_produces_dict_when_any_surface_used(self, build):
         """Each fan-out produces dict[str, MatchResult] keyed by label."""
         pipeline = build()
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "tsp-001"})
 
         verify_results = result.get("verify") or result.get("tsp_dec_verify")
@@ -550,7 +557,7 @@ class TestThreeSurfaceParity:
     def test_each_items_match_source_when_any_surface_used(self, build):
         """Each fan-out item has the correct cluster_label from the source."""
         pipeline = build()
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "tsp-002"})
 
         verify_results = result.get("verify") or result.get("tsp_dec_verify")
@@ -585,7 +592,7 @@ class TestModifierCombinations:
         import types as _types
 
         from neograph import compile, node, run
-        from neograph.factory import register_scripted
+        from tests.fakes import register_scripted
 
         gen_count = [0]
 
@@ -625,7 +632,7 @@ class TestModifierCombinations:
             Node.scripted("mc-make", fn="mc_make_clusters_rdu1", outputs=Clusters),
             inner | Each(over="mc_make.groups", key="label"),
         ])
-        graph = compile(parent)
+        graph = compile(parent, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "rdu1"})
 
         # Each cluster got Oracle'd (2 variants each) => 2 clusters x 2 = 4 calls
@@ -639,7 +646,7 @@ class TestModifierCombinations:
         node — the interrupt fires after Each results are collected."""
         from langgraph.checkpoint.memory import MemorySaver
 
-        from neograph.factory import register_condition, register_scripted
+        from tests.fakes import register_condition, register_scripted
 
         register_scripted(
             "mc_make_clusters_rdu4",
@@ -680,7 +687,7 @@ class TestModifierCombinations:
             | Operator(when="mc_check_failed")
         )
         pipeline = Construct("test-each-operator", nodes=[make, review, check])
-        graph = compile(pipeline, checkpointer=MemorySaver())
+        graph = compile(pipeline, checkpointer=MemorySaver(), **build_test_compile_kwargs())
         config = {"configurable": {"thread_id": "rdu4-test"}}
 
         result = run(graph, input={"node_id": "rdu4"}, config=config)
@@ -695,7 +702,7 @@ class TestModifierCombinations:
     def test_oracle_merges_variants_when_single_output_oracle_node(self):
         """neograph-rdu.6: Oracle modifier on a node with single-type outputs
         runs N variants and merges via scripted merge_fn."""
-        from neograph.factory import register_scripted
+        from tests.fakes import register_scripted
 
         gen_count = [0]
 
@@ -718,7 +725,7 @@ class TestModifierCombinations:
             | Oracle(n=2, merge_fn="mc_oracle_merge")
         )
         pipeline = Construct("test-oracle-merge", nodes=[gen_node])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "rdu6"})
 
         # Oracle ran 2 variants
@@ -737,7 +744,7 @@ class TestModifierCombinations:
         dict-form outputs write to {field_name}_{key}. The redirect misses
         them, each generator writes directly to per-key fields, causing
         concurrent write errors in LangGraph's state management."""
-        from neograph.factory import register_scripted
+        from tests.fakes import register_scripted
 
         gen_count = [0]
 
@@ -766,7 +773,7 @@ class TestModifierCombinations:
             | Oracle(n=2, merge_fn="dict_oracle_merge")
         )
         pipeline = Construct("test-dict-oracle", nodes=[gen_node])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "7ft"})
 
         # Oracle ran 2 variants
@@ -779,7 +786,7 @@ class TestModifierCombinations:
     def test_each_wraps_per_key_when_dict_outputs_with_each(self):
         """neograph-rdu.7: dict-form outputs + Each — each output key becomes
         dict[str, type] independently in state."""
-        from neograph.factory import register_scripted
+        from tests.fakes import register_scripted
 
         register_scripted(
             "mc_each_make",
@@ -808,7 +815,7 @@ class TestModifierCombinations:
             | Each(over="mc_each_make.groups", key="label")
         )
         pipeline = Construct("test-dict-each", nodes=[make, process])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "rdu7"})
 
         # Each output key should be a dict keyed by Each labels
@@ -856,7 +863,7 @@ class TestOracleOperatorCombo:
         The merged result must be in state before the interrupt fires."""
         from langgraph.checkpoint.memory import MemorySaver
 
-        from neograph.factory import register_condition, register_scripted
+        from tests.fakes import register_condition, register_scripted
 
         gen_count = [0]
 
@@ -890,7 +897,7 @@ class TestOracleOperatorCombo:
         )
 
         pipeline = Construct("test-oracle-operator", nodes=[gen_node])
-        graph = compile(pipeline, checkpointer=MemorySaver())
+        graph = compile(pipeline, checkpointer=MemorySaver(), **build_test_compile_kwargs())
         config = {"configurable": {"thread_id": "oracle-op-test"}}
 
         result = run(graph, input={"node_id": "oo-001"}, config=config)
@@ -910,7 +917,7 @@ class TestOracleOperatorCombo:
         and human feedback is accessible in state."""
         from langgraph.checkpoint.memory import MemorySaver
 
-        from neograph.factory import register_condition, register_scripted
+        from tests.fakes import register_condition, register_scripted
 
         gen_count = [0]
 
@@ -944,7 +951,7 @@ class TestOracleOperatorCombo:
         )
 
         pipeline = Construct("test-oracle-op-resume", nodes=[gen_node])
-        graph = compile(pipeline, checkpointer=MemorySaver())
+        graph = compile(pipeline, checkpointer=MemorySaver(), **build_test_compile_kwargs())
         config = {"configurable": {"thread_id": "oracle-op-resume"}}
 
         # First run: hits interrupt
@@ -966,7 +973,7 @@ class TestOracleOperatorCombo:
         Tests that modifiers compose across construct boundaries."""
         from langgraph.checkpoint.memory import MemorySaver
 
-        from neograph.factory import register_condition, register_scripted
+        from tests.fakes import register_condition, register_scripted
 
         register_scripted(
             "oo_sub_gen",
@@ -1013,7 +1020,7 @@ class TestOracleOperatorCombo:
             Node.scripted("oo-validate", fn="oo_validate", outputs=ValidationResult)
             | Operator(when="oo_val_failed"),
         ])
-        graph = compile(parent, checkpointer=MemorySaver())
+        graph = compile(parent, checkpointer=MemorySaver(), **build_test_compile_kwargs())
         config = {"configurable": {"thread_id": "oracle-sub-op-test"}}
 
         result = run(graph, input={"node_id": "oo-003"}, config=config)
@@ -1050,7 +1057,7 @@ class TestEachOracleFusion:
         """M items × N generators, grouped merge, dict output."""
         from pydantic import BaseModel
 
-        from neograph.factory import register_scripted
+        from tests.fakes import register_scripted
 
         class Chunk(BaseModel, frozen=True):
             chunk_idx: str
@@ -1087,7 +1094,7 @@ class TestEachOracleFusion:
             | Oracle(n=3, merge_fn="tpgi_merge")
             | Each(over="chunks.items", key="chunk_idx"),
         ])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "fusion-1"})
 
         decompose = result["decompose"]
@@ -1134,7 +1141,7 @@ class TestEachOracleFusion:
             return Scored(item_id=item.item_id, score=item.value * 0.1)
 
         pipeline = construct_from_functions("decorator-fusion", [make_items, score])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "fusion-2"})
 
         scored = result["score"]
@@ -1147,7 +1154,7 @@ class TestEachOracleFusion:
         """list[X] consumer of Each×Oracle dict[str, X] works (merge-after-fanout)."""
         from pydantic import BaseModel
 
-        from neograph.factory import register_scripted
+        from tests.fakes import register_scripted
 
         class Chunk(BaseModel, frozen=True):
             chunk_idx: str
@@ -1175,7 +1182,7 @@ class TestEachOracleFusion:
             Node.scripted("collect", fn="tpgi_collect",
                           inputs={"decompose": list[Result]}, outputs=RawText),
         ])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "fusion-list"})
 
         assert result["collect"].text == "collected 2 items"
@@ -1184,7 +1191,7 @@ class TestEachOracleFusion:
         """Node | Oracle | Each produces same result as Node | Each | Oracle."""
         from pydantic import BaseModel
 
-        from neograph.factory import register_scripted
+        from tests.fakes import register_scripted
 
         class Tpgi2Chunk(BaseModel, frozen=True):
             chunk_idx: str
@@ -1210,7 +1217,7 @@ class TestEachOracleFusion:
             | Oracle(n=2, merge_fn="tpgi2_mrg")
             | Each(over="chunks.items", key="chunk_idx"),
         ])
-        g1 = compile(p1)
+        g1 = compile(p1, **build_test_compile_kwargs())
         r1 = run(g1, input={"node_id": "order-1"})
 
         # Order 2: Each first, then Oracle
@@ -1220,7 +1227,7 @@ class TestEachOracleFusion:
             | Each(over="chunks.items", key="chunk_idx")
             | Oracle(n=2, merge_fn="tpgi2_mrg"),
         ])
-        g2 = compile(p2)
+        g2 = compile(p2, **build_test_compile_kwargs())
         r2 = run(g2, input={"node_id": "order-2"})
 
         # Both produce same shape and values
@@ -1235,7 +1242,7 @@ class TestEachOracleFusion:
         """Oracle models= routes different models to different generators within each item."""
         from pydantic import BaseModel
 
-        from neograph.factory import register_scripted
+        from tests.fakes import register_scripted
 
         class Tpgi2Item(BaseModel, frozen=True):
             item_id: str
@@ -1270,7 +1277,7 @@ class TestEachOracleFusion:
                      merge_fn="tpgi2_model_merge")
             | Each(over="items.items", key="item_id"),
         ])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "models-1"})
 
         proc = result["proc"]
@@ -1284,7 +1291,7 @@ class TestEachOracleFusion:
         """Each with 1-item collection + Oracle still works (M=1, N=3)."""
         from pydantic import BaseModel
 
-        from neograph.factory import register_scripted
+        from tests.fakes import register_scripted
 
         class Tpgi2Solo(BaseModel, frozen=True):
             solo_id: str
@@ -1317,7 +1324,7 @@ class TestEachOracleFusion:
             | Oracle(n=3, merge_fn="tpgi2_solo_merge")
             | Each(over="source.items", key="solo_id"),
         ])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "solo-1"})
 
         proc = result["proc"]
@@ -1333,7 +1340,7 @@ class TestEachOracleFusion:
 
         from neograph import FromInput
         from neograph import merge_fn as merge_fn_deco
-        from neograph.factory import register_scripted
+        from tests.fakes import register_scripted
 
         class Tpgi2DIChunk(BaseModel, frozen=True):
             chunk_idx: str
@@ -1372,7 +1379,7 @@ class TestEachOracleFusion:
             | Oracle(n=2, merge_fn="tpgi2_di_merge")
             | Each(over="chunks.items", key="chunk_idx"),
         ])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "di-test-42"})
 
         proc = result["proc"]
@@ -1399,7 +1406,7 @@ class TestEachOracleFusion:
 
         from neograph import FromInput
         from neograph import merge_fn as merge_fn_deco
-        from neograph.factory import register_scripted
+        from tests.fakes import register_scripted
 
         class RunCtx(BaseModel):
             node_id: str
@@ -1436,7 +1443,7 @@ class TestEachOracleFusion:
             | Oracle(n=2, merge_fn="bundled_merge")
             | Each(over="src.items", key="idx"),
         ])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "ctx-test", "project_root": "/proj"})
 
         proc = result["proc"]
@@ -1457,7 +1464,7 @@ class TestEachOracleFusion:
         """Programmatic Node.scripted() | Oracle() | Each() and reverse both compile and run."""
         from pydantic import BaseModel
 
-        from neograph.factory import register_scripted
+        from tests.fakes import register_scripted
 
         class Tpgi2ProgItem(BaseModel, frozen=True):
             prog_id: str
@@ -1489,7 +1496,7 @@ class TestEachOracleFusion:
             Node.scripted("source", fn="tpgi2_prog_src", outputs=Tpgi2ProgList),
             node_oe,
         ])
-        g1 = compile(p1)
+        g1 = compile(p1, **build_test_compile_kwargs())
         r1 = run(g1, input={"node_id": "prog-oe"})
 
         # Order 2: Each | Oracle
@@ -1503,7 +1510,7 @@ class TestEachOracleFusion:
             Node.scripted("source", fn="tpgi2_prog_src", outputs=Tpgi2ProgList),
             node_eo,
         ])
-        g2 = compile(p2)
+        g2 = compile(p2, **build_test_compile_kwargs())
         r2 = run(g2, input={"node_id": "prog-eo"})
 
         # Both produce same dict shape

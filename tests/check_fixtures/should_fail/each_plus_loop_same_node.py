@@ -3,8 +3,8 @@
 from pydantic import BaseModel
 
 from neograph import Node
-from neograph.factory import register_scripted
 from neograph.modifiers import Each, Loop
+from tests.fakes import register_scripted
 
 
 class Item(BaseModel, frozen=True):

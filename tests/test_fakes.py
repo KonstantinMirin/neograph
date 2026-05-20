@@ -6,7 +6,6 @@ from pydantic import BaseModel
 
 from tests.fakes import (
     StructuredFakeWithRaw,
-    configure_fake_llm,
 )
 
 
@@ -86,14 +85,16 @@ class TestStructuredFakeWithRaw:
     def test_invoke_structured_returns_correct_model_when_fake_with_raw(self):
         """invoke_structured returns the parsed model when using StructuredFakeWithRaw."""
         from neograph._llm import invoke_structured
+        from tests.fakes import build_fake_runtime
 
         fake = StructuredFakeWithRaw(
             lambda model: model(items=["end"]),
             usage={"prompt_tokens": 5, "completion_tokens": 15},
         )
-        configure_fake_llm(lambda tier: fake)
+        runtime = build_fake_runtime(factory=lambda tier: fake)
 
         result = invoke_structured(
+            runtime,
             model_tier="default",
             prompt_template="test",
             input_data={},

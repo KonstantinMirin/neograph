@@ -30,6 +30,7 @@ from pydantic import BaseModel, Field, PlainValidator, PrivateAttr
 from typing_extensions import TypeVar
 
 from neograph._llm_config import LlmConfig
+from neograph._llm_runtime import EMPTY_RUNTIME, LlmRuntime
 from neograph.errors import ConstructError, NeographError
 from neograph.renderers import Renderer
 
@@ -196,8 +197,11 @@ class Node(Modifiable, BaseModel):
     # Preserved by model_copy (Pydantic v2 copies __pydantic_private__).
     # _sidecar: (original_fn, param_names_tuple) from @node decoration.
     # _param_res: DI bindings from _classify_di_params.
+    # _scripted_shim: the closure built at construct-build time. compile()
+    #   reads it and inserts the entry into the per-compile scripted dict.
     _sidecar: tuple[Callable, tuple[str, ...]] | None = PrivateAttr(default=None)
     _param_res: dict | None = PrivateAttr(default=None)
+    _scripted_shim: Callable | None = PrivateAttr(default=None)
 
     # arbitrary_types_allowed: required for the runtime_checkable Protocol
     # fields ``raw_fn``, ``renderer``, ``skip_when``, ``skip_value`` (none of
@@ -273,6 +277,11 @@ class Node(Modifiable, BaseModel):
         input: Any = None,
         *,
         config: dict | None = None,
+        llm_factory: Callable | None = None,
+        prompt_compiler: Callable | None = None,
+        scripted: dict[str, Callable] | None = None,
+        conditions: dict[str, Callable] | None = None,
+        tool_factories: dict[str, Callable] | None = None,
     ) -> Any:
         """Execute this node in isolation — for unit testing.
 
@@ -287,9 +296,12 @@ class Node(Modifiable, BaseModel):
             result = extract.run_isolated(input={"raw": "hello"})
             assert result.text == "hello"
 
-            # Unit test a produce node (with configure_llm already set)
-            configure_llm(llm_factory=lambda tier: FakeLLM(), prompt_compiler=...)
-            result = classify.run_isolated(input=Claims(items=["x"]))
+            # Unit test a produce node
+            result = classify.run_isolated(
+                input=Claims(items=["x"]),
+                llm_factory=lambda tier: FakeLLM(),
+                prompt_compiler=lambda t, d, **kw: [{"role": "user", "content": "x"}],
+            )
             assert isinstance(result, Classified)
 
         Note:
@@ -328,7 +340,56 @@ class Node(Modifiable, BaseModel):
                 node=self.name,
             )
 
-        node_fn = make_node_fn(self)
+        # Fail-loud check (§2): LLM-mode nodes require llm_factory +
+        # prompt_compiler kwargs.
+        if self.mode in ("think", "agent", "act"):
+            need_factory = llm_factory is None
+            need_compiler = prompt_compiler is None
+            if need_factory or need_compiler:
+                missing = []
+                if need_factory:
+                    missing.append("llm_factory")
+                if need_compiler:
+                    missing.append("prompt_compiler")
+                raise NeographError.build(
+                    f"Node '{self.name}' (mode={self.mode}) requires runtime configuration",
+                    expected="llm_factory= and prompt_compiler= passed to run_isolated()",
+                    found=f"{' and '.join(missing)} not set",
+                    hint=f"Pass llm_factory= and prompt_compiler= to {self.name}.run_isolated().",
+                    node=self.name,
+                )
+
+        if llm_factory is not None or prompt_compiler is not None:
+            runtime = LlmRuntime.build(
+                llm_factory=llm_factory,
+                prompt_compiler=prompt_compiler,
+            )
+        else:
+            runtime = EMPTY_RUNTIME
+
+        # Collect a scripted_lookup for the node. Start with this Node's
+        # own `_scripted_shim` (if any), merge in caller-supplied `scripted=`,
+        # then merge in decorator-side dicts (for @merge_fn / @tool /
+        # interrupt_when shims that were attached at decoration time).
+        from neograph.decorators import _decorator_scripted, _decorator_tool_factories
+        scripted_lookup: dict[str, Callable] = {}
+        own_shim = getattr(self, "_scripted_shim", None)
+        if own_shim is not None and self.scripted_fn:
+            scripted_lookup[self.scripted_fn] = own_shim
+        scripted_lookup.update(_decorator_scripted)
+        if scripted:
+            scripted_lookup.update(scripted)
+
+        tool_factory_lookup: dict[str, Callable] = dict(_decorator_tool_factories)
+        if tool_factories:
+            tool_factory_lookup.update(tool_factories)
+
+        node_fn = make_node_fn(
+            self,
+            runtime=runtime,
+            scripted_lookup=scripted_lookup,
+            tool_factory_lookup=tool_factory_lookup,
+        )
 
         # Build a minimal state dict the node function can read
         state: dict[str, Any] = {}

@@ -17,7 +17,7 @@ from neograph._llm import (
     _resolve_var,
     _substitute_vars,
 )
-from tests.fakes import StructuredFake, configure_fake_llm
+from tests.fakes import StructuredFake, build_fake_runtime, build_test_compile_kwargs, configure_fake_llm
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Detection heuristic
@@ -191,11 +191,8 @@ class TestCompilePromptInline:
             captured.append(template)
             return [{"role": "system", "content": "compiled"}]
 
-        configure_fake_llm(
-            factory=lambda tier: StructuredFake(lambda m: m()),
-            prompt_compiler=fake_compiler,
-        )
-        msgs = _compile_prompt("rw/summarize", {"data": "x"})
+        runtime = build_fake_runtime(prompt_compiler=fake_compiler)
+        msgs = _compile_prompt("rw/summarize", {"data": "x"}, runtime=runtime)
         assert captured == ["rw/summarize"]
         assert msgs[0]["content"] == "compiled"
 
@@ -207,7 +204,7 @@ class TestCompilePromptInline:
             called.append(True)
             return [{"role": "user", "content": "from compiler"}]
 
-        configure_fake_llm(
+        _llm_kw = configure_fake_llm(
             factory=lambda tier: StructuredFake(lambda m: m()),
             prompt_compiler=spy_compiler,
         )
@@ -249,8 +246,7 @@ class TestInlinePromptThroughFullDispatch:
         silently returns "" instead of the field value.
         """
         from neograph import Construct, Node, compile, run
-        from neograph.factory import register_scripted
-        from tests.fakes import configure_fake_llm
+        from tests.fakes import configure_fake_llm, register_scripted
 
         class Claim(BaseModel):
             claim_id: str
@@ -282,7 +278,7 @@ class TestInlinePromptThroughFullDispatch:
                 return Bound()
 
         fake = CapturingFake()
-        configure_fake_llm(
+        _llm_kw = configure_fake_llm(
             factory=lambda tier: fake,
             prompt_compiler=lambda t, d, **kw: [{"role": "user", "content": "ERROR: compiler called for inline"}],
         )
@@ -296,7 +292,7 @@ class TestInlinePromptThroughFullDispatch:
             Node("judge", prompt="Judge this claim: ${seed.text}",
                  model="default", outputs=Verdict, inputs={"seed": Claim}),
         ])
-        graph = compile(parent)
+        graph = compile(parent, **_llm_kw, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "x3gz"})
 
         assert result["judge"].disposition == "confirmed"
@@ -329,8 +325,7 @@ class TestInlinePromptThroughFullDispatch:
     def test_whole_var_renders_usefully_through_pipeline(self):
         """${seed} (no dotted access) must produce useful text, not Pydantic repr."""
         from neograph import Construct, Node, compile, run
-        from neograph.factory import register_scripted
-        from tests.fakes import StructuredFakeWithRaw, configure_fake_llm
+        from tests.fakes import StructuredFakeWithRaw, configure_fake_llm, register_scripted
 
         class Claim(BaseModel):
             text: str
@@ -342,7 +337,7 @@ class TestInlinePromptThroughFullDispatch:
 
         # Use a prompt compiler that captures what it receives for file-ref prompts
         # For inline prompts, _substitute_vars handles it directly
-        configure_fake_llm(
+        _llm_kw = configure_fake_llm(
             factory=lambda tier: StructuredFakeWithRaw(
                 lambda m: m(answer="yes"),
             ),
@@ -356,7 +351,7 @@ class TestInlinePromptThroughFullDispatch:
             Node("judge", prompt="Evaluate: ${seed}",
                  model="default", outputs=Result, inputs={"seed": Claim}),
         ])
-        graph = compile(parent)
+        graph = compile(parent, **_llm_kw, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "x3gz-whole"})
         assert result["judge"].answer == "yes"
 
@@ -540,7 +535,7 @@ class TestResolveImageErrors:
         class Score(BaseModel, frozen=True):
             score: float
 
-        configure_fake_llm(lambda tier: CaptureMultimodalLLM(tier))
+        _llm_kw = configure_fake_llm(lambda tier: CaptureMultimodalLLM(tier))
 
         b64 = base64.b64encode(b"test-image").decode()
 
@@ -557,7 +552,7 @@ class TestResolveImageErrors:
         mod.score_image = score_image
 
         pipeline = construct_from_module(mod, name="e2e-multimodal")
-        graph = compile(pipeline)
+        graph = compile(pipeline, **_llm_kw, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "e2e-mm"})
 
         assert result["score_image"].score == 0.9
@@ -598,15 +593,15 @@ class TestRenderPromptMultimodal:
         from neograph import Node
         from neograph._llm import render_prompt
 
-        configure_fake_llm(
-            lambda tier: None,
+        runtime = build_fake_runtime(
+            factory=lambda tier: None,
             prompt_compiler=lambda t, d, **kw: [{"role": "user", "content": t}],
         )
 
         b64 = base64.b64encode(b"img").decode()
         n = Node("score", mode="think", outputs=BaseModel,
                  prompt="Rate: ${image:photo}", model="fast")
-        result = render_prompt(n, {"photo": b64})
+        result = render_prompt(n, {"photo": b64}, runtime=runtime)
         assert "[image]" in result
 
 
@@ -649,7 +644,7 @@ class TestJsonModeMultimodal:
                 from langchain_core.messages import AIMessage
                 return AIMessage(content='{"score": 0.9}')
 
-        configure_fake_llm(lambda tier: CaptureLLM(tier))
+        _llm_kw = configure_fake_llm(lambda tier: CaptureLLM(tier))
 
         from neograph._llm import invoke_structured
 
@@ -657,7 +652,7 @@ class TestJsonModeMultimodal:
             score: float
 
         b64 = base64.b64encode(b"test-img").decode()
-        result = invoke_structured(
+        result = invoke_structured(runtime=build_fake_runtime(_llm_kw['llm_factory'], _llm_kw['prompt_compiler']),
             model_tier="fast",
             prompt_template="Rate: ${image:photo}",
             input_data={"photo": b64},
@@ -845,11 +840,11 @@ class TestTemplateRefBoundary:
             compiler_calls.append(template)
             return [{"role": "user", "content": "compiled"}]
 
-        configure_fake_llm(
-            lambda tier: None,
+        runtime = build_fake_runtime(
+            factory=lambda tier: None,
             prompt_compiler=mock_compiler,
         )
 
-        msgs = _compile_prompt("rw/score-image", {"photo": "base64data"})
+        msgs = _compile_prompt("rw/score-image", {"photo": "base64data"}, runtime=runtime)
         assert compiler_calls == ["rw/score-image"]
         assert msgs[0]["content"] == "compiled"

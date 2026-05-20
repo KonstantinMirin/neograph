@@ -118,6 +118,9 @@ def lint(
     config: dict[str, Any] | None = None,
     known_template_vars: set[str] | None = None,
     template_resolver: Callable[[str], str | None] | None = None,
+    llm_factory: Any = None,
+    prompt_compiler: Any = None,
+    conditions: dict[str, Callable] | None = None,
 ) -> list[LintIssue]:
     """Validate DI bindings and template placeholders in *construct*.
 
@@ -145,12 +148,69 @@ def lint(
 
     Returns a list of LintIssue instances. An empty list means all bindings
     are satisfied.
+
+    Fail-loud LLM kwarg surfacing (§2): when the construct contains any
+    LLM-mode node (think/agent/act) and neither the supplied kwargs nor the
+    legacy `configure_llm()` compat slot provides `llm_factory` and
+    `prompt_compiler`, `lint()` emits a `LintIssue(kind="llm_kwargs_missing")`
+    naming the offending node(s). The compile-time path (`compile()`) raises;
+    `lint()` surfaces the same contract as a discoverable issue.
     """
     issues: list[LintIssue] = []
+    _emit_missing_llm_kwargs_issue(construct, llm_factory, prompt_compiler, issues)
+
     all_known = _KNOWN_EXTRAS | (known_template_vars or set())
     _walk(construct, config, issues, known_vars=all_known,
-          template_resolver=template_resolver)
+          template_resolver=template_resolver,
+          conditions=conditions)
     return issues
+
+
+def _emit_missing_llm_kwargs_issue(
+    construct: Construct,
+    llm_factory: Any,
+    prompt_compiler: Any,
+    issues: list[LintIssue],
+) -> None:
+    """Surface a `llm_kwargs_missing` LintIssue when LLM-mode nodes lack runtime config.
+
+    This is the lint-surface counterpart to compile()'s fail-loud raise: the
+    contract is the same (§2 requires LLM kwargs), but lint() reports it as
+    a discoverable issue rather than raising.
+    """
+    llm_nodes: list[str] = []
+
+    def _walk_for_llm(items: list) -> None:
+        for it in items:
+            if isinstance(it, Construct):
+                _walk_for_llm(it.nodes)
+                continue
+            if isinstance(it, Node) and it.mode in ("think", "agent", "act"):
+                llm_nodes.append(it.name)
+
+    _walk_for_llm(construct.nodes)
+    if not llm_nodes:
+        return
+
+    missing = []
+    if llm_factory is None:
+        missing.append("llm_factory")
+    if prompt_compiler is None:
+        missing.append("prompt_compiler")
+    if not missing:
+        return
+
+    issues.append(LintIssue(
+        node_name=", ".join(llm_nodes),
+        param="",
+        kind="llm_kwargs_missing",
+        message=(
+            f"LLM-mode nodes ({', '.join(llm_nodes)}) require "
+            f"{' and '.join(missing)} at compile() time. "
+            "Pass these kwargs to compile() or configure them via "
+            "configure_llm() (legacy)."
+        ),
+    ))
 
 
 def _walk(
@@ -160,14 +220,16 @@ def _walk(
     *,
     known_vars: frozenset[str] | set[str] = _KNOWN_EXTRAS,
     template_resolver: Callable[[str], str | None] | None = None,
+    conditions: dict[str, Callable] | None = None,
 ) -> None:
     """Recursively walk a construct and check DI bindings + template placeholders."""
     if isinstance(item, Construct):
         # Check Loop condition on the Construct itself (Construct | Loop)
-        _check_loop_condition(item, issues)
+        _check_loop_condition(item, issues, conditions=conditions)
         for child in item.nodes:
             _walk(child, config, issues, known_vars=known_vars,
-                  template_resolver=template_resolver)
+                  template_resolver=template_resolver,
+                  conditions=conditions)
         return
 
     if not isinstance(item, Node):
@@ -195,7 +257,7 @@ def _walk(
                                  template_resolver=template_resolver)
 
     # 3. Loop condition checks
-    _check_loop_condition(item, issues)
+    _check_loop_condition(item, issues, conditions=conditions)
 
 
 def _check_template_placeholders(
@@ -285,16 +347,18 @@ def _check_template_placeholders(
 def _check_loop_condition(
     item: Construct | Node,
     issues: list[LintIssue],
+    *,
+    conditions: dict[str, Callable] | None = None,
 ) -> None:
     """Check Loop modifier's when-condition for common issues.
 
     Three checks:
-    1. String condition not registered in the condition registry (ERROR).
+    1. String condition not in the `conditions=` kwarg (ERROR).
     2. Callable condition not None-safe — first iteration value is None (WARN).
     3. Registered string condition that resolves to a parse_condition result,
        which is inherently None-unsafe (ERROR).
     """
-    from neograph._registry import registry
+    conditions = conditions or {}
 
     ms = getattr(item, "modifier_set", None)
     if ms is None:
@@ -311,7 +375,7 @@ def _check_loop_condition(
 
     if isinstance(condition, str):
         # Check 1: is the string condition registered?
-        resolved = registry.condition.get(condition)
+        resolved = conditions.get(condition)
         if resolved is None:
             issues.append(LintIssue(
                 node_name=item_label,
@@ -320,8 +384,7 @@ def _check_loop_condition(
                 required=True,
                 message=(
                     f"Loop condition '{condition}' is not registered. "
-                    f"Register it via register_condition('{condition}', fn) "
-                    f"before compile()."
+                    f"Pass conditions={{'{condition}': fn}} to compile()."
                 ),
             ))
             return  # can't test None-safety without the callable

@@ -18,6 +18,7 @@ from neograph import (
     node,
     run,
 )
+from tests.fakes import build_test_compile_kwargs
 from tests.schemas import (
     Claims,
     MergedResult,
@@ -373,7 +374,7 @@ class TestMergeFnDecoratorEdges:
     def test_legacy_shim_invoked(self):
         """Line 1047: the legacy shim path is exercised when called directly."""
         from neograph.decorators import merge_fn as merge_fn_deco
-        from neograph.factory import lookup_scripted
+        from tests.fakes import lookup_scripted
 
         @merge_fn_deco(name="_test_legacy_shim")
         def my_merge(variants: list[Claims]) -> Claims:
@@ -880,7 +881,7 @@ class TestOutputsInference:
             return Claims(items=[step_one.text])
 
         pipeline = construct_from_functions("inferred-pipe", [step_one, step_two])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "test", "topic": "x"})
         assert result["step_two"].items == ["got x"]
 
@@ -963,7 +964,7 @@ class TestOutputsInference:
         from neograph import CompileError
 
         with pytest.raises(CompileError):
-            compile(Construct("broken", nodes=[n]))
+            compile(Construct("broken", nodes=[n]), **build_test_compile_kwargs())
 
     def test_mismatch_with_subclass_still_raises(self):
         """Subclass mismatch: outputs=Parent with -> Child still raises."""

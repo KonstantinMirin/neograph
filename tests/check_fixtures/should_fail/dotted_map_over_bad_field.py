@@ -3,7 +3,7 @@
 from pydantic import BaseModel
 
 from neograph import Construct, Each, Node
-from neograph.factory import register_scripted
+from tests.fakes import register_scripted
 
 
 class FilterResult(BaseModel, frozen=True):

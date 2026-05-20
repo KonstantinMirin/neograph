@@ -10,6 +10,7 @@ Wiring helpers (Each, Oracle, Loop, Branch, Operator topology) live in _wiring.p
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 import structlog
@@ -17,7 +18,7 @@ from langgraph.graph import END, START, StateGraph
 from pydantic import BaseModel
 
 from neograph._dev_warnings import DEV_MODE
-from neograph._registry import registry
+from neograph._llm_runtime import EMPTY_RUNTIME, LlmRuntime, check_llm_kwargs_or_raise
 from neograph._state_keys import StateKeys
 from neograph._subconstruct import make_subgraph_fn
 from neograph._wiring import (  # noqa: F401 — re-exported for backward compat
@@ -31,10 +32,14 @@ from neograph._wiring import (  # noqa: F401 — re-exported for backward compat
     _wire_oracle,
 )
 from neograph.construct import Construct
+from neograph.decorators import (
+    _decorator_conditions,
+    _decorator_scripted,
+    _decorator_tool_factories,
+)
 from neograph.di import DIKind
-from neograph.errors import CompileError
+from neograph.errors import CompileError, ConfigurationError
 from neograph.factory import (
-    lookup_condition,
     make_each_redirect_fn,
     make_node_fn,
     make_oracle_merge_fn,
@@ -49,13 +54,41 @@ from neograph.state import compile_state_model, compute_node_fingerprints, compu
 log = structlog.get_logger()
 
 
-def compile(construct: Construct, checkpointer: Any = None, _context_types: dict[str, type] | None = None) -> Any:
+def compile(
+    construct: Construct,
+    checkpointer: Any = None,
+    _context_types: dict[str, type] | None = None,
+    *,
+    llm_factory: Any = None,
+    prompt_compiler: Any = None,
+    renderer: Any = None,
+    cost_callback: Any = None,
+    scripted: dict[str, Callable] | None = None,
+    conditions: dict[str, Callable] | None = None,
+    tool_factories: dict[str, Callable] | None = None,
+    _runtime: LlmRuntime | None = None,
+    _scripted_lookup: dict[str, Callable] | None = None,
+) -> Any:
     """Compile a Construct into an executable LangGraph StateGraph.
 
     Args:
         construct: The Construct to compile.
         checkpointer: LangGraph checkpointer for persistence/resume support.
                       Required if any node uses Operator (interrupt/resume).
+        llm_factory: Per-tier LLM client factory used by LLM-mode nodes.
+        prompt_compiler: Callable that turns a prompt template + input into
+            a message list for the LLM. Required by LLM-mode nodes.
+        renderer: Optional global renderer used for input rendering when a
+            node has no per-node renderer set.
+        cost_callback: Optional telemetry hook called after each LLM
+            invocation with token usage.
+        _runtime: Internal — sub-construct compiles thread the parent's
+            runtime through this argument instead of rebuilding it.
+
+    The LLM kwargs are closed over into a frozen `LlmRuntime` bundle and
+    threaded into every factory closure (`make_node_fn`,
+    `make_oracle_merge_fn`, etc.). Two `compile()` calls with different
+    kwargs produce fully isolated graphs (§2 multi-tenant guarantee).
 
     Retry concerns live in their own layers (see docs/design/architecture-decisions.md §3):
       - Transient API failures: user's llm_factory via model.with_retry(...)
@@ -63,6 +96,49 @@ def compile(construct: Construct, checkpointer: Any = None, _context_types: dict
       - Flaky external calls in scripted nodes: inside the node function
     """
     compile_log = log.bind(construct=construct.name, nodes=len(construct.nodes))
+
+    # Resolve runtime: explicit kwargs > internal pass-through > legacy compat.
+    if _runtime is not None:
+        runtime = _runtime
+    elif any(x is not None for x in (llm_factory, prompt_compiler, renderer, cost_callback)):
+        runtime = LlmRuntime.build(
+            llm_factory=llm_factory,
+            prompt_compiler=prompt_compiler,
+            renderer=renderer,
+            cost_callback=cost_callback,
+        )
+    else:
+        # No runtime configuration supplied — start empty. Fail-loud check
+        # below will raise CompileError if any LLM-mode nodes are present.
+        runtime = EMPTY_RUNTIME
+
+    # Per-compile scripted lookup: walk the construct, collect each Node's
+    # `_scripted_shim` PrivateAttr into a fresh dict. Factory closures close
+    # over this dict instead of consulting the deprecated fallback registry.
+    # When called recursively for a sub-construct, the parent passes its
+    # collected lookup so child-graph factory closures see the same shims.
+    if _scripted_lookup is not None:
+        scripted_lookup: dict[str, Callable] = _scripted_lookup
+    else:
+        scripted_lookup = _collect_scripted_shims(construct)
+        # Merge in decorator-side shims for inline body-merge / @merge_fn /
+        # interrupt_when callables. These are registered at decoration time
+        # and need to flow to compile()'s per-compile dict.
+        scripted_lookup.update(_decorator_scripted)
+        # Merge in callers' explicit `scripted=` kwargs LAST so they win.
+        if scripted:
+            scripted_lookup.update(scripted)
+
+    # Build per-compile condition + tool_factory dicts. Both seed from
+    # decorator-side registrations (for inline interrupt_when callables and
+    # `@tool` decorations) and merge in explicit kwargs.
+    condition_lookup: dict[str, Callable] = dict(_decorator_conditions)
+    if conditions:
+        condition_lookup.update(conditions)
+    tool_factory_lookup: dict[str, Callable] = dict(_decorator_tool_factories)
+    if tool_factories:
+        tool_factory_lookup.update(tool_factories)
+
     compile_log.info("compile_start",
                      node_names=[n.name for n in construct.nodes],
                      modifiers={n.name: n.modifier_set.combo.name
@@ -76,7 +152,14 @@ def compile(construct: Construct, checkpointer: Any = None, _context_types: dict
             _, item_mods = classify_modifiers(item)
             op = item_mods.get("operator")
             if op is not None and isinstance(op.when, str):
-                lookup_condition(op.when)  # raises ConfigurationError if not registered
+                if op.when not in condition_lookup:
+                    raise ConfigurationError.build(
+                        f"Condition '{op.when}' not registered",
+                        hint=(
+                            "Pass conditions={'" + op.when + "': fn} to compile() "
+                            "to register the condition."
+                        ),
+                    )
 
     # Validate: Operator requires checkpointer
     has_operator = any(
@@ -92,37 +175,24 @@ def compile(construct: Construct, checkpointer: Any = None, _context_types: dict
             construct=construct.name,
         )
 
-    # Validate: LLM nodes require configure_llm()
-    has_llm_node = any(
-        isinstance(item, Node) and item.mode in ("think", "agent", "act")
-        for item in construct.nodes
+    # Validate: LLM nodes require runtime configuration (fail-loud per §2).
+    check_llm_kwargs_or_raise(
+        construct,
+        runtime.llm_factory,
+        runtime.prompt_compiler,
+        source="compile()",
     )
-    if has_llm_node:
-        from neograph._llm import _llm_factory, _prompt_compiler
-        if _llm_factory is None or _prompt_compiler is None:
-            missing = []
-            if _llm_factory is None:
-                missing.append("llm_factory")
-            if _prompt_compiler is None:
-                missing.append("prompt_compiler")
-            raise CompileError.build(
-                "LLM nodes require configure_llm()",
-                expected="llm_factory and prompt_compiler configured",
-                found=f"{' and '.join(missing)} not set",
-                hint="Call neograph.configure_llm() before compile()",
-                construct=construct.name,
-            )
 
     # Validate: tool factory registrations
     for item in construct.nodes:
         if isinstance(item, Node) and item.mode in ("agent", "act") and item.tools:
             for t in item.tools:
-                if t.name not in registry.tool_factory:
+                if t.name not in tool_factory_lookup:
                     raise CompileError.build(
                         f"tool '{t.name}' has no registered factory",
-                        expected=f"register_tool_factory('{t.name}', factory_fn) called",
+                        expected=f"compile(..., tool_factories={{'{t.name}': factory_fn}})",
                         found="no factory registered",
-                        hint=f"Use register_tool_factory('{t.name}', factory_fn) before compile()",
+                        hint=f"Pass tool_factories={{'{t.name}': factory_fn}} to compile().",
                         node=item.name,
                         construct=construct.name,
                     )
@@ -141,12 +211,12 @@ def compile(construct: Construct, checkpointer: Any = None, _context_types: dict
 
     for item in construct.nodes:
         if isinstance(item, _BranchNode):
-            prev_node = _add_branch_to_graph(graph, item, prev_node)
+            prev_node = _add_branch_to_graph(graph, item, prev_node, runtime=runtime, scripted_lookup=scripted_lookup, tool_factory_lookup=tool_factory_lookup)
         elif isinstance(item, Construct):
-            prev_node = _add_subgraph(graph, item, prev_node, checkpointer=checkpointer, parent_state_model=state_model)
+            prev_node = _add_subgraph(graph, item, prev_node, checkpointer=checkpointer, parent_state_model=state_model, runtime=runtime, scripted_lookup=scripted_lookup, condition_lookup=condition_lookup, tool_factory_lookup=tool_factory_lookup)
         else:
             assert isinstance(item, Node)  # narrow ConstructItem Protocol to Node
-            prev_node = _add_node_to_graph(graph, item, prev_node)
+            prev_node = _add_node_to_graph(graph, item, prev_node, runtime=runtime, scripted_lookup=scripted_lookup, condition_lookup=condition_lookup, tool_factory_lookup=tool_factory_lookup)
 
     # Final edge to END
     if prev_node:
@@ -171,12 +241,40 @@ def compile(construct: Construct, checkpointer: Any = None, _context_types: dict
 
     # 6. Stash Construct for post-compile verification (verify_compiled)
     compiled._neo_construct = construct  # type: ignore[attr-defined]
+    compiled._neo_runtime = runtime  # type: ignore[attr-defined]
+    compiled._neo_scripted = scripted_lookup  # type: ignore[attr-defined]
+    compiled._neo_conditions = condition_lookup  # type: ignore[attr-defined]
+    compiled._neo_tool_factories = tool_factory_lookup  # type: ignore[attr-defined]
 
     # 7. Dev-mode DAG visualization
     if DEV_MODE:
         _print_dag_summary(compiled, construct)
 
     return compiled
+
+
+def _collect_scripted_shims(construct: Construct) -> dict[str, Any]:
+    """Walk the construct tree and build the per-compile scripted dict.
+
+    For each Node with a `_scripted_shim` PrivateAttr (attached by the
+    `@node` decorator path via `_register_node_scripted`), insert the
+    shim under `node.scripted_fn` into the returned dict. Sub-constructs
+    are walked recursively.
+    """
+    lookup: dict[str, Any] = {}
+
+    def _walk(nodes: list) -> None:
+        for item in nodes:
+            if isinstance(item, Construct):
+                _walk(item.nodes)
+                continue
+            if isinstance(item, Node):
+                shim = getattr(item, "_scripted_shim", None)
+                if shim is not None and item.scripted_fn:
+                    lookup[item.scripted_fn] = shim
+
+    _walk(construct.nodes)
+    return lookup
 
 
 def _collect_required_di(construct: Construct) -> dict[str, set[str]]:
@@ -267,6 +365,11 @@ def _add_subgraph(
     prev_node: str | None,
     checkpointer: Any = None,
     parent_state_model: type[BaseModel] | None = None,
+    *,
+    runtime: LlmRuntime = EMPTY_RUNTIME,
+    scripted_lookup: dict[str, Callable] | None = None,
+    condition_lookup: dict[str, Callable] | None = None,
+    tool_factory_lookup: dict[str, Callable] | None = None,
 ) -> str:
     """Compile a sub-Construct as an isolated subgraph node, with modifier support."""
     if sub.input is None:
@@ -291,8 +394,16 @@ def _add_subgraph(
             if finfo.annotation is not None:
                 _context_types[fname] = finfo.annotation
 
-    # Compile the sub-construct into its own graph (recursive, thread checkpointer)
-    sub_graph = compile(sub, checkpointer=checkpointer, _context_types=_context_types)
+    # Compile the sub-construct into its own graph (recursive, thread checkpointer + runtime)
+    sub_graph = compile(
+        sub,
+        checkpointer=checkpointer,
+        _context_types=_context_types,
+        _runtime=runtime,
+        _scripted_lookup=scripted_lookup,
+        conditions=condition_lookup,
+        tool_factories=tool_factory_lookup,
+    )
     field_name = field_name_for(sub.name)
 
     # Build the subgraph node function via factory
@@ -317,7 +428,9 @@ def _add_subgraph(
             collector_field = StateKeys.oracle_collector(field_name)
             redirect_fn = make_oracle_redirect_fn(subgraph_fn, field_name, collector_field)
             merge_fn = make_oracle_merge_fn(oracle, field_name, collector_field, sub.output,
-                                               llm_config=sub.llm_config or None)
+                                               llm_config=sub.llm_config or None,
+                                               runtime=runtime,
+                                               scripted_lookup=scripted_lookup)
             last_name = _wire_oracle(graph, sub.name, redirect_fn, merge_fn, oracle, prev_node)
         case ModifierCombo.EACH | ModifierCombo.EACH_OPERATOR:
             each = mods["each"]
@@ -325,7 +438,7 @@ def _add_subgraph(
             last_name = _wire_each(graph, sub.name, each_fn, each, prev_node)
         case ModifierCombo.LOOP | ModifierCombo.LOOP_OPERATOR:
             loop = mods["loop"]
-            last_name = _add_subgraph_loop(graph, sub, subgraph_fn, loop, prev_node)
+            last_name = _add_subgraph_loop(graph, sub, subgraph_fn, loop, prev_node, condition_lookup=condition_lookup)
         case ModifierCombo.BARE | ModifierCombo.OPERATOR:
             # Plain subgraph — no modifiers (or Operator only)
             graph.add_node(sub.name, subgraph_fn)
@@ -339,7 +452,7 @@ def _add_subgraph(
 
     # Operator stacking: add interrupt check after the primary modifier
     if operator:
-        last_name = _add_operator_check(graph, last_name, operator)
+        last_name = _add_operator_check(graph, last_name, operator, condition_lookup=condition_lookup)
 
     return last_name
 
@@ -348,6 +461,11 @@ def _add_node_to_graph(
     graph: StateGraph,
     node: Node,
     prev_node: str | None,
+    *,
+    runtime: LlmRuntime = EMPTY_RUNTIME,
+    scripted_lookup: dict[str, Callable] | None = None,
+    condition_lookup: dict[str, Callable] | None = None,
+    tool_factory_lookup: dict[str, Callable] | None = None,
 ) -> str:
     """Add a single node (with its modifiers) to the graph. Returns the last node name."""
     from typing import assert_never
@@ -358,20 +476,20 @@ def _add_node_to_graph(
     match combo:
         case ModifierCombo.EACH_ORACLE | ModifierCombo.EACH_ORACLE_OPERATOR:
             # Each x Oracle fusion: flat M x N Send topology
-            last_name = _add_each_oracle_fused(graph, node, mods["each"], mods["oracle"], prev_node)
+            last_name = _add_each_oracle_fused(graph, node, mods["each"], mods["oracle"], prev_node, runtime=runtime, scripted_lookup=scripted_lookup, tool_factory_lookup=tool_factory_lookup)
         case ModifierCombo.ORACLE | ModifierCombo.ORACLE_OPERATOR:
             # Oracle: expand to fan-out + merge
-            last_name = _add_oracle_nodes(graph, node, mods["oracle"], prev_node)
+            last_name = _add_oracle_nodes(graph, node, mods["oracle"], prev_node, runtime=runtime, scripted_lookup=scripted_lookup, tool_factory_lookup=tool_factory_lookup)
         case ModifierCombo.EACH | ModifierCombo.EACH_OPERATOR:
             # Each: expand to fan-out + barrier
-            last_name = _add_each_nodes(graph, node, mods["each"], prev_node)
+            last_name = _add_each_nodes(graph, node, mods["each"], prev_node, runtime=runtime, scripted_lookup=scripted_lookup, tool_factory_lookup=tool_factory_lookup)
         case ModifierCombo.LOOP | ModifierCombo.LOOP_OPERATOR:
             # Loop: conditional back-edge
-            last_name = _add_loop_back_edge(graph, node, mods["loop"], prev_node)
+            last_name = _add_loop_back_edge(graph, node, mods["loop"], prev_node, runtime=runtime, scripted_lookup=scripted_lookup, condition_lookup=condition_lookup, tool_factory_lookup=tool_factory_lookup)
         case ModifierCombo.BARE | ModifierCombo.OPERATOR:
             # Simple node — no modifiers (or Operator only)
             node_name = node.name
-            node_fn = make_node_fn(node)
+            node_fn = make_node_fn(node, runtime=runtime, scripted_lookup=scripted_lookup, tool_factory_lookup=tool_factory_lookup)
             graph.add_node(node_name, node_fn)
             if prev_node:
                 graph.add_edge(prev_node, node_name)
@@ -383,7 +501,7 @@ def _add_node_to_graph(
 
     # Operator stacking: add interrupt check after the primary modifier
     if operator:
-        last_name = _add_operator_check(graph, last_name, operator)
+        last_name = _add_operator_check(graph, last_name, operator, condition_lookup=condition_lookup)
 
     return last_name
 
@@ -393,16 +511,22 @@ def _add_oracle_nodes(
     node: Node,
     oracle: Any,
     prev_node: str | None,
+    *,
+    runtime: LlmRuntime = EMPTY_RUNTIME,
+    scripted_lookup: dict[str, Callable] | None = None,
+    tool_factory_lookup: dict[str, Callable] | None = None,
 ) -> str:
     """Expand Oracle modifier into fan-out generators + merge barrier."""
     field_name = field_name_for(node.name)
     collector_field = StateKeys.oracle_collector(field_name)
 
-    raw_fn = make_node_fn(node)
+    raw_fn = make_node_fn(node, runtime=runtime, scripted_lookup=scripted_lookup, tool_factory_lookup=tool_factory_lookup)
     redirect_fn = make_oracle_redirect_fn(raw_fn, field_name, collector_field)
     merge_fn = make_oracle_merge_fn(oracle, field_name, collector_field, node.outputs,
                                     node_inputs=node.inputs,
-                                    llm_config=node.llm_config or None)
+                                    llm_config=node.llm_config or None,
+                                    runtime=runtime,
+                                    scripted_lookup=scripted_lookup)
 
     return _wire_oracle(graph, node.name, redirect_fn, merge_fn, oracle, prev_node)
 
@@ -412,7 +536,11 @@ def _add_each_nodes(
     node: Node,
     each: Any,
     prev_node: str | None,
+    *,
+    runtime: LlmRuntime = EMPTY_RUNTIME,
+    scripted_lookup: dict[str, Callable] | None = None,
+    tool_factory_lookup: dict[str, Callable] | None = None,
 ) -> str:
     """Expand Each modifier into fan-out dispatch + barrier."""
-    node_fn = make_node_fn(node)
+    node_fn = make_node_fn(node, runtime=runtime, scripted_lookup=scripted_lookup, tool_factory_lookup=tool_factory_lookup)
     return _wire_each(graph, node.name, node_fn, each, prev_node)

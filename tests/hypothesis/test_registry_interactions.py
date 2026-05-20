@@ -1,14 +1,11 @@
-"""Hypothesis property-based tests for registry lifecycle interactions.
+"""Hypothesis property-based tests for test-side registry lifecycle.
 
-Tests the behavioral properties of the registration → compile → run
-lifecycle, not just the Registry class itself. Focuses on:
-- Name collision across concurrent pipelines
-- Registration timing (assembly vs compile vs run)
-- Session isolation (no leaks between test contexts)
-- compile→run contract (registry mutated between compile and run)
+Post-§2 (ticket ezqz): src/ no longer has a module-level registry. The
+test-side `register_scripted` helper in `tests/fakes.py` writes into a
+test-local dict that compile() consumes via the `scripted=` kwarg.
 
-TASK neograph-f0vp followup: registry at 76% coverage signals
-untested interaction surface, not just uncovered lines.
+Tests in this file exercise the test-helper round-trip and the §2
+multi-tenant compile() guarantee.
 """
 
 from __future__ import annotations
@@ -19,9 +16,12 @@ from hypothesis import given, settings
 from pydantic import BaseModel
 
 from neograph import Construct, Node, compile, run
-from neograph._registry import registry
 from neograph.errors import ConfigurationError
-from neograph.factory import lookup_scripted, register_scripted
+from tests.fakes import (
+    build_test_compile_kwargs,
+    lookup_scripted,
+    register_scripted,
+)
 
 # ── Test models ───────────────────────────────────────────────────────────
 
@@ -38,11 +38,6 @@ st_fn_name = st.text(
     alphabet=st.sampled_from("abcdefghijklmnopqrstuvwxyz_"),
     min_size=3, max_size=15,
 ).filter(lambda s: s[0] != "_")  # no leading underscore
-
-st_node_name = st.text(
-    alphabet=st.sampled_from("abcdefghijklmnopqrstuvwxyz-"),
-    min_size=2, max_size=12,
-).filter(lambda s: s[0].isalpha() and s[-1].isalpha())
 
 
 # ── Property tests ────────────────────────────────────────────────────────
@@ -63,7 +58,6 @@ class TestRegistryWriteReadContract:
     @settings(max_examples=30)
     def test_lookup_unregistered_raises_configuration_error(self, name):
         """Looking up an unregistered name raises ConfigurationError."""
-        # Use a name that's guaranteed not registered
         unique = f"__hyp_missing_{name}_{id(name):x}"
         with pytest.raises(ConfigurationError):
             lookup_scripted(unique)
@@ -81,53 +75,15 @@ class TestRegistryWriteReadContract:
         assert lookup_scripted(name) is fn2
 
 
-class TestSessionIsolation:
-    """Registry.session() provides clean isolation."""
-
-    def test_session_restores_state(self):
-        """session() restores all three registries on exit."""
-        from neograph.factory import register_condition, register_tool_factory
-
-        register_scripted("before_session", lambda _i, _c: None)
-        register_condition("cond_before", lambda x: True)
-        register_tool_factory("tool_before", lambda: None)
-
-        with registry.session():
-            # Inside session — registries are empty
-            with pytest.raises(ConfigurationError):
-                lookup_scripted("before_session")
-            # Register something inside session
-            register_scripted("inside_session", lambda _i, _c: None)
-            assert lookup_scripted("inside_session") is not None
-
-        # After session — original state restored, session-local gone
-        assert lookup_scripted("before_session") is not None
-        with pytest.raises(ConfigurationError):
-            lookup_scripted("inside_session")
-
-    def test_session_restores_on_exception(self):
-        """session() restores state even if body raises."""
-        register_scripted("before_exc", lambda _i, _c: None)
-
-        with pytest.raises(RuntimeError):
-            with registry.session():
-                register_scripted("during_exc", lambda _i, _c: None)
-                raise RuntimeError("boom")
-
-        # Original restored despite exception
-        assert lookup_scripted("before_exc") is not None
-        with pytest.raises(ConfigurationError):
-            lookup_scripted("during_exc")
-
-
 class TestCompileRunContract:
     """Compiled graph is self-contained — registry mutations after compile don't affect it."""
 
     def test_run_succeeds_when_scripted_fn_deregistered_after_compile(self):
         """Compiled graph captures function references at compile time.
 
-        Deleting from registry after compile doesn't break the graph —
-        the function is already bound in the node_fn closure.
+        Post-§2: the scripted_lookup is closure-captured at compile time.
+        Mutations to the test-side `register_scripted` dict after compile
+        don't break the compiled graph.
         """
         fn_name = "ephemeral_fn"
         register_scripted(fn_name, lambda _i, _c: Output(result="ok"))
@@ -135,30 +91,31 @@ class TestCompileRunContract:
         pipeline = Construct("ephemeral", nodes=[
             Node.scripted("a", fn=fn_name, outputs=Output),
         ])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
 
-        # Remove from registry — compiled graph should still work
-        del registry.scripted[fn_name]
+        # Even after we deregister, the graph still works.
+        from tests.fakes import _TEST_SCRIPTED
+        _TEST_SCRIPTED.pop(fn_name, None)
 
         result = run(graph, input={"node_id": "test"})
         assert result["a"].result == "ok"
 
     def test_compile_fails_when_scripted_fn_not_registered(self):
-        """compile() validates that scripted_fn names exist in the registry."""
+        """compile() validates that scripted_fn names resolve to a callable."""
         pipeline = Construct("missing-fn", nodes=[
             Node.scripted("a", fn="nonexistent_fn_xyz", outputs=Output),
         ])
         with pytest.raises(ConfigurationError, match="not registered"):
-            compile(pipeline)
+            compile(pipeline, **build_test_compile_kwargs())
 
 
 class TestMultiplePipelineNameCollision:
-    """Two pipelines compiled in sequence must not interfere via shared registry."""
+    """Two pipelines compiled in sequence must not interfere through shared state."""
 
     @given(data=st.data())
     @settings(max_examples=20)
     def test_two_pipelines_with_same_fn_names_dont_collide(self, data):
-        """Compiling pipeline B doesn't break pipeline A's registered functions."""
+        """Compiling pipeline B doesn't break pipeline A's captured shims."""
         name = data.draw(st_fn_name)
         fn_a = f"pipe_a_{name}"
         fn_b = f"pipe_b_{name}"
@@ -173,8 +130,8 @@ class TestMultiplePipelineNameCollision:
             Node.scripted("b", fn=fn_b, outputs=Output),
         ])
 
-        graph_a = compile(pipe_a)
-        graph_b = compile(pipe_b)
+        graph_a = compile(pipe_a, **build_test_compile_kwargs())
+        graph_b = compile(pipe_b, **build_test_compile_kwargs())
 
         result_a = run(graph_a, input={"node_id": "a"})
         result_b = run(graph_b, input={"node_id": "b"})

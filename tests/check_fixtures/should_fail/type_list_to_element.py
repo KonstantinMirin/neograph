@@ -4,7 +4,7 @@
 from pydantic import BaseModel
 
 from neograph import Construct, Node
-from neograph.factory import register_scripted
+from tests.fakes import register_scripted
 
 
 class Claims(BaseModel, frozen=True):

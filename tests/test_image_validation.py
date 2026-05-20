@@ -17,7 +17,7 @@ from pydantic import BaseModel
 
 from neograph import compile, construct_from_module, node, run
 from neograph._image import configure_image, resolve_image
-from tests.fakes import configure_fake_llm
+from tests.fakes import build_fake_runtime, build_test_compile_kwargs, configure_fake_llm
 
 # ── Schemas ──────────────────────────────────────────────────────────────
 
@@ -84,7 +84,7 @@ class TestE2ESizeLimit:
             llm_instances.append(llm)
             return llm
 
-        configure_fake_llm(factory)
+        _llm_kw = configure_fake_llm(factory)
 
         tmp = _make_temp_image(size=200)  # 208 bytes > 100 limit
         try:
@@ -100,7 +100,7 @@ class TestE2ESizeLimit:
             mod.score_it = score_it
 
             pipeline = construct_from_module(mod, name="size-e2e")
-            graph = compile(pipeline)
+            graph = compile(pipeline, **_llm_kw, **build_test_compile_kwargs())
             result = run(graph, input={"node_id": "size-1"})
 
             # Pipeline completes
@@ -126,7 +126,7 @@ class TestE2ESizeLimit:
             llm_instances.append(llm)
             return llm
 
-        configure_fake_llm(factory)
+        _llm_kw = configure_fake_llm(factory)
 
         tmp = _make_temp_image(size=50)  # 58 bytes < 10000 limit
         try:
@@ -142,7 +142,7 @@ class TestE2ESizeLimit:
             mod.score_it = score_it
 
             pipeline = construct_from_module(mod, name="small-e2e")
-            graph = compile(pipeline)
+            graph = compile(pipeline, **_llm_kw, **build_test_compile_kwargs())
             result = run(graph, input={"node_id": "small-1"})
 
             assert result["score_it"].score == 0.95
@@ -177,7 +177,7 @@ class TestE2EAllowedDirs:
                 llm_instances.append(llm)
                 return llm
 
-            configure_fake_llm(factory)
+            _llm_kw = configure_fake_llm(factory)
 
             @node(outputs=ImageData)
             def seed() -> ImageData:
@@ -191,7 +191,7 @@ class TestE2EAllowedDirs:
             mod.score_it = score_it
 
             pipeline = construct_from_module(mod, name="dir-block-e2e")
-            graph = compile(pipeline)
+            graph = compile(pipeline, **_llm_kw, **build_test_compile_kwargs())
             result = run(graph, input={"node_id": "dir-1"})
 
             # Pipeline completes
@@ -218,7 +218,7 @@ class TestE2EAllowedDirs:
                 llm_instances.append(llm)
                 return llm
 
-            configure_fake_llm(factory)
+            _llm_kw = configure_fake_llm(factory)
 
             @node(outputs=ImageData)
             def seed() -> ImageData:
@@ -232,7 +232,7 @@ class TestE2EAllowedDirs:
             mod.score_it = score_it
 
             pipeline = construct_from_module(mod, name="dir-allow-e2e")
-            graph = compile(pipeline)
+            graph = compile(pipeline, **_llm_kw, **build_test_compile_kwargs())
             result = run(graph, input={"node_id": "dir-2"})
 
             # Image was accepted
@@ -256,7 +256,7 @@ class TestConfigPersistence:
         """max_size_bytes set before compile is enforced during run."""
         configure_image(max_size_bytes=50)  # very small
 
-        configure_fake_llm(lambda tier: _CaptureLLM(tier))
+        _llm_kw = configure_fake_llm(lambda tier: _CaptureLLM(tier))
 
         tmp = _make_temp_image(size=200)  # exceeds limit
         try:
@@ -272,7 +272,7 @@ class TestConfigPersistence:
             mod.score_it = score_it
 
             pipeline = construct_from_module(mod, name="persist-e2e")
-            graph = compile(pipeline)
+            graph = compile(pipeline, **_llm_kw, **build_test_compile_kwargs())
             # Config was set before compile — should still be active at run
             result = run(graph, input={"node_id": "persist-1"})
             assert result["score_it"].score == 0.95
@@ -406,11 +406,11 @@ class TestMultimodalOracleMerge:
             llm_instances.append(llm)
             return llm
 
-        configure_fake_llm(factory)
+        _llm_kw = configure_fake_llm(factory)
 
         b64 = base64.b64encode(b"merge-image").decode()
 
-        from neograph.factory import register_scripted
+        from tests.fakes import register_scripted
         register_scripted("_mm_gen", lambda i, c: Score(score=0.5))
 
         writer = Node.scripted("gen", fn="_mm_gen", outputs=Score) | Oracle(
@@ -423,7 +423,7 @@ class TestMultimodalOracleMerge:
         )
 
         pipeline = Construct("mm-oracle", nodes=[writer])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **_llm_kw, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "mm-1"})
 
         assert result["gen"].score == 0.95
@@ -676,10 +676,10 @@ class TestF5RetryWithMultimodal:
                     return AIMessage(content="not valid json")
                 return AIMessage(content='{"score": 0.8}')
 
-        configure_fake_llm(lambda tier: RetryLLM(tier))
+        _llm_kw = configure_fake_llm(lambda tier: RetryLLM(tier))
 
         b64 = base64.b64encode(b"test-img").decode()
-        result = invoke_structured(
+        result = invoke_structured(runtime=build_fake_runtime(_llm_kw['llm_factory'], _llm_kw['prompt_compiler']),
             model_tier="fast",
             prompt_template="Rate: ${image:photo}",
             input_data={"photo": b64},
@@ -715,12 +715,12 @@ class TestF6StructuredOutputMultimodal:
                 received.append(messages)
                 return self._model(score=0.5)
 
-        configure_fake_llm(lambda tier: InspectLLM(tier))
+        _llm_kw = configure_fake_llm(lambda tier: InspectLLM(tier))
 
         from neograph._llm import invoke_structured
 
         b64 = base64.b64encode(b"img").decode()
-        invoke_structured(
+        invoke_structured(runtime=build_fake_runtime(_llm_kw['llm_factory'], _llm_kw['prompt_compiler']),
             model_tier="fast",
             prompt_template="Rate: ${image:photo}",
             input_data={"photo": b64},

@@ -1,4 +1,4 @@
-# CHECK_ERROR: LLM nodes require configure_llm
+# CHECK_ERROR: LLM-mode nodes
 from pydantic import BaseModel
 
 from neograph import Construct, Node

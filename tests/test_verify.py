@@ -15,8 +15,8 @@ from neograph import (
     construct_from_functions,
     node,
 )
-from neograph.factory import register_scripted
 from neograph.modifiers import Loop
+from tests.fakes import build_test_compile_kwargs, register_scripted
 
 
 class RawText(BaseModel, frozen=True):
@@ -40,37 +40,38 @@ class TestVerifyCompiled:
         b = Node.scripted("classify", fn="_vc_b",
                           inputs={"seed": RawText}, outputs=Claims)
         pipeline = Construct("valid", nodes=[a, b])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
 
         issues = verify_compiled(graph)
         assert issues == []
 
     def test_detects_missing_scripted_fn_after_registry_clear(self):
-        """If registry is cleared after compile, verify catches missing fn."""
-        from neograph._registry import registry
+        """If the per-compile scripted snapshot is mutated, verify catches missing fn."""
         from neograph.verify import verify_compiled
 
         register_scripted("_vc_temp", lambda i, c: RawText(text="ok"))
         a = Node.scripted("temp-node", fn="_vc_temp", outputs=RawText)
         pipeline = Construct("temp", nodes=[a])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
 
-        # Clear the registry after compile — simulates session reset
-        saved = dict(registry.scripted)
-        del registry.scripted["_vc_temp"]
+        # Post-§2: compile() captures a frozen snapshot into graph._neo_scripted.
+        # Simulate "registry cleared after compile" by mutating the snapshot directly.
+        snapshot = getattr(graph, "_neo_scripted", {})
+        saved = snapshot.pop("_vc_temp", None)
         try:
             issues = verify_compiled(graph)
             scripted_issues = [i for i in issues if i.kind == "scripted_fn_missing"]
             assert len(scripted_issues) >= 1
             assert any("_vc_temp" in i.message for i in scripted_issues)
         finally:
-            registry.scripted.update(saved)
+            if saved is not None:
+                snapshot["_vc_temp"] = saved
 
     def test_detects_missing_loop_condition(self):
         """Verify catches unregistered Loop condition post-compile."""
-        from neograph import register_condition
-        from neograph._registry import registry
         from neograph.verify import verify_compiled
+        from tests.fakes import _TEST_CONDITIONS as _condition_dict
+        from tests.fakes import register_condition
 
         register_condition("_vc_cond", lambda d: d is None or d.text == "")
         register_scripted("_vc_loop", lambda i, c: RawText(text="ok"))
@@ -78,19 +79,25 @@ class TestVerifyCompiled:
         a = Node.scripted("loop-node", fn="_vc_loop", outputs=RawText)
         a = a | Loop(when="_vc_cond", max_iterations=3)
         pipeline = Construct("loop-test", nodes=[a])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
 
-        # Remove the condition after compile
-        saved = registry.condition.pop("_vc_cond")
+        # Remove the condition from the compiled graph's stashed dict to
+        # simulate "condition deregistered after compile".
+        compiled_conditions = getattr(graph, "_neo_conditions", {})
+        if "_vc_cond" in compiled_conditions:
+            saved = compiled_conditions.pop("_vc_cond")
+        else:
+            saved = _condition_dict.pop("_vc_cond")
         try:
             issues = verify_compiled(graph)
             cond_issues = [i for i in issues if i.kind == "condition_missing"]
             assert len(cond_issues) >= 1
         finally:
-            registry.condition["_vc_cond"] = saved
+            _condition_dict["_vc_cond"] = saved
 
     def test_detects_missing_llm_factory(self):
         """Verify catches missing LLM factory for graphs with LLM nodes."""
+        from neograph._llm_runtime import LlmRuntime
         from neograph.verify import verify_compiled
 
         # Node with mode=think requires LLM factory
@@ -98,22 +105,26 @@ class TestVerifyCompiled:
                           prompt="test/prompt", model="fast")
         pipeline = Construct("llm-test", nodes=[think_node])
 
-        # Compile requires LLM factory — need to set one up then clear
         from tests.fakes import StructuredFake, configure_fake_llm
 
-        configure_fake_llm(lambda tier: StructuredFake(lambda m: m(items=["x"])))
-        graph = compile(pipeline)
+        llm_kw = configure_fake_llm(lambda tier: StructuredFake(lambda m: m(items=["x"])))
+        graph = compile(pipeline, **build_test_compile_kwargs(), **llm_kw)
 
-        # Clear LLM factory after compile
-        import neograph._llm as llm_mod
-        saved_factory = llm_mod._llm_factory
-        llm_mod._llm_factory = None
+        # Post-§2: clear the per-compile runtime snapshot to simulate
+        # "LLM factory missing".
+        saved_runtime = getattr(graph, "_neo_runtime", None)
+        graph._neo_runtime = LlmRuntime(
+            llm_factory=None,
+            prompt_compiler=saved_runtime.prompt_compiler if saved_runtime else None,
+            renderer=saved_runtime.renderer if saved_runtime else None,
+            cost_callback=saved_runtime.cost_callback if saved_runtime else None,
+        )
         try:
             issues = verify_compiled(graph)
             llm_issues = [i for i in issues if i.kind == "llm_factory_missing"]
             assert len(llm_issues) >= 1
         finally:
-            llm_mod._llm_factory = saved_factory
+            graph._neo_runtime = saved_runtime
 
     def test_state_field_cross_check(self):
         """Every node output has a corresponding state field."""
@@ -122,7 +133,7 @@ class TestVerifyCompiled:
         register_scripted("_vc_sf", lambda i, c: RawText(text="ok"))
         a = Node.scripted("producer", fn="_vc_sf", outputs=RawText)
         pipeline = Construct("sf-test", nodes=[a])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
 
         issues = verify_compiled(graph)
         # Valid pipeline — no state field issues
@@ -134,7 +145,7 @@ class TestVerifyCompiled:
         register_scripted("_vc_stash", lambda i, c: RawText(text="ok"))
         a = Node.scripted("stash-test", fn="_vc_stash", outputs=RawText)
         pipeline = Construct("stash", nodes=[a])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
 
         assert hasattr(graph, "_neo_construct")
         assert graph._neo_construct is pipeline
@@ -152,7 +163,7 @@ class TestVerifyCompiled:
             return Claims(items=[seed.text])
 
         pipeline = construct_from_functions("deco-test", [seed, classify])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
 
         issues = verify_compiled(graph)
         assert issues == []

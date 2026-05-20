@@ -13,8 +13,8 @@ from dataclasses import field as dc_field
 import hypothesis.strategies as st
 
 from neograph import Construct, Node, compile
-from neograph.factory import register_condition, register_scripted
 from neograph.modifiers import Each, Loop, Oracle
+from tests.fakes import build_test_compile_kwargs, register_condition, register_scripted
 
 from .conftest import (
     INTERMEDIATE_TYPES,
@@ -423,7 +423,7 @@ def _build_scripted_surface(spec: TopologySpec):
             input=spec.meta["sub_input"], output=spec.meta["sub_output"],
         )
         outer_nodes.append(sub)
-        return compile(Construct(spec.name, nodes=outer_nodes))
+        return compile(Construct(spec.name, nodes=outer_nodes), **build_test_compile_kwargs())
 
     if spec.meta.get("skip_threshold") is not None:
         threshold = spec.meta["skip_threshold"]
@@ -446,7 +446,7 @@ def _build_scripted_surface(spec: TopologySpec):
                     "skip_value": skip_val,
                 })
             nodes.append(node)
-        return compile(Construct(spec.name, nodes=nodes))
+        return compile(Construct(spec.name, nodes=nodes), **build_test_compile_kwargs())
 
     nodes = []
     for ns in spec.nodes:
@@ -457,7 +457,7 @@ def _build_scripted_surface(spec: TopologySpec):
                              inputs=ns.input_type, outputs=ns.output_type)
         node = _apply_spec_modifiers(node, ns, f"scr_{t}", spec)
         nodes.append(node)
-    return compile(Construct(spec.name, nodes=nodes))
+    return compile(Construct(spec.name, nodes=nodes), **build_test_compile_kwargs())
 
 
 def _apply_spec_modifiers(node, ns: NodeSpec, prefix: str, spec: TopologySpec | None = None):

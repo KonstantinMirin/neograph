@@ -14,7 +14,7 @@ import pytest
 from neograph import Construct, Node, compile, run
 from neograph.describe_type import describe_type
 from neograph.renderers import JsonRenderer, XmlRenderer
-from tests.fakes import StructuredFake, TextFake, configure_fake_llm
+from tests.fakes import StructuredFake, TextFake, build_test_compile_kwargs, configure_fake_llm
 from tests.schemas_compat import ContactMethod, Experience, LeadProfile
 
 # ---------------------------------------------------------------------------
@@ -71,10 +71,10 @@ class TestCompileSucceeds:
     @pytest.mark.parametrize("model_tier", MODEL_TIERS)
     def test_compile_succeeds(self, strategy, model_tier):
         # LLM nodes require configure_llm before compile
-        configure_fake_llm(lambda tier: StructuredFake(_make_profile_from_model))
+        _llm_kw = configure_fake_llm(lambda tier: StructuredFake(_make_profile_from_model))
 
         pipeline = _make_pipeline(strategy, model_tier)
-        compile(pipeline)  # succeeds = test passes; raises = test fails
+        compile(pipeline, **_llm_kw, **build_test_compile_kwargs())  # succeeds = test passes; raises = test fails
 
 
 class TestSchemaRoundTrip:
@@ -83,10 +83,10 @@ class TestSchemaRoundTrip:
     @pytest.mark.parametrize("model_tier", MODEL_TIERS)
     def test_structured_strategy_round_trip(self, model_tier):
         """structured: StructuredFake returns model instance directly."""
-        configure_fake_llm(lambda tier: StructuredFake(_make_profile_from_model))
+        _llm_kw = configure_fake_llm(lambda tier: StructuredFake(_make_profile_from_model))
 
         pipeline = _make_pipeline("structured", model_tier)
-        graph = compile(pipeline)
+        graph = compile(pipeline, **_llm_kw, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "compat-test"})
 
         profile = result["profile"]
@@ -101,10 +101,10 @@ class TestSchemaRoundTrip:
     @pytest.mark.parametrize("model_tier", MODEL_TIERS)
     def test_json_mode_strategy_round_trip(self, model_tier):
         """json_mode: TextFake returns raw JSON, framework parses to model."""
-        configure_fake_llm(lambda tier: TextFake(SAMPLE_JSON))
+        _llm_kw = configure_fake_llm(lambda tier: TextFake(SAMPLE_JSON))
 
         pipeline = _make_pipeline("json_mode", model_tier)
-        graph = compile(pipeline)
+        graph = compile(pipeline, **_llm_kw, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "compat-test"})
 
         profile = result["profile"]
@@ -117,10 +117,10 @@ class TestSchemaRoundTrip:
     def test_text_strategy_round_trip(self, model_tier):
         """text: TextFake returns JSON embedded in prose, framework extracts."""
         prose_wrapped = f"Here is the lead profile:\n{SAMPLE_JSON}\nAnalysis complete."
-        configure_fake_llm(lambda tier: TextFake(prose_wrapped))
+        _llm_kw = configure_fake_llm(lambda tier: TextFake(prose_wrapped))
 
         pipeline = _make_pipeline("text", model_tier)
-        graph = compile(pipeline)
+        graph = compile(pipeline, **_llm_kw, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "compat-test"})
 
         profile = result["profile"]
@@ -246,10 +246,10 @@ class TestEdgeCases:
             preferred_contact=ContactMethod.linkedin,
         )
         minimal_json = minimal.model_dump_json()
-        configure_fake_llm(lambda tier: TextFake(minimal_json))
+        _llm_kw = configure_fake_llm(lambda tier: TextFake(minimal_json))
 
         pipeline = _make_pipeline("json_mode", "fast")
-        graph = compile(pipeline)
+        graph = compile(pipeline, **_llm_kw, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "edge-test"})
 
         profile = result["profile"]
@@ -261,10 +261,10 @@ class TestEdgeCases:
     def test_markdown_fenced_json_parsed_in_json_mode(self):
         """json_mode strips markdown fences before parsing."""
         fenced = f"```json\n{SAMPLE_JSON}\n```"
-        configure_fake_llm(lambda tier: TextFake(fenced))
+        _llm_kw = configure_fake_llm(lambda tier: TextFake(fenced))
 
         pipeline = _make_pipeline("json_mode", "fast")
-        graph = compile(pipeline)
+        graph = compile(pipeline, **_llm_kw, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "fence-test"})
 
         assert isinstance(result["profile"], LeadProfile)

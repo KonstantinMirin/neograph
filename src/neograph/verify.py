@@ -52,18 +52,26 @@ def verify_compiled(graph: Any) -> list[VerifyIssue]:
 
     # Check if any LLM node exists (to validate LLM factory)
     has_llm_node = False
+    scripted_lookup: dict = getattr(graph, "_neo_scripted", {}) or {}
+    condition_lookup: dict = getattr(graph, "_neo_conditions", {}) or {}
 
-    _walk(construct, issues, state_fields, has_llm_ref=has_llm_node)
+    _walk(
+        construct, issues, state_fields,
+        has_llm_ref=has_llm_node,
+        scripted_lookup=scripted_lookup,
+        condition_lookup=condition_lookup,
+    )
 
-    # After walking, check if LLM factory is needed
+    # After walking, check if LLM factory is needed.
+    # The runtime is stashed on the compiled graph at compile time (§2).
     if _has_llm_nodes(construct):
-        from neograph._llm import _llm_factory
-        if _llm_factory is None:
+        runtime = getattr(graph, "_neo_runtime", None)
+        if runtime is None or runtime.llm_factory is None:
             issues.append(VerifyIssue(
                 node_name="<graph>",
                 kind="llm_factory_missing",
                 message="Graph contains LLM nodes but no LLM factory is configured. "
-                        "Call configure_llm() before run().",
+                        "Pass llm_factory= to compile().",
             ))
 
     return issues
@@ -75,11 +83,18 @@ def _walk(
     state_fields: set[str],
     *,
     has_llm_ref: bool,
+    scripted_lookup: dict | None = None,
+    condition_lookup: dict | None = None,
 ) -> None:
     """Recursively walk construct tree and check each node."""
     if isinstance(item, Construct):
         for child in item.nodes:
-            _walk(child, issues, state_fields, has_llm_ref=has_llm_ref)
+            _walk(
+                child, issues, state_fields,
+                has_llm_ref=has_llm_ref,
+                scripted_lookup=scripted_lookup,
+                condition_lookup=condition_lookup,
+            )
         return
 
     if not isinstance(item, Node):
@@ -87,10 +102,10 @@ def _walk(
 
     label = f"Node '{item.name}'"
 
-    # 1. Scripted fn registration check
+    # 1. Scripted fn registration check (post-§2: per-compile only).
     if item.scripted_fn:
-        from neograph._registry import registry
-        if item.scripted_fn not in registry.scripted:
+        per_compile = scripted_lookup or {}
+        if item.scripted_fn not in per_compile:
             issues.append(VerifyIssue(
                 node_name=label,
                 kind="scripted_fn_missing",
@@ -111,22 +126,22 @@ def _walk(
     # 3. Loop/Operator condition registration check
     ms = getattr(item, "modifier_set", None)
     if ms:
-        _check_condition_registrations(item, ms, issues)
+        _check_condition_registrations(item, ms, issues, condition_lookup=condition_lookup)
 
 
 def _check_condition_registrations(
     node: Node,
     ms: Any,
     issues: list[VerifyIssue],
+    condition_lookup: dict | None = None,
 ) -> None:
     """Check that string conditions for Loop/Operator are still registered."""
-    from neograph._registry import registry
-
     label = f"Node '{node.name}'"
+    conditions = condition_lookup or {}
 
     loop = ms.loop
     if loop and isinstance(loop.when, str):
-        if loop.when not in registry.condition:
+        if loop.when not in conditions:
             issues.append(VerifyIssue(
                 node_name=label,
                 kind="condition_missing",
@@ -135,7 +150,7 @@ def _check_condition_registrations(
 
     operator = ms.operator
     if operator and isinstance(operator.when, str):
-        if operator.when not in registry.condition:
+        if operator.when not in conditions:
             issues.append(VerifyIssue(
                 node_name=label,
                 kind="condition_missing",

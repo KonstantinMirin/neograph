@@ -20,7 +20,6 @@ from typing import Any
 
 from neograph._di_classify import _build_annotation_namespace
 from neograph.di import DIBinding
-from neograph.errors import ConfigurationError
 from neograph.node import Node
 
 # Type alias for DI parameter resolution dicts.
@@ -96,16 +95,16 @@ def infer_oracle_gen_type(merge_fn_name: str) -> Any | None:
     if meta is not None:
         fn, _ = meta
     else:
-        # Fall back to scripted registry (plain merge functions).
-        # May not be registered yet at decoration time — return None.
+        # Fall back to the decorator-side scripted dict (post-§2 the only
+        # plain-scripted registry visible at decoration time).
         try:
-            from neograph.factory import lookup_scripted
-            fn = lookup_scripted(merge_fn_name)
-        except (ImportError, ConfigurationError):
-            # May not be registered yet at decoration time.
+            from neograph.decorators import _decorator_scripted
+        except ImportError:
             return None
-        if fn is None:  # pragma: no cover — lookup_scripted raises, never returns None
+        candidate = _decorator_scripted.get(merge_fn_name)
+        if candidate is None:
             return None
+        fn = candidate
 
     # Use get_type_hints to resolve string annotations (from __future__)
     # with the function's local namespace for locally-defined classes.

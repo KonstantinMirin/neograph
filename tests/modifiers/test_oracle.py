@@ -21,8 +21,15 @@ from neograph import (
     node,
     run,
 )
-from neograph.factory import register_scripted, register_tool_factory
-from tests.fakes import FakeTool, ReActFake, StructuredFake, configure_fake_llm
+from tests.fakes import (
+    FakeTool,
+    ReActFake,
+    StructuredFake,
+    build_test_compile_kwargs,
+    configure_fake_llm,
+    register_scripted,
+    register_tool_factory,
+)
 from tests.schemas import (
     Claims,
     RawText,
@@ -55,7 +62,7 @@ class TestOracle:
     def test_merge_combines_variants_when_three_generators_run(self):
         """Oracle dispatches 3 generators and merges results."""
 
-        from neograph.factory import register_scripted
+        from tests.fakes import register_scripted
 
         gen_call_count = [0]
 
@@ -77,7 +84,7 @@ class TestOracle:
         mod.generate = generate
 
         pipeline = construct_from_module(mod, name="test-oracle")
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "test-001"})
 
         # All 3 generators ran
@@ -90,11 +97,11 @@ class TestOracle:
     def test_llm_judge_merges_when_merge_prompt_set(self):
         """Oracle with merge_prompt calls LLM to judge-merge variants."""
 
-        from neograph.factory import register_scripted
+        from tests.fakes import register_scripted
 
         register_scripted("gen_llm", lambda input_data, config: Claims(items=["v1"]))
 
-        configure_fake_llm(lambda tier: StructuredFake(lambda m: m(items=["merged-consensus"])))
+        __llm_kw = configure_fake_llm(lambda tier: StructuredFake(lambda m: m(items=["merged-consensus"])))
 
         @node(outputs=Claims, ensemble_n=2, merge_prompt="test/merge")
         def generate() -> Claims:
@@ -104,7 +111,7 @@ class TestOracle:
         mod.generate = generate
 
         pipeline = construct_from_module(mod, name="test-oracle-llm")
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs(), **__llm_kw)
         result = run(graph, input={"node_id": "test-001"})
 
         merged = result.get("generate")
@@ -156,7 +163,7 @@ class TestConstructOracle:
 
     def test_sub_pipeline_runs_n_times_when_oracle_with_scripted_merge(self):
         """Sub-pipeline runs 3 times, scripted merge combines outputs."""
-        from neograph.factory import register_scripted
+        from tests.fakes import register_scripted
 
         register_scripted("sub_step_a", lambda input_data, config: Claims(items=["step-a"]))
         register_scripted("sub_step_b", lambda input_data, config: RawText(
@@ -185,7 +192,7 @@ class TestConstructOracle:
             Node.scripted("start", fn="make_input", outputs=Claims),
             sub,
         ])
-        graph = compile(parent)
+        graph = compile(parent, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "test-001"})
 
         # 3 variants merged into one
@@ -194,11 +201,11 @@ class TestConstructOracle:
 
     def test_sub_pipeline_runs_n_times_when_oracle_with_llm_merge(self):
         """Sub-pipeline runs 2 times, LLM merge combines outputs."""
-        from neograph.factory import register_scripted
+        from tests.fakes import register_scripted
 
         register_scripted("gen_claim", lambda input_data, config: Claims(items=["variant"]))
 
-        configure_fake_llm(lambda tier: StructuredFake(lambda m: m(items=["llm-merged"])))
+        __llm_kw = configure_fake_llm(lambda tier: StructuredFake(lambda m: m(items=["llm-merged"])))
 
         sub = Construct(
             "gen-pipeline",
@@ -213,7 +220,7 @@ class TestConstructOracle:
             Node.scripted("seed", fn="seed", outputs=Claims),
             sub,
         ])
-        graph = compile(parent)
+        graph = compile(parent, **build_test_compile_kwargs(), **__llm_kw)
         result = run(graph, input={"node_id": "test-001"})
 
         assert result["gen_pipeline"].items == ["llm-merged"]
@@ -254,7 +261,7 @@ class TestConstructOracle:
             Node.scripted("seed", fn="seed_claims", outputs=Claims),
             sub,
         ])
-        graph = compile(parent)
+        graph = compile(parent, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "model-fwd-test"})
 
         # Each variant must have received a distinct model override
@@ -292,7 +299,7 @@ class TestConstructOracle:
             Node.scripted("seed", fn="seed_nmo", outputs=Claims),
             sub,
         ])
-        graph = compile(parent)
+        graph = compile(parent, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "no-model-test"})
 
         # All 3 variants should have seen None for _oracle_model
@@ -313,7 +320,7 @@ class TestOracleModels:
 
     def test_oracle_assigns_model_per_generator_when_models_set(self):
         """Each generator gets a different model from the models list."""
-        from neograph.factory import register_scripted
+        from tests.fakes import register_scripted
 
         seen_models = []
 
@@ -338,7 +345,7 @@ class TestOracleModels:
             | Oracle(models=["reason", "fast", "creative"], merge_fn="models_merge")
         )
         pipeline = Construct("test-oracle-models", nodes=[gen_node])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "oracle-models"})
 
         # 3 generators, one per model
@@ -351,7 +358,7 @@ class TestOracleModels:
 
     def test_oracle_round_robins_models_when_n_exceeds_models_count(self):
         """When n > len(models), models are assigned round-robin."""
-        from neograph.factory import register_scripted
+        from tests.fakes import register_scripted
 
         seen_models = []
 
@@ -372,7 +379,7 @@ class TestOracleModels:
             | Oracle(n=7, models=["reason", "fast", "creative"], merge_fn="rr_merge")
         )
         pipeline = Construct("test-rr", nodes=[gen_node])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "rr"})
 
         # 7 generators, round-robin across 3 models
@@ -389,7 +396,7 @@ class TestOracleModels:
     def test_body_as_merge_when_models_set_on_node_decorator(self):
         """@node with models= uses the function body as the merge function.
         The body receives list[OutputType] at runtime (the collected variants)."""
-        from neograph.factory import register_scripted
+        from tests.fakes import register_scripted
 
         gen_count = [0]
 
@@ -417,7 +424,7 @@ class TestOracleModels:
         register_scripted("bam_body_merge", bam_body_merge)
 
         pipeline = Construct("body-merge", nodes=[gen_node])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "body-merge"})
 
         assert gen_count[0] == 2
@@ -454,7 +461,7 @@ class TestOracleModels:
         Now all modes share _execute_node preamble which calls
         _inject_oracle_config. Regression test for neograph-lbsf.
         """
-        from neograph.factory import register_scripted
+        from tests.fakes import register_scripted
 
         seen_tiers = []
 
@@ -462,7 +469,7 @@ class TestOracleModels:
             seen_tiers.append(tier)
             return StructuredFake(lambda m: m(items=[f"from-{tier}"]))
 
-        configure_fake_llm(tier_capturing_factory)
+        __llm_kw = configure_fake_llm(tier_capturing_factory)
 
         # Merge function (scripted) to combine variants
         def think_merge(variants, config):
@@ -484,7 +491,7 @@ class TestOracleModels:
             | Oracle(models=["reason", "fast", "creative"], merge_fn="think_models_merge")
         )
         pipeline = Construct("test-think-oracle-models", nodes=[gen_node])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs(), **__llm_kw)
         result = run(graph, input={"node_id": "think-oracle-models"})
 
         # Filter to only the generator tiers (exclude merge LLM calls)
@@ -500,7 +507,7 @@ class TestOracleModels:
         Now all modes share _execute_node preamble which calls
         _inject_oracle_config. Regression test for neograph-lbsf.
         """
-        from neograph.factory import register_scripted
+        from tests.fakes import register_scripted
 
         seen_tiers = []
         fake_tool = FakeTool("agent_search", response="found")
@@ -516,7 +523,7 @@ class TestOracleModels:
                 final=lambda m: m(items=[f"from-{tier}"]),
             )
 
-        configure_fake_llm(tier_capturing_factory)
+        __llm_kw = configure_fake_llm(tier_capturing_factory)
 
         def agent_merge(variants, config):
             all_items = []
@@ -538,7 +545,7 @@ class TestOracleModels:
             | Oracle(models=["reason", "fast"], merge_fn="agent_models_merge")
         )
         pipeline = Construct("test-agent-oracle-models", nodes=[gen_node])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs(), **__llm_kw)
         result = run(graph, input={"node_id": "agent-oracle-models"})
 
         # Filter to only the generator tiers (exclude merge/final-parse calls)
@@ -548,7 +555,7 @@ class TestOracleModels:
 
     def test_oracle_models_round_robin_on_think_mode(self):
         """Round-robin model assignment works on think-mode nodes when n > len(models)."""
-        from neograph.factory import register_scripted
+        from tests.fakes import register_scripted
 
         seen_tiers = []
 
@@ -556,7 +563,7 @@ class TestOracleModels:
             seen_tiers.append(tier)
             return StructuredFake(lambda m: m(items=[f"from-{tier}"]))
 
-        configure_fake_llm(tier_capturing_factory)
+        __llm_kw = configure_fake_llm(tier_capturing_factory)
 
         def rr_think_merge(variants, config):
             return Claims(items=[f"{len(variants)} variants"])
@@ -574,7 +581,7 @@ class TestOracleModels:
             | Oracle(n=5, models=["alpha", "beta"], merge_fn="rr_think_merge")
         )
         pipeline = Construct("test-rr-think", nodes=[gen_node])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs(), **__llm_kw)
         result = run(graph, input={"node_id": "rr-think"})
 
         gen_tiers = [t for t in seen_tiers if t in ("alpha", "beta")]
@@ -591,7 +598,7 @@ class TestOracleModels:
             seen_tiers.append(tier)
             return StructuredFake(lambda m: m(items=[f"from-{tier}"]))
 
-        configure_fake_llm(tier_capturing_factory)
+        __llm_kw = configure_fake_llm(tier_capturing_factory)
 
         gen_node = (
             Node(
@@ -608,7 +615,7 @@ class TestOracleModels:
             )
         )
         pipeline = Construct("test-leak", nodes=[gen_node])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs(), **__llm_kw)
         result = run(graph, input={"node_id": "leak-test"})
 
         # The merge call should use "judge-tier", not "reason" or "fast"
@@ -646,7 +653,7 @@ class TestOracleModels:
         receives list[T] at runtime. This documents the intentional mismatch
         (neograph-qr9v) — the annotation is for compile-time wiring, not a
         runtime type contract."""
-        from neograph.factory import register_scripted
+        from tests.fakes import register_scripted
 
         received_type = [None]
 
@@ -674,7 +681,7 @@ class TestOracleModels:
         register_scripted("bam_typed_merge", bam_typed_merge)
 
         pipeline = Construct("body-merge-typed", nodes=[gen_node])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "body-merge-typed"})
 
         # The merge function receives a list, not a single Claims
@@ -741,7 +748,7 @@ class TestOracleMergeFnErrors:
     def test_exception_propagates_when_merge_fn_raises(self):
         """merge_fn that raises AttributeError must crash the pipeline,
         not produce silent garbage results."""
-        from neograph.factory import register_scripted
+        from tests.fakes import register_scripted
 
         register_scripted("bglm_gen", lambda input_data, config: Claims(items=["v1"]))
 
@@ -755,7 +762,7 @@ class TestOracleMergeFnErrors:
             | Oracle(n=2, merge_fn="bglm_bad_merge")
         )
         pipeline = Construct("test-merge-error", nodes=[gen_node])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
 
         # The pipeline MUST fail — not silently produce garbage
         with pytest.raises(Exception, match="ModelRole.FAST"):
@@ -763,7 +770,7 @@ class TestOracleMergeFnErrors:
 
     def test_wrong_return_type_raises_when_merge_fn_returns_bad_type(self):
         """merge_fn that returns the wrong type should be caught."""
-        from neograph.factory import register_scripted
+        from tests.fakes import register_scripted
 
         register_scripted("bglm_gen2", lambda input_data, config: Claims(items=["v1"]))
 
@@ -778,7 +785,7 @@ class TestOracleMergeFnErrors:
             | Oracle(n=2, merge_fn="bglm_wrong_merge")
         )
         pipeline = Construct("test-merge-type", nodes=[gen_node])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
 
         # Should raise because merge result doesn't match output type
         with pytest.raises(ExecutionError, match="(?i)merge.*type|expected.*Claims"):
@@ -809,7 +816,7 @@ class TestMergeFnStateParams:
         """A @merge_fn param named after an upstream node reads from state."""
         from pydantic import BaseModel
 
-        from neograph.factory import register_scripted
+        from tests.fakes import register_scripted
 
         class Context(BaseModel, frozen=True):
             topic: str
@@ -833,7 +840,7 @@ class TestMergeFnStateParams:
             Node.scripted("gen", fn="jg2g_gen", outputs=Result)
             | Oracle(n=2, merge_fn="merge_with_context"),
         ])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "jg2g-test"})
 
         assert result["gen"].topic == "AI safety"
@@ -843,7 +850,7 @@ class TestMergeFnStateParams:
         from pydantic import BaseModel
 
         from neograph import FromInput
-        from neograph.factory import register_scripted
+        from tests.fakes import register_scripted
 
         class Metadata(BaseModel, frozen=True):
             source: str
@@ -871,7 +878,7 @@ class TestMergeFnStateParams:
             Node.scripted("gen2", fn="jg2g_gen2", outputs=Result)
             | Oracle(n=2, merge_fn="merge_mixed"),
         ])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "mixed-test"})
 
         assert result["gen2"].label == "api:mixed-test"
@@ -880,7 +887,7 @@ class TestMergeFnStateParams:
         """State param for a field not in state raises ConstructError."""
         from pydantic import BaseModel
 
-        from neograph.factory import register_scripted
+        from tests.fakes import register_scripted
 
         class Result(BaseModel, frozen=True):
             text: str
@@ -905,8 +912,8 @@ class TestMergeFnStateParams:
         """Regression neograph-8i1g: from_state on a Loop node must unwrap [-1]."""
         from pydantic import BaseModel
 
-        from neograph.factory import register_scripted
         from neograph.modifiers import Loop
+        from tests.fakes import register_scripted
 
         class Ctx(BaseModel, frozen=True):
             topic: str
@@ -930,7 +937,7 @@ class TestMergeFnStateParams:
             Node.scripted("gen", fn="8i1g_gen", outputs=Result)
             | Oracle(n=2, merge_fn="ctx_aware_merge"),
         ])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         run(graph, input={"node_id": "8i1g"})
 
         # from_state should unwrap the Loop append-list to get Ctx, not list[Ctx]
@@ -985,7 +992,7 @@ class TestMergePromptUpstreamContext:
                     captured_input["messages"] = messages
                 return self._model(text="merged")
 
-        configure_fake_llm(lambda tier: CaptureMerge(tier))
+        __llm_kw = configure_fake_llm(lambda tier: CaptureMerge(tier))
 
         @node(outputs=UpstreamContext)
         def enrich() -> UpstreamContext:
@@ -1001,7 +1008,7 @@ class TestMergePromptUpstreamContext:
 
         from neograph import construct_from_module
         pipeline = construct_from_module(mod, name="merge-ctx")
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs(), **__llm_kw)
         result = run(graph, input={"node_id": "t1"})
 
         # The merge prompt should have received upstream context
@@ -1029,7 +1036,7 @@ class TestMergePromptUpstreamContext:
                     captured_data["prompt"] = messages[0]["content"] if messages else ""
                 return self._model(text="variant-output")
 
-        configure_fake_llm(lambda tier: InspectMerge(tier))
+        __llm_kw = configure_fake_llm(lambda tier: InspectMerge(tier))
 
         @node(outputs=Draft, ensemble_n=3, merge_prompt="Judge: ${variants}",
               prompt="generate a draft", model="fast")
@@ -1040,7 +1047,7 @@ class TestMergePromptUpstreamContext:
 
         from neograph import construct_from_module
         pipeline = construct_from_module(mod, name="variants-test")
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs(), **__llm_kw)
         result = run(graph, input={"node_id": "t2"})
 
         # Variants should be rendered in the prompt (BAML notation of Draft list)
@@ -1066,7 +1073,7 @@ class TestMergePromptUpstreamContext:
 
         from neograph import construct_from_module
         pipeline = construct_from_module(mod, name="mfn-test")
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "t3"})
 
         # merge_fn should still receive list, not dict
@@ -1090,7 +1097,7 @@ class TestMergePromptUpstreamContext:
                     captured_input["prompt"] = messages[0]["content"] if messages else ""
                 return self._model(text="merged")
 
-        configure_fake_llm(lambda tier: CaptureMerge3(tier))
+        __llm_kw = configure_fake_llm(lambda tier: CaptureMerge3(tier))
 
         register_scripted("_mp_seed", lambda i, c: UpstreamContext(site_name="Test Site", tone="casual"))
 
@@ -1102,7 +1109,7 @@ class TestMergePromptUpstreamContext:
         ) | Oracle(n=2, merge_prompt="Pick best: ${seed.site_name} ${variants}")
 
         pipeline = Construct("prog-merge", nodes=[seed, writer])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs(), **__llm_kw)
         result = run(graph, input={"node_id": "t4"})
 
         prompt = captured_input.get("prompt", "")
@@ -1143,7 +1150,7 @@ class TestMergeHooks:
                     captured_input["prompt"] = messages[0]["content"] if messages else ""
                 return self._model(text="merged")
 
-        configure_fake_llm(lambda tier: CaptureMerge(tier))
+        __llm_kw = configure_fake_llm(lambda tier: CaptureMerge(tier))
 
         def tag_variants(variants):
             tagged = [f"[v{i}] {v.text}" for i, v in enumerate(variants)]
@@ -1159,7 +1166,7 @@ class TestMergeHooks:
         mod.write = write
 
         pipeline = construct_from_module(mod, name="pre-test")
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs(), **__llm_kw)
         result = run(graph, input={"node_id": "t-pre"})
 
         prompt = captured_input.get("prompt", "")
@@ -1168,7 +1175,7 @@ class TestMergeHooks:
 
     def test_post_process_transforms_merged_result(self):
         """merge_post_process should transform the LLM result before state write."""
-        configure_fake_llm(lambda tier: StructuredFake(lambda m: m(text="draft-output")))
+        __llm_kw = configure_fake_llm(lambda tier: StructuredFake(lambda m: m(text="draft-output")))
 
         post_called = []
 
@@ -1186,7 +1193,7 @@ class TestMergeHooks:
         mod.write = write
 
         pipeline = construct_from_module(mod, name="post-test")
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs(), **__llm_kw)
         result = run(graph, input={"node_id": "t-post"})
 
         assert len(post_called) == 1, "post_process should have been called once"
@@ -1207,7 +1214,7 @@ class TestMergeHooks:
                     raise RuntimeError("LLM merge failed")
                 return self._model(text="variant")
 
-        configure_fake_llm(lambda tier: FailOnMerge(tier))
+        __llm_kw = configure_fake_llm(lambda tier: FailOnMerge(tier))
 
         def fallback_fn(variants, error):
             return Draft(text=f"fallback-{len(variants)}")
@@ -1222,7 +1229,7 @@ class TestMergeHooks:
         mod.write = write
 
         pipeline = construct_from_module(mod, name="fallback-test")
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs(), **__llm_kw)
         result = run(graph, input={"node_id": "t-fb"})
 
         assert result["write"].text == "fallback-2"
@@ -1249,7 +1256,7 @@ class TestMergeHooks:
 
     def test_programmatic_oracle_with_hooks(self):
         """Programmatic Node | Oracle(merge_prompt=..., hooks=...) should work."""
-        configure_fake_llm(lambda tier: StructuredFake(lambda m: m(text="gen-output")))
+        __llm_kw = configure_fake_llm(lambda tier: StructuredFake(lambda m: m(text="gen-output")))
 
         post_called = []
 
@@ -1267,7 +1274,7 @@ class TestMergeHooks:
         )
 
         pipeline = Construct("hook-prog", nodes=[writer])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs(), **__llm_kw)
         result = run(graph, input={"node_id": "t-prog"})
 
         assert len(post_called) == 1
@@ -1288,7 +1295,7 @@ class TestMergeHooks:
                     raise RuntimeError("LLM unavailable")
                 return self._model(text="v")
 
-        configure_fake_llm(lambda tier: FailMerge(tier))
+        __llm_kw = configure_fake_llm(lambda tier: FailMerge(tier))
 
         @node(outputs=Draft, ensemble_n=2,
               prompt="gen", model="fast",
@@ -1299,14 +1306,14 @@ class TestMergeHooks:
         mod.write = write
 
         pipeline = construct_from_module(mod, name="nofb-test")
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs(), **__llm_kw)
 
         with pytest.raises(RuntimeError, match="LLM unavailable"):
             run(graph, input={"node_id": "t-nofb"})
 
     def test_dict_form_outputs_with_post_process(self):
         """post_process receives primary values from dict-form outputs."""
-        configure_fake_llm(lambda tier: StructuredFake(lambda m: m(text="llm")))
+        __llm_kw = configure_fake_llm(lambda tier: StructuredFake(lambda m: m(text="llm")))
 
         post_variants = []
 
@@ -1325,7 +1332,7 @@ class TestMergeHooks:
         )
 
         pipeline = Construct("dict-hook", nodes=[writer])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs(), **__llm_kw)
         result = run(graph, input={"node_id": "t-dict"})
 
         # post_process should have received primary values (Draft instances)
@@ -1359,7 +1366,7 @@ class TestMergeHooks:
                     captured["prompt"] = messages[0]["content"] if messages else ""
                 return self._model(text="merged")
 
-        configure_fake_llm(lambda tier: CaptureMerge(tier))
+        __llm_kw = configure_fake_llm(lambda tier: CaptureMerge(tier))
 
         def custom_pre(variants):
             return {"custom_key": "custom_value"}
@@ -1379,7 +1386,7 @@ class TestMergeHooks:
         mod.write = write
 
         pipeline = construct_from_module(mod, name="displace-test")
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs(), **__llm_kw)
         run(graph, input={"node_id": "t-disp"})
 
         prompt = captured.get("prompt", "")
@@ -1405,7 +1412,7 @@ class TestMergeHooks:
                     captured["prompt"] = messages[0]["content"] if messages else ""
                 return self._model(text="merged")
 
-        configure_fake_llm(lambda tier: CaptureMerge(tier))
+        __llm_kw = configure_fake_llm(lambda tier: CaptureMerge(tier))
 
         @node(outputs=UpstreamContext)
         def enrich() -> UpstreamContext:
@@ -1421,7 +1428,7 @@ class TestMergeHooks:
         mod.write = write
 
         pipeline = construct_from_module(mod, name="preserve-test")
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs(), **__llm_kw)
         run(graph, input={"node_id": "t-pres"})
 
         prompt = captured.get("prompt", "")
@@ -1429,7 +1436,7 @@ class TestMergeHooks:
 
     def test_all_three_hooks_success_path(self):
         """All hooks set, LLM succeeds: pre + post called, fallback NOT called."""
-        configure_fake_llm(lambda tier: StructuredFake(lambda m: m(text="llm")))
+        __llm_kw = configure_fake_llm(lambda tier: StructuredFake(lambda m: m(text="llm")))
 
         call_log = []
 
@@ -1457,7 +1464,7 @@ class TestMergeHooks:
         mod.write = write
 
         pipeline = construct_from_module(mod, name="all3-ok")
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs(), **__llm_kw)
         result = run(graph, input={"node_id": "t-3ok"})
 
         assert call_log == ["pre", "post"]
@@ -1478,7 +1485,7 @@ class TestMergeHooks:
                     raise RuntimeError("boom")
                 return self._model(text="v")
 
-        configure_fake_llm(lambda tier: FailMerge(tier))
+        __llm_kw = configure_fake_llm(lambda tier: FailMerge(tier))
 
         call_log = []
 
@@ -1506,7 +1513,7 @@ class TestMergeHooks:
         mod.write = write
 
         pipeline = construct_from_module(mod, name="all3-fail")
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs(), **__llm_kw)
         result = run(graph, input={"node_id": "t-3f"})
 
         assert call_log == ["pre", "fallback"]
@@ -1529,7 +1536,7 @@ class TestMergeHooks:
                     captured["prompt"] = messages[0]["content"] if messages else ""
                 return self._model(text="merged")
 
-        configure_fake_llm(lambda tier: CaptureMerge(tier))
+        __llm_kw = configure_fake_llm(lambda tier: CaptureMerge(tier))
 
         def pre(variants):
             return {"count": str(len(variants))}
@@ -1544,7 +1551,7 @@ class TestMergeHooks:
         )
 
         pipeline = Construct("prog-pre", nodes=[writer])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs(), **__llm_kw)
         run(graph, input={"node_id": "t-pp"})
 
         assert "2" in captured.get("prompt", ""), f"pre_process not applied: {captured}"
@@ -1564,7 +1571,7 @@ class TestMergeHooks:
                     raise RuntimeError("merge boom")
                 return self._model(text="v")
 
-        configure_fake_llm(lambda tier: FailMerge(tier))
+        __llm_kw = configure_fake_llm(lambda tier: FailMerge(tier))
 
         writer = Node(
             "writer", mode="think", outputs=Draft,
@@ -1576,14 +1583,14 @@ class TestMergeHooks:
         )
 
         pipeline = Construct("prog-fb", nodes=[writer])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs(), **__llm_kw)
         result = run(graph, input={"node_id": "t-pfb"})
 
         assert result["writer"].text == "fb-2"
 
     def test_declarative_node_with_hooks(self):
         """Declarative Node.scripted() + Oracle with hooks (three-surface rule)."""
-        configure_fake_llm(lambda tier: StructuredFake(lambda m: m(text="llm-out")))
+        __llm_kw = configure_fake_llm(lambda tier: StructuredFake(lambda m: m(text="llm-out")))
 
         post_called = []
 
@@ -1603,7 +1610,7 @@ class TestMergeHooks:
         )
 
         pipeline = Construct("decl-hook", nodes=[writer])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs(), **__llm_kw)
         result = run(graph, input={"node_id": "t-decl"})
 
         assert len(post_called) == 1
@@ -1626,7 +1633,7 @@ class TestMergeHooks:
                     captured_input["prompt"] = messages[0]["content"] if messages else ""
                 return self._model(text="merged")
 
-        configure_fake_llm(lambda tier: CaptureMerge(tier))
+        __llm_kw = configure_fake_llm(lambda tier: CaptureMerge(tier))
 
         @node(outputs=Draft, ensemble_n=2,
               prompt="generate draft", model="fast",
@@ -1637,7 +1644,7 @@ class TestMergeHooks:
         mod.write = write
 
         pipeline = construct_from_module(mod, name="nochange-test")
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs(), **__llm_kw)
         result = run(graph, input={"node_id": "t-nc"})
 
         prompt = captured_input.get("prompt", "")
@@ -1645,7 +1652,7 @@ class TestMergeHooks:
 
     def test_post_process_error_not_caught_by_fallback(self):
         """post_process errors must propagate, NOT be caught by fallback."""
-        configure_fake_llm(lambda tier: StructuredFake(lambda m: m(text="ok")))
+        __llm_kw = configure_fake_llm(lambda tier: StructuredFake(lambda m: m(text="ok")))
 
         fallback_called = []
 
@@ -1667,7 +1674,7 @@ class TestMergeHooks:
         mod.write = write
 
         pipeline = construct_from_module(mod, name="pp-err-test")
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs(), **__llm_kw)
 
         with pytest.raises(ValueError, match="post_process bug"):
             run(graph, input={"node_id": "t-pp-err"})
@@ -1708,7 +1715,7 @@ class TestEachOracleFusionHooks:
 
     def test_post_process_in_fused_path(self):
         """merge_post_process works in EachxOracle fused path."""
-        configure_fake_llm(lambda tier: StructuredFake(lambda m: m(summary="raw")))
+        __llm_kw = configure_fake_llm(lambda tier: StructuredFake(lambda m: m(summary="raw")))
 
         post_calls = []
 
@@ -1734,7 +1741,7 @@ class TestEachOracleFusionHooks:
         mod.score = score
 
         pipeline = construct_from_module(mod, name="fused-post")
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs(), **__llm_kw)
         result = run(graph, input={"node_id": "f-post"})
 
         scores = result["score"]
@@ -1758,7 +1765,7 @@ class TestEachOracleFusionHooks:
                     raise RuntimeError("fused merge failed")
                 return self._model(summary="gen")
 
-        configure_fake_llm(lambda tier: FailOnMerge(tier))
+        __llm_kw = configure_fake_llm(lambda tier: FailOnMerge(tier))
 
         def fused_fallback(variants, error):
             return ChunkResult(summary=f"fb-{len(variants)}")
@@ -1778,7 +1785,7 @@ class TestEachOracleFusionHooks:
         mod.score = score
 
         pipeline = construct_from_module(mod, name="fused-fb")
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs(), **__llm_kw)
         result = run(graph, input={"node_id": "f-fb"})
 
         scores = result["score"]
@@ -1802,7 +1809,7 @@ class TestEachOracleFusionHooks:
                         messages[0]["content"] if messages else "")
                 return self._model(summary="merged")
 
-        configure_fake_llm(lambda tier: CaptureMerge(tier))
+        __llm_kw = configure_fake_llm(lambda tier: CaptureMerge(tier))
 
         def tag_pre(variants):
             return {"tagged": f"count={len(variants)}"}
@@ -1822,7 +1829,7 @@ class TestEachOracleFusionHooks:
         mod.score = score
 
         pipeline = construct_from_module(mod, name="fused-pre")
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs(), **__llm_kw)
         result = run(graph, input={"node_id": "f-pre"})
 
         assert any("count=2" in p for p in captured.get("prompts", [])), (
@@ -1847,15 +1854,18 @@ class TestOracleMergeLlmConfig:
         """invoke_structured in the merge path should receive node.llm_config."""
         captured_calls = []
 
-        configure_fake_llm(lambda tier: StructuredFake(lambda m: m(text="out")))
+        __llm_kw = configure_fake_llm(lambda tier: StructuredFake(lambda m: m(text="out")))
 
         # Patch _llm.invoke_structured to capture all calls
         from neograph import _llm
         original = _llm.invoke_structured
 
         def capture_invoke(
-            model_tier, prompt_template, input_data, output_model, config,
-            node_name="", llm_config=None, context=None,
+            *args,
+            model_tier=None, prompt_template=None, input_data=None,
+            output_model=None, config=None,
+            node_name="", llm_config=None, context=None, runtime=None,
+            **kwargs,
         ):
             captured_calls.append({
                 "model_tier": model_tier,
@@ -1879,7 +1889,7 @@ class TestOracleMergeLlmConfig:
         mod.write = write
 
         pipeline = construct_from_module(mod, name="llm-cfg-test")
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs(), **__llm_kw)
         run(graph, input={"node_id": "t-cfg"})
 
         # Should have 3 calls: 2 generators + 1 merge

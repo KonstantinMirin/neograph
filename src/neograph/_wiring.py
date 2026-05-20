@@ -15,15 +15,15 @@ from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Send, interrupt
 
+from neograph._llm_runtime import EMPTY_RUNTIME, LlmRuntime
 from neograph._normalize import normalize_outputs
 from neograph._state_bus import StateBus, adapt_state
 from neograph._state_keys import StateKeys
 from neograph._subconstruct import make_subgraph_fn
 from neograph.construct import Construct
 from neograph.di import _unwrap_loop_value
-from neograph.errors import ExecutionError
+from neograph.errors import ConfigurationError, ExecutionError
 from neograph.factory import (
-    lookup_condition,
     make_node_fn,
     make_oracle_merge_fn,
 )
@@ -178,6 +178,10 @@ def _add_each_oracle_fused(
     each: Each,
     oracle: Oracle,
     prev_node: str | None,
+    *,
+    runtime: LlmRuntime = EMPTY_RUNTIME,
+    scripted_lookup: dict[str, Callable] | None = None,
+    tool_factory_lookup: dict[str, Callable] | None = None,
 ) -> str:
     """Each x Oracle fusion: flat M x N Send topology.
 
@@ -195,7 +199,7 @@ def _add_each_oracle_fused(
     # Generator function — tagged redirect for Each x Oracle fusion
     from neograph.factory import make_eachoracle_redirect_fn
 
-    raw_fn = make_node_fn(node)
+    raw_fn = make_node_fn(node, runtime=runtime, scripted_lookup=scripted_lookup, tool_factory_lookup=tool_factory_lookup)
     redirect_fn = make_eachoracle_redirect_fn(raw_fn, field_name, collector_field, each.key)
     graph.add_node(gen_name, redirect_fn)
 
@@ -255,7 +259,9 @@ def _add_each_oracle_fused(
     # Group-merge barrier: partitions by each.key, calls merge_fn per group
     merge_fn_impl = make_oracle_merge_fn(oracle, field_name, collector_field, node.outputs,
                                         node_inputs=node.inputs,
-                                        llm_config=node.llm_config)
+                                        llm_config=node.llm_config,
+                                        runtime=runtime,
+                                        scripted_lookup=scripted_lookup)
 
     def group_merge_barrier(state: Any, config: RunnableConfig) -> dict:
         from collections import defaultdict
@@ -270,7 +276,7 @@ def _add_each_oracle_fused(
         merged: dict[str, Any] = {}
         for key, variants in groups.items():
             # Build a mini-state with just this group's variants for the merge_fn
-            merged[key] = _merge_one_group(oracle, node, variants, config)
+            merged[key] = _merge_one_group(oracle, node, variants, config, runtime=runtime, scripted_lookup=scripted_lookup)
 
         # For dict-form outputs: write to per-key fields
         if normalize_outputs(node.outputs).is_dict_form:
@@ -292,10 +298,17 @@ def _add_each_oracle_fused(
     return barrier_name
 
 
-def _merge_one_group(oracle: Oracle, node: Node, variants: list, config: RunnableConfig) -> Any:
+def _merge_one_group(
+    oracle: Oracle,
+    node: Node,
+    variants: list,
+    config: RunnableConfig,
+    *,
+    runtime: LlmRuntime = EMPTY_RUNTIME,
+    scripted_lookup: dict[str, Callable] | None = None,
+) -> Any:
     """Merge one group of Oracle variants (used by Each x Oracle fusion)."""
     from neograph.decorators import _resolve_merge_args, get_merge_fn_metadata
-    from neograph.factory import lookup_scripted
 
     output_model = normalize_outputs(node.outputs).primary
     assert output_model is not None, f"Oracle merge on '{node.name}' requires outputs"
@@ -315,6 +328,7 @@ def _merge_one_group(oracle: Oracle, node: Node, variants: list, config: Runnabl
         used_fallback = False
         try:
             merged = invoke_structured(
+                runtime,
                 model_tier=oracle.merge_model,
                 prompt_template=oracle.merge_prompt,
                 input_data=input_data,
@@ -344,7 +358,13 @@ def _merge_one_group(oracle: Oracle, node: Node, variants: list, config: Runnabl
             args = _resolve_merge_args(param_res, config, None)
             return user_fn(variants, *args)
         else:
-            scripted_merge = lookup_scripted(oracle.merge_fn)
+            per_compile = scripted_lookup or {}
+            scripted_merge = per_compile.get(oracle.merge_fn)
+            if scripted_merge is None:
+                raise ConfigurationError.build(
+                    f"Scripted function '{oracle.merge_fn}' not registered",
+                    hint=f"Pass scripted={{'{oracle.merge_fn}': fn}} to compile().",
+                )
             return scripted_merge(variants, config)
 
     return variants[0] if variants else None  # pragma: no cover — Oracle validation requires merge_fn or merge_prompt
@@ -435,11 +455,35 @@ def _construct_loop_unwrap(state: StateBus, field_name: str) -> Any:
     return _unwrap_loop_value(val, object)
 
 
+def _resolve_condition(
+    name_or_fn: str | Callable,
+    condition_lookup: dict[str, Callable] | None,
+) -> Callable:
+    """Resolve a condition reference: string → per-compile dict;
+    callable → identity. Raises ConfigurationError when a string condition
+    isn't in the per-compile dict (post-§2: no fallback registry)."""
+    if not isinstance(name_or_fn, str):
+        return name_or_fn
+    per_compile = condition_lookup or {}
+    fn = per_compile.get(name_or_fn)
+    if fn is not None:
+        return fn
+    raise ConfigurationError.build(
+        f"Condition '{name_or_fn}' not registered",
+        hint=f"Pass conditions={{'{name_or_fn}': fn}} to compile().",
+    )
+
+
 def _add_loop_back_edge(
     graph: StateGraph,
     node: Node,
     loop: Loop,
     prev_node: str | None,
+    *,
+    runtime: LlmRuntime = EMPTY_RUNTIME,
+    scripted_lookup: dict[str, Callable] | None = None,
+    condition_lookup: dict[str, Callable] | None = None,
+    tool_factory_lookup: dict[str, Callable] | None = None,
 ) -> str:
     """Wire Loop modifier: conditional back-edge with iteration tracking.
 
@@ -447,7 +491,7 @@ def _add_loop_back_edge(
     and a pass-through exit node so the compile loop can wire forward normally.
     """
     node_name = node.name
-    node_fn = make_node_fn(node)
+    node_fn = make_node_fn(node, runtime=runtime, scripted_lookup=scripted_lookup, tool_factory_lookup=tool_factory_lookup)
     field_name = field_name_for(node_name)
     count_field = StateKeys.loop_count(field_name)
 
@@ -458,10 +502,7 @@ def _add_loop_back_edge(
     else:
         graph.add_edge(START, node_name)
 
-    if isinstance(loop.when, str):
-        condition = lookup_condition(loop.when)
-    else:
-        condition = loop.when
+    condition = _resolve_condition(loop.when, condition_lookup)
 
     reenter_target = node_name
     exit_name = f"__loop_exit_{node_name}"
@@ -495,6 +536,8 @@ def _add_subgraph_loop(
     subgraph_fn: LangGraphNodeFn,
     loop: Loop,
     prev_node: str | None,
+    *,
+    condition_lookup: dict[str, Callable] | None = None,
 ) -> str:
     """Wire Loop modifier on a sub-construct: conditional back-edge."""
     field_name = field_name_for(sub.name)
@@ -507,10 +550,7 @@ def _add_subgraph_loop(
     else:
         graph.add_edge(START, sub.name)
 
-    if isinstance(loop.when, str):
-        condition = lookup_condition(loop.when)
-    else:
-        condition = loop.when
+    condition = _resolve_condition(loop.when, condition_lookup)
 
     exit_name = f"__loop_exit_{sub.name}"
 
@@ -541,6 +581,10 @@ def _add_branch_to_graph(
     graph: StateGraph,
     branch_node: _BranchNode,
     prev_node: str | None,
+    *,
+    runtime: LlmRuntime = EMPTY_RUNTIME,
+    scripted_lookup: dict[str, Callable] | None = None,
+    tool_factory_lookup: dict[str, Callable] | None = None,
 ) -> str:
     """Lower a _BranchNode into conditional edges in the graph.
 
@@ -566,20 +610,20 @@ def _add_branch_to_graph(
     # We only add the node function here — edge wiring is handled below.
     for item in true_nodes:
         if isinstance(item, Construct):
-            sub_graph = _compile(item, checkpointer=None)
+            sub_graph = _compile(item, checkpointer=None, _runtime=runtime, _scripted_lookup=scripted_lookup, tool_factories=tool_factory_lookup)
             subgraph_fn = make_subgraph_fn(item, sub_graph)
             graph.add_node(item.name, subgraph_fn)
         else:
-            node_fn = make_node_fn(item)
+            node_fn = make_node_fn(item, runtime=runtime, scripted_lookup=scripted_lookup, tool_factory_lookup=tool_factory_lookup)
             graph.add_node(item.name, node_fn)
 
     for item in false_nodes:
         if isinstance(item, Construct):
-            sub_graph = _compile(item, checkpointer=None)
+            sub_graph = _compile(item, checkpointer=None, _runtime=runtime, _scripted_lookup=scripted_lookup, tool_factories=tool_factory_lookup)
             subgraph_fn = make_subgraph_fn(item, sub_graph)
             graph.add_node(item.name, subgraph_fn)
         else:
-            node_fn = make_node_fn(item)
+            node_fn = make_node_fn(item, runtime=runtime, scripted_lookup=scripted_lookup, tool_factory_lookup=tool_factory_lookup)
             graph.add_node(item.name, node_fn)
 
     # Wire sequential edges within each arm
@@ -660,11 +704,13 @@ def _add_operator_check(
     graph: StateGraph,
     node_name: str,
     operator: Operator,
+    *,
+    condition_lookup: dict[str, Callable] | None = None,
 ) -> str:
     """Add an interrupt check node after the given node."""
     check_name = f"{node_name}__operator"
 
-    condition_fn = lookup_condition(operator.when)
+    condition_fn = _resolve_condition(operator.when, condition_lookup)
 
     def operator_check(state: Any) -> dict:
         should_pause = condition_fn(state)

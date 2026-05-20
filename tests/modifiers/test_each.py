@@ -15,8 +15,7 @@ from neograph import (
     node,
     run,
 )
-from neograph.factory import register_scripted
-from tests.fakes import StructuredFake, configure_fake_llm
+from tests.fakes import StructuredFake, build_test_compile_kwargs, configure_fake_llm, register_scripted
 from tests.schemas import (
     Claims,
     ClusterGroup,
@@ -79,7 +78,7 @@ class TestEach:
         mod.verify = verify
 
         pipeline = construct_from_module(mod)
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "test-001"})
 
         # Both clusters were processed — pin cardinality AND per-key payload
@@ -113,7 +112,7 @@ class TestEach:
         mod.summarize = summarize
 
         pipeline = construct_from_module(mod)
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "empty-each"})
 
         # Downstream MUST fire �� verify produces empty dict, summarize runs
@@ -150,7 +149,7 @@ class TestConstructEach:
 
     def test_sub_pipeline_runs_per_item_when_each_over_collection(self):
         """Sub-pipeline runs once per cluster, results collected as dict."""
-        from neograph.factory import register_scripted
+        from tests.fakes import register_scripted
 
         register_scripted("make_clusters", lambda input_data, config: Clusters(
             groups=[
@@ -181,7 +180,7 @@ class TestConstructEach:
             Node.scripted("make-clusters", fn="make_clusters", outputs=Clusters),
             sub,
         ])
-        graph = compile(parent)
+        graph = compile(parent, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "test-001"})
 
         # Both clusters processed
@@ -212,7 +211,7 @@ class TestListOverEachEndToEnd:
         """Declarative: Each producer + Node.scripted consumer that
         annotates inputs={'verify': list[MatchResult]}."""
         from neograph import compile, run
-        from neograph.factory import register_scripted
+        from tests.fakes import register_scripted
 
         register_scripted(
             "make_clusters_l5",
@@ -247,7 +246,7 @@ class TestListOverEachEndToEnd:
             outputs=MergedResult,
         )
         pipeline = Construct("l5-decl", nodes=[make, verify, summarize])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "l5"})
         assert result["summarize"].final_text == "verified:3:a,b,c"
 
@@ -280,7 +279,7 @@ class TestListOverEachEndToEnd:
             )
 
         pipeline = construct_from_functions("l5-dec", [gen_clusters, verify, summarize])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "l5"})
         assert result["summarize"].final_text == "got:2:alpha,beta"
 
@@ -303,7 +302,7 @@ class TestListOverEachEndToEnd:
     def test_dict_consumer_passes_when_each_producer_present(self):
         """dict[str, X] consumer still passes through unchanged (regression)."""
         from neograph import compile, run
-        from neograph.factory import register_scripted
+        from tests.fakes import register_scripted
 
         register_scripted(
             "make_clusters_l5b",
@@ -332,7 +331,7 @@ class TestListOverEachEndToEnd:
             outputs=MergedResult,
         )
         pipeline = Construct("l5-dict", nodes=[make, verify, summarize])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "l5"})
         assert result["summarize"].final_text == "keys:['x']"
 
@@ -401,7 +400,7 @@ class TestEachDuplicateKeyGuard:
         mod.verify = verify
 
         pipeline = construct_from_module(mod)
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
 
         result = run(graph, input={"node_id": "dup-test"})
         # First occurrence kept
@@ -433,7 +432,7 @@ class TestEachDuplicateKeyGuard:
             | Each(over="dup_each_make.groups", key="label")
         )
         pipeline = Construct("test-dup-each", nodes=[make, proc])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
 
         result = run(graph, input={"node_id": "dup-prog"})
         # First occurrence kept
@@ -477,7 +476,7 @@ class TestEachDuplicateKeyDedup:
         mod.verify = verify
 
         pipeline = construct_from_module(mod)
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
 
         result = run(graph, input={"node_id": "dedup-test"})
 
@@ -511,7 +510,7 @@ class TestEachDuplicateKeyDedup:
             | Each(over="dedup_each_make.groups", key="label")
         )
         pipeline = Construct("test-dedup-each", nodes=[make, proc])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
 
         result = run(graph, input={"node_id": "dedup-prog"})
 
@@ -534,7 +533,7 @@ class TestSkipWhenWithEach:
 
         # LLM-mode node with skip_when + Each. Skip fires for single-claim
         # groups. Non-skipped groups go through the LLM (StructuredFake).
-        configure_fake_llm(lambda tier: StructuredFake(
+        __llm_kw = configure_fake_llm(lambda tier: StructuredFake(
             lambda m: m(cluster_label="processed", matched=["llm-result"]),
         ))
 
@@ -558,7 +557,7 @@ class TestSkipWhenWithEach:
         def verify(group: ClusterGroup) -> MatchResult: ...
 
         pipeline = construct_from_functions("skip-each", [make, verify])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs(), **__llm_kw)
         result = run(graph, input={"node_id": "gpn"})
 
         proc = result["verify"]

@@ -15,10 +15,10 @@ from langchain_core.runnables import RunnableConfig
 from pydantic import BaseModel
 
 from neograph._llm_config import LlmConfig
-from neograph._runtime_registry import lookup_scripted
+from neograph._llm_runtime import EMPTY_RUNTIME, LlmRuntime
 from neograph._state_bus import StateBus, adapt_state
 from neograph._state_keys import StateKeys
-from neograph.errors import ExecutionError
+from neograph.errors import ConfigurationError, ExecutionError
 from neograph.modifiers import Each, Oracle
 from neograph.naming import field_name_for
 from neograph.node import TypeSpecStatic
@@ -193,6 +193,9 @@ def make_oracle_merge_fn(
     output_model: TypeSpecStatic,
     node_inputs: dict[str, TypeSpecStatic] | None = None,
     llm_config: LlmConfig | None = None,
+    *,
+    runtime: LlmRuntime = EMPTY_RUNTIME,
+    scripted_lookup: dict[str, Callable] | None = None,
 ) -> Callable:
     """Create the merge barrier function for Oracle.
 
@@ -216,6 +219,7 @@ def make_oracle_merge_fn(
     """
     _node_inputs = node_inputs if isinstance(node_inputs, dict) else None
     _llm_config = llm_config
+    _runtime = runtime
 
     if oracle.merge_prompt:
         assert oracle.merge_prompt is not None  # narrowing for mypy
@@ -250,6 +254,7 @@ def make_oracle_merge_fn(
                 else:
                     primary_output_model = cast(type[BaseModel], output_model)
                 merged = invoke_structured(
+                    _runtime,
                     model_tier=oracle.merge_model,
                     prompt_template=_merge_prompt,
                     input_data=input_data,
@@ -283,7 +288,13 @@ def make_oracle_merge_fn(
                 merged = user_fn(primary, *_resolve_merge_args(param_res, config, state))
                 return _build_oracle_merge_result(merged, field_name, output_model, secondaries)
         else:
-            scripted_merge = lookup_scripted(_merge_fn_name)
+            per_compile = scripted_lookup or {}
+            scripted_merge = per_compile.get(_merge_fn_name)
+            if scripted_merge is None:
+                raise ConfigurationError.build(
+                    f"Scripted function '{_merge_fn_name}' not registered",
+                    hint="Pass scripted={'" + _merge_fn_name + "': fn} to compile().",
+                )
 
             def merge_fn(state: Any, config: RunnableConfig) -> dict:
                 results = getattr(state, collector_field, [])

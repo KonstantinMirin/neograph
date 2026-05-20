@@ -12,11 +12,9 @@ Structlog captures the framework-level view regardless.
 
 from __future__ import annotations
 
-import inspect
 import re
 import time
-from collections.abc import Callable
-from typing import Any, Protocol, runtime_checkable
+from typing import Any
 
 import structlog
 from langchain_core.runnables import RunnableConfig
@@ -24,95 +22,22 @@ from pydantic import BaseModel, ValidationError
 
 from neograph._image import resolve_image
 from neograph._llm_config import LlmConfig
+from neograph._llm_protocols import CostCallback, LlmFactory, PromptCompiler  # noqa: F401 — re-exported
+from neograph._llm_runtime import (
+    _ACCEPT_ALL,
+    EMPTY_RUNTIME,
+    LlmRuntime,
+    _accepted_params,  # noqa: F401 — re-exported
+)
 from neograph.describe_type import describe_type, describe_value
 from neograph.errors import ConfigurationError, ExecutionError
-from neograph.renderers import Renderer
-
-# ═══════════════════════════════════════════════════════════════════════════
-# Typed callback Protocols
-#
-# Replace bare ``Callable`` annotations on user-supplied callback slots so
-# mypy + IDEs enforce the contract at declaration time. Protocols are
-# structural and erased at runtime; ``_accepted_params`` introspection still
-# works against the underlying function.
-#
-# ``runtime_checkable`` is used for parity with the Renderer Protocol and to
-# permit ``isinstance(fn, ProtocolName)`` checks in tests.
-# ═══════════════════════════════════════════════════════════════════════════
-
-
-@runtime_checkable
-class LlmFactory(Protocol):
-    """Factory callback for creating LLM client instances per node tier.
-
-    Backward-compatible with both shapes documented in ``configure_llm``:
-
-    * Simple:   ``(tier) -> BaseChatModel``
-    * Advanced: ``(tier, *, node_name=, llm_config=) -> BaseChatModel``
-
-    Uses ``*args``/``**kwargs`` catch so the Simple form (no kwargs) still
-    satisfies the Protocol structurally. ``_accepted_params`` filters
-    actual kwargs at call site.
-    """
-
-    def __call__(self, tier: str, *args: Any, **kwargs: Any) -> Any: ...
-
-
-@runtime_checkable
-class PromptCompiler(Protocol):
-    """Builds message lists for LLM calls.
-
-    Backward-compatible with both shapes:
-
-    * Simple:   ``(template, input_data) -> list``
-    * Advanced: ``(template, input_data, *, node_name=, config=, ...) -> list``
-    """
-
-    def __call__(self, template: str, input_data: Any, *args: Any, **kwargs: Any) -> list[Any]: ...
-
-
-@runtime_checkable
-class CostCallback(Protocol):
-    """Cost telemetry hook called after each LLM invocation.
-
-    Modern shape (preferred): keyword-only -- mypy validates the required
-    keys. The legacy 3-arg fallback at ``_notify_cost`` catches ``TypeError``
-    for callbacks that only accept ``(tier, input_tokens, output_tokens)``.
-    """
-
-    def __call__(
-        self,
-        *,
-        tier: str,
-        input_tokens: int,
-        output_tokens: int,
-        node_name: str = ...,
-        mode: str = ...,
-        duration_s: float = ...,
-        **kw: Any,
-    ) -> None: ...
 
 log = structlog.get_logger()
 
-# Consumer-provided LLM factory
-_llm_factory: LlmFactory | None = None
-_llm_factory_params: set[str] | frozenset[str] = set()
-
-# Consumer-provided prompt compiler
-_prompt_compiler: PromptCompiler | None = None
-_prompt_compiler_params: set[str] | frozenset[str] = set()
-
-# Consumer-provided renderer (set via configure_llm(renderer=...))
-_global_renderer: Renderer | None = None
-
-# Consumer-provided cost callback (set via configure_llm(cost_callback=...))
-_cost_callback: CostCallback | None = None
-
 
 def _notify_cost(
-    tier: str,
-    usage: dict | None,
-    *,
+    *args: Any,
+    runtime: LlmRuntime | None = None,
     node_name: str | None = None,
     mode: str | None = None,
     duration_s: float | None = None,
@@ -122,8 +47,22 @@ def _notify_cost(
     Extra kwargs (node_name, mode, duration_s) are passed through to the
     callback. Old-style callbacks that only accept (tier, input_tokens,
     output_tokens) are supported via TypeError fallback.
+
+    Accepts both call shapes:
+        _notify_cost(runtime, tier, usage, ...)  # post-§2
+        _notify_cost(tier, usage, ...)           # legacy — uses compat runtime
     """
-    if _cost_callback is None or usage is None:
+    if args and isinstance(args[0], LlmRuntime):
+        runtime = args[0]
+        tier = args[1] if len(args) > 1 else ""
+        usage = args[2] if len(args) > 2 else None
+    else:
+        tier = args[0] if args else ""
+        usage = args[1] if len(args) > 1 else None
+        if runtime is None:
+            runtime = EMPTY_RUNTIME
+    cb = runtime.cost_callback
+    if cb is None or usage is None:
         return
     kwargs: dict = {
         "tier": tier,
@@ -137,99 +76,17 @@ def _notify_cost(
     if duration_s is not None:
         kwargs["duration_s"] = duration_s
     try:
-        _cost_callback(**kwargs)
+        cb(**kwargs)
     except TypeError:
         # Old-style callback doesn't accept extra kwargs — fall back
         try:
-            _cost_callback(
+            cb(
                 tier=tier,
                 input_tokens=kwargs["input_tokens"],
                 output_tokens=kwargs["output_tokens"],
             )
         except TypeError as exc:
             log.warning("cost_callback_failed", error=str(exc))
-
-
-def _get_global_renderer() -> Any:
-    """Return the globally configured renderer, or None."""
-    return _global_renderer
-
-
-_ACCEPT_ALL = frozenset({"__all__"})  # sentinel for **kwargs functions
-
-
-def _accepted_params(fn: Callable) -> set[str] | frozenset[str]:
-    """Inspect a callable and return the set of parameter names it accepts.
-
-    If the function accepts **kwargs, returns a sentinel that matches all keys.
-    """
-    try:
-        sig = inspect.signature(fn)
-        for p in sig.parameters.values():
-            if p.kind == inspect.Parameter.VAR_KEYWORD:
-                return _ACCEPT_ALL  # accepts everything
-        return set(sig.parameters.keys())
-    except (ValueError, TypeError):  # pragma: no cover
-        # Builtins, C extensions — assume simple signature
-        return set()  # pragma: no cover
-
-
-def configure_llm(
-    llm_factory: LlmFactory,
-    prompt_compiler: PromptCompiler,
-    *,
-    renderer: Renderer | None = None,
-    cost_callback: CostCallback | None = None,
-) -> None:
-    """Configure NeoGraph's LLM layer.
-
-    Args:
-        llm_factory: Creates LLM instances per node.
-            Simple:   (tier) → BaseChatModel
-            Advanced: (tier, node_name=, llm_config=) → BaseChatModel
-
-        prompt_compiler: Builds message lists for LLM calls.
-            Simple:   (template, input_data) → list[BaseMessage]
-            Advanced: (template, input_data, node_name=, config=) → list[BaseMessage]
-            The config contains everything from run()'s input + config["configurable"],
-            so the compiler can access node_id, project_root, shared resources, etc.
-
-        renderer: Global renderer for input data. Lowest priority in the
-            dispatch hierarchy (model method > node.renderer > global).
-
-    Usage:
-        # Simple
-        configure_llm(
-            llm_factory=lambda tier: ChatOpenAI(model=MODELS[tier]),
-            prompt_compiler=lambda template, data: [HumanMessage(content=str(data))],
-        )
-
-        # Production: full context access
-        def my_compiler(template, data, *, node_name=None, config=None):
-            node_id = config["configurable"]["node_id"]
-            project_root = config["configurable"]["project_root"]
-            return get_generator_prompt(
-                atom_type=template,
-                node_id=node_id,
-                context_files=load_context(project_root, node_id),
-                analysis_notes=format_notes(data),
-            )
-
-        def my_factory(tier, node_name=None, llm_config=None):
-            return ChatOpenAI(
-                model=MODELS[tier],
-                temperature=(llm_config or {}).get("temperature", 0),
-            )
-
-        configure_llm(llm_factory=my_factory, prompt_compiler=my_compiler)
-    """
-    global _llm_factory, _prompt_compiler, _llm_factory_params, _prompt_compiler_params, _global_renderer, _cost_callback  # noqa: PLW0603
-    _llm_factory = llm_factory
-    _llm_factory_params = _accepted_params(llm_factory)
-    _prompt_compiler = prompt_compiler
-    _prompt_compiler_params = _accepted_params(prompt_compiler)
-    _global_renderer = renderer
-    _cost_callback = cost_callback
 
 
 def _coerce_llm_config(llm_config: LlmConfig | dict | None) -> LlmConfig:
@@ -246,19 +103,39 @@ def _coerce_llm_config(llm_config: LlmConfig | dict | None) -> LlmConfig:
     return LlmConfig(**llm_config)
 
 
-def _get_llm(tier: str, node_name: str = "", llm_config: LlmConfig | dict | None = None) -> Any:
-    if _llm_factory is None:
+def _get_llm(
+    *args: Any,
+    runtime: LlmRuntime | None = None,
+    node_name: str = "",
+    llm_config: LlmConfig | dict | None = None,
+) -> Any:
+    """Resolve an LLM client for *tier* from the runtime's factory.
+
+    Backward-compatible argument shapes:
+        _get_llm(runtime, tier, ...)   # post-§2 (positional)
+        _get_llm(tier, ...)            # legacy — runtime defaults to compat
+        _get_llm(tier, runtime=...)    # explicit keyword
+    """
+    if args and isinstance(args[0], LlmRuntime):
+        runtime = args[0]
+        tier = args[1] if len(args) > 1 else None
+    else:
+        tier = args[0] if args else None
+        if runtime is None:
+            runtime = EMPTY_RUNTIME
+    if runtime.llm_factory is None:
         raise ConfigurationError.build(
             "LLM not configured",
-            hint="Call neograph.configure_llm() first.",
+            hint="Pass llm_factory= to compile().",
         )
     cfg = _coerce_llm_config(llm_config)
     all_kwargs = {"node_name": node_name, "llm_config": cfg.as_factory_kwargs()}
-    if _llm_factory_params is _ACCEPT_ALL:
+    if runtime.llm_factory_params is _ACCEPT_ALL:
         kwargs = all_kwargs
     else:
-        kwargs = {k: v for k, v in all_kwargs.items() if k in _llm_factory_params}
-    return _llm_factory(tier, **kwargs)
+        kwargs = {k: v for k, v in all_kwargs.items() if k in runtime.llm_factory_params}
+    assert tier is not None and isinstance(tier, str)
+    return runtime.llm_factory(tier, **kwargs)
 
 
 def _is_inline_prompt(template: str) -> bool:
@@ -388,9 +265,11 @@ def _substitute_vars(template: str, input_data: Any) -> str:
 
 
 def _compile_prompt(
-    template: str,
-    input_data: Any,
+    template_or_runtime: Any,
+    input_data_or_template: Any = None,
+    input_data: Any = None,
     *,
+    runtime: LlmRuntime | None = None,
     node_name: str = "",
     config: RunnableConfig | None = None,
     output_model: type[BaseModel] | None = None,
@@ -398,6 +277,27 @@ def _compile_prompt(
     output_schema: str | None = None,
     context: dict[str, Any] | None = None,
 ) -> list:
+    """Compile a prompt to message list.
+
+    Two call shapes are accepted to preserve backward compatibility with the
+    inline-prompt tests that predate the runtime threading:
+
+        _compile_prompt(template, input_data, ...)              # legacy
+        _compile_prompt(runtime, template, input_data, ...)     # post-§2
+
+    The first positional is the discriminator: if it's an `LlmRuntime`,
+    the new shape is used; otherwise the call is treated as the legacy
+    inline-prompt path with `runtime=EMPTY_RUNTIME` and no prompt_compiler.
+    """
+    if isinstance(template_or_runtime, LlmRuntime):
+        runtime = template_or_runtime
+        template = input_data_or_template
+        # input_data already named correctly
+    else:
+        template = template_or_runtime
+        input_data = input_data_or_template
+        if runtime is None:
+            runtime = EMPTY_RUNTIME
     # Inline prompt — resolve ${} variables and return directly
     if _is_inline_prompt(template):
         if _IMAGE_RE.search(template):
@@ -415,13 +315,21 @@ def _compile_prompt(
     }
     if context is not None:
         all_kwargs["context"] = context
-    # Only pass kwargs the compiler accepts — inspected at configure_llm() time
-    if _prompt_compiler_params is _ACCEPT_ALL:
+    if runtime.prompt_compiler is None:
+        raise ConfigurationError.build(
+            "prompt compiler not configured",
+            hint="Pass prompt_compiler= to compile().",
+        )
+    # Only pass kwargs the compiler accepts — inspected at compile time
+    if runtime.prompt_compiler_params is _ACCEPT_ALL:
         kwargs = all_kwargs
     else:
-        kwargs = {k: v for k, v in all_kwargs.items() if k in _prompt_compiler_params}
-    assert _prompt_compiler is not None, "prompt compiler not configured; call configure_llm() first"
-    return _prompt_compiler(template, input_data, **kwargs)
+        kwargs = {
+            k: v
+            for k, v in all_kwargs.items()
+            if k in runtime.prompt_compiler_params
+        }
+    return runtime.prompt_compiler(template, input_data, **kwargs)
 
 
 def _extract_json(text: str) -> str:
@@ -760,14 +668,16 @@ def _call_structured(
 
 
 def invoke_structured(
-    model_tier: str,
-    prompt_template: str,
-    input_data: Any,
-    output_model: type[BaseModel],
-    config: RunnableConfig,
+    *args: Any,
+    model_tier: str | None = None,
+    prompt_template: str | None = None,
+    input_data: Any = None,
+    output_model: Any = None,
+    config: RunnableConfig | None = None,
     node_name: str = "",
     llm_config: LlmConfig | dict | None = None,
     context: dict[str, Any] | None = None,
+    runtime: LlmRuntime | None = None,
 ) -> BaseModel:
     """Single LLM call with structured JSON output. Mode: produce.
 
@@ -775,7 +685,15 @@ def invoke_structured(
         "structured" — llm.with_structured_output(model) (default, widest LangChain support)
         "json_mode"  — inject schema into prompt, LLM returns raw JSON, framework parses
         "text"       — LLM returns plain text, framework extracts and parses JSON from it
+
+    Accepts both call shapes:
+        invoke_structured(runtime, model_tier=..., ...)   # post-§2
+        invoke_structured(model_tier=..., ...)            # legacy — uses compat runtime
     """
+    if args and isinstance(args[0], LlmRuntime):
+        runtime = args[0]
+    elif runtime is None:
+        runtime = EMPTY_RUNTIME
     cfg = _coerce_llm_config(llm_config)
     strategy = cfg.output_strategy
     llm_log = log.bind(tier=model_tier, prompt=prompt_template, output=output_model.__name__, strategy=strategy)
@@ -786,8 +704,9 @@ def invoke_structured(
 
         output_schema = describe_type(output_model)
 
-    llm = _get_llm(model_tier, node_name=node_name, llm_config=cfg)
+    llm = _get_llm(runtime, model_tier, node_name=node_name, llm_config=cfg)
     messages = _compile_prompt(
+        runtime,
         prompt_template,
         input_data,
         node_name=node_name,
@@ -800,6 +719,7 @@ def invoke_structured(
 
     max_retries = cfg.max_retries
     t0 = time.monotonic()
+    assert config is not None
     result, usage = _call_structured(llm, messages, output_model, strategy, config, max_retries=max_retries)
     elapsed = time.monotonic() - t0
 
@@ -812,7 +732,7 @@ def invoke_structured(
         }
 
     llm_log.info("llm_call", mode="think", duration_s=round(elapsed, 3), **usage_info)
-    _notify_cost(model_tier, usage, node_name=node_name, mode="think", duration_s=round(elapsed, 3))
+    _notify_cost(runtime, model_tier, usage, node_name=node_name, mode="think", duration_s=round(elapsed, 3))
     return result
 
 
@@ -821,31 +741,38 @@ def render_prompt(
     input_data: Any,
     *,
     config: RunnableConfig | None = None,
+    runtime: LlmRuntime | None = None,
 ) -> str:
     """Render the exact prompt a node would send to the LLM, without calling it.
 
-    Applies the renderer dispatch hierarchy (node.renderer > global > None),
-    compiles via the registered prompt_compiler, and formats messages as a
+    Applies the renderer dispatch hierarchy (node.renderer > runtime.renderer > None),
+    compiles via the supplied prompt_compiler, and formats messages as a
     readable string. Useful for prompt engineering and debugging.
 
     Args:
         node: A Node instance with prompt, model, and output fields.
         input_data: The input data (Pydantic model, dict, or primitive).
         config: Optional RunnableConfig-style dict for the prompt compiler.
+        runtime: LLM runtime bundle (llm_factory/prompt_compiler/renderer).
+            If omitted, falls back to the legacy compat slot set via
+            `configure_llm()`. Pass `runtime=` for the new API.
 
     Returns:
         A human-readable string of the compiled messages.
     """
-    if _prompt_compiler is None:
+    if runtime is None:
+        runtime = EMPTY_RUNTIME
+
+    if runtime.prompt_compiler is None:
         raise ConfigurationError.build(
             "Prompt compiler not configured",
-            hint="Call neograph.configure_llm() first.",
+            hint="Pass prompt_compiler= to compile(), or supply runtime= here.",
         )
 
     # Apply renderer dispatch via RenderedInput — matches runtime path
     from neograph.renderers import build_rendered_input
     prompt = getattr(node, "prompt", "") or ""
-    effective_renderer = getattr(node, "renderer", None) or _global_renderer
+    effective_renderer = getattr(node, "renderer", None) or runtime.renderer
     ri = build_rendered_input(input_data, renderer=effective_renderer)
     if _is_inline_prompt(prompt):
         input_data = ri.raw
@@ -863,6 +790,7 @@ def render_prompt(
         output_schema = describe_type(output_model)
 
     messages = _compile_prompt(
+        runtime,
         getattr(node, "prompt", "") or "",
         input_data,
         node_name=getattr(node, "name", ""),

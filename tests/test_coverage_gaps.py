@@ -27,8 +27,8 @@ from neograph import (
     node,
     run,
 )
-from neograph.factory import register_condition, register_scripted
 from neograph.forward import _BranchMeta, _BranchNode, _ConditionSpec
+from tests.fakes import build_test_compile_kwargs, register_condition, register_scripted
 from tests.schemas import (
     Claims,
     ClusterGroup,
@@ -72,7 +72,7 @@ class TestDescribeGraph:
         pipeline = Construct("dg-test", nodes=[
             Node.scripted("a", fn="dg_a", outputs=RawText),
         ])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = describe_graph(graph)
         assert isinstance(result, str)
         # Mermaid diagrams start with "%%{" or "graph" or contain "-->"
@@ -97,7 +97,7 @@ class TestDescribeGraph:
         pipeline = Construct("dag-test", nodes=[
             Node.scripted("a", fn="dag_a", outputs=RawText),
         ])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         _print_dag_summary(graph, pipeline)
         captured = capsys.readouterr()
         assert "dag-test" in captured.err
@@ -129,7 +129,7 @@ class TestDescribeGraph:
         monkeypatch.setattr(_compiler, "DEV_MODE", True)
         with patch.dict(os.environ, {"NEOGRAPH_DEV": "1"}):
             with patch("neograph.compiler._print_dag_summary") as mock_print:
-                compile(pipeline)
+                compile(pipeline, **build_test_compile_kwargs())
                 mock_print.assert_called_once()
 
 
@@ -143,7 +143,7 @@ class TestOperatorAfterModifiers:
 
     def test_operator_added_after_oracle_on_node(self):
         """Operator after Oracle on a Node compiles without error."""
-        from neograph.factory import register_condition
+        from tests.fakes import register_condition
 
         register_scripted("op_ora_gen", lambda _in, _cfg: RawText(text="v"))
         register_scripted("op_ora_merge", lambda variants, _cfg: RawText(text="merged"))
@@ -156,14 +156,14 @@ class TestOperatorAfterModifiers:
 
         from langgraph.checkpoint.memory import MemorySaver
         cp = MemorySaver()
-        graph = compile(pipeline, checkpointer=cp)
+        graph = compile(pipeline, checkpointer=cp, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "test"},
                      config={"configurable": {"thread_id": "op-ora-1"}})
         assert result["gen"].text == "merged"
 
     def test_operator_added_after_each_on_node(self):
         """Operator after Each on a Node compiles without error."""
-        from neograph.factory import register_condition
+        from tests.fakes import register_condition
 
         register_scripted("op_each_make", lambda _in, _cfg: Clusters(
             groups=[ClusterGroup(label="a", claim_ids=["1"])],
@@ -181,14 +181,14 @@ class TestOperatorAfterModifiers:
         pipeline = Construct("each-op", nodes=[make, proc])
         from langgraph.checkpoint.memory import MemorySaver
         cp = MemorySaver()
-        graph = compile(pipeline, checkpointer=cp)
+        graph = compile(pipeline, checkpointer=cp, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "test"},
                      config={"configurable": {"thread_id": "op-each-1"}})
         assert "a" in result["proc"]
 
     def test_operator_added_after_loop_on_node(self):
         """Operator after Loop on a Node compiles without error."""
-        from neograph.factory import register_condition
+        from tests.fakes import register_condition
 
         register_scripted("op_loop_seed", lambda _in, _cfg: Draft(content="v0", score=0.0))
         register_scripted("op_loop_refine", lambda _in, _cfg: Draft(
@@ -204,14 +204,14 @@ class TestOperatorAfterModifiers:
         pipeline = Construct("loop-op", nodes=[seed, refine])
         from langgraph.checkpoint.memory import MemorySaver
         cp = MemorySaver()
-        graph = compile(pipeline, checkpointer=cp)
+        graph = compile(pipeline, checkpointer=cp, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "test"},
                      config={"configurable": {"thread_id": "op-loop-1"}})
         assert result["refine"][-1].score >= 0.5
 
     def test_operator_added_after_each_oracle_on_node(self):
         """Operator after Each+Oracle (fused) on a Node compiles without error."""
-        from neograph.factory import register_condition
+        from tests.fakes import register_condition
 
         register_scripted("eo_make", lambda _in, _cfg: Clusters(
             groups=[ClusterGroup(label="a", claim_ids=["1"])],
@@ -233,14 +233,14 @@ class TestOperatorAfterModifiers:
         pipeline = Construct("eo-op", nodes=[make, proc])
         from langgraph.checkpoint.memory import MemorySaver
         cp = MemorySaver()
-        graph = compile(pipeline, checkpointer=cp)
+        graph = compile(pipeline, checkpointer=cp, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "test"},
                      config={"configurable": {"thread_id": "eo-op-1"}})
         assert "a" in result["proc"]
 
     def test_operator_added_after_loop_on_sub_construct(self):
         """Operator after Loop on a sub-construct (line 266)."""
-        from neograph.factory import register_condition
+        from tests.fakes import register_condition
 
         register_scripted("sub_loop_seed", lambda _in, _cfg: Draft(content="v0", score=0.0))
         register_scripted("sub_loop_inner", lambda _in, _cfg: Draft(content="done", score=1.0))
@@ -262,7 +262,7 @@ class TestOperatorAfterModifiers:
 
         from langgraph.checkpoint.memory import MemorySaver
         cp = MemorySaver()
-        graph = compile(parent, checkpointer=cp)
+        graph = compile(parent, checkpointer=cp, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "test"},
                      config={"configurable": {"thread_id": "sub-loop-op-1"}})
         inner = result["inner"]
@@ -306,7 +306,7 @@ class TestEachOracleFusion:
             | Oracle(n=2, merge_fn="eo_dupe_merge")
 
         pipeline = Construct("eo-dupe", nodes=[make, proc])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "test"})
         # Only one key survives dedup
         assert "same" in result["proc"]
@@ -322,7 +322,7 @@ class TestMergeOneGroup:
 
     def test_merge_one_group_dict_form_output(self):
         """When node.outputs is a dict, extract first value (line 479)."""
-        from neograph.compiler import _merge_one_group
+        from neograph._wiring import _merge_one_group
 
         n = Node("test", outputs={"result": MatchResult, "meta": Claims})
         oracle = Oracle(n=2, merge_fn="mg_scripted")
@@ -330,21 +330,20 @@ class TestMergeOneGroup:
         def scripted_merge(variants, config):
             return MatchResult(cluster_label="x", matched=["merged"])
 
-        register_scripted("mg_scripted", scripted_merge)
-
         result = _merge_one_group(
             oracle, n,
             [MatchResult(cluster_label="a", matched=["1"])],
             {},
+            scripted_lookup={"mg_scripted": scripted_merge},
         )
         assert isinstance(result, MatchResult)
 
     def test_merge_one_group_merge_prompt_path(self):
         """_merge_one_group with merge_prompt calls invoke_structured (lines 482-483)."""
-        from neograph.compiler import _merge_one_group
-        from tests.fakes import StructuredFake, configure_fake_llm
+        from neograph._wiring import _merge_one_group
+        from tests.fakes import StructuredFake, build_fake_runtime
 
-        configure_fake_llm(lambda tier: StructuredFake(
+        runtime = build_fake_runtime(lambda tier: StructuredFake(
             lambda m: m(cluster_label="merged", matched=["combined"]),
         ))
 
@@ -355,6 +354,7 @@ class TestMergeOneGroup:
             oracle, n,
             [MatchResult(cluster_label="a", matched=["1"])],
             {"configurable": {}},
+            runtime=runtime,
         )
         assert isinstance(result, MatchResult)
         assert result.cluster_label == "merged"
@@ -389,7 +389,7 @@ class TestLoopRouterEdgeCases:
             return Draft(content="v0", score=0.0)
 
         pipeline = construct_from_functions("dict-loop", [seed, refine_dict])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "dict-loop"})
         # The result key is per the dict output format; Loop wraps in list
         raw = result.get("refine_dict_result")
@@ -419,7 +419,7 @@ class TestSubgraphLoopEdges:
 
         # As the ONLY node in the parent → prev_node=None → line 610
         parent = Construct("parent", nodes=[inner])
-        graph = compile(parent)
+        graph = compile(parent, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "test"})
         inner = result["inner"]
         final = inner[-1] if isinstance(inner, list) else inner
@@ -443,7 +443,7 @@ class TestSubgraphLoopEdges:
             Node.scripted("seed", fn="sc_seed", outputs=Draft),
             inner,
         ])
-        graph = compile(parent)
+        graph = compile(parent, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "test"})
         # Loop condition is always false → exits after first iteration
         inner = result["inner"]
@@ -467,7 +467,7 @@ class TestSubgraphLoopEdges:
             Node.scripted("seed", fn="exh_seed", outputs=Draft),
             inner,
         ])
-        graph = compile(parent)
+        graph = compile(parent, **build_test_compile_kwargs())
         with pytest.raises(ExecutionError, match="max_iterations"):
             run(graph, input={"node_id": "test"})
 
@@ -490,7 +490,7 @@ class TestSubgraphLoopEdges:
             Node.scripted("seed", fn="ce_seed", outputs=Draft),
             inner,
         ])
-        graph = compile(parent)
+        graph = compile(parent, **build_test_compile_kwargs())
         with pytest.raises(ExecutionError, match="loop condition raised AttributeError"):
             run(graph, input={"node_id": "test"})
 
@@ -553,7 +553,7 @@ class TestBranchArmsWithConstructs:
         )
 
         pipeline = Construct("br-test", nodes=[seed_node, branch])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "test"})
         # score=0.8 > 0.5 → true arm → sub-construct runs
         assert isinstance(result.get("br_sub"), SubOutput)
@@ -585,7 +585,7 @@ class TestBranchArmsWithConstructs:
         )
 
         pipeline = Construct("bf-test", nodes=[seed_node, branch])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "test"})
         # score=0.2 not > 0.5 → false arm → sub-construct runs
         assert isinstance(result.get("bf_sub"), SubOutput)
@@ -615,7 +615,7 @@ class TestBranchArmsWithConstructs:
         )
 
         pipeline = Construct("mn-test", nodes=[seed_node, branch])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "test"})
         # score=0.8 > 0.5 → true arm → t1 then t2
         assert result["t2"].items == ["t2"]
@@ -640,7 +640,7 @@ class TestBranchArmsWithConstructs:
         )
 
         pipeline = Construct("ns-test", nodes=[seed_node, branch])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "test"})
         # value is None, op_fn returns True → true arm
         assert result["true_n"].items == ["true"]
@@ -666,7 +666,7 @@ class TestBranchArmsWithConstructs:
         )
 
         pipeline = Construct("ac-test", nodes=[seed_node, branch])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "test"})
         # value becomes None after first attr miss → op_fn returns False → false arm
         assert result["false_n"].text == "false"
@@ -694,7 +694,7 @@ class TestBranchArmsWithConstructs:
         )
 
         pipeline = Construct("ce-test", nodes=[seed_node, branch])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         with pytest.raises(ExecutionError, match="branch condition raised TypeError"):
             run(graph, input={"node_id": "test"})
 
@@ -716,7 +716,7 @@ class TestBranchArmsWithConstructs:
         )
 
         pipeline = Construct("bf-test", nodes=[branch])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "test"})
         assert result["true_n"].text == "true"
 
@@ -772,13 +772,12 @@ class TestRendererFallback:
 
     def test_render_input_returns_original_when_no_renderer(self):
         """When no renderer at all, returns original input_data."""
-        from neograph.factory import _render_input
+        from neograph._dispatch import _render_input
 
         n = Node("test-no-renderer", outputs=RawText, renderer=None)
-
-        # Patch the global renderer to return None
-        with patch("neograph._llm._global_renderer", None):
-            result = _render_input(n, {"key": "value"})
+        # EMPTY_RUNTIME has renderer=None, so the dispatch chain has nothing
+        # to apply — input passes through unchanged.
+        result = _render_input(n, {"key": "value"})
 
         assert result == {"key": "value"}
 
@@ -868,7 +867,7 @@ class TestLLMNodeDictForm:
         """Produce node with dict-form outputs wraps LLM result (line 376)."""
         from tests.fakes import StructuredFake, configure_fake_llm
 
-        configure_fake_llm(lambda tier: StructuredFake(
+        _llm_kw = configure_fake_llm(lambda tier: StructuredFake(
             lambda m: m(text="produced") if m is RawText else m(items=["x"]),
         ))
 
@@ -883,7 +882,7 @@ class TestLLMNodeDictForm:
         mod = types.ModuleType("test_produce_dict_mod")
         mod.produce_dict = produce_dict
         pipeline = construct_from_functions("produce-dict", [produce_dict])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **_llm_kw, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "test"})
         assert isinstance(result.get("produce_dict_result"), RawText)
         assert result["produce_dict_result"].text == "produced"

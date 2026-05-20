@@ -655,33 +655,24 @@ def _register_node_scripted(
     port_param_map: dict[str, str] | None = None,
     loop_renames: dict[str, str] | None = None,
 ) -> str | None:
-    """Register a scripted shim and return the synthetic name.
+    """Build the scripted shim, attach it to the Node, and return the lookup name.
 
-    Returns the synthetic name string so the caller can set it on the Node
-    via model_copy (immutable IR). Returns None if the node has no sidecar.
+    Post-ticket-bbov: the shim no longer registers into a process-global
+    `Registry` singleton. Instead it is stored on the Node via
+    `_scripted_shim` (PrivateAttr) and the lookup name is just `n.name`,
+    so `compile()` can walk the construct and build a fresh per-compile
+    scripted dict.
 
-    When ``port_param_map`` is set, port params (whose keys were rewritten
-    in ``n.inputs`` to ``neo_subgraph_input``) are looked up under the
-    rewritten key in ``input_data``.
-
-    When ``loop_renames`` is set, loop self-reference params (whose keys
-    were rewritten in ``n.inputs`` from original name to resolved upstream)
-    are looked up under the rewritten key in ``input_data``.
+    Returns the lookup name to set on `node.scripted_fn` (via model_copy),
+    or None if the node has no sidecar.
     """
-    from neograph.factory import register_scripted
-
     sidecar = _get_sidecar(n)
     if sidecar is None:
         return None
     fn, param_names = sidecar
     param_res = _get_param_res(n)
-    _fan_out = fan_out or set()
     _port_map = port_param_map or {}
     _loop_map = loop_renames or {}
-
-    # Synthesize a unique name for the registered shim. Use id(n) so
-    # parallel pipelines with the same node names don't collide.
-    synthetic_name = f"_node_{n.name}_{id(n):x}"
 
     def scripted_shim(input_data: Any, config: Any) -> Any:
         """Adapter: (input_data, config) → fn(*positional_args)."""
@@ -707,5 +698,7 @@ def _register_node_scripted(
         return fn(*args)
 
     scripted_shim.__name__ = field_name_for(n.name)
-    register_scripted(synthetic_name, scripted_shim)
-    return synthetic_name
+    # Store the shim on the Node via PrivateAttr — compile() reads it and
+    # inserts the entry into the per-compile scripted dict.
+    n._scripted_shim = scripted_shim
+    return n.name

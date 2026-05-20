@@ -25,7 +25,7 @@ from neograph._llm import (
     _parse_json_response,
 )
 from neograph._llm_config import LlmConfig
-from neograph._registry import registry
+from neograph._llm_runtime import EMPTY_RUNTIME, LlmRuntime
 from neograph.describe_type import describe_value
 from neograph.errors import ConfigurationError, ExecutionError
 from neograph.renderers import Renderer
@@ -145,17 +145,20 @@ class _CoercingToolWrapper:
 
 
 def invoke_with_tools(
-    model_tier: str,
-    prompt_template: str,
-    input_data: Any,
-    output_model: type[BaseModel],
-    tools: list[Tool],
-    budget_tracker: ToolBudgetTracker,
-    config: RunnableConfig,
+    *args: Any,
+    model_tier: str | None = None,
+    prompt_template: str | None = None,
+    input_data: Any = None,
+    output_model: Any = None,
+    tools: list[Tool] | None = None,
+    budget_tracker: ToolBudgetTracker | None = None,
+    config: RunnableConfig | None = None,
     node_name: str = "",
     llm_config: LlmConfig | dict | None = None,
     renderer: Renderer | None = None,
     context: dict[str, Any] | None = None,
+    runtime: LlmRuntime | None = None,
+    tool_factory_lookup: dict[str, Any] | None = None,
 ) -> tuple[BaseModel | None, list]:
     """ReAct tool loop with per-tool budget enforcement. Mode: agent/act.
 
@@ -172,6 +175,14 @@ def invoke_with_tools(
     """
     from langchain_core.messages import ToolMessage
 
+    # Resolve runtime: positional first-arg or fall back to compat
+    if args and isinstance(args[0], LlmRuntime):
+        runtime = args[0]
+    elif runtime is None:
+        runtime = EMPTY_RUNTIME
+
+    assert tools is not None  # mypy narrowing
+    assert budget_tracker is not None
     llm_log = log.bind(
         tier=model_tier,
         prompt=prompt_template,
@@ -180,9 +191,10 @@ def invoke_with_tools(
     )
 
     cfg = _coerce_llm_config(llm_config)
-    llm = _get_llm(model_tier, node_name=node_name, llm_config=cfg)
+    llm = _get_llm(runtime, model_tier, node_name=node_name, llm_config=cfg)
     messages = list(
         _compile_prompt(
+            runtime,
             prompt_template,
             input_data,
             node_name=node_name,
@@ -193,15 +205,17 @@ def invoke_with_tools(
         )
     )
 
-    # Create tool instances from registered factories
+    # Create tool instances from registered factories.
+    # Per-compile dict first, then legacy _FALLBACK (deprecated).
+    per_compile_tools = tool_factory_lookup or {}
     tool_instances = {}
     for tool_spec in tools:
-        if tool_spec.name not in registry.tool_factory:
+        factory = per_compile_tools.get(tool_spec.name)
+        if factory is None:
             raise ConfigurationError.build(
                 f"Tool '{tool_spec.name}' not registered",
-                hint="Call register_tool_factory() to register the tool before using it.",
+                hint="Pass tool_factories={'" + tool_spec.name + "': factory_fn} to compile().",
             )
-        factory = registry.tool_factory[tool_spec.name]
         tool_instances[tool_spec.name] = factory(config, tool_spec.config)
 
     active_tools = list(tool_instances.values())
@@ -338,6 +352,7 @@ def invoke_with_tools(
     elapsed = time.monotonic() - t0
 
     # Parse final response as structured output — strategy-aware
+    assert config is not None
     strategy = cfg.output_strategy
     max_retries = cfg.max_retries
 
@@ -400,6 +415,6 @@ def invoke_with_tools(
         output=output_model.__name__,
         **usage_info,
     )
-    _notify_cost(model_tier, usage_info if usage_info else None,
+    _notify_cost(runtime, model_tier, usage_info if usage_info else None,
                  node_name=node_name, mode="react", duration_s=round(elapsed, 3))
     return parse_result, tool_interactions

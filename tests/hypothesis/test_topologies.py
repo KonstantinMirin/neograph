@@ -12,8 +12,8 @@ from hypothesis import given, settings
 from pydantic import BaseModel
 
 from neograph import CompileError, ConfigurationError, Construct, ConstructError, ExecutionError, Node, compile, run
-from neograph.factory import register_condition, register_scripted
 from neograph.modifiers import Each, Loop, Operator, Oracle
+from tests.fakes import build_test_compile_kwargs, register_condition, register_scripted
 
 from .conftest import (
     INTERMEDIATE_TYPES,
@@ -234,7 +234,7 @@ class TestDictFormOutputs:
     def test_dict_outputs_produce_both_fields(self, pm):
         """Both output keys must appear in result as separate state fields."""
         pipeline, meta = pm
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "dict-test"})
 
         assert meta["result_field"] in result, (
@@ -255,7 +255,7 @@ class TestSubConstructs:
     def test_sub_construct_output_surfaces(self, pm):
         """Sub-construct output surfaces under sub's name in parent result."""
         pipeline, meta = pm
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "sub-test"})
 
         terminal = result.get(meta["terminal_field"])
@@ -269,7 +269,7 @@ class TestSubConstructs:
     def test_sub_construct_internals_dont_leak(self, pm):
         """Sub-construct internal node fields must not appear in parent result."""
         pipeline, meta = pm
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "sub-leak-test"})
 
         # Internal node names (inner-*) should not be in parent result
@@ -285,7 +285,7 @@ class TestMixedModifiers:
     def test_mixed_each_then_oracle_produces_correct_types(self, pm):
         """Each fan-out node produces dict, Oracle node produces merged result."""
         pipeline, meta = pm
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "mixed-test"})
 
         fan_result = result.get(meta["fan_field"])
@@ -309,7 +309,7 @@ class TestEachEmptyCollection:
     def test_empty_each_produces_empty_dict(self, pm):
         """Each over [] must produce {} without deadlocking."""
         pipeline, meta = pm
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "empty-each-test"})
 
         terminal = result.get(meta["terminal_field"])
@@ -325,7 +325,7 @@ class TestDIPositive:
     def test_di_param_resolves_from_input(self, pm):
         """DI param provided in run(input=) resolves correctly."""
         pipeline, meta = pm
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "di-test", **meta["injected"]})
 
         terminal = result.get(meta["terminal_field"])
@@ -344,7 +344,7 @@ class TestSkipWhen:
     def test_skip_when_respects_condition(self, pm):
         """Node produces skip_value when skip_when returns True, normal output otherwise."""
         pipeline, meta = pm
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "skip-test"})
 
         terminal = result.get(meta["terminal_field"])
@@ -586,7 +586,7 @@ class TestNodeDecoratorPath:
     @settings(max_examples=20, deadline=10000)
     def test_decorator_pipeline_compiles_and_runs(self, pm):
         pipeline, meta = pm
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "deco-test"})
         terminal = result.get(meta["terminal_field"])
         assert isinstance(terminal, meta["terminal_type"]), (
@@ -603,7 +603,7 @@ class TestSubConstructWithEach:
     def test_each_inside_sub_produces_collected_output(self, pm):
         """Each inside sub + collector produces Gamma with correct keys."""
         pipeline, meta = pm
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "sce-test"})
         sub_result = result.get(meta["sub_field"])
         assert isinstance(sub_result, Gamma), (
@@ -621,7 +621,7 @@ class TestNestedSubConstructs:
     @settings(max_examples=15, deadline=10000)
     def test_nested_subs_compile_and_run(self, pm):
         pipeline, meta = pm
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "nested-test"})
         terminal = result.get(meta["outer_sub_field"])
         assert isinstance(terminal, meta["terminal_type"]), (
@@ -637,7 +637,7 @@ class TestFanIn:
     @settings(max_examples=15, deadline=10000)
     def test_fan_in_receives_all_upstreams(self, pm):
         pipeline, meta = pm
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "fanin-test"})
         terminal = result.get(meta["terminal_field"])
         assert isinstance(terminal, Gamma), f"Expected Gamma, got {type(terminal)}"
@@ -653,7 +653,7 @@ class TestEachWithDictOutputs:
     @settings(max_examples=15, deadline=10000)
     def test_each_dict_outputs_produce_per_key_dicts(self, pm):
         pipeline, meta = pm
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "edo-test"})
 
         result_field = result.get(meta["result_field"])
@@ -676,7 +676,7 @@ class TestNodeDecoratorWithDI:
     @settings(max_examples=15, deadline=10000)
     def test_di_resolves_through_decorator_path(self, pm):
         pipeline, meta = pm
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "deco-di-test", **meta["input"]})
         terminal = result.get(meta["terminal_field"])
         assert isinstance(terminal, meta["terminal_type"])
@@ -709,7 +709,7 @@ class TestNodeDecoratorMapOver:
             return Alpha(value=item.item_id)
 
         pipeline = construct_from_functions("deco-each", [src, process])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "deco-each-test"})
 
         proc = result.get("process")
@@ -738,7 +738,7 @@ class TestNodeDecoratorEnsemble:
             return Beta(score=1.0)
 
         pipeline = construct_from_functions("deco-oracle", [ens_src, ens_gen])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "ens-test"})
 
         merged = result.get("ens_gen")
@@ -778,7 +778,7 @@ class TestListConsumerOfEach:
             Node.scripted(coll_name, fn="lc_coll",
                           inputs=list[Alpha], outputs=Gamma),
         ])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "lc-test"})
 
         terminal = result.get(coll_name.replace("-", "_"))
@@ -813,7 +813,7 @@ class TestMultipleSubConstructs:
             Node.scripted(f"mssrc-{tag}", fn=f"ms_src_{tag}", outputs=SubInput),
             *subs,
         ])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "multi-sub-test"})
 
         for i, field in enumerate(sub_fields):
@@ -855,7 +855,7 @@ class TestSubConstructWithOracle:
             Node.scripted(f"sosrc-{tag}", fn=f"so_outer_{tag}", outputs=SubInput),
             sub,
         ])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "so-test"})
 
         val = result.get(sub_name.replace("-", "_"))
@@ -892,7 +892,7 @@ class TestSubConstructWithLoop:
             Node.scripted(f"slsrc-{tag}", fn=f"sl_src_{tag}", outputs=Beta),
             sub,
         ])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "sl-test"})
 
         val = result.get(sub_name.replace("-", "_"))
@@ -924,7 +924,7 @@ class TestTypeSubclassCompat:
             Node.scripted(f"tcsink-{tag}", fn=f"tc_sink_{tag}",
                           inputs=Parent, outputs=Gamma),
         ])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "tc-test"})
         assert isinstance(result.get(f"tcsink_{tag}".replace("-", "_")), Gamma)
 
@@ -1001,7 +1001,7 @@ class TestOperatorCombo:
             )
 
         pipeline = Construct(f"op-{tag}", nodes=nodes)
-        graph = compile(pipeline, checkpointer=MemorySaver())
+        graph = compile(pipeline, checkpointer=MemorySaver(), **build_test_compile_kwargs())
         config = {"configurable": {"thread_id": f"op-{tag}"}}
         result = run(graph, input={"node_id": "op-test"}, config=config)
 
@@ -1035,19 +1035,19 @@ class TestContextParam:
                  inputs=Alpha, outputs=Gamma,
                  context=[src_name.replace("-", "_")]),
         ])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "ctx-test"})
         assert isinstance(result.get(cons_name.replace("-", "_")), Gamma)
 
 
 class TestRunIsolated:
-    """Node.run_isolated() — direct invocation bypassing compile."""
+    """Node.run_isolated(**build_test_compile_kwargs()) — direct invocation bypassing compile."""
 
     def test_scripted_node_run_isolated(self):
         """Scripted node returns output directly."""
         register_scripted("ri_fn", lambda _i, _c: Alpha(value="isolated"))
         n = Node.scripted("ri-node", fn="ri_fn", outputs=Alpha)
-        result = n.run_isolated()
+        result = n.run_isolated(**build_test_compile_kwargs())
         assert isinstance(result, Alpha)
         assert result.value == "isolated"
 
@@ -1058,7 +1058,7 @@ class TestRunIsolated:
             return Alpha(value=f"score={input_data.score}")
         register_scripted("ri_input_fn", ri_with_input)
         n = Node.scripted("ri-input", fn="ri_input_fn", inputs=Beta, outputs=Alpha)
-        result = n.run_isolated(input=Beta(score=42.0))
+        result = n.run_isolated(**build_test_compile_kwargs(), input=Beta(score=42.0))
         assert isinstance(result, Alpha)
         assert "42" in result.value
 
@@ -1078,7 +1078,7 @@ class TestCreativeHumanErrors:
                 Node.scripted("same-name", fn="dup_fn", outputs=Alpha),
                 Node.scripted("same-name", fn="dup_fn", inputs=Alpha, outputs=Beta),
             ])
-            compile(pipeline)
+            compile(pipeline, **build_test_compile_kwargs())
 
     def test_node_referencing_itself_as_input(self):
         """Node with inputs={own_name: type} — self-reference without Loop should reject."""
@@ -1088,7 +1088,7 @@ class TestCreativeHumanErrors:
                 Node.scripted("ouroboros", fn="self_fn",
                               inputs={"ouroboros": Alpha}, outputs=Alpha),
             ])
-            compile(pipeline)
+            compile(pipeline, **build_test_compile_kwargs())
 
     @given(name=st.text(min_size=1, max_size=20,
                         alphabet=st.characters(whitelist_categories=("L", "N", "P"))))
@@ -1101,7 +1101,7 @@ class TestCreativeHumanErrors:
             pipeline = Construct(f"weird-{id(name)}", nodes=[
                 Node.scripted(name, fn=f"weird_{id(name)}", outputs=Alpha),
             ])
-            compile(pipeline)
+            compile(pipeline, **build_test_compile_kwargs())
         except (ConstructError, CompileError, ValueError):
             pass  # clean error is fine
 
@@ -1115,7 +1115,7 @@ class TestCreativeHumanErrors:
             | Oracle(n=2, merge_fn="nonexistent_merge_fn"),
         ])
         with pytest.raises((ConstructError, CompileError, Exception)):
-            graph = compile(pipeline)
+            graph = compile(pipeline, **build_test_compile_kwargs())
             run(graph, input={"node_id": "test"})
 
     def test_loop_max_iterations_zero(self):
@@ -1131,7 +1131,7 @@ class TestCreativeHumanErrors:
                 Node.scripted("lz-body", fn="lz_body", inputs=Beta, outputs=Beta)
                 | Loop(when="lz_cond", max_iterations=0),
             ])
-            graph = compile(pipeline)
+            graph = compile(pipeline, **build_test_compile_kwargs())
             result = run(graph, input={"node_id": "lz-test"})
             body_field = result.get("lz_body")
             assert body_field is not None, "Loop with max_iterations=0 should still produce output"
@@ -1151,7 +1151,7 @@ class TestCreativeHumanErrors:
                 Node.scripted("ek-proc", fn="ek_proc", inputs=FanItem, outputs=Alpha)
                 | Each(over="ek_src.items", key="nonexistent_field"),
             ])
-            graph = compile(pipeline)
+            graph = compile(pipeline, **build_test_compile_kwargs())
             run(graph, input={"node_id": "ek-test"})
         except (ConstructError, CompileError, ExecutionError, ConfigurationError):
             pass  # clean error is fine
@@ -1175,7 +1175,7 @@ class TestInvalidTopologyErrors:
     def test_empty_construct_raises_construct_error(self):
         """Empty Construct(nodes=[]) must raise ConstructError, not LangGraph ValueError."""
         with pytest.raises(ConstructError):
-            compile(Construct("empty", nodes=[]))
+            compile(Construct("empty", nodes=[]), **build_test_compile_kwargs())
 
     @given(
         root=st.text(min_size=1, max_size=10, alphabet=st.characters(whitelist_categories=("L",))),
@@ -1196,7 +1196,7 @@ class TestInvalidTopologyErrors:
                               inputs=Alpha, outputs=Beta)
                 | Each(over=bogus_path, key="x"),
             ])
-            compile(pipeline)
+            compile(pipeline, **build_test_compile_kwargs())
 
     def test_oracle_n_zero_raises(self):
         """Oracle(n=0) must raise ConstructError."""
@@ -1227,7 +1227,7 @@ class TestDIErrorMessages:
             return Alpha(value=required_param)
 
         p = construct_from_functions("di-err", [di_src, di_needs])
-        g = compile(p)
+        g = compile(p, **build_test_compile_kwargs())
 
         with pytest.raises(ExecutionError, match="required_param"):
             run(g, input={"node_id": "test"})  # required_param not provided
@@ -1247,7 +1247,7 @@ class TestDIErrorMessages:
             return Alpha(value=setting)
 
         p = construct_from_functions("di-cfg-err", [di_cfg_src, di_cfg_needs])
-        g = compile(p)
+        g = compile(p, **build_test_compile_kwargs())
 
         with pytest.raises(ExecutionError, match="setting"):
             run(g, input={"node_id": "test"})
@@ -1272,7 +1272,7 @@ class TestDIErrorMessages:
             return Alpha(value=ctx.node_id)
 
         p = construct_from_functions("bundled-err", [bundled_src, bundled_needs])
-        g = compile(p)
+        g = compile(p, **build_test_compile_kwargs())
 
         with pytest.raises(ExecutionError, match="extra_field|RunCtx"):
             run(g, input={"node_id": "test", "project_root": "/proj"})  # missing extra_field
@@ -1292,7 +1292,7 @@ class TestDIErrorMessages:
             return Alpha(value=str(count))
 
         p = construct_from_functions("wt-err", [wt_src, wt_needs])
-        g = compile(p)
+        g = compile(p, **build_test_compile_kwargs())
 
         with pytest.raises(ExecutionError, match="count.*expects int.*got str"):
             run(g, input={"count": "not_an_int"})
@@ -1316,7 +1316,7 @@ class TestDIPreFlight:
             return Beta(score=1.0)
 
         p = construct_from_functions("preflight", [pf_src, pf_needs])
-        g = compile(p)
+        g = compile(p, **build_test_compile_kwargs())
 
         with pytest.raises(ExecutionError, match="required_topic"):
             run(g, input={"node_id": "test"})  # required_topic missing
@@ -1340,7 +1340,7 @@ class TestDIPreFlight:
             return Beta(score=1.0)
 
         p = construct_from_functions("preflight2", [pf2_src, pf2_needs])
-        g = compile(p)
+        g = compile(p, **build_test_compile_kwargs())
 
         with pytest.raises(ExecutionError, match="topic.*region|region.*topic"):
             run(g, input={"node_id": "test"})  # both topic and region missing

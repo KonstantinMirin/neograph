@@ -14,8 +14,8 @@ import pytest
 from hypothesis import given, settings
 
 from neograph import Construct, ExecutionError, Node, compile, run
-from neograph.factory import register_scripted
 from neograph.modifiers import Oracle
+from tests.fakes import build_test_compile_kwargs, register_scripted
 
 from .conftest import Alpha, Beta, Gamma, SubInput, SubOutput, _make_fn, _uid
 from .topology import (
@@ -274,8 +274,8 @@ class TestNodeReuseAcrossConstructs:
         c1 = Construct(f"{spec.name}-a", nodes=shared_nodes)
         c2 = Construct(f"{spec.name}-b", nodes=shared_nodes)
 
-        g1 = compile(c1)
-        g2 = compile(c2)
+        g1 = compile(c1, **build_test_compile_kwargs())
+        g2 = compile(c2, **build_test_compile_kwargs())
 
         r1 = run(g1, input={"node_id": "test"})
         r2 = run(g2, input={"node_id": "test"})
@@ -318,7 +318,7 @@ class TestEveryNodeExecutesExactlyOnce:
             node = _apply_spec_modifiers(node, ns, f"cnt_{t}")
             nodes.append(node)
 
-        graph = compile(Construct(spec.name, nodes=nodes))
+        graph = compile(Construct(spec.name, nodes=nodes), **build_test_compile_kwargs())
         run(graph, input={"node_id": "test"})
 
         for name, count in call_counts.items():
@@ -440,7 +440,7 @@ class TestDataFlowIntegrity:
             node = _apply_spec_modifiers(node, ns, f"flow_{t}", spec)
             nodes.append(node)
 
-        graph = compile(Construct(spec.name, nodes=nodes))
+        graph = compile(Construct(spec.name, nodes=nodes), **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "test"})
 
         # Every non-source node must have received non-None input
@@ -598,7 +598,7 @@ class TestOracleCallsGeneratorNTimes:
             | Oracle(n=gen_ns.oracle_n, merge_fn=merge_fn),
         ])
 
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         run(graph, input={"node_id": "test"})
 
         assert call_count[0] == gen_ns.oracle_n, (
@@ -670,7 +670,7 @@ class TestSubConstructIsolation:
             sub,
         ])
 
-        graph = compile(outer)
+        graph = compile(outer, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "test"})
 
         # Inner node names must NOT appear as top-level result keys
@@ -820,7 +820,7 @@ class TestDeepChainDataFlowIntegrity:
             node = _apply_spec_modifiers(node, ns, f"deep_{t}", spec)
             nodes.append(node)
 
-        graph = compile(Construct(spec.name, nodes=nodes))
+        graph = compile(Construct(spec.name, nodes=nodes), **build_test_compile_kwargs())
         run(graph, input={"node_id": "test"})
 
         depth = spec.meta["depth"]

@@ -30,8 +30,8 @@ from neograph import (
     node,
     run,
 )
-from neograph.factory import register_scripted
 from neograph.modifiers import Loop
+from tests.fakes import build_test_compile_kwargs, register_scripted
 
 # -- Schemas for loop tests ---------------------------------------------------
 
@@ -94,7 +94,7 @@ class TestSelfLoop:
             return Draft(content="v0", iteration=0, score=0.0)
 
         pipeline = construct_from_functions("self-loop", [seed, refine])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "loop-1"})
 
         # Should have looped 3 times (0.0 → 0.3 → 0.6 → 0.9 exits)
@@ -122,7 +122,7 @@ class TestSelfLoop:
             return Draft(content="still bad", iteration=draft.iteration + 1, score=0.1)
 
         pipeline = construct_from_functions("capped", [seed, never_good])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "loop-cap"})
 
         assert result["never_good"][-1].iteration == 3
@@ -146,7 +146,7 @@ class TestSelfLoop:
             return Draft(content="bad", iteration=draft.iteration + 1, score=0.0)
 
         pipeline = construct_from_functions("error-loop", [seed, always_bad])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
 
         with pytest.raises(ExecutionError, match="max_iterations"):
             run(graph, input={"node_id": "loop-err"})
@@ -191,7 +191,7 @@ class TestMultiNodeLoop:
         ) | Loop(when=lambda d: d is None or d.score < 0.8, max_iterations=10)
 
         pipeline = construct_from_functions("multi-loop", [draft, refine])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "multi-loop"})
 
         assert review_count[0] == 3  # 0.3, 0.6, 0.9
@@ -242,7 +242,7 @@ class TestLoopInSubConstruct:
             return Essay(content=refine.content, final_score=refine.score, iterations=refine.iteration)
 
         pipeline = construct_from_functions("writer", [seed, refine_sub, finalize])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "sub-loop"})
 
         final = result["finalize"][-1] if isinstance(result["finalize"], list) else result["finalize"]
@@ -292,7 +292,7 @@ class TestEachPlusLoop:
         verify_each = verify_sub | Each(over="make_claims.items", key="claim_id")
 
         pipeline = construct_from_functions("each-loop", [make_claims, verify_each])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "each-loop"})
 
         verified = result["verify"]
@@ -535,7 +535,7 @@ class TestForwardConstructLoop:
         register_scripted("fc_revise", fc_revise)
 
         writer = Writer()
-        graph = compile(writer)
+        graph = compile(writer, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "fc-loop"})
 
         # Known limitation (neograph-mwx3): the tracer does NOT compile
@@ -587,7 +587,7 @@ class TestForwardConstructLoop:
         register_scripted("fc_revise_loop", fc_revise_loop)
 
         writer = Writer()
-        graph = compile(writer)
+        graph = compile(writer, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "fc-loop-prim"})
 
         # Loop cycled: review ran 3 times (0.3, 0.6, 0.9)
@@ -632,7 +632,7 @@ class TestForwardConstructLoop:
         register_scripted("fc_refine_single", fc_refine_single)
 
         pipeline = Refiner()
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "fc-single-loop"})
 
         # 0.1 seed → refine1=0.35, refine2=0.60, refine3=0.85 → exits
@@ -677,7 +677,7 @@ class TestForwardConstructLoop:
         register_scripted("fc_tweak_exhaust", fc_tweak_exhaust)
 
         pipeline = NeverDone()
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         # Should NOT raise — on_exhaust='last' means exit silently
         result = run(graph, input={"node_id": "fc-exhaust-last"})
 
@@ -716,7 +716,7 @@ class TestForwardConstructLoop:
         )
 
         pipeline = AlwaysBad()
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
 
         with pytest.raises(ExecutionError, match="max_iterations"):
             run(graph, input={"node_id": "fc-exhaust-err"})
@@ -790,7 +790,7 @@ class TestForwardConstructLoop:
         )
 
         pipeline = LoopThenBranch()
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "fc-loop-branch"})
 
         # refine: 0.0 → 0.3 → 0.6 → exits (score >= 0.5)
@@ -838,7 +838,7 @@ class TestForwardConstructLoop:
         register_scripted("fc_refine_bl", fc_refine_bl)
 
         pipeline = BranchThenLoop()
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "fc-branch-loop"})
 
         # Branch should have taken the boost path (0.6 > 0.5)
@@ -890,7 +890,7 @@ class TestForwardConstructLoop:
         register_scripted("fc_polish_2l", fc_polish_2l)
 
         pipeline = TwoLoops()
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "fc-two-loops"})
 
         # Rough: 0.0 → 0.2 → 0.4 → 0.6 (3 iterations, exits at 0.6 >= 0.5)
@@ -949,7 +949,7 @@ class TestDictFormOutputsLoop:
             return Draft(content="v0", iteration=0, score=0.0)
 
         pipeline = construct_from_functions("dict-loop", [seed, analyze])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "dict-loop-1"})
 
         # Should have looped 3 times (0.0 -> 0.3 -> 0.6 -> 0.9 exits)
@@ -992,7 +992,7 @@ class TestDictFormOutputsLoop:
             return Draft(content="v0", iteration=0, score=0.0)
 
         pipeline = construct_from_functions("no-feedback", [seed, analyze])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         run(graph, input={"node_id": "dict-loop-2"})
 
         # Iteration 1: receives seed Draft (score=0.0)
@@ -1035,7 +1035,7 @@ class TestDictFormOutputsLoop:
             )
 
         pipeline = construct_from_functions("downstream", [seed, refine, summarize])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "dict-loop-3"})
 
         final = result["summarize"]
@@ -1062,7 +1062,7 @@ class TestLoopDictFormMultipleInputs:
         On re-entry, draft should get latest, context should come from state."""
         from pydantic import BaseModel
 
-        from neograph.factory import register_scripted
+        from tests.fakes import register_scripted
 
         class Context(BaseModel, frozen=True):
             topic: str
@@ -1101,7 +1101,7 @@ class TestLoopDictFormMultipleInputs:
                           outputs=Draft)
             | Loop(when=lambda d: d is None or d.score < 0.8, max_iterations=5),
         ])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "o5gd"})
 
         # Should have iterated 3 times (score: 0.3, 0.6, 0.9)
@@ -1117,7 +1117,7 @@ class TestLoopDictFormMultipleInputs:
         """Regression neograph-pnzs: first iteration self-ref key must be None, not []."""
         from pydantic import BaseModel
 
-        from neograph.factory import register_scripted
+        from tests.fakes import register_scripted
 
         class Ctx(BaseModel, frozen=True):
             topic: str
@@ -1146,7 +1146,7 @@ class TestLoopDictFormMultipleInputs:
                           outputs=Draft)
             | Loop(when=lambda d: d is None or d.score < 0.8, max_iterations=3),
         ])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         run(graph, input={"node_id": "pnzs"})
 
         # First call: self-ref key should be None (not [])
@@ -1175,7 +1175,7 @@ class TestLoopSkipWhenCounterIncrement:
             llm_called[0] = True
             return model(content="should-not-happen", score=0.0)
 
-        configure_fake_llm(lambda tier: StructuredFake(should_not_call))
+        __llm_kw = configure_fake_llm(lambda tier: StructuredFake(should_not_call))
 
         @node(outputs=Draft)
         def seed() -> Draft:
@@ -1204,7 +1204,7 @@ class TestLoopSkipWhenCounterIncrement:
             f"Expected error log about skip_value, got: {logs}"
         )
 
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs(), **__llm_kw)
 
         # Must not hang — should exit at max_iterations=3
         result = run(graph, input={"node_id": "skip-loop-1"})
@@ -1223,7 +1223,7 @@ class TestLoopSkipWhenCounterIncrement:
             llm_call_count[0] += 1
             return model(content=f"llm-v{llm_call_count[0]}", score=0.9)
 
-        configure_fake_llm(lambda tier: StructuredFake(fake_respond))
+        __llm_kw = configure_fake_llm(lambda tier: StructuredFake(fake_respond))
 
         @node(outputs=Draft)
         def seed() -> Draft:
@@ -1243,7 +1243,7 @@ class TestLoopSkipWhenCounterIncrement:
         def refine(seed: Draft) -> Draft: ...
 
         pipeline = construct_from_functions("skip-first", [seed, refine])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs(), **__llm_kw)
 
         result = run(graph, input={"node_id": "skip-first-1"})
 
@@ -1265,7 +1265,7 @@ class TestLoopSkipWhenCounterIncrement:
         increment AND skip_value result must appear in the loop history."""
         from tests.fakes import StructuredFake, configure_fake_llm
 
-        configure_fake_llm(lambda tier: StructuredFake(
+        __llm_kw = configure_fake_llm(lambda tier: StructuredFake(
             lambda m: m(content="llm-produced", score=0.9)
         ))
 
@@ -1287,7 +1287,7 @@ class TestLoopSkipWhenCounterIncrement:
         def refine(seed: Draft) -> Draft: ...
 
         pipeline = construct_from_functions("skip-value-loop", [seed, refine])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs(), **__llm_kw)
 
         result = run(graph, input={"node_id": "skip-val-1"})
 
@@ -1306,7 +1306,7 @@ class TestLoopSkipWhenCounterIncrement:
         max_iterations with no error."""
         from tests.fakes import StructuredFake, configure_fake_llm
 
-        configure_fake_llm(lambda tier: StructuredFake(
+        __llm_kw = configure_fake_llm(lambda tier: StructuredFake(
             lambda m: m(content="unreachable", score=0.0)
         ))
 
@@ -1327,7 +1327,7 @@ class TestLoopSkipWhenCounterIncrement:
         def refine(seed: Draft) -> Draft: ...
 
         pipeline = construct_from_functions("all-skip-last", [seed, refine])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs(), **__llm_kw)
 
         # Must NOT hang — exits at max_iterations=3 with on_exhaust='last'
         result = run(graph, input={"node_id": "all-skip-last-1"})
@@ -1339,7 +1339,7 @@ class TestLoopSkipWhenCounterIncrement:
         from neograph import ExecutionError
         from tests.fakes import StructuredFake, configure_fake_llm
 
-        configure_fake_llm(lambda tier: StructuredFake(
+        __llm_kw = configure_fake_llm(lambda tier: StructuredFake(
             lambda m: m(content="unreachable", score=0.0)
         ))
 
@@ -1360,7 +1360,7 @@ class TestLoopSkipWhenCounterIncrement:
         def refine(seed: Draft) -> Draft: ...
 
         pipeline = construct_from_functions("all-skip-err", [seed, refine])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs(), **__llm_kw)
 
         with pytest.raises(ExecutionError, match="max_iterations"):
             run(graph, input={"node_id": "all-skip-err-1"})
@@ -1423,7 +1423,7 @@ class TestLoopInputNotEqualOutput:
         )
 
         pipeline = Construct("outer", nodes=[sub])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={
             "node_id": "test-1",
             "neo_subgraph_input": ProduceInput(topic="AI", context="safety"),
@@ -1461,7 +1461,7 @@ class TestLoopInputNotEqualOutput:
         )
 
         pipeline = Construct("outer", nodes=[sub])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
 
         with pytest.raises(ExecutionError, match="max_iterations"):
             run(graph, input={
@@ -1490,7 +1490,7 @@ class TestLoopInputNotEqualOutput:
         )
 
         pipeline = Construct("outer", nodes=[sub])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={
             "node_id": "test-3",
             "neo_subgraph_input": ProduceInput(topic="X", context="Y"),
@@ -1533,7 +1533,7 @@ class TestLoopInputNotEqualOutput:
         ) | Loop(when=lambda v: v is None or bool(v.errors), max_iterations=5)
 
         pipeline = Construct("pv-outer", nodes=[sub])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={
             "node_id": "prog-1",
             "neo_subgraph_input": ProduceInput(topic="T", context="C"),
@@ -1588,7 +1588,7 @@ class TestLoopInputNotEqualOutput:
         register_scripted("_fc_check", _fc_check)
 
         flow = ProduceValidateFlow()
-        graph = compile(flow)
+        graph = compile(flow, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "fc-1"})
 
         assert fc_call_count["produce"] == 2

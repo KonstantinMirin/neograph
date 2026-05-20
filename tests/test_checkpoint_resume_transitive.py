@@ -11,10 +11,28 @@ state-field names.
 
 from __future__ import annotations
 
+import pytest
 from pydantic import BaseModel
 
 from neograph import Construct, Each, Node, compile
 from neograph.runner import _compute_invalidated_nodes
+from tests.fakes import build_test_compile_kwargs, register_scripted
+
+# Dummy shims for compile() — these tests inspect fingerprints only, never
+# execute the graph, so any callable will do. Registered per-test via fixture
+# because the autouse conftest fixture clears the test registry between tests.
+_DUMMY = lambda input_data, config: None  # noqa: E731
+_SHIM_NAMES = (
+    "tj_a", "tj_b", "tj_c",
+    "tj_each_a_v1", "tj_each_a_v2", "tj_each_b", "tj_each_c",
+    "tj_d_a_v1", "tj_d_a_v2", "tj_d_b", "tj_d_c", "tj_d_d",
+)
+
+
+@pytest.fixture(autouse=True)
+def _register_dummies():
+    for name in _SHIM_NAMES:
+        register_scripted(name, _DUMMY)
 
 
 class _A(BaseModel):
@@ -35,11 +53,7 @@ class _A_v2(BaseModel):
 
 
 def _linear_chain(a_out: type, b_out: type = _B, c_out: type = _C) -> Construct:
-    from neograph.factory import register_scripted
 
-    register_scripted("tj_a", lambda _i, _c: a_out())
-    register_scripted("tj_b", lambda _i, _c: b_out())
-    register_scripted("tj_c", lambda _i, _c: c_out())
 
     return Construct(
         "tj-pipe",
@@ -56,11 +70,11 @@ def test_compute_invalidated_nodes_returns_transitive_closure():
     Returned set must contain {a, b, c} (transitive closure).
     """
     pipe_v1 = _linear_chain(_A)
-    graph_v1 = compile(pipe_v1)
+    graph_v1 = compile(pipe_v1, **build_test_compile_kwargs())
     stored_fps = dict(graph_v1._neo_node_fingerprints)
 
     pipe_v2 = _linear_chain(_A_v2)
-    graph_v2 = compile(pipe_v2)
+    graph_v2 = compile(pipe_v2, **build_test_compile_kwargs())
 
     channel_values = {"neo_node_fingerprints": stored_fps}
     invalidated = _compute_invalidated_nodes(graph_v2, channel_values)
@@ -72,7 +86,7 @@ def test_compute_invalidated_nodes_returns_transitive_closure():
 
 def test_compute_invalidated_nodes_empty_when_unchanged():
     pipe = _linear_chain(_A)
-    graph = compile(pipe)
+    graph = compile(pipe, **build_test_compile_kwargs())
     channel_values = {"neo_node_fingerprints": dict(graph._neo_node_fingerprints)}
 
     invalidated = _compute_invalidated_nodes(graph, channel_values)
@@ -86,15 +100,10 @@ def test_compute_invalidated_nodes_through_each_modifier():
     C reads B as a list and produces _C.
     Change A's element type. B (Each) and C must both invalidate.
     """
-    from neograph.factory import register_scripted
 
     class _AList(BaseModel):
         items: list
 
-    register_scripted("tj_each_a_v1", lambda _i, _c: [_A(), _A()])
-    register_scripted("tj_each_a_v2", lambda _i, _c: [_A_v2(), _A_v2()])
-    register_scripted("tj_each_b", lambda _i, _c: _B())
-    register_scripted("tj_each_c", lambda _i, _c: _C())
 
     def build(a_elem: type, a_fn: str) -> Construct:
         return Construct(
@@ -112,11 +121,11 @@ def test_compute_invalidated_nodes_through_each_modifier():
         )
 
     pipe_v1 = build(_A, "tj_each_a_v1")
-    graph_v1 = compile(pipe_v1)
+    graph_v1 = compile(pipe_v1, **build_test_compile_kwargs())
     stored_fps = dict(graph_v1._neo_node_fingerprints)
 
     pipe_v2 = build(_A_v2, "tj_each_a_v2")
-    graph_v2 = compile(pipe_v2)
+    graph_v2 = compile(pipe_v2, **build_test_compile_kwargs())
 
     channel_values = {"neo_node_fingerprints": stored_fps}
     invalidated = _compute_invalidated_nodes(graph_v2, channel_values)
@@ -129,16 +138,10 @@ def test_compute_invalidated_nodes_through_each_modifier():
 
 def test_compute_invalidated_nodes_handles_diamond():
     """Diamond A→{B,C}→D. Change A. All four must invalidate."""
-    from neograph.factory import register_scripted
 
     class _D(BaseModel):
         val: str = "d"
 
-    register_scripted("tj_d_a_v1", lambda _i, _c: _A())
-    register_scripted("tj_d_a_v2", lambda _i, _c: _A_v2())
-    register_scripted("tj_d_b", lambda _i, _c: _B())
-    register_scripted("tj_d_c", lambda _i, _c: _C())
-    register_scripted("tj_d_d", lambda _i, _c: _D())
 
     def build(a_out: type, a_fn: str) -> Construct:
         return Construct(
@@ -157,11 +160,11 @@ def test_compute_invalidated_nodes_handles_diamond():
         )
 
     pipe_v1 = build(_A, "tj_d_a_v1")
-    graph_v1 = compile(pipe_v1)
+    graph_v1 = compile(pipe_v1, **build_test_compile_kwargs())
     stored_fps = dict(graph_v1._neo_node_fingerprints)
 
     pipe_v2 = build(_A_v2, "tj_d_a_v2")
-    graph_v2 = compile(pipe_v2)
+    graph_v2 = compile(pipe_v2, **build_test_compile_kwargs())
 
     invalidated = _compute_invalidated_nodes(
         graph_v2, {"neo_node_fingerprints": stored_fps}

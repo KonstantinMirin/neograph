@@ -6,8 +6,8 @@ from langgraph.checkpoint.memory import MemorySaver
 from pydantic import BaseModel
 
 from neograph import Construct, Node, compile
-from neograph.factory import register_scripted
 from neograph.modifiers import Operator
+from tests.fakes import register_scripted
 
 
 class Result(BaseModel, frozen=True):

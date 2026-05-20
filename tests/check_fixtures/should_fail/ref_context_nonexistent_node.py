@@ -7,12 +7,6 @@
 from pydantic import BaseModel
 
 from neograph import Construct, Node
-from neograph._llm import configure_llm
-
-configure_llm(
-    llm_factory=lambda tier: None,
-    prompt_compiler=lambda t, d: [{"role": "user", "content": "x"}],
-)
 
 
 class Input(BaseModel, frozen=True):

@@ -25,6 +25,7 @@ from langgraph.checkpoint.memory import MemorySaver
 from pydantic import BaseModel
 
 from neograph import compile, construct_from_module, node, run
+from tests.fakes import build_test_compile_kwargs
 
 
 class Priority(StrEnum):
@@ -72,7 +73,7 @@ def test_checkpoint_roundtrip_with_pydantic_state_after_serde_helper_removed():
 
     pipeline = construct_from_module(mod, name="checkpoint-roundtrip")
     checkpointer = MemorySaver()
-    graph = compile(pipeline, checkpointer=checkpointer)
+    graph = compile(pipeline, checkpointer=checkpointer, **build_test_compile_kwargs())
 
     config = {"configurable": {"thread_id": "roundtrip-test"}}
 

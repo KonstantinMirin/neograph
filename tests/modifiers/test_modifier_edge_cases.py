@@ -17,7 +17,7 @@ from neograph import (
     node,
     run,
 )
-from neograph.factory import register_scripted
+from tests.fakes import build_test_compile_kwargs, register_scripted
 from tests.schemas import (
     Claims,
     _producer,
@@ -43,7 +43,7 @@ class TestDegeneratePatterns:
             Node.scripted("gen", fn="deg_gen", outputs=Claims)
             | Oracle(n=1, merge_fn="deg_merge"),
         ])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "deg-o1"})
         assert result["gen"].items == ["v1"]
 
@@ -69,7 +69,7 @@ class TestDegeneratePatterns:
             Node.scripted("proc", fn="deg_proc", inputs=Item, outputs=Result)
             | Each(over="batch.items", key="key"),
         ])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "deg-e1"})
         assert isinstance(result["proc"], dict)
         assert set(result["proc"].keys()) == {"only"}
@@ -96,7 +96,7 @@ class TestDegeneratePatterns:
             Node.scripted("proc", fn="deg0_proc", inputs=Item, outputs=Result)
             | Each(over="batch.items", key="key"),
         ])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "deg-e0"})
         # Empty collection → empty dict (or None depending on reducer)
         proc = result.get("proc")
@@ -141,7 +141,7 @@ class TestDegeneratePatterns:
             Node.scripted("proc", fn="spz1_proc", inputs=Item, outputs=Result)
             | Each(over="batch.items", key="key"),
         ])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
 
         # Current behavior: entire graph crashes due to one bad item.
         # When neograph-spz1 is fixed, this should return partial results
@@ -459,7 +459,7 @@ class TestRunIsolatedRefusesModifiers:
         node_with_mod = base | modifier
 
         with pytest.raises(NeographError) as exc_info:
-            node_with_mod.run_isolated(input=Claims(items=["x"]))
+            node_with_mod.run_isolated(**build_test_compile_kwargs(), input=Claims(items=["x"]))
 
         msg = str(exc_info.value)
         assert kind in msg

@@ -9,9 +9,9 @@ from typing import Annotated
 from pydantic import BaseModel
 
 from neograph import Construct, FromConfig, merge_fn
-from neograph.factory import register_scripted
 from neograph.modifiers import Oracle
 from neograph.node import Node
+from tests.fakes import register_scripted
 
 
 class Claims(BaseModel, frozen=True):

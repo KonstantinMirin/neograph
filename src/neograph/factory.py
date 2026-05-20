@@ -34,6 +34,7 @@ from neograph._input_shape import (  # noqa: F401 — internal helpers re-export
     _extract_loop_reentry,
     _extract_single_type,
 )
+from neograph._llm_runtime import EMPTY_RUNTIME, LlmRuntime
 from neograph._oracle import (  # noqa: F401 — re-exported so compiler.py imports stay stable
     _build_oracle_merge_result,
     _inject_oracle_config,
@@ -42,14 +43,6 @@ from neograph._oracle import (  # noqa: F401 — re-exported so compiler.py impo
     make_eachoracle_redirect_fn,
     make_oracle_merge_fn,
     make_oracle_redirect_fn,
-)
-from neograph._registry import registry
-from neograph._runtime_registry import (  # noqa: F401 — re-exported for public API
-    lookup_condition,
-    lookup_scripted,
-    register_condition,
-    register_scripted,
-    register_tool_factory,
 )
 from neograph._state_bus import adapt_state  # noqa: F401 — re-exported for tests
 from neograph._state_write import (  # noqa: F401 — re-exported for tests
@@ -73,7 +66,13 @@ from neograph.node import Node
 log = structlog.get_logger()
 
 
-def make_node_fn(node: Node) -> Callable:
+def make_node_fn(
+    node: Node,
+    *,
+    runtime: LlmRuntime = EMPTY_RUNTIME,
+    scripted_lookup: dict[str, Callable] | None = None,
+    tool_factory_lookup: dict[str, Callable] | None = None,
+) -> Callable:
     """Create a LangGraph node function from a Node definition.
 
     This is the core of NeoGraph — the generic factory that eliminates
@@ -81,21 +80,39 @@ def make_node_fn(node: Node) -> Callable:
 
     Raw nodes get a minimal observability wrapper. All other modes
     (scripted, think, agent, act) go through _execute_node with a
-    mode-specific ModeDispatch.
+    mode-specific ModeDispatch that captures the supplied LlmRuntime
+    and per-compile scripted lookup.
+
+    Args:
+        node: Node IR definition.
+        runtime: LLM runtime bundle closure-captured by LLM-mode dispatches.
+            Scripted nodes ignore this. Defaults to EMPTY_RUNTIME so
+            scripted-only constructs compile without LLM kwargs.
+        scripted_lookup: per-compile `{name: shim_fn}` dict built by
+            `compile()` from `node._scripted_shim` on each scripted Node.
+            Falls back to the deprecated module-level fallback registry
+            if not supplied — for direct callers like `Node.run_isolated`.
     """
     # Raw node — wrap with observability so node_start/node_complete fire
     if node.raw_fn is not None:
         return _make_raw_wrapper(node)
 
     # Validate scripted registration early
-    if node.mode == "scripted" and node.scripted_fn not in registry.scripted:
-        raise ConfigurationError.build(
-            f"Scripted function '{node.scripted_fn}' not registered",
-            hint="Use register_scripted() to register it before compilation",
-            node=node.name,
-        )
+    if node.mode == "scripted":
+        per_compile = scripted_lookup or {}
+        if node.scripted_fn not in per_compile:
+            raise ConfigurationError.build(
+                f"Scripted function '{node.scripted_fn}' not registered",
+                hint=f"Pass scripted={{'{node.scripted_fn}': fn}} to compile().",
+                node=node.name,
+            )
 
-    dispatch = _dispatch_for_mode(node)
+    dispatch = _dispatch_for_mode(
+        node,
+        runtime=runtime,
+        scripted_lookup=scripted_lookup,
+        tool_factory_lookup=tool_factory_lookup,
+    )
     field_name = field_name_for(node.name)
 
     def node_wrapper(state: BaseModel, config: RunnableConfig) -> dict[str, Any]:

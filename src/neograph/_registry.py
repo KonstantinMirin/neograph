@@ -1,7 +1,15 @@
-"""Centralized registry for scripted functions, conditions, and tool factories.
+"""Per-compile registry container.
 
-Replaces the three module-level dicts that previously lived in factory.py.
-Provides ``session()`` context manager for test isolation.
+Post-ticket-bbov: this module no longer instantiates a process-global
+`Registry()`. `compile()` builds a fresh `Registry()` per call, walks the
+construct to populate the `scripted` dict from each node's
+`_scripted_shim`, and seeds `condition`/`tool_factory` from the deprecated
+fallback maintained in `_runtime_registry.py`. Factory closures close
+over the per-compile registry instance.
+
+Legacy consumers that still import `registry` get the fallback bridge
+maintained by `_runtime_registry.py` — same semantics as before for
+manual `register_scripted()`/etc., until ticket 5 removes that API.
 """
 
 from __future__ import annotations
@@ -12,10 +20,11 @@ from typing import Any
 
 
 class Registry:
-    """Thread-aware registry for runtime-registered callables.
+    """Per-compile container for runtime-registered callables.
 
-    All three registries (scripted, condition, tool_factory) live here
-    instead of as module-level dicts in factory.py.
+    Holds three dicts: scripted shims (@node-derived), conditions (Operator/Loop),
+    and tool factories. `compile()` builds a fresh instance and threads it
+    through factory closures so two `compile()` calls cannot collide.
     """
 
     def __init__(self) -> None:
@@ -24,7 +33,7 @@ class Registry:
         self.tool_factory: dict[str, Callable[..., Any]] = {}
 
     def reset(self) -> None:
-        """Clear all registries. Used by test fixtures."""
+        """Clear all maps. Used by test fixtures that need a blank slate."""
         self.scripted.clear()
         self.condition.clear()
         self.tool_factory.clear()
@@ -46,7 +55,3 @@ class Registry:
             yield self
         finally:
             self.scripted, self.condition, self.tool_factory = saved
-
-
-#: Module-level singleton — the one registry instance used by the entire runtime.
-registry = Registry()

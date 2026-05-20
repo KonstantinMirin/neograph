@@ -12,7 +12,7 @@ from neograph import (
     compile,
     run,
 )
-from tests.fakes import StructuredFake, configure_fake_llm
+from tests.fakes import StructuredFake, build_fake_runtime, build_test_compile_kwargs, configure_fake_llm
 from tests.schemas import (
     Claims,
     ClusterGroup,
@@ -28,7 +28,7 @@ from tests.schemas import (
 
 
 class TestCostCallback:
-    """configure_llm(cost_callback=...) dispatches per-call token usage."""
+    """cost_callback delivers per-call token usage (post-§2: via runtime)."""
 
     def test_cost_callback_called_on_think_mode(self):
         """cost_callback receives tier + token counts after invoke_structured."""
@@ -36,56 +36,54 @@ class TestCostCallback:
 
         calls = []
 
-        def my_cost_callback(*, tier, input_tokens, output_tokens):
+        def my_cost_callback(*, tier, input_tokens, output_tokens, **kw):
             calls.append({"tier": tier, "in": input_tokens, "out": output_tokens})
 
         fake = StructuredFake(lambda model: model(items=["done"]))
-        configure_fake_llm(lambda tier: fake)
-        # Re-configure with cost callback
-        from neograph._llm import _llm_factory, _prompt_compiler, configure_llm
-        configure_llm(_llm_factory, _prompt_compiler, cost_callback=my_cost_callback)
+        runtime = build_fake_runtime(
+            factory=lambda tier: fake,
+            cost_callback=my_cost_callback,
+        )
 
         invoke_structured(
+            runtime,
             model_tier="reason",
             prompt_template="test",
             input_data="test",
             output_model=Claims,
             config={"configurable": {}},
         )
-        # Callback was called (may have 0 tokens since fakes don't report usage)
         assert len(calls) >= 0  # doesn't crash
 
     def test_cost_callback_not_called_when_none(self):
-        """When cost_callback=None (default), no dispatch happens."""
+        """When runtime has no cost_callback, no dispatch happens."""
         from neograph._llm import _notify_cost
+
+        runtime = build_fake_runtime(cost_callback=None)
         # Should not crash even with valid usage data
-        _notify_cost("reason", {"input_tokens": 100, "output_tokens": 50})
+        _notify_cost(runtime, "reason", {"input_tokens": 100, "output_tokens": 50})
 
     def test_cost_callback_exception_does_not_break_pipeline(self):
         """A broken cost_callback must not crash the pipeline."""
-        from neograph._llm import _llm_factory, _notify_cost, _prompt_compiler, configure_llm
+        from neograph._llm import _notify_cost
 
         def broken_callback(**kwargs):
             raise TypeError("cost tracking broken")
 
-        configure_llm(_llm_factory, _prompt_compiler, cost_callback=broken_callback)
+        runtime = build_fake_runtime(cost_callback=broken_callback)
         # Should not raise
-        _notify_cost("reason", {"input_tokens": 100, "output_tokens": 50})
-        # Reset
-        configure_llm(_llm_factory, _prompt_compiler, cost_callback=None)
+        _notify_cost(runtime, "reason", {"input_tokens": 100, "output_tokens": 50})
 
     def test_cost_callback_fires_with_empty_usage_dict(self):
-        """Regression neograph-pz2x: empty dict {} must NOT skip callback."""
-        from neograph._llm import _llm_factory, _notify_cost, _prompt_compiler, configure_llm
+        """Regression: empty dict {} must NOT skip callback."""
+        from neograph._llm import _notify_cost
 
         calls = []
-        configure_llm(_llm_factory, _prompt_compiler,
-                      cost_callback=lambda **kw: calls.append(kw))
-        _notify_cost("fast", {})  # empty dict — was previously skipped (falsy)
+        runtime = build_fake_runtime(cost_callback=lambda **kw: calls.append(kw))
+        _notify_cost(runtime, "fast", {})  # empty dict — previously skipped (falsy)
         assert len(calls) == 1
         assert calls[0]["input_tokens"] == 0
         assert calls[0]["output_tokens"] == 0
-        configure_llm(_llm_factory, _prompt_compiler, cost_callback=None)
 
     def test_retry_accumulates_token_usage(self):
         """Regression neograph-xcwd: retries must accumulate tokens, not overwrite."""
@@ -117,57 +115,49 @@ class TestCostCallback:
 
 
     def test_cost_callback_receives_node_name(self):
-        """cost_callback must receive node_name kwarg (neograph-m621)."""
-        from neograph._llm import _llm_factory, _notify_cost, _prompt_compiler, configure_llm
+        """cost_callback must receive node_name kwarg."""
+        from neograph._llm import _notify_cost
 
         calls = []
-        configure_llm(_llm_factory, _prompt_compiler,
-                      cost_callback=lambda **kw: calls.append(kw))
-        _notify_cost("fast", {"input_tokens": 10, "output_tokens": 5},
+        runtime = build_fake_runtime(cost_callback=lambda **kw: calls.append(kw))
+        _notify_cost(runtime, "fast", {"input_tokens": 10, "output_tokens": 5},
                      node_name="my-node")
         assert len(calls) == 1
         assert calls[0]["node_name"] == "my-node"
-        configure_llm(_llm_factory, _prompt_compiler, cost_callback=None)
 
     def test_cost_callback_receives_mode(self):
-        """cost_callback must receive mode kwarg (neograph-m621)."""
-        from neograph._llm import _llm_factory, _notify_cost, _prompt_compiler, configure_llm
+        """cost_callback must receive mode kwarg."""
+        from neograph._llm import _notify_cost
 
         calls = []
-        configure_llm(_llm_factory, _prompt_compiler,
-                      cost_callback=lambda **kw: calls.append(kw))
-        _notify_cost("reason", {"input_tokens": 50, "output_tokens": 20},
+        runtime = build_fake_runtime(cost_callback=lambda **kw: calls.append(kw))
+        _notify_cost(runtime, "reason", {"input_tokens": 50, "output_tokens": 20},
                      node_name="gen", mode="think")
         assert calls[0]["mode"] == "think"
-        configure_llm(_llm_factory, _prompt_compiler, cost_callback=None)
 
     def test_cost_callback_receives_duration(self):
-        """cost_callback must receive duration_s kwarg (neograph-m621)."""
-        from neograph._llm import _llm_factory, _notify_cost, _prompt_compiler, configure_llm
+        """cost_callback must receive duration_s kwarg."""
+        from neograph._llm import _notify_cost
 
         calls = []
-        configure_llm(_llm_factory, _prompt_compiler,
-                      cost_callback=lambda **kw: calls.append(kw))
-        _notify_cost("fast", {"input_tokens": 10, "output_tokens": 5},
+        runtime = build_fake_runtime(cost_callback=lambda **kw: calls.append(kw))
+        _notify_cost(runtime, "fast", {"input_tokens": 10, "output_tokens": 5},
                      node_name="x", duration_s=1.23)
         assert calls[0]["duration_s"] == 1.23
-        configure_llm(_llm_factory, _prompt_compiler, cost_callback=None)
 
     def test_cost_callback_backward_compat_old_signature(self):
-        """Existing callbacks with (*, tier, input_tokens, output_tokens) must not break."""
-        from neograph._llm import _llm_factory, _notify_cost, _prompt_compiler, configure_llm
+        """Callbacks with (*, tier, input_tokens, output_tokens) must not break."""
+        from neograph._llm import _notify_cost
 
         calls = []
         def old_style_callback(*, tier, input_tokens, output_tokens):
             calls.append({"tier": tier, "in": input_tokens, "out": output_tokens})
 
-        configure_llm(_llm_factory, _prompt_compiler, cost_callback=old_style_callback)
-        # New _notify_cost passes extra kwargs — old callback must not crash
-        _notify_cost("fast", {"input_tokens": 10, "output_tokens": 5},
+        runtime = build_fake_runtime(cost_callback=old_style_callback)
+        _notify_cost(runtime, "fast", {"input_tokens": 10, "output_tokens": 5},
                      node_name="x", mode="think", duration_s=0.5)
         assert len(calls) == 1
         assert calls[0]["tier"] == "fast"
-        configure_llm(_llm_factory, _prompt_compiler, cost_callback=None)
 
 
 class TestMergeDictsReducer:
@@ -209,8 +199,8 @@ class TestModifierCombo:
         assert combo == ModifierCombo.EACH
 
     def test_oracle_only(self):
-        from neograph.factory import register_scripted
         from neograph.modifiers import ModifierCombo, classify_modifiers
+        from tests.fakes import register_scripted
         register_scripted("35c3_m", lambda v, c: v[0])
         n = Node.scripted("orc", fn="xw75_gen", outputs=Claims) | Oracle(n=2, merge_fn="35c3_m")
         combo, _ = classify_modifiers(n)
@@ -296,7 +286,7 @@ class TestSkipWhenOnScriptedNode:
 
     def test_skip_when_fires_on_scripted_node(self):
         """Scripted node with skip_when=True should NOT execute the function body."""
-        from neograph.factory import register_scripted
+        from tests.fakes import register_scripted
 
         call_log = []
 
@@ -314,7 +304,7 @@ class TestSkipWhenOnScriptedNode:
                  skip_when=lambda data: True,  # always skip
                  skip_value=lambda data: Claims(items=["skipped"])),
         ])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "ejl2"})
 
         # Function body should NOT have been called
@@ -334,7 +324,7 @@ class TestSkipWhenOnThinkNode:
 
         # LLM should NOT be called — if it is, the fake will still produce output
         # but skip_value should have taken precedence
-        configure_fake_llm(
+        _llm_kw = configure_fake_llm(
             lambda tier: StructuredFake(
                 lambda model: model(items=["should-not-appear"]),
             )
@@ -360,7 +350,7 @@ class TestSkipWhenOnThinkNode:
         mod.thinker = thinker
 
         pipeline = construct_from_module(mod, name="test-skip-think")
-        graph = compile(pipeline)
+        graph = compile(pipeline, **_llm_kw, **build_test_compile_kwargs())
         result = run(graph, input={})
 
         # Node was skipped — skip_value produced the output
@@ -372,7 +362,7 @@ class TestSingleTypeListInputFromEach:
 
     def test_single_type_list_input_unwraps_each_dict(self):
         """Downstream with inputs=list[MatchResult] receives list, not dict."""
-        from neograph.factory import register_scripted
+        from tests.fakes import register_scripted
 
         register_scripted("df77_src", lambda i, c: Clusters(groups=[
             ClusterGroup(label="a", claim_ids=["1"]),
@@ -398,7 +388,7 @@ class TestSingleTypeListInputFromEach:
             Node("collect", mode="scripted", scripted_fn="df77_collect",
                  inputs=list[MatchResult], outputs=RawText),
         ])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "df77"})
 
         assert isinstance(collected_input[0], list), (

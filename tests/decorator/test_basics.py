@@ -18,8 +18,7 @@ from neograph import (
     run,
     tool,
 )
-from neograph.factory import register_scripted
-from tests.fakes import configure_fake_llm
+from tests.fakes import build_test_compile_kwargs, configure_fake_llm, register_scripted
 from tests.schemas import (
     Claims,
     ClassifiedClaims,
@@ -72,7 +71,7 @@ class TestToolDecorator:
                 self._model = model
                 return self
 
-        configure_fake_llm(lambda tier: FakeGatherLLM())
+        __llm_kw = configure_fake_llm(lambda tier: FakeGatherLLM())
 
         researcher = Node(
             name="research",
@@ -84,7 +83,7 @@ class TestToolDecorator:
         )
 
         pipeline = Construct("test-tool-decorator", nodes=[researcher])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs(), **__llm_kw)
         run(graph, input={})
 
         # The decorated function was called twice (within budget)
@@ -157,7 +156,7 @@ class TestNodeDecorator:
         assert isinstance(pipeline, Construct)
         assert [n.name for n in pipeline.nodes] == ["seed", "split"]
 
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "basic-chain"})
 
         assert isinstance(result["split"], Claims)
@@ -212,7 +211,7 @@ class TestNodeDecorator:
         # Register the scripted fns and run end-to-end.
         from neograph import compile, run
 
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "fan-in"})
         assert result["report"].summary == "a-b-c"
 
@@ -280,7 +279,7 @@ class TestNodeDecorator:
 
         from neograph import compile, run
 
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "topo"})
         assert [c["claim"] for c in result["report"].classified] == ["a", "b", "c"]
 
@@ -326,7 +325,7 @@ class TestNodeDecorator:
             "summarize",
         ]
 
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "name-conv"})
         # Output field uses underscore form of the node name.
         classified = result["summarize"].classified
@@ -439,7 +438,7 @@ class TestNodeDecoratorParams:
         mod.greet = greet
 
         pipeline = construct_from_module(mod, name="test-from-input")
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "t-001", "topic": "world"})
 
         assert result["greet"] == RawText(text="Hello, world!")
@@ -469,7 +468,7 @@ class TestNodeDecoratorParams:
         mod.process = process
 
         pipeline = construct_from_module(mod, name="test-from-config")
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(
             graph,
             input={"node_id": "t-002"},
@@ -494,7 +493,7 @@ class TestNodeDecoratorParams:
         mod.greet = greet
 
         pipeline = construct_from_module(mod, name="test-default-const")
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "t-003"})
 
         assert result["greet"] == RawText(text="Hi, friend!")
@@ -534,7 +533,7 @@ class TestNodeDecoratorParams:
         mod.combine = combine
 
         pipeline = construct_from_module(mod, name="test-mixed")
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(
             graph,
             input={"node_id": "t-004", "topic": "science"},
@@ -562,7 +561,7 @@ class TestNodeDecoratorParams:
         mod.greet = greet
 
         pipeline = construct_from_module(mod, name="test-from-input-missing")
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "t-005"})
 
         assert result["greet"] == RawText(text="no topic")
@@ -694,7 +693,7 @@ class TestNodeDecoratorRawMode:
             return {"filter_claims": filtered}
 
         pipeline = Construct("test-raw-mode", nodes=[make, filter_claims])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "test-001"})
 
         filtered = result.get("filter_claims")
@@ -742,7 +741,7 @@ class TestNodeDecoratorRawMode:
         mod.summarize = summarize
 
         pipeline = construct_from_module(mod, name="test-raw-downstream")
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "test-001"})
 
         summary = result.get("summarize")
@@ -774,7 +773,7 @@ class TestNodeDecoratorRawMode:
         mod.classify = classify
 
         pipeline = construct_from_module(mod, name="test-mixed")
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "test-001"})
 
         classified = result.get("classify")

@@ -20,6 +20,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.fakes import build_test_compile_kwargs
+
 FIXTURES = Path(__file__).parent / "check_fixtures"
 SHOULD_FAIL = sorted(FIXTURES.glob("should_fail/*.py"))
 SHOULD_PASS = sorted(FIXTURES.glob("should_pass/*.py"))
@@ -54,15 +56,34 @@ def _extract_error_pattern(path: Path) -> str | None:
 
 
 def _try_compile(mod: object) -> Exception | None:
-    """Find Constructs in the module and try to compile them."""
+    """Find Constructs in the module and try to compile them.
+
+    Pass placeholder LLM kwargs so the §2 fail-loud check doesn't mask
+    other expected failures (missing tool, unregistered merge_fn, etc.).
+    Fixtures that test the LLM-kwargs-missing error itself supply their
+    own pattern and don't need these placeholders to fire.
+    """
     from neograph.compiler import compile
     from neograph.construct import Construct
+
+    placeholder_llm_kwargs = {
+        "llm_factory": lambda tier: None,
+        "prompt_compiler": lambda template, data, **kw: [],
+    }
 
     for name in dir(mod):
         obj = getattr(mod, name)
         if isinstance(obj, Construct):
             try:
-                compile(obj)
+                # First attempt: pass placeholder LLM kwargs so the LLM
+                # check passes (most fixtures don't test that path).
+                compile(obj, **placeholder_llm_kwargs, **build_test_compile_kwargs())
+            except Exception as exc:
+                return exc
+            # Second attempt without LLM kwargs (in case the fixture's
+            # expected error is "LLM not configured").
+            try:
+                compile(obj, **build_test_compile_kwargs())
             except Exception as exc:
                 return exc
     return None

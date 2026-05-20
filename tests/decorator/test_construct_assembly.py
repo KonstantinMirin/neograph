@@ -17,8 +17,7 @@ from neograph import (
     node,
     run,
 )
-from neograph.factory import register_scripted
-from tests.fakes import StructuredFake, configure_fake_llm
+from tests.fakes import StructuredFake, build_test_compile_kwargs, configure_fake_llm
 from tests.schemas import (
     Claims,
     ClassifiedClaims,
@@ -64,7 +63,7 @@ class TestNodeDecoratorCrossModule:
         pipeline = construct_from_module(mod_b, name="cross-module")
         assert [n.name for n in pipeline.nodes] == ["fetch", "process"]
 
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "cross-mod-001"})
 
         assert result["process"] == Claims(items=["FETCHED DATA"])
@@ -157,7 +156,7 @@ class TestConstructFromFunctions:
         assert pipeline.name == "explicit"
         assert [n.name for n in pipeline.nodes] == ["cff-seed", "cff-split"]
 
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "cff-001"})
         assert result["cff_split"].items == ["hello", "world"]
 
@@ -209,8 +208,8 @@ class TestConstructFromFunctions:
         pipeA = construct_from_functions("A", [pipeA_start, pipeA_end])
         pipeB = construct_from_functions("B", [pipeB_start, pipeB_end])
 
-        gA = compile(pipeA)
-        gB = compile(pipeB)
+        gA = compile(pipeA, **build_test_compile_kwargs())
+        gB = compile(pipeB, **build_test_compile_kwargs())
         rA = run(gA, input={"node_id": "A-001"})
         rB = run(gB, input={"node_id": "B-001"})
 
@@ -268,7 +267,7 @@ class TestConstructLlmConfigDefault:
         """Produce nodes without explicit llm_config inherit the Construct default."""
         from neograph import Construct, Node
 
-        configure_fake_llm(lambda tier: StructuredFake(lambda m: m(items=["x"])))
+        _llm_kw = configure_fake_llm(lambda tier: StructuredFake(lambda m: m(items=["x"])))
 
         # Build via declarative API — Construct carries the default
         a = Node("a", mode="think", outputs=Claims, model="fast", prompt="p")
@@ -315,7 +314,6 @@ class TestConstructLlmConfigDefault:
         """Scripted nodes get llm_config inheritance uniformly."""
         from neograph import Construct, Node
 
-        register_scripted("noop_k7k", lambda input_data, config: Claims(items=["x"]))
         a = Node.scripted("a-k7k", fn="noop_k7k", outputs=Claims)
 
         pipeline = Construct(
@@ -508,7 +506,7 @@ class TestNodeDecoratorDictInputs:
             return MergedResult(final_text=produce_text.text + ":" + ",".join(produce_claims.items))
 
         pipeline = construct_from_functions("p", [produce_claims, produce_text, combine])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
 
         import structlog
         captured: list[dict] = []
@@ -577,7 +575,7 @@ class TestDecoratorDictOutputs:
         mod.analyze = analyze
         mod.classify = classify
         pipeline = construct_from_module(mod)
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={})
         assert result["classify"] == ClassifiedClaims(classified=[{"claim": "hello", "category": "ok"}])
 
@@ -636,7 +634,7 @@ class TestNodeDecoratorInterop:
 
         pipeline = construct_from_functions("op_interop", [produce, review])
         checkpointer = MemorySaver()
-        graph = compile(pipeline, checkpointer=checkpointer)
+        graph = compile(pipeline, checkpointer=checkpointer, **build_test_compile_kwargs())
 
         config = {"configurable": {"thread_id": "test-op-interop"}}
 
@@ -674,7 +672,7 @@ class TestNodeDecoratorInterop:
             return MatchResult(cluster_label=f"{node_id}:{cluster.label}", matched=[])
 
         pipeline = construct_from_functions("each_di", [producer, consumer])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "test-42"})
 
         consumer_results = result["consumer"]
@@ -710,7 +708,7 @@ class TestNodeDecoratorInterop:
             return RawText(text=f"{pipeline_id}:{len(verify)}")
 
         pipeline = construct_from_functions("after_each", [producer, verify, summarize])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"pipeline_id": "test-99"})
 
         assert result["summarize"].text == "test-99:1"
@@ -746,7 +744,7 @@ class TestNodeDecoratorInterop:
             return RawText(text=f"{ctx.node_id}:{len(verify)}")
 
         pipeline = construct_from_functions("bundled_after_each", [producer, verify, summarize])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "bundled-test", "project_root": "/src"})
 
         assert result["summarize"].text == "bundled-test:1"
@@ -783,7 +781,7 @@ class TestConditionalProduce:
         from neograph.decorators import construct_from_functions
         from tests.fakes import StructuredFake, configure_fake_llm
 
-        configure_fake_llm(lambda tier: StructuredFake(lambda m: m()))
+        _llm_kw = configure_fake_llm(lambda tier: StructuredFake(lambda m: m()))
 
         @node(outputs=Claims)
         def seed() -> Claims:
@@ -800,7 +798,7 @@ class TestConditionalProduce:
         def maybe_merge(seed: Claims) -> MergedResult: ...
 
         pipeline = construct_from_functions("skip-test", [seed, maybe_merge])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **_llm_kw, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "t"})
         assert result["maybe_merge"].final_text == "single"
 
@@ -809,7 +807,7 @@ class TestConditionalProduce:
         from neograph.decorators import construct_from_functions
         from tests.fakes import StructuredFake, configure_fake_llm
 
-        configure_fake_llm(
+        _llm_kw = configure_fake_llm(
             lambda tier: StructuredFake(lambda m: MergedResult(final_text="llm-result")),
         )
 
@@ -828,7 +826,7 @@ class TestConditionalProduce:
         def maybe_merge(seed: Claims) -> MergedResult: ...
 
         pipeline = construct_from_functions("no-skip", [seed, maybe_merge])
-        graph = compile(pipeline)
+        graph = compile(pipeline, **_llm_kw, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "t"})
         assert result["maybe_merge"].final_text == "llm-result"
 
