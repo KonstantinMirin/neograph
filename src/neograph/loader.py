@@ -28,6 +28,7 @@ from neograph._spec_schema import (
     Spec,
     ToolSpec,
 )
+from neograph._state_keys import StateKeys
 from neograph.conditions import parse_condition
 from neograph.construct import Construct
 from neograph.errors import ConfigurationError
@@ -226,7 +227,7 @@ def _build_sub_construct(
             if i == 0:
                 node = node.model_copy(update={"inputs": input_type})
             else:
-                inputs_dict: dict[str, Any] = {"neo_subgraph_input": input_type}
+                inputs_dict: dict[str, Any] = {StateKeys.SUBGRAPH_INPUT: input_type}
                 for prev_ref in construct_spec.nodes[:i]:
                     prev_field = field_name_for(prev_ref)
                     prev_node = all_nodes[prev_field]

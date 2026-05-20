@@ -17,6 +17,7 @@ from pydantic import BaseModel
 from neograph._llm_config import LlmConfig
 from neograph._runtime_registry import lookup_scripted
 from neograph._state_bus import StateBus, adapt_state
+from neograph._state_keys import StateKeys
 from neograph.errors import ExecutionError
 from neograph.modifiers import Each, Oracle
 from neograph.naming import field_name_for
@@ -30,12 +31,12 @@ def _inject_oracle_config(state: StateBus, config: RunnableConfig) -> RunnableCo
     into config['configurable']. Returns the original config unchanged
     when no oracle fields are present.
     """
-    oracle_gen_id = state.get("neo_oracle_gen_id")
+    oracle_gen_id = state.get(StateKeys.ORACLE_GEN_ID)
     if oracle_gen_id is None:
         return config
     configurable = config.get("configurable", {})
     extra = {"_generator_id": oracle_gen_id}
-    oracle_model = state.get("neo_oracle_model")
+    oracle_model = state.get(StateKeys.ORACLE_MODEL)
     if oracle_model is not None:
         extra["_oracle_model"] = oracle_model
     return {**config, "configurable": {**configurable, **extra}}
@@ -80,7 +81,7 @@ def make_eachoracle_redirect_fn(
     def eachoracle_redirect_fn(state: Any, config: RunnableConfig) -> dict:
         result = raw_fn(state, config)
         # Extract the each_key from the item
-        item = adapt_state(state).get("neo_each_item")
+        item = adapt_state(state).get(StateKeys.EACH_ITEM)
         key = getattr(item, each_key, str(item)) if item is not None else "unknown"
         # Single-type outputs: result has {field_name: val}
         val = result.get(field_name)
@@ -301,7 +302,7 @@ def make_each_redirect_fn(raw_fn: Callable, field_name: str, each: Each) -> Call
 
     def each_redirect_fn(state: Any, config: RunnableConfig = None) -> dict:  # type: ignore[assignment]
         # Get the item being processed
-        each_item = adapt_state(state).get("neo_each_item")
+        each_item = adapt_state(state).get(StateKeys.EACH_ITEM)
 
         result = raw_fn(state, config) if config else raw_fn(state)
         val = result.get(field_name)

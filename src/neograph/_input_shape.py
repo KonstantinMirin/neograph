@@ -8,6 +8,7 @@ from typing import get_origin as _get_origin
 
 from neograph._normalize import normalize_inputs, normalize_outputs
 from neograph._state_bus import StateBus
+from neograph._state_keys import StateKeys
 from neograph.di import _isinstance_safe as _is_instance_safe
 from neograph.di import _unwrap_each_dict, _unwrap_loop_value
 from neograph.modifiers import ModifierCombo, classify_modifiers
@@ -40,7 +41,7 @@ def _classify_input_shape(state: StateBus, node: Node) -> InputShape:
         if isinstance(own_val, list) and own_val:
             return InputShape.LOOP_REENTRY
 
-    replicate_item = state.get("neo_each_item")
+    replicate_item = state.get(StateKeys.EACH_ITEM)
     if replicate_item is not None and _is_instance_safe(replicate_item, node.inputs):
         return InputShape.EACH_ITEM
 
@@ -92,7 +93,7 @@ def _extract_loop_reentry(state: StateBus, node: Node) -> Any:
 
 def _extract_each_item(state: StateBus, node: Node) -> Any:
     """Read the fan-out item from neo_each_item."""
-    return state.get("neo_each_item")
+    return state.get(StateKeys.EACH_ITEM)
 
 
 def _extract_fan_in_dict(state: StateBus, node: Node) -> dict[str, Any]:
@@ -102,7 +103,7 @@ def _extract_fan_in_dict(state: StateBus, node: Node) -> dict[str, Any]:
     result: dict[str, Any] = {}
     for input_name, expected_type in ni.by_name.items():
         if input_name == node.fan_out_param:
-            value = state.get("neo_each_item")
+            value = state.get(StateKeys.EACH_ITEM)
         else:
             state_key = field_name_for(input_name)
             value = state.get(state_key)

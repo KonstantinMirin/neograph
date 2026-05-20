@@ -20,6 +20,7 @@ log = structlog.get_logger()
 from typing import assert_never
 
 from neograph._normalize import normalize_outputs
+from neograph._state_keys import StateKeys
 from neograph.modifiers import ModifierCombo, classify_modifiers
 from neograph.node import Node
 
@@ -135,7 +136,7 @@ def compile_state_model(
                         Annotated[list[arm_item.output], _append_loop_result],  # type: ignore[name-defined]
                         [],
                     )
-                    fields[f'neo_loop_count_{field_name}'] = (int, 0)
+                    fields[StateKeys.loop_count(field_name)] = (int, 0)
                 else:
                     fields[field_name] = (arm_item.output | None, None)
             else:
@@ -155,7 +156,7 @@ def compile_state_model(
         match combo:
             case ModifierCombo.ORACLE | ModifierCombo.ORACLE_OPERATOR:
                 # Oracle on Construct: collector + consumer field
-                collector_field = f"neo_oracle_{field_name}"
+                collector_field = StateKeys.oracle_collector(field_name)
                 fields[collector_field] = (
                     Annotated[list[sub.output], _collect_oracle_results],  # type: ignore[name-defined]
                     [],
@@ -174,7 +175,7 @@ def compile_state_model(
                     Annotated[list[sub.output], _append_loop_result],  # type: ignore[name-defined]
                     [],
                 )
-                fields[f'neo_loop_count_{field_name}'] = (int, 0)
+                fields[StateKeys.loop_count(field_name)] = (int, 0)
             case ModifierCombo.BARE | ModifierCombo.OPERATOR:
                 fields[field_name] = (sub.output | None, None)
             case ModifierCombo.EACH_ORACLE | ModifierCombo.EACH_ORACLE_OPERATOR:
@@ -201,26 +202,26 @@ def compile_state_model(
         ):
             has_any_each = True
     if has_any_oracle:
-        fields["neo_oracle_gen_id"] = (str | None, None)
-        fields["neo_oracle_model"] = (str | None, None)
+        fields[StateKeys.ORACLE_GEN_ID] = (str | None, None)
+        fields[StateKeys.ORACLE_MODEL] = (str | None, None)
     if has_any_each:
-        fields["neo_each_item"] = (Any, None)
+        fields[StateKeys.EACH_ITEM] = (Any, None)
 
     # Loop support: iteration counter per looped node
     for n in nodes_only:
         n_combo, n_mods = classify_modifiers(n)
         if n_combo in (ModifierCombo.LOOP, ModifierCombo.LOOP_OPERATOR):
             field_name = field_name_for(n.name)
-            fields[f'neo_loop_count_{field_name}'] = (int, 0)
+            fields[StateKeys.loop_count(field_name)] = (int, 0)
             loop = n_mods["loop"]
             if loop.history:
-                fields[f'neo_loop_history_{field_name}'] = (
+                fields[StateKeys.loop_history(field_name)] = (
                     Annotated[list, _collect_oracle_results], []
                 )
 
     # Subgraph input port — when this Construct declares an input type
     if construct.input is not None:
-        fields["neo_subgraph_input"] = (construct.input | None, None)
+        fields[StateKeys.SUBGRAPH_INPUT] = (construct.input | None, None)
 
     # Context fields — forwarded from parent state for nodes that declare context=
     # When context_types is provided (subconstruct compilation), use the concrete
@@ -254,8 +255,8 @@ def compile_state_model(
     fields["node_id"] = (str, "")
     fields["project_root"] = (str, "")
     fields["human_feedback"] = (dict[str, Any] | None, None)
-    fields["neo_schema_fingerprint"] = (str, "")
-    fields["neo_node_fingerprints"] = (dict[str, str], {})
+    fields[StateKeys.SCHEMA_FINGERPRINT] = (str, "")
+    fields[StateKeys.NODE_FINGERPRINTS] = (dict[str, str], {})
 
     return create_model(f"{construct.name}State", **fields)
 
@@ -306,7 +307,7 @@ def compute_schema_fingerprint(state_model: type[BaseModel]) -> str:
     human_feedback) are excluded — they change with modifier config, not schema.
     """
     import hashlib
-    _FRAMEWORK_PREFIXES = ("neo_", "node_id", "project_root", "human_feedback")
+    _FRAMEWORK_PREFIXES = (StateKeys.FRAMEWORK_PREFIX, "node_id", "project_root", "human_feedback")
     items = []
     for fname, finfo in state_model.model_fields.items():
         if any(fname.startswith(p) or fname == p for p in _FRAMEWORK_PREFIXES):
@@ -341,7 +342,7 @@ def _add_output_field(node: Node, fields: dict[str, Any]) -> None:
             case ModifierCombo.EACH_ORACLE | ModifierCombo.EACH_ORACLE_OPERATOR:
                 # Each×Oracle fusion + dict-form: tagged collector + dict output
                 # per key. Same as single-type fusion but per-key.
-                collector_field = f"neo_eachoracle_{field_name}"
+                collector_field = StateKeys.eachoracle_collector(field_name)
                 fields[collector_field] = (
                     Annotated[list, _append_tagged],
                     [],
@@ -356,7 +357,7 @@ def _add_output_field(node: Node, fields: dict[str, Any]) -> None:
             case ModifierCombo.ORACLE | ModifierCombo.ORACLE_OPERATOR:
                 # Oracle + dict-form: single collector for the whole result dict,
                 # per-key consumer fields without per-key collectors.
-                collector_field = f"neo_oracle_{field_name}"
+                collector_field = StateKeys.oracle_collector(field_name)
                 fields[collector_field] = (
                     Annotated[list[dict], _collect_oracle_results],
                     [],
@@ -391,7 +392,7 @@ def _add_single_output_field(
     match combo:
         case ModifierCombo.EACH_ORACLE | ModifierCombo.EACH_ORACLE_OPERATOR:
             # Each×Oracle fusion: tagged collector + dict output
-            collector_field = f"neo_eachoracle_{field_name}"
+            collector_field = StateKeys.eachoracle_collector(field_name)
             fields[collector_field] = (
                 Annotated[list, _append_tagged],
                 [],
@@ -409,7 +410,7 @@ def _add_single_output_field(
                 None,
             )
         case ModifierCombo.ORACLE | ModifierCombo.ORACLE_OPERATOR:
-            collector_field = f"neo_oracle_{field_name}"
+            collector_field = StateKeys.oracle_collector(field_name)
             # When oracle_gen_type is set, the collector holds per-variant types
             # (list[gen_type]), not the post-merge type. The consumer-facing field
             # keeps node.outputs (the post-merge type).

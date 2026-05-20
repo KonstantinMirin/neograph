@@ -17,6 +17,7 @@ from langgraph.types import Send, interrupt
 
 from neograph._normalize import normalize_outputs
 from neograph._state_bus import StateBus, adapt_state
+from neograph._state_keys import StateKeys
 from neograph._subconstruct import make_subgraph_fn
 from neograph.construct import Construct
 from neograph.di import _unwrap_loop_value
@@ -65,9 +66,9 @@ def _wire_oracle(
         }
         sends = []
         for i in range(oracle.n):
-            send_state = {**state_dict, "neo_oracle_gen_id": f"gen-{i}"}
+            send_state = {**state_dict, StateKeys.ORACLE_GEN_ID: f"gen-{i}"}
             if models:
-                send_state["neo_oracle_model"] = models[i % len(models)]
+                send_state[StateKeys.ORACLE_MODEL] = models[i % len(models)]
             sends.append(Send(gen_name, send_state))
         if models and oracle.n % len(models) != 0:
             log.info("oracle_uneven_distribution",
@@ -151,7 +152,7 @@ def _wire_each(
             for k in state.__class__.model_fields
         }
         return [
-            Send(fan_name, {**state_dict, "neo_each_item": item})
+            Send(fan_name, {**state_dict, StateKeys.EACH_ITEM: item})
             for item in unique_items
         ]
 
@@ -186,7 +187,7 @@ def _add_each_oracle_fused(
     Topology: prev -> flat_router -> M x N Send(gen) -> group_merge(defer) -> next
     """
     field_name = field_name_for(node.name)
-    collector_field = f"neo_eachoracle_{field_name}"
+    collector_field = StateKeys.eachoracle_collector(field_name)
     gen_name = node.name
     barrier_name = f"merge_{node.name}"
     empty_name = f"__each_empty_{node.name}"
@@ -238,11 +239,11 @@ def _add_each_oracle_fused(
             for i in range(oracle.n):
                 send_state = {
                     **state_dict,
-                    "neo_each_item": item,
-                    "neo_oracle_gen_id": f"gen-{i}",
+                    StateKeys.EACH_ITEM: item,
+                    StateKeys.ORACLE_GEN_ID: f"gen-{i}",
                 }
                 if models:
-                    send_state["neo_oracle_model"] = models[i % len(models)]
+                    send_state[StateKeys.ORACLE_MODEL] = models[i % len(models)]
                 sends.append(Send(gen_name, send_state))
         return sends
 
@@ -448,7 +449,7 @@ def _add_loop_back_edge(
     node_name = node.name
     node_fn = make_node_fn(node)
     field_name = field_name_for(node_name)
-    count_field = f'neo_loop_count_{field_name}'
+    count_field = StateKeys.loop_count(field_name)
 
     graph.add_node(node_name, node_fn)
 
@@ -497,7 +498,7 @@ def _add_subgraph_loop(
 ) -> str:
     """Wire Loop modifier on a sub-construct: conditional back-edge."""
     field_name = field_name_for(sub.name)
-    count_field = f'neo_loop_count_{field_name}'
+    count_field = StateKeys.loop_count(field_name)
 
     graph.add_node(sub.name, cast(Any, subgraph_fn))
 

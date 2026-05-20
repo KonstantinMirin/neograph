@@ -437,17 +437,21 @@ class TestInputShapeExhaustiveness:
 class TestSubconstructBoundaryOwnership:
     """Guard 6 — Sub-construct runtime boundary lives in _subconstruct.py only.
 
-    The runtime mutation that writes `neo_subgraph_input` into a sub_input
-    dict is sub-construct boundary semantics. Re-implementations in
-    factory.py / _execute.py / _wiring.py / runner.py would mean the boundary
-    is splaying across files.
+    The runtime mutation that writes `StateKeys.SUBGRAPH_INPUT` (the
+    `neo_subgraph_input` state-bus key) into a sub_input dict is sub-construct
+    boundary semantics. Re-implementations in factory.py / _execute.py /
+    _wiring.py / runner.py would mean the boundary is splaying across files.
 
     Compile-time mentions in state.py / loader.py / _construct_builder.py /
     _construct_validation.py / forward.py are out-of-scope (they declare the
     port type; they don't perform the runtime write).
+
+    Per neograph-n3f1 the literal `"neo_subgraph_input"` was centralized into
+    `_state_keys.py`; the runtime needle is now the typed `StateKeys.SUBGRAPH_INPUT`
+    reference rather than the bare string.
     """
 
-    NEEDLE = '"neo_subgraph_input"'
+    NEEDLE = "StateKeys.SUBGRAPH_INPUT"
     RUNTIME_MODULES = {
         "factory.py",
         "_execute.py",
@@ -472,13 +476,13 @@ class TestSubconstructBoundaryOwnership:
     def test_subconstruct_writes_neo_subgraph_input(self):
         text = (SRC_DIR / "_subconstruct.py").read_text()
         assert self.NEEDLE in text, (
-            "_subconstruct.py must own the runtime neo_subgraph_input write."
+            "_subconstruct.py must own the runtime StateKeys.SUBGRAPH_INPUT write."
         )
 
     def test_mutation_runtime_leak_detected(self, tmp_path):
         """Mutation case — write needle into a fake runtime file; scanner detects."""
         rogue = tmp_path / "factory.py"
-        rogue.write_text('sub_input["neo_subgraph_input"] = x\n')
+        rogue.write_text('sub_input[StateKeys.SUBGRAPH_INPUT] = x\n')
         text = rogue.read_text()
         assert self.NEEDLE in text, (
             "Mutation scanner failed: runtime leak not detected."
@@ -3229,3 +3233,89 @@ class TestRetrySemanticsDocPage:
             "exposing retry_policy at compile() (expected mention of 'act'-mode "
             "tool replay / double-write)."
         )
+
+
+class TestNeoStateKeysCentralized:
+    """Guard — `neo_*` state-bus key literals must live in `_state_keys.py`.
+
+    Per `docs/design/architecture-decisions.md` §7 (State bus): `neo_*` state-bus
+    keys are framework-internal field names on the LangGraph state dict. A typo
+    in any read site is a silent runtime miss — LangGraph returns `None` for an
+    unknown key with no error. Centralizing the keys in a single module
+    eliminates that whole class of bug.
+
+    This guard AST-scans every `src/neograph/*.py` (except `_state_keys.py`)
+    for string-literal fragments matching `^neo_`. Both plain `"neo_..."`
+    constants and f-string fragments like `f"neo_loop_count_{field}"` are
+    detected.
+
+    If this test fails, replace the literal with the named constant or builder
+    from `neograph._state_keys` — do NOT add an allowlist entry.
+    """
+
+    PATTERN = re.compile(r"^neo_")
+
+    @staticmethod
+    def _string_fragments(node: ast.AST):
+        """Yield every literal string fragment in an AST node.
+
+        Covers plain `ast.Constant(str)` and the string parts of an
+        `ast.JoinedStr` (f-string). For f-strings, only the *literal* fragments
+        are yielded (the surrounding text), so `f"neo_loop_count_{field}"`
+        yields `"neo_loop_count_"`.
+        """
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            yield node.value
+        elif isinstance(node, ast.JoinedStr):
+            for part in node.values:
+                if isinstance(part, ast.Constant) and isinstance(part.value, str):
+                    yield part.value
+
+    @classmethod
+    def _scan(cls, path: pathlib.Path) -> list[tuple[int, str]]:
+        """Return a list of (lineno, fragment) for every offending literal."""
+        source = path.read_text()
+        try:
+            tree = ast.parse(source, filename=str(path))
+        except SyntaxError:
+            return []
+
+        hits: list[tuple[int, str]] = []
+        for node in ast.walk(tree):
+            for frag in cls._string_fragments(node):
+                if cls.PATTERN.match(frag):
+                    hits.append((node.lineno, frag))
+        return hits
+
+    def test_no_neo_state_key_literals_outside_state_keys_module(self):
+        violations: list[str] = []
+        for py_file in sorted(SRC_DIR.glob("*.py")):
+            if py_file.name == "_state_keys.py":
+                continue
+            for lineno, frag in self._scan(py_file):
+                violations.append(f"  {py_file.name}:{lineno}: '{frag}'")
+
+        assert violations == [], (
+            f"\n{len(violations)} `neo_*` literal(s) found outside "
+            "_state_keys.py:\n"
+            + "\n".join(violations)
+            + "\n\nReplace each with the named constant or builder from "
+            "`neograph._state_keys`."
+        )
+
+    def test_guard_detects_injected_violation(self, tmp_path):
+        """Mutation case: synthesize a file with a forbidden literal and
+        confirm the scanner detects it. Guarantees the guard cannot rot."""
+        bad = tmp_path / "synthetic.py"
+        bad.write_text('FORBIDDEN = "neo_typo_injected"\n')
+        hits = self._scan(bad)
+        assert hits, "scanner failed to detect injected `neo_*` literal"
+        assert any("neo_typo_injected" in h[1] for h in hits)
+
+    def test_guard_detects_fstring_violation(self, tmp_path):
+        """Mutation case: f-string fragment starting with `neo_` is detected."""
+        bad = tmp_path / "synthetic_fstring.py"
+        bad.write_text('def f(x):\n    return f"neo_synthetic_{x}"\n')
+        hits = self._scan(bad)
+        assert hits, "scanner failed to detect injected `neo_*` f-string fragment"
+        assert any("neo_synthetic_" in h[1] for h in hits)

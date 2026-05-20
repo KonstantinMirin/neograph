@@ -9,6 +9,7 @@ from structlog.stdlib import BoundLogger
 
 from neograph._normalize import normalize_outputs
 from neograph._state_bus import StateBus
+from neograph._state_keys import StateKeys
 from neograph.errors import ExecutionError
 from neograph.modifiers import Each, ModifierCombo, classify_modifiers
 from neograph.node import Node
@@ -49,7 +50,7 @@ def _build_state_update(
         case _ as unreachable:
             assert_never(unreachable)
 
-    each_item = state.get("neo_each_item") if state is not None else None
+    each_item = state.get(StateKeys.EACH_ITEM) if state is not None else None
 
     # MODIFIER_RULE_TOUCHPOINT: dict-form output projection + Each per-key wrap.
     no = normalize_outputs(node.outputs)
@@ -76,11 +77,11 @@ def _build_state_update(
     # MODIFIER_RULE_TOUCHPOINT: Loop iteration counter + optional history collection.
     loop_mod = mods.get("loop")
     if loop_mod is not None:
-        count_field = f"neo_loop_count_{field_name}"
+        count_field = StateKeys.loop_count(field_name)
         current_count = (state.get(count_field) if state is not None else None) or 0
         update[count_field] = current_count + 1
         if loop_mod.history:
-            history_field = f"neo_loop_history_{field_name}"
+            history_field = StateKeys.loop_history(field_name)
             update[history_field] = result
 
     return update
@@ -131,7 +132,7 @@ def _apply_skip_when(
     _, skip_mods = classify_modifiers(node)
     loop_mod = skip_mods.get("loop")
     if loop_mod is not None:
-        count_field = f"neo_loop_count_{field_name}"
+        count_field = StateKeys.loop_count(field_name)
         current_count = (state.get(count_field) if state is not None else None) or 0
         update[count_field] = current_count + 1
     return update

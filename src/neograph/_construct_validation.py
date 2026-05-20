@@ -26,6 +26,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, ForwardRef, Union, cast, get_args, get_origin, get_type_hints
 
 from neograph._ir_protocols import ConstructItem
+from neograph._state_keys import StateKeys
 from neograph.di import DIKind as _DIKind
 from neograph.errors import ConstructError, NeographError
 from neograph.modifiers import Each, Oracle, split_each_path
@@ -257,7 +258,7 @@ def _validate_node_chain(construct: Construct) -> None:
     # used by inner nodes that read from `neo_subgraph_input`.
     if construct.input is not None:
         producers.append(Producer(
-            field_name="neo_subgraph_input",
+            field_name=StateKeys.SUBGRAPH_INPUT,
             effective_type=construct.input,
             label=f"construct '{construct.name}' input port",
         ))
@@ -426,7 +427,7 @@ def _validate_node_chain(construct: Construct) -> None:
     if construct.output is not None and producers:
         declared_output = construct.output
         internal_producers = [
-            p for p in producers if p.field_name != "neo_subgraph_input"
+            p for p in producers if p.field_name != StateKeys.SUBGRAPH_INPUT
         ]
         for p in internal_producers:
             if p.effective_type is not None and _types_compatible(p.effective_type, declared_output):
@@ -634,7 +635,7 @@ def _check_each_path(
 
     if root_type is None:
         # Allow framework-injected roots (sub-construct port param).
-        if root == "neo_subgraph_input":
+        if root == StateKeys.SUBGRAPH_INPUT:
             return
         known_roots = {p.field_name for p in producers}
         raise ConstructError.build(

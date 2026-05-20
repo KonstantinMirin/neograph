@@ -18,14 +18,16 @@ from typing import Any
 from langchain_core.runnables import RunnableConfig
 from langgraph.types import Command
 
+from neograph._state_keys import StateKeys
 from neograph.errors import CheckpointSchemaError, ExecutionError
+from neograph.naming import field_name_for
 
 
 def _strip_internals(result: Any) -> Any:
     """Remove neo_* framework plumbing from the result dict."""
     if not isinstance(result, dict):
         return result
-    return {k: v for k, v in result.items() if not k.startswith("neo_")}
+    return {k: v for k, v in result.items() if not k.startswith(StateKeys.FRAMEWORK_PREFIX)}
 
 
 def _preflight_di_check(graph: Any, config: RunnableConfig) -> None:
@@ -96,9 +98,9 @@ def _verify_checkpoint_schema(graph: Any, config: RunnableConfig, *, auto_resume
     channel_values = saved.checkpoint.get("channel_values", {})
     stored_fp = None
     if isinstance(channel_values, dict):
-        stored_fp = channel_values.get("neo_schema_fingerprint")
+        stored_fp = channel_values.get(StateKeys.SCHEMA_FINGERPRINT)
     elif hasattr(channel_values, "get"):
-        stored_fp = channel_values.get("neo_schema_fingerprint")
+        stored_fp = channel_values.get(StateKeys.SCHEMA_FINGERPRINT)
 
     if stored_fp is None or stored_fp == "":
         return  # checkpoint from before fingerprinting was added
@@ -140,27 +142,27 @@ def _auto_resume_from_divergence(
     if not invalidated:
         return
 
-    # Walk state history to find the checkpoint where an invalidated node
-    # was about to execute — this is the rewind point
+    # ``get_state_history`` yields newest-first. We want the OLDEST checkpoint
+    # whose ``next`` intersects the invalidated set — that's the rewind point
+    # that re-executes every invalidated node, not just the latest one.
+    rewind_checkpoint_id = None
     for state_snapshot in graph.get_state_history(config):
         next_nodes = set(state_snapshot.next)
         if next_nodes & invalidated:
-            # Found it. Extract the checkpoint_id and inject into the caller's config
-            # so invoke(None, config) resumes from here.
-            rewind_checkpoint_id = state_snapshot.config.get("configurable", {}).get("checkpoint_id")
-            if rewind_checkpoint_id is not None:
-                config.setdefault("configurable", {})["checkpoint_id"] = rewind_checkpoint_id
-            return
-
-    # Can't find rewind point — fall through to normal resume
+            candidate = state_snapshot.config.get("configurable", {}).get("checkpoint_id")
+            if candidate is not None:
+                rewind_checkpoint_id = candidate
+    if rewind_checkpoint_id is not None:
+        config.setdefault("configurable", {})["checkpoint_id"] = rewind_checkpoint_id
 
 
 def _compute_invalidated_nodes(graph: Any, channel_values: Any) -> set[str]:
     """Compute which nodes changed + their transitive descendants.
 
     Compares per-node fingerprints stored in the checkpoint against the
-    current graph's per-node fingerprints. Returns the union of changed
-    nodes and all nodes that transitively depend on them.
+    current graph's per-node fingerprints, then walks the construct's
+    producer→consumer adjacency (keyed by state-field name) to return the
+    full transitive closure.
     """
     current_nfp = getattr(graph, "_neo_node_fingerprints", None)
     if current_nfp is None:
@@ -168,15 +170,15 @@ def _compute_invalidated_nodes(graph: Any, channel_values: Any) -> set[str]:
 
     stored_nfp = None
     if isinstance(channel_values, dict):
-        stored_nfp = channel_values.get("neo_node_fingerprints")
+        stored_nfp = channel_values.get(StateKeys.NODE_FINGERPRINTS)
     elif hasattr(channel_values, "get"):
-        stored_nfp = channel_values.get("neo_node_fingerprints")
+        stored_nfp = channel_values.get(StateKeys.NODE_FINGERPRINTS)
 
     if not stored_nfp or not isinstance(stored_nfp, dict):
         return set()
 
-    # Find directly changed nodes
-    changed = set()
+    # Find directly changed nodes (by state-field name).
+    changed: set[str] = set()
     for node_field, current_fp in current_nfp.items():
         stored_fp = stored_nfp.get(node_field)
         if stored_fp is not None and stored_fp != current_fp:
@@ -185,12 +187,66 @@ def _compute_invalidated_nodes(graph: Any, channel_values: Any) -> set[str]:
     if not changed:
         return set()
 
-    # Compute transitive descendants via the graph's node adjacency
-    # The graph nodes have a mapping we can derive from the channel specs
-    # For simplicity, return changed nodes — DAG walking requires construct access
-    # which isn't available on the compiled graph. The changed set is sufficient
-    # for the user to identify what needs invalidation.
-    return changed
+    construct = getattr(graph, "_neo_construct", None)
+    if construct is None:
+        return changed
+
+    adjacency = _build_producer_consumer_adjacency(construct)
+    return _transitive_closure(changed, adjacency)
+
+
+def _build_producer_consumer_adjacency(construct: Any) -> dict[str, set[str]]:
+    """Map upstream-producer field-name → set of consumer field-names.
+
+    Modifier-bearing nodes participate via their state-field names — the
+    same key the per-node fingerprint store uses. Dict-form outputs are
+    registered under both their composite key (``{field}_{output_key}``)
+    and their base field name, so consumers that read either form are
+    captured.
+    """
+    adjacency: dict[str, set[str]] = {}
+
+    def add_edge(producer_key: str, consumer_field: str) -> None:
+        adjacency.setdefault(producer_key, set()).add(consumer_field)
+
+    for item in getattr(construct, "nodes", []):
+        consumer_name = getattr(item, "name", None)
+        if consumer_name is None:
+            continue
+        consumer_field = field_name_for(consumer_name)
+
+        inputs = getattr(item, "inputs", None)
+        if isinstance(inputs, dict):
+            for upstream_name in inputs:
+                add_edge(upstream_name, consumer_field)
+
+        # Each.over names a producer field (root may contain dotted path).
+        ms = getattr(item, "modifier_set", None)
+        each = getattr(ms, "each", None) if ms is not None else None
+        if each is not None:
+            over = getattr(each, "over", None)
+            if isinstance(over, str) and over:
+                root = over.split(".", 1)[0]
+                add_edge(root, consumer_field)
+
+        # context= references upstream fields by name.
+        for ctx_name in getattr(item, "context", None) or ():
+            add_edge(field_name_for(ctx_name), consumer_field)
+
+    return adjacency
+
+
+def _transitive_closure(seeds: set[str], adjacency: dict[str, set[str]]) -> set[str]:
+    """BFS through producer→consumer adjacency from ``seeds``."""
+    closure: set[str] = set(seeds)
+    frontier: list[str] = list(seeds)
+    while frontier:
+        producer = frontier.pop()
+        for consumer in adjacency.get(producer, ()):
+            if consumer not in closure:
+                closure.add(consumer)
+                frontier.append(consumer)
+    return closure
 
 
 def _has_existing_checkpoint(graph: Any, config: RunnableConfig) -> bool:
@@ -270,10 +326,10 @@ def run(
         # Inject schema fingerprint into initial state for checkpoint storage
         fp = getattr(graph, "_neo_schema_fingerprint", None)
         if fp is not None:
-            input["neo_schema_fingerprint"] = fp
+            input[StateKeys.SCHEMA_FINGERPRINT] = fp
         node_fps = getattr(graph, "_neo_node_fingerprints", None)
         if node_fps is not None:
-            input["neo_node_fingerprints"] = node_fps
+            input[StateKeys.NODE_FINGERPRINTS] = node_fps
 
         # Pre-flight: check all required DI params are present
         _preflight_di_check(graph, config)

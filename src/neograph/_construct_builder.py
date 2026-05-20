@@ -26,6 +26,7 @@ from neograph._sidecar import (
     _set_param_res,
     infer_oracle_gen_type,
 )
+from neograph._state_keys import StateKeys
 from neograph.construct import Construct
 from neograph.di import DIBinding, DIKind
 from neograph.naming import field_name_for
@@ -548,7 +549,7 @@ def _cleanup_inputs_and_register(
             filtered: dict[str, Any] = {}
             for k, v in ni.by_name.items():
                 if k in _ports:
-                    filtered["neo_subgraph_input"] = v
+                    filtered[StateKeys.SUBGRAPH_INPUT] = v
                 elif k in renames:
                     filtered[renames[k]] = v
                 elif (
@@ -567,7 +568,7 @@ def _cleanup_inputs_and_register(
         if n.mode == "scripted" and n.raw_fn is None:
             synthetic_name = _register_node_scripted(
                 n, fan_out_params.get(field, set()),
-                port_param_map=dict.fromkeys(port_params.get(field, set()), "neo_subgraph_input"),
+                port_param_map=dict.fromkeys(port_params.get(field, set()), StateKeys.SUBGRAPH_INPUT),
                 loop_renames=loop_param_renames.get(field),
             )
             if synthetic_name is not None:

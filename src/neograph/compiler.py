@@ -18,6 +18,7 @@ from pydantic import BaseModel
 
 from neograph._dev_warnings import DEV_MODE
 from neograph._registry import registry
+from neograph._state_keys import StateKeys
 from neograph._subconstruct import make_subgraph_fn
 from neograph._wiring import (  # noqa: F401 — re-exported for backward compat
     _add_branch_to_graph,
@@ -313,7 +314,7 @@ def _add_subgraph(
             )
         case ModifierCombo.ORACLE | ModifierCombo.ORACLE_OPERATOR:
             oracle = mods["oracle"]
-            collector_field = f"neo_oracle_{field_name}"
+            collector_field = StateKeys.oracle_collector(field_name)
             redirect_fn = make_oracle_redirect_fn(subgraph_fn, field_name, collector_field)
             merge_fn = make_oracle_merge_fn(oracle, field_name, collector_field, sub.output,
                                                llm_config=sub.llm_config or None)
@@ -395,7 +396,7 @@ def _add_oracle_nodes(
 ) -> str:
     """Expand Oracle modifier into fan-out generators + merge barrier."""
     field_name = field_name_for(node.name)
-    collector_field = f"neo_oracle_{field_name}"
+    collector_field = StateKeys.oracle_collector(field_name)
 
     raw_fn = make_node_fn(node)
     redirect_fn = make_oracle_redirect_fn(raw_fn, field_name, collector_field)

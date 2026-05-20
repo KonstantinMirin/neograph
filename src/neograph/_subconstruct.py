@@ -11,6 +11,7 @@ from pydantic import BaseModel
 
 from neograph._oracle import _inject_oracle_config
 from neograph._state_bus import StateBus, adapt_state
+from neograph._state_keys import StateKeys
 from neograph.construct import Construct
 from neograph.errors import ExecutionError
 from neograph.modifiers import ModifierCombo, classify_modifiers
@@ -94,7 +95,7 @@ def make_subgraph_fn(sub: Construct, sub_graph: CompiledStateGraph) -> Callable:
         # Run sub-graph with isolated state
         sub_input: dict[str, Any] = {"node_id": bus.get("node_id", "")}
         if input_data is not None:
-            sub_input["neo_subgraph_input"] = input_data
+            sub_input[StateKeys.SUBGRAPH_INPUT] = input_data
 
         # Forward context fields from parent state into sub-construct
         for n in sub.nodes:
@@ -128,7 +129,7 @@ def make_subgraph_fn(sub: Construct, sub_graph: CompiledStateGraph) -> Callable:
         sub_log.info("subgraph_complete")
         update: dict[str, Any] = {field_name: output_val}
         if has_loop:
-            count_field = f"neo_loop_count_{field_name}"
+            count_field = StateKeys.loop_count(field_name)
             current = bus.get(count_field) or 0
             update[count_field] = current + 1
         return update
