@@ -647,7 +647,7 @@ def _check_each_path(
         )
 
     # Walk remaining segments through Pydantic model_fields.
-    current_type: Any = root_type
+    current_type: TypeSpecStatic = root_type
     walked = [root]
     for segment in segments:
         walked.append(segment)
@@ -705,7 +705,7 @@ def _check_each_path(
 _MISSING = object()
 
 
-def _resolve_field_annotation(model_class: Any, field_name: str) -> TypeSpecStatic:
+def _resolve_field_annotation(model_class: TypeSpecStatic, field_name: str) -> TypeSpecStatic:
     """Return the fully-resolved annotation for a field, or _MISSING if absent.
 
     Tries `typing.get_type_hints` first to unwrap ForwardRefs and string

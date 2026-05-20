@@ -26,7 +26,7 @@ from neograph.factory import (
     make_subgraph_fn,
 )
 from neograph.forward import _BranchNode
-from neograph.modifiers import Each, Loop, Oracle, split_each_path
+from neograph.modifiers import Each, Loop, Operator, Oracle, split_each_path
 from neograph.naming import field_name_for
 from neograph.node import Node
 
@@ -657,7 +657,7 @@ def _add_branch_to_graph(
 def _add_operator_check(
     graph: StateGraph,
     node_name: str,
-    operator: Any,
+    operator: Operator,
 ) -> str:
     """Add an interrupt check node after the given node."""
     check_name = f"{node_name}__operator"

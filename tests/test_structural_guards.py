@@ -1310,7 +1310,6 @@ ANY_ALLOWLIST: dict[str, str] = {
     "node.py:_validate_type_spec:v": "Pydantic BeforeValidator boundary; raw input is untyped",
     "node.py:_validate_type_spec:return": "Pydantic BeforeValidator boundary; returns type | dict[str, type] | None",
     "node.py:_is_type_like:v": "introspection helper called on arbitrary user-declared shapes",
-    "node.py:Node.oracle_gen_type": "user-supplied output model class; resolved at compile time (PEP 747 TypeForm unavailable)",
     "node.py:Node.run_isolated:input": "user-supplied initial state (typed instance or dict) for isolated execution",
     "node.py:Node.run_isolated:return": "user-supplied output value; type declared by node.outputs",
     # ── construct.py — node list validator boundary and dynamic kwargs ──
@@ -1327,7 +1326,6 @@ ANY_ALLOWLIST: dict[str, str] = {
     # _resolve_field_annotation:return, _types_compatible:producer/target,
     # _extract_list_element:tp/return, _fmt_type:tp, _build_no_producer_error:input_type,
     # _suggest_hint:input_type) migrated to TypeSpecStatic in Batch 1 (neograph-86r1).
-    "_construct_validation.py:_resolve_field_annotation:model_class": "user-declared Pydantic model class",
     # ── factory.py — state bus polymorphism (state is BaseModel | dict[str, Any]) ──
     # Untypable boundary: state is sometimes a compiled Pydantic model and
     # sometimes a dict during sub-graph dispatch / isolated execution. Adding
@@ -1340,7 +1338,6 @@ ANY_ALLOWLIST: dict[str, str] = {
     # factory.py:_type_name:t migrated to TypeSpecStatic in Batch 1 (neograph-86r1).
     "factory.py:_apply_skip_when:input_data": "user-supplied extracted input; type declared by node.inputs",
     "factory.py:_apply_skip_when:state": "state bus polymorphism: BaseModel | dict[str, Any]",
-    "factory.py:_apply_skip_when:node_log": "structlog BoundLoggerLazyProxy; private structlog type",
     "factory.py:_apply_skip_when:return": "state update dict; values typed by user node outputs",
     "factory.py:_build_state_update:result": "user-supplied node result; type declared by node.outputs",
     "factory.py:_build_state_update:state": "state bus polymorphism: BaseModel | dict[str, Any]",
@@ -1377,7 +1374,6 @@ ANY_ALLOWLIST: dict[str, str] = {
     "_wiring.py:_merge_one_group:return": "user-supplied merge result; type declared by node.outputs",
     "_wiring.py:_construct_loop_unwrap:state": "state bus polymorphism: BaseModel | dict[str, Any]",
     "_wiring.py:_construct_loop_unwrap:return": "user-supplied loop value; type declared by the sub-construct output",
-    "_wiring.py:_add_operator_check:operator": "user-supplied Operator modifier; type-narrowed at call site",
 }
 
 

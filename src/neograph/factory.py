@@ -29,6 +29,7 @@ from typing import get_origin as _get_origin
 import structlog
 from langchain_core.runnables import RunnableConfig
 from pydantic import BaseModel
+from structlog.stdlib import BoundLogger
 
 from neograph._dispatch import (  # noqa: F401 — re-exported for tests/backward compat
     ModeDispatch,
@@ -153,7 +154,7 @@ def _apply_skip_when(
     input_data: Any,
     field_name: str,
     t0: float,
-    node_log: Any,
+    node_log: BoundLogger,
     state: Any = None,
 ) -> dict[str, Any] | None:
     """Check skip_when predicate and return early state update if skipped.
