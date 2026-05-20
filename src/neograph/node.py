@@ -27,6 +27,7 @@ from typing import Annotated, Any, Literal, Protocol, runtime_checkable
 
 from langchain_core.runnables import RunnableConfig
 from pydantic import BaseModel, Field, PlainValidator, PrivateAttr
+from typing_extensions import TypeVar
 
 from neograph._llm_config import LlmConfig
 from neograph.errors import ConstructError
@@ -36,24 +37,33 @@ from neograph.renderers import Renderer
 # Node lifecycle Protocols
 # ═══════════════════════════════════════════════════════════════════════════
 
+# PEP 696 TypeVar defaults: the input/output types of these Protocols are declared
+# elsewhere (node.inputs / node.outputs); defaulting to Any preserves the prior
+# un-parameterized call sites without forcing users to subscript at every callsite.
+# typing.TypeVar gained `default=` support in Python 3.13; typing_extensions
+# backports it to 3.11+. Inputs are contravariant, outputs are covariant —
+# matches Callable's variance contract.
+_SkipIn = TypeVar("_SkipIn", contravariant=True, default=Any)
+_SkipOut = TypeVar("_SkipOut", covariant=True, default=Any)
+
 
 @runtime_checkable
-class SkipPredicate(Protocol):
+class SkipPredicate(Protocol[_SkipIn]):
     """Returns True to bypass the LLM call. Receives extracted ``input_data``
     (after ``_extract_input``, before renderer dispatch).
     """
 
-    def __call__(self, input_data: Any) -> bool: ...
+    def __call__(self, input_data: _SkipIn) -> bool: ...
 
 
 @runtime_checkable
-class SkipValueFactory(Protocol):
+class SkipValueFactory(Protocol[_SkipIn, _SkipOut]):
     """Produces the output value when ``skip_when`` fires. Receives the same
     ``input_data`` shape as ``skip_when``. If absent, the node returns an
     empty state update.
     """
 
-    def __call__(self, input_data: Any) -> Any: ...
+    def __call__(self, input_data: _SkipIn) -> _SkipOut: ...
 
 
 @runtime_checkable

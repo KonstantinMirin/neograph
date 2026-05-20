@@ -11,6 +11,7 @@ from enum import Enum, auto
 from typing import TYPE_CHECKING, Any, Protocol, Self, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, field_validator
+from typing_extensions import TypeVar
 
 from neograph._dev_warnings import dev_warn
 from neograph.errors import ConfigurationError, ConstructError
@@ -22,31 +23,42 @@ if TYPE_CHECKING:
 # Oracle merge-hook Protocols
 # ═══════════════════════════════════════════════════════════════════════════
 
+# PEP 696 TypeVar defaults: variant element / result types are declared by
+# node.oracle_gen_type / node.outputs. Defaulting to Any preserves existing
+# un-parameterized call sites; subscription is optional for richer typing.
+# `_Variant` appears inside `list[...]` (invariant container), so it stays
+# invariant. `_FallbackResult` is output-only in MergeFallback, hence
+# covariant. `_PostResult` is both input and output in MergePostProcess,
+# so it must remain invariant.
+_Variant = TypeVar("_Variant", default=Any)
+_FallbackResult = TypeVar("_FallbackResult", covariant=True, default=Any)
+_PostResult = TypeVar("_PostResult", default=Any)
+
 
 @runtime_checkable
-class MergePreProcess(Protocol):
+class MergePreProcess(Protocol[_Variant]):
     """Replaces the default ``{variants: ..., **upstream}`` input_data
     construction for the ``merge_prompt`` path. Returns the data passed
     verbatim to ``invoke_structured`` -- which accepts ``BaseModel | dict | str``.
     """
 
-    def __call__(self, variants: list[Any]) -> Any: ...
+    def __call__(self, variants: list[_Variant]) -> BaseModel | dict[str, Any] | str: ...
 
 
 @runtime_checkable
-class MergePostProcess(Protocol):
+class MergePostProcess(Protocol[_PostResult, _Variant]):
     """Transforms the parsed LLM merge result before it is written to state."""
 
-    def __call__(self, result: Any, variants: list[Any]) -> Any: ...
+    def __call__(self, result: _PostResult, variants: list[_Variant]) -> _PostResult: ...
 
 
 @runtime_checkable
-class MergeFallback(Protocol):
+class MergeFallback(Protocol[_Variant, _FallbackResult]):
     """Catches errors from ``invoke_structured`` during merge. Returns a
     deterministic fallback result instead of propagating the exception.
     """
 
-    def __call__(self, variants: list[Any], error: Exception) -> Any: ...
+    def __call__(self, variants: list[_Variant], error: Exception) -> _FallbackResult: ...
 
 
 class ModifierCombo(Enum):

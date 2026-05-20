@@ -1306,9 +1306,6 @@ ANY_AUDIT_MODULES = (
 # NodeInput/NodeOutput, or a BaseModel), do that instead.
 ANY_ALLOWLIST: dict[str, str] = {
     # ── node.py — Protocol signatures and TypeSpec validator boundaries ──
-    "node.py:SkipPredicate.__call__:input_data": "user-supplied extracted input, type declared by node.inputs",
-    "node.py:SkipValueFactory.__call__:input_data": "user-supplied extracted input, type declared by node.inputs",
-    "node.py:SkipValueFactory.__call__:return": "user-supplied skip value, type declared by node.outputs",
     "node.py:RawNodeFn.__call__:return": "user-supplied state-update dict; values typed by user node",
     "node.py:_validate_type_spec:v": "Pydantic BeforeValidator boundary; raw input is untyped",
     "node.py:_validate_type_spec:return": "Pydantic BeforeValidator boundary; returns type | dict[str, type] | None",
@@ -1320,13 +1317,7 @@ ANY_ALLOWLIST: dict[str, str] = {
     "construct.py:_validate_node_list:v": "Pydantic BeforeValidator boundary; raw input is untyped",
     "construct.py:Construct.__init__:kwargs": "Pydantic BaseModel kwargs passthrough boundary",
     # ── modifiers.py — Protocol signatures for user merge/fallback callbacks ──
-    "modifiers.py:MergePreProcess.__call__:variants": "user-supplied variant list; element type declared by node.oracle_gen_type",
-    "modifiers.py:MergePreProcess.__call__:return": "user-supplied pre-processed input_data; passed to merge_prompt LLM",
-    "modifiers.py:MergePostProcess.__call__:result": "user-supplied LLM-merged result; type declared by node.outputs",
-    "modifiers.py:MergePostProcess.__call__:variants": "user-supplied variant list; element type declared by node.oracle_gen_type",
-    "modifiers.py:MergePostProcess.__call__:return": "user-supplied post-processed result; type declared by node.outputs",
-    "modifiers.py:MergeFallback.__call__:variants": "user-supplied variant list; element type declared by node.oracle_gen_type",
-    "modifiers.py:MergeFallback.__call__:return": "user-supplied fallback value; type declared by node.outputs",
+    "modifiers.py:MergePreProcess.__call__:return": "invoke_structured accepts BaseModel | dict[str, Any] | str; dict-form retains Any value type",
     "modifiers.py:Modifiable.map:source": "tracer recorder proxy; symbolic attribute path, runtime-substituted",
     "modifiers.py:Oracle.model_post_init:__context": "Pydantic model_post_init context payload; framework-internal",
     "modifiers.py:Loop.model_post_init:__context": "Pydantic model_post_init context payload; framework-internal",
@@ -1400,17 +1391,10 @@ ANY_ALLOWLIST: dict[str, str] = {
     # gen_fn / merge_fn / fan_fn / subgraph_fn are runtime-built closures whose
     # precise signatures are determined by the user's modifier configuration.
     # retry_policy is a LangGraph internal type not in our public surface.
-    "_wiring.py:_wire_oracle:gen_fn": "framework-built closure; signature varies by modifier configuration",
-    "_wiring.py:_wire_oracle:merge_fn": "framework-built closure; signature varies by modifier configuration",
-    "_wiring.py:_wire_each:fan_fn": "framework-built closure; signature varies by modifier configuration",
     "_wiring.py:_merge_one_group:return": "user-supplied merge result; type declared by node.outputs",
     "_wiring.py:_make_loop_router:condition": "user-supplied loop condition: str (registry name) or Callable predicate",
-    "_wiring.py:_make_loop_router:unwrap_fn": "framework-built closure; reads loop state for the router",
-    "_wiring.py:_make_loop_router:return": "LangGraph router callable; consumed by add_conditional_edges",
-    "_wiring.py:_node_loop_unwrap:return": "framework-built closure; reads loop state for the router",
     "_wiring.py:_construct_loop_unwrap:state": "state bus polymorphism: BaseModel | dict[str, Any]",
     "_wiring.py:_construct_loop_unwrap:return": "user-supplied loop value; type declared by the sub-construct output",
-    "_wiring.py:_add_subgraph_loop:subgraph_fn": "framework-built closure; runs the sub-graph in isolation",
     "_wiring.py:_add_operator_check:operator": "user-supplied Operator modifier; type-narrowed at call site",
 }
 
@@ -1773,20 +1757,20 @@ NEOGRAPH_ERROR_ALLOWLIST: dict[str, str] = {
     # @field_validator boundaries catch ValueError into ValidationError.
     # Modifiable.map() TypeErrors document type-contract violations of the
     # user-supplied lambda; tests assert TypeError.
-    "modifiers.py:173": "AttributeError is the Python attribute-protocol contract (private-attr guard)",
-    "modifiers.py:320": "TypeError documents map() lambda contract; tests assert TypeError",
-    "modifiers.py:326": "TypeError documents map() lambda contract; tests assert TypeError",
-    "modifiers.py:333": "TypeError documents map() lambda contract; tests assert TypeError",
-    "modifiers.py:340": "TypeError documents map() source-type contract; tests assert TypeError",
-    "modifiers.py:399": "Pydantic @field_validator boundary; ValueError is rolled into ValidationError",
-    "modifiers.py:455": "Pydantic @field_validator boundary; ValueError is rolled into ValidationError",
+    "modifiers.py:185": "AttributeError is the Python attribute-protocol contract (private-attr guard)",
+    "modifiers.py:332": "TypeError documents map() lambda contract; tests assert TypeError",
+    "modifiers.py:338": "TypeError documents map() lambda contract; tests assert TypeError",
+    "modifiers.py:345": "TypeError documents map() lambda contract; tests assert TypeError",
+    "modifiers.py:352": "TypeError documents map() source-type contract; tests assert TypeError",
+    "modifiers.py:411": "Pydantic @field_validator boundary; ValueError is rolled into ValidationError",
+    "modifiers.py:467": "Pydantic @field_validator boundary; ValueError is rolled into ValidationError",
 
     # ── node.py — Pydantic BeforeValidator boundary ──
     # _validate_type_spec runs inside Pydantic field validation; Pydantic
     # catches TypeError and rolls it into ValidationError.
-    "node.py:82": "Pydantic BeforeValidator boundary; TypeError is rolled into ValidationError",
-    "node.py:84": "Pydantic BeforeValidator boundary; TypeError is rolled into ValidationError",
-    "node.py:88": "Pydantic BeforeValidator boundary; TypeError is rolled into ValidationError",
+    "node.py:92": "Pydantic BeforeValidator boundary; TypeError is rolled into ValidationError",
+    "node.py:94": "Pydantic BeforeValidator boundary; TypeError is rolled into ValidationError",
+    "node.py:98": "Pydantic BeforeValidator boundary; TypeError is rolled into ValidationError",
 }
 
 

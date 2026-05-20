@@ -12,6 +12,7 @@ from collections.abc import Callable
 from typing import Any
 
 from langchain_core.runnables import RunnableConfig
+from pydantic import BaseModel
 
 from neograph._llm_config import LlmConfig
 from neograph.errors import ExecutionError
@@ -217,8 +218,9 @@ def make_oracle_merge_fn(
             results = getattr(state, collector_field, [])
             primary, secondaries = _unwrap_oracle_results(results, field_name, output_model)
 
-            # Pre-process hook replaces default input_data construction
-            input_data: dict[str, Any]
+            # Pre-process hook replaces default input_data construction.
+            # invoke_structured accepts BaseModel | dict[str, Any] | str.
+            input_data: BaseModel | dict[str, Any] | str
             if _pre_process is not None:
                 input_data = _pre_process(primary)
             else:

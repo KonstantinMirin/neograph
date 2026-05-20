@@ -7,7 +7,8 @@ modifiers. They are called by _add_node_to_graph / _add_subgraph in compiler.py.
 
 from __future__ import annotations
 
-from typing import Any
+from collections.abc import Callable
+from typing import Any, cast
 
 import structlog
 from langchain_core.runnables import RunnableConfig
@@ -31,12 +32,16 @@ from neograph.node import Node
 
 log = structlog.get_logger()
 
+LangGraphNodeFn = Callable[[Any, RunnableConfig], dict[str, Any]]
+LangGraphRouterFn = Callable[[Any], str]
+LangGraphLoopUnwrapFn = Callable[[Any, str], Any]
+
 
 def _wire_oracle(
     graph: StateGraph,
     gen_name: str,
-    gen_fn: Any,
-    merge_fn: Any,
+    gen_fn: LangGraphNodeFn,
+    merge_fn: LangGraphNodeFn,
     oracle: Oracle,
     prev_node: str | None,
     retry_policy: RetryPolicy | None = None,
@@ -48,7 +53,7 @@ def _wire_oracle(
     merge_name = f"merge_{gen_name}"
 
     # Generator node (called N times via Send) — retryable
-    graph.add_node(gen_name, gen_fn, retry_policy=retry_policy)
+    graph.add_node(gen_name, cast(Any, gen_fn), retry_policy=retry_policy)
 
     # Router that dispatches N generators
     models = oracle.models
@@ -76,7 +81,7 @@ def _wire_oracle(
         graph.add_conditional_edges(START, oracle_router, path_map=[gen_name])
 
     # Merge barrier
-    graph.add_node(merge_name, merge_fn, defer=True)
+    graph.add_node(merge_name, cast(Any, merge_fn), defer=True)
     graph.add_edge([gen_name], merge_name)
 
     return merge_name
@@ -85,7 +90,7 @@ def _wire_oracle(
 def _wire_each(
     graph: StateGraph,
     fan_name: str,
-    fan_fn: Any,
+    fan_fn: LangGraphNodeFn,
     each: Each,
     prev_node: str | None,
     retry_policy: RetryPolicy | None = None,
@@ -98,7 +103,7 @@ def _wire_each(
     barrier_name = f"assemble_{fan_name}"
     empty_name = f"__each_empty_{fan_name}"
 
-    graph.add_node(fan_name, fan_fn, retry_policy=retry_policy)
+    graph.add_node(fan_name, cast(Any, fan_fn), retry_policy=retry_policy)
 
     # Empty-collection bypass: writes empty dict to the Each field so
     # downstream nodes proceed. Follows the __loop_exit_ pattern.
@@ -354,8 +359,8 @@ def _make_loop_router(
     condition: Any,
     exit_name: str,
     reenter_target: str,
-    unwrap_fn: Any,
-) -> Any:
+    unwrap_fn: LangGraphLoopUnwrapFn,
+) -> LangGraphRouterFn:
     """Build a loop_router closure shared by Node and Construct loop wiring.
 
     Parameters
@@ -394,7 +399,7 @@ def _make_loop_router(
     return loop_router
 
 
-def _node_loop_unwrap(node: Node, field_name: str) -> Any:
+def _node_loop_unwrap(node: Node, field_name: str) -> LangGraphLoopUnwrapFn:
     """Unwrap callback for Node loop routers.
 
     Handles dict-form outputs (primary key) and list unwrapping from the
@@ -485,7 +490,7 @@ def _add_loop_back_edge(
 def _add_subgraph_loop(
     graph: StateGraph,
     sub: Construct,
-    subgraph_fn: Any,
+    subgraph_fn: LangGraphNodeFn,
     loop: Loop,
     prev_node: str | None,
 ) -> str:
@@ -493,7 +498,7 @@ def _add_subgraph_loop(
     field_name = field_name_for(sub.name)
     count_field = f'neo_loop_count_{field_name}'
 
-    graph.add_node(sub.name, subgraph_fn)
+    graph.add_node(sub.name, cast(Any, subgraph_fn))
 
     if prev_node:
         graph.add_edge(prev_node, sub.name)
