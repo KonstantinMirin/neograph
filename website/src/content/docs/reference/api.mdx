@@ -343,17 +343,13 @@ pipeline = Construct(
 
 ## Shared
 
-### `compile(construct, *, checkpointer=None, retry_policy=None) -> CompiledGraph`
+### `compile(construct, *, checkpointer=None) -> CompiledGraph`
 
 Compiles a `Construct` (or `ForwardConstruct`) into an executable LangGraph `StateGraph`.
 
 - **`checkpointer`** — Required when the pipeline uses `Operator` or `interrupt_when=`.
-- **`retry_policy`** — LangGraph `RetryPolicy` applied to all LLM-calling nodes (`think`/`agent`/`act`). Handles malformed JSON, validation errors, and transient API failures. Scripted nodes are not retried. Sub-constructs inherit the policy.
 
-```python
-from langgraph.types import RetryPolicy
-graph = compile(pipeline, retry_policy=RetryPolicy(max_attempts=3))
-```
+Retry concerns live in their own layers, not at the `compile()` boundary. See [Retry Semantics](/concepts/retry-semantics/) for the three-layer model (transient -> `llm_factory.with_retry`; output-quality -> `LlmConfig.max_retries`; flaky scripted -> in-function).
 
 ### `run(graph, *, input=None, resume=None, config=None, auto_resume=True) -> dict`
 

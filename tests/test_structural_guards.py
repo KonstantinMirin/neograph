@@ -2254,10 +2254,9 @@ ANY_ALLOWLIST: dict[str, str] = {
     # ── _oracle.py — user-declared output models ──
     # _oracle.py:_unwrap_oracle_results:output_model migrated to TypeSpecStatic in Batch 1 (neograph-86r1).
     "_oracle.py:_build_oracle_merge_result:merged": "user-supplied merge result; type declared by node.outputs",
-    # ── _wiring.py — Callable fn pointers, LangGraph retry_policy ──
+    # ── _wiring.py — Callable fn pointers ──
     # gen_fn / merge_fn / fan_fn / subgraph_fn are runtime-built closures whose
     # precise signatures are determined by the user's modifier configuration.
-    # retry_policy is a LangGraph internal type not in our public surface.
     "_wiring.py:_merge_one_group:return": "user-supplied merge result; type declared by node.outputs",
     "_wiring.py:_construct_loop_unwrap:return": "user-supplied loop value; type declared by the sub-construct output",
 }
@@ -3075,4 +3074,158 @@ class TestNoFunctionLocalFactoryImportInDecorators:
         offenders = self._find_function_local_factory_imports(synthetic.read_text())
         assert offenders == [], (
             f"scanner false-positive on module-level import; offenders={offenders}"
+        )
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# TEST: §3 - compile() does not accept retry_policy (neograph-s5yk)
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TestNoRetryPolicyInCompileSignature:
+    """``compile()`` must not expose a ``retry_policy`` kwarg.
+
+    Per ``docs/design/architecture-decisions.md`` §3, LangGraph's
+    ``RetryPolicy`` is not a framework-boundary concern. Retry concerns live
+    in three separate layers (transient -> ``llm_factory``; output-quality ->
+    ``LlmConfig.max_retries``; flaky scripted -> in-function). A compile-level
+    knob is also incorrect because it replays already-executed ``act``-mode
+    tools.
+
+    Guard covers:
+      (a) AST scan of ``compiler.py``: no function named ``compile`` accepts a
+          ``retry_policy`` parameter.
+      (b) ``inspect.signature(compile)`` confirms it at runtime.
+      (c) ``src/neograph/`` is free of ``RetryPolicy`` references.
+    """
+
+    def test_compile_signature_has_no_retry_policy_param_ast(self):
+        compiler_py = SRC_DIR / "compiler.py"
+        tree = ast.parse(compiler_py.read_text(), filename=str(compiler_py))
+
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            args = node.args
+            all_args = (
+                list(args.posonlyargs)
+                + list(args.args)
+                + list(args.kwonlyargs)
+            )
+            for a in all_args:
+                assert a.arg != "retry_policy", (
+                    f"compiler.py:{node.lineno} {node.name}(...) still declares "
+                    "a 'retry_policy' parameter; per §3 this kwarg has been removed"
+                )
+
+    def test_compile_runtime_signature_has_no_retry_policy(self):
+        import inspect
+
+        from neograph import compile as compile_fn
+
+        sig = inspect.signature(compile_fn)
+        assert "retry_policy" not in sig.parameters, (
+            f"neograph.compile() still exposes retry_policy: {list(sig.parameters)}"
+        )
+
+    def test_src_neograph_does_not_reference_retry_policy(self):
+        offenders: list[str] = []
+        for py_file in SRC_DIR.rglob("*.py"):
+            for lineno, raw in enumerate(py_file.read_text().splitlines(), start=1):
+                stripped = raw.strip()
+                if stripped.startswith("#"):
+                    continue
+                if "RetryPolicy" in raw or "retry_policy" in raw:
+                    offenders.append(f"{py_file.name}:{lineno}: {stripped[:120]}")
+        assert offenders == [], (
+            f"\n{len(offenders)} reference(s) to RetryPolicy / retry_policy remain in src/neograph:\n"
+            + "\n".join(f"  {o}" for o in offenders)
+            + "\n\nPer §3, this kwarg is removed from the framework boundary."
+        )
+
+    def test_scanner_detects_injected_retry_policy_param(self, tmp_path: pathlib.Path):
+        """Mutation: a synthetic compile() with retry_policy must be flagged."""
+        synthetic = tmp_path / "compiler.py"
+        synthetic.write_text(
+            "from typing import Any\n"
+            "def compile(construct, checkpointer=None, retry_policy=None) -> Any:\n"
+            "    return None\n"
+        )
+        tree = ast.parse(synthetic.read_text(), filename=str(synthetic))
+        flagged = False
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            if node.name != "compile":
+                continue
+            args = node.args
+            all_args = (
+                list(args.posonlyargs)
+                + list(args.args)
+                + list(args.kwonlyargs)
+            )
+            if any(a.arg == "retry_policy" for a in all_args):
+                flagged = True
+        assert flagged, "mutation case: injected retry_policy param was not detected"
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# TEST: §3 - retry-semantics doc page covers the three layers (neograph-7vls)
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TestRetrySemanticsDocPage:
+    """The neograph.pro retry-semantics page must cover the three-layer model.
+
+    Per ``docs/design/architecture-decisions.md`` §3, the page must mention
+    every layer (transient -> ``llm_factory.with_retry``; output-quality ->
+    ``LlmConfig.max_retries``; flaky external in scripted nodes -> in-function),
+    state the correctness rationale for not exposing ``retry_policy`` at the
+    ``compile()`` boundary (``act``-mode tool replay), and show a concrete
+    ``model.with_retry(...)`` example.
+    """
+
+    DOC_DIR = pathlib.Path(__file__).resolve().parent.parent / "website" / "src" / "content" / "docs"
+
+    def _find_page(self) -> pathlib.Path:
+        candidates = list(self.DOC_DIR.rglob("*retry*.mdx"))
+        assert candidates, (
+            f"no retry-semantics page found under {self.DOC_DIR}; "
+            "expected a file with 'retry' in its name"
+        )
+        # Prefer concepts/ over reference/ when both exist.
+        candidates.sort(key=lambda p: (0 if "concepts" in p.parts else 1, str(p)))
+        return candidates[0]
+
+    def test_retry_page_exists_and_covers_three_layers(self):
+        page = self._find_page()
+        text = page.read_text()
+
+        required = {
+            "llm_factory": "transient-API layer reference (user's llm_factory)",
+            "with_retry": "concrete model.with_retry(...) example",
+            "LlmConfig.max_retries": "output-quality layer reference",
+            "scripted": "flaky-external-in-scripted layer reference",
+        }
+        missing = [k for k in required if k not in text]
+        assert missing == [], (
+            f"\n{page} is missing required mentions: {missing}\n"
+            f"Required terms map: {required}"
+        )
+
+    def test_retry_page_states_compile_correctness_rationale(self):
+        page = self._find_page()
+        text = page.read_text().lower()
+
+        # Either phrasing of the correctness argument: act-mode tools, or
+        # double-write / replay reasoning.
+        ok = (
+            ("act" in text and ("replay" in text or "tool" in text))
+            or "double-write" in text
+            or "double write" in text
+        )
+        assert ok, (
+            f"{page.name} does not state the correctness rationale for not "
+            "exposing retry_policy at compile() (expected mention of 'act'-mode "
+            "tool replay / double-write)."
         )

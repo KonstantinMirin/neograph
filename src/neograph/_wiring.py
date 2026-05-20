@@ -13,7 +13,7 @@ from typing import Any, cast
 import structlog
 from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END, START, StateGraph
-from langgraph.types import RetryPolicy, Send, interrupt
+from langgraph.types import Send, interrupt
 
 from neograph._normalize import normalize_outputs
 from neograph._state_bus import StateBus, adapt_state
@@ -45,7 +45,6 @@ def _wire_oracle(
     merge_fn: LangGraphNodeFn,
     oracle: Oracle,
     prev_node: str | None,
-    retry_policy: RetryPolicy | None = None,
 ) -> str:
     """Shared Oracle wiring used by both Node and Construct paths.
 
@@ -53,8 +52,8 @@ def _wire_oracle(
     """
     merge_name = f"merge_{gen_name}"
 
-    # Generator node (called N times via Send) — retryable
-    graph.add_node(gen_name, cast(Any, gen_fn), retry_policy=retry_policy)
+    # Generator node (called N times via Send)
+    graph.add_node(gen_name, cast(Any, gen_fn))
 
     # Router that dispatches N generators
     models = oracle.models
@@ -94,7 +93,6 @@ def _wire_each(
     fan_fn: LangGraphNodeFn,
     each: Each,
     prev_node: str | None,
-    retry_policy: RetryPolicy | None = None,
 ) -> str:
     """Shared Each wiring used by both Node and Construct paths.
 
@@ -104,7 +102,7 @@ def _wire_each(
     barrier_name = f"assemble_{fan_name}"
     empty_name = f"__each_empty_{fan_name}"
 
-    graph.add_node(fan_name, cast(Any, fan_fn), retry_policy=retry_policy)
+    graph.add_node(fan_name, cast(Any, fan_fn))
 
     # Empty-collection bypass: writes empty dict to the Each field so
     # downstream nodes proceed. Follows the __loop_exit_ pattern.
@@ -179,7 +177,6 @@ def _add_each_oracle_fused(
     each: Each,
     oracle: Oracle,
     prev_node: str | None,
-    retry_policy: RetryPolicy | None = None,
 ) -> str:
     """Each x Oracle fusion: flat M x N Send topology.
 
@@ -199,7 +196,7 @@ def _add_each_oracle_fused(
 
     raw_fn = make_node_fn(node)
     redirect_fn = make_eachoracle_redirect_fn(raw_fn, field_name, collector_field, each.key)
-    graph.add_node(gen_name, redirect_fn, retry_policy=retry_policy)
+    graph.add_node(gen_name, redirect_fn)
 
     # Empty-collection bypass for Each x Oracle fusion
     def empty_bypass(state: Any) -> dict:
@@ -442,7 +439,6 @@ def _add_loop_back_edge(
     node: Node,
     loop: Loop,
     prev_node: str | None,
-    retry_policy: RetryPolicy | None = None,
 ) -> str:
     """Wire Loop modifier: conditional back-edge with iteration tracking.
 
@@ -454,7 +450,7 @@ def _add_loop_back_edge(
     field_name = field_name_for(node_name)
     count_field = f'neo_loop_count_{field_name}'
 
-    graph.add_node(node_name, node_fn, retry_policy=retry_policy)
+    graph.add_node(node_name, node_fn)
 
     if prev_node:
         graph.add_edge(prev_node, node_name)

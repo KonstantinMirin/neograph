@@ -30,7 +30,7 @@ from pydantic import BaseModel, Field, PlainValidator, PrivateAttr
 from typing_extensions import TypeVar
 
 from neograph._llm_config import LlmConfig
-from neograph.errors import ConstructError
+from neograph.errors import ConstructError, NeographError
 from neograph.renderers import Renderer
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -306,6 +306,28 @@ class Node(Modifiable, BaseModel):
         """
         from neograph.factory import make_node_fn
 
+        # Modifier-bearing nodes need state fields (neo_each_item,
+        # neo_loop_count_*, neo_oracle_*) that run_isolated does not populate.
+        # Refuse at entry with a clear message rather than silently returning
+        # None from an unpopulated state field downstream.
+        ms = self.modifier_set
+        active = [
+            kind for kind, mod in (
+                ("Each", ms.each),
+                ("Oracle", ms.oracle),
+                ("Loop", ms.loop),
+            )
+            if mod is not None
+        ]
+        if active:
+            kinds = "/".join(active)
+            raise NeographError.build(
+                f"Node '{self.name}' carries modifiers ({kinds}); "
+                "run_isolated does not support modifier-bearing nodes",
+                hint="use compile(construct, ...) + run(graph, ...) instead",
+                node=self.name,
+            )
+
         node_fn = make_node_fn(self)
 
         # Build a minimal state dict the node function can read
@@ -322,6 +344,20 @@ class Node(Modifiable, BaseModel):
 
         result = node_fn(state, config)
 
-        # node_fn returns a state update dict — extract the output field
+        # node_fn returns a state update dict — extract the output field.
+        # If the field is missing or None, raise rather than silently returning
+        # None: run_isolated is a testing/inspection tool, and a silent None
+        # masks the underlying cause (body returned None, return-type annotation
+        # mismatch, dict-form output missing the primary key).
         field_name = field_name_for(self.name)
-        return result.get(field_name)
+        if field_name not in result or result[field_name] is None:
+            raise NeographError.build(
+                f"Node '{self.name}' did not produce output field '{field_name}'",
+                hint=(
+                    "the node body returned None or the @node return-type "
+                    "annotation does not match the actual return; "
+                    "for dict-form outputs, the primary key must be populated"
+                ),
+                node=self.name,
+            )
+        return result[field_name]

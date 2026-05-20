@@ -264,6 +264,9 @@ def run(
         configurable["_neo_input"] = input
         config = _inject_input_to_config(input, config)
 
+        # Defensive copy: framework keys must not leak into the caller's dict.
+        input = {**input}
+
         # Inject schema fingerprint into initial state for checkpoint storage
         fp = getattr(graph, "_neo_schema_fingerprint", None)
         if fp is not None:

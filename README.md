@@ -139,7 +139,7 @@ Set `NEOGRAPH_DEV=1` for auto-printed DAG summaries after every `compile()`.
 
 **Observe everything.** Structured logs on every node. Pass trace providers and shared resources via `Annotated[T, FromConfig]`.
 
-**Retry on failure.** `compile(pipeline, retry_policy=RetryPolicy(max_attempts=3))` retries LLM nodes on malformed JSON, validation errors, and transient API failures.
+**Retry on failure.** Output-quality retries (malformed JSON, validation errors) are configured per node via `LlmConfig.max_retries`. Transient API failures (network, 429, 5xx) belong in your `llm_factory` via `model.with_retry(...)`. See the retry-semantics page on neograph.pro.
 
 **Test at every level.** `node.run_isolated()` for unit tests. `compile()` + `run()` for integration. `forward()` direct-call for debugging.
 

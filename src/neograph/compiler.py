@@ -48,17 +48,18 @@ from neograph.state import compile_state_model, compute_node_fingerprints, compu
 log = structlog.get_logger()
 
 
-def compile(construct: Construct, checkpointer: Any = None, retry_policy: Any = None, _context_types: dict[str, type] | None = None) -> Any:
+def compile(construct: Construct, checkpointer: Any = None, _context_types: dict[str, type] | None = None) -> Any:
     """Compile a Construct into an executable LangGraph StateGraph.
 
     Args:
         construct: The Construct to compile.
         checkpointer: LangGraph checkpointer for persistence/resume support.
                       Required if any node uses Operator (interrupt/resume).
-        retry_policy: LangGraph RetryPolicy applied to all LLM-calling nodes
-                      (think/agent/act). Handles malformed JSON, validation
-                      errors, and transient API failures. Scripted nodes are
-                      not retried.
+
+    Retry concerns live in their own layers (see docs/design/architecture-decisions.md §3):
+      - Transient API failures: user's llm_factory via model.with_retry(...)
+      - LLM output-quality failures: per-node LlmConfig.max_retries
+      - Flaky external calls in scripted nodes: inside the node function
     """
     compile_log = log.bind(construct=construct.name, nodes=len(construct.nodes))
     compile_log.info("compile_start",
@@ -141,10 +142,10 @@ def compile(construct: Construct, checkpointer: Any = None, retry_policy: Any = 
         if isinstance(item, _BranchNode):
             prev_node = _add_branch_to_graph(graph, item, prev_node)
         elif isinstance(item, Construct):
-            prev_node = _add_subgraph(graph, item, prev_node, checkpointer=checkpointer, retry_policy=retry_policy, parent_state_model=state_model)
+            prev_node = _add_subgraph(graph, item, prev_node, checkpointer=checkpointer, parent_state_model=state_model)
         else:
             assert isinstance(item, Node)  # narrow ConstructItem Protocol to Node
-            prev_node = _add_node_to_graph(graph, item, prev_node, retry_policy=retry_policy)
+            prev_node = _add_node_to_graph(graph, item, prev_node)
 
     # Final edge to END
     if prev_node:
@@ -264,7 +265,6 @@ def _add_subgraph(
     sub: Construct,
     prev_node: str | None,
     checkpointer: Any = None,
-    retry_policy: Any = None,
     parent_state_model: type[BaseModel] | None = None,
 ) -> str:
     """Compile a sub-Construct as an isolated subgraph node, with modifier support."""
@@ -291,7 +291,7 @@ def _add_subgraph(
                 _context_types[fname] = finfo.annotation
 
     # Compile the sub-construct into its own graph (recursive, thread checkpointer)
-    sub_graph = compile(sub, checkpointer=checkpointer, retry_policy=retry_policy, _context_types=_context_types)
+    sub_graph = compile(sub, checkpointer=checkpointer, _context_types=_context_types)
     field_name = field_name_for(sub.name)
 
     # Build the subgraph node function via factory
@@ -347,14 +347,9 @@ def _add_node_to_graph(
     graph: StateGraph,
     node: Node,
     prev_node: str | None,
-    retry_policy: Any = None,
 ) -> str:
     """Add a single node (with its modifiers) to the graph. Returns the last node name."""
     from typing import assert_never
-
-    # Retry applies to LLM-calling nodes only (think/agent/act).
-    # Scripted nodes are deterministic — retrying won't help.
-    rp = retry_policy if node.mode in ("think", "agent", "act") else None
 
     combo, mods = classify_modifiers(node)
     operator = mods.get("operator")
@@ -362,21 +357,21 @@ def _add_node_to_graph(
     match combo:
         case ModifierCombo.EACH_ORACLE | ModifierCombo.EACH_ORACLE_OPERATOR:
             # Each x Oracle fusion: flat M x N Send topology
-            last_name = _add_each_oracle_fused(graph, node, mods["each"], mods["oracle"], prev_node, retry_policy=rp)
+            last_name = _add_each_oracle_fused(graph, node, mods["each"], mods["oracle"], prev_node)
         case ModifierCombo.ORACLE | ModifierCombo.ORACLE_OPERATOR:
             # Oracle: expand to fan-out + merge
-            last_name = _add_oracle_nodes(graph, node, mods["oracle"], prev_node, retry_policy=rp)
+            last_name = _add_oracle_nodes(graph, node, mods["oracle"], prev_node)
         case ModifierCombo.EACH | ModifierCombo.EACH_OPERATOR:
             # Each: expand to fan-out + barrier
-            last_name = _add_each_nodes(graph, node, mods["each"], prev_node, retry_policy=rp)
+            last_name = _add_each_nodes(graph, node, mods["each"], prev_node)
         case ModifierCombo.LOOP | ModifierCombo.LOOP_OPERATOR:
             # Loop: conditional back-edge
-            last_name = _add_loop_back_edge(graph, node, mods["loop"], prev_node, retry_policy=rp)
+            last_name = _add_loop_back_edge(graph, node, mods["loop"], prev_node)
         case ModifierCombo.BARE | ModifierCombo.OPERATOR:
             # Simple node — no modifiers (or Operator only)
             node_name = node.name
             node_fn = make_node_fn(node)
-            graph.add_node(node_name, node_fn, retry_policy=rp)
+            graph.add_node(node_name, node_fn)
             if prev_node:
                 graph.add_edge(prev_node, node_name)
             else:
@@ -397,7 +392,6 @@ def _add_oracle_nodes(
     node: Node,
     oracle: Any,
     prev_node: str | None,
-    retry_policy: Any = None,
 ) -> str:
     """Expand Oracle modifier into fan-out generators + merge barrier."""
     field_name = field_name_for(node.name)
@@ -409,7 +403,7 @@ def _add_oracle_nodes(
                                     node_inputs=node.inputs,
                                     llm_config=node.llm_config or None)
 
-    return _wire_oracle(graph, node.name, redirect_fn, merge_fn, oracle, prev_node, retry_policy=retry_policy)
+    return _wire_oracle(graph, node.name, redirect_fn, merge_fn, oracle, prev_node)
 
 
 def _add_each_nodes(
@@ -417,8 +411,7 @@ def _add_each_nodes(
     node: Node,
     each: Any,
     prev_node: str | None,
-    retry_policy: Any = None,
 ) -> str:
     """Expand Each modifier into fan-out dispatch + barrier."""
     node_fn = make_node_fn(node)
-    return _wire_each(graph, node.name, node_fn, each, prev_node, retry_policy=retry_policy)
+    return _wire_each(graph, node.name, node_fn, each, prev_node)

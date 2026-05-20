@@ -430,3 +430,38 @@ class TestModifierSet:
         n2 = n | Oracle(n=3, merge_fn="m")
         assert len(n2.modifiers) == 1
         assert isinstance(n2.modifiers[0], Oracle)
+
+
+class TestRunIsolatedRefusesModifiers:
+    """Bug neograph-6oz8: Node.run_isolated must refuse modifier-bearing nodes
+    at entry with a clear NeographError, not silently return None because the
+    modifier state fields (neo_each_item, neo_loop_count_*, neo_oracle_*) are
+    unpopulated.
+    """
+
+    @pytest.mark.parametrize(
+        "modifier, kind",
+        [
+            (Each(over="upstream.items", key="id"), "Each"),
+            (Oracle(n=3, merge_fn="m"), "Oracle"),
+            (Loop(when=lambda d: False, max_iterations=1), "Loop"),
+        ],
+    )
+    def test_run_isolated_refuses_modifier_bearing_node(self, modifier, kind):
+        """Each / Oracle / Loop modifier on a node makes run_isolated raise
+        with a message that names the modifier kind and directs the caller to
+        compile() + run().
+        """
+        from neograph import NeographError
+
+        register_scripted("noop_mod", lambda i, c: Claims(items=["x"]))
+        base = Node.scripted("modified", fn="noop_mod", inputs=Claims, outputs=Claims)
+        node_with_mod = base | modifier
+
+        with pytest.raises(NeographError) as exc_info:
+            node_with_mod.run_isolated(input=Claims(items=["x"]))
+
+        msg = str(exc_info.value)
+        assert kind in msg
+        # Directs caller to the compile()+run() workflow
+        assert "compile" in msg and "run" in msg

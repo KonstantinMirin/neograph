@@ -626,6 +626,44 @@ class TestStripInternalsEdge:
         assert _strip_internals([1, 2, 3]) == [1, 2, 3]
 
 
+class TestRunDoesNotMutateCallerInput:
+    """§7 invariant: run() must not mutate the caller's input dict.
+
+    Framework keys (neo_schema_fingerprint, neo_node_fingerprints) must be
+    injected into a defensive copy, not the caller's dict.
+    """
+
+    def test_run_does_not_mutate_caller_input_dict(self):
+        """Caller's input dict is untouched after run() returns; no neo_* leaks."""
+        import types
+
+        mod = types.ModuleType("test_no_mutate_input_mod")
+
+        @node(mode="scripted", outputs=RawText)
+        def emit() -> RawText:
+            return RawText(text="ok")
+
+        mod.emit = emit
+        pipeline = construct_from_module(mod)
+        graph = compile(pipeline)
+
+        original = {"topic": "x"}
+        snapshot = dict(original)
+
+        run(graph, input=original)
+
+        assert original == snapshot
+        assert "neo_schema_fingerprint" not in original
+        assert "neo_node_fingerprints" not in original
+
+        # Second pass through the same dict confirms no accumulation either
+        run(graph, input=original)
+
+        assert original == snapshot
+        assert "neo_schema_fingerprint" not in original
+        assert "neo_node_fingerprints" not in original
+
+
 class TestDictOutputsStateModel:
     """Dict-form outputs emit per-key state fields (neograph-1bp.2)."""
 

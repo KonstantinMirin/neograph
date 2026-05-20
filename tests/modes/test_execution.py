@@ -730,6 +730,53 @@ class TestRunIsolated:
         assert isinstance(result, Claims)
         assert "configurable" in seen_config
 
+    def test_run_isolated_raises_neograph_error_when_output_field_missing(self):
+        """Bug neograph-xv5d: scripted node body returning None must raise NeographError,
+        not silently return None. The output field is the node-name field; if it's
+        missing from the state update, run_isolated must refuse the result rather
+        than mask the bug.
+        """
+        from neograph import NeographError, register_scripted
+
+        # Function returns None despite declared output type — common bug.
+        register_scripted("none_returner", lambda input_data, config: None)
+        n = Node.scripted("none-returner", fn="none_returner", outputs=Claims)
+
+        with pytest.raises(NeographError, match="none-returner"):
+            n.run_isolated(input=Claims(items=["x"]))
+
+    def test_run_isolated_error_names_node_and_field(self):
+        """The NeographError message must name the node and identify the missing
+        output field so the caller can diagnose the cause without printing state.
+        """
+        from neograph import NeographError, register_scripted
+
+        register_scripted("silent_node", lambda input_data, config: None)
+        n = Node.scripted("silent-node", fn="silent_node", outputs=Claims)
+
+        with pytest.raises(NeographError) as exc_info:
+            n.run_isolated(input=Claims(items=["x"]))
+
+        msg = str(exc_info.value)
+        # Names the node
+        assert "silent-node" in msg or "silent_node" in msg
+        # Names the missing output field name (field_name_for("silent-node"))
+        assert "silent_node" in msg
+
+    def test_run_isolated_raises_when_dict_output_field_missing(self):
+        """Dict-form outputs: if the @node body returns a dict that omits the
+        primary output key, run_isolated must raise. Today returns None silently.
+        """
+        from neograph import NeographError, register_scripted
+
+        # Scripted node with dict-form outputs; function returns a dict but the
+        # primary output field (node-name) is not populated.
+        register_scripted("partial_dict", lambda input_data, config: None)
+        n = Node.scripted("partial-dict", fn="partial_dict", outputs={"result": Claims})
+
+        with pytest.raises(NeographError, match="partial-dict"):
+            n.run_isolated(input=Claims(items=["x"]))
+
 
 class TestStateGet:
     """``adapt_state(state).get(...)`` — dual-form state access (dict vs Pydantic model).

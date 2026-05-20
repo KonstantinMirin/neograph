@@ -1,0 +1,157 @@
+---
+title: Retry Semantics
+description: Three independent retry layers — transient API failures, LLM output-quality failures, and flaky external calls. Each lives in exactly one place.
+sidebar:
+  order: 60
+---
+
+import { Aside } from '@astrojs/starlight/components';
+
+Retries in neograph are partitioned by *what is failing*. Each failure mode lives in exactly one layer, so you never wonder which knob applies to your problem.
+
+## The three layers
+
+| Concern | Where it lives | Mechanism |
+|---|---|---|
+| Transient API failures (network, 429, 5xx, timeouts) | User's `llm_factory` | `model.with_retry(...)` or SDK-level retry |
+| LLM output-quality failures (malformed JSON, schema violations) | Per-node `LlmConfig.max_retries` | `_invoke_json_with_retry` with BAML-rendered feedback |
+| Flaky external calls inside a scripted node | Inside the node function | Local explicit retry; not a framework concern |
+
+These layers do not compose by accident. They were chosen so that each retry happens at the level where the failure has meaning — and so that no retry replays work that should not be replayed.
+
+## Layer 1 — Transient API failures: `llm_factory.with_retry(...)`
+
+Network blips, rate limits (HTTP 429), 5xx, timeouts, dropped connections — these are problems at the transport layer. They have nothing to do with the contents of the LLM's response, and they happen before the response is produced.
+
+Handle them where the model client is created: your `llm_factory`.
+
+```python
+from langchain_openai import ChatOpenAI
+from langchain_core.runnables import Runnable
+from neograph import configure_llm
+
+
+def llm_factory(tier: str) -> Runnable:
+    base = ChatOpenAI(model=MODELS[tier])
+    return base.with_retry(
+        stop_after_attempt=5,
+        wait_exponential_jitter=True,
+        retry_if_exception_type=(TimeoutError, ConnectionError),
+    )
+
+
+configure_llm(llm_factory=llm_factory, prompt_compiler=my_compiler)
+```
+
+A non-conforming model (DeepSeek, some Anthropic deployments, anything that occasionally returns 503 under load) is the canonical case. Wrap the `Runnable` once at the factory and every downstream node inherits it.
+
+This layer is also where SDK-level retries belong (the LangChain `with_retry` shown above; OpenAI's `max_retries` constructor arg; Anthropic's equivalent). The framework does not duplicate this work.
+
+## Layer 2 — LLM output-quality failures: `LlmConfig.max_retries`
+
+The transport succeeded but the LLM returned something neograph cannot parse: malformed JSON, missing required field, wrong type, hallucinated structure. The transport-layer retry above will not help — the *next* call is just as likely to be malformed as this one.
+
+What neograph does instead is re-prompt the LLM with structured feedback about *what it produced* and *what was expected*, rendered in BAML notation. The LLM sees its own answer alongside the type it should have produced, and is asked to re-issue conforming output.
+
+```python
+from neograph import node
+
+
+@node(
+    outputs=ClaimSet,
+    mode="think",
+    model="reason",
+    prompt="claims/extract",
+    llm_config={"max_retries": 3},
+)
+def extract(text: RawText) -> ClaimSet: ...
+```
+
+`LlmConfig.max_retries` controls how many output-quality retry attempts each call gets. The default is `1` (one parse, one retry on failure). The retry path is `_invoke_json_with_retry` in `src/neograph/_llm.py`.
+
+### Why BAML rendering, not a foreign parser
+
+Two reasons the framework does not depend on LangChain's `OutputFixingParser` or `RetryWithErrorOutputParser`:
+
+1. **BAML rendering beats JSON-Schema format instructions** for the prompt the LLM actually sees. The feedback the LLM consumes is the same notation it was originally instructed in, which converges faster.
+2. **Foreign parsers carry their own prompt assumptions** that the rest of the rendering pipeline does not control. The output-quality layer needs to be the single owner of the retry prompt, not a chained component with its own template.
+
+### Why output-quality retry is safe in `act` mode
+
+`act` mode runs tools that have side effects (sending email, writing files, mutating a database). Naively re-running the node body would replay those tool calls — a double-write.
+
+Output-quality retry sidesteps this: by the time we know the answer is unparseable, all tool calls have already been issued. The retry reformats the *already-produced* assistant answer into the expected schema. No tool is invoked twice.
+
+## Layer 3 — Flaky external calls in scripted nodes: in-function
+
+A `mode="scripted"` node that calls a flaky internal service, hits a rate-limited webhook, or polls a queue is the user's concern, not the framework's. Retry it where the call lives:
+
+```python
+import time
+from neograph import node
+
+
+@node(outputs=EnrichedRecord)
+def enrich(record: RawRecord) -> EnrichedRecord:
+    for attempt in range(3):
+        try:
+            return _call_enrichment_service(record)
+        except TransientError:
+            if attempt == 2:
+                raise
+            time.sleep(2 ** attempt)
+```
+
+The framework does not retry scripted nodes. Scripted bodies are deterministic from neograph's point of view — if they fail, the failure is a real failure and the pipeline halts (subject to checkpointer-based resume on the next run).
+
+## Why `compile()` does not take `retry_policy`
+
+LangGraph exposes a node-level `RetryPolicy` that wraps the *entire node function* in a retry. Earlier neograph versions surfaced this as a `compile(retry_policy=...)` kwarg applied to every LLM-calling node.
+
+That design was withdrawn because it is incorrect for `act` mode: a compile-level `RetryPolicy` retries the whole node, including tool dispatch. If a node successfully invoked `send_email` then failed downstream parsing, the retry would issue a second `send_email`. Double-write. Tool replay. Externally visible side effects re-fired.
+
+The three-layer split above eliminates that path:
+
+- Transport-layer retry happens *before* tools are dispatched, in the model client.
+- Output-quality retry happens *after* tools have already been dispatched, by re-prompting on the assistant answer only — no tool re-dispatch.
+- Scripted retry happens inside a body the user controls explicitly.
+
+No combination of those layers replays an already-executed tool call.
+
+<Aside type="caution">
+If you were previously passing `retry_policy=RetryPolicy(max_attempts=N)` to `compile()`, remove the kwarg and migrate:
+1. Add `with_retry(...)` to your `llm_factory` for transport-layer retries.
+2. Set `LlmConfig.max_retries` per node (or via `Construct.llm_config`) for output-quality retries.
+3. For flaky scripted calls, retry in-function.
+</Aside>
+
+## Configuring per-construct defaults
+
+`LlmConfig.max_retries` is a `LlmConfig` framework field, so it propagates the usual way:
+
+```python
+from neograph import Construct, node
+
+
+@node(outputs=Claims, mode="think", model="reason", prompt="claims/extract")
+def extract(text: RawText) -> Claims: ...
+
+
+@node(outputs=Scores, mode="think", model="fast", prompt="claims/score")
+def score(claims: Claims) -> Scores: ...
+
+
+pipeline = Construct(
+    "extract-and-score",
+    nodes=[extract, score],
+    llm_config={"max_retries": 2},
+)
+```
+
+Both nodes inherit `max_retries=2`. A per-node `llm_config={"max_retries": ...}` wins over the construct-level default.
+
+## See also
+
+- [LLM Configuration](/concepts/llm-configuration/) — full `LlmConfig` reference.
+- [Node Modes](/concepts/node-modes/) — `think` / `agent` / `act` / `scripted` semantics.
+- [API Reference](/reference/api/) — `compile()` and `LlmConfig` signatures.
