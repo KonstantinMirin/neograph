@@ -1318,11 +1318,9 @@ ANY_ALLOWLIST: dict[str, str] = {
     "construct.py:Construct.__init__:kwargs": "Pydantic BaseModel kwargs passthrough boundary",
     # ── modifiers.py — Protocol signatures for user merge/fallback callbacks ──
     "modifiers.py:MergePreProcess.__call__:return": "invoke_structured accepts BaseModel | dict[str, Any] | str; dict-form retains Any value type",
-    "modifiers.py:Modifiable.map:source": "tracer recorder proxy; symbolic attribute path, runtime-substituted",
     "modifiers.py:Oracle.model_post_init:__context": "Pydantic model_post_init context payload; framework-internal",
     "modifiers.py:Loop.model_post_init:__context": "Pydantic model_post_init context payload; framework-internal",
     "modifiers.py:ModifierSet.model_post_init:__context": "Pydantic model_post_init context payload; framework-internal",
-    "modifiers.py:Loop.when": "user-supplied loop condition: str (registry name) or Callable predicate",
     # ── _construct_validation.py — IR introspection over user-declared types ──
     "_construct_validation.py:effective_producer_type:return": "user-declared output type, computed per modifier rules",
     "_construct_validation.py:_check_item_input:input_type": "user-declared consumer input type",
@@ -1392,7 +1390,6 @@ ANY_ALLOWLIST: dict[str, str] = {
     # precise signatures are determined by the user's modifier configuration.
     # retry_policy is a LangGraph internal type not in our public surface.
     "_wiring.py:_merge_one_group:return": "user-supplied merge result; type declared by node.outputs",
-    "_wiring.py:_make_loop_router:condition": "user-supplied loop condition: str (registry name) or Callable predicate",
     "_wiring.py:_construct_loop_unwrap:state": "state bus polymorphism: BaseModel | dict[str, Any]",
     "_wiring.py:_construct_loop_unwrap:return": "user-supplied loop value; type declared by the sub-construct output",
     "_wiring.py:_add_operator_check:operator": "user-supplied Operator modifier; type-narrowed at call site",
@@ -1569,8 +1566,26 @@ def _annotation_uses_any(ann: ast.expr) -> bool:
     Catches ``Any``, ``Any | None``, ``dict[str, Any]``, ``list[Any]``,
     ``Annotated[Any, ...]``, etc. ``RunnableConfig``, ``BaseModel``, etc. do
     NOT count.
+
+    ``Any`` appearing inside a ``Callable[[...], ...]`` subscript is exempt:
+    the visible union (e.g. ``str | Callable[[Any], bool]``) is honest about
+    the two-shape boundary, and the inner ``Any`` represents the user state
+    value -- a §5 boundary that has no more precise type at the IR layer.
     """
+    skip_nodes: set[int] = set()
     for node in ast.walk(ann):
+        if isinstance(node, ast.Subscript):
+            value = node.value
+            is_callable = (
+                (isinstance(value, ast.Name) and value.id == "Callable")
+                or (isinstance(value, ast.Attribute) and value.attr == "Callable")
+            )
+            if is_callable:
+                for inner in ast.walk(node.slice):
+                    skip_nodes.add(id(inner))
+    for node in ast.walk(ann):
+        if id(node) in skip_nodes:
+            continue
         if isinstance(node, ast.Name) and node.id == "Any":
             return True
         if isinstance(node, ast.Attribute) and node.attr == "Any":
@@ -1716,9 +1731,6 @@ def _has_arbitrary_types_justification(
 # review. Update the key when the line moves, and confirm the boundary
 # reason still applies.
 NEOGRAPH_ERROR_ALLOWLIST: dict[str, str] = {
-    # ── _construct_validation.py — helper that returns ConstructError ──
-    "_construct_validation.py:519": "factory helper returns ConstructError; verified by reading the function body",
-
     # ── conditions.py — string-grammar parser (stdlib parser contract) ──
     # parse_condition() implements a tiny expression grammar; ValueError is
     # the documented contract and tests depend on it. AttributeError raises
@@ -1738,30 +1750,21 @@ NEOGRAPH_ERROR_ALLOWLIST: dict[str, str] = {
     "construct.py:45": "Pydantic BeforeValidator boundary; TypeError is rolled into ValidationError",
 
     # ── forward.py — proxy / tracer / abstract-method contracts ──
-    # ForwardConstruct constructor TypeErrors document misuse at the public
-    # API boundary; tests assert TypeError. _Proxy.__getattr__ raises
-    # AttributeError per the Python attribute protocol (hasattr depends on
-    # it). __bool__/__iter__ raise TypeError per the Python protocol contract
-    # (a non-iterable used in `for` raises TypeError, not NeographError).
-    # forward() raises NotImplementedError as a Python abstract-method idiom.
-    "forward.py:121": "TypeError for misuse of ForwardConstruct constructor; tests assert TypeError",
-    "forward.py:130": "TypeError for missing forward() override; tests assert TypeError",
-    "forward.py:164": "NotImplementedError is the Python abstract-method idiom",
-    "forward.py:195": "AttributeError is the Python attribute-protocol contract (hasattr depends on it)",
-    "forward.py:224": "TypeError is the Python protocol contract for __bool__ misuse",
-    "forward.py:232": "TypeError is the Python protocol contract for __iter__ misuse",
-    "forward.py:259": "TypeError is the Python protocol contract for __bool__ misuse on _ConditionProxy",
+    # _Proxy.__getattr__ raises AttributeError per the Python attribute
+    # protocol (hasattr depends on it). __bool__/__iter__ raise TypeError per
+    # the Python protocol contract (a non-iterable used in `for` raises
+    # TypeError, not NeographError). forward() raises NotImplementedError as
+    # a Python abstract-method idiom.
+    "forward.py:165": "NotImplementedError is the Python abstract-method idiom",
+    "forward.py:196": "AttributeError is the Python attribute-protocol contract (hasattr depends on it)",
+    "forward.py:225": "TypeError is the Python protocol contract for __bool__ misuse",
+    "forward.py:233": "TypeError is the Python protocol contract for __iter__ misuse",
+    "forward.py:260": "TypeError is the Python protocol contract for __bool__ misuse on _ConditionProxy",
 
-    # ── modifiers.py — Pydantic field_validator + proxy attribute protocol + lambda introspection ──
+    # ── modifiers.py — Pydantic field_validator + proxy attribute protocol ──
     # _PathRecorder.__getattr__ implements the attribute protocol. Pydantic
     # @field_validator boundaries catch ValueError into ValidationError.
-    # Modifiable.map() TypeErrors document type-contract violations of the
-    # user-supplied lambda; tests assert TypeError.
-    "modifiers.py:185": "AttributeError is the Python attribute-protocol contract (private-attr guard)",
-    "modifiers.py:332": "TypeError documents map() lambda contract; tests assert TypeError",
-    "modifiers.py:338": "TypeError documents map() lambda contract; tests assert TypeError",
-    "modifiers.py:345": "TypeError documents map() lambda contract; tests assert TypeError",
-    "modifiers.py:352": "TypeError documents map() source-type contract; tests assert TypeError",
+    "modifiers.py:186": "AttributeError is the Python attribute-protocol contract (private-attr guard)",
     "modifiers.py:411": "Pydantic @field_validator boundary; ValueError is rolled into ValidationError",
     "modifiers.py:467": "Pydantic @field_validator boundary; ValueError is rolled into ValidationError",
 

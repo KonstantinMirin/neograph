@@ -114,20 +114,21 @@ class ForwardConstruct(Construct):
         discovered = self._discover_node_attrs()
 
         if not discovered and type(self) is ForwardConstruct:
-            msg = (
-                "ForwardConstruct cannot be instantiated directly. "
-                "Subclass it and declare Node attributes."
+            raise ConstructError.build(
+                "ForwardConstruct cannot be instantiated directly",
+                expected="a subclass that declares Node attributes",
+                found="bare ForwardConstruct()",
+                hint="subclass ForwardConstruct and declare Node attributes on the class",
             )
-            raise TypeError(msg)
 
         # Check that forward() is overridden
         if type(self).forward is ForwardConstruct.forward:
-            msg = (
-                f"{type(self).__name__} must override forward(). "
-                "Define a forward() method that calls self.<node>(...) "
-                "to specify execution order."
+            raise ConstructError.build(
+                f"{type(self).__name__} must override forward()",
+                expected="a forward() method that calls self.<node>(...) to specify execution order",
+                found="no forward() override",
+                hint="define forward(self) on your subclass",
             )
-            raise TypeError(msg)
 
         # Trace forward() to get nodes in call order
         traced_nodes = _trace_forward(self, discovered)

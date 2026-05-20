@@ -8,6 +8,7 @@ import pytest
 
 from neograph import (
     Construct,
+    ConstructError,
     Each,
     Node,
     Operator,
@@ -116,31 +117,31 @@ class TestNodeMap:
     def test_map_raises_when_lambda_has_no_attributes(self):
         """`lambda s: s` has no path — clear error."""
         node = Node.scripted("verify", fn="noop", outputs=MatchResult)
-        with pytest.raises(TypeError, match="at least one attribute"):
+        with pytest.raises(ConstructError, match="at least one attribute"):
             node.map(lambda s: s, key="label")
 
     def test_map_raises_when_lambda_returns_scalar(self):
         """`lambda s: 42` — clear error, not a silent Each."""
         node = Node.scripted("verify", fn="noop", outputs=MatchResult)
-        with pytest.raises(TypeError, match="attribute-access chain"):
+        with pytest.raises(ConstructError, match="attribute-access chain"):
             node.map(lambda s: 42, key="label")
 
     def test_map_raises_when_lambda_uses_indexing(self):
         """A lambda that does something illegal (e.g. indexing) reports cleanly."""
         node = Node.scripted("verify", fn="noop", outputs=MatchResult)
-        with pytest.raises(TypeError, match="pure attribute-access chain"):
+        with pytest.raises(ConstructError, match="pure attribute-access chain"):
             node.map(lambda s: s.items[0], key="label")  # __getitem__ on recorder
 
     def test_map_raises_when_lambda_accesses_dunder(self):
         """`lambda s: s.__dict__.foo` must not silently produce Each(over='__dict__.foo')."""
         node = Node.scripted("verify", fn="noop", inputs=ClusterGroup, outputs=MatchResult)
-        with pytest.raises(TypeError, match="pure attribute-access chain"):
+        with pytest.raises(ConstructError, match="pure attribute-access chain"):
             node.map(lambda s: s.__dict__.foo, key="label")
 
     def test_map_raises_when_lambda_accesses_underscore_attr(self):
         """Reject `lambda s: s._private.field` — underscores are a footgun trapdoor."""
         node = Node.scripted("verify", fn="noop", inputs=ClusterGroup, outputs=MatchResult)
-        with pytest.raises(TypeError, match="pure attribute-access chain"):
+        with pytest.raises(ConstructError, match="pure attribute-access chain"):
             node.map(lambda s: s._private.x, key="label")
 
     def test_user_exception_propagates_when_lambda_raises(self):
@@ -152,7 +153,7 @@ class TestNodeMap:
     def test_map_raises_when_source_not_string_or_callable(self):
         """Passing an int or other non-source type raises immediately."""
         node = Node.scripted("verify", fn="noop", outputs=MatchResult)
-        with pytest.raises(TypeError, match="string path or a lambda"):
+        with pytest.raises(ConstructError, match="string path or a lambda"):
             node.map(42, key="label")  # type: ignore[arg-type]
 
     def test_each_attaches_when_map_called_on_construct(self):

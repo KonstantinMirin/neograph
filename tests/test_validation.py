@@ -952,33 +952,33 @@ class TestModifiableMapErrors:
         assert each.over == "make.groups"
 
     def test_map_raises_when_source_not_string_or_callable(self):
-        """Non-string, non-callable source raises TypeError."""
+        """Non-string, non-callable source raises ConstructError."""
         n = _consumer("verify", ClusterGroup, MatchResult)
-        with pytest.raises(TypeError, match="must be a string path or a lambda"):
+        with pytest.raises(ConstructError, match="must be a string path or a lambda"):
             n.map(42, key="label")
 
     def test_map_raises_when_lambda_uses_indexing(self):
-        """Lambda with subscript/indexing raises TypeError (not a pure attr chain)."""
+        """Lambda with subscript/indexing raises ConstructError (not a pure attr chain)."""
         n = _consumer("verify", ClusterGroup, MatchResult)
-        with pytest.raises(TypeError, match="pure attribute-access chain"):
+        with pytest.raises(ConstructError, match="pure attribute-access chain"):
             n.map(lambda s: s.make.groups[0], key="label")
 
     def test_map_raises_when_lambda_accesses_underscore_attr(self):
-        """Lambda accessing underscore-prefixed attribute raises TypeError."""
+        """Lambda accessing underscore-prefixed attribute raises ConstructError."""
         n = _consumer("verify", ClusterGroup, MatchResult)
-        with pytest.raises(TypeError, match="pure attribute-access chain"):
+        with pytest.raises(ConstructError, match="pure attribute-access chain"):
             n.map(lambda s: s.make._private, key="label")
 
     def test_map_raises_when_lambda_returns_non_recorder(self):
-        """Lambda that returns a non-recorder value raises TypeError."""
+        """Lambda that returns a non-recorder value raises ConstructError."""
         n = _consumer("verify", ClusterGroup, MatchResult)
-        with pytest.raises(TypeError, match="must return an attribute-access chain"):
+        with pytest.raises(ConstructError, match="must return an attribute-access chain"):
             n.map(lambda s: "literal_string", key="label")
 
     def test_map_raises_when_lambda_is_identity(self):
-        """Lambda that returns the recorder without any attribute access raises TypeError."""
+        """Lambda that returns the recorder without any attribute access raises ConstructError."""
         n = _consumer("verify", ClusterGroup, MatchResult)
-        with pytest.raises(TypeError, match="must access at least one attribute"):
+        with pytest.raises(ConstructError, match="must access at least one attribute"):
             n.map(lambda s: s, key="label")
 
     def test_map_raises_when_called_twice(self):

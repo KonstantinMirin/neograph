@@ -516,7 +516,8 @@ def _check_item_input(
         if _types_compatible(producer_type, input_type):
             return
 
-    raise _build_no_producer_error(construct, item, input_type, producers)
+    error = _build_no_producer_error(construct, item, input_type, producers)
+    raise error
 
 
 def _check_fan_in_inputs(

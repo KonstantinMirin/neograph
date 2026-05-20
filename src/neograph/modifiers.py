@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from enum import Enum, auto
 from typing import TYPE_CHECKING, Any, Protocol, Self, runtime_checkable
 
@@ -281,7 +282,7 @@ class Modifiable:
             return self.modifier_set.operator
         return None
 
-    def map(self, source: Any, *, key: str) -> Self:
+    def map(self, source: str | Callable[[Any], Any], *, key: str) -> Self:
         """Fan-out over a collection — sugar over `| Each(over=..., key=...)`.
 
         Usage:
@@ -324,32 +325,31 @@ class Modifiable:
                 # other exception (ValueError, ZeroDivisionError, etc.) is a
                 # genuine bug in the user lambda and should propagate unchanged
                 # so they see their own error, not our wrapper.
-                msg = (
-                    "Node.map() lambda must be a pure attribute-access chain "
-                    "like `lambda s: s.upstream_node.field`; "
-                    f"got error when introspecting: {exc}."
-                )
-                raise TypeError(msg) from exc
+                raise ConstructError.build(
+                    "Node.map() lambda must be a pure attribute-access chain",
+                    expected="lambda s: s.upstream_node.field",
+                    found=f"error when introspecting: {exc}",
+                ) from exc
             if not isinstance(result, _PathRecorder):
-                msg = (
-                    "Node.map() lambda must return an attribute-access chain "
-                    f"like `s.upstream_node.field`; got {type(result).__name__}."
+                raise ConstructError.build(
+                    "Node.map() lambda must return an attribute-access chain",
+                    expected="s.upstream_node.field",
+                    found=type(result).__name__,
                 )
-                raise TypeError(msg)
             path = result._neo_path
             if not path:
-                msg = (
-                    "Node.map() lambda must access at least one attribute, "
-                    "e.g. `lambda s: s.make_clusters.groups`."
+                raise ConstructError.build(
+                    "Node.map() lambda must access at least one attribute",
+                    expected="lambda s: s.make_clusters.groups",
+                    found="lambda returned the recorder unchanged",
                 )
-                raise TypeError(msg)
             over = ".".join(path)
         else:
-            msg = (
-                "Node.map() source must be a string path or a lambda; "
-                f"got {type(source).__name__}."
+            raise ConstructError.build(
+                "Node.map() source must be a string path or a lambda",
+                expected="str | Callable[[state], path]",
+                found=type(source).__name__,
             )
-            raise TypeError(msg)
 
         return self | Each(over=over, key=key)
 
@@ -523,7 +523,7 @@ class Loop(Modifier, frozen=True):
         def refine(draft: Draft) -> Draft: ...
     """
 
-    when: Any           # str (registered condition name) or Callable. True = continue looping.
+    when: str | Callable[[Any], bool]  # str (registered condition name) or predicate. True = continue looping.
     max_iterations: int = 10
     on_exhaust: str = "error"           # "error" raises ExecutionError, "last" returns last result
     history: bool = False               # collect each iteration's output in state

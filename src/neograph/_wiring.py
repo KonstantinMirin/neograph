@@ -356,7 +356,7 @@ def _make_loop_router(
     field_name: str,
     count_field: str,
     loop: Loop,
-    condition: Any,
+    condition: Callable[[Any], bool],
     exit_name: str,
     reenter_target: str,
     unwrap_fn: LangGraphLoopUnwrapFn,

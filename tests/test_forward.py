@@ -9,7 +9,7 @@ from __future__ import annotations
 import pytest
 from pydantic import BaseModel
 
-from neograph import Construct, Each, ForwardConstruct, Node, compile, run
+from neograph import Construct, ConstructError, Each, ForwardConstruct, Node, compile, run
 from neograph.factory import register_scripted
 from tests.fakes import StructuredFake, configure_fake_llm
 from tests.schemas import Claims, ClassifiedClaims, Clusters, MatchResult, RawText
@@ -79,13 +79,13 @@ class TestForwardConstructBase:
         assert isinstance(pipeline, ForwardConstruct)
 
     def test_init_raises_when_forward_method_missing(self):
-        """Subclass without forward() method raises TypeError."""
+        """Subclass without forward() method raises ConstructError."""
         from neograph import ForwardConstruct, Node
 
         class NoForward(ForwardConstruct):
             a = Node.scripted("a", fn="a_fn", outputs=RawText)
 
-        with pytest.raises(TypeError, match="must override forward"):
+        with pytest.raises(ConstructError, match="must override forward"):
             NoForward()
 
 
@@ -895,7 +895,7 @@ class TestSelfLoopTracing:
 
     def test_empty_body_raises_construct_error(self):
         """self.loop(body=[], when=...) raises ConstructError at trace time."""
-        from neograph import ConstructError, ForwardConstruct
+        from neograph import ForwardConstruct
 
         class EmptyLoop(ForwardConstruct):
             seed = Node.scripted("seed", fn="fc_seed_empty", outputs=Draft)
@@ -1118,7 +1118,7 @@ class TestLoopBodyValidation:
     def test_proxy_in_body_raises_construct_error(self):
         """Passing a _Proxy (result of self.some_node(x)) as body item
         raises ConstructError, not AttributeError."""
-        from neograph import ConstructError, ForwardConstruct
+        from neograph import ForwardConstruct
 
         register_scripted(
             "fc_seed_ndm1_a",
@@ -1148,7 +1148,7 @@ class TestLoopBodyValidation:
 
     def test_non_node_object_in_body_raises_construct_error(self):
         """Passing a plain string as body item raises ConstructError."""
-        from neograph import ConstructError, ForwardConstruct
+        from neograph import ForwardConstruct
 
         register_scripted(
             "fc_seed_ndm1_b",
@@ -1244,7 +1244,6 @@ class TestLoopBodyValidation:
 # Coverage gap tests for forward.py
 # =============================================================================
 
-from neograph.errors import ConstructError
 from neograph.forward import (
     _BranchMeta,
     _BranchNode,
@@ -1258,11 +1257,11 @@ from neograph.modifiers import Loop
 
 
 class TestForwardConstructDirectInstantiation:
-    """Lines 113-117: direct ForwardConstruct() raises TypeError."""
+    """Lines 113-117: direct ForwardConstruct() raises ConstructError."""
 
     def test_direct_instantiation_raises_type_error(self):
-        """Instantiating ForwardConstruct directly (not a subclass) raises TypeError."""
-        with pytest.raises(TypeError, match="cannot be instantiated directly"):
+        """Instantiating ForwardConstruct directly (not a subclass) raises ConstructError."""
+        with pytest.raises(ConstructError, match="cannot be instantiated directly"):
             ForwardConstruct()
 
 
@@ -1270,11 +1269,11 @@ class TestForwardNotOverridden:
     """Line 160: forward() not overridden raises NotImplementedError."""
 
     def test_forward_not_overridden_raises(self):
-        """Subclass without forward() override raises TypeError at init."""
+        """Subclass without forward() override raises ConstructError at init."""
         class NoForward(ForwardConstruct):
             a = Node.scripted("a", fn="f", outputs=RawText)
 
-        with pytest.raises(TypeError, match="must override forward"):
+        with pytest.raises(ConstructError, match="must override forward"):
             NoForward()
 
     def test_base_forward_raises_not_implemented(self):
