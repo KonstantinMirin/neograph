@@ -76,6 +76,7 @@ from neograph._di_classify import (  # noqa: F401 — re-exported for backward c
     _resolve_merge_args,
 )
 from neograph._llm_config import LlmConfig
+from neograph._runtime_registry import register_condition, register_scripted
 from neograph._sidecar import (  # noqa: F401 — re-exported for backward compat
     _get_node_source,
     _get_param_res,
@@ -150,14 +151,13 @@ def _build_oracle_kwargs(
             stacklevel=4,
         )
         body_merge_name = f"_body_merge_{node_label}_{secrets.token_hex(8)}"
-        from neograph.factory import register_scripted as _reg_scripted
 
         def _make_body_merge(user_fn: Callable) -> Callable:
             def body_merge(variants: list, config: Any) -> Any:
                 return user_fn(variants)
             return body_merge
 
-        _reg_scripted(body_merge_name, _make_body_merge(f))
+        register_scripted(body_merge_name, _make_body_merge(f))
         effective_merge_fn = body_merge_name
 
     if effective_merge_fn is None and effective_merge_prompt is None:
@@ -585,8 +585,6 @@ def node(
 
         # -- Operator interrupt when interrupt_when is set --------------------
         if interrupt_when is not None:
-            from neograph.factory import register_condition
-
             if isinstance(interrupt_when, str):
                 condition_name = interrupt_when
             elif callable(interrupt_when):
@@ -729,8 +727,6 @@ def merge_fn(
         # factory hasn't hooked into the DI path. In practice the factory
         # always checks _merge_fn_registry first (see
         # factory.make_oracle_merge_fn) so this shim is rarely invoked.
-        from neograph.factory import register_scripted
-
         def legacy_shim(variants: Any, config: Any) -> Any:
             return f(variants, *_resolve_di_args(param_res, config))
 

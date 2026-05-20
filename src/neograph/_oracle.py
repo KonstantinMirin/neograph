@@ -15,16 +15,12 @@ from langchain_core.runnables import RunnableConfig
 from pydantic import BaseModel
 
 from neograph._llm_config import LlmConfig
+from neograph._runtime_registry import lookup_scripted
 from neograph._state_bus import adapt_state
 from neograph.errors import ExecutionError
 from neograph.modifiers import Each, Oracle
 from neograph.naming import field_name_for
 from neograph.node import TypeSpecStatic
-
-
-def _lookup_scripted(name: str) -> Callable:
-    from neograph.factory import lookup_scripted
-    return lookup_scripted(name)
 
 
 def make_oracle_redirect_fn(raw_fn: Callable, field_name: str, collector_field: str) -> Callable:
@@ -268,7 +264,7 @@ def make_oracle_merge_fn(
                 merged = user_fn(primary, *_resolve_merge_args(param_res, config, state))
                 return _build_oracle_merge_result(merged, field_name, output_model, secondaries)
         else:
-            scripted_merge = _lookup_scripted(_merge_fn_name)
+            scripted_merge = lookup_scripted(_merge_fn_name)
 
             def merge_fn(state: Any, config: RunnableConfig) -> dict:
                 results = getattr(state, collector_field, [])

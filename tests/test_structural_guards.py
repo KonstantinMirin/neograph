@@ -1878,3 +1878,298 @@ def _raised_exception_name(exc_node: ast.expr) -> str | None:
             return exc_node.id
         return None  # ``raise exc`` — runtime-bound variable
     return None
+
+
+class TestNoFunctionLocalFactoryImportInOracle:
+    """neograph-9occ: break factory <-> _oracle cycle via a Protocol module.
+
+    `_oracle.py` is imported by `factory.py`, so a top-level
+    `from neograph.factory import ...` in `_oracle.py` would create a cycle.
+    Historically `_oracle.py` worked around this with function-local imports
+    (the canonical deferred-import anti-pattern).
+
+    The fix is to extract the shared names into a dedicated Protocol module
+    (`_runtime_registry.py`) that both modules import from. After the
+    extraction, no function-local `from neograph.factory` import is allowed
+    inside `_oracle.py`.
+
+    Mutation-verified: a parametrized tmpdir fixture writes a synthetic
+    module with a function-local `from neograph.factory import _state_get`,
+    runs the AST scanner, asserts detection.
+    """
+
+    @staticmethod
+    def _find_function_local_factory_imports(source: str) -> list[tuple[int, str]]:
+        """Return (lineno, module) for every function-local `from neograph.factory`
+        or `from .factory` ImportFrom node in *source*.
+        """
+        tree = ast.parse(source)
+        offenders: list[tuple[int, str]] = []
+        for func in ast.walk(tree):
+            if not isinstance(func, ast.FunctionDef | ast.AsyncFunctionDef):
+                continue
+            for sub in ast.walk(func):
+                if not isinstance(sub, ast.ImportFrom):
+                    continue
+                module = sub.module or ""
+                # Absolute: from neograph.factory ...
+                # Relative: from .factory ... (level=1, module="factory")
+                is_absolute = module == "neograph.factory"
+                is_relative = sub.level >= 1 and module == "factory"
+                if is_absolute or is_relative:
+                    offenders.append((sub.lineno, module or f".{'.' * (sub.level - 1)}factory"))
+        return offenders
+
+    def test_no_function_local_factory_import_in_oracle(self):
+        """`_oracle.py` must not contain any function-local `from neograph.factory` import."""
+        oracle_path = SRC_DIR / "_oracle.py"
+        offenders = self._find_function_local_factory_imports(oracle_path.read_text())
+        assert offenders == [], (
+            f"\n{len(offenders)} function-local `from neograph.factory` import(s) "
+            f"found in {oracle_path.name}:\n"
+            + "\n".join(f"  line {lineno}: from {module} import ..." for lineno, module in offenders)
+            + "\n\nFix: extract the shared symbols into a Protocol/registry module "
+              "(e.g. `_runtime_registry.py`) and import from there at module scope."
+        )
+
+    def test_scanner_detects_injected_function_local_factory_import(self, tmp_path: pathlib.Path):
+        """Mutation: a synthetic module with a function-local factory import must be flagged."""
+        synthetic = tmp_path / "_oracle.py"
+        synthetic.write_text(
+            "from __future__ import annotations\n"
+            "\n"
+            "def _lookup(name):\n"
+            "    from neograph.factory import lookup_scripted\n"
+            "    return lookup_scripted(name)\n"
+        )
+        offenders = self._find_function_local_factory_imports(synthetic.read_text())
+        assert any(m == "neograph.factory" for _, m in offenders), (
+            f"scanner failed to detect injected function-local factory import; offenders={offenders}"
+        )
+
+    def test_scanner_accepts_module_level_factory_import(self, tmp_path: pathlib.Path):
+        """Module-level imports from neograph.factory are not flagged by this scanner.
+
+        (The deferred-import budget guard tracks those separately.)
+        """
+        synthetic = tmp_path / "_oracle.py"
+        synthetic.write_text(
+            "from __future__ import annotations\n"
+            "from neograph.factory import lookup_scripted\n"
+            "\n"
+            "def _lookup(name):\n"
+            "    return lookup_scripted(name)\n"
+        )
+        offenders = self._find_function_local_factory_imports(synthetic.read_text())
+        assert offenders == [], (
+            f"scanner false-positive on module-level import; offenders={offenders}"
+        )
+
+
+class TestNoFunctionLocalLlmOrFactoryImportInDispatch:
+    """neograph-7uhx: _dispatch.py must not import _llm/factory inside function bodies.
+
+    Six function-local imports lived inside ThinkDispatch.execute / ToolDispatch.execute /
+    _render_input — including a defensive ``try/except ImportError`` guarding the
+    ``_get_global_renderer`` read against a phantom circular import. The fix is a
+    Protocol module so the types are importable at module top, plus deletion of the
+    try/except.
+
+    Mutation-verified: re-introducing `from neograph._llm import _is_inline_prompt`
+    inside a function body in _dispatch.py, or wrapping a renderer read in
+    `try: ... except ImportError: ...`, makes this test fail naming the offender.
+    """
+
+    FORBIDDEN_MODULES = frozenset({
+        "neograph._llm",
+        "neograph.factory",
+        "_llm",
+        "factory",
+    })
+
+    def _walk_function_bodies(self, tree: ast.AST):
+        for fn in ast.walk(tree):
+            if isinstance(fn, ast.FunctionDef | ast.AsyncFunctionDef):
+                for child in ast.walk(fn):
+                    if child is fn:
+                        continue
+                    yield fn, child
+
+    def test_no_function_local_llm_or_factory_import_in_dispatch(self):
+        path = SRC_DIR / "_dispatch.py"
+        tree = ast.parse(path.read_text(), filename=str(path))
+
+        function_local_imports: list[str] = []
+        importerror_handlers: list[str] = []
+
+        for fn, child in self._walk_function_bodies(tree):
+            if isinstance(child, ast.ImportFrom):
+                module = child.module or ""
+                if module in self.FORBIDDEN_MODULES:
+                    alias_names = ", ".join(alias.name for alias in child.names)
+                    function_local_imports.append(
+                        f"  _dispatch.py:{child.lineno} (in {fn.name}): "
+                        f"from {module} import {alias_names}"
+                    )
+            elif isinstance(child, ast.ExceptHandler):
+                # ``except ImportError:`` or ``except (ImportError, ...):``
+                exc_type = child.type
+                exc_names: list[str] = []
+                if isinstance(exc_type, ast.Name):
+                    exc_names = [exc_type.id]
+                elif isinstance(exc_type, ast.Tuple):
+                    exc_names = [
+                        n.id for n in exc_type.elts if isinstance(n, ast.Name)
+                    ]
+                if "ImportError" in exc_names:
+                    importerror_handlers.append(
+                        f"  _dispatch.py:{child.lineno} (in {fn.name}): "
+                        f"except {', '.join(exc_names)}"
+                    )
+
+        problems = []
+        if function_local_imports:
+            problems.append(
+                f"{len(function_local_imports)} function-local _llm/factory import(s):\n"
+                + "\n".join(function_local_imports)
+            )
+        if importerror_handlers:
+            problems.append(
+                f"{len(importerror_handlers)} defensive ImportError handler(s):\n"
+                + "\n".join(importerror_handlers)
+            )
+
+        assert not problems, (
+            "\n_dispatch.py has function-local imports / defensive ImportError "
+            "handlers that should be hoisted via a Protocol module (neograph-7uhx):\n\n"
+            + "\n\n".join(problems)
+            + "\n\nFix: extract a Protocol module so the types/interfaces are "
+            "importable at module top, then delete the try/except ImportError."
+        )
+
+    def test_scanner_detects_mutation(self, tmp_path):
+        """Mutation check: synthetic module with function-local import + try/except ImportError
+        must be flagged by the scanner logic (we re-execute it via parse → walk)."""
+        synthetic = tmp_path / "_dispatch.py"
+        synthetic.write_text(
+            "from __future__ import annotations\n"
+            "\n"
+            "def f():\n"
+            "    from neograph._llm import invoke_structured\n"
+            "    try:\n"
+            "        from neograph._llm import _get_global_renderer\n"
+            "        return _get_global_renderer()\n"
+            "    except ImportError:\n"
+            "        return None\n"
+        )
+        tree = ast.parse(synthetic.read_text(), filename=str(synthetic))
+
+        function_local_imports = []
+        importerror_handlers = []
+        for _fn, child in self._walk_function_bodies(tree):
+            if isinstance(child, ast.ImportFrom):
+                if (child.module or "") in self.FORBIDDEN_MODULES:
+                    function_local_imports.append(child.lineno)
+            elif isinstance(child, ast.ExceptHandler):
+                exc_type = child.type
+                exc_names: list[str] = []
+                if isinstance(exc_type, ast.Name):
+                    exc_names = [exc_type.id]
+                elif isinstance(exc_type, ast.Tuple):
+                    exc_names = [
+                        n.id for n in exc_type.elts if isinstance(n, ast.Name)
+                    ]
+                if "ImportError" in exc_names:
+                    importerror_handlers.append(child.lineno)
+
+        assert function_local_imports, "scanner missed function-local _llm import"
+        assert importerror_handlers, "scanner missed except ImportError handler"
+
+
+class TestNoFunctionLocalFactoryImportInDecorators:
+    """neograph-q7fh: break decorators ↔ factory cycle via a Protocol module.
+
+    The original cycle was `decorators → factory → _construct_builder → decorators`.
+    `_sidecar.py` extraction broke the `decorators ↔ _construct_builder` edge.
+    This guard enforces the remaining `decorators ↔ factory` break: the shared
+    registration callables (`register_scripted`, `register_condition`) live in
+    a leaf Protocol module that both `decorators.py` and `factory.py` import
+    from, removing the need for function-local imports inside `decorators.py`.
+
+    A function-local `from neograph.factory import ...` is forbidden because
+    it signals a residual cycle: if decorators.py needed nothing from factory.py
+    at module-import time, the imports should live at the top of the file.
+
+    Mutation-verified: a parametrized tmpdir fixture writes a synthetic
+    module with a function-local `from neograph.factory import register_scripted`,
+    runs the AST scanner, asserts detection.
+    """
+
+    @staticmethod
+    def _find_function_local_factory_imports(source: str) -> list[tuple[int, str]]:
+        """Return (lineno, module) for every function-local `from neograph.factory`
+        or `from .factory` ImportFrom node in *source*.
+        """
+        tree = ast.parse(source)
+        offenders: list[tuple[int, str]] = []
+        for func in ast.walk(tree):
+            if not isinstance(func, ast.FunctionDef | ast.AsyncFunctionDef):
+                continue
+            for sub in ast.walk(func):
+                if not isinstance(sub, ast.ImportFrom):
+                    continue
+                module = sub.module or ""
+                is_absolute = module == "neograph.factory"
+                is_relative = sub.level >= 1 and module == "factory"
+                if is_absolute or is_relative:
+                    offenders.append((sub.lineno, module or f".{'.' * (sub.level - 1)}factory"))
+        return offenders
+
+    def test_no_function_local_factory_import_in_decorators(self):
+        """`decorators.py` must not contain any function-local `from neograph.factory` import."""
+        decorators_path = SRC_DIR / "decorators.py"
+        offenders = self._find_function_local_factory_imports(decorators_path.read_text())
+        assert offenders == [], (
+            f"\n{len(offenders)} function-local `from neograph.factory` import(s) "
+            f"found in {decorators_path.name}:\n"
+            + "\n".join(f"  line {lineno}: from {module} import ..." for lineno, module in offenders)
+            + "\n\nFix: extract the shared symbols into a Protocol/registry module "
+              "(e.g. `_runtime_registry.py`) and import from there at module scope."
+        )
+
+    def test_scanner_detects_injected_function_local_factory_import_in_decorators(
+        self, tmp_path: pathlib.Path
+    ):
+        """Mutation: a synthetic module with a function-local factory import must be flagged."""
+        synthetic = tmp_path / "decorators.py"
+        synthetic.write_text(
+            "from __future__ import annotations\n"
+            "\n"
+            "def make_node():\n"
+            "    from neograph.factory import register_scripted\n"
+            "    register_scripted('x', lambda: None)\n"
+        )
+        offenders = self._find_function_local_factory_imports(synthetic.read_text())
+        assert any(m == "neograph.factory" for _, m in offenders), (
+            f"scanner failed to detect injected function-local factory import; offenders={offenders}"
+        )
+
+    def test_scanner_accepts_module_level_factory_import_in_decorators(
+        self, tmp_path: pathlib.Path
+    ):
+        """Module-level imports from neograph.factory are not flagged by this scanner.
+
+        (The deferred-import budget guard tracks those separately.)
+        """
+        synthetic = tmp_path / "decorators.py"
+        synthetic.write_text(
+            "from __future__ import annotations\n"
+            "from neograph.factory import register_scripted\n"
+            "\n"
+            "def make_node():\n"
+            "    register_scripted('x', lambda: None)\n"
+        )
+        offenders = self._find_function_local_factory_imports(synthetic.read_text())
+        assert offenders == [], (
+            f"scanner false-positive on module-level import; offenders={offenders}"
+        )

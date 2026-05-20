@@ -17,11 +17,13 @@ from typing import Any, Protocol, cast
 from langchain_core.runnables import RunnableConfig
 from pydantic import BaseModel
 
+from neograph import _llm, _tool_loop
 from neograph._llm import _is_inline_prompt
 from neograph._normalize import normalize_outputs
 from neograph.errors import ConfigurationError
 from neograph.node import Node, TypeSpecStatic
 from neograph.renderers import build_rendered_input
+from neograph.tool import ToolBudgetTracker
 
 # ── Typed dispatch containers (architecture-v2 section 1) ────────────────
 #
@@ -127,8 +129,6 @@ class ThinkDispatch:
         config: RunnableConfig,
         context_data: dict[str, str] | None,
     ) -> NodeOutput:
-        from neograph._llm import invoke_structured
-
         rendered = _render_input(node, input_data.value)
         output_model, primary_key = _resolve_primary_output(node)
         effective_model = config.get("configurable", {}).get("_oracle_model", node.model) or ""
@@ -136,7 +136,7 @@ class ThinkDispatch:
         # think mode always resolves to a concrete BaseModel class
         # (TypeSpecStatic includes dict-form for multi-output Nodes; the
         # primary key resolution above unwraps it).
-        result = invoke_structured(
+        result = _llm.invoke_structured(
             model_tier=effective_model,
             prompt_template=node.prompt or "",
             input_data=rendered,
@@ -168,9 +168,6 @@ class ToolDispatch:
         config: RunnableConfig,
         context_data: dict[str, str] | None,
     ) -> NodeOutput:
-        from neograph._tool_loop import invoke_with_tools
-        from neograph.tool import ToolBudgetTracker
-
         rendered = _render_input(node, input_data.value)
         output_model, primary_key = _resolve_primary_output(node)
         no = normalize_outputs(node.outputs)
@@ -178,11 +175,7 @@ class ToolDispatch:
         budget_tracker = ToolBudgetTracker(node.tools)
 
         # Renderer resolution: node-level renderer takes priority, then global
-        try:
-            from neograph._llm import _get_global_renderer
-            effective_renderer = node.renderer or _get_global_renderer()
-        except (ImportError, AttributeError):
-            effective_renderer = node.renderer
+        effective_renderer = node.renderer or _llm._get_global_renderer()
 
         effective_model = config.get("configurable", {}).get("_oracle_model", node.model) or ""
 
@@ -191,7 +184,7 @@ class ToolDispatch:
         if no.is_dict_form and primary_key is not None:
             oracle_gen_type = no.all_keys[primary_key]
 
-        result, tool_interactions = invoke_with_tools(
+        result, tool_interactions = _tool_loop.invoke_with_tools(
             model_tier=effective_model,
             prompt_template=node.prompt or "",
             input_data=rendered,
@@ -228,11 +221,7 @@ def _render_input(node: Node, input_data: Any) -> Any:
     - Inline prompts: raw data (for ${var.field} dotted access)
     - Template-ref prompts: rendered + flattened (for prompt_compiler)
     """
-    try:
-        from neograph._llm import _get_global_renderer
-        effective_renderer = node.renderer or _get_global_renderer()
-    except ImportError:
-        effective_renderer = node.renderer
+    effective_renderer = node.renderer or _llm._get_global_renderer()
 
     ri = build_rendered_input(input_data, renderer=effective_renderer)
 

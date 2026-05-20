@@ -94,42 +94,16 @@ def _extract_context(state: StateBus, node: Node) -> dict[str, str] | None:
 # Singleton registry instance — replaces former module-level dicts.
 from neograph._registry import registry
 
-
-def register_scripted(name: str, fn: Callable) -> None:
-    """Register a deterministic function for Node.scripted."""
-    registry.scripted[name] = fn
-
-
-def register_condition(name: str, fn: Callable) -> None:
-    """Register a condition function for Operator(when=...)."""
-    registry.condition[name] = fn
-
-
-def register_tool_factory(name: str, fn: Callable) -> None:
-    """Register a tool factory that creates LangChain @tool functions."""
-    registry.tool_factory[name] = fn
-
-
-def lookup_condition(name: str) -> Callable:
-    """Look up a registered condition function by name. Raises ConfigurationError if missing."""
-    fn = registry.condition.get(name)
-    if fn is None:
-        raise ConfigurationError.build(
-            f"Condition '{name}' not registered",
-            hint="Use register_condition() to register it before compilation",
-        )
-    return fn
-
-
-def lookup_scripted(name: str) -> Callable:
-    """Look up a registered scripted function by name. Raises ConfigurationError if missing."""
-    fn = registry.scripted.get(name)
-    if fn is None:
-        raise ConfigurationError.build(
-            f"Scripted function '{name}' not registered",
-            hint="Use register_scripted() to register it before compilation",
-        )
-    return fn
+# Registry accessors live in `_runtime_registry.py` (a leaf module shared with
+# `_oracle.py` to break the factory <-> _oracle import cycle). Re-exported
+# here so `from neograph.factory import register_scripted` keeps working.
+from neograph._runtime_registry import (  # noqa: F401 — re-exported for public API
+    lookup_condition,
+    lookup_scripted,
+    register_condition,
+    register_scripted,
+    register_tool_factory,
+)
 
 
 def _type_name(t: TypeSpecStatic) -> str | None:
