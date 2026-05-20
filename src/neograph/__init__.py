@@ -54,7 +54,7 @@ from neograph.modifiers import (
     Operator,
     Oracle,
 )
-from neograph.node import Node, RawNodeFn, SkipPredicate, SkipValueFactory
+from neograph.node import Node, RawNodeFn, SkipPredicate, SkipValueFactory, TypeSpecStatic
 from neograph.renderers import (
     DelimitedRenderer,
     JsonRenderer,
@@ -88,6 +88,7 @@ __all__ = [
     "Tool",
     "Construct",
     "ForwardConstruct",
+    "TypeSpecStatic",
     # Error hierarchy
     "NeographError",
     "ConstructError",

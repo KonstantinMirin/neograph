@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Any, Protocol, cast
 
 from langchain_core.runnables import RunnableConfig
 from pydantic import BaseModel
@@ -20,7 +20,7 @@ from pydantic import BaseModel
 from neograph._llm import _is_inline_prompt
 from neograph._normalize import normalize_outputs
 from neograph.errors import ConfigurationError
-from neograph.node import Node
+from neograph.node import Node, TypeSpecStatic
 from neograph.renderers import build_rendered_input
 
 # ── Typed dispatch containers (architecture-v2 section 1) ────────────────
@@ -133,11 +133,14 @@ class ThinkDispatch:
         output_model, primary_key = _resolve_primary_output(node)
         effective_model = config.get("configurable", {}).get("_oracle_model", node.model) or ""
 
+        # think mode always resolves to a concrete BaseModel class
+        # (TypeSpecStatic includes dict-form for multi-output Nodes; the
+        # primary key resolution above unwraps it).
         result = invoke_structured(
             model_tier=effective_model,
             prompt_template=node.prompt or "",
             input_data=rendered,
-            output_model=output_model,
+            output_model=cast(type[BaseModel], output_model),
             config=config,
             node_name=node.name,
             llm_config=node.llm_config,
@@ -192,7 +195,7 @@ class ToolDispatch:
             model_tier=effective_model,
             prompt_template=node.prompt or "",
             input_data=rendered,
-            output_model=oracle_gen_type,
+            output_model=cast(type[BaseModel], oracle_gen_type),
             tools=node.tools,
             budget_tracker=budget_tracker,
             config=config,
@@ -239,7 +242,7 @@ def _render_input(node: Node, input_data: Any) -> Any:
     return ri.for_template_ref
 
 
-def _resolve_primary_output(node: Node) -> tuple[Any, str | None]:
+def _resolve_primary_output(node: Node) -> tuple[TypeSpecStatic, str | None]:
     """Resolve the LLM output model and primary key for dict-form outputs.
 
     For dict-form outputs, the LLM produces the primary type (first key).

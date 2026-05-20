@@ -46,7 +46,7 @@ from neograph.di import _unwrap_each_dict, _unwrap_loop_value
 from neograph.errors import ConfigurationError, ExecutionError
 from neograph.modifiers import Each, ModifierCombo, classify_modifiers
 from neograph.naming import field_name_for
-from neograph.node import Node
+from neograph.node import Node, TypeSpecStatic
 
 if TYPE_CHECKING:
     from langgraph.graph.state import CompiledStateGraph
@@ -136,7 +136,7 @@ def lookup_scripted(name: str) -> Callable:
     return fn
 
 
-def _type_name(t: Any) -> str | None:
+def _type_name(t: TypeSpecStatic) -> str | None:
     """Get a readable name from a type, or None."""
     if t is None:
         return None

@@ -18,6 +18,7 @@ from neograph._llm_config import LlmConfig
 from neograph.errors import ExecutionError
 from neograph.modifiers import Each, Oracle
 from neograph.naming import field_name_for
+from neograph.node import TypeSpecStatic
 
 
 def _state_get(state: Any, key: str) -> Any:
@@ -90,7 +91,7 @@ def make_eachoracle_redirect_fn(
 def _unwrap_oracle_results(
     results: list,
     field_name: str,
-    output_model: Any,
+    output_model: TypeSpecStatic,
 ) -> tuple[list, dict[str, list] | None]:
     """Unwrap collected Oracle results for the merge function.
 

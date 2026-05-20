@@ -22,14 +22,14 @@ import os
 import sys
 import types
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Any, ForwardRef, Union, get_args, get_origin, get_type_hints
+from typing import TYPE_CHECKING, Any, ForwardRef, Union, cast, get_args, get_origin, get_type_hints
 
 from neograph._ir_protocols import ConstructItem
 from neograph.di import DIKind as _DIKind
 from neograph.errors import ConstructError, NeographError
 from neograph.modifiers import Each, Oracle, split_each_path
 from neograph.naming import field_name_for
-from neograph.node import Node
+from neograph.node import Node, TypeSpecStatic
 
 if TYPE_CHECKING:
     from neograph.construct import Construct
@@ -40,7 +40,7 @@ if TYPE_CHECKING:
 NodeItem = ConstructItem
 
 
-def effective_producer_type(item: NodeItem) -> Any:
+def effective_producer_type(item: NodeItem) -> TypeSpecStatic:
     """Return the type this producer writes to the state bus, accounting
     for modifiers.
 
@@ -453,7 +453,7 @@ def validate_loop_construct(construct: Construct) -> None:
 def _check_item_input(
     construct: Construct,
     item: NodeItem,
-    input_type: Any,
+    input_type: TypeSpecStatic,
     producers: list[tuple[str, Any, str]],
 ) -> None:
     """Validate that `item.inputs` is satisfied by some upstream producer.
@@ -485,7 +485,10 @@ def _check_item_input(
     # key (neograph-kqd.2). This was a bypass pre-kqd; it is now a positive
     # check.
     if isinstance(input_type, dict):
-        _check_fan_in_inputs(construct, item, input_type, producers)
+        # dict is invariant; the narrowed input_type is dict[str, type] (a
+        # subtype of dict[str, TypeSpecStatic] semantically but not by mypy
+        # rules).
+        _check_fan_in_inputs(construct, item, cast(dict[str, TypeSpecStatic], input_type), producers)
         return
     # Raw dict class: inputs=dict — multi-field isinstance extraction,
     # defers to runtime.
@@ -523,7 +526,7 @@ def _check_item_input(
 def _check_fan_in_inputs(
     construct: Construct,
     item: NodeItem,
-    inputs_dict: dict[str, Any],
+    inputs_dict: dict[str, TypeSpecStatic],
     producers: list[tuple[str, Any, str]],
 ) -> None:
     """Validate a fan-in ``inputs={'name': Type, ...}`` spec against the
@@ -595,7 +598,7 @@ def _check_fan_in_inputs(
 def _check_each_path(
     construct: Construct,
     item: NodeItem,
-    input_type: Any,
+    input_type: TypeSpecStatic,
     each: Each,
     producers: list[tuple[str, Any, str]],
 ) -> None:
@@ -681,7 +684,7 @@ def _check_each_path(
 _MISSING = object()
 
 
-def _resolve_field_annotation(model_class: Any, field_name: str) -> Any:
+def _resolve_field_annotation(model_class: Any, field_name: str) -> TypeSpecStatic:
     """Return the fully-resolved annotation for a field, or _MISSING if absent.
 
     Tries `typing.get_type_hints` first to unwrap ForwardRefs and string
@@ -691,21 +694,24 @@ def _resolve_field_annotation(model_class: Any, field_name: str) -> Any:
     than leaking it to callers — otherwise `_extract_list_element` silently
     returns None on an unresolved annotation and the validation appears to
     pass when it should have flagged a resolution failure.
+
+    Callers check ``is _MISSING`` before using the result; the cast keeps the
+    sentinel sharing the return slot without widening to ``object``.
     """
     model_fields = getattr(model_class, "model_fields", None) or {}
     if field_name not in model_fields:
-        return _MISSING
+        return cast(TypeSpecStatic, _MISSING)
     try:
         hints = get_type_hints(model_class)
     except (NameError, AttributeError, TypeError):
         hints = {}
     ann = hints.get(field_name, model_fields[field_name].annotation)
     if ann is None or isinstance(ann, (str, ForwardRef)):
-        return _MISSING
+        return cast(TypeSpecStatic, _MISSING)
     return ann
 
 
-def _types_compatible(producer: Any, target: Any) -> bool:
+def _types_compatible(producer: TypeSpecStatic, target: TypeSpecStatic) -> bool:
     """True if a value of type `producer` can satisfy a consumer of `target`.
 
     Handles parameterized generics (e.g. dict[str, X]) as well as plain classes.
@@ -753,7 +759,7 @@ def _types_compatible(producer: Any, target: Any) -> bool:
         return False
 
 
-def _extract_list_element(tp: Any) -> Any:
+def _extract_list_element(tp: TypeSpecStatic) -> TypeSpecStatic:
     """If tp is list[X], Optional[list[X]], or list[X] | None, return X."""
     origin = get_origin(tp)
     if origin is list:
@@ -771,7 +777,7 @@ def _extract_list_element(tp: Any) -> Any:
     return None
 
 
-def _fmt_type(tp: Any) -> str:
+def _fmt_type(tp: TypeSpecStatic) -> str:
     if tp is None:
         return "None"
     if hasattr(tp, "__name__"):
@@ -782,7 +788,7 @@ def _fmt_type(tp: Any) -> str:
 def _build_no_producer_error(
     construct: Construct,
     item: NodeItem,
-    input_type: Any,
+    input_type: TypeSpecStatic,
     producers: list[tuple[str, Any, str]],
 ) -> NeographError:
     if producers:
@@ -807,7 +813,7 @@ def _build_no_producer_error(
 
 
 def _suggest_hint(
-    input_type: Any,
+    input_type: TypeSpecStatic,
     producers: list[tuple[str, Any, str]],
 ) -> str | None:
     """Scan producer outputs for actionable suggestions."""

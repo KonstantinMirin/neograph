@@ -114,6 +114,16 @@ def _is_type_like(v: Any) -> bool:
 # has no TypeForm (PEP 747). PlainValidator is the real enforcement point.
 TypeSpec = Annotated[Any, PlainValidator(_validate_type_spec)]
 
+# Static-annotation alias for user-declared type values flowing through the
+# framework. Distinct from the Pydantic-validator-bearing TypeSpec field type,
+# which carries _validate_type_spec on top of the same union. Use this on
+# parameter and return annotations of helpers that introspect user-declared
+# types (closes the PEP 747 gap until TypeForm lands). See
+# docs/design/architecture-decisions.md §5 and §8.
+import types as _types_mod
+
+TypeSpecStatic = type | dict[str, type] | _types_mod.GenericAlias | _types_mod.UnionType | None
+
 from neograph.modifiers import Modifiable, ModifierSet
 from neograph.naming import field_name_for
 from neograph.tool import Tool

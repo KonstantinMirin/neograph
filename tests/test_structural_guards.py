@@ -1322,23 +1322,16 @@ ANY_ALLOWLIST: dict[str, str] = {
     "modifiers.py:Loop.model_post_init:__context": "Pydantic model_post_init context payload; framework-internal",
     "modifiers.py:ModifierSet.model_post_init:__context": "Pydantic model_post_init context payload; framework-internal",
     # ── _construct_validation.py — IR introspection over user-declared types ──
-    "_construct_validation.py:effective_producer_type:return": "user-declared output type, computed per modifier rules",
-    "_construct_validation.py:_check_item_input:input_type": "user-declared consumer input type",
+    # Cluster-5 entries (effective_producer_type:return, _check_item_input:input_type,
+    # _check_fan_in_inputs:inputs_dict, _check_each_path:input_type,
+    # _resolve_field_annotation:return, _types_compatible:producer/target,
+    # _extract_list_element:tp/return, _fmt_type:tp, _build_no_producer_error:input_type,
+    # _suggest_hint:input_type) migrated to TypeSpecStatic in Batch 1 (neograph-86r1).
     "_construct_validation.py:_check_item_input:producers": "list of (name, user-declared-type, source) tuples for diagnostics",
-    "_construct_validation.py:_check_fan_in_inputs:inputs_dict": "user-declared dict[str, type] for fan-in validation",
     "_construct_validation.py:_check_fan_in_inputs:producers": "list of (name, user-declared-type, source) tuples for diagnostics",
-    "_construct_validation.py:_check_each_path:input_type": "user-declared consumer input type for Each path validation",
     "_construct_validation.py:_check_each_path:producers": "list of (name, user-declared-type, source) tuples for diagnostics",
     "_construct_validation.py:_resolve_field_annotation:model_class": "user-declared Pydantic model class",
-    "_construct_validation.py:_resolve_field_annotation:return": "user-declared field annotation",
-    "_construct_validation.py:_types_compatible:producer": "user-declared producer type for compatibility check",
-    "_construct_validation.py:_types_compatible:target": "user-declared consumer target type",
-    "_construct_validation.py:_extract_list_element:tp": "user-declared list[X] type",
-    "_construct_validation.py:_extract_list_element:return": "user-declared element type X from list[X]",
-    "_construct_validation.py:_fmt_type:tp": "user-declared type rendered for error messages",
-    "_construct_validation.py:_build_no_producer_error:input_type": "user-declared consumer input type for diagnostics",
     "_construct_validation.py:_build_no_producer_error:producers": "list of (name, user-declared-type, source) tuples for diagnostics",
-    "_construct_validation.py:_suggest_hint:input_type": "user-declared consumer input type for diagnostics",
     "_construct_validation.py:_suggest_hint:producers": "list of (name, user-declared-type, source) tuples for diagnostics",
     # ── factory.py — state bus polymorphism (state is BaseModel | dict[str, Any]) ──
     # Untypable boundary: state is sometimes a compiled Pydantic model and
@@ -1349,7 +1342,7 @@ ANY_ALLOWLIST: dict[str, str] = {
     "factory.py:_inject_oracle_config:state": "state bus polymorphism: BaseModel | dict[str, Any]",
     "factory.py:_extract_context:state": "state bus polymorphism: BaseModel | dict[str, Any]",
     "factory.py:_extract_context:return": "context dict values resolved from user-declared state fields",
-    "factory.py:_type_name:t": "user-declared type or dict-form type spec for log rendering",
+    # factory.py:_type_name:t migrated to TypeSpecStatic in Batch 1 (neograph-86r1).
     "factory.py:_apply_skip_when:input_data": "user-supplied extracted input; type declared by node.inputs",
     "factory.py:_apply_skip_when:state": "state bus polymorphism: BaseModel | dict[str, Any]",
     "factory.py:_apply_skip_when:node_log": "structlog BoundLoggerLazyProxy; private structlog type",
@@ -1376,11 +1369,11 @@ ANY_ALLOWLIST: dict[str, str] = {
     "_dispatch.py:ToolDispatch.execute:context_data": "user-supplied verbatim context strings; values are pre-rendered",
     "_dispatch.py:_render_input:input_data": "user-supplied extracted input; type declared by node.inputs",
     "_dispatch.py:_render_input:return": "RenderedInput.raw or RenderedInput.for_template_ref; user-typed payload",
-    "_dispatch.py:_resolve_primary_output:return": "user-declared output model class (PEP 747 TypeForm unavailable)",
+    # _dispatch.py:_resolve_primary_output:return migrated to TypeSpecStatic in Batch 1 (neograph-86r1).
     # ── _oracle.py — state bus polymorphism + user-declared output models ──
     "_oracle.py:_state_get:state": "state bus polymorphism: BaseModel | dict[str, Any]",
     "_oracle.py:_state_get:return": "state field value, type declared by user node outputs",
-    "_oracle.py:_unwrap_oracle_results:output_model": "user-declared output model class (PEP 747 TypeForm unavailable)",
+    # _oracle.py:_unwrap_oracle_results:output_model migrated to TypeSpecStatic in Batch 1 (neograph-86r1).
     "_oracle.py:_build_oracle_merge_result:merged": "user-supplied merge result; type declared by node.outputs",
     "_oracle.py:_build_oracle_merge_result:output_model": "user-declared output model class (PEP 747 TypeForm unavailable)",
     "_oracle.py:make_oracle_merge_fn:output_model": "user-declared output model class (PEP 747 TypeForm unavailable)",
