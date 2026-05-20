@@ -1326,53 +1326,36 @@ ANY_ALLOWLIST: dict[str, str] = {
     # _resolve_field_annotation:return, _types_compatible:producer/target,
     # _extract_list_element:tp/return, _fmt_type:tp, _build_no_producer_error:input_type,
     # _suggest_hint:input_type) migrated to TypeSpecStatic in Batch 1 (neograph-86r1).
-    # ── factory.py — state bus polymorphism (state is BaseModel | dict[str, Any]) ──
-    # Untypable boundary: state is sometimes a compiled Pydantic model and
-    # sometimes a dict during sub-graph dispatch / isolated execution. Adding
-    # a precise alias would still bottom out in dict[str, Any].
-    "factory.py:_state_get:state": "state bus polymorphism: BaseModel | dict[str, Any]",
-    "factory.py:_state_get:return": "state field value, type declared by user node outputs",
-    "factory.py:_inject_oracle_config:state": "state bus polymorphism: BaseModel | dict[str, Any]",
-    "factory.py:_extract_context:state": "state bus polymorphism: BaseModel | dict[str, Any]",
+    # ── factory.py — state-bus polymorphism resolved via StateBus protocol ──
+    # The state union BaseModel | dict[str, Any] is now adapted into a StateBus
+    # at the dispatch entry; helpers take ``state: StateBus`` and never see the
+    # raw union. ``Any`` returns survive where the value is genuinely user-typed
+    # (Cluster 5 / 6 boundaries — covered by their own allowlist entries).
+    # Cluster 3 / 8 state entries migrated to StateBus in Batch 2 (neograph-036p).
     "factory.py:_extract_context:return": "context dict values resolved from user-declared state fields",
     # factory.py:_type_name:t migrated to TypeSpecStatic in Batch 1 (neograph-86r1).
     "factory.py:_apply_skip_when:input_data": "user-supplied extracted input; type declared by node.inputs",
-    "factory.py:_apply_skip_when:state": "state bus polymorphism: BaseModel | dict[str, Any]",
     "factory.py:_apply_skip_when:return": "state update dict; values typed by user node outputs",
     "factory.py:_build_state_update:result": "user-supplied node result; type declared by node.outputs",
-    "factory.py:_build_state_update:state": "state bus polymorphism: BaseModel | dict[str, Any]",
     "factory.py:_build_state_update:return": "state update dict; values typed by user node outputs",
     "factory.py:_execute_node:return": "state update dict; values typed by user node outputs",
-    "factory.py:_classify_input_shape:state": "state bus polymorphism: BaseModel | dict[str, Any]",
-    "factory.py:_extract_loop_reentry:state": "state bus polymorphism: BaseModel | dict[str, Any]",
     "factory.py:_extract_loop_reentry:return": "user-supplied loop value; type declared by node.outputs",
-    "factory.py:_extract_each_item:state": "state bus polymorphism: BaseModel | dict[str, Any]",
     "factory.py:_extract_each_item:return": "user-supplied Each item; element type from each.over collection",
-    "factory.py:_extract_fan_in_dict:state": "state bus polymorphism: BaseModel | dict[str, Any]",
     "factory.py:_extract_fan_in_dict:return": "dict of upstream values; element types declared by node.inputs",
-    "factory.py:_extract_single_type:state": "state bus polymorphism: BaseModel | dict[str, Any]",
     "factory.py:_extract_single_type:return": "user-supplied upstream value; type declared by node.inputs",
-    "factory.py:_extract_input:state": "state bus polymorphism: BaseModel | dict[str, Any]",
     "factory.py:_extract_input:return": "user-supplied extracted input; type declared by node.inputs",
-    # ── _dispatch.py — context_data carries verbatim user strings; render boundary ──
-    "_dispatch.py:ModeDispatch.execute:context_data": "user-supplied verbatim context strings; values are pre-rendered",
-    "_dispatch.py:ScriptedDispatch.execute:context_data": "user-supplied verbatim context strings; values are pre-rendered",
-    "_dispatch.py:ThinkDispatch.execute:context_data": "user-supplied verbatim context strings; values are pre-rendered",
-    "_dispatch.py:ToolDispatch.execute:context_data": "user-supplied verbatim context strings; values are pre-rendered",
+    # ── _dispatch.py — render boundary; context_data is now precise (dict[str, str]) ──
     "_dispatch.py:_render_input:input_data": "user-supplied extracted input; type declared by node.inputs",
     "_dispatch.py:_render_input:return": "RenderedInput.raw or RenderedInput.for_template_ref; user-typed payload",
     # _dispatch.py:_resolve_primary_output:return migrated to TypeSpecStatic in Batch 1 (neograph-86r1).
-    # ── _oracle.py — state bus polymorphism + user-declared output models ──
-    "_oracle.py:_state_get:state": "state bus polymorphism: BaseModel | dict[str, Any]",
-    "_oracle.py:_state_get:return": "state field value, type declared by user node outputs",
+    # ── _oracle.py — user-declared output models ──
     # _oracle.py:_unwrap_oracle_results:output_model migrated to TypeSpecStatic in Batch 1 (neograph-86r1).
     "_oracle.py:_build_oracle_merge_result:merged": "user-supplied merge result; type declared by node.outputs",
-    # ── _wiring.py — Callable fn pointers, state bus polymorphism, LangGraph retry_policy ──
+    # ── _wiring.py — Callable fn pointers, LangGraph retry_policy ──
     # gen_fn / merge_fn / fan_fn / subgraph_fn are runtime-built closures whose
     # precise signatures are determined by the user's modifier configuration.
     # retry_policy is a LangGraph internal type not in our public surface.
     "_wiring.py:_merge_one_group:return": "user-supplied merge result; type declared by node.outputs",
-    "_wiring.py:_construct_loop_unwrap:state": "state bus polymorphism: BaseModel | dict[str, Any]",
     "_wiring.py:_construct_loop_unwrap:return": "user-supplied loop value; type declared by the sub-construct output",
 }
 

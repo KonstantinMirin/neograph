@@ -16,6 +16,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.types import RetryPolicy, Send, interrupt
 
 from neograph._normalize import normalize_outputs
+from neograph._state_bus import StateBus, adapt_state
 from neograph.construct import Construct
 from neograph.di import _unwrap_loop_value
 from neograph.errors import ExecutionError
@@ -34,7 +35,7 @@ log = structlog.get_logger()
 
 LangGraphNodeFn = Callable[[Any, RunnableConfig], dict[str, Any]]
 LangGraphRouterFn = Callable[[Any], str]
-LangGraphLoopUnwrapFn = Callable[[Any, str], Any]
+LangGraphLoopUnwrapFn = Callable[[StateBus, str], Any]
 
 
 def _wire_oracle(
@@ -372,7 +373,8 @@ def _make_loop_router(
     """
 
     def loop_router(state: Any) -> str:
-        count = getattr(state, count_field, 0)
+        bus = adapt_state(state)
+        count = bus.get(count_field, 0)
         if count >= loop.max_iterations:
             if loop.on_exhaust == 'error':
                 raise ExecutionError.build(
@@ -382,7 +384,7 @@ def _make_loop_router(
                     node=item_name,
                 )
             return exit_name
-        val = unwrap_fn(state, field_name)
+        val = unwrap_fn(bus, field_name)
         try:
             should_continue = condition(val)
         except (AttributeError, TypeError) as exc:
@@ -406,14 +408,14 @@ def _node_loop_unwrap(node: Node, field_name: str) -> LangGraphLoopUnwrapFn:
     append-reducer that Loop uses.
     """
 
-    def unwrap(state: Any, _field_name: str) -> Any:
+    def unwrap(state: StateBus, _field_name: str) -> Any:
         # Dict-form outputs: primary key is {field}_{first_key}.
         no = normalize_outputs(node.outputs)
         if no.is_dict_form:
             state_field = f"{_field_name}_{no.primary_key}"
         else:
             state_field = _field_name
-        own_val = getattr(state, state_field, None)
+        own_val = state.get(state_field)
         if isinstance(own_val, list) and own_val:
             return own_val[-1]
         elif isinstance(own_val, list):
@@ -426,9 +428,12 @@ def _node_loop_unwrap(node: Node, field_name: str) -> LangGraphLoopUnwrapFn:
     return unwrap
 
 
-def _construct_loop_unwrap(state: Any, field_name: str) -> Any:
-    """Unwrap callback for Construct loop routers."""
-    val = getattr(state, field_name, None)
+def _construct_loop_unwrap(state: StateBus, field_name: str) -> Any:
+    """Unwrap callback for Construct loop routers.
+
+    Receives a pre-adapted StateBus from ``loop_router``.
+    """
+    val = state.get(field_name)
     return _unwrap_loop_value(val, object)
 
 

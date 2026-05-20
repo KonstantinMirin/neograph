@@ -86,7 +86,7 @@ class ModeDispatch(Protocol):
         node: Node,
         input_data: NodeInput,
         config: RunnableConfig,
-        context_data: dict[str, Any] | None,
+        context_data: dict[str, str] | None,
     ) -> NodeOutput: ...
 
 
@@ -106,7 +106,7 @@ class ScriptedDispatch:
         node: Node,
         input_data: NodeInput,
         config: RunnableConfig,
-        context_data: dict[str, Any] | None,
+        context_data: dict[str, str] | None,
     ) -> NodeOutput:
         # context_data intentionally unused — scripted functions don't need LLM context
         result = self.fn(input_data.value, config)
@@ -125,7 +125,7 @@ class ThinkDispatch:
         node: Node,
         input_data: NodeInput,
         config: RunnableConfig,
-        context_data: dict[str, Any] | None,
+        context_data: dict[str, str] | None,
     ) -> NodeOutput:
         from neograph._llm import invoke_structured
 
@@ -166,7 +166,7 @@ class ToolDispatch:
         node: Node,
         input_data: NodeInput,
         config: RunnableConfig,
-        context_data: dict[str, Any] | None,
+        context_data: dict[str, str] | None,
     ) -> NodeOutput:
         from neograph._tool_loop import invoke_with_tools
         from neograph.tool import ToolBudgetTracker

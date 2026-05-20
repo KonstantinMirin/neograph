@@ -813,6 +813,7 @@ class TestBuildStateUpdate:
         """Dict-form outputs with Each modifier wraps per-key (lines 211-213)."""
         from pydantic import create_model
 
+        from neograph._state_bus import adapt_state
         from neograph.factory import _build_state_update
 
         n = Node("test", outputs={"result": RawText, "meta": Claims}) \
@@ -827,7 +828,7 @@ class TestBuildStateUpdate:
         result = _build_state_update(
             n, "test",
             {"result": RawText(text="ok"), "meta": Claims(items=["x"])},
-            state,
+            adapt_state(state),
         )
         # Each wraps each key with the dispatch key
         assert result["test_result"] == {"a": RawText(text="ok")}
@@ -837,6 +838,7 @@ class TestBuildStateUpdate:
         """Loop with history=True writes to history field (lines 231-232)."""
         from pydantic import create_model
 
+        from neograph._state_bus import adapt_state
         from neograph.factory import _build_state_update
 
         n = Node("test", outputs=RawText) \
@@ -847,7 +849,7 @@ class TestBuildStateUpdate:
         )
         state = StateModel()
 
-        result = _build_state_update(n, "test", RawText(text="v1"), state)
+        result = _build_state_update(n, "test", RawText(text="v1"), adapt_state(state))
         assert result["test"] == RawText(text="v1")
         assert result["neo_loop_count_test"] == 1
         assert result["neo_loop_history_test"] == RawText(text="v1")
@@ -935,6 +937,7 @@ class TestExtractInputEdgeCases:
         append-list is unwrapped to the latest value (line 555-556)."""
         from pydantic import create_model
 
+        from neograph._state_bus import adapt_state
         from neograph.factory import _extract_input
 
         # Node expects Draft (single type), state has a list from Loop
@@ -948,7 +951,7 @@ class TestExtractInputEdgeCases:
             Draft(content="v2", score=0.8),
         ])
 
-        result = _extract_input(state, n)
+        result = _extract_input(adapt_state(state), n)
         # Should unwrap to latest (v2) since it matches Draft type
         assert isinstance(result, Draft)
         assert result.content == "v2"

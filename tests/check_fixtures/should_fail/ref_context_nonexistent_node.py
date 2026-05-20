@@ -1,7 +1,7 @@
 # CHECK_ERROR: context.*not found|context.*unknown|context.*nonexistent
 # GAP: context= references are never validated at compile time.
 # state.py blindly creates Any-typed fields for each context name.
-# factory.py reads them at runtime via _state_get, silently returning None.
+# factory.py reads them at runtime via the StateBus adapter, silently returning None.
 # A typo in context=["nonexistant_node"] compiles fine but injects None
 # into the LLM prompt at runtime.
 from pydantic import BaseModel

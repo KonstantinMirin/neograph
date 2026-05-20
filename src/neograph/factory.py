@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 from typing import get_origin as _get_origin
 
 import structlog
@@ -42,6 +42,7 @@ from neograph._dispatch import (  # noqa: F401 — re-exported for tests/backwar
     _render_input,
 )
 from neograph._normalize import normalize_inputs, normalize_outputs
+from neograph._state_bus import StateBus, adapt_state
 from neograph.construct import Construct
 from neograph.di import _unwrap_each_dict, _unwrap_loop_value
 from neograph.errors import ConfigurationError, ExecutionError
@@ -57,41 +58,35 @@ log = structlog.get_logger()
 
 
 
-def _state_get(state: Any, key: str) -> Any:
-    """Read a key from state, handling both dict and Pydantic model forms."""
-    if isinstance(state, dict):
-        return state.get(key)
-    return getattr(state, key, None)
-
-
-def _inject_oracle_config(state: Any, config: RunnableConfig) -> RunnableConfig:
+def _inject_oracle_config(state: StateBus, config: RunnableConfig) -> RunnableConfig:
     """Inject Oracle generator ID and model override into config if present.
 
     Reads neo_oracle_gen_id and neo_oracle_model from state, merges them
     into config['configurable']. Returns the original config unchanged
     when no oracle fields are present.
     """
-    oracle_gen_id = _state_get(state, "neo_oracle_gen_id")
+    oracle_gen_id = state.get("neo_oracle_gen_id")
     if oracle_gen_id is None:
         return config
     configurable = config.get("configurable", {})
     extra = {"_generator_id": oracle_gen_id}
-    oracle_model = _state_get(state, "neo_oracle_model")
+    oracle_model = state.get("neo_oracle_model")
     if oracle_model is not None:
         extra["_oracle_model"] = oracle_model
     return {**config, "configurable": {**configurable, **extra}}
 
 
-def _extract_context(state: Any, node: Node) -> dict[str, Any] | None:
+def _extract_context(state: StateBus, node: Node) -> dict[str, str] | None:
     """Extract verbatim context fields from state for LLM nodes.
 
     Returns a dict of {context_name: state_value} if the node declares
-    context fields, or None if no context is configured.
+    context fields, or None if no context is configured. Context values
+    are user-declared string fields rendered verbatim into prompts.
     """
     if not node.context:
         return None
     return {
-        name: _state_get(state, field_name_for(name))
+        name: cast(str, state.get(field_name_for(name)))
         for name in node.context
     }
 
@@ -155,7 +150,7 @@ def _apply_skip_when(
     field_name: str,
     t0: float,
     node_log: BoundLogger,
-    state: Any = None,
+    state: StateBus | None = None,
 ) -> dict[str, Any] | None:
     """Check skip_when predicate and return early state update if skipped.
 
@@ -195,7 +190,7 @@ def _apply_skip_when(
     loop_mod = skip_mods.get("loop")
     if loop_mod is not None:
         count_field = f"neo_loop_count_{field_name}"
-        current_count = _state_get(state, count_field) or 0
+        current_count = (state.get(count_field) if state is not None else None) or 0
         update[count_field] = current_count + 1
     return update
 
@@ -206,7 +201,7 @@ def _build_state_update(
     node: Node,
     field_name: str,
     result: Any,
-    state: Any,
+    state: StateBus | None,
 ) -> dict[str, Any]:
     """Build a state update dict, handling dict-form and single-type outputs.
 
@@ -238,7 +233,7 @@ def _build_state_update(
         case _ as unreachable:
             assert_never(unreachable)
 
-    each_item = _state_get(state, "neo_each_item")
+    each_item = state.get("neo_each_item") if state is not None else None
 
     # Dict-form outputs: per-key state fields (neograph-1bp.3).
     no = normalize_outputs(node.outputs)
@@ -266,7 +261,7 @@ def _build_state_update(
     loop_mod = mods.get("loop")
     if loop_mod is not None:
         count_field = f"neo_loop_count_{field_name}"
-        current_count = _state_get(state, count_field) or 0
+        current_count = (state.get(count_field) if state is not None else None) or 0
         update[count_field] = current_count + 1
         if loop_mod.history:
             history_field = f"neo_loop_history_{field_name}"
@@ -298,14 +293,15 @@ def _execute_node(
 
     t0 = time.monotonic()
 
-    config = _inject_oracle_config(state, config)
-    raw_input = _extract_input(state, node)
+    bus = adapt_state(state)
+    config = _inject_oracle_config(bus, config)
+    raw_input = _extract_input(bus, node)
 
-    skip_result = _apply_skip_when(node, raw_input, field_name, t0, node_log, state)
+    skip_result = _apply_skip_when(node, raw_input, field_name, t0, node_log, bus)
     if skip_result is not None:
         return skip_result
 
-    context_data = _extract_context(state, node) if node.mode != "scripted" else None
+    context_data = _extract_context(bus, node) if node.mode != "scripted" else None
 
     if isinstance(raw_input, dict) and normalize_inputs(node.inputs).is_dict_form:
         node_input = NodeInput(fan_in=raw_input)
@@ -313,7 +309,7 @@ def _execute_node(
         node_input = NodeInput(single=raw_input)
 
     output = dispatch.execute(node, node_input, config, context_data)
-    update = _build_state_update(node, field_name, output.value, state)
+    update = _build_state_update(node, field_name, output.value, bus)
 
     elapsed = time.monotonic() - t0
     node_log.info("node_complete", duration_s=round(elapsed, 3))
@@ -397,7 +393,7 @@ class InputShape(Enum):
     SINGLE_TYPE = "single_type"
 
 
-def _classify_input_shape(state: Any, node: Node) -> InputShape:
+def _classify_input_shape(state: StateBus, node: Node) -> InputShape:
     """Determine which extraction strategy applies. Priority order matters."""
     if node.inputs is None:
         return InputShape.NONE
@@ -408,11 +404,11 @@ def _classify_input_shape(state: Any, node: Node) -> InputShape:
         no = normalize_outputs(node.outputs)
         if no.is_dict_form:
             own_field = f"{own_field}_{no.primary_key}"
-        own_val = _state_get(state, own_field)
+        own_val = state.get(own_field)
         if isinstance(own_val, list) and own_val:
             return InputShape.LOOP_REENTRY
 
-    replicate_item = _state_get(state, "neo_each_item")
+    replicate_item = state.get("neo_each_item")
     if replicate_item is not None and _is_instance_safe(replicate_item, node.inputs):
         return InputShape.EACH_ITEM
 
@@ -422,13 +418,13 @@ def _classify_input_shape(state: Any, node: Node) -> InputShape:
     return InputShape.SINGLE_TYPE
 
 
-def _extract_loop_reentry(state: Any, node: Node) -> Any:
+def _extract_loop_reentry(state: StateBus, node: Node) -> Any:
     """Read from the node's own append-list on loop iteration 1+."""
     own_field = field_name_for(node.name)
     no_out = normalize_outputs(node.outputs)
     if no_out.is_dict_form:
         own_field = f"{own_field}_{no_out.primary_key}"
-    own_val = _state_get(state, own_field)
+    own_val = state.get(own_field)
     latest = own_val[-1]  # type: ignore[index]
 
     ni = normalize_inputs(node.inputs)
@@ -447,7 +443,7 @@ def _extract_loop_reentry(state: Any, node: Node) -> Any:
     placed_latest = False
     for key, expected_type in by_name.items():
         state_key = field_name_for(key)
-        upstream_val = _state_get(state, state_key)
+        upstream_val = state.get(state_key)
         if upstream_val is not None and state_key != node_own_field:
             value = upstream_val
             if isinstance(value, list) and value and _get_origin(expected_type) is not list:
@@ -462,22 +458,22 @@ def _extract_loop_reentry(state: Any, node: Node) -> Any:
     return result
 
 
-def _extract_each_item(state: Any, node: Node) -> Any:
+def _extract_each_item(state: StateBus, node: Node) -> Any:
     """Read the fan-out item from neo_each_item."""
-    return _state_get(state, "neo_each_item")
+    return state.get("neo_each_item")
 
 
-def _extract_fan_in_dict(state: Any, node: Node) -> dict[str, Any]:
+def _extract_fan_in_dict(state: StateBus, node: Node) -> dict[str, Any]:
     """Read each named upstream from state by key."""
     ni = normalize_inputs(node.inputs)
     assert ni.is_dict_form
     result: dict[str, Any] = {}
     for input_name, expected_type in ni.by_name.items():
         if input_name == node.fan_out_param:
-            value = _state_get(state, "neo_each_item")
+            value = state.get("neo_each_item")
         else:
             state_key = field_name_for(input_name)
-            value = _state_get(state, state_key)
+            value = state.get(state_key)
             value = _unwrap_loop_value(value, expected_type)
             if (
                 value is not None
@@ -489,15 +485,10 @@ def _extract_fan_in_dict(state: Any, node: Node) -> dict[str, Any]:
     return result
 
 
-def _extract_single_type(state: Any, node: Node) -> Any:
+def _extract_single_type(state: StateBus, node: Node) -> Any:
     """Scan state fields for first value matching the node's input type."""
-    if isinstance(state, dict):
-        fields = list(state.keys())
-    else:
-        fields = list(state.__class__.model_fields.keys())
-
-    for attr_name in fields:
-        val = _state_get(state, attr_name)
+    for attr_name in state.keys():
+        val = state.get(attr_name)
         val = _unwrap_loop_value(val, node.inputs)
         val = _unwrap_each_dict(val, node.inputs)
         if val is not None and _is_instance_safe(val, node.inputs):
@@ -505,7 +496,7 @@ def _extract_single_type(state: Any, node: Node) -> Any:
     return None
 
 
-def _extract_input(state: Any, node: Node) -> Any:
+def _extract_input(state: StateBus, node: Node) -> Any:
     """Extract typed input from state — pure dispatch to shape helpers."""
     shape = _classify_input_shape(state, node)
     match shape:
@@ -548,8 +539,9 @@ def make_subgraph_fn(sub: Construct, sub_graph: CompiledStateGraph) -> Callable:
     sub_combo, _ = classify_modifiers(sub)
     has_loop = sub_combo in (ModifierCombo.LOOP, ModifierCombo.LOOP_OPERATOR)
 
-    def subgraph_node(state: Any, config: RunnableConfig) -> dict:
+    def subgraph_node(state: BaseModel | dict[str, Any], config: RunnableConfig) -> dict:
         sub_log.info("subgraph_start")
+        bus = adapt_state(state)
 
         # Loop re-entry: on iteration 2+, read from own append-list.
         # When output type matches input type (classic refine pattern),
@@ -558,7 +550,7 @@ def make_subgraph_fn(sub: Construct, sub_graph: CompiledStateGraph) -> Callable:
         # original inputs from parent state.
         input_data = None
         if has_loop:
-            own_val = _state_get(state, field_name)
+            own_val = bus.get(field_name)
             if isinstance(own_val, list) and own_val:
                 latest = own_val[-1]
                 if sub.input is None or isinstance(latest, sub.input):
@@ -570,26 +562,17 @@ def make_subgraph_fn(sub: Construct, sub_graph: CompiledStateGraph) -> Callable:
         # (e.g., loop output over seed). Unwrap append-lists.
         if input_data is None and sub.input is not None:
             sub_input_type = sub.input
-            if isinstance(state, dict):  # pragma: no cover — state is always a Pydantic model
-                for val in reversed(list(state.values())):
-                    check_val = val
-                    if isinstance(val, list) and val:
-                        check_val = val[-1]
-                    if check_val is not None and isinstance(check_val, sub_input_type):
-                        input_data = check_val
-                        break
-            else:
-                for attr_name in reversed(list(state.__class__.model_fields)):
-                    val = getattr(state, attr_name, None)
-                    check_val = val
-                    if isinstance(val, list) and val:
-                        check_val = val[-1]
-                    if check_val is not None and isinstance(check_val, sub_input_type):
-                        input_data = check_val
-                        break
+            for attr_name in reversed(bus.keys()):
+                val = bus.get(attr_name)
+                check_val = val
+                if isinstance(val, list) and val:
+                    check_val = val[-1]
+                if check_val is not None and isinstance(check_val, sub_input_type):
+                    input_data = check_val
+                    break
 
         # Run sub-graph with isolated state
-        sub_input: dict[str, Any] = {"node_id": state.get("node_id", "") if isinstance(state, dict) else getattr(state, "node_id", "")}
+        sub_input: dict[str, Any] = {"node_id": bus.get("node_id", "")}
         if input_data is not None:
             sub_input["neo_subgraph_input"] = input_data
 
@@ -598,12 +581,12 @@ def make_subgraph_fn(sub: Construct, sub_graph: CompiledStateGraph) -> Callable:
             if hasattr(n, "context") and n.context:
                 for ctx_name in n.context:
                     ctx_field = field_name_for(ctx_name)
-                    val = _state_get(state, ctx_field)
+                    val = bus.get(ctx_field)
                     if val is not None:
                         sub_input[ctx_field] = val
 
         # Forward Oracle gen_id + model override from parent state into config
-        config = _inject_oracle_config(state, config)
+        config = _inject_oracle_config(bus, config)
 
         sub_result = _strip_internals(sub_graph.invoke(sub_input, config=config))
 
@@ -636,7 +619,7 @@ def make_subgraph_fn(sub: Construct, sub_graph: CompiledStateGraph) -> Callable:
         update: dict[str, Any] = {field_name: output_val}
         if has_loop:
             count_field = f"neo_loop_count_{field_name}"
-            current = _state_get(state, count_field) or 0
+            current = bus.get(count_field) or 0
             update[count_field] = current + 1
         return update
 

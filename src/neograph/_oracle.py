@@ -15,16 +15,11 @@ from langchain_core.runnables import RunnableConfig
 from pydantic import BaseModel
 
 from neograph._llm_config import LlmConfig
+from neograph._state_bus import adapt_state
 from neograph.errors import ExecutionError
 from neograph.modifiers import Each, Oracle
 from neograph.naming import field_name_for
 from neograph.node import TypeSpecStatic
-
-
-def _state_get(state: Any, key: str) -> Any:
-    """Read a key from state — imported from factory at call time to avoid cycles."""
-    from neograph.factory import _state_get as _fg
-    return _fg(state, key)
 
 
 def _lookup_scripted(name: str) -> Callable:
@@ -71,7 +66,7 @@ def make_eachoracle_redirect_fn(
     def eachoracle_redirect_fn(state: Any, config: RunnableConfig) -> dict:
         result = raw_fn(state, config)
         # Extract the each_key from the item
-        item = _state_get(state, "neo_each_item")
+        item = adapt_state(state).get("neo_each_item")
         key = getattr(item, each_key, str(item)) if item is not None else "unknown"
         # Single-type outputs: result has {field_name: val}
         val = result.get(field_name)
@@ -292,7 +287,7 @@ def make_each_redirect_fn(raw_fn: Callable, field_name: str, each: Each) -> Call
 
     def each_redirect_fn(state: Any, config: RunnableConfig = None) -> dict:  # type: ignore[assignment]
         # Get the item being processed
-        each_item = _state_get(state, "neo_each_item")
+        each_item = adapt_state(state).get("neo_each_item")
 
         result = raw_fn(state, config) if config else raw_fn(state)
         val = result.get(field_name)

@@ -732,31 +732,35 @@ class TestRunIsolated:
 
 
 class TestStateGet:
-    """_state_get() — dual-form state access (dict vs Pydantic model).
+    """``adapt_state(state).get(...)`` — dual-form state access (dict vs Pydantic model).
 
-    BUG neograph-l5g0: dict path was untested. These tests cover both
-    forms directly to ensure identical behavior.
+    BUG neograph-l5g0: dict path was untested. These tests cover both forms
+    directly to ensure identical behavior. The duplicated ``_state_get``
+    helpers in factory.py and _oracle.py were replaced by the ``StateBus``
+    adapter in Batch 2 (neograph-036p); see
+    ``tests/hypothesis/test_state_bus_equivalence.py`` for property-based
+    equivalence pinning.
     """
 
     def test_returns_value_from_dict(self):
         """Dict-form state: key present → return value."""
-        from neograph.factory import _state_get
-        assert _state_get({"foo": 42}, "foo") == 42
+        from neograph._state_bus import adapt_state
+        assert adapt_state({"foo": 42}).get("foo") == 42
 
     def test_returns_none_for_missing_dict_key(self):
         """Dict-form state: key absent → None (not KeyError)."""
-        from neograph.factory import _state_get
-        assert _state_get({"foo": 42}, "bar") is None
+        from neograph._state_bus import adapt_state
+        assert adapt_state({"foo": 42}).get("bar") is None
 
     def test_returns_value_from_pydantic_model(self):
         """Pydantic-form state: field present → return value."""
-        from neograph.factory import _state_get
-        assert _state_get(RawText(text="hello"), "text") == "hello"
+        from neograph._state_bus import adapt_state
+        assert adapt_state(RawText(text="hello")).get("text") == "hello"
 
     def test_returns_none_for_missing_pydantic_field(self):
         """Pydantic-form state: field absent → None (not AttributeError)."""
-        from neograph.factory import _state_get
-        assert _state_get(RawText(text="hello"), "nonexistent") is None
+        from neograph._state_bus import adapt_state
+        assert adapt_state(RawText(text="hello")).get("nonexistent") is None
 
 
 class TestConfigInjectionPatterns:
