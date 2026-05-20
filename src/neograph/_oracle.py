@@ -16,11 +16,29 @@ from pydantic import BaseModel
 
 from neograph._llm_config import LlmConfig
 from neograph._runtime_registry import lookup_scripted
-from neograph._state_bus import adapt_state
+from neograph._state_bus import StateBus, adapt_state
 from neograph.errors import ExecutionError
 from neograph.modifiers import Each, Oracle
 from neograph.naming import field_name_for
 from neograph.node import TypeSpecStatic
+
+
+def _inject_oracle_config(state: StateBus, config: RunnableConfig) -> RunnableConfig:
+    """Inject Oracle generator ID and model override into config if present.
+
+    Reads neo_oracle_gen_id and neo_oracle_model from state, merges them
+    into config['configurable']. Returns the original config unchanged
+    when no oracle fields are present.
+    """
+    oracle_gen_id = state.get("neo_oracle_gen_id")
+    if oracle_gen_id is None:
+        return config
+    configurable = config.get("configurable", {})
+    extra = {"_generator_id": oracle_gen_id}
+    oracle_model = state.get("neo_oracle_model")
+    if oracle_model is not None:
+        extra["_oracle_model"] = oracle_model
+    return {**config, "configurable": {**configurable, **extra}}
 
 
 def make_oracle_redirect_fn(raw_fn: Callable, field_name: str, collector_field: str) -> Callable:

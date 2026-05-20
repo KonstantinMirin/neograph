@@ -17,6 +17,7 @@ from langgraph.types import RetryPolicy, Send, interrupt
 
 from neograph._normalize import normalize_outputs
 from neograph._state_bus import StateBus, adapt_state
+from neograph._subconstruct import make_subgraph_fn
 from neograph.construct import Construct
 from neograph.di import _unwrap_loop_value
 from neograph.errors import ExecutionError
@@ -24,7 +25,6 @@ from neograph.factory import (
     lookup_condition,
     make_node_fn,
     make_oracle_merge_fn,
-    make_subgraph_fn,
 )
 from neograph.forward import _BranchNode
 from neograph.modifiers import Each, Loop, Operator, Oracle, split_each_path

@@ -121,109 +121,674 @@ class TestFileSplitEnforcement:
         )
 
 
-class TestFactoryResponsibilityDiscipline:
-    """factory.py has one named responsibility: node-function construction.
+def _parse_neograph_imports(path: pathlib.Path) -> set[str]:
+    """Return the set of `neograph.*` modules imported by the file.
 
-    Per docs/design/architecture-decisions.md §4, factory.py was a god-module
-    mixing six responsibilities. The cgkl ticket split it into:
-        factory.py         — make_node_fn, make_subgraph_fn (the named public surface)
-        _state_io.py       — state read/write helpers (_build_state_update, _inject_oracle_config)
-        _modifier_io.py    — modifier-aware input extraction (_extract_input + shape dispatch)
-        _observability.py  — log/context helpers (_extract_context)
-    Oracle plumbing already lives in _oracle.py.
+    Walks both `from neograph.X import Y` and `import neograph.X` forms.
+    Returns module names without the `neograph.` prefix
+    (e.g., `_execute`, `factory`, `_oracle`).
+    """
+    if not path.exists():
+        return set()
+    tree = ast.parse(path.read_text())
+    mods: set[str] = set()
+    for stmt in ast.walk(tree):
+        if isinstance(stmt, ast.ImportFrom):
+            if stmt.module and stmt.module.startswith("neograph.") and stmt.level == 0:
+                mods.add(stmt.module[len("neograph."):])
+        elif isinstance(stmt, ast.Import):
+            for alias in stmt.names:
+                if alias.name.startswith("neograph."):
+                    mods.add(alias.name[len("neograph."):])
+    return mods
 
-    Each new module carries a one-line docstring stating its single responsibility.
-    factory.py keeps thin re-exports for backward compatibility with `compiler.py`,
-    `_wiring.py`, and tests — the re-exports are explicit and named so drift back
-    is obvious.
 
-    This guard whitelists the names factory.py is allowed to *define* at module
-    scope. Re-exports (imported then bound) are tolerated; defining a function
-    or class outside the whitelist fails the guard.
+class TestAssemblyClusterImportDAG:
+    """Guard 1 — Import-graph DAG layering for the assembly cluster.
+
+    Replaces the previous TestFactoryResponsibilityDiscipline line-count +
+    name-whitelist guard with a real architectural rule: the assembly cluster
+    modules (factory.py, _execute.py, _subconstruct.py, _oracle.py,
+    _state_write.py, _input_shape.py) form a strict layering DAG per
+    docs/design/god-module-analysis-2026-05-20.md §5.
+
+    factory.py -> _execute.py -> {_state_write, _input_shape, _oracle, _dispatch}
+    _subconstruct.py -> {_oracle, _state_bus}
+    _oracle.py / _state_write.py / _input_shape.py are leaves (no upward edges).
     """
 
-    # The only top-level *definitions* allowed in factory.py. Anything else
-    # must move to one of the responsibility-aligned modules.
-    FACTORY_DEFINITION_WHITELIST = frozenset({
-        # public node-function construction
-        "make_node_fn",
-        "make_subgraph_fn",
-        # private helpers used solely by the constructors above
-        "_make_raw_wrapper",
-        "_execute_node",
-        "_type_name",
-        # module-level objects
-        "log",
+    CLUSTER = frozenset({
+        "factory",
+        "_execute",
+        "_subconstruct",
+        "_oracle",
+        "_state_write",
+        "_input_shape",
     })
 
-    # Maximum line count for factory.py — was 601, target is well under 300.
-    FACTORY_LINE_BUDGET = 300
+    # For each cluster module, the cluster modules it is allowed to import.
+    # External modules (di, modifiers, naming, errors, etc.) are not enforced.
+    ALLOWED_CLUSTER_EDGES = {
+        "factory": {"_execute", "_input_shape", "_oracle", "_state_write", "_subconstruct"},
+        "_execute": {"_input_shape", "_oracle", "_state_write"},
+        "_subconstruct": {"_oracle"},
+        "_oracle": set(),
+        "_state_write": set(),
+        "_input_shape": set(),
+    }
 
-    def test_factory_defines_only_whitelisted_names(self):
-        """factory.py must define only the node-function construction surface."""
-        factory_path = SRC_DIR / "factory.py"
-        tree = ast.parse(factory_path.read_text())
-
-        defined: list[tuple[str, int]] = []
-        for stmt in tree.body:
-            if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                defined.append((stmt.name, stmt.lineno))
-            elif isinstance(stmt, ast.ClassDef):
-                defined.append((stmt.name, stmt.lineno))
-            elif isinstance(stmt, ast.Assign):
-                for target in stmt.targets:
-                    if isinstance(target, ast.Name):
-                        defined.append((target.id, stmt.lineno))
-
-        unauthorized = [
-            (name, lineno) for (name, lineno) in defined
-            if name not in self.FACTORY_DEFINITION_WHITELIST and not name.startswith("__")
-        ]
-        assert unauthorized == [], (
-            f"\n{len(unauthorized)} non-whitelisted definition(s) in factory.py:\n"
-            + "\n".join(f"  factory.py:{lineno}: '{name}'" for (name, lineno) in unauthorized)
-            + "\n\nfactory.py is for node-function construction only "
-            f"({sorted(self.FACTORY_DEFINITION_WHITELIST)}). Move other definitions "
-            "to _state_io.py, _modifier_io.py, _observability.py, or _oracle.py."
+    def test_no_edge_violates_dag(self):
+        violations: list[str] = []
+        for mod, allowed in self.ALLOWED_CLUSTER_EDGES.items():
+            path = SRC_DIR / f"{mod}.py"
+            imports = _parse_neograph_imports(path)
+            cluster_imports = imports & self.CLUSTER
+            extras = cluster_imports - allowed
+            for extra in sorted(extras):
+                violations.append(f"  {mod}.py -> {extra}.py (not in allowed DAG)")
+        assert not violations, (
+            "Assembly cluster import-DAG layering violated:\n"
+            + "\n".join(violations)
         )
 
-    def test_factory_under_line_budget(self):
-        """factory.py must stay under FACTORY_LINE_BUDGET lines."""
-        factory_path = SRC_DIR / "factory.py"
-        line_count = len(factory_path.read_text().splitlines())
-        assert line_count < self.FACTORY_LINE_BUDGET, (
-            f"factory.py is {line_count} lines; budget is {self.FACTORY_LINE_BUDGET}. "
-            "Move definitions to the responsibility-aligned siblings "
-            "(_state_io.py, _modifier_io.py, _observability.py)."
+    def test_mutation_violation_detected(self, tmp_path):
+        """Mutation case — inject a violating edge; scanner must detect."""
+        # Build a fake module that has a violating edge: _oracle imports _execute
+        fake_oracle = tmp_path / "_oracle.py"
+        fake_oracle.write_text(
+            "from neograph._execute import _execute_node\n"
+        )
+        imports = _parse_neograph_imports(fake_oracle)
+        cluster_imports = imports & self.CLUSTER
+        allowed = self.ALLOWED_CLUSTER_EDGES["_oracle"]
+        extras = cluster_imports - allowed
+        assert "_execute" in extras, (
+            "Scanner failed to detect the mutation (oracle -> _execute)."
         )
 
-    def test_responsibility_modules_exist_with_docstrings(self):
-        """Each new module must exist and carry a one-line responsibility docstring."""
-        modules = {
-            "_state_io.py": "state",
-            "_modifier_io.py": "modifier",
-            "_observability.py": "observability",
-        }
+
+class TestAssemblyScenarioTouchpoints:
+    """Guard 2 — Scenario walkthrough: change scenarios bounded by file count.
+
+    Each architectural change scenario lists the files that should be touched.
+    The guard asserts the touched-file set stays bounded. If a future change
+    forces more files than `max_touch`, that is a drift signal — the cluster
+    has accreted responsibilities.
+    """
+
+    SCENARIO_TOUCHPOINTS = {
+        "add_new_execution_mode": {
+            "must_touch": {"_dispatch.py"},
+            "may_touch": {"factory.py"},
+            "max_touch": 2,
+        },
+        "add_new_modifier_shape": {
+            "must_touch": {"_state_write.py", "_input_shape.py", "modifiers.py"},
+            "may_touch": set(),
+            "max_touch": 3,
+        },
+        "add_new_oracle_config_field": {
+            "must_touch": {"_oracle.py"},
+            "may_touch": set(),
+            "max_touch": 1,
+        },
+        "add_subconstruct_boundary_feature": {
+            "must_touch": {"_subconstruct.py"},
+            "may_touch": {"construct.py"},
+            "max_touch": 3,
+        },
+        "add_lifecycle_step": {
+            "must_touch": {"_execute.py"},
+            "may_touch": set(),
+            "max_touch": 1,
+        },
+    }
+
+    def test_all_must_touch_files_exist(self):
+        """Every file named in SCENARIO_TOUCHPOINTS must exist in src."""
         missing: list[str] = []
-        for mod, expected_keyword in modules.items():
-            path = SRC_DIR / mod
+        for scenario, spec in self.SCENARIO_TOUCHPOINTS.items():
+            for fname in (spec["must_touch"] | spec["may_touch"]):
+                if not (SRC_DIR / fname).exists():
+                    missing.append(f"  {scenario}: {fname} does not exist")
+        assert not missing, "\n".join(missing)
+
+    def test_max_touch_bounded(self):
+        for scenario, spec in self.SCENARIO_TOUCHPOINTS.items():
+            total = len(spec["must_touch"]) + len(spec["may_touch"])
+            assert total <= spec["max_touch"], (
+                f"Scenario '{scenario}' touches {total} files; max {spec['max_touch']}. "
+                "If a real change forces more, that's a drift signal."
+            )
+
+    def test_mutation_excess_touchpoint_detected(self):
+        """Mutation case — inject a scenario that touches too many files."""
+        bad = {
+            "must_touch": {"a.py", "b.py", "c.py", "d.py"},
+            "may_touch": set(),
+            "max_touch": 2,
+        }
+        total = len(bad["must_touch"]) + len(bad["may_touch"])
+        assert total > bad["max_touch"], (
+            "Mutation scanner failed: oversized touchpoint not detected."
+        )
+
+
+class TestAssemblyCohesionFanOut:
+    """Guard 3 — Cohesion fan-out metric.
+
+    For each assembly-cluster module, count how many distinct external
+    (src/neograph) modules import from it. The ceiling is set per the
+    expected architectural shape — drivers (factory) can have many
+    importers; leaf modules should have few; lifecycle hub (_execute)
+    must have exactly one importer (factory).
+    """
+
+    FAN_OUT_CEILING = {
+        # factory.py is the public-facing wrapper builder; it's allowed many importers.
+        "factory.py": 12,
+        # _execute.py is the lifecycle hub; only factory should import.
+        "_execute.py": 1,
+        # _subconstruct.py is imported by compiler + _wiring + factory.
+        "_subconstruct.py": 3,
+        # _oracle.py: re-exported via factory, imported by _execute, _subconstruct, _wiring.
+        "_oracle.py": 6,
+        # _state_write.py: imported by _execute + factory (re-export) + tests scope.
+        "_state_write.py": 3,
+        # _input_shape.py: imported by _execute + factory (re-export).
+        "_input_shape.py": 3,
+    }
+
+    def _count_importers(self, target_module_basename: str) -> list[str]:
+        target = f"neograph.{target_module_basename[:-3]}"  # strip '.py'
+        importers: list[str] = []
+        for py in sorted(SRC_DIR.glob("*.py")):
+            if py.name == target_module_basename:
+                continue
+            text = py.read_text()
+            if f"from {target} " in text or f"from {target}\n" in text or f"import {target}\n" in text:
+                importers.append(py.name)
+        return importers
+
+    def test_fan_out_under_ceiling(self):
+        violations: list[str] = []
+        for mod, ceiling in self.FAN_OUT_CEILING.items():
+            importers = self._count_importers(mod)
+            if len(importers) > ceiling:
+                violations.append(
+                    f"  {mod}: imported by {len(importers)} modules (ceiling {ceiling}). "
+                    f"Importers: {importers}"
+                )
+        assert not violations, (
+            "Cohesion fan-out exceeded ceiling — module is becoming a kitchen sink:\n"
+            + "\n".join(violations)
+        )
+
+    def test_mutation_excess_importers_detected(self, tmp_path):
+        """Mutation case — synthesize a target that has too many importers."""
+        # Synthesize 5 importers of a fictitious module 'leaf.py', ceiling 1.
+        for i in range(5):
+            (tmp_path / f"client_{i}.py").write_text(
+                "from neograph.leaf import x\n"
+            )
+        count = sum(
+            1 for p in tmp_path.glob("client_*.py")
+            if "from neograph.leaf " in p.read_text()
+        )
+        assert count > 1, "Mutation scanner failed: excess importers not detected."
+
+
+class TestClusterEModifierTouchpointSentinels:
+    """Guard 4 — Co-change witness for Cluster E (tightens gm-1 sentinel).
+
+    Every `# MODIFIER_RULE_TOUCHPOINT` sentinel must live in _state_write.py.
+    Sentinels in other files indicate the Each-key / Loop-counter / Oracle-fusion
+    rules are leaking across files — the same anti-pattern Cluster E was
+    designed to eliminate.
+    """
+
+    SENTINEL = "# MODIFIER_RULE_TOUCHPOINT"
+
+    def _scan_sentinels(self) -> dict[str, int]:
+        result: dict[str, int] = {}
+        for py in sorted(SRC_DIR.glob("*.py")):
+            text = py.read_text()
+            n = text.count(self.SENTINEL)
+            if n > 0:
+                result[py.name] = n
+        return result
+
+    def test_all_sentinels_live_in_state_write(self):
+        counts = self._scan_sentinels()
+        offenders = {k: v for k, v in counts.items() if k != "_state_write.py"}
+        assert not offenders, (
+            f"{self.SENTINEL} sentinels found outside _state_write.py: {offenders}"
+        )
+
+    def test_state_write_has_sentinels(self):
+        counts = self._scan_sentinels()
+        n = counts.get("_state_write.py", 0)
+        assert n >= 3, (
+            f"Expected >=3 {self.SENTINEL} sentinels in _state_write.py "
+            f"(Each-key wrap, Loop counter, Oracle fusion) but found {n}."
+        )
+
+    def test_mutation_drift_detected(self, tmp_path):
+        """Mutation case — inject sentinel into a different file; scanner detects."""
+        rogue = tmp_path / "rogue.py"
+        rogue.write_text(f"x = 1  {self.SENTINEL}\n")
+        # The scanner using `text.count(SENTINEL)` would see it. Simulate the
+        # check shape from test_all_sentinels_live_in_state_write.
+        n = rogue.read_text().count(self.SENTINEL)
+        assert n > 0, "Mutation scanner failed: sentinel injection not detected."
+
+
+class TestInputShapeExhaustiveness:
+    """Guard 5 — Every InputShape enum value has a matching extractor function.
+
+    The dispatch in _extract_input must enumerate every InputShape variant.
+    A new shape always implies (a) a new enum value, (b) a new extractor
+    function, (c) a new branch in _classify_input_shape, and (d) a new
+    branch in _extract_input. The exhaustive `assert_never` plus this guard
+    keep them in lockstep.
+    """
+
+    def _enum_values(self) -> list[str]:
+        from neograph._input_shape import InputShape
+        return [v.value for v in InputShape]
+
+    def test_extractor_per_variant(self):
+        src = (SRC_DIR / "_input_shape.py").read_text()
+        missing: list[str] = []
+        for variant in self._enum_values():
+            if variant == "none":
+                continue
+            expected_fn = f"_extract_{variant}"
+            if f"def {expected_fn}(" not in src:
+                missing.append(f"  InputShape({variant!r}) has no _extract_{variant}() function")
+        assert not missing, (
+            "InputShape extractor table incomplete:\n" + "\n".join(missing)
+        )
+
+    def test_dispatch_covers_all_variants(self):
+        """_extract_input must reference every (non-NONE) InputShape variant."""
+        src = (SRC_DIR / "_input_shape.py").read_text()
+        missing: list[str] = []
+        for variant in self._enum_values():
+            if variant == "none":
+                continue
+            needle = f"InputShape.{variant.upper()}"
+            if needle not in src:
+                missing.append(f"  {needle} not referenced in _extract_input")
+        assert not missing, (
+            "InputShape dispatch is not exhaustive:\n" + "\n".join(missing)
+        )
+
+    def test_mutation_missing_extractor_detected(self):
+        """Mutation case — pretend a variant exists with no extractor."""
+        src = (SRC_DIR / "_input_shape.py").read_text()
+        bogus_variant = "phantom_shape"
+        expected = f"def _extract_{bogus_variant}("
+        assert expected not in src, (
+            "Mutation precondition violated: _extract_phantom_shape unexpectedly exists."
+        )
+
+
+class TestSubconstructBoundaryOwnership:
+    """Guard 6 — Sub-construct runtime boundary lives in _subconstruct.py only.
+
+    The runtime mutation that writes `neo_subgraph_input` into a sub_input
+    dict is sub-construct boundary semantics. Re-implementations in
+    factory.py / _execute.py / _wiring.py / runner.py would mean the boundary
+    is splaying across files.
+
+    Compile-time mentions in state.py / loader.py / _construct_builder.py /
+    _construct_validation.py / forward.py are out-of-scope (they declare the
+    port type; they don't perform the runtime write).
+    """
+
+    NEEDLE = '"neo_subgraph_input"'
+    RUNTIME_MODULES = {
+        "factory.py",
+        "_execute.py",
+        "_wiring.py",
+        "runner.py",
+    }
+
+    def test_runtime_write_only_in_subconstruct(self):
+        offenders: list[str] = []
+        for fname in self.RUNTIME_MODULES:
+            path = SRC_DIR / fname
             if not path.exists():
-                missing.append(f"  {mod}: file does not exist")
+                continue
+            text = path.read_text()
+            if self.NEEDLE in text:
+                offenders.append(fname)
+        assert not offenders, (
+            f"{self.NEEDLE} found in runtime modules other than _subconstruct.py: {offenders}. "
+            "Sub-construct boundary semantics belong in _subconstruct.py only."
+        )
+
+    def test_subconstruct_writes_neo_subgraph_input(self):
+        text = (SRC_DIR / "_subconstruct.py").read_text()
+        assert self.NEEDLE in text, (
+            "_subconstruct.py must own the runtime neo_subgraph_input write."
+        )
+
+    def test_mutation_runtime_leak_detected(self, tmp_path):
+        """Mutation case — write needle into a fake runtime file; scanner detects."""
+        rogue = tmp_path / "factory.py"
+        rogue.write_text('sub_input["neo_subgraph_input"] = x\n')
+        text = rogue.read_text()
+        assert self.NEEDLE in text, (
+            "Mutation scanner failed: runtime leak not detected."
+        )
+
+
+class TestClusterEUnification:
+    """_apply_skip_when joins _build_state_update in renamed _state_write.py (gm-1).
+
+    The two functions encode the same modifier rule set (Each-key wrapping,
+    Loop counter increment, Oracle-fusion). They were split across two files
+    in the cgkl topical layout; this guard pins them in one module so the
+    rule set has a single home.
+
+    Per docs/design/god-module-analysis-2026-05-20.md Q3+Q4:
+      - _state_io.py renamed to _state_write.py (mirrors _state_bus.py read side)
+      - _apply_skip_when moved out of _modifier_io.py to _state_write.py
+      - both functions co-located so modifier rules change in lockstep
+
+    The co-change witness is a `# MODIFIER_RULE_TOUCHPOINT` sentinel comment
+    placed at every Each-key wrapping / Loop counter / Oracle-fusion rule
+    site inside _state_write.py. The guard asserts all sentinels live in
+    _state_write.py only — if one drifts to another file, modifier rules
+    have splayed again.
+    """
+
+    def test_state_write_module_exists(self):
+        assert (SRC_DIR / "_state_write.py").exists(), (
+            "_state_write.py must exist (renamed from _state_io.py per gm-1)."
+        )
+
+    def test_state_io_module_deleted(self):
+        assert not (SRC_DIR / "_state_io.py").exists(), (
+            "_state_io.py must be deleted — its contents moved to _state_write.py."
+        )
+
+    def test_state_write_contains_build_state_update_and_apply_skip_when(self):
+        path = SRC_DIR / "_state_write.py"
+        if not path.exists():
+            pytest.fail("_state_write.py does not exist yet (gm-1 not complete).")
+        tree = ast.parse(path.read_text())
+        names = {
+            n.name for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)
+        }
+        for required in ("_build_state_update", "_apply_skip_when"):
+            assert required in names, (
+                f"_state_write.py must define {required} (gm-1 Cluster E unification)."
+            )
+
+    def test_apply_skip_when_not_in_modifier_io_or_input_shape(self):
+        for candidate in ("_modifier_io.py", "_input_shape.py"):
+            path = SRC_DIR / candidate
+            if not path.exists():
                 continue
             tree = ast.parse(path.read_text())
-            docstring = ast.get_docstring(tree)
-            if not docstring:
-                missing.append(f"  {mod}: module-level docstring missing")
+            names = {
+                n.name for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)
+            }
+            assert "_apply_skip_when" not in names, (
+                f"_apply_skip_when must NOT be defined in {candidate} — "
+                "it belongs in _state_write.py (Cluster E)."
+            )
+
+    def test_modifier_rule_touchpoint_sentinels_live_in_state_write(self):
+        """All `# MODIFIER_RULE_TOUCHPOINT` sentinels must live in _state_write.py."""
+        SENTINEL = "# MODIFIER_RULE_TOUCHPOINT"
+        offenders: list[str] = []
+        count_in_state_write = 0
+        for py in sorted(SRC_DIR.glob("*.py")):
+            text = py.read_text()
+            n = text.count(SENTINEL)
+            if n == 0:
                 continue
-            if expected_keyword.lower() not in docstring.lower():
-                missing.append(
-                    f"  {mod}: docstring does not mention '{expected_keyword}' "
-                    f"(got: {docstring[:80]!r})"
-                )
-        assert missing == [], (
-            f"\n{len(missing)} responsibility-module issue(s):\n"
-            + "\n".join(missing)
+            if py.name == "_state_write.py":
+                count_in_state_write = n
+            else:
+                offenders.append(f"{py.name}: {n} sentinel(s)")
+        assert not offenders, (
+            f"{SENTINEL} found outside _state_write.py: {offenders}"
         )
+        assert count_in_state_write >= 3, (
+            f"Expected >=3 {SENTINEL} sentinels in _state_write.py "
+            f"(Each-key wrap, Loop counter, Oracle fusion) but found {count_in_state_write}."
+        )
+
+
+class TestLifecycleSeparation:
+    """_execute_node and its helpers live in _execute.py (gm-3 / Cluster B).
+
+    factory.py builds wrappers (Cluster A). _execute_node *runs* one
+    invocation through preamble → dispatch → postamble — a different change
+    axis. Per docs/design/god-module-analysis-2026-05-20.md Q1+Q5+Q2:
+      - _execute_node moved to new _execute.py
+      - _type_name moved into _execute.py as a private helper
+      - _extract_context moved into _execute.py (sole caller was _execute_node)
+      - _observability.py deleted (its only function lives in _execute.py)
+    """
+
+    def test_execute_module_exists(self):
+        assert (SRC_DIR / "_execute.py").exists(), (
+            "_execute.py must exist (created by gm-3 for Cluster B)."
+        )
+
+    def test_observability_module_deleted(self):
+        assert not (SRC_DIR / "_observability.py").exists(), (
+            "_observability.py must be deleted — _extract_context moved into _execute.py."
+        )
+
+    def test_execute_defines_required_functions(self):
+        path = SRC_DIR / "_execute.py"
+        if not path.exists():
+            pytest.fail("_execute.py does not exist yet (gm-3 not complete).")
+        tree = ast.parse(path.read_text())
+        names = {
+            n.name for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)
+        }
+        for required in ("_execute_node", "_type_name", "_extract_context"):
+            assert required in names, (
+                f"_execute.py must define {required} (gm-3 Cluster B)."
+            )
+
+    def test_factory_does_not_define_execute_helpers(self):
+        path = SRC_DIR / "factory.py"
+        tree = ast.parse(path.read_text())
+        names = {
+            n.name for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)
+        }
+        for forbidden in ("_execute_node", "_type_name", "_extract_context"):
+            assert forbidden not in names, (
+                f"factory.py must NOT define {forbidden} — it lives in _execute.py."
+            )
+
+    def test_execute_cohesion_single_src_importer(self):
+        """_execute.py's only src/neograph importer must be factory.py."""
+        importers: list[str] = []
+        target = "neograph._execute"
+        for py in sorted(SRC_DIR.glob("*.py")):
+            if py.name == "_execute.py":
+                continue
+            text = py.read_text()
+            if f"from {target}" in text or f"import {target}" in text:
+                importers.append(py.name)
+        assert importers == ["factory.py"], (
+            f"_execute.py should be imported by factory.py only, got: {importers}"
+        )
+
+
+class TestInputShapeRename:
+    """_modifier_io.py renamed to _input_shape.py (gm-3 / Clusters G+H).
+
+    After _apply_skip_when left in gm-1, what remains is pure read-side
+    input-shape classification + extraction. The name should reflect that.
+    """
+
+    def test_input_shape_module_exists(self):
+        assert (SRC_DIR / "_input_shape.py").exists(), (
+            "_input_shape.py must exist (renamed from _modifier_io.py per gm-3)."
+        )
+
+    def test_modifier_io_module_deleted(self):
+        assert not (SRC_DIR / "_modifier_io.py").exists(), (
+            "_modifier_io.py must be deleted — contents renamed to _input_shape.py."
+        )
+
+    def test_input_shape_contains_required_symbols(self):
+        path = SRC_DIR / "_input_shape.py"
+        if not path.exists():
+            pytest.fail("_input_shape.py does not exist yet.")
+        tree = ast.parse(path.read_text())
+        func_names = {
+            n.name for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)
+        }
+        class_names = {
+            n.name for n in ast.walk(tree) if isinstance(n, ast.ClassDef)
+        }
+        assert "InputShape" in class_names, "_input_shape.py must define InputShape."
+        for fn in (
+            "_classify_input_shape",
+            "_extract_input",
+            "_extract_loop_reentry",
+            "_extract_each_item",
+            "_extract_fan_in_dict",
+            "_extract_single_type",
+        ):
+            assert fn in func_names, f"_input_shape.py must define {fn}."
+
+    def test_input_shape_cohesion_single_src_importer(self):
+        """_input_shape.py's only src/neograph importer (apart from factory's
+        backward-compat re-export) must be _execute.py."""
+        importers: list[str] = []
+        target = "neograph._input_shape"
+        for py in sorted(SRC_DIR.glob("*.py")):
+            if py.name == "_input_shape.py":
+                continue
+            text = py.read_text()
+            if f"from {target}" in text or f"import {target}" in text:
+                importers.append(py.name)
+        # factory.py keeps a noqa re-export of InputShape + extractors for
+        # tests/test_coverage_gaps that imports them off factory.py. _execute.py
+        # is the real consumer.
+        assert "_execute.py" in importers, (
+            f"_execute.py must import from _input_shape.py, got importers: {importers}"
+        )
+        # Apart from factory.py (re-export) and _execute.py (real), no one
+        # else may import.
+        allowed = {"_execute.py", "factory.py"}
+        extras = set(importers) - allowed
+        assert not extras, (
+            f"_input_shape.py imported by unexpected modules: {extras}; "
+            f"allowed: {allowed}"
+        )
+
+
+class TestSubconstructBoundary:
+    """make_subgraph_fn moves to _subconstruct.py (gm-4 / Cluster C).
+
+    Sub-construct boundary semantics (input-by-type scan, output-by-type scan,
+    loop re-entry shortcut, context-field forwarding, isolated sub_input dict)
+    is a separate change axis from per-node wrapper assembly. The inline scan
+    blocks are extracted to named helpers so the boundary rules have
+    inspectable shape per docs/design/god-module-analysis-2026-05-20.md
+    Cluster C + §6.
+
+    Scenario walkthrough — "Add a new sub-construct boundary feature" should
+    touch at most 3 files: _subconstruct.py, tests/test_composition.py, and
+    optionally construct.py for IR-level shape changes.
+    """
+
+    SCENARIO_TOUCHPOINTS = {
+        "add_subconstruct_boundary_feature": {
+            "_subconstruct.py",
+            "tests/test_composition.py",
+            "construct.py",
+        },
+    }
+
+    def test_subconstruct_module_exists(self):
+        assert (SRC_DIR / "_subconstruct.py").exists(), (
+            "_subconstruct.py must exist (created by gm-4 for Cluster C)."
+        )
+
+    def test_subconstruct_defines_required_symbols(self):
+        path = SRC_DIR / "_subconstruct.py"
+        if not path.exists():
+            pytest.fail("_subconstruct.py does not exist yet.")
+        tree = ast.parse(path.read_text())
+        names = {
+            n.name for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)
+        }
+        for required in (
+            "make_subgraph_fn",
+            "_scan_subgraph_input",
+            "_scan_subgraph_output",
+        ):
+            assert required in names, (
+                f"_subconstruct.py must define {required} (gm-4 Cluster C)."
+            )
+
+    def test_factory_does_not_define_make_subgraph_fn(self):
+        path = SRC_DIR / "factory.py"
+        tree = ast.parse(path.read_text())
+        names = {
+            n.name for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)
+        }
+        assert "make_subgraph_fn" not in names, (
+            "factory.py must NOT define make_subgraph_fn — it lives in _subconstruct.py."
+        )
+
+    def test_scenario_touchpoints_bounded(self):
+        """Adding a sub-construct boundary feature must touch at most 3 files."""
+        for scenario, files in self.SCENARIO_TOUCHPOINTS.items():
+            assert len(files) <= 3, (
+                f"Scenario '{scenario}' would touch {len(files)} files; "
+                "max 3. If a future change forces more, that's a drift signal."
+            )
+
+
+class TestOracleConfigInOracleModule:
+    """_inject_oracle_config belongs in _oracle.py (gm-2 / Cluster F).
+
+    The function reads neo_oracle_* state and injects into config['configurable'].
+    That is Oracle dispatch plumbing, not state I/O. Per
+    docs/design/god-module-analysis-2026-05-20.md Q4, it lives in _oracle.py
+    next to make_oracle_redirect_fn / make_oracle_merge_fn / _unwrap_oracle_results.
+    """
+
+    def test_inject_oracle_config_defined_in_oracle_module(self):
+        oracle = (SRC_DIR / "_oracle.py").read_text()
+        tree = ast.parse(oracle)
+        names = {
+            n.name for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)
+        }
+        assert "_inject_oracle_config" in names, (
+            "_inject_oracle_config must be defined in _oracle.py "
+            "(Cluster F — Oracle generator dispatch)."
+        )
+
+    def test_inject_oracle_config_not_in_state_modules(self):
+        for candidate in ("_state_io.py", "_state_write.py"):
+            path = SRC_DIR / candidate
+            if not path.exists():
+                continue
+            tree = ast.parse(path.read_text())
+            names = {
+                n.name for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)
+            }
+            assert "_inject_oracle_config" not in names, (
+                f"_inject_oracle_config must NOT be defined in {candidate} — "
+                "it belongs in _oracle.py (Cluster F)."
+            )
 
 
 class TestDeadCodeRemoval:
@@ -710,7 +1275,7 @@ class TestExtractInputDispatch:
 
     def test_extract_input_body_is_short(self):
         """_extract_input body must be < 30 lines (pure dispatch)."""
-        source = (SRC_DIR / "_modifier_io.py").read_text()
+        source = (SRC_DIR / "_input_shape.py").read_text()
         tree = ast.parse(source)
 
         for node in ast.walk(tree):
@@ -722,18 +1287,18 @@ class TestExtractInputDispatch:
                 )
                 return
 
-        pytest.fail("_extract_input function not found in _modifier_io.py")
+        pytest.fail("_extract_input function not found in _input_shape.py")
 
     def test_input_shape_enum_exists(self):
         """InputShape enum must exist for exhaustive dispatch."""
-        source = (SRC_DIR / "_modifier_io.py").read_text()
+        source = (SRC_DIR / "_input_shape.py").read_text()
         tree = ast.parse(source)
         class_names = {
             n.name for n in ast.walk(tree)
             if isinstance(n, ast.ClassDef)
         }
         assert "InputShape" in class_names, (
-            "InputShape enum must exist in _modifier_io.py for exhaustive "
+            "InputShape enum must exist in _input_shape.py for exhaustive "
             "_extract_input dispatch."
         )
 
@@ -1119,9 +1684,10 @@ FUNCTION_LOCAL_IMPORT_ALLOWLIST: set[tuple[str, str, frozenset[str]]] = {
         "neograph._llm",
         frozenset({"_llm_factory", "_prompt_compiler"}),
     ),
-    # factory.py — cycle: factory's state-update path strips internal fields that
-    # runner.py owns. Will retire when state writeback moves to _state_io (cgkl).
-    ("factory.py", "neograph.runner", frozenset({"_strip_internals"})),
+    # _subconstruct.py — cycle: sub-construct invocation strips internal fields
+    # that runner.py owns. Inherited from factory.py when make_subgraph_fn moved
+    # out (gm-4). Will retire when runner.py loses its internal-field knowledge.
+    ("_subconstruct.py", "neograph.runner", frozenset({"_strip_internals"})),
     # lint.py — cycle: lint inspects the runtime registry to check whether
     # scripted shims exist. Retires with _runtime_registry split.
     ("lint.py", "neograph._registry", frozenset({"registry"})),

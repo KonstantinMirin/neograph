@@ -18,6 +18,7 @@ from pydantic import BaseModel
 
 from neograph._dev_warnings import DEV_MODE
 from neograph._registry import registry
+from neograph._subconstruct import make_subgraph_fn
 from neograph._wiring import (  # noqa: F401 — re-exported for backward compat
     _add_branch_to_graph,
     _add_each_oracle_fused,
@@ -37,7 +38,6 @@ from neograph.factory import (
     make_node_fn,
     make_oracle_merge_fn,
     make_oracle_redirect_fn,
-    make_subgraph_fn,
 )
 from neograph.forward import _BranchNode
 from neograph.modifiers import ModifierCombo, classify_modifiers
