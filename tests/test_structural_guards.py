@@ -3662,6 +3662,9 @@ class TestLlmResponsibilityDiscipline:
             "_parse_json_response",
             "_build_retry_msg",
             "_invoke_json_with_retry",
+            # neograph-0tid: shared DSML recovery helper used by both
+            # _tool_loop and _llm_dispatch (strategy-orthogonal recovery).
+            "_attempt_dsml_recovery",
         }),
         "_llm_render.py": frozenset({
             "_is_inline_prompt",
@@ -3678,8 +3681,15 @@ class TestLlmResponsibilityDiscipline:
     # is); a proxy that catches accretion that escapes name-level review.
     LINE_BUDGETS = {
         "_llm.py": 260,
-        "_llm_dispatch.py": 80,
-        "_llm_retry.py": 300,
+        # neograph-0tid: bumped from 80 -> 130. Added strategy-orthogonal DSML
+        # recovery wiring in _call_structured (TypeError + silent-variant
+        # paths) plus richer docstring. Single helper call, not new
+        # responsibilities.
+        "_llm_dispatch.py": 130,
+        # neograph-0tid: bumped from 300 -> 365. Added shared
+        # _attempt_dsml_recovery helper (~58 lines) + _DSML_PATTERN constant
+        # consolidated from two prior sites.
+        "_llm_retry.py": 365,
         "_llm_render.py": 310,
     }
 

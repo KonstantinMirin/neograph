@@ -19,7 +19,11 @@ from neograph._llm import _get_llm, _notify_cost
 from neograph._llm_config import LlmConfig, _coerce_llm_config
 from neograph._llm_dispatch import _call_structured
 from neograph._llm_render import _compile_prompt
-from neograph._llm_retry import _invoke_json_with_retry, _parse_json_response
+from neograph._llm_retry import (
+    _attempt_dsml_recovery,
+    _invoke_json_with_retry,
+    _parse_json_response,
+)
 from neograph._llm_runtime import EMPTY_RUNTIME, LlmRuntime
 from neograph.describe_type import describe_value
 from neograph.errors import ConfigurationError, ExecutionError
@@ -356,30 +360,26 @@ def invoke_with_tools(
         raw_text = last_msg.content if hasattr(last_msg, "content") else str(last_msg)
         try:
             parse_result = _parse_json_response(raw_text, output_model)
-        except ExecutionError as parse_exc:
-            # Layer C: DSML/XML tool-call markup in final response — targeted retry
-            import re as _re
-            if _re.search(r"<[^>]*(?:function_call|invoke|DSML)[^>]*>", raw_text, _re.IGNORECASE):
-                log.warning("trailing_tool_call_markup",
-                             hint="model emitted tool-call markup after budget exhaustion; "
-                                  "retrying with targeted directive")
-                budget_msg = cfg.resolved_budget_exhausted_message(output_model.__name__)
-                messages.append({"role": "assistant", "content": raw_text})
-                messages.append({"role": "user", "content": budget_msg})
-                try:
-                    retry_response = llm.invoke(messages, config=config)
-                    retry_text = retry_response.content if hasattr(retry_response, "content") else str(retry_response)
-                    parse_result = _parse_json_response(retry_text, output_model)
-                except ExecutionError:
-                    # Layer B: targeted retry also failed — use generic retry path
-                    parse_result, _ = _invoke_json_with_retry(
-                        llm, messages, output_model, config, max_retries=max_retries,
-                    )
+        except ExecutionError:
+            # Layer C: DSML/XML tool-call markup in final response — strategy-orthogonal
+            # recovery via shared helper. See neograph-0tid.
+            recovered = _attempt_dsml_recovery(
+                raw_text, output_model, llm, messages, config, cfg,
+                strategy=strategy,
+            )
+            if recovered is not None:
+                parse_result = recovered
             else:
-                parse_result, _ = _invoke_json_with_retry(llm, messages, output_model, config, max_retries=max_retries)
+                # Layer B: no DSML markup detected — fall through to generic retry
+                parse_result, _ = _invoke_json_with_retry(
+                    llm, messages, output_model, config, max_retries=max_retries,
+                )
         usage = getattr(last_msg, "usage_metadata", None)
     else:
-        parse_result, usage = _call_structured(llm, messages, output_model, strategy, config, max_retries=max_retries)
+        parse_result, usage = _call_structured(
+            llm, messages, output_model, strategy, config,
+            cfg=cfg, max_retries=max_retries,
+        )
 
     # Collect total usage
     total_input_tokens = 0

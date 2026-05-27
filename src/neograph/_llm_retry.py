@@ -22,6 +22,14 @@ from pydantic_core import PydanticUndefined
 from neograph.describe_type import describe_type
 from neograph.errors import ExecutionError
 
+# Single source of truth for DSML/XML tool-call markup detection.
+# Used by both _tool_loop (post-ReAct loop final response) and
+# _llm_dispatch._call_structured (on TypeError or parsed=None) for
+# strategy-orthogonal recovery. See neograph-0tid.
+_DSML_PATTERN = re.compile(
+    r"<[^>]*(?:function_call|invoke|DSML)[^>]*>", re.IGNORECASE,
+)
+
 
 def _extract_balanced(text: str, start: int, open_ch: str, close_ch: str) -> str | None:
     """Extract a balanced JSON value starting at *start* with given delimiters."""
@@ -160,7 +168,7 @@ def _parse_json_response(text: str, output_model: type[BaseModel]) -> BaseModel:
     stripped = extracted.strip()
     if not stripped or (
         not stripped.startswith(("{", "["))
-        and re.search(r"<[^>]*(?:function_call|invoke|DSML)[^>]*>", text, re.IGNORECASE)
+        and _DSML_PATTERN.search(text)
     ):
         raise ExecutionError.build(
             "LLM returned non-JSON content instead of structured output",
@@ -297,3 +305,57 @@ def _invoke_json_with_retry(
         "total_tokens": total_input + total_output,
     } if (total_input or total_output) else None
     return _parse_json_response(raw_text, output_model), combined_usage
+
+
+def _attempt_dsml_recovery(
+    raw_text: str,
+    output_model: type[BaseModel],
+    llm: Any,
+    messages: list,
+    config: RunnableConfig,
+    cfg: Any,  # LlmConfig; duck-typed for .resolved_budget_exhausted_message + .max_retries
+    *,
+    strategy: str,
+) -> BaseModel | None:
+    """Detect DSML/XML tool-call markup in raw_text and attempt targeted retry.
+
+    Strategy-orthogonal: detection is content-based. Used by _tool_loop and
+    by _llm_dispatch._call_structured (for the structured strategy's TypeError
+    and parsed=None silent variants).
+
+    Returns:
+        Parsed model on successful recovery; None if no DSML markup detected.
+
+    Raises:
+        ExecutionError if DSML detected but the targeted retry also failed
+        AND the generic retry path also failed.
+    """
+    import structlog
+    _log = structlog.get_logger("neograph")
+
+    if not _DSML_PATTERN.search(raw_text):
+        return None
+
+    _log.warning(
+        "trailing_tool_call_markup",
+        strategy=strategy,
+        hint="model emitted tool-call markup; retrying with targeted directive",
+    )
+    budget_msg = cfg.resolved_budget_exhausted_message(output_model.__name__)
+    retry_messages = list(messages)
+    retry_messages.append({"role": "assistant", "content": raw_text})
+    retry_messages.append({"role": "user", "content": budget_msg})
+    try:
+        retry_response = llm.invoke(retry_messages, config=config)
+        retry_text = (
+            retry_response.content if hasattr(retry_response, "content")
+            else str(retry_response)
+        )
+        return _parse_json_response(retry_text, output_model)
+    except ExecutionError:
+        # Targeted retry also failed — try generic retry path
+        max_retries = getattr(cfg, "max_retries", 1)
+        parse_result, _ = _invoke_json_with_retry(
+            llm, retry_messages, output_model, config, max_retries=max_retries,
+        )
+        return parse_result

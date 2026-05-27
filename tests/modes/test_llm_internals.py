@@ -2565,8 +2565,14 @@ class TestDSMLInStructuredStrategyPath:
     _call_structured makes this test fail (structured_calls goes from 2 to 1).
     """
 
-    def test_structured_path_has_no_dsml_recovery_when_provider_returns_dsml(self):
-        import pytest as _pytest
+    def test_structured_path_recovers_dsml_when_provider_returns_dsml(self):
+        """neograph-0tid: structured strategy should recover DSML markup just like
+        json_mode/text. Strategy-agnostic recovery: detection is content-based.
+
+        REPRODUCES the bug: today this test FAILS because the gate at
+        _tool_loop.py:354 excludes structured from DSML recovery; the structured
+        path raises TypeError instead of recovering.
+        """
         from langchain_core.messages import AIMessage
         from pydantic import BaseModel as _BM
 
@@ -2587,7 +2593,6 @@ class TestDSMLInStructuredStrategyPath:
             answer: str
 
         call_count = [0]
-        structured_calls = [0]
 
         class DSMLFake:
             def bind_tools(self, tools):
@@ -2599,12 +2604,15 @@ class TestDSMLInStructuredStrategyPath:
                     msg = AIMessage(content="")
                     msg.tool_calls = [{"name": "search", "args": {"q": "x"}, "id": "c1"}]
                     return msg
-                return AIMessage(content=DSML_MARKUP)
+                if call_count[0] == 2:
+                    # Final response contains DSML markup
+                    return AIMessage(content=DSML_MARKUP)
+                # Targeted-retry path (post-recovery) returns valid JSON
+                return AIMessage(content='{"answer": "recovered-structured"}')
 
             def with_structured_output(self, model, **kw):
                 class _StructuredWrap:
                     def invoke(self, messages, **kw2):
-                        structured_calls[0] += 1
                         raise TypeError(
                             "Expected Answer but got non-JSON content: " + DSML_MARKUP[:50]
                         )
@@ -2622,22 +2630,22 @@ class TestDSMLInStructuredStrategyPath:
         tools = [Tool(name="search", description="search")]
         budget = ToolBudgetTracker(tools)
 
-        with _pytest.raises(TypeError) as excinfo:
-            invoke_with_tools(
-                model_tier="fast",
-                prompt_template="test",
-                input_data={},
-                output_model=Answer,
-                config={"configurable": {}},
-                tools=tools,
-                budget_tracker=budget,
-                llm_config={"output_strategy": "structured"},
-             runtime=build_fake_runtime(lambda tier: DSMLFake()), tool_factory_lookup=build_fake_tool_lookup())
+        parsed, _ = invoke_with_tools(
+            model_tier="fast",
+            prompt_template="test",
+            input_data={},
+            output_model=Answer,
+            config={"configurable": {}},
+            tools=tools,
+            budget_tracker=budget,
+            llm_config={"output_strategy": "structured"},
+            runtime=build_fake_runtime(lambda tier: DSMLFake()),
+            tool_factory_lookup=build_fake_tool_lookup(),
+        )
 
-        # Contract: structured strategy raises TypeError without DSML recovery.
-        # The pytest.raises(TypeError) above already covers the contract; drop
-        # the exact structured_calls/call_count pins (implementation detail).
-        assert "Expected Answer" in str(excinfo.value)
+        # Contract: DSML in structured strategy recovers via targeted retry,
+        # just like json_mode/text. Detection is content-based, strategy-agnostic.
+        assert parsed.answer == "recovered-structured"
 
     def test_structured_path_happy_baseline_no_dsml(self):
         """Control: structured strategy works when provider returns valid model."""
@@ -2708,6 +2716,187 @@ class TestDSMLInStructuredStrategyPath:
         # Drop the structured_calls == 1 pin (implementation detail).
         assert parsed.answer == "ok"
         assert len(interactions) == 1
+
+    def test_structured_path_no_spurious_recovery_for_valid_json(self):
+        """neograph-0tid: structured strategy + valid model response ->
+        no DSML recovery fires (no extra invokes, no warning logs).
+
+        Sanity check: recovery is gated by content detection. A clean parsed
+        model from with_structured_output(...).invoke() must not trigger
+        targeted retry or budget-exhausted feedback.
+        """
+        from langchain_core.messages import AIMessage
+        from pydantic import BaseModel as _BM
+
+        from neograph import Tool
+        from neograph._tool_loop import invoke_with_tools
+        from neograph.tool import ToolBudgetTracker
+        from tests.fakes import register_tool_factory
+
+        class Answer(_BM):
+            answer: str
+
+        call_count = [0]
+        structured_calls = [0]
+
+        class HappyFake:
+            def bind_tools(self, tools):
+                return self
+
+            def invoke(self, messages, **kw):
+                call_count[0] += 1
+                if call_count[0] == 1:
+                    msg = AIMessage(content="")
+                    msg.tool_calls = [{"name": "search", "args": {"q": "x"}, "id": "c1"}]
+                    return msg
+                return AIMessage(content="")
+
+            def with_structured_output(self, model, include_raw=False, **kw):
+                outer_model = model
+                inc = include_raw
+
+                class _StructuredWrap:
+                    def invoke(self, messages, **kw2):
+                        structured_calls[0] += 1
+                        parsed = outer_model(answer="clean")
+                        if inc:
+                            return {"parsed": parsed, "raw": AIMessage(content="fake")}
+                        return parsed
+
+                return _StructuredWrap()
+
+        def search_factory(config, tool_config):
+            from langchain_core.tools import StructuredTool
+            return StructuredTool.from_function(
+                lambda q: f"found {q}", name="search", description="search"
+            )
+
+        register_tool_factory("search", search_factory)
+
+        tools = [Tool(name="search", description="search")]
+        budget = ToolBudgetTracker(tools)
+
+        baseline_call_count = call_count[0]
+        parsed, _ = invoke_with_tools(
+            model_tier="fast",
+            prompt_template="test",
+            input_data={},
+            output_model=Answer,
+            config={"configurable": {}},
+            tools=tools,
+            budget_tracker=budget,
+            llm_config={"output_strategy": "structured"},
+            runtime=build_fake_runtime(lambda tier: HappyFake()),
+            tool_factory_lookup=build_fake_tool_lookup(),
+        )
+
+        # Contract: clean structured response -> no recovery fired.
+        assert parsed.answer == "clean"
+        # Exactly one structured invoke: include_raw=True succeeded the first time.
+        assert structured_calls[0] == 1
+        # No extra raw llm.invoke beyond the ReAct loop's tool-call + empty-final
+        # iterations (2 calls total: tool_call + empty final).
+        assert call_count[0] - baseline_call_count == 2
+
+    def test_structured_path_recovers_dsml_when_parsed_is_none_silent_variant(self):
+        """neograph-0tid: silent variant — provider returns
+        {"parsed": None, "raw": <AIMessage with DSML>, "parsing_error": ...}.
+
+        Before the fix this silently returned None to the caller (the
+        ``result = raw_result["parsed"]`` unpack passes through). The
+        helper now inspects the raw content for DSML markup and recovers.
+        """
+        from langchain_core.messages import AIMessage
+        from pydantic import BaseModel as _BM
+        from pydantic import ValidationError
+
+        from neograph import Tool
+        from neograph._tool_loop import invoke_with_tools
+        from neograph.tool import ToolBudgetTracker
+        from tests.fakes import register_tool_factory
+
+        DSML_MARKUP = (
+            '<｜DSML｜tool_calls>\n'
+            '<｜DSML｜invoke name="search">\n'
+            '<｜DSML｜parameter name="q">more</｜DSML｜parameter>\n'
+            '</｜DSML｜invoke>\n'
+            '</｜DSML｜tool_calls>'
+        )
+
+        class Answer(_BM):
+            answer: str
+
+        call_count = [0]
+
+        class SilentDSMLFake:
+            def bind_tools(self, tools):
+                return self
+
+            def invoke(self, messages, **kw):
+                call_count[0] += 1
+                if call_count[0] == 1:
+                    msg = AIMessage(content="")
+                    msg.tool_calls = [{"name": "search", "args": {"q": "x"}, "id": "c1"}]
+                    return msg
+                if call_count[0] == 2:
+                    return AIMessage(content=DSML_MARKUP)
+                # Targeted-retry recovery: valid JSON.
+                return AIMessage(content='{"answer": "recovered-structured"}')
+
+            def with_structured_output(self, model, include_raw=False, **kw):
+                inc = include_raw
+
+                class _StructuredWrap:
+                    def invoke(self, messages, **kw2):
+                        # Simulate LangChain's silent variant: parsed=None,
+                        # raw contains DSML markup, parsing_error populated.
+                        raw_msg = AIMessage(content=DSML_MARKUP)
+                        try:
+                            err = ValidationError.from_exception_data(
+                                "Answer", []
+                            )
+                        except Exception:
+                            err = None
+                        if inc:
+                            return {
+                                "parsed": None,
+                                "raw": raw_msg,
+                                "parsing_error": err,
+                            }
+                        # Without include_raw, surface a TypeError so the
+                        # compat path also doesn't silently return None.
+                        raise TypeError("non-JSON content")
+
+                return _StructuredWrap()
+
+        def search_factory(config, tool_config):
+            from langchain_core.tools import StructuredTool
+            return StructuredTool.from_function(
+                lambda q: f"found {q}", name="search", description="search"
+            )
+
+        register_tool_factory("search", search_factory)
+
+        tools = [Tool(name="search", description="search")]
+        budget = ToolBudgetTracker(tools)
+
+        parsed, _ = invoke_with_tools(
+            model_tier="fast",
+            prompt_template="test",
+            input_data={},
+            output_model=Answer,
+            config={"configurable": {}},
+            tools=tools,
+            budget_tracker=budget,
+            llm_config={"output_strategy": "structured"},
+            runtime=build_fake_runtime(lambda tier: SilentDSMLFake()),
+            tool_factory_lookup=build_fake_tool_lookup(),
+        )
+
+        # Contract: silent variant no longer drops parsed=None to caller;
+        # the helper detects DSML in raw and recovers via targeted retry.
+        assert parsed is not None
+        assert parsed.answer == "recovered-structured"
 
 
 class TestDSMLAfterMaxIterationsGuard:
