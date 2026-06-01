@@ -239,6 +239,71 @@ class TestCrossSurfaceValueEquivalence:
         )
 
 
+class TestFanOutParamIRParity:
+    """neograph-vgc1: node.fan_out_param must be set consistently across
+    all three API surfaces (declarative @node decoration is the existing
+    contract; YAML and programmatic Node()|Each() must produce IR with the
+    same field set).
+
+    Today (pre-fix), @node sets fan_out_param at construct-assembly time
+    in _construct_builder._build_construct_from_decorated, but YAML/load_spec
+    and Node()|Each() do NOT. The runtime in _extract_fan_in_dict has a
+    band-aid heuristic that scans state.keys() to detect the fan-out param,
+    which means the IR-parity claim in CLAUDE.md is FALSE.
+
+    Regression test: assert fan_out_param is set on the IR Node regardless
+    of how the construct was built.
+    """
+
+    def test_fan_out_param_set_on_yaml_each_node(self):
+        """A YAML-loaded Each fan-out target must have node.fan_out_param
+        set on its IR Node, matching the @node path."""
+        from neograph.loader import load_spec
+        from neograph.spec_types import register_type
+
+        register_type("FanCollection", FanCollection)
+        register_type("FanItem", FanItem)
+        register_type("Beta", Beta)
+
+        spec = {
+            "name": "fpip-yaml",
+            "nodes": [
+                {"name": "fpip-src", "mode": "scripted",
+                 "scripted_fn": "fpip_src", "outputs": "FanCollection"},
+                {"name": "fpip-proc", "mode": "scripted",
+                 "scripted_fn": "fpip_proc",
+                 "inputs": {"item": "FanItem"},
+                 "outputs": "Beta",
+                 "each": {"over": "fpip_src.items", "key": "item_id"}},
+            ],
+            "pipeline": {"nodes": ["fpip-src", "fpip-proc"]},
+        }
+        construct = load_spec(spec)
+        proc = next(n for n in construct.nodes if getattr(n, "name", None) == "fpip-proc")
+        assert proc.fan_out_param == "item", (
+            f"YAML-loaded Each node must set fan_out_param='item'; got "
+            f"{proc.fan_out_param!r}. Surface mismatch with @node path."
+        )
+
+    def test_fan_out_param_set_on_programmatic_each_node(self):
+        """A programmatic Node()|Each() with dict-form inputs must have
+        fan_out_param set on the IR Node, matching the @node path."""
+        proc = Node.scripted(
+            "fpip-prog-proc", fn="fpip_proc",
+            inputs={"item": FanItem}, outputs=Beta,
+        ) | Each(over="fpip_prog_src.items", key="item_id")
+        src = Node.scripted("fpip-prog-src", fn="fpip_src", outputs=FanCollection)
+        construct = Construct("fpip-prog", nodes=[src, proc])
+        proc_ir = next(
+            n for n in construct.nodes
+            if getattr(n, "name", None) == "fpip-prog-proc"
+        )
+        assert proc_ir.fan_out_param == "item", (
+            f"Programmatic Each node must set fan_out_param='item'; got "
+            f"{proc_ir.fan_out_param!r}. Surface mismatch with @node path."
+        )
+
+
 class TestEachKeyParityAcrossSurfaces:
     """Each fan-out must produce the same keys regardless of surface."""
 

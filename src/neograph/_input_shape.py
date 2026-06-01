@@ -105,29 +105,18 @@ def _extract_each_item(state: StateBus, node: Node) -> Any:
 
 
 def _extract_fan_in_dict(state: StateBus, node: Node) -> dict[str, Any]:
-    """Read each named upstream from state by key."""
+    """Read each named upstream from state by key.
+
+    ``node.fan_out_param`` is set once at Construct construction (see
+    ``Construct._normalize_fan_out_params``) so all three API surfaces —
+    declarative, ``@node``, programmatic/YAML — produce identical IR by
+    the time the runtime sees the node.
+    """
     ni = normalize_inputs(node.inputs)
     assert ni.is_dict_form
-
-    # Effective fan_out_param: explicit attribute (set by @node decoration) OR
-    # — for YAML/programmatic surfaces that don't decorate — derive at runtime
-    # by finding the unique dict-form key with no corresponding state field.
-    # Mirrors the validator's detection in _check_fan_in_inputs.
-    fan_out_param = node.fan_out_param
-    if (
-        fan_out_param is None
-        and node.modifier_set.each is not None
-    ):
-        state_keys = set(state.keys())
-        unknown = [
-            name for name in ni.by_name if field_name_for(name) not in state_keys
-        ]
-        if len(unknown) == 1:
-            fan_out_param = unknown[0]
-
     result: dict[str, Any] = {}
     for input_name, expected_type in ni.by_name.items():
-        if input_name == fan_out_param:
+        if input_name == node.fan_out_param:
             # REQUIRED: node IS the fan-out target; EACH_ITEM is the dispatched value.
             value = state.get_required(StateKeys.EACH_ITEM, node_label=node.name)
         else:

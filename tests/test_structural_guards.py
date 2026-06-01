@@ -2617,8 +2617,8 @@ NEOGRAPH_ERROR_ALLOWLIST: dict[str, str] = {
     # ── construct.py — Pydantic BeforeValidator boundary ──
     # _validate_node_list runs inside Pydantic field validation; Pydantic
     # catches TypeError/ValueError and rolls them into ValidationError.
-    "construct.py:42": "Pydantic BeforeValidator boundary; TypeError is rolled into ValidationError",
     "construct.py:45": "Pydantic BeforeValidator boundary; TypeError is rolled into ValidationError",
+    "construct.py:48": "Pydantic BeforeValidator boundary; TypeError is rolled into ValidationError",
 
     # ── forward.py — proxy / tracer / abstract-method contracts ──
     # _Proxy.__getattr__ raises AttributeError per the Python attribute
@@ -4124,3 +4124,42 @@ class TestStateBusGetDiscipline:
         )
         offenders = self._scan(tmp_path)
         assert offenders == [], offenders
+
+
+class TestNoRuntimeFanOutDetection:
+    """neograph-vgc1: ``Construct._normalize_fan_out_params`` is the single
+    source of truth for ``node.fan_out_param``. The runtime extractor at
+    ``_input_shape._extract_fan_in_dict`` must NOT detect fan-out via
+    ``state.keys()`` scanning — that band-aid existed during the izo1-B
+    migration and was removed once the construct-time normalization landed.
+    Reintroducing it splits the rule across two layers and re-creates the
+    drift class (cf. neograph-8k3, neograph-ayq).
+    """
+
+    def test_input_shape_does_not_call_state_keys_for_fan_out_detection(self):
+        source = (SRC_DIR / "_input_shape.py").read_text()
+        tree = ast.parse(source)
+
+        # Find _extract_fan_in_dict body.
+        target_fn = None
+        for node in ast.walk(tree):
+            if isinstance(node, ast.FunctionDef) and node.name == "_extract_fan_in_dict":
+                target_fn = node
+                break
+        assert target_fn is not None, "_extract_fan_in_dict must exist"
+
+        # Within its body, no `state.keys()` call.
+        for sub in ast.walk(target_fn):
+            if (
+                isinstance(sub, ast.Call)
+                and isinstance(sub.func, ast.Attribute)
+                and sub.func.attr == "keys"
+                and isinstance(sub.func.value, ast.Name)
+                and sub.func.value.id in ("state", "bus")
+            ):
+                raise AssertionError(
+                    f"_extract_fan_in_dict re-introduced state.keys() scan at "
+                    f"line {sub.lineno}; fan-out detection belongs in "
+                    f"Construct._normalize_fan_out_params (single source of truth, "
+                    f"neograph-vgc1)."
+                )

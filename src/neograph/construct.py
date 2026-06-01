@@ -27,7 +27,10 @@ from pydantic import BaseModel, BeforeValidator, Field
 from neograph._construct_validation import ConstructError, _validate_node_chain
 from neograph._ir_protocols import ConstructItem
 from neograph._llm_config import LlmConfig
+from neograph._normalize import normalize_inputs
 from neograph.modifiers import Modifiable, ModifierSet
+from neograph.naming import field_name_for
+from neograph.node import Node
 from neograph.renderers import Renderer
 
 
@@ -144,9 +147,48 @@ class Construct(Modifiable, BaseModel):
                 # the field — both gates only fire on BaseModel children.
                 assert isinstance(item, BaseModel)
                 self.nodes[i] = item.model_copy(update=updates)
+        # IR-parity: the @node decoration path sets node.fan_out_param at
+        # construct-assembly time; the YAML and programmatic surfaces must
+        # produce the same IR. Detect the fan-out receiver key here, once,
+        # so all three surfaces converge.
+        self._normalize_fan_out_params()
         # Validate after pydantic finishes so ConstructError escapes cleanly
         # rather than being wrapped in a pydantic ValidationError. Nested
         # constructs self-validate during their own __init__.
         _validate_node_chain(self)
+
+    def _normalize_fan_out_params(self) -> None:
+        """Set ``node.fan_out_param`` on dict-form Each nodes whose
+        ``fan_out_param`` is still unset (YAML / programmatic surfaces).
+
+        For each Node with an Each modifier and dict-form inputs, the
+        fan-out receiver is the input key whose name has no corresponding
+        peer node in this Construct. Idempotent: nodes whose fan_out_param
+        is already set (the @node decoration path) are left alone.
+        """
+        peer_field_names = {
+            field_name_for(it.name) for it in self.nodes
+            if getattr(it, "name", None) is not None
+        }
+        for i, item in enumerate(self.nodes):
+            if not isinstance(item, Node):
+                continue
+            if item.fan_out_param is not None:
+                continue
+            if item.modifier_set.each is None:
+                continue
+            ni = normalize_inputs(item.inputs)
+            if not ni.is_dict_form:
+                continue
+            self_field = field_name_for(item.name)
+            unknown = [
+                key for key in ni.by_name
+                if field_name_for(key) not in peer_field_names
+                and field_name_for(key) != self_field
+            ]
+            if len(unknown) == 1:
+                self.nodes[i] = item.model_copy(
+                    update={"fan_out_param": unknown[0]},
+                )
 
     # has_modifier, get_modifier, __or__, map inherited from Modifiable
