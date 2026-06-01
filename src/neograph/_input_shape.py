@@ -37,10 +37,14 @@ def _classify_input_shape(state: StateBus, node: Node) -> InputShape:
         no = normalize_outputs(node.outputs)
         if no.is_dict_form:
             own_field = f"{own_field}_{no.primary_key}"
+        # StateBus.get optional: loop-bootstrap — first router pass may have no
+        # self-output yet; absence signals "iteration 0" and falls through.
         own_val = state.get(own_field)
         if isinstance(own_val, list) and own_val:
             return InputShape.LOOP_REENTRY
 
+    # StateBus.get optional: framework — neo_each_item is absent for non-fan-out
+    # nodes; absence is the documented signal.
     replicate_item = state.get(StateKeys.EACH_ITEM)
     if replicate_item is not None and _is_instance_safe(replicate_item, node.inputs):
         return InputShape.EACH_ITEM
@@ -57,8 +61,9 @@ def _extract_loop_reentry(state: StateBus, node: Node) -> Any:
     no_out = normalize_outputs(node.outputs)
     if no_out.is_dict_form:
         own_field = f"{own_field}_{no_out.primary_key}"
-    own_val = state.get(own_field)
-    latest = own_val[-1]  # type: ignore[index]
+    # REQUIRED: _classify_input_shape already confirmed own_val is non-empty list.
+    own_val = state.get_required(own_field, node_label=node.name)
+    latest = own_val[-1]
 
     ni = normalize_inputs(node.inputs)
     if not ni.is_dict_form:
@@ -76,6 +81,8 @@ def _extract_loop_reentry(state: StateBus, node: Node) -> Any:
     placed_latest = False
     for key, expected_type in by_name.items():
         state_key = field_name_for(key)
+        # StateBus.get optional: loop-bootstrap — sibling keys may not have
+        # been re-produced this iteration; documented sentinel for "use latest".
         upstream_val = state.get(state_key)
         if upstream_val is not None and state_key != node_own_field:
             value = upstream_val
@@ -93,20 +100,40 @@ def _extract_loop_reentry(state: StateBus, node: Node) -> Any:
 
 def _extract_each_item(state: StateBus, node: Node) -> Any:
     """Read the fan-out item from neo_each_item."""
-    return state.get(StateKeys.EACH_ITEM)
+    # REQUIRED: dispatched only after classification confirmed EACH_ITEM presence.
+    return state.get_required(StateKeys.EACH_ITEM, node_label=node.name)
 
 
 def _extract_fan_in_dict(state: StateBus, node: Node) -> dict[str, Any]:
     """Read each named upstream from state by key."""
     ni = normalize_inputs(node.inputs)
     assert ni.is_dict_form
+
+    # Effective fan_out_param: explicit attribute (set by @node decoration) OR
+    # — for YAML/programmatic surfaces that don't decorate — derive at runtime
+    # by finding the unique dict-form key with no corresponding state field.
+    # Mirrors the validator's detection in _check_fan_in_inputs.
+    fan_out_param = node.fan_out_param
+    if (
+        fan_out_param is None
+        and node.modifier_set.each is not None
+    ):
+        state_keys = set(state.keys())
+        unknown = [
+            name for name in ni.by_name if field_name_for(name) not in state_keys
+        ]
+        if len(unknown) == 1:
+            fan_out_param = unknown[0]
+
     result: dict[str, Any] = {}
     for input_name, expected_type in ni.by_name.items():
-        if input_name == node.fan_out_param:
-            value = state.get(StateKeys.EACH_ITEM)
+        if input_name == fan_out_param:
+            # REQUIRED: node IS the fan-out target; EACH_ITEM is the dispatched value.
+            value = state.get_required(StateKeys.EACH_ITEM, node_label=node.name)
         else:
             state_key = field_name_for(input_name)
-            value = state.get(state_key)
+            # REQUIRED: fan-in upstreams guaranteed by _validate_node_chain.
+            value = state.get_required(state_key, node_label=node.name)
             value = _unwrap_loop_value(value, expected_type)
             if (
                 value is not None
@@ -121,7 +148,8 @@ def _extract_fan_in_dict(state: StateBus, node: Node) -> dict[str, Any]:
 def _extract_single_type(state: StateBus, node: Node) -> Any:
     """Scan state fields for first value matching the node's input type."""
     for attr_name in state.keys():
-        val = state.get(attr_name)
+        # REQUIRED: iterating state.keys() — every key is by definition present.
+        val = state.get_required(attr_name, node_label=node.name)
         val = _unwrap_loop_value(val, node.inputs)
         val = _unwrap_each_dict(val, node.inputs)
         if val is not None and _is_instance_safe(val, node.inputs):

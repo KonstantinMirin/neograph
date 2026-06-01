@@ -392,6 +392,8 @@ def _make_loop_router(
 
     def loop_router(state: Any) -> str:
         bus = adapt_state(state)
+        # StateBus.get optional: loop-counter — counter absent before first
+        # body execution; explicit `0` default is the documented bootstrap.
         count = bus.get(count_field, 0)
         if count >= loop.max_iterations:
             if loop.on_exhaust == 'error':
@@ -433,6 +435,8 @@ def _node_loop_unwrap(node: Node, field_name: str) -> LangGraphLoopUnwrapFn:
             state_field = f"{_field_name}_{no.primary_key}"
         else:
             state_field = _field_name
+        # StateBus.get optional: loop-bootstrap — first router pass may have
+        # not-yet-populated list; user condition expected to handle None.
         own_val = state.get(state_field)
         if isinstance(own_val, list) and own_val:
             return own_val[-1]
@@ -451,6 +455,8 @@ def _construct_loop_unwrap(state: StateBus, field_name: str) -> Any:
 
     Receives a pre-adapted StateBus from ``loop_router``.
     """
+    # StateBus.get optional: loop-bootstrap — sub-construct output absent on
+    # first pass; condition handles None.
     val = state.get(field_name)
     return _unwrap_loop_value(val, object)
 

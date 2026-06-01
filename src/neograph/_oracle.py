@@ -31,11 +31,15 @@ def _inject_oracle_config(state: StateBus, config: RunnableConfig) -> RunnableCo
     into config['configurable']. Returns the original config unchanged
     when no oracle fields are present.
     """
+    # StateBus.get optional: framework — neo_oracle_gen_id only set inside
+    # an Oracle fan-out dispatch; absence is the "not in Oracle" signal.
     oracle_gen_id = state.get(StateKeys.ORACLE_GEN_ID)
     if oracle_gen_id is None:
         return config
     configurable = config.get("configurable", {})
     extra = {"_generator_id": oracle_gen_id}
+    # StateBus.get optional: framework — neo_oracle_model only present when
+    # Oracle was configured with models=; legitimately absent otherwise.
     oracle_model = state.get(StateKeys.ORACLE_MODEL)
     if oracle_model is not None:
         extra["_oracle_model"] = oracle_model
@@ -80,9 +84,12 @@ def make_eachoracle_redirect_fn(
 
     def eachoracle_redirect_fn(state: Any, config: RunnableConfig) -> dict:
         result = raw_fn(state, config)
-        # Extract the each_key from the item
-        item = adapt_state(state).get(StateKeys.EACH_ITEM)
-        key = getattr(item, each_key, str(item)) if item is not None else "unknown"
+        # REQUIRED: flat Each×Oracle router always populates EACH_ITEM in the
+        # Send payload. Absence = wiring bug.
+        item = adapt_state(state).get_required(
+            StateKeys.EACH_ITEM, node_label=raw_fn.__name__,
+        )
+        key = getattr(item, each_key, str(item))
         # Single-type outputs: result has {field_name: val}
         val = result.get(field_name)
         if val is not None:
@@ -312,13 +319,15 @@ def make_each_redirect_fn(raw_fn: Callable, field_name: str, each: Each) -> Call
     """
 
     def each_redirect_fn(state: Any, config: RunnableConfig = None) -> dict:  # type: ignore[assignment]
-        # Get the item being processed
-        each_item = adapt_state(state).get(StateKeys.EACH_ITEM)
+        # REQUIRED: Each router always populates EACH_ITEM in the Send payload.
+        each_item = adapt_state(state).get_required(
+            StateKeys.EACH_ITEM, node_label=raw_fn.__name__,
+        )
 
         result = raw_fn(state, config) if config else raw_fn(state)
         val = result.get(field_name)
 
-        if val is not None and each_item is not None:
+        if val is not None:
             key_val = getattr(each_item, each.key, str(each_item))
             return {field_name: {key_val: val}}
         return result

@@ -31,7 +31,8 @@ def _scan_subgraph_input(state: StateBus, sub_input_type: type) -> Any:
     declared input type.
     """
     for attr_name in reversed(state.keys()):
-        val = state.get(attr_name)
+        # REQUIRED: iterating state.keys() — every key is by definition present.
+        val = state.get_required(attr_name)
         check_val = val
         if isinstance(val, list) and val:
             check_val = val[-1]
@@ -81,6 +82,8 @@ def make_subgraph_fn(sub: Construct, sub_graph: CompiledStateGraph) -> Callable:
         # original inputs from parent state.
         input_data = None
         if has_loop:
+            # StateBus.get optional: loop-bootstrap — sub-construct's own field
+            # is unbound on iteration 0.
             own_val = bus.get(field_name)
             if isinstance(own_val, list) and own_val:
                 latest = own_val[-1]
@@ -92,16 +95,21 @@ def make_subgraph_fn(sub: Construct, sub_graph: CompiledStateGraph) -> Callable:
         if input_data is None and sub.input is not None:
             input_data = _scan_subgraph_input(bus, sub.input)
 
-        # Run sub-graph with isolated state
+        # Run sub-graph with isolated state.
+        # StateBus.get optional: framework — node_id is a DI-style context key
+        # that may not be present; empty-string default propagates to sub-graph.
         sub_input: dict[str, Any] = {"node_id": bus.get("node_id", "")}
         if input_data is not None:
             sub_input[StateKeys.SUBGRAPH_INPUT] = input_data
 
-        # Forward context fields from parent state into sub-construct
+        # Forward context fields from parent state into sub-construct.
         for n in sub.nodes:
             if hasattr(n, "context") and n.context:
                 for ctx_name in n.context:
                     ctx_field = field_name_for(ctx_name)
+                    # StateBus.get optional: context forwarding is best-effort;
+                    # missing context propagates as None to sub-node, whose own
+                    # _extract_context read enforces required-ness (see §7 Q3).
                     val = bus.get(ctx_field)
                     if val is not None:
                         sub_input[ctx_field] = val
@@ -130,6 +138,8 @@ def make_subgraph_fn(sub: Construct, sub_graph: CompiledStateGraph) -> Callable:
         update: dict[str, Any] = {field_name: output_val}
         if has_loop:
             count_field = StateKeys.loop_count(field_name)
+            # StateBus.get optional: loop-counter — absent on first iteration;
+            # `or 0` is the documented bootstrap value.
             current = bus.get(count_field) or 0
             update[count_field] = current + 1
         return update

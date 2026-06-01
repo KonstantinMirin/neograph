@@ -50,6 +50,8 @@ def _build_state_update(
         case _ as unreachable:
             assert_never(unreachable)
 
+    # StateBus.get optional: framework — EACH_ITEM is absent for non-fan-out
+    # dispatches; absence drives the "not inside fan-out" branches below.
     each_item = state.get(StateKeys.EACH_ITEM) if state is not None else None
 
     # MODIFIER_RULE_TOUCHPOINT: dict-form output projection + Each per-key wrap.
@@ -78,6 +80,8 @@ def _build_state_update(
     loop_mod = mods.get("loop")
     if loop_mod is not None:
         count_field = StateKeys.loop_count(field_name)
+        # StateBus.get optional: loop-counter — absent before first iteration;
+        # `or 0` is the documented bootstrap value.
         current_count = (state.get(count_field) if state is not None else None) or 0
         update[count_field] = current_count + 1
         if loop_mod.history:
@@ -133,6 +137,7 @@ def _apply_skip_when(
     loop_mod = skip_mods.get("loop")
     if loop_mod is not None:
         count_field = StateKeys.loop_count(field_name)
+        # StateBus.get optional: loop-counter — same justification as above.
         current_count = (state.get(count_field) if state is not None else None) or 0
         update[count_field] = current_count + 1
     return update
