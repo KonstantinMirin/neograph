@@ -16,18 +16,26 @@ from typing import Any, Protocol, runtime_checkable
 
 from pydantic import BaseModel
 
+from neograph.errors import StateMissingError
+
+_MISSING: Any = object()
+
 
 @runtime_checkable
 class StateBus(Protocol):
     """Read-only state accessor for node helpers.
 
-    Mirrors ``dict.get`` semantics: ``get(key, default)`` returns the bound
-    value (including ``None`` when explicitly stored) or ``default`` when the
-    key is absent. ``keys()`` enumerates all bound field names in their
+    ``get(key, default)`` mirrors ``dict.get`` — returns the bound value
+    (including ``None`` when explicitly stored) or ``default`` when the key is
+    absent. ``get_required(key, *, node_label=None)`` raises
+    :class:`StateMissingError` when the key is absent (explicit ``None`` is
+    permitted). ``keys()`` enumerates all bound field names in their
     declared/insertion order.
     """
 
     def get(self, key: str, default: Any = None) -> Any: ...
+
+    def get_required(self, key: str, *, node_label: str | None = None) -> Any: ...
 
     def keys(self) -> list[str]: ...
 
@@ -41,6 +49,11 @@ class _DictStateBus:
     def get(self, key: str, default: Any = None) -> Any:
         return self._state.get(key, default)
 
+    def get_required(self, key: str, *, node_label: str | None = None) -> Any:
+        if key not in self._state:
+            raise StateMissingError.build(key=key, node_label=node_label)
+        return self._state[key]
+
     def keys(self) -> list[str]:
         return list(self._state.keys())
 
@@ -53,6 +66,12 @@ class _ModelStateBus:
 
     def get(self, key: str, default: Any = None) -> Any:
         return getattr(self._state, key, default)
+
+    def get_required(self, key: str, *, node_label: str | None = None) -> Any:
+        value = getattr(self._state, key, _MISSING)
+        if value is _MISSING:
+            raise StateMissingError.build(key=key, node_label=node_label)
+        return value
 
     def keys(self) -> list[str]:
         return list(self._state.__class__.model_fields.keys())

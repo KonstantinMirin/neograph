@@ -2674,6 +2674,7 @@ class TestPublicFunctionsRaiseNeographError:
         "CompileError",
         "ConfigurationError",
         "CheckpointSchemaError",
+        "StateMissingError",
     })
 
     def test_no_bare_stdlib_raises(self):

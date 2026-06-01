@@ -140,6 +140,27 @@ class ExecutionError(NeographError):
         return cls(msg, validation_errors=validation_errors)
 
 
+class StateMissingError(NeographError):
+    """Raised when ``StateBus.get_required()`` finds a missing key.
+
+    §7: required reads raise; optional reads return None with a documented
+    justification. Silent-None reads of required fields are bugs.
+    """
+
+    @classmethod
+    def build(  # type: ignore[override]
+        cls,
+        *,
+        key: str,
+        node_label: str | None = None,
+    ) -> StateMissingError:
+        if node_label:
+            msg = f"[Node '{node_label}'] required state key '{key}' not found"
+        else:
+            msg = f"Required state key '{key}' not found"
+        return cls(msg)
+
+
 class CheckpointSchemaError(NeographError):
     """Checkpoint state schema does not match the current graph.
 
