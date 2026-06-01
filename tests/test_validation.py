@@ -3194,3 +3194,55 @@ class TestContextFieldProducerValidation:
         )
         pipeline = Construct("ctx-hyphen", nodes=[producer, consumer])
         assert len(pipeline.nodes) == 2
+
+
+class TestSubConstructContextFieldValidation:
+    """neograph-51m7: a context field declared on a node INSIDE a
+    sub-construct must be produced by an UPSTREAM node in the PARENT
+    construct. The validator previously skipped this check whenever
+    construct.input was set (i.e. for every sub-construct), so typos
+    inside sub-constructs only surfaced at runtime — breaking the
+    'if it compiles, it runs' positioning."""
+
+    def _build_subconstruct_with_inner_context(self, ctx_field: str) -> Construct:
+        """Build a sub-construct whose inner node declares context=[ctx_field].
+        The inner node consumes the sub-construct's port input."""
+        from neograph._state_keys import StateKeys
+        inner = Node(
+            name="inner", mode="scripted", scripted_fn="f",
+            inputs={StateKeys.SUBGRAPH_INPUT: RawText},
+            outputs=MatchResult,
+            context=[ctx_field],
+        )
+        return Construct("sub", input=RawText, output=MatchResult, nodes=[inner])
+
+    def test_subconstruct_inner_context_typo_rejected_at_compile(self):
+        """Inner node's context=['nonexistent'] with no upstream producer in
+        the parent must be rejected at parent-construct compile time."""
+        parent_seed = _producer("topic", RawText)
+        sub = self._build_subconstruct_with_inner_context("nonexistent_field")
+        with pytest.raises(ConstructError) as exc_info:
+            Construct("parent", nodes=[parent_seed, sub])
+        msg = str(exc_info.value)
+        assert "nonexistent_field" in msg
+        assert "context" in msg.lower() or "no upstream" in msg
+
+    def test_subconstruct_inner_context_with_parent_producer_passes(self):
+        """Inner node's context=['catalog'] with 'catalog' produced by an
+        upstream parent node compiles cleanly (no false positive)."""
+        catalog = _producer("catalog", RawText)
+        parent_seed = _producer("topic", RawText)
+        sub = self._build_subconstruct_with_inner_context("catalog")
+        parent = Construct("parent-ok", nodes=[catalog, parent_seed, sub])
+        assert len(parent.nodes) == 3
+
+    def test_subconstruct_inner_context_error_names_inner_node(self):
+        """Error message must name the offending INNER node, not the
+        sub-construct, so the user can find the typo."""
+        parent_seed = _producer("topic", RawText)
+        sub = self._build_subconstruct_with_inner_context("typoed")
+        with pytest.raises(ConstructError) as exc_info:
+            Construct("parent-msg", nodes=[parent_seed, sub])
+        msg = str(exc_info.value)
+        assert "inner" in msg
+        assert "typoed" in msg
