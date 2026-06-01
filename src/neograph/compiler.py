@@ -426,7 +426,9 @@ def _add_subgraph(
         case ModifierCombo.ORACLE | ModifierCombo.ORACLE_OPERATOR:
             oracle = mods["oracle"]
             collector_field = StateKeys.oracle_collector(field_name)
-            redirect_fn = make_oracle_redirect_fn(subgraph_fn, field_name, collector_field)
+            redirect_fn = make_oracle_redirect_fn(
+                subgraph_fn, field_name, collector_field, node_name=sub.name,
+            )
             merge_fn = make_oracle_merge_fn(oracle, field_name, collector_field, sub.output,
                                                llm_config=sub.llm_config or None,
                                                runtime=runtime,
@@ -521,7 +523,9 @@ def _add_oracle_nodes(
     collector_field = StateKeys.oracle_collector(field_name)
 
     raw_fn = make_node_fn(node, runtime=runtime, scripted_lookup=scripted_lookup, tool_factory_lookup=tool_factory_lookup)
-    redirect_fn = make_oracle_redirect_fn(raw_fn, field_name, collector_field)
+    redirect_fn = make_oracle_redirect_fn(
+        raw_fn, field_name, collector_field, node_name=node.name,
+    )
     merge_fn = make_oracle_merge_fn(oracle, field_name, collector_field, node.outputs,
                                     node_inputs=node.inputs,
                                     llm_config=node.llm_config or None,

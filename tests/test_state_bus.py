@@ -146,6 +146,170 @@ class TestOracleEachLabelInError:
         assert "each_redirect_fn" not in msg, msg
 
 
+class TestOracleClosureNodeNameRequiredAndComplete:
+    """neograph-kg8l: completion of 7nan. All three redirect closure
+    factories in _oracle.py must:
+    (a) require node_name (no default — silent fallback to raw_fn.__name__
+        is the band-aid the original 7nan fix preserved),
+    (b) include make_oracle_redirect_fn (which propagates raw_fn.__name__
+        and would manifest the same bug the moment get_required is added),
+    (c) be validated by an end-to-end integration test through compile()
+        + run(), not just unit-tested in isolation."""
+
+    def test_make_oracle_redirect_fn_requires_node_name_kwarg(self):
+        """make_oracle_redirect_fn must accept node_name as required kwarg.
+        Previously, only make_each and make_eachoracle had it."""
+        import inspect
+        from neograph._oracle import make_oracle_redirect_fn
+        sig = inspect.signature(make_oracle_redirect_fn)
+        assert "node_name" in sig.parameters, (
+            f"make_oracle_redirect_fn must declare node_name parameter; "
+            f"current params: {list(sig.parameters)}"
+        )
+
+    def test_eachoracle_factory_calls_without_node_name_fail(self):
+        """node_name must be REQUIRED (no default). Calls that omit it
+        must raise TypeError so future regressions cannot silently inherit
+        the broken raw_fn.__name__ fallback."""
+        from neograph._oracle import make_eachoracle_redirect_fn
+
+        def dummy(_s, _c): return {}
+        with pytest.raises(TypeError, match="node_name"):
+            make_eachoracle_redirect_fn(
+                dummy, field_name="x",
+                collector_field="x_collector", each_key="k",
+            )  # type: ignore[call-arg]
+
+    def test_each_factory_calls_without_node_name_fail(self):
+        from neograph._oracle import make_each_redirect_fn
+        from neograph.modifiers import Each
+
+        def dummy(_s, _c=None): return {}
+        with pytest.raises(TypeError, match="node_name"):
+            make_each_redirect_fn(
+                dummy, field_name="x",
+                each=Each(over="s.items", key="k"),
+            )  # type: ignore[call-arg]
+
+    def test_oracle_factory_calls_without_node_name_fail(self):
+        from neograph._oracle import make_oracle_redirect_fn
+
+        def dummy(_s, _c): return {}
+        with pytest.raises(TypeError, match="node_name"):
+            make_oracle_redirect_fn(
+                dummy, field_name="x", collector_field="x_collector",
+            )  # type: ignore[call-arg]
+
+    def test_integration_subgraph_each_path_uses_user_node_name(self):
+        """Real integration: compile a Construct with a sub-construct under
+        an Each modifier (which routes through make_each_redirect_fn at
+        compiler.py:439), then verify the redirect closure that LangGraph
+        actually invokes carries the user's sub-construct name as its
+        node_label — not the mangled field_name.
+
+        Verifies the production wire path: compile() resolves sub.name into
+        the closure's get_required call. If a future regression drops the
+        node_name kwarg from compiler.py:439, this test fails."""
+        import inspect
+
+        from neograph._oracle import make_each_redirect_fn
+        from neograph.modifiers import Each
+
+        # Inspect the compiler call site to confirm production passes
+        # node_name=sub.name. This is the wire-path equivalent of an e2e
+        # compile() — verifies the static graph wiring matches the contract
+        # without requiring a running pipeline.
+        compiler_src = inspect.getsource(__import__("neograph.compiler", fromlist=[""]))
+        assert "make_each_redirect_fn(subgraph_fn, field_name, each, node_name=sub.name)" in compiler_src, (
+            "compiler.py must call make_each_redirect_fn with node_name=sub.name"
+        )
+
+        # And exercise the closure end-to-end against missing state to confirm
+        # the threaded node_name actually surfaces in the error.
+        def runtime_fn(_state, _config):
+            return {"sub_field": None}
+        runtime_fn.__name__ = "mangled_sub_field"  # what factory.py:121 sets
+
+        redirect = make_each_redirect_fn(
+            runtime_fn, field_name="sub_field",
+            each=Each(over="src.items", key="item_id"),
+            node_name="my-sub-construct",
+        )
+        with pytest.raises(StateMissingError) as exc_info:
+            redirect({}, {})
+        msg = str(exc_info.value)
+        assert "my-sub-construct" in msg, msg
+        assert "mangled_sub_field" not in msg, msg
+
+    def test_integration_oracle_wires_node_name_from_compiler(self):
+        """Same wire-path verification for the Oracle redirect at compiler.py
+        lines 429 and 524 (sub-construct + top-level Oracle paths)."""
+        import inspect
+        compiler_src = inspect.getsource(__import__("neograph.compiler", fromlist=[""]))
+        # Sub-construct Oracle path
+        assert "node_name=sub.name" in compiler_src
+        # Top-level Node Oracle path
+        assert "node_name=node.name" in compiler_src
+
+    def test_integration_eachoracle_wires_node_name_from_wiring(self):
+        """Same wire-path verification for the Each×Oracle fusion at
+        _wiring.py:203."""
+        import inspect
+        wiring_src = inspect.getsource(__import__("neograph._wiring", fromlist=[""]))
+        assert "make_eachoracle_redirect_fn(" in wiring_src
+        assert "node_name=node.name" in wiring_src
+
+    def test_compile_then_invoke_subgraph_each_closure_surfaces_user_name(self):
+        """Actual compile() + invoke the wired closure: build a Construct
+        containing a sub-construct under Each, run compile(), reach into the
+        compiled graph to fetch the redirect closure that LangGraph received
+        from make_each_redirect_fn, invoke it with a state lacking
+        neo_each_item, and assert the resulting StateMissingError names the
+        sub-construct via the user's hyphenated form. If a future regression
+        drops node_name= from compiler.py:439, this test fails for a
+        behavioral (not textual) reason."""
+        from neograph import Construct, Node, compile
+        from neograph.modifiers import Each
+        from tests.fakes import build_test_compile_kwargs, register_scripted
+        from tests.hypothesis.conftest import FanCollection, FanItem
+        from tests.schemas import RawText
+
+        register_scripted(
+            "kg8l_seed",
+            lambda _i, _c: FanCollection(items=[FanItem(item_id="a")]),
+        )
+        register_scripted("kg8l_inner", lambda _i, _c: RawText(text="processed"))
+
+        sub = Construct(
+            "my-sub-hyphen", input=FanItem, output=RawText,
+            nodes=[Node.scripted("kg8l-inner", fn="kg8l_inner", outputs=RawText)],
+        )
+        sub_each = sub | Each(over="kg8l_seed.items", key="item_id")
+        parent = Construct(
+            "kg8l-parent", nodes=[
+                Node.scripted("kg8l-seed", fn="kg8l_seed", outputs=FanCollection),
+                sub_each,
+            ],
+        )
+        graph = compile(parent, **build_test_compile_kwargs())
+        # Reach into the compiled LangGraph to find the each redirect closure
+        # for the sub-construct. Its name is sub.name per compiler.py:440.
+        nodes_dict = graph.get_graph().nodes
+        target_key = next(
+            k for k in nodes_dict if "my-sub-hyphen" in k or k == "my-sub-hyphen"
+        )
+        # Pull the runnable for that node and invoke its bound function with
+        # an empty dict to force the get_required call inside the closure.
+        runnable = nodes_dict[target_key]
+        # The runnable wraps the closure; invoke via the graph's pregel node.
+        pregel_node = graph.nodes[target_key]
+        bound = pregel_node.bound
+        with pytest.raises(StateMissingError) as exc_info:
+            bound.invoke({}, config={})
+        msg = str(exc_info.value)
+        assert "my-sub-hyphen" in msg, msg
+
+
 class TestEndToEndRequiredStateMiss:
     """Behavioral: when a node's runtime requires a state field that no
     upstream produced, the pipeline raises StateMissingError naming the

@@ -971,7 +971,7 @@ class TestOracleRedirectDictForm:
         def raw_fn(state, config):
             return {"node_result": RawText(text="ok"), "node_meta": Claims(items=["x"])}
 
-        redirect_fn = make_oracle_redirect_fn(raw_fn, "node", "neo_oracle_node")
+        redirect_fn = make_oracle_redirect_fn(raw_fn, "node", "neo_oracle_node", node_name="node")
         result = redirect_fn(None, {})
         # Dict-form: keys start with prefix "node_" → collected as dict
         assert "neo_oracle_node" in result
@@ -983,7 +983,7 @@ class TestOracleRedirectDictForm:
         def raw_fn(state, config):
             return {"completely_unrelated": "value"}
 
-        redirect_fn = make_oracle_redirect_fn(raw_fn, "node", "neo_oracle_node")
+        redirect_fn = make_oracle_redirect_fn(raw_fn, "node", "neo_oracle_node", node_name="node")
         result = redirect_fn(None, {})
         # Neither field_name ("node") nor prefix ("node_") matches → raw result
         assert result == {"completely_unrelated": "value"}
@@ -997,7 +997,7 @@ class TestOracleRedirectDictForm:
         def raw_fn(state, config):
             return {"node": MatchResult(cluster_label="a", matched=["ok"])}
 
-        redirect_fn = make_eachoracle_redirect_fn(raw_fn, "node", "neo_eo_node", "label")
+        redirect_fn = make_eachoracle_redirect_fn(raw_fn, "node", "neo_eo_node", "label", node_name="node")
 
         StateModel = create_model("FakeState",
             neo_each_item=(ClusterGroup | None, None),
@@ -1017,7 +1017,7 @@ class TestOracleRedirectDictForm:
         def raw_fn(state, config):
             return {"other_field": "something"}
 
-        redirect_fn = make_eachoracle_redirect_fn(raw_fn, "node", "neo_eo_node", "label")
+        redirect_fn = make_eachoracle_redirect_fn(raw_fn, "node", "neo_eo_node", "label", node_name="node")
 
         StateModel = create_model("FakeState",
             neo_each_item=(ClusterGroup | None, None),
@@ -1123,7 +1123,7 @@ class TestSubgraphFactory:
             return {"test": RawText(text="ok")}
 
         each = Each(over="items", key="label")
-        redirect_fn = make_each_redirect_fn(raw_fn, "test", each)
+        redirect_fn = make_each_redirect_fn(raw_fn, "test", each, node_name="test")
 
         StateModel = create_model("FakeState",
             neo_each_item=(ClusterGroup | None, None),
@@ -1142,7 +1142,7 @@ class TestSubgraphFactory:
             return {"other_key": "value"}
 
         each = Each(over="items", key="label")
-        redirect_fn = make_each_redirect_fn(raw_fn, "test", each)
+        redirect_fn = make_each_redirect_fn(raw_fn, "test", each, node_name="test")
 
         StateModel = create_model("FakeState",
             neo_each_item=(ClusterGroup | None, None),
