@@ -250,8 +250,23 @@ def _validate_merge_hooks(oracle: Oracle, node: Node, construct_name: str) -> No
                 )
 
 
-def _validate_node_chain(construct: Construct) -> None:
-    """Walk the node list, verifying each input has a compatible producer."""
+def _validate_node_chain(
+    construct: Construct,
+    *,
+    ambient_producers: list[Producer] | None = None,
+) -> None:
+    """Walk the node list, verifying each input has a compatible producer.
+
+    ``ambient_producers`` carries the PARENT's producers when this construct is
+    being validated as a nested sub-construct. Inner nodes' ``context``
+    references are checked against the union of ambient + locally collected
+    producers, so context typos are caught at arbitrary depth.
+
+    When called standalone (``ambient_producers is None``) on a sub-construct
+    (``construct.input is not None``), inner-node context checks are DEFERRED
+    because the parent's producer set is unknown; the parent's own validation
+    pass will re-walk this sub-construct with ambient supplied.
+    """
     producers: list[Producer] = []
 
     # The Construct's own input port is the first producer, if declared —
@@ -291,14 +306,16 @@ def _validate_node_chain(construct: Construct) -> None:
                 )
             _check_item_input(construct, item, input_type, producers)
 
-        # Validate context= references.
-        # Top-level node: check directly against parent producers.
-        # Sub-construct: walk its inner nodes (context comes from parent state
-        # via _subconstruct.py forwarding, so it must be produced HERE).
-        # context entries are user-declared upstream NAMES; compare against
-        # the mangled field_name via field_name_for() for hyphenated names.
-        if isinstance(item, Node) and item.context and construct.input is None:
-            known_fields = {p.field_name for p in producers}
+        # Validate context= references against ambient (parent) + local producers.
+        # When called standalone on a sub-construct (ambient is None and
+        # construct.input is not None), inner-node context is DEFERRED: the
+        # parent's recursive call will re-validate with ambient supplied.
+        context_checkable = (
+            ambient_producers is not None or construct.input is None
+        )
+        if isinstance(item, Node) and item.context and context_checkable:
+            ambient = ambient_producers or []
+            known_fields = {p.field_name for p in (ambient + producers)}
             for ctx_name in item.context:
                 ctx_field = field_name_for(ctx_name)
                 if ctx_field not in known_fields:
@@ -309,32 +326,22 @@ def _validate_node_chain(construct: Construct) -> None:
                         node=item.name,
                         location=_source_location(),
                     )
-        elif (
-            getattr(item, "input", None) is not None
+
+        # Sub-construct items: recurse with the current producer union as the
+        # ambient set so inner-node context checks fire at arbitrary depth.
+        is_sub_construct = (
+            not isinstance(item, Node)
+            and getattr(item, "input", None) is not None
             and getattr(item, "nodes", None) is not None
-            and not isinstance(item, Node)
-            and construct.input is None
-        ):
-            # Sub-construct in a top-level parent: walk inner nodes and check
-            # each inner Node.context against the PARENT's producers — context
-            # is forwarded from parent state via _subconstruct.subgraph_node.
-            known_fields = {p.field_name for p in producers}
-            inner_nodes: list = list(getattr(item, "nodes", []))
-            for inner in inner_nodes:
-                if not isinstance(inner, Node) or not inner.context:
-                    continue
-                for ctx_name in inner.context:
-                    ctx_field = field_name_for(ctx_name)
-                    if ctx_field not in known_fields:
-                        raise ConstructError.build(
-                            f"inner node references context='{ctx_name}' but no "
-                            f"upstream node in the parent construct produces "
-                            f"a field with that name",
-                            found=f"known parent upstream fields: {sorted(known_fields) or '(none)'}",
-                            node=inner.name,
-                            construct=f"{construct.name} > {item.name}",
-                            location=_source_location(),
-                        )
+        )
+        if is_sub_construct and context_checkable:
+            ambient_for_recursion = (ambient_producers or []) + producers
+            # item is a Construct here (verified by is_sub_construct guard);
+            # cast(Any) avoids the TYPE_CHECKING-only Construct import at runtime.
+            _validate_node_chain(
+                cast(Any, item),
+                ambient_producers=ambient_for_recursion,
+            )
 
         # Node uses .outputs (plural); Construct / _BranchNode use .output (singular).
         output_type = item.outputs if isinstance(item, Node) else getattr(item, "output", None)

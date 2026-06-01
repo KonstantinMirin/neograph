@@ -3246,3 +3246,61 @@ class TestSubConstructContextFieldValidation:
         msg = str(exc_info.value)
         assert "inner" in msg
         assert "typoed" in msg
+
+    # ── Depth-coverage tests (ta43) ────────────────────────────────────────
+    # The validator must be recursive: typo'd contexts at ANY depth of
+    # sub-construct nesting must be rejected at compile time.
+
+    def _build_nested_subconstruct(self, ctx_field: str, depth: int) -> Construct:
+        """Build a sub-construct with `depth` levels of nesting. The deepest
+        inner node declares context=[ctx_field]."""
+        from neograph._state_keys import StateKeys
+        # Deepest inner node — declares the suspect context.
+        leaf = Node(
+            name=f"leaf-d{depth}", mode="scripted", scripted_fn="f",
+            inputs={StateKeys.SUBGRAPH_INPUT: RawText},
+            outputs=MatchResult,
+            context=[ctx_field],
+        )
+        current: Construct = Construct(
+            f"sub-d{depth}", input=RawText, output=MatchResult, nodes=[leaf],
+        )
+        # Wrap in additional layers up to the target depth.
+        for level in range(depth - 1, 0, -1):
+            current = Construct(
+                f"sub-d{level}", input=RawText, output=MatchResult,
+                nodes=[current],
+            )
+        return current
+
+    def test_depth_3_typo_rejected_at_compile(self):
+        """A context typo at the DEEPEST level of a parent->sub->sub-sub
+        topology must be caught at compile time. Today's elif-based fix
+        (commit 0330cea) handles depth 1 only — this depth-3 case is the
+        ta43 reproducer."""
+        parent_seed = _producer("topic", RawText)
+        deep = self._build_nested_subconstruct("nonexistent_deep", depth=3)
+        with pytest.raises(ConstructError) as exc_info:
+            Construct("parent-d3-typo", nodes=[parent_seed, deep])
+        msg = str(exc_info.value)
+        assert "nonexistent_deep" in msg, msg
+
+    def test_depth_3_happy_path_compiles(self):
+        """Depth-3 nesting where the deepest context IS produced by the
+        parent must compile cleanly (no false positive from the recursive
+        check)."""
+        catalog = _producer("catalog", RawText)
+        parent_seed = _producer("topic", RawText)
+        deep = self._build_nested_subconstruct("catalog", depth=3)
+        parent = Construct("parent-d3-ok", nodes=[catalog, parent_seed, deep])
+        assert len(parent.nodes) == 3
+
+    def test_depth_4_typo_rejected_at_compile(self):
+        """Even-deeper nesting; further guards against off-by-one in any
+        recursive implementation."""
+        parent_seed = _producer("topic", RawText)
+        deep = self._build_nested_subconstruct("nonexistent_4", depth=4)
+        with pytest.raises(ConstructError) as exc_info:
+            Construct("parent-d4-typo", nodes=[parent_seed, deep])
+        msg = str(exc_info.value)
+        assert "nonexistent_4" in msg, msg
