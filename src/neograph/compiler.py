@@ -434,7 +434,7 @@ def _add_subgraph(
             last_name = _wire_oracle(graph, sub.name, redirect_fn, merge_fn, oracle, prev_node)
         case ModifierCombo.EACH | ModifierCombo.EACH_OPERATOR:
             each = mods["each"]
-            each_fn = make_each_redirect_fn(subgraph_fn, field_name, each)
+            each_fn = make_each_redirect_fn(subgraph_fn, field_name, each, node_name=sub.name)
             last_name = _wire_each(graph, sub.name, each_fn, each, prev_node)
         case ModifierCombo.LOOP | ModifierCombo.LOOP_OPERATOR:
             loop = mods["loop"]

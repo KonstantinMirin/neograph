@@ -91,6 +91,61 @@ class TestAdaptStateParity:
             model_bus.get_required("missing")
 
 
+class TestOracleEachLabelInError:
+    """neograph-7nan: when StateMissingError fires from inside an Oracle
+    or Each redirect closure, the error must name the USER's node (e.g.
+    'score-claim'), not the framework's internal closure name (e.g.
+    'eachoracle_redirect_fn'). The closures previously passed
+    ``raw_fn.__name__`` which surfaces a confusing framework label."""
+
+    def test_eachoracle_redirect_error_carries_user_node_name(self):
+        from neograph._oracle import make_eachoracle_redirect_fn
+        from tests.schemas import MatchResult
+
+        def user_node_fn(_state, _config):
+            return {"score_claim": MatchResult(cluster_label="c", matched=["x"])}
+
+        # In production, factory.py sets raw_fn.__name__ to the MANGLED
+        # field_name (hyphens replaced with underscores). The error must
+        # surface the user's original node name, not this mangled form.
+        user_node_fn.__name__ = "score_claim"  # what factory.py would set
+        redirect = make_eachoracle_redirect_fn(
+            user_node_fn, field_name="score_claim",
+            collector_field="score_claim_collector", each_key="claim_id",
+            node_name="score-claim",
+        )
+        # Empty dict state lacks EACH_ITEM — closure's get_required must raise.
+        with pytest.raises(StateMissingError) as exc_info:
+            redirect({}, {})
+        msg = str(exc_info.value)
+        # The closure must surface the user's node name, not the closure name.
+        assert "score-claim" in msg, msg
+        assert "eachoracle_redirect_fn" not in msg, msg
+
+    def test_each_redirect_error_carries_user_node_name(self):
+        from neograph._oracle import make_each_redirect_fn
+        from neograph.modifiers import Each
+        from tests.schemas import MatchResult
+
+        def user_node_fn(_state, _config):
+            return {"score_claim": MatchResult(cluster_label="c", matched=["x"])}
+
+        # In production, factory.py sets raw_fn.__name__ to the MANGLED
+        # field_name (hyphens replaced with underscores). The error must
+        # surface the user's original node name, not this mangled form.
+        user_node_fn.__name__ = "score_claim"  # what factory.py would set
+        redirect = make_each_redirect_fn(
+            user_node_fn, field_name="score_claim",
+            each=Each(over="src.items", key="claim_id"),
+            node_name="score-claim",
+        )
+        with pytest.raises(StateMissingError) as exc_info:
+            redirect({}, {})
+        msg = str(exc_info.value)
+        assert "score-claim" in msg, msg
+        assert "each_redirect_fn" not in msg, msg
+
+
 class TestEndToEndRequiredStateMiss:
     """Behavioral: when a node's runtime requires a state field that no
     upstream produced, the pipeline raises StateMissingError naming the

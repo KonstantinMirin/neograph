@@ -74,20 +74,27 @@ def make_oracle_redirect_fn(raw_fn: Callable, field_name: str, collector_field: 
 
 def make_eachoracle_redirect_fn(
     raw_fn: Callable, field_name: str, collector_field: str, each_key: str,
+    *,
+    node_name: str | None = None,
 ) -> Callable:
     """Wrap a node function for Each x Oracle fusion.
 
     Like make_oracle_redirect_fn, but tags each result with the each_key
     extracted from neo_each_item. The collector accumulates (key, result) tuples.
+
+    ``node_name`` is the user-declared node name surfaced in
+    StateMissingError messages; defaults to ``raw_fn.__name__`` (the mangled
+    field name) when not supplied.
     """
     prefix = f"{field_name}_"
+    label = node_name or raw_fn.__name__
 
     def eachoracle_redirect_fn(state: Any, config: RunnableConfig) -> dict:
         result = raw_fn(state, config)
         # REQUIRED: flat Each×Oracle router always populates EACH_ITEM in the
         # Send payload. Absence = wiring bug.
         item = adapt_state(state).get_required(
-            StateKeys.EACH_ITEM, node_label=raw_fn.__name__,
+            StateKeys.EACH_ITEM, node_label=label,
         )
         key = getattr(item, each_key, str(item))
         # Single-type outputs: result has {field_name: val}
@@ -312,16 +319,23 @@ def make_oracle_merge_fn(
     return merge_fn
 
 
-def make_each_redirect_fn(raw_fn: Callable, field_name: str, each: Each) -> Callable:
+def make_each_redirect_fn(
+    raw_fn: Callable, field_name: str, each: Each,
+    *,
+    node_name: str | None = None,
+) -> Callable:
     """Wrap a node function to key the result by the Each item's key field.
 
     Reads neo_each_item from state, uses each.key to extract the dispatch key.
+    ``node_name`` is surfaced in StateMissingError messages; defaults to
+    ``raw_fn.__name__`` (mangled field name) when not supplied.
     """
+    label = node_name or (raw_fn.__name__ if hasattr(raw_fn, "__name__") else field_name)
 
     def each_redirect_fn(state: Any, config: RunnableConfig = None) -> dict:  # type: ignore[assignment]
         # REQUIRED: Each router always populates EACH_ITEM in the Send payload.
         each_item = adapt_state(state).get_required(
-            StateKeys.EACH_ITEM, node_label=raw_fn.__name__,
+            StateKeys.EACH_ITEM, node_label=label,
         )
 
         result = raw_fn(state, config) if config else raw_fn(state)

@@ -200,7 +200,9 @@ def _add_each_oracle_fused(
     from neograph.factory import make_eachoracle_redirect_fn
 
     raw_fn = make_node_fn(node, runtime=runtime, scripted_lookup=scripted_lookup, tool_factory_lookup=tool_factory_lookup)
-    redirect_fn = make_eachoracle_redirect_fn(raw_fn, field_name, collector_field, each.key)
+    redirect_fn = make_eachoracle_redirect_fn(
+        raw_fn, field_name, collector_field, each.key, node_name=node.name,
+    )
     graph.add_node(gen_name, redirect_fn)
 
     # Empty-collection bypass for Each x Oracle fusion
