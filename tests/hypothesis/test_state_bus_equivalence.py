@@ -19,11 +19,13 @@ from __future__ import annotations
 
 from typing import Any
 
+import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 from pydantic import BaseModel
 
 from neograph._state_bus import adapt_state
+from neograph.errors import StateMissingError
 
 
 # ── The legacy reference implementation ────────────────────────────────────
@@ -133,13 +135,13 @@ def test_none_value_is_returned_not_treated_as_missing(state):
     assert _state_get_legacy(state_with_none, "explicit_none", "DEFAULT") is None
 
 
-def test_empty_dict_state():
+def test_empty_dict_states():
     """Empty dict: any key returns default."""
     assert adapt_state({}).get("anything") is None
     assert adapt_state({}).get("anything", "default") == "default"
 
 
-def test_empty_model_state():
+def test_empty_model_states():
     """Empty BaseModel: any key returns default."""
     empty = _DynamicModel()
     assert adapt_state(empty).get("anything") is None
@@ -175,3 +177,48 @@ def test_neo_loop_count_pattern(default):
     # `... or 0` idiom collapses None to 0 consistently
     assert (adapt_state(state_dict).get("neo_loop_count_x") or 0) == 0
     assert (adapt_state(state_model).get("neo_loop_count_x") or 0) == 0
+
+
+# ── get_required properties (izo1-D / neograph-tzzi) ───────────────────────
+
+
+@given(state_dict=dict_states(), key=KEYS)
+def test_get_required_matches_get_when_key_present_dict(state_dict, key):
+    """When the key exists in dict state, get_required and get return the
+    same value (including None — explicit None binds are permitted)."""
+    if key in state_dict:
+        bus = adapt_state(state_dict)
+        assert bus.get_required(key) == bus.get(key)
+
+
+@given(state_dict=dict_states(), key=KEYS)
+def test_get_required_raises_when_key_missing_dict(state_dict, key):
+    """When the key is absent from dict state, get_required raises
+    StateMissingError carrying the key and the node_label."""
+    if key not in state_dict:
+        bus = adapt_state(state_dict)
+        with pytest.raises(StateMissingError) as exc_info:
+            bus.get_required(key, node_label="test_node")
+        msg = str(exc_info.value)
+        assert key in msg
+        assert "test_node" in msg
+
+
+@given(state_model=model_states(), key=KEYS)
+def test_get_required_matches_get_when_field_present_model(state_model, key):
+    """Same equivalence as the dict case for BaseModel state."""
+    if hasattr(state_model, key):
+        bus = adapt_state(state_model)
+        assert bus.get_required(key) == bus.get(key)
+
+
+@given(state_model=model_states(), key=KEYS)
+def test_get_required_raises_when_field_missing_model(state_model, key):
+    """BaseModel state: missing attribute raises with the same message shape."""
+    if not hasattr(state_model, key):
+        bus = adapt_state(state_model)
+        with pytest.raises(StateMissingError) as exc_info:
+            bus.get_required(key, node_label="model_node")
+        msg = str(exc_info.value)
+        assert key in msg
+        assert "model_node" in msg

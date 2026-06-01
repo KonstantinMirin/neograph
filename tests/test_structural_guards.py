@@ -4004,3 +4004,123 @@ class TestLlmCohesionFanOut:
         )
         assert count > 2
 
+
+
+class TestStateBusGetDiscipline:
+    """Every .get(...) call on a StateBus receiver in src/neograph/ must
+    either use ``.get_required(...)`` (§7 fail-loud) OR carry a
+    ``# StateBus.get optional: <reason>`` justification comment on the
+    same line or the immediately-preceding line.
+
+    Per neograph-tzzi (izo1-D). Mutation tests verify the scanner.
+    """
+
+    # Filenames whose StateBus.get sites have been audited (izo1-B). The
+    # scanner only enforces discipline on these files; new modules can be
+    # added once their sites are classified per the audit doc.
+    IN_SCOPE = frozenset({
+        "_input_shape.py",
+        "_execute.py",
+        "_oracle.py",
+        "_subconstruct.py",
+        "_wiring.py",
+        "_state_write.py",
+    })
+
+    # Variable names that we treat as "this expression is a StateBus".
+    BUS_NAMES = frozenset({"bus", "state", "_state"})
+
+    OPTIONAL_TAG = "StateBus.get optional:"
+
+    @classmethod
+    def _scan(cls, src_dir: pathlib.Path) -> list[str]:
+        offenders: list[str] = []
+        for py_file in sorted(src_dir.glob("*.py")):
+            if py_file.name not in cls.IN_SCOPE:
+                continue
+            text = py_file.read_text()
+            lines = text.splitlines()
+            try:
+                tree = ast.parse(text, filename=str(py_file))
+            except SyntaxError:  # pragma: no cover — file must parse
+                continue
+            for ast_node in ast.walk(tree):
+                if not isinstance(ast_node, ast.Call):
+                    continue
+                func = ast_node.func
+                if not isinstance(func, ast.Attribute):
+                    continue
+                if func.attr != "get":
+                    continue
+                value = func.value
+                # Receiver must be a bare Name matching the StateBus naming
+                # convention used in the codebase.
+                if not isinstance(value, ast.Name):
+                    continue
+                if value.id not in cls.BUS_NAMES:
+                    continue
+                lineno = ast_node.lineno
+                if 0 < lineno <= len(lines) and cls.OPTIONAL_TAG in lines[lineno - 1]:
+                    continue
+                annotated = False
+                cursor = lineno - 2
+                while cursor >= 0 and lines[cursor].lstrip().startswith("#"):
+                    if cls.OPTIONAL_TAG in lines[cursor]:
+                        annotated = True
+                        break
+                    cursor -= 1
+                if annotated:
+                    continue
+                offenders.append(f"{py_file.name}:{lineno}")
+        return offenders
+
+    def test_every_state_bus_get_is_annotated(self):
+        offenders = self._scan(SRC_DIR)
+        assert offenders == [], (
+            f"\n{len(offenders)} unannotated StateBus.get site(s) found:\n"
+            + "\n".join(f"  {o}" for o in offenders)
+            + "\n\nEither switch to .get_required(...) (§7 required-getter) "
+              "or add a `# StateBus.get optional: <reason>` comment on the "
+              "call site or the immediately-preceding line."
+        )
+
+    def test_mutation_unannotated_get_detected(self, tmp_path: pathlib.Path):
+        """Inject an unannotated `bus.get(k)` into a scoped temp file;
+        scanner must flag it."""
+        target = tmp_path / "_input_shape.py"
+        target.write_text(
+            "def f(bus):\n"
+            "    return bus.get('k')\n"
+        )
+        offenders = self._scan(tmp_path)
+        assert any(o.endswith(":2") for o in offenders), offenders
+
+    def test_mutation_annotated_get_passes(self, tmp_path: pathlib.Path):
+        """`bus.get(k, None)  # StateBus.get optional: test` → scanner skips."""
+        target = tmp_path / "_input_shape.py"
+        target.write_text(
+            "def f(bus):\n"
+            "    return bus.get('k', None)  # StateBus.get optional: test reason\n"
+        )
+        offenders = self._scan(tmp_path)
+        assert offenders == [], offenders
+
+    def test_mutation_get_required_passes(self, tmp_path: pathlib.Path):
+        """`bus.get_required(k)` (not `.get`) is never flagged."""
+        target = tmp_path / "_input_shape.py"
+        target.write_text(
+            "def f(bus):\n"
+            "    return bus.get_required('k')\n"
+        )
+        offenders = self._scan(tmp_path)
+        assert offenders == [], offenders
+
+    def test_mutation_out_of_scope_file_skipped(self, tmp_path: pathlib.Path):
+        """A file outside IN_SCOPE is not scanned."""
+        target = tmp_path / "not_audited.py"
+        target.write_text(
+            "def f(bus):\n"
+            "    return bus.get('k')\n"
+        )
+        offenders = self._scan(tmp_path)
+        assert offenders == [], offenders
