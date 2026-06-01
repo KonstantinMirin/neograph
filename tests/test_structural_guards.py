@@ -2617,8 +2617,8 @@ NEOGRAPH_ERROR_ALLOWLIST: dict[str, str] = {
     # ── construct.py — Pydantic BeforeValidator boundary ──
     # _validate_node_list runs inside Pydantic field validation; Pydantic
     # catches TypeError/ValueError and rolls them into ValidationError.
-    "construct.py:45": "Pydantic BeforeValidator boundary; TypeError is rolled into ValidationError",
-    "construct.py:48": "Pydantic BeforeValidator boundary; TypeError is rolled into ValidationError",
+    "construct.py:46": "Pydantic BeforeValidator boundary; TypeError is rolled into ValidationError",
+    "construct.py:49": "Pydantic BeforeValidator boundary; TypeError is rolled into ValidationError",
 
     # ── forward.py — proxy / tracer / abstract-method contracts ──
     # _Proxy.__getattr__ raises AttributeError per the Python attribute
@@ -4163,3 +4163,106 @@ class TestNoRuntimeFanOutDetection:
                     f"Construct._normalize_fan_out_params (single source of truth, "
                     f"neograph-vgc1)."
                 )
+
+
+class TestConstructNormalizesEveryAtNodeOnlyIRField:
+    """neograph-aqau: every Node IR field that _construct_builder.py writes
+    via the @node decoration path's `updates` dict must have a matching
+    normalization step in `Construct.__init__` so the YAML and programmatic
+    surfaces produce identical IR.
+
+    Today's `updates` keys (per audit): inputs, fan_out_param, scripted_fn,
+    oracle_gen_type. The first three are passthroughs (set by Node()
+    constructor or modifier pipe). Only fan_out_param and oracle_gen_type
+    need explicit normalization in Construct (already done). If a future
+    commit adds a new `updates[X] = ...` write in _construct_builder.py
+    without an `X` reference inside `Construct._normalize_*`, this guard
+    fires.
+    """
+
+    # Fields that are set by other surfaces (Node() constructor or pipe)
+    # and therefore don't need a Construct normalization step.
+    PASSTHROUGH_FIELDS = frozenset({"inputs", "scripted_fn"})
+
+    # Fields that DO have a Construct normalization step today.
+    NORMALIZED_FIELDS = frozenset({"fan_out_param", "oracle_gen_type"})
+
+    def test_every_updates_write_has_normalizer_or_passthrough_justification(self):
+        builder_src = (SRC_DIR / "_construct_builder.py").read_text()
+        tree = ast.parse(builder_src)
+        # Collect every updates[<str literal>] = ... assignment.
+        written_fields: set[str] = set()
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Assign):
+                continue
+            for target in node.targets:
+                if not isinstance(target, ast.Subscript):
+                    continue
+                if not (
+                    isinstance(target.value, ast.Name)
+                    and target.value.id == "updates"
+                ):
+                    continue
+                # ast.Constant for string literal index
+                key_node = target.slice
+                if isinstance(key_node, ast.Constant) and isinstance(key_node.value, str):
+                    written_fields.add(key_node.value)
+
+        unaccounted = written_fields - self.PASSTHROUGH_FIELDS - self.NORMALIZED_FIELDS
+        assert not unaccounted, (
+            f"_construct_builder.py writes updates[{sorted(unaccounted)}] in "
+            f"the @node assembly path. Each such field must either be set by "
+            f"another surface (Node() constructor / pipe / YAML loader) — add "
+            f"to PASSTHROUGH_FIELDS — or have a Construct._normalize_<field> "
+            f"step + add to NORMALIZED_FIELDS. Otherwise the YAML/programmatic "
+            f"surface produces an IR with the field missing (drift class of "
+            f"neograph-vgc1 + neograph-aqau)."
+        )
+
+    def test_every_normalized_field_referenced_in_construct(self):
+        """If we claim a field is normalized, the Construct source must
+        reference it. Catches forgotten normalizer methods."""
+        construct_src = (SRC_DIR / "construct.py").read_text()
+        for field in self.NORMALIZED_FIELDS:
+            assert f'"{field}"' in construct_src or f"'{field}'" in construct_src or field in construct_src, (
+                f"NORMALIZED_FIELDS claims '{field}' has a Construct "
+                f"normalization step, but '{field}' is not referenced in "
+                f"construct.py. Either add the normalizer or move to "
+                f"PASSTHROUGH_FIELDS."
+            )
+
+    def test_mutation_unannotated_updates_write_is_detected(self):
+        """Mutation: synthesize a tiny source file containing an
+        ``updates["unaudited_field"] = ...`` write; the scanner logic must
+        flag it. Proves the guard isn't a snapshot — it would catch a future
+        regression where someone adds a new IR field without classifying it."""
+        synthetic = (
+            'def f():\n'
+            '    updates = {}\n'
+            '    updates["new_drift_field"] = "value"\n'
+        )
+        tree = ast.parse(synthetic)
+        written_fields: set[str] = set()
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Assign):
+                continue
+            for target in node.targets:
+                if not isinstance(target, ast.Subscript):
+                    continue
+                if not (
+                    isinstance(target.value, ast.Name)
+                    and target.value.id == "updates"
+                ):
+                    continue
+                key_node = target.slice
+                if isinstance(key_node, ast.Constant) and isinstance(key_node.value, str):
+                    written_fields.add(key_node.value)
+        assert "new_drift_field" in written_fields, (
+            "Scanner must detect updates[<str>] = ... in synthetic source — "
+            "if this assertion fails, the real guard's scanning logic is broken."
+        )
+        unaccounted = written_fields - self.PASSTHROUGH_FIELDS - self.NORMALIZED_FIELDS
+        assert "new_drift_field" in unaccounted, (
+            "An unclassified field must surface in `unaccounted`; the guard "
+            "would correctly fail _construct_builder.py with the same logic."
+        )

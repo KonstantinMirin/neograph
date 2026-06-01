@@ -28,6 +28,7 @@ from neograph._construct_validation import ConstructError, _validate_node_chain
 from neograph._ir_protocols import ConstructItem
 from neograph._llm_config import LlmConfig
 from neograph._normalize import normalize_inputs
+from neograph._sidecar import infer_oracle_gen_type
 from neograph.modifiers import Modifiable, ModifierSet
 from neograph.naming import field_name_for
 from neograph.node import Node
@@ -147,11 +148,13 @@ class Construct(Modifiable, BaseModel):
                 # the field — both gates only fire on BaseModel children.
                 assert isinstance(item, BaseModel)
                 self.nodes[i] = item.model_copy(update=updates)
-        # IR-parity: the @node decoration path sets node.fan_out_param at
-        # construct-assembly time; the YAML and programmatic surfaces must
-        # produce the same IR. Detect the fan-out receiver key here, once,
-        # so all three surfaces converge.
+        # IR-parity: the @node decoration path sets several Node fields at
+        # construct-assembly time (fan_out_param, oracle_gen_type). The YAML
+        # and programmatic surfaces must produce identical IR. Run all
+        # @node-only field inferences here, once, so all three surfaces
+        # converge before validation.
         self._normalize_fan_out_params()
+        self._normalize_oracle_gen_type()
         # Validate after pydantic finishes so ConstructError escapes cleanly
         # rather than being wrapped in a pydantic ValidationError. Nested
         # constructs self-validate during their own __init__.
@@ -189,6 +192,29 @@ class Construct(Modifiable, BaseModel):
             if len(unknown) == 1:
                 self.nodes[i] = item.model_copy(
                     update={"fan_out_param": unknown[0]},
+                )
+
+    def _normalize_oracle_gen_type(self) -> None:
+        """Set ``node.oracle_gen_type`` on Oracle nodes whose merge_fn signature
+        reveals a generator type different from the node's outputs.
+
+        Mirrors the inference at ``_construct_builder.py:583`` (the @node
+        decoration path) so YAML and programmatic surfaces produce IR with
+        the field populated. Idempotent: nodes whose oracle_gen_type is
+        already set are left alone.
+        """
+        for i, item in enumerate(self.nodes):
+            if not isinstance(item, Node):
+                continue
+            if item.oracle_gen_type is not None:
+                continue
+            oracle_mod = item.modifier_set.oracle
+            if oracle_mod is None or oracle_mod.merge_fn is None:
+                continue
+            gen_type = infer_oracle_gen_type(oracle_mod.merge_fn)
+            if gen_type is not None and gen_type is not item.outputs:
+                self.nodes[i] = item.model_copy(
+                    update={"oracle_gen_type": gen_type},
                 )
 
     # has_modifier, get_modifier, __or__, map inherited from Modifiable

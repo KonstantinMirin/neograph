@@ -239,6 +239,88 @@ class TestCrossSurfaceValueEquivalence:
         )
 
 
+class TestOracleGenTypeIRParity:
+    """neograph-aqau: Node.oracle_gen_type must be set consistently across
+    all three API surfaces (YAML, programmatic, @node) when Oracle has a
+    merge_fn whose signature reveals a different generator type than the
+    node's outputs. Today _construct_builder.py:583 only runs the inference
+    for the @node decoration path."""
+
+    def test_oracle_gen_type_set_on_programmatic_oracle_with_merge_fn(self):
+        """Programmatic Node() | Oracle(merge_fn='name') with a merge_fn whose
+        first parameter is list[T] (T != node.outputs) must produce a Node
+        IR with oracle_gen_type=T after Construct construction."""
+        from neograph.decorators import merge_fn as merge_fn_decorator
+        from neograph.modifiers import Oracle
+
+        # Define a merge_fn whose first parameter type is different from the
+        # node's outputs. Generators produce Beta; merge consumes list[Beta]
+        # to produce Gamma.
+        @merge_fn_decorator
+        def aqau_merge(beta_list: list[Beta]) -> Gamma:
+            return Gamma(value=str(len(beta_list)))
+
+        register_scripted("aqau_seed", lambda _i, _c: Alpha(value=1))
+        register_scripted("aqau_gen", lambda _i, _c: Beta(score=0.5))
+
+        # Programmatic surface: Node()|Oracle(merge_fn="aqau_merge")
+        prod = Node.scripted(
+            "aqau-gen", fn="aqau_gen", inputs=Alpha, outputs=Gamma,
+        ) | Oracle(n=2, merge_fn="aqau_merge")
+        seed = Node.scripted("aqau-seed", fn="aqau_seed", outputs=Alpha)
+        construct = Construct("aqau-prog", nodes=[seed, prod])
+        ir = next(
+            n for n in construct.nodes
+            if getattr(n, "name", None) == "aqau-gen"
+        )
+        # Per audit: Oracle(merge_fn) where merge_fn's first param is list[T]
+        # and T differs from node.outputs must surface T as oracle_gen_type.
+        assert ir.oracle_gen_type is Beta, (
+            f"Programmatic Oracle node must have oracle_gen_type=Beta "
+            f"(inferred from merge_fn signature list[Beta]); got "
+            f"{ir.oracle_gen_type!r}. Surface drift vs @node path."
+        )
+
+    def test_oracle_gen_type_set_on_yaml_oracle_with_merge_fn(self):
+        """YAML-loaded Oracle node with a merge_fn whose first parameter is
+        list[T] (T != node.outputs) must have oracle_gen_type=T."""
+        from neograph.decorators import merge_fn as merge_fn_decorator
+        from neograph.loader import load_spec
+        from neograph.spec_types import register_type
+
+        @merge_fn_decorator
+        def aqau_yaml_merge(beta_list: list[Beta]) -> Gamma:
+            return Gamma(value=str(len(beta_list)))
+
+        register_type("Alpha", Alpha)
+        register_type("Beta", Beta)
+        register_type("Gamma", Gamma)
+        register_scripted("aqau_yaml_seed", lambda _i, _c: Alpha(value=1))
+        register_scripted("aqau_yaml_gen", lambda _i, _c: Beta(score=0.5))
+
+        spec = {
+            "name": "aqau-yaml",
+            "nodes": [
+                {"name": "aqau-yaml-seed", "mode": "scripted",
+                 "scripted_fn": "aqau_yaml_seed", "outputs": "Alpha"},
+                {"name": "aqau-yaml-gen", "mode": "scripted",
+                 "scripted_fn": "aqau_yaml_gen",
+                 "inputs": "Alpha", "outputs": "Gamma",
+                 "oracle": {"n": 2, "merge_fn": "aqau_yaml_merge"}},
+            ],
+            "pipeline": {"nodes": ["aqau-yaml-seed", "aqau-yaml-gen"]},
+        }
+        construct = load_spec(spec)
+        ir = next(
+            n for n in construct.nodes
+            if getattr(n, "name", None) == "aqau-yaml-gen"
+        )
+        assert ir.oracle_gen_type is Beta, (
+            f"YAML Oracle node must have oracle_gen_type=Beta; got "
+            f"{ir.oracle_gen_type!r}. Surface drift vs @node path."
+        )
+
+
 class TestFanOutParamIRParity:
     """neograph-vgc1: node.fan_out_param must be set consistently across
     all three API surfaces (declarative @node decoration is the existing
