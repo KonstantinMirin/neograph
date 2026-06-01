@@ -3120,3 +3120,77 @@ class TestLoopConditionLint:
         # This should be ERROR (required=True) since it ALWAYS crashes
         assert any(i.kind == "loop_condition_none_unsafe" for i in loop_issues)
         assert any(i.required is True for i in loop_issues)
+
+
+class TestContextFieldProducerValidation:
+    """§7 / izo1-C — node.context fields must have an upstream producer.
+
+    Without this check, a typoed context name silently renders as the literal
+    string ``"None"`` in LLM prompts (see _execute.py:46). The validator
+    catches the typo at compile time and refuses to construct the pipeline.
+    """
+
+    def _make_consumer(self, name: str, in_type: type, ctx: list[str]) -> Node:
+        return Node(
+            name=name, mode="scripted", scripted_fn="f",
+            inputs={in_type.__name__.lower(): in_type},
+            outputs=MatchResult,
+            context=ctx,
+        )
+
+    def test_typoed_context_field_with_no_producer_raises_at_compile(self):
+        """consumer.context=['nonexistent'] with no upstream producer raises."""
+        producer = _producer("topic", RawText)
+        consumer = Node(
+            name="summarize", mode="scripted", scripted_fn="f",
+            inputs={"topic": RawText},
+            outputs=MatchResult,
+            context=["nonexistent_field"],
+        )
+        with pytest.raises(ConstructError) as exc_info:
+            Construct("bad-context", nodes=[producer, consumer])
+        msg = str(exc_info.value)
+        assert "nonexistent_field" in msg
+        assert "no upstream node" in msg or "context" in msg.lower()
+
+    def test_error_message_names_node_and_field(self):
+        """Error message includes node name and the offending context field."""
+        producer = _producer("topic", RawText)
+        consumer = Node(
+            name="summarize", mode="scripted", scripted_fn="f",
+            inputs={"topic": RawText},
+            outputs=MatchResult,
+            context=["typoed"],
+        )
+        with pytest.raises(ConstructError) as exc_info:
+            Construct("ctx-msg", nodes=[producer, consumer])
+        msg = str(exc_info.value)
+        assert "summarize" in msg
+        assert "typoed" in msg
+
+    def test_valid_context_field_with_upstream_producer_passes(self):
+        """consumer.context=['catalog'] where 'catalog' is an upstream output
+        compiles cleanly (regression guard — no false positive)."""
+        catalog = _producer("catalog", RawText)
+        consumer = Node(
+            name="summarize", mode="scripted", scripted_fn="f",
+            inputs={"catalog": RawText},
+            outputs=MatchResult,
+            context=["catalog"],
+        )
+        pipeline = Construct("ctx-ok", nodes=[catalog, consumer])
+        assert len(pipeline.nodes) == 2
+
+    def test_hyphenated_context_field_with_producer_passes(self):
+        """node.context references the unmangled node name; the validator
+        must apply field_name_for() consistently when comparing against
+        producers. Regression for hyphen handling."""
+        producer = _producer("topic-source", RawText)
+        consumer = Node(
+            name="summarize", mode="scripted", scripted_fn="f",
+            inputs={"topic_source": RawText},
+            outputs=MatchResult,
+            context=["topic-source"],
+        )
+        pipeline = Construct("ctx-hyphen", nodes=[producer, consumer])
+        assert len(pipeline.nodes) == 2

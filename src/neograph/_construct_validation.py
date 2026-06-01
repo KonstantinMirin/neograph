@@ -293,10 +293,14 @@ def _validate_node_chain(construct: Construct) -> None:
 
         # Validate context= references.
         # Skip for sub-constructs (input is set) — context comes from parent.
+        # context entries are user-declared upstream NAMES (matching the
+        # producer's `name`); compare against the mangled `field_name` via
+        # field_name_for() so hyphenated names work consistently.
         if isinstance(item, Node) and item.context and construct.input is None:
             known_fields = {p.field_name for p in producers}
             for ctx_name in item.context:
-                if ctx_name not in known_fields:
+                ctx_field = field_name_for(ctx_name)
+                if ctx_field not in known_fields:
                     raise ConstructError.build(
                         f"references context='{ctx_name}' but no upstream node "
                         f"produces a field with that name",
