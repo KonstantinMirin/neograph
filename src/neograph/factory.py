@@ -60,7 +60,6 @@ from neograph.di import (
     _unwrap_loop_value,  # noqa: F401
 )
 from neograph.errors import ConfigurationError
-from neograph.naming import field_name_for
 from neograph.node import Node
 
 log = structlog.get_logger()
@@ -113,12 +112,13 @@ def make_node_fn(
         scripted_lookup=scripted_lookup,
         tool_factory_lookup=tool_factory_lookup,
     )
-    field_name = field_name_for(node.name)
 
     def node_wrapper(state: BaseModel, config: RunnableConfig) -> dict[str, Any]:
         return _execute_node(node, state, config, dispatch)
 
-    node_wrapper.__name__ = field_name
+    # Routing identity is the explicit graph.add_node(name, fn) argument, not
+    # this closure's __name__ (which stays informational). Display labels come
+    # from node.name via the captured Node. See neograph-y20i.
     return node_wrapper
 
 
@@ -131,7 +131,6 @@ def _make_raw_wrapper(node: Node) -> Callable:
     """
     assert node.raw_fn is not None, f"node '{node.name}' has mode='raw' but no raw_fn"
     raw_fn = node.raw_fn
-    field_name = field_name_for(node.name)
 
     def raw_node_wrapper(state: BaseModel, config: RunnableConfig) -> dict[str, Any]:
         node_log = log.bind(node=node.name, mode="raw")
@@ -144,5 +143,5 @@ def _make_raw_wrapper(node: Node) -> Callable:
         node_log.info("node_complete", duration_s=round(elapsed, 3))
         return result
 
-    raw_node_wrapper.__name__ = field_name
+    # __name__ stays informational; routing is the add_node argument (y20i).
     return raw_node_wrapper

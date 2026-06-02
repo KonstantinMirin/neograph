@@ -21,7 +21,7 @@ from neograph._state_keys import StateKeys
 from neograph.errors import ConfigurationError, ExecutionError
 from neograph.modifiers import Each, Oracle
 from neograph.naming import field_name_for
-from neograph.node import TypeSpecStatic
+from neograph.node import HasName, TypeSpecStatic
 
 
 def _inject_oracle_config(state: StateBus, config: RunnableConfig) -> RunnableConfig:
@@ -48,8 +48,7 @@ def _inject_oracle_config(state: StateBus, config: RunnableConfig) -> RunnableCo
 
 def make_oracle_redirect_fn(
     raw_fn: Callable, field_name: str, collector_field: str,
-    *,
-    node_name: str,
+    item: HasName,
 ) -> Callable:
     """Wrap a node function to redirect output from field_name to collector_field.
 
@@ -60,12 +59,13 @@ def make_oracle_redirect_fn(
     outputs (result has {field_name}_{key} keys). For dict-form, collects the
     full result dict into the collector so the merge fn can process per-key.
 
-    ``node_name`` is required: any StateBus.get_required call added to this
-    closure in the future must surface the user's node name rather than the
-    mangled ``raw_fn.__name__`` propagated to LangGraph's graph identity.
+    ``item`` carries the IR node/construct; ``item.name`` is the user-facing
+    label. This factory does not currently raise StateMissingError, so it does
+    not read ``item.name`` — the parameter is kept for signature parity with
+    the other two redirect factories (a future get_required here asks
+    ``item.name`` directly, never a threaded string nor ``raw_fn.__name__``).
     """
     prefix = f"{field_name}_"
-    _ = node_name  # reserved for future get_required calls — see kg8l audit
 
     def oracle_redirect_fn(state: Any, config: RunnableConfig) -> dict:
         result = raw_fn(state, config)
@@ -77,35 +77,33 @@ def make_oracle_redirect_fn(
             return {collector_field: result}
         return result
 
-    oracle_redirect_fn.__name__ = raw_fn.__name__
     return oracle_redirect_fn
 
 
 def make_eachoracle_redirect_fn(
     raw_fn: Callable, field_name: str, collector_field: str, each_key: str,
-    *,
-    node_name: str,
+    item: HasName,
 ) -> Callable:
     """Wrap a node function for Each x Oracle fusion.
 
     Like make_oracle_redirect_fn, but tags each result with the each_key
     extracted from neo_each_item. The collector accumulates (key, result) tuples.
 
-    ``node_name`` is the user-declared node name surfaced in
-    StateMissingError messages. Required (not optional) so callers cannot
-    silently fall back to the mangled ``raw_fn.__name__``.
+    ``item`` is the captured IR node/construct; ``item.name`` is the
+    user-declared label surfaced in StateMissingError messages. The closure
+    asks the IR object directly (Information Expert) rather than receiving a
+    pre-extracted string.
     """
     prefix = f"{field_name}_"
-    label = node_name
 
     def eachoracle_redirect_fn(state: Any, config: RunnableConfig) -> dict:
         result = raw_fn(state, config)
         # REQUIRED: flat Each×Oracle router always populates EACH_ITEM in the
         # Send payload. Absence = wiring bug.
-        item = adapt_state(state).get_required(
-            StateKeys.EACH_ITEM, node_label=label,
+        each_item = adapt_state(state).get_required(
+            StateKeys.EACH_ITEM, node_label=item.name,
         )
-        key = getattr(item, each_key, str(item))
+        key = getattr(each_item, each_key, str(each_item))
         # Single-type outputs: result has {field_name: val}
         val = result.get(field_name)
         if val is not None:
@@ -117,7 +115,6 @@ def make_eachoracle_redirect_fn(
             return {collector_field: [(key, per_key)]}
         return result
 
-    eachoracle_redirect_fn.__name__ = raw_fn.__name__
     return eachoracle_redirect_fn
 
 
@@ -330,22 +327,20 @@ def make_oracle_merge_fn(
 
 def make_each_redirect_fn(
     raw_fn: Callable, field_name: str, each: Each,
-    *,
-    node_name: str,
+    item: HasName,
 ) -> Callable:
     """Wrap a node function to key the result by the Each item's key field.
 
     Reads neo_each_item from state, uses each.key to extract the dispatch key.
-    ``node_name`` is surfaced in StateMissingError messages. Required (not
-    optional) so callers cannot silently fall back to the mangled
-    ``raw_fn.__name__``.
+    ``item`` is the captured IR node/construct; ``item.name`` is the
+    user-declared label surfaced in StateMissingError messages — asked of the
+    IR object directly, never threaded as a string.
     """
-    label = node_name
 
     def each_redirect_fn(state: Any, config: RunnableConfig = None) -> dict:  # type: ignore[assignment]
         # REQUIRED: Each router always populates EACH_ITEM in the Send payload.
         each_item = adapt_state(state).get_required(
-            StateKeys.EACH_ITEM, node_label=label,
+            StateKeys.EACH_ITEM, node_label=item.name,
         )
 
         result = raw_fn(state, config) if config else raw_fn(state)
@@ -356,5 +351,4 @@ def make_each_redirect_fn(
             return {field_name: {key_val: val}}
         return result
 
-    each_redirect_fn.__name__ = raw_fn.__name__ if hasattr(raw_fn, '__name__') else field_name
     return each_redirect_fn

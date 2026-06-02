@@ -74,6 +74,20 @@ class RawNodeFn(Protocol):
     def __call__(self, state: BaseModel, config: RunnableConfig) -> dict[str, Any]: ...
 
 
+@runtime_checkable
+class HasName(Protocol):
+    """Anything that carries a user-facing declaration name.
+
+    Both ``Node`` and ``Construct`` satisfy this structurally (each declares
+    ``name: str``). Redirect-closure factories (`_oracle.py`) capture a
+    ``HasName`` and read ``.name`` for error/observability labels — the label
+    concern is sourced from the IR object (Information Expert), never threaded
+    as a string kwarg nor scraped from a wrapper's ``__name__``.
+    """
+
+    name: str
+
+
 def _validate_type_spec(v: Any) -> Any:
     """Accept type objects, generic aliases, and dict-form type specs.
 

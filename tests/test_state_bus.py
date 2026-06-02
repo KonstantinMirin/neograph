@@ -8,6 +8,8 @@ permitted (mirrors `dict` semantics).
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 from pydantic import BaseModel
 
@@ -92,11 +94,15 @@ class TestAdaptStateParity:
 
 
 class TestOracleEachLabelInError:
-    """neograph-7nan: when StateMissingError fires from inside an Oracle
-    or Each redirect closure, the error must name the USER's node (e.g.
-    'score-claim'), not the framework's internal closure name (e.g.
-    'eachoracle_redirect_fn'). The closures previously passed
-    ``raw_fn.__name__`` which surfaces a confusing framework label."""
+    """neograph-7nan / y20i: when StateMissingError fires from inside an
+    Oracle or Each redirect closure, the error must name the USER's node
+    (e.g. 'score-claim'), not the framework's internal closure name (e.g.
+    'eachoracle_redirect_fn').
+
+    Post-y20i the closure sources the label from the captured IR object's
+    ``.name`` (Information Expert) — passed as ``item``, NOT threaded as a
+    ``node_name`` string kwarg. The closure no longer relies on
+    ``raw_fn.__name__`` at all (factory.py no longer mangles it)."""
 
     def test_eachoracle_redirect_error_carries_user_node_name(self):
         from neograph._oracle import make_eachoracle_redirect_fn
@@ -105,14 +111,13 @@ class TestOracleEachLabelInError:
         def user_node_fn(_state, _config):
             return {"score_claim": MatchResult(cluster_label="c", matched=["x"])}
 
-        # In production, factory.py sets raw_fn.__name__ to the MANGLED
-        # field_name (hyphens replaced with underscores). The error must
-        # surface the user's original node name, not this mangled form.
-        user_node_fn.__name__ = "score_claim"  # what factory.py would set
+        # The wrapper's __name__ is informational only post-y20i. The closure
+        # must surface item.name, never the wrapper function name.
+        user_node_fn.__name__ = "eachoracle_redirect_fn"
         redirect = make_eachoracle_redirect_fn(
             user_node_fn, field_name="score_claim",
             collector_field="score_claim_collector", each_key="claim_id",
-            node_name="score-claim",
+            item=SimpleNamespace(name="score-claim"),
         )
         # Empty dict state lacks EACH_ITEM — closure's get_required must raise.
         with pytest.raises(StateMissingError) as exc_info:
@@ -130,14 +135,11 @@ class TestOracleEachLabelInError:
         def user_node_fn(_state, _config):
             return {"score_claim": MatchResult(cluster_label="c", matched=["x"])}
 
-        # In production, factory.py sets raw_fn.__name__ to the MANGLED
-        # field_name (hyphens replaced with underscores). The error must
-        # surface the user's original node name, not this mangled form.
-        user_node_fn.__name__ = "score_claim"  # what factory.py would set
+        user_node_fn.__name__ = "each_redirect_fn"
         redirect = make_each_redirect_fn(
             user_node_fn, field_name="score_claim",
             each=Each(over="src.items", key="claim_id"),
-            node_name="score-claim",
+            item=SimpleNamespace(name="score-claim"),
         )
         with pytest.raises(StateMissingError) as exc_info:
             redirect({}, {})
@@ -147,118 +149,15 @@ class TestOracleEachLabelInError:
 
 
 class TestOracleClosureNodeNameRequiredAndComplete:
-    """neograph-kg8l: completion of 7nan. All three redirect closure
-    factories in _oracle.py must:
-    (a) require node_name (no default — silent fallback to raw_fn.__name__
-        is the band-aid the original 7nan fix preserved),
-    (b) include make_oracle_redirect_fn (which propagates raw_fn.__name__
-        and would manifest the same bug the moment get_required is added),
-    (c) be validated by an end-to-end integration test through compile()
-        + run(), not just unit-tested in isolation."""
+    """neograph-y20i: the three redirect closure factories source the
+    user-facing label from the captured IR object (``item.name``), not from
+    a threaded ``node_name`` string and not from ``raw_fn.__name__``.
 
-    def test_make_oracle_redirect_fn_requires_node_name_kwarg(self):
-        """make_oracle_redirect_fn must accept node_name as required kwarg.
-        Previously, only make_each and make_eachoracle had it."""
-        import inspect
-
-        from neograph._oracle import make_oracle_redirect_fn
-        sig = inspect.signature(make_oracle_redirect_fn)
-        assert "node_name" in sig.parameters, (
-            f"make_oracle_redirect_fn must declare node_name parameter; "
-            f"current params: {list(sig.parameters)}"
-        )
-
-    def test_eachoracle_factory_calls_without_node_name_fail(self):
-        """node_name must be REQUIRED (no default). Calls that omit it
-        must raise TypeError so future regressions cannot silently inherit
-        the broken raw_fn.__name__ fallback."""
-        from neograph._oracle import make_eachoracle_redirect_fn
-
-        def dummy(_s, _c): return {}
-        with pytest.raises(TypeError, match="node_name"):
-            make_eachoracle_redirect_fn(
-                dummy, field_name="x",
-                collector_field="x_collector", each_key="k",
-            )  # type: ignore[call-arg]
-
-    def test_each_factory_calls_without_node_name_fail(self):
-        from neograph._oracle import make_each_redirect_fn
-        from neograph.modifiers import Each
-
-        def dummy(_s, _c=None): return {}
-        with pytest.raises(TypeError, match="node_name"):
-            make_each_redirect_fn(
-                dummy, field_name="x",
-                each=Each(over="s.items", key="k"),
-            )  # type: ignore[call-arg]
-
-    def test_oracle_factory_calls_without_node_name_fail(self):
-        from neograph._oracle import make_oracle_redirect_fn
-
-        def dummy(_s, _c): return {}
-        with pytest.raises(TypeError, match="node_name"):
-            make_oracle_redirect_fn(
-                dummy, field_name="x", collector_field="x_collector",
-            )  # type: ignore[call-arg]
-
-    def test_integration_subgraph_each_path_uses_user_node_name(self):
-        """Real integration: compile a Construct with a sub-construct under
-        an Each modifier (which routes through make_each_redirect_fn at
-        compiler.py:439), then verify the redirect closure that LangGraph
-        actually invokes carries the user's sub-construct name as its
-        node_label — not the mangled field_name.
-
-        Verifies the production wire path: compile() resolves sub.name into
-        the closure's get_required call. If a future regression drops the
-        node_name kwarg from compiler.py:439, this test fails."""
-        import inspect
-
-        from neograph._oracle import make_each_redirect_fn
-        from neograph.modifiers import Each
-
-        # Inspect the compiler call site to confirm production passes
-        # node_name=sub.name. This is the wire-path equivalent of an e2e
-        # compile() — verifies the static graph wiring matches the contract
-        # without requiring a running pipeline.
-        compiler_src = inspect.getsource(__import__("neograph.compiler", fromlist=[""]))
-        assert "make_each_redirect_fn(subgraph_fn, field_name, each, node_name=sub.name)" in compiler_src, (
-            "compiler.py must call make_each_redirect_fn with node_name=sub.name"
-        )
-
-        # And exercise the closure end-to-end against missing state to confirm
-        # the threaded node_name actually surfaces in the error.
-        def runtime_fn(_state, _config):
-            return {"sub_field": None}
-        runtime_fn.__name__ = "mangled_sub_field"  # what factory.py:121 sets
-
-        redirect = make_each_redirect_fn(
-            runtime_fn, field_name="sub_field",
-            each=Each(over="src.items", key="item_id"),
-            node_name="my-sub-construct",
-        )
-        with pytest.raises(StateMissingError) as exc_info:
-            redirect({}, {})
-        msg = str(exc_info.value)
-        assert "my-sub-construct" in msg, msg
-        assert "mangled_sub_field" not in msg, msg
-
-    def test_integration_oracle_wires_node_name_from_compiler(self):
-        """Same wire-path verification for the Oracle redirect at compiler.py
-        lines 429 and 524 (sub-construct + top-level Oracle paths)."""
-        import inspect
-        compiler_src = inspect.getsource(__import__("neograph.compiler", fromlist=[""]))
-        # Sub-construct Oracle path
-        assert "node_name=sub.name" in compiler_src
-        # Top-level Node Oracle path
-        assert "node_name=node.name" in compiler_src
-
-    def test_integration_eachoracle_wires_node_name_from_wiring(self):
-        """Same wire-path verification for the Each×Oracle fusion at
-        _wiring.py:203."""
-        import inspect
-        wiring_src = inspect.getsource(__import__("neograph._wiring", fromlist=[""]))
-        assert "make_eachoracle_redirect_fn(" in wiring_src
-        assert "node_name=node.name" in wiring_src
+    The previous source-text guards (asserting the literal ``node_name=...``
+    appears in compiler.py/_wiring.py) and the "node_name is a required
+    kwarg" guards are deleted: they pinned the band-aid this epic removes.
+    The behavioral contract is verified end-to-end by the compile()+invoke
+    test below, which exercises the real production wire path."""
 
     def test_compile_then_invoke_subgraph_each_closure_surfaces_user_name(self):
         """Actual compile() + invoke the wired closure: build a Construct
@@ -267,8 +166,9 @@ class TestOracleClosureNodeNameRequiredAndComplete:
         from make_each_redirect_fn, invoke it with a state lacking
         neo_each_item, and assert the resulting StateMissingError names the
         sub-construct via the user's hyphenated form. If a future regression
-        drops node_name= from compiler.py:439, this test fails for a
-        behavioral (not textual) reason."""
+        stops passing the IR object (item=sub) to make_each_redirect_fn at
+        compiler.py:439, this test fails for a behavioral (not textual)
+        reason."""
         from neograph import Construct, Node, compile
         from neograph.modifiers import Each
         from tests.fakes import build_test_compile_kwargs, register_scripted

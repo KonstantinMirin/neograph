@@ -427,7 +427,7 @@ def _add_subgraph(
             oracle = mods["oracle"]
             collector_field = StateKeys.oracle_collector(field_name)
             redirect_fn = make_oracle_redirect_fn(
-                subgraph_fn, field_name, collector_field, node_name=sub.name,
+                subgraph_fn, field_name, collector_field, item=sub,
             )
             merge_fn = make_oracle_merge_fn(oracle, field_name, collector_field, sub.output,
                                                llm_config=sub.llm_config or None,
@@ -436,7 +436,7 @@ def _add_subgraph(
             last_name = _wire_oracle(graph, sub.name, redirect_fn, merge_fn, oracle, prev_node)
         case ModifierCombo.EACH | ModifierCombo.EACH_OPERATOR:
             each = mods["each"]
-            each_fn = make_each_redirect_fn(subgraph_fn, field_name, each, node_name=sub.name)
+            each_fn = make_each_redirect_fn(subgraph_fn, field_name, each, item=sub)
             last_name = _wire_each(graph, sub.name, each_fn, each, prev_node)
         case ModifierCombo.LOOP | ModifierCombo.LOOP_OPERATOR:
             loop = mods["loop"]
@@ -524,7 +524,7 @@ def _add_oracle_nodes(
 
     raw_fn = make_node_fn(node, runtime=runtime, scripted_lookup=scripted_lookup, tool_factory_lookup=tool_factory_lookup)
     redirect_fn = make_oracle_redirect_fn(
-        raw_fn, field_name, collector_field, node_name=node.name,
+        raw_fn, field_name, collector_field, item=node,
     )
     merge_fn = make_oracle_merge_fn(oracle, field_name, collector_field, node.outputs,
                                     node_inputs=node.inputs,
