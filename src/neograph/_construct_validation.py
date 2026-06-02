@@ -614,6 +614,17 @@ def _check_fan_in_inputs(
     producer_by_name: dict[str, tuple[TypeSpecStatic, str]] = {
         p.field_name: (p.effective_type, p.label) for p in producers
     }
+    # The Each fan-out receiver candidate(s) are computed by the single shared
+    # rule from neograph-k7bg — the same one the normalizer used to set
+    # fan_out_param. We pass our producer field set as known_field_names. This
+    # validator owns only the POLICY below (tolerate one, error on extras);
+    # the candidate identity is not re-derived here. Imported function-locally
+    # to break the _construct_validation -> _ir_normalize -> _sidecar ->
+    # _di_classify -> _construct_validation import cycle.
+    from neograph._ir_normalize import fan_out_candidates
+
+    # item has dict-form inputs here (the fan-in path), so it is a Node.
+    _fan_out_candidates = set(fan_out_candidates(cast(Node, item), set(producer_by_name)))
     # Track if the Each fan-out receiver slot was consumed.
     # If fan_out_param is already set (from @node), the slot is pre-consumed.
     _each_skip_used = (fan_out_key is not None)
@@ -624,7 +635,7 @@ def _check_fan_in_inputs(
             # If the node has an Each modifier, ONE unmatched key is the
             # fan-out item receiver — skip it. Additional unmatched keys
             # are real errors (typos) and must be rejected.
-            if has_each and not _each_skip_used:
+            if has_each and not _each_skip_used and upstream_name in _fan_out_candidates:
                 _each_skip_used = True
                 continue
             # Loop self-reference: key matching the node's own name reads

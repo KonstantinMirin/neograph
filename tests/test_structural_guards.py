@@ -1650,6 +1650,16 @@ FUNCTION_LOCAL_IMPORT_ALLOWLIST: set[tuple[str, str, frozenset[str]]] = {
         "neograph.decorators",
         frozenset({"get_merge_fn_metadata"}),
     ),
+    # _construct_validation.py — cycle: validation shares the fan-out candidate
+    # rule with the normalizer, but _ir_normalize -> _sidecar -> _di_classify ->
+    # _construct_validation forms a cycle. Function-local import keeps the shared
+    # rule single-sourced without the cycle (neograph-k7bg). Retires when
+    # _di_classify no longer imports ConstructError from _construct_validation.
+    (
+        "_construct_validation.py",
+        "neograph._ir_normalize",
+        frozenset({"fan_out_candidates"}),
+    ),
     # _llm_runtime.py — cycle: check_llm_kwargs_or_raise walks the construct
     # for LLM-mode nodes, but Construct/Node themselves import from _llm_runtime
     # (via factory.py through compiler.py). Function-local imports keep
@@ -4196,16 +4206,15 @@ class TestNormalizeIrIsSoleIrFieldWriter:
     setattr/object.__setattr__ — and asserts the (file, field) write set
     equals a tightly-justified allowlist:
 
-      _ir_normalize.py  → {fan_out_param, oracle_gen_type}  (the canonical site)
-      _construct_builder.py → {fan_out_param}   (@node SIGNATURE-derived
-            pre-population; richer than the inputs-dict heuristic; normalize_ir
-            is idempotent over it)
+      _ir_normalize.py  → {fan_out_param, oracle_gen_type}  (the canonical site;
+            normalize_ir is the SOLE writer of fan_out_param after neograph-k7bg)
       decorators.py → {oracle_gen_type}   (@node DECORATION-time eager
             pre-population so a bare Node carries the type before assembly;
             normalize_ir owns the inference rule via oracle_gen_type_for and
             is idempotent over it)
 
-    Both pre-population sites run BEFORE the Construct object exists. Any other
+    The remaining pre-population site (decorators.py) runs BEFORE the Construct
+    object exists. Any other
     (file, field) pair — e.g. re-adding oracle_gen_type inference to
     _construct_builder, or a new Construct._normalize_* method — fails the
     guard. So does any write of a NEW IR field anywhere but _ir_normalize.
@@ -4215,8 +4224,10 @@ class TestNormalizeIrIsSoleIrFieldWriter:
     IR_FIELDS = frozenset({"fan_out_param", "oracle_gen_type"})
 
     # Sanctioned (file, field) pre-population writes outside _ir_normalize.
+    # After neograph-k7bg, _construct_builder no longer writes fan_out_param —
+    # the normalizer is its sole writer. Only the @node decoration-time eager
+    # oracle_gen_type write remains.
     ALLOWED_PREPOP: dict[str, frozenset[str]] = {
-        "_construct_builder.py": frozenset({"fan_out_param"}),
         "decorators.py": frozenset({"oracle_gen_type"}),
     }
 

@@ -543,7 +543,13 @@ def _cleanup_inputs_and_register(
             continue
         updates: dict[str, Any] = {}
 
-        # Phase 1: Strip DI params, rewrite port/loop keys, set fan_out_param.
+        # Phase 1: Strip DI params, rewrite port/loop keys.
+        # fan_out_param is NOT written here — it is owned exclusively by
+        # neograph._ir_normalize (run from Construct.__init__), which
+        # re-derives it from the same fan_out_candidates rule the validator
+        # uses. `skip` is still computed: it keeps the fan-out receiver key in
+        # the filtered inputs and is passed to _register_node_scripted below.
+        # The normalizer is the sole writer of fan_out_param. See neograph-k7bg.
         ni = normalize_inputs(n.inputs)
         if ni.is_dict_form:
             skip = fan_out_params.get(field, set())
@@ -564,8 +570,6 @@ def _cleanup_inputs_and_register(
                     filtered[k] = v
             if filtered != ni.by_name:
                 updates["inputs"] = filtered
-            if skip:
-                updates["fan_out_param"] = next(iter(skip))
 
         # Phase 2: Register scripted shim.
         if n.mode == "scripted" and n.raw_fn is None:
@@ -577,13 +581,11 @@ def _cleanup_inputs_and_register(
             if synthetic_name is not None:
                 updates["scripted_fn"] = synthetic_name
 
-        # oracle_gen_type is an IR-level inference owned exclusively by
-        # neograph._ir_normalize (run from Construct.__init__). It is NOT
-        # written here — doing so would re-create the two-site drift class
-        # neograph-20xq addressed. fan_out_param at Phase 1 stays: it is
-        # derived from the @node function signature (richer than the
-        # inputs-dict heuristic the normalizer uses) and normalize_ir is
-        # idempotent over it.
+        # Neither oracle_gen_type NOR fan_out_param is written here: both are
+        # IR-level inferences owned exclusively by neograph._ir_normalize (run
+        # from Construct.__init__). Writing them here would re-create the
+        # two-site drift class neograph-20xq/k7bg addressed. This assembly path
+        # does only @node-specific work (input cleanup + scripted shims).
 
         # Single model_copy with all accumulated updates.
         if updates:

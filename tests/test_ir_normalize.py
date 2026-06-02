@@ -51,6 +51,58 @@ def _node_by_name(construct: Construct, name: str) -> Node:
     raise AssertionError(f"node {name!r} not found in {construct.name}")
 
 
+class TestFanOutCandidates:
+    """fan_out_candidates is the SINGLE definition of 'which dict-form input
+    key is an Each fan-out receiver candidate' (neograph-k7bg). Both
+    _FanOutParamNormalizer (the writer of fan_out_param) and the validator's
+    _check_fan_in_inputs (the tolerator of the unmatched key) derive their
+    candidates from it. A candidate is an input key whose field name is neither
+    a known producer/peer field nor the node's own field; the caller supplies
+    its own ``known_field_names`` (the normalizer has peer node fields, the
+    validator has the full producer field set — different pipeline stages)."""
+
+    def _each_consumer(self, name: str, inputs: dict, over: str) -> Node:
+        n = Node.scripted(name, fn=f"{name}_fn", inputs=inputs, outputs=Gamma)
+        return n | Each(over=over, key="value")
+
+    def test_returns_single_unmatched_key_as_candidate(self):
+        from neograph._ir_normalize import fan_out_candidates
+
+        consumer = self._each_consumer("consumer", {"claims": Alpha, "item": Beta}, "claims")
+        cands = fan_out_candidates(consumer, {"claims", "consumer"})
+        assert cands == ["item"], (
+            f"the one input key naming no known field is the fan-out candidate; got {cands}"
+        )
+
+    def test_excludes_the_nodes_own_field(self):
+        from neograph._ir_normalize import fan_out_candidates
+
+        # A node consuming its own output (loop self-reference shape): the
+        # self field must NOT be reported as a fan-out candidate.
+        n = Node.scripted("refine", fn="refine_fn", inputs={"seed": Alpha, "refine": Gamma}, outputs=Gamma)
+        cands = fan_out_candidates(n, {"seed", "refine"})
+        assert cands == [], f"self field 'refine' must be excluded; got {cands}"
+
+    def test_caller_supplied_known_set_drives_result(self):
+        from neograph._ir_normalize import fan_out_candidates
+
+        consumer = self._each_consumer("consumer", {"a": Alpha, "b": Beta}, "a")
+        # Both known -> nothing unmatched.
+        assert fan_out_candidates(consumer, {"a", "b", "consumer"}) == []
+        # Only 'a' known -> 'b' is the candidate. Proves the caller's set drives
+        # the result (the normalizer and validator pass different sets).
+        assert fan_out_candidates(consumer, {"a", "consumer"}) == ["b"]
+
+    def test_normalizer_writes_fan_out_param_via_the_shared_helper(self):
+        """Integration: the normalizer still resolves fan_out_param (it now
+        derives candidates from fan_out_candidates). normalize_ir runs inside
+        Construct.__init__."""
+        consumer = self._each_consumer("consumer", {"claims": Alpha, "item": Beta}, "claims")
+        producer = Node.scripted("claims", fn="k7bg_p", outputs=Alpha)
+        pipeline = Construct("k7bg-int", nodes=[producer, consumer])
+        assert _node_by_name(pipeline, "consumer").fan_out_param == "item"
+
+
 class TestNormalizeIrOwnsFanOutParam:
     """normalize_ir is the single inference site for fan_out_param."""
 

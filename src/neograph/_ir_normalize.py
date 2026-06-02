@@ -64,14 +64,45 @@ class IrNormalizer(Protocol):
         ...
 
 
+def fan_out_candidates(node: Node, known_field_names: set[str]) -> list[str]:
+    """The dict-form input keys of ``node`` that could be an Each fan-out
+    receiver: those whose field name is neither a known producer/peer field
+    nor the node's own field.
+
+    Single definition of "fan-out candidate", shared by the two consumers that
+    each supply their own ``known_field_names`` (they run at different pipeline
+    stages with different information):
+
+    - :class:`_FanOutParamNormalizer` (writer) — runs in ``Construct.__init__``
+      before producers exist, so it passes the *peer node* field set.
+    - ``_construct_validation._check_fan_in_inputs`` (tolerator) — runs after,
+      so it passes the full *producer* field set (incl. per-output-key names).
+
+    Returns ``[]`` for non-dict-form inputs. Order follows the inputs dict
+    (insertion order). The policy on the result — write when exactly one
+    (normalizer), tolerate one + error on extras (validator) — stays with each
+    caller; only the candidate computation is shared.
+    """
+    ni = normalize_inputs(node.inputs)
+    if not ni.is_dict_form:
+        return []
+    self_field = field_name_for(node.name)
+    return [
+        key for key in ni.by_name
+        if field_name_for(key) not in known_field_names
+        and field_name_for(key) != self_field
+    ]
+
+
 class _FanOutParamNormalizer:
     """Set ``node.fan_out_param`` for an Each + dict-form node whose fan-out
     receiver hasn't been resolved yet.
 
     The receiver is the single dict-form input key that names neither a peer
-    producer nor the node itself. When exactly one such key exists it is the
-    fan-out receiver; zero or many is deliberately left for the validator
-    (an ambiguous fan-out is a user error, not an inference).
+    producer nor the node itself (see :func:`fan_out_candidates`). When exactly
+    one such key exists it is the fan-out receiver; zero or many is
+    deliberately left for the validator (an ambiguous fan-out is a user error,
+    not an inference).
     """
 
     def applies_to(self, node: Node) -> bool:
@@ -82,15 +113,9 @@ class _FanOutParamNormalizer:
         return normalize_inputs(node.inputs).is_dict_form
 
     def apply(self, node: Node, peer_field_names: set[str]) -> dict[str, Any]:
-        ni = normalize_inputs(node.inputs)
-        self_field = field_name_for(node.name)
-        unknown = [
-            key for key in ni.by_name
-            if field_name_for(key) not in peer_field_names
-            and field_name_for(key) != self_field
-        ]
-        if len(unknown) == 1:
-            return {"fan_out_param": unknown[0]}
+        candidates = fan_out_candidates(node, peer_field_names)
+        if len(candidates) == 1:
+            return {"fan_out_param": candidates[0]}
         return {}
 
 
