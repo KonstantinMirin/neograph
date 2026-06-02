@@ -4418,3 +4418,75 @@ class TestNormalizeIrIsSoleIrFieldWriter:
         assert written == set(), (
             f"scanner flagged a read as a write: {sorted(written)}"
         )
+
+
+class TestRoutingKeyNotLabelInvariant:
+    """neograph-y20i / 7df1: LangGraph routing identity is the explicit
+    graph.add_node(name, fn) argument — never a wrapper/shim closure's
+    __name__. No closure may override its __name__ to a mangled state
+    field_name (``= field_name`` or ``= field_name_for(...)``). Such
+    overrides conflate routing identity with the display label and are
+    dead weight (routing never reads closure __name__).
+
+    Legitimate __name__ assignments that preserve a real user-facing name
+    (e.g. ``legacy_shim.__name__ = fn_name`` in decorators.py, which keeps
+    the user's function name) are NOT flagged — only mangled-field_name
+    overrides are.
+    """
+
+    @staticmethod
+    def _scan_name_overrides(tree: ast.AST) -> list[int]:
+        """Return line numbers of ``<x>.__name__ = field_name`` or
+        ``<x>.__name__ = field_name_for(...)`` assignments."""
+        offenders: list[int] = []
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Assign):
+                continue
+            # target must be an attribute access ending in `.__name__`
+            if not (
+                len(node.targets) == 1
+                and isinstance(node.targets[0], ast.Attribute)
+                and node.targets[0].attr == "__name__"
+            ):
+                continue
+            val = node.value
+            is_field_name = isinstance(val, ast.Name) and val.id == "field_name"
+            is_field_name_for = (
+                isinstance(val, ast.Call)
+                and isinstance(val.func, ast.Name)
+                and val.func.id == "field_name_for"
+            )
+            if is_field_name or is_field_name_for:
+                offenders.append(node.lineno)
+        return offenders
+
+    def test_no_closure_name_mangled_to_field_name(self):
+        offenders: list[str] = []
+        for py in SRC_DIR.rglob("*.py"):
+            tree = ast.parse(py.read_text())
+            for lineno in self._scan_name_overrides(tree):
+                offenders.append(f"{py.name}:{lineno}")
+        assert offenders == [], (
+            f"\n{len(offenders)} closure __name__ override(s) mangle routing "
+            f"identity into a state field_name:\n"
+            + "\n".join(f"  {o}" for o in offenders)
+            + "\n\nRouting identity is the graph.add_node(name, fn) argument; "
+              "do NOT override the closure __name__ to field_name/field_name_for(). "
+              "Source display labels from node.name/sub.name via the captured IR "
+              "object (see neograph-y20i)."
+        )
+
+    def test_scanner_detects_field_name_override(self):
+        """Mutation: ``x.__name__ = field_name`` must be flagged."""
+        tree = ast.parse("def f():\n    x.__name__ = field_name\n")
+        assert self._scan_name_overrides(tree) == [2]
+
+    def test_scanner_detects_field_name_for_override(self):
+        """Mutation: ``x.__name__ = field_name_for(n.name)`` must be flagged."""
+        tree = ast.parse("def f():\n    x.__name__ = field_name_for(n.name)\n")
+        assert self._scan_name_overrides(tree) == [2]
+
+    def test_scanner_ignores_legitimate_name_assignment(self):
+        """Mutation: preserving a real user name (fn_name) is NOT flagged."""
+        tree = ast.parse("def f():\n    shim.__name__ = fn_name\n")
+        assert self._scan_name_overrides(tree) == []

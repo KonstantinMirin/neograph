@@ -702,7 +702,9 @@ def _register_node_scripted(
                 )
         return fn(*args)
 
-    scripted_shim.__name__ = field_name_for(n.name)
+    # __name__ stays informational; the shim is registered under
+    # n.scripted_fn (compiler._collect_scripted_shims), never via __name__.
+    # See neograph-y20i.
     # Store the shim on the Node via PrivateAttr — compile() reads it and
     # inserts the entry into the per-compile scripted dict.
     n._scripted_shim = scripted_shim

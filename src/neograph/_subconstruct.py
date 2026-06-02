@@ -144,5 +144,6 @@ def make_subgraph_fn(sub: Construct, sub_graph: CompiledStateGraph) -> Callable:
             update[count_field] = current + 1
         return update
 
-    subgraph_node.__name__ = field_name
+    # __name__ stays informational; routing is the graph.add_node(name, fn)
+    # argument (always sub.name/item.name). See neograph-y20i.
     return subgraph_node
