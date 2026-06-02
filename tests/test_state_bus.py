@@ -160,6 +160,7 @@ class TestOracleClosureNodeNameRequiredAndComplete:
         """make_oracle_redirect_fn must accept node_name as required kwarg.
         Previously, only make_each and make_eachoracle had it."""
         import inspect
+
         from neograph._oracle import make_oracle_redirect_fn
         sig = inspect.signature(make_oracle_redirect_fn)
         assert "node_name" in sig.parameters, (
