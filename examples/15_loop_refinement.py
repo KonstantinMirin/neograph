@@ -231,14 +231,12 @@ def demo_loop_in_sub_construct():
 
 def demo_forward_loop():
     """ForwardConstruct with self.loop() — explicit cycle primitive."""
-    from neograph import ForwardConstruct, Node, register_scripted
+    from neograph import ForwardConstruct, Node
 
     review_count = [0]
 
-    register_scripted(
-        "fc_draft_ex15",
-        lambda _in, _cfg: Draft(content="Initial essay about distributed systems", score=0.0),
-    )
+    def fc_draft(_in, _cfg):
+        return Draft(content="Initial essay about distributed systems", score=0.0)
 
     def fc_review(_in, _cfg):
         review_count[0] += 1
@@ -248,16 +246,12 @@ def demo_forward_loop():
             feedback=f"Iteration {review_count[0]}: {'needs work' if score < 0.8 else 'approved'}",
         )
 
-    register_scripted("fc_review_ex15", fc_review)
-
     def fc_revise(_in, _cfg):
         return Draft(
             content=f"Revised v{review_count[0]}",
             iteration=review_count[0],
             score=0.3 * review_count[0],
         )
-
-    register_scripted("fc_revise_ex15", fc_revise)
 
     class Writer(ForwardConstruct):
         draft  = Node.scripted("draft", fn="fc_draft_ex15", outputs=Draft)
@@ -273,7 +267,14 @@ def demo_forward_loop():
             )(d)
             return d
 
-    graph = compile(Writer())
+    graph = compile(
+        Writer(),
+        scripted={
+            "fc_draft_ex15": fc_draft,
+            "fc_review_ex15": fc_review,
+            "fc_revise_ex15": fc_revise,
+        },
+    )
     result = run(graph, input={"node_id": "forward-loop-demo"})
 
     print("=== Pattern 4: ForwardConstruct with self.loop() ===")

@@ -25,10 +25,9 @@ from pathlib import Path
 
 from pydantic import BaseModel
 
-from neograph import compile, configure_image, configure_llm, run
+from neograph import compile, configure_image, run
 from neograph import Construct, Node
 from neograph._image import resolve_image
-from neograph.factory import register_scripted
 
 
 # ── Schemas ──────────────────────────────────────────────────────────────
@@ -62,10 +61,8 @@ class FakeLLM:
         return self._model(result="analyzed" if has_image else "no-image")
 
 
-configure_llm(
-    llm_factory=lambda tier: FakeLLM(tier),
-    prompt_compiler=lambda t, d, **kw: [{"role": "user", "content": t}],
-)
+_llm_factory = lambda tier: FakeLLM(tier)
+_prompt_compiler = lambda t, d, **kw: [{"role": "user", "content": t}]
 
 
 # ── Set up a safe upload directory ───────────────────────────────────────
@@ -102,9 +99,9 @@ configure_image(
 
 # ── Build pipeline ───────────────────────────────────────────────────────
 
-register_scripted("_img_seed", lambda i, c: ImageInput(
-    photo=c.get("configurable", {}).get("photo_path", "")
-))
+def _img_seed(i, c):
+    return ImageInput(photo=c.get("configurable", {}).get("photo_path", ""))
+
 
 seed = Node.scripted("seed", fn="_img_seed", outputs=ImageInput)
 analyze = Node(
@@ -113,7 +110,12 @@ analyze = Node(
     inputs={"seed": ImageInput},
 )
 pipeline = Construct("secure-vision", nodes=[seed, analyze])
-graph = compile(pipeline)
+graph = compile(
+    pipeline,
+    llm_factory=_llm_factory,
+    prompt_compiler=_prompt_compiler,
+    scripted={"_img_seed": _img_seed},
+)
 
 
 # ── Test cases ───────────────────────────────────────────────────────────

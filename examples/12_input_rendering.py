@@ -7,7 +7,7 @@ NeoGraph renders it as human-readable text via the renderer dispatch hierarchy:
 
     Level 1: Model method  — render_for_prompt() on the BaseModel
     Level 2: Node renderer — @node(renderer=XmlRenderer())
-    Level 3: Construct/global — Construct(renderer=...) or configure_llm(renderer=...)
+    Level 3: Construct/global — Construct(renderer=...) or compile(renderer=...)
 
 Additional sections demonstrate:
 
@@ -35,12 +35,12 @@ from neograph import (
     XmlRenderer,
     DelimitedRenderer,
     JsonRenderer,
-    configure_llm,
     describe_type,
     describe_value,
     render_input,
     render_prompt,
 )
+from neograph._llm_runtime import LlmRuntime
 from neograph.renderers import build_rendered_input
 
 
@@ -84,7 +84,10 @@ def simple_compiler(template, data, **kwargs):
     return [{"role": "user", "content": f"[{template}]\n{data}"}]
 
 
-configure_llm(
+# LLM runtime for the render_prompt() inspector. The renderer here is the
+# Level 3 (construct/global) default: render_prompt resolves
+# node.renderer > runtime.renderer > None.
+runtime = LlmRuntime.build(
     llm_factory=lambda tier: FakeLLM(),
     prompt_compiler=simple_compiler,
     renderer=XmlRenderer(),  # Level 3: global default
@@ -122,13 +125,13 @@ if __name__ == "__main__":
 
     # Level 2: node renderer (DelimitedRenderer on `analyze`)
     print("Level 2 (node renderer) via render_prompt inspector:")
-    print(render_prompt(analyze, doc))
+    print(render_prompt(analyze, doc, runtime=runtime))
     print()
 
-    # Level 3: global renderer (XmlRenderer via configure_llm)
+    # Level 3: global renderer (XmlRenderer via the runtime)
     plain_node = Node("plain", mode="think", outputs=Analysis, model="fast", prompt="p")
     print("Level 3 (global renderer) via render_prompt inspector:")
-    print(render_prompt(plain_node, doc))
+    print(render_prompt(plain_node, doc, runtime=runtime))
     print()
 
     # describe_type for output schema
@@ -228,7 +231,7 @@ if __name__ == "__main__":
     print("=" * 60)
 
     # Use a node with NO renderer (renderer=None) so BAML is the default.
-    # Since the global configure_llm set XmlRenderer, we create a node
+    # Since the runtime set XmlRenderer, we create a node
     # with explicit renderer=None to show BAML behavior.
     # However, render_prompt uses: effective_renderer = node.renderer or global
     # So we demonstrate inline vs template-ref via build_rendered_input directly.

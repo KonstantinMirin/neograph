@@ -31,11 +31,8 @@ from neograph import (
     Tool,
     ToolInteraction,
     compile,
-    configure_llm,
     construct_from_functions,
     node,
-    register_scripted,
-    register_tool_factory,
     run,
 )
 
@@ -116,17 +113,21 @@ class FakeSearch:
         return EvidenceHit(source="auth.py", line=42, relevance=0.95)
 
 
-register_tool_factory("search_evidence", lambda cfg, tc: FakeSearch())
+# -- Tool factories + LLM layer (passed to compile() below) -------------------
+
+TOOL_FACTORIES = {
+    "search_evidence": lambda cfg, tc: FakeSearch(),
+}
 
 
-# -- Configure LLM ------------------------------------------------------------
+def llm_factory(tier):
+    return FakeAgentLLM()
 
-configure_llm(
-    llm_factory=lambda tier: FakeAgentLLM(),
-    prompt_compiler=lambda template, data, **kw: [
+
+def prompt_compiler(template, data, **kw):
+    return [
         {"role": "user", "content": f"template={template} context={kw.get('context', 'none')}"},
-    ],
-)
+    ]
 
 
 # -- Pipeline -----------------------------------------------------------------
@@ -181,7 +182,12 @@ pipeline = construct_from_functions(
 # -- Run ----------------------------------------------------------------------
 
 if __name__ == "__main__":
-    graph = compile(pipeline)
+    graph = compile(
+        pipeline,
+        llm_factory=llm_factory,
+        prompt_compiler=prompt_compiler,
+        tool_factories=TOOL_FACTORIES,
+    )
     result = run(graph, input={"node_id": "VERIFY-001"})
 
     print("=== Verification Results ===\n")

@@ -91,9 +91,16 @@ def run_langgraph():
 # ═══════════════════════════════════════════════════════════════════════════
 
 def run_neograph():
-    from neograph import Construct, Node, compile, configure_llm, run
+    from neograph import Construct, Node, compile, run
 
-    configure_llm(
+    # 3 nodes, ordered. No add_edge, no add_node, no StateGraph.
+    decompose = Node(name="decompose", mode="think", outputs=Claims, model="fast", prompt="decompose")
+    classify = Node(name="classify", mode="think", inputs=Claims, outputs=ClassifiedClaims, model="fast", prompt="classify")
+    summarize = Node(name="summarize", mode="think", inputs=ClassifiedClaims, outputs=Summary, model="fast", prompt="summarize")
+
+    pipeline = Construct("analysis", nodes=[decompose, classify, summarize])
+    graph = compile(
+        pipeline,
         llm_factory=lambda tier: llm,
         prompt_compiler=lambda template, data, **kw: [{"role": "user", "content": (
             f"Break this topic into 3-5 factual claims: {kw.get('config', {}).get('configurable', {}).get('topic', 'AI')}"
@@ -102,14 +109,6 @@ def run_neograph():
             else f"Summarize in one paragraph: {data}"
         )}],
     )
-
-    # 3 nodes, ordered. No add_edge, no add_node, no StateGraph.
-    decompose = Node(name="decompose", mode="think", outputs=Claims, model="fast", prompt="decompose")
-    classify = Node(name="classify", mode="think", inputs=Claims, outputs=ClassifiedClaims, model="fast", prompt="classify")
-    summarize = Node(name="summarize", mode="think", inputs=ClassifiedClaims, outputs=Summary, model="fast", prompt="summarize")
-
-    pipeline = Construct("analysis", nodes=[decompose, classify, summarize])
-    graph = compile(pipeline)
     result = run(graph, input={"node_id": "demo", "topic": "microservice authentication"})
     return result["summarize"].text
 

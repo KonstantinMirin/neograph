@@ -23,7 +23,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel
 
-from neograph import Construct, Node, compile, configure_llm, register_scripted, run
+from neograph import Construct, Node, compile, run
 
 
 # ── Schemas ──────────────────────────────────────────────────────────────
@@ -127,9 +127,6 @@ def my_llm_factory(tier, node_name=None, llm_config=None):
     return FakeLLM()
 
 
-configure_llm(llm_factory=my_llm_factory, prompt_compiler=my_prompt_compiler)
-
-
 # ══════════════════════════════════════════════════════════════════════════
 # SCRIPTED NODE — accesses pipeline metadata from config
 # ══════════════════════════════════════════════════════════════════════════
@@ -148,9 +145,6 @@ def build_report(input_data, config):
         print(f"  [report] rate_limiter has made {rate_limiter.calls} calls")
 
     return Report(text=f"Report for {node_id} at {project_root}: {input_data.items}")
-
-
-register_scripted("build_report", build_report)
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -177,7 +171,12 @@ pipeline = Construct("metadata-demo", nodes=[decompose, report])
 if __name__ == "__main__":
     limiter = RateLimiter(max_rpm=60)
 
-    graph = compile(pipeline)
+    graph = compile(
+        pipeline,
+        llm_factory=my_llm_factory,
+        prompt_compiler=my_prompt_compiler,
+        scripted={"build_report": build_report},
+    )
 
     print("Running pipeline:\n")
     result = run(

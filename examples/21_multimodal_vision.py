@@ -24,7 +24,7 @@ from pathlib import Path
 
 from pydantic import BaseModel, Field
 
-from neograph import compile, configure_llm, construct_from_module, node, run
+from neograph import compile, construct_from_module, node, run
 
 
 # ── Schemas ──────────────────────────────────────────────────────────────
@@ -78,10 +78,8 @@ class FakeVisionLLM:
         )
 
 
-configure_llm(
-    llm_factory=lambda tier: FakeVisionLLM(tier),
-    prompt_compiler=lambda t, d, **kw: [{"role": "user", "content": t}],
-)
+_llm_factory = lambda tier: FakeVisionLLM(tier)
+_prompt_compiler = lambda t, d, **kw: [{"role": "user", "content": t}]
 
 
 # ── Pipeline ─────────────────────────────────────────────────────────────
@@ -112,7 +110,11 @@ pipeline = construct_from_module(sys.modules[__name__], name="product-catalog")
 # ── Run ──────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    graph = compile(pipeline)
+    graph = compile(
+        pipeline,
+        llm_factory=_llm_factory,
+        prompt_compiler=_prompt_compiler,
+    )
     result = run(graph, input={"node_id": "product-001"})
 
     meta = result["classify"]
@@ -132,11 +134,9 @@ if __name__ == "__main__":
     from neograph import Construct, Node
 
     b64 = base64.b64encode(b"\x89PNG\r\n\x1a\nbase64-product-photo").decode()
-    from neograph.factory import register_scripted
 
-    register_scripted("_b64_seed", lambda i, c: ProductPhoto(
-        image_data=b64, product_name="Smart Watch"
-    ))
+    def _b64_seed(i, c):
+        return ProductPhoto(image_data=b64, product_name="Smart Watch")
 
     seed = Node.scripted("seed", fn="_b64_seed", outputs=ProductPhoto)
     classify_node = Node(
@@ -145,7 +145,12 @@ if __name__ == "__main__":
         model="fast", inputs={"seed": ProductPhoto},
     )
     b64_pipeline = Construct("b64-catalog", nodes=[seed, classify_node])
-    graph2 = compile(b64_pipeline)
+    graph2 = compile(
+        b64_pipeline,
+        llm_factory=_llm_factory,
+        prompt_compiler=_prompt_compiler,
+        scripted={"_b64_seed": _b64_seed},
+    )
     result2 = run(graph2, input={"node_id": "product-002"})
 
     meta2 = result2["classify_b64"]

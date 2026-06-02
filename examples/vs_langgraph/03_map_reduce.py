@@ -101,17 +101,7 @@ def run_langgraph():
 # ═══════════════════════════════════════════════════════════════════════════
 
 def run_neograph():
-    from neograph import Construct, Node, Oracle, compile, configure_llm, run
-
-    configure_llm(
-        llm_factory=lambda tier: llm,
-        prompt_compiler=lambda template, data, **kw: [{"role": "user", "content": (
-            "Write a short joke about programming languages."
-            if template == "generate"
-            else f"Pick the best joke and return it as a single item list:\n"
-                 + "\n".join(f"- {j.items[0]}" for j in data if j.items)
-        )}],
-    )
+    from neograph import Construct, Node, Oracle, compile, run
 
     # Oracle: 3 parallel generators + LLM merge. One line.
     generate = Node(
@@ -127,7 +117,16 @@ def run_neograph():
     #   merge_fallback=fn       -- deterministic fallback on LLM error
 
     pipeline = Construct("joke-contest", nodes=[generate])
-    graph = compile(pipeline)
+    graph = compile(
+        pipeline,
+        llm_factory=lambda tier: llm,
+        prompt_compiler=lambda template, data, **kw: [{"role": "user", "content": (
+            "Write a short joke about programming languages."
+            if template == "generate"
+            else f"Pick the best joke and return it as a single item list:\n"
+                 + "\n".join(f"- {j.items[0]}" for j in data if j.items)
+        )}],
+    )
     result = run(graph, input={"node_id": "demo"})
     return result["jokes"].items[0] if result["jokes"].items else "no joke"
 

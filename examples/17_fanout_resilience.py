@@ -21,7 +21,7 @@ import sys
 
 from pydantic import BaseModel
 
-from neograph import Construct, Each, Node, compile, register_scripted, run
+from neograph import Construct, Each, Node, compile, run
 
 
 # ── Schemas ──────────────────────────────────────────────────────────────
@@ -64,15 +64,14 @@ def analyze_document(input_data, config):
 
 # ── Pipeline ────────────────────────────────────────────────────────────
 
-register_scripted("load_docs", lambda _in, _cfg: Batch(documents=[
-    Document(doc_id="doc-01", text="Authentication flow for OAuth2 integration"),
-    Document(doc_id="doc-02", text="Rate limiting middleware configuration"),
-    Document(doc_id="doc-03", text="Database migration strategy for multi-tenant"),
-    Document(doc_id="doc-04", text="Observability pipeline with OpenTelemetry"),
-    Document(doc_id="doc-05", text="CI/CD workflow for canary deployments"),
-]))
-
-register_scripted("analyze", analyze_document)
+def load_docs(_in, _cfg):
+    return Batch(documents=[
+        Document(doc_id="doc-01", text="Authentication flow for OAuth2 integration"),
+        Document(doc_id="doc-02", text="Rate limiting middleware configuration"),
+        Document(doc_id="doc-03", text="Database migration strategy for multi-tenant"),
+        Document(doc_id="doc-04", text="Observability pipeline with OpenTelemetry"),
+        Document(doc_id="doc-05", text="CI/CD workflow for canary deployments"),
+    ])
 
 pipeline = Construct("resilient-fanout", nodes=[
     Node.scripted("load", fn="load_docs", outputs=Batch),
@@ -89,7 +88,11 @@ def main():
     # The key: compile with a checkpointer.
     # Without it, a failed item kills everything and you start over.
     checkpointer = MemorySaver()
-    graph = compile(pipeline, checkpointer=checkpointer)
+    graph = compile(
+        pipeline,
+        checkpointer=checkpointer,
+        scripted={"load_docs": load_docs, "analyze": analyze_document},
+    )
 
     # Same config for both run and resume — the thread_id links them.
     config = {"configurable": {"thread_id": "resilience-demo"}}

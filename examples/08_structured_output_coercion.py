@@ -33,7 +33,7 @@ import sys
 
 from pydantic import BaseModel
 
-from neograph import compile, configure_llm, construct_from_module, node, run
+from neograph import compile, construct_from_module, node, run
 
 
 # ── Schema ───────────────────────────────────────────────────────────────
@@ -88,12 +88,6 @@ def demo_factory(tier, node_name=None, llm_config=None):
     return VerboseTextLLM()
 
 
-configure_llm(
-    llm_factory=demo_factory,
-    prompt_compiler=lambda template, data, **kw: [{"role": "user", "content": "analyze"}],
-)
-
-
 # ══════════════════════════════════════════════════════════════════════════
 # THREE STRATEGIES — same schema, different models, same result
 # ══════════════════════════════════════════════════════════════════════════
@@ -142,7 +136,11 @@ pipeline = construct_from_module(sys.modules[__name__], name="output-strategies"
 if __name__ == "__main__":
     print("Output strategy comparison:\n")
 
-    graph = compile(pipeline)
+    graph = compile(
+        pipeline,
+        llm_factory=demo_factory,
+        prompt_compiler=lambda template, data, **kw: [{"role": "user", "content": "analyze"}],
+    )
     result = run(graph, input={"node_id": "test"})
 
     for field in ("structured", "json_mode", "text_mode"):

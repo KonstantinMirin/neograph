@@ -105,16 +105,7 @@ def run_langgraph():
 # ═══════════════════════════════════════════════════════════════════════════
 
 def run_neograph():
-    from neograph import Construct, Node, compile, configure_llm, run
-
-    configure_llm(
-        llm_factory=lambda tier: llm,
-        prompt_compiler=lambda template, data, **kw: [{"role": "user", "content": (
-            f"Break 'API rate limiting' into 3-5 factual claims." if template == "decompose"
-            else f"Score each claim as high/medium/low: {data}" if template == "score"
-            else f"Write a brief report: {data}"
-        )}],
-    )
+    from neograph import Construct, Node, compile, run
 
     # Sub-pipeline with declared I/O boundary — that's it
     enrich = Construct(
@@ -130,7 +121,15 @@ def run_neograph():
         Node(name="report", mode="think", inputs=ScoredClaims, outputs=Report, model="fast", prompt="report"),
     ])
 
-    graph = compile(pipeline)
+    graph = compile(
+        pipeline,
+        llm_factory=lambda tier: llm,
+        prompt_compiler=lambda template, data, **kw: [{"role": "user", "content": (
+            f"Break 'API rate limiting' into 3-5 factual claims." if template == "decompose"
+            else f"Score each claim as high/medium/low: {data}" if template == "score"
+            else f"Write a brief report: {data}"
+        )}],
+    )
     result = run(graph, input={"node_id": "demo"})
     return result["report"].text
 

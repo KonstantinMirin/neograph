@@ -22,7 +22,7 @@ import threading
 
 from pydantic import BaseModel
 
-from neograph import compile, construct_from_module, node, register_scripted, run
+from neograph import compile, construct_from_module, node, run
 
 
 # ── Schemas ──────────────────────────────────────────────────────────────
@@ -61,8 +61,6 @@ def merge_claims(variants, config):
                 merged.append(claim)
     return Claims(items=merged)
 
-register_scripted("merge_claims", merge_claims)
-
 
 # ── Build pipeline ───────────────────────────────────────────────────────
 # @node with ensemble_n=3 and merge_fn= attaches the Oracle modifier.
@@ -82,7 +80,7 @@ pipeline = construct_from_module(sys.modules[__name__], name="oracle-demo")
 
 if __name__ == "__main__":
     _gen_counter[0] = 0  # reset for clean run
-    graph = compile(pipeline)
+    graph = compile(pipeline, scripted={"merge_claims": merge_claims})
     result = run(graph, input={"node_id": "REQ-001"})
 
     merged = result["decompose"]
@@ -105,8 +103,6 @@ if __name__ == "__main__":
         seen_models.append(model)
         return Claims(items=[f"claim-from-{model}"])
 
-    register_scripted("multi_model_gen", multi_model_gen)
-
     def pick_best(variants, config):
         # In a real pipeline, you'd score and pick. Here we merge all.
         all_items = []
@@ -114,14 +110,15 @@ if __name__ == "__main__":
             all_items.extend(v.items)
         return Claims(items=all_items)
 
-    register_scripted("pick_best", pick_best)
-
     gen_node = (
         Node.scripted("multi-gen", fn="multi_model_gen", outputs=Claims)
         | Oracle(models=["reason", "fast", "creative"], merge_fn="pick_best")
     )
     multi_pipeline = Construct("multi-model", nodes=[gen_node])
-    multi_graph = compile(multi_pipeline)
+    multi_graph = compile(
+        multi_pipeline,
+        scripted={"multi_model_gen": multi_model_gen, "pick_best": pick_best},
+    )
     multi_result = run(multi_graph, input={"node_id": "REQ-002"})
 
     multi_merged = multi_result["multi_gen"]
@@ -139,14 +136,9 @@ if __name__ == "__main__":
     # This demo uses merge_fallback to show the pattern without requiring
     # an LLM key — the fallback fires because no LLM is configured.
 
-    from neograph import configure_llm
-
-    # Configure with a prompt compiler that just returns the template.
-    # No real LLM — invoke_structured will fail, triggering our fallback.
-    configure_llm(
-        llm_factory=lambda tier: None,  # type: ignore[arg-type]
-        prompt_compiler=lambda tmpl, data, **kw: [{"role": "user", "content": tmpl}],
-    )
+    # A prompt compiler that just returns the template. No real LLM —
+    # invoke_structured will fail, triggering our fallback. These are
+    # passed to compile() below as llm_factory/prompt_compiler kwargs.
 
     def tag_variants(variants: list) -> dict:
         """Pre-process: tag each variant with a generator ID."""
@@ -181,8 +173,6 @@ if __name__ == "__main__":
             _gen_counter[0] += 1
         return Claims(items=_perspectives[idx])
 
-    register_scripted("hooks_gen", hooks_gen)
-
     _gen_counter[0] = 0  # reset
     hooks_node = (
         Node.scripted("decompose-hooks", fn="hooks_gen", outputs=Claims)
@@ -195,7 +185,12 @@ if __name__ == "__main__":
         )
     )
     hooks_pipeline = Construct("hooks-demo", nodes=[hooks_node])
-    hooks_graph = compile(hooks_pipeline)
+    hooks_graph = compile(
+        hooks_pipeline,
+        llm_factory=lambda tier: None,  # type: ignore[arg-type]
+        prompt_compiler=lambda tmpl, data, **kw: [{"role": "user", "content": tmpl}],
+        scripted={"hooks_gen": hooks_gen},
+    )
     hooks_result = run(hooks_graph, input={"node_id": "REQ-003"})
 
     hooks_merged = hooks_result["decompose_hooks"]

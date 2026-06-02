@@ -21,7 +21,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel
 
-from neograph import Construct, Node, Oracle, compile, register_scripted, run
+from neograph import Construct, Node, Oracle, compile, run
 
 
 # ── Schemas ──────────────────────────────────────────────────────────────
@@ -48,9 +48,6 @@ def format_report(input_data, config):
     lines = [f"  {s['claim']}: {s['score']}" for s in input_data.scored]
     return Report(text="Coverage Report:\n" + "\n".join(lines))
 
-register_scripted("decompose_req", decompose_req)
-register_scripted("format_report", format_report)
-
 
 # ── Sub-pipeline: enrich (lookup + score) ────────────────────────────────
 # These functions are internal to the sub-pipeline. The parent never sees
@@ -73,9 +70,6 @@ def score_claims(input_data, config):
                 break
         scored.append({"claim": claim, "score": score})
     return ScoredClaims(scored=scored)
-
-register_scripted("lookup_context", lookup_context)
-register_scripted("score_claims", score_claims)
 
 
 # ── Build sub-pipeline with declared I/O ─────────────────────────────────
@@ -101,8 +95,15 @@ pipeline = Construct("req-analysis", nodes=[
 
 # ── Run ──────────────────────────────────────────────────────────────────
 
+_SCRIPTED = {
+    "decompose_req": decompose_req,
+    "format_report": format_report,
+    "lookup_context": lookup_context,
+    "score_claims": score_claims,
+}
+
 if __name__ == "__main__":
-    graph = compile(pipeline)
+    graph = compile(pipeline, scripted=_SCRIPTED)
     result = run(graph, input={"node_id": "REQ-100"})
 
     print(result["report"].text)
@@ -125,8 +126,6 @@ def merge_scored(variants, config):
                 best[claim] = item["score"]
     return ScoredClaims(scored=[{"claim": c, "score": s} for c, s in best.items()])
 
-register_scripted("merge_scored", merge_scored)
-
 # Same sub-pipeline, but ensembled 3 times:
 enrich_oracle = Construct(
     "enrich",
@@ -146,7 +145,7 @@ pipeline_oracle = Construct("req-analysis-oracle", nodes=[
 
 # Uncomment to run the Oracle variant:
 # if __name__ == "__main__":
-#     graph = compile(pipeline_oracle)
+#     graph = compile(pipeline_oracle, scripted={**_SCRIPTED, "merge_scored": merge_scored})
 #     result = run(graph, input={"node_id": "REQ-101"})
 #     print("\n--- Oracle variant ---")
 #     print(result["report"].text)

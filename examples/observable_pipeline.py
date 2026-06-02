@@ -24,7 +24,7 @@ from langchain_openai import ChatOpenAI
 from langfuse.langchain import CallbackHandler
 from pydantic import BaseModel
 
-from neograph import compile, configure_llm, construct_from_module, node, run
+from neograph import compile, construct_from_module, node, run
 
 # ── Structlog: human-readable for this example ──────────────────────────
 
@@ -84,8 +84,6 @@ def prompt_compiler(template: str, input_data) -> list[dict]:
     return [{"role": "user", "content": "Hello"}]
 
 
-configure_llm(llm_factory=llm_factory, prompt_compiler=prompt_compiler)
-
 # ── Pipeline ─────────────────────────────────────────────────────────────
 
 # produce: LLM decomposes topic into claims (3 variants via Oracle, LLM merge)
@@ -107,7 +105,11 @@ pipeline = construct_from_module(sys.modules[__name__], name="observable-demo")
 if __name__ == "__main__":
     langfuse_handler = CallbackHandler()
 
-    graph = compile(pipeline)
+    graph = compile(
+        pipeline,
+        llm_factory=llm_factory,
+        prompt_compiler=prompt_compiler,
+    )
     result = run(
         graph,
         input={"node_id": "demo-001"},

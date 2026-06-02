@@ -112,24 +112,7 @@ def run_langgraph():
 def run_neograph():
     from langgraph.checkpoint.memory import MemorySaver
 
-    from neograph import (Construct, Node, Operator, compile, configure_llm,
-                          register_condition, run)
-
-    configure_llm(
-        llm_factory=lambda tier: llm,
-        prompt_compiler=lambda template, data, **kw: [{"role": "user", "content": (
-            f"Analyze 'microservice security'. List 3 claims and rate confidence 0-1."
-            if template == "analyze"
-            else f"Write a brief report based on: {data}"
-        )}],
-    )
-
-    # Condition: when should the graph pause?
-    register_condition("low_confidence", lambda state: (
-        {"message": f"Confidence {state.analyze.confidence:.0%} is low. Approve?"}
-        if state.analyze and state.analyze.confidence < 0.8
-        else None
-    ))
+    from neograph import (Construct, Node, Operator, compile, run)
 
     # Pipeline — Operator modifier handles the interrupt
     analyze = Node(name="analyze", mode="think", outputs=Analysis, model="fast", prompt="analyze")
@@ -140,7 +123,22 @@ def run_neograph():
         report,
     ])
 
-    graph = compile(pipeline, checkpointer=MemorySaver())
+    graph = compile(
+        pipeline,
+        checkpointer=MemorySaver(),
+        llm_factory=lambda tier: llm,
+        prompt_compiler=lambda template, data, **kw: [{"role": "user", "content": (
+            f"Analyze 'microservice security'. List 3 claims and rate confidence 0-1."
+            if template == "analyze"
+            else f"Write a brief report based on: {data}"
+        )}],
+        # Condition: when should the graph pause?
+        conditions={"low_confidence": lambda state: (
+            {"message": f"Confidence {state.analyze.confidence:.0%} is low. Approve?"}
+            if state.analyze and state.analyze.confidence < 0.8
+            else None
+        )},
+    )
     config = {"configurable": {"thread_id": "neo-demo"}}
 
     result = run(graph, input={"node_id": "demo"}, config=config)

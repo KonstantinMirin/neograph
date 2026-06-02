@@ -23,7 +23,6 @@ from neograph import (
     Each,
     Node,
     compile,
-    configure_llm,
     construct_from_functions,
     node,
     run,
@@ -67,12 +66,6 @@ def _llm_factory(tier: str, *, node_name: str = "", llm_config: dict | None = No
         max_tokens=(llm_config or {}).get("max_tokens", 4000),
     )
 
-configure_llm(
-    llm_factory=_llm_factory,
-    prompt_compiler=lambda template, data: [{"role": "user", "content": template}],
-)
-
-
 # =============================================================================
 # Pipeline — this is the whole thing
 # =============================================================================
@@ -108,7 +101,7 @@ _draft_feedback = Construct(
             name="draft", mode="think",
             inputs=EmailState, outputs=EmailState,
             model="reason", prompt=_prompt("draft"),
-            llm_config={"temperature": 0.8},
+            llm_config={"provider_kwargs": {"temperature": 0.8}},
         ) | Oracle(
             models=["reason", "fast", "creative"],
             merge_prompt=_prompt("pick_best"),
@@ -117,7 +110,7 @@ _draft_feedback = Construct(
             name="feedback", mode="think",
             inputs=EmailState, outputs=EmailState,
             model="reason", prompt=_prompt("feedback"),
-            llm_config={"temperature": 0.3},
+            llm_config={"provider_kwargs": {"temperature": 0.3}},
         ),
     ],
 ) | Loop(when=lambda s: s is None or s.score < 0.8, max_iterations=3, on_exhaust="last")
@@ -140,7 +133,11 @@ def main():
     print(f"Lead: {lead.first_name} {lead.last_name}, {lead.headline}")
     print(f"Models: {list(MODELS.values())}\n")
 
-    graph = compile(pipeline)
+    graph = compile(
+        pipeline,
+        llm_factory=_llm_factory,
+        prompt_compiler=lambda template, data: [{"role": "user", "content": template}],
+    )
     result = run(graph, input={"node_id": f"outreach-{lead.company.lower()}"})
 
     labels = {0: "Cold Open", 3: "Value Drop", 7: "Soft Ask", 14: "Breakup"}

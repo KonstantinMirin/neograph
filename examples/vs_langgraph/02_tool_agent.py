@@ -102,19 +102,9 @@ def run_langgraph():
 # ═══════════════════════════════════════════════════════════════════════════
 
 def run_neograph():
-    from neograph import Construct, Node, Tool, compile, configure_llm, register_tool_factory, run
+    from neograph import Construct, Node, Tool, compile, run
 
     search_calls["current"] = 0
-
-    # Tool factory: NeoGraph creates tool instances per-node
-    register_tool_factory("search_web", lambda config, tool_config: search_web)
-
-    configure_llm(
-        llm_factory=lambda tier: base_llm,
-        prompt_compiler=lambda template, data, **kw: [
-            {"role": "user", "content": "Research microservice authentication patterns. Use the search tool."},
-        ],
-    )
 
     # One node. Gather mode = ReAct loop. Budget = max 3 searches.
     research = Node(
@@ -127,7 +117,15 @@ def run_neograph():
     )
 
     pipeline = Construct("research", nodes=[research])
-    graph = compile(pipeline)
+    graph = compile(
+        pipeline,
+        # Tool factory: NeoGraph creates tool instances per-node
+        tool_factories={"search_web": lambda config, tool_config: search_web},
+        llm_factory=lambda tier: base_llm,
+        prompt_compiler=lambda template, data, **kw: [
+            {"role": "user", "content": "Research microservice authentication patterns. Use the search tool."},
+        ],
+    )
     result = run(graph, input={"node_id": "demo"})
     return result["research"], search_calls["current"]
 

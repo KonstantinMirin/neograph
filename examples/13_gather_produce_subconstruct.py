@@ -42,11 +42,8 @@ from neograph import (
     Tool,
     ToolInteraction,
     compile,
-    configure_llm,
     construct_from_functions,
     node,
-    register_scripted,
-    register_tool_factory,
     run,
 )
 
@@ -157,10 +154,12 @@ class FakeEvidenceSearch:
         )
 
 
-register_tool_factory("search_evidence", lambda config, tool_config: FakeEvidenceSearch())
+# -- Tool factories + LLM layer (passed to compile() below) -------------------
 
+TOOL_FACTORIES = {
+    "search_evidence": lambda config, tool_config: FakeEvidenceSearch(),
+}
 
-# -- Configure LLM layer -----------------------------------------------------
 
 def llm_factory(tier):
     if tier == "research":
@@ -168,10 +167,8 @@ def llm_factory(tier):
     return FakeScoreLLM()  # "judge" tier
 
 
-configure_llm(
-    llm_factory=llm_factory,
-    prompt_compiler=lambda template, data, **kw: [{"role": "user", "content": "verify"}],
-)
+def prompt_compiler(template, data, **kw):
+    return [{"role": "user", "content": "verify"}]
 
 
 # -- Pipeline nodes -----------------------------------------------------------
@@ -253,7 +250,12 @@ pipeline = construct_from_functions(
 # -- Run ----------------------------------------------------------------------
 
 if __name__ == "__main__":
-    graph = compile(pipeline)
+    graph = compile(
+        pipeline,
+        llm_factory=llm_factory,
+        prompt_compiler=prompt_compiler,
+        tool_factories=TOOL_FACTORIES,
+    )
     result = run(graph, input={"node_id": "VERIFY-001"})
 
     verdicts = result["verify_claim"]
@@ -284,7 +286,12 @@ if __name__ == "__main__":
     def demo_explore() -> ExplorationResult: ...
 
     mod.demo_explore = demo_explore
-    demo_graph = compile(construct_from_module(mod))
+    demo_graph = compile(
+        construct_from_module(mod),
+        llm_factory=llm_factory,
+        prompt_compiler=prompt_compiler,
+        tool_factories=TOOL_FACTORIES,
+    )
     demo_result = run(demo_graph, input={"node_id": "demo"})
 
     tool_log = demo_result["demo_explore_tool_log"]
@@ -325,7 +332,12 @@ if __name__ == "__main__":
 
     ctx_mod.build_catalog = build_catalog
     ctx_mod.ctx_explore = ctx_explore
-    ctx_graph = compile(construct_from_module(ctx_mod))
+    ctx_graph = compile(
+        construct_from_module(ctx_mod),
+        llm_factory=llm_factory,
+        prompt_compiler=prompt_compiler,
+        tool_factories=TOOL_FACTORIES,
+    )
     ctx_result = run(ctx_graph, input={"node_id": "ctx-demo"})
 
     print("\n-- Context injection --")

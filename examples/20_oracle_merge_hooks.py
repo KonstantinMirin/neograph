@@ -25,7 +25,6 @@ from neograph import (
     Node,
     Oracle,
     compile,
-    configure_llm,
     construct_from_module,
     node,
     run,
@@ -82,12 +81,6 @@ class FakeProductLLM:
         )
 
 
-configure_llm(
-    llm_factory=lambda tier: FakeProductLLM(tier),
-    prompt_compiler=lambda tmpl, data, **kw: [{"role": "user", "content": tmpl}],
-)
-
-
 # ── Hooks: the only domain logic you write ────────────────────────────────
 
 def tag_variants(variants: list[ProductDescription]) -> dict:
@@ -140,7 +133,11 @@ pipeline = construct_from_module(sys.modules[__name__], name="product-copy")
 
 if __name__ == "__main__":
     _gen_counter[0] = 0
-    graph = compile(pipeline)
+    graph = compile(
+        pipeline,
+        llm_factory=lambda tier: FakeProductLLM(tier),
+        prompt_compiler=lambda tmpl, data, **kw: [{"role": "user", "content": tmpl}],
+    )
     result = run(graph, input={"node_id": "launch-v1"})
 
     desc = result["write_description"]

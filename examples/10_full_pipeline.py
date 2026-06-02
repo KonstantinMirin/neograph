@@ -13,9 +13,10 @@ This combines: produce, scripted, Oracle, Each, Operator, subgraph,
 per-node LLM config, tool budgets, checkpointer, and observability.
 
 The decompose node uses the @node decorator with Oracle kwargs for a
-concise LLM-mode declaration. Scripted nodes use register_scripted +
-Node.scripted because the pipeline includes a Construct subgraph that
-requires manual assembly (construct_from_module cannot inline subgraphs).
+concise LLM-mode declaration. Scripted nodes are registered via the
+scripted= kwarg on compile() + Node.scripted because the pipeline includes
+a Construct subgraph that requires manual assembly (construct_from_module
+cannot inline subgraphs).
 
 Run (with fakes):
     python examples/10_full_pipeline.py
@@ -29,8 +30,7 @@ from pydantic import BaseModel
 
 from neograph import (
     Construct, Each, Node, Operator, Oracle, Tool,
-    compile, configure_llm, node, run,
-    register_condition, register_scripted, register_tool_factory,
+    compile, node, run,
 )
 
 
@@ -122,14 +122,6 @@ def llm_factory(tier, node_name=None, llm_config=None):
     return FakeGatherLLM()
 
 
-configure_llm(
-    llm_factory=llm_factory,
-    prompt_compiler=lambda template, data: [{"role": "user", "content": "analyze"}],
-)
-
-register_tool_factory("search_code", lambda config, tool_config: FakeSearchTool())
-
-
 # ══════════════════════════════════════════════════════════════════════════
 # SCRIPTED FUNCTIONS
 # ══════════════════════════════════════════════════════════════════════════
@@ -177,14 +169,6 @@ def check_all_passed(input_data, config):
 def build_report(input_data, config):
     return Report(text="Verification complete. 1 cluster needs attention.")
 
-register_scripted("merge_claims", merge_claims)
-register_scripted("lookup_context", lookup_context)
-register_scripted("score_claims", score_claims)
-register_scripted("make_clusters", make_clusters)
-register_scripted("verify_cluster", verify_cluster)
-register_scripted("check_passed", check_all_passed)
-register_scripted("build_report", build_report)
-
 
 # ══════════════════════════════════════════════════════════════════════════
 # CONDITION (for Operator)
@@ -196,8 +180,6 @@ def needs_review(state):
         return {"issues": val.issues}
     return None
 
-register_condition("needs_review", needs_review)
-
 
 # ══════════════════════════════════════════════════════════════════════════
 # PIPELINE ASSEMBLY
@@ -205,7 +187,7 @@ register_condition("needs_review", needs_review)
 
 # Step 1: Decompose — @node with Oracle kwargs (LLM mode, no register_scripted needed)
 @node(outputs=Claims, prompt="decompose", model="fast",
-      llm_config={"temperature": 0.8},
+      llm_config={"provider_kwargs": {"temperature": 0.8}},
       ensemble_n=3, merge_fn="merge_claims")
 def decompose() -> Claims: ...
 
@@ -248,7 +230,25 @@ pipeline = Construct(
 
 if __name__ == "__main__":
     # Checkpointer required because Operator is in the pipeline
-    graph = compile(pipeline, checkpointer=MemorySaver())
+    graph = compile(
+        pipeline,
+        checkpointer=MemorySaver(),
+        llm_factory=llm_factory,
+        prompt_compiler=lambda template, data: [{"role": "user", "content": "analyze"}],
+        scripted={
+            "merge_claims": merge_claims,
+            "lookup_context": lookup_context,
+            "score_claims": score_claims,
+            "make_clusters": make_clusters,
+            "verify_cluster": verify_cluster,
+            "check_passed": check_all_passed,
+            "build_report": build_report,
+        },
+        conditions={"needs_review": needs_review},
+        tool_factories={
+            "search_code": lambda config, tool_config: FakeSearchTool(),
+        },
+    )
     config = {"configurable": {"thread_id": "full-001"}}
 
     print("=== Running full pipeline ===\n")

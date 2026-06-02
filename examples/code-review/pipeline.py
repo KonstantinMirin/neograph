@@ -26,7 +26,6 @@ from neograph import (
     FromInput,
     Node,
     compile,
-    configure_llm,
     construct_from_functions,
     node,
     run,
@@ -91,12 +90,6 @@ def _llm_factory(tier: str, *, node_name: str = "", llm_config: dict | None = No
         temperature=(llm_config or {}).get("temperature", 0.3),
         max_tokens=(llm_config or {}).get("max_tokens", 4000),
     )
-
-
-configure_llm(
-    llm_factory=_llm_factory,
-    prompt_compiler=lambda template, data: [{"role": "user", "content": template}],
-)
 
 
 # =============================================================================
@@ -220,7 +213,11 @@ def main():
     diff_text = _load_sample_diff()
     print(f"Loaded sample diff ({len(diff_text)} chars)")
 
-    graph = compile(pipeline)
+    graph = compile(
+        pipeline,
+        llm_factory=_llm_factory,
+        prompt_compiler=lambda template, data: [{"role": "user", "content": template}],
+    )
     result = run(graph, input={
         "node_id": "review-001",
         "diff_text": diff_text,

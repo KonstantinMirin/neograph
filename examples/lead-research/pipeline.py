@@ -21,7 +21,6 @@ from neograph import (
     Construct,
     Each,
     compile,
-    configure_llm,
     construct_from_functions,
     node,
     run,
@@ -64,12 +63,6 @@ def _llm_factory(tier: str, *, node_name: str = "", llm_config: dict | None = No
         temperature=(llm_config or {}).get("temperature", 0.7),
         max_tokens=(llm_config or {}).get("max_tokens", 4000),
     )
-
-
-configure_llm(
-    llm_factory=_llm_factory,
-    prompt_compiler=lambda template, data: [{"role": "user", "content": template}],
-)
 
 
 # =============================================================================
@@ -226,7 +219,11 @@ def main():
     print("Lead Research Pipeline")
     print("=" * 40)
 
-    graph = compile(pipeline)
+    graph = compile(
+        pipeline,
+        llm_factory=_llm_factory,
+        prompt_compiler=lambda template, data: [{"role": "user", "content": template}],
+    )
     result = run(graph, input={"node_id": "lead-research-batch"})
 
     qualified = result["qualify"]

@@ -37,12 +37,10 @@ from neograph import (
     Node,
     XmlRenderer,
     compile,
-    configure_llm,
     describe_type,
     render_input,
     run,
 )
-from neograph.factory import register_scripted
 
 
 # ── Models ───────────────────────────────────────────────────────────────
@@ -173,23 +171,20 @@ def main():
     print("4. Full pipeline with ExcludeFromOutput")
     print("=" * 60)
 
-    register_scripted("make_condition", lambda _i, _c: ExtensionCondition(
-        text="System shall validate inputs",
-        acceptance_criteria=["Reject empty strings"],
-    ))
-    register_scripted("assign_letter", lambda _i, _c: ExtensionCondition(
-        text=_i.text,
-        acceptance_criteria=_i.acceptance_criteria,
-        assigned_letter="C",  # pipeline sets this
-    ))
-    register_scripted("write_extension", lambda _i, _c: Analysis(
-        summary=f"Extension for condition {_i.assigned_letter}: {_i.text}",
-    ))
-
-    configure_llm(
-        llm_factory=lambda tier: None,
-        prompt_compiler=lambda tmpl, data, **kw: [],
-    )
+    scripted = {
+        "make_condition": lambda _i, _c: ExtensionCondition(
+            text="System shall validate inputs",
+            acceptance_criteria=["Reject empty strings"],
+        ),
+        "assign_letter": lambda _i, _c: ExtensionCondition(
+            text=_i.text,
+            acceptance_criteria=_i.acceptance_criteria,
+            assigned_letter="C",  # pipeline sets this
+        ),
+        "write_extension": lambda _i, _c: Analysis(
+            summary=f"Extension for condition {_i.assigned_letter}: {_i.text}",
+        ),
+    }
 
     pipeline = Construct("visibility-demo", nodes=[
         Node.scripted("make-condition", fn="make_condition", outputs=ExtensionCondition),
@@ -199,7 +194,12 @@ def main():
                       inputs=ExtensionCondition, outputs=Analysis),
     ])
 
-    graph = compile(pipeline)
+    graph = compile(
+        pipeline,
+        scripted=scripted,
+        llm_factory=lambda tier: None,
+        prompt_compiler=lambda tmpl, data, **kw: [],
+    )
     result = run(graph, input={"node_id": "example-18"})
     print(f"\n  Result: {result['write_extension'].summary}")
     print()

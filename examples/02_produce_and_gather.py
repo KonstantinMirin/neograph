@@ -24,7 +24,7 @@ import sys
 from langchain_core.messages import AIMessage
 from pydantic import BaseModel
 
-from neograph import Tool, compile, configure_llm, construct_from_module, node, register_tool_factory, run
+from neograph import Tool, compile, construct_from_module, node, run
 
 
 # ── Schemas ──────────────────────────────────────────────────────────────
@@ -103,8 +103,6 @@ class FakeSearchTool:
         query = args.get("query", "?")
         return CodeReference(query=query, matches=3, top_file="auth.py")
 
-register_tool_factory("search_codebase", lambda config, tool_config: FakeSearchTool())
-
 
 # ── Configure LLM layer ──────────────────────────────────────────────────
 
@@ -112,11 +110,6 @@ def llm_factory(tier):
     if tier == "fast":
         return FakeDecomposeLLM()
     return FakeResearchLLM()
-
-configure_llm(
-    llm_factory=llm_factory,
-    prompt_compiler=lambda template, data: [{"role": "user", "content": "analyze"}],
-)
 
 
 # ── Pipeline nodes ───────────────────────────────────────────────────────
@@ -147,7 +140,12 @@ pipeline = construct_from_module(sys.modules[__name__], name="requirement-analys
 # ── Run ──────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    graph = compile(pipeline)
+    graph = compile(
+        pipeline,
+        llm_factory=llm_factory,
+        prompt_compiler=lambda template, data: [{"role": "user", "content": "analyze"}],
+        tool_factories={"search_codebase": lambda config, tool_config: FakeSearchTool()},
+    )
     result = run(graph, input={"node_id": "REQ-042"})
 
     print(f"Decomposed into {len(result['decompose'].items)} claims:")

@@ -25,7 +25,7 @@ _HERE = Path(__file__).resolve().parent
 if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 
-from neograph import FromInput, compile, configure_llm, construct_from_functions, node, run
+from neograph import FromInput, compile, construct_from_functions, node, run
 
 from schemas import (
     AnalysisResult,
@@ -63,12 +63,6 @@ def _llm_factory(tier: str, *, node_name: str = "", llm_config: dict | None = No
 
 def _prompt(name: str) -> str:
     return (_HERE / "prompts" / f"{name}.md").read_text()
-
-
-configure_llm(
-    llm_factory=_llm_factory,
-    prompt_compiler=lambda template, data: [{"role": "user", "content": template}],
-)
 
 
 # =============================================================================
@@ -225,12 +219,18 @@ def main():
     request = _load_sample(0)
     print(f"Workflow request:\n  {request.description}\n")
 
-    graph = compile(pipeline)
+    graph = compile(
+        pipeline,
+        llm_factory=_llm_factory,
+        prompt_compiler=lambda template, data: [{"role": "user", "content": template}],
+    )
     result = run(
         graph,
         input={
             "node_id": "spec-builder-demo",
-            "request": request,
+            # WorkflowRequest is a BaseModel DI param (Annotated[..., FromInput]),
+            # so the bundle rule pulls each field by name — flatten the instance.
+            **request.model_dump(),
         },
     )
 

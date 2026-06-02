@@ -21,7 +21,7 @@ Patterns demonstrated:
   1. YAML spec loading with load_spec + project surface
   2. Type auto-generation from JSON Schema definitions
   3. Loop modifier driven by a condition expression
-  4. register_scripted for plugging Python functions into spec nodes
+  4. scripted= kwarg on compile() for plugging Python functions into spec nodes
 
 Run:
     python examples/16_spec_driven_pipeline.py
@@ -31,7 +31,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from neograph import compile, load_spec, lookup_type, register_scripted, run
+from neograph import compile, load_spec, lookup_type, run
 
 
 # -- Scripted node implementations -------------------------------------------
@@ -133,12 +133,6 @@ def generate_recommendations(input_data, config):
 def main():
     _refine_call[0] = 0
 
-    # Register scripted implementations so the spec can reference them
-    register_scripted("scan_codebase", scan_codebase)
-    register_scripted("initial_assessment", initial_assessment)
-    register_scripted("refine_analysis", refine_analysis)
-    register_scripted("generate_recommendations", generate_recommendations)
-
     here = Path(__file__).parent
     spec_path = str(here / "16_security_analysis.yaml")
     project_path = str(here / "16_project.yaml")
@@ -160,7 +154,16 @@ def main():
 
     # -- Compile --
     print("\n=== Compiling to LangGraph ===")
-    graph = compile(construct)
+    # Scripted implementations so the spec can reference them by name
+    graph = compile(
+        construct,
+        scripted={
+            "scan_codebase": scan_codebase,
+            "initial_assessment": initial_assessment,
+            "refine_analysis": refine_analysis,
+            "generate_recommendations": generate_recommendations,
+        },
+    )
     print("  Compiled successfully.")
 
     # -- Run --

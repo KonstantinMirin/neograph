@@ -26,7 +26,7 @@ import sys
 
 from pydantic import BaseModel
 
-from neograph import compile, configure_llm, construct_from_module, node, run
+from neograph import compile, construct_from_module, node, run
 
 
 # ── Schemas ──────────────────────────────────────────────────────────────
@@ -104,12 +104,10 @@ def fake_llm_factory(tier, node_name=None, llm_config=None):
     return FakeLLM()
 
 
-configure_llm(
-    llm_factory=fake_llm_factory if USE_FAKE else real_llm_factory,
-    prompt_compiler=lambda template, data: [{"role": "user", "content": (
-        f"Process this: {data}" if data else "Generate claims about system security"
-    )}],
-)
+_llm_factory = fake_llm_factory if USE_FAKE else real_llm_factory
+_prompt_compiler = lambda template, data: [{"role": "user", "content": (
+    f"Process this: {data}" if data else "Generate claims about system security"
+)}]
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -123,8 +121,10 @@ configure_llm(
     model="reason",          # uses the "reason" tier (more capable model)
     prompt="decompose",
     llm_config={
-        "temperature": 0.9,  # creative — explore diverse decompositions
-        "max_tokens": 2000,
+        "provider_kwargs": {
+            "temperature": 0.9,  # creative — explore diverse decompositions
+            "max_tokens": 2000,
+        },
     },
 )
 def decompose() -> Claims:
@@ -139,8 +139,10 @@ def decompose() -> Claims:
     model="fast",            # uses the "fast" tier (cheaper model)
     prompt="classify",
     llm_config={
-        "temperature": 0,    # deterministic — consistent classification
-        "max_tokens": 500,
+        "provider_kwargs": {
+            "temperature": 0,    # deterministic — consistent classification
+            "max_tokens": 500,
+        },
     },
 )
 def classify(decompose: Claims) -> ClassifiedClaims:
@@ -155,7 +157,11 @@ pipeline = construct_from_module(sys.modules[__name__], name="configured-pipelin
 
 if __name__ == "__main__":
     print("LLM factory calls:\n")
-    graph = compile(pipeline)
+    graph = compile(
+        pipeline,
+        llm_factory=_llm_factory,
+        prompt_compiler=_prompt_compiler,
+    )
     result = run(graph, input={"node_id": "REQ-001"})
 
     print(f"\nDecomposed: {result['decompose'].items}")
