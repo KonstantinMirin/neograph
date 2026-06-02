@@ -21,6 +21,15 @@ from neograph.errors import StateMissingError
 _MISSING: Any = object()
 
 
+def _as_counter(value: Any) -> int:
+    """Normalize a raw counter read to an int: absent/None -> 0, int -> int.
+
+    The single source of truth for the 'None-means-zero' counter rule that
+    used to be re-derived via ``get(k) or 0`` / ``get(k, 0)`` at call sites.
+    """
+    return value if isinstance(value, int) else 0
+
+
 @runtime_checkable
 class StateBus(Protocol):
     """Read-only state accessor for node helpers.
@@ -29,13 +38,16 @@ class StateBus(Protocol):
     (including ``None`` when explicitly stored) or ``default`` when the key is
     absent. ``get_required(key, *, node_label=None)`` raises
     :class:`StateMissingError` when the key is absent (explicit ``None`` is
-    permitted). ``keys()`` enumerates all bound field names in their
-    declared/insertion order.
+    permitted). ``get_counter(key)`` reads a monotonic counter field,
+    internalizing the 'absent/None means zero' rule. ``keys()`` enumerates
+    all bound field names in their declared/insertion order.
     """
 
     def get(self, key: str, default: Any = None) -> Any: ...
 
     def get_required(self, key: str, *, node_label: str | None = None) -> Any: ...
+
+    def get_counter(self, key: str) -> int: ...
 
     def keys(self) -> list[str]: ...
 
@@ -53,6 +65,9 @@ class _DictStateBus:
         if key not in self._state:
             raise StateMissingError.build(key=key, node_label=node_label)
         return self._state[key]
+
+    def get_counter(self, key: str) -> int:
+        return _as_counter(self._state.get(key))
 
     def keys(self) -> list[str]:
         return list(self._state.keys())
@@ -72,6 +87,9 @@ class _ModelStateBus:
         if value is _MISSING:
             raise StateMissingError.build(key=key, node_label=node_label)
         return value
+
+    def get_counter(self, key: str) -> int:
+        return _as_counter(getattr(self._state, key, None))
 
     def keys(self) -> list[str]:
         return list(self._state.__class__.model_fields.keys())

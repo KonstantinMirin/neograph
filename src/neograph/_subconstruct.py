@@ -138,9 +138,8 @@ def make_subgraph_fn(sub: Construct, sub_graph: CompiledStateGraph) -> Callable:
         update: dict[str, Any] = {field_name: output_val}
         if has_loop:
             count_field = StateKeys.loop_count(field_name)
-            # StateBus.get optional: loop-counter — absent on first iteration;
-            # `or 0` is the documented bootstrap value.
-            current = bus.get(count_field) or 0
+            # Counter bootstrap (absent/None -> 0) lives in StateBus.get_counter.
+            current = bus.get_counter(count_field)
             update[count_field] = current + 1
         return update
 

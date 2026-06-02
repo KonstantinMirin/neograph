@@ -1034,3 +1034,67 @@ class TestRoutingKeyNotLabelInvariant:
         """Mutation: preserving a real user name (fn_name) is NOT flagged."""
         tree = ast.parse("def f():\n    shim.__name__ = fn_name\n")
         assert self._scan_name_overrides(tree) == []
+
+
+class TestNoOrZeroCounterIdiom:
+    """neograph-ylk9: the counter 'None-means-zero' rule lives ONLY in
+    ``StateBus.get_counter``. No production site may re-derive it via
+    ``.get(<count_field>) or 0`` or ``.get(<count_field>, 0)``.
+
+    Same root cause as ``loop_condition_none_unsafe``: counter zero-default
+    semantics must not leak across the codebase. This guard is scoped to the
+    StateBus-audited files (TestStateBusGetDiscipline.IN_SCOPE).
+    """
+
+    # A .get(...) whose argument list mentions a counter field.
+    _COUNTER_GET = re.compile(r"\.get\([^)]*count[^)]*\)")
+    # The explicit-default form: .get(<...count...>, 0)
+    _COUNTER_GET_DEFAULT = re.compile(r"\.get\([^)]*count[^)]*,\s*0\s*\)")
+
+    @classmethod
+    def _is_counter_zero_idiom(cls, line: str) -> bool:
+        if not cls._COUNTER_GET.search(line):
+            return False
+        return ("or 0" in line) or bool(cls._COUNTER_GET_DEFAULT.search(line))
+
+    @classmethod
+    def _scan(cls, src_dir) -> list[str]:
+        offenders: list[str] = []
+        for name in sorted(TestStateBusGetDiscipline.IN_SCOPE):
+            py = src_dir / name
+            if not py.exists():
+                continue
+            for lineno, line in enumerate(py.read_text().splitlines(), start=1):
+                if cls._is_counter_zero_idiom(line):
+                    offenders.append(f"{name}:{lineno}: {line.strip()}")
+        return offenders
+
+    def test_no_or_zero_counter_idiom_in_statebus_files(self):
+        offenders = self._scan(SRC_DIR)
+        assert offenders == [], (
+            f"\n{len(offenders)} counter 'or 0' / get(count,0) idiom(s) — "
+            f"use StateBus.get_counter(key) instead:\n"
+            + "\n".join(f"  {o}" for o in offenders)
+        )
+
+    def test_scanner_detects_or_zero_form(self):
+        """Mutation: 'bus.get(count_field) or 0' must be flagged."""
+        assert self._is_counter_zero_idiom("    current = bus.get(count_field) or 0")
+
+    def test_scanner_detects_guarded_or_zero_form(self):
+        """Mutation: the _state_write guarded form must be flagged."""
+        line = "        current = (state.get(count_field) if state is not None else None) or 0"
+        assert self._is_counter_zero_idiom(line)
+
+    def test_scanner_detects_explicit_zero_default_form(self):
+        """Mutation: 'bus.get(count_field, 0)' must be flagged."""
+        assert self._is_counter_zero_idiom("        count = bus.get(count_field, 0)")
+
+    def test_scanner_ignores_get_counter(self):
+        """get_counter(key) is the sanctioned form — never flagged."""
+        assert not self._is_counter_zero_idiom("        count = bus.get_counter(count_field)")
+
+    def test_scanner_ignores_unrelated_or_zero(self):
+        """'or 0' on a non-counter .get must NOT be flagged."""
+        assert not self._is_counter_zero_idiom("        x = bus.get('score') or 0")
+        assert not self._is_counter_zero_idiom("        total = some_list_len or 0")

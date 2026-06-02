@@ -394,9 +394,8 @@ def _make_loop_router(
 
     def loop_router(state: Any) -> str:
         bus = adapt_state(state)
-        # StateBus.get optional: loop-counter — counter absent before first
-        # body execution; explicit `0` default is the documented bootstrap.
-        count = bus.get(count_field, 0)
+        # Counter bootstrap (absent/None -> 0) lives in StateBus.get_counter.
+        count = bus.get_counter(count_field)
         if count >= loop.max_iterations:
             if loop.on_exhaust == 'error':
                 raise ExecutionError.build(

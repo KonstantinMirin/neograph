@@ -222,3 +222,30 @@ def test_get_required_raises_when_field_missing_model(state_model, key):
         msg = str(exc_info.value)
         assert key in msg
         assert "model_node" in msg
+
+
+# ── get_counter equivalence (neograph-ylk9) ────────────────────────────────
+
+
+def _get_counter_legacy(state: Any, key: str) -> int:
+    """Reference: the 'None/absent-means-zero' counter rule pre-get_counter."""
+    return _state_get_legacy(state, key, None) or 0
+
+
+@given(state=STATES, key=KEYS)
+def test_get_counter_equivalent_to_legacy_or_zero(state, key):
+    """For any state shape and key, get_counter matches the legacy
+    'get(k) or 0' result whenever the stored value is an int/None/absent —
+    the only shapes a monotonic counter field ever holds."""
+    legacy = _get_counter_legacy(state, key)
+    # get_counter only claims equivalence for counter-shaped values (int/None/
+    # absent). Restrict the property to those to avoid comparing against
+    # legacy's accidental coercion of non-int falsy values.
+    raw = _state_get_legacy(state, key, None)
+    if raw is None or isinstance(raw, int):
+        assert adapt_state(state).get_counter(key) == legacy
+
+
+@given(state=STATES, key=KEYS)
+def test_get_counter_always_returns_int(state, key):
+    assert isinstance(adapt_state(state).get_counter(key), int)

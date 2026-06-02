@@ -80,9 +80,8 @@ def _build_state_update(
     loop_mod = mods.get("loop")
     if loop_mod is not None:
         count_field = StateKeys.loop_count(field_name)
-        # StateBus.get optional: loop-counter — absent before first iteration;
-        # `or 0` is the documented bootstrap value.
-        current_count = (state.get(count_field) if state is not None else None) or 0
+        # Counter bootstrap (absent/None -> 0) lives in StateBus.get_counter.
+        current_count = state.get_counter(count_field) if state is not None else 0
         update[count_field] = current_count + 1
         if loop_mod.history:
             history_field = StateKeys.loop_history(field_name)
@@ -137,7 +136,7 @@ def _apply_skip_when(
     loop_mod = skip_mods.get("loop")
     if loop_mod is not None:
         count_field = StateKeys.loop_count(field_name)
-        # StateBus.get optional: loop-counter — same justification as above.
-        current_count = (state.get(count_field) if state is not None else None) or 0
+        # Counter bootstrap (absent/None -> 0) lives in StateBus.get_counter.
+        current_count = state.get_counter(count_field) if state is not None else 0
         update[count_field] = current_count + 1
     return update

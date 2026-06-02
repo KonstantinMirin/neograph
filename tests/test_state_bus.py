@@ -93,6 +93,48 @@ class TestAdaptStateParity:
             model_bus.get_required("missing")
 
 
+class TestGetCounter:
+    """neograph-ylk9: StateBus.get_counter(key) internalizes the
+    'None/absent-means-zero' rule for monotonic counters, replacing the
+    'get(k) or 0' / 'get(k, 0)' idioms scattered across the runtime.
+
+    Contract: absent key -> 0, explicit None -> 0, bound int -> that int.
+    """
+
+    def test_dict_bus_absent_key_returns_zero(self):
+        assert _DictStateBus({}).get_counter("loop_count") == 0
+
+    def test_dict_bus_explicit_none_returns_zero(self):
+        assert _DictStateBus({"loop_count": None}).get_counter("loop_count") == 0
+
+    def test_dict_bus_bound_int_returned(self):
+        assert _DictStateBus({"loop_count": 3}).get_counter("loop_count") == 3
+
+    def test_dict_bus_zero_is_returned_as_zero(self):
+        # A genuinely-stored 0 reads as 0, same as absent — the contract is
+        # identical either way for a monotonic counter.
+        assert _DictStateBus({"loop_count": 0}).get_counter("loop_count") == 0
+
+    def test_model_bus_absent_field_returns_zero(self):
+        assert _ModelStateBus(_StateModel()).get_counter("not_a_field") == 0
+
+    def test_model_bus_explicit_none_returns_zero(self):
+        assert _ModelStateBus(_StateModel(field_b=None)).get_counter("field_b") == 0
+
+    def test_model_bus_bound_int_returned(self):
+        assert _ModelStateBus(_StateModel(field_b=5)).get_counter("field_b") == 5
+
+    def test_return_type_is_always_int(self):
+        assert isinstance(_DictStateBus({}).get_counter("x"), int)
+        assert isinstance(_DictStateBus({"x": None}).get_counter("x"), int)
+
+    def test_dict_and_model_buses_share_get_counter_semantics(self):
+        assert adapt_state({"c": 2}).get_counter("c") == 2
+        assert adapt_state(_StateModel(field_b=2)).get_counter("field_b") == 2
+        assert adapt_state({}).get_counter("c") == 0
+        assert adapt_state(_StateModel()).get_counter("field_b") == 0
+
+
 class TestOracleEachLabelInError:
     """neograph-7nan / y20i: when StateMissingError fires from inside an
     Oracle or Each redirect closure, the error must name the USER's node
