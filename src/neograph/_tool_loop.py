@@ -15,14 +15,15 @@ import structlog
 from langchain_core.runnables import RunnableConfig
 from pydantic import BaseModel
 
+from neograph._dsml import message_text
 from neograph._llm import _get_llm, _notify_cost
 from neograph._llm_config import LlmConfig, _coerce_llm_config
 from neograph._llm_dispatch import _call_structured
 from neograph._llm_render import _compile_prompt
 from neograph._llm_retry import (
-    _attempt_dsml_recovery,
     _invoke_json_with_retry,
     _parse_json_response,
+    recover_dsml,
 )
 from neograph._llm_runtime import EMPTY_RUNTIME, LlmRuntime
 from neograph.describe_type import describe_value
@@ -357,13 +358,13 @@ def invoke_with_tools(
 
     if strategy in ("json_mode", "text"):
         last_msg = messages[-1]
-        raw_text = last_msg.content if hasattr(last_msg, "content") else str(last_msg)
+        raw_text = message_text(last_msg)
         try:
             parse_result = _parse_json_response(raw_text, output_model)
         except ExecutionError:
             # Layer C: DSML/XML tool-call markup in final response — strategy-orthogonal
             # recovery via shared helper. See neograph-0tid.
-            recovered = _attempt_dsml_recovery(
+            recovered = recover_dsml(
                 raw_text, output_model, llm, messages, config, cfg,
                 strategy=strategy,
             )

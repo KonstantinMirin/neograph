@@ -4,6 +4,12 @@ Single-responsibility: given a strategy name (`structured`, `json_mode`,
 `text`), invoke the LLM with the right adapter and return (parsed_model,
 usage). Adding a new output_strategy means editing exactly this file (and,
 when it surfaces as a config option, the `Literal` in `_llm_config.py`).
+
+Provider quirks of the `structured` path (include_raw rejection, parsed=None,
+DSML markup) are NOT handled here. They are normalized by the compat shim
+(`_llm_structured_compat`) into a `StructuredResult` tagged union; this module
+just switches on the variant. Adding a new quirk is a new decorator there, not
+a new branch here.
 """
 
 from __future__ import annotations
@@ -13,10 +19,13 @@ from typing import Any
 from langchain_core.runnables import RunnableConfig
 from pydantic import BaseModel
 
-from neograph._llm_retry import (
-    _DSML_PATTERN,
-    _attempt_dsml_recovery,
-    _invoke_json_with_retry,
+from neograph._dsml import contains_dsml, message_text
+from neograph._llm_retry import _invoke_json_with_retry, recover_dsml
+from neograph._llm_structured_compat import (
+    Failed,
+    Parsed,
+    Raw,
+    build_default_adapter,
 )
 from neograph.errors import ExecutionError
 
@@ -33,80 +42,65 @@ def _call_structured(
 ) -> tuple[BaseModel, Any]:
     """Dispatch structured output by strategy. Returns (result, usage_metadata).
 
-    For the ``structured`` strategy, two DSML recovery paths fire when ``cfg``
-    is provided (see neograph-0tid):
+    For the ``structured`` strategy, the compat shim classifies the provider's
+    response into ``Parsed | Raw | Failed`` and this function switches on it:
 
-    1. **TypeError variant** — ``with_structured_output(..., include_raw=True)``
-       raises TypeError (often LangChain-compat: provider rejected
-       ``include_raw=True``). The compat retry (without ``include_raw``) is
-       attempted; if it also raises TypeError, raw ``llm.invoke`` is consulted
-       and the helper inspects the text for DSML markup.
-    2. **Silent variant** — provider returns ``{"parsed": None, "raw": <AIMessage
-       with DSML>, "parsing_error": ...}``. Detection is content-based; the
-       helper re-parses via a targeted retry.
+    - ``Parsed`` — return the model and its usage.
+    - ``Raw(dsml=True)`` — content-level DSML recovery via ``recover_dsml`` (a
+      retry concern); usage from the original response is preserved.
+    - ``Raw`` (no DSML, the ``parsed=None`` silent variant) — preserve the
+      legacy passthrough: return ``(None, usage)`` without re-prompting.
+    - ``Failed`` — ``include_raw`` was rejected and the compat retry also
+      failed. As a last resort fetch the provider's real output here (the
+      orchestration boundary owns this IO, not the compat decorators) and, if
+      it is DSML, recover; otherwise surface the dispatch error.
     """
     if strategy == "structured":
-        usage = None
-        try:
-            structured_llm = llm.with_structured_output(output_model, include_raw=True)
-            raw_result = structured_llm.invoke(messages, config=config)
-            if isinstance(raw_result, dict) and "parsed" in raw_result:
-                result = raw_result["parsed"]
-                raw_msg = raw_result.get("raw")
-                usage = getattr(raw_msg, "usage_metadata", None) if raw_msg else None
-
-                # Silent variant: parsed=None + raw contains DSML markup.
-                # See neograph-0tid.
-                if result is None and raw_msg is not None and cfg is not None:
-                    raw_text = (
-                        raw_msg.content if hasattr(raw_msg, "content")
-                        else str(raw_msg)
+        result = build_default_adapter().invoke(llm, output_model, messages, config)
+        match result:
+            case Parsed(model=parsed, usage=usage):
+                return parsed, usage
+            case Raw(dsml=True, raw_text=raw_text, usage=usage):
+                if cfg is not None:
+                    recovered = recover_dsml(
+                        raw_text, output_model, llm, messages, config, cfg,
+                        strategy="structured",
                     )
-                    if _DSML_PATTERN.search(raw_text):
-                        recovered = _attempt_dsml_recovery(
-                            raw_text, output_model, llm, messages, config, cfg,
+                    if recovered is not None:
+                        return recovered, usage
+                raise ExecutionError.build(
+                    "structured output contained unrecoverable tool-call markup",
+                    expected=f"valid {output_model.__name__}",
+                    found=f"DSML markup (first 200 chars): {raw_text[:200]!r}",
+                    hint="Model emitted tool-call markup instead of structured output.",
+                )
+            case Raw(raw_text=_, usage=usage):
+                # Silent variant: parsed=None with no DSML markup. Legacy
+                # behavior surfaced None to the caller; preserve it (and usage).
+                return None, usage  # type: ignore[return-value]
+            case Failed(error=err, raw_text=raw_text):
+                if cfg is not None:
+                    text = raw_text or message_text(llm.invoke(messages, config=config))
+                    if contains_dsml(text):
+                        recovered = recover_dsml(
+                            text, output_model, llm, messages, config, cfg,
                             strategy="structured",
                         )
                         if recovered is not None:
-                            result = recovered
-            else:
-                result = raw_result
-        except TypeError as initial_exc:
-            # LangChain compat: provider rejected include_raw=True. Retry without it.
-            structured_llm = llm.with_structured_output(output_model)
-            try:
-                result = structured_llm.invoke(messages, config=config)
-            except TypeError as exc:
-                # Compat path also threw TypeError — likely DSML markup in the
-                # response. Peek the last message in the conversation (from the
-                # ReAct loop's final iteration) for DSML markers; if absent,
-                # invoke the raw llm directly. See neograph-0tid.
-                if cfg is None:
-                    raise
-                last_msg = messages[-1] if messages else None
-                raw_text = ""
-                if last_msg is not None:
-                    raw_text = (
-                        last_msg.content if hasattr(last_msg, "content")
-                        else str(last_msg)
-                    )
-                if not _DSML_PATTERN.search(raw_text):
-                    # No DSML in the existing trailing message — fall back to
-                    # a fresh raw invoke to surface the provider's actual output.
-                    raw_response = llm.invoke(messages, config=config)
-                    raw_text = (
-                        raw_response.content if hasattr(raw_response, "content")
-                        else str(raw_response)
-                    )
-                recovered = _attempt_dsml_recovery(
-                    raw_text, output_model, llm, messages, config, cfg,
-                    strategy="structured",
+                            return recovered, None
+                raise ExecutionError.build(
+                    "structured output dispatch failed",
+                    expected=f"valid {output_model.__name__}",
+                    found=repr(err),
+                    hint="Provider rejected include_raw=True and the compat retry also failed.",
+                ) from err
+            case _:  # defensive: a future StructuredResult variant added without a dispatch arm
+                raise ExecutionError.build(
+                    "unexpected structured-output result variant",
+                    expected="Parsed | Raw | Failed",
+                    found=repr(result),
+                    hint="A new StructuredResult variant needs a matching case in _call_structured.",
                 )
-                if recovered is not None:
-                    result = recovered
-                else:
-                    raise exc from initial_exc
-        return result, usage
 
     if strategy in ("json_mode", "text"):
         return _invoke_json_with_retry(llm, messages, output_model, config, max_retries=max_retries)

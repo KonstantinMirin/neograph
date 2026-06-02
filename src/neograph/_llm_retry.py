@@ -11,7 +11,6 @@ escalation policy on parse failure.
 from __future__ import annotations
 
 import json as _json
-import re
 from typing import Any
 
 from json_repair import repair_json
@@ -19,16 +18,9 @@ from langchain_core.runnables import RunnableConfig
 from pydantic import BaseModel, ValidationError
 from pydantic_core import PydanticUndefined
 
+from neograph._dsml import contains_dsml
 from neograph.describe_type import describe_type
 from neograph.errors import ExecutionError
-
-# Single source of truth for DSML/XML tool-call markup detection.
-# Used by both _tool_loop (post-ReAct loop final response) and
-# _llm_dispatch._call_structured (on TypeError or parsed=None) for
-# strategy-orthogonal recovery. See neograph-0tid.
-_DSML_PATTERN = re.compile(
-    r"<[^>]*(?:function_call|invoke|DSML)[^>]*>", re.IGNORECASE,
-)
 
 
 def _extract_balanced(text: str, start: int, open_ch: str, close_ch: str) -> str | None:
@@ -168,7 +160,7 @@ def _parse_json_response(text: str, output_model: type[BaseModel]) -> BaseModel:
     stripped = extracted.strip()
     if not stripped or (
         not stripped.startswith(("{", "["))
-        and _DSML_PATTERN.search(text)
+        and contains_dsml(text)
     ):
         raise ExecutionError.build(
             "LLM returned non-JSON content instead of structured output",
@@ -307,7 +299,7 @@ def _invoke_json_with_retry(
     return _parse_json_response(raw_text, output_model), combined_usage
 
 
-def _attempt_dsml_recovery(
+def recover_dsml(
     raw_text: str,
     output_model: type[BaseModel],
     llm: Any,
@@ -317,11 +309,14 @@ def _attempt_dsml_recovery(
     *,
     strategy: str,
 ) -> BaseModel | None:
-    """Detect DSML/XML tool-call markup in raw_text and attempt targeted retry.
+    """Recover from DSML/XML tool-call markup via a targeted re-prompt.
 
-    Strategy-orthogonal: detection is content-based. Used by _tool_loop and
-    by _llm_dispatch._call_structured (for the structured strategy's TypeError
-    and parsed=None silent variants).
+    This is the *retry* side of the DSML story: the compat shim
+    (`_llm_structured_compat`) classifies output as DSML; this function acts on
+    it by re-prompting the LLM with a budget-exhausted directive and re-parsing.
+    Strategy-orthogonal — called by both the `structured` dispatch path and the
+    `json_mode`/`text` tool-loop path. Detection is delegated to
+    `_dsml.contains_dsml` (the single definition site).
 
     Returns:
         Parsed model on successful recovery; None if no DSML markup detected.
@@ -333,7 +328,7 @@ def _attempt_dsml_recovery(
     import structlog
     _log = structlog.get_logger("neograph")
 
-    if not _DSML_PATTERN.search(raw_text):
+    if not contains_dsml(raw_text):
         return None
 
     _log.warning(

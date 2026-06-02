@@ -4291,3 +4291,163 @@ class TestDictCoercionTypoRejection:
 
         with pytest.raises(_VE):
             _coerce_llm_config({"max_retires": 5})
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# TEST: _llm_structured_compat — provider-quirk compat shim (neograph-ble3)
+#
+# The compat shim normalizes with_structured_output(model, include_raw=True)
+# into a StructuredResult tagged union (Parsed | Raw | Failed). Each provider
+# quirk is a decorator on a StructuredOutputAdapter. These tests pin the
+# CLASSIFICATION contract (pure result-shape normalization, no re-prompt).
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TestStructuredCompatShim:
+    """neograph-ble3: build_default_adapter classifies each provider quirk into
+    the correct StructuredResult variant. Compat = classification only; the
+    decorators never re-prompt the LLM (that is the retry concern).
+    """
+
+    _DSML = (
+        '<｜DSML｜tool_calls>\n'
+        '<｜DSML｜invoke name="search">\n'
+        '<｜DSML｜parameter name="q">more</｜DSML｜parameter>\n'
+        '</｜DSML｜invoke>\n'
+        '</｜DSML｜tool_calls>'
+    )
+
+    def test_happy_path_classifies_as_parsed_with_usage(self):
+        """include_raw=True works -> Parsed(model, usage from raw.usage_metadata)."""
+        from langchain_core.messages import AIMessage
+
+        from neograph._llm_structured_compat import Parsed, build_default_adapter
+
+        expected = Claims(items=["ok"])
+
+        class HappyLLM:
+            def with_structured_output(self, model, include_raw=False, **kw):
+                inc = include_raw
+
+                class _Wrap:
+                    def invoke(self, messages, **kw2):
+                        raw = AIMessage(content="ok")
+                        raw.usage_metadata = {"input_tokens": 3, "output_tokens": 5}
+                        return {"parsed": expected, "raw": raw} if inc else expected
+
+                return _Wrap()
+
+        result = build_default_adapter().invoke(HappyLLM(), Claims, [], {"configurable": {}})
+
+        assert isinstance(result, Parsed)
+        assert result.model == expected
+        assert result.usage == {"input_tokens": 3, "output_tokens": 5}
+
+    def test_silent_variant_classifies_as_raw_dsml_and_preserves_usage(self):
+        """parsed=None + raw contains DSML -> Raw(dsml=True), usage preserved (R1)."""
+        from langchain_core.messages import AIMessage
+
+        from neograph._llm_structured_compat import Raw, build_default_adapter
+
+        class SilentLLM:
+            def with_structured_output(self, model, include_raw=False, **kw):
+                dsml = TestStructuredCompatShim._DSML
+
+                class _Wrap:
+                    def invoke(self, messages, **kw2):
+                        raw = AIMessage(content=dsml)
+                        raw.usage_metadata = {"input_tokens": 7, "output_tokens": 11}
+                        return {"parsed": None, "raw": raw, "parsing_error": ValueError("x")}
+
+                return _Wrap()
+
+        result = build_default_adapter().invoke(SilentLLM(), Claims, [], {"configurable": {}})
+
+        assert isinstance(result, Raw)
+        assert result.dsml is True
+        assert "DSML" in result.raw_text
+        # R1: usage must NOT be dropped on the parsed=None path.
+        assert result.usage == {"input_tokens": 7, "output_tokens": 11}
+
+    def test_typeerror_then_success_classifies_as_parsed(self):
+        """include_raw=True rejected (TypeError); retry without it succeeds -> Parsed."""
+        from neograph._llm_structured_compat import Parsed, build_default_adapter
+
+        expected = Claims(items=["fallback"])
+
+        class TypeErrorLLM:
+            def with_structured_output(self, model, **kwargs):
+                if kwargs.get("include_raw", False):
+                    raise TypeError("unexpected keyword argument 'include_raw'")
+
+                class _Wrap:
+                    def invoke(self, messages, **kw2):
+                        return expected
+
+                return _Wrap()
+
+        result = build_default_adapter().invoke(TypeErrorLLM(), Claims, [], {"configurable": {}})
+
+        assert isinstance(result, Parsed)
+        assert result.model == expected
+
+    def test_double_typeerror_with_trailing_dsml_classifies_as_raw_dsml(self):
+        """Both structured invokes raise TypeError; messages[-1] carries DSML
+        -> Raw(dsml=True). This is the Case-E unification the original sketch lost.
+        Classification reads the trailing message; the decorator does NOT re-invoke.
+        """
+        from langchain_core.messages import AIMessage
+
+        from neograph._llm_structured_compat import Raw, build_default_adapter
+
+        class DoubleTypeErrorLLM:
+            def with_structured_output(self, model, **kwargs):
+                class _Wrap:
+                    def invoke(self, messages, **kw2):
+                        raise TypeError("non-JSON content")
+
+                return _Wrap()
+
+            def invoke(self, messages, **kw):  # must NOT be called by the compat decorator
+                raise AssertionError("compat decorator must not re-invoke the LLM")
+
+        trailing = AIMessage(content=TestStructuredCompatShim._DSML)
+        result = build_default_adapter().invoke(
+            DoubleTypeErrorLLM(), Claims, [trailing], {"configurable": {}}
+        )
+
+        assert isinstance(result, Raw)
+        assert result.dsml is True
+        assert "DSML" in result.raw_text
+
+
+class TestCallStructuredCPrimeUsagePreserved:
+    """neograph-ble3 (R1): the C' path — parsed=None with NO DSML markup and
+    cfg=None — preserves legacy behavior: return (None, usage). The usage from
+    the raw message must NOT be dropped (architect HIGH finding).
+    """
+
+    def test_parsed_none_no_dsml_returns_none_and_preserves_usage(self):
+        from langchain_core.messages import AIMessage
+
+        from neograph._llm_dispatch import _call_structured
+
+        class CPrimeLLM:
+            def with_structured_output(self, model, include_raw=False, **kw):
+                class _Wrap:
+                    def invoke(self, messages, **kw2):
+                        raw = AIMessage(content="plain prose, no markup here")
+                        raw.usage_metadata = {"input_tokens": 9, "output_tokens": 13}
+                        # parsed=None, raw has no DSML markup
+                        return {"parsed": None, "raw": raw, "parsing_error": ValueError("x")}
+
+                return _Wrap()
+
+        # cfg defaults to None -> C' passthrough path
+        result, usage = _call_structured(
+            CPrimeLLM(), [], Claims, "structured", {"configurable": {}},
+        )
+
+        assert result is None
+        # R1: usage carried through, not dropped.
+        assert usage == {"input_tokens": 9, "output_tokens": 13}

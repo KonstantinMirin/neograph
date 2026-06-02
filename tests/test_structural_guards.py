@@ -3680,6 +3680,24 @@ class TestLlmResponsibilityDiscipline:
         "_llm_dispatch.py": frozenset({
             "_call_structured",
         }),
+        # neograph-ble3: DSML detection extracted to its own pure leaf module.
+        "_dsml.py": frozenset({
+            "contains_dsml",
+            "message_text",
+        }),
+        # neograph-ble3: provider-quirk compat shim — StructuredResult tagged
+        # union + Protocol-based adapter chain. New provider quirks are new
+        # decorator classes HERE, never new branches in _call_structured.
+        "_llm_structured_compat.py": frozenset({
+            "Parsed",
+            "Raw",
+            "Failed",
+            "StructuredOutputAdapter",
+            "LangChainStructuredAdapter",
+            "IncludeRawCompatDecorator",
+            "DsmlClassifierDecorator",
+            "build_default_adapter",
+        }),
         "_llm_retry.py": frozenset({
             "_extract_json",
             "_extract_balanced",
@@ -3688,9 +3706,10 @@ class TestLlmResponsibilityDiscipline:
             "_parse_json_response",
             "_build_retry_msg",
             "_invoke_json_with_retry",
-            # neograph-0tid: shared DSML recovery helper used by both
-            # _tool_loop and _llm_dispatch (strategy-orthogonal recovery).
-            "_attempt_dsml_recovery",
+            # neograph-ble3: DSML recovery (re-prompt + re-parse) is the RETRY
+            # side of the DSML story; detection moved to _dsml. Renamed from
+            # _attempt_dsml_recovery to recover_dsml.
+            "recover_dsml",
         }),
         "_llm_render.py": frozenset({
             "_is_inline_prompt",
@@ -3707,16 +3726,18 @@ class TestLlmResponsibilityDiscipline:
     # is); a proxy that catches accretion that escapes name-level review.
     LINE_BUDGETS = {
         "_llm.py": 260,
-        # neograph-0tid: bumped from 80 -> 130. Added strategy-orthogonal DSML
-        # recovery wiring in _call_structured (TypeError + silent-variant
-        # paths) plus richer docstring. Single helper call, not new
-        # responsibilities.
-        "_llm_dispatch.py": 130,
-        # neograph-0tid: bumped from 300 -> 365. Added shared
-        # _attempt_dsml_recovery helper (~58 lines) + _DSML_PATTERN constant
-        # consolidated from two prior sites.
-        "_llm_retry.py": 365,
+        # neograph-ble3: tightened 130 -> 115. The 5-path include_raw try/except
+        # ladder collapsed to a match on the StructuredResult variant; the
+        # provider-quirk wiring moved to the compat shim. Locks the deletion.
+        "_llm_dispatch.py": 115,
+        # neograph-ble3: tightened 365 -> 360. _DSML_PATTERN regex moved to
+        # _dsml.py; recover_dsml is detection-free. Locks the deletion.
+        "_llm_retry.py": 360,
         "_llm_render.py": 310,
+        # neograph-ble3: new pure-leaf detection module.
+        "_dsml.py": 55,
+        # neograph-ble3: compat shim — sum-type + Protocol + 3 adapters + factory.
+        "_llm_structured_compat.py": 180,
     }
 
     def _top_level_defs(self, path: pathlib.Path) -> set[str]:
@@ -3778,16 +3799,22 @@ class TestLlmResponsibilityDiscipline:
         Allowed edges (a -> b means a imports from b):
             _llm.py        -> _llm_dispatch, _llm_render, _llm_config,
                               _llm_protocols, _llm_runtime
-            _llm_dispatch  -> _llm_retry
-            _llm_retry     -> (no _llm* deps except possibly _llm_config)
+            _llm_dispatch  -> _llm_retry, _llm_structured_compat
+            _llm_structured_compat -> _dsml (pure leaf, not _llm*-prefixed)
+            _llm_retry     -> _dsml (no other _llm* deps except possibly _llm_config)
             _llm_render    -> _llm_config, _llm_protocols, _llm_runtime
             _llm_protocols -> (no _llm* deps)
             _llm_runtime   -> (no _llm* deps; uses TYPE_CHECKING for protocols)
             _llm_config    -> (no _llm* deps)
+
+        neograph-ble3: _dsml.py is a pure leaf (no neograph._llm* imports) so it
+        cannot participate in any cycle; it is intentionally omitted from the
+        _llm*-prefixed collector below. _llm_structured_compat.py IS tracked.
         """
         modules = [
             "_llm.py",
             "_llm_dispatch.py",
+            "_llm_structured_compat.py",
             "_llm_retry.py",
             "_llm_render.py",
             "_llm_protocols.py",
@@ -3869,7 +3896,10 @@ class TestLlmResponsibilityDiscipline:
         of a hidden cycle the layout was supposed to prevent.
         """
         violations: list[str] = []
-        for fname in ("_llm_dispatch.py", "_llm_retry.py", "_llm_render.py"):
+        for fname in (
+            "_llm_dispatch.py", "_llm_retry.py", "_llm_render.py",
+            "_llm_structured_compat.py",  # neograph-ble3
+        ):
             path = SRC_DIR / fname
             if not path.exists():
                 continue
@@ -3939,6 +3969,15 @@ class TestLlmScenarioTouchpoints:
             "may_touch": set(),
             "max_touch": 1,
         },
+        # neograph-ble3: "Add new provider quirk (e.g., provider returns empty
+        # string on overload)" → a new StructuredOutputAdapter decorator in the
+        # compat shim ONLY. This is the Open/Closed proof: a new quirk is a new
+        # decorator class, never a new branch in _call_structured.
+        "add_new_provider_quirk": {
+            "must_touch": {"_llm_structured_compat.py"},
+            "may_touch": set(),
+            "max_touch": 1,
+        },
     }
 
     def test_all_must_touch_files_exist(self):
@@ -3988,6 +4027,11 @@ class TestLlmCohesionFanOut:
         # called by _llm, _tool_loop, _dispatch (for _is_inline_prompt),
         # and re-exported via __init__.
         "_llm_render.py": 5,
+        # neograph-ble3: _dsml is the shared detection leaf — imported by
+        # _llm_dispatch, _llm_structured_compat, _llm_retry, _tool_loop.
+        "_dsml.py": 5,
+        # neograph-ble3: compat shim, called only by the dispatch table.
+        "_llm_structured_compat.py": 2,
     }
 
     def _count_importers(self, target_module_basename: str) -> list[str]:
