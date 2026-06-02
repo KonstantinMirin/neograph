@@ -2209,6 +2209,11 @@ ANY_AUDIT_MODULES = (
     "_dispatch.py",
     "_oracle.py",
     "_wiring.py",
+    "_ir_normalize.py",
+    # Note: _normalize.py (the sibling normalized-view helper) is intentionally
+    # NOT in scope — it is a pre-existing input/output-shape adapter whose Any
+    # uses carry user-declared types throughout; bringing it under the
+    # discipline is a separate effort (neograph-y95c scoped only _ir_normalize).
 )
 
 # Allowlist of public functions/methods that may use ``Any`` because the value
@@ -2272,6 +2277,8 @@ ANY_ALLOWLIST: dict[str, str] = {
     # precise signatures are determined by the user's modifier configuration.
     "_wiring.py:_merge_one_group:return": "user-supplied merge result; type declared by node.outputs",
     "_wiring.py:_construct_loop_unwrap:return": "user-supplied loop value; type declared by the sub-construct output",
+    # ── _ir_normalize.py — IrNormalizer.apply update dict ──
+    "_ir_normalize.py:IrNormalizer.apply:return": "model_copy update dict; heterogeneous IR field values (str fan_out_param, type[BaseModel] oracle_gen_type)",
 }
 
 

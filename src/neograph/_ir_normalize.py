@@ -30,7 +30,9 @@ preserved.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, cast
+
+from pydantic import BaseModel
 
 from neograph._normalize import normalize_inputs
 from neograph._sidecar import infer_oracle_gen_type
@@ -41,7 +43,6 @@ if TYPE_CHECKING:
     from neograph.construct import Construct
 
 
-@runtime_checkable
 class IrNormalizer(Protocol):
     """Infers a single IR-level field on a Node post-construction.
 
@@ -93,7 +94,7 @@ class _FanOutParamNormalizer:
         return {}
 
 
-def oracle_gen_type_for(node: Node) -> Any | None:
+def oracle_gen_type_for(node: Node) -> type[BaseModel] | None:
     """The per-generator output type inferred from a node's Oracle ``merge_fn``.
 
     The merge_fn's first parameter is ``list[T]`` where ``T`` is the type each
@@ -112,7 +113,10 @@ def oracle_gen_type_for(node: Node) -> Any | None:
         return None
     gen_type = infer_oracle_gen_type(oracle.merge_fn)
     if gen_type is not None and gen_type is not node.outputs:
-        return gen_type
+        # infer_oracle_gen_type returns the introspected ``list[T]`` element,
+        # which is intended to be a generator output model. Not statically
+        # provable, hence the cast at this boundary.
+        return cast("type[BaseModel]", gen_type)
     return None
 
 
@@ -127,6 +131,11 @@ class _OracleGenTypeNormalizer:
         if node.oracle_gen_type is not None:
             return False
         oracle = node.modifier_set.oracle
+        # This oracle/merge_fn guard is intentionally duplicated with the one
+        # inside oracle_gen_type_for: the GRASP predicate/inference split keeps
+        # applies_to cheap (no inference) while apply does the real work. Do
+        # NOT collapse it by calling oracle_gen_type_for here — that would run
+        # the full inference twice per node.
         return oracle is not None and oracle.merge_fn is not None
 
     def apply(self, node: Node, peer_field_names: set[str]) -> dict[str, Any]:
