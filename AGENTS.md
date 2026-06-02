@@ -348,18 +348,33 @@ lint(construct, *, config=None, known_template_vars=None, template_resolver=None
 
 ### Test file layout (36 files across 5 packages)
 
-**Root tests** (18 files):
+**Root tests** (28 files):
+
+`test_validation.py` and `test_structural_guards.py` were split by concern in
+neograph-e8jg (no file exceeds 1200 lines; class names unchanged so guards stay
+discoverable). The validation suite is now 5 files; the structural-guard suite
+is 6 files.
 
 | File | Scope | Tests |
 |------|-------|-------|
-| `test_validation.py` | Assembly-time type checking; fan-in; effective_producer_type; lint(); TypeSpec | ~128 |
+| `test_validation.py` | Core assembly validation: construct/oracle errors, Each-path, name collision, tool/LLM config, output strategy, error builder, TypeSpec, FromInput-required, single-type deprecation | ~72 |
+| `test_fanin_validation.py` | Fan-in: dict-form inputs, Each interop, effective_producer_type, list/dict compat, dict-form outputs, three-surface parity | ~35 |
+| `test_lint.py` | lint() DI bindings, obligation gaps, Loop condition checks | ~29 |
+| `test_template_lint.py` | lint() inline `${var}` and template-ref `{var}` placeholder checks | ~44 |
+| `test_context_validation.py` | Sub-construct context-field + output-boundary validation | ~15 |
+| `test_guards_assembly.py` | Guards: error builder, file-split, assembly import DAG, subconstruct boundaries, dead code, no-Any boundaries, no-sidecar-pattern | ~50 |
+| `test_guards_ir_compiler.py` | Guards: IR typing, compiler wiring, node mutation, branch nodes, build-construct body size, registry dicts | ~23 |
+| `test_guards_sidecar_imports.py` | Guards: sidecar module, function-local import allowlist, tool-loop import graph, langgraph imports, IO polymorphism | ~12 |
+| `test_guards_any_audit.py` | Guards: no-Any in public IR APIs, arbitrary-types justification, public functions raise NeographError | ~10 |
+| `test_guards_function_local_imports.py` | Guards: function-local factory/llm imports, retry-policy signature, StateKeys centralization, no module-level registration | ~23 |
+| `test_guards_llm_runtime.py` | Guards: factory kwargs, LLM responsibility/cohesion, StateBus.get discipline, runtime fan-out, normalize_ir field writer, routing-key invariant | ~30 |
 | `test_renderers.py` | XmlRenderer, DelimitedRenderer, JsonRenderer, describe_type, render_prompt | ~88 |
 | `test_forward.py` | ForwardConstruct base class, tracer, compilation, branching, loops | ~67 |
 | `test_composition.py` | Sub-constructs, @node sub-constructs, state hygiene, reducers, dict-form | ~63 |
 | `test_coverage_gaps.py` | Coverage gap tests for uncovered code paths | ~60 |
 | `test_conditions.py` | parse_condition, condition registry | ~45 |
 | `test_loop.py` | Loop modifier: self-loop, Loop-on-Construct, ForwardConstruct, skip_when | ~41 |
-| `test_structural_guards.py` | AST-scanning guards against regressions | ~37 |
+| `test_node_sidecar_contract.py` | Pins PrivateAttr (`_sidecar`/`_param_res`/`_scripted_shim`) preservation across model_copy/pipe/deepcopy | ~8 |
 | `test_inline_prompts.py` | Inline prompt compilation, template rendering | ~29 |
 | `test_di.py` | DI bindings, resolution, typed fields | ~27 |
 | `test_spec_loader.py` | YAML/spec loader, type resolution | ~26 |
