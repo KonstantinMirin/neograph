@@ -108,7 +108,7 @@ def _extract_fan_in_dict(state: StateBus, node: Node) -> dict[str, Any]:
     """Read each named upstream from state by key.
 
     ``node.fan_out_param`` is set once at Construct construction (see
-    ``Construct._normalize_fan_out_params``) so all three API surfaces —
+    ``neograph._ir_normalize.normalize_ir``) so all three API surfaces —
     declarative, ``@node``, programmatic/YAML — produce identical IR by
     the time the runtime sees the node.
     """

@@ -24,7 +24,6 @@ from neograph._sidecar import (
     _get_param_res,
     _get_sidecar,
     _set_param_res,
-    infer_oracle_gen_type,
 )
 from neograph._state_keys import StateKeys
 from neograph.construct import Construct
@@ -524,11 +523,15 @@ def _cleanup_inputs_and_register(
     loop_param_renames: dict[str, dict[str, str]],
     ordered: list[Any],
 ) -> list[Any]:
-    """Clean up inputs, register scripted shims, infer oracle types.
+    """Clean up inputs and register scripted shims (@node-specific work).
 
-    Strips DI params from inputs, rewrites port/loop params, sets
-    fan_out_param, registers scripted shims, and infers deferred
-    oracle_gen_type. All via model_copy -- never mutates originals.
+    Strips DI params from inputs, rewrites port/loop params, sets the
+    signature-derived fan_out_param, and registers scripted shims. All via
+    model_copy -- never mutates originals.
+
+    IR-level inferences that must be identical across all API surfaces
+    (oracle_gen_type, and fan_out_param for non-@node surfaces) are owned by
+    neograph._ir_normalize, run from Construct.__init__ -- NOT here.
 
     Returns the final ordered list with model_copy replacements.
     """
@@ -574,13 +577,13 @@ def _cleanup_inputs_and_register(
             if synthetic_name is not None:
                 updates["scripted_fn"] = synthetic_name
 
-        # Phase 3: Deferred oracle_gen_type inference.
-        if isinstance(n, Node) and n.modifier_set.oracle is not None and n.oracle_gen_type is None:
-            oracle_mod = n.modifier_set.oracle
-            if oracle_mod is not None and oracle_mod.merge_fn is not None:
-                gen_type = infer_oracle_gen_type(oracle_mod.merge_fn)
-                if gen_type is not None and gen_type is not n.outputs:
-                    updates["oracle_gen_type"] = gen_type
+        # oracle_gen_type is an IR-level inference owned exclusively by
+        # neograph._ir_normalize (run from Construct.__init__). It is NOT
+        # written here — doing so would re-create the two-site drift class
+        # neograph-20xq addressed. fan_out_param at Phase 1 stays: it is
+        # derived from the @node function signature (richer than the
+        # inputs-dict heuristic the normalizer uses) and normalize_ir is
+        # idempotent over it.
 
         # Single model_copy with all accumulated updates.
         if updates:

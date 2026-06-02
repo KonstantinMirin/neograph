@@ -2617,8 +2617,8 @@ NEOGRAPH_ERROR_ALLOWLIST: dict[str, str] = {
     # ── construct.py — Pydantic BeforeValidator boundary ──
     # _validate_node_list runs inside Pydantic field validation; Pydantic
     # catches TypeError/ValueError and rolls them into ValidationError.
+    "construct.py:43": "Pydantic BeforeValidator boundary; TypeError is rolled into ValidationError",
     "construct.py:46": "Pydantic BeforeValidator boundary; TypeError is rolled into ValidationError",
-    "construct.py:49": "Pydantic BeforeValidator boundary; TypeError is rolled into ValidationError",
 
     # ── forward.py — proxy / tracer / abstract-method contracts ──
     # _Proxy.__getattr__ raises AttributeError per the Python attribute
@@ -4127,7 +4127,7 @@ class TestStateBusGetDiscipline:
 
 
 class TestNoRuntimeFanOutDetection:
-    """neograph-vgc1: ``Construct._normalize_fan_out_params`` is the single
+    """neograph-vgc1: ``neograph._ir_normalize.normalize_ir`` is the single
     source of truth for ``node.fan_out_param``. The runtime extractor at
     ``_input_shape._extract_fan_in_dict`` must NOT detect fan-out via
     ``state.keys()`` scanning — that band-aid existed during the izo1-B
@@ -4160,109 +4160,177 @@ class TestNoRuntimeFanOutDetection:
                 raise AssertionError(
                     f"_extract_fan_in_dict re-introduced state.keys() scan at "
                     f"line {sub.lineno}; fan-out detection belongs in "
-                    f"Construct._normalize_fan_out_params (single source of truth, "
+                    f"neograph._ir_normalize.normalize_ir (single source of truth, "
                     f"neograph-vgc1)."
                 )
 
 
-class TestConstructNormalizesEveryAtNodeOnlyIRField:
-    """neograph-aqau: every Node IR field that _construct_builder.py writes
-    via the @node decoration path's `updates` dict must have a matching
-    normalization step in `Construct.__init__` so the YAML and programmatic
-    surfaces produce identical IR.
+class TestNormalizeIrIsSoleIrFieldWriter:
+    """neograph-20xq: IR-level inferred fields (fan_out_param, oracle_gen_type)
+    are written at exactly one ASSEMBLY-TIME site — neograph._ir_normalize,
+    called once from Construct.__init__. This replaces the older
+    TestConstructNormalizesEveryAtNodeOnlyIRField, which only policed
+    _construct_builder's `updates` dict and required a parallel
+    Construct._normalize_<field> method per field (the very drift mechanism
+    the epic removed).
 
-    Today's `updates` keys (per audit): inputs, fan_out_param, scripted_fn,
-    oracle_gen_type. The first three are passthroughs (set by Node()
-    constructor or modifier pipe). Only fan_out_param and oracle_gen_type
-    need explicit normalization in Construct (already done). If a future
-    commit adds a new `updates[X] = ...` write in _construct_builder.py
-    without an `X` reference inside `Construct._normalize_*`, this guard
-    fires.
+    The invariant is structural, not a snapshot: rather than enumerate the
+    expected writes, the guard scans ALL of src/neograph for EVERY syntactic
+    form that writes one of the IR fields — attribute assignment, subscript
+    assignment, a key in a model_copy/dict-literal update, and
+    setattr/object.__setattr__ — and asserts the (file, field) write set
+    equals a tightly-justified allowlist:
+
+      _ir_normalize.py  → {fan_out_param, oracle_gen_type}  (the canonical site)
+      _construct_builder.py → {fan_out_param}   (@node SIGNATURE-derived
+            pre-population; richer than the inputs-dict heuristic; normalize_ir
+            is idempotent over it)
+      decorators.py → {oracle_gen_type}   (@node DECORATION-time eager
+            pre-population so a bare Node carries the type before assembly;
+            normalize_ir owns the inference rule via oracle_gen_type_for and
+            is idempotent over it)
+
+    Both pre-population sites run BEFORE the Construct object exists. Any other
+    (file, field) pair — e.g. re-adding oracle_gen_type inference to
+    _construct_builder, or a new Construct._normalize_* method — fails the
+    guard. So does any write of a NEW IR field anywhere but _ir_normalize.
     """
 
-    # Fields that are set by other surfaces (Node() constructor or pipe)
-    # and therefore don't need a Construct normalization step.
-    PASSTHROUGH_FIELDS = frozenset({"inputs", "scripted_fn"})
+    # IR-level inferred fields owned by normalize_ir.
+    IR_FIELDS = frozenset({"fan_out_param", "oracle_gen_type"})
 
-    # Fields that DO have a Construct normalization step today.
-    NORMALIZED_FIELDS = frozenset({"fan_out_param", "oracle_gen_type"})
+    # Sanctioned (file, field) pre-population writes outside _ir_normalize.
+    ALLOWED_PREPOP: dict[str, frozenset[str]] = {
+        "_construct_builder.py": frozenset({"fan_out_param"}),
+        "decorators.py": frozenset({"oracle_gen_type"}),
+    }
 
-    def test_every_updates_write_has_normalizer_or_passthrough_justification(self):
-        builder_src = (SRC_DIR / "_construct_builder.py").read_text()
-        tree = ast.parse(builder_src)
-        # Collect every updates[<str literal>] = ... assignment.
-        written_fields: set[str] = set()
+    @classmethod
+    def _scan_ir_field_writes(cls, tree: ast.AST) -> set[str]:
+        """Return the set of IR field names WRITTEN anywhere in ``tree``.
+
+        Detects: attribute-assign (``x.field = ...``), subscript-assign
+        (``d["field"] = ...``), dict-literal keys (covers
+        ``model_copy(update={"field": ...})`` and a normalizer's
+        ``return {"field": ...}``), and ``setattr``/``object.__setattr__``
+        string-literal targets. Read forms (``getattr(x, "field")``,
+        attribute access) are NOT matched — only writes.
+        """
+        written: set[str] = set()
+
+        def _str_const(node: ast.AST) -> str | None:
+            return node.value if isinstance(node, ast.Constant) and isinstance(node.value, str) else None
+
         for node in ast.walk(tree):
-            if not isinstance(node, ast.Assign):
-                continue
-            for target in node.targets:
-                if not isinstance(target, ast.Subscript):
-                    continue
-                if not (
-                    isinstance(target.value, ast.Name)
-                    and target.value.id == "updates"
-                ):
-                    continue
-                # ast.Constant for string literal index
-                key_node = target.slice
-                if isinstance(key_node, ast.Constant) and isinstance(key_node.value, str):
-                    written_fields.add(key_node.value)
+            # x.field = ...   and   d["field"] = ...
+            if isinstance(node, ast.Assign):
+                for target in node.targets:
+                    if isinstance(target, ast.Attribute) and target.attr in cls.IR_FIELDS:
+                        written.add(target.attr)
+                    elif isinstance(target, ast.Subscript):
+                        key = _str_const(target.slice)
+                        if key in cls.IR_FIELDS:
+                            written.add(key)
+            # {"field": ...} dict literals (model_copy update=, normalizer return)
+            elif isinstance(node, ast.Dict):
+                for key_node in node.keys:
+                    if key_node is not None:
+                        key = _str_const(key_node)
+                        if key in cls.IR_FIELDS:
+                            written.add(key)
+            # setattr(x, "field", ...) / object.__setattr__(x, "field", ...)
+            elif isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "__setattr__":
+                for arg in node.args:
+                    key = _str_const(arg)
+                    if key in cls.IR_FIELDS:
+                        written.add(key)
+            elif isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "setattr":
+                for arg in node.args:
+                    key = _str_const(arg)
+                    if key in cls.IR_FIELDS:
+                        written.add(key)
+        return written
 
-        unaccounted = written_fields - self.PASSTHROUGH_FIELDS - self.NORMALIZED_FIELDS
-        assert not unaccounted, (
-            f"_construct_builder.py writes updates[{sorted(unaccounted)}] in "
-            f"the @node assembly path. Each such field must either be set by "
-            f"another surface (Node() constructor / pipe / YAML loader) — add "
-            f"to PASSTHROUGH_FIELDS — or have a Construct._normalize_<field> "
-            f"step + add to NORMALIZED_FIELDS. Otherwise the YAML/programmatic "
-            f"surface produces an IR with the field missing (drift class of "
-            f"neograph-vgc1 + neograph-aqau)."
+    def test_ir_fields_written_only_in_normalize_ir_and_sanctioned_prepop(self):
+        offenders: list[str] = []
+        for py_file in sorted(SRC_DIR.glob("*.py")):
+            written = self._scan_ir_field_writes(ast.parse(py_file.read_text()))
+            if not written:
+                continue
+            name = py_file.name
+            if name == "_ir_normalize.py":
+                continue  # the canonical site may write any IR field
+            allowed = self.ALLOWED_PREPOP.get(name, frozenset())
+            unexpected = written - allowed
+            for field in sorted(unexpected):
+                offenders.append(f"{name}: writes IR field '{field}'")
+
+        assert offenders == [], (
+            "IR-level inferred fields must be written only by "
+            "neograph._ir_normalize (the single assembly-time normalization "
+            "site) or by a sanctioned @node pre-population site listed in "
+            "ALLOWED_PREPOP.\nUnsanctioned writes:\n"
+            + "\n".join(f"  {o}" for o in offenders)
+            + "\n\nIf this is a new IR inference, add it as an IrNormalizer in "
+            "_ir_normalize.py — do NOT inline it in an assembly path (that "
+            "re-creates the drift class of neograph-vgc1/aqau/20xq)."
         )
 
-    def test_every_normalized_field_referenced_in_construct(self):
-        """If we claim a field is normalized, the Construct source must
-        reference it. Catches forgotten normalizer methods."""
+    def test_construct_has_no_normalize_field_methods(self):
+        """The per-field Construct._normalize_<field> methods are GONE — the
+        whole point of the epic. A new one would re-introduce parallel
+        inference. Guards against regression to the old shape."""
         construct_src = (SRC_DIR / "construct.py").read_text()
-        for field in self.NORMALIZED_FIELDS:
-            assert f'"{field}"' in construct_src or f"'{field}'" in construct_src or field in construct_src, (
-                f"NORMALIZED_FIELDS claims '{field}' has a Construct "
-                f"normalization step, but '{field}' is not referenced in "
-                f"construct.py. Either add the normalizer or move to "
-                f"PASSTHROUGH_FIELDS."
-            )
+        tree = ast.parse(construct_src)
+        offenders = [
+            n.name for n in ast.walk(tree)
+            if isinstance(n, ast.FunctionDef)
+            and re.fullmatch(r"_normalize_(fan_out_params|oracle_gen_type)", n.name)
+        ]
+        assert offenders == [], (
+            f"construct.py defines {offenders}; IR-field inference belongs in "
+            f"_ir_normalize.IrNormalizer implementations, not per-field methods "
+            f"on Construct (neograph-20xq)."
+        )
 
-    def test_mutation_unannotated_updates_write_is_detected(self):
-        """Mutation: synthesize a tiny source file containing an
-        ``updates["unaudited_field"] = ...`` write; the scanner logic must
-        flag it. Proves the guard isn't a snapshot — it would catch a future
-        regression where someone adds a new IR field without classifying it."""
+    def test_construct_init_calls_normalize_ir(self):
+        """Construct.__init__ must delegate to normalize_ir — proves the single
+        site is actually wired in, not just present."""
+        construct_src = (SRC_DIR / "construct.py").read_text()
+        assert "normalize_ir(self)" in construct_src, (
+            "Construct.__init__ must call normalize_ir(self) so all three API "
+            "surfaces converge on identical IR before validation (neograph-20xq)."
+        )
+
+    def test_scanner_detects_every_write_form(self):
+        """Mutation: the scanner must catch each write form, so the guard is
+        not a dead snapshot. Synthesize source exercising all four forms for a
+        fictitious IR field and confirm detection logic (parametrised on the
+        real IR_FIELDS via a temporary union)."""
         synthetic = (
-            'def f():\n'
-            '    updates = {}\n'
-            '    updates["new_drift_field"] = "value"\n'
+            'def f(node, d):\n'
+            '    node.fan_out_param = "x"\n'                       # attribute
+            '    d["oracle_gen_type"] = T\n'                       # subscript
+            '    node.model_copy(update={"fan_out_param": "y"})\n'  # dict literal
+            '    object.__setattr__(node, "oracle_gen_type", T)\n'  # __setattr__
         )
-        tree = ast.parse(synthetic)
-        written_fields: set[str] = set()
-        for node in ast.walk(tree):
-            if not isinstance(node, ast.Assign):
-                continue
-            for target in node.targets:
-                if not isinstance(target, ast.Subscript):
-                    continue
-                if not (
-                    isinstance(target.value, ast.Name)
-                    and target.value.id == "updates"
-                ):
-                    continue
-                key_node = target.slice
-                if isinstance(key_node, ast.Constant) and isinstance(key_node.value, str):
-                    written_fields.add(key_node.value)
-        assert "new_drift_field" in written_fields, (
-            "Scanner must detect updates[<str>] = ... in synthetic source — "
-            "if this assertion fails, the real guard's scanning logic is broken."
+        written = self._scan_ir_field_writes(ast.parse(synthetic))
+        assert written == {"fan_out_param", "oracle_gen_type"}, (
+            f"scanner missed a write form; detected {sorted(written)}. The "
+            f"real guard would silently pass a regression if this breaks."
         )
-        unaccounted = written_fields - self.PASSTHROUGH_FIELDS - self.NORMALIZED_FIELDS
-        assert "new_drift_field" in unaccounted, (
-            "An unclassified field must surface in `unaccounted`; the guard "
-            "would correctly fail _construct_builder.py with the same logic."
+
+    def test_scanner_ignores_read_forms(self):
+        """getattr/attribute-read of an IR field is NOT a write and must not
+        be flagged (the validator legitimately reads fan_out_param via
+        getattr)."""
+        synthetic = (
+            'def f(node):\n'
+            '    a = getattr(node, "fan_out_param", None)\n'
+            '    b = node.oracle_gen_type\n'
+            '    return a, b\n'
+        )
+        written = self._scan_ir_field_writes(ast.parse(synthetic))
+        assert written == set(), (
+            f"scanner flagged a read as a write: {sorted(written)}"
         )

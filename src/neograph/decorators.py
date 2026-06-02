@@ -101,6 +101,7 @@ def register_condition(name: str, fn: Callable) -> None:
 def register_tool_factory(name: str, fn: Callable) -> None:
     """Decorator-side tool-factory store. Internal to neograph.decorators."""
     _decorator_tool_factories[name] = fn
+from neograph._ir_normalize import oracle_gen_type_for
 from neograph._sidecar import (  # noqa: F401 — re-exported for backward compat
     _get_node_source,
     _get_param_res,
@@ -568,10 +569,12 @@ def node(
             _register_sidecar(n, f, param_names)
             if param_res:
                 _set_param_res(n, param_res)
-            if merge_fn is not None:
-                gen_type = infer_oracle_gen_type(merge_fn)
-                if gen_type is not None and gen_type is not n.outputs:
-                    n.oracle_gen_type = gen_type
+            # Eager (decoration-time) oracle_gen_type so the bare Node carries
+            # it before assembly. normalize_ir owns the inference rule and is
+            # idempotent over this pre-population. See neograph-20xq.
+            gen_type = oracle_gen_type_for(n)
+            if gen_type is not None:
+                n.oracle_gen_type = gen_type
             return n
 
         # -- Fan-out via Each when map_over is set (no Oracle) -----------------
@@ -602,10 +605,10 @@ def node(
             _register_sidecar(n, f, param_names)
             if param_res:
                 _set_param_res(n, param_res)
-            if merge_fn is not None:
-                gen_type = infer_oracle_gen_type(merge_fn)
-                if gen_type is not None and gen_type is not n.outputs:
-                    n.oracle_gen_type = gen_type
+            # Eager (decoration-time) oracle_gen_type — see note above.
+            gen_type = oracle_gen_type_for(n)
+            if gen_type is not None:
+                n.oracle_gen_type = gen_type
 
         # -- Operator interrupt when interrupt_when is set --------------------
         if interrupt_when is not None:
