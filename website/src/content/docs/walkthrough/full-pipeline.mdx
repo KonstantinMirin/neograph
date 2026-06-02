@@ -91,13 +91,13 @@ class Report(BaseModel, frozen=True):
 ```python
 from neograph import (
     Construct, Each, Node, Operator,
-    compile, node, register_condition, register_scripted,
+    compile, node,
 )
 from langgraph.checkpoint.memory import MemorySaver
 
 # Step 1 — @node with Oracle kwargs for LLM ensemble
 @node(outputs=Claims, prompt="decompose", model="fast",
-      llm_config={"temperature": 0.8},
+      llm_config={"provider_kwargs": {"temperature": 0.8}},
       ensemble_n=3, merge_fn="merge_claims")
 def decompose() -> Claims: ...
 
@@ -136,29 +136,45 @@ pipeline = Construct(
 )
 ```
 
-Register the scripted functions and the Operator condition:
+Define the scripted functions and the Operator condition. They're passed to `compile()` by name in the next step — no global registration:
 
 ```python
-register_scripted("merge_claims", lambda variants, config: ...)   # Oracle merge
-register_scripted("lookup_context", lambda input_data, config: ...)
-register_scripted("score_claims", lambda input_data, config: ...)
-register_scripted("make_clusters", lambda input_data, config: ...)
-register_scripted("verify_cluster", lambda input_data, config: ...)
-register_scripted("check_passed", lambda input_data, config: ...)
-register_scripted("build_report", lambda input_data, config: ...)
+def merge_claims(variants, config): ...       # Oracle merge
+def lookup_context(input_data, config): ...
+def score_claims(input_data, config): ...
+def make_clusters(input_data, config): ...
+def verify_cluster(input_data, config): ...
+def check_passed(input_data, config): ...
+def build_report(input_data, config): ...
 
-register_condition("needs_review", lambda state: (
-    {"issues": state.check_results.issues}
-    if state.check_results and not state.check_results.passed
-    else None
-))
+def needs_review(state):
+    if state.check_results and not state.check_results.passed:
+        return {"issues": state.check_results.issues}
+    return None
 ```
 
 ## Running the pipeline
 
 ```python
-# Checkpointer is required because Operator is in the pipeline
-graph = compile(pipeline, checkpointer=MemorySaver())
+# Checkpointer is required because Operator is in the pipeline.
+# Scripted functions and the Operator condition are passed by name —
+# the same keys referenced by Node.scripted(fn=...) and Operator(when=...).
+graph = compile(
+    pipeline,
+    checkpointer=MemorySaver(),
+    llm_factory=llm_factory,
+    prompt_compiler=prompt_compiler,
+    scripted={
+        "merge_claims": merge_claims,
+        "lookup_context": lookup_context,
+        "score_claims": score_claims,
+        "make_clusters": make_clusters,
+        "verify_cluster": verify_cluster,
+        "check_passed": check_passed,
+        "build_report": build_report,
+    },
+    conditions={"needs_review": needs_review},
+)
 config = {"configurable": {"thread_id": "full-001"}}
 
 result = run(graph, input={"node_id": "REQ-FULL-001"}, config=config)
@@ -192,6 +208,7 @@ if "__interrupt__" in result:
 - **Operator interrupt** — `| Operator(when='needs_review')` pauses the graph when the condition payload is truthy
 - **Mixed @node + declarative** — both forms compose into one `Construct(nodes=[...])`; the compiler treats them uniformly
 - **Checkpointer requirement** — any pipeline with `Operator` must pass a checkpointer to `compile()`
+- **Wiring via `compile()` kwargs** — scripted functions, conditions, and the LLM factory are passed as `scripted=`, `conditions=`, and `llm_factory=` keyword args to `compile()`; there are no global registration steps
 - **Observability** — every node emits structured logs; `call_count` tracking shows where the LLM/tools were called
 
 ## Three surfaces, one compiler

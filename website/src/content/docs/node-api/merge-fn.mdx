@@ -30,7 +30,7 @@ def combine(variants: list[Claims]) -> Claims:
 def decompose() -> Claims: ...
 ```
 
-The decorator auto-registers the function via `register_scripted`, so Oracle's string lookup (`merge_fn="combine"`) finds it. Functions without the decorator -- plain `(variants, config) -> X` signatures -- continue to work unchanged.
+The decorator auto-registers the function under its Python name, so Oracle's string lookup (`merge_fn="combine"`) finds it. Functions without the decorator -- plain `(variants, config) -> X` signatures -- continue to work unchanged.
 
 ## from_state: reading upstream outputs
 
@@ -38,7 +38,7 @@ Parameters after the first that do not have `FromInput` or `FromConfig` markers 
 
 ```python
 from pydantic import BaseModel
-from neograph import merge_fn, node, register_scripted
+from neograph import merge_fn, node
 from neograph import Construct, Node, Oracle, compile, run
 
 class Context(BaseModel, frozen=True):
@@ -47,9 +47,6 @@ class Context(BaseModel, frozen=True):
 class Result(BaseModel, frozen=True):
     text: str
     topic: str
-
-register_scripted("ctx_fn", lambda i, c: Context(topic="AI safety"))
-register_scripted("gen_fn", lambda i, c: Result(text="draft", topic=""))
 
 @merge_fn
 def merge_with_context(
@@ -63,7 +60,10 @@ pipeline = Construct("example", nodes=[
     Node.scripted("gen", fn="gen_fn", outputs=Result)
     | Oracle(n=2, merge_fn="merge_with_context"),
 ])
-graph = compile(pipeline)
+graph = compile(pipeline, scripted={
+    "ctx_fn": lambda i, c: Context(topic="AI safety"),
+    "gen_fn": lambda i, c: Result(text="draft", topic=""),
+})
 result = run(graph, input={"node_id": "demo"})
 # result["gen"].topic == "AI safety"
 ```

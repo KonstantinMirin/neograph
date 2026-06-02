@@ -31,7 +31,7 @@ The Oracle modifier expands a single node into N parallel generators + a merge b
 ## What you will learn
 
 - Applying the Oracle modifier via `@node` kwargs (`ensemble_n=`, `merge_fn=`)
-- Registering a scripted merge function with `register_scripted()`
+- Supplying a scripted merge function via the `scripted=` kwarg on `compile()`
 - Thread-safe generation across parallel instances
 - How the compiler expands Oracle into fan-out + barrier + merge
 
@@ -52,7 +52,7 @@ class Claims(BaseModel, frozen=True):
 Adding `ensemble_n=3` and `merge_fn="merge_claims"` to `@node` tells the compiler to run this node 3 times in parallel, then merge the results:
 
 ```python
-from neograph import node, register_scripted
+from neograph import node
 
 @node(outputs=Claims, ensemble_n=3, merge_fn="merge_claims")
 def decompose() -> Claims:
@@ -79,11 +79,9 @@ def merge_claims(variants, config):
                 seen.add(claim)
                 merged.append(claim)
     return Claims(items=merged)
-
-register_scripted("merge_claims", merge_claims)
 ```
 
-`variants` is `[Claims, Claims, Claims]` -- one per generator. The merge deduplicates by claim text.
+`variants` is `[Claims, Claims, Claims]` -- one per generator. The merge deduplicates by claim text. The function is wired to the `merge_fn="merge_claims"` reference by passing `scripted={"merge_claims": merge_claims}` to `compile()` (see the complete pipeline below).
 
 ## The complete pipeline
 
@@ -101,7 +99,7 @@ import threading
 
 from pydantic import BaseModel
 
-from neograph import compile, construct_from_module, node, register_scripted, run
+from neograph import compile, construct_from_module, node, run
 
 
 # -- Schemas ----------------------------------------------------------------
@@ -138,8 +136,6 @@ def merge_claims(variants, config):
                 merged.append(claim)
     return Claims(items=merged)
 
-register_scripted("merge_claims", merge_claims)
-
 
 # -- Build pipeline ---------------------------------------------------------
 
@@ -158,7 +154,7 @@ pipeline = construct_from_module(sys.modules[__name__], name="oracle-demo")
 
 if __name__ == "__main__":
     _gen_counter[0] = 0  # reset for clean run
-    graph = compile(pipeline)
+    graph = compile(pipeline, scripted={"merge_claims": merge_claims})
     result = run(graph, input={"node_id": "REQ-001"})
 
     merged = result["decompose"]
@@ -247,13 +243,11 @@ All three are optional and only valid with `merge_prompt`. Passing any hook with
 Instead of running the same model N times, run different models on the same input. Each generator gets a different model tier:
 
 ```python
-from neograph import Node, Construct, Oracle, compile, run, register_scripted
+from neograph import Node, Construct, Oracle, compile, run
 
 def gen(input_data, config):
     model = config.get("configurable", {}).get("_oracle_model", "default")
     return Claims(items=[f"claim-from-{model}"])
-
-register_scripted("multi_gen", gen)
 
 def pick_best(variants, config):
     # In production: score variants, pick highest quality
@@ -262,14 +256,12 @@ def pick_best(variants, config):
         all_items.extend(v.items)
     return Claims(items=all_items)
 
-register_scripted("pick_best", pick_best)
-
 gen_node = (
     Node.scripted("gen", fn="multi_gen", outputs=Claims)
     | Oracle(models=["reason", "fast", "creative"], merge_fn="pick_best")
 )
 pipeline = Construct("multi-model", nodes=[gen_node])
-graph = compile(pipeline)
+graph = compile(pipeline, scripted={"multi_gen": gen, "pick_best": pick_best})
 result = run(graph, input={"node_id": "REQ-001"})
 # result["gen"].items = ["claim-from-reason", "claim-from-fast", "claim-from-creative"]
 ```

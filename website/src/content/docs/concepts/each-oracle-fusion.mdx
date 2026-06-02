@@ -62,11 +62,13 @@ for label, claims in result["decompose"].items():
 ### Programmatic (pipe) form
 
 ```python
-from neograph import Node, Each, Oracle, Construct, compile, run, register_scripted
+from neograph import Node, Each, Oracle, Construct, compile, run
 
-register_scripted("split_fn", lambda i, c: ChunkList(items=[...]))
-register_scripted("decompose_fn", lambda i, c: Claims(text="..."))
-register_scripted("merge_fn", lambda v, c: max(v, key=lambda x: len(x.text)))
+scripted = {
+    "split_fn": lambda i, c: ChunkList(items=[...]),
+    "decompose_fn": lambda i, c: Claims(text="..."),
+    "merge_fn": lambda v, c: max(v, key=lambda x: len(x.text)),
+}
 
 pipeline = Construct("chunked", nodes=[
     Node.scripted("split-doc", fn="split_fn", outputs=ChunkList),
@@ -74,6 +76,8 @@ pipeline = Construct("chunked", nodes=[
     | Oracle(n=3, merge_fn="merge_fn")
     | Each(over="split_doc.items", key="chunk_idx"),
 ])
+
+graph = compile(pipeline, scripted=scripted)
 ```
 
 Modifier order does not matter on Nodes. `| Oracle(...) | Each(...)` and `| Each(...) | Oracle(...)` produce the same fused topology.

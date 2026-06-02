@@ -90,7 +90,7 @@ pipeline = construct_from_module(sys.modules[__name__], name="review-pipeline")
 `interrupt_when` accepts either a callable or a registered condition name:
 
 - **Callable (inline)**: `interrupt_when=lambda state: payload_or_none`. The function receives the full pipeline state and returns either `None` (continue) or a dict (pause, with the dict as the interrupt payload).
-- **String (registered)**: `interrupt_when='condition_name'`. The name must be registered via `register_condition('condition_name', lambda state: ...)` before `compile()`.
+- **String (registered)**: `interrupt_when='condition_name'`. The name must be supplied to `compile()` via the `conditions=` kwarg: `compile(pipeline, conditions={'condition_name': lambda state: ...})`.
 
 The inline form is usually cleaner. When the condition returns a dict, the graph pauses and LangGraph's `interrupt()` fires with that payload as the reason.
 

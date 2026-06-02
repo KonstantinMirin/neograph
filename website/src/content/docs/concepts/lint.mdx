@@ -167,8 +167,11 @@ Fix: `lambda d: d is None or d.score < 0.8`
 `parse_condition("score < 0.8")` produces a callable that always crashes on None (it calls `getattr(None, "score")`). When registered as a Loop condition, lint reports this as ERROR:
 
 ```python
-register_condition("score_check", parse_condition("score < 0.8"))
+from neograph.conditions import parse_condition
+
+conditions = {"score_check": parse_condition("score < 0.8")}
 node = Node("refine", ...) | Loop(when="score_check", max_iterations=3)
+lint(pipeline, conditions=conditions)
 # LintIssue(kind="loop_condition_none_unsafe", required=True, ...)
 ```
 

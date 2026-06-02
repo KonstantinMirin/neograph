@@ -219,7 +219,7 @@ print(result["classify"].classified)
 # [{'claim': 'The system shall log access', 'category': 'security'}, ...]
 ```
 
-No LLM, no API keys, no wiring. No `register_scripted`, no `Node.scripted()`. The `@node` decorator with no `prompt=`/`model=` infers scripted mode. The parameter name `extract` wires `classify` after `extract` automatically.
+No LLM, no API keys, no wiring. No `scripted={...}` registration on `compile()`, no `Node.scripted()`. The `@node` decorator with no `prompt=`/`model=` infers scripted mode and registers the function body for you. The parameter name `extract` wires `classify` after `extract` automatically.
 
 ---
 

@@ -63,7 +63,7 @@ Both `map_over` and `map_key` are required together. Passing one without the oth
 Run a node N times in parallel, then merge the results. This is the Oracle pattern — multiple independent generations combined into a consensus.
 
 ```python
-from neograph import node, register_scripted, construct_from_module, compile, run
+from neograph import node, construct_from_module, compile, run
 import sys
 
 def merge_claims(variants, config):
@@ -77,21 +77,20 @@ def merge_claims(variants, config):
                 merged.append(claim)
     return Claims(items=merged)
 
-register_scripted("merge_claims", merge_claims)
-
 @node(outputs=Claims, ensemble_n=3, merge_fn="merge_claims")
 def decompose() -> Claims:
     # Each of the 3 copies runs this function independently
     return Claims(items=["shall authenticate", "shall encrypt"])
 
 pipeline = construct_from_module(sys.modules[__name__], name="oracle-demo")
+graph = compile(pipeline, scripted={"merge_claims": merge_claims})
 ```
 
 The merge step can be either scripted or LLM-powered:
 
 | Keyword | What it does |
 |---|---|
-| `merge_fn="name"` | Call a registered scripted function. Receives `(variants, config)`. |
+| `merge_fn="name"` | Call a scripted function passed via `compile(..., scripted={"name": fn})`. Receives `(variants, config)`. |
 | `merge_prompt="template"` | Call an LLM with variants + upstream context. The template receives `${variants}` (the N variant outputs) and upstream values by name (e.g., `${enrich.site_name}`). |
 | `merge_pre_process=fn` | (Optional, `merge_prompt` only) Transform variants into custom input_data for the prompt. |
 | `merge_post_process=fn` | (Optional, `merge_prompt` only) Transform the LLM result before state write. |
@@ -262,7 +261,7 @@ The callable receives the full graph state and returns either a dict (interrupt 
 ### String form
 
 ```python
-from neograph import register_condition
+from neograph import compile
 
 def needs_review(state):
     val = state.check_results
@@ -270,10 +269,11 @@ def needs_review(state):
         return {"issues": val.issues}
     return None
 
-register_condition("needs_review", needs_review)
-
 @node(outputs=ValidationResult, interrupt_when="needs_review")
 def check(analyze: Analysis) -> ValidationResult: ...
+
+# The string condition is resolved by the conditions= dict on compile():
+graph = compile(pipeline, conditions={"needs_review": needs_review})
 ```
 
 ## Loop with loop_when and max_iterations

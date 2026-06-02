@@ -28,7 +28,7 @@ Handle them where the model client is created: your `llm_factory`.
 ```python
 from langchain_openai import ChatOpenAI
 from langchain_core.runnables import Runnable
-from neograph import configure_llm
+from neograph import compile
 
 
 def llm_factory(tier: str) -> Runnable:
@@ -40,7 +40,7 @@ def llm_factory(tier: str) -> Runnable:
     )
 
 
-configure_llm(llm_factory=llm_factory, prompt_compiler=my_compiler)
+graph = compile(pipeline, llm_factory=llm_factory, prompt_compiler=my_compiler)
 ```
 
 A non-conforming model (DeepSeek, some Anthropic deployments, anything that occasionally returns 503 under load) is the canonical case. Wrap the `Runnable` once at the factory and every downstream node inherits it.

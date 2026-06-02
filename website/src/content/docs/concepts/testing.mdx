@@ -64,7 +64,7 @@ For `think`/`agent`/`act` nodes, unit testing focuses on the input/output types 
 Test the full pipeline with `compile()` + `run()`. Use a `FakeLLM` to make tests deterministic:
 
 ```python
-from neograph import compile, run, configure_llm
+from neograph import compile, run
 
 class FakeLLM:
     """Returns canned responses keyed by prompt template."""
@@ -87,18 +87,17 @@ def test_pipeline_integration():
         "rw/classify": {"classified": [{"claim": "claim1", "category": "A"}]},
     })
 
-    configure_llm(
+    graph = compile(
+        pipeline,
         llm_factory=lambda tier: fake,
         prompt_compiler=lambda template, data: [{"role": "user", "content": str(data)}],
     )
-
-    graph = compile(pipeline)
     result = run(graph, input={"node_id": "test-001"})
 
     assert result["classify"] is not None
 ```
 
-The key pattern: `configure_llm` with a fake factory before `run()`. Since `configure_llm` is a global registration, call it in test setup (or use a fixture) and reset it in teardown.
+The key pattern: pass the fake factory to `compile()` via the `llm_factory` and `prompt_compiler` kwargs. The configuration is scoped to that compiled graph -- no global state to register or reset between tests.
 
 ## ForwardConstruct: direct forward() calls
 

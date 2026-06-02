@@ -21,12 +21,11 @@ pip install langchain-openai
 
 ## 2. Configure the LLM
 
-NeoGraph does not own LLM configuration. You provide two functions: an **LLM factory** that creates chat model instances, and a **prompt compiler** that builds message lists for each node.
+NeoGraph does not own LLM configuration. You provide two functions: an **LLM factory** that creates chat model instances, and a **prompt compiler** that builds message lists for each node. You pass them to `compile()` (in step 5) as keyword arguments.
 
 ```python
 import os
 from langchain_openai import ChatOpenAI
-from neograph import configure_llm
 
 # Map model tiers to actual models
 MODELS = {
@@ -34,15 +33,14 @@ MODELS = {
     "reason": "gpt-4o",
 }
 
-configure_llm(
-    llm_factory=lambda tier: ChatOpenAI(
-        model=MODELS.get(tier, "gpt-4o-mini"),
-        api_key=os.environ["OPENAI_API_KEY"],
-    ),
-    prompt_compiler=lambda template, data, **kwargs: [
-        {"role": "user", "content": f"[{template}] {data}"}
-    ],
+llm_factory = lambda tier: ChatOpenAI(
+    model=MODELS.get(tier, "gpt-4o-mini"),
+    api_key=os.environ["OPENAI_API_KEY"],
 )
+
+prompt_compiler = lambda template, data, **kwargs: [
+    {"role": "user", "content": f"[{template}] {data}"}
+]
 ```
 
 The `llm_factory` receives a tier string (like `"fast"` or `"reason"`) and returns a `BaseChatModel`. The `prompt_compiler` receives a template name and the input data from the previous node, and returns a list of messages.
@@ -100,13 +98,17 @@ Mode is inferred: `prompt=` + `model=` means LLM call (`think` mode). Neither me
 ```python
 from neograph import compile, run
 
-graph = compile(pipeline)
+graph = compile(
+    pipeline,
+    llm_factory=llm_factory,
+    prompt_compiler=prompt_compiler,
+)
 result = run(graph, input={"topic": "microservice authentication"})
 
 print(result["summarize"].text)
 ```
 
-`compile()` converts the Construct into a LangGraph `StateGraph`, wires all edges, infers the state schema, and compiles. `run()` executes the graph and returns the final state with framework internals stripped out.
+`compile()` converts the Construct into a LangGraph `StateGraph`, wires all edges, infers the state schema, and compiles. Your `llm_factory` and `prompt_compiler` are passed here as keyword arguments -- they are captured per-compile, not registered globally. `run()` executes the graph and returns the final state with framework internals stripped out.
 
 Every field you pass in `input=` also flows into `config["configurable"]`, so your prompt compiler can read them via `config["configurable"]["topic"]`. This is how pipeline-level metadata (topic, project_root, whatever you need) reaches every node without threading it through state manually.
 
@@ -121,7 +123,7 @@ import os
 import sys
 from langchain_openai import ChatOpenAI
 from pydantic import BaseModel
-from neograph import node, construct_from_module, compile, configure_llm, run
+from neograph import node, construct_from_module, compile, run
 
 # --- Schemas ---
 class Claims(BaseModel):
@@ -134,22 +136,21 @@ class Summary(BaseModel):
     text: str
 
 # --- LLM Configuration ---
-configure_llm(
-    llm_factory=lambda tier: ChatOpenAI(
-        model="gpt-4o-mini",
-        api_key=os.environ["OPENAI_API_KEY"],
-    ),
-    prompt_compiler=lambda template, data, **kwargs: [
-        {"role": "user", "content": (
-            f"Break this topic into 3-5 factual claims: "
-            f"{kwargs.get('config', {}).get('configurable', {}).get('topic', 'AI')}"
-            if template == "decompose"
-            else f"Classify each claim as security/reliability/performance: {data}"
-            if template == "classify"
-            else f"Summarize these classified claims in one paragraph: {data}"
-        )}
-    ],
+llm_factory = lambda tier: ChatOpenAI(
+    model="gpt-4o-mini",
+    api_key=os.environ["OPENAI_API_KEY"],
 )
+
+prompt_compiler = lambda template, data, **kwargs: [
+    {"role": "user", "content": (
+        f"Break this topic into 3-5 factual claims: "
+        f"{kwargs.get('config', {}).get('configurable', {}).get('topic', 'AI')}"
+        if template == "decompose"
+        else f"Classify each claim as security/reliability/performance: {data}"
+        if template == "classify"
+        else f"Summarize these classified claims in one paragraph: {data}"
+    )}
+]
 
 # --- Pipeline ---
 @node(outputs=Claims, prompt='decompose', model='fast')
@@ -164,7 +165,11 @@ def summarize(classify: ClassifiedClaims) -> Summary: ...
 pipeline = construct_from_module(sys.modules[__name__])
 
 # --- Run ---
-graph = compile(pipeline)
+graph = compile(
+    pipeline,
+    llm_factory=llm_factory,
+    prompt_compiler=prompt_compiler,
+)
 result = run(graph, input={"topic": "microservice authentication"})
 
 print(result["summarize"].text)

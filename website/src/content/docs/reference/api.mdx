@@ -29,13 +29,11 @@ from neograph import (
     # Renderers (opt-in alternatives to BAML)
     Renderer, XmlRenderer, DelimitedRenderer, JsonRenderer,
     # Shared
-    compile, run, configure_llm,
+    compile, run,
     RenderedInput, build_rendered_input, ExcludeFromOutput,
     # Errors
     NeographError, ConstructError, CompileError, ConfigurationError,
     CheckpointSchemaError, ExecutionError,
-    # Registries (for runtime construction)
-    register_scripted, register_condition, register_tool_factory,
     # Spec loader
     load_spec, register_type, lookup_type,
 )
@@ -247,11 +245,14 @@ decompose = Node("decompose", mode="think", outputs=Claims,
 
 ### `Node.scripted(name, fn, inputs=None, outputs=None)`
 
-Convenience constructor for scripted nodes registered via `register_scripted`:
+Convenience constructor for scripted nodes. `fn` is a string key resolved against the `scripted=` dict passed to `compile()`:
 
 ```python
-register_scripted("extract_fn", lambda input_data, config: ...)
+def extract_fn(input_data, config): ...
+
 extract = Node.scripted("extract", fn="extract_fn", outputs=RawText)
+
+graph = compile(pipeline, scripted={"extract_fn": extract_fn})
 ```
 
 ### `Construct(name, *, nodes, input=None, output=None, description=None)`
@@ -343,11 +344,36 @@ pipeline = Construct(
 
 ## Shared
 
-### `compile(construct, *, checkpointer=None) -> CompiledGraph`
+### `compile(...)`
 
 Compiles a `Construct` (or `ForwardConstruct`) into an executable LangGraph `StateGraph`.
 
-- **`checkpointer`** — Required when the pipeline uses `Operator` or `interrupt_when=`.
+```python
+compile(
+    construct,
+    checkpointer=None,
+    *,
+    llm_factory=None,
+    prompt_compiler=None,
+    renderer=None,
+    cost_callback=None,
+    scripted=None,
+    conditions=None,
+    tool_factories=None,
+) -> CompiledGraph
+```
+
+- **`construct`** — The `Construct` (or `ForwardConstruct`) to compile.
+- **`checkpointer`** — LangGraph checkpointer for persistence/resume. Required when the pipeline uses `Operator` or `interrupt_when=`.
+- **`llm_factory`** — Per-tier LLM client factory used by LLM-mode nodes. `llm_factory(tier, ...)` returns a `BaseChatModel`. Required if the pipeline has any `think` / `agent` / `act` node.
+- **`prompt_compiler`** — Callable that turns a prompt template + input into a message list for the LLM. `prompt_compiler(template, data, **kwargs)` returns a list of messages. The compiler may accept additional kwargs — `output_model`, `output_schema`, `llm_config`, `context`, `node_name`, `config` — and NeoGraph inspects its signature and passes only the kwargs it declares.
+- **`renderer`** — Global renderer used for input rendering when a node has no per-node renderer set.
+- **`cost_callback`** — Telemetry hook called after each LLM invocation with token usage.
+- **`scripted`** — `dict[str, Callable]` mapping the `fn=` keys used by `Node.scripted(fn=...)` (and `@node(merge_fn=...)`) to their functions.
+- **`conditions`** — `dict[str, Callable]` mapping condition names used by `Operator(when=...)` and string-form `interrupt_when=` / `loop_when=` to their predicate functions.
+- **`tool_factories`** — `dict[str, Callable]` mapping tool-factory names to `factory(config, tool_config)` callables, for declarative tool lookup.
+
+The LLM kwargs are closed over into a frozen `LlmRuntime` bundle threaded into every factory closure. Two `compile()` calls with different kwargs produce fully isolated graphs. `@node`, `@tool`, and `@merge_fn` register themselves automatically, so `scripted=` / `conditions=` / `tool_factories=` are only needed for the programmatic / runtime-constructed surface.
 
 Retry concerns live in their own layers, not at the `compile()` boundary. See [Retry Semantics](/concepts/retry-semantics/) for the three-layer model (transient -> `llm_factory.with_retry`; output-quality -> `LlmConfig.max_retries`; flaky scripted -> in-function).
 
@@ -420,12 +446,6 @@ check(my_output)  # True if my_output.result.score < 0.8
 ```
 
 Raises `ValueError` for any expression that does not match the grammar. Used internally by `load_spec` for string-form conditions in pipeline specs; available for custom runtime routing.
-
-### `configure_llm(llm_factory, prompt_compiler)`
-
-Configures the LLM provider once per process. `llm_factory(tier, ...)` returns a `BaseChatModel`. `prompt_compiler(template, data, **kwargs)` returns a list of messages.
-
-The prompt compiler may accept additional kwargs: `output_model`, `output_schema`, `llm_config`, `context`, `node_name`, `config`. NeoGraph inspects the compiler's signature and passes only kwargs it declares.
 
 ### `Tool(name, budget=0, config=None)`
 
@@ -545,13 +565,24 @@ NeographError (base)
 
 All errors are importable: `from neograph import ConstructError, CompileError, ConfigurationError, CheckpointSchemaError, ExecutionError`.
 
-### Registries
+### Runtime wiring (compile() dict kwargs)
 
-- **`register_scripted(name, fn)`** — Register a function for `Node.scripted(fn='name')`
-- **`register_condition(name, fn)`** — Register a condition for `Operator(when='name')` and string-form `interrupt_when='name'`
-- **`register_tool_factory(name, factory)`** — Register a tool factory for declarative tool lookup
+The programmatic / runtime-constructed surface references scripted functions, conditions, and tool factories by string name. Supply the implementations as dicts to `compile()` — there are no global registration functions:
 
-These are only needed for the programmatic API. `@node`, `@tool`, and `@merge_fn` handle registration automatically.
+- **`scripted={"name": fn}`** — Resolves `Node.scripted(fn="name")` (and `@node(merge_fn="name")`).
+- **`conditions={"name": fn}`** — Resolves `Operator(when="name")` and string-form `interrupt_when="name"` / `loop_when="name"`.
+- **`tool_factories={"name": factory}`** — Resolves declarative tool lookup; `factory(config, tool_config)` returns a tool.
+
+```python
+graph = compile(
+    pipeline,
+    scripted={"extract_fn": extract_fn, "merge_claims": merge_claims},
+    conditions={"needs_review": needs_review},
+    tool_factories={"search_code": lambda config, tool_config: SearchTool()},
+)
+```
+
+These are only needed for the programmatic API. `@node`, `@tool`, and `@merge_fn` handle wiring automatically.
 
 ---
 

@@ -62,7 +62,7 @@ When composing across modules, you assemble the `Construct` manually rather than
 When part of your pipeline has internal state that shouldn't leak into the parent, wrap it in a `Construct` with declared I/O boundaries.
 
 ```python
-from neograph import Construct, Node, register_scripted
+from neograph import Construct, Node
 
 def lookup_context(input_data, config):
     return Context(references=["auth.py:42", "logger.py:18"])
@@ -70,9 +70,6 @@ def lookup_context(input_data, config):
 def score_claims(input_data, config):
     scored = [{"claim": c, "score": "high"} for c in input_data.items]
     return ScoredClaims(scored=scored)
-
-register_scripted("lookup_context", lookup_context)
-register_scripted("score_claims", score_claims)
 
 # Sub-construct: Claims in, ScoredClaims out. Internal nodes are hidden.
 enrich = Construct(
@@ -95,7 +92,10 @@ pipeline = Construct("analysis", nodes=[
     build_report,
 ])
 
-graph = compile(pipeline)
+graph = compile(pipeline, scripted={
+    "lookup_context": lookup_context,
+    "score_claims": score_claims,
+})
 result = run(graph, input={"node_id": "REQ-001"})
 
 # result has "decompose" and "build_report" keys

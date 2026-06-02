@@ -1,24 +1,25 @@
 ---
 title: LLM Configuration
-description: configure_llm(), per-node llm_config, prompt compilers with full context access, and config injection.
+description: Passing llm_factory and prompt_compiler to compile(), per-node llm_config, prompt compilers with full context access, and config injection.
 ---
 
-NeoGraph does not own the LLM client. You register a factory that creates LLM instances and a compiler that builds prompts. The framework calls them for every LLM invocation -- think, agent, act, and Oracle merge.
+NeoGraph does not own the LLM client. You supply a factory that creates LLM instances and a compiler that builds prompts. The framework calls them for every LLM invocation -- think, agent, act, and Oracle merge.
 
-## configure_llm()
+## Configuring at compile()
 
-Called once at application startup. Registers two callbacks:
+There is no global configuration step. You pass the LLM factory and prompt compiler as keyword arguments to `compile()`:
 
 ```python
-from neograph import configure_llm
+from neograph import compile
 
-configure_llm(
+graph = compile(
+    pipeline,
     llm_factory=my_factory,
     prompt_compiler=my_compiler,
 )
 ```
 
-If you call `run()` on a graph that has LLM nodes without calling `configure_llm()` first, you get a `ConfigurationError`.
+Configuration is **per graph**. Each `compile()` call closes the factory and compiler into a frozen runtime bundle, so two graphs compiled with different callbacks stay fully isolated -- no shared global state. If you compile a graph that has LLM nodes without supplying an `llm_factory` / `prompt_compiler`, those nodes raise a `ConfigurationError` when they run.
 
 ## LLM factory
 
@@ -37,7 +38,8 @@ MODELS = {
     "large": "o1",
 }
 
-configure_llm(
+graph = compile(
+    pipeline,
     llm_factory=lambda tier: ChatOpenAI(model=MODELS[tier]),
     prompt_compiler=my_compiler,
 )
@@ -50,16 +52,17 @@ The advanced signature receives the node name and per-node LLM config:
 ```python
 def my_factory(tier, node_name=None, llm_config=None):
     config = llm_config or {}
+    provider_kwargs = config.get("provider_kwargs", {})
     return ChatOpenAI(
         model=MODELS[tier],
-        temperature=config.get("temperature", 0),
-        max_tokens=config.get("max_tokens", 4096),
+        temperature=provider_kwargs.get("temperature", 0),
+        max_tokens=provider_kwargs.get("max_tokens", 4096),
     )
 
-configure_llm(llm_factory=my_factory, prompt_compiler=my_compiler)
+graph = compile(pipeline, llm_factory=my_factory, prompt_compiler=my_compiler)
 ```
 
-The framework inspects your factory with `inspect.signature` at `configure_llm()` time and passes only the kwargs it declares on each call. Factories that use `**kwargs` receive everything. This provides backward compatibility without runtime try/except -- you can start simple and add parameters later.
+The framework inspects your factory with `inspect.signature` when `compile()` builds its runtime bundle, and passes only the kwargs it declares on each call. Factories that use `**kwargs` receive everything. This provides backward compatibility without runtime try/except -- you can start simple and add parameters later.
 
 ## Per-node llm_config
 
@@ -69,11 +72,11 @@ Each node can carry an `llm_config` dict that is passed to the factory. With `@n
 from neograph import node
 
 @node(outputs=ClassifiedClaims, prompt='rw/classify', model='reason',
-      llm_config={"temperature": 0.7, "max_tokens": 2048})
+      llm_config={"provider_kwargs": {"temperature": 0.7, "max_tokens": 2048}})
 def classify(raw_claims: RawClaims) -> ClassifiedClaims: ...
 ```
 
-The `llm_config` dict is opaque to NeoGraph. The framework passes it through to your factory; you decide what keys mean. Common uses: temperature, max_tokens, top_p, stop sequences.
+Provider-specific sampling parameters (temperature, max_tokens, top_p, stop sequences) go under the `provider_kwargs` key. The framework passes the whole `llm_config` through to your factory; you decide what the keys mean. NeoGraph reserves a couple of top-level keys for its own behavior (such as `output_strategy`, below), so per-provider model parameters are nested under `provider_kwargs` to keep them separate.
 
 Mode inference still works when `llm_config` is present -- the decorator infers `think` from the `prompt=` and `model=` kwargs, regardless of `llm_config`.
 
@@ -88,7 +91,8 @@ The minimal compiler takes a template name and the input data:
 ```python
 from langchain_core.messages import HumanMessage
 
-configure_llm(
+graph = compile(
+    pipeline,
     llm_factory=my_factory,
     prompt_compiler=lambda template, data: [
         HumanMessage(content=f"Template: {template}\n\nData: {data}")
@@ -128,10 +132,10 @@ def my_compiler(template, data, *, node_name=None, config=None,
 
     return messages
 
-configure_llm(llm_factory=my_factory, prompt_compiler=my_compiler)
+graph = compile(pipeline, llm_factory=my_factory, prompt_compiler=my_compiler)
 ```
 
-The framework inspects your compiler with `inspect.signature` at `configure_llm()` time and passes only the kwargs it declares. Any of these work:
+The framework inspects your compiler with `inspect.signature` when `compile()` builds its runtime bundle, and passes only the kwargs it declares. Any of these work:
 - `(template, data, node_name=, config=, output_model=, llm_config=)` -- full context
 - `(template, data, node_name=, config=)` -- partial
 - `(template, data)` -- minimal
@@ -255,12 +259,14 @@ from neograph import node
 
 # DeepSeek for creative decomposition (no structured output support)
 @node(outputs=Claims, prompt='rw/decompose', model='reason',
-      llm_config={"temperature": 0.9, "output_strategy": "json_mode"})
+      llm_config={"provider_kwargs": {"temperature": 0.9},
+                  "output_strategy": "json_mode"})
 def decompose(topic: RawText) -> Claims: ...
 
 # Gemini for precise classification (native structured output)
 @node(outputs=ClassifiedClaims, prompt='rw/classify', model='fast',
-      llm_config={"temperature": 0, "output_strategy": "structured"})
+      llm_config={"provider_kwargs": {"temperature": 0},
+                  "output_strategy": "structured"})
 def classify(decompose: Claims) -> ClassifiedClaims: ...
 
 pipeline = construct_from_module(sys.modules[__name__])
@@ -282,7 +288,7 @@ def research(query: SearchQuery) -> ResearchResult: ...
 
 ## Backward compatibility
 
-Both the factory and compiler accept multiple signatures. The framework inspects your callable at `configure_llm()` time and passes only the kwargs it declares:
+Both the factory and compiler accept multiple signatures. The framework inspects your callable when `compile()` builds its runtime bundle, and passes only the kwargs it declares:
 
 | Callback | Accepted parameters |
 |---|---|
