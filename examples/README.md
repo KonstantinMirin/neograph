@@ -54,7 +54,7 @@ python examples/01_scripted_pipeline.py
 ```
 
 Examples that use LLM modes (02, 03, 07, 08, 10) require either:
-- A configured LLM via `neograph.configure_llm()` (shown in each example), or
+- An LLM wired via `compile(..., llm_factory=..., prompt_compiler=...)` (shown in each example), or
 - The `--fake` flag if the example supports it (07)
 
 Example 09 demonstrates interrupt/resume — it runs both phases automatically.
