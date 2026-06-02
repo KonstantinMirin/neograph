@@ -21,11 +21,23 @@ import inspect
 import os
 import sys
 import types
+from collections import OrderedDict
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, ForwardRef, Union, cast, get_args, get_origin, get_type_hints
+from enum import Enum
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    ForwardRef,
+    TypeGuard,
+    Union,
+    cast,
+    get_args,
+    get_origin,
+    get_type_hints,
+)
 
-from neograph._ir_protocols import ConstructItem
+from neograph._ir_protocols import ConstructItem, ConstructLike
 from neograph._state_keys import StateKeys
 from neograph.di import DIKind as _DIKind
 from neograph.errors import ConstructError, NeographError
@@ -53,6 +65,43 @@ if TYPE_CHECKING:
 # sentinel. Aliased to the structural Protocol so this module's helpers share
 # one polymorphic shape with Construct.nodes (see neograph._ir_protocols).
 NodeItem = ConstructItem
+
+# Producers collected during a single construct walk, keyed by state-field
+# name. The dict makes the field_name → producer lookup O(1) (no per-call
+# rebuild in _check_fan_in_inputs) and the ordering contract explicit.
+ProducerMap = OrderedDict[str, Producer]
+
+
+class ValidationMode(Enum):
+    """Why a construct is being walked — names the state the old
+    ``context_checkable`` boolean encoded implicitly.
+
+    STANDALONE: top-level/standalone walk; no parent producer set is known.
+    A sub-construct walked standalone defers its inner ``context=`` checks
+    until the parent re-walks it IN_CONTEXT.
+
+    IN_CONTEXT: walked as a nested sub-construct with the parent's producers
+    supplied as ``ambient`` — inner ``context=`` references are checkable now.
+    """
+
+    STANDALONE = "standalone"
+    IN_CONTEXT = "in_context"
+
+
+def _is_construct_like(item: NodeItem) -> TypeGuard[ConstructLike]:
+    """Narrow a ``ConstructItem`` to a container ``ConstructLike``.
+
+    True for sub-constructs (have both ``.input`` and ``.nodes``); False for
+    ``Node`` and the ``_BranchNode`` sentinel. Replaces the inline
+    ``is_sub_construct`` boolean plus the untyped escape-hatch cast at the
+    recursive call site with a type-safe narrowing — no runtime ``Construct``
+    import.
+    """
+    return (
+        not isinstance(item, Node)
+        and getattr(item, "input", None) is not None
+        and getattr(item, "nodes", None) is not None
+    )
 
 
 def effective_producer_type(item: NodeItem) -> TypeSpecStatic:
@@ -251,9 +300,9 @@ def _validate_merge_hooks(oracle: Oracle, node: Node, construct_name: str) -> No
 
 
 def _validate_node_chain(
-    construct: Construct,
+    construct: ConstructLike,
     *,
-    ambient_producers: list[Producer] | None = None,
+    ambient_producers: ProducerMap | None = None,
 ) -> None:
     """Walk the node list, verifying each input has a compatible producer.
 
@@ -262,21 +311,27 @@ def _validate_node_chain(
     references are checked against the union of ambient + locally collected
     producers, so context typos are caught at arbitrary depth.
 
-    When called standalone (``ambient_producers is None``) on a sub-construct
+    When called standalone (``ambient_producers is None`` →
+    ``ValidationMode.STANDALONE``) on a sub-construct
     (``construct.input is not None``), inner-node context checks are DEFERRED
     because the parent's producer set is unknown; the parent's own validation
-    pass will re-walk this sub-construct with ambient supplied.
+    pass will re-walk this sub-construct ``IN_CONTEXT`` with ambient supplied.
     """
-    producers: list[Producer] = []
+    mode = (
+        ValidationMode.STANDALONE
+        if ambient_producers is None
+        else ValidationMode.IN_CONTEXT
+    )
+    producers: ProducerMap = OrderedDict()
 
     # The Construct's own input port is the first producer, if declared —
     # used by inner nodes that read from `neo_subgraph_input`.
     if construct.input is not None:
-        producers.append(Producer(
+        producers[StateKeys.SUBGRAPH_INPUT] = Producer(
             field_name=StateKeys.SUBGRAPH_INPUT,
             effective_type=construct.input,
             label=f"construct '{construct.name}' input port",
-        ))
+        )
 
     for item in construct.nodes:
         # Node has `inputs` (plural) since neograph-kqd.1. Construct still
@@ -307,15 +362,14 @@ def _validate_node_chain(
             _check_item_input(construct, item, input_type, producers)
 
         # Validate context= references against ambient (parent) + local producers.
-        # When called standalone on a sub-construct (ambient is None and
+        # When walked STANDALONE on a sub-construct (ambient is None and
         # construct.input is not None), inner-node context is DEFERRED: the
-        # parent's recursive call will re-validate with ambient supplied.
+        # parent's recursive call will re-validate IN_CONTEXT with ambient.
         context_checkable = (
-            ambient_producers is not None or construct.input is None
+            mode is ValidationMode.IN_CONTEXT or construct.input is None
         )
         if isinstance(item, Node) and item.context and context_checkable:
-            ambient = ambient_producers or []
-            known_fields = {p.field_name for p in (ambient + producers)}
+            known_fields = set(ambient_producers or ()) | set(producers)
             for ctx_name in item.context:
                 ctx_field = field_name_for(ctx_name)
                 if ctx_field not in known_fields:
@@ -329,17 +383,12 @@ def _validate_node_chain(
 
         # Sub-construct items: recurse with the current producer union as the
         # ambient set so inner-node context checks fire at arbitrary depth.
-        is_sub_construct = (
-            not isinstance(item, Node)
-            and getattr(item, "input", None) is not None
-            and getattr(item, "nodes", None) is not None
-        )
-        if is_sub_construct and context_checkable:
-            ambient_for_recursion = (ambient_producers or []) + producers
-            # item is a Construct here (verified by is_sub_construct guard);
-            # cast(Any) avoids the TYPE_CHECKING-only Construct import at runtime.
+        # The TypeGuard narrows `item` to ConstructLike — no untyped cast.
+        if _is_construct_like(item) and context_checkable:
+            ambient_for_recursion: ProducerMap = OrderedDict(ambient_producers or {})
+            ambient_for_recursion.update(producers)
             _validate_node_chain(
-                cast(Any, item),
+                item,
                 ambient_producers=ambient_for_recursion,
             )
 
@@ -357,11 +406,11 @@ def _validate_node_chain(
                     key_field = output_field_name(field_name, output_key)
                     key_label = f"node '{name}' output '{output_key}'"
                     producer_type = dict[str, key_type] if has_each else key_type  # type: ignore[valid-type]
-                    producers.append(Producer(
+                    producers[key_field] = Producer(
                         field_name=key_field,
                         effective_type=producer_type,
                         label=key_label,
-                    ))
+                    )
             else:
                 label = (
                     f"node '{name}'"
@@ -369,11 +418,11 @@ def _validate_node_chain(
                     else f"sub-construct '{name}'"
                 )
                 # Shared helper decides the modifier-adjusted state-bus type.
-                producers.append(Producer(
+                producers[field_name] = Producer(
                     field_name=field_name,
                     effective_type=effective_producer_type(item),
                     label=label,
-                ))
+                )
 
         # Loop + skip_when without skip_value is surprising.
         # The counter still increments so the loop exits, but re-entry
@@ -408,7 +457,8 @@ def _validate_node_chain(
                     _, merge_param_res = meta
                     item_field = field_name_for(item.name)
                     known_producers = {
-                        p.field_name: (p.effective_type, p.label) for p in producers
+                        p.field_name: (p.effective_type, p.label)
+                        for p in producers.values()
                     }
                     for pname, binding in merge_param_res.items():
                         if binding.kind != _DIKind.FROM_STATE:
@@ -465,7 +515,7 @@ def _validate_node_chain(
     if construct.output is not None and producers:
         declared_output = construct.output
         internal_producers = [
-            p for p in producers if p.field_name != StateKeys.SUBGRAPH_INPUT
+            p for p in producers.values() if p.field_name != StateKeys.SUBGRAPH_INPUT
         ]
         for p in internal_producers:
             if p.effective_type is not None and _types_compatible(p.effective_type, declared_output):
@@ -512,10 +562,10 @@ def validate_loop_construct(construct: Construct) -> None:
 
 
 def _check_item_input(
-    construct: Construct,
+    construct: ConstructLike,
     item: NodeItem,
     input_type: TypeSpecStatic,
-    producers: list[Producer],
+    producers: ProducerMap,
 ) -> None:
     """Validate that `item.inputs` is satisfied by some upstream producer.
 
@@ -559,7 +609,7 @@ def _check_item_input(
     # upstream has a parameterized dict output, otherwise defer to runtime.
     if get_origin(input_type) is dict:
         has_dict_producer = any(
-            get_origin(p.effective_type) is dict for p in producers
+            get_origin(p.effective_type) is dict for p in producers.values()
         )
         if not has_dict_producer:
             return
@@ -576,7 +626,7 @@ def _check_item_input(
         return
 
     # Plain input: any producer whose output is assignable to input_type wins.
-    for p in producers:
+    for p in producers.values():
         if _types_compatible(p.effective_type, input_type):
             return
 
@@ -585,13 +635,13 @@ def _check_item_input(
 
 
 def _check_fan_in_inputs(
-    construct: Construct,
+    construct: ConstructLike,
     item: NodeItem,
     inputs_dict: dict[str, TypeSpecStatic],
-    producers: list[Producer],
+    producers: ProducerMap,
 ) -> None:
     """Validate a fan-in ``inputs={'name': Type, ...}`` spec against the
-    producer list by upstream name (neograph-kqd.2).
+    producer map by upstream name (neograph-kqd.2).
 
     For each (upstream_name, expected_type) pair:
       1. Look up a producer whose state-field name matches ``upstream_name``.
@@ -611,9 +661,8 @@ def _check_fan_in_inputs(
     fan_out_key = getattr(item, "fan_out_param", None)
     ms = getattr(item, "modifier_set", None)
     has_each = ms is not None and ms.each is not None
-    producer_by_name: dict[str, tuple[TypeSpecStatic, str]] = {
-        p.field_name: (p.effective_type, p.label) for p in producers
-    }
+    # ``producers`` is already keyed by field_name, so the
+    # lookup is O(1) per upstream — no per-call rebuild of a name→producer map.
     # The Each fan-out receiver candidate(s) are computed by the single shared
     # rule from neograph-k7bg — the same one the normalizer used to set
     # fan_out_param. We pass our producer field set as known_field_names. This
@@ -624,14 +673,14 @@ def _check_fan_in_inputs(
     from neograph._ir_normalize import fan_out_candidates
 
     # item has dict-form inputs here (the fan-in path), so it is a Node.
-    _fan_out_candidates = set(fan_out_candidates(cast(Node, item), set(producer_by_name)))
+    _fan_out_candidates = set(fan_out_candidates(cast(Node, item), set(producers)))
     # Track if the Each fan-out receiver slot was consumed.
     # If fan_out_param is already set (from @node), the slot is pre-consumed.
     _each_skip_used = (fan_out_key is not None)
     for upstream_name, expected_type in inputs_dict.items():
         if upstream_name == fan_out_key:
             continue
-        if upstream_name not in producer_by_name:
+        if upstream_name not in producers:
             # If the node has an Each modifier, ONE unmatched key is the
             # fan-out item receiver — skip it. Additional unmatched keys
             # are real errors (typos) and must be rejected.
@@ -647,12 +696,12 @@ def _check_fan_in_inputs(
             raise ConstructError.build(
                 f"declares inputs['{upstream_name}']={_fmt_type(expected_type)} "
                 f"but no upstream node named '{upstream_name}' exists",
-                found=f"available upstreams: {sorted(producer_by_name.keys())}",
+                found=f"available upstreams: {sorted(producers)}",
                 node=item.name,
                 construct=construct.name,
                 location=_source_location(),
             )
-        producer_type, _label = producer_by_name[upstream_name]
+        producer_type = producers[upstream_name].effective_type
         if not _types_compatible(producer_type, expected_type):
             raise ConstructError.build(
                 f"declares inputs['{upstream_name}']={_fmt_type(expected_type)} "
@@ -667,26 +716,23 @@ def _check_fan_in_inputs(
 
 
 def _check_each_path(
-    construct: Construct,
+    construct: ConstructLike,
     item: NodeItem,
     input_type: TypeSpecStatic,
     each: Each,
-    producers: list[Producer],
+    producers: ProducerMap,
 ) -> None:
     """Resolve each.over against producers; verify it lands on list[input_type]."""
     root, segments = split_each_path(each.over)
 
-    root_type: TypeSpecStatic = None
-    for p in producers:
-        if p.field_name == root:
-            root_type = p.effective_type
-            break
+    matched = producers.get(root)
+    root_type: TypeSpecStatic = matched.effective_type if matched is not None else None
 
     if root_type is None:
         # Allow framework-injected roots (sub-construct port param).
         if root == StateKeys.SUBGRAPH_INPUT:
             return
-        known_roots = {p.field_name for p in producers}
+        known_roots = set(producers)
         raise ConstructError.build(
             f"Each(over='{each.over}') root '{root}' does not match any upstream node",
             found=f"known producers: {sorted(known_roots)}" if known_roots else "no producers available",
@@ -857,15 +903,15 @@ def _fmt_type(tp: TypeSpecStatic) -> str:
 
 
 def _build_no_producer_error(
-    construct: Construct,
+    construct: ConstructLike,
     item: NodeItem,
     input_type: TypeSpecStatic,
-    producers: list[Producer],
+    producers: ProducerMap,
 ) -> NeographError:
     if producers:
         producer_summary = "\n".join(
             f"    - {p.label}: {_fmt_type(p.effective_type)}"
-            for p in producers
+            for p in producers.values()
         )
     else:
         producer_summary = "    (no upstream producers)"
@@ -885,11 +931,11 @@ def _build_no_producer_error(
 
 def _suggest_hint(
     input_type: TypeSpecStatic,
-    producers: list[Producer],
+    producers: ProducerMap,
 ) -> str | None:
     """Scan producer outputs for actionable suggestions."""
     # Check for Each dict[str, X] → raw X mismatch first.
-    for p in producers:
+    for p in producers.values():
         p_origin = get_origin(p.effective_type)
         if p_origin is dict:
             p_args = get_args(p.effective_type)
@@ -908,7 +954,7 @@ def _suggest_hint(
                         )
 
     # Fallback: scan for list[input_type] fields and suggest .map().
-    for p in producers:
+    for p in producers.values():
         model_fields = getattr(p.effective_type, "model_fields", None) or {}
         for fname in model_fields:
             resolved = _resolve_field_annotation(p.effective_type, fname)

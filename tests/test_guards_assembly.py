@@ -1058,3 +1058,63 @@ class TestNoSidecarPattern:
         )
 
 
+
+
+class TestValidatorHardening:
+    """neograph-xs3e: ta43 recursive-validator hardening.
+
+    1. No ``cast(Any`` at the recursive call site — the recursion is made
+       type-safe via a ConstructLike Protocol + TypeGuard instead.
+    2. ``ValidationMode`` enum names the STANDALONE-vs-IN_CONTEXT state that
+       the old ``context_checkable`` boolean encoded implicitly.
+    3. The producer collection is keyed by field_name
+       (``OrderedDict[str, Producer]``), dropping the O(N^2) per-call rebuild
+       in ``_check_fan_in_inputs``.
+    """
+
+    VALIDATOR = SRC_DIR / "_construct_validation.py"
+
+    def test_no_cast_any_in_validator(self):
+        """The recursive call site must not launder the type via cast(Any).
+
+        Specific-type casts (e.g. cast(Node, ...), cast(dict[...], ...)) are
+        fine — only the untyped cast(Any, ...) escape hatch is forbidden.
+        """
+        hits = [
+            f"{self.VALIDATOR.name}:{i}: {line.strip()}"
+            for i, line in enumerate(self.VALIDATOR.read_text().splitlines(), 1)
+            if "cast(Any" in line
+        ]
+        assert hits == [], (
+            "cast(Any ...) found in the recursive validator — use the "
+            "ConstructLike Protocol + _is_construct_like TypeGuard instead:\n"
+            + "\n".join(f"  {h}" for h in hits)
+        )
+
+    def test_validation_mode_enum_replaces_context_checkable(self):
+        """ValidationMode{STANDALONE, IN_CONTEXT} must exist and be used."""
+        import enum
+
+        from neograph import _construct_validation as cv
+
+        assert hasattr(cv, "ValidationMode"), "ValidationMode enum missing"
+        mode = cv.ValidationMode
+        assert issubclass(mode, enum.Enum)
+        names = {m.name for m in mode}
+        assert {"STANDALONE", "IN_CONTEXT"} <= names, names
+
+    def test_producers_collection_keyed_by_field_name(self):
+        """Producer collection is OrderedDict[str, Producer], not list[Producer]."""
+        text = self.VALIDATOR.read_text()
+        assert "OrderedDict[str, Producer]" in text, (
+            "producers should be typed OrderedDict[str, Producer] keyed by field_name"
+        )
+        assert "list[Producer]" not in text, (
+            "no signature should still thread producers as list[Producer]"
+        )
+
+    def test_construct_like_protocol_exists(self):
+        """ConstructLike Protocol (name/input/nodes) lives in _ir_protocols."""
+        from neograph import _ir_protocols
+
+        assert hasattr(_ir_protocols, "ConstructLike"), "ConstructLike Protocol missing"
