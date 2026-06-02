@@ -620,6 +620,32 @@ class TestEachOracleFusionDecoratorPath:
         # gen_type should be Claims (from list[Claims])
         assert fused.oracle_gen_type is Claims
 
+    def test_oracle_only_infers_gen_type_on_bare_node(self):
+        """Oracle-only (no map_over): the decoration-time eager write must set
+        oracle_gen_type on the BARE decorated node, before any assembly.
+
+        This is the Site-2 counterpart of the Each x Oracle test above.
+        test_composition.py only asserts oracle_gen_type post-assembly, where
+        normalize_ir re-derives it regardless — so it would NOT catch a broken
+        decorator-side eager write / rebind. This pins the bare-node behavior
+        so the neograph-wtug refactor (extract helper + model_copy rebind in
+        the Oracle-only fall-through branch) is regression-proof."""
+        from neograph.decorators import register_scripted as _dec_register_scripted
+        from tests.fakes import register_scripted as _f_register_scripted
+
+        def oo_merge(variants: list[Claims], config: Any) -> MatchResult:
+            return MatchResult()  # type: ignore[call-arg]
+        _f_register_scripted("oo_merge", oo_merge)
+        _dec_register_scripted("oo_merge", oo_merge)
+
+        @node(outputs=MatchResult, model="fast", prompt="test",
+              ensemble_n=3, merge_fn="oo_merge")
+        def ensemble(cluster: ClusterGroup) -> MatchResult:
+            ...
+        # gen_type should be Claims (from list[Claims]), set eagerly at
+        # decoration time on the bare returned Node.
+        assert ensemble.oracle_gen_type is Claims
+
 
 
 

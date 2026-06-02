@@ -75,6 +75,7 @@ from neograph._di_classify import (  # noqa: F401 — re-exported for backward c
     _resolve_di_args,
     _resolve_merge_args,
 )
+from neograph._ir_normalize import oracle_gen_type_for
 from neograph._llm_config import LlmConfig
 
 # Decorator-side shim registry. The decorators emit shims for inline
@@ -101,7 +102,6 @@ def register_condition(name: str, fn: Callable) -> None:
 def register_tool_factory(name: str, fn: Callable) -> None:
     """Decorator-side tool-factory store. Internal to neograph.decorators."""
     _decorator_tool_factories[name] = fn
-from neograph._ir_normalize import oracle_gen_type_for
 from neograph._sidecar import (  # noqa: F401 — re-exported for backward compat
     _get_node_source,
     _get_param_res,
@@ -142,6 +142,22 @@ def _is_trivial_body(body: list[ast.stmt]) -> bool:
         if isinstance(stmt.value, ast.Constant) and stmt.value.value is None:
             return True
     return False
+
+
+def _apply_eager_oracle_gen_type(n: Node) -> Node:
+    """Eagerly set ``oracle_gen_type`` at decoration time so a bare Node carries
+    it before it is placed in a Construct.
+
+    Returns a copy with the field set (IR-immutability — no in-place mutation),
+    or the node unchanged when there is no inference. The inference rule lives
+    in ``neograph._ir_normalize.oracle_gen_type_for``; ``normalize_ir`` owns the
+    assembly-time write and is idempotent over this pre-population. Single
+    named operation shared by the @node Each×Oracle and Oracle-only branches.
+    """
+    gen_type = oracle_gen_type_for(n)
+    if gen_type is None:
+        return n
+    return n.model_copy(update={"oracle_gen_type": gen_type})
 
 
 def _build_oracle_kwargs(
@@ -569,13 +585,7 @@ def node(
             _register_sidecar(n, f, param_names)
             if param_res:
                 _set_param_res(n, param_res)
-            # Eager (decoration-time) oracle_gen_type so the bare Node carries
-            # it before assembly. normalize_ir owns the inference rule and is
-            # idempotent over this pre-population. See neograph-20xq.
-            gen_type = oracle_gen_type_for(n)
-            if gen_type is not None:
-                n.oracle_gen_type = gen_type
-            return n
+            return _apply_eager_oracle_gen_type(n)
 
         # -- Fan-out via Each when map_over is set (no Oracle) -----------------
         if map_over is not None:
@@ -605,10 +615,9 @@ def node(
             _register_sidecar(n, f, param_names)
             if param_res:
                 _set_param_res(n, param_res)
-            # Eager (decoration-time) oracle_gen_type — see note above.
-            gen_type = oracle_gen_type_for(n)
-            if gen_type is not None:
-                n.oracle_gen_type = gen_type
+            # Rebind: the eager write produces a copy; the fall-through below
+            # (Operator/Loop/context handling) must use the rebound node.
+            n = _apply_eager_oracle_gen_type(n)
 
         # -- Operator interrupt when interrupt_when is set --------------------
         if interrupt_when is not None:
