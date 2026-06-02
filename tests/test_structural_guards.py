@@ -1312,6 +1312,14 @@ class TestNoNodeMutationInAssembly:
 
     _construct_builder.py iterates the `ordered` list and must use model_copy()
     instead of direct attribute assignment on Node instances.
+
+    Scope note: this guard polices *in-place attribute mutation* in
+    _construct_builder.py ONLY (any field, `n.<attr> = ...`). It is NOT the
+    authority on where IR-inferred fields may be written — that is
+    TestNormalizeIrIsSoleIrFieldWriter, which scans all of src/neograph for
+    every write form (attr/subscript/dict-literal/dict-kwarg/setattr/...) of
+    fan_out_param/oracle_gen_type against an allowlist. The two overlap on
+    field names but enforce different invariants; do not conflate them.
     """
 
     def test_no_direct_attr_assignment_on_nodes_in_ordered_loops(self):
@@ -4209,28 +4217,56 @@ class TestNormalizeIrIsSoleIrFieldWriter:
     def _scan_ir_field_writes(cls, tree: ast.AST) -> set[str]:
         """Return the set of IR field names WRITTEN anywhere in ``tree``.
 
-        Detects: attribute-assign (``x.field = ...``), subscript-assign
-        (``d["field"] = ...``), dict-literal keys (covers
-        ``model_copy(update={"field": ...})`` and a normalizer's
-        ``return {"field": ...}``), and ``setattr``/``object.__setattr__``
-        string-literal targets. Read forms (``getattr(x, "field")``,
-        attribute access) are NOT matched — only writes.
+        Detects every write form for an IR field on an *instance*:
+          - attribute-assign            ``x.field = ...``
+          - subscript-assign            ``d["field"] = ...``
+          - augmented-assign            ``x.field += ...`` / ``d["field"] += ...``
+          - annotated-assign            ``x.field: T = ...`` / ``d["field"]: T = ...``
+          - tuple/list-unpack targets   ``x.field, y = a, b``
+          - dict-literal keys           ``{"field": ...}`` (covers
+            ``model_copy(update={"field": ...})`` and a normalizer's
+            ``return {"field": ...}``)
+          - dict() keyword args         ``dict(field=...)`` (the kwarg form of
+            the same ``model_copy(update=...)`` idiom)
+          - ``setattr``/``object.__setattr__`` string-literal targets
+
+        Deliberately NOT matched (not writes to an instance field):
+          - bare-``Name`` annotated/plain assignments — these are class-body
+            field DECLARATIONS (``fan_out_param: str | None = None`` in
+            ``node.py``) or module constants, not instance writes.
+          - read forms — ``getattr(x, "field")``, ``x.field`` access.
         """
         written: set[str] = set()
 
         def _str_const(node: ast.AST) -> str | None:
             return node.value if isinstance(node, ast.Constant) and isinstance(node.value, str) else None
 
+        def _check_target(target: ast.AST) -> None:
+            """Record an assignment target if it writes an IR field on an
+            instance. Recurses tuple/list unpacking. Bare ``Name`` targets are
+            ignored (declaration/constant, not an instance write)."""
+            if isinstance(target, ast.Attribute):
+                if target.attr in cls.IR_FIELDS:
+                    written.add(target.attr)
+            elif isinstance(target, ast.Subscript):
+                key = _str_const(target.slice)
+                if key in cls.IR_FIELDS:
+                    written.add(key)
+            elif isinstance(target, (ast.Tuple, ast.List)):
+                for elt in target.elts:
+                    _check_target(elt)
+
         for node in ast.walk(tree):
-            # x.field = ...   and   d["field"] = ...
+            # x.field = ... | d["field"] = ... | a, b = ... (tuple targets)
             if isinstance(node, ast.Assign):
                 for target in node.targets:
-                    if isinstance(target, ast.Attribute) and target.attr in cls.IR_FIELDS:
-                        written.add(target.attr)
-                    elif isinstance(target, ast.Subscript):
-                        key = _str_const(target.slice)
-                        if key in cls.IR_FIELDS:
-                            written.add(key)
+                    _check_target(target)
+            # x.field += ... | d["field"] += ...
+            elif isinstance(node, ast.AugAssign):
+                _check_target(node.target)
+            # x.field: T = ... | d["field"]: T = ...  (Name targets ignored above)
+            elif isinstance(node, ast.AnnAssign):
+                _check_target(node.target)
             # {"field": ...} dict literals (model_copy update=, normalizer return)
             elif isinstance(node, ast.Dict):
                 for key_node in node.keys:
@@ -4238,17 +4274,21 @@ class TestNormalizeIrIsSoleIrFieldWriter:
                         key = _str_const(key_node)
                         if key in cls.IR_FIELDS:
                             written.add(key)
-            # setattr(x, "field", ...) / object.__setattr__(x, "field", ...)
-            elif isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "__setattr__":
-                for arg in node.args:
-                    key = _str_const(arg)
-                    if key in cls.IR_FIELDS:
-                        written.add(key)
-            elif isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "setattr":
-                for arg in node.args:
-                    key = _str_const(arg)
-                    if key in cls.IR_FIELDS:
-                        written.add(key)
+            elif isinstance(node, ast.Call):
+                # setattr(x, "field", ...) / object.__setattr__(x, "field", ...)
+                if (
+                    (isinstance(node.func, ast.Attribute) and node.func.attr == "__setattr__")
+                    or (isinstance(node.func, ast.Name) and node.func.id == "setattr")
+                ):
+                    for arg in node.args:
+                        key = _str_const(arg)
+                        if key in cls.IR_FIELDS:
+                            written.add(key)
+                # dict(field=...) — kwarg form of model_copy(update=dict(...))
+                elif isinstance(node.func, ast.Name) and node.func.id == "dict":
+                    for kw in node.keywords:
+                        if kw.arg in cls.IR_FIELDS:
+                            written.add(kw.arg)
         return written
 
     def test_ir_fields_written_only_in_normalize_ir_and_sanctioned_prepop(self):
@@ -4303,21 +4343,47 @@ class TestNormalizeIrIsSoleIrFieldWriter:
         )
 
     def test_scanner_detects_every_write_form(self):
-        """Mutation: the scanner must catch each write form, so the guard is
-        not a dead snapshot. Synthesize source exercising all four forms for a
-        fictitious IR field and confirm detection logic (parametrised on the
-        real IR_FIELDS via a temporary union)."""
+        """Mutation: the scanner must catch EVERY write form it claims to, so
+        the guard is not a dead snapshot. Each form below must surface the
+        field; if any line stops being detected, the real guard would silently
+        pass a regression that writes an IR field via that form."""
+        forms = {
+            "attribute": 'node.fan_out_param = "x"',
+            "subscript": 'd["fan_out_param"] = "x"',
+            "aug-assign-attr": 'node.fan_out_param += "x"',
+            "aug-assign-subscript": 'd["fan_out_param"] += "x"',
+            "ann-assign-attr": 'node.fan_out_param: str = "x"',
+            "ann-assign-subscript": 'd["fan_out_param"]: str = "x"',
+            "tuple-unpack": 'node.fan_out_param, y = a, b',
+            "list-unpack": '[node.fan_out_param, y] = a, b',
+            "dict-literal": 'node.model_copy(update={"fan_out_param": "y"})',
+            "dict-kwarg": 'node.model_copy(update=dict(fan_out_param="y"))',
+            "setattr": 'setattr(node, "fan_out_param", "x")',
+            "object-setattr": 'object.__setattr__(node, "fan_out_param", T)',
+        }
+        for label, src in forms.items():
+            written = self._scan_ir_field_writes(ast.parse(src))
+            assert "fan_out_param" in written, (
+                f"scanner missed write form {label!r} ({src!r}); detected "
+                f"{sorted(written)}. The guard's docstring claims this form is "
+                f"covered — a regression using it would slip past silently."
+            )
+
+    def test_scanner_ignores_class_body_field_declarations(self):
+        """A class-body field declaration (``fan_out_param: str | None = None``)
+        and a module-level annotated constant are NOT instance writes and must
+        NOT be flagged — otherwise the guard would fail against node.py's own
+        Node field definitions and _ir_normalize's _NORMALIZERS constant."""
         synthetic = (
-            'def f(node, d):\n'
-            '    node.fan_out_param = "x"\n'                       # attribute
-            '    d["oracle_gen_type"] = T\n'                       # subscript
-            '    node.model_copy(update={"fan_out_param": "y"})\n'  # dict literal
-            '    object.__setattr__(node, "oracle_gen_type", T)\n'  # __setattr__
+            "class Node:\n"
+            "    fan_out_param: str | None = None\n"
+            "    oracle_gen_type: object = None\n"
+            "_NORMALIZERS: list = []\n"
         )
         written = self._scan_ir_field_writes(ast.parse(synthetic))
-        assert written == {"fan_out_param", "oracle_gen_type"}, (
-            f"scanner missed a write form; detected {sorted(written)}. The "
-            f"real guard would silently pass a regression if this breaks."
+        assert written == set(), (
+            f"scanner flagged a class-body declaration as a write: {sorted(written)}; "
+            f"bare-Name annotated/plain targets must be ignored."
         )
 
     def test_scanner_ignores_read_forms(self):
