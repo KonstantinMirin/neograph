@@ -34,9 +34,10 @@ from typing import TYPE_CHECKING, Any, Protocol, cast
 
 from pydantic import BaseModel
 
-from neograph._normalize import normalize_inputs
+from neograph._ir_protocols import ConstructItem
+from neograph._normalize import normalize_inputs, normalize_outputs
 from neograph._sidecar import infer_oracle_gen_type
-from neograph.naming import field_name_for
+from neograph.naming import field_name_for, output_field_name
 from neograph.node import Node
 
 if TYPE_CHECKING:
@@ -62,6 +63,35 @@ class IrNormalizer(Protocol):
     def apply(self, node: Node, peer_field_names: set[str]) -> dict[str, Any]:
         """Return the ``model_copy`` update dict for ``node`` (possibly empty)."""
         ...
+
+
+def declared_output_fields(item: ConstructItem) -> set[str]:
+    """The state-field names a node/sub-construct contributes as a producer.
+
+    Mirrors the validator's producer registration (``_construct_validation``):
+    - dict-form ``Node.outputs`` → one ``{base}_{key}`` field per output key
+      (NO bare base — matching the validator, which registers per-key only)
+    - single-type ``Node.outputs`` → the bare ``base`` field
+    - ``Node.outputs is None`` → no producer (empty set)
+    - sub-construct (non-Node) → the bare ``base`` field
+
+    Used by :func:`normalize_ir` to build the peer-field set so it is IDENTICAL
+    to the validator's producer field-name set. See neograph-bcct. Field-name
+    only (type-independent), so Each-wrapping of producer types does not affect
+    it.
+    """
+    name = getattr(item, "name", None)
+    if name is None:
+        return set()
+    base = field_name_for(name)
+    if isinstance(item, Node):
+        no = normalize_outputs(item.outputs)
+        if no.is_none:
+            return set()
+        if no.is_dict_form:
+            return {output_field_name(base, key) for key in no.all_keys}
+        return {base}
+    return {base}
 
 
 def fan_out_candidates(node: Node, known_field_names: set[str]) -> list[str]:
@@ -188,11 +218,13 @@ def normalize_ir(construct: Construct) -> None:
     and writes them via a single ``model_copy`` per node. Idempotent:
     normalizers whose field is already set return ``{}`` and are no-ops.
     """
-    peer_field_names = {
-        field_name_for(item.name)
-        for item in construct.nodes
-        if getattr(item, "name", None) is not None
-    }
+    # Peer-field set IDENTICAL to the validator's producer field-name set:
+    # multi-output nodes contribute per-output-key fields ({base}_{key}), not
+    # the bare base. Built from the shared declared_output_fields helper so the
+    # two views cannot drift. See neograph-bcct.
+    peer_field_names: set[str] = set()
+    for item in construct.nodes:
+        peer_field_names |= declared_output_fields(item)
     for i, item in enumerate(construct.nodes):
         if not isinstance(item, Node):
             continue

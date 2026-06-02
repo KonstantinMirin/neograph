@@ -30,7 +30,7 @@ from neograph._state_keys import StateKeys
 from neograph.di import DIKind as _DIKind
 from neograph.errors import ConstructError, NeographError
 from neograph.modifiers import Each, Oracle, split_each_path
-from neograph.naming import field_name_for
+from neograph.naming import field_name_for, output_field_name
 from neograph.node import Node, TypeSpecStatic
 
 
@@ -354,7 +354,7 @@ def _validate_node_chain(
             if isinstance(item, Node) and isinstance(output_type, dict):
                 has_each = item.modifier_set.each is not None
                 for output_key, key_type in output_type.items():
-                    key_field = f"{field_name}_{output_key}"
+                    key_field = output_field_name(field_name, output_key)
                     key_label = f"node '{name}' output '{output_key}'"
                     producer_type = dict[str, key_type] if has_each else key_type  # type: ignore[valid-type]
                     producers.append(Producer(

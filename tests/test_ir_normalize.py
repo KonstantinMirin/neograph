@@ -24,11 +24,14 @@ from pydantic import BaseModel
 from neograph import (
     Each,
     Node,
+    compile,
     construct_from_module,
     merge_fn,
     node,
+    run,
 )
 from neograph.construct import Construct
+from tests.fakes import build_test_compile_kwargs, register_scripted
 
 
 class Alpha(BaseModel, frozen=True):
@@ -49,6 +52,94 @@ def _node_by_name(construct: Construct, name: str) -> Node:
             assert isinstance(n, Node)
             return n
     raise AssertionError(f"node {name!r} not found in {construct.name}")
+
+
+class TestDeclaredOutputFields:
+    """declared_output_fields is the single source of producer field NAMES,
+    shared by normalize_ir's peer set and the validator's producer loop, so the
+    two can't drift (neograph-bcct)."""
+
+    def test_dict_output_yields_per_key_fields_no_bare_base(self):
+        from neograph._ir_normalize import declared_output_fields
+
+        class _X(BaseModel, frozen=True):
+            a: str
+
+        class _Y(BaseModel, frozen=True):
+            b: str
+
+        n = Node.scripted("gen", fn="dof_gen", outputs={"result": _X, "log": _Y})
+        fields = declared_output_fields(n)
+        assert fields == {"gen_result", "gen_log"}, (
+            "dict-output node must contribute per-key fields, NOT the bare base "
+            "'gen' — exact parity with the validator's producer registration"
+        )
+
+    def test_single_output_yields_bare_base(self):
+        from neograph._ir_normalize import declared_output_fields
+
+        n = Node.scripted("extract", fn="dof_extract", outputs=Alpha)
+        assert declared_output_fields(n) == {"extract"}
+
+    def test_none_output_yields_empty(self):
+        from neograph._ir_normalize import declared_output_fields
+
+        n = Node.scripted("sink", fn="dof_sink")  # outputs=None
+        assert declared_output_fields(n) == set(), (
+            "a None-output node registers no producer; its field must not leak "
+            "into the known set (would diverge from the validator)"
+        )
+
+    def test_hyphenated_name_uses_field_form(self):
+        from neograph._ir_normalize import declared_output_fields
+
+        n = Node.scripted("my-gen", fn="dof_mygen", outputs={"result": Alpha})
+        assert declared_output_fields(n) == {"my_gen_result"}
+
+
+class TestFanOutMultiOutputRuntime:
+    """End-to-end: an Each consumer fanning over a multi-output upstream's
+    per-key field must route the fanned item at runtime (neograph-bcct). Before
+    the fix, fan_out_param was None and _extract_fan_in_dict could not route."""
+
+    def test_each_over_multi_output_field_runs(self):
+        class _Item(BaseModel, frozen=True):
+            v: str
+
+        class _Log(BaseModel, frozen=True):
+            msg: str
+
+        class _Summary(BaseModel, frozen=True):
+            s: str
+
+        register_scripted(
+            "bcct_gen_rt",
+            lambda _i, _c: {"result": [_Item(v="a"), _Item(v="b")], "log": _Log(msg="ok")},
+        )
+        register_scripted("bcct_cons_rt", lambda input_data, _c: _Summary(s=input_data["item"].v))
+
+        gen = Node.scripted(
+            "gen", fn="bcct_gen_rt",
+            outputs={"result": list[_Item], "log": _Log},
+        )
+        consumer = Node.scripted(
+            "consumer", fn="bcct_cons_rt",
+            inputs={"gen_result": list[_Item], "item": _Item},
+            outputs=_Summary,
+        ) | Each(over="gen_result", key="v")
+
+        pipeline = Construct("bcct-rt", nodes=[gen, consumer])
+        # fan_out_param must be set for the runtime to route the fanned item.
+        assert _node_by_name(pipeline, "consumer").fan_out_param == "item"
+
+        graph = compile(pipeline, **build_test_compile_kwargs())
+        result = run(graph, input={})
+        # Each produces a dict keyed by `key`; both items were processed.
+        produced = result["consumer"]
+        summaries = list(produced.values()) if isinstance(produced, dict) else produced
+        assert {s.s for s in summaries} == {"a", "b"}, (
+            f"both fanned items must be processed; got {produced!r}"
+        )
 
 
 class TestFanOutCandidates:
@@ -144,6 +235,43 @@ class TestNormalizeIrOwnsFanOutParam:
         assert pipeline.nodes[idx].fan_out_param == "item", (
             "normalize_ir must re-derive fan_out_param for an Each + dict-form "
             "node with a single unknown input key"
+        )
+
+    def test_fan_out_param_set_when_each_consumes_multi_output_upstream(self):
+        """neograph-bcct: an Each node that fans over a MULTI-OUTPUT upstream's
+        per-output-key field must still get fan_out_param set.
+
+        Bug: the normalizer computed candidates against peer NODE field names
+        ({field_name_for(name)}), which excludes per-output-key producer fields
+        like 'gen_result'. So for a consumer with inputs={'gen_result', 'item'}
+        fanning over 'gen_result', the normalizer saw BOTH keys as unknown (two
+        candidates) and declined -> fan_out_param=None, while the validator
+        (using the full producer field set) correctly tolerated it. The
+        assembled IR was wrong: fan_out_param must be 'item'."""
+        class _Item(BaseModel, frozen=True):
+            v: str
+
+        class _Log(BaseModel, frozen=True):
+            msg: str
+
+        class _Summary(BaseModel, frozen=True):
+            s: str
+
+        gen = Node.scripted(
+            "gen", fn="bcct_gen",
+            outputs={"result": list[_Item], "log": _Log},
+        )
+        consumer = Node.scripted(
+            "consumer", fn="bcct_cons",
+            inputs={"gen_result": list[_Item], "item": _Item},
+            outputs=_Summary,
+        ) | Each(over="gen_result", key="v")
+
+        pipeline = Construct("bcct-multi-output", nodes=[gen, consumer])
+
+        assert _node_by_name(pipeline, "consumer").fan_out_param == "item", (
+            "an Each consumer over a multi-output upstream's per-key field must "
+            "have fan_out_param set to the fan-out receiver ('item'), not None"
         )
 
     def test_normalize_ir_idempotent_after_rederivation(self):
