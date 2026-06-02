@@ -94,10 +94,15 @@ class TestNormalizeIrOwnsFanOutParam:
             "node with a single unknown input key"
         )
 
-    def test_normalize_ir_idempotent_on_fan_out_param(self):
-        """A second normalize_ir call must not change an already-set
-        fan_out_param (idempotency — required because the @node surface sets
-        it before Construct.__init__ runs normalize_ir)."""
+    def test_normalize_ir_idempotent_after_rederivation(self):
+        """Idempotency of the inference itself (neograph-hede / TQ-04).
+
+        The weak version of this test only re-ran normalize_ir on an
+        already-set node, so _FanOutParamNormalizer.applies_to short-circuited
+        and `apply` was never exercised — it would pass even if `apply` were
+        broken. This version CLEARS the field first (forcing `apply` to run on
+        the first normalize), then normalizes AGAIN, asserting the second pass
+        is a true no-op and the value is stable across both passes."""
         from neograph._ir_normalize import normalize_ir
 
         consumer = Node.scripted(
@@ -110,10 +115,68 @@ class TestNormalizeIrOwnsFanOutParam:
         producer = Node.scripted("claims", fn="ir_norm_producer2", outputs=Alpha)
         pipeline = Construct("ir-norm-idem", nodes=[producer, consumer])
 
-        before = _node_by_name(pipeline, "consumer").fan_out_param
-        normalize_ir(pipeline)
-        after = _node_by_name(pipeline, "consumer").fan_out_param
-        assert before == after == "item"
+        idx = next(
+            i for i, n in enumerate(pipeline.nodes)
+            if getattr(n, "name", None) == "consumer"
+        )
+        # Clear so the FIRST normalize_ir actually runs apply (not short-circuit).
+        pipeline.nodes[idx] = pipeline.nodes[idx].model_copy(update={"fan_out_param": None})
+
+        normalize_ir(pipeline)            # pass 1: apply runs, sets "item"
+        after_first = pipeline.nodes[idx].fan_out_param
+        normalize_ir(pipeline)            # pass 2: must be a no-op
+        after_second = pipeline.nodes[idx].fan_out_param
+
+        assert after_first == "item", "first normalize_ir (post-clear) must re-derive via apply"
+        assert after_second == after_first, "second normalize_ir must be a no-op (idempotent)"
+
+    def test_node_and_normalizer_agree_on_fan_out_param(self):
+        """The @node signature-derived fan_out_param (written at
+        _construct_builder.py:568) and the inputs-dict normalizer must AGREE on
+        the receiver key (neograph-hede / DRY-02).
+
+        Background: the refactor keeps two derivations of fan_out_param — the
+        @node signature path and the normalizer's inputs-dict heuristic. The
+        original justification was that the signature path is "richer" (handles
+        multi-unknown). Empirically (recorded in the bead) a multi-unknown
+        @node Each is rejected by the validator, so for every VALID @node Each
+        the normalizer reproduces the builder's value. This test pins that
+        AGREEMENT — the actually-true invariant — so a future change to either
+        derivation that makes them diverge is caught. (It also means builder:568
+        is redundant-but-consistent; deleting it is a safe future simplification
+        tracked under neograph-k7bg, out of scope here.)"""
+        from neograph._ir_normalize import _FanOutParamNormalizer
+        from neograph.naming import field_name_for
+
+        @node(outputs=Alpha)
+        def produce() -> Alpha: ...
+
+        @node(outputs=Gamma, map_over="produce", map_key="value")
+        def summarize(produce: Alpha, item: Beta) -> Gamma: ...
+
+        import types as t
+        mod = t.ModuleType("test_agree_fanout_mod")
+        mod.produce = produce
+        mod.summarize = summarize
+        construct = construct_from_module(mod)
+
+        node_ir = _node_by_name(construct, "summarize")
+        builder_value = node_ir.fan_out_param
+        assert builder_value == "item", "sanity: @node builder resolves the fan-out receiver"
+
+        # Independent re-derivation by the normalizer, given the same peers.
+        peers = {
+            field_name_for(n.name) for n in construct.nodes
+            if getattr(n, "name", None) is not None
+        }
+        cleared = node_ir.model_copy(update={"fan_out_param": None})
+        normalizer_update = _FanOutParamNormalizer().apply(cleared, peers)
+
+        assert normalizer_update == {"fan_out_param": builder_value}, (
+            f"@node builder set fan_out_param={builder_value!r} but the "
+            f"normalizer independently derived {normalizer_update!r} — the two "
+            f"derivations must agree for every valid @node Each"
+        )
 
 
 class TestNormalizeIrOwnsOracleGenType:
