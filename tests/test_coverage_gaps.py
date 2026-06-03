@@ -893,34 +893,38 @@ class TestLLMNodeDictForm:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# factory.py — _is_instance_safe parameterized generic (line 485)
+# di.py — _isinstance_safe parameterized generic
 # ═══════════════════════════════════════════════════════════════════════════
 
 
 class TestIsInstanceSafe:
-    """_is_instance_safe handles parameterized generics."""
+    """_isinstance_safe handles parameterized generics.
+
+    Canonical name/location is ``neograph.di._isinstance_safe`` (CON-01: the
+    ``_is_instance_safe`` alias was consolidated away in neograph-0e9a).
+    """
 
     def test_parameterized_generic_matches_base_type(self):
-        """dict[str, X] matches against a plain dict instance (line 485)."""
-        from neograph.factory import _is_instance_safe
+        """dict[str, X] matches against a plain dict instance."""
+        from neograph.di import _isinstance_safe
 
-        assert _is_instance_safe({"a": 1}, dict[str, int]) is True
-        assert _is_instance_safe(["a"], list[str]) is True
-        assert _is_instance_safe("hello", dict[str, int]) is False
+        assert _isinstance_safe({"a": 1}, dict[str, int]) is True
+        assert _isinstance_safe(["a"], list[str]) is True
+        assert _isinstance_safe("hello", dict[str, int]) is False
 
     def test_plain_type_works_normally(self):
         """Non-parameterized types use regular isinstance."""
-        from neograph.factory import _is_instance_safe
+        from neograph.di import _isinstance_safe
 
-        assert _is_instance_safe("hello", str) is True
-        assert _is_instance_safe(42, str) is False
+        assert _isinstance_safe("hello", str) is True
+        assert _isinstance_safe(42, str) is False
 
     def test_returns_false_for_bad_type_spec(self):
-        """TypeError from isinstance returns False (line 489)."""
-        from neograph.factory import _is_instance_safe
+        """TypeError from isinstance returns False."""
+        from neograph.di import _isinstance_safe
 
         # None is not a valid type for isinstance
-        assert _is_instance_safe("hello", None) is False
+        assert _isinstance_safe("hello", None) is False
 
 
 # ═══════════════════════════════════════════════════════════════════════════

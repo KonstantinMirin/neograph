@@ -878,6 +878,10 @@ class TestNormalizeIrIsSoleIrFieldWriter:
             "re-creates the drift class of neograph-vgc1/aqau/20xq)."
         )
 
+    # Named so the regex carries a slip meta-test (PROC-2). Matches the exact
+    # set of removed per-field Construct methods.
+    _NORMALIZE_FIELD_RE = re.compile(r"_normalize_(fan_out_params|oracle_gen_type)")
+
     def test_construct_has_no_normalize_field_methods(self):
         """The per-field Construct._normalize_<field> methods are GONE — the
         whole point of the epic. A new one would re-introduce parallel
@@ -887,13 +891,24 @@ class TestNormalizeIrIsSoleIrFieldWriter:
         offenders = [
             n.name for n in ast.walk(tree)
             if isinstance(n, ast.FunctionDef)
-            and re.fullmatch(r"_normalize_(fan_out_params|oracle_gen_type)", n.name)
+            and self._NORMALIZE_FIELD_RE.fullmatch(n.name)
         ]
         assert offenders == [], (
             f"construct.py defines {offenders}; IR-field inference belongs in "
             f"_ir_normalize.IrNormalizer implementations, not per-field methods "
             f"on Construct (neograph-20xq)."
         )
+
+    def test_slip_normalize_field_re(self):
+        """Regex-slip: fullmatch (not search) is what makes this precise — a
+        method merely CONTAINING the name (e.g. a helper or a longer name) must
+        NOT be flagged, while the exact removed names must be."""
+        assert self._NORMALIZE_FIELD_RE.fullmatch("_normalize_fan_out_params")
+        assert self._NORMALIZE_FIELD_RE.fullmatch("_normalize_oracle_gen_type")
+        # Slip guard: substring/longer forms would match re.search but NOT
+        # fullmatch — proving the fullmatch anchoring is load-bearing.
+        assert not self._NORMALIZE_FIELD_RE.fullmatch("_normalize_fan_out_params_v2")
+        assert not self._NORMALIZE_FIELD_RE.fullmatch("_normalize_inputs")
 
     def test_construct_init_calls_normalize_ir(self):
         """Construct.__init__ must delegate to normalize_ir — proves the single
@@ -1098,3 +1113,20 @@ class TestNoOrZeroCounterIdiom:
         """'or 0' on a non-counter .get must NOT be flagged."""
         assert not self._is_counter_zero_idiom("        x = bus.get('score') or 0")
         assert not self._is_counter_zero_idiom("        total = some_list_len or 0")
+
+    def test_slip_counter_get(self):
+        """Regex-slip: _COUNTER_GET keys on the 'count' substring inside a .get
+        arg list. Prove the boundary: a counter .get matches, a non-counter .get
+        does not (the 'count'-substring scoping is load-bearing and documented)."""
+        assert self._COUNTER_GET.search("bus.get(loop_count_field)")
+        assert self._COUNTER_GET.search('bus.get("neo_loop_count")')
+        assert not self._COUNTER_GET.search("bus.get(score_field)")
+
+    def test_slip_counter_get_default(self):
+        """Regex-slip: _COUNTER_GET_DEFAULT requires the explicit ', 0' default
+        with optional surrounding whitespace. Prove whitespace variants match and
+        a no-default counter .get does not (so it can't masquerade as the
+        explicit-default form)."""
+        assert self._COUNTER_GET_DEFAULT.search("bus.get(loop_count, 0)")
+        assert self._COUNTER_GET_DEFAULT.search("bus.get(loop_count,0)")
+        assert not self._COUNTER_GET_DEFAULT.search("bus.get(loop_count)")

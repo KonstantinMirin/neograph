@@ -31,6 +31,7 @@ from typing_extensions import TypeVar
 
 from neograph._llm_config import LlmConfig
 from neograph._llm_runtime import EMPTY_RUNTIME, LlmRuntime
+from neograph._state_keys import StateKeys
 from neograph.errors import ConstructError, NeographError
 from neograph.renderers import Renderer
 
@@ -411,7 +412,7 @@ class Node(Modifiable, BaseModel):
             state.update(input)
         elif input is not None:
             # Typed instance — place it under the node name so _extract_input finds it by type
-            state["_neo_isolated_input"] = input
+            state[StateKeys.ISOLATED_INPUT] = input
 
         config = config or {"configurable": {}}
         if "configurable" not in config:

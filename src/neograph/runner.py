@@ -307,7 +307,7 @@ def run(
         # The initial run stashes input in the caller's config dict.
         # On resume, re-inject so FromInput DI resolves for post-interrupt nodes.
         if config is not None:
-            neo_input = config.get("configurable", {}).get("_neo_input")
+            neo_input = config.get("configurable", {}).get(StateKeys.CONFIG_INPUT)
             if neo_input is not None:
                 config = _inject_input_to_config(neo_input, config)
         return _strip_internals(graph.invoke(Command(resume=resume), config=config))
@@ -317,7 +317,7 @@ def run(
         if config is None:
             config = {}
         configurable = config.setdefault("configurable", {})
-        configurable["_neo_input"] = input
+        configurable[StateKeys.CONFIG_INPUT] = input
         config = _inject_input_to_config(input, config)
 
         # Defensive copy: framework keys must not leak into the caller's dict.

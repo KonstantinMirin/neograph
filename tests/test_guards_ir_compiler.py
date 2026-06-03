@@ -55,12 +55,16 @@ class TestNoTicketIdsInComments:
     from creeping back after cleanup.
     """
 
+    # Named so the regex carries a slip meta-test (PROC-2). The id body is
+    # {3,5} chars; the boundary is where a naiver regex slips.
+    _TICKET_ID_RE = re.compile(r"\(neograph-[a-z0-9]{3,5}\)")
+
     def test_no_parenthesized_ticket_ids(self):
         """No (neograph-xxxx) patterns in source code."""
         violations = []
         for py_file in sorted(SRC_DIR.glob("*.py")):
             for i, line in enumerate(py_file.read_text().splitlines(), 1):
-                if re.search(r"\(neograph-[a-z0-9]{3,5}\)", line):
+                if self._TICKET_ID_RE.search(line):
                     stripped = line.lstrip()[:80]
                     violations.append(f"  {py_file.name}:{i}: {stripped}")
         assert violations == [], (
@@ -69,6 +73,19 @@ class TestNoTicketIdsInComments:
             + ("\n  ..." if len(violations) > 20 else "")
             + "\n\nRemove the (neograph-xxxx) part. Keep the comment text."
         )
+
+    def test_slip_ticket_id_re(self):
+        """Regex-slip: the {3,5} id body and the required parentheses are the
+        boundaries where a regression slips. Prove the live forms match and the
+        near-misses do not."""
+        # Must MATCH: real parenthesized ids (3-5 char bodies).
+        assert self._TICKET_ID_RE.search("see (neograph-abc) here")
+        assert self._TICKET_ID_RE.search("fixed (neograph-26ih)")
+        # Must NOT match: no parens (bare id in prose is allowed) ...
+        assert not self._TICKET_ID_RE.search("see neograph-26ih here")
+        # ... and an over-long body outside {3,5} (e.g. a 6+ char tail) at the
+        # paren boundary: the closing paren cannot follow a 6-char body directly.
+        assert not self._TICKET_ID_RE.search("(neograph-abcdef)")
 
 
 class TestNodeIRTyping:

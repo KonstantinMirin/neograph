@@ -54,7 +54,6 @@ from neograph._subconstruct import make_subgraph_fn  # noqa: F401 — re-exporte
 # Backward-compat re-exports for tests that imported these helpers from
 # factory.py before the §4 split. Each is `noqa`'d individually because ruff
 # strips items inside a parenthesized import group even with a line-level noqa.
-from neograph.di import _isinstance_safe as _is_instance_safe  # noqa: F401
 from neograph.di import (
     _unwrap_each_dict,  # noqa: F401
     _unwrap_loop_value,  # noqa: F401

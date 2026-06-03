@@ -9,8 +9,7 @@ from typing import get_origin as _get_origin
 from neograph._normalize import normalize_inputs, normalize_outputs
 from neograph._state_bus import StateBus
 from neograph._state_keys import StateKeys
-from neograph.di import _isinstance_safe as _is_instance_safe
-from neograph.di import _unwrap_each_dict, _unwrap_loop_value
+from neograph.di import _isinstance_safe, _unwrap_each_dict, _unwrap_loop_value
 from neograph.modifiers import ModifierCombo, classify_modifiers
 from neograph.naming import field_name_for
 from neograph.node import Node
@@ -46,7 +45,7 @@ def _classify_input_shape(state: StateBus, node: Node) -> InputShape:
     # StateBus.get optional: framework — neo_each_item is absent for non-fan-out
     # nodes; absence is the documented signal.
     replicate_item = state.get(StateKeys.EACH_ITEM)
-    if replicate_item is not None and _is_instance_safe(replicate_item, node.inputs):
+    if replicate_item is not None and _isinstance_safe(replicate_item, node.inputs):
         return InputShape.EACH_ITEM
 
     if normalize_inputs(node.inputs).is_dict_form:
@@ -141,7 +140,7 @@ def _extract_single_type(state: StateBus, node: Node) -> Any:
         val = state.get_required(attr_name, node_label=node.name)
         val = _unwrap_loop_value(val, node.inputs)
         val = _unwrap_each_dict(val, node.inputs)
-        if val is not None and _is_instance_safe(val, node.inputs):
+        if val is not None and _isinstance_safe(val, node.inputs):
             return val
     return None
 

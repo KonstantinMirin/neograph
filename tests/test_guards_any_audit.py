@@ -381,6 +381,17 @@ class TestArbitraryTypesJustified:
             tmp_path / fname, lineno, "# arbitrary_types_allowed:"
         ), "scanner failed to honor a present justification"
 
+    def test_slip_arbitrary_types_re(self):
+        """Regex-slip: the BOTH-forms support is load-bearing. A naive
+        ``arbitrary_types_allowed=True`` regex would slip the dict-literal form
+        ``"arbitrary_types_allowed": True``. Prove both ``=`` and ``:`` (quoted)
+        forms match, with whitespace variants, and a ``=False`` does not."""
+        assert _ARBITRARY_TYPES_RE.search("model_config = ConfigDict(arbitrary_types_allowed=True)")
+        assert _ARBITRARY_TYPES_RE.search('    "arbitrary_types_allowed": True,')
+        assert _ARBITRARY_TYPES_RE.search("arbitrary_types_allowed = True")
+        # Must NOT match the disabled form (the whole point is detecting True).
+        assert not _ARBITRARY_TYPES_RE.search("arbitrary_types_allowed=False")
+
 
 # Matches both ConfigDict(arbitrary_types_allowed=True) and
 # {"arbitrary_types_allowed": True} forms. The optional trailing quote handles
@@ -476,9 +487,9 @@ NEOGRAPH_ERROR_ALLOWLIST: dict[str, str] = {
     # ── node.py — Pydantic BeforeValidator boundary ──
     # _validate_type_spec runs inside Pydantic field validation; Pydantic
     # catches TypeError and rolls it into ValidationError.
-    "node.py:107": "Pydantic BeforeValidator boundary; TypeError is rolled into ValidationError",
-    "node.py:109": "Pydantic BeforeValidator boundary; TypeError is rolled into ValidationError",
-    "node.py:113": "Pydantic BeforeValidator boundary; TypeError is rolled into ValidationError",
+    "node.py:108": "Pydantic BeforeValidator boundary; TypeError is rolled into ValidationError",
+    "node.py:110": "Pydantic BeforeValidator boundary; TypeError is rolled into ValidationError",
+    "node.py:114": "Pydantic BeforeValidator boundary; TypeError is rolled into ValidationError",
 }
 
 

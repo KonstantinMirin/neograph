@@ -481,15 +481,32 @@ class TestNeoStateKeysCentralized:
     eliminates that whole class of bug.
 
     This guard AST-scans every `src/neograph/*.py` (except `_state_keys.py`)
-    for string-literal fragments matching `^neo_`. Both plain `"neo_..."`
-    constants and f-string fragments like `f"neo_loop_count_{field}"` are
-    detected.
+    for offending string-literal fragments in two layers:
+
+    * Layer A — any bare ``neo_*`` fragment ANYWHERE (a bare ``neo_`` literal is
+      never a legitimate attribute, so position is irrelevant). Covers plain
+      ``"neo_..."`` constants and f-string fragments like
+      ``f"neo_loop_count_{field}"``.
+    * Layer B — a leading-underscore ``_neo_*`` fragment ONLY when it sits in a
+      state-dict KEY position: a subscript slice (``x["_neo_..."]``) or the
+      first arg of a ``.get`` / ``.pop`` / ``.setdefault`` call
+      (``x.get("_neo_...")``). This is RECEIVER-AGNOSTIC (it does not depend on
+      the variable being named ``state``), so it survives aliasing. It does NOT
+      flag the legitimate ``_neo_*`` graph-object attribute namespace
+      (``getattr`` args, ``__slots__`` members, attribute access).
+
+    Layer B closes MED-06: ``state["_neo_isolated_input"]`` slipped the old
+    ``^neo_`` anchor entirely because of the leading underscore.
 
     If this test fails, replace the literal with the named constant or builder
     from `neograph._state_keys` — do NOT add an allowlist entry.
     """
 
-    PATTERN = re.compile(r"^neo_")
+    # Matches both ``neo_*`` (Layer A) and ``_neo_*`` (Layer B); the leading
+    # underscore is optional. The layer logic in ``_scan`` decides which match
+    # counts in which context.
+    _NEO_KEY_RE = re.compile(r"^_?neo_")
+    _KEY_ACCESS_METHODS = frozenset({"get", "pop", "setdefault"})
 
     @staticmethod
     def _string_fragments(node: ast.AST):
@@ -508,6 +525,37 @@ class TestNeoStateKeysCentralized:
                     yield part.value
 
     @classmethod
+    def _key_position_node_ids(cls, tree: ast.AST) -> set[int]:
+        """Return ``id()`` of every str-literal/f-string node that sits in a
+        state-dict key position. Receiver-agnostic. Covers the three ways a
+        state-dict key literal appears:
+
+        * subscript slice — ``x["_neo_..."]`` (assignment or read)
+        * ``.get``/``.pop``/``.setdefault`` first arg — ``x.get("_neo_...")``
+        * dict-literal key — ``{"_neo_...": v}`` (also catches the
+          ``x.update({"_neo_...": v})`` form, whose argument is a dict literal)
+
+        It deliberately does NOT cover ``getattr``/``__slots__``/attribute
+        access — those are the legitimate ``_neo_*`` graph-object namespace.
+        """
+        key_ids: set[int] = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Subscript):
+                key_ids.add(id(node.slice))
+            elif isinstance(node, ast.Dict):
+                for key in node.keys:
+                    if key is not None:  # None == ``**spread``; no literal key
+                        key_ids.add(id(key))
+            elif (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr in cls._KEY_ACCESS_METHODS
+                and node.args
+            ):
+                key_ids.add(id(node.args[0]))
+        return key_ids
+
+    @classmethod
     def _scan(cls, path: pathlib.Path) -> list[tuple[int, str]]:
         """Return a list of (lineno, fragment) for every offending literal."""
         source = path.read_text()
@@ -516,10 +564,15 @@ class TestNeoStateKeysCentralized:
         except SyntaxError:
             return []
 
+        key_ids = cls._key_position_node_ids(tree)
         hits: list[tuple[int, str]] = []
         for node in ast.walk(tree):
+            in_key_position = id(node) in key_ids
             for frag in cls._string_fragments(node):
-                if cls.PATTERN.match(frag):
+                if not cls._NEO_KEY_RE.match(frag):
+                    continue
+                bare = not frag.startswith("_")  # Layer A: bare neo_* anywhere
+                if bare or in_key_position:  # Layer B: _neo_* only in key position
                     hits.append((node.lineno, frag))
         return hits
 
@@ -555,6 +608,55 @@ class TestNeoStateKeysCentralized:
         hits = self._scan(bad)
         assert hits, "scanner failed to detect injected `neo_*` f-string fragment"
         assert any("neo_synthetic_" in h[1] for h in hits)
+
+    def test_slip_neo_key_re_catches_leading_underscore_in_key_position(self, tmp_path):
+        """Regex-slip (MED-06): a `_neo_*` state-dict key in KEY POSITION slipped
+        the old `^neo_` anchor entirely. The hardened guard must catch a
+        leading-underscore `_neo_*` literal used as a subscript-slice or a
+        ``.get``/``.pop``/``.setdefault`` arg -- regardless of receiver name --
+        while NOT flagging the legitimate `_neo_*` graph-object attribute
+        namespace (getattr / ``__slots__`` / attribute access).
+
+        This is the test that would have caught ``state["_neo_isolated_input"]``
+        at node.py:414.
+        """
+        # Layer A unchanged: bare `neo_*` literal anywhere is still caught.
+        a = tmp_path / "layer_a.py"
+        a.write_text('X = "neo_bare_anywhere"\n')
+        assert self._scan(a), "Layer A regression: bare neo_* literal not caught"
+
+        # Layer B: `_neo_*` in key position (subscript) -- the MED-06 slip.
+        sub = tmp_path / "key_subscript.py"
+        sub.write_text('def f(state, x):\n    state["_neo_slipped"] = x\n')
+        hits = self._scan(sub)
+        assert hits and any("_neo_slipped" in h[1] for h in hits), (
+            "slip: `_neo_*` literal in subscript key position must be caught"
+        )
+
+        # Layer B: `_neo_*` as a `.get` arg is also a key position.
+        getarg = tmp_path / "key_get.py"
+        getarg.write_text('def f(state):\n    return state.get("_neo_slipped_get")\n')
+        assert self._scan(getarg), "slip: `_neo_*` literal as a .get() arg must be caught"
+
+        # Layer B: `_neo_*` as a dict-literal key (the idiomatic alternative to
+        # subscript assignment, incl. the `.update({...})` form) is caught.
+        dictlit = tmp_path / "key_dict.py"
+        dictlit.write_text('def f(state, v):\n    state.update({"_neo_slipped_dict": v})\n')
+        assert self._scan(dictlit), "slip: `_neo_*` dict-literal key must be caught"
+
+        # NEGATIVE: legitimate `_neo_*` graph-object attribute namespace must
+        # NOT be flagged (getattr arg, __slots__ membership, attribute access).
+        attr = tmp_path / "graph_attr.py"
+        attr.write_text(
+            "class P:\n"
+            '    __slots__ = ("_neo_source", "_neo_tracer")\n'
+            "def f(graph):\n"
+            '    return getattr(graph, "_neo_construct", None)\n'
+        )
+        assert self._scan(attr) == [], (
+            "over-detection: `_neo_*` graph-object attributes (getattr/__slots__) "
+            "must NOT be flagged -- only state-dict KEY positions"
+        )
 
 
 class TestNoLlmModuleGlobals:

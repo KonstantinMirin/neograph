@@ -43,6 +43,17 @@ class StateKeys:
     # Sub-construct boundary port.
     SUBGRAPH_INPUT = "neo_subgraph_input"
 
+    # Historical leading-underscore framework keys (predate this module). Kept
+    # at their original literal values for zero behavior change; centralized
+    # here so the StateKeys guard can no longer slip them (MED-06).
+    #
+    # ISOLATED_INPUT is a state-DICT key: run_isolated() seeds a typed instance
+    # under it so _extract_input can find it by type (node.py).
+    ISOLATED_INPUT = "_neo_isolated_input"
+    # CONFIG_INPUT is a config['configurable'] key (NOT a state-bus key): the
+    # runner stashes the run input there for re-injection on resume (runner.py).
+    CONFIG_INPUT = "_neo_input"
+
     @staticmethod
     def loop_count(field_name: str) -> str:
         """Per-loop iteration counter field name."""

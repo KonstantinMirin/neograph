@@ -524,16 +524,20 @@ class TestToolConfigOnlyPassedPositionally:
     pej0/rnjw closed for llm_config.
     """
 
+    # Named (PROC-2) so the regex set carries a slip meta-test. Both the
+    # subscript (`[`) and the `.get(` read forms must be caught for both
+    # `tool` and `tool_spec` receivers.
+    _TOOL_CONFIG_READ_RES = (
+        re.compile(r"\btool_spec\.config\["),
+        re.compile(r"\btool_spec\.config\.get\("),
+        re.compile(r"\btool\.config\["),
+        re.compile(r"\btool\.config\.get\("),
+    )
+
     def test_no_framework_reads_on_tool_spec_config(self):
         from pathlib import Path
 
         src_dir = Path(__file__).resolve().parents[1] / "src" / "neograph"
-        forbidden = [
-            re.compile(r"\btool_spec\.config\["),
-            re.compile(r"\btool_spec\.config\.get\("),
-            re.compile(r"\btool\.config\["),
-            re.compile(r"\btool\.config\.get\("),
-        ]
 
         violations: list[str] = []
         for py_file in src_dir.rglob("*.py"):
@@ -543,7 +547,7 @@ class TestToolConfigOnlyPassedPositionally:
                 stripped = line.lstrip()
                 if stripped.startswith(("#", "//", "*", '"', "'")):
                     continue
-                for pattern in forbidden:
+                for pattern in self._TOOL_CONFIG_READ_RES:
                     if pattern.search(line):
                         violations.append(
                             f"{py_file.name}:{line_no} -- {line.strip()}"
@@ -556,6 +560,24 @@ class TestToolConfigOnlyPassedPositionally:
             "default-drift bug class that LlmConfig closed for llm_config. "
             f"Violations:\n{chr(10).join(violations)}"
         )
+
+    def test_slip_tool_config_read_res(self):
+        """Regex-slip: BOTH read forms (`[` subscript and `.get(`) for BOTH
+        receivers (`tool`, `tool_spec`) must be caught, and the `\\b` word
+        boundary must not let a longer attribute name (e.g. `mytool.config[`)
+        masquerade or be missed. Prove each form matches and an unrelated
+        `.config` access on a different object does not."""
+        def matched(s: str) -> bool:
+            return any(p.search(s) for p in self._TOOL_CONFIG_READ_RES)
+
+        assert matched("x = tool.config['k']")
+        assert matched("x = tool.config.get('k')")
+        assert matched("x = tool_spec.config['k']")
+        assert matched("x = tool_spec.config.get('k')")
+        # Word boundary: a different object's .config read is NOT flagged.
+        assert not matched("x = llm.config['k']")
+        # Pass-through (positional forward of the whole dict) is NOT a key read.
+        assert not matched("factory(tool.config)")
 
 
 # ═══════════════════════════════════════════════════════════════════════════
