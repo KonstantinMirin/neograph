@@ -83,29 +83,48 @@ class TestDecoratorsNoModuleLevelDicts:
 
 
 class TestNoNeoMonkeyPatch:
-    """HIGH-02: no ``_neo_*`` attribute is stitched onto a runtime object, and
-    ``compile()`` returns the typed ``CompiledNeograph`` facade.
+    """HIGH-02: the 8 framework-metadata fields are never stitched onto a
+    runtime object, and ``compile()`` returns the typed ``CompiledNeograph``.
 
     The pre-migration shape stashed 8 ``compiled._neo_* = ...`` attributes on
     LangGraph's CompiledStateGraph (each with ``# type: ignore[attr-defined]``)
     and read them back via ``getattr(graph, "_neo_*", None)`` in runner.py /
     verify.py. The facade replaces all of that with typed fields.
+
+    Scope = exactly the 8 monkey-patched metadata names. The ForwardConstruct
+    symbolic-tracer ``_neo_*`` attribute namespace (``_neo_tracer``,
+    ``_neo_source``, ``_neo_name``, ``_neo_branch_meta``, ``_neo_path``,
+    ``_neo_nodes``, ``_neo_real``) is a DISTINCT, legitimate private-attribute
+    namespace on proxy objects and is intentionally NOT in scope.
     """
 
-    @staticmethod
-    def _neo_attr_assigns(tree: ast.AST) -> list[int]:
-        """Lineno of every ``<expr>._neo_* = ...`` attribute assignment."""
+    # The framework-metadata fields that used to be monkey-patched onto the
+    # compiled LangGraph graph and now live as CompiledNeograph fields.
+    MONKEY_PATCHED_NAMES = frozenset({
+        "_neo_required_di",
+        "_neo_schema_fingerprint",
+        "_neo_node_fingerprints",
+        "_neo_construct",
+        "_neo_runtime",
+        "_neo_scripted",
+        "_neo_conditions",
+        "_neo_tool_factories",
+    })
+
+    @classmethod
+    def _neo_attr_assigns(cls, tree: ast.AST) -> list[int]:
+        """Lineno of every ``<expr>.<metadata-name> = ...`` assignment."""
         hits: list[int] = []
         for node in ast.walk(tree):
             if isinstance(node, ast.Assign):
                 for tgt in node.targets:
-                    if isinstance(tgt, ast.Attribute) and tgt.attr.startswith("_neo_"):
+                    if isinstance(tgt, ast.Attribute) and tgt.attr in cls.MONKEY_PATCHED_NAMES:
                         hits.append(node.lineno)
         return hits
 
-    @staticmethod
-    def _neo_getattr_reads(tree: ast.AST) -> list[int]:
-        """Lineno of every ``getattr(x, "_neo_...")`` read."""
+    @classmethod
+    def _neo_getattr_reads(cls, tree: ast.AST) -> list[int]:
+        """Lineno of every ``getattr(x, "<metadata-name>")`` read."""
         hits: list[int] = []
         for node in ast.walk(tree):
             if (
@@ -115,7 +134,7 @@ class TestNoNeoMonkeyPatch:
                 and len(node.args) >= 2
                 and isinstance(node.args[1], ast.Constant)
                 and isinstance(node.args[1].value, str)
-                and node.args[1].value.startswith("_neo_")
+                and node.args[1].value in cls.MONKEY_PATCHED_NAMES
             ):
                 hits.append(node.lineno)
         return hits
@@ -160,12 +179,23 @@ class TestNoNeoMonkeyPatch:
         raise AssertionError("compile() not found in compiler.py")
 
     def test_mutation_neo_assign_detected(self):
-        tree = ast.parse("def f(g):\n    g._neo_thing = 1\n")
+        tree = ast.parse("def f(g):\n    g._neo_construct = 1\n")
         assert self._neo_attr_assigns(tree), "scanner missed a _neo_ assignment"
 
     def test_mutation_neo_getattr_detected(self):
-        tree = ast.parse('def f(g):\n    return getattr(g, "_neo_thing", None)\n')
+        tree = ast.parse('def f(g):\n    return getattr(g, "_neo_runtime", None)\n')
         assert self._neo_getattr_reads(tree), "scanner missed a _neo_ getattr"
+
+    def test_forward_tracer_namespace_not_flagged(self):
+        """The ForwardConstruct _neo_* tracer namespace is out of scope."""
+        tree = ast.parse(
+            "def f(self, left):\n"
+            "    self._neo_tracer = 1\n"
+            "    self._neo_source = 2\n"
+            "    return getattr(left, '_neo_tracer', None)\n"
+        )
+        assert self._neo_attr_assigns(tree) == []
+        assert self._neo_getattr_reads(tree) == []
 
 
 class TestFactoryNoTestReexportShims:

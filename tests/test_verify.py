@@ -54,9 +54,9 @@ class TestVerifyCompiled:
         pipeline = Construct("temp", nodes=[a])
         graph = compile(pipeline, **build_test_compile_kwargs())
 
-        # Post-§2: compile() captures a frozen snapshot into graph._neo_scripted.
+        # Post-§2: compile() captures a frozen snapshot into graph.scripted.
         # Simulate "registry cleared after compile" by mutating the snapshot directly.
-        snapshot = getattr(graph, "_neo_scripted", {})
+        snapshot = graph.scripted
         saved = snapshot.pop("_vc_temp", None)
         try:
             issues = verify_compiled(graph)
@@ -83,7 +83,7 @@ class TestVerifyCompiled:
 
         # Remove the condition from the compiled graph's stashed dict to
         # simulate "condition deregistered after compile".
-        compiled_conditions = getattr(graph, "_neo_conditions", {})
+        compiled_conditions = graph.conditions
         if "_vc_cond" in compiled_conditions:
             saved = compiled_conditions.pop("_vc_cond")
         else:
@@ -110,21 +110,24 @@ class TestVerifyCompiled:
         llm_kw = configure_fake_llm(lambda tier: StructuredFake(lambda m: m(items=["x"])))
         graph = compile(pipeline, **build_test_compile_kwargs(), **llm_kw)
 
-        # Post-§2: clear the per-compile runtime snapshot to simulate
-        # "LLM factory missing".
-        saved_runtime = getattr(graph, "_neo_runtime", None)
-        graph._neo_runtime = LlmRuntime(
-            llm_factory=None,
-            prompt_compiler=saved_runtime.prompt_compiler if saved_runtime else None,
-            renderer=saved_runtime.renderer if saved_runtime else None,
-            cost_callback=saved_runtime.cost_callback if saved_runtime else None,
+        # Simulate "LLM factory missing": build a CompiledNeograph with a
+        # factory-less runtime. CompiledNeograph is frozen, so use
+        # dataclasses.replace rather than mutating the field in place.
+        import dataclasses
+
+        saved_runtime = graph.runtime
+        graph = dataclasses.replace(
+            graph,
+            runtime=LlmRuntime(
+                llm_factory=None,
+                prompt_compiler=saved_runtime.prompt_compiler if saved_runtime else None,
+                renderer=saved_runtime.renderer if saved_runtime else None,
+                cost_callback=saved_runtime.cost_callback if saved_runtime else None,
+            ),
         )
-        try:
-            issues = verify_compiled(graph)
-            llm_issues = [i for i in issues if i.kind == "llm_factory_missing"]
-            assert len(llm_issues) >= 1
-        finally:
-            graph._neo_runtime = saved_runtime
+        issues = verify_compiled(graph)
+        llm_issues = [i for i in issues if i.kind == "llm_factory_missing"]
+        assert len(llm_issues) >= 1
 
     def test_state_field_cross_check(self):
         """Every node output has a corresponding state field."""
@@ -141,14 +144,14 @@ class TestVerifyCompiled:
         assert state_issues == []
 
     def test_construct_is_stashed_on_compiled_graph(self):
-        """compile() stashes _neo_construct for post-compile introspection."""
+        """compile() stashes construct for post-compile introspection."""
         register_scripted("_vc_stash", lambda i, c: RawText(text="ok"))
         a = Node.scripted("stash-test", fn="_vc_stash", outputs=RawText)
         pipeline = Construct("stash", nodes=[a])
         graph = compile(pipeline, **build_test_compile_kwargs())
 
-        assert hasattr(graph, "_neo_construct")
-        assert graph._neo_construct is pipeline
+        assert hasattr(graph, "construct")
+        assert graph.construct is pipeline
 
     def test_verify_compiled_with_node_decorator(self):
         """Works with @node decorated pipelines."""

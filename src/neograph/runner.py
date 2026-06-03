@@ -18,6 +18,7 @@ from typing import Any
 from langchain_core.runnables import RunnableConfig
 from langgraph.types import Command
 
+from neograph._compiled import CompiledNeograph
 from neograph._state_keys import StateKeys
 from neograph.errors import CheckpointSchemaError, ExecutionError
 from neograph.naming import field_name_for
@@ -30,16 +31,16 @@ def _strip_internals(result: Any) -> Any:
     return {k: v for k, v in result.items() if not k.startswith(StateKeys.FRAMEWORK_PREFIX)}
 
 
-def _preflight_di_check(graph: Any, config: RunnableConfig) -> None:
+def _preflight_di_check(graph: CompiledNeograph, config: RunnableConfig) -> None:
     """Validate that all required DI params are present before starting any node.
 
-    compile() stashes _neo_required_di on the graph — a dict with "input"
-    and "config" sets of required param names. This check runs before
+    ``compile()`` records ``required_di`` on the CompiledNeograph — a dict with
+    "input" and "config" sets of required param names. This check runs before
     graph.invoke() so missing params fail at the gate, not mid-pipeline.
     """
-    required = getattr(graph, "_neo_required_di", None)
-    if required is None:
-        return  # graph compiled without DI metadata (e.g., raw LangGraph)
+    required = graph.required_di
+    if required is None:  # pragma: no cover — required_di is always populated
+        return
 
     configurable = config.get("configurable", {})
     missing_input = required.get("input", set()) - set(configurable.keys())
@@ -74,7 +75,7 @@ def _inject_input_to_config(
     return {**config, "configurable": merged}
 
 
-def _verify_checkpoint_schema(graph: Any, config: RunnableConfig, *, auto_resume: bool = True) -> None:
+def _verify_checkpoint_schema(graph: CompiledNeograph, config: RunnableConfig, *, auto_resume: bool = True) -> None:
     """Verify checkpoint state schema matches the current graph.
 
     Compares the neo_schema_fingerprint stored in the checkpoint against
@@ -82,7 +83,7 @@ def _verify_checkpoint_schema(graph: Any, config: RunnableConfig, *, auto_resume
     rewinds to the checkpoint before the earliest changed node and re-invokes.
     When False, raises CheckpointSchemaError.
     """
-    current_fp = getattr(graph, "_neo_schema_fingerprint", None)
+    current_fp = graph.schema_fingerprint
     if current_fp is None:
         return  # no fingerprint on graph (pre-feature compile)
 
@@ -130,7 +131,7 @@ def _verify_checkpoint_schema(graph: Any, config: RunnableConfig, *, auto_resume
 
 
 def _auto_resume_from_divergence(
-    graph: Any, config: RunnableConfig, invalidated: set[str],
+    graph: CompiledNeograph, config: RunnableConfig, invalidated: set[str],
 ) -> None:
     """Rewind checkpoint to before the earliest invalidated node.
 
@@ -156,7 +157,7 @@ def _auto_resume_from_divergence(
         config.setdefault("configurable", {})["checkpoint_id"] = rewind_checkpoint_id
 
 
-def _compute_invalidated_nodes(graph: Any, channel_values: Any) -> set[str]:
+def _compute_invalidated_nodes(graph: CompiledNeograph, channel_values: Any) -> set[str]:
     """Compute which nodes changed + their transitive descendants.
 
     Compares per-node fingerprints stored in the checkpoint against the
@@ -164,7 +165,7 @@ def _compute_invalidated_nodes(graph: Any, channel_values: Any) -> set[str]:
     producer→consumer adjacency (keyed by state-field name) to return the
     full transitive closure.
     """
-    current_nfp = getattr(graph, "_neo_node_fingerprints", None)
+    current_nfp = graph.node_fingerprints
     if current_nfp is None:
         return set()
 
@@ -187,7 +188,7 @@ def _compute_invalidated_nodes(graph: Any, channel_values: Any) -> set[str]:
     if not changed:
         return set()
 
-    construct = getattr(graph, "_neo_construct", None)
+    construct = graph.construct
     if construct is None:
         return changed
 
@@ -249,7 +250,7 @@ def _transitive_closure(seeds: set[str], adjacency: dict[str, set[str]]) -> set[
     return closure
 
 
-def _has_existing_checkpoint(graph: Any, config: RunnableConfig) -> bool:
+def _has_existing_checkpoint(graph: CompiledNeograph, config: RunnableConfig) -> bool:
     """Check if a checkpoint exists for this thread_id.
 
     Returns True if the graph has a checkpointer and it contains saved state
@@ -267,7 +268,7 @@ def _has_existing_checkpoint(graph: Any, config: RunnableConfig) -> bool:
 
 
 def run(
-    graph: Any,
+    graph: CompiledNeograph,
     input: dict[str, Any] | None = None,
     resume: dict[str, Any] | None = None,
     config: RunnableConfig | None = None,
@@ -324,10 +325,10 @@ def run(
         input = {**input}
 
         # Inject schema fingerprint into initial state for checkpoint storage
-        fp = getattr(graph, "_neo_schema_fingerprint", None)
+        fp = graph.schema_fingerprint
         if fp is not None:
             input[StateKeys.SCHEMA_FINGERPRINT] = fp
-        node_fps = getattr(graph, "_neo_node_fingerprints", None)
+        node_fps = graph.node_fingerprints
         if node_fps is not None:
             input[StateKeys.NODE_FINGERPRINTS] = node_fps
 

@@ -237,7 +237,10 @@ class TestOracleClosureNodeNameRequiredAndComplete:
         graph = compile(parent, **build_test_compile_kwargs())
         # Reach into the compiled LangGraph to find the each redirect closure
         # for the sub-construct. Its name is sub.name per compiler.py:440.
-        nodes_dict = graph.get_graph().nodes
+        # compile() returns the CompiledNeograph facade; the raw LangGraph graph
+        # (with its pregel `.nodes`) lives on the `.graph` field.
+        lg_graph = graph.graph
+        nodes_dict = lg_graph.get_graph().nodes
         target_key = next(
             k for k in nodes_dict if "my-sub-hyphen" in k or k == "my-sub-hyphen"
         )
@@ -245,7 +248,7 @@ class TestOracleClosureNodeNameRequiredAndComplete:
         # an empty dict to force the get_required call inside the closure.
         runnable = nodes_dict[target_key]
         # The runnable wraps the closure; invoke via the graph's pregel node.
-        pregel_node = graph.nodes[target_key]
+        pregel_node = lg_graph.nodes[target_key]
         bound = pregel_node.bound
         with pytest.raises(StateMissingError) as exc_info:
             bound.invoke({}, config={})

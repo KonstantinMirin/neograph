@@ -71,7 +71,7 @@ def test_compute_invalidated_nodes_returns_transitive_closure():
     """
     pipe_v1 = _linear_chain(_A)
     graph_v1 = compile(pipe_v1, **build_test_compile_kwargs())
-    stored_fps = dict(graph_v1._neo_node_fingerprints)
+    stored_fps = dict(graph_v1.node_fingerprints)
 
     pipe_v2 = _linear_chain(_A_v2)
     graph_v2 = compile(pipe_v2, **build_test_compile_kwargs())
@@ -87,7 +87,7 @@ def test_compute_invalidated_nodes_returns_transitive_closure():
 def test_compute_invalidated_nodes_empty_when_unchanged():
     pipe = _linear_chain(_A)
     graph = compile(pipe, **build_test_compile_kwargs())
-    channel_values = {"neo_node_fingerprints": dict(graph._neo_node_fingerprints)}
+    channel_values = {"neo_node_fingerprints": dict(graph.node_fingerprints)}
 
     invalidated = _compute_invalidated_nodes(graph, channel_values)
     assert invalidated == set()
@@ -122,7 +122,7 @@ def test_compute_invalidated_nodes_through_each_modifier():
 
     pipe_v1 = build(_A, "tj_each_a_v1")
     graph_v1 = compile(pipe_v1, **build_test_compile_kwargs())
-    stored_fps = dict(graph_v1._neo_node_fingerprints)
+    stored_fps = dict(graph_v1.node_fingerprints)
 
     pipe_v2 = build(_A_v2, "tj_each_a_v2")
     graph_v2 = compile(pipe_v2, **build_test_compile_kwargs())
@@ -161,7 +161,7 @@ def test_compute_invalidated_nodes_handles_diamond():
 
     pipe_v1 = build(_A, "tj_d_a_v1")
     graph_v1 = compile(pipe_v1, **build_test_compile_kwargs())
-    stored_fps = dict(graph_v1._neo_node_fingerprints)
+    stored_fps = dict(graph_v1.node_fingerprints)
 
     pipe_v2 = build(_A_v2, "tj_d_a_v2")
     graph_v2 = compile(pipe_v2, **build_test_compile_kwargs())

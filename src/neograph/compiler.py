@@ -17,6 +17,7 @@ import structlog
 from langgraph.graph import END, START, StateGraph
 from pydantic import BaseModel
 
+from neograph._compiled import CompiledNeograph
 from neograph._dev_warnings import DEV_MODE
 from neograph._llm_runtime import EMPTY_RUNTIME, LlmRuntime, check_llm_kwargs_or_raise
 from neograph._oracle import (
@@ -68,7 +69,7 @@ def compile(
     tool_factories: dict[str, Callable] | None = None,
     _runtime: LlmRuntime | None = None,
     _scripted_lookup: dict[str, Callable] | None = None,
-) -> Any:
+) -> CompiledNeograph:
     """Compile a Construct into an executable LangGraph StateGraph.
 
     Args:
@@ -232,25 +233,28 @@ def compile(
     compiled = graph.compile(checkpointer=checkpointer)
     compile_log.info("compile_complete", state_fields=list(state_model.model_fields.keys()))
 
-    # 4. Collect required DI params for pre-flight validation in run()
-    compiled._neo_required_di = _collect_required_di(construct)  # type: ignore[attr-defined]
-
-    # 5. Schema fingerprint for checkpoint validation
-    compiled._neo_schema_fingerprint = compute_schema_fingerprint(state_model)  # type: ignore[attr-defined]
-    compiled._neo_node_fingerprints = compute_node_fingerprints(construct)  # type: ignore[attr-defined]
-
-    # 6. Stash Construct for post-compile verification (verify_compiled)
-    compiled._neo_construct = construct  # type: ignore[attr-defined]
-    compiled._neo_runtime = runtime  # type: ignore[attr-defined]
-    compiled._neo_scripted = scripted_lookup  # type: ignore[attr-defined]
-    compiled._neo_conditions = condition_lookup  # type: ignore[attr-defined]
-    compiled._neo_tool_factories = tool_factory_lookup  # type: ignore[attr-defined]
+    # 4-6. Wrap the LangGraph graph in the typed CompiledNeograph facade with
+    # all framework metadata as typed fields (no _neo_* monkey-patching):
+    #   - required_di: pre-flight DI validation in run()
+    #   - schema/node fingerprints: checkpoint-resume schema validation
+    #   - construct/runtime/scripted/conditions/tool_factories: verify_compiled
+    result = CompiledNeograph(
+        graph=compiled,
+        required_di=_collect_required_di(construct),
+        schema_fingerprint=compute_schema_fingerprint(state_model),
+        node_fingerprints=compute_node_fingerprints(construct),
+        construct=construct,
+        runtime=runtime,
+        scripted=scripted_lookup,
+        conditions=condition_lookup,
+        tool_factories=tool_factory_lookup,
+    )
 
     # 7. Dev-mode DAG visualization
     if DEV_MODE:
-        _print_dag_summary(compiled, construct)
+        _print_dag_summary(result, construct)
 
-    return compiled
+    return result
 
 
 def _collect_scripted_shims(construct: Construct) -> dict[str, Any]:
@@ -406,8 +410,9 @@ def _add_subgraph(
     )
     field_name = field_name_for(sub.name)
 
-    # Build the subgraph node function via factory
-    subgraph_fn = make_subgraph_fn(sub, sub_graph)
+    # Build the subgraph node function via factory. compile() returns the
+    # CompiledNeograph facade; make_subgraph_fn drives the raw LangGraph graph.
+    subgraph_fn = make_subgraph_fn(sub, sub_graph.graph)
 
     from typing import assert_never
 

@@ -580,7 +580,7 @@ def _add_branch_to_graph(
     for item in true_nodes:
         if isinstance(item, Construct):
             sub_graph = _compile(item, checkpointer=None, _runtime=runtime, _scripted_lookup=scripted_lookup, tool_factories=tool_factory_lookup)
-            subgraph_fn = make_subgraph_fn(item, sub_graph)
+            subgraph_fn = make_subgraph_fn(item, sub_graph.graph)
             graph.add_node(item.name, subgraph_fn)
         else:
             node_fn = make_node_fn(item, runtime=runtime, scripted_lookup=scripted_lookup, tool_factory_lookup=tool_factory_lookup)
@@ -589,7 +589,7 @@ def _add_branch_to_graph(
     for item in false_nodes:
         if isinstance(item, Construct):
             sub_graph = _compile(item, checkpointer=None, _runtime=runtime, _scripted_lookup=scripted_lookup, tool_factories=tool_factory_lookup)
-            subgraph_fn = make_subgraph_fn(item, sub_graph)
+            subgraph_fn = make_subgraph_fn(item, sub_graph.graph)
             graph.add_node(item.name, subgraph_fn)
         else:
             node_fn = make_node_fn(item, runtime=runtime, scripted_lookup=scripted_lookup, tool_factory_lookup=tool_factory_lookup)

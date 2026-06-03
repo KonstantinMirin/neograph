@@ -36,12 +36,12 @@ def verify_compiled(graph: Any) -> list[VerifyIssue]:
 
     Returns an empty list when everything checks out.
     """
-    construct = getattr(graph, "_neo_construct", None)
+    construct = getattr(graph, "construct", None)
     if construct is None:
         return [VerifyIssue(
             node_name="<graph>",
             kind="no_construct",
-            message="Compiled graph has no _neo_construct — was it compiled with neograph.compile()?",
+            message="Compiled graph has no construct — was it compiled with neograph.compile()?",
         )]
 
     issues: list[VerifyIssue] = []
@@ -52,8 +52,8 @@ def verify_compiled(graph: Any) -> list[VerifyIssue]:
 
     # Check if any LLM node exists (to validate LLM factory)
     has_llm_node = False
-    scripted_lookup: dict = getattr(graph, "_neo_scripted", {}) or {}
-    condition_lookup: dict = getattr(graph, "_neo_conditions", {}) or {}
+    scripted_lookup: dict = getattr(graph, "scripted", {}) or {}
+    condition_lookup: dict = getattr(graph, "conditions", {}) or {}
 
     _walk(
         construct, issues, state_fields,
@@ -65,7 +65,7 @@ def verify_compiled(graph: Any) -> list[VerifyIssue]:
     # After walking, check if LLM factory is needed.
     # The runtime is stashed on the compiled graph at compile time (§2).
     if _has_llm_nodes(construct):
-        runtime = getattr(graph, "_neo_runtime", None)
+        runtime = getattr(graph, "runtime", None)
         if runtime is None or runtime.llm_factory is None:
             issues.append(VerifyIssue(
                 node_name="<graph>",
