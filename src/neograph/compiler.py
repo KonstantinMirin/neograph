@@ -28,13 +28,12 @@ from neograph._oracle import (
 from neograph._runtime_registry import _decoration_registry
 from neograph._state_keys import StateKeys
 from neograph._subconstruct import make_subgraph_fn
-from neograph._wiring import (  # noqa: F401 — re-exported for backward compat
+from neograph._wiring import (
     _add_branch_to_graph,
     _add_each_oracle_fused,
     _add_loop_back_edge,
     _add_operator_check,
     _add_subgraph_loop,
-    _merge_one_group,
     _wire_each,
     _wire_oracle,
 )
