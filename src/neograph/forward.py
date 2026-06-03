@@ -75,6 +75,26 @@ _OP_MAP = {
 _MAX_BRANCHES = 8
 
 
+def _attr_chain_after_prefix(
+    source_node: Node | Construct | None, full_name: str
+) -> list[str]:
+    """Strip the ``out_of_<node>`` proxy-name prefix and return the attr chain.
+
+    The symbolic tracer names node-output proxies ``out_of_<node_name>`` and
+    appends a dotted attribute path (e.g. ``out_of_check.items.severity``). This
+    returns the path components after the prefix (``["items", "severity"]``), or
+    ``[]`` when there is no source node or the prefix does not match. Shared by
+    ``_ConditionProxy._build_runtime_condition`` and ``_Tracer.record_iteration``.
+    """
+    if source_node is None:
+        return []
+    prefix = f"out_of_{source_node.name}"
+    if not full_name.startswith(prefix):
+        return []
+    remainder = full_name[len(prefix):]
+    return [p for p in remainder.split(".") if p]
+
+
 class ForwardConstruct(Construct):
     """A Construct whose node list is discovered from class attributes.
 
@@ -283,18 +303,8 @@ class _ConditionProxy:
         source_node = left._neo_source
         full_name = left._neo_name
 
-        # Extract attribute chain after the proxy name prefix
-        # The prefix is "out_of_<node_name>" for node outputs
-        if source_node is not None:
-            prefix = f"out_of_{source_node.name}"
-            if full_name.startswith(prefix):
-                remainder = full_name[len(prefix):]
-                # remainder is like ".score" or ".items.first.severity"
-                attr_chain = [p for p in remainder.split(".") if p]
-            else:
-                attr_chain = []
-        else:
-            attr_chain = []
+        # Extract attribute chain after the "out_of_<node>" proxy prefix.
+        attr_chain = _attr_chain_after_prefix(source_node, full_name)
 
         return _ConditionSpec(
             source_node=source_node,
@@ -418,17 +428,12 @@ class _Tracer:
         source_node = proxy._neo_source
         full_name = proxy._neo_name
 
-        if source_node is not None:
-            prefix = f"out_of_{source_node.name}"
-            field_name = field_name_for(source_node.name)
-            if full_name.startswith(prefix):
-                remainder = full_name[len(prefix):]
-                attr_parts = [p for p in remainder.split(".") if p]
-                over_path = ".".join([field_name] + attr_parts)
-            else:
-                over_path = field_name
-        else:
+        if source_node is None:
             over_path = full_name
+        else:
+            field_name = field_name_for(source_node.name)
+            attr_parts = _attr_chain_after_prefix(source_node, full_name)
+            over_path = ".".join([field_name, *attr_parts]) if attr_parts else field_name
 
         self._loop_stack.append(over_path)
         # Yield a single proxy item — enough for tracing the loop body once
@@ -760,6 +765,25 @@ def _merge_branch_traces(
     return _merge_sequential_branches(branch_traces, branches)
 
 
+def _build_condition_spec(condition: _ConditionProxy | _Proxy) -> _ConditionSpec:
+    """Resolve a branch condition into a _ConditionSpec.
+
+    A _ConditionProxy carries a comparison and builds its own spec; a plain
+    _Proxy used directly as a bool becomes a truthy check. Shared by both branch
+    merge paths so the truthy-fallback default lives in one place.
+    """
+    if isinstance(condition, _ConditionProxy):
+        return condition._build_runtime_condition()
+    # Plain proxy used as bool — less common, create a truthy-check spec.
+    return _ConditionSpec(
+        source_node=condition._neo_source,
+        attr_chain=[],
+        op_fn=op_module.truth,
+        op_str="truthy",
+        threshold=None,
+    )
+
+
 def _merge_single_branch(
     trace: _BranchTrace,
     branch: _BranchPoint,
@@ -786,18 +810,7 @@ def _merge_single_branch(
     false_only = [n for n in trace.false_nodes if n.name not in true_set]
 
     # Build condition spec from the branch's condition
-    condition = branch.condition
-    if isinstance(condition, _ConditionProxy):
-        cond_spec = condition._build_runtime_condition()
-    else:
-        # Plain proxy used as bool — less common, create a truthy-check spec
-        cond_spec = _ConditionSpec(
-            source_node=condition._neo_source,
-            attr_chain=[],
-            op_fn=op_module.truth,
-            op_str="truthy",
-            threshold=None,
-        )
+    cond_spec = _build_condition_spec(branch.condition)
 
     branch_meta = _BranchMeta(
         condition_spec=cond_spec,
@@ -844,17 +857,7 @@ def _merge_sequential_branches(
         false_only = [n for n in trace.false_nodes if n.name not in true_names]
 
         # Build condition spec
-        condition = branch.condition
-        if isinstance(condition, _ConditionProxy):
-            cond_spec = condition._build_runtime_condition()
-        else:
-            cond_spec = _ConditionSpec(
-                source_node=condition._neo_source,
-                attr_chain=[],
-                op_fn=op_module.truth,
-                op_str="truthy",
-                threshold=None,
-            )
+        cond_spec = _build_condition_spec(branch.condition)
 
         branch_meta = _BranchMeta(
             condition_spec=cond_spec,

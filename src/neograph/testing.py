@@ -27,7 +27,7 @@ from __future__ import annotations
 import os
 from typing import Any
 
-from neograph._normalize import normalize_inputs
+from neograph._normalize import normalize_inputs, normalize_outputs
 from neograph.construct import Construct
 from neograph.naming import field_name_for
 from neograph.node import Node
@@ -36,11 +36,11 @@ from neograph.node import Node
 
 def _node_info(node: Node) -> dict[str, Any]:
     inputs_dict = normalize_inputs(node.inputs).by_name
-    outputs_name = (
-        node.outputs.__name__
-        if hasattr(node.outputs, "__name__")
-        else repr(node.outputs)
-    )
+    # Collapse dict-form outputs to the primary type before rendering its name —
+    # the raw dict has no __name__ and repr(dict) emits "<class ...>" reprs that
+    # are not valid Python in the generated assertions (neograph-wpzg/CON-01).
+    primary_out = normalize_outputs(node.outputs).primary
+    outputs_name = primary_out.__name__ if primary_out is not None else "None"
     oracle = node.modifier_set.oracle
     each = node.modifier_set.each
     loop = node.modifier_set.loop
@@ -470,6 +470,19 @@ def _gen_e2e(construct_var: str, construct_name: str, nodes: list[dict]) -> str:
     return '\n'.join(L)
 
 
+def _emit_set_block(field_name: str, items: list[str]) -> list[str]:
+    """Emit a ``FIELD = {"a", "b", ...}`` class-attr set literal as source lines.
+
+    Single source for the four EXPECTED_* drift-detection sets in _gen_sync.
+    The caller chooses iteration/sort order of ``items``.
+    """
+    lines = [f'    {field_name} = {{']
+    lines.extend(f'        "{item}",' for item in items)
+    lines.append('    }')
+    lines.append('')
+    return lines
+
+
 def _gen_sync(construct_var: str, nodes: list[dict], subs: list[dict]) -> str:
     """Generate tier-aware drift detection."""
     all_items = nodes + [{"name": s["name"], "field": s["field"]} for s in subs]
@@ -496,34 +509,12 @@ def _gen_sync(construct_var: str, nodes: list[dict], subs: list[dict]) -> str:
         'class TestSync:',
         f'    """Drift detection for \'{construct_var}\'."""',
         '',
-        '    EXPECTED_NODES = {',
     ]
-    for i in all_items:
-        L.append(f'        "{i["name"]}",')
+    L.extend(_emit_set_block("EXPECTED_NODES", [i["name"] for i in all_items]))
+    L.extend(_emit_set_block("EXPECTED_SCRIPTED", sorted(scripted_names)))
+    L.extend(_emit_set_block("EXPECTED_LLM", sorted(llm_names)))
+    L.extend(_emit_set_block("EXPECTED_MODIFIED", sorted(modifier_names)))
     L.extend([
-        '    }',
-        '',
-        '    EXPECTED_SCRIPTED = {',
-    ])
-    for name in sorted(scripted_names):
-        L.append(f'        "{name}",')
-    L.extend([
-        '    }',
-        '',
-        '    EXPECTED_LLM = {',
-    ])
-    for name in sorted(llm_names):
-        L.append(f'        "{name}",')
-    L.extend([
-        '    }',
-        '',
-        '    EXPECTED_MODIFIED = {',
-    ])
-    for name in sorted(modifier_names):
-        L.append(f'        "{name}",')
-    L.extend([
-        '    }',
-        '',
         '    def test_no_untested_nodes(self):',
         f'        actual = {{getattr(n, "name", "") for n in {construct_var}.nodes}}',
         '        missing = actual - self.EXPECTED_NODES',
