@@ -735,8 +735,8 @@ class TestSkipWhenErrorWrapping:
         """skip_when that raises AttributeError is wrapped in ExecutionError."""
         import structlog
 
-        from neograph.errors import ExecutionError
         from neograph._state_write import _apply_skip_when
+        from neograph.errors import ExecutionError
 
         n = Node("test-skip", outputs=RawText,
                  skip_when=lambda x: x.nonexistent_attr)
@@ -940,8 +940,8 @@ class TestExtractInputEdgeCases:
         append-list is unwrapped to the latest value (line 555-556)."""
         from pydantic import create_model
 
-        from neograph._state_bus import adapt_state
         from neograph._input_shape import _extract_input
+        from neograph._state_bus import adapt_state
 
         # Node expects Draft (single type), state has a list from Loop
         n = Node("consumer", inputs=Draft, outputs=RawText)
