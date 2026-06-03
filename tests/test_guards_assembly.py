@@ -85,7 +85,16 @@ class TestFileSplitEnforcement:
         ("def construct_from_module", "_construct_builder.py", "decorators.py"),
         ("def construct_from_functions", "_construct_builder.py", "decorators.py"),
         ("def _build_construct_from_decorated", "_construct_builder.py", "decorators.py"),
-        ("def _register_node_scripted", "_construct_builder.py", "decorators.py"),
+        # _construct_builder.py → cohesive sibling modules (neograph-3zai).
+        # must_NOT_be_in is _construct_builder.py so the helpers can't drift back
+        # and re-bloat the orchestrator.
+        ("def _register_node_scripted", "_scripted_registry.py", "_construct_builder.py"),
+        ("def _resolve_dict_output_param", "_construct_graph.py", "_construct_builder.py"),
+        ("def _resolve_loop_self_param", "_construct_graph.py", "_construct_builder.py"),
+        ("def _identify_port_params", "_param_classify.py", "_construct_builder.py"),
+        ("def _detect_fan_out_params", "_param_classify.py", "_construct_builder.py"),
+        ("def _classify_constants", "_param_classify.py", "_construct_builder.py"),
+        ("def _check_di_collisions", "_param_classify.py", "_construct_builder.py"),
     ]
 
     def test_extracted_functions_in_correct_module(self):
@@ -110,6 +119,153 @@ class TestFileSplitEnforcement:
         assert violations == [], (
             f"\n{len(violations)} file-split violation(s):\n"
             + "\n".join(violations)
+        )
+
+
+def _line_cap_violations(
+    src_dir: pathlib.Path, files: tuple[str, ...], cap: int
+) -> list[str]:
+    """Pure check: which of `files` are missing or exceed `cap` lines."""
+    violations: list[str] = []
+    for fname in files:
+        path = src_dir / fname
+        if not path.exists():
+            violations.append(f"  MISSING: {fname} does not exist")
+            continue
+        n_lines = len(path.read_text().splitlines())
+        if n_lines > cap:
+            violations.append(f"  {fname}: {n_lines} lines (> {cap})")
+    return violations
+
+
+def _symbol_location_violations(
+    src_dir: pathlib.Path, expected_locations: dict[str, set[str]]
+) -> list[str]:
+    """Pure check: each signature must be in its target file and absent from the builder."""
+    builder_path = src_dir / "_construct_builder.py"
+    builder_text = builder_path.read_text() if builder_path.exists() else ""
+    violations: list[str] = []
+    for fname, signatures in expected_locations.items():
+        path = src_dir / fname
+        text = path.read_text() if path.exists() else ""
+        for sig in signatures:
+            if sig not in text:
+                violations.append(f"  MISSING: '{sig}' not found in {fname}")
+            # Moved symbols must NOT linger in the builder.
+            if fname != "_construct_builder.py" and sig in builder_text:
+                violations.append(
+                    f"  DRIFTED: '{sig}' still in _construct_builder.py "
+                    f"(should only be in {fname})"
+                )
+    return violations
+
+
+class TestConstructBuilderSplit:
+    """neograph-3zai: _construct_builder.py is split into cohesive modules.
+
+    The 711-line builder mixed four responsibilities: public API + orchestrator,
+    graph construction, param classification, and scripted-shim registration.
+    After the split:
+      - graph construction lives in _construct_graph.py
+      - param classification lives in _param_classify.py
+      - scripted-shim registration lives in _scripted_registry.py
+      - _construct_builder.py keeps only the public API + orchestrator + the
+        @node input-cleanup pass (_cleanup_inputs_and_register).
+
+    Acceptance (from the ticket): no extracted file exceeds 300 lines and the
+    moved symbols live in their target modules, not the builder.
+
+    This is an AST/text guard (substring + line-count), not regex-based, so a
+    positive + negative meta-test pair suffices (no regex-slip case).
+    """
+
+    # field_name (must be in this file) -> set of `def <name>` that must live there
+    EXPECTED_LOCATIONS = {
+        "_construct_graph.py": {
+            "def _build_decorated_dict",
+            "def _build_adjacency",
+            "def _topo_sort",
+            "def _resolve_dict_output_param",
+            "def _resolve_loop_self_param",
+        },
+        "_param_classify.py": {
+            "def _identify_port_params",
+            "def _detect_fan_out_params",
+            "def _classify_constants",
+            "def _check_di_collisions",
+        },
+        "_scripted_registry.py": {
+            "def _register_node_scripted",
+        },
+        "_construct_builder.py": {
+            "def construct_from_module",
+            "def construct_from_functions",
+            "def _build_construct_from_decorated",
+            "def _cleanup_inputs_and_register",
+        },
+    }
+
+    # All four files participating in the split must stay under this cap.
+    LINE_CAP = 300
+    SPLIT_FILES = (
+        "_construct_builder.py",
+        "_construct_graph.py",
+        "_param_classify.py",
+        "_scripted_registry.py",
+    )
+
+    def test_each_split_file_under_line_cap(self):
+        violations = _line_cap_violations(SRC_DIR, self.SPLIT_FILES, self.LINE_CAP)
+        assert violations == [], (
+            f"\n{len(violations)} line-cap/existence violation(s):\n"
+            + "\n".join(violations)
+        )
+
+    def test_symbols_live_in_target_modules(self):
+        violations = _symbol_location_violations(SRC_DIR, self.EXPECTED_LOCATIONS)
+        assert violations == [], (
+            f"\n{len(violations)} symbol-location violation(s):\n"
+            + "\n".join(violations)
+        )
+
+    # --- meta-tests: prove the guard actually catches regressions ---
+
+    def test_meta_line_cap_catches_oversized_file(self, tmp_path):
+        """Negative meta-test: an oversized file must be flagged."""
+        big = tmp_path / "_construct_graph.py"
+        big.write_text("\n".join(f"x = {i}" for i in range(self.LINE_CAP + 50)))
+        violations = _line_cap_violations(tmp_path, ("_construct_graph.py",), self.LINE_CAP)
+        assert any("> 300" in v for v in violations), (
+            "line-cap guard failed to flag a file exceeding the cap"
+        )
+
+    def test_meta_line_cap_passes_clean_files(self, tmp_path):
+        """Positive meta-test: a small file must not be flagged."""
+        small = tmp_path / "_construct_graph.py"
+        small.write_text("x = 1\n")
+        assert _line_cap_violations(tmp_path, ("_construct_graph.py",), self.LINE_CAP) == []
+
+    def test_meta_drift_catches_symbol_left_in_builder(self, tmp_path):
+        """Negative meta-test: a moved symbol still present in the builder must be flagged."""
+        # Builder still contains the helper that should have moved out.
+        (tmp_path / "_construct_builder.py").write_text("def _register_node_scripted(): ...\n")
+        (tmp_path / "_scripted_registry.py").write_text("def _register_node_scripted(): ...\n")
+        violations = _symbol_location_violations(
+            tmp_path, {"_scripted_registry.py": {"def _register_node_scripted"}}
+        )
+        assert any("DRIFTED" in v for v in violations), (
+            "symbol-location guard failed to flag a moved symbol left in the builder"
+        )
+
+    def test_meta_drift_catches_missing_symbol(self, tmp_path):
+        """Negative meta-test: a symbol absent from its target file must be flagged."""
+        (tmp_path / "_construct_builder.py").write_text("# empty\n")
+        (tmp_path / "_scripted_registry.py").write_text("# helper not here\n")
+        violations = _symbol_location_violations(
+            tmp_path, {"_scripted_registry.py": {"def _register_node_scripted"}}
+        )
+        assert any("MISSING" in v for v in violations), (
+            "symbol-location guard failed to flag a symbol absent from its target file"
         )
 
 

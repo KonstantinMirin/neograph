@@ -70,11 +70,13 @@ FUNCTION_LOCAL_IMPORT_ALLOWLIST: set[tuple[str, str, frozenset[str]]] = {
     ("__main__.py", "neograph.compiler", frozenset({"classify_modifiers"})),
     ("__main__.py", "neograph.testing", frozenset({"scaffold_tests"})),
     ("__main__.py", "neograph", frozenset({"__version__"})),
-    # _construct_builder.py — cycle: _construct_builder imports validation/factory
+    # _construct_graph.py — cycle: the graph builder imports validation helpers
     # which themselves transitively touch decorator metadata. Break tracked by
-    # the §4 epic (neograph-pgso).
+    # the §4 epic (neograph-pgso). Relocated here from _construct_builder.py when
+    # _resolve_loop_self_param (the sole user) moved into _construct_graph.py
+    # (neograph-3zai). Entry RELOCATED, not added — the allowlist did not grow.
     (
-        "_construct_builder.py",
+        "_construct_graph.py",
         "neograph._construct_validation",
         frozenset({"_types_compatible", "effective_producer_type"}),
     ),

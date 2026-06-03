@@ -764,17 +764,16 @@ def merge_fn(
     return decorator
 
 
-# Construct-building functions live in _construct_builder.py. Re-exported
-# here for backward compatibility and so __init__.py's existing imports work.
-
-
-# Construct-building functions live in _construct_builder.py. Re-exported
-# here so __init__.py and test imports continue to work.
+# Construct-building functions live in _construct_builder.py and its sibling
+# helper modules per neograph-3zai. Re-exported here for backward compatibility
+# and so __init__.py's existing imports + test imports continue to work.
 from neograph._construct_builder import (  # noqa: E402, F401
     _build_construct_from_decorated,
-    _register_node_scripted,
-    _resolve_dict_output_param,
-    _resolve_loop_self_param,
     construct_from_functions,
     construct_from_module,
 )
+from neograph._construct_graph import (  # noqa: E402, F401
+    _resolve_dict_output_param,
+    _resolve_loop_self_param,
+)
+from neograph._scripted_registry import _register_node_scripted  # noqa: E402, F401
