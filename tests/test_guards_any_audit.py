@@ -91,10 +91,25 @@ ANY_ALLOWLIST: dict[str, str] = {
     # ── _oracle.py — user-declared output models ──
     # _oracle.py:_unwrap_oracle_results:output_model migrated to TypeSpecStatic in Batch 1 (neograph-86r1).
     "_oracle.py:_build_oracle_merge_result:merged": "user-supplied merge result; type declared by node.outputs",
+    # ── _oracle.py — canonical merge kernel (ARCH-1 / neograph-s0iz) ──
+    # state is the dynamically-shaped LangGraph state object; upstream_context
+    # values are heterogeneous upstream model instances; returns are the
+    # user-declared merge output (type-erased at this layer, declared by node.outputs).
+    "_oracle.py:_build_upstream_context:state": "dynamically-shaped LangGraph state object",
+    "_oracle.py:_build_upstream_context:return": "heterogeneous upstream model instances keyed by input name",
+    "_oracle.py:_run_merge_prompt:upstream_context": "heterogeneous upstream model instances keyed by input name",
+    "_oracle.py:_run_merge_prompt:return": "user-supplied merge result; type declared by node.outputs",
+    "_oracle.py:_run_merge_fn:state_for_di": "dynamically-shaped LangGraph state object (from_state DI source)",
+    "_oracle.py:_run_merge_fn:return": "user-supplied merge result; type declared by node.outputs",
+    "_oracle.py:_merge_variants:upstream_context": "heterogeneous upstream model instances keyed by input name",
+    "_oracle.py:_merge_variants:state_for_di": "dynamically-shaped LangGraph state object (from_state DI source)",
+    "_oracle.py:_merge_variants:return": "user-supplied merge result; type declared by node.outputs",
     # ── _wiring.py — Callable fn pointers ──
     # gen_fn / merge_fn / fan_fn / subgraph_fn are runtime-built closures whose
     # precise signatures are determined by the user's modifier configuration.
     "_wiring.py:_merge_one_group:return": "user-supplied merge result; type declared by node.outputs",
+    "_wiring.py:_merge_one_group:upstream_context": "heterogeneous upstream model instances keyed by input name",
+    "_wiring.py:_merge_one_group:state": "dynamically-shaped LangGraph state object (from_state DI source)",
     "_wiring.py:_construct_loop_unwrap:return": "user-supplied loop value; type declared by the sub-construct output",
     # ── _ir_normalize.py — IrNormalizer.apply update dict ──
     "_ir_normalize.py:IrNormalizer.apply:return": "model_copy update dict; heterogeneous IR field values (str fan_out_param, type[BaseModel] oracle_gen_type)",

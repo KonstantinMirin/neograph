@@ -206,6 +206,174 @@ def _build_oracle_merge_result(
     return update
 
 
+def _build_upstream_context(
+    state: Any, node_inputs: dict[str, TypeSpecStatic] | None
+) -> dict[str, Any]:
+    """Extract upstream node-input values from state for merge-prompt injection.
+
+    Returns ``{key: value}`` for each ``node_inputs`` key whose state field
+    (``field_name_for(key)``) is present and non-None. This is the SINGLE source
+    of the upstream-context rule (``field_name_for`` + None-skip), shared by the
+    standard Oracle merge (``make_oracle_merge_fn``) and the Each×Oracle fused
+    merge (``_wiring.group_merge_barrier``) so the two paths cannot diverge.
+    """
+    ctx: dict[str, Any] = {}
+    if isinstance(node_inputs, dict):
+        for key in node_inputs:
+            val = getattr(state, field_name_for(key), None)
+            if val is not None:
+                ctx[key] = val
+    return ctx
+
+
+def _run_merge_prompt(
+    oracle: Oracle,
+    variants: list,
+    output_model: TypeSpecStatic,
+    config: RunnableConfig,
+    *,
+    upstream_context: dict[str, Any] | None = None,
+    llm_config: LlmConfig | None = None,
+    runtime: LlmRuntime = EMPTY_RUNTIME,
+) -> Any:
+    """Run the merge_prompt (LLM-judge) merge step on a variants list.
+
+    Owns the pre_process-vs-default input_data branch: a ``merge_pre_process``
+    hook fully replaces input_data (and upstream context is intentionally NOT
+    injected); otherwise input_data is ``{"variants": variants, **upstream}``.
+    Applies merge_fallback (on invoke_structured error) and merge_post_process
+    (on success). Returns the merged value.
+    """
+    from neograph._llm import invoke_structured
+
+    assert oracle.merge_prompt is not None  # narrowing — caller guards on it
+
+    input_data: BaseModel | dict[str, Any] | str
+    if oracle.merge_pre_process is not None:
+        input_data = oracle.merge_pre_process(variants)
+    else:
+        input_data = {"variants": variants}
+        if upstream_context:
+            input_data.update(upstream_context)
+
+    if isinstance(output_model, dict):
+        primary_output_model = cast(type[BaseModel], next(iter(output_model.values())))
+    else:
+        primary_output_model = cast(type[BaseModel], output_model)
+
+    used_fallback = False
+    try:
+        merged = invoke_structured(
+            runtime,
+            model_tier=oracle.merge_model,
+            prompt_template=oracle.merge_prompt,
+            input_data=input_data,
+            output_model=primary_output_model,
+            config=config,
+            llm_config=llm_config,
+        )
+    except Exception as exc:
+        if oracle.merge_fallback is not None:
+            merged = oracle.merge_fallback(variants, exc)
+            used_fallback = True
+        else:
+            raise
+
+    if oracle.merge_post_process is not None and not used_fallback:
+        merged = oracle.merge_post_process(merged, variants)
+
+    return merged
+
+
+def _run_merge_fn(
+    oracle: Oracle,
+    variants: list,
+    config: RunnableConfig,
+    *,
+    scripted_lookup: dict[str, Callable] | None = None,
+    state_for_di: Any = None,
+) -> Any:
+    """Run the scripted/``@merge_fn`` merge step on a variants list.
+
+    For ``@merge_fn``-declared functions, resolves DI + from_state params via
+    ``_resolve_merge_args`` (``state_for_di`` supplies from_state values).
+    Otherwise calls the scripted function from ``scripted_lookup``. Returns the
+    merged value.
+    """
+    from neograph.decorators import _resolve_merge_args, get_merge_fn_metadata
+
+    assert oracle.merge_fn is not None
+    metadata = get_merge_fn_metadata(oracle.merge_fn)
+    if metadata is not None:
+        user_fn, param_res = metadata
+        return user_fn(variants, *_resolve_merge_args(param_res, config, state_for_di))
+
+    per_compile = scripted_lookup or {}
+    scripted_merge = per_compile.get(oracle.merge_fn)
+    if scripted_merge is None:
+        raise ConfigurationError.build(
+            f"Scripted function '{oracle.merge_fn}' not registered",
+            hint="Pass scripted={'" + oracle.merge_fn + "': fn} to compile().",
+        )
+    return scripted_merge(variants, config)
+
+
+def _assert_merge_fn_registered(
+    oracle: Oracle, scripted_lookup: dict[str, Callable] | None
+) -> None:
+    """Compile-time validation: a scripted merge_fn must be resolvable.
+
+    Raises ConfigurationError if ``oracle.merge_fn`` is set but is neither a
+    ``@merge_fn``-declared function nor present in ``scripted_lookup``. This is
+    a registration check (not a merge step), called at barrier-build time so
+    the error fires during compile() rather than at run time.
+    """
+    if not oracle.merge_fn or oracle.merge_prompt:
+        return
+    from neograph.decorators import get_merge_fn_metadata
+
+    if get_merge_fn_metadata(oracle.merge_fn) is not None:
+        return
+    if (scripted_lookup or {}).get(oracle.merge_fn) is not None:
+        return
+    raise ConfigurationError.build(
+        f"Scripted function '{oracle.merge_fn}' not registered",
+        hint="Pass scripted={'" + oracle.merge_fn + "': fn} to compile().",
+    )
+
+
+def _merge_variants(
+    oracle: Oracle,
+    variants: list,
+    output_model: TypeSpecStatic,
+    config: RunnableConfig,
+    *,
+    upstream_context: dict[str, Any] | None = None,
+    llm_config: LlmConfig | None = None,
+    runtime: LlmRuntime = EMPTY_RUNTIME,
+    scripted_lookup: dict[str, Callable] | None = None,
+    state_for_di: Any = None,
+) -> Any:
+    """Canonical Oracle merge: run the configured merge MODE on a variants list
+    and return the merged value.
+
+    This is the ONE site for the merge algorithm. Both orchestrators delegate
+    here: ``make_oracle_merge_fn`` (single-group, reads state collector) and
+    ``_wiring._merge_one_group`` (per-group, Each×Oracle fusion). The internal
+    branch is merge_prompt-vs-merge_fn (the Oracle's two merge modes) — NOT
+    per-group-vs-single-group, which stays the callers' concern.
+    """
+    if oracle.merge_prompt:
+        return _run_merge_prompt(
+            oracle, variants, output_model, config,
+            upstream_context=upstream_context, llm_config=llm_config, runtime=runtime,
+        )
+    return _run_merge_fn(
+        oracle, variants, config,
+        scripted_lookup=scripted_lookup, state_for_di=state_for_di,
+    )
+
+
 def make_oracle_merge_fn(
     oracle: Oracle,
     field_name: str,
@@ -217,110 +385,35 @@ def make_oracle_merge_fn(
     runtime: LlmRuntime = EMPTY_RUNTIME,
     scripted_lookup: dict[str, Callable] | None = None,
 ) -> Callable:
-    """Create the merge barrier function for Oracle.
+    """Create the merge barrier function for Oracle (single-group orchestrator).
 
-    If oracle.merge_prompt, calls invoke_structured (LLM judge).
-    If oracle.merge_fn, calls the registered scripted function -- with
-    FromInput/FromConfig DI if it was declared via ``@merge_fn``.
-    Reads from collector_field, writes to field_name (or per-key fields
-    for dict-form outputs).
+    Reads variants from ``collector_field`` on state, runs the canonical merge
+    step (``_merge_variants``), and shapes the state update via
+    ``_build_oracle_merge_result``. When *node_inputs* is provided (dict-form
+    inputs), upstream values are injected into a merge_prompt's input_data via
+    ``_build_upstream_context`` (parity with the Each×Oracle fused path).
 
-    When *node_inputs* is provided (dict-form inputs from the node),
-    upstream values are extracted from state and passed alongside the
-    variant list as a dict: ``{"variants": [...], upstream_key: val, ...}``.
-
-    Merge hooks (merge_prompt path only):
-    - ``merge_pre_process(variants) -> dict``: replaces default input_data.
-      When set, upstream context auto-injection is skipped.
-    - ``merge_post_process(result, variants) -> result``: transforms the
-      parsed LLM result. Only runs on LLM success (skipped when fallback fires).
-    - ``merge_fallback(variants, error) -> result``: catches invoke_structured
-      errors. Returns a deterministic result instead of raising.
+    Merge hooks (merge_prompt path only) live in ``_run_merge_prompt``.
     """
     _node_inputs = node_inputs if isinstance(node_inputs, dict) else None
-    _llm_config = llm_config
-    _runtime = runtime
+    # Fail-fast at compile time (closure-build) when a scripted merge_fn is not
+    # registered — the merge barrier is built during compile(), so an
+    # unregistered name surfaces as a ConfigurationError at compile, not at run.
+    _assert_merge_fn_registered(oracle, scripted_lookup)
 
-    if oracle.merge_prompt:
-        assert oracle.merge_prompt is not None  # narrowing for mypy
-        _merge_prompt: str = oracle.merge_prompt
-        _pre_process = oracle.merge_pre_process
-        _post_process = oracle.merge_post_process
-        _fallback = oracle.merge_fallback
-
-        def merge_fn(state: Any, config: RunnableConfig) -> dict:
-            from neograph._llm import invoke_structured
-
-            results = getattr(state, collector_field, [])
-            primary, secondaries = _unwrap_oracle_results(results, field_name, output_model)
-
-            # Pre-process hook replaces default input_data construction.
-            # invoke_structured accepts BaseModel | dict[str, Any] | str.
-            input_data: BaseModel | dict[str, Any] | str
-            if _pre_process is not None:
-                input_data = _pre_process(primary)
-            else:
-                input_data = {"variants": primary}
-                if _node_inputs:
-                    for key in _node_inputs:
-                        val = getattr(state, field_name_for(key), None)
-                        if val is not None:
-                            input_data[key] = val
-
-            used_fallback = False
-            try:
-                if isinstance(output_model, dict):
-                    primary_output_model = cast(type[BaseModel], next(iter(output_model.values())))
-                else:
-                    primary_output_model = cast(type[BaseModel], output_model)
-                merged = invoke_structured(
-                    _runtime,
-                    model_tier=oracle.merge_model,
-                    prompt_template=_merge_prompt,
-                    input_data=input_data,
-                    output_model=primary_output_model,
-                    config=config,
-                    llm_config=_llm_config,
-                )
-            except Exception as exc:
-                if _fallback is not None:
-                    merged = _fallback(primary, exc)
-                    used_fallback = True
-                else:
-                    raise
-
-            if _post_process is not None and not used_fallback:
-                merged = _post_process(merged, primary)
-
-            return _build_oracle_merge_result(merged, field_name, output_model, secondaries)
-    else:
-        from neograph.decorators import _resolve_merge_args, get_merge_fn_metadata
-
-        assert oracle.merge_fn is not None
-        _merge_fn_name: str = oracle.merge_fn
-        metadata = get_merge_fn_metadata(_merge_fn_name)
-        if metadata is not None:
-            user_fn, param_res = metadata
-
-            def merge_fn(state: Any, config: RunnableConfig) -> dict:
-                results = getattr(state, collector_field, [])
-                primary, secondaries = _unwrap_oracle_results(results, field_name, output_model)
-                merged = user_fn(primary, *_resolve_merge_args(param_res, config, state))
-                return _build_oracle_merge_result(merged, field_name, output_model, secondaries)
-        else:
-            per_compile = scripted_lookup or {}
-            scripted_merge = per_compile.get(_merge_fn_name)
-            if scripted_merge is None:
-                raise ConfigurationError.build(
-                    f"Scripted function '{_merge_fn_name}' not registered",
-                    hint="Pass scripted={'" + _merge_fn_name + "': fn} to compile().",
-                )
-
-            def merge_fn(state: Any, config: RunnableConfig) -> dict:
-                results = getattr(state, collector_field, [])
-                primary, secondaries = _unwrap_oracle_results(results, field_name, output_model)
-                merged = scripted_merge(primary, config)
-                return _build_oracle_merge_result(merged, field_name, output_model, secondaries)
+    def merge_fn(state: Any, config: RunnableConfig) -> dict:
+        results = getattr(state, collector_field, [])
+        primary, secondaries = _unwrap_oracle_results(results, field_name, output_model)
+        upstream_context = _build_upstream_context(state, _node_inputs)
+        merged = _merge_variants(
+            oracle, primary, output_model, config,
+            upstream_context=upstream_context,
+            llm_config=llm_config,
+            runtime=runtime,
+            scripted_lookup=scripted_lookup,
+            state_for_di=state,
+        )
+        return _build_oracle_merge_result(merged, field_name, output_model, secondaries)
 
     return merge_fn
 

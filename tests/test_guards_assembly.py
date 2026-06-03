@@ -481,6 +481,92 @@ class TestSubconstructBoundaryOwnership:
         )
 
 
+class TestNoMergeStepsOutsideOracleModule:
+    """ARCH-1 (CRIT-01) — the Oracle merge ALGORITHM lives only in `_oracle.py`.
+
+    The merge skeleton (merge_prompt path: pre_process -> invoke_structured ->
+    fallback -> post_process; merge_fn path: @merge_fn metadata lookup +
+    arg-resolution / scripted) had a parallel re-implementation in
+    `_wiring.py::_merge_one_group` that drifted from
+    `_oracle.py::make_oracle_merge_fn` (the Each x Oracle fused path dropped
+    node_inputs upstream-context injection). After consolidation `_wiring.py`
+    obtains variants and shapes results but never performs a merge STEP — it
+    routes through `_oracle._merge_variants`.
+
+    This guard AST-scans `_wiring.py` for any direct call to a merge-step
+    symbol. A hit means the algorithm is leaking back out of `_oracle.py`.
+    """
+
+    # Every merge-step symbol. A direct call to any of these in _wiring.py
+    # means a merge step is being re-derived there instead of delegated.
+    MERGE_STEP_CALLEES = frozenset({
+        "invoke_structured",
+        "merge_pre_process",
+        "merge_post_process",
+        "merge_fallback",
+        "get_merge_fn_metadata",
+        "_resolve_merge_args",
+    })
+
+    @classmethod
+    def _called_names(cls, tree: ast.AST) -> set[str]:
+        """Return the set of called callee names (Name or Attribute attr)."""
+        names: set[str] = set()
+        for n in ast.walk(tree):
+            if not isinstance(n, ast.Call):
+                continue
+            fn = n.func
+            if isinstance(fn, ast.Name):
+                names.add(fn.id)
+            elif isinstance(fn, ast.Attribute):
+                names.add(fn.attr)
+        return names
+
+    def test_wiring_does_not_call_merge_steps(self):
+        tree = ast.parse((SRC_DIR / "_wiring.py").read_text())
+        leaked = self._called_names(tree) & self.MERGE_STEP_CALLEES
+        assert not leaked, (
+            f"_wiring.py calls merge-step symbol(s) {sorted(leaked)} directly. "
+            "The Oracle merge algorithm has ONE home: _oracle.py. _wiring.py must "
+            "route through _oracle._merge_variants (obtain variants + shape "
+            "results only — never re-derive a merge step)."
+        )
+
+    def test_wiring_does_not_import_invoke_structured(self):
+        """Import-level needle: even a re-aliased invoke_structured re-leak fails."""
+        tree = ast.parse((SRC_DIR / "_wiring.py").read_text())
+        imported_from_llm: set[str] = set()
+        for n in ast.walk(tree):
+            if isinstance(n, ast.ImportFrom) and n.module == "neograph._llm":
+                imported_from_llm |= {a.name for a in n.names}
+        assert "invoke_structured" not in imported_from_llm, (
+            "_wiring.py imports invoke_structured from neograph._llm — the merge "
+            "LLM call belongs in _oracle._merge_variants, not the wiring layer."
+        )
+
+    def test_oracle_module_owns_merge_steps(self):
+        """Positive: the canonical merge step IS in _oracle.py."""
+        oracle_calls = self._called_names(ast.parse((SRC_DIR / "_oracle.py").read_text()))
+        assert "invoke_structured" in oracle_calls and "get_merge_fn_metadata" in oracle_calls, (
+            "_oracle.py must own the merge steps (invoke_structured + "
+            "get_merge_fn_metadata)."
+        )
+
+    def test_meta_scanner_detects_injected_merge_step(self, tmp_path):
+        """Mutation: a synthetic file calling a merge step is flagged."""
+        rogue = tmp_path / "rogue.py"
+        rogue.write_text("def f(s, c):\n    return invoke_structured(s, c)\n")
+        leaked = self._called_names(ast.parse(rogue.read_text())) & self.MERGE_STEP_CALLEES
+        assert leaked == {"invoke_structured"}
+
+    def test_meta_scanner_ignores_clean_file(self, tmp_path):
+        """Negative: a file that only delegates is not flagged."""
+        clean = tmp_path / "clean.py"
+        clean.write_text("def f(o, v, c):\n    return _merge_variants(o, v, c)\n")
+        leaked = self._called_names(ast.parse(clean.read_text())) & self.MERGE_STEP_CALLEES
+        assert leaked == set()
+
+
 class TestClusterEUnification:
     """_apply_skip_when joins _build_state_update in renamed _state_write.py (gm-1).
 

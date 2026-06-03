@@ -1529,3 +1529,121 @@ class TestEachOracleFusion:
 # ═══════════════════════════════════════════════════════════════════════════
 
 
+
+class TestArch1OracleMergeConsolidation:
+    """ARCH-1 (CRIT-01): the Each x Oracle fused merge must have parity with the
+    standard Oracle merge. Two behavioral gaps the consolidation closes:
+      - merge_prompt path drops node_inputs upstream-context injection (row #3)
+      - merge_fn path drops from_state param resolution (state=None on fused path)
+    """
+
+    def test_fused_eachoracle_mergeprompt_injects_upstream_context(self):
+        """Row #3: a fused Each x Oracle node with dict-form inputs and a
+        merge_prompt referencing an upstream (${ctx.tag}) must inject that
+        upstream into the merge input — exactly as the standard Oracle merge
+        does. Today the fused path builds {'variants': ...} only, so ${ctx.tag}
+        renders empty."""
+        import types as _types
+
+        from pydantic import BaseModel
+
+        class A1Chunk(BaseModel, frozen=True):
+            cid: str
+
+        class A1Chunks(BaseModel, frozen=True):
+            items: list[A1Chunk]
+
+        class A1Ctx(BaseModel, frozen=True):
+            tag: str
+
+        class A1Res(BaseModel, frozen=True):
+            label: str
+
+        captured: list[str] = []
+
+        class _RecFake:
+            def __init__(self, respond, model=None):
+                self._r, self._m = respond, model
+
+            def with_structured_output(self, model, **kw):
+                return _RecFake(self._r, model)
+
+            def invoke(self, messages, **kw):
+                captured.append(str(messages))
+                return self._r(self._m)
+
+        __llm_kw = configure_fake_llm(lambda tier: _RecFake(lambda m: m(label="merged")))
+
+        @node(mode="scripted", outputs=A1Chunks)
+        def chunks() -> A1Chunks:
+            return A1Chunks(items=[A1Chunk(cid="A"), A1Chunk(cid="B")])
+
+        @node(mode="scripted", outputs=A1Ctx)
+        def ctx() -> A1Ctx:
+            return A1Ctx(tag="CTXVAL")
+
+        @node(mode="scripted", outputs=A1Res, map_over="chunks.items", map_key="cid",
+              ensemble_n=2, merge_prompt="context=${ctx.tag} variants=${variants}")
+        def gen(chunk: A1Chunk, ctx: A1Ctx) -> A1Res:
+            return A1Res(label=f"g-{chunk.cid}")
+
+        mod = _types.ModuleType("a1_mergeprompt_mod")
+        mod.chunks, mod.ctx, mod.gen = chunks, ctx, gen
+        pipeline = construct_from_module(mod, name="a1-merge-prompt")
+        graph = compile(pipeline, **build_test_compile_kwargs(), **__llm_kw)
+        run(graph, input={})
+
+        assert captured, "merge prompt was never invoked"
+        joined = " ".join(captured)
+        assert "CTXVAL" in joined, (
+            "fused Each x Oracle merge_prompt did not receive upstream context "
+            f"(node_inputs injection dropped). Rendered merge prompts: {joined!r}"
+        )
+
+    def test_fused_eachoracle_mergefn_resolves_from_state_param(self):
+        """5ii: a @merge_fn from_state param must resolve on the fused Each x
+        Oracle path. Today _merge_one_group passes state=None, so the param
+        resolves to None."""
+        import types as _types
+
+        from pydantic import BaseModel
+
+        class B1Chunk(BaseModel, frozen=True):
+            cid: str
+
+        class B1Chunks(BaseModel, frozen=True):
+            items: list[B1Chunk]
+
+        class B1Ctx(BaseModel, frozen=True):
+            tag: str
+
+        class B1Res(BaseModel, frozen=True):
+            label: str
+
+        @merge_fn(name="b1_merge")
+        def b1_merge(variants: list[B1Res], ctx: B1Ctx) -> B1Res:
+            return B1Res(label=f"CTX:{ctx.tag}" if ctx is not None else "MISSING")
+
+        @node(mode="scripted", outputs=B1Chunks)
+        def chunks() -> B1Chunks:
+            return B1Chunks(items=[B1Chunk(cid="A")])
+
+        @node(mode="scripted", outputs=B1Ctx)
+        def ctx() -> B1Ctx:
+            return B1Ctx(tag="T")
+
+        @node(mode="scripted", outputs=B1Res, map_over="chunks.items", map_key="cid",
+              ensemble_n=2, merge_fn="b1_merge")
+        def gen(chunk: B1Chunk, ctx: B1Ctx) -> B1Res:
+            return B1Res(label="g")
+
+        mod = _types.ModuleType("b1_mergefn_mod")
+        mod.chunks, mod.ctx, mod.gen = chunks, ctx, gen
+        pipeline = construct_from_module(mod, name="b1-merge-fn")
+        graph = compile(pipeline, **build_test_compile_kwargs())
+        result = run(graph, input={})
+
+        assert result["gen"] == {"A": B1Res(label="CTX:T")}, (
+            "fused Each x Oracle merge_fn from_state param did not resolve "
+            f"(state not threaded). Got: {result.get('gen')!r}"
+        )

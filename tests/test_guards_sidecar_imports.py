@@ -117,6 +117,13 @@ FUNCTION_LOCAL_IMPORT_ALLOWLIST: set[tuple[str, str, frozenset[str]]] = {
         "neograph.decorators",
         frozenset({"_resolve_merge_args", "get_merge_fn_metadata"}),
     ),
+    # _assert_merge_fn_registered (ARCH-1) does the compile-time registration
+    # check with only get_merge_fn_metadata — same decorators<->_oracle cycle.
+    (
+        "_oracle.py",
+        "neograph.decorators",
+        frozenset({"get_merge_fn_metadata"}),
+    ),
     # _sidecar.py — cycle: infer_oracle_gen_type peeks the decorator-side
     # scripted dict to type-infer Oracle's per-generator output. decorators.py
     # imports node.py which imports _sidecar.py for PrivateAttr storage; the
@@ -132,12 +139,11 @@ FUNCTION_LOCAL_IMPORT_ALLOWLIST: set[tuple[str, str, frozenset[str]]] = {
         "neograph.factory",
         frozenset({"make_eachoracle_redirect_fn"}),
     ),
-    (
-        "_wiring.py",
-        "neograph.decorators",
-        frozenset({"_resolve_merge_args", "get_merge_fn_metadata"}),
-    ),
-    ("_wiring.py", "neograph._llm", frozenset({"invoke_structured"})),
+    # NOTE (ARCH-1 / neograph-s0iz): the merge_fn metadata + invoke_structured
+    # function-local imports left _wiring.py when the Oracle merge algorithm was
+    # consolidated into _oracle._merge_variants. _wiring.py now imports that
+    # kernel at module level and performs no merge step, so the former
+    # decorators/_llm function-local allowlist entries are retired here.
     ("_wiring.py", "neograph.compiler", frozenset({"compile"})),
     # _subconstruct.py — cycle: sub-construct invocation strips internal fields
     # that runner.py owns. Inherited from factory.py when make_subgraph_fn moved
