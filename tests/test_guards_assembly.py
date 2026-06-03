@@ -10,6 +10,17 @@ import pytest
 
 SRC_DIR = pathlib.Path(__file__).resolve().parent.parent / "src" / "neograph"
 
+# The validation cluster after the _construct_validation.py decomposition
+# (neograph-gig0). _construct_validation.py is the ONLY entry point: external
+# modules import the public surface from it; the _validation_* sub-modules are
+# package-private and may only be imported from WITHIN the cluster.
+VALIDATION_CLUSTER = frozenset({
+    "_construct_validation.py",
+    "_validation_types.py",
+    "_validation_inputs.py",
+    "_validation_modifiers.py",
+})
+
 # Error classes that must use .build() instead of direct construction.
 ERROR_CLASSES = frozenset({
     "ConstructError",
@@ -1312,23 +1323,30 @@ class TestValidatorHardening:
     3. The producer collection is keyed by field_name
        (``OrderedDict[str, Producer]``), dropping the O(N^2) per-call rebuild
        in ``_check_fan_in_inputs``.
+
+    Post neograph-gig0 the validator is split into the flat-peer cluster
+    (``VALIDATION_CLUSTER``); the text scans below run across the whole cluster
+    so the assertions follow the symbols into their new homes (e.g. the
+    ``OrderedDict[str, Producer]`` alias now lives in ``_validation_types.py``,
+    the ``cast(Node, ...)`` casts in ``_validation_inputs.py``).
     """
 
-    VALIDATOR = SRC_DIR / "_construct_validation.py"
+    CLUSTER = tuple(sorted(SRC_DIR / f for f in VALIDATION_CLUSTER))
 
     def test_no_cast_any_in_validator(self):
-        """The recursive call site must not launder the type via cast(Any).
+        """No cluster module may launder the type via cast(Any).
 
         Specific-type casts (e.g. cast(Node, ...), cast(dict[...], ...)) are
         fine — only the untyped cast(Any, ...) escape hatch is forbidden.
         """
         hits = [
-            f"{self.VALIDATOR.name}:{i}: {line.strip()}"
-            for i, line in enumerate(self.VALIDATOR.read_text().splitlines(), 1)
+            f"{path.name}:{i}: {line.strip()}"
+            for path in self.CLUSTER
+            for i, line in enumerate(path.read_text().splitlines(), 1)
             if "cast(Any" in line
         ]
         assert hits == [], (
-            "cast(Any ...) found in the recursive validator — use the "
+            "cast(Any ...) found in the validation cluster — use the "
             "ConstructLike Protocol + _is_construct_like TypeGuard instead:\n"
             + "\n".join(f"  {h}" for h in hits)
         )
@@ -1346,12 +1364,17 @@ class TestValidatorHardening:
         assert {"STANDALONE", "IN_CONTEXT"} <= names, names
 
     def test_producers_collection_keyed_by_field_name(self):
-        """Producer collection is OrderedDict[str, Producer], not list[Producer]."""
-        text = self.VALIDATOR.read_text()
-        assert "OrderedDict[str, Producer]" in text, (
+        """Producer collection is OrderedDict[str, Producer], not list[Producer].
+
+        The ``ProducerMap = OrderedDict[str, Producer]`` alias lives in
+        ``_validation_types.py`` post-split; the assertion scans the cluster so
+        it follows the alias to its home.
+        """
+        cluster_text = "\n".join(p.read_text() for p in self.CLUSTER)
+        assert "OrderedDict[str, Producer]" in cluster_text, (
             "producers should be typed OrderedDict[str, Producer] keyed by field_name"
         )
-        assert "list[Producer]" not in text, (
+        assert "list[Producer]" not in cluster_text, (
             "no signature should still thread producers as list[Producer]"
         )
 
@@ -1360,3 +1383,183 @@ class TestValidatorHardening:
         from neograph import _ir_protocols
 
         assert hasattr(_ir_protocols, "ConstructLike"), "ConstructLike Protocol missing"
+
+
+# --- validation-cluster boundary helpers (neograph-gig0) ---
+
+
+def _seam_violations(src_dir: pathlib.Path) -> list[str]:
+    """Files OUTSIDE the cluster must not import from a _validation_* sub-module.
+
+    The single import seam is `neograph._construct_validation`. Any
+    `from neograph._validation_types/_validation_inputs/_validation_modifiers`
+    appearing in a non-cluster file (module-level OR function-local) is a
+    boundary breach.
+    """
+    private_modules = {
+        "neograph._validation_types",
+        "neograph._validation_inputs",
+        "neograph._validation_modifiers",
+    }
+    violations: list[str] = []
+    for py_file in sorted(src_dir.glob("*.py")):
+        if py_file.name in VALIDATION_CLUSTER:
+            continue
+        tree = ast.parse(py_file.read_text())
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.module in private_modules:
+                names = ", ".join(a.name for a in node.names)
+                violations.append(
+                    f"  {py_file.name}:{node.lineno}: from {node.module} import {names}"
+                )
+    return violations
+
+
+def _star_import_violations(src_dir: pathlib.Path) -> list[str]:
+    """No file may `import *` from the cluster; cluster files may not `import *` at all."""
+    violations: list[str] = []
+    cluster_modules = {f"neograph.{f[:-3]}" for f in VALIDATION_CLUSTER}
+    for py_file in sorted(src_dir.glob("*.py")):
+        tree = ast.parse(py_file.read_text())
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.ImportFrom):
+                continue
+            is_star = any(a.name == "*" for a in node.names)
+            if not is_star:
+                continue
+            # Star FROM a cluster module — forbidden anywhere.
+            if node.module in cluster_modules:
+                violations.append(
+                    f"  {py_file.name}:{node.lineno}: from {node.module} import *"
+                )
+            # Any star import INSIDE a cluster file — forbidden.
+            elif py_file.name in VALIDATION_CLUSTER:
+                violations.append(
+                    f"  {py_file.name}:{node.lineno}: from {node.module} import *"
+                )
+    return violations
+
+
+class TestValidationModuleBoundary:
+    """neograph-gig0: _construct_validation.py (1005L) is split by validation concern.
+
+    After the split the cluster is four flat peer modules (no sub-package,
+    matching the neograph-3zai builder-split precedent):
+      - _validation_types.py     — type-compat primitives + shared vocab
+      - _validation_inputs.py    — fan-in + Each fan-out consumer-input checks
+      - _validation_modifiers.py — Loop self-edge/construct + Oracle merge hooks
+      - _construct_validation.py — orchestrator (_validate_node_chain) + the
+        single public re-export seam.
+
+    Invariant: behavior is byte-identical; only file boundaries + the import
+    seam change. This guard pins the new structure: line cap, symbol homes,
+    the single import seam, and no star-imports.
+
+    AST/substring guard (line-count + `def` presence + import shape) — a
+    positive + negative meta-test pair suffices (no regex-slip case).
+    """
+
+    LINE_CAP = 400
+
+    # `def`/`class` signature -> module it must live in. Each moved symbol must
+    # also be ABSENT (as a definition) from the slimmed orchestrator.
+    EXPECTED_LOCATIONS = {
+        "_validation_types.py": {
+            "def _types_compatible",
+            "def _extract_list_element",
+            "def _resolve_field_annotation",
+            "def _fmt_type",
+            "def _source_location",
+            "def effective_producer_type",
+            "def _is_construct_like",
+            "class Producer",
+        },
+        "_validation_inputs.py": {
+            "def _check_item_input",
+            "def _check_fan_in_inputs",
+            "def _check_each_path",
+            "def _build_no_producer_error",
+            "def _suggest_hint",
+        },
+        "_validation_modifiers.py": {
+            "def validate_loop_self_edge",
+            "def validate_loop_construct",
+            "def _validate_merge_hooks",
+        },
+        "_construct_validation.py": {
+            "def _validate_node_chain",
+            "class ValidationMode",
+        },
+    }
+
+    def test_each_cluster_file_under_line_cap(self):
+        violations = _line_cap_violations(
+            SRC_DIR, tuple(sorted(VALIDATION_CLUSTER)), self.LINE_CAP
+        )
+        assert violations == [], (
+            f"\n{len(violations)} line-cap/existence violation(s):\n"
+            + "\n".join(violations)
+        )
+
+    def test_symbols_live_in_target_modules(self):
+        """Each symbol is DEFINED in its target module and absent from the orchestrator."""
+        orchestrator = SRC_DIR / "_construct_validation.py"
+        orch_text = orchestrator.read_text() if orchestrator.exists() else ""
+        violations: list[str] = []
+        for fname, signatures in self.EXPECTED_LOCATIONS.items():
+            path = SRC_DIR / fname
+            text = path.read_text() if path.exists() else ""
+            for sig in signatures:
+                if sig not in text:
+                    violations.append(f"  MISSING: '{sig}' not found in {fname}")
+                # A moved definition must not linger in the orchestrator.
+                if fname != "_construct_validation.py" and sig in orch_text:
+                    violations.append(
+                        f"  DRIFTED: '{sig}' still defined in _construct_validation.py "
+                        f"(should only be in {fname})"
+                    )
+        assert violations == [], (
+            f"\n{len(violations)} symbol-location violation(s):\n"
+            + "\n".join(violations)
+        )
+
+    def test_single_import_seam(self):
+        """Only _construct_validation.py is importable by non-cluster files."""
+        violations = _seam_violations(SRC_DIR)
+        assert violations == [], (
+            f"\n{len(violations)} import-seam violation(s) — non-cluster files must "
+            f"import the validation public surface from neograph._construct_validation, "
+            f"not from a _validation_* sub-module:\n" + "\n".join(violations)
+        )
+
+    def test_no_star_imports_in_cluster(self):
+        violations = _star_import_violations(SRC_DIR)
+        assert violations == [], (
+            f"\n{len(violations)} star-import violation(s):\n" + "\n".join(violations)
+        )
+
+    # --- meta-tests: prove the guard catches regressions ---
+
+    def test_meta_line_cap_catches_oversized_cluster_file(self, tmp_path):
+        big = tmp_path / "_validation_inputs.py"
+        big.write_text("\n".join(f"x = {i}" for i in range(self.LINE_CAP + 50)))
+        violations = _line_cap_violations(
+            tmp_path, ("_validation_inputs.py",), self.LINE_CAP
+        )
+        assert any("> 400" in v for v in violations)
+
+    def test_meta_seam_catches_private_import(self, tmp_path):
+        (tmp_path / "_construct_validation.py").write_text("x = 1\n")
+        (tmp_path / "_validation_inputs.py").write_text("y = 2\n")
+        (tmp_path / "outsider.py").write_text(
+            "from neograph._validation_inputs import _check_item_input\n"
+        )
+        violations = _seam_violations(tmp_path)
+        assert any("outsider.py" in v for v in violations)
+
+    def test_meta_star_import_flagged(self, tmp_path):
+        (tmp_path / "rogue.py").write_text(
+            "from neograph._construct_validation import *\n"
+        )
+        violations = _star_import_violations(tmp_path)
+        assert any("rogue.py" in v for v in violations)

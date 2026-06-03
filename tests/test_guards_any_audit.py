@@ -24,6 +24,14 @@ ANY_AUDIT_MODULES = (
     "construct.py",
     "modifiers.py",
     "_construct_validation.py",
+    # Validation cluster sub-modules (neograph-gig0): the no-Any audit follows
+    # the moved public functions (effective_producer_type -> _validation_types;
+    # validate_loop_self_edge / validate_loop_construct -> _validation_modifiers)
+    # into their new homes. Zero new ANY_ALLOWLIST entries — the Cluster-5
+    # functions were already migrated to TypeSpecStatic (neograph-86r1).
+    "_validation_types.py",
+    "_validation_inputs.py",
+    "_validation_modifiers.py",
     "factory.py",
     "_dispatch.py",
     "_oracle.py",
