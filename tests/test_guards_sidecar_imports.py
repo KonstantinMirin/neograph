@@ -78,11 +78,15 @@ FUNCTION_LOCAL_IMPORT_ALLOWLIST: set[tuple[str, str, frozenset[str]]] = {
         "neograph._construct_validation",
         frozenset({"_types_compatible", "effective_producer_type"}),
     ),
-    # _construct_validation.py — cycle: validation reads merge_fn metadata that
-    # lives in decorators.py. Resolved when DI/merge metadata moves into a leaf.
+    # _construct_validation.py — REAL cycle: get_merge_fn_metadata lives in the
+    # leaf module _sidecar, but a module-level import here cycles via
+    # _sidecar -> _di_classify -> _construct_validation (_di_classify imports
+    # ConstructError from this module). Function-local import to the leaf is the
+    # truthful fix (neograph-v3xx / HIGH-09). Retires when _di_classify stops
+    # importing ConstructError from _construct_validation.
     (
         "_construct_validation.py",
-        "neograph.decorators",
+        "neograph._sidecar",
         frozenset({"get_merge_fn_metadata"}),
     ),
     # _construct_validation.py — cycle: validation shares the fan-out candidate
@@ -108,22 +112,16 @@ FUNCTION_LOCAL_IMPORT_ALLOWLIST: set[tuple[str, str, frozenset[str]]] = {
     # moved into _llm_render where describe_type + build_rendered_input are
     # safe module-level imports, and the slim _llm.py imports describe_type
     # directly for the json_mode schema branch.
-    # _oracle.py — cycle: oracle merges call invoke_structured (_llm) and resolve
-    # merge_fn metadata (decorators). Both retire when §2 -lyvi collapses _llm
-    # globals and merge_fn metadata moves to a leaf module.
+    # _oracle.py — cycle: oracle merges call invoke_structured (_llm). Retires
+    # when §2 -lyvi collapses _llm globals.
     ("_oracle.py", "neograph._llm", frozenset({"invoke_structured"})),
-    (
-        "_oracle.py",
-        "neograph.decorators",
-        frozenset({"_resolve_merge_args", "get_merge_fn_metadata"}),
-    ),
-    # _assert_merge_fn_registered (ARCH-1) does the compile-time registration
-    # check with only get_merge_fn_metadata — same decorators<->_oracle cycle.
-    (
-        "_oracle.py",
-        "neograph.decorators",
-        frozenset({"get_merge_fn_metadata"}),
-    ),
+    # NOTE (ARCH-4 / neograph-v3xx / HIGH-09): the former _oracle -> decorators
+    # function-local imports of get_merge_fn_metadata + _resolve_merge_args were
+    # illusory cycles — those symbols live in the leaf modules _sidecar and
+    # _di_classify (decorators only re-exported them). _oracle now imports them
+    # at MODULE level from the leaves (_oracle -> _sidecar -> _di_classify ->
+    # _construct_validation never reaches _oracle, so no cycle). Both allowlist
+    # entries deleted.
     # _sidecar.py — cycle: infer_oracle_gen_type peeks the decorator-side
     # scripted dict to type-infer Oracle's per-generator output. decorators.py
     # imports node.py which imports _sidecar.py for PrivateAttr storage; the

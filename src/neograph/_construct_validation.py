@@ -448,7 +448,10 @@ def _validate_node_chain(
         if isinstance(item, Node):
             oracle = item.modifier_set.oracle
             if oracle is not None and isinstance(getattr(oracle, 'merge_fn', None), str):
-                from neograph.decorators import get_merge_fn_metadata
+                # Function-local + leaf source: get_merge_fn_metadata lives in
+                # _sidecar; a module-level import here cycles via
+                # _sidecar -> _di_classify -> _construct_validation (ConstructError).
+                from neograph._sidecar import get_merge_fn_metadata
                 assert oracle.merge_fn is not None
                 meta = get_merge_fn_metadata(oracle.merge_fn)
                 if meta is not None and meta[1]:

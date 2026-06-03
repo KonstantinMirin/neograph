@@ -14,9 +14,11 @@ from typing import Any, cast
 from langchain_core.runnables import RunnableConfig
 from pydantic import BaseModel
 
+from neograph._di_classify import _resolve_merge_args
 from neograph._llm_config import LlmConfig
 from neograph._llm_runtime import EMPTY_RUNTIME, LlmRuntime
 from neograph._normalize import normalize_outputs
+from neograph._sidecar import get_merge_fn_metadata
 from neograph._state_bus import StateBus, adapt_state
 from neograph._state_keys import StateKeys
 from neograph.errors import ConfigurationError, ExecutionError
@@ -300,8 +302,6 @@ def _run_merge_fn(
     Otherwise calls the scripted function from ``scripted_lookup``. Returns the
     merged value.
     """
-    from neograph.decorators import _resolve_merge_args, get_merge_fn_metadata
-
     assert oracle.merge_fn is not None
     metadata = get_merge_fn_metadata(oracle.merge_fn)
     if metadata is not None:
@@ -330,8 +330,6 @@ def _assert_merge_fn_registered(
     """
     if not oracle.merge_fn or oracle.merge_prompt:
         return
-    from neograph.decorators import get_merge_fn_metadata
-
     if get_merge_fn_metadata(oracle.merge_fn) is not None:
         return
     if (scripted_lookup or {}).get(oracle.merge_fn) is not None:
