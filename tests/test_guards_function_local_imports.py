@@ -833,3 +833,179 @@ class TestNoGlobalRegistry:
         )
 
 
+def _formatted_ref_name(fv: ast.FormattedValue) -> str | None:
+    """Return the simple ref-name of an f-string ``{...}`` placeholder.
+
+    ``{output_key}`` -> ``"output_key"`` (Name); ``{no.primary_key}`` ->
+    ``"primary_key"`` (Attribute). Anything else (subscript, call) -> None.
+    """
+    val = fv.value
+    if isinstance(val, ast.Name):
+        return val.id
+    if isinstance(val, ast.Attribute):
+        return val.attr
+    return None
+
+
+class TestOutputFieldNameMonopoly:
+    """HIGH-05 (neograph-gf9g): the per-output-key state-field name
+    ``{base}_{output_key}`` has ONE canonical builder -- ``output_field_name``
+    in ``naming.py``. Hand-rolled f-string joins of the form
+    ``f"...{base}_{output_key}"`` are structurally banned so the validator's
+    producer registration, the IR normalizer, the state builder, and the
+    runtime writers cannot drift on the naming convention.
+
+    The scanner flags an f-string placeholder whose ref-name is an output-key
+    variable (``key`` / ``output_key`` / ``primary_key``) immediately preceded
+    by a literal fragment ending in ``_`` (i.e. ``..._{output_key}``). It scopes
+    OUT ``naming.py`` (the helper home). Unrelated joins (synthesized shim names
+    in ``decorators.py``, rendering-prefix joins in ``renderers.py``) use other
+    trailing names and are not flagged.
+    """
+
+    _OUTPUT_KEY_NAMES = frozenset({"key", "output_key", "primary_key"})
+    _EXEMPT_FILES = frozenset({"naming.py"})
+
+    @classmethod
+    def _scan(cls, src_dir: pathlib.Path) -> list[str]:
+        offenders: list[str] = []
+        for py_file in sorted(src_dir.glob("*.py")):
+            if py_file.name in cls._EXEMPT_FILES:
+                continue
+            try:
+                tree = ast.parse(py_file.read_text(), filename=str(py_file))
+            except SyntaxError:  # pragma: no cover — file must parse
+                continue
+            for node in ast.walk(tree):
+                if not isinstance(node, ast.JoinedStr):
+                    continue
+                vals = node.values
+                for i in range(1, len(vals)):
+                    fv = vals[i]
+                    prev = vals[i - 1]
+                    if (
+                        isinstance(fv, ast.FormattedValue)
+                        and isinstance(prev, ast.Constant)
+                        and isinstance(prev.value, str)
+                        and prev.value.endswith("_")
+                        and _formatted_ref_name(fv) in cls._OUTPUT_KEY_NAMES
+                    ):
+                        offenders.append(f"{py_file.name}:{node.lineno}")
+        return offenders
+
+    def test_no_handrolled_output_field_name_joins(self):
+        offenders = self._scan(SRC_DIR)
+        assert offenders == [], (
+            f"\n{len(offenders)} hand-rolled output-field-name join(s) found:\n"
+            + "\n".join(f"  {o}" for o in offenders)
+            + "\n\nReplace f\"{base}_{output_key}\" with "
+            "output_field_name(base, output_key) from neograph.naming."
+        )
+
+    def test_mutation_output_key_join_detected(self, tmp_path: pathlib.Path):
+        (tmp_path / "m.py").write_text(
+            'def f(field_name, output_key):\n'
+            '    return f"{field_name}_{output_key}"\n'
+        )
+        assert self._scan(tmp_path), "scanner missed an output_key join"
+
+    def test_mutation_primary_key_attr_join_detected(self, tmp_path: pathlib.Path):
+        (tmp_path / "m.py").write_text(
+            'def f(own_field, no):\n'
+            '    return f"{own_field}_{no.primary_key}"\n'
+        )
+        assert self._scan(tmp_path), "scanner missed a primary_key attribute join"
+
+    def test_mutation_non_output_join_not_flagged(self, tmp_path: pathlib.Path):
+        """Near-miss: a join whose trailing name is NOT an output key (e.g. a
+        synthesized shim name) must NOT be flagged."""
+        (tmp_path / "m.py").write_text(
+            'def f(node_label, token):\n'
+            '    a = f"_body_merge_{node_label}_{token}"\n'
+            '    b = f"{prefix}{field_name}"\n'
+            '    return a, b\n'
+        )
+        assert self._scan(tmp_path) == [], "near-miss join wrongly flagged"
+
+    def test_helper_home_exempt(self, tmp_path: pathlib.Path):
+        (tmp_path / "naming.py").write_text(
+            'def output_field_name(base, output_key):\n'
+            '    return f"{base}_{output_key}"\n'
+        )
+        assert self._scan(tmp_path) == [], "naming.py must be exempt"
+
+
+class TestPrimaryOutputMonopoly:
+    """HIGH-06 (neograph-gf9g): extracting the PRIMARY value/type from a
+    dict-form ``Node.outputs`` has ONE canonical expression --
+    ``normalize_outputs(x).primary``. The hand-rolled idiom
+    ``next(iter(<outputs>.values()))`` is structurally banned on outputs
+    containers so the merge path, the validator, and the IR cannot diverge on
+    what "primary output" means.
+
+    Scoped to outputs-container variable names so the legitimate single-upstream
+    INPUT unwrap (``next(iter(input_data.values()))`` in ``_state_write.py``) is
+    NOT flagged -- that is a different concern (first/only input value).
+    """
+
+    _OUTPUT_CONTAINER_NAMES = frozenset({
+        "output_model", "output_type", "gen_type", "outputs", "node_outputs",
+    })
+
+    @classmethod
+    def _scan(cls, src_dir: pathlib.Path) -> list[str]:
+        offenders: list[str] = []
+        for py_file in sorted(src_dir.glob("*.py")):
+            try:
+                tree = ast.parse(py_file.read_text(), filename=str(py_file))
+            except SyntaxError:  # pragma: no cover — file must parse
+                continue
+            for node in ast.walk(tree):
+                # next( iter( <NAME>.values() ) )
+                if not (
+                    isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Name)
+                    and node.func.id == "next"
+                    and node.args
+                    and isinstance(node.args[0], ast.Call)
+                    and isinstance(node.args[0].func, ast.Name)
+                    and node.args[0].func.id == "iter"
+                    and node.args[0].args
+                ):
+                    continue
+                inner = node.args[0].args[0]
+                if (
+                    isinstance(inner, ast.Call)
+                    and isinstance(inner.func, ast.Attribute)
+                    and inner.func.attr == "values"
+                    and isinstance(inner.func.value, ast.Name)
+                    and inner.func.value.id in cls._OUTPUT_CONTAINER_NAMES
+                ):
+                    offenders.append(f"{py_file.name}:{node.lineno}")
+        return offenders
+
+    def test_no_handrolled_primary_output_extraction(self):
+        offenders = self._scan(SRC_DIR)
+        assert offenders == [], (
+            f"\n{len(offenders)} hand-rolled primary-output extraction(s) found:\n"
+            + "\n".join(f"  {o}" for o in offenders)
+            + "\n\nReplace next(iter(<outputs>.values())) with "
+            "normalize_outputs(<outputs>).primary from neograph._normalize."
+        )
+
+    def test_mutation_output_model_primary_detected(self, tmp_path: pathlib.Path):
+        (tmp_path / "m.py").write_text(
+            'def f(output_model):\n'
+            '    return next(iter(output_model.values()))\n'
+        )
+        assert self._scan(tmp_path), "scanner missed an output_model primary extraction"
+
+    def test_mutation_input_data_unwrap_not_flagged(self, tmp_path: pathlib.Path):
+        """The single-upstream INPUT unwrap is a different concern and exempt."""
+        (tmp_path / "m.py").write_text(
+            'def f(input_data):\n'
+            '    return next(iter(input_data.values()))\n'
+        )
+        assert self._scan(tmp_path) == [], "input_data unwrap wrongly flagged"
+
+

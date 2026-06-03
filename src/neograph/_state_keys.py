@@ -54,6 +54,16 @@ class StateKeys:
     # runner stashes the run input there for re-injection on resume (runner.py).
     CONFIG_INPUT = "_neo_input"
 
+    # Non-`neo_`-prefixed framework state keys (CON-01). These are DI-context
+    # state-bus fields the compiler always adds (node_id, project_root) plus the
+    # Operator interrupt channel (human_feedback). They predate the `neo_`
+    # convention and stay un-prefixed because FromInput/FromConfig bind them by
+    # their bare names; centralized here so every read/write site shares one
+    # symbol and the schema-fingerprint exclusion list cannot drift.
+    NODE_ID = "node_id"
+    PROJECT_ROOT = "project_root"
+    HUMAN_FEEDBACK = "human_feedback"
+
     @staticmethod
     def loop_count(field_name: str) -> str:
         """Per-loop iteration counter field name."""

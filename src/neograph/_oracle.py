@@ -16,11 +16,12 @@ from pydantic import BaseModel
 
 from neograph._llm_config import LlmConfig
 from neograph._llm_runtime import EMPTY_RUNTIME, LlmRuntime
+from neograph._normalize import normalize_outputs
 from neograph._state_bus import StateBus, adapt_state
 from neograph._state_keys import StateKeys
 from neograph.errors import ConfigurationError, ExecutionError
 from neograph.modifiers import Each, Oracle
-from neograph.naming import field_name_for
+from neograph.naming import field_name_for, output_field_name
 from neograph.node import HasName, TypeSpecStatic
 
 
@@ -142,8 +143,8 @@ def _unwrap_oracle_results(
 
     if isinstance(output_model, dict):
         keys = list(output_model)
-        primary_key = f"{prefix}{keys[0]}"
-        secondary_keys = [f"{prefix}{k}" for k in keys[1:]]
+        primary_key = output_field_name(field_name, keys[0])
+        secondary_keys = [output_field_name(field_name, k) for k in keys[1:]]
     else:
         # Fallback: find keys by prefix
         for k in results[0]:
@@ -176,10 +177,7 @@ def _build_oracle_merge_result(
     ExecutionError if the merge_fn returns the wrong type -- catches silent
     garbage before it propagates through the pipeline.
     """
-    if isinstance(output_model, dict):
-        expected_type = cast(type, next(iter(output_model.values())))
-    else:
-        expected_type = cast(type, output_model)
+    expected_type = cast(type, normalize_outputs(output_model).primary)
 
     if not isinstance(merged, expected_type):
         raise ExecutionError.build(
@@ -193,9 +191,10 @@ def _build_oracle_merge_result(
     if secondaries is None:
         return {field_name: merged}
 
-    prefix = f"{field_name}_"
-    if isinstance(output_model, dict):
-        primary_field = f"{prefix}{next(iter(output_model))}"
+    no = normalize_outputs(output_model)
+    if no.is_dict_form:
+        assert no.primary_key is not None  # dict-form always has a primary key
+        primary_field = output_field_name(field_name, no.primary_key)
     else:
         primary_field = field_name
 
@@ -260,10 +259,7 @@ def _run_merge_prompt(
         if upstream_context:
             input_data.update(upstream_context)
 
-    if isinstance(output_model, dict):
-        primary_output_model = cast(type[BaseModel], next(iter(output_model.values())))
-    else:
-        primary_output_model = cast(type[BaseModel], output_model)
+    primary_output_model = cast(type[BaseModel], normalize_outputs(output_model).primary)
 
     used_fallback = False
     try:

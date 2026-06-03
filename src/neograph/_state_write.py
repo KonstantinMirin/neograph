@@ -12,6 +12,7 @@ from neograph._state_bus import StateBus
 from neograph._state_keys import StateKeys
 from neograph.errors import ExecutionError
 from neograph.modifiers import Each, ModifierCombo, classify_modifiers
+from neograph.naming import output_field_name
 from neograph.node import Node
 
 
@@ -62,7 +63,7 @@ def _build_state_update(
             val = result.get(key)
             if val is None:
                 continue
-            key_field = f"{field_name}_{key}"
+            key_field = output_field_name(field_name, key)
             if each_mod and each_item is not None:
                 key_val = getattr(each_item, each_mod.key, str(each_item))
                 update[key_field] = {key_val: val}

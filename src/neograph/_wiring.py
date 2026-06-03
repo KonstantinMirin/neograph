@@ -33,7 +33,7 @@ from neograph.factory import (
 )
 from neograph.forward import _BranchNode
 from neograph.modifiers import Each, Loop, Operator, Oracle, split_each_path
-from neograph.naming import field_name_for
+from neograph.naming import field_name_for, output_field_name
 from neograph.node import Node
 
 log = structlog.get_logger()
@@ -289,7 +289,7 @@ def _add_each_oracle_fused(
             for each_key, per_item_result in merged.items():
                 if isinstance(per_item_result, dict):
                     for output_key, val in per_item_result.items():
-                        key_field = f"{field_name}_{output_key}"
+                        key_field = output_field_name(field_name, output_key)
                         update.setdefault(key_field, {})[each_key] = val
                 else:
                     update.setdefault(field_name, {})[each_key] = per_item_result
@@ -395,7 +395,8 @@ def _node_loop_unwrap(node: Node, field_name: str) -> LangGraphLoopUnwrapFn:
         # Dict-form outputs: primary key is {field}_{first_key}.
         no = normalize_outputs(node.outputs)
         if no.is_dict_form:
-            state_field = f"{_field_name}_{no.primary_key}"
+            assert no.primary_key is not None  # dict-form always has a primary key
+            state_field = output_field_name(_field_name, no.primary_key)
         else:
             state_field = _field_name
         # StateBus.get optional: loop-bootstrap — first router pass may have
@@ -688,7 +689,7 @@ def _add_operator_check(
         should_pause = condition_fn(state)
         if should_pause:
             human_input = interrupt(should_pause)
-            return {"human_feedback": human_input}
+            return {StateKeys.HUMAN_FEEDBACK: human_input}
         return {}
 
     graph.add_node(check_name, operator_check)

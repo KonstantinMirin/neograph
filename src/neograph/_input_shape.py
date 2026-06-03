@@ -11,7 +11,7 @@ from neograph._state_bus import StateBus
 from neograph._state_keys import StateKeys
 from neograph.di import _isinstance_safe, _unwrap_each_dict, _unwrap_loop_value
 from neograph.modifiers import ModifierCombo, classify_modifiers
-from neograph.naming import field_name_for
+from neograph.naming import field_name_for, output_field_name
 from neograph.node import Node
 
 
@@ -35,7 +35,8 @@ def _classify_input_shape(state: StateBus, node: Node) -> InputShape:
         own_field = field_name_for(node.name)
         no = normalize_outputs(node.outputs)
         if no.is_dict_form:
-            own_field = f"{own_field}_{no.primary_key}"
+            assert no.primary_key is not None  # dict-form always has a primary key
+            own_field = output_field_name(own_field, no.primary_key)
         # StateBus.get optional: loop-bootstrap — first router pass may have no
         # self-output yet; absence signals "iteration 0" and falls through.
         own_val = state.get(own_field)
@@ -59,7 +60,8 @@ def _extract_loop_reentry(state: StateBus, node: Node) -> Any:
     own_field = field_name_for(node.name)
     no_out = normalize_outputs(node.outputs)
     if no_out.is_dict_form:
-        own_field = f"{own_field}_{no_out.primary_key}"
+        assert no_out.primary_key is not None  # dict-form always has a primary key
+        own_field = output_field_name(own_field, no_out.primary_key)
     # REQUIRED: _classify_input_shape already confirmed own_val is non-empty list.
     own_val = state.get_required(own_field, node_label=node.name)
     latest = own_val[-1]

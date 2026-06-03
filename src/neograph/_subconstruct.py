@@ -98,7 +98,7 @@ def make_subgraph_fn(sub: Construct, sub_graph: CompiledStateGraph) -> Callable:
         # Run sub-graph with isolated state.
         # StateBus.get optional: framework — node_id is a DI-style context key
         # that may not be present; empty-string default propagates to sub-graph.
-        sub_input: dict[str, Any] = {"node_id": bus.get("node_id", "")}
+        sub_input: dict[str, Any] = {StateKeys.NODE_ID: bus.get(StateKeys.NODE_ID, "")}
         if input_data is not None:
             sub_input[StateKeys.SUBGRAPH_INPUT] = input_data
 

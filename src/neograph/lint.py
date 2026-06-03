@@ -18,13 +18,14 @@ from typing import Any
 from neograph._ir_protocols import ConstructItem
 from neograph._normalize import normalize_inputs
 from neograph._sidecar import _get_param_res, get_merge_fn_metadata
+from neograph._state_keys import StateKeys
 from neograph.construct import Construct
 from neograph.di import DIBinding, DIKind
 from neograph.node import Node
 
 # Standard keys always available in state / config
 _KNOWN_EXTRAS: frozenset[str] = frozenset({
-    "node_id", "project_root", "human_feedback",
+    StateKeys.NODE_ID, StateKeys.PROJECT_ROOT, StateKeys.HUMAN_FEEDBACK,
 })
 
 # Matches ${var} and ${var.field} in inline prompts

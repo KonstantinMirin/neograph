@@ -14,7 +14,7 @@ from pydantic import BaseModel, create_model
 from neograph.construct import Construct
 from neograph.errors import CompileError
 from neograph.forward import _BranchNode
-from neograph.naming import field_name_for
+from neograph.naming import field_name_for, output_field_name
 
 log = structlog.get_logger()
 from typing import assert_never
@@ -252,9 +252,9 @@ def compile_state_model(
     # node_id and project_root have defaults so consumers can omit them
     # in run(input=...); they're still accessible via config["configurable"]
     # for node functions that need pipeline metadata.
-    fields["node_id"] = (str, "")
-    fields["project_root"] = (str, "")
-    fields["human_feedback"] = (dict[str, Any] | None, None)
+    fields[StateKeys.NODE_ID] = (str, "")
+    fields[StateKeys.PROJECT_ROOT] = (str, "")
+    fields[StateKeys.HUMAN_FEEDBACK] = (dict[str, Any] | None, None)
     fields[StateKeys.SCHEMA_FINGERPRINT] = (str, "")
     fields[StateKeys.NODE_FINGERPRINTS] = (dict[str, str], {})
 
@@ -279,7 +279,7 @@ def compute_node_fingerprints(construct: Any) -> dict[str, str]:
             if no.is_dict_form:
                 # Dict-form outputs: fingerprint each key
                 for key, typ in no.all_keys.items():
-                    full_name = f"{fname}_{key}"
+                    full_name = output_field_name(fname, key)
                     result[full_name] = hashlib.sha256(
                         f"{full_name}:{type(typ).__name__ if isinstance(typ, type) else str(typ)}".encode()
                     ).hexdigest()[:12]
@@ -307,7 +307,12 @@ def compute_schema_fingerprint(state_model: type[BaseModel]) -> str:
     human_feedback) are excluded — they change with modifier config, not schema.
     """
     import hashlib
-    _FRAMEWORK_PREFIXES = (StateKeys.FRAMEWORK_PREFIX, "node_id", "project_root", "human_feedback")
+    _FRAMEWORK_PREFIXES = (
+        StateKeys.FRAMEWORK_PREFIX,
+        StateKeys.NODE_ID,
+        StateKeys.PROJECT_ROOT,
+        StateKeys.HUMAN_FEEDBACK,
+    )
     items = []
     for fname, finfo in state_model.model_fields.items():
         if any(fname.startswith(p) or fname == p for p in _FRAMEWORK_PREFIXES):
@@ -348,7 +353,7 @@ def _add_output_field(node: Node, fields: dict[str, Any]) -> None:
                     [],
                 )
                 for output_key, output_type in no.all_keys.items():
-                    key_field = f"{field_name}_{output_key}"
+                    key_field = output_field_name(field_name, output_key)
                     field_type = dict[str, output_type] | None  # type: ignore[valid-type]
                     fields[key_field] = (
                         Annotated[field_type, _merge_dicts],
@@ -363,7 +368,7 @@ def _add_output_field(node: Node, fields: dict[str, Any]) -> None:
                     [],
                 )
                 for output_key, output_type in no.all_keys.items():
-                    key_field = f"{field_name}_{output_key}"
+                    key_field = output_field_name(field_name, output_key)
                     fields[key_field] = (output_type | None, None)
             case (
                 ModifierCombo.BARE | ModifierCombo.OPERATOR
@@ -371,7 +376,7 @@ def _add_output_field(node: Node, fields: dict[str, Any]) -> None:
                 | ModifierCombo.LOOP | ModifierCombo.LOOP_OPERATOR
             ):
                 for output_key, output_type in no.all_keys.items():
-                    key_field = f"{field_name}_{output_key}"
+                    key_field = output_field_name(field_name, output_key)
                     _add_single_output_field(node, key_field, output_type, fields)
             case _ as unreachable:
                 assert_never(unreachable)

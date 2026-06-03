@@ -38,6 +38,7 @@ from typing import (
 )
 
 from neograph._ir_protocols import ConstructItem, ConstructLike
+from neograph._normalize import normalize_outputs
 from neograph._state_keys import StateKeys
 from neograph.di import DIKind as _DIKind
 from neograph.errors import ConstructError, NeographError
@@ -153,8 +154,7 @@ def validate_loop_self_edge(node: Node) -> None:
 
     # Dict-form outputs: loop feeds back the PRIMARY key only (first key).
     # Secondary keys (e.g. tool_log) are per-iteration metadata.
-    if isinstance(output_type, dict):
-        output_type = next(iter(output_type.values()))
+    output_type = normalize_outputs(output_type).primary
 
     # Dict-form inputs: the back-edge feeds the node's output back as one
     # of its own inputs.  Check if the output is compatible with ANY input
@@ -199,14 +199,12 @@ def _validate_merge_hooks(oracle: Oracle, node: Node, construct_name: str) -> No
     annotations — only for provably wrong ones.
     """
     # Resolve the variant type (what the hooks receive as list elements)
-    gen_type = getattr(node, 'oracle_gen_type', None) or node.outputs
-    if isinstance(gen_type, dict):
-        gen_type = next(iter(gen_type.values()))
+    gen_type = normalize_outputs(
+        getattr(node, 'oracle_gen_type', None) or node.outputs
+    ).primary
 
     # The post-merge output type (what post_process/fallback must return)
-    output_type = node.outputs
-    if isinstance(output_type, dict):
-        output_type = next(iter(output_type.values()))
+    output_type = normalize_outputs(node.outputs).primary
 
     hooks: list[tuple[str, Callable | None, int]] = [
         ("merge_pre_process", oracle.merge_pre_process, 1),
