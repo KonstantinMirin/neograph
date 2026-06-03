@@ -74,7 +74,7 @@ def make_node_fn(
 ) -> Callable:
     """Create a LangGraph node function from a Node definition.
 
-    This is the core of NeoGraph — the generic factory that eliminates
+    This is the core of neograph — the generic factory that eliminates
     the 70% boilerplate from every hand-coded node.
 
     Raw nodes get a minimal observability wrapper. All other modes

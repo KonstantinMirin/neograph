@@ -273,7 +273,7 @@ def run(
     config: RunnableConfig | None = None,
     auto_resume: bool = True,
 ) -> Any:
-    """Execute a compiled NeoGraph graph.
+    """Execute a compiled neograph graph.
 
     Three modes:
         run(graph, input={...})              -- new execution

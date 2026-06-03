@@ -1,4 +1,4 @@
-"""NeoGraph — Declarative LLM Graph Compiler.
+"""neograph — Declarative LLM Graph Compiler.
 
 Declare pipeline nodes with @node and assemble from function signatures:
 
