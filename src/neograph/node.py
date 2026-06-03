@@ -384,18 +384,19 @@ class Node(Modifiable, BaseModel):
 
         # Collect a scripted_lookup for the node. Start with this Node's
         # own `_scripted_shim` (if any), merge in caller-supplied `scripted=`,
-        # then merge in decorator-side dicts (for @merge_fn / @tool /
-        # interrupt_when shims that were attached at decoration time).
-        from neograph.decorators import _decorator_scripted, _decorator_tool_factories
+        # then merge in decoration-time shims (for @merge_fn / @tool /
+        # interrupt_when shims registered at decoration time in the
+        # _runtime_registry leaf).
+        from neograph._runtime_registry import _decoration_registry
         scripted_lookup: dict[str, Callable] = {}
         own_shim = getattr(self, "_scripted_shim", None)
         if own_shim is not None and self.scripted_fn:
             scripted_lookup[self.scripted_fn] = own_shim
-        scripted_lookup.update(_decorator_scripted)
+        scripted_lookup.update(_decoration_registry.scripted)
         if scripted:
             scripted_lookup.update(scripted)
 
-        tool_factory_lookup: dict[str, Callable] = dict(_decorator_tool_factories)
+        tool_factory_lookup: dict[str, Callable] = dict(_decoration_registry.tool_factory)
         if tool_factories:
             tool_factory_lookup.update(tool_factories)
 

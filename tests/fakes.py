@@ -90,12 +90,12 @@ def reset_test_registry() -> None:
 def lookup_scripted(name: str) -> _Callable:
     """Test-only mirror of the removed src/ helper.
 
-    Looks up in both the test-local dict AND the decorator-side dict
+    Looks up in both the test-local dict AND the decoration-time registry
     (which holds inline body-merge / @merge_fn / interrupt shims).
     """
-    from neograph.decorators import _decorator_scripted
+    from neograph._runtime_registry import _decoration_registry
     from neograph.errors import ConfigurationError
-    fn = _TEST_SCRIPTED.get(name) or _decorator_scripted.get(name)
+    fn = _TEST_SCRIPTED.get(name) or _decoration_registry.scripted.get(name)
     if fn is None:
         raise ConfigurationError.build(
             f"Scripted function '{name}' not registered",
@@ -106,9 +106,9 @@ def lookup_scripted(name: str) -> _Callable:
 
 def lookup_condition(name: str) -> _Callable:
     """Test-only mirror of the removed src/ helper."""
-    from neograph.decorators import _decorator_conditions
+    from neograph._runtime_registry import _decoration_registry
     from neograph.errors import ConfigurationError
-    fn = _TEST_CONDITIONS.get(name) or _decorator_conditions.get(name)
+    fn = _TEST_CONDITIONS.get(name) or _decoration_registry.condition.get(name)
     if fn is None:
         raise ConfigurationError.build(
             f"Condition '{name}' not registered",

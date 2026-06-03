@@ -122,12 +122,12 @@ FUNCTION_LOCAL_IMPORT_ALLOWLIST: set[tuple[str, str, frozenset[str]]] = {
     # at MODULE level from the leaves (_oracle -> _sidecar -> _di_classify ->
     # _construct_validation never reaches _oracle, so no cycle). Both allowlist
     # entries deleted.
-    # _sidecar.py — cycle: infer_oracle_gen_type peeks the decorator-side
-    # scripted dict to type-infer Oracle's per-generator output. decorators.py
-    # imports node.py which imports _sidecar.py for PrivateAttr storage; the
-    # reverse must stay function-local. Will retire when decorator-side dicts
-    # move into a leaf module shared by both.
-    ("_sidecar.py", "neograph.decorators", frozenset({"_decorator_scripted"})),
+    # _sidecar.py — infer_oracle_gen_type peeks the decoration-time scripted
+    # registry to type-infer Oracle's per-generator output. The registry now
+    # lives in the leaf _runtime_registry (neograph-v3xx HIGH-01), so this is no
+    # longer a decorators cycle; the import stays function-local only to defer
+    # the registry import to call time. Retires if made module-level.
+    ("_sidecar.py", "neograph._runtime_registry", frozenset({"_decoration_registry"})),
     # NOTE (ARCH-4 / neograph-v3xx): the _wiring.py -> factory function-local
     # import of make_eachoracle_redirect_fn was removed when factory.py's
     # test-only re-export shims were deleted (HIGH-08). _wiring.py now imports
@@ -161,24 +161,23 @@ FUNCTION_LOCAL_IMPORT_ALLOWLIST: set[tuple[str, str, frozenset[str]]] = {
     # Both retire when Node loses its compile()/run() convenience methods.
     ("node.py", "neograph.errors", frozenset({"ConstructError"})),
     ("node.py", "neograph.factory", frozenset({"make_node_fn"})),
-    # node.py — Node.run_isolated() falls back to decorator-side defaults for
+    # node.py — Node.run_isolated() falls back to decoration-time defaults for
     # scripted/tool-factory lookups when the caller hasn't passed scripted=/
-    # tool_factories= kwargs. decorators.py imports node.py at module top
-    # (Node is referenced for sidecar storage), so the reverse must stay
-    # function-local. Will retire when decorator-side dicts move into a leaf
-    # module owned by node.py and decorators.py both.
+    # tool_factories= kwargs. The registry now lives in the leaf
+    # _runtime_registry (neograph-v3xx HIGH-01); the import stays function-local
+    # inside run_isolated alongside its other deferred imports.
     (
         "node.py",
-        "neograph.decorators",
-        frozenset({"_decorator_scripted", "_decorator_tool_factories"}),
+        "neograph._runtime_registry",
+        frozenset({"_decoration_registry"}),
     ),
     # state.py — cycle: state.py owns field naming logic which naming.py wraps
     # for legacy callers. Trivial; can be flattened anytime.
     ("state.py", "neograph.naming", frozenset({"field_name_for"})),
-    # tool.py — cycle: @tool decorator registers into decorators.py's
-    # _decorator_tool_factories. Function-local import keeps tool.py a leaf
-    # while it depends on decorators.py for registration storage.
-    ("tool.py", "neograph.decorators", frozenset({"register_tool_factory"})),
+    # tool.py — @tool registers the tool factory into the decoration-time
+    # registry (leaf _runtime_registry, neograph-v3xx HIGH-01). Function-local
+    # import inside the decorator defers the registry import to decoration time.
+    ("tool.py", "neograph._runtime_registry", frozenset({"register_tool_factory"})),
 }
 
 

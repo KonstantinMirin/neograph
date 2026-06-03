@@ -25,6 +25,7 @@ from neograph._oracle import (
     make_oracle_merge_fn,
     make_oracle_redirect_fn,
 )
+from neograph._runtime_registry import _decoration_registry
 from neograph._state_keys import StateKeys
 from neograph._subconstruct import make_subgraph_fn
 from neograph._wiring import (  # noqa: F401 — re-exported for backward compat
@@ -38,11 +39,6 @@ from neograph._wiring import (  # noqa: F401 — re-exported for backward compat
     _wire_oracle,
 )
 from neograph.construct import Construct
-from neograph.decorators import (
-    _decorator_conditions,
-    _decorator_scripted,
-    _decorator_tool_factories,
-)
 from neograph.di import DIKind
 from neograph.errors import CompileError, ConfigurationError
 from neograph.factory import make_node_fn
@@ -122,21 +118,21 @@ def compile(
         scripted_lookup: dict[str, Callable] = _scripted_lookup
     else:
         scripted_lookup = _collect_scripted_shims(construct)
-        # Merge in decorator-side shims for inline body-merge / @merge_fn /
+        # Merge in decoration-time shims for inline body-merge / @merge_fn /
         # interrupt_when callables. These are registered at decoration time
-        # and need to flow to compile()'s per-compile dict.
-        scripted_lookup.update(_decorator_scripted)
+        # (in the _runtime_registry leaf) and flow to compile()'s per-compile dict.
+        scripted_lookup.update(_decoration_registry.scripted)
         # Merge in callers' explicit `scripted=` kwargs LAST so they win.
         if scripted:
             scripted_lookup.update(scripted)
 
     # Build per-compile condition + tool_factory dicts. Both seed from
-    # decorator-side registrations (for inline interrupt_when callables and
+    # decoration-time registrations (for inline interrupt_when callables and
     # `@tool` decorations) and merge in explicit kwargs.
-    condition_lookup: dict[str, Callable] = dict(_decorator_conditions)
+    condition_lookup: dict[str, Callable] = dict(_decoration_registry.condition)
     if conditions:
         condition_lookup.update(conditions)
-    tool_factory_lookup: dict[str, Callable] = dict(_decorator_tool_factories)
+    tool_factory_lookup: dict[str, Callable] = dict(_decoration_registry.tool_factory)
     if tool_factories:
         tool_factory_lookup.update(tool_factories)
 

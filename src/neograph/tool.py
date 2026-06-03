@@ -132,8 +132,7 @@ def tool(
     The factory is auto-registered under the tool's name.
     """
     def decorator(f: Callable) -> Tool:
-        # Avoid circular import
-        from neograph.decorators import register_tool_factory
+        from neograph._runtime_registry import register_tool_factory
 
         tool_name = name or f.__name__
 

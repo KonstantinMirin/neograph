@@ -95,13 +95,13 @@ def infer_oracle_gen_type(merge_fn_name: str) -> Any | None:
     if meta is not None:
         fn, _ = meta
     else:
-        # Fall back to the decorator-side scripted dict (post-§2 the only
+        # Fall back to the decoration-time scripted registry (the only
         # plain-scripted registry visible at decoration time).
         try:
-            from neograph.decorators import _decorator_scripted
+            from neograph._runtime_registry import _decoration_registry
         except ImportError:
             return None
-        candidate = _decorator_scripted.get(merge_fn_name)
+        candidate = _decoration_registry.scripted.get(merge_fn_name)
         if candidate is None:
             return None
         fn = candidate

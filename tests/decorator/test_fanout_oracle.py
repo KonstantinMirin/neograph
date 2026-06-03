@@ -603,7 +603,7 @@ class TestEachOracleFusionDecoratorPath:
             return variants[0]
         register_scripted("my_fuse_merge", my_merge)
         # Also visible to decoration-time infer_oracle_gen_type (post-§2 the
-        # inference reads decorator-side _decorator_scripted).
+        # inference reads the decoration-time _decoration_registry.scripted).
         _dec_register_scripted("my_fuse_merge", my_merge)
 
         @node(
@@ -709,7 +709,8 @@ class TestBodyMergeRuntimeInvocation:
 
         # The body_merge shim was registered. Find it.
         # The name is _body_merge_{node_label}_{id}
-        from neograph.decorators import _decorator_scripted as _scripted_dict
+        from neograph._runtime_registry import _decoration_registry as _dr
+        _scripted_dict = _dr.scripted
         body_merge_keys = [k for k in _scripted_dict if k.startswith("_body_merge_fused")]
         assert body_merge_keys, "Body merge should be registered"
         shim = lookup_scripted(body_merge_keys[0])
@@ -731,7 +732,8 @@ class TestBodyMergeRuntimeInvocation:
             call_log.append("called")
             return Claims(items=["merged"])
 
-        from neograph.decorators import _decorator_scripted as _scripted_dict
+        from neograph._runtime_registry import _decoration_registry as _dr
+        _scripted_dict = _dr.scripted
         body_merge_keys = [k for k in _scripted_dict if k.startswith("_body_merge_oracle-merged")]
         assert body_merge_keys
         shim = lookup_scripted(body_merge_keys[0])
@@ -791,7 +793,8 @@ class TestBodyMergeShimNameUniqueness:
         """
         import gc
 
-        from neograph.decorators import _decorator_scripted as _scripted_dict
+        from neograph._runtime_registry import _decoration_registry as _dr
+        _scripted_dict = _dr.scripted
 
         shim_names: list[str] = []
         prefix = "_body_merge_oracle-merged"
@@ -837,8 +840,10 @@ class TestBodyMergeShimNameUniqueness:
         """
         import gc
 
-        from neograph.decorators import _decorator_conditions as _condition_dict
-        from neograph.decorators import _decorator_scripted as _scripted_dict
+        from neograph._runtime_registry import _decoration_registry as _dr
+        _condition_dict = _dr.condition
+        from neograph._runtime_registry import _decoration_registry as _dr
+        _scripted_dict = _dr.scripted
 
         prefix = "_node_interrupt_intr-target"
         before = {k for k in _scripted_dict if k.startswith(prefix)}
@@ -871,7 +876,8 @@ class TestBodyMergeShimNameUniqueness:
         memory address hex string. After the fix, suffix is a 16-char hex
         token from secrets.token_hex(8).
         """
-        from neograph.decorators import _decorator_scripted as _scripted_dict
+        from neograph._runtime_registry import _decoration_registry as _dr
+        _scripted_dict = _dr.scripted
 
         @node(
             outputs=Claims,

@@ -78,30 +78,18 @@ from neograph._di_classify import (  # noqa: F401 — re-exported for backward c
 from neograph._ir_normalize import oracle_gen_type_for
 from neograph._llm_config import LlmConfig
 
-# Decorator-side shim registry. The decorators emit shims for inline
-# body-merge functions (`@node(merge_fn=callable)`) and for inline
-# interrupt-when conditions (`@node(interrupt_when=callable)`). compile()
-# picks these up via the `_decorator_scripted` / `_decorator_conditions`
-# accessor below. The dicts are module-scoped because @decorator runs at
-# import time, before compile() is called.
-_decorator_scripted: dict[str, Callable] = {}
-_decorator_conditions: dict[str, Callable] = {}
-_decorator_tool_factories: dict[str, Callable] = {}
-
-
-def register_scripted(name: str, fn: Callable) -> None:
-    """Decorator-side scripted-shim store. Internal to neograph.decorators."""
-    _decorator_scripted[name] = fn
-
-
-def register_condition(name: str, fn: Callable) -> None:
-    """Decorator-side condition-shim store. Internal to neograph.decorators."""
-    _decorator_conditions[name] = fn
-
-
-def register_tool_factory(name: str, fn: Callable) -> None:
-    """Decorator-side tool-factory store. Internal to neograph.decorators."""
-    _decorator_tool_factories[name] = fn
+# Decorator-side shim registration. The decorators emit shims for inline
+# body-merge functions (`@node(merge_fn=callable)`), inline interrupt-when
+# conditions (`@node(interrupt_when=callable)`), `@merge_fn`, and `@tool`.
+# These run at IMPORT time, before compile() exists, so the store lives in the
+# leaf `_runtime_registry` module — decorators.py owns ZERO module-level
+# mutable dicts (neograph-v3xx HIGH-01). `register_*` are re-exported here so
+# existing call sites (and `@tool` in tool.py) keep working unchanged.
+from neograph._runtime_registry import (  # noqa: F401 — re-exported registration API
+    register_condition,
+    register_scripted,
+    register_tool_factory,
+)
 from neograph._sidecar import (  # noqa: F401 — re-exported for backward compat
     _get_node_source,
     _get_param_res,
