@@ -207,7 +207,7 @@ def _build_oracle_merge_result(
 
 
 def _build_upstream_context(
-    state: Any, node_inputs: dict[str, TypeSpecStatic] | None
+    bus: StateBus, node_inputs: dict[str, TypeSpecStatic] | None
 ) -> dict[str, Any]:
     """Extract upstream node-input values from state for merge-prompt injection.
 
@@ -216,11 +216,15 @@ def _build_upstream_context(
     of the upstream-context rule (``field_name_for`` + None-skip), shared by the
     standard Oracle merge (``make_oracle_merge_fn``) and the Each×Oracle fused
     merge (``_wiring.group_merge_barrier``) so the two paths cannot diverge.
+
+    Reads go through the StateBus; callers ``adapt_state(state)`` first.
     """
     ctx: dict[str, Any] = {}
     if isinstance(node_inputs, dict):
         for key in node_inputs:
-            val = getattr(state, field_name_for(key), None)
+            # StateBus.get optional: upstream-context is best-effort — an
+            # absent/None upstream field is skipped, not required.
+            val = bus.get(field_name_for(key))
             if val is not None:
                 ctx[key] = val
     return ctx
@@ -402,9 +406,12 @@ def make_oracle_merge_fn(
     _assert_merge_fn_registered(oracle, scripted_lookup)
 
     def merge_fn(state: Any, config: RunnableConfig) -> dict:
-        results = getattr(state, collector_field, [])
+        bus = adapt_state(state)
+        # StateBus.get optional: collector field is unbound until the first
+        # generator writes a variant; empty-list default is the correct zero.
+        results = bus.get(collector_field, [])
         primary, secondaries = _unwrap_oracle_results(results, field_name, output_model)
-        upstream_context = _build_upstream_context(state, _node_inputs)
+        upstream_context = _build_upstream_context(bus, _node_inputs)
         merged = _merge_variants(
             oracle, primary, output_model, config,
             upstream_context=upstream_context,

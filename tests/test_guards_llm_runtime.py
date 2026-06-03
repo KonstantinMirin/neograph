@@ -695,6 +695,136 @@ class TestStateBusGetDiscipline:
         assert offenders == [], offenders
 
 
+class TestNoRawStateAccessInRoutingModules:
+    """ARCH-2 (neograph-aiiz): the routing/boundary modules must read pipeline
+    state ONLY through the StateBus protocol. Three raw forms are structurally
+    forbidden on a bare ``state`` name:
+
+      1. ``getattr(state, ...)``               -- use ``bus.get`` / ``get_required``
+      2. ``state.__class__.model_fields`` (any ``state.__class__`` access)
+      3. ``state[...]`` subscript              -- use ``bus.get``
+
+    The full-state snapshot lives in exactly one helper (``snapshot_state`` in
+    ``_state_bus.py``, which goes through ``bus.keys()``/``bus.get``); the
+    Each-router navigation+dedup lives in exactly one helper
+    (``_collect_each_items`` in ``_wiring.py``). Neither re-derives raw access.
+
+    Scope is the four routing modules ONLY -- ``_state_bus.py`` is the StateBus
+    implementation and legitimately uses ``getattr(self._state, ...)`` and
+    ``self._state.__class__.model_fields``; it is NOT in scope. ``adapt_state(state)``
+    call-args are not a banned form (``state`` is an argument, not a receiver).
+
+    Value-navigation (``getattr(item, key)``, ``getattr(value, attr)``) is
+    excluded because the scanner keys on ``Name(id='state')`` only.
+    """
+
+    IN_SCOPE = frozenset({
+        "_wiring.py",
+        "_oracle.py",
+        "_subconstruct.py",
+        "_state_write.py",
+    })
+
+    @classmethod
+    def _scan(cls, src_dir: pathlib.Path) -> list[str]:
+        offenders: list[str] = []
+        for py_file in sorted(src_dir.glob("*.py")):
+            if py_file.name not in cls.IN_SCOPE:
+                continue
+            text = py_file.read_text()
+            try:
+                tree = ast.parse(text, filename=str(py_file))
+            except SyntaxError:  # pragma: no cover — file must parse
+                continue
+            for ast_node in ast.walk(tree):
+                # Form 1: getattr(state, ...)
+                if (
+                    isinstance(ast_node, ast.Call)
+                    and isinstance(ast_node.func, ast.Name)
+                    and ast_node.func.id == "getattr"
+                    and ast_node.args
+                    and isinstance(ast_node.args[0], ast.Name)
+                    and ast_node.args[0].id == "state"
+                ):
+                    offenders.append(f"{py_file.name}:{ast_node.lineno} getattr(state,...)")
+                # Form 2: state.__class__ (covers state.__class__.model_fields)
+                if (
+                    isinstance(ast_node, ast.Attribute)
+                    and ast_node.attr == "__class__"
+                    and isinstance(ast_node.value, ast.Name)
+                    and ast_node.value.id == "state"
+                ):
+                    offenders.append(f"{py_file.name}:{ast_node.lineno} state.__class__")
+                # Form 3: state[...] subscript
+                if (
+                    isinstance(ast_node, ast.Subscript)
+                    and isinstance(ast_node.value, ast.Name)
+                    and ast_node.value.id == "state"
+                ):
+                    offenders.append(f"{py_file.name}:{ast_node.lineno} state[...]")
+        return offenders
+
+    def test_no_raw_state_access_in_routing_modules(self):
+        offenders = self._scan(SRC_DIR)
+        assert offenders == [], (
+            f"\n{len(offenders)} raw-state-access site(s) found in routing modules:\n"
+            + "\n".join(f"  {o}" for o in offenders)
+            + "\n\nRoute reads through StateBus: adapt_state(state) then bus.get / "
+              "get_required / get_counter / keys. Use snapshot_state(bus) for the "
+              "full snapshot and _collect_each_items(bus, each, fan_out=...) for "
+              "Each-router navigation+dedup."
+        )
+
+    def test_mutation_getattr_state_detected(self, tmp_path: pathlib.Path):
+        """A probe ``getattr(state, 'x')`` in a scoped temp file is flagged."""
+        (tmp_path / "_wiring.py").write_text(
+            "def f(state):\n"
+            "    return getattr(state, 'x')\n"
+        )
+        offenders = self._scan(tmp_path)
+        assert any("getattr(state,...)" in o for o in offenders), offenders
+
+    def test_mutation_model_fields_enumeration_detected(self, tmp_path: pathlib.Path):
+        """The regex-slip case: ``state.__class__.model_fields`` enumeration."""
+        (tmp_path / "_oracle.py").write_text(
+            "def f(state):\n"
+            "    return {k: 1 for k in state.__class__.model_fields}\n"
+        )
+        offenders = self._scan(tmp_path)
+        assert any("state.__class__" in o for o in offenders), offenders
+
+    def test_mutation_subscript_detected(self, tmp_path: pathlib.Path):
+        """A raw ``state[root]`` subscript is flagged."""
+        (tmp_path / "_state_write.py").write_text(
+            "def f(state):\n"
+            "    return state['root']\n"
+        )
+        offenders = self._scan(tmp_path)
+        assert any("state[...]" in o for o in offenders), offenders
+
+    def test_mutation_statebus_calls_pass(self, tmp_path: pathlib.Path):
+        """StateBus method calls and adapt_state(state) args are NOT flagged."""
+        (tmp_path / "_subconstruct.py").write_text(
+            "def f(state):\n"
+            "    bus = adapt_state(state)\n"
+            "    a = bus.get('k')\n"
+            "    b = bus.get_required('k')\n"
+            "    c = getattr(item, 'key', None)\n"
+            "    return a, b, c\n"
+        )
+        offenders = self._scan(tmp_path)
+        assert offenders == [], offenders
+
+    def test_mutation_out_of_scope_file_skipped(self, tmp_path: pathlib.Path):
+        """``_state_bus.py`` (the StateBus impl) is out of scope and skipped."""
+        (tmp_path / "_state_bus.py").write_text(
+            "def f(state):\n"
+            "    return getattr(state, 'x')\n"
+        )
+        offenders = self._scan(tmp_path)
+        assert offenders == [], offenders
+
+
 class TestNoRuntimeFanOutDetection:
     """neograph-vgc1: ``neograph._ir_normalize.normalize_ir`` is the single
     source of truth for ``node.fan_out_param``. The runtime extractor at

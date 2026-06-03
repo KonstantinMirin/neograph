@@ -104,3 +104,15 @@ def adapt_state(state: BaseModel | dict[str, Any]) -> StateBus:
     if isinstance(state, dict):
         return _DictStateBus(state)
     return _ModelStateBus(state)
+
+
+def snapshot_state(bus: StateBus) -> dict[str, Any]:
+    """Return a full ``{field_name: value}`` snapshot of bound state.
+
+    The SINGLE source of the full-state-snapshot pattern. Routers that build a
+    ``Send`` payload from the entire parent state call this instead of
+    re-deriving ``{k: getattr(state, k) for k in state.__class__.model_fields}``
+    inline. All access is routed through the StateBus (``keys()`` + ``get()``),
+    so no raw ``getattr``/``model_fields`` escapes into caller modules.
+    """
+    return {key: bus.get(key) for key in bus.keys()}

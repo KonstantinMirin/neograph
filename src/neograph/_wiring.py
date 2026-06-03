@@ -22,7 +22,7 @@ from neograph._oracle import (
     _build_upstream_context,
     _merge_variants,
 )
-from neograph._state_bus import StateBus, adapt_state
+from neograph._state_bus import StateBus, adapt_state, snapshot_state
 from neograph._state_keys import StateKeys
 from neograph._subconstruct import make_subgraph_fn
 from neograph.construct import Construct
@@ -41,6 +41,43 @@ log = structlog.get_logger()
 LangGraphNodeFn = Callable[[Any, RunnableConfig], dict[str, Any]]
 LangGraphRouterFn = Callable[[Any], str]
 LangGraphLoopUnwrapFn = Callable[[StateBus, str], Any]
+
+
+def _collect_each_items(bus: StateBus, each: Each, *, fan_out: str) -> list:
+    """Navigate the Each ``over`` dotted path and dedup the collection.
+
+    The SINGLE source of the Each-router navigation+dedup rule, shared by
+    ``each_router`` (single Each) and ``flat_router`` (Each×Oracle fusion) so
+    the two topologies cannot drift. Reads the root collection through the
+    StateBus; the remaining dotted segments navigate the resolved VALUE
+    (``getattr(obj, part)`` is value navigation, not a state read).
+
+    Dedup keeps the first occurrence of each ``each.key`` value and emits an
+    ``each_duplicate_key`` warning (with kept/dropped indices) for the rest.
+    """
+    root, segments = split_each_path(each.over)
+    # StateBus.get optional: the Each ``over`` root is validated at assembly
+    # time; a runtime-absent root surfaces as an empty/None collection below.
+    obj = bus.get(root)
+    for part in segments:
+        obj = getattr(obj, part) if hasattr(obj, part) else obj[part]
+
+    seen_keys: dict[str, int] = {}
+    unique_items: list = []
+    for idx, item in enumerate(list(obj)):
+        key_val = getattr(item, each.key, str(item))
+        if key_val in seen_keys:
+            log.warning(
+                "each_duplicate_key",
+                fan_out=fan_out,
+                key=key_val,
+                kept_index=seen_keys[key_val],
+                dropped_index=idx,
+            )
+            continue
+        seen_keys[key_val] = idx
+        unique_items.append(item)
+    return unique_items
 
 
 def _wire_oracle(
@@ -64,10 +101,7 @@ def _wire_oracle(
     models = oracle.models
 
     def oracle_router(state: Any) -> list:
-        state_dict = {
-            k: getattr(state, k)
-            for k in state.__class__.model_fields
-        }
+        state_dict = snapshot_state(adapt_state(state))
         sends = []
         for i in range(oracle.n):
             send_state = {**state_dict, StateKeys.ORACLE_GEN_ID: f"gen-{i}"}
@@ -116,45 +150,15 @@ def _wire_each(
 
     graph.add_node(empty_name, empty_bypass)
 
-    # Router that iterates over the collection
-    root, segments = split_each_path(each.over)
-
     def each_router(state: Any) -> list:
-        # Navigate dotted path to get collection
-        obj = getattr(state, root) if hasattr(state, root) else state[root]
-        for part in segments:
-            obj = getattr(obj, part) if hasattr(obj, part) else obj[part]
-
-        # Dedup: keep first occurrence of each dispatch key, warn on duplicates
-        seen_keys: dict[str, int] = {}
-        items = list(obj)
-        unique_items: list = []
-        for idx, item in enumerate(items):
-            key_val = getattr(item, each.key, str(item))
-            if key_val in seen_keys:
-                log.warning(
-                    "each_duplicate_key",
-                    fan_out=fan_name,
-                    key=key_val,
-                    kept_index=seen_keys[key_val],
-                    dropped_index=idx,
-                )
-                continue
-            seen_keys[key_val] = idx
-            unique_items.append(item)
+        bus = adapt_state(state)
+        unique_items = _collect_each_items(bus, each, fan_out=fan_name)
+        state_dict = snapshot_state(bus)
 
         # Empty collection: skip fan-out, route to bypass node
         if not unique_items:
-            state_dict = {
-                k: getattr(state, k)
-                for k in state.__class__.model_fields
-            }
             return [Send(empty_name, state_dict)]
 
-        state_dict = {
-            k: getattr(state, k)
-            for k in state.__class__.model_fields
-        }
         return [
             Send(fan_name, {**state_dict, StateKeys.EACH_ITEM: item})
             for item in unique_items
@@ -216,34 +220,18 @@ def _add_each_oracle_fused(
     graph.add_node(empty_name, empty_bypass)
 
     # Flat router: M items x N generators = M x N Send() calls
-    root, segments = split_each_path(each.over)
     models = oracle.models
 
     def flat_router(state: Any) -> list:
-        # Navigate dotted path to collection
-        obj = getattr(state, root) if hasattr(state, root) else state[root]
-        for part in segments:
-            obj = getattr(obj, part) if hasattr(obj, part) else obj[part]
-
-        # Dedup items by each.key
-        seen_keys: dict[str, int] = {}
-        items = list(obj)
-        unique_items: list = []
-        for idx, item in enumerate(items):
-            key_val = getattr(item, each.key, str(item))
-            if key_val in seen_keys:
-                log.warning("each_duplicate_key", fan_out=gen_name, key=key_val)
-                continue
-            seen_keys[key_val] = idx
-            unique_items.append(item)
+        bus = adapt_state(state)
+        unique_items = _collect_each_items(bus, each, fan_out=gen_name)
+        state_dict = snapshot_state(bus)
 
         # Empty collection: skip fan-out, route to bypass
         if not unique_items:
-            state_dict = {k: getattr(state, k) for k in state.__class__.model_fields}
             return [Send(empty_name, state_dict)]
 
         # Dispatch M x N
-        state_dict = {k: getattr(state, k) for k in state.__class__.model_fields}
         sends = []
         for item in unique_items:
             for i in range(oracle.n):
@@ -270,7 +258,10 @@ def _add_each_oracle_fused(
     # canonical merge step in _oracle.py (no merge algorithm lives here).
     def group_merge_barrier(state: Any, config: RunnableConfig) -> dict:
         from collections import defaultdict
-        collector = getattr(state, collector_field, [])
+        bus = adapt_state(state)
+        # StateBus.get optional: collector is unbound until the first fused
+        # generator writes a tagged result; empty-list default is the zero.
+        collector = bus.get(collector_field, [])
 
         # Group tagged results by each_key
         groups: dict[str, list] = defaultdict(list)
@@ -279,7 +270,7 @@ def _add_each_oracle_fused(
 
         # Upstream-context for merge_prompt injection — built ONCE from the
         # barrier's state (parity with make_oracle_merge_fn's single-group path).
-        upstream_context = _build_upstream_context(state, node.inputs)
+        upstream_context = _build_upstream_context(bus, node.inputs)
 
         # Call merge per group
         merged: dict[str, Any] = {}
@@ -629,7 +620,10 @@ def _add_branch_to_graph(
     def branch_router(state: Any) -> str:
         """Evaluate the branch condition against live state and route."""
         if field_name is not None:
-            value = getattr(state, field_name, None)
+            # StateBus.get optional: the branch source field may be unbound
+            # when the condition fires before its producer ran; None routes
+            # to the false arm via the op_fn below.
+            value = adapt_state(state).get(field_name)
             # Navigate attribute chain (e.g., .score, .items.first)
             for attr in attr_chain:
                 if value is None:
