@@ -236,48 +236,48 @@ class TestUnwrapHelpers:
 
     def test_unwrap_loop_value_extracts_last(self):
         """Loop append-list [v1, v2, v3] → v3."""
-        from neograph.factory import _unwrap_loop_value
+        from neograph.di import _unwrap_loop_value
         assert _unwrap_loop_value([1, 2, 3], int) == 3
 
     def test_unwrap_loop_value_empty_list_returns_none(self):
         """Empty Loop append-list [] → None (first iteration)."""
-        from neograph.factory import _unwrap_loop_value
+        from neograph.di import _unwrap_loop_value
         assert _unwrap_loop_value([], int) is None
 
     def test_unwrap_loop_value_none_passthrough(self):
         """None → None."""
-        from neograph.factory import _unwrap_loop_value
+        from neograph.di import _unwrap_loop_value
         assert _unwrap_loop_value(None, int) is None
 
     def test_unwrap_loop_value_non_list_passthrough(self):
         """Non-list value passes through unchanged."""
-        from neograph.factory import _unwrap_loop_value
+        from neograph.di import _unwrap_loop_value
         assert _unwrap_loop_value("hello", str) == "hello"
 
     def test_unwrap_loop_value_list_consumer_passthrough(self):
         """When expected_type IS list, don't unwrap — consumer wants the list."""
-        from neograph.factory import _unwrap_loop_value
+        from neograph.di import _unwrap_loop_value
         assert _unwrap_loop_value([1, 2, 3], list[int]) == [1, 2, 3]
 
     def test_unwrap_each_dict_to_list(self):
         """dict[str, X] → list[X] when consumer wants list."""
-        from neograph.factory import _unwrap_each_dict
+        from neograph.di import _unwrap_each_dict
         result = _unwrap_each_dict({"a": 1, "b": 2}, list[int])
         assert result == [1, 2]
 
     def test_unwrap_each_dict_non_list_consumer_passthrough(self):
         """When consumer doesn't want list, dict passes through."""
-        from neograph.factory import _unwrap_each_dict
+        from neograph.di import _unwrap_each_dict
         assert _unwrap_each_dict({"a": 1}, int) == {"a": 1}
 
     def test_unwrap_each_dict_non_dict_passthrough(self):
         """Non-dict value passes through."""
-        from neograph.factory import _unwrap_each_dict
+        from neograph.di import _unwrap_each_dict
         assert _unwrap_each_dict("hello", list[str]) == "hello"
 
     def test_unwrap_each_dict_none_passthrough(self):
         """None passes through."""
-        from neograph.factory import _unwrap_each_dict
+        from neograph.di import _unwrap_each_dict
         assert _unwrap_each_dict(None, list[int]) is None
 
 
@@ -407,45 +407,45 @@ class TestNodeInput:
 
     def test_single_basemodel_value(self):
         """NodeInput holds a single BaseModel value."""
-        from neograph.factory import NodeInput
+        from neograph._dispatch import NodeInput
         ni = NodeInput(single=RawText(text="hello"))
         assert ni.value == RawText(text="hello")
         assert ni.fan_in is None
 
     def test_single_str_value(self):
         """NodeInput.single accepts non-BaseModel types (str)."""
-        from neograph.factory import NodeInput
+        from neograph._dispatch import NodeInput
         ni = NodeInput(single="plain string")
         assert ni.value == "plain string"
 
     def test_single_int_value(self):
         """NodeInput.single accepts int."""
-        from neograph.factory import NodeInput
+        from neograph._dispatch import NodeInput
         ni = NodeInput(single=42)
         assert ni.value == 42
 
     def test_fan_in_dict_value(self):
         """NodeInput holds a fan-in dict of upstream values."""
-        from neograph.factory import NodeInput
+        from neograph._dispatch import NodeInput
         ni = NodeInput(fan_in={"claims": Claims(items=["a"]), "text": RawText(text="b")})
         assert ni.value == {"claims": Claims(items=["a"]), "text": RawText(text="b")}
         assert ni.single is None
 
     def test_fan_in_with_mixed_types(self):
         """Fan-in dict can hold non-BaseModel values (str, list, int)."""
-        from neograph.factory import NodeInput
+        from neograph._dispatch import NodeInput
         ni = NodeInput(fan_in={"count": 5, "names": ["a", "b"]})
         assert ni.value == {"count": 5, "names": ["a", "b"]}
 
     def test_fan_in_takes_precedence_over_single(self):
         """When both are set, fan_in takes precedence."""
-        from neograph.factory import NodeInput
+        from neograph._dispatch import NodeInput
         ni = NodeInput(single=RawText(text="x"), fan_in={"a": Claims(items=[])})
         assert ni.value == {"a": Claims(items=[])}
 
     def test_empty_input(self):
         """NodeInput with neither single nor fan_in returns None."""
-        from neograph.factory import NodeInput
+        from neograph._dispatch import NodeInput
         ni = NodeInput()
         assert ni.value is None
 
@@ -455,32 +455,32 @@ class TestNodeOutput:
 
     def test_single_basemodel_value(self):
         """NodeOutput holds a single BaseModel result."""
-        from neograph.factory import NodeOutput
+        from neograph._dispatch import NodeOutput
         no = NodeOutput(single=Claims(items=["x"]))
         assert no.value == Claims(items=["x"])
         assert no.multi is None
 
     def test_single_str_value(self):
         """NodeOutput.single accepts non-BaseModel types."""
-        from neograph.factory import NodeOutput
+        from neograph._dispatch import NodeOutput
         no = NodeOutput(single="result string")
         assert no.value == "result string"
 
     def test_multi_dict_value(self):
         """NodeOutput holds dict-form multi-output."""
-        from neograph.factory import NodeOutput
+        from neograph._dispatch import NodeOutput
         no = NodeOutput(multi={"summary": RawText(text="s"), "count": Claims(items=[])})
         assert no.value == {"summary": RawText(text="s"), "count": Claims(items=[])}
 
     def test_multi_takes_precedence_over_single(self):
         """When both are set, multi takes precedence."""
-        from neograph.factory import NodeOutput
+        from neograph._dispatch import NodeOutput
         no = NodeOutput(single=RawText(text="x"), multi={"a": Claims(items=[])})
         assert no.value == {"a": Claims(items=[])}
 
     def test_empty_output(self):
         """NodeOutput with neither single nor multi returns None."""
-        from neograph.factory import NodeOutput
+        from neograph._dispatch import NodeOutput
         no = NodeOutput()
         assert no.value is None
 
@@ -490,7 +490,7 @@ class TestModeDispatch:
 
     def test_scripted_dispatch_instantiates(self):
         """ScriptedDispatch wraps a callable and instantiates."""
-        from neograph.factory import ScriptedDispatch
+        from neograph._dispatch import ScriptedDispatch
         def my_fn(input_data, config):
             return RawText(text="ok")
         sd = ScriptedDispatch(fn=my_fn)
@@ -498,19 +498,19 @@ class TestModeDispatch:
 
     def test_think_dispatch_instantiates(self):
         """ThinkDispatch instantiates without arguments."""
-        from neograph.factory import ThinkDispatch
+        from neograph._dispatch import ThinkDispatch
         td = ThinkDispatch()
         assert isinstance(td, ThinkDispatch)
 
     def test_tool_dispatch_instantiates(self):
         """ToolDispatch instantiates without arguments."""
-        from neograph.factory import ToolDispatch
+        from neograph._dispatch import ToolDispatch
         td = ToolDispatch()
         assert isinstance(td, ToolDispatch)
 
     def test_scripted_dispatch_execute_calls_fn(self):
         """ScriptedDispatch.execute delegates to the wrapped fn."""
-        from neograph.factory import NodeInput, NodeOutput, ScriptedDispatch
+        from neograph._dispatch import NodeInput, NodeOutput, ScriptedDispatch
         call_log = []
 
         def my_fn(input_data, config):
@@ -536,7 +536,7 @@ class TestModeDispatch:
 
         This is documented explicitly: scripted functions don't use LLM context.
         """
-        from neograph.factory import NodeInput, ScriptedDispatch
+        from neograph._dispatch import NodeInput, ScriptedDispatch
         received_args = []
 
         def my_fn(input_data, config):
@@ -554,13 +554,13 @@ class TestModeDispatch:
 
     def test_think_dispatch_has_execute_method(self):
         """ThinkDispatch conforms to ModeDispatch protocol (has execute method)."""
-        from neograph.factory import ThinkDispatch
+        from neograph._dispatch import ThinkDispatch
         td = ThinkDispatch()
         assert callable(getattr(td, "execute", None))
 
     def test_tool_dispatch_has_execute_method(self):
         """ToolDispatch conforms to ModeDispatch protocol (has execute method)."""
-        from neograph.factory import ToolDispatch
+        from neograph._dispatch import ToolDispatch
         td = ToolDispatch()
         assert callable(getattr(td, "execute", None))
 
@@ -568,7 +568,7 @@ class TestModeDispatch:
         """All 3 dispatches are runtime-compatible with ModeDispatch."""
         import inspect
 
-        from neograph.factory import ScriptedDispatch, ThinkDispatch, ToolDispatch
+        from neograph._dispatch import ScriptedDispatch, ThinkDispatch, ToolDispatch
 
         def dummy_fn(input_data, config):
             return None

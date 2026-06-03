@@ -10,54 +10,9 @@ import structlog
 from langchain_core.runnables import RunnableConfig
 from pydantic import BaseModel
 
-from neograph._dispatch import (  # noqa: F401 — re-exported for tests/backward compat
-    ModeDispatch,
-    NodeInput,
-    NodeOutput,
-    ScriptedDispatch,
-    ThinkDispatch,
-    ToolDispatch,
-    _dispatch_for_mode,
-    _render_input,
-)
-from neograph._execute import (  # noqa: F401 — re-exported for tests
-    _execute_node,
-    _extract_context,
-    _type_name,
-)
-from neograph._input_shape import (  # noqa: F401 — internal helpers re-exported for tests
-    InputShape,
-    _classify_input_shape,
-    _extract_each_item,
-    _extract_fan_in_dict,
-    _extract_input,
-    _extract_loop_reentry,
-    _extract_single_type,
-)
+from neograph._dispatch import _dispatch_for_mode
+from neograph._execute import _execute_node, _type_name
 from neograph._llm_runtime import EMPTY_RUNTIME, LlmRuntime
-from neograph._oracle import (  # noqa: F401 — re-exported so compiler.py imports stay stable
-    _build_oracle_merge_result,
-    _inject_oracle_config,
-    _unwrap_oracle_results,
-    make_each_redirect_fn,
-    make_eachoracle_redirect_fn,
-    make_oracle_merge_fn,
-    make_oracle_redirect_fn,
-)
-from neograph._state_bus import adapt_state  # noqa: F401 — re-exported for tests
-from neograph._state_write import (  # noqa: F401 — re-exported for tests
-    _apply_skip_when,
-    _build_state_update,
-)
-from neograph._subconstruct import make_subgraph_fn  # noqa: F401 — re-exported
-
-# Backward-compat re-exports for tests that imported these helpers from
-# factory.py before the §4 split. Each is `noqa`'d individually because ruff
-# strips items inside a parenthesized import group even with a line-level noqa.
-from neograph.di import (
-    _unwrap_each_dict,  # noqa: F401
-    _unwrap_loop_value,  # noqa: F401
-)
 from neograph.errors import ConfigurationError
 from neograph.node import Node
 

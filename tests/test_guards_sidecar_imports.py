@@ -130,15 +130,11 @@ FUNCTION_LOCAL_IMPORT_ALLOWLIST: set[tuple[str, str, frozenset[str]]] = {
     # reverse must stay function-local. Will retire when decorator-side dicts
     # move into a leaf module shared by both.
     ("_sidecar.py", "neograph.decorators", frozenset({"_decorator_scripted"})),
-    # _wiring.py — cycle: wiring composes Each-Oracle redirects from factory,
-    # resolves merge metadata from decorators, calls compile() recursively for
-    # nested constructs. Multiple cycles converging in one module; will resolve
-    # piecewise as factory.py and decorators.py are split.
-    (
-        "_wiring.py",
-        "neograph.factory",
-        frozenset({"make_eachoracle_redirect_fn"}),
-    ),
+    # NOTE (ARCH-4 / neograph-v3xx): the _wiring.py -> factory function-local
+    # import of make_eachoracle_redirect_fn was removed when factory.py's
+    # test-only re-export shims were deleted (HIGH-08). _wiring.py now imports
+    # make_eachoracle_redirect_fn at module level from _oracle (already a
+    # module-level dependency), so no cycle and no allowlist entry is needed.
     # NOTE (ARCH-1 / neograph-s0iz): the merge_fn metadata + invoke_structured
     # function-local imports left _wiring.py when the Oracle merge algorithm was
     # consolidated into _oracle._merge_variants. _wiring.py now imports that

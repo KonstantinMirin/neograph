@@ -21,6 +21,7 @@ from neograph._oracle import (
     _assert_merge_fn_registered,
     _build_upstream_context,
     _merge_variants,
+    make_eachoracle_redirect_fn,
 )
 from neograph._state_bus import StateBus, adapt_state, snapshot_state
 from neograph._state_keys import StateKeys
@@ -205,8 +206,6 @@ def _add_each_oracle_fused(
     empty_name = f"__each_empty_{node.name}"
 
     # Generator function — tagged redirect for Each x Oracle fusion
-    from neograph.factory import make_eachoracle_redirect_fn
-
     raw_fn = make_node_fn(node, runtime=runtime, scripted_lookup=scripted_lookup, tool_factory_lookup=tool_factory_lookup)
     redirect_fn = make_eachoracle_redirect_fn(
         raw_fn, field_name, collector_field, each.key, item=node,

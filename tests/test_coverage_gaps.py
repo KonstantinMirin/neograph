@@ -736,7 +736,7 @@ class TestSkipWhenErrorWrapping:
         import structlog
 
         from neograph.errors import ExecutionError
-        from neograph.factory import _apply_skip_when
+        from neograph._state_write import _apply_skip_when
 
         n = Node("test-skip", outputs=RawText,
                  skip_when=lambda x: x.nonexistent_attr)
@@ -758,7 +758,7 @@ class TestRendererFallback:
         """When _get_global_renderer import fails, falls back to node.renderer (line 148-149)."""
         import sys
 
-        from neograph.factory import _render_input
+        from neograph._dispatch import _render_input
         from neograph.renderers import XmlRenderer
 
         n = Node("test-renderer", outputs=RawText, renderer=XmlRenderer())
@@ -793,7 +793,7 @@ class TestBuildStateUpdate:
 
     def test_returns_empty_when_result_none(self):
         """When result is None, returns empty dict (line 193-194)."""
-        from neograph.factory import _build_state_update
+        from neograph._state_write import _build_state_update
 
         n = Node("test", outputs=RawText)
         result = _build_state_update(n, "test", None, None)
@@ -801,7 +801,7 @@ class TestBuildStateUpdate:
 
     def test_dict_form_skips_none_values(self):
         """Dict-form outputs skip None values (line 208-209)."""
-        from neograph.factory import _build_state_update
+        from neograph._state_write import _build_state_update
 
         n = Node("test", outputs={"result": RawText, "meta": Claims})
         result = _build_state_update(n, "test", {"result": RawText(text="ok"), "meta": None}, None)
@@ -813,7 +813,7 @@ class TestBuildStateUpdate:
         from pydantic import create_model
 
         from neograph._state_bus import adapt_state
-        from neograph.factory import _build_state_update
+        from neograph._state_write import _build_state_update
 
         n = Node("test", outputs={"result": RawText, "meta": Claims}) \
             | Each(over="items", key="label")
@@ -838,7 +838,7 @@ class TestBuildStateUpdate:
         from pydantic import create_model
 
         from neograph._state_bus import adapt_state
-        from neograph.factory import _build_state_update
+        from neograph._state_write import _build_state_update
 
         n = Node("test", outputs=RawText) \
             | Loop(when=lambda x: True, max_iterations=3, history=True)
@@ -941,7 +941,7 @@ class TestExtractInputEdgeCases:
         from pydantic import create_model
 
         from neograph._state_bus import adapt_state
-        from neograph.factory import _extract_input
+        from neograph._input_shape import _extract_input
 
         # Node expects Draft (single type), state has a list from Loop
         n = Node("consumer", inputs=Draft, outputs=RawText)
@@ -970,7 +970,7 @@ class TestOracleRedirectDictForm:
 
     def test_oracle_redirect_dict_form_output(self):
         """Oracle redirect captures dict-form output (line 584-585)."""
-        from neograph.factory import make_oracle_redirect_fn
+        from neograph._oracle import make_oracle_redirect_fn
 
         def raw_fn(state, config):
             return {"node_result": RawText(text="ok"), "node_meta": Claims(items=["x"])}
@@ -982,7 +982,7 @@ class TestOracleRedirectDictForm:
 
     def test_oracle_redirect_fallback_when_no_match(self):
         """Oracle redirect returns raw result when no field matches (line 586)."""
-        from neograph.factory import make_oracle_redirect_fn
+        from neograph._oracle import make_oracle_redirect_fn
 
         def raw_fn(state, config):
             return {"completely_unrelated": "value"}
@@ -996,7 +996,7 @@ class TestOracleRedirectDictForm:
         """EachOracle redirect tags result with each_key (line 606-608)."""
         from pydantic import create_model
 
-        from neograph.factory import make_eachoracle_redirect_fn
+        from neograph._oracle import make_eachoracle_redirect_fn
 
         def raw_fn(state, config):
             return {"node": MatchResult(cluster_label="a", matched=["ok"])}
@@ -1016,7 +1016,7 @@ class TestOracleRedirectDictForm:
         """EachOracle redirect returns raw result when field_name not in result (line 608)."""
         from pydantic import create_model
 
-        from neograph.factory import make_eachoracle_redirect_fn
+        from neograph._oracle import make_eachoracle_redirect_fn
 
         def raw_fn(state, config):
             return {"other_field": "something"}
@@ -1042,7 +1042,7 @@ class TestUnwrapOracleResults:
 
     def test_non_dict_results_pass_through(self):
         """Non-dict results return as-is (line 628-629)."""
-        from neograph.factory import _unwrap_oracle_results
+        from neograph._oracle import _unwrap_oracle_results
 
         results = [RawText(text="a"), RawText(text="b")]
         primary, secondaries = _unwrap_oracle_results(results, "node", RawText)
@@ -1051,7 +1051,7 @@ class TestUnwrapOracleResults:
 
     def test_empty_results_pass_through(self):
         """Empty results return as-is."""
-        from neograph.factory import _unwrap_oracle_results
+        from neograph._oracle import _unwrap_oracle_results
 
         primary, secondaries = _unwrap_oracle_results([], "node", RawText)
         assert primary == []
@@ -1059,7 +1059,7 @@ class TestUnwrapOracleResults:
 
     def test_dict_results_with_non_dict_output_model_fallback(self):
         """Dict-form results with non-dict output_model uses fallback (lines 641-648)."""
-        from neograph.factory import _unwrap_oracle_results
+        from neograph._oracle import _unwrap_oracle_results
 
         # Results are dicts (dict-form), but output_model is NOT a dict.
         # This triggers the fallback path that finds keys by prefix.
@@ -1074,7 +1074,7 @@ class TestUnwrapOracleResults:
 
     def test_dict_results_no_prefix_match_returns_full(self):
         """Dict results with no prefix match return as-is (line 650)."""
-        from neograph.factory import _unwrap_oracle_results
+        from neograph._oracle import _unwrap_oracle_results
 
         results = [
             {"completely_different_key": "val1"},
@@ -1096,7 +1096,7 @@ class TestBuildOracleMergeResult:
 
     def test_non_dict_output_model_uses_field_name(self):
         """Non-dict output_model writes to field_name directly (line 691)."""
-        from neograph.factory import _build_oracle_merge_result
+        from neograph._oracle import _build_oracle_merge_result
 
         merged = RawText(text="merged")
         # Non-dict output_model with secondaries (unusual but tests line 691)
@@ -1121,7 +1121,7 @@ class TestSubgraphFactory:
         """each_redirect_fn handles missing config (line 864/870)."""
         from pydantic import create_model
 
-        from neograph.factory import make_each_redirect_fn
+        from neograph._oracle import make_each_redirect_fn
 
         def raw_fn(state):
             return {"test": RawText(text="ok")}
@@ -1140,7 +1140,7 @@ class TestSubgraphFactory:
         """each_redirect_fn returns raw result when field_name not in result (line 870)."""
         from pydantic import create_model
 
-        from neograph.factory import make_each_redirect_fn
+        from neograph._oracle import make_each_redirect_fn
 
         def raw_fn(state, config):
             return {"other_key": "value"}
