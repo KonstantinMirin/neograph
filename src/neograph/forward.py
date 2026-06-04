@@ -54,6 +54,7 @@ import operator as op_module
 from collections.abc import Iterator
 from typing import Any
 
+from neograph.conditions import OPERATORS
 from neograph.construct import Construct
 from neograph.errors import ConstructError
 from neograph.modifiers import Each, Loop, Modifiable, ModifierSet
@@ -61,16 +62,6 @@ from neograph.naming import field_name_for
 from neograph.node import Node
 
 __all__ = ["ForwardConstruct"]
-
-# Map comparison operator strings to callables for runtime evaluation
-_OP_MAP = {
-    "<": op_module.lt,
-    "<=": op_module.le,
-    ">": op_module.gt,
-    ">=": op_module.ge,
-    "==": op_module.eq,
-    "!=": op_module.ne,
-}
 
 _MAX_BRANCHES = 8
 
@@ -295,7 +286,7 @@ class _ConditionProxy:
         the compiler uses to build the router function.
         """
         left = self._left
-        op_fn = _OP_MAP[self._op]
+        op_fn = OPERATORS[self._op]
         threshold = self._right
 
         # Parse the proxy name to extract state field + attribute chain

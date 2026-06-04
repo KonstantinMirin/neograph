@@ -475,12 +475,12 @@ NEOGRAPH_ERROR_ALLOWLIST: dict[str, str] = {
     # the documented contract and tests depend on it. AttributeError raises
     # inside _resolve_field implement the Python attribute-protocol contract
     # for dotted-path lookup (caller may catch AttributeError to fall back).
-    "conditions.py:63": "ValueError is the documented contract for parse_condition grammar errors; tests assert it",
-    "conditions.py:74": "AttributeError is the Python attribute-protocol contract for dotted-path lookup",
-    "conditions.py:82": "AttributeError is the Python attribute-protocol contract for dotted-path lookup",
-    "conditions.py:90": "AttributeError is the Python attribute-protocol contract for dotted-path lookup",
-    "conditions.py:115": "ValueError is the documented contract for parse_condition grammar errors; tests assert it",
-    "conditions.py:126": "ValueError is the documented contract for parse_condition grammar errors; tests assert it",
+    "conditions.py:68": "ValueError is the documented contract for parse_condition grammar errors; tests assert it",
+    "conditions.py:79": "AttributeError is the Python attribute-protocol contract for dotted-path lookup",
+    "conditions.py:87": "AttributeError is the Python attribute-protocol contract for dotted-path lookup",
+    "conditions.py:95": "AttributeError is the Python attribute-protocol contract for dotted-path lookup",
+    "conditions.py:120": "ValueError is the documented contract for parse_condition grammar errors; tests assert it",
+    "conditions.py:131": "ValueError is the documented contract for parse_condition grammar errors; tests assert it",
 
     # ── construct.py — Pydantic BeforeValidator boundary ──
     # _validate_node_list runs inside Pydantic field validation; Pydantic
@@ -494,11 +494,11 @@ NEOGRAPH_ERROR_ALLOWLIST: dict[str, str] = {
     # the Python protocol contract (a non-iterable used in `for` raises
     # TypeError, not NeographError). forward() raises NotImplementedError as
     # a Python abstract-method idiom.
-    "forward.py:185": "NotImplementedError is the Python abstract-method idiom",
-    "forward.py:216": "AttributeError is the Python attribute-protocol contract (hasattr depends on it)",
-    "forward.py:245": "TypeError is the Python protocol contract for __bool__ misuse",
-    "forward.py:253": "TypeError is the Python protocol contract for __iter__ misuse",
-    "forward.py:280": "TypeError is the Python protocol contract for __bool__ misuse on _ConditionProxy",
+    "forward.py:176": "NotImplementedError is the Python abstract-method idiom",
+    "forward.py:207": "AttributeError is the Python attribute-protocol contract (hasattr depends on it)",
+    "forward.py:236": "TypeError is the Python protocol contract for __bool__ misuse",
+    "forward.py:244": "TypeError is the Python protocol contract for __iter__ misuse",
+    "forward.py:271": "TypeError is the Python protocol contract for __bool__ misuse on _ConditionProxy",
 
     # ── modifiers.py — Pydantic field_validator + proxy attribute protocol ──
     # _PathRecorder.__getattr__ implements the attribute protocol. Pydantic

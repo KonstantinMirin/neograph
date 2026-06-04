@@ -285,3 +285,71 @@ class TestUnwrapHelperMonopoly:
         assert _list_latest_bypass_sites(own, frozenset()) == [
             ("subgraph_node", "own_val")
         ]
+
+
+_COMPARISON_OP_ATTRS = frozenset({"lt", "le", "gt", "ge", "eq", "ne"})
+
+
+def _comparison_op_table_modules(src_dir: pathlib.Path) -> list[str]:
+    """Modules defining a dict literal that maps to >=4 ``operator.<cmp>``
+    callables — the comparison-operator->callable table (neograph-e27b).
+
+    Detects values like ``operator.lt`` / ``op_module.ge`` regardless of the
+    import alias (matches on the trailing attribute name).
+    """
+    found: list[str] = []
+    for py in sorted(src_dir.glob("*.py")):
+        tree = ast.parse(py.read_text())
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Dict):
+                continue
+            op_values = sum(
+                1
+                for v in node.values
+                if isinstance(v, ast.Attribute) and v.attr in _COMPARISON_OP_ATTRS
+            )
+            if op_values >= 4:
+                found.append(py.name)
+                break
+    return found
+
+
+class TestComparisonOperatorTableMonopoly:
+    """neograph-e27b: the comparison-operator->callable table lives once.
+
+    conditions.py owns the canonical table (public OPERATORS); forward.py
+    imports it rather than re-declaring _OP_MAP. AST guard + positive/negative
+    meta-tests (AST — no regex-slip case).
+    """
+
+    def test_op_table_defined_in_exactly_one_module(self):
+        modules = _comparison_op_table_modules(SRC_DIR)
+        assert modules == ["conditions.py"], (
+            f"\nComparison-operator table must be defined ONCE (conditions.py); "
+            f"found in: {modules}.\nImport conditions.OPERATORS instead of "
+            "re-declaring the mapping."
+        )
+
+    def test_forward_imports_canonical_operators(self):
+        source = (SRC_DIR / "forward.py").read_text()
+        assert "OPERATORS" in source and "from neograph.conditions import" in source, (
+            "forward.py must import the canonical OPERATORS from neograph.conditions."
+        )
+
+    # --- meta-tests ---
+
+    def test_meta_op_table_scanner_catches_duplicate(self, tmp_path):
+        """positive: a module re-declaring the table is detected."""
+        (tmp_path / "dup.py").write_text(
+            "import operator\n"
+            "_T = {'<': operator.lt, '>': operator.gt, "
+            "'<=': operator.le, '>=': operator.ge}\n"
+        )
+        assert _comparison_op_table_modules(tmp_path) == ["dup.py"]
+
+    def test_meta_op_table_scanner_ignores_unrelated_dict(self, tmp_path):
+        """negative: a non-operator dict is not flagged."""
+        (tmp_path / "clean.py").write_text(
+            "_M = {'a': 1, 'b': 2, 'c': 3, 'd': 4}\n"
+        )
+        assert _comparison_op_table_modules(tmp_path) == []

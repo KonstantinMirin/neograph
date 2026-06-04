@@ -14,7 +14,9 @@ from typing import Any
 
 # ---- grammar ----------------------------------------------------------
 
-_OPS: dict[str, Callable[[Any, Any], bool]] = {
+# Canonical comparison-operator -> callable table. Single source of truth;
+# consumers (e.g. forward.py) import this rather than re-declaring the mapping.
+OPERATORS: dict[str, Callable[[Any, Any], bool]] = {
     "<": operator.lt,
     ">": operator.gt,
     "<=": operator.le,
@@ -22,6 +24,9 @@ _OPS: dict[str, Callable[[Any, Any], bool]] = {
     "==": operator.eq,
     "!=": operator.ne,
 }
+
+# Internal alias retained for the evaluator's existing references.
+_OPS = OPERATORS
 
 # dotted_field  op  literal
 # literal: float, int, bool (true/false), quoted string ("..." or '...')
