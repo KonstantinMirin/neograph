@@ -186,3 +186,96 @@ migrations in §6.3.
 Until decided: **stop spawning per-operation dedup tickets** against IR-item
 dispatch. They each win a skirmish (real fixes) while the root — no unified
 IR-item interface — persists and re-spawns the pattern.
+
+---
+
+## 9. Three-lens review synthesis (2026-06-04)
+
+Three independent Opus analyses were run against §1–8 — DDD, SOLID/GRASP, and
+pragmatic engineering. Companion docs:
+`ir-item-dispatch-ddd-2026-06-04.md`, `-solid-grasp-2026-06-04.md`,
+`-pragmatic-2026-06-04.md`. Where they converge is now high-confidence; where
+they split is the actual decision.
+
+### 9.1 Strong convergence (do this regardless of A/B)
+
+All three independently land on the **same concrete first move**, at three
+ambition levels but one mechanism:
+
+- **The only *live* duplication is `_declared_output` being cluster-private.**
+  `forward.py:~561` hand-rolls the `Node.outputs` / `Construct.output` selector
+  *because* `_declared_output` (`_validation_types.py:110`) is not in
+  `_construct_validation.__all__` and `forward` is the DX layer. DDD: "imprisoned
+  domain logic"; SOLID: "relocate to a neutral module + fix the DIP"; pragmatic:
+  "promote to `_ir_normalize.py`, point forward at it." Same move.
+- **New finding the seed missed — a live DIP inversion / context leak.**
+  `compiler.py:44`, `state.py:16`, `_wiring.py` import `_BranchNode` *upward*
+  from the DX-layer `forward.py`. `_BranchNode` is a core-IR concept living in a
+  high layer. Both DDD (anti-corruption) and SOLID (DIP) flag it independently.
+  Relocate `_BranchNode` to a neutral low-level IR module. This is worth doing on
+  its own merits.
+
+### 9.2 The sizing was wrong (pragmatic lens, uncontested)
+
+The "52 isinstance sites" overstates the disease by ~25×. Segmented: ~7 are
+non-code (docstrings, the `testing.py` codegen template); ~4 are an *irreducible*
+sum-type dispatch (`compiler.py:209-215` routes to three different graph builders
+— no protocol removes this); ~30 are benign, non-duplicated **local Node-only
+guards** (legitimate, not the disease). The true recurring-dispatch problem is
+**~2 selector idioms with exactly one live duplication**. Neither the DDD nor
+SOLID lens contradicts this — they argue the *shape* of B is right, not that the
+52 are all real disease.
+
+Consequences:
+- The **"collapse ≥~40 of 52" gate in §6.4 is a vanity metric** — it would reward
+  converting *correct* local guards into protocol calls. Strike it.
+- The cited drift bugs (`8k3`/`ayq`) were a duplicated **modifier rule**, which
+  is **already centralized** in `effective_producer_type` (second walker deleted).
+  They argue "centralize the rule" (done) — **not** for a general dispatch
+  framework.
+- The **"load-bearing for the TS port" justification is aspirational**: there is
+  no `.ts` source yet. It cannot carry Option B's weight today.
+
+### 9.3 The shape, when it's time (DDD + SOLID, converged)
+
+If/when B is triggered, its principled form — both lenses agree — is **not** the
+seed's literal "widen `ConstructItem`":
+- **One neutral IR-ops module** owning all item-level dispatch (DDD calls it a
+  domain service; SOLID calls it GRASP **Pure Fabrication**). The
+  Information-Expert (the type itself) is overridden by the two constraints —
+  which is *exactly* the textbook condition for Pure Fabrication, so the adapter
+  is canonically correct, not a workaround. The seed undersold it as "a trade."
+- **Capability-segregated protocols** (e.g. `HasDeclaredOutput`, `Walkable`,
+  `HasBoundaryPort`), **not** one fat `ConstructItem` (ISP; avoids re-coupling
+  `forward` to validation vocabulary).
+- **Structural `match` over the closed union, not the Visitor pattern** — Visitor
+  needs `accept()` on the dumb IR types, which the layering forbids.
+- The real defect under LSP: singular `output` vs plural `outputs` + `getattr(…,
+  None)` defaults is a **heterogeneous closed union papered as homogeneous**.
+
+### 9.4 Revised recommendation (supersedes §6)
+
+Two-step, decision-gated:
+
+1. **NOW (this is "A done properly" *and* B's first migration *and* the domain-
+   service seed — all three at once):**
+   a. Create a neutral low-level IR module (working name `_ir_ops.py`) and move
+      `_declared_output` there; relocate `_BranchNode` out of `forward.py` into a
+      neutral module (fixes the DIP inversion). Point `forward.py` at the shared
+      selector; drop the `getattr(source_node, 'output', None)` default.
+   b. Add **one** backstop guard: generalize the existing
+      `test_declared_output_ternary_appears_once` to also ban the
+      `getattr(item,'output',None)` form and `isinstance(_, Node|Construct)`
+      selector idioms outside the allowlisted IR-ops home.
+   Half-to-one day, reversible, layer-clean. Resolves the only live duplication
+   and the context leak.
+
+2. **DEFER full Option B** (capability protocols + match-based dispatch module,
+   retiring the per-op helpers) behind a **real trigger**, not a site count:
+   *a fourth IR item type is introduced* **OR** *the TypeScript port starts and
+   forces a shared item contract*. Until then it is YAGNI; §9.3 records the shape
+   so the decision is pre-made when the trigger fires.
+
+Net: the seed's instinct (no unified interface is the root) is correct; its
+*urgency and scope* were inflated. The cheap convergent move closes the real
+wound now; the framework waits for a real trigger.
