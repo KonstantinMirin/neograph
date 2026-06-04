@@ -1,0 +1,191 @@
+---
+title: Prompt Compiler
+description: The user-defined callable that turns a template reference + BAML-rendered input into the messages the LLM sees.
+sidebar:
+  order: 35
+---
+
+A **prompt compiler** is a callable you pass to `compile(prompt_compiler=...)` that turns a template reference and neograph's BAML-rendered input into the messages the LLM sees. This is the user-extension point: neograph defines the protocol; you decide how to compose system messages, inject schemas, look up templates from a registry, or whatever else your project needs.
+
+This page documents the contract. For the simple file-per-prompt case, see [the local helper in the examples directory](https://github.com/KonstantinMirin/neograph/blob/main/examples/_shared.py). For a richer reference implementation that splits system and user messages, injects JSON schemas, and forwards aliases, see [piarch's `neograph_bridge.py`](https://github.com/KonstantinMirin/piarch/blob/main/src/derive_ensemble/integration/neograph_bridge.py).
+
+## The contract
+
+A prompt compiler is any callable with this shape:
+
+```python
+def prompt_compiler(
+    template: str,
+    data: Any,
+    *,
+    node_name: str | None = None,
+    config: dict | None = None,
+    output_model: type | None = None,
+    output_schema: str | None = None,
+    llm_config: dict | None = None,
+    context: dict[str, Any] | None = None,
+) -> list[dict]:
+    ...
+```
+
+It returns a list of message dicts in OpenAI chat-completion format (`{"role": "user", "content": "..."}`, `{"role": "system", "content": "..."}`, etc.).
+
+The keyword arguments are passed by neograph when they're relevant; your compiler can accept any subset via `**kwargs`. Only `template` and `data` are positional and always present.
+
+## What neograph guarantees about `data`
+
+By the time the compiler is called, neograph has already BAML-rendered the upstream input via `render_input()` (the same machinery that renders tool results — see [Input Renderers](/concepts/renderers/)).
+
+You receive `data` in one of three shapes:
+
+| Shape | When | Example |
+|---|---|---|
+| `dict[str, str]` | Multi-input fan-in node — keys are @node parameter names | `{"claims": "...", "scores": "..."}` for `def merge(claims: Claims, scores: Scores)` |
+| `str` | Single-input node — value is already rendered | `"<Claims with 3 items: ...>"` for `def classify(claims: Claims)` |
+| `None` | First-of-pipeline node with no inputs | Seed nodes that only consume `FromInput` parameters |
+
+The compiler does NOT receive raw Pydantic instances. If you need the raw structure, configure a custom renderer per the [Input Renderers](/concepts/renderers/) page. The compiler operates on the rendered text.
+
+## What neograph guarantees about `template`
+
+The `template` argument is whatever string was passed to `@node(prompt=...)`. Two conventions exist:
+
+- **File-reference**: a short identifier with no spaces or `${...}` markers. Your compiler resolves it (load from disk, look up in a registry, etc.).
+- **Inline**: a string containing a space or `${var}` marker. Neograph treats it as inline text and substitutes `${var}` placeholders itself via [render_input](/concepts/renderers/) — your compiler is NEVER called for inline templates.
+
+The detection lives at `src/neograph/_llm_render.py::_is_inline_prompt`. If you want the compiler to receive the string, make sure it has no internal spaces. The conventional pattern is short snake_case identifiers like `"review_security"`.
+
+## Minimal compiler (file-per-prompt)
+
+This is the shape used by the [example sub-projects](https://github.com/KonstantinMirin/neograph/tree/main/examples) (`code-review`, `lead-outreach`, `spec-builder`, `lead-research`):
+
+```python
+from pathlib import Path
+from string import Template
+
+def make_template_prompt_compiler(prompt_dir):
+    """Load prompts/{name}.md and substitute ${var} placeholders."""
+    prompt_dir = Path(prompt_dir)
+
+    def compiler(template, data, **kw):
+        raw = (prompt_dir / f"{template}.md").read_text()
+        if isinstance(data, dict):
+            # Expose lone value as ${input} for portability
+            if len(data) == 1:
+                data = {**data, "input": next(iter(data.values()))}
+            content = Template(raw).safe_substitute(**data)
+        elif isinstance(data, str):
+            content = Template(raw).safe_substitute(input=data)
+        else:
+            content = raw
+        return [{"role": "user", "content": content}]
+
+    return compiler
+```
+
+Usage:
+
+```python
+graph = compile(
+    pipeline,
+    llm_factory=my_factory,
+    prompt_compiler=make_template_prompt_compiler(Path(__file__).parent / "prompts"),
+)
+```
+
+**Why `${var}` not `{var}`**: `string.Template` survives literal `{curly}` braces in prompts (YAML/JSON code samples). `str.format()` would crash.
+
+**The examples ship this helper at `examples/_shared.py`. It is NOT part of neograph's public API** — every production project has different prompt needs, and trying to ship a single "right" compiler turns the framework into either a kwarg-soup or a callback-tower. Write your own.
+
+## Richer compiler (system messages, schema injection, registry lookup)
+
+When you need more — system/user splits, JSON schema injection for structured-output prompts, multi-template lookup chains, alias forwarding for legacy templates — write your own compiler. The piarch project's `neograph_bridge.py` is the reference:
+
+```python
+def prompt_compiler(
+    template_name: str,
+    input_data: Any,
+    *,
+    node_name: str | None = None,
+    config: dict | None = None,
+    output_model: type | None = None,
+    output_schema: str | None = None,
+    llm_config: dict | None = None,
+    context: dict[str, Any] | None = None,
+) -> list[dict]:
+    # Build template_vars from input_data + context
+    template_vars = {}
+    if isinstance(input_data, dict):
+        for k, v in input_data.items():
+            template_vars[k] = ... # custom handling per type
+    elif isinstance(input_data, str):
+        template_vars["_single_input"] = input_data
+
+    # Forward context, inject node_id, project-specific defaults
+    configurable = (config or {}).get("configurable", {})
+    template_vars.setdefault("node_id", configurable.get("node_id", ""))
+
+    # Inject JSON schema for structured-output prompts
+    if output_schema:
+        template_vars["json_schema"] = output_schema
+    elif output_model and hasattr(output_model, "model_json_schema"):
+        template_vars["json_schema"] = json.dumps(
+            output_model.model_json_schema(), indent=2
+        )
+
+    # Look up template from a registry + format-substitute
+    prompt_text = get_prompt(template_name, **template_vars)
+
+    # Split system + user messages based on node mode
+    if node_name in ("explore",):
+        return [{"role": "user", "content": prompt_text}]
+    return [
+        {"role": "system", "content": f"You are a requirements engineer."},
+        {"role": "user", "content": prompt_text},
+    ]
+```
+
+This is application-specific code. Neograph doesn't ship this because every project's notion of "system message," "schema injection," and "registry" is different.
+
+## Inline prompts (no compiler needed)
+
+When your prompt is a short literal with `${var}` placeholders, neograph handles substitution directly — your compiler is never called:
+
+```python
+@node(
+    mode="think",
+    outputs=Result,
+    prompt="Analyze ${claim} for ${dimension} concerns and return findings.",
+)
+def analyze(claim: Claim, dimension: Dimension) -> Result: ...
+```
+
+Same `${var}` syntax as the file-reference case above. Use this when the prompt is small enough to live in the source file; use file references when the prompt is large or shared across nodes.
+
+## When NOT to write your own compiler
+
+You don't need a custom compiler if:
+
+- All your prompts are short inline strings with `${var}` markers (neograph handles substitution).
+- Your project only ever uses `mode="scripted"` nodes (no LLM, no compiler call).
+
+You DO need one if:
+
+- You load prompts from files or a registry.
+- You want to inject system messages, JSON schemas, or run-context into prompts.
+- You want to format prompts differently per model tier or output strategy.
+
+## Contract summary
+
+| Position | Type | Source | Guarantee |
+|---|---|---|---|
+| `template` | `str` | `@node(prompt=...)` argument | Always present; not an inline prompt (those bypass the compiler) |
+| `data` | `dict[str, str] | str | None` | BAML-rendered upstream input | Always pre-rendered; never raw Pydantic |
+| `node_name` (kw) | `str | None` | @node's `name` | Present when configured |
+| `config` (kw) | `dict | None` | `run(graph, config=...)` | Present at runtime |
+| `output_model` (kw) | `type | None` | @node's `outputs` annotation | Present for structured-output nodes |
+| `output_schema` (kw) | `str | None` | Compiled JSON schema | Present for structured-output nodes |
+| `llm_config` (kw) | `dict | None` | Merged LLM config | Present |
+| `context` (kw) | `dict | None` | @node's `context=[...]` resolutions | Present when configured |
+
+Your compiler can accept any subset via `**kwargs`. The protocol is forward-compatible — neograph may pass additional kwargs in future versions; your compiler keeps working.

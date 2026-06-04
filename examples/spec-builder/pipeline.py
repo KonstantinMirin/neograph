@@ -24,6 +24,9 @@ import yaml
 _HERE = Path(__file__).resolve().parent
 if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
+sys.path.insert(0, str(_HERE.parent))  # examples/ — for _shared helper
+
+from _shared import make_template_prompt_compiler
 
 from neograph import FromInput, compile, construct_from_functions, node, run
 
@@ -219,27 +222,11 @@ def main():
     request = _load_sample(0)
     print(f"Workflow request:\n  {request.description}\n")
 
-    # Canonical prompt_compiler (mirrors piarch's neograph_bridge.py):
-    # loads prompts/{name}.md and substitutes BAML-pre-rendered input via
-    # string.Template (${var} style — same as neograph's inline substitution).
-    # ${var} keeps literal {curly braces} in code samples safe.
-    def prompt_compiler(template, data, **kw):
-        from string import Template
-        raw = _prompt(template)
-        if isinstance(data, dict):
-            if len(data) == 1:
-                data = {**data, "input": next(iter(data.values()))}
-            content = Template(raw).safe_substitute(**data)
-        elif isinstance(data, str):
-            content = Template(raw).safe_substitute(input=data)
-        else:
-            content = raw
-        return [{"role": "user", "content": content}]
 
     graph = compile(
         pipeline,
         llm_factory=_llm_factory,
-        prompt_compiler=prompt_compiler,
+        prompt_compiler=make_template_prompt_compiler(_HERE / "prompts"),
     )
     result = run(
         graph,
