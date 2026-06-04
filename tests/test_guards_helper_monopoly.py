@@ -360,7 +360,7 @@ _X3F0_HELPER_HOMES = {
     "iter_nodes": "construct.py",
     "collect_llm_nodes": "_llm_runtime.py",
     "missing_runtime_kwargs": "_llm_runtime.py",
-    "_declared_output": "_validation_types.py",
+    "_declared_output": "_normalize.py",
 }
 
 # The declared-output field-selection ternary (whitespace-normalized).
@@ -500,3 +500,79 @@ class TestTypeDisplayNameMonopoly:
         spaced = "name = getattr( t ,  '__name__' , str( t ) )"
         assert spaced.count(_TYPE_DISPLAY_GETATTR_IDIOM) == 0  # naive scan misses it
         assert _normalized_idiom_count(spaced, _TYPE_DISPLAY_GETATTR_IDIOM) == 1
+
+
+REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
+
+
+def _getattr_output_sites(tree: ast.AST) -> bool:
+    """True if the tree contains ``getattr(<x>, 'output', ...)`` — the
+    Construct-boundary declared-output selector (neograph-8cqd). Singular
+    'output' only; 'input'/'nodes'/'outputs' accesses are different concerns."""
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "getattr"
+            and len(node.args) >= 2
+            and isinstance(node.args[1], ast.Constant)
+            and node.args[1].value == "output"
+        ):
+            return True
+    return False
+
+
+class TestDeclaredOutputSelectorMonopoly:
+    """neograph-8cqd: the Node.outputs/Construct.output declared-output selector
+    has ONE home (_declared_output in _normalize.py). No other module may
+    hand-roll it via ``getattr(item, 'output', None)``. AST guard + meta-tests.
+    The irreducible compiler.py sum-type match uses isinstance (not
+    getattr-'output') so it is not caught.
+    """
+
+    _EXEMPT_FILES = frozenset({"_normalize.py"})
+
+    def test_no_handrolled_getattr_output_selector(self):
+        offenders = [
+            py.name
+            for py in sorted(SRC_DIR.glob("*.py"))
+            if py.name not in self._EXEMPT_FILES
+            and _getattr_output_sites(ast.parse(py.read_text()))
+        ]
+        assert offenders == [], (
+            f"\n{len(offenders)} hand-rolled getattr(_, 'output', ...) declared-output "
+            f"selector(s): {offenders}.\nUse _declared_output(item) from neograph._normalize."
+        )
+
+    def test_meta_getattr_output_scanner_catches(self):
+        tree = ast.parse("def f(x):\n    return getattr(x, 'output', None)\n")
+        assert _getattr_output_sites(tree)
+
+    def test_meta_getattr_output_scanner_ignores_other_attrs(self):
+        tree = ast.parse(
+            "def f(x):\n    return getattr(x, 'input', None), getattr(x, 'nodes', None)\n"
+        )
+        assert not _getattr_output_sites(tree)
+
+
+class TestNoTsPortJustification:
+    """neograph-8cqd (maintainer decision 2026-06-04): the TypeScript port is a
+    PARALLEL codebase sharing data FORMATS (YAML/JSON-Schema/templates), not
+    objects — so it must never be cited as the justification for a Python-
+    codebase decision. The phrase 'TypeScript port' is banned from AGENTS.md
+    (descriptive 'TypeScript-style notation' for describe_type is a different
+    string and stays).
+    """
+
+    def test_no_ts_port_justification_in_agents_md(self):
+        text = (REPO_ROOT / "AGENTS.md").read_text()
+        assert "TypeScript port" not in text, (
+            "AGENTS.md cites 'TypeScript port' as a justification. The TS port is a "
+            "parallel codebase (shared formats, not objects); remove it as a rationale "
+            "and keep the independent reason."
+        )
+
+    def test_meta_ts_port_phrase_detected(self):
+        sample = "...consumes the same metadata. The TypeScript port (over LangGraphJS)..."
+        assert "TypeScript port" in sample  # the phrase the guard bans
+        assert "TypeScript port" not in "renders a TypeScript-style notation"  # descriptive stays

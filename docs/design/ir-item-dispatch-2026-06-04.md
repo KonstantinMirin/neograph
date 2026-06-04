@@ -114,10 +114,18 @@ Two real constraints, both deliberate:
    methods will not uniformly cover `_BranchNode`; it would need parallel
    hand-written methods, re-introducing drift by another door.
 2. **Layer discipline (AGENTS.md).** The IR types are intentionally *dumb data*;
-   behavior lives in the compiler/validation layer. This is load-bearing — it is
-   *why* the planned TypeScript port can reuse the same IR. Pushing
+   behavior lives in the compiler/validation layer. Pushing
    `effective_producer_type`/`declared_output` onto `Node` as methods would bake
-   Python-runtime behavior into the IR and break that separation.
+   Python-runtime behavior into the IR and break the sidecar separation between
+   "what the node is" and "how this runtime invokes it".
+
+> **TS-port note (2026-06-04, maintainer):** earlier drafts cited "the IR is
+> load-bearing for the TypeScript port" as a reason here. Struck. The TS port is
+> a *parallel codebase* sharing data *formats* (YAML / JSON Schema / templates),
+> not Python objects — methods on Python's `Node` never cross the boundary or
+> touch the serialized shape. The constraint above stands on the sidecar
+> discipline alone; the TS port is **not** a justification for any Python-codebase
+> decision. (See §9.5.)
 
 So the choice is genuinely a trade, not an obvious win.
 
@@ -128,7 +136,7 @@ So the choice is genuinely a trade, not an obvious win.
 **A. Status quo — per-operation free helpers.** Keep extracting one helper per
 discrimination (the seven-ticket approach). Each helper `isinstance`-es once,
 centrally.
-- Pro: respects dumb-data IR + layering; TS port stays clean; small, safe diffs.
+- Pro: respects dumb-data IR + layering; small, safe diffs.
 - Con: helper count grows; nothing stops a *new* operation from hand-rolling the
   dispatch again (only a per-helper structural guard catches each one); cross-layer
   reuse blocked (the `forward` ↔ `_declared_output` case); the "52 isinstance"
@@ -233,8 +241,9 @@ Consequences:
   is **already centralized** in `effective_producer_type` (second walker deleted).
   They argue "centralize the rule" (done) — **not** for a general dispatch
   framework.
-- The **"load-bearing for the TS port" justification is aspirational**: there is
-  no `.ts` source yet. It cannot carry Option B's weight today.
+- The **"load-bearing for the TS port" justification is struck entirely** (see
+  §9.5): the TS port is a parallel codebase sharing *formats*, not objects, so it
+  was never a valid reason for a Python-codebase decision in the first place.
 
 ### 9.3 The shape, when it's time (DDD + SOLID, converged)
 
@@ -258,23 +267,57 @@ seed's literal "widen `ConstructItem`":
 Two-step, decision-gated:
 
 1. **NOW (this is "A done properly" *and* B's first migration *and* the domain-
-   service seed — all three at once):**
-   a. Create a neutral low-level IR module (working name `_ir_ops.py`) and move
-      `_declared_output` there; relocate `_BranchNode` out of `forward.py` into a
-      neutral module (fixes the DIP inversion). Point `forward.py` at the shared
-      selector; drop the `getattr(source_node, 'output', None)` default.
-   b. Add **one** backstop guard: generalize the existing
-      `test_declared_output_ternary_appears_once` to also ban the
-      `getattr(item,'output',None)` form and `isinstance(_, Node|Construct)`
-      selector idioms outside the allowlisted IR-ops home.
-   Half-to-one day, reversible, layer-clean. Resolves the only live duplication
-   and the context leak.
+   service seed):** *implemented under `neograph-jju3`, 2026-06-04.*
+   a. Move `_declared_output` to the existing neutral low-level module
+      **`_normalize.py`** (it already houses `normalize_outputs`/
+      `primary_output_field` and is already imported by `forward.py` — so no new
+      module was needed; the §9.4 working name `_ir_ops.py` was superseded by the
+      existing seam). Point `forward.py` at the shared selector; drop the
+      `getattr(source_node, 'output', None)` default.
+   b. Add **one** backstop guard: `TestDeclaredOutputSelectorMonopoly` bans
+      `getattr(_, 'output', ...)` outside `_normalize.py` (with meta-tests). The
+      irreducible `compiler.py` sum-type match uses `isinstance`, not
+      `getattr-'output'`, so it is not caught.
+   Resolves the only live duplication.
+
+   *Split out (NOT done here):* relocating `_BranchNode` out of `forward.py` to
+   fix the DIP inversion (DDD/SOLID finding) is a separate, more invasive change
+   — filed as its own ticket rather than folded into this "just Option A" scope.
 
 2. **DEFER full Option B** (capability protocols + match-based dispatch module,
-   retiring the per-op helpers) behind a **real trigger**, not a site count:
-   *a fourth IR item type is introduced* **OR** *the TypeScript port starts and
-   forces a shared item contract*. Until then it is YAGNI; §9.3 records the shape
-   so the decision is pre-made when the trigger fires.
+   retiring the per-op helpers) behind a **single real trigger**, not a site
+   count: *a fourth `Construct.nodes` item type is introduced*. (The earlier
+   "TS-port starts" trigger is removed — see §9.5.) Until then it is YAGNI; §9.3
+   records the shape so the decision is pre-made when the trigger fires.
+
+### 9.5 TS-port struck as a justification (maintainer decision, 2026-06-04)
+
+The TypeScript port must **not** be cited as the reason for any Python-codebase
+decision. Rationale: per `typescript-port.md` / `typescript-timeline.md`, the TS
+port is a **parallel codebase** that shares data *formats* (YAML specs, JSON
+Schema for types, prompt templates, renderer output, `describe_type` notation) —
+**not** Python objects. TS builds its own `Node`/`Construct` from the same
+YAML/JSON Schema. Consequences:
+
+- Methods/dispatch on Python's IR types never cross the boundary and never touch
+  the serialized interchange shape, so "keep the IR dumb for TS" was never a real
+  constraint. The genuine constraints are the **sidecar discipline** (don't bake
+  Python runtime-registration into the IR) and **`_BranchNode` being
+  non-Pydantic** — both TS-independent.
+- TS is therefore **not** an Option-B trigger: the boundary is pure data with no
+  "missing behavioral interface" problem; TS would re-derive its own dispatch
+  (discriminated union + exhaustive `switch`). At most it could suggest a
+  *data-shape* tweak (an explicit `kind` discriminant), which is cross-language
+  and orthogonal to A/B.
+- `typescript-timeline.md`'s "prefer cross-language solutions" actually favours
+  free-function helpers (Option A's mechanism) over a Python-OO visitor.
+
+Sites scrubbed (workstream 2 of `neograph-jju3`): the `AGENTS.md` sidecar "why"
+paragraph and this doc's §4 constraint + §9.4 trigger. Allowlisted as
+*descriptive* (not justification-for-a-Python-choice): `describe_type`'s
+"TypeScript-style notation" (an LLM-facing format), and the `typescript-*.md`
+strategy docs. A guard (`TestNoTsPortJustification`) pins `AGENTS.md` against the
+phrase "TypeScript port" returning as a rationale.
 
 Net: the seed's instinct (no unified interface is the root) is correct; its
 *urgency and scope* were inflated. The cheap convergent move closes the real

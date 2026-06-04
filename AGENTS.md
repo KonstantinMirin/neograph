@@ -88,6 +88,8 @@ Current rules encoded in `effective_producer_type`:
 - `Each` modifier → `dict[str, output]` (see `state.py:_add_output_field` for the state builder side of the same rule)
 - Anything else → raw `output` unchanged
 
+**The declared-output selector is also monopolized** (`neograph-8cqd`): the `Node.outputs` (plural) vs `Construct.output` (singular) discrimination lives once in `_declared_output` in `_normalize.py` (a neutral low-level module reachable from every layer, including the DX layer `forward.py`). Do NOT hand-roll `getattr(item, 'output', None)` — call `_declared_output(item)`. `TestDeclaredOutputSelectorMonopoly` bans the inline form outside `_normalize.py`. The one sanctioned exception is `compiler.py`'s three-way `isinstance(_BranchNode/Construct/Node)` match, which dispatches to three different graph-builders with different signatures — an irreducible sum-type, not a selector.
+
 ### `list[X]` consumers of `Each` producers (merge-after-fan-out)
 
 A downstream node can consume an Each-modified upstream's fanned-out results as a `list[X]`:
@@ -221,7 +223,7 @@ Both are `PrivateAttr(default=None)`, preserved by `model_copy` (Pydantic v2 cop
 
 **Why PrivateAttr, not proper fields**: the sidecar carries a `Callable` (the user's function), which can't go through Pydantic schema validation without `arbitrary_types_allowed` on every downstream consumer. PrivateAttr bypasses schema while staying on the Node instance.
 
-**Why we keep the sidecar rather than eagerly resolving**: the sidecar carries the IR-level metadata that the compiler needs (the original function, param names, DI bindings). The Python compiler consumes this to build scripted shims registered by string name into LangGraph. The TypeScript port (over LangGraphJS) consumes the same conceptual metadata via its own pipeline. Eagerly resolving to LangGraph-Python `scripted_fn` registry names at IR construction time would bake the Python runtime's registration mechanics into the IR; keeping the sidecar separates "what the node is" from "how this runtime invokes it".
+**Why we keep the sidecar rather than eagerly resolving**: the sidecar carries the IR-level metadata that the compiler needs (the original function, param names, DI bindings). The Python compiler consumes this to build scripted shims registered by string name into LangGraph. Eagerly resolving to LangGraph-Python `scripted_fn` registry names at IR construction time would bake the Python runtime's registration mechanics into the IR; keeping the sidecar separates "what the node is" from "how this runtime invokes it".
 
 ---
 

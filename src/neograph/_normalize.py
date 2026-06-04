@@ -18,7 +18,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from neograph._ir_protocols import ConstructItem
 from neograph.naming import output_field_name
+from neograph.node import Node, TypeSpecStatic
 
 
 @dataclass(frozen=True)
@@ -121,3 +123,15 @@ def primary_output_field(base_field: str, outputs: Any) -> str:
         assert no.primary_key is not None  # dict-form always has a primary key
         return output_field_name(base_field, no.primary_key)
     return base_field
+
+
+def _declared_output(item: ConstructItem) -> TypeSpecStatic:
+    """Return an item's declared output type, abstracting the Node/Construct split.
+
+    Single source of truth: ``Node`` declares ``.outputs`` (plural);
+    ``Construct`` / ``_BranchNode`` declare ``.output`` (singular).
+    Lives here (a neutral low-level module reachable from every layer, incl. the
+    DX layer ``forward.py``) so no caller re-inlines the
+    ``getattr(item, 'output', None)`` selector.
+    """
+    return item.outputs if isinstance(item, Node) else getattr(item, "output", None)

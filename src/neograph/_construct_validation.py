@@ -30,6 +30,7 @@ from collections import OrderedDict
 from enum import Enum
 
 from neograph._ir_protocols import ConstructLike
+from neograph._normalize import _declared_output
 from neograph._state_keys import StateKeys
 from neograph._validation_inputs import _check_item_input
 from neograph._validation_modifiers import (
@@ -41,7 +42,6 @@ from neograph._validation_types import (
     NodeItem,
     Producer,
     ProducerMap,
-    _declared_output,
     _fmt_type,
     _is_construct_like,
     _source_location,
