@@ -5,6 +5,73 @@ All notable changes to NeoGraph will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2026-06-04
+
+### Breaking
+
+- **`configure_llm` removed** — pass `llm_factory=` to `compile()` instead. The module-level singleton is gone; LLM configuration is now bound at compile time and captured by closure, so multiple compiled graphs in one process can use different factories.
+- **`register_scripted`, `register_condition`, `register_tool_factory` removed** — pass `conditions=` and `tool_factories=` to `compile()` instead. Scripted nodes are handled automatically by `@node`. Each compile gets its own isolated registry; nothing leaks across compiles.
+- **`RetryPolicy` scope narrowed to scripted nodes only.** Transient LLM errors (rate limits, 5xx) are now the `llm_factory`'s responsibility (configure on the returned `BaseChatModel`); output-quality retries (parse failure, validation) move to `LlmConfig.max_retries`. Single-responsibility split — no more overlap.
+- **Single-type `inputs=` shorthand removed** (was deprecated in 0.4.0). Use dict-form `inputs={"name": SomeType}`.
+- **LangGraph dependency pinned and required.** Positioning updated: neograph is "the fastest way to build production-grade agents on LangGraph," not a backend-neutral abstraction. The private `_serde` shim is gone; we use LangGraph's public API throughout.
+
+### Added
+
+#### Multimodal
+- **Vision/image inputs via `${image:field}` in inline prompts** (examples 21, 22). New `configure_image(...)` policy + `resolve_image(...)` helper for size/MIME/URL allowlist enforcement.
+
+#### Verify subsystem
+- **`verify_compiled(graph) -> list[VerifyIssue]`** — post-compile structural verification, complementary to `lint()`. Catches issues that only exist on the compiled `StateGraph` (orphan checkpointer wiring, state-bus key drift, etc.).
+
+#### Testing scaffold
+- **`neograph.testing` auto-generates test suites from pipeline definitions**: per-node fakes, fan-out resilience cases, sub-construct fixtures. Mode-aware (think/agent/scripted), tier-aware (fast/reason/creative).
+
+#### Checkpoint auto-resume
+- **Schema-aware rewind on resume.** Schema fingerprints (state model + per-node) attached to compiled graph and persisted with checkpoints. On `run(graph, config=...)` with a changed schema, neograph walks `get_state_history()` backwards, finds the checkpoint before the earliest changed node, and resumes from there — by default. Opt out with `auto_resume=False` to get `CheckpointSchemaError` instead. (Example 19.)
+
+#### Lint expansion
+- **Inline `${var}` placeholder validation** against predicted input keys (raw, no flattened, no framework extras).
+- **Template-ref `{var}` placeholder validation** when you pass `template_resolver=`.
+- **Loop `when` condition checks** — registered-name resolution, `None`-safety smoke test (catches the common `lambda d: d.score < 0.8` bug that crashes when `d is None`).
+- **Oracle merge-hook signature checks** against the variant type.
+- **`neograph check --setup` reads `get_known_template_vars()`** from your check-setup module.
+
+#### Oracle merge hooks
+- **`merge_prompt` now receives upstream context** alongside the variant list. Use `${variants}` for the list, `${upstream.field}` for upstream data. (Example 20.)
+- **`MergePreProcess` / `MergePostProcess` / `MergeFallback` hooks** for variant transformation around the merge.
+
+#### Renderer pipeline
+- **`render_for_prompt()` returning a `BaseModel` is auto-rendered** through the active renderer. Fields of the returned model flatten into template variables, so prompts can reference `${nested_field}` directly without manual unpacking.
+- **`ExcludeFromOutput` marker** — fields visible in input rendering but stripped from the structured-output schema. Lets you carry context into the prompt without confusing the LLM's response schema.
+
+#### YAML/JSON pipeline specs
+- **Typed Pydantic schema for specs** (`Spec`, `NodeSpec`, etc., publicly importable via `loader`). JSON-schema document published at `src/neograph/schemas/neograph-pipeline.schema.json`.
+- **`Spec.version: Literal[1]` forward-compat gate** — unknown spec versions fail loudly. (Example 16.)
+
+#### Public API surface
+- **Typed callback Protocols** exported for IDE help and downstream typing:
+  `LlmFactory`, `PromptCompiler`, `CostCallback`, `MergeFallback`, `MergePostProcess`, `MergePreProcess`, `SkipPredicate`, `SkipValueFactory`, `RawNodeFn`, `TypeSpecStatic`.
+- **`type_display_name`, `ExcludeFromOutput`** re-exported.
+
+### Examples + Docs
+
+- **10 new runnable examples** (12–22): input rendering, gather→produce sub-construct, context injection, loop refinement, spec-driven pipeline, fan-out resilience, typed projections, checkpoint auto-resume, Oracle merge hooks, multimodal vision, image-security policy.
+- **4 sub-projects rewritten** to the canonical `prompt_compiler` pattern (`code-review`, `lead-outreach`, `spec-builder`, `lead-research`). New shared helper at `examples/_shared.py` covers the simple file-per-prompt case.
+- **All examples run end-to-end on real APIs** — verified live this release.
+- **New website pages**: Prompt Compiler, Checkpoint Resume, Retry Semantics, Multimodal Vision walkthrough. API reference, quick-start, full-pipeline, oracle-ensemble, produce-and-gather walkthroughs updated for the `compile()` kwargs API.
+
+### Fixed
+
+- **Structured-output schema 400s on open `dict[str, str]` fields** — example output models migrated to named Pydantic types so OpenAI strict-mode `response_format` accepts them across providers.
+- **Sub-construct auto-fan-in (YAML loader) now wires dict-form upstream producers correctly** via the monopolized `normalize_outputs` / `primary_output_field` helpers.
+- **Oracle merge `prompt_compiler` receives `{"variants": [...]}` consistently** — example merge compilers read `data["variants"]` instead of iterating the bare dict.
+- **`observable_pipeline.py` declares its `langfuse` + `langchain` dependencies.**
+- **OpenRouter model swap**: retired `google/gemini-2.0-flash-001` replaced with `openai/gpt-4o-mini` across examples.
+
+### Architecture (summary)
+
+Internal cleanup landing in this release is extensive — six architecture-decision epics (Q1–Q6) closed, a multi-wave ARCH-SWEEP epic closed, validation cluster split, helper monopolies enforced via structural guards, DIP inversion of `_BranchNode` corrected. None of it changes user-facing behavior beyond what's listed above; details in commit history if curious.
+
 ## [0.4.0] - 2026-04-14
 
 ### Breaking
