@@ -54,11 +54,12 @@ import operator as op_module
 from collections.abc import Iterator
 from typing import Any
 
+from neograph._ir_branch import _BranchMeta, _BranchNode, _ConditionSpec
 from neograph._normalize import _declared_output, normalize_outputs
 from neograph.conditions import OPERATORS
 from neograph.construct import Construct
 from neograph.errors import ConstructError
-from neograph.modifiers import Each, Loop, Modifiable, ModifierSet
+from neograph.modifiers import Each, Loop
 from neograph.naming import field_name_for
 from neograph.node import Node
 
@@ -307,16 +308,6 @@ class _ConditionProxy:
         )
 
 
-@dataclasses.dataclass(frozen=True)
-class _ConditionSpec:
-    """Parsed condition specification for compiler lowering."""
-    source_node: Node | Construct | None
-    attr_chain: list[str]
-    op_fn: Any  # operator callable
-    op_str: str  # e.g., "<", ">"
-    threshold: Any  # right-hand side constant
-
-
 @dataclasses.dataclass
 class _BranchPoint:
     """A recorded branch point during tracing."""
@@ -331,36 +322,6 @@ class _BranchTrace:
     branch: _BranchPoint
     true_nodes: list[Node | Construct]
     false_nodes: list[Node | Construct]
-
-
-@dataclasses.dataclass
-class _BranchMeta:
-    """Branch metadata attached to the node list for compiler consumption.
-
-    This is stored on a sentinel _BranchNode that the compiler recognizes
-    and lowers to add_conditional_edges.
-    """
-    condition_spec: _ConditionSpec
-    # Nodes that only appear in the true arm
-    true_arm_nodes: list[Node | Construct]
-    # Nodes that only appear in the false arm
-    false_arm_nodes: list[Node | Construct]
-
-
-class _BranchNode(Modifiable):
-    """Sentinel that carries _BranchMeta in the node list.
-
-    The compiler checks for this type and wires conditional edges instead
-    of adding a regular node. It carries a synthetic name for graph wiring.
-
-    Inherits has_modifier, get_modifier, and modifiers from Modifiable.
-    """
-
-    def __init__(self, branch_meta: _BranchMeta, branch_id: int) -> None:
-        self._neo_branch_meta = branch_meta
-        self.name = f"__branch_{branch_id}"
-        self.modifier_set = ModifierSet()
-        self.output = None
 
 
 class _Tracer:

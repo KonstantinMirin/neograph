@@ -1617,3 +1617,44 @@ class TestValidationModuleBoundary:
         )
         violations = _star_import_violations(tmp_path)
         assert any("rogue.py" in v for v in violations)
+
+
+class TestLowerLayersDoNotImportForwardDX:
+    """neograph-9epk — DIP: the DX layer is forward.py. No lower-layer module
+    (compiler, state, wiring, IR, validation, factory cluster) may import from
+    it. Core-IR concepts that the compiler needs (e.g. the branch sentinel)
+    live in neutral low-level modules (_ir_branch.py), so the dependency points
+    DX -> IR, never IR -> DX.
+
+    Only the package facade ``__init__.py`` may import forward.py (it re-exports
+    the PUBLIC ``ForwardConstruct`` for the top-level API).
+    """
+
+    # The package facade re-exports the public DX class — allowed.
+    FORWARD_IMPORT_ALLOWLIST = {"__init__"}
+
+    def test_no_lower_layer_imports_forward(self):
+        offenders: list[str] = []
+        for path in SRC_DIR.glob("*.py"):
+            mod = path.stem
+            if mod == "forward" or mod in self.FORWARD_IMPORT_ALLOWLIST:
+                continue
+            if "forward" in _parse_neograph_imports(path):
+                offenders.append(f"  {mod}.py imports from neograph.forward (DX layer)")
+        assert not offenders, (
+            "Lower-layer modules must not import the DX layer (forward.py). "
+            "Move shared core-IR concepts to a neutral module (e.g. _ir_branch.py):\n"
+            + "\n".join(offenders)
+        )
+
+    def test_meta_detects_forward_import(self, tmp_path):
+        """Positive: a module importing from neograph.forward is detected."""
+        fake = tmp_path / "_fake_lower.py"
+        fake.write_text("from neograph.forward import _BranchNode\n")
+        assert "forward" in _parse_neograph_imports(fake)
+
+    def test_meta_passes_neutral_ir_import(self, tmp_path):
+        """Negative: importing the neutral IR module is not a forward import."""
+        fake = tmp_path / "_fake_ok.py"
+        fake.write_text("from neograph._ir_branch import _BranchNode\n")
+        assert "forward" not in _parse_neograph_imports(fake)

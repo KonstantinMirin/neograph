@@ -15,6 +15,7 @@ from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Send, interrupt
 
+from neograph._ir_branch import _BranchNode
 from neograph._llm_runtime import EMPTY_RUNTIME, LlmRuntime
 from neograph._normalize import normalize_outputs, primary_output_field
 from neograph._oracle import (
@@ -32,7 +33,6 @@ from neograph.errors import ConfigurationError, ExecutionError
 from neograph.factory import (
     make_node_fn,
 )
-from neograph.forward import _BranchNode
 from neograph.modifiers import Each, Loop, Operator, Oracle, split_each_path
 from neograph.naming import field_name_for, output_field_name
 from neograph.node import Node

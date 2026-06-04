@@ -19,6 +19,7 @@ from pydantic import BaseModel
 
 from neograph._compiled import CompiledNeograph
 from neograph._dev_warnings import DEV_MODE
+from neograph._ir_branch import _BranchNode
 from neograph._llm_runtime import EMPTY_RUNTIME, LlmRuntime, check_llm_kwargs_or_raise
 from neograph._oracle import (
     make_each_redirect_fn,
@@ -41,7 +42,6 @@ from neograph.construct import Construct, iter_nodes
 from neograph.di import DIKind
 from neograph.errors import CompileError, ConfigurationError
 from neograph.factory import make_node_fn
-from neograph.forward import _BranchNode
 from neograph.modifiers import ModifierCombo, classify_modifiers
 from neograph.naming import field_name_for
 from neograph.node import Node

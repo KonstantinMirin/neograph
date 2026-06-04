@@ -11,9 +11,9 @@ from typing import Annotated, Any
 import structlog
 from pydantic import BaseModel, create_model
 
+from neograph._ir_branch import _BranchNode
 from neograph.construct import Construct
 from neograph.errors import CompileError
-from neograph.forward import _BranchNode
 from neograph.naming import field_name_for, output_field_name
 
 log = structlog.get_logger()
