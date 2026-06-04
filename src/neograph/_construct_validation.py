@@ -143,10 +143,11 @@ def _validate_node_chain(
                 and producers  # not the first node
             ):
                 import warnings
+                type_name = _fmt_type(input_type)
                 warnings.warn(
-                    f"Node '{item.name}': single-type inputs={input_type.__name__ if hasattr(input_type, '__name__') else input_type} "
+                    f"Node '{item.name}': single-type inputs={type_name} "
                     f"relies on O(N) isinstance scan at runtime. "
-                    f"Use dict-form inputs={{'{field_name_for(item.name)}': {input_type.__name__ if hasattr(input_type, '__name__') else input_type}}} "
+                    f"Use dict-form inputs={{'{field_name_for(item.name)}': {type_name}}} "
                     f"for explicit named resolution.",
                     DeprecationWarning,
                     stacklevel=2,

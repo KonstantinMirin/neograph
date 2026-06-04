@@ -2299,3 +2299,38 @@ class TestRendererAsIRType:
         )
         assert n.renderer is r
 
+
+
+class TestTypeDisplayName:
+    """type_display_name: short type-name renderer (neograph-hbhi)."""
+
+    def test_none_renders_as_none_string(self):
+        from neograph.describe_type import type_display_name
+
+        assert type_display_name(None) == "None"
+
+    def test_class_renders_as_name(self):
+        from neograph.describe_type import type_display_name
+
+        class Claims:
+            pass
+
+        assert type_display_name(Claims) == "Claims"
+
+    def test_dict_form_renders_per_key(self):
+        from neograph.describe_type import type_display_name
+
+        class A:
+            pass
+
+        class B:
+            pass
+
+        assert type_display_name({"result": A, "log": B}) == "{result: A, log: B}"
+
+    def test_generic_alias_renders_via_name(self):
+        from neograph.describe_type import type_display_name
+
+        # list[int] / dict[str, int] are generic aliases (not dict instances)
+        assert type_display_name(list[int]) in ("list", "list[int]")
+        assert type_display_name(dict[str, int]) in ("dict", "dict[str, int]")

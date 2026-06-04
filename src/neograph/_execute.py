@@ -15,6 +15,7 @@ from neograph._normalize import normalize_inputs
 from neograph._oracle import _inject_oracle_config
 from neograph._state_bus import StateBus, adapt_state
 from neograph._state_write import _apply_skip_when, _build_state_update
+from neograph.describe_type import type_display_name
 from neograph.naming import field_name_for
 from neograph.node import Node, TypeSpecStatic
 
@@ -22,15 +23,15 @@ log = structlog.get_logger()
 
 
 def _type_name(t: TypeSpecStatic) -> str | None:
-    """Get a readable name from a type, or None."""
+    """Get a readable name from a type, or None (logging contract).
+
+    Delegates rendering to ``type_display_name`` (the single source of truth);
+    only the ``None -> None`` adaptation lives here, for structlog callers that
+    omit the field when the type is absent.
+    """
     if t is None:
         return None
-    if isinstance(t, dict):
-        parts = ", ".join(
-            f"{k}: {getattr(v, '__name__', str(v))}" for k, v in t.items()
-        )
-        return "{" + parts + "}"
-    return getattr(t, '__name__', str(t))
+    return type_display_name(t)
 
 
 def _extract_context(state: StateBus, node: Node) -> dict[str, str] | None:

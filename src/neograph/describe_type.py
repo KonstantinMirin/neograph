@@ -9,10 +9,34 @@ from __future__ import annotations
 
 import enum
 import types
-from typing import Any, Literal, Union, get_args, get_origin
+from typing import TYPE_CHECKING, Any, Literal, Union, get_args, get_origin
 
 from pydantic import BaseModel
 from pydantic.fields import FieldInfo
+
+if TYPE_CHECKING:
+    from neograph.node import TypeSpecStatic
+
+
+def type_display_name(t: TypeSpecStatic) -> str:
+    """Render a ``TypeSpec`` to a short, human-readable display string.
+
+    Single source of truth for the short type-name rendering used in logs and
+    ``ConstructError``/``DeprecationWarning`` messages — as opposed to
+    :func:`describe_type`, which emits the full TS-notation schema.
+
+      - ``None``                -> ``"None"``
+      - dict-form (``{key: type}``) -> ``"{key: TypeName, ...}"``
+      - everything else         -> ``t.__name__`` if present, else ``str(t)``
+    """
+    if t is None:
+        return "None"
+    if isinstance(t, dict):
+        parts = ", ".join(
+            f"{k}: {getattr(v, '__name__', str(v))}" for k, v in t.items()
+        )
+        return "{" + parts + "}"
+    return getattr(t, "__name__", str(t))
 
 
 class ExcludeFromOutput:

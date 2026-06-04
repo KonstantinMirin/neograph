@@ -442,3 +442,61 @@ class TestIrWalkHelperMonopoly:
         spaced = 'x = item.outputs  if  isinstance( item , Node )  else getattr(item, "output", None)'
         assert spaced.count(_DECLARED_OUTPUT_IDIOM) == 0  # naive scan misses it
         assert _normalized_idiom_count(spaced, _DECLARED_OUTPUT_IDIOM) == 1
+
+
+# neograph-hbhi: the short type-display renderer has one home.
+_TYPE_DISPLAY_GETATTR_IDIOM = "getattr(t, '__name__', str(t))"
+# Files allowed to contain the getattr-__name__-str idiom (the helper home).
+_TYPE_DISPLAY_EXEMPT = frozenset({"describe_type.py"})
+
+
+class TestTypeDisplayNameMonopoly:
+    """neograph-hbhi: rendering a TypeSpec to a short display string has ONE
+    home -- describe_type.type_display_name. _type_name (_execute) and
+    _fmt_type (_validation_types) delegate; decorators / validation messages
+    call it directly. AST + normalized-text guard with meta-tests.
+    """
+
+    def test_type_display_name_defined_once_in_describe_type(self):
+        homes = _modules_defining(SRC_DIR, "type_display_name")
+        assert homes == ["describe_type.py"], (
+            f"type_display_name must be defined once in describe_type.py; found {homes}."
+        )
+
+    def test_delegators_call_type_display_name(self):
+        for fname in ("_execute.py", "_validation_types.py"):
+            source = (SRC_DIR / fname).read_text()
+            assert _count_calls(source, "type_display_name") >= 1, (
+                f"{fname} must delegate to type_display_name (type-display monopoly)."
+            )
+
+    def test_getattr_name_str_idiom_only_in_home(self):
+        offenders = [
+            py.name
+            for py in sorted(SRC_DIR.glob("*.py"))
+            if py.name not in _TYPE_DISPLAY_EXEMPT
+            and _normalized_idiom_count(py.read_text(), _TYPE_DISPLAY_GETATTR_IDIOM) > 0
+        ]
+        assert offenders == [], (
+            f"\ngetattr(.,'__name__',str(.)) type-display idiom outside describe_type: "
+            f"{offenders}.\nCall type_display_name(t) instead."
+        )
+
+    # --- meta-tests ---
+
+    def test_meta_type_display_home_scanner(self, tmp_path):
+        (tmp_path / "describe_type.py").write_text(
+            "def type_display_name(t):\n    return str(t)\n"
+        )
+        (tmp_path / "rogue.py").write_text(
+            "def type_display_name(t):\n    return str(t)\n"
+        )
+        assert _modules_defining(tmp_path, "type_display_name") == [
+            "describe_type.py",
+            "rogue.py",
+        ]
+
+    def test_meta_getattr_idiom_resists_whitespace_slip(self):
+        spaced = "name = getattr( t ,  '__name__' , str( t ) )"
+        assert spaced.count(_TYPE_DISPLAY_GETATTR_IDIOM) == 0  # naive scan misses it
+        assert _normalized_idiom_count(spaced, _TYPE_DISPLAY_GETATTR_IDIOM) == 1

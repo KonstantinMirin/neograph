@@ -101,6 +101,7 @@ from neograph._sidecar import (  # noqa: F401 — re-exported for backward compa
     get_merge_fn_metadata,
     infer_oracle_gen_type,
 )
+from neograph.describe_type import type_display_name
 from neograph.di import DIBinding, DIKind
 from neograph.modifiers import Each, Loop, Operator, Oracle
 from neograph.node import Node
@@ -483,8 +484,8 @@ def node(
             # Explicit outputs= AND return annotation — must match.
             # Dict-form outputs= is exempt (multi-output, annotation is partial).
             if outputs is not ret_hint:
-                out_name = getattr(outputs, "__name__", str(outputs))
-                ret_name = getattr(ret_hint, "__name__", str(ret_hint))
+                out_name = type_display_name(outputs)
+                ret_name = type_display_name(ret_hint)
                 raise ConstructError.build(
                     "outputs= differs from return annotation",
                     node=node_label,

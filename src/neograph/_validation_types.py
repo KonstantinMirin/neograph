@@ -29,6 +29,7 @@ from typing import (
 )
 
 from neograph._ir_protocols import ConstructItem, ConstructLike
+from neograph.describe_type import type_display_name
 from neograph.node import Node, TypeSpecStatic
 
 
@@ -236,11 +237,8 @@ def _extract_list_element(tp: TypeSpecStatic) -> TypeSpecStatic:
 
 
 def _fmt_type(tp: TypeSpecStatic) -> str:
-    if tp is None:
-        return "None"
-    if hasattr(tp, "__name__"):
-        return tp.__name__
-    return repr(tp)
+    """Render a type for error messages — delegates to the single renderer."""
+    return type_display_name(tp)
 
 
 def _source_location() -> str | None:
