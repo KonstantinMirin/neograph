@@ -229,11 +229,25 @@ class TestExampleCanonicalPromptCompiler:
 # this guard only flags models produced by LLM nodes (prompt= present).
 # ═══════════════════════════════════════════════════════════════════════════
 
-import re as _re
-
 # Output models that legitimately keep an open mapping despite being an LLM
 # output (none today). Each entry MUST carry a one-line reason.
 OPEN_MAPPING_OUTPUT_ALLOWLIST: dict[str, str] = {}
+
+
+def _identifier_tokens(text: str) -> list[str]:
+    """Identifier-like tokens in `text` (regex-free, so this guard module stays
+    regex-free per TestRegexGuardsHaveSlipMetaTests)."""
+    tokens: list[str] = []
+    current: list[str] = []
+    for ch in text:
+        if ch.isalnum() or ch == "_":
+            current.append(ch)
+        elif current:
+            tokens.append("".join(current))
+            current = []
+    if current:
+        tokens.append("".join(current))
+    return tokens
 
 
 def _class_field_annotations(tree: ast.AST) -> dict[str, list[str]]:
@@ -251,8 +265,18 @@ def _class_field_annotations(tree: ast.AST) -> dict[str, list[str]]:
 
 
 def _annotation_has_open_mapping(annotation: str) -> bool:
-    """True if the annotation contains a dict[...] / Dict[...] open mapping."""
-    return bool(_re.search(r"\bdict\[", annotation, _re.IGNORECASE))
+    """True if the annotation contains a dict[...] / Dict[...] open mapping.
+
+    Word-boundary aware (so ``MyDict[`` is not matched) but regex-free.
+    """
+    low = annotation.lower()
+    idx = low.find("dict[")
+    while idx != -1:
+        prev = low[idx - 1] if idx > 0 else ""
+        if not (prev.isalnum() or prev == "_"):
+            return True
+        idx = low.find("dict[", idx + 5)
+    return False
 
 
 def _model_has_open_mapping(
@@ -267,7 +291,7 @@ def _model_has_open_mapping(
     for ann in fields_map[name]:
         if _annotation_has_open_mapping(ann):
             return True
-        for ref in _re.findall(r"[A-Za-z_][A-Za-z0-9_]*", ann):
+        for ref in _identifier_tokens(ann):
             if ref != name and ref in fields_map and _model_has_open_mapping(ref, fields_map, _seen):
                 return True
     return False
@@ -404,3 +428,105 @@ class TestExampleStructuredOutputModelsAreTyped:
             "def f(x): ...\n"
         )
         assert _scan_open_mapping_outputs(source), "must catch dict[...] nested one model level below the output"
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# neograph-iu05 — an Oracle merge_prompt prompt_compiler receives
+# input_data = {"variants": [<variant models>], ...} (a dict), NOT list[Pydantic].
+# Iterating the bare data param walks the dict's keys (strings) and crashes.
+# Compilers must read data["variants"]. Scripted @node bodies (no `template`
+# param) are exempt — they receive their real typed input.
+# ═══════════════════════════════════════════════════════════════════════════
+
+_PROMPT_COMPILER_TEMPLATE_PARAMS = {"template", "tmpl", "t"}
+
+
+def _prompt_compiler_data_param(args_node: ast.arguments) -> str | None:
+    """If `args_node` looks like a prompt_compiler signature (first param is a
+    template name, with a following data param), return the data param name."""
+    args = args_node.args
+    if args and args[0].arg in _PROMPT_COMPILER_TEMPLATE_PARAMS and len(args) >= 2:
+        return args[1].arg
+    return None
+
+
+def _scan_bare_data_iteration(source: str) -> list[tuple[int, str]]:
+    """(lineno, data_param) for every prompt_compiler that iterates its bare data
+    param -- via a for-statement OR a comprehension generator. Reading
+    data["variants"] (a Subscript) or data.attr (an Attribute) is NOT flagged."""
+    tree = ast.parse(source)
+    offenders: set[tuple[int, str]] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+            continue
+        data_param = _prompt_compiler_data_param(node.args)
+        if data_param is None:
+            continue
+        for inner in ast.walk(node):
+            iters: list[ast.expr] = []
+            if isinstance(inner, ast.For):
+                iters.append(inner.iter)
+            elif isinstance(inner, (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)):
+                iters.extend(gen.iter for gen in inner.generators)
+            for it in iters:
+                if isinstance(it, ast.Name) and it.id == data_param:
+                    offenders.add((inner.lineno, data_param))
+    return sorted(offenders)
+
+
+class TestExampleMergeCompilerReadsVariants:
+    """neograph-iu05 — example merge prompt_compilers must read data["variants"],
+    not iterate the bare data dict.
+    """
+
+    def test_no_bare_data_iteration_in_example_compilers(self):
+        offenders: list[str] = []
+        for path in _iter_example_pipelines():
+            rel = path.relative_to(REPO_ROOT).as_posix()
+            for lineno, data_param in _scan_bare_data_iteration(path.read_text()):
+                offenders.append(
+                    f"{rel}:{lineno} — prompt_compiler iterates bare `{data_param}` "
+                    f"(the Oracle merge passes {{'variants': [...]}}; read {data_param}['variants'])"
+                )
+        assert not offenders, (
+            "Example prompt_compiler iterates its bare data param (neograph-iu05). "
+            "Oracle merge_prompt input_data is a dict — read data['variants'].\n"
+            + "\n".join(offenders)
+        )
+
+    def test_meta_catches_bare_iteration_comprehension(self):
+        """Positive (comprehension form, like 03_map_reduce)."""
+        source = (
+            "graph = compile(pipeline, prompt_compiler=lambda template, data, **kw: "
+            '[{"role": "user", "content": "\\n".join(f"- {j}" for j in data)}])\n'
+        )
+        assert _scan_bare_data_iteration(source), "must flag bare `for j in data` comprehension"
+
+    def test_meta_catches_bare_iteration_for_statement(self):
+        """Would-be-missed (for-statement form, like observable_pipeline)."""
+        source = (
+            "def prompt_compiler(template, input_data):\n"
+            "    acc = []\n"
+            "    for claims in input_data:\n"
+            "        acc.extend(claims.items)\n"
+            "    return acc\n"
+        )
+        assert _scan_bare_data_iteration(source), "must flag bare `for ... in input_data` statement"
+
+    def test_meta_passes_subscript_variants(self):
+        """Negative: reading data['variants'] (the fix) is not flagged."""
+        source = (
+            "graph = compile(pipeline, prompt_compiler=lambda template, data, **kw: "
+            '[{"role": "user", "content": "\\n".join(f"- {v}" for v in data["variants"])}])\n'
+        )
+        assert not _scan_bare_data_iteration(source), "subscript data['variants'] must not be flagged"
+
+    def test_meta_passes_scripted_node_body(self):
+        """Negative: a scripted @node body (no `template` param) iterating its
+        typed input is exempt (examples 05/10)."""
+        source = (
+            "def format_report(input_data):\n"
+            "    for claim in input_data.items:\n"
+            "        print(claim)\n"
+        )
+        assert not _scan_bare_data_iteration(source), "scripted node body must not be flagged"

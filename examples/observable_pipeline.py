@@ -71,9 +71,10 @@ def prompt_compiler(template: str, input_data) -> list[dict]:
             f"Topic: {input_data.text if input_data else 'artificial intelligence'}"
         )}]
     if template == "merge-claims":
-        # input_data is a list of Claims from Oracle generators
+        # Oracle merge passes input_data={"variants": [<Claims>, ...]} — read the
+        # variant list, not the dict itself (neograph-iu05).
         all_claims = []
-        for claims in input_data:
+        for claims in input_data["variants"]:
             all_claims.extend(claims.items)
         return [{"role": "user", "content": (
             "You received multiple decompositions of a topic. "

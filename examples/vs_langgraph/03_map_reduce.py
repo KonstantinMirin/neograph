@@ -124,7 +124,9 @@ def run_neograph():
             "Write a short joke about programming languages."
             if template == "generate"
             else f"Pick the best joke and return it as a single item list:\n"
-                 + "\n".join(f"- {j.items[0]}" for j in data if j.items)
+                 # Oracle merge passes data={"variants": [<Jokes>, ...]} — read the
+                 # variant list, not the dict itself (neograph-iu05).
+                 + "\n".join(f"- {v.items[0]}" for v in data["variants"] if v.items)
         )}],
     )
     result = run(graph, input={"node_id": "demo"})
