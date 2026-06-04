@@ -109,5 +109,6 @@ filterwarnings = [
 [dependency-groups]
 dev = [
     "hypothesis>=6.151.12",
+    "langchain-openai>=1.2.2",
     "pytest-cov>=7.1.0",
 ]
