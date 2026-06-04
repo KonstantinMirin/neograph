@@ -2389,3 +2389,24 @@ class TestSplitOutputField:
         assert split_output_field("verifyextra_x", "verify") is None
 
 
+class TestPrimaryOutputField:
+    """primary_output_field resolves a node's primary output state field
+    (neograph-my84)."""
+
+    def test_single_type_returns_base_field(self):
+        from neograph._normalize import primary_output_field
+
+        assert primary_output_field("verify", Claims) == "verify"
+
+    def test_none_returns_base_field(self):
+        from neograph._normalize import primary_output_field
+
+        assert primary_output_field("verify", None) == "verify"
+
+    def test_dict_form_returns_primary_key_field(self):
+        from neograph._normalize import primary_output_field
+
+        field = primary_output_field("verify", {"result": Claims, "log": Clusters})
+        assert field == "verify_result"
+
+

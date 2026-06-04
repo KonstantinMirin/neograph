@@ -494,11 +494,11 @@ NEOGRAPH_ERROR_ALLOWLIST: dict[str, str] = {
     # the Python protocol contract (a non-iterable used in `for` raises
     # TypeError, not NeographError). forward() raises NotImplementedError as
     # a Python abstract-method idiom.
-    "forward.py:176": "NotImplementedError is the Python abstract-method idiom",
-    "forward.py:207": "AttributeError is the Python attribute-protocol contract (hasattr depends on it)",
-    "forward.py:236": "TypeError is the Python protocol contract for __bool__ misuse",
-    "forward.py:244": "TypeError is the Python protocol contract for __iter__ misuse",
-    "forward.py:271": "TypeError is the Python protocol contract for __bool__ misuse on _ConditionProxy",
+    "forward.py:177": "NotImplementedError is the Python abstract-method idiom",
+    "forward.py:208": "AttributeError is the Python attribute-protocol contract (hasattr depends on it)",
+    "forward.py:237": "TypeError is the Python protocol contract for __bool__ misuse",
+    "forward.py:245": "TypeError is the Python protocol contract for __iter__ misuse",
+    "forward.py:272": "TypeError is the Python protocol contract for __bool__ misuse on _ConditionProxy",
 
     # ── modifiers.py — Pydantic field_validator + proxy attribute protocol ──
     # _PathRecorder.__getattr__ implements the attribute protocol. Pydantic

@@ -5,12 +5,12 @@ from __future__ import annotations
 from enum import Enum
 from typing import Any, assert_never
 
-from neograph._normalize import normalize_inputs, normalize_outputs
+from neograph._normalize import normalize_inputs, primary_output_field
 from neograph._state_bus import StateBus
 from neograph._state_keys import StateKeys
 from neograph.di import _isinstance_safe, _unwrap_each_dict, _unwrap_loop_value
 from neograph.modifiers import ModifierCombo, classify_modifiers
-from neograph.naming import field_name_for, output_field_name
+from neograph.naming import field_name_for
 from neograph.node import Node
 
 
@@ -31,11 +31,7 @@ def _classify_input_shape(state: StateBus, node: Node) -> InputShape:
 
     combo, _ = classify_modifiers(node)
     if combo in (ModifierCombo.LOOP, ModifierCombo.LOOP_OPERATOR):
-        own_field = field_name_for(node.name)
-        no = normalize_outputs(node.outputs)
-        if no.is_dict_form:
-            assert no.primary_key is not None  # dict-form always has a primary key
-            own_field = output_field_name(own_field, no.primary_key)
+        own_field = primary_output_field(field_name_for(node.name), node.outputs)
         # StateBus.get optional: loop-bootstrap — first router pass may have no
         # self-output yet; absence signals "iteration 0" and falls through.
         own_val = state.get(own_field)
@@ -56,11 +52,7 @@ def _classify_input_shape(state: StateBus, node: Node) -> InputShape:
 
 def _extract_loop_reentry(state: StateBus, node: Node) -> Any:
     """Read from the node's own append-list on loop iteration 1+."""
-    own_field = field_name_for(node.name)
-    no_out = normalize_outputs(node.outputs)
-    if no_out.is_dict_form:
-        assert no_out.primary_key is not None  # dict-form always has a primary key
-        own_field = output_field_name(own_field, no_out.primary_key)
+    own_field = primary_output_field(field_name_for(node.name), node.outputs)
     # REQUIRED: _classify_input_shape already confirmed own_val is non-empty list.
     own_val = state.get_required(own_field, node_label=node.name)
     latest = own_val[-1]

@@ -17,7 +17,7 @@ from pydantic import BaseModel
 from neograph._di_classify import _resolve_merge_args
 from neograph._llm_config import LlmConfig
 from neograph._llm_runtime import EMPTY_RUNTIME, LlmRuntime
-from neograph._normalize import normalize_outputs
+from neograph._normalize import normalize_outputs, primary_output_field
 from neograph._sidecar import get_merge_fn_metadata
 from neograph._state_bus import StateBus, adapt_state
 from neograph._state_keys import StateKeys
@@ -192,12 +192,7 @@ def _build_oracle_merge_result(
     if secondaries is None:
         return {field_name: merged}
 
-    no = normalize_outputs(output_model)
-    if no.is_dict_form:
-        assert no.primary_key is not None  # dict-form always has a primary key
-        primary_field = output_field_name(field_name, no.primary_key)
-    else:
-        primary_field = field_name
+    primary_field = primary_output_field(field_name, output_model)
 
     update = {primary_field: merged}
     for key, values in secondaries.items():

@@ -54,6 +54,7 @@ import operator as op_module
 from collections.abc import Iterator
 from typing import Any
 
+from neograph._normalize import normalize_outputs
 from neograph.conditions import OPERATORS
 from neograph.construct import Construct
 from neograph.errors import ConstructError
@@ -551,9 +552,15 @@ class _LoopCall:
         # output type so the construct compiles.  Input and output can
         # differ (produce+validate pattern, neograph-vt4y).
         source_node = input_proxy._neo_source
-        output_type = body_nodes[-1].outputs
+        # Boundary ports are single types; a dict-form Node.outputs collapses
+        # to its primary key (secondary outputs are not the loop value).
+        output_type = normalize_outputs(body_nodes[-1].outputs).primary
         if source_node is not None:
-            input_type = source_node.outputs if isinstance(source_node, Node) else getattr(source_node, 'output', None)
+            input_type = (
+                normalize_outputs(source_node.outputs).primary
+                if isinstance(source_node, Node)
+                else getattr(source_node, 'output', None)
+            )
         else:
             # Fallback: use output_type (no source node to infer from)
             input_type = output_type

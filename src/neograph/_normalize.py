@@ -18,6 +18,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from neograph.naming import output_field_name
+
 
 @dataclass(frozen=True)
 class NormalizedOutputs:
@@ -102,3 +104,20 @@ def normalize_inputs(inputs: Any) -> NormalizedInputs:
     if isinstance(inputs, dict):
         return NormalizedInputs(by_name=dict(inputs), is_dict_form=True)
     return NormalizedInputs(single_type=inputs)
+
+
+def primary_output_field(base_field: str, outputs: Any) -> str:
+    """State field that holds a node's PRIMARY output value.
+
+    Single source of truth for the dict-form field-name resolution: for
+    dict-form ``outputs`` the primary value lands on
+    ``output_field_name(base_field, primary_key)``; single-type / ``None``
+    outputs keep ``base_field`` unchanged. Replaces the
+    ``if no.is_dict_form: output_field_name(base, no.primary_key)`` block that
+    was repeated across the loop, oracle, and wiring read paths.
+    """
+    no = normalize_outputs(outputs)
+    if no.is_dict_form:
+        assert no.primary_key is not None  # dict-form always has a primary key
+        return output_field_name(base_field, no.primary_key)
+    return base_field

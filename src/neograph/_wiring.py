@@ -16,7 +16,7 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.types import Send, interrupt
 
 from neograph._llm_runtime import EMPTY_RUNTIME, LlmRuntime
-from neograph._normalize import normalize_outputs
+from neograph._normalize import normalize_outputs, primary_output_field
 from neograph._oracle import (
     _assert_merge_fn_registered,
     _build_upstream_context,
@@ -391,13 +391,8 @@ def _node_loop_unwrap(node: Node, field_name: str) -> LangGraphLoopUnwrapFn:
     """
 
     def unwrap(state: StateBus, _field_name: str) -> Any:
-        # Dict-form outputs: primary key is {field}_{first_key}.
-        no = normalize_outputs(node.outputs)
-        if no.is_dict_form:
-            assert no.primary_key is not None  # dict-form always has a primary key
-            state_field = output_field_name(_field_name, no.primary_key)
-        else:
-            state_field = _field_name
+        # Dict-form outputs: primary value lands on {field}_{first_key}.
+        state_field = primary_output_field(_field_name, node.outputs)
         # StateBus.get optional: loop-bootstrap — first router pass may have
         # not-yet-populated list; user condition expected to handle None.
         # Empty list -> None (no output yet, e.g. skip_when with no skip_value)

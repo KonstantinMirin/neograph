@@ -1088,3 +1088,78 @@ class TestPrimaryOutputMonopoly:
         assert self._scan(tmp_path) == [], "input_data unwrap wrongly flagged"
 
 
+
+def _primary_key_field_join_sites(tree: ast.AST) -> bool:
+    """True if the tree contains ``output_field_name(<x>, <y>.primary_key)`` —
+    the hand-rolled primary-output-FIELD resolution (neograph-my84). The
+    canonical form is ``primary_output_field(base, outputs)``."""
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "output_field_name"
+            and len(node.args) == 2
+            and isinstance(node.args[1], ast.Attribute)
+            and node.args[1].attr == "primary_key"
+        ):
+            return True
+    return False
+
+
+class TestPrimaryOutputFieldMonopoly:
+    """neograph-my84: resolving a node's PRIMARY output STATE FIELD has ONE
+    home -- ``primary_output_field`` in ``_normalize.py``. The hand-rolled
+    ``if no.is_dict_form: output_field_name(base, no.primary_key)`` idiom is
+    structurally banned elsewhere so the loop/oracle/wiring read paths cannot
+    drift. AST guard + meta-tests.
+    """
+
+    _EXEMPT_FILES = frozenset({"_normalize.py"})
+
+    def test_primary_output_field_defined_once_in_normalize(self):
+        homes = [
+            py.name
+            for py in sorted(SRC_DIR.glob("*.py"))
+            if any(
+                isinstance(n, ast.FunctionDef) and n.name == "primary_output_field"
+                for n in ast.walk(ast.parse(py.read_text()))
+            )
+        ]
+        assert homes == ["_normalize.py"], (
+            f"primary_output_field must be defined once in _normalize.py; found {homes}."
+        )
+
+    def test_no_handrolled_primary_key_field_join(self):
+        offenders = [
+            py.name
+            for py in sorted(SRC_DIR.glob("*.py"))
+            if py.name not in self._EXEMPT_FILES
+            and _primary_key_field_join_sites(ast.parse(py.read_text()))
+        ]
+        assert offenders == [], (
+            f"\n{len(offenders)} hand-rolled 'output_field_name(base, no.primary_key)' "
+            f"site(s): {offenders}.\nUse primary_output_field(base, outputs) from "
+            "neograph._normalize."
+        )
+
+    def test_forward_boundary_uses_normalize_outputs(self):
+        source = (SRC_DIR / "forward.py").read_text()
+        assert "normalize_outputs" in source, (
+            "forward.py loop boundary must derive primary type via normalize_outputs."
+        )
+
+    # --- meta-tests ---
+
+    def test_meta_primary_key_join_scanner_catches_idiom(self):
+        tree = ast.parse(
+            "def f(base, no):\n"
+            "    return output_field_name(base, no.primary_key)\n"
+        )
+        assert _primary_key_field_join_sites(tree)
+
+    def test_meta_primary_key_join_scanner_passes_helper(self):
+        tree = ast.parse(
+            "def f(base, outputs):\n"
+            "    return primary_output_field(base, outputs)\n"
+        )
+        assert not _primary_key_field_join_sites(tree)
