@@ -400,15 +400,11 @@ def _node_loop_unwrap(node: Node, field_name: str) -> LangGraphLoopUnwrapFn:
             state_field = _field_name
         # StateBus.get optional: loop-bootstrap — first router pass may have
         # not-yet-populated list; user condition expected to handle None.
+        # Empty list -> None (no output yet, e.g. skip_when with no skip_value)
+        # so user conditions like `lambda d: d is None or ...` work; the
+        # construct-loop path delegates to the same helper.
         own_val = state.get(state_field)
-        if isinstance(own_val, list) and own_val:
-            return own_val[-1]
-        elif isinstance(own_val, list):
-            # Empty list — no output yet (e.g. skip_when with no skip_value).
-            # Pass None so user conditions like `lambda d: d is None or ...` work.
-            return None
-        else:  # pragma: no cover — Loop reducer always produces a list
-            return own_val
+        return _unwrap_loop_value(own_val, object)
 
     return unwrap
 

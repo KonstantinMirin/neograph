@@ -13,6 +13,7 @@ from neograph._oracle import _inject_oracle_config
 from neograph._state_bus import StateBus, adapt_state
 from neograph._state_keys import StateKeys
 from neograph.construct import Construct
+from neograph.di import _unwrap_loop_value
 from neograph.errors import ExecutionError
 from neograph.modifiers import ModifierCombo, classify_modifiers
 from neograph.naming import field_name_for
@@ -33,9 +34,7 @@ def _scan_subgraph_input(state: StateBus, sub_input_type: type) -> Any:
     for attr_name in reversed(state.keys()):
         # REQUIRED: iterating state.keys() — every key is by definition present.
         val = state.get_required(attr_name)
-        check_val = val
-        if isinstance(val, list) and val:
-            check_val = val[-1]
+        check_val = _unwrap_loop_value(val, object)
         if check_val is not None and isinstance(check_val, sub_input_type):
             return check_val
     return None
@@ -49,9 +48,7 @@ def _scan_subgraph_output(sub_result: dict[str, Any], sub_output_type: type) -> 
     declared output type.
     """
     for val in reversed(list(sub_result.values())):
-        check_val = val
-        if isinstance(val, list) and val:
-            check_val = val[-1]
+        check_val = _unwrap_loop_value(val, object)
         if isinstance(check_val, sub_output_type):
             return check_val
     return None

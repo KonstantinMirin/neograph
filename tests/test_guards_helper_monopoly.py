@@ -137,3 +137,151 @@ class TestHelperMonopolyWpzg:
         # the bypass slip; the normalized scanner must still count it as 1.
         assert spaced.count("full_name[len(prefix):]") == 0  # naive scan misses it
         assert _normalized_idiom_count(spaced, "full_name[len(prefix):]") == 1
+
+
+# Functions that legitimately read their OWN loop-append field's latest value
+# (after get_required / shape classification guarantees a non-empty list); these
+# are NOT the consumer/scan unwrap that di._unwrap_loop_value owns.
+_OWN_FIELD_READ_ALLOWLIST = frozenset({"subgraph_node"})
+
+
+def _list_latest_bypass_sites(
+    source: str, allowlist: frozenset[str]
+) -> list[tuple[str, str]]:
+    """Find functions that both ``isinstance(X, list)``-test and ``X[-1]``-subscript
+    the SAME name — the hand-rolled loop-append latest-unwrap idiom that must
+    delegate to ``di._unwrap_loop_value`` instead (neograph-ovx1).
+
+    Per-function scoping avoids cross-function false positives (e.g. a shape
+    check on ``own_val`` in one function and a guaranteed own-field ``own_val[-1]``
+    in another). Returns (function_name, variable_name) pairs.
+    """
+    tree = ast.parse(source)
+    out: list[tuple[str, str]] = []
+    for fn in ast.walk(tree):
+        if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        if fn.name in allowlist:
+            continue
+        isinstance_list: set[str] = set()
+        neg1: set[str] = set()
+        # Analyse this function's OWN body only — nested closures are separate
+        # FunctionDefs (visited in their own right), so a nested own-field read
+        # isn't mis-attributed to its enclosing builder.
+        nested_ids: set[int] = set()
+        for child in ast.walk(fn):
+            if child is fn:
+                continue
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+                nested_ids.update(id(n) for n in ast.walk(child))
+        for node in ast.walk(fn):
+            if id(node) in nested_ids:
+                continue
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id == "isinstance"
+                and len(node.args) == 2
+                and isinstance(node.args[0], ast.Name)
+                and isinstance(node.args[1], ast.Name)
+                and node.args[1].id == "list"
+            ):
+                isinstance_list.add(node.args[0].id)
+            if (
+                isinstance(node, ast.Subscript)
+                and isinstance(node.value, ast.Name)
+                and isinstance(node.slice, ast.UnaryOp)
+                and isinstance(node.slice.op, ast.USub)
+                and isinstance(node.slice.operand, ast.Constant)
+                and node.slice.operand.value == 1
+            ):
+                neg1.add(node.value.id)
+        for name in sorted(isinstance_list & neg1):
+            out.append((fn.name, name))
+    return out
+
+
+class TestUnwrapHelperMonopoly:
+    """neograph-ovx1: loop-append / Each-dict unwrap is defined once in di.py.
+
+    No consumer or scan site may hand-roll ``isinstance(X, list) and X`` ->
+    ``X[-1]``; it must call ``di._unwrap_loop_value``. Likewise the dict ->
+    list(values()) Each unwrap must call ``di._unwrap_each_dict``.
+
+    AST guard (per-function same-name conjunction) + positive monopoly call-site
+    assertions. Positive + negative meta-tests (AST guard — no regex-slip case).
+    """
+
+    # files the disease lived in (and their migrated helper) — the canonical
+    # helper must be referenced here after migration.
+    _HELPER_USERS = {
+        "_input_shape.py": ("_unwrap_loop_value", "_unwrap_each_dict"),
+        "_subconstruct.py": ("_unwrap_loop_value",),
+        "_wiring.py": ("_unwrap_loop_value",),
+    }
+
+    def test_no_inline_list_latest_unwrap_outside_di(self):
+        violations: list[str] = []
+        for py in sorted(SRC_DIR.glob("*.py")):
+            if py.name == "di.py":
+                continue  # the monopoly home
+            for func, name in _list_latest_bypass_sites(
+                py.read_text(), _OWN_FIELD_READ_ALLOWLIST
+            ):
+                violations.append(
+                    f"  {py.name}::{func} hand-rolls isinstance({name}, list)+{name}[-1]"
+                    f" — delegate to di._unwrap_loop_value."
+                )
+        assert violations == [], (
+            "\nInline loop-append latest-unwrap (neograph-ovx1 disease):\n"
+            + "\n".join(violations)
+            + "\n\ndi._unwrap_loop_value is the single source of truth."
+        )
+
+    def test_migrated_files_reference_canonical_helper(self):
+        violations: list[str] = []
+        for fname, helpers in self._HELPER_USERS.items():
+            source = (SRC_DIR / fname).read_text()
+            for helper in helpers:
+                if _count_calls(source, helper) < 1:
+                    violations.append(
+                        f"  {fname} does not call {helper} — bypass re-introduced?"
+                    )
+        assert violations == [], (
+            "\nMigrated files must delegate to the di unwrap helpers:\n"
+            + "\n".join(violations)
+        )
+
+    # --- meta-tests ---
+
+    def test_meta_bypass_scanner_catches_inline_idiom(self):
+        """positive: a hand-rolled consumer unwrap is flagged."""
+        bad = (
+            "def consume(value, expected_type):\n"
+            "    if isinstance(value, list) and value:\n"
+            "        value = value[-1]\n"
+            "    return value\n"
+        )
+        sites = _list_latest_bypass_sites(bad, frozenset())
+        assert ("consume", "value") in sites
+
+    def test_meta_bypass_scanner_passes_helper_delegation(self):
+        """negative: delegating to the helper is clean."""
+        good = (
+            "def consume(value, expected_type):\n"
+            "    return _unwrap_loop_value(value, expected_type)\n"
+        )
+        assert _list_latest_bypass_sites(good, frozenset()) == []
+
+    def test_meta_bypass_scanner_allowlists_own_field_reads(self):
+        """own-field reads (allowlisted function) are not flagged."""
+        own = (
+            "def subgraph_node(own_val):\n"
+            "    if isinstance(own_val, list) and own_val:\n"
+            "        return own_val[-1]\n"
+        )
+        assert _list_latest_bypass_sites(own, _OWN_FIELD_READ_ALLOWLIST) == []
+        # but the same idiom in a non-allowlisted function IS flagged
+        assert _list_latest_bypass_sites(own, frozenset()) == [
+            ("subgraph_node", "own_val")
+        ]

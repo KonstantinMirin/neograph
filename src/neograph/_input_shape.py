@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from enum import Enum
 from typing import Any, assert_never
-from typing import get_origin as _get_origin
 
 from neograph._normalize import normalize_inputs, normalize_outputs
 from neograph._state_bus import StateBus
@@ -86,10 +85,7 @@ def _extract_loop_reentry(state: StateBus, node: Node) -> Any:
         # been re-produced this iteration; documented sentinel for "use latest".
         upstream_val = state.get(state_key)
         if upstream_val is not None and state_key != node_own_field:
-            value = upstream_val
-            if isinstance(value, list) and value and _get_origin(expected_type) is not list:
-                value = value[-1]
-            result[key] = value
+            result[key] = _unwrap_loop_value(upstream_val, expected_type)
         else:
             result[key] = latest
             placed_latest = True
@@ -125,12 +121,7 @@ def _extract_fan_in_dict(state: StateBus, node: Node) -> dict[str, Any]:
             # REQUIRED: fan-in upstreams guaranteed by _validate_node_chain.
             value = state.get_required(state_key, node_label=node.name)
             value = _unwrap_loop_value(value, expected_type)
-            if (
-                value is not None
-                and _get_origin(expected_type) is list
-                and isinstance(value, dict)
-            ):
-                value = list(value.values())
+            value = _unwrap_each_dict(value, expected_type)
         result[input_name] = value
     return result
 
