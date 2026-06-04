@@ -19,3 +19,9 @@ Given the workflow description, extract:
 Be precise about types. Every node's output type must be consumed by at least one downstream node (except the final node). Every node's input type must be produced by an upstream node (except the first node).
 
 Output your analysis as structured data matching the AnalysisResult schema.
+
+---
+
+## Input
+
+${input}

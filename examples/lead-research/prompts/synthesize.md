@@ -17,3 +17,9 @@ Produce a concise research report that includes:
 5. **Recommended angle**: A single sentence describing the best approach for initial outreach. Reference a specific finding that makes this angle credible.
 
 Be direct. No filler. Every sentence should give the salesperson something they can use.
+
+---
+
+## Input
+
+${input}

@@ -72,8 +72,8 @@ def _prompt(name: str) -> str:
 
 
 MODELS = {
-    "reason": "anthropic/claude-sonnet-4",
-    "fast": "google/gemini-2.0-flash-001",
+    "reason": "openai/gpt-4o",
+    "fast": "openai/gpt-4o-mini",
 }
 
 
@@ -135,17 +135,17 @@ def parse_diff(diff_text: Annotated[str, FromInput]) -> ChangedFiles:
 # Phase 2: Per-file review sub-construct (3 dimensions in parallel)
 # =============================================================================
 
-@node(mode="think", outputs=StyleFindings, model="fast", prompt=_prompt("review_style"))
+@node(mode="think", outputs=StyleFindings, model="fast", prompt="review_style")
 def review_style(file: ChangedFile) -> StyleFindings:
     ...
 
 
-@node(mode="think", outputs=LogicFindings, model="fast", prompt=_prompt("review_logic"))
+@node(mode="think", outputs=LogicFindings, model="fast", prompt="review_logic")
 def review_logic(file: ChangedFile) -> LogicFindings:
     ...
 
 
-@node(mode="think", outputs=SecurityFindings, model="reason", prompt=_prompt("review_security"))
+@node(mode="think", outputs=SecurityFindings, model="reason", prompt="review_security")
 def review_security(file: ChangedFile) -> SecurityFindings:
     ...
 
@@ -186,7 +186,7 @@ review_file = construct_from_functions(
 # Phase 3: Synthesize all file reviews
 # =============================================================================
 
-@node(mode="think", outputs=ReviewReport, model="reason", prompt=_prompt("synthesize"))
+@node(mode="think", outputs=ReviewReport, model="reason", prompt="synthesize")
 def synthesize(review_file: dict[str, FileReview]) -> ReviewReport:
     ...
 
@@ -213,10 +213,27 @@ def main():
     diff_text = _load_sample_diff()
     print(f"Loaded sample diff ({len(diff_text)} chars)")
 
+    # Canonical prompt_compiler (mirrors piarch's neograph_bridge.py):
+    # loads prompts/{name}.md and substitutes BAML-pre-rendered input via
+    # string.Template (${var} style — same as neograph's inline substitution).
+    # ${var} keeps literal {curly braces} in code samples safe.
+    def prompt_compiler(template, data, **kw):
+        from string import Template
+        raw = _prompt(template)
+        if isinstance(data, dict):
+            if len(data) == 1:
+                data = {**data, "input": next(iter(data.values()))}
+            content = Template(raw).safe_substitute(**data)
+        elif isinstance(data, str):
+            content = Template(raw).safe_substitute(input=data)
+        else:
+            content = raw
+        return [{"role": "user", "content": content}]
+
     graph = compile(
         pipeline,
         llm_factory=_llm_factory,
-        prompt_compiler=lambda template, data: [{"role": "user", "content": template}],
+        prompt_compiler=prompt_compiler,
     )
     result = run(graph, input={
         "node_id": "review-001",

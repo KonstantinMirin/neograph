@@ -11,3 +11,9 @@ Rules:
 - No default values unless truly optional (use "= None" with Optional type, or empty string/list defaults where sensible)
 
 Output the complete Python module as a single string in the python_code field, and list all model names in type_names.
+
+---
+
+## Input
+
+${input}

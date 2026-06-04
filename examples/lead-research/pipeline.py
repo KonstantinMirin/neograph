@@ -46,8 +46,8 @@ def _prompt(name: str) -> str:
 
 
 MODELS = {
-    "reason": "anthropic/claude-sonnet-4",
-    "fast": "google/gemini-2.0-flash-001",
+    "reason": "openai/gpt-4o",
+    "fast": "openai/gpt-4o-mini",
 }
 
 
@@ -177,7 +177,7 @@ def search_news(load_leads: Lead) -> NewsList:
     outputs=LeadReport,
     mode="think",
     model="reason",
-    prompt=_prompt("synthesize"),
+    prompt="synthesize",
 )
 def synthesize(scrape_website: CompanyProfile, search_news: NewsList) -> LeadReport:
     ...
@@ -197,7 +197,7 @@ research = construct_from_functions(
     outputs=QualifiedLeads,
     mode="think",
     model="reason",
-    prompt=_prompt("qualify"),
+    prompt="qualify",
 )
 def qualify(research: list[LeadReport]) -> QualifiedLeads:
     ...
@@ -219,10 +219,27 @@ def main():
     print("Lead Research Pipeline")
     print("=" * 40)
 
+    # Canonical prompt_compiler (mirrors piarch's neograph_bridge.py):
+    # loads prompts/{name}.md and substitutes BAML-pre-rendered input via
+    # string.Template (${var} style — same as neograph's inline substitution).
+    # ${var} keeps literal {curly braces} in code samples safe.
+    def prompt_compiler(template, data, **kw):
+        from string import Template
+        raw = _prompt(template)
+        if isinstance(data, dict):
+            if len(data) == 1:
+                data = {**data, "input": next(iter(data.values()))}
+            content = Template(raw).safe_substitute(**data)
+        elif isinstance(data, str):
+            content = Template(raw).safe_substitute(input=data)
+        else:
+            content = raw
+        return [{"role": "user", "content": content}]
+
     graph = compile(
         pipeline,
         llm_factory=_llm_factory,
-        prompt_compiler=lambda template, data: [{"role": "user", "content": template}],
+        prompt_compiler=prompt_compiler,
     )
     result = run(graph, input={"node_id": "lead-research-batch"})
 

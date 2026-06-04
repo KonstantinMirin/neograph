@@ -40,3 +40,9 @@ Rules:
 - Give the pipeline a descriptive kebab-case name
 
 Output the YAML string in yaml_spec, the node count in node_count, and the pipeline name in pipeline_name.
+
+---
+
+## Input
+
+${input}

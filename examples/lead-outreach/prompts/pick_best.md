@@ -8,3 +8,9 @@ Score each variant on:
 5. Is the tone right for this person's seniority and industry?
 
 Pick the variant that scores highest overall. Return it exactly as-is (you may fix minor typos but do not rewrite). Preserve the email_number and send_day from the winning variant.
+
+---
+
+## Input
+
+${input}

@@ -17,3 +17,9 @@ For each issue found, provide:
 - suggestion: how to fix it, with a brief code sketch if helpful
 
 Be precise. "This might fail" is not useful. "This fails when user_id is None because the f-string produces 'WHERE id = None' which matches no rows silently" is useful.
+
+---
+
+## File to review
+
+${input}

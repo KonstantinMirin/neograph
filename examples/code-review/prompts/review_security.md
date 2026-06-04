@@ -17,3 +17,9 @@ For each vulnerability found, provide:
 - suggestion: the secure alternative (parameterized queries, secrets manager, etc.)
 
 Be specific about attack vectors. "SQL injection" alone is insufficient. "The username parameter is interpolated directly into the SQL string. An attacker can pass `' OR 1=1 --` to bypass authentication" is what we need.
+
+---
+
+## File to review
+
+${input}

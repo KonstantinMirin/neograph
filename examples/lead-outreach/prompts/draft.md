@@ -14,3 +14,9 @@ Rules (non-negotiable):
 - First name only, never "Dear Ms./Mr."
 
 Fill in the subject and body fields. Preserve all other fields exactly as provided.
+
+---
+
+## Input
+
+${input}

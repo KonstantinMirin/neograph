@@ -10,3 +10,9 @@ Your job:
 The output should be actionable. A developer reading the summary should know immediately whether to stop what they're doing and fix something (critical), plan a fix this sprint (high), or add to the backlog (medium/low).
 
 Do NOT inflate severity. If there are no critical findings, say so. A review that cries wolf on severity loses trust.
+
+---
+
+## File reviews to synthesize
+
+${input}

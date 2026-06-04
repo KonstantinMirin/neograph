@@ -17,3 +17,9 @@ For each issue found, provide:
 Style issues are rarely critical. Most are medium or low. Only flag critical if the naming is actively misleading (e.g., a function called `validate` that doesn't validate).
 
 Do NOT flag issues that a linter or formatter would catch automatically (trailing whitespace, import order). Focus on things that require human judgment.
+
+---
+
+## File to review
+
+${input}

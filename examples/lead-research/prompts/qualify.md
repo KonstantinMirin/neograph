@@ -20,3 +20,9 @@ For each lead, provide:
 4. A specific recommended next step
 
 Rank the leads from highest to lowest score.
+
+---
+
+## Input
+
+${input}

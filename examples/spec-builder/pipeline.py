@@ -41,8 +41,8 @@ from schemas import (
 # =============================================================================
 
 MODELS = {
-    "reason": "anthropic/claude-sonnet-4",
-    "fast": "google/gemini-2.0-flash-001",
+    "reason": "openai/gpt-4o",
+    "fast": "openai/gpt-4o-mini",
 }
 
 
@@ -73,7 +73,7 @@ def _prompt(name: str) -> str:
 @node(
     outputs=AnalysisResult,
     model="reason",
-    prompt=_prompt("analyze"),
+    prompt="analyze",
 )
 def analyze_request(request: Annotated[WorkflowRequest, FromInput]) -> AnalysisResult: ...
 
@@ -81,7 +81,7 @@ def analyze_request(request: Annotated[WorkflowRequest, FromInput]) -> AnalysisR
 @node(
     outputs=GeneratedTypes,
     model="reason",
-    prompt=_prompt("generate_types"),
+    prompt="generate_types",
 )
 def generate_types(analyze_request: AnalysisResult) -> GeneratedTypes: ...
 
@@ -89,7 +89,7 @@ def generate_types(analyze_request: AnalysisResult) -> GeneratedTypes: ...
 @node(
     outputs=GeneratedSpec,
     model="reason",
-    prompt=_prompt("generate_spec"),
+    prompt="generate_spec",
 )
 def generate_spec(generate_types: GeneratedTypes) -> GeneratedSpec: ...
 
@@ -219,10 +219,27 @@ def main():
     request = _load_sample(0)
     print(f"Workflow request:\n  {request.description}\n")
 
+    # Canonical prompt_compiler (mirrors piarch's neograph_bridge.py):
+    # loads prompts/{name}.md and substitutes BAML-pre-rendered input via
+    # string.Template (${var} style — same as neograph's inline substitution).
+    # ${var} keeps literal {curly braces} in code samples safe.
+    def prompt_compiler(template, data, **kw):
+        from string import Template
+        raw = _prompt(template)
+        if isinstance(data, dict):
+            if len(data) == 1:
+                data = {**data, "input": next(iter(data.values()))}
+            content = Template(raw).safe_substitute(**data)
+        elif isinstance(data, str):
+            content = Template(raw).safe_substitute(input=data)
+        else:
+            content = raw
+        return [{"role": "user", "content": content}]
+
     graph = compile(
         pipeline,
         llm_factory=_llm_factory,
-        prompt_compiler=lambda template, data: [{"role": "user", "content": template}],
+        prompt_compiler=prompt_compiler,
     )
     result = run(
         graph,

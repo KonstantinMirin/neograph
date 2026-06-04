@@ -13,3 +13,9 @@ Compute: score = would_reply * 0.30 + feels_personal * 0.25 + would_open * 0.20 
 Write your scores and specific, actionable critique in the feedback field. Be blunt -- "the opening is generic" is more useful than "consider making it more personal."
 
 Do NOT rewrite the email. Just evaluate and give feedback. Preserve subject and body exactly. Increment iteration by 1.
+
+---
+
+## Input
+
+${input}
