@@ -88,9 +88,12 @@ def prompt_compiler(template: str, input_data) -> list[dict]:
 # ── Pipeline ─────────────────────────────────────────────────────────────
 
 # produce: LLM decomposes topic into claims (3 variants via Oracle, LLM merge)
-@node(inputs=Topic, outputs=Claims, prompt="decompose", model="fast",
+# First node: the topic comes from the prompt_compiler (defaults to a sample
+# topic), so decompose takes no upstream parameter — same shape as examples
+# 02/07's first node.
+@node(outputs=Claims, prompt="decompose", model="fast",
       ensemble_n=3, merge_prompt="merge-claims")
-def decompose(topic: Topic) -> Claims: ...
+def decompose() -> Claims: ...
 
 
 # scripted: format the merged result

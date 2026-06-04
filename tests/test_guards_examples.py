@@ -530,3 +530,112 @@ class TestExampleMergeCompilerReadsVariants:
             "        print(claim)\n"
         )
         assert not _scan_bare_data_iteration(source), "scripted node body must not be flagged"
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# neograph-b6hm — every third-party module an example imports must be a declared
+# (installed) dependency. An undeclared import (e.g. `langfuse`) makes the
+# example die at import with ModuleNotFoundError.
+# ═══════════════════════════════════════════════════════════════════════════
+
+import sys as _sys
+
+
+def _example_import_roots(source: str) -> set[str]:
+    """Top-level module roots imported by `source` (relative imports skipped)."""
+    tree = ast.parse(source)
+    roots: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                roots.add(alias.name.split(".")[0])
+        elif isinstance(node, ast.ImportFrom):
+            if node.level == 0 and node.module:  # level>0 == relative -> local
+                roots.add(node.module.split(".")[0])
+    return roots
+
+
+def _example_local_module_names() -> set[str]:
+    """Stems of every example .py file -- these are local sibling imports."""
+    return {p.stem for p in EXAMPLES_ROOT.rglob("*.py")}
+
+
+def _third_party_import_roots(source: str, local_names: set[str]) -> set[str]:
+    """Import roots that are neither stdlib nor local example modules."""
+    return {
+        root
+        for root in _example_import_roots(source)
+        if root not in _sys.stdlib_module_names
+        and root != "__future__"
+        and root not in local_names
+    }
+
+
+class TestExampleImportsAreDeclared:
+    """neograph-b6hm — example third-party imports must be importable (declared
+    in pyproject [dependency-groups].dev or a runtime dependency)."""
+
+    def test_example_third_party_imports_are_importable(self):
+        import importlib.util
+
+        local = _example_local_module_names()
+        missing: dict[str, list[str]] = {}
+        for path in _iter_example_pipelines():
+            for root in _third_party_import_roots(path.read_text(), local):
+                if importlib.util.find_spec(root) is None:
+                    missing.setdefault(root, []).append(path.relative_to(REPO_ROOT).as_posix())
+        assert not missing, (
+            "Examples import third-party modules that are not installed/declared "
+            "(add them to pyproject [dependency-groups].dev): "
+            + ", ".join(f"{mod} <- {files}" for mod, files in sorted(missing.items()))
+        )
+
+    def test_meta_detects_third_party_import(self):
+        """Positive: a non-stdlib, non-local import root is detected."""
+        roots = _third_party_import_roots(
+            "import langfuse\nfrom langfuse.langchain import CallbackHandler\n", set()
+        )
+        assert "langfuse" in roots
+
+    def test_meta_excludes_stdlib(self):
+        """Negative: stdlib imports are not flagged as third-party."""
+        roots = _third_party_import_roots("import os, sys\nfrom pathlib import Path\n", set())
+        assert roots == set()
+
+    def test_meta_excludes_local_and_relative(self):
+        """Negative: local sibling modules and relative imports are excluded."""
+        source = "from _shared import make\nimport schemas\nfrom . import helper\n"
+        roots = _third_party_import_roots(source, {"_shared", "schemas"})
+        assert roots == set()
+
+
+class TestObservablePipelineImports:
+    """neograph-b6hm — examples/observable_pipeline.py must import cleanly.
+
+    It is the one example whose import exercises the langfuse.langchain
+    integration (requires both `langfuse` AND `langchain` installed) and runs
+    construct_from_module at module scope. A plain find_spec check misses the
+    transitive `langchain` requirement and the module-assembly path, so this
+    smoke test imports the module (Langfuse cloud creds are only touched in
+    __main__, not at import).
+    """
+
+    def test_observable_pipeline_module_imports(self):
+        import importlib.util
+        import os
+        import sys
+
+        os.environ.setdefault("OPENROUTER_API_KEY", "test-dummy-key")
+        path = EXAMPLES_ROOT / "observable_pipeline.py"
+        spec = importlib.util.spec_from_file_location("neograph_example_observable_pipeline", path)
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        try:
+            spec.loader.exec_module(module)  # raises if langfuse/langchain missing or assembly breaks
+        finally:
+            sys.modules.pop(spec.name, None)
+        # construct_from_module ran at import — the pipeline must have assembled.
+        from neograph import Construct
+
+        assert isinstance(module.pipeline, Construct)
