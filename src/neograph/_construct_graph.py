@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING, Any
 from neograph._construct_validation import ConstructError
 from neograph._normalize import normalize_inputs, normalize_outputs
 from neograph._sidecar import _get_node_source, _get_param_res, _get_sidecar
-from neograph.naming import field_name_for
+from neograph.naming import field_name_for, split_output_field
 from neograph.node import Node
 
 if TYPE_CHECKING:
@@ -40,13 +40,12 @@ def _resolve_dict_output_param(
     Returns None if no match.
     """
     for upstream_name, upstream_node in decorated.items():
-        prefix = f"{upstream_name}_"
-        if not pname.startswith(prefix):
+        output_key = split_output_field(pname, upstream_name)
+        if output_key is None:
             continue
         up_no = normalize_outputs(upstream_node.outputs)
         if not up_no.is_dict_form:
             continue
-        output_key = pname[len(prefix):]
         if output_key in up_no.all_keys:
             return upstream_name
     return None

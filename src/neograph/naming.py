@@ -18,3 +18,18 @@ def output_field_name(base_field: str, output_key: str) -> str:
     ``field_name_for(name)``.
     """
     return f"{base_field}{_UNDERSCORE}{output_key}"
+
+
+def split_output_field(state_field: str, base_field: str) -> str | None:
+    """Recover the output key from a per-key state field, or ``None``.
+
+    Inverse of :func:`output_field_name`: given ``state_field`` and the owning
+    node's ``base_field``, return the ``output_key`` when ``state_field`` has
+    the form ``{base_field}_{output_key}``, else ``None``. Single source of the
+    PARSE side of the per-output-key convention, so it cannot drift from the
+    build side. See neograph-bcct (build) and neograph-7s2n (parse).
+    """
+    prefix = f"{base_field}{_UNDERSCORE}"
+    if not state_field.startswith(prefix):
+        return None
+    return state_field[len(prefix):]

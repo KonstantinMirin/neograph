@@ -23,7 +23,7 @@ from neograph._state_bus import StateBus, adapt_state
 from neograph._state_keys import StateKeys
 from neograph.errors import ConfigurationError, ExecutionError
 from neograph.modifiers import Each, Oracle
-from neograph.naming import field_name_for, output_field_name
+from neograph.naming import field_name_for, output_field_name, split_output_field
 from neograph.node import HasName, TypeSpecStatic
 
 
@@ -68,15 +68,13 @@ def make_oracle_redirect_fn(
     the other two redirect factories (a future get_required here asks
     ``item.name`` directly, never a threaded string nor ``raw_fn.__name__``).
     """
-    prefix = f"{field_name}_"
-
     def oracle_redirect_fn(state: Any, config: RunnableConfig) -> dict:
         result = raw_fn(state, config)
         val = result.get(field_name)
         if val is not None:
             return {collector_field: val}
         # Dict-form outputs: per-key fields like {field_name}_{key}
-        if any(k.startswith(prefix) for k in result):
+        if any(split_output_field(k, field_name) is not None for k in result):
             return {collector_field: result}
         return result
 
@@ -97,8 +95,6 @@ def make_eachoracle_redirect_fn(
     asks the IR object directly (Information Expert) rather than receiving a
     pre-extracted string.
     """
-    prefix = f"{field_name}_"
-
     def eachoracle_redirect_fn(state: Any, config: RunnableConfig) -> dict:
         result = raw_fn(state, config)
         # REQUIRED: flat Each×Oracle router always populates EACH_ITEM in the
@@ -113,8 +109,12 @@ def make_eachoracle_redirect_fn(
             return {collector_field: [(key, val)]}
         # Dict-form outputs: result has per-key fields.
         # Collect the full per-key dict as the tagged value.
-        if any(k.startswith(prefix) for k in result):
-            per_key = {k[len(prefix):]: v for k, v in result.items() if k.startswith(prefix)}
+        per_key = {
+            ok: v
+            for k, v in result.items()
+            if (ok := split_output_field(k, field_name)) is not None
+        }
+        if per_key:
             return {collector_field: [(key, per_key)]}
         return result
 
@@ -139,7 +139,6 @@ def _unwrap_oracle_results(
         return results, None
 
     # Dict-form: extract primary (first key) for merge, collect secondaries
-    prefix = f"{field_name}_"
     primary_key = None
     secondary_keys: list[str] = []
 
@@ -148,9 +147,9 @@ def _unwrap_oracle_results(
         primary_key = output_field_name(field_name, keys[0])
         secondary_keys = [output_field_name(field_name, k) for k in keys[1:]]
     else:
-        # Fallback: find keys by prefix
+        # Fallback: find per-key fields by the {field_name}_ convention
         for k in results[0]:
-            if k.startswith(prefix):
+            if split_output_field(k, field_name) is not None:
                 if primary_key is None:
                     primary_key = k
                 else:

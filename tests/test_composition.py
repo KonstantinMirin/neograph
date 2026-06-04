@@ -2370,3 +2370,22 @@ class TestIterNodes:
         assert all(isinstance(n, Node) for n in iter_nodes(outer))
 
 
+class TestSplitOutputField:
+    """split_output_field is the inverse of output_field_name (neograph-7s2n)."""
+
+    def test_round_trips_with_output_field_name(self):
+        from neograph.naming import output_field_name, split_output_field
+
+        for base, key in [("verify", "result"), ("rank_items", "tool_log")]:
+            field = output_field_name(base, key)
+            assert split_output_field(field, base) == key
+
+    def test_non_matching_field_returns_none(self):
+        from neograph.naming import split_output_field
+
+        assert split_output_field("other_result", "verify") is None
+        # no trailing-underscore boundary: a longer base prefix must not match
+        assert split_output_field("verify", "verify") is None
+        assert split_output_field("verifyextra_x", "verify") is None
+
+

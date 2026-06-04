@@ -935,6 +935,85 @@ class TestOutputFieldNameMonopoly:
         assert self._scan(tmp_path) == [], "naming.py must be exempt"
 
 
+def _has_len_prefix_slice(tree: ast.AST) -> bool:
+    """True if the tree contains a ``<x>[len(<prefix>):]`` slice — the
+    hand-rolled output-field PARSE idiom (strip a ``{base}_`` prefix)."""
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Subscript):
+            continue
+        sl = node.slice
+        if not isinstance(sl, ast.Slice) or sl.lower is None:
+            continue
+        low = sl.lower
+        if (
+            isinstance(low, ast.Call)
+            and isinstance(low.func, ast.Name)
+            and low.func.id == "len"
+        ):
+            return True
+    return False
+
+
+class TestSplitOutputFieldMonopoly:
+    """neograph-7s2n: the INVERSE of ``output_field_name`` -- recovering an
+    output key from a ``{base}_{key}`` state field -- has ONE canonical parser,
+    ``split_output_field`` in ``naming.py``. The hand-rolled
+    ``prefix = f"{base}_"; field[len(prefix):]`` idiom is structurally banned
+    so the oracle redirect/merge path and the @node dict-output resolver cannot
+    drift from the build side.
+
+    Scoped OUT: ``naming.py`` (the parser home) and ``forward.py`` (whose
+    ``_attr_chain_after_prefix`` strips the unrelated ``out_of_<node>`` proxy
+    prefix -- its own neograph-wpzg monopoly).
+    """
+
+    _EXEMPT_FILES = frozenset({"naming.py", "forward.py"})
+
+    def test_split_output_field_defined_once_in_naming(self):
+        homes = [
+            py.name
+            for py in sorted(SRC_DIR.glob("*.py"))
+            if any(
+                isinstance(n, ast.FunctionDef) and n.name == "split_output_field"
+                for n in ast.walk(ast.parse(py.read_text()))
+            )
+        ]
+        assert homes == ["naming.py"], (
+            f"split_output_field must be defined once in naming.py; found in {homes}."
+        )
+
+    def test_no_handrolled_prefix_strip_parse(self):
+        offenders = [
+            py.name
+            for py in sorted(SRC_DIR.glob("*.py"))
+            if py.name not in self._EXEMPT_FILES
+            and _has_len_prefix_slice(ast.parse(py.read_text()))
+        ]
+        assert offenders == [], (
+            f"\n{len(offenders)} hand-rolled '<field>[len(prefix):]' output-field "
+            f"parse(s): {offenders}.\nUse split_output_field(field, base) from "
+            "neograph.naming."
+        )
+
+    # --- meta-tests ---
+
+    def test_meta_parse_scanner_catches_len_prefix_slice(self):
+        tree = ast.parse(
+            "def f(result, field_name):\n"
+            "    prefix = f'{field_name}_'\n"
+            "    return {k[len(prefix):]: v for k, v in result.items()}\n"
+        )
+        assert _has_len_prefix_slice(tree)
+
+    def test_meta_parse_scanner_passes_helper_delegation(self):
+        tree = ast.parse(
+            "def f(result, field_name):\n"
+            "    return {key: v for k, v in result.items() "
+            "if (key := split_output_field(k, field_name)) is not None}\n"
+        )
+        assert not _has_len_prefix_slice(tree)
+
+
 class TestPrimaryOutputMonopoly:
     """HIGH-06 (neograph-gf9g): extracting the PRIMARY value/type from a
     dict-form ``Node.outputs`` has ONE canonical expression --
