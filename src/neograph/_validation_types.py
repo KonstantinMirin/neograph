@@ -96,12 +96,34 @@ def effective_producer_type(item: NodeItem) -> TypeSpecStatic:
     output = item.outputs if isinstance(item, Node) else getattr(item, "output", None)
     if output is None:
         return None
-    ms = getattr(item, "modifier_set", None)
-    if ms is None:
-        return output
-    if ms.each is not None:
-        return dict[str, output]  # type: ignore[valid-type]
-    return output
+    return effective_producer_type_for(output, getattr(item, "modifier_set", None))
+
+
+def effective_producer_type_for(
+    declared_type: TypeSpecStatic, modifier_set: object | None
+) -> TypeSpecStatic:
+    """Apply the modifier-to-bus rule to a SINGLE declared output type.
+
+    This is the per-key core extracted from :func:`effective_producer_type`.
+    Both producer-registration paths share it so the Each→dict[str, X] rule
+    has exactly one implementation:
+
+      - whole-node / single-type path → :func:`effective_producer_type`
+        delegates here with the node's sole declared output;
+      - dict-form multi-output path (``_construct_validation`` registers one
+        producer per output key) → delegates here per key, so each key's type
+        is wrapped independently.
+
+    ``modifier_set`` is duck-typed (``.each``) rather than imported, keeping
+    this validation-cluster leaf module free of a ``modifiers`` dependency.
+
+    Current rules:
+      - ``Each`` modifier → ``dict[str, declared_type]``
+      - Everything else → ``declared_type`` unchanged.
+    """
+    if modifier_set is not None and getattr(modifier_set, "each", None) is not None:
+        return dict[str, declared_type]  # type: ignore[valid-type]
+    return declared_type
 
 
 # Sentinel distinguishing "field absent" from "field present but None-valued" —

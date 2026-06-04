@@ -46,6 +46,7 @@ from neograph._validation_types import (
     _source_location,
     _types_compatible,
     effective_producer_type,
+    effective_producer_type_for,
 )
 from neograph.di import DIKind as _DIKind
 from neograph.errors import ConstructError
@@ -67,6 +68,7 @@ __all__ = [
     "_types_compatible",
     "_validate_node_chain",
     "effective_producer_type",
+    "effective_producer_type_for",
     "validate_loop_construct",
     "validate_loop_self_edge",
 ]
@@ -190,11 +192,14 @@ def _validate_node_chain(
             # Dict-form outputs (neograph-1bp.4): register one producer per
             # output key, with modifier wrapping applied independently per key.
             if isinstance(item, Node) and isinstance(output_type, dict):
-                has_each = item.modifier_set.each is not None
                 for output_key, key_type in output_type.items():
                     key_field = output_field_name(field_name, output_key)
                     key_label = f"node '{name}' output '{output_key}'"
-                    producer_type = dict[str, key_type] if has_each else key_type  # type: ignore[valid-type]
+                    # Per-key modifier rule via the single source of truth —
+                    # the same helper the whole-node producer path uses.
+                    producer_type = effective_producer_type_for(
+                        key_type, item.modifier_set
+                    )
                     producers[key_field] = Producer(
                         field_name=key_field,
                         effective_type=producer_type,

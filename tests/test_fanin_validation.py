@@ -389,6 +389,47 @@ class TestEffectiveProducerType:
         assert effective_producer_type(OutputlessStub()) is None
 
 
+class TestEffectiveProducerTypeFor:
+    """Per-key core (neograph-etxo): the single implementation of the
+    modifier-to-bus rule, shared by the whole-node and dict-form paths."""
+
+    def test_no_modifier_set_returns_declared_type(self):
+        from neograph._construct_validation import effective_producer_type_for
+
+        assert effective_producer_type_for(Claims, None) is Claims
+
+    def test_each_modifier_wraps_single_type_as_dict(self):
+        from neograph._construct_validation import effective_producer_type_for
+
+        n = Node.scripted(
+            "each-node", fn="_x_each2", inputs=ClusterGroup, outputs=MatchResult
+        ) | Each(over="upstream.items", key="label")
+        assert effective_producer_type_for(MatchResult, n.modifier_set) == dict[
+            str, MatchResult
+        ]
+
+    def test_non_each_modifier_leaves_type_unchanged(self):
+        from neograph._construct_validation import effective_producer_type_for
+
+        n = Node.scripted("op2", fn="_x_op2", outputs=Claims) | Operator(
+            when="_nonexistent_for_helper_test"
+        )
+        assert effective_producer_type_for(Claims, n.modifier_set) is Claims
+
+    def test_dict_form_each_wraps_each_key_independently(self):
+        """The dict-form branch applies the rule PER KEY, not to the whole dict."""
+        from neograph._construct_validation import effective_producer_type_for
+
+        n = Node.scripted(
+            "multi", fn="_x_multi", inputs=ClusterGroup,
+            outputs={"a": MatchResult, "b": Claims},
+        ) | Each(over="upstream.items", key="label")
+        assert effective_producer_type_for(MatchResult, n.modifier_set) == dict[
+            str, MatchResult
+        ]
+        assert effective_producer_type_for(Claims, n.modifier_set) == dict[str, Claims]
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # Fan-in validation (dict-form inputs)
 # ═══════════════════════════════════════════════════════════════════════════

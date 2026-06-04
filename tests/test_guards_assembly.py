@@ -1234,6 +1234,60 @@ class TestNoRedundantValidation:
                 "Remove the belt-and-suspenders checks."
             )
 
+    @staticmethod
+    def _each_rule_reinline_violations(text: str) -> list[str]:
+        """Detect a re-inlined Each->dict[str,X] producer rule in validator text.
+
+        Disease: the dict-form per-key branch recomputing the modifier-to-bus
+        rule inline instead of delegating to effective_producer_type_for. The
+        drift class behind neograph-8k3 / neograph-ayq.
+        """
+        violations = []
+        if "dict[str, key_type]" in text:
+            violations.append(
+                "  inlines 'dict[str, key_type]' — the Each->dict[str,X] rule. "
+                "Delegate to effective_producer_type_for."
+            )
+        if "effective_producer_type_for" not in text:
+            violations.append(
+                "  does not reference effective_producer_type_for — "
+                "the dict-form branch must use it."
+            )
+        return violations
+
+    def test_each_dict_form_producer_rule_not_reinlined(self):
+        """The Each->dict[str,X] producer rule has ONE owner.
+
+        The dict-form per-key producer branch in _construct_validation.py must
+        NOT recompute 'dict[str, key_type] if has_each else key_type' inline —
+        that re-implements the modifier-to-bus rule that effective_producer_type
+        (now via effective_producer_type_for) solely owns.
+        """
+        text = (SRC_DIR / "_construct_validation.py").read_text()
+        violations = self._each_rule_reinline_violations(text)
+        assert violations == [], (
+            "\nEach->dict[str,X] producer rule re-inlined in the validator:\n"
+            + "\n".join(violations)
+            + "\n\nTeach the rule to effective_producer_type_for "
+            "(_validation_types.py) and have both producer paths delegate."
+        )
+
+    def test_meta_reinline_guard_catches_disease(self):
+        """positive meta-test: the inline literal is flagged."""
+        bad = (
+            "for output_key, key_type in output_type.items():\n"
+            "    producer_type = dict[str, key_type] if has_each else key_type\n"
+        )
+        violations = self._each_rule_reinline_violations(bad)
+        assert any("dict[str, key_type]" in v for v in violations)
+
+    def test_meta_reinline_guard_passes_clean_source(self):
+        """negative meta-test: delegating source is accepted."""
+        good = (
+            "producer_type = effective_producer_type_for(key_type, item.modifier_set)\n"
+        )
+        assert self._each_rule_reinline_violations(good) == []
+
 
 class TestNoSidecarPattern:
     """Node metadata must live on the Node via PrivateAttr, not in global dicts.
