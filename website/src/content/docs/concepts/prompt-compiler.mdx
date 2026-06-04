@@ -7,7 +7,7 @@ sidebar:
 
 A **prompt compiler** is a callable you pass to `compile(prompt_compiler=...)` that turns a template reference and neograph's BAML-rendered input into the messages the LLM sees. This is the user-extension point: neograph defines the protocol; you decide how to compose system messages, inject schemas, look up templates from a registry, or whatever else your project needs.
 
-This page documents the contract. For the simple file-per-prompt case, see [the local helper in the examples directory](https://github.com/KonstantinMirin/neograph/blob/main/examples/_shared.py). For a richer reference implementation that splits system and user messages, injects JSON schemas, and forwards aliases, see [piarch's `neograph_bridge.py`](https://github.com/KonstantinMirin/piarch/blob/main/src/derive_ensemble/integration/neograph_bridge.py).
+This page documents the contract. The [example sub-projects](https://github.com/KonstantinMirin/neograph/tree/main/examples) ship a minimal file-per-prompt helper at [`examples/_shared.py`](https://github.com/KonstantinMirin/neograph/blob/main/examples/_shared.py) that covers the simple case. The "[richer compiler](#richer-compiler-system-messages-schema-injection-registry-lookup)" section below sketches the production-shaped pattern (system message splits, JSON schema injection, registry lookup) inline so you can adapt it to your project.
 
 ## The contract
 
@@ -99,7 +99,7 @@ graph = compile(
 
 ## Richer compiler (system messages, schema injection, registry lookup)
 
-When you need more — system/user splits, JSON schema injection for structured-output prompts, multi-template lookup chains, alias forwarding for legacy templates — write your own compiler. The piarch project's `neograph_bridge.py` is the reference:
+When you need more — system/user splits, JSON schema injection for structured-output prompts, multi-template lookup chains, alias forwarding for legacy templates — write your own compiler. A production-shaped pattern looks like this:
 
 ```python
 def prompt_compiler(
@@ -145,7 +145,20 @@ def prompt_compiler(
     ]
 ```
 
-This is application-specific code. Neograph doesn't ship this because every project's notion of "system message," "schema injection," and "registry" is different.
+This is application-specific code. Neograph doesn't ship this because every project's notion of "system message," "schema injection," and "registry" is different. The pieces you compose — a template registry, a renderer for BAML-pre-rendered input, an output_schema serializer, a node-name → message-shape policy — are all yours to define.
+
+A typical production project has roughly this structure:
+
+```
+your_project/
+├── prompts/
+│   ├── templates/          # *.md files
+│   └── registry.py         # get_prompt(name, **vars) → rendered text
+├── neograph_bridge.py      # llm_factory + prompt_compiler
+└── pipeline.py             # @node definitions
+```
+
+The `prompt_compiler` lives in `neograph_bridge.py`, takes neograph's `(template, data, **kw)` arguments, builds a `template_vars` dict from `data` + `context` + `output_schema`, calls `get_prompt(template, **template_vars)`, and returns the message list shaped for your node-mode conventions.
 
 ## Inline prompts (no compiler needed)
 

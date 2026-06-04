@@ -2,19 +2,18 @@
 
 NOT part of the neograph public API. neograph's `prompt_compiler` contract is
 deliberately minimal — a callable taking `(template, data, **kw)` and
-returning `list[dict]` — and every production consumer (e.g., piarch's
-`neograph_bridge.py`) writes their own compiler shaped to their needs:
-system/user message splits, schema injection, registry lookup, alias
-forwarding, multi-template chains.
+returning `list[dict]` — and every production consumer writes their own
+compiler shaped to their needs: system/user message splits, schema
+injection, registry lookup, alias forwarding, multi-template chains.
 
 This helper covers ONLY the simple shape that example pipelines need:
 load a `.md` template by name and substitute neograph's BAML-rendered input.
 
 Production code should NOT import from this module. Write your own compiler.
-See:
-- piarch's `derive_ensemble/integration/neograph_bridge.py` for a richer
-  reference implementation
-- neograph's docs/concepts/prompt-compiler.mdx for the contract
+The full protocol — argument shapes, what neograph guarantees about
+`data`, the inline-prompt detection rule — is documented at
+`docs/concepts/prompt-compiler.mdx` (also at neograph.pro under
+Concepts → Prompt Compiler).
 """
 
 from __future__ import annotations
@@ -50,9 +49,9 @@ def make_template_prompt_compiler(
       framework keys.
 
     This function is NOT part of neograph's public API. Production consumers
-    should write their own prompt_compiler shaped to their needs — see
-    piarch's neograph_bridge.py for a reference implementation that handles
-    system/user message splits, schema injection, and merge_fn metadata.
+    should write their own prompt_compiler shaped to their needs (system/user
+    message splits, JSON schema injection, registry lookup, alias forwarding,
+    etc.). See `docs/concepts/prompt-compiler.mdx` for the full contract.
 
     Args:
         prompt_dir: directory containing prompt files.
