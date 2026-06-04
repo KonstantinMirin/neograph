@@ -485,8 +485,8 @@ NEOGRAPH_ERROR_ALLOWLIST: dict[str, str] = {
     # ── construct.py — Pydantic BeforeValidator boundary ──
     # _validate_node_list runs inside Pydantic field validation; Pydantic
     # catches TypeError/ValueError and rolls them into ValidationError.
-    "construct.py:43": "Pydantic BeforeValidator boundary; TypeError is rolled into ValidationError",
-    "construct.py:46": "Pydantic BeforeValidator boundary; TypeError is rolled into ValidationError",
+    "construct.py:45": "Pydantic BeforeValidator boundary; TypeError is rolled into ValidationError",
+    "construct.py:48": "Pydantic BeforeValidator boundary; TypeError is rolled into ValidationError",
 
     # ── forward.py — proxy / tracer / abstract-method contracts ──
     # _Proxy.__getattr__ raises AttributeError per the Python attribute

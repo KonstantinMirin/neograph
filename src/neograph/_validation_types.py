@@ -92,11 +92,21 @@ def effective_producer_type(item: NodeItem) -> TypeSpecStatic:
 
     Returns ``None`` when the item has no declared output.
     """
-    # Node uses .outputs (plural); Construct uses .output (singular).
-    output = item.outputs if isinstance(item, Node) else getattr(item, "output", None)
+    output = _declared_output(item)
     if output is None:
         return None
     return effective_producer_type_for(output, getattr(item, "modifier_set", None))
+
+
+def _declared_output(item: NodeItem) -> TypeSpecStatic:
+    """Return an item's declared output type, abstracting the Node/Construct split.
+
+    Single source of truth: ``Node`` declares ``.outputs`` (plural);
+    ``Construct`` / ``_BranchNode`` declare ``.output`` (singular).
+    Both the producer-registration loop and ``effective_producer_type`` read
+    through here instead of re-inlining the ternary.
+    """
+    return item.outputs if isinstance(item, Node) else getattr(item, "output", None)
 
 
 def effective_producer_type_for(

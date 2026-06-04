@@ -41,6 +41,7 @@ from neograph._validation_types import (
     NodeItem,
     Producer,
     ProducerMap,
+    _declared_output,
     _fmt_type,
     _is_construct_like,
     _source_location,
@@ -183,8 +184,7 @@ def _validate_node_chain(
                 ambient_producers=ambient_for_recursion,
             )
 
-        # Node uses .outputs (plural); Construct / _BranchNode use .output (singular).
-        output_type = item.outputs if isinstance(item, Node) else getattr(item, "output", None)
+        output_type = _declared_output(item)
         name = getattr(item, "name", None)
         if output_type is not None and name is not None:
             field_name = field_name_for(name)

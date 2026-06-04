@@ -20,6 +20,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from typing import Annotated, Any
 
 from pydantic import BaseModel, BeforeValidator, Field
@@ -29,6 +30,7 @@ from neograph._ir_normalize import normalize_ir
 from neograph._ir_protocols import ConstructItem
 from neograph._llm_config import LlmConfig
 from neograph.modifiers import Modifiable, ModifierSet
+from neograph.node import Node
 from neograph.renderers import Renderer
 
 
@@ -49,7 +51,23 @@ def _validate_node_list(v: Any) -> list[ConstructItem]:
             )
     return v
 
-__all__ = ["Construct", "ConstructError"]
+__all__ = ["Construct", "ConstructError", "iter_nodes"]
+
+
+def iter_nodes(construct: Construct) -> Iterator[Node]:
+    """Yield every leaf ``Node`` in ``construct``, recursing into sub-constructs.
+
+    Single source of truth for the IR node-tree walk. Replaces the hand-rolled
+    ``isinstance(item, Construct) -> recurse; isinstance(item, Node) -> body``
+    skeleton that was duplicated across the compiler, the LLM runtime, and lint.
+    ``_BranchNode`` sentinels (neither Node nor Construct) are skipped, matching
+    the prior walks' ``isinstance(Node)`` gate.
+    """
+    for item in construct.nodes:
+        if isinstance(item, Construct):
+            yield from iter_nodes(item)
+        elif isinstance(item, Node):
+            yield item
 
 
 class Construct(Modifiable, BaseModel):

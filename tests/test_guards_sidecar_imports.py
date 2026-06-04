@@ -104,14 +104,13 @@ FUNCTION_LOCAL_IMPORT_ALLOWLIST: set[tuple[str, str, frozenset[str]]] = {
         "neograph._ir_normalize",
         frozenset({"fan_out_candidates"}),
     ),
-    # _llm_runtime.py — cycle: check_llm_kwargs_or_raise walks the construct
-    # for LLM-mode nodes, but Construct/Node themselves import from _llm_runtime
-    # (via factory.py through compiler.py). Function-local imports keep
-    # _llm_runtime a leaf. Retires when the construct-walking helper moves
+    # _llm_runtime.py — cycle: collect_llm_nodes walks the construct for
+    # LLM-mode nodes via iter_nodes, but construct.py imports from _llm_runtime
+    # (transitively, via factory.py through compiler.py). Function-local imports
+    # keep _llm_runtime a leaf. Retires when the construct-walking helper moves
     # to a non-leaf module (e.g., a new _llm_check.py).
-    ("_llm_runtime.py", "neograph.construct", frozenset({"Construct"})),
+    ("_llm_runtime.py", "neograph.construct", frozenset({"iter_nodes"})),
     ("_llm_runtime.py", "neograph.errors", frozenset({"CompileError"})),
-    ("_llm_runtime.py", "neograph.node", frozenset({"Node"})),
     # NOTE: _llm.py describe_type / renderers entries retired by neograph-8ne2.
     # The split made both leaf modules importable at module level — render_prompt
     # moved into _llm_render where describe_type + build_rendered_input are

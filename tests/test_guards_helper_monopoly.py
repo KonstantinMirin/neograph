@@ -353,3 +353,92 @@ class TestComparisonOperatorTableMonopoly:
             "_M = {'a': 1, 'b': 2, 'c': 3, 'd': 4}\n"
         )
         assert _comparison_op_table_modules(tmp_path) == []
+
+
+# neograph-x3f0: three shared IR helpers, each defined in exactly one home.
+_X3F0_HELPER_HOMES = {
+    "iter_nodes": "construct.py",
+    "collect_llm_nodes": "_llm_runtime.py",
+    "missing_runtime_kwargs": "_llm_runtime.py",
+    "_declared_output": "_validation_types.py",
+}
+
+# The declared-output field-selection ternary (whitespace-normalized).
+_DECLARED_OUTPUT_IDIOM = 'item.outputs if isinstance(item, Node) else getattr(item, "output", None)'
+
+
+def _modules_defining(src_dir: pathlib.Path, func_name: str) -> list[str]:
+    return [
+        py.name
+        for py in sorted(src_dir.glob("*.py"))
+        if _has_def(py.read_text(), func_name)
+    ]
+
+
+class TestIrWalkHelperMonopoly:
+    """neograph-x3f0: iter_nodes / collect_llm_nodes / missing_runtime_kwargs /
+    _declared_output are the single source for IR-tree walk, LLM-node collection,
+    and declared-output selection. AST + normalized-text guard with meta-tests.
+    """
+
+    def test_helpers_defined_in_exactly_one_home(self):
+        violations: list[str] = []
+        for helper, home in _X3F0_HELPER_HOMES.items():
+            modules = _modules_defining(SRC_DIR, helper)
+            if modules != [home]:
+                violations.append(
+                    f"  {helper} defined in {modules} (expected exactly [{home}])"
+                )
+        assert violations == [], "\nIR-walk helper home violations:\n" + "\n".join(
+            violations
+        )
+
+    def test_declared_output_ternary_appears_once(self):
+        total = sum(
+            _normalized_idiom_count(py.read_text(), _DECLARED_OUTPUT_IDIOM)
+            for py in sorted(SRC_DIR.glob("*.py"))
+        )
+        assert total == 1, (
+            f"\nDeclared-output ternary appears {total}x across src "
+            "(must be exactly 1 — only inside _declared_output). "
+            "Call _declared_output(item) instead of re-inlining."
+        )
+
+    def test_no_inline_walk_for_llm(self):
+        """The hand-rolled nested _walk_for_llm collectors must be gone."""
+        offenders = [
+            py.name
+            for py in sorted(SRC_DIR.glob("*.py"))
+            if "_walk_for_llm" in py.read_text()
+        ]
+        assert offenders == [], (
+            f"\n_walk_for_llm re-inlined in {offenders}; use collect_llm_nodes(construct)."
+        )
+
+    def test_llm_node_collection_callers_delegate(self):
+        for fname in ("_llm_runtime.py", "lint.py"):
+            source = (SRC_DIR / fname).read_text()
+            assert _count_calls(source, "collect_llm_nodes") >= 1, (
+                f"{fname} must call collect_llm_nodes (LLM-node walk monopoly)."
+            )
+
+    def test_compiler_collectors_use_iter_nodes(self):
+        source = (SRC_DIR / "compiler.py").read_text()
+        assert _count_calls(source, "iter_nodes") >= 2, (
+            "compiler.py collectors must iterate via iter_nodes(construct)."
+        )
+
+    # --- meta-tests ---
+
+    def test_meta_home_scanner_flags_second_definition(self, tmp_path):
+        (tmp_path / "construct.py").write_text("def iter_nodes(c):\n    return []\n")
+        (tmp_path / "rogue.py").write_text("def iter_nodes(c):\n    return []\n")
+        assert _modules_defining(tmp_path, "iter_nodes") == [
+            "construct.py",
+            "rogue.py",
+        ]
+
+    def test_meta_declared_output_idiom_resists_whitespace_slip(self):
+        spaced = 'x = item.outputs  if  isinstance( item , Node )  else getattr(item, "output", None)'
+        assert spaced.count(_DECLARED_OUTPUT_IDIOM) == 0  # naive scan misses it
+        assert _normalized_idiom_count(spaced, _DECLARED_OUTPUT_IDIOM) == 1

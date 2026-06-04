@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from neograph._ir_protocols import ConstructItem
+from neograph._llm_runtime import collect_llm_nodes, missing_runtime_kwargs
 from neograph._normalize import normalize_inputs
 from neograph._sidecar import _get_param_res, get_merge_fn_metadata
 from neograph._state_keys import StateKeys
@@ -179,25 +180,11 @@ def _emit_missing_llm_kwargs_issue(
     contract is the same (§2 requires LLM kwargs), but lint() reports it as
     a discoverable issue rather than raising.
     """
-    llm_nodes: list[str] = []
-
-    def _walk_for_llm(items: list) -> None:
-        for it in items:
-            if isinstance(it, Construct):
-                _walk_for_llm(it.nodes)
-                continue
-            if isinstance(it, Node) and it.mode in ("think", "agent", "act"):
-                llm_nodes.append(it.name)
-
-    _walk_for_llm(construct.nodes)
+    llm_nodes = collect_llm_nodes(construct)
     if not llm_nodes:
         return
 
-    missing = []
-    if llm_factory is None:
-        missing.append("llm_factory")
-    if prompt_compiler is None:
-        missing.append("prompt_compiler")
+    missing = missing_runtime_kwargs(llm_factory, prompt_compiler)
     if not missing:
         return
 

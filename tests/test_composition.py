@@ -2335,3 +2335,38 @@ class TestSubconstructContextTypes:
         )
 
 
+class TestIterNodes:
+    """iter_nodes(construct) is the single IR node-tree walk (neograph-x3f0):
+    yields leaf Nodes, recursing into sub-constructs, in document order."""
+
+    def test_flat_construct_yields_its_nodes_in_order(self):
+        from neograph.construct import iter_nodes
+
+        a = Node.scripted("a", fn="_x_a", outputs=Claims)
+        b = Node.scripted("b", fn="_x_b", inputs=Claims, outputs=Clusters)
+        c = Construct("flat", nodes=[a, b])
+        assert [n.name for n in iter_nodes(c)] == ["a", "b"]
+
+    def test_recurses_into_sub_constructs(self):
+        from neograph.construct import iter_nodes
+
+        inner_a = Node.scripted("ia", fn="_x_ia", inputs=Claims, outputs=Claims)
+        inner_b = Node.scripted("ib", fn="_x_ib", inputs=Claims, outputs=Claims)
+        sub = Construct("sub", input=Claims, output=Claims, nodes=[inner_a, inner_b])
+        top = Node.scripted("top", fn="_x_top", outputs=Claims)
+        outer = Construct("outer", nodes=[top, sub])
+        # leaf nodes only, depth-first in document order; the sub-Construct
+        # itself is not yielded
+        assert [n.name for n in iter_nodes(outer)] == ["top", "ia", "ib"]
+
+    def test_all_yielded_items_are_nodes(self):
+        from neograph.construct import iter_nodes
+
+        inner = Node.scripted("inner", fn="_x_in", inputs=Claims, outputs=Claims)
+        sub = Construct("sub2", input=Claims, output=Claims, nodes=[inner])
+        outer = Construct(
+            "outer2", nodes=[Node.scripted("t", fn="_x_t", outputs=Claims), sub]
+        )
+        assert all(isinstance(n, Node) for n in iter_nodes(outer))
+
+

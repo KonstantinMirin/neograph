@@ -93,6 +93,29 @@ class LlmRuntime:
 EMPTY_RUNTIME: LlmRuntime = LlmRuntime()
 
 
+def collect_llm_nodes(construct: Any) -> list[str]:
+    """Return the names of all LLM-mode (think/agent/act) nodes in ``construct``.
+
+    Single source of truth for the LLM-node walk shared by
+    ``check_llm_kwargs_or_raise`` (raises) and ``lint`` (reports). Recurses
+    into sub-constructs via ``iter_nodes``.
+    """
+    # Function-local import keeps this leaf module dependency-free.
+    from neograph.construct import iter_nodes
+
+    return [n.name for n in iter_nodes(construct) if n.mode in ("think", "agent", "act")]
+
+
+def missing_runtime_kwargs(llm_factory: Any, prompt_compiler: Any) -> list[str]:
+    """Return which required LLM runtime kwargs are absent (``[]`` when all set)."""
+    missing: list[str] = []
+    if llm_factory is None:
+        missing.append("llm_factory")
+    if prompt_compiler is None:
+        missing.append("prompt_compiler")
+    return missing
+
+
 def check_llm_kwargs_or_raise(
     construct: Any,
     llm_factory: Any,
@@ -106,29 +129,12 @@ def check_llm_kwargs_or_raise(
     LLM-mode node is found and either kwarg is missing, raises CompileError
     with the offending node names verbatim.
     """
-    # Function-local imports keep this leaf module dependency-free.
-    from neograph.construct import Construct
     from neograph.errors import CompileError
-    from neograph.node import Node
 
-    llm_nodes: list[str] = []
-
-    def _walk_for_llm(items: list) -> None:
-        for it in items:
-            if isinstance(it, Construct):
-                _walk_for_llm(it.nodes)
-                continue
-            if isinstance(it, Node) and it.mode in ("think", "agent", "act"):
-                llm_nodes.append(it.name)
-
-    _walk_for_llm(construct.nodes)
+    llm_nodes = collect_llm_nodes(construct)
     if not llm_nodes:
         return
-    missing = []
-    if llm_factory is None:
-        missing.append("llm_factory")
-    if prompt_compiler is None:
-        missing.append("prompt_compiler")
+    missing = missing_runtime_kwargs(llm_factory, prompt_compiler)
     if not missing:
         return
     raise CompileError.build(

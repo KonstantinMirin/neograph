@@ -37,7 +37,7 @@ from neograph._wiring import (
     _wire_each,
     _wire_oracle,
 )
-from neograph.construct import Construct
+from neograph.construct import Construct, iter_nodes
 from neograph.di import DIKind
 from neograph.errors import CompileError, ConfigurationError
 from neograph.factory import make_node_fn
@@ -261,18 +261,10 @@ def _collect_scripted_shims(construct: Construct) -> dict[str, Any]:
     are walked recursively.
     """
     lookup: dict[str, Any] = {}
-
-    def _walk(nodes: list) -> None:
-        for item in nodes:
-            if isinstance(item, Construct):
-                _walk(item.nodes)
-                continue
-            if isinstance(item, Node):
-                shim = getattr(item, "_scripted_shim", None)
-                if shim is not None and item.scripted_fn:
-                    lookup[item.scripted_fn] = shim
-
-    _walk(construct.nodes)
+    for item in iter_nodes(construct):
+        shim = getattr(item, "_scripted_shim", None)
+        if shim is not None and item.scripted_fn:
+            lookup[item.scripted_fn] = shim
     return lookup
 
 
@@ -283,39 +275,30 @@ def _collect_required_di(construct: Construct) -> dict[str, set[str]]:
     param names that must be present in run(input=) or config['configurable'].
     """
     required: dict[str, set[str]] = {"input": set(), "config": set()}
-
-    def _walk(nodes: list) -> None:
-        for item in nodes:
-            if isinstance(item, Construct):
-                _walk(item.nodes)
+    for item in iter_nodes(construct):
+        param_res = item._param_res
+        if not param_res:
+            continue
+        for _pname, binding in param_res.items():
+            if not binding.required:
                 continue
-            if not isinstance(item, Node):
-                continue
-            param_res = item._param_res
-            if not param_res:
-                continue
-            for _pname, binding in param_res.items():
-                if not binding.required:
-                    continue
-                if binding.kind in (DIKind.FROM_INPUT, DIKind.FROM_INPUT_MODEL):
-                    if binding.kind == DIKind.FROM_INPUT_MODEL:
-                        # Bundled model — each field is a required input key
-                        model_cls = binding.model_cls
-                        if model_cls is not None:
-                            for fname in model_cls.model_fields:
-                                required["input"].add(fname)
-                    else:
-                        required["input"].add(binding.name)
-                elif binding.kind in (DIKind.FROM_CONFIG, DIKind.FROM_CONFIG_MODEL):
-                    if binding.kind == DIKind.FROM_CONFIG_MODEL:
-                        model_cls = binding.model_cls
-                        if model_cls is not None:
-                            for fname in model_cls.model_fields:
-                                required["config"].add(fname)
-                    else:
-                        required["config"].add(binding.name)
-
-    _walk(construct.nodes)
+            if binding.kind in (DIKind.FROM_INPUT, DIKind.FROM_INPUT_MODEL):
+                if binding.kind == DIKind.FROM_INPUT_MODEL:
+                    # Bundled model — each field is a required input key
+                    model_cls = binding.model_cls
+                    if model_cls is not None:
+                        for fname in model_cls.model_fields:
+                            required["input"].add(fname)
+                else:
+                    required["input"].add(binding.name)
+            elif binding.kind in (DIKind.FROM_CONFIG, DIKind.FROM_CONFIG_MODEL):
+                if binding.kind == DIKind.FROM_CONFIG_MODEL:
+                    model_cls = binding.model_cls
+                    if model_cls is not None:
+                        for fname in model_cls.model_fields:
+                            required["config"].add(fname)
+                else:
+                    required["config"].add(binding.name)
     return required
 
 
