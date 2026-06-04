@@ -1360,3 +1360,87 @@ class TestSpecPydanticSchema:
 
         with pytest.raises(ConfigurationError):
             load_spec(self._minimal_versioned_spec("2"), project=self._project())
+
+
+# =============================================================================
+# neograph-z3ie — _build_sub_construct auto-fan-in: dict-form upstream
+# =============================================================================
+
+class TestSubConstructAutoFanInDictForm:
+    """neograph-z3ie: auto-fan-in in a sub-construct must wire each prior node
+    to the EXACT state-bus producer field the validator registers, using the
+    monopolized normalize_outputs/primary_output_field helpers.
+
+    For a dict-form upstream the validator registers producers only at
+    output_field_name(prev, key) (per key), never the base field, and the
+    value must be the PRIMARY type -- not the raw outputs dict. NodeSpec.outputs
+    is a single str so YAML cannot express dict-form outputs; this drives
+    _build_sub_construct directly with a synthesized dict-form node.
+
+    (Loader-only surface: declarative/@node/programmatic APIs do not auto-wire
+    inputs, so the three-surface parity rule does not apply here.)
+    """
+
+    @staticmethod
+    def _types():
+        class SubIn(BaseModel, frozen=True):
+            x: str
+
+        class PrevPrimary(BaseModel, frozen=True):
+            a: str
+
+        class PrevLog(BaseModel, frozen=True):
+            b: str
+
+        class SubOut(BaseModel, frozen=True):
+            y: str
+
+        return SubIn, PrevPrimary, PrevLog, SubOut
+
+    def test_dict_form_upstream_wires_primary_per_key_field(self):
+        from neograph._spec_schema import ConstructSpec
+        from neograph._state_keys import StateKeys
+        from neograph.loader import _build_sub_construct
+        from neograph.naming import output_field_name
+        from neograph.spec_types import register_type
+
+        SubIn, PrevPrimary, PrevLog, SubOut = self._types()
+        register_type("SubIn", SubIn)
+        register_type("SubOut", SubOut)
+
+        prev = Node("prev", mode="scripted", outputs={"result": PrevPrimary, "log": PrevLog})
+        cur = Node("cur", mode="scripted", outputs=SubOut)
+        all_nodes = {"prev": prev, "cur": cur}
+        spec = ConstructSpec(name="sub", input="SubIn", output="SubOut", nodes=["prev", "cur"])
+
+        sub = _build_sub_construct(spec, all_nodes)
+
+        cur_built = sub.nodes[1]
+        assert cur_built.inputs == {
+            StateKeys.SUBGRAPH_INPUT: SubIn,
+            output_field_name("prev", "result"): PrevPrimary,
+        }, (
+            "auto-fan-in must wire the dict-form upstream to its primary per-key "
+            f"producer field with the primary type; got {cur_built.inputs}"
+        )
+
+    def test_single_type_upstream_wiring_unchanged(self):
+        """Behavior-preservation guard: single-type upstream wiring is identical
+        before and after the fix (base field -> the single type)."""
+        from neograph._spec_schema import ConstructSpec
+        from neograph._state_keys import StateKeys
+        from neograph.loader import _build_sub_construct
+        from neograph.spec_types import register_type
+
+        SubIn, PrevPrimary, _PrevLog, SubOut = self._types()
+        register_type("SubIn", SubIn)
+        register_type("SubOut", SubOut)
+
+        prev = Node("prev", mode="scripted", outputs=PrevPrimary)
+        cur = Node("cur", mode="scripted", outputs=SubOut)
+        all_nodes = {"prev": prev, "cur": cur}
+        spec = ConstructSpec(name="sub", input="SubIn", output="SubOut", nodes=["prev", "cur"])
+
+        sub = _build_sub_construct(spec, all_nodes)
+
+        assert sub.nodes[1].inputs == {StateKeys.SUBGRAPH_INPUT: SubIn, "prev": PrevPrimary}

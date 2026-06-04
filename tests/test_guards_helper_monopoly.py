@@ -576,3 +576,65 @@ class TestNoTsPortJustification:
         sample = "...consumes the same metadata. The TypeScript port (over LangGraphJS)..."
         assert "TypeScript port" in sample  # the phrase the guard bans
         assert "TypeScript port" not in "renders a TypeScript-style notation"  # descriptive stays
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# neograph-z3ie — fan-in wiring must not assign a raw `.outputs` into a mapping.
+# A dict-form Node.outputs is registered by the validator only at per-key fields
+# ({base}_{key}); assigning the raw outputs dict at a base field mis-wires the
+# fan-in. Producer-field + primary-type selection must go through the monopolized
+# _normalize helpers (normalize_outputs / primary_output_field). The precise
+# disease signature is a SUBSCRIPT assignment whose value is `<expr>.outputs`
+# (e.g. `inputs_dict[prev] = prev_node.outputs`) -- distinct from legitimate raw
+# `.outputs` reads (call args, plain `x = node.outputs` for the merge/factory).
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _subscript_assigns_raw_outputs(source: str) -> list[int]:
+    """Line numbers of `<subscript>[...] = <expr>.outputs` assignments."""
+    tree = ast.parse(source)
+    hits: list[int] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            value = node.value
+            if (
+                isinstance(value, ast.Attribute)
+                and value.attr == "outputs"
+                and any(isinstance(t, ast.Subscript) for t in node.targets)
+            ):
+                hits.append(node.lineno)
+    return hits
+
+
+class TestNoRawOutputsInFanInWiring:
+    """neograph-z3ie: no src module may assign a raw `.outputs` into a mapping
+    (fan-in wiring). Use normalize_outputs(...).primary + primary_output_field."""
+
+    def test_no_subscript_raw_outputs_assignment_in_src(self):
+        offenders: list[str] = []
+        for path in SRC_DIR.rglob("*.py"):
+            for lineno in _subscript_assigns_raw_outputs(path.read_text()):
+                offenders.append(f"{path.relative_to(SRC_DIR.parent.parent).as_posix()}:{lineno}")
+        assert not offenders, (
+            "Raw `.outputs` assigned into a mapping (fan-in wiring). Use "
+            "primary_output_field(base, outputs) for the key and "
+            "normalize_outputs(outputs).primary for the value (neograph-z3ie).\n"
+            + "\n".join(offenders)
+        )
+
+    def test_meta_catches_raw_outputs_subscript_assign(self):
+        """Positive: `d[k] = node.outputs` is flagged."""
+        assert _subscript_assigns_raw_outputs("d[k] = node.outputs\n")
+
+    def test_meta_passes_normalized_primary(self):
+        """Negative: routing through the helper (.primary) is not flagged."""
+        assert not _subscript_assigns_raw_outputs(
+            "d[k] = normalize_outputs(node.outputs).primary\n"
+        )
+
+    def test_meta_passes_plain_assign_and_call_arg(self):
+        """Negative: plain `x = node.outputs` and call-arg `f(node.outputs)` are
+        legitimate raw reads (factory output_model, merge_fn arg) -- not the
+        fan-in disease."""
+        assert not _subscript_assigns_raw_outputs("output_model = node.outputs\n")
+        assert not _subscript_assigns_raw_outputs("f(node.outputs)\n")

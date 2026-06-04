@@ -21,6 +21,7 @@ import structlog
 import yaml  # type: ignore[import-untyped]
 from pydantic import ValidationError
 
+from neograph._normalize import normalize_outputs, primary_output_field
 from neograph._spec_schema import (
     ConstructSpec,
     NodeSpec,
@@ -227,7 +228,13 @@ def _build_sub_construct(
                 for prev_ref in construct_spec.nodes[:i]:
                     prev_field = field_name_for(prev_ref)
                     prev_node = all_nodes[prev_field]
-                    inputs_dict[prev_field] = prev_node.outputs
+                    # Wire each upstream to the EXACT state-bus field the
+                    # validator registers, via the monopolized helpers: a
+                    # dict-form producer lives at {prev}_{primary_key} with the
+                    # PRIMARY type, not the raw outputs dict at the base field.
+                    # Behavior-identical for single-type.
+                    producer_field = primary_output_field(prev_field, prev_node.outputs)
+                    inputs_dict[producer_field] = normalize_outputs(prev_node.outputs).primary
                 node = node.model_copy(update={"inputs": inputs_dict})
         nodes.append(node)
 
