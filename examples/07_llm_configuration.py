@@ -34,8 +34,12 @@ from neograph import compile, construct_from_module, node, run
 class Claims(BaseModel, frozen=True):
     items: list[str]
 
+class Classification(BaseModel, frozen=True):
+    claim: str
+    category: str
+
 class ClassifiedClaims(BaseModel, frozen=True):
-    classified: list[dict[str, str]]
+    classified: list[Classification]
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -96,8 +100,8 @@ def fake_llm_factory(tier, node_name=None, llm_config=None):
                 return Claims(items=["claim-1", "claim-2"])
             if self._model is ClassifiedClaims:
                 return ClassifiedClaims(classified=[
-                    {"claim": "claim-1", "category": "security"},
-                    {"claim": "claim-2", "category": "reliability"},
+                    Classification(claim="claim-1", category="security"),
+                    Classification(claim="claim-2", category="reliability"),
                 ])
             return self._model()
 
@@ -132,7 +136,7 @@ def decompose() -> Claims:
     ...
 
 
-# Precise classification: zero temperature, fewer tokens
+# Precise classification: zero temperature, generous token budget
 @node(
     mode="think",
     outputs=ClassifiedClaims,
@@ -140,8 +144,8 @@ def decompose() -> Claims:
     prompt="classify",
     llm_config={
         "provider_kwargs": {
-            "temperature": 0,    # deterministic — consistent classification
-            "max_tokens": 500,
+            "temperature": 0,     # deterministic — consistent classification
+            "max_tokens": 2000,   # must fit one structured row per decomposed claim
         },
     },
 )
@@ -165,7 +169,9 @@ if __name__ == "__main__":
     result = run(graph, input={"node_id": "REQ-001"})
 
     print(f"\nDecomposed: {result['decompose'].items}")
-    print(f"Classified: {result['classify'].classified}")
+    print("Classified:")
+    for c in result["classify"].classified:
+        print(f"  - {c.claim} -> {c.category}")
     print()
     print("Note: output_strategy is per-node — mix structured and json_mode")
     print("in the same pipeline when using different model providers.")

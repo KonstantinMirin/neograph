@@ -33,8 +33,12 @@ llm = ChatOpenAI(
 class Claims(BaseModel):
     items: list[str]
 
+class ScoredClaim(BaseModel):
+    claim: str
+    confidence: str  # high / medium / low
+
 class ScoredClaims(BaseModel):
-    scored: list[dict[str, str]]
+    scored: list[ScoredClaim]
 
 class Report(BaseModel):
     text: str

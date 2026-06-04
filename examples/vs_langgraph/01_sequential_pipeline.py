@@ -33,8 +33,12 @@ llm = ChatOpenAI(
 class Claims(BaseModel):
     items: list[str]
 
+class Classification(BaseModel):
+    claim: str
+    category: str
+
 class ClassifiedClaims(BaseModel):
-    classified: list[dict[str, str]]
+    classified: list[Classification]
 
 class Summary(BaseModel):
     text: str

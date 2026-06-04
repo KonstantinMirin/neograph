@@ -219,3 +219,188 @@ class TestExampleCanonicalPromptCompiler:
             "Scanner must catch the bypass pattern regardless of parameter naming "
             "(tmpl/template/t — first-param-bound content is the disease)"
         )
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# neograph-yi0n — example LLM-structured output models must be typed (no open
+# dict[...] maps). Open mappings have no fixed json-schema `properties` and so
+# violate OpenAI structured-output (json_schema) invariants -> runtime 400.
+# Scripted-node outputs are NOT the disease (no structured-output call), so
+# this guard only flags models produced by LLM nodes (prompt= present).
+# ═══════════════════════════════════════════════════════════════════════════
+
+import re as _re
+
+# Output models that legitimately keep an open mapping despite being an LLM
+# output (none today). Each entry MUST carry a one-line reason.
+OPEN_MAPPING_OUTPUT_ALLOWLIST: dict[str, str] = {}
+
+
+def _class_field_annotations(tree: ast.AST) -> dict[str, list[str]]:
+    """Map every class name -> list of its annotated field type sources."""
+    out: dict[str, list[str]] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ClassDef):
+            anns = [
+                ast.unparse(stmt.annotation)
+                for stmt in node.body
+                if isinstance(stmt, ast.AnnAssign) and stmt.annotation is not None
+            ]
+            out[node.name] = anns
+    return out
+
+
+def _annotation_has_open_mapping(annotation: str) -> bool:
+    """True if the annotation contains a dict[...] / Dict[...] open mapping."""
+    return bool(_re.search(r"\bdict\[", annotation, _re.IGNORECASE))
+
+
+def _model_has_open_mapping(
+    name: str, fields_map: dict[str, list[str]], _seen: set[str] | None = None
+) -> bool:
+    """True if `name` or any model it transitively references declares a dict[...] field."""
+    if _seen is None:
+        _seen = set()
+    if name in _seen or name not in fields_map:
+        return False
+    _seen.add(name)
+    for ann in fields_map[name]:
+        if _annotation_has_open_mapping(ann):
+            return True
+        for ref in _re.findall(r"[A-Za-z_][A-Za-z0-9_]*", ann):
+            if ref != name and ref in fields_map and _model_has_open_mapping(ref, fields_map, _seen):
+                return True
+    return False
+
+
+def _llm_output_model_refs(tree: ast.AST) -> list[tuple[int, str]]:
+    """(lineno, model_name) for every LLM node whose output model is a bare Name.
+
+    LLM node = a Node(...)/node(...) call OR an @node-decorated function that
+    carries a `prompt=` keyword and is not mode='scripted'/'raw'. Output models
+    come from `outputs=`/`output=` (explicit) or, for an @node function with no
+    explicit output kwarg, the function's return annotation (inference).
+    """
+    refs: list[tuple[int, str]] = []
+
+    def _is_llm_kwargs(kws: dict[str, ast.expr]) -> bool:
+        if "prompt" not in kws:
+            return False
+        mode = kws.get("mode")
+        return not (isinstance(mode, ast.Constant) and mode.value in ("scripted", "raw"))
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            kws = {kw.arg: kw.value for kw in node.keywords if kw.arg}
+            if not _is_llm_kwargs(kws):
+                continue
+            for out_kw in ("outputs", "output"):
+                v = kws.get(out_kw)
+                if isinstance(v, ast.Name):
+                    refs.append((node.lineno, v.id))
+        elif isinstance(node, ast.FunctionDef):
+            for dec in node.decorator_list:
+                if not isinstance(dec, ast.Call):
+                    continue
+                fname = dec.func.id if isinstance(dec.func, ast.Name) else getattr(dec.func, "attr", None)
+                if fname != "node":
+                    continue
+                kws = {kw.arg: kw.value for kw in dec.keywords if kw.arg}
+                if not _is_llm_kwargs(kws):
+                    continue
+                if any(k in kws for k in ("outputs", "output")):
+                    continue  # explicit output already captured by the Call branch
+                if isinstance(node.returns, ast.Name):
+                    refs.append((node.lineno, node.returns.id))
+    return refs
+
+
+def _scan_open_mapping_outputs(source: str) -> list[tuple[int, str]]:
+    """Return (lineno, model_name) for every LLM-structured output model in
+    `source` that (transitively) declares an open dict[...] field."""
+    tree = ast.parse(source)
+    fields_map = _class_field_annotations(tree)
+    return [
+        (lineno, name)
+        for lineno, name in _llm_output_model_refs(tree)
+        if _model_has_open_mapping(name, fields_map)
+    ]
+
+
+class TestExampleStructuredOutputModelsAreTyped:
+    """neograph-yi0n — LLM nodes route structured output through OpenAI's
+    json_schema API (on OpenRouter/OpenAI). An output model with an open
+    dict[...] field has no fixed json-schema `properties` and 400s at runtime.
+    Examples must declare named, typed output models. Scripted-node outputs are
+    exempt (no structured-output call is made).
+    """
+
+    def test_no_open_mapping_in_llm_output_models(self):
+        offenders: list[str] = []
+        for path in _iter_example_pipelines():
+            rel = path.relative_to(REPO_ROOT).as_posix()
+            for lineno, model_name in _scan_open_mapping_outputs(path.read_text()):
+                key = f"{rel}:{model_name}"
+                if key in OPEN_MAPPING_OUTPUT_ALLOWLIST:
+                    assert OPEN_MAPPING_OUTPUT_ALLOWLIST[key], f"empty allowlist reason for {key}"
+                    continue
+                offenders.append(f"{rel}:{lineno} — LLM output model {model_name} has an open dict[...] field")
+        assert not offenders, (
+            "LLM-structured output model with an open dict[...] field found in examples "
+            "(neograph-yi0n). Use a named Pydantic model with typed fields, or "
+            "output_strategy='json_mode'.\n" + "\n".join(offenders)
+        )
+
+    def test_meta_catches_open_dict_llm_output(self):
+        """Positive: an LLM node whose output model has a dict[...] field is flagged."""
+        source = (
+            "from neograph import node\n"
+            "from pydantic import BaseModel\n"
+            "class Bad(BaseModel):\n"
+            "    classified: list[dict[str, str]]\n"
+            "@node(prompt='classify', model='fast', outputs=Bad)\n"
+            "def classify(x): ...\n"
+        )
+        assert _scan_open_mapping_outputs(source), "must flag open-dict LLM output model"
+
+    def test_meta_passes_named_model_output(self):
+        """Negative: a named, typed output model is not flagged."""
+        source = (
+            "from neograph import node\n"
+            "from pydantic import BaseModel\n"
+            "class Classification(BaseModel):\n"
+            "    claim: str\n"
+            "    category: str\n"
+            "class Good(BaseModel):\n"
+            "    classified: list[Classification]\n"
+            "@node(prompt='classify', model='fast', outputs=Good)\n"
+            "def classify(x): ...\n"
+        )
+        assert not _scan_open_mapping_outputs(source), "named-model output must not be flagged"
+
+    def test_meta_passes_scripted_open_dict_output(self):
+        """Negative: a SCRIPTED node with an open-dict output is exempt (no
+        structured-output call) -- the ALLOWLIST examples (01/01c/05/10 scripted)."""
+        source = (
+            "from neograph import Node\n"
+            "from pydantic import BaseModel\n"
+            "class Scored(BaseModel):\n"
+            "    scored: list[dict[str, str]]\n"
+            "n = Node.scripted('score', fn='score_fn', outputs=Scored)\n"
+        )
+        assert not _scan_open_mapping_outputs(source), "scripted open-dict output must not be flagged"
+
+    def test_meta_catches_nested_open_dict(self):
+        """Would-be-missed: the dict[...] hides one model level below the LLM
+        output model. Transitive check must still catch it."""
+        source = (
+            "from neograph import node\n"
+            "from pydantic import BaseModel\n"
+            "class Inner(BaseModel):\n"
+            "    attrs: dict[str, str]\n"
+            "class Outer(BaseModel):\n"
+            "    inner: Inner\n"
+            "@node(prompt='p', model='fast', outputs=Outer)\n"
+            "def f(x): ...\n"
+        )
+        assert _scan_open_mapping_outputs(source), "must catch dict[...] nested one model level below the output"

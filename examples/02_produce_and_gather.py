@@ -35,8 +35,12 @@ class Requirement(BaseModel, frozen=True):
 class Claims(BaseModel, frozen=True):
     items: list[str]
 
+class Finding(BaseModel, frozen=True):
+    claim: str
+    evidence: str
+
 class ResearchResult(BaseModel, frozen=True):
-    findings: list[dict[str, str]]
+    findings: list[Finding]
 
 class CodeReference(BaseModel, frozen=True):
     """Typed tool result -- what search_codebase returns."""

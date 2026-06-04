@@ -912,6 +912,99 @@ class TestSingleTypeInputsDeprecation:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# Example output models must be OpenAI-structured-compatible (neograph-yi0n)
+# ═══════════════════════════════════════════════════════════════════════════
+
+def _open_mapping_paths(schema: object, path: str = "$") -> list[str]:
+    """Return paths to open-mapping objects in a JSON schema.
+
+    An "open mapping" is a JSON-schema object with no fixed ``properties`` and
+    an ``additionalProperties`` that is itself a schema (or ``True``) -- i.e. an
+    arbitrary-key map (what Pydantic emits for ``dict[str, X]``). OpenAI's
+    structured-output (json_schema) API cannot represent these: under strict
+    mode it collapses ``additionalProperties`` to ``false`` (losing the map),
+    and otherwise rejects the schema outright. Walks ``$defs`` too.
+    """
+    bad: list[str] = []
+    if isinstance(schema, dict):
+        if schema.get("type") == "object" and "properties" not in schema:
+            ap = schema.get("additionalProperties")
+            if ap is True or isinstance(ap, dict):
+                bad.append(path)
+        for key, value in schema.items():
+            bad += _open_mapping_paths(value, f"{path}.{key}")
+    elif isinstance(schema, list):
+        for i, value in enumerate(schema):
+            bad += _open_mapping_paths(value, f"{path}[{i}]")
+    return bad
+
+
+def _load_example_module(rel_path: str):
+    """Import an example module by file path (handles digit-prefixed names).
+
+    Sets a dummy OPENROUTER_API_KEY so example modules that build a real
+    ChatOpenAI client at import time (vs_langgraph/*) load without a live key;
+    no network call happens until ``.invoke``.
+    """
+    import importlib.util
+    import os
+    import sys
+    from pathlib import Path
+
+    os.environ.setdefault("OPENROUTER_API_KEY", "test-dummy-key")
+    repo_root = Path(__file__).resolve().parent.parent
+    path = repo_root / "examples" / rel_path
+    mod_name = "neograph_example_" + path.stem
+    spec = importlib.util.spec_from_file_location(mod_name, path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[mod_name] = module  # construct_from_module reads sys.modules[__name__]
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        sys.modules.pop(mod_name, None)
+    return module
+
+
+class TestExampleOutputModelsAreStructuredCompatible:
+    """neograph-yi0n: example LLM nodes that produce structured output (the
+    default output_strategy='structured', routed through OpenAI's json_schema
+    API on OpenRouter/OpenAI) must declare OUTPUT models with named, typed
+    fields -- never open ``dict[...]`` maps.
+
+    Open-mapping output models (``list[dict[str, str]]``) produced the runtime
+    ``BadRequestError: 400 Invalid schema for response_format`` that motivated
+    this bug. The fix is to type the example models, keeping ``structured`` as
+    the default. This is a provider-agnostic schema-shape assertion: it does
+    not gate compile() on provider behavior (compile cannot know the provider);
+    it asserts the examples that target OpenRouter declare compatible models.
+    """
+
+    # (example file, attribute name of the LLM-structured output model)
+    EXAMPLE_MODELS = [
+        ("07_llm_configuration.py", "ClassifiedClaims"),
+        ("02_produce_and_gather.py", "ResearchResult"),
+        ("vs_langgraph/01_sequential_pipeline.py", "ClassifiedClaims"),
+        ("vs_langgraph/05_subgraph.py", "ScoredClaims"),
+    ]
+
+    @pytest.mark.parametrize(
+        "rel_path, model_name",
+        EXAMPLE_MODELS,
+        ids=[f"{p}:{m}" for p, m in EXAMPLE_MODELS],
+    )
+    def test_example_structured_output_model_has_no_open_mapping(self, rel_path, model_name):
+        module = _load_example_module(rel_path)
+        model = getattr(module, model_name)
+        bad = _open_mapping_paths(model.model_json_schema())
+        assert not bad, (
+            f"{rel_path}:{model_name} declares open-mapping field(s) at {bad}, "
+            f"incompatible with OpenAI structured output. Use a named Pydantic "
+            f"model (typed fields) instead of dict[...], or output_strategy='json_mode'."
+        )
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # Loop condition lint checks
 # ═══════════════════════════════════════════════════════════════════════════
 
