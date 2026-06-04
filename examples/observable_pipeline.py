@@ -49,8 +49,8 @@ class Claims(BaseModel, frozen=True):
 # ── LLM factory: OpenRouter ─────────────────────────────────────────────
 
 MODELS = {
-    "fast": "google/gemini-2.0-flash-001",
-    "reason": "google/gemini-2.0-flash-001",
+    "fast": "openai/gpt-4o-mini",
+    "reason": "openai/gpt-4o-mini",
 }
 
 

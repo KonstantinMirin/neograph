@@ -65,8 +65,8 @@ def real_llm_factory(tier, node_name=None, llm_config=None):
 
     # Model routing by tier
     models = {
-        "fast": "google/gemini-2.0-flash-001",
-        "reason": "anthropic/claude-sonnet-4",
+        "fast": "openai/gpt-4o-mini",
+        "reason": "openai/gpt-4o",
     }
 
     return ChatOpenAI(

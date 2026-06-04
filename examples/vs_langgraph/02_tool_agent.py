@@ -25,7 +25,7 @@ from pydantic import BaseModel
 
 load_dotenv()
 
-MODEL = "google/gemini-2.0-flash-001"
+MODEL = "openai/gpt-4o-mini"
 
 base_llm = ChatOpenAI(
     model=MODEL,
