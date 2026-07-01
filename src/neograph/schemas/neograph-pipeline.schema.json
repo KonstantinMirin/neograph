@@ -133,6 +133,11 @@
           "default": null,
           "title": "Token Budget"
         },
+        "announce_tool_budget": {
+          "default": false,
+          "title": "Announce Tool Budget",
+          "type": "boolean"
+        },
         "budget_exhausted_message": {
           "anyOf": [
             {

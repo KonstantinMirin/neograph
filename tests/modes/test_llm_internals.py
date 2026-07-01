@@ -3866,6 +3866,35 @@ class TestLlmConfigAsIRType:
         assert merged.max_iterations == 15
         assert merged.token_budget == 1000
 
+    def test_announce_tool_budget_survives_merged_with_when_set_on_parent(self):
+        """announce_tool_budget rides construct->node inheritance via merged_with (neograph-iyo2).
+
+        The opt-in flag lives on LlmConfig with no bespoke plumbing; the only
+        propagation contract that must hold is that merged_with carries it from
+        a construct-level parent into a default-constructed child node.
+        """
+        from neograph._llm_config import LlmConfig
+
+        parent = LlmConfig(announce_tool_budget=True)
+        child = LlmConfig()  # node sets nothing -> inherits construct default
+        merged = parent.merged_with(child)
+        assert merged.announce_tool_budget is True
+
+    def test_announce_tool_budget_child_override_beats_parent_in_merged_with(self):
+        """A node that explicitly sets announce_tool_budget wins over the parent (neograph-iyo2)."""
+        from neograph._llm_config import LlmConfig
+
+        parent = LlmConfig(announce_tool_budget=True)
+        child = LlmConfig(announce_tool_budget=False)
+        merged = parent.merged_with(child)
+        assert merged.announce_tool_budget is False
+
+    def test_announce_tool_budget_defaults_false_when_unset(self):
+        """The opt-in flag is off by default (off-by-default contract) (neograph-iyo2)."""
+        from neograph._llm_config import LlmConfig
+
+        assert LlmConfig().announce_tool_budget is False
+
     def test_merged_with_provider_kwargs_collision_child_wins(self):
         """provider_kwargs merge: child wins on key collision."""
         from neograph._llm_config import LlmConfig
@@ -4451,3 +4480,191 @@ class TestCallStructuredCPrimeUsagePreserved:
         assert result is None
         # R1: usage carried through, not dropped.
         assert usage == {"input_tokens": 9, "output_tokens": 13}
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# TEST: framework-generated tool-budget preamble injection (neograph-iyo2)
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class _CapturingReActFake(ReActFake):
+    """ReActFake that stashes the FIRST ReAct-loop messages list it sees.
+
+    Existing fakes don't retain `messages`, so we cannot otherwise observe
+    whether invoke_with_tools prepended the {role:system} budget preamble.
+    Reuses ReActFake's proven final-parse path so the structured output
+    dispatch (_call_structured) works unchanged.
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.captured_messages = None
+
+    def invoke(self, messages, **kwargs):
+        if not self._in_structured_mode and self.captured_messages is None:
+            self.captured_messages = list(messages)
+        return super().invoke(messages, **kwargs)
+
+    def with_structured_output(self, model, **kwargs):
+        clone = _CapturingReActFake(self._tool_calls, self._final)
+        clone._call_idx = self._call_idx
+        clone._model = model
+        clone._in_structured_mode = True
+        clone.captured_messages = self.captured_messages
+        return clone
+
+
+def _msg_role(msg):
+    """Role of a message that may be a dict or a LangChain BaseMessage."""
+    if isinstance(msg, dict):
+        return msg.get("role")
+    return getattr(msg, "type", None)
+
+
+def _msg_content(msg):
+    if isinstance(msg, dict):
+        return msg.get("content", "")
+    return getattr(msg, "content", "")
+
+
+class TestToolBudgetPreambleInjection:
+    """announce_tool_budget prepends an accurate {role:system} preamble (neograph-iyo2).
+
+    Drives the behavior through the real invoke_with_tools tool loop (the ONLY
+    site holding tools+cfg.max_iterations together), asserting on the messages
+    the LLM actually receives. announced == enforced, by construction.
+    """
+
+    def _answer_model(self):
+        from pydantic import BaseModel as _BM
+
+        class Answer(_BM):
+            answer: str
+
+        return Answer
+
+    def _register_finite_tools(self):
+        from langchain_core.tools import StructuredTool
+
+        from tests.fakes import register_tool_factory
+
+        def _factory(name):
+            def factory(config, tool_config):
+                return StructuredTool.from_function(
+                    lambda q="": "x", name=name, description=name
+                )
+            return factory
+
+        register_tool_factory("search", _factory("search"))
+        register_tool_factory("read", _factory("read"))
+
+    def test_first_message_is_system_budget_preamble_when_announce_enabled(self):
+        """announce_tool_budget=True -> first msg the LLM sees is a system preamble
+        containing the finite tools' budget numbers and max_iterations."""
+        from neograph._tool_loop import invoke_with_tools
+        from neograph.tool import ToolBudgetTracker
+
+        self._register_finite_tools()
+        Answer = self._answer_model()
+
+        tools = [Tool("search", budget=3), Tool("read", budget=5)]
+        fake = _CapturingReActFake(tool_calls=[[]], final=lambda m: m(answer="done"))
+
+        parsed, _ = invoke_with_tools(
+            runtime=build_fake_runtime(lambda tier: fake),
+            model_tier="fast",
+            prompt_template="test prompt",
+            input_data={},
+            output_model=Answer,
+            config={"configurable": {}},
+            tools=tools,
+            budget_tracker=ToolBudgetTracker(tools),
+            llm_config={"announce_tool_budget": True, "max_iterations": 9},
+            tool_factory_lookup=build_fake_tool_lookup(),
+        )
+
+        assert parsed.answer == "done"
+        first = fake.captured_messages[0]
+        assert _msg_role(first) == "system"
+        content = _msg_content(first)
+        # announced numbers == enforced Tool.budget values
+        assert "3 calls" in content
+        assert "5 calls" in content
+        # step cap == cfg.max_iterations
+        assert "9" in content
+
+    def test_no_system_preamble_prepended_when_announce_unset(self):
+        """Default (announce_tool_budget unset/False): NO system preamble is
+        prepended — the first message is the original user prompt."""
+        from neograph._tool_loop import invoke_with_tools
+        from neograph.tool import ToolBudgetTracker
+
+        self._register_finite_tools()
+        Answer = self._answer_model()
+
+        tools = [Tool("search", budget=3)]
+        fake = _CapturingReActFake(tool_calls=[[]], final=lambda m: m(answer="done"))
+
+        parsed, _ = invoke_with_tools(
+            runtime=build_fake_runtime(lambda tier: fake),
+            model_tier="fast",
+            prompt_template="test prompt",
+            input_data={},
+            output_model=Answer,
+            config={"configurable": {}},
+            tools=tools,
+            budget_tracker=ToolBudgetTracker(tools),
+            tool_factory_lookup=build_fake_tool_lookup(),
+        )
+
+        assert parsed.answer == "done"
+        first = fake.captured_messages[0]
+        assert _msg_role(first) == "user"
+        assert _msg_content(first) == "test prompt"
+        assert all(_msg_role(m) != "system" for m in fake.captured_messages)
+
+    def test_prepend_keeps_system_first_without_clobbering_existing_system_when_template_ref(self):
+        """A template-ref prompt already carrying a leading SystemMessage: the
+        budget preamble is prepended (system-first) and the existing messages
+        survive intact (LOW finding — provider portability)."""
+        from langchain_core.messages import SystemMessage
+
+        from neograph._tool_loop import invoke_with_tools
+        from neograph.tool import ToolBudgetTracker
+
+        self._register_finite_tools()
+        Answer = self._answer_model()
+
+        existing_system = SystemMessage(content="You are a careful agent.")
+
+        def template_ref_compiler(template, input_data, **kwargs):
+            # non-inline (template-ref) shape: multi-message, leading SystemMessage
+            return [existing_system, {"role": "user", "content": "do the task"}]
+
+        tools = [Tool("search", budget=3)]
+        fake = _CapturingReActFake(tool_calls=[[]], final=lambda m: m(answer="done"))
+
+        parsed, _ = invoke_with_tools(
+            runtime=build_fake_runtime(
+                lambda tier: fake, prompt_compiler=template_ref_compiler
+            ),
+            model_tier="fast",
+            prompt_template="agent/diagnose",  # no space -> template-ref path
+            input_data={},
+            output_model=Answer,
+            config={"configurable": {}},
+            tools=tools,
+            budget_tracker=ToolBudgetTracker(tools),
+            llm_config={"announce_tool_budget": True, "max_iterations": 11},
+            tool_factory_lookup=build_fake_tool_lookup(),
+        )
+
+        assert parsed.answer == "done"
+        msgs = fake.captured_messages
+        # our preamble is prepended and stays system-first
+        assert _msg_role(msgs[0]) == "system"
+        assert "3 calls" in _msg_content(msgs[0])
+        assert "11" in _msg_content(msgs[0])
+        # the pre-existing SystemMessage is not clobbered
+        assert existing_system in msgs
+        assert any(_msg_content(m) == "do the task" for m in msgs)

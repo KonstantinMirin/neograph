@@ -26,6 +26,7 @@ from neograph._llm_retry import (
     recover_dsml,
 )
 from neograph._llm_runtime import EMPTY_RUNTIME, LlmRuntime
+from neograph._tool_budget_preamble import render_tool_budget_preamble
 from neograph.describe_type import describe_value
 from neograph.errors import ConfigurationError, ExecutionError
 from neograph.renderers import Renderer
@@ -204,6 +205,20 @@ def invoke_with_tools(
             context=context,
         )
     )
+
+    # Framework-generated tool-budget preamble. Opt-in via
+    # cfg.announce_tool_budget. This is the ONLY site holding `tools` +
+    # `cfg.max_iterations` together, so the announced numbers == the enforced
+    # numbers by construction. Prepend (never assume the list is length 1 — the
+    # template-ref path may return multiple messages / BaseMessage instances).
+    if cfg.announce_tool_budget:
+        messages.insert(
+            0,
+            {
+                "role": "system",
+                "content": render_tool_budget_preamble(tools, cfg.max_iterations),
+            },
+        )
 
     # Create tool instances from registered factories.
     # Per-compile dict first, then legacy _FALLBACK (deprecated).

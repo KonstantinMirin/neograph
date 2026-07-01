@@ -268,6 +268,24 @@ Each `Tool` has a `budget` -- the maximum number of calls allowed. When a tool's
 
 This prevents runaway loops and controls API costs. Set `budget=0` for unlimited calls.
 
+### Announcing the budget to the model
+
+Budgets are *enforced* silently -- the model discovers a tool is gone only after it tries to call it. You can also *announce* the budget up front so the model plans its calls, batches where it can, and stops once it has enough. Opt in per node via `llm_config`:
+
+```python
+research = Node(
+    "research",
+    mode="agent",
+    tools=[Tool(name="search_codebase", budget=2), Tool(name="read_file", budget=5)],
+    llm_config={"announce_tool_budget": True},
+    # ...
+)
+```
+
+When enabled, the tool loop prepends a framework-generated system message listing each finite-budget tool with its exact call count, the overall step cap (`max_iterations`), and a plan-ahead directive. The announced numbers are computed at the same site that enforces them, so they can never drift from the real budgets.
+
+Tools with `budget=0` (unlimited) are deliberately **not** announced -- "unlimited" is only meaningful alongside context-window management, which NeoGraph leaves to the caller. Omitting an unlimited tool already tells the model there is no explicit cap. The flag is off by default and does not alter your prompts unless you set it.
+
 ## Configuring the LLM layer
 
 Before using any LLM node, pass two functions to `compile()`:

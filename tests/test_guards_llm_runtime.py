@@ -1260,3 +1260,63 @@ class TestNoOrZeroCounterIdiom:
         assert self._COUNTER_GET_DEFAULT.search("bus.get(loop_count, 0)")
         assert self._COUNTER_GET_DEFAULT.search("bus.get(loop_count,0)")
         assert not self._COUNTER_GET_DEFAULT.search("bus.get(loop_count)")
+
+
+class TestToolBudgetPreambleSingleSource:
+    """The framework tool-budget preamble has exactly ONE producer.
+
+    announced==enforced holds only while a single helper renders the budget
+    prose from Tool.budget / cfg.max_iterations. A future PR that hand-rolls a
+    second budget announcement in another module would silently reintroduce the
+    drift this feature eliminated (the in-repo analogue of the piarch
+    max_tool_calls=15 hardcode). This guard pins the single source.
+    """
+
+    _PRODUCER_MODULE = "_tool_budget_preamble.py"
+    # Distinctive fragment of the locked plan-ahead directive. Only the
+    # canonical helper may contain it.
+    _DIRECTIVE_MARKER = "you need not use every call"
+
+    @staticmethod
+    def _modules_with_marker(corpus: dict[str, str], marker: str) -> list[str]:
+        return sorted(name for name, text in corpus.items() if marker in text)
+
+    def _real_corpus(self) -> dict[str, str]:
+        return {py.name: py.read_text() for py in SRC_DIR.glob("*.py")}
+
+    def test_directive_lives_in_exactly_one_module(self):
+        """The live tree: the directive marker appears in only the producer."""
+        hits = self._modules_with_marker(self._real_corpus(), self._DIRECTIVE_MARKER)
+        assert hits == [self._PRODUCER_MODULE], (
+            "Tool-budget preamble directive must live only in "
+            f"{self._PRODUCER_MODULE}; found in: {hits}. Do not hand-roll a "
+            "second budget announcement -- call render_tool_budget_preamble so "
+            "announced==enforced by construction."
+        )
+
+    def test_tool_loop_delegates_to_helper(self):
+        """The announce branch delegates to the helper -- numbers are derived
+        from tools/cfg, never written as literals."""
+        src = (SRC_DIR / "_tool_loop.py").read_text()
+        assert "render_tool_budget_preamble(tools, cfg.max_iterations)" in src
+
+    def test_scanner_accepts_single_producer(self):
+        """Positive meta-test: one producer -> the sanctioned result."""
+        corpus = {
+            "_tool_budget_preamble.py": "... you need not use every call ...",
+            "other.py": "unrelated",
+        }
+        assert self._modules_with_marker(corpus, self._DIRECTIVE_MARKER) == [
+            self._PRODUCER_MODULE
+        ]
+
+    def test_scanner_flags_second_producer(self):
+        """Negative meta-test: a rogue second producer diverges from the
+        sanctioned single-module result, so the guard fires."""
+        corpus = {
+            "_tool_budget_preamble.py": "... you need not use every call ...",
+            "_rogue.py": "hand-rolled: you need not use every call",
+        }
+        hits = self._modules_with_marker(corpus, self._DIRECTIVE_MARKER)
+        assert hits != [self._PRODUCER_MODULE]
+        assert "_rogue.py" in hits

@@ -37,6 +37,11 @@ class LlmConfig(BaseModel):
     max_retries: int = 1
     max_iterations: int = 20
     token_budget: int | None = None
+    # Opt-in: when True, the tool loop prepends a framework-generated
+    # {role:system} preamble announcing per-tool budgets + the step cap.
+    # Announced numbers are computed at the enforcement site, never
+    # hand-written, so they cannot drift. See _tool_budget_preamble.py.
+    announce_tool_budget: bool = False
     # ``None`` means "use the framework default template, interpolated with
     # the output model name". ``""`` also falls back to the default.
     budget_exhausted_message: str | None = None
