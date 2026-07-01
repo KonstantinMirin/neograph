@@ -5,6 +5,14 @@ requirement into claims (think mode — single structured call). Then,
 a gather node uses a search tool to research each claim, constrained
 by a per-tool call budget. The tool budget prevents runaway API costs.
 
+Budgets are enforced silently by default — the model only discovers a tool
+is gone after it tries to call it. This example also opts into
+`announce_tool_budget`, which prepends a framework-generated system message
+telling the model its budget up front, so it can plan its calls and batch.
+The announced numbers are computed at the same site that enforces them, so
+they can never drift from the real budgets. Unlimited tools (`budget=0`) are
+deliberately not announced. See `research` below and the printed preamble.
+
 Built with the @node decorator + construct_from_module. Each function
 becomes a Node; dependencies come from parameter names (e.g., `research`
 takes `decompose: Claims`, which wires it to the upstream `decompose`
@@ -25,7 +33,6 @@ from langchain_core.messages import AIMessage
 from pydantic import BaseModel
 
 from neograph import Tool, compile, construct_from_module, node, run
-
 
 # ── Schemas ──────────────────────────────────────────────────────────────
 
@@ -65,6 +72,21 @@ class FakeDecomposeLLM:
         ])
 
 
+# Captures the budget preamble the framework injects, so we can show the
+# consumer exactly what the model is told. In production you never touch this —
+# the framework prepends it and the model reads it.
+announced = {"preamble": None}
+
+
+def _first_system_content(messages):
+    """Return the content of the first system message, dict- or object-shaped."""
+    for m in messages:
+        role = m.get("role") if isinstance(m, dict) else getattr(m, "type", None)
+        if role == "system":
+            return m.get("content") if isinstance(m, dict) else m.content
+    return None
+
+
 class FakeResearchLLM:
     """Simulates an LLM that calls a search tool, then responds."""
     def __init__(self):
@@ -78,6 +100,8 @@ class FakeResearchLLM:
 
     def invoke(self, messages, **kwargs):
         self._call_count += 1
+        if announced["preamble"] is None:
+            announced["preamble"] = _first_system_content(messages)
         if getattr(self, '_has_tools', True) and self._call_count <= 3:
             msg = AIMessage(content="")
             msg.tool_calls = [{
@@ -132,6 +156,9 @@ def decompose() -> Claims:
     model="reason",
     prompt="req/research",
     tools=[Tool(name="search_codebase", budget=2)],  # max 2 searches
+    # Announce the budget to the model up front so it plans + batches.
+    # Off by default; the announced count is derived from the Tool budget above.
+    llm_config={"announce_tool_budget": True},
 )
 def research(decompose: Claims) -> ResearchResult:
     # body unused for mode='agent' — LLM handles execution via prompt=
@@ -158,3 +185,8 @@ if __name__ == "__main__":
 
     print(f"\nSearch tool called {search_count['n']} times (budget was 2)")
     print(f"Research complete: {result['research'] is not None}")
+
+    print("\nBudget preamble the model was told (announce_tool_budget=True):")
+    print("-" * 60)
+    print(announced["preamble"])
+    print("-" * 60)

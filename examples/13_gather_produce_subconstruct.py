@@ -26,6 +26,9 @@ Demonstrates:
   - Port param resolution (claim param -> neo_subgraph_input)
   - .map() fan-out on a sub-construct
   - context= for verbatim state injection (pre-formatted catalogs)
+  - announce_tool_budget: the model is told its budget up front. The finite
+    tool (search_evidence: 3) is announced; the unlimited tool (local_lookup,
+    budget=0) is deliberately omitted. Works the same inside a sub-construct.
 
 Run:
     python examples/13_gather_produce_subconstruct.py
@@ -37,8 +40,6 @@ from langchain_core.messages import AIMessage
 from pydantic import BaseModel
 
 from neograph import (
-    Construct,
-    Node,
     Tool,
     ToolInteraction,
     compile,
@@ -46,7 +47,6 @@ from neograph import (
     node,
     run,
 )
-
 
 # -- Schemas ------------------------------------------------------------------
 
@@ -104,6 +104,12 @@ class FakeExploreLLM:
                 evidence=["auth.py:42", "crypto.py:18"],
                 summary="found 2 references supporting the claim",
             )
+        if announced["preamble"] is None:
+            for m in messages:
+                role = m.get("role") if isinstance(m, dict) else getattr(m, "type", None)
+                if role == "system":
+                    announced["preamble"] = m.get("content") if isinstance(m, dict) else m.content
+                    break
         self._call_count += 1
         if self._call_count == 1:
             msg = AIMessage(content="")
@@ -138,6 +144,11 @@ class FakeScoreLLM:
         )
 
 
+# Captures the injected budget preamble so the example can print it. In
+# production you never touch this -- the framework prepends it for the model.
+announced = {"preamble": None}
+
+
 # -- Fake tool ----------------------------------------------------------------
 
 class FakeEvidenceSearch:
@@ -156,8 +167,19 @@ class FakeEvidenceSearch:
 
 # -- Tool factories + LLM layer (passed to compile() below) -------------------
 
+class FakeLocalLookup:
+    """A cheap, unlimited local lookup (budget=0). Declared on the node but
+    never called by this fake LLM -- present to show that unlimited tools are
+    intentionally omitted from the announced budget."""
+    name = "local_lookup"
+
+    def invoke(self, args):
+        return EvidenceHit(source_file="cache", line=0, snippet="", relevance=0.0)
+
+
 TOOL_FACTORIES = {
     "search_evidence": lambda config, tool_config: FakeEvidenceSearch(),
+    "local_lookup": lambda config, tool_config: FakeLocalLookup(),
 }
 
 
@@ -180,7 +202,11 @@ def prompt_compiler(template, data, **kw):
     outputs={"result": ExplorationResult, "tool_log": list[ToolInteraction]},
     model="research",
     prompt="verify/explore",
-    tools=[Tool("search_evidence", budget=3)],
+    # search_evidence has a finite budget (announced); local_lookup is unlimited
+    # (budget=0) so it is intentionally omitted from the announced budget.
+    tools=[Tool("search_evidence", budget=3), Tool("local_lookup", budget=0)],
+    # Tell the model its budget up front. Works the same inside a sub-construct.
+    llm_config={"announce_tool_budget": True},
 )
 def explore(claim: VerifyClaim) -> ExplorationResult:
     # Body unused -- LLM handles execution via prompt= + tools=
@@ -269,10 +295,18 @@ if __name__ == "__main__":
     print(f"Result keys: {sorted(result.keys())}")
     print("Note: explore/score internals are NOT in the result")
 
+    print("\nBudget preamble the explore agent was told (announce_tool_budget=True):")
+    print("-" * 60)
+    print(announced["preamble"])
+    print("-" * 60)
+    print("Note: search_evidence (budget 3) is announced; local_lookup "
+          "(budget 0 = unlimited) is omitted by design.")
+
     # -- Typed tool results demo ------------------------------------------------
     # The tool_log lives inside the sub-construct (doesn't surface to parent).
     # To show typed_result, run a standalone agent node:
     import types
+
     from neograph import construct_from_module
 
     mod = types.ModuleType("typed_tool_demo")
