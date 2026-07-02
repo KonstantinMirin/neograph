@@ -20,6 +20,7 @@ setup with a simple prompt compiler.
 
 from __future__ import annotations
 
+import contextlib
 import json
 from collections.abc import Callable
 
@@ -192,6 +193,9 @@ class StructuredFake:
         assert self._model is not None, "with_structured_output must be called first"
         return self._respond(self._model)
 
+    async def ainvoke(self, *a, **k) -> Any:
+        return self.invoke(*a, **k)
+
 
 class StructuredFakeWithRaw:
     """Fake LLM that honors include_raw=True in with_structured_output.
@@ -239,6 +243,9 @@ class StructuredFakeWithRaw:
             )
             return {"parsed": result, "raw": raw_msg}
         return result
+
+    async def ainvoke(self, *a, **k) -> Any:
+        return self.invoke(*a, **k)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -288,6 +295,9 @@ class ReActFake:
         # Return self so call counter persists across rebinds
         return self
 
+    def abind_tools(self, *a, **k) -> ReActFake:
+        return self.bind_tools(*a, **k)
+
     def _final_message(self) -> AIMessage:
         """The loop's final (no-tool-call) turn — parseable JSON (neograph-f7nt)."""
         return AIMessage(content=_final_json_content(self._final, self._output_model))
@@ -310,6 +320,9 @@ class ReActFake:
         msg = AIMessage(content="")
         msg.tool_calls = calls
         return msg
+
+    async def ainvoke(self, *a, **k) -> Any:
+        return self.invoke(*a, **k)
 
     def with_structured_output(self, model: type[BaseModel], **kwargs) -> ReActFake:
         clone = ReActFake(self._tool_calls, self._final, self._output_model)
@@ -352,6 +365,9 @@ class StringArgsFake:
     def bind_tools(self, tools: list) -> StringArgsFake:
         return self
 
+    def abind_tools(self, *a, **k) -> StringArgsFake:
+        return self.bind_tools(*a, **k)
+
     def invoke(self, messages: list, **kwargs) -> Any:
         import json as _json
 
@@ -388,6 +404,9 @@ class StringArgsFake:
         msg.tool_calls = calls
         return msg
 
+    async def ainvoke(self, *a, **k) -> Any:
+        return self.invoke(*a, **k)
+
     def _generate(self, messages: list, *, run_manager: Any = None, **kwargs) -> Any:
         """Fallback for _CoercingToolWrapper — returns response via additional_kwargs."""
         import json as _json
@@ -418,6 +437,9 @@ class StringArgsFake:
         ]
         msg = AIMessage(content="", additional_kwargs={"tool_calls": ak_tool_calls})
         return SimpleNamespace(generations=[SimpleNamespace(message=msg)])
+
+    async def _agenerate(self, *a, **k) -> Any:
+        return self._generate(*a, **k)
 
     def with_structured_output(self, model: type[BaseModel], **kwargs) -> StringArgsFake:
         clone = StringArgsFake(self._tool_calls, self._final, always_fail=self._always_fail)
@@ -450,6 +472,9 @@ class TextFake:
     def invoke(self, messages: list, **kwargs) -> AIMessage:
         return AIMessage(content=self._text)
 
+    async def ainvoke(self, *a, **k) -> AIMessage:
+        return self.invoke(*a, **k)
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 # FakeTool — shared tool implementation for gather/execute tests
@@ -467,6 +492,9 @@ class FakeTool:
     def invoke(self, args: dict) -> Any:
         self.calls.append(args)
         return self.response
+
+    async def ainvoke(self, *a, **k) -> Any:
+        return self.invoke(*a, **k)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -505,6 +533,9 @@ class GuardFake:
         bound._has_tools = bool(tools)
         return bound
 
+    def abind_tools(self, *a, **k):
+        return self.bind_tools(*a, **k)
+
     def invoke(self, messages, **kwargs):
         if self._structured:
             return self._model(items=["done"])
@@ -523,6 +554,9 @@ class GuardFake:
         # structured output is always items-shaped (see with_structured_output),
         # so emit matching JSON directly.
         return self._AIMessage(content='{"items": ["done"]}')
+
+    async def ainvoke(self, *a, **k):
+        return self.invoke(*a, **k)
 
     def with_structured_output(self, model, **kwargs):
         clone = GuardFake(input_tokens_per_call=self._input_tokens)
@@ -556,6 +590,9 @@ class StubbornFake:
     def bind_tools(self, tools):
         return self  # always returns self — ignores unbinding
 
+    def abind_tools(self, *a, **k):
+        return self.bind_tools(*a, **k)
+
     def invoke(self, messages, **kwargs):
         if self._structured:
             return self._model(items=["done"])
@@ -564,11 +601,136 @@ class StubbornFake:
         msg.tool_calls = [{"name": "search", "args": {"q": "x"}, "id": "1"}]
         return msg
 
+    async def ainvoke(self, *a, **k):
+        return self.invoke(*a, **k)
+
     def with_structured_output(self, model, **kwargs):
         clone = StubbornFake()
         clone._model = model
         clone._structured = True
         return clone
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Phase 0 M1 primitives — the parity-insufficient surface (neograph-w74k.1)
+#
+# Parity (run == arun) proves plumbing only. It structurally CANNOT prove
+# concurrency, ordering, event-loop non-blocking, or cancellation. These two
+# primitives are what the Phase-1 concurrency/blocking/cancellation E2Es build
+# on; Phase 0 ships them (kept assertion-light — the E2Es land with Phase 1).
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class GatedAsyncFake:
+    """Async-native fake whose ``ainvoke`` parks on a gate until released.
+
+    Enables the two tests parity cannot be:
+      * real-concurrency — launch N ``ainvoke`` coroutines on ONE loop, use
+        ``wait_entered()`` to confirm they all parked simultaneously (proving
+        interleaving/isolation), then ``release()`` and assert results.
+      * cancellation E2E — park a run mid-flight and cancel the task, asserting
+        clean teardown / checkpoint consistency.
+
+    Async-NATIVE by construction: it has NO sync ``invoke`` twin, so it is
+    EXEMPT from the sync/async bare-delegation invariant enforced on the shared
+    fakes (test_guards_async_fakes.py only governs the 8 deterministic fakes).
+    Computing its response inside ``ainvoke`` is correct here precisely because
+    there is no sync surface to drift from.
+    """
+
+    def __init__(self, respond: Callable[[type[BaseModel]], BaseModel] | None = None):
+        self._respond = respond
+        self._model: type[BaseModel] | None = None
+        self._gate: Any = None  # asyncio.Event, created lazily on the running loop
+        self._entered: Any = None
+        self.enter_count = 0
+
+    def _ensure_events(self) -> None:
+        import asyncio
+
+        if self._gate is None:
+            self._gate = asyncio.Event()
+        if self._entered is None:
+            self._entered = asyncio.Event()
+
+    def with_structured_output(self, model: type[BaseModel], **kwargs) -> GatedAsyncFake:
+        self._model = model
+        return self
+
+    def bind_tools(self, tools) -> GatedAsyncFake:
+        return self
+
+    def abind_tools(self, *a, **k) -> GatedAsyncFake:
+        return self.bind_tools(*a, **k)
+
+    def release(self) -> None:
+        """Unblock every parked (and future) ``ainvoke`` call."""
+        self._ensure_events()
+        self._gate.set()
+
+    async def wait_entered(self) -> None:
+        """Await until at least one ``ainvoke`` has reached the gate."""
+        self._ensure_events()
+        await self._entered.wait()
+
+    async def ainvoke(self, *a, **k) -> Any:
+        self._ensure_events()
+        self.enter_count += 1
+        self._entered.set()
+        await self._gate.wait()
+        if self._model is not None and self._respond is not None:
+            return self._respond(self._model)
+        return AIMessage(content="done")
+
+
+@contextlib.asynccontextmanager
+async def event_loop_lag_watchdog(threshold_s: float = 0.5, interval_s: float = 0.02):
+    """Detect a coroutine/tool that BLOCKS the event loop (M1).
+
+    Parity cannot catch a fake/tool that runs sync-blocking work under ``arun``:
+    LangGraph threadpools a truly-sync node, masking the block. This watchdog
+    schedules a heartbeat every ``interval_s``; if the loop is blocked so long
+    that a heartbeat lands more than its interval late, the excess is recorded as
+    lag. A generous default ``threshold_s`` keeps CI non-flaky — a blocking-
+    detector test asserts ``handle.max_lag > threshold_s``.
+
+    Yields a handle exposing ``.max_lag`` (seconds). Assertion-light in Phase 0;
+    the blocking E2E lands with Phase 1.
+    """
+    import asyncio
+    import time
+
+    class _Handle:
+        max_lag = 0.0
+
+    handle = _Handle()
+    stop = asyncio.Event()
+
+    async def _heartbeat() -> None:
+        last = time.monotonic()
+        while not stop.is_set():
+            await asyncio.sleep(interval_s)
+            now = time.monotonic()
+            lag = (now - last) - interval_s
+            if lag > handle.max_lag:
+                handle.max_lag = lag
+            last = now
+
+    task = asyncio.create_task(_heartbeat())
+    # Prime the heartbeat: yield the loop once so it records its baseline and
+    # parks on its first interval sleep BEFORE we hand control to the caller.
+    # Without this the watchdog is unarmed until its first cycle, and a block
+    # that happens immediately after entry would go unmeasured.
+    await asyncio.sleep(0)
+    try:
+        yield handle
+    finally:
+        stop.set()
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
 
 
 # ═══════════════════════════════════════════════════════════════════════════

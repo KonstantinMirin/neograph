@@ -102,6 +102,13 @@ ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# neograph-w74k.1 (Phase 0): async collection for the dual-surface harness.
+# 'auto' treats bare `async def test_*` as asyncio without per-test markers
+# (safe: zero existing async tests, so nothing is reclassified). The explicit
+# fixture loop scope silences the pytest-asyncio deprecation warning and avoids
+# a future warnings-as-error surprise.
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
 filterwarnings = [
     "ignore:Node '.*'.*single-type inputs:DeprecationWarning",
 ]
