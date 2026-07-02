@@ -970,30 +970,35 @@ class TestOracleRedirectDictForm:
 
     def test_oracle_redirect_dict_form_output(self):
         """Oracle redirect captures dict-form output (line 584-585)."""
+        from langchain_core.runnables import RunnableLambda
+
         from neograph._oracle import make_oracle_redirect_fn
 
         def raw_fn(state, config):
             return {"node_result": RawText(text="ok"), "node_meta": Claims(items=["x"])}
 
-        redirect_fn = make_oracle_redirect_fn(raw_fn, "node", "neo_oracle_node", item=types.SimpleNamespace(name="node"))
-        result = redirect_fn(None, {})
+        redirect_fn = make_oracle_redirect_fn(RunnableLambda(raw_fn), "node", "neo_oracle_node", item=types.SimpleNamespace(name="node"))
+        result = redirect_fn.invoke(None, {})
         # Dict-form: keys start with prefix "node_" → collected as dict
         assert "neo_oracle_node" in result
 
     def test_oracle_redirect_fallback_when_no_match(self):
         """Oracle redirect returns raw result when no field matches (line 586)."""
+        from langchain_core.runnables import RunnableLambda
+
         from neograph._oracle import make_oracle_redirect_fn
 
         def raw_fn(state, config):
             return {"completely_unrelated": "value"}
 
-        redirect_fn = make_oracle_redirect_fn(raw_fn, "node", "neo_oracle_node", item=types.SimpleNamespace(name="node"))
-        result = redirect_fn(None, {})
+        redirect_fn = make_oracle_redirect_fn(RunnableLambda(raw_fn), "node", "neo_oracle_node", item=types.SimpleNamespace(name="node"))
+        result = redirect_fn.invoke(None, {})
         # Neither field_name ("node") nor prefix ("node_") matches → raw result
         assert result == {"completely_unrelated": "value"}
 
     def test_eachoracle_redirect_captures_result(self):
         """EachOracle redirect tags result with each_key (line 606-608)."""
+        from langchain_core.runnables import RunnableLambda
         from pydantic import create_model
 
         from neograph._oracle import make_eachoracle_redirect_fn
@@ -1001,19 +1006,20 @@ class TestOracleRedirectDictForm:
         def raw_fn(state, config):
             return {"node": MatchResult(cluster_label="a", matched=["ok"])}
 
-        redirect_fn = make_eachoracle_redirect_fn(raw_fn, "node", "neo_eo_node", "label", item=types.SimpleNamespace(name="node"))
+        redirect_fn = make_eachoracle_redirect_fn(RunnableLambda(raw_fn), "node", "neo_eo_node", "label", item=types.SimpleNamespace(name="node"))
 
         StateModel = create_model("FakeState",
             neo_each_item=(ClusterGroup | None, None),
         )
         state = StateModel(neo_each_item=ClusterGroup(label="test-key", claim_ids=["1"]))
-        result = redirect_fn(state, {})
+        result = redirect_fn.invoke(state, {})
         assert "neo_eo_node" in result
         # Should be a list of (key, result) tuples
         assert result["neo_eo_node"][0][0] == "test-key"
 
     def test_eachoracle_redirect_no_match_returns_raw(self):
         """EachOracle redirect returns raw result when field_name not in result (line 608)."""
+        from langchain_core.runnables import RunnableLambda
         from pydantic import create_model
 
         from neograph._oracle import make_eachoracle_redirect_fn
@@ -1021,13 +1027,13 @@ class TestOracleRedirectDictForm:
         def raw_fn(state, config):
             return {"other_field": "something"}
 
-        redirect_fn = make_eachoracle_redirect_fn(raw_fn, "node", "neo_eo_node", "label", item=types.SimpleNamespace(name="node"))
+        redirect_fn = make_eachoracle_redirect_fn(RunnableLambda(raw_fn), "node", "neo_eo_node", "label", item=types.SimpleNamespace(name="node"))
 
         StateModel = create_model("FakeState",
             neo_each_item=(ClusterGroup | None, None),
         )
         state = StateModel(neo_each_item=ClusterGroup(label="key", claim_ids=["1"]))
-        result = redirect_fn(state, {})
+        result = redirect_fn.invoke(state, {})
         # No match → returns raw result
         assert result == {"other_field": "something"}
 
@@ -1119,6 +1125,7 @@ class TestSubgraphFactory:
 
     def test_each_redirect_fn_without_config(self):
         """each_redirect_fn handles missing config (line 864/870)."""
+        from langchain_core.runnables import RunnableLambda
         from pydantic import create_model
 
         from neograph._oracle import make_each_redirect_fn
@@ -1127,17 +1134,18 @@ class TestSubgraphFactory:
             return {"test": RawText(text="ok")}
 
         each = Each(over="items", key="label")
-        redirect_fn = make_each_redirect_fn(raw_fn, "test", each, item=types.SimpleNamespace(name="test"))
+        redirect_fn = make_each_redirect_fn(RunnableLambda(raw_fn), "test", each, item=types.SimpleNamespace(name="test"))
 
         StateModel = create_model("FakeState",
             neo_each_item=(ClusterGroup | None, None),
         )
         state = StateModel(neo_each_item=ClusterGroup(label="a", claim_ids=["1"]))
-        result = redirect_fn(state)  # No config
+        result = redirect_fn.invoke(state)  # No explicit config — RunnableLambda ensures one
         assert result == {"test": {"a": RawText(text="ok")}}
 
     def test_each_redirect_fn_returns_raw_when_no_match(self):
         """each_redirect_fn returns raw result when field_name not in result (line 870)."""
+        from langchain_core.runnables import RunnableLambda
         from pydantic import create_model
 
         from neograph._oracle import make_each_redirect_fn
@@ -1146,13 +1154,13 @@ class TestSubgraphFactory:
             return {"other_key": "value"}
 
         each = Each(over="items", key="label")
-        redirect_fn = make_each_redirect_fn(raw_fn, "test", each, item=types.SimpleNamespace(name="test"))
+        redirect_fn = make_each_redirect_fn(RunnableLambda(raw_fn), "test", each, item=types.SimpleNamespace(name="test"))
 
         StateModel = create_model("FakeState",
             neo_each_item=(ClusterGroup | None, None),
         )
         state = StateModel(neo_each_item=ClusterGroup(label="a", claim_ids=["1"]))
-        result = redirect_fn(state, {"configurable": {}})
+        result = redirect_fn.invoke(state, {"configurable": {}})
         # No match on "test" key → returns raw result
         assert result == {"other_key": "value"}
 

@@ -11,7 +11,7 @@ from collections.abc import Callable
 from typing import Any, cast
 
 import structlog
-from langchain_core.runnables import RunnableConfig
+from langchain_core.runnables import Runnable, RunnableConfig
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Send, interrupt
 
@@ -39,7 +39,10 @@ from neograph.node import Node
 
 log = structlog.get_logger()
 
-LangGraphNodeFn = Callable[[Any, RunnableConfig], dict[str, Any]]
+# A graph node function is either a plain (state, config) callable or a Runnable
+# (post-Phase-1a the factory/redirect wrappers return RunnableLambda for the
+# driver-selected sync/async dual path). Both are accepted by add_node.
+LangGraphNodeFn = Callable[[Any, RunnableConfig], dict[str, Any]] | Runnable
 LangGraphRouterFn = Callable[[Any], str]
 LangGraphLoopUnwrapFn = Callable[[StateBus, str], Any]
 

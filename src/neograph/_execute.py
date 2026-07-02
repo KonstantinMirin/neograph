@@ -94,3 +94,47 @@ def _execute_node(
     elapsed = time.monotonic() - t0
     node_log.info("node_complete", duration_s=round(elapsed, 3))
     return update
+
+
+async def _aexecute_node(
+    node: Node,
+    state: BaseModel,
+    config: RunnableConfig,
+    dispatch: ModeDispatch,
+) -> dict[str, Any]:
+    """Async twin of :func:`_execute_node` (Phase 1a — driver-selected async).
+
+    Structurally identical to the sync path: every pure preamble/postamble
+    helper (adapt_state, _inject_oracle_config, _extract_input, _apply_skip_when,
+    _extract_context, NodeInput shaping, _build_state_update, logging, timing) is
+    reused VERBATIM. The ONLY divergence is the terminal call —
+    ``await dispatch.aexecute(...)`` instead of ``dispatch.execute(...)`` — so the
+    sync and async node paths cannot silently drift (Core Invariant).
+    """
+    field_name = field_name_for(node.name)
+    node_log = log.bind(node=node.name, mode=node.mode)
+    node_log.info("node_start", input_type=_type_name(node.inputs), output_type=_type_name(node.outputs))
+
+    t0 = time.monotonic()
+
+    bus = adapt_state(state)
+    config = _inject_oracle_config(bus, config)
+    raw_input = _extract_input(bus, node)
+
+    skip_result = _apply_skip_when(node, raw_input, field_name, t0, node_log, bus)
+    if skip_result is not None:
+        return skip_result
+
+    context_data = _extract_context(bus, node) if node.mode != "scripted" else None
+
+    if isinstance(raw_input, dict) and normalize_inputs(node.inputs).is_dict_form:
+        node_input = NodeInput(fan_in=raw_input)
+    else:
+        node_input = NodeInput(single=raw_input)
+
+    output = await dispatch.aexecute(node, node_input, config, context_data)
+    update = _build_state_update(node, field_name, output.value, bus)
+
+    elapsed = time.monotonic() - t0
+    node_log.info("node_complete", duration_s=round(elapsed, 3))
+    return update

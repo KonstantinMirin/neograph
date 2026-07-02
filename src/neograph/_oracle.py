@@ -11,7 +11,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any, cast
 
-from langchain_core.runnables import RunnableConfig
+from langchain_core.runnables import Runnable, RunnableConfig, RunnableLambda
 from pydantic import BaseModel
 
 from neograph._di_classify import _resolve_merge_args
@@ -50,9 +50,9 @@ def _inject_oracle_config(state: StateBus, config: RunnableConfig) -> RunnableCo
 
 
 def make_oracle_redirect_fn(
-    raw_fn: Callable, field_name: str, collector_field: str,
+    raw_fn: Runnable, field_name: str, collector_field: str,
     item: HasName,
-) -> Callable:
+) -> Runnable:
     """Wrap a node function to redirect output from field_name to collector_field.
 
     Used by Oracle generators: the node writes to the collector (list reducer)
@@ -68,8 +68,7 @@ def make_oracle_redirect_fn(
     the other two redirect factories (a future get_required here asks
     ``item.name`` directly, never a threaded string nor ``raw_fn.__name__``).
     """
-    def oracle_redirect_fn(state: Any, config: RunnableConfig) -> dict:
-        result = raw_fn(state, config)
+    def _project(result: dict) -> dict:
         val = result.get(field_name)
         if val is not None:
             return {collector_field: val}
@@ -78,13 +77,23 @@ def make_oracle_redirect_fn(
             return {collector_field: result}
         return result
 
-    return oracle_redirect_fn
+    def oracle_redirect_fn(state: Any, config: RunnableConfig) -> dict:
+        return _project(raw_fn.invoke(state, config))
+
+    async def aoracle_redirect_fn(state: Any, config: RunnableConfig) -> dict:
+        return _project(await raw_fn.ainvoke(state, config))
+
+    # Dual-path: the gen node the redirect wraps has its own sync/async twins;
+    # under ainvoke we MUST await raw_fn.ainvoke() or an Oracle-wrapped LLM node
+    # would be threadpooled and block the loop (review H2). Shared _project()
+    # keeps sync/async post-processing from drifting.
+    return RunnableLambda(oracle_redirect_fn, afunc=aoracle_redirect_fn)
 
 
 def make_eachoracle_redirect_fn(
-    raw_fn: Callable, field_name: str, collector_field: str, each_key: str,
+    raw_fn: Runnable, field_name: str, collector_field: str, each_key: str,
     item: HasName,
-) -> Callable:
+) -> Runnable:
     """Wrap a node function for Each x Oracle fusion.
 
     Like make_oracle_redirect_fn, but tags each result with the each_key
@@ -95,8 +104,7 @@ def make_eachoracle_redirect_fn(
     asks the IR object directly (Information Expert) rather than receiving a
     pre-extracted string.
     """
-    def eachoracle_redirect_fn(state: Any, config: RunnableConfig) -> dict:
-        result = raw_fn(state, config)
+    def _project(state: Any, result: dict) -> dict:
         # REQUIRED: flat Each×Oracle router always populates EACH_ITEM in the
         # Send payload. Absence = wiring bug.
         each_item = adapt_state(state).get_required(
@@ -118,7 +126,13 @@ def make_eachoracle_redirect_fn(
             return {collector_field: [(key, per_key)]}
         return result
 
-    return eachoracle_redirect_fn
+    def eachoracle_redirect_fn(state: Any, config: RunnableConfig) -> dict:
+        return _project(state, raw_fn.invoke(state, config))
+
+    async def aeachoracle_redirect_fn(state: Any, config: RunnableConfig) -> dict:
+        return _project(state, await raw_fn.ainvoke(state, config))
+
+    return RunnableLambda(eachoracle_redirect_fn, afunc=aeachoracle_redirect_fn)
 
 
 def _unwrap_oracle_results(
@@ -414,9 +428,9 @@ def make_oracle_merge_fn(
 
 
 def make_each_redirect_fn(
-    raw_fn: Callable, field_name: str, each: Each,
+    raw_fn: Runnable, field_name: str, each: Each,
     item: HasName,
-) -> Callable:
+) -> Runnable:
     """Wrap a node function to key the result by the Each item's key field.
 
     Reads neo_each_item from state, uses each.key to extract the dispatch key.
@@ -425,18 +439,23 @@ def make_each_redirect_fn(
     IR object directly, never threaded as a string.
     """
 
-    def each_redirect_fn(state: Any, config: RunnableConfig = None) -> dict:  # type: ignore[assignment]
+    def _project(state: Any, result: dict) -> dict:
         # REQUIRED: Each router always populates EACH_ITEM in the Send payload.
         each_item = adapt_state(state).get_required(
             StateKeys.EACH_ITEM, node_label=item.name,
         )
-
-        result = raw_fn(state, config) if config else raw_fn(state)
         val = result.get(field_name)
-
         if val is not None:
             key_val = getattr(each_item, each.key, str(each_item))
             return {field_name: {key_val: val}}
         return result
 
-    return each_redirect_fn
+    # raw_fn is a RunnableLambda (make_node_fn or a wrapped subgraph_fn);
+    # .invoke(state, None) is safe (langchain synthesizes a config).
+    def each_redirect_fn(state: Any, config: RunnableConfig = None) -> dict:  # type: ignore[assignment]
+        return _project(state, raw_fn.invoke(state, config))
+
+    async def aeach_redirect_fn(state: Any, config: RunnableConfig = None) -> dict:  # type: ignore[assignment]
+        return _project(state, await raw_fn.ainvoke(state, config))
+
+    return RunnableLambda(each_redirect_fn, afunc=aeach_redirect_fn)

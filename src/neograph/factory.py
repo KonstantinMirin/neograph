@@ -7,11 +7,11 @@ from collections.abc import Callable
 from typing import Any
 
 import structlog
-from langchain_core.runnables import RunnableConfig
+from langchain_core.runnables import Runnable, RunnableConfig, RunnableLambda
 from pydantic import BaseModel
 
 from neograph._dispatch import _dispatch_for_mode
-from neograph._execute import _execute_node, _type_name
+from neograph._execute import _aexecute_node, _execute_node, _type_name
 from neograph._llm_runtime import EMPTY_RUNTIME, LlmRuntime
 from neograph.errors import ConfigurationError
 from neograph.node import Node
@@ -25,7 +25,7 @@ def make_node_fn(
     runtime: LlmRuntime = EMPTY_RUNTIME,
     scripted_lookup: dict[str, Callable] | None = None,
     tool_factory_lookup: dict[str, Callable] | None = None,
-) -> Callable:
+) -> Runnable:
     """Create a LangGraph node function from a Node definition.
 
     This is the core of neograph — the generic factory that eliminates
@@ -46,9 +46,12 @@ def make_node_fn(
             Falls back to the deprecated module-level fallback registry
             if not supplied — for direct callers like `Node.run_isolated`.
     """
-    # Raw node — wrap with observability so node_start/node_complete fire
+    # Raw node — wrap with observability so node_start/node_complete fire.
+    # Wrapped in RunnableLambda so make_node_fn's return type is uniform across
+    # all paths (direct callers .invoke() it). No afunc in 1a — under ainvoke
+    # LangGraph threadpools the sync func; the async-raw twin lands in Phase 1b.
     if node.raw_fn is not None:
-        return _make_raw_wrapper(node)
+        return RunnableLambda(_make_raw_wrapper(node))
 
     # Validate scripted registration early
     if node.mode == "scripted":
@@ -70,10 +73,14 @@ def make_node_fn(
     def node_wrapper(state: BaseModel, config: RunnableConfig) -> dict[str, Any]:
         return _execute_node(node, state, config, dispatch)
 
-    # Routing identity is the explicit graph.add_node(name, fn) argument, not
-    # this closure's __name__ (which stays informational). Display labels come
-    # from node.name via the captured Node. See neograph-y20i.
-    return node_wrapper
+    async def anode_wrapper(state: BaseModel, config: RunnableConfig) -> dict[str, Any]:
+        return await _aexecute_node(node, state, config, dispatch)
+
+    # Driver-selected dual path: graph.invoke -> node_wrapper (sync),
+    # graph.ainvoke -> anode_wrapper (async). Routing identity is the explicit
+    # graph.add_node(name, fn) argument, not this closure's __name__ (which stays
+    # informational). Display labels come from node.name. See neograph-y20i.
+    return RunnableLambda(node_wrapper, afunc=anode_wrapper)
 
 
 def _make_raw_wrapper(node: Node) -> Callable:

@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import inspect
 from collections.abc import Callable
-from typing import Annotated, Any, Literal, Protocol, runtime_checkable
+from typing import Annotated, Any, Literal, Protocol, cast, runtime_checkable
 
 from langchain_core.runnables import RunnableConfig
 from pydantic import BaseModel, Field, PlainValidator, PrivateAttr
@@ -419,7 +419,7 @@ class Node(Modifiable, BaseModel):
         if "configurable" not in config:
             config["configurable"] = {}
 
-        result = node_fn(state, config)
+        result = node_fn.invoke(state, cast(RunnableConfig, config))
 
         # node_fn returns a state update dict — extract the output field.
         # If the field is missing or None, raise rather than silently returning

@@ -92,6 +92,14 @@ class ModeDispatch(Protocol):
         context_data: dict[str, str] | None,
     ) -> NodeOutput: ...
 
+    async def aexecute(
+        self,
+        node: Node,
+        input_data: NodeInput,
+        config: RunnableConfig,
+        context_data: dict[str, str] | None,
+    ) -> NodeOutput: ...
+
 
 class ScriptedDispatch:
     """Dispatch for scripted (deterministic Python) nodes.
@@ -112,6 +120,19 @@ class ScriptedDispatch:
         context_data: dict[str, str] | None,
     ) -> NodeOutput:
         # context_data intentionally unused — scripted functions don't need LLM context
+        result = self.fn(input_data.value, config)
+        return NodeOutput(single=result)
+
+    async def aexecute(  # noqa: RUF029 — sync-call form in 1a; awaiting an async body lands in Phase 1b
+        self,
+        node: Node,
+        input_data: NodeInput,
+        config: RunnableConfig,
+        context_data: dict[str, str] | None,
+    ) -> NodeOutput:
+        # Phase 1a: scripted bodies are sync, so the async path calls them
+        # directly (LangGraph runs the coroutine on the loop). Detecting an
+        # `async def` body and awaiting it is Phase 1b.
         result = self.fn(input_data.value, config)
         return NodeOutput(single=result)
 
@@ -155,6 +176,18 @@ class ThinkDispatch:
         if primary_key is not None and result is not None:
             return NodeOutput(multi={primary_key: result})
         return NodeOutput(single=result)
+
+    async def aexecute(
+        self,
+        node: Node,
+        input_data: NodeInput,
+        config: RunnableConfig,
+        context_data: dict[str, str] | None,
+    ) -> NodeOutput:
+        # Fail loud rather than silently threadpool the sync LLM vertical
+        # (review H2 — a sync-delegate here blocks the event loop invisibly).
+        # The awaiting async LLM path lands in Phase 1c.
+        raise NotImplementedError("async LLM/tool dispatch lands in Phase 1c")
 
 
 class ToolDispatch:
@@ -226,6 +259,17 @@ class ToolDispatch:
                 result_dict["tool_log"] = tool_interactions
             return NodeOutput(multi=result_dict) if result_dict else NodeOutput()
         return NodeOutput(single=result)
+
+    async def aexecute(
+        self,
+        node: Node,
+        input_data: NodeInput,
+        config: RunnableConfig,
+        context_data: dict[str, str] | None,
+    ) -> NodeOutput:
+        # Fail loud rather than silently threadpool the sync tool loop
+        # (review H2). The awaiting async tool loop lands in Phase 1c.
+        raise NotImplementedError("async LLM/tool dispatch lands in Phase 1c")
 
 
 def _render_input(

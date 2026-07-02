@@ -331,6 +331,11 @@ class TestNoNearDuplicateHelperNames:
 
     # Allowlist: frozenset({name_a, name_b}) -> reason (includes lev distance).
     ALLOWLIST: dict[frozenset[str], str] = {
+        frozenset({"_aexecute_node", "_execute_node"}): (
+            "lev=1: async twin of the sync node executor (_execute.py). The "
+            "a-prefix (aexecute/ainvoke/arun) is the deliberate sync/async twin "
+            "naming convention for the async foundation, not a duplicate helper."
+        ),
         frozenset({"_get_param_res", "_set_param_res"}): (
             "lev=1: getter/setter antonym pair (_sidecar.py); the get/set prefix "
             "is intentional API symmetry, not a near-duplicate of one helper."

@@ -14,6 +14,7 @@ from collections.abc import Callable
 from typing import Any
 
 import structlog
+from langchain_core.runnables import RunnableLambda
 from langgraph.graph import END, START, StateGraph
 from pydantic import BaseModel
 
@@ -410,7 +411,7 @@ def _add_subgraph(
             oracle = mods["oracle"]
             collector_field = StateKeys.oracle_collector(field_name)
             redirect_fn = make_oracle_redirect_fn(
-                subgraph_fn, field_name, collector_field, item=sub,
+                RunnableLambda(subgraph_fn), field_name, collector_field, item=sub,
             )
             merge_fn = make_oracle_merge_fn(oracle, field_name, collector_field, sub.output,
                                                llm_config=sub.llm_config or None,
@@ -419,7 +420,7 @@ def _add_subgraph(
             last_name = _wire_oracle(graph, sub.name, redirect_fn, merge_fn, oracle, prev_node)
         case ModifierCombo.EACH | ModifierCombo.EACH_OPERATOR:
             each = mods["each"]
-            each_fn = make_each_redirect_fn(subgraph_fn, field_name, each, item=sub)
+            each_fn = make_each_redirect_fn(RunnableLambda(subgraph_fn), field_name, each, item=sub)
             last_name = _wire_each(graph, sub.name, each_fn, each, prev_node)
         case ModifierCombo.LOOP | ModifierCombo.LOOP_OPERATOR:
             loop = mods["loop"]

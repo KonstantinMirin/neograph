@@ -150,20 +150,22 @@ class TestOracleEachLabelInError:
         from neograph._oracle import make_eachoracle_redirect_fn
         from tests.schemas import MatchResult
 
-        def user_node_fn(_state, _config):
+        def user_node_fn(_state, config=None):
             return {"score_claim": MatchResult(cluster_label="c", matched=["x"])}
 
         # The wrapper's __name__ is informational only post-y20i. The closure
         # must surface item.name, never the wrapper function name.
+        from langchain_core.runnables import RunnableLambda
+
         user_node_fn.__name__ = "eachoracle_redirect_fn"
         redirect = make_eachoracle_redirect_fn(
-            user_node_fn, field_name="score_claim",
+            RunnableLambda(user_node_fn), field_name="score_claim",
             collector_field="score_claim_collector", each_key="claim_id",
             item=SimpleNamespace(name="score-claim"),
         )
         # Empty dict state lacks EACH_ITEM — closure's get_required must raise.
         with pytest.raises(StateMissingError) as exc_info:
-            redirect({}, {})
+            redirect.invoke({}, {})
         msg = str(exc_info.value)
         # The closure must surface the user's node name, not the closure name.
         assert "score-claim" in msg, msg
@@ -174,17 +176,19 @@ class TestOracleEachLabelInError:
         from neograph.modifiers import Each
         from tests.schemas import MatchResult
 
-        def user_node_fn(_state, _config):
+        def user_node_fn(_state, config=None):
             return {"score_claim": MatchResult(cluster_label="c", matched=["x"])}
+
+        from langchain_core.runnables import RunnableLambda
 
         user_node_fn.__name__ = "each_redirect_fn"
         redirect = make_each_redirect_fn(
-            user_node_fn, field_name="score_claim",
+            RunnableLambda(user_node_fn), field_name="score_claim",
             each=Each(over="src.items", key="claim_id"),
             item=SimpleNamespace(name="score-claim"),
         )
         with pytest.raises(StateMissingError) as exc_info:
-            redirect({}, {})
+            redirect.invoke({}, {})
         msg = str(exc_info.value)
         assert "score-claim" in msg, msg
         assert "each_redirect_fn" not in msg, msg
