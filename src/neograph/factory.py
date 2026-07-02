@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import time
 from collections.abc import Callable
 from typing import Any
@@ -47,11 +48,11 @@ def make_node_fn(
             if not supplied — for direct callers like `Node.run_isolated`.
     """
     # Raw node — wrap with observability so node_start/node_complete fire.
-    # Wrapped in RunnableLambda so make_node_fn's return type is uniform across
-    # all paths (direct callers .invoke() it). No afunc in 1a — under ainvoke
-    # LangGraph threadpools the sync func; the async-raw twin lands in Phase 1b.
+    # Dual-path RunnableLambda (uniform return type; direct callers .invoke()):
+    # graph.invoke -> sync raw wrapper, graph.ainvoke -> async raw wrapper that
+    # awaits an `async def` raw body (Phase 1b).
     if node.raw_fn is not None:
-        return RunnableLambda(_make_raw_wrapper(node))
+        return RunnableLambda(_make_raw_wrapper(node), afunc=_make_araw_wrapper(node))
 
     # Validate scripted registration early
     if node.mode == "scripted":
@@ -106,3 +107,30 @@ def _make_raw_wrapper(node: Node) -> Callable:
 
     # __name__ stays informational; routing is the add_node argument (y20i).
     return raw_node_wrapper
+
+
+def _make_araw_wrapper(node: Node) -> Callable:
+    """Async twin of :func:`_make_raw_wrapper` (Phase 1b).
+
+    Same observability/timing as the sync wrapper; the only divergence is that
+    an ``async def`` raw body is awaited. Detection is at the call boundary
+    (``inspect.isawaitable``), identical to ScriptedDispatch.aexecute, so a sync
+    raw body under ``ainvoke`` is simply not awaited (LangGraph threadpools it).
+    """
+    assert node.raw_fn is not None, f"node '{node.name}' has mode='raw' but no raw_fn"
+    raw_fn = node.raw_fn
+
+    async def araw_node_wrapper(state: BaseModel, config: RunnableConfig) -> dict[str, Any]:
+        node_log = log.bind(node=node.name, mode="raw")
+        node_log.info("node_start", input_type=_type_name(node.inputs), output_type=_type_name(node.outputs))
+        t0 = time.monotonic()
+
+        result = raw_fn(state, config)
+        if inspect.isawaitable(result):
+            result = await result
+
+        elapsed = time.monotonic() - t0
+        node_log.info("node_complete", duration_s=round(elapsed, 3))
+        return result
+
+    return araw_node_wrapper

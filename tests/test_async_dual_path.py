@@ -29,6 +29,7 @@ Three-surface parity (AGENTS.md neograph-ts7 rule): @node decorator, declarative
 from __future__ import annotations
 
 import asyncio
+import inspect
 import threading
 
 from neograph import (
@@ -45,6 +46,15 @@ from tests.schemas import Claims, RawText
 
 _CFG = {"configurable": {}}
 _INPUT = {"node_id": "t"}
+
+
+def _ainvoke_field(graph, field: str):
+    """Drive ONLY ``graph.ainvoke`` (async body cells must not touch the sync
+    driver — sync-driver + async-body is the out-of-scope footgun neograph-khff)
+    and return the named state field.
+    """
+    result = asyncio.run(graph.graph.ainvoke(dict(_INPUT), dict(_CFG)))
+    return result[field]
 
 
 def _sync_async_node_thread(graph, field: str, node_thread: dict):
@@ -220,3 +230,145 @@ class TestMakeNodeFnReturnsRunnable:
         fn = make_node_fn(rawn)
 
         assert hasattr(fn, "invoke"), "make_node_fn(raw) must return a Runnable"
+
+
+class TestAsyncScriptedBody:
+    """Phase 1b (neograph-w74k.2.2) — TDD RED.
+
+    ``ScriptedDispatch.aexecute`` must AWAIT an ``async def`` scripted body when
+    one is detected via ``inspect.isawaitable(result)`` AFTER calling ``self.fn``.
+    Today (post-1a) ``aexecute`` calls ``self.fn(...)`` and returns the result
+    WITHOUT awaiting, so an async body's result is an un-awaited COROUTINE written
+    into state — ``result[field]`` is a coroutine, not the declared model.
+
+    The load-bearing RED (identical across all three surfaces): without the
+    conditional await, ``isinstance(result[field], Claims)`` is False and
+    ``inspect.isawaitable(result[field])`` is True. All cells drive
+    ``graph.ainvoke`` only (the sync driver + async body is out of 1b scope).
+
+    Three-surface parity (AGENTS.md neograph-ts7 rule): the async body reaches
+    ``self.fn`` differently per surface — behind a sync ``scripted_shim`` for
+    ``@node`` (so ``iscoroutinefunction(self.fn)`` is BLIND to it), and directly
+    for declarative/programmatic ``register_scripted`` fns — but the single
+    call-then-``isawaitable`` check is uniform, so all three must go green
+    together.
+    """
+
+    def test_node_decorator_async_scripted_body_is_awaited(self):
+        """Surface 1 — ``@node`` async scripted body. The user body hides behind
+        a sync shim; the shim returns an un-awaited coroutine, so aexecute must
+        detect+await the awaitable result.
+        """
+        @node(outputs=RawText)
+        def raw_src() -> RawText:
+            return RawText(text="hi")
+
+        @node(outputs=Claims)
+        async def f(raw_src: RawText) -> Claims:
+            await asyncio.sleep(0)
+            return Claims(items=[raw_src.text.upper()])
+
+        graph = compile(
+            construct_from_functions("p", [raw_src, f]),
+            **build_test_compile_kwargs(),
+        )
+
+        got = _ainvoke_field(graph, "f")
+
+        assert not inspect.isawaitable(got), (
+            "async @node scripted body left un-awaited — result is a coroutine "
+            "(ScriptedDispatch.aexecute did not await the awaitable)"
+        )
+        assert isinstance(got, Claims)
+        assert got == Claims(items=["HI"])
+
+    def test_declarative_scripted_async_fn_is_awaited(self):
+        """Surface 2 — declarative ``Node.scripted()`` with an ``async def``
+        ``(input_data, config)`` fn registered via ``register_scripted``.
+        """
+        async def g(input_data, config):
+            await asyncio.sleep(0)
+            return Claims(items=["G"])
+
+        register_scripted("g", g)
+        graph = compile(
+            Construct("p", nodes=[Node.scripted("g", fn="g", outputs=Claims)]),
+            **build_test_compile_kwargs(),
+        )
+
+        got = _ainvoke_field(graph, "g")
+
+        assert not inspect.isawaitable(got), (
+            "async declarative scripted fn left un-awaited — result is a coroutine"
+        )
+        assert isinstance(got, Claims)
+        assert got == Claims(items=["G"])
+
+    def test_programmatic_node_async_fn_is_awaited(self):
+        """Surface 3 — programmatic bare ``Node(...)`` constructor with the same
+        registered ``async def`` fn.
+        """
+        async def h(input_data, config):
+            await asyncio.sleep(0)
+            return Claims(items=["H"])
+
+        register_scripted("h", h)
+        graph = compile(
+            Construct(
+                "p",
+                nodes=[Node(name="h", mode="scripted", scripted_fn="h", outputs=Claims)],
+            ),
+            **build_test_compile_kwargs(),
+        )
+
+        got = _ainvoke_field(graph, "h")
+
+        assert not inspect.isawaitable(got), (
+            "async programmatic scripted fn left un-awaited — result is a coroutine"
+        )
+        assert isinstance(got, Claims)
+        assert got == Claims(items=["H"])
+
+    def test_raw_async_body_state_update_is_awaited(self):
+        """Surface 4 — ``@node(mode='raw')`` async body under ainvoke. The raw
+        path has no ``afunc`` twin today, so the sync raw wrapper returns an
+        un-awaited coroutine as the node's state update instead of the dict.
+        """
+        @node(mode="raw", outputs=Claims)
+        async def araw(state, config):
+            await asyncio.sleep(0)
+            return {"araw": Claims(items=["R"])}
+
+        graph = compile(
+            construct_from_functions("p", [araw]),
+            **build_test_compile_kwargs(),
+        )
+
+        got = _ainvoke_field(graph, "araw")
+
+        assert not inspect.isawaitable(got), (
+            "async raw body left un-awaited — state update is a coroutine "
+            "(raw path lacks an async afunc twin)"
+        )
+        assert isinstance(got, Claims)
+        assert got == Claims(items=["R"])
+
+    def test_sync_scripted_body_under_ainvoke_is_not_over_awaited(self):
+        """Guard (green now AND after 1b) — a SYNC scripted body under ainvoke
+        must NOT be awaited: ``isawaitable(result)`` is False, so the 1b
+        conditional-await must leave it untouched. Locks against over-awaiting.
+        """
+        @node(outputs=Claims)
+        def sync_body() -> Claims:
+            return Claims(items=["S"])
+
+        graph = compile(
+            construct_from_functions("p", [sync_body]),
+            **build_test_compile_kwargs(),
+        )
+
+        got = _ainvoke_field(graph, "sync_body")
+
+        assert not inspect.isawaitable(got)
+        assert isinstance(got, Claims)
+        assert got == Claims(items=["S"])

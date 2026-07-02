@@ -10,6 +10,7 @@ strategies injected into the unified ``_execute_node`` path:
 
 from __future__ import annotations
 
+import inspect
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Protocol, cast
@@ -123,17 +124,22 @@ class ScriptedDispatch:
         result = self.fn(input_data.value, config)
         return NodeOutput(single=result)
 
-    async def aexecute(  # noqa: RUF029 — sync-call form in 1a; awaiting an async body lands in Phase 1b
+    async def aexecute(
         self,
         node: Node,
         input_data: NodeInput,
         config: RunnableConfig,
         context_data: dict[str, str] | None,
     ) -> NodeOutput:
-        # Phase 1a: scripted bodies are sync, so the async path calls them
-        # directly (LangGraph runs the coroutine on the loop). Detecting an
-        # `async def` body and awaiting it is Phase 1b.
+        # The user's body may be `async def`, but for @node it is hidden behind
+        # a synchronous shim (scripted_shim `return fn(*args)`), so
+        # iscoroutinefunction(self.fn) is blind to it. Detect the awaitable at
+        # the call boundary instead — this works identically across @node,
+        # declarative, and programmatic surfaces. A sync body returns a plain
+        # value (isawaitable False) and is not awaited.
         result = self.fn(input_data.value, config)
+        if inspect.isawaitable(result):
+            result = await result
         return NodeOutput(single=result)
 
 

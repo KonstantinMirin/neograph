@@ -336,6 +336,10 @@ class TestNoNearDuplicateHelperNames:
             "a-prefix (aexecute/ainvoke/arun) is the deliberate sync/async twin "
             "naming convention for the async foundation, not a duplicate helper."
         ),
+        frozenset({"_make_araw_wrapper", "_make_raw_wrapper"}): (
+            "lev=1: async twin of the sync raw-node wrapper (factory.py). Same "
+            "a-prefix sync/async twin convention as _aexecute_node/_execute_node."
+        ),
         frozenset({"_get_param_res", "_set_param_res"}): (
             "lev=1: getter/setter antonym pair (_sidecar.py); the get/set prefix "
             "is intentional API symmetry, not a near-duplicate of one helper."
