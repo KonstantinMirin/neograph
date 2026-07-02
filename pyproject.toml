@@ -112,6 +112,9 @@ asyncio_default_fixture_loop_scope = "function"
 filterwarnings = [
     "ignore:Node '.*'.*single-type inputs:DeprecationWarning",
 ]
+markers = [
+    "perf: marks async/sync per-node overhead perf gates (neograph-w74k.2.6 Phase 1f)",
+]
 
 [dependency-groups]
 dev = [
