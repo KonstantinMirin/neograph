@@ -535,6 +535,53 @@ class TestParseJsonResponseLenientParsing:
         assert "line1" in result.content
         assert "line2" in result.content
 
+    def test_null_coerced_to_default_factory_list_field(self):
+        """null for a list field with default_factory should use factory() → [].
+
+        BUG neograph-s1u4: LLMs (GLM 5.2) emit null for list fields that have a
+        default_factory (e.g. ``sources: list[str] = Field(default_factory=list)``).
+        Such fields carry ``.default = PydanticUndefined`` (the default lives in
+        ``.default_factory``), so the null→default coercion is skipped and Pydantic
+        rejects null for the list type. Coerce null → default_factory() first.
+        """
+        from pydantic import BaseModel, Field
+
+        from neograph._llm_retry import _parse_json_response
+
+        class ResearchPacket(BaseModel):
+            finding: str
+            sources: list[str] = Field(default_factory=list)
+
+        text = '{"finding": "x", "sources": null}'
+        result = _parse_json_response(text, ResearchPacket)
+        assert result.finding == "x"
+        assert result.sources == []
+
+    def test_null_coerced_for_data_accepting_default_factory(self):
+        """null for a Pydantic 2.10+ data-accepting default_factory must coerce,
+        not crash.
+
+        BUG neograph-s1u4 (completeness): a bare ``default_factory()`` call crashes
+        with TypeError on a factory declared to receive validated data
+        (``default_factory=lambda data: ...``). The coercion must fall back to
+        ``default_factory(data)`` on TypeError — and must NOT pass ``data`` to a
+        zero-arg factory like ``list`` (``list(data)`` silently returns the dict's
+        keys instead of []). This pins the guard the naive fix omitted.
+        """
+        from pydantic import BaseModel, Field
+
+        from neograph._llm_retry import _parse_json_response
+
+        class Packet(BaseModel):
+            label: str
+            # data-accepting factory (Pydantic 2.10+): derives from validated data
+            tags: list[str] = Field(default_factory=lambda data: [data["label"]])
+
+        text = '{"label": "alpha", "tags": null}'
+        result = _parse_json_response(text, Packet)
+        assert result.label == "alpha"
+        assert result.tags == ["alpha"]
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 # TEST: _call_structured TypeError fallback for include_raw (neograph-rdu.11)

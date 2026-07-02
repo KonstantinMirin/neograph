@@ -232,7 +232,9 @@ class TestLlmResponsibilityDiscipline:
         "_llm_dispatch.py": 115,
         # neograph-ble3: tightened 365 -> 360. _DSML_PATTERN regex moved to
         # _dsml.py; recover_dsml is detection-free. Locks the deletion.
-        "_llm_retry.py": 360,
+        # neograph-s1u4: 360 -> 375. _apply_null_defaults gained a guarded
+        # default_factory coercion branch (a real fix, not accretion).
+        "_llm_retry.py": 375,
         "_llm_render.py": 310,
         # neograph-ble3: new pure-leaf detection module.
         "_dsml.py": 55,
@@ -1408,3 +1410,77 @@ class TestAgentModeNoStructuredRegeneration:
         )
         assert self._total_calls("_call_structured", src) == 1
         assert self._unconditional_calls("_call_structured", src) == 0
+
+
+class TestDefaultFactoryCoercionIsGuarded:
+    """The default_factory null-coercion must call the factory inside a
+    TypeError guard (neograph-s1u4).
+
+    A bare ``default_factory()`` crashes on Pydantic 2.10+ data-accepting
+    factories (``default_factory=lambda data: ...``); conversely, passing the
+    data dict to a zero-arg factory like ``list`` silently returns the dict's
+    keys instead of ``[]``. So the coercion must be zero-arg-first with an
+    ``except TypeError -> factory(data)`` fallback. This guard stops a future PR
+    from "simplifying" it back to a bare call.
+
+    LIMITS: a single-function AST check on ``_apply_null_defaults`` — it proves a
+    TypeError-guarded try wraps a factory call, not the exact call shape. The
+    behavioral pins are TestParseJsonResponseLenientParsing (plain list factory
+    AND data-accepting factory).
+    """
+
+    @staticmethod
+    def _func_default_factory_is_typeerror_guarded(src: str, func_name: str) -> bool:
+        tree = ast.parse(src)
+        target = next(
+            (n for n in ast.walk(tree)
+             if isinstance(n, ast.FunctionDef) and n.name == func_name),
+            None,
+        )
+        if target is None:
+            return False
+        references_factory = any(
+            isinstance(n, ast.Attribute) and n.attr == "default_factory"
+            for n in ast.walk(target)
+        )
+        if not references_factory:
+            return False
+        for node in ast.walk(target):
+            if isinstance(node, ast.Try) and any(
+                isinstance(h.type, ast.Name) and h.type.id == "TypeError"
+                for h in node.handlers
+            ):
+                body_has_call = any(isinstance(n, ast.Call) for b in node.body for n in ast.walk(b))
+                handler_has_call = any(
+                    isinstance(n, ast.Call) for h in node.handlers for n in ast.walk(h)
+                )
+                if body_has_call and handler_has_call:
+                    return True
+        return False
+
+    def test_apply_null_defaults_guards_default_factory(self):
+        """Live tree: the coercion in _apply_null_defaults is TypeError-guarded."""
+        src = (SRC_DIR / "_llm_retry.py").read_text()
+        assert self._func_default_factory_is_typeerror_guarded(src, "_apply_null_defaults")
+
+    def test_scanner_flags_bare_factory_call(self):
+        """Negative meta-test: a bare default_factory() call is NOT guarded."""
+        src = (
+            "def _apply_null_defaults(data, model):\n"
+            "    fi = model\n"
+            "    data['x'] = fi.default_factory()\n"
+        )
+        assert not self._func_default_factory_is_typeerror_guarded(src, "_apply_null_defaults")
+
+    def test_scanner_accepts_guarded_call(self):
+        """Positive meta-test: zero-arg-first + except TypeError fallback passes."""
+        src = (
+            "def _apply_null_defaults(data, model):\n"
+            "    fi = model\n"
+            "    factory = fi.default_factory\n"
+            "    try:\n"
+            "        data['x'] = factory()\n"
+            "    except TypeError:\n"
+            "        data['x'] = factory(data)\n"
+        )
+        assert self._func_default_factory_is_typeerror_guarded(src, "_apply_null_defaults")

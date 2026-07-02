@@ -113,9 +113,9 @@ def _is_list_annotation(annotation: Any) -> bool:
 def _apply_null_defaults(data: dict, model: type[BaseModel]) -> None:
     """Replace null values with field defaults, recursively.
 
-    Mutates *data* in place. Only applies when the field has an explicit
-    default (not PydanticUndefined) and the JSON value is None.
-    Also recurses into nested BaseModel fields and list[BaseModel] items.
+    Mutates *data* in place. Applies when the JSON value is None and the field
+    has either an explicit default or a default_factory. Also recurses into
+    nested BaseModel fields and list[BaseModel] items.
     """
     for field_name, field_info in model.model_fields.items():
         if field_name not in data:
@@ -124,6 +124,22 @@ def _apply_null_defaults(data: dict, model: type[BaseModel]) -> None:
 
         if val is None and field_info.default is not PydanticUndefined:
             data[field_name] = field_info.default
+            continue
+
+        # LLMs emit null for default_factory list/dict fields (their default is
+        # PydanticUndefined, so the branch above skips them). Coerce to the
+        # factory result. Zero-arg first: a data-accepting factory (Pydantic
+        # 2.10+) raises TypeError -> factory(data); a zero-arg one like list must
+        # NOT get the data dict (list(data) returns keys, not []). neograph-s1u4.
+        if val is None and field_info.default_factory is not None:
+            # default_factory is typed as a union (zero-arg | data-accepting);
+            # the try/except resolves the arity at runtime, so both calls need
+            # the call-arg ignore.
+            factory = field_info.default_factory
+            try:
+                data[field_name] = factory()  # type: ignore[call-arg]
+            except TypeError:
+                data[field_name] = factory(data)  # type: ignore[call-arg]
             continue
 
         annotation = field_info.annotation
