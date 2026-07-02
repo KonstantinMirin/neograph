@@ -119,6 +119,12 @@ dev = [
     "langchain>=1.0",
     "langchain-openai>=1.2.2",
     "langfuse>=3.0",
+    # neograph-w74k.2.5 (Phase 1e): file-backed Sqlite savers for the async
+    # checkpointer + mixed-driver resume + crash-recovery E2Es. In the default
+    # dependency-group (installed by `uv sync` / `uv run pytest`) — NOT an
+    # optional extra — so the async checkpoint test file collects. Dev-only:
+    # neograph core stays sqlite-free.
+    "langgraph-checkpoint-sqlite>=3.1",
     "pytest-cov>=7.1.0",
     "python-dotenv>=1.2.2",
 ]
