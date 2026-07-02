@@ -65,7 +65,7 @@ class TestToolDecorator:
                         "id": f"c{counter['n']}",
                     }]
                     return msg
-                return AIMessage(content="done")
+                return AIMessage(content='{"items": ["searched"]}')
 
             def with_structured_output(self, model, **kwargs):
                 self._model = model

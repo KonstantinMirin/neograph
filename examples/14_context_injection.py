@@ -94,7 +94,13 @@ class FakeAgentLLM:
                 "id": "call-1",
             }]
             return msg
-        return AIMessage(content="done")
+        # Agent mode parses the final ReAct turn as JSON (schema injected up
+        # front), so emit a valid Verdict.
+        return AIMessage(
+            content=Verdict(
+                claim_id="scored", disposition="confirmed", evidence_count=1,
+            ).model_dump_json()
+        )
 
     def with_structured_output(self, model, **kwargs):
         clone = FakeAgentLLM()

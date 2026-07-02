@@ -110,7 +110,13 @@ class FakeResearchLLM:
                 "id": f"call-{self._call_count}",
             }]
             return msg
-        return AIMessage(content="research complete")
+        # Agent mode parses the final ReAct turn as JSON (the model is told the
+        # output schema up front), so emit a valid ResearchResult.
+        return AIMessage(
+            content=ResearchResult(
+                findings=[Finding(claim="authentication", evidence="auth.py:42")]
+            ).model_dump_json()
+        )
 
     def with_structured_output(self, model):
         self._model = model

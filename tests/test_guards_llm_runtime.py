@@ -1320,3 +1320,63 @@ class TestToolBudgetPreambleSingleSource:
         hits = self._modules_with_marker(corpus, self._DIRECTIVE_MARKER)
         assert hits != [self._PRODUCER_MODULE]
         assert "_rogue.py" in hits
+
+
+class TestAgentModeNoStructuredRegeneration:
+    """Agent/act mode never re-generates its output via _call_structured.
+
+    neograph-f7nt eliminated the double-generation: the ReAct loop's final turn
+    IS the structured answer (parsed from messages[-1]), so _call_structured
+    (constrained-decoding, a fresh LLM call) must NOT be invoked from the tool
+    loop. It stays the single-shot think path's job (_llm.py). This guard pins
+    the class-level fix: a future PR that re-adds a _call_structured call inside
+    _tool_loop.py reintroduces the double-gen and fails here.
+    """
+
+    @staticmethod
+    def _files_calling(func_name: str, corpus: dict[str, str]) -> list[str]:
+        """Return the filenames whose AST contains a call to func_name."""
+        hits = []
+        for name, src in corpus.items():
+            try:
+                tree = ast.parse(src)
+            except SyntaxError:
+                continue
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Call):
+                    fn = node.func
+                    if isinstance(fn, ast.Name) and fn.id == func_name:
+                        hits.append(name)
+                        break
+        return sorted(hits)
+
+    def _src_corpus(self) -> dict[str, str]:
+        return {py.name: py.read_text() for py in SRC_DIR.glob("*.py")}
+
+    def test_call_structured_not_invoked_in_tool_loop(self):
+        """The live tree: _call_structured is called only from the think path,
+        never from _tool_loop.py (agent mode)."""
+        callers = self._files_calling("_call_structured", self._src_corpus())
+        assert "_tool_loop.py" not in callers, (
+            f"_call_structured is called in _tool_loop.py ({callers}); agent mode "
+            "must parse the ReAct final turn as JSON (no separate re-generation). "
+            "Constrained decoding is the single-shot think path's job (_llm.py)."
+        )
+        # Positive: the think path IS still a caller (constrained decoding kept).
+        assert "_llm.py" in callers
+
+    def test_scanner_flags_a_tool_loop_caller(self):
+        """Negative meta-test: a _call_structured call in _tool_loop.py is detected."""
+        corpus = {
+            "_llm.py": "def f():\n    return _call_structured(a, b)\n",
+            "_tool_loop.py": "def g():\n    return _call_structured(x, y)\n",
+        }
+        assert self._files_calling("_call_structured", corpus) == ["_llm.py", "_tool_loop.py"]
+
+    def test_scanner_accepts_think_path_only(self):
+        """Positive meta-test: only the think path calling it is the sanctioned state."""
+        corpus = {
+            "_llm.py": "def f():\n    return _call_structured(a, b)\n",
+            "_tool_loop.py": "def g():\n    return parse(messages[-1])  # no re-gen\n",
+        }
+        assert self._files_calling("_call_structured", corpus) == ["_llm.py"]

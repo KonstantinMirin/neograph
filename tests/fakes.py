@@ -20,6 +20,7 @@ setup with a simple prompt compiler.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 
 # Post-§2 (ticket ezqz): `configure_llm` no longer exists. Tests pass LLM
@@ -32,6 +33,7 @@ from collections.abc import Callable
 # `conditions=`, `tool_factories=` kwargs (tests splat via
 # `compile(c, **build_test_compile_kwargs())` or pass dicts explicitly).
 from collections.abc import Callable as _Callable
+from enum import Enum
 from typing import Any
 
 from langchain_core.messages import AIMessage
@@ -40,6 +42,46 @@ from pydantic import BaseModel
 _TEST_SCRIPTED: dict[str, _Callable] = {}
 _TEST_CONDITIONS: dict[str, _Callable] = {}
 _TEST_TOOL_FACTORIES: dict[str, _Callable] = {}
+
+
+def _final_json_content(
+    final: Callable[[type[BaseModel]], BaseModel] | None,
+    output_model: type[BaseModel] | None = None,
+) -> str:
+    """Render a ReAct fake's FINAL (no-tool-call) turn as parseable JSON.
+
+    neograph-f7nt: agent mode parses the loop's final turn as JSON directly
+    (no separate with_structured_output re-gen), so fakes must emit JSON on
+    their final turn. Supports both ``final`` conventions without the caller
+    passing a model:
+        final=lambda m: m(field=...)         -> capture-proxy records the kwargs
+        final=lambda m: SomeModel(field=...) -> returns a real BaseModel
+    An explicit ``output_model`` is used as a precise override when given.
+    Returns the legacy ``"done"`` when there is no ``final``.
+    """
+    if final is None:
+        return "done"
+    if output_model is not None:
+        return final(output_model).model_dump_json()
+
+    captured: dict[str, Any] = {}
+
+    class _Capture:
+        def __init__(self, **kwargs: Any) -> None:
+            captured.update(kwargs)
+
+    result = final(_Capture)  # type: ignore[arg-type]
+    if isinstance(result, BaseModel):
+        return result.model_dump_json()
+
+    def _default(o: Any) -> Any:
+        if isinstance(o, BaseModel):
+            return o.model_dump(mode="json")
+        if isinstance(o, Enum):
+            return o.value
+        return str(o)
+
+    return json.dumps(captured, default=_default)
 
 
 def register_scripted(name: str, fn: _Callable) -> None:
@@ -224,9 +266,16 @@ class ReActFake:
         self,
         tool_calls: list[list[dict]],
         final: Callable[[type[BaseModel]], BaseModel] | None = None,
+        output_model: type[BaseModel] | None = None,
     ):
         self._tool_calls = tool_calls
         self._final = final
+        # neograph-f7nt: agent mode now parses the loop's FINAL turn as JSON
+        # (no separate with_structured_output re-gen). When output_model is
+        # given, the final turn serializes final(output_model) to JSON so the
+        # json_mode-style tail can parse it. Without it, the final turn returns
+        # plain "done" (legacy — for tests that drive their own final message).
+        self._output_model = output_model
         self._call_idx = 0
         self._model: type[BaseModel] | None = None
         self._in_structured_mode = False
@@ -235,6 +284,10 @@ class ReActFake:
         # Return self so call counter persists across rebinds
         return self
 
+    def _final_message(self) -> AIMessage:
+        """The loop's final (no-tool-call) turn — parseable JSON (neograph-f7nt)."""
+        return AIMessage(content=_final_json_content(self._final, self._output_model))
+
     def invoke(self, messages: list, **kwargs) -> Any:
         if self._in_structured_mode:
             assert self._final is not None, "ReActFake needs a final callable for structured output"
@@ -242,20 +295,20 @@ class ReActFake:
 
         # Normal ReAct invocation
         if self._call_idx >= len(self._tool_calls):
-            return AIMessage(content="done")
+            return self._final_message()
 
         calls = self._tool_calls[self._call_idx]
         self._call_idx += 1
 
         if not calls:
-            return AIMessage(content="done")
+            return self._final_message()
 
         msg = AIMessage(content="")
         msg.tool_calls = calls
         return msg
 
     def with_structured_output(self, model: type[BaseModel], **kwargs) -> ReActFake:
-        clone = ReActFake(self._tool_calls, self._final)
+        clone = ReActFake(self._tool_calls, self._final, self._output_model)
         clone._call_idx = self._call_idx
         clone._model = model
         clone._in_structured_mode = True
@@ -303,13 +356,13 @@ class StringArgsFake:
             return self._final(self._model)
 
         if self._call_idx >= len(self._tool_calls):
-            return AIMessage(content="done")
+            return AIMessage(content=_final_json_content(self._final))
 
         calls = self._tool_calls[self._call_idx]
 
         if not calls:
             self._call_idx += 1
-            return AIMessage(content="done")
+            return AIMessage(content=_final_json_content(self._final))
 
         should_fail = self._always_fail or self._fail_count == 0
         if should_fail:
@@ -337,14 +390,14 @@ class StringArgsFake:
         from types import SimpleNamespace
 
         if self._call_idx >= len(self._tool_calls):
-            msg = AIMessage(content="done")
+            msg = AIMessage(content=_final_json_content(self._final))
             return SimpleNamespace(generations=[SimpleNamespace(message=msg)])
 
         calls = self._tool_calls[self._call_idx]
         self._call_idx += 1
 
         if not calls:
-            msg = AIMessage(content="done")
+            msg = AIMessage(content=_final_json_content(self._final))
             return SimpleNamespace(generations=[SimpleNamespace(message=msg)])
 
         # Build via additional_kwargs — handles string args correctly
@@ -462,7 +515,10 @@ class GuardFake:
                     "total_tokens": self._input_tokens + 50,
                 }
             return msg
-        return self._AIMessage(content="done")
+        # neograph-f7nt: agent mode parses the final turn as JSON. GuardFake's
+        # structured output is always items-shaped (see with_structured_output),
+        # so emit matching JSON directly.
+        return self._AIMessage(content='{"items": ["done"]}')
 
     def with_structured_output(self, model, **kwargs):
         clone = GuardFake(input_tokens_per_call=self._input_tokens)

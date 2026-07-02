@@ -200,7 +200,7 @@ class TestLLMUnknownToolCall:
                     msg = AIMessage(content="")
                     msg.tool_calls = [{"name": "delete_everything", "args": {}, "id": "bad-1"}]
                     return msg
-                return AIMessage(content="ok done")
+                return AIMessage(content='{"items": ["recovered"]}')
 
             def with_structured_output(self, model, **kwargs):
                 clone = FakeLLMHallucinator()

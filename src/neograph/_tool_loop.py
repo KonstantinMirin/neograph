@@ -15,10 +15,10 @@ import structlog
 from langchain_core.runnables import RunnableConfig
 from pydantic import BaseModel
 
+from neograph._agent_output_schema_preamble import render_output_schema_instruction
 from neograph._dsml import message_text
 from neograph._llm import _get_llm, _notify_cost
 from neograph._llm_config import LlmConfig, _coerce_llm_config
-from neograph._llm_dispatch import _call_structured
 from neograph._llm_render import _compile_prompt
 from neograph._llm_retry import (
     _invoke_json_with_retry,
@@ -206,6 +206,20 @@ def invoke_with_tools(
         )
     )
 
+    # Framework-generated output-schema instruction. In agent/act mode the
+    # ReAct loop's final turn IS the structured answer — it is parsed directly
+    # from messages[-1] below, with no separate _call_structured re-generation.
+    # So the model must be told the output schema up front, always (unconditional
+    # — not flag-gated). Prepended first so the (optional) budget preamble, added
+    # next, sits ahead of it. Distinct system message; never assume len == 1.
+    messages.insert(
+        0,
+        {
+            "role": "system",
+            "content": render_output_schema_instruction(output_model),
+        },
+    )
+
     # Framework-generated tool-budget preamble. Opt-in via
     # cfg.announce_tool_budget. This is the ONLY site holding `tools` +
     # `cfg.max_iterations` together, so the announced numbers == the enforced
@@ -366,38 +380,37 @@ def invoke_with_tools(
 
     elapsed = time.monotonic() - t0
 
-    # Parse final response as structured output — strategy-aware
+    # Parse the ReAct final turn as the node's structured output.
+    # Agent/act mode ALWAYS parses messages[-1] directly — the schema was
+    # injected into the loop above, so the final turn is the answer. There is NO
+    # separate _call_structured re-generation regardless of cfg.output_strategy
+    # (which is inert here; a warning is emitted at build time when it is set).
+    # Constrained decoding stays the single-shot think path's job (_llm.py).
     assert config is not None
     strategy = cfg.output_strategy
     max_retries = cfg.max_retries
 
-    if strategy in ("json_mode", "text"):
-        last_msg = messages[-1]
-        raw_text = message_text(last_msg)
-        try:
-            parse_result = _parse_json_response(raw_text, output_model)
-        except ExecutionError:
-            # Layer C: DSML/XML tool-call markup in final response — strategy-orthogonal
-            # recovery via shared helper. See neograph-0tid.
-            recovered = recover_dsml(
-                raw_text, output_model, llm, messages, config, cfg,
-                strategy=strategy,
-            )
-            if recovered is not None:
-                parse_result = recovered
-            else:
-                # Layer B: no DSML markup detected — fall through to generic retry
-                parse_result, _ = _invoke_json_with_retry(
-                    llm, messages, output_model, config, max_retries=max_retries,
-                )
-        usage = getattr(last_msg, "usage_metadata", None)
-    else:
-        parse_result, usage = _call_structured(
-            llm, messages, output_model, strategy, config,
-            cfg=cfg, max_retries=max_retries,
+    last_msg = messages[-1]
+    raw_text = message_text(last_msg)
+    try:
+        parse_result = _parse_json_response(raw_text, output_model)
+    except ExecutionError:
+        # Layer C: DSML/XML tool-call markup in final response — strategy-orthogonal
+        # recovery via shared helper. See neograph-0tid.
+        recovered = recover_dsml(
+            raw_text, output_model, llm, messages, config, cfg,
+            strategy=strategy,
         )
+        if recovered is not None:
+            parse_result = recovered
+        else:
+            # Layer B: no DSML markup detected — fall through to generic retry
+            parse_result, _ = _invoke_json_with_retry(
+                llm, messages, output_model, config, max_retries=max_retries,
+            )
 
-    # Collect total usage
+    # Collect total usage. The final turn's usage lives in messages, so it is
+    # already counted by the loop — no separate re-generation usage to re-add.
     total_input_tokens = 0
     total_output_tokens = 0
     for msg in messages:
@@ -405,9 +418,6 @@ def invoke_with_tools(
         if msg_usage:
             total_input_tokens += msg_usage.get("input_tokens", 0)
             total_output_tokens += msg_usage.get("output_tokens", 0)
-    if usage and strategy not in ("json_mode", "text"):
-        total_input_tokens += usage.get("input_tokens", 0)
-        total_output_tokens += usage.get("output_tokens", 0)
 
     usage_info = {}
     if total_input_tokens or total_output_tokens:

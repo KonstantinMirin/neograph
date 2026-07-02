@@ -119,7 +119,14 @@ class FakeExploreLLM:
                 "id": "call-1",
             }]
             return msg
-        return AIMessage(content="exploration complete")
+        # Agent mode parses the final ReAct turn as JSON (schema injected up
+        # front), so emit a valid ExplorationResult.
+        return AIMessage(
+            content=ExplorationResult(
+                evidence=["auth.py:42", "crypto.py:18"],
+                summary="found 2 references supporting the claim",
+            ).model_dump_json()
+        )
 
     def with_structured_output(self, model, **kwargs):
         clone = FakeExploreLLM()

@@ -1419,7 +1419,8 @@ class TestUsageTokenAccumulation:
                     msg.tool_calls = [{"name": "search", "args": {"q": "x"}, "id": "1"}]
                     return msg
                 return AIMessage(
-                    content="done", usage_metadata={"input_tokens": 20, "output_tokens": 10, "total_tokens": 30}
+                    content='{"items": ["done"]}',
+                    usage_metadata={"input_tokens": 20, "output_tokens": 10, "total_tokens": 30},
                 )
 
             def with_structured_output(self, model, **kwargs):
@@ -1531,7 +1532,7 @@ class TestReActToolReturnsListOfModels:
                     msg = AIMessage(content="")
                     msg.tool_calls = [{"name": "search", "args": {"q": "x"}, "id": "1"}]
                     return msg
-                return AIMessage(content="done")
+                return AIMessage(content='{"items": ["done"]}')
 
             def with_structured_output(self, model, **kwargs):
                 clone = ListReActFake()
@@ -1692,8 +1693,17 @@ class TestReActMaxIterationsGuard:
     def test_guard_fired_llm_ignores_wrap_up_still_calls_tools(self):
         """After guard fires and tools are unbound, if the LLM still returns
         tool_calls on the next invocation, the loop force-breaks instead of
-        looping forever (the _guard_fired safety net)."""
+        looping forever (the _guard_fired safety net).
+
+        neograph-f7nt: agent mode no longer force-generates a structured result
+        via a separate constrained-decoding call. A stubborn model that never
+        emits a JSON final answer therefore terminates the loop (the safety net
+        works — no hang) and surfaces a bounded ExecutionError rather than a
+        magically-constrained Claims. The safety net is what this pins."""
+        import pytest
+
         from neograph._tool_loop import invoke_with_tools
+        from neograph.errors import ExecutionError
         from neograph.tool import ToolBudgetTracker
         from tests.fakes import register_tool_factory
 
@@ -1705,22 +1715,21 @@ class TestReActMaxIterationsGuard:
         tools = [Tool("search", budget=0)]
         tracker = ToolBudgetTracker(tools)
 
-        # With max_iterations=1, guard fires on first iteration,
-        # but the LLM keeps calling tools — should force-break, not infinite loop
-        result, interactions = invoke_with_tools(runtime=build_fake_runtime(_llm_kw['llm_factory'], _llm_kw['prompt_compiler']),
-            model_tier="fast",
-            prompt_template="test",
-            input_data="test",
-            output_model=Claims,
-            tools=tools,
-            budget_tracker=tracker,
-            config={"configurable": {}},
-            llm_config={"max_iterations": 1},
-            tool_factory_lookup=build_fake_tool_lookup(),
-        )
-        # Loop terminates despite LLM never stopping tool calls
-        assert isinstance(result, Claims)
-        assert len(interactions) == 0
+        # With max_iterations=1, guard fires on first iteration, but the LLM
+        # keeps calling tools — must force-break (not infinite loop) and then,
+        # having no parseable final answer, raise a bounded error.
+        with pytest.raises(ExecutionError):
+            invoke_with_tools(runtime=build_fake_runtime(_llm_kw['llm_factory'], _llm_kw['prompt_compiler']),
+                model_tier="fast",
+                prompt_template="test",
+                input_data="test",
+                output_model=Claims,
+                tools=tools,
+                budget_tracker=tracker,
+                config={"configurable": {}},
+                llm_config={"max_iterations": 1},
+                tool_factory_lookup=build_fake_tool_lookup(),
+            )
 
 
 
@@ -2673,7 +2682,8 @@ class TestDSMLInStructuredStrategyPath:
                     msg = AIMessage(content="")
                     msg.tool_calls = [{"name": "search", "args": {"q": "x"}, "id": "c1"}]
                     return msg
-                return AIMessage(content="")
+                # neograph-f7nt: agent mode parses this final turn as JSON.
+                return AIMessage(content='{"answer": "ok"}')
 
             def with_structured_output(self, model, include_raw=False, **kw):
                 outer_model = model
@@ -2711,11 +2721,12 @@ class TestDSMLInStructuredStrategyPath:
             llm_config={"output_strategy": "structured"},
          runtime=build_fake_runtime(lambda tier: HappyFake()), tool_factory_lookup=build_fake_tool_lookup())
 
-        # Contract: structured strategy returns a typed model on a clean
-        # response, and the scripted single tool call surfaces one interaction.
-        # Drop the structured_calls == 1 pin (implementation detail).
+        # Contract (neograph-f7nt): agent mode parses the ReAct final turn as
+        # JSON directly — no separate structured re-generation — and the scripted
+        # single tool call surfaces one interaction.
         assert parsed.answer == "ok"
         assert len(interactions) == 1
+        assert structured_calls[0] == 0  # no _call_structured re-gen in agent mode
 
     def test_structured_path_no_spurious_recovery_for_valid_json(self):
         """neograph-0tid: structured strategy + valid model response ->
@@ -2749,7 +2760,8 @@ class TestDSMLInStructuredStrategyPath:
                     msg = AIMessage(content="")
                     msg.tool_calls = [{"name": "search", "args": {"q": "x"}, "id": "c1"}]
                     return msg
-                return AIMessage(content="")
+                # neograph-f7nt: agent mode parses this final turn as JSON.
+                return AIMessage(content='{"answer": "clean"}')
 
             def with_structured_output(self, model, include_raw=False, **kw):
                 outer_model = model
@@ -2790,10 +2802,10 @@ class TestDSMLInStructuredStrategyPath:
             tool_factory_lookup=build_fake_tool_lookup(),
         )
 
-        # Contract: clean structured response -> no recovery fired.
+        # Contract (neograph-0tid, agent mode): a clean JSON final turn parses
+        # directly -> no DSML recovery fired, and no separate structured re-gen.
         assert parsed.answer == "clean"
-        # Exactly one structured invoke: include_raw=True succeeded the first time.
-        assert structured_calls[0] == 1
+        assert structured_calls[0] == 0  # no _call_structured re-gen in agent mode
         # No extra raw llm.invoke beyond the ReAct loop's tool-call + empty-final
         # iterations (2 calls total: tool_call + empty final).
         assert call_count[0] - baseline_call_count == 2
@@ -4593,9 +4605,10 @@ class TestToolBudgetPreambleInjection:
         # step cap == cfg.max_iterations
         assert "9" in content
 
-    def test_no_system_preamble_prepended_when_announce_unset(self):
-        """Default (announce_tool_budget unset/False): NO system preamble is
-        prepended — the first message is the original user prompt."""
+    def test_no_budget_preamble_prepended_when_announce_unset(self):
+        """Default (announce_tool_budget unset/False): NO budget preamble is
+        prepended. The only system message is the always-on output-schema
+        instruction (neograph-f7nt), and the user prompt survives."""
         from neograph._tool_loop import invoke_with_tools
         from neograph.tool import ToolBudgetTracker
 
@@ -4618,10 +4631,14 @@ class TestToolBudgetPreambleInjection:
         )
 
         assert parsed.answer == "done"
-        first = fake.captured_messages[0]
-        assert _msg_role(first) == "user"
-        assert _msg_content(first) == "test prompt"
-        assert all(_msg_role(m) != "system" for m in fake.captured_messages)
+        # No budget preamble: no "call budget" language anywhere.
+        assert not any("tool-call budget" in (_msg_content(m) or "") for m in fake.captured_messages)
+        # The user prompt survives.
+        assert any(_msg_content(m) == "test prompt" for m in fake.captured_messages)
+        # The only system message present is the output-schema instruction.
+        system_msgs = [m for m in fake.captured_messages if _msg_role(m) == "system"]
+        assert len(system_msgs) == 1
+        assert "JSON object matching this schema" in _msg_content(system_msgs[0])
 
     def test_prepend_keeps_system_first_without_clobbering_existing_system_when_template_ref(self):
         """A template-ref prompt already carrying a leading SystemMessage: the
@@ -4668,3 +4685,438 @@ class TestToolBudgetPreambleInjection:
         # the pre-existing SystemMessage is not clobbered
         assert existing_system in msgs
         assert any(_msg_content(m) == "do the task" for m in msgs)
+
+
+# =============================================================================
+# neograph-f7nt: agent/act mode produces its typed output in exactly ONE
+# generation. The ReAct loop's final turn IS the structured answer (schema
+# injected into the loop as a framework system message), parsed directly from
+# messages[-1], with retry ONLY on parse failure -- regardless of the node's
+# declared output_strategy. NO separate re-generation over the message history
+# (no _call_structured in agent mode). The single-shot think path
+# (invoke_structured) keeps _call_structured / constrained decoding untouched.
+#
+# Regression test for the double-generation described in neograph-f7nt:
+# trace deal-4818-alice showed GEN1 tool-call + GEN2 fenced-JSON final answer
+# + GEN3 structured re-gen (~43% of trace cost). GEN3 must go away.
+# =============================================================================
+
+from langchain_core.messages import AIMessage as _AIMessage  # noqa: E402
+from pydantic import BaseModel as _BaseModel  # noqa: E402
+
+
+class _CountingAgentFake:
+    """Counts EVERY invoke on ONE shared counter, INCLUDING the
+    ``with_structured_output`` re-generation path.
+
+    This is the crux fake for the anti-double-gen regression. Existing fakes
+    cannot observe GEN3: ``ReActFake.with_structured_output`` returns a CLONE
+    (separate counter) and ``GuardFake``'s structured invoke returns before
+    incrementing. This fake returns ``self`` from ``with_structured_output`` so
+    the structured re-gen invoke lands on the SAME ``self.calls`` counter.
+
+    Scripts ``k_tool_turns`` tool-call turns, then a FINAL turn whose content is
+    ``final_json`` (parseable JSON for the output model). If the (to-be-removed)
+    structured else-branch runs, the structured invoke returns ``regen`` -- a
+    DIFFERENT value than the JSON in ``messages[-1]`` -- so BOTH the invocation
+    count (K+2 vs K+1) and the returned value expose the double-gen.
+    """
+
+    def __init__(self, k_tool_turns, final_json, regen, tool_name="search"):
+        self.calls = 0
+        self.seen_messages = []
+        self._k = k_tool_turns
+        self._final_json = final_json
+        self._regen = regen
+        self._tool_name = tool_name
+        self._react_idx = 0
+        self._structured = False
+
+    def bind_tools(self, tools):
+        return self
+
+    def invoke(self, messages, **kwargs):
+        self.calls += 1
+        self.seen_messages.append(list(messages))
+        if self._structured:
+            # GEN3: a separate re-generation over the message history. Under the
+            # fixed design this branch must NEVER be reached in agent mode.
+            return {"parsed": self._regen, "raw": _AIMessage(content="")}
+        self._react_idx += 1
+        if self._react_idx <= self._k:
+            msg = _AIMessage(content="")
+            msg.tool_calls = [
+                {"name": self._tool_name, "args": {"q": "x"}, "id": f"c{self._react_idx}"}
+            ]
+            return msg
+        return _AIMessage(content=self._final_json)
+
+    def with_structured_output(self, model, **kwargs):
+        # Return self so the SHARED counter sees the re-gen invoke (unlike
+        # ReActFake, which clones and hides GEN3).
+        self._structured = True
+        return self
+
+
+class _DsmlAgentFake:
+    """Agent fake whose FINAL ReAct turn emits DSML tool-call markup.
+
+    Recovery must flow through the json_mode tail's ``recover_dsml``
+    (_tool_loop.py:382): the targeted re-prompt (a fresh base-``llm`` invoke)
+    then returns valid JSON. The separate ``with_structured_output`` wrapper
+    also surfaces the DSML as ``parsed=None`` + raw markup so the pre-fix
+    structured path recovers identically -- keeping the neograph-0tid guard
+    green both before and after the fix.
+    """
+
+    def __init__(self, dsml_markup, recovery_json):
+        self._idx = 0
+        self._dsml = dsml_markup
+        self._recovery_json = recovery_json
+
+    def bind_tools(self, tools):
+        return self
+
+    def invoke(self, messages, **kwargs):
+        self._idx += 1
+        if self._idx == 1:
+            msg = _AIMessage(content="")
+            msg.tool_calls = [{"name": "search", "args": {"q": "x"}, "id": "c1"}]
+            return msg
+        if self._idx == 2:
+            return _AIMessage(content=self._dsml)  # final ReAct turn = DSML markup
+        return _AIMessage(content=self._recovery_json)  # recover_dsml re-prompt
+
+    def with_structured_output(self, model, **kwargs):
+        dsml = self._dsml
+
+        class _Wrap:
+            def invoke(self, messages, **kw):
+                # parsed=None + raw DSML -> Raw(dsml=True) -> recover_dsml
+                return {"parsed": None, "raw": _AIMessage(content=dsml)}
+
+        return _Wrap()
+
+
+class _HappyAgentFake:
+    """Agent fake whose FINAL ReAct turn emits valid JSON (happy baseline)."""
+
+    def __init__(self, final_json, parsed_model):
+        self._idx = 0
+        self._final_json = final_json
+        self._parsed = parsed_model
+
+    def bind_tools(self, tools):
+        return self
+
+    def invoke(self, messages, **kwargs):
+        self._idx += 1
+        if self._idx == 1:
+            msg = _AIMessage(content="")
+            msg.tool_calls = [{"name": "search", "args": {"q": "x"}, "id": "c1"}]
+            return msg
+        return _AIMessage(content=self._final_json)  # final ReAct turn = valid JSON
+
+    def with_structured_output(self, model, include_raw=False, **kwargs):
+        parsed = self._parsed
+        inc = include_raw
+
+        class _Wrap:
+            def invoke(self, messages, **kw):
+                if inc:
+                    return {"parsed": parsed, "raw": _AIMessage(content="")}
+                return parsed
+
+        return _Wrap()
+
+
+class TestAgentSingleGenerationOutput:
+    """neograph-f7nt: agent/act output is produced in exactly ONE generation."""
+
+    def test_agent_structured_does_not_double_generate(self):
+        """PRIMARY: output_strategy='structured' agent node makes K+1 invokes
+        (K tool turns + 1 final JSON turn), NOT K+2. The parsed result comes
+        from messages[-1], not a separate structured re-generation (GEN3).
+
+        RED today: the structured else-branch (_tool_loop.py:395) fires
+        _call_structured, adding GEN3 -> K+2 and returning the re-gen value.
+        """
+        from neograph._tool_loop import invoke_with_tools
+        from neograph.tool import ToolBudgetTracker
+        from tests.fakes import register_tool_factory
+
+        class Diagnosis(_BaseModel):
+            diagnosis_summary: str
+
+        register_tool_factory("search", lambda cfg, tc: FakeTool("search", response="found"))
+
+        K = 2
+        fake = _CountingAgentFake(
+            k_tool_turns=K,
+            final_json='{"diagnosis_summary": "from_final_react_turn"}',
+            regen=Diagnosis(diagnosis_summary="from_separate_regen"),
+        )
+
+        tools = [Tool("search", budget=5)]
+        tracker = ToolBudgetTracker(tools)
+        result, _interactions = invoke_with_tools(
+            runtime=build_fake_runtime(lambda tier: fake),
+            model_tier="fast",
+            prompt_template="diagnose the deal",
+            input_data={},
+            output_model=Diagnosis,
+            tools=tools,
+            budget_tracker=tracker,
+            config={"configurable": {}},
+            llm_config={"output_strategy": "structured"},
+            tool_factory_lookup=build_fake_tool_lookup(),
+        )
+
+        # CORE INVARIANT: exactly ONE generation of the typed output.
+        assert fake.calls == K + 1, (
+            f"agent double-generated: {fake.calls} invocations "
+            f"(expected {K + 1} = {K} tool turns + 1 final JSON turn; "
+            f"{K + 2} means the structured else-branch re-generated GEN3)"
+        )
+        # The parsed result MUST come from messages[-1], not a re-gen.
+        assert result.diagnosis_summary == "from_final_react_turn"
+
+    def test_agent_loop_system_messages_include_output_schema(self):
+        """The agent ReAct loop is told the output schema: a framework system
+        message carries the describe_type rendering of the output model.
+
+        Distinct from the (default-off) tool-budget preamble.
+
+        RED today: the agent loop omits output_schema entirely -- no schema
+        system message is injected.
+        """
+        from neograph import describe_type
+        from neograph._tool_loop import invoke_with_tools
+        from neograph.tool import ToolBudgetTracker
+        from tests.fakes import register_tool_factory
+
+        class Diagnosis(_BaseModel):
+            diagnosis_summary: str
+
+        register_tool_factory("search", lambda cfg, tc: FakeTool("search", response="found"))
+
+        fake = _CountingAgentFake(
+            k_tool_turns=1,
+            final_json='{"diagnosis_summary": "x"}',
+            regen=Diagnosis(diagnosis_summary="x"),
+        )
+        tools = [Tool("search", budget=5)]
+        tracker = ToolBudgetTracker(tools)
+
+        invoke_with_tools(
+            runtime=build_fake_runtime(lambda tier: fake),
+            model_tier="fast",
+            prompt_template="diagnose the deal",
+            input_data={},
+            output_model=Diagnosis,
+            tools=tools,
+            budget_tracker=tracker,
+            config={"configurable": {}},
+            # NOTE: announce_tool_budget left at its default (False) -- the schema
+            # instruction is unconditional, NOT the budget preamble.
+            tool_factory_lookup=build_fake_tool_lookup(),
+        )
+
+        first_msgs = fake.seen_messages[0]
+        system_text = "\n".join(
+            _msg_content(m) for m in first_msgs if _msg_role(m) == "system"
+        )
+        # describe_type renders the model's fields; the distinctive field name
+        # only appears if the schema instruction was injected.
+        assert "diagnosis_summary" in describe_type(Diagnosis)
+        assert "diagnosis_summary" in system_text, (
+            "agent loop did not inject the output schema into a system message; "
+            f"system messages seen: {system_text!r}"
+        )
+
+    def test_agent_dsml_final_turn_recovers_via_json_mode_tail(self):
+        """neograph-0tid PRESERVATION (agent mode): a formerly-structured agent
+        node whose FINAL ReAct turn emits DSML/tool-call markup still recovers
+        to a valid output via the json_mode tail's recover_dsml
+        (_tool_loop.py:382). Must stay green after the fix.
+        """
+        from neograph._tool_loop import invoke_with_tools
+        from neograph.tool import ToolBudgetTracker
+        from tests.fakes import register_tool_factory
+
+        class Answer(_BaseModel):
+            answer: str
+
+        dsml_markup = (
+            '<｜DSML｜tool_calls>\n'
+            '<｜DSML｜invoke name="search">\n'
+            '<｜DSML｜parameter name="q">more</｜DSML｜parameter>\n'
+            '</｜DSML｜invoke>\n'
+            '</｜DSML｜tool_calls>'
+        )
+
+        register_tool_factory("search", lambda cfg, tc: FakeTool("search", response="found"))
+
+        fake = _DsmlAgentFake(dsml_markup, '{"answer": "recovered-agent"}')
+        tools = [Tool("search", budget=5)]
+        tracker = ToolBudgetTracker(tools)
+
+        parsed, _ = invoke_with_tools(
+            runtime=build_fake_runtime(lambda tier: fake),
+            model_tier="fast",
+            prompt_template="diagnose",
+            input_data={},
+            output_model=Answer,
+            tools=tools,
+            budget_tracker=tracker,
+            config={"configurable": {}},
+            llm_config={"output_strategy": "structured"},
+            tool_factory_lookup=build_fake_tool_lookup(),
+        )
+
+        assert parsed.answer == "recovered-agent"
+
+    def test_agent_structured_happy_baseline_parses_final_turn(self):
+        """Adapts the structured happy baseline through invoke_with_tools: the
+        final ReAct turn emits valid JSON and parses directly (no re-gen).
+        Must stay green after the fix.
+        """
+        from neograph._tool_loop import invoke_with_tools
+        from neograph.tool import ToolBudgetTracker
+        from tests.fakes import register_tool_factory
+
+        class Answer(_BaseModel):
+            answer: str
+
+        register_tool_factory("search", lambda cfg, tc: FakeTool("search", response="found"))
+
+        fake = _HappyAgentFake('{"answer": "ok"}', Answer(answer="ok"))
+        tools = [Tool("search", budget=5)]
+        tracker = ToolBudgetTracker(tools)
+
+        parsed, interactions = invoke_with_tools(
+            runtime=build_fake_runtime(lambda tier: fake),
+            model_tier="fast",
+            prompt_template="diagnose",
+            input_data={},
+            output_model=Answer,
+            tools=tools,
+            budget_tracker=tracker,
+            config={"configurable": {}},
+            llm_config={"output_strategy": "structured"},
+            tool_factory_lookup=build_fake_tool_lookup(),
+        )
+
+        assert parsed.answer == "ok"
+        assert len(interactions) == 1
+
+    def test_explicit_output_strategy_on_agent_node_warns(self):
+        """REFINEMENT MEDIUM-1: building an agent node with output_strategy
+        EXPLICITLY set (in llm_config.model_fields_set) emits a UserWarning
+        that output_strategy is inert for agent/act nodes.
+
+        RED today: no warning is emitted.
+        """
+        from tests.fakes import register_tool_factory
+
+        register_tool_factory("search", lambda cfg, tc: FakeTool("search", response="ok"))
+
+        agent = Node(
+            "agent_explicit",
+            mode="agent",
+            model="fast",
+            prompt="p",
+            outputs=Claims,
+            tools=[Tool("search", budget=2)],
+            llm_config={"output_strategy": "structured"},
+        )
+        assert "output_strategy" in agent.llm_config.model_fields_set
+        pipeline = Construct("warn-explicit", nodes=[agent])
+
+        with pytest.warns(UserWarning, match="output_strategy"):
+            compile(
+                pipeline,
+                llm_factory=lambda tier: ReActFake(
+                    tool_calls=[[]], final=lambda m: m(items=["x"])
+                ),
+                prompt_compiler=lambda t, d, **kw: [{"role": "user", "content": "go"}],
+                **build_test_compile_kwargs(),
+            )
+
+    def test_default_output_strategy_on_agent_node_does_not_warn(self):
+        """REFINEMENT MEDIUM-1: an agent node with output_strategy UNSET emits
+        NO inertness warning (default/unset -> silent)."""
+        import warnings
+
+        from tests.fakes import register_tool_factory
+
+        register_tool_factory("search", lambda cfg, tc: FakeTool("search", response="ok"))
+
+        agent = Node(
+            "agent_default",
+            mode="agent",
+            model="fast",
+            prompt="p",
+            outputs=Claims,
+            tools=[Tool("search", budget=2)],
+        )
+        assert "output_strategy" not in agent.llm_config.model_fields_set
+        pipeline = Construct("warn-default", nodes=[agent])
+
+        with warnings.catch_warnings(record=True) as rec:
+            warnings.simplefilter("always")
+            compile(
+                pipeline,
+                llm_factory=lambda tier: ReActFake(
+                    tool_calls=[[]], final=lambda m: m(items=["x"])
+                ),
+                prompt_compiler=lambda t, d, **kw: [{"role": "user", "content": "go"}],
+                **build_test_compile_kwargs(),
+            )
+
+        offending = [
+            w for w in rec
+            if issubclass(w.category, UserWarning) and "output_strategy" in str(w.message)
+        ]
+        assert not offending, f"unexpected inertness warning for unset strategy: {offending}"
+
+    def test_think_structured_still_routes_through_call_structured(self):
+        """Think-path-unchanged guard: a single-shot think node with
+        output_strategy='structured' still routes through _call_structured
+        (constrained decoding), NOT the messages[-1] JSON parse. Must stay
+        green after the fix.
+        """
+        from neograph._llm import invoke_structured
+
+        used = {"structured": False}
+
+        class ThinkFake:
+            def with_structured_output(self, model, include_raw=False, **kwargs):
+                used["structured"] = True
+                parsed = model(items=["ok"])
+                inc = include_raw
+
+                class _W:
+                    def invoke(self, messages, **kw):
+                        if inc:
+                            return {"parsed": parsed, "raw": _AIMessage(content="")}
+                        return parsed
+
+                return _W()
+
+            def invoke(self, messages, **kwargs):
+                # The json-parse path would call this; the structured path must not.
+                return _AIMessage(content="SHOULD_NOT_BE_PARSED_AS_JSON")
+
+        result = invoke_structured(
+            runtime=build_fake_runtime(lambda tier: ThinkFake()),
+            model_tier="fast",
+            prompt_template="p",
+            input_data={},
+            output_model=Claims,
+            config={"configurable": {}},
+            llm_config={"output_strategy": "structured"},
+        )
+
+        assert used["structured"] is True
+        assert result.items == ["ok"]
