@@ -357,6 +357,17 @@ class TestNoNearDuplicateHelperNames:
         frozenset({"arecover_dsml", "recover_dsml"}): (
             "lev=1: async twin of DSML recovery (_llm_retry.py)."
         ),
+        # neograph-w74k.2.4 (Phase 1d): a-prefix async twins of the runner's
+        # checkpoint helpers (arun path).
+        frozenset({"_ahas_existing_checkpoint", "_has_existing_checkpoint"}): (
+            "lev=1: async twin of the checkpoint-exists probe (runner.py)."
+        ),
+        frozenset({"_averify_checkpoint_schema", "_verify_checkpoint_schema"}): (
+            "lev=1: async twin of checkpoint-schema verification (runner.py)."
+        ),
+        frozenset({"_aauto_resume_from_divergence", "_auto_resume_from_divergence"}): (
+            "lev=1: async twin of the auto-resume rewind (runner.py)."
+        ),
         frozenset({"_get_param_res", "_set_param_res"}): (
             "lev=1: getter/setter antonym pair (_sidecar.py); the get/set prefix "
             "is intentional API symmetry, not a near-duplicate of one helper."

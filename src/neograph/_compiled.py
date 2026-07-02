@@ -57,6 +57,22 @@ class CompiledNeograph:
     def get_state_history(self, *args: Any, **kwargs: Any) -> Any:
         return self.graph.get_state_history(*args, **kwargs)
 
+    # Async delegations (Phase 1d). ainvoke/aget_state are coroutines (awaited);
+    # aget_state_history/astream are async GENERATORS returned un-awaited (the
+    # caller drives them with `async for`) — do NOT `async def`/await them or the
+    # returned object becomes a coroutine yielding a generator (double-wrap).
+    async def ainvoke(self, *args: Any, **kwargs: Any) -> Any:
+        return await self.graph.ainvoke(*args, **kwargs)
+
+    async def aget_state(self, *args: Any, **kwargs: Any) -> Any:
+        return await self.graph.aget_state(*args, **kwargs)
+
+    def aget_state_history(self, *args: Any, **kwargs: Any) -> Any:
+        return self.graph.aget_state_history(*args, **kwargs)
+
+    def astream(self, *args: Any, **kwargs: Any) -> Any:
+        return self.graph.astream(*args, **kwargs)
+
     def get_graph(self, *args: Any, **kwargs: Any) -> Any:
         return self.graph.get_graph(*args, **kwargs)
 

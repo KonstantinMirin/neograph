@@ -267,6 +267,41 @@ def _has_existing_checkpoint(graph: CompiledNeograph, config: RunnableConfig) ->
         return False
 
 
+def _prepare_resume_config(config: RunnableConfig | None) -> RunnableConfig | None:
+    """Re-inject stashed input into config on resume so FromInput DI resolves
+    for post-interrupt nodes. Pure (no I/O); shared by run() and arun()."""
+    if config is not None:
+        neo_input = config.get("configurable", {}).get(StateKeys.CONFIG_INPUT)
+        if neo_input is not None:
+            config = _inject_input_to_config(neo_input, config)
+    return config
+
+
+def _prepare_new_input(
+    graph: CompiledNeograph, input: dict[str, Any], config: RunnableConfig | None,
+) -> tuple[dict[str, Any], RunnableConfig]:
+    """Prep for a new execution: stash CONFIG_INPUT in the caller's config,
+    inject input into config for DI, defensively copy input, and inject the
+    schema/node fingerprints for checkpoint storage. Pure (no I/O); shared by
+    run() and arun() so the two drivers cannot fork on input handling."""
+    if config is None:
+        config = {}
+    configurable = config.setdefault("configurable", {})
+    configurable[StateKeys.CONFIG_INPUT] = input
+    config = _inject_input_to_config(input, config)
+
+    # Defensive copy: framework keys must not leak into the caller's dict.
+    input = {**input}
+
+    fp = graph.schema_fingerprint
+    if fp is not None:
+        input[StateKeys.SCHEMA_FINGERPRINT] = fp
+    node_fps = graph.node_fingerprints
+    if node_fps is not None:
+        input[StateKeys.NODE_FINGERPRINTS] = node_fps
+    return input, config
+
+
 def run(
     graph: CompiledNeograph,
     input: dict[str, Any] | None = None,
@@ -304,33 +339,11 @@ def run(
             run(graph, config={"configurable": {"thread_id": "same-id"}})
     """
     if resume is not None:
-        # Re-inject input fields on resume.
-        # The initial run stashes input in the caller's config dict.
-        # On resume, re-inject so FromInput DI resolves for post-interrupt nodes.
-        if config is not None:
-            neo_input = config.get("configurable", {}).get(StateKeys.CONFIG_INPUT)
-            if neo_input is not None:
-                config = _inject_input_to_config(neo_input, config)
+        config = _prepare_resume_config(config)
         return _strip_internals(graph.invoke(Command(resume=resume), config=config))
 
     if input is not None:
-        # Stash input in the CALLER'S config so resume can re-inject.
-        if config is None:
-            config = {}
-        configurable = config.setdefault("configurable", {})
-        configurable[StateKeys.CONFIG_INPUT] = input
-        config = _inject_input_to_config(input, config)
-
-        # Defensive copy: framework keys must not leak into the caller's dict.
-        input = {**input}
-
-        # Inject schema fingerprint into initial state for checkpoint storage
-        fp = graph.schema_fingerprint
-        if fp is not None:
-            input[StateKeys.SCHEMA_FINGERPRINT] = fp
-        node_fps = graph.node_fingerprints
-        if node_fps is not None:
-            input[StateKeys.NODE_FINGERPRINTS] = node_fps
+        input, config = _prepare_new_input(graph, input, config)
 
         # Pre-flight: check all required DI params are present
         _preflight_di_check(graph, config)
@@ -358,3 +371,125 @@ def run(
     if _has_existing_checkpoint(graph, config or {}):
         _verify_checkpoint_schema(graph, config or {}, auto_resume=auto_resume)
     return _strip_internals(graph.invoke(None, config=config))
+
+
+async def _ahas_existing_checkpoint(graph: CompiledNeograph, config: RunnableConfig) -> bool:
+    """Async twin of :func:`_has_existing_checkpoint` (awaits aget_tuple)."""
+    checkpointer = getattr(graph, "checkpointer", None)
+    if checkpointer is None:
+        return False
+    try:
+        saved = await checkpointer.aget_tuple(config)
+        return saved is not None and bool(saved.checkpoint.get("channel_versions"))
+    except (AttributeError, TypeError, KeyError):
+        return False
+
+
+async def _averify_checkpoint_schema(graph: CompiledNeograph, config: RunnableConfig, *, auto_resume: bool = True) -> None:
+    """Async twin of :func:`_verify_checkpoint_schema`.
+
+    Identical fingerprint-compare/invalidation logic; awaits ``aget_tuple`` and,
+    on mismatch, ``_aauto_resume_from_divergence``. Reuses _compute_invalidated_nodes.
+    """
+    current_fp = graph.schema_fingerprint
+    if current_fp is None:
+        return
+
+    checkpointer = getattr(graph, "checkpointer", None)
+    if checkpointer is None:
+        return
+
+    saved = await checkpointer.aget_tuple(config)
+    if saved is None:
+        return
+
+    channel_values = saved.checkpoint.get("channel_values", {})
+    stored_fp = None
+    if isinstance(channel_values, dict):
+        stored_fp = channel_values.get(StateKeys.SCHEMA_FINGERPRINT)
+    elif hasattr(channel_values, "get"):
+        stored_fp = channel_values.get(StateKeys.SCHEMA_FINGERPRINT)
+
+    if stored_fp is None or stored_fp == "":
+        return
+
+    if stored_fp != current_fp:
+        invalidated = _compute_invalidated_nodes(graph, channel_values)
+
+        if not auto_resume:
+            raise CheckpointSchemaError(
+                f"Checkpoint schema fingerprint mismatch: "
+                f"stored={stored_fp!r}, current={current_fp!r}. "
+                f"Invalidated nodes: {sorted(invalidated) if invalidated else 'all'}. "
+                f"Invalidate the checkpoint or migrate the state.",
+                invalidated_nodes=invalidated,
+            )
+
+        import structlog
+        log = structlog.get_logger()
+        log.info(
+            "auto_resume_schema_change",
+            invalidated=sorted(invalidated),
+            stored_fp=stored_fp,
+            current_fp=current_fp,
+        )
+        await _aauto_resume_from_divergence(graph, config, invalidated)
+
+
+async def _aauto_resume_from_divergence(
+    graph: CompiledNeograph, config: RunnableConfig, invalidated: set[str],
+) -> None:
+    """Async twin of :func:`_auto_resume_from_divergence`.
+
+    ``aget_state_history`` is an async generator — consumed via ``async for``,
+    never awaited. Identical rewind-checkpoint-id selection + config mutation.
+    """
+    if not invalidated:
+        return
+
+    rewind_checkpoint_id = None
+    async for state_snapshot in graph.aget_state_history(config):
+        next_nodes = set(state_snapshot.next)
+        if next_nodes & invalidated:
+            candidate = state_snapshot.config.get("configurable", {}).get("checkpoint_id")
+            if candidate is not None:
+                rewind_checkpoint_id = candidate
+    if rewind_checkpoint_id is not None:
+        config.setdefault("configurable", {})["checkpoint_id"] = rewind_checkpoint_id
+
+
+async def arun(
+    graph: CompiledNeograph,
+    input: dict[str, Any] | None = None,
+    resume: dict[str, Any] | None = None,
+    config: RunnableConfig | None = None,
+    auto_resume: bool = True,
+) -> Any:
+    """Async twin of :func:`run` (Phase 1d).
+
+    Driver-parallel to run(): mirrors the exact three-mode branch structure
+    (resume / input+nested-checkpoint / crash-recovery), reuses the shared pure
+    prep helpers (_prepare_resume_config / _prepare_new_input / _preflight_di_check
+    / _strip_internals), and diverges ONLY at the graph/checkpointer I/O —
+    ``await graph.ainvoke`` and the async checkpoint twins.
+    """
+    if resume is not None:
+        config = _prepare_resume_config(config)
+        return _strip_internals(await graph.ainvoke(Command(resume=resume), config=config))
+
+    if input is not None:
+        input, config = _prepare_new_input(graph, input, config)
+
+        _preflight_di_check(graph, config)
+
+        if await _ahas_existing_checkpoint(graph, config):
+            await _averify_checkpoint_schema(graph, config, auto_resume=auto_resume)
+            return _strip_internals(await graph.ainvoke(None, config=config))
+
+        return _strip_internals(await graph.ainvoke(input, config=config))
+
+    if config is not None:
+        _preflight_di_check(graph, config)
+    if await _ahas_existing_checkpoint(graph, config or {}):
+        await _averify_checkpoint_schema(graph, config or {}, auto_resume=auto_resume)
+    return _strip_internals(await graph.ainvoke(None, config=config))

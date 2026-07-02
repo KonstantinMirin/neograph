@@ -66,7 +66,7 @@ from neograph.renderers import (
     XmlRenderer,
     render_input,
 )
-from neograph.runner import run
+from neograph.runner import arun, run
 from neograph.spec_types import lookup_type, register_type
 from neograph.tool import Tool, ToolInteraction, tool
 from neograph.verify import VerifyIssue, verify_compiled
@@ -80,6 +80,7 @@ __all__ = [
     "FromConfig",
     "compile",
     "run",
+    "arun",
     "tool",
     "merge_fn",
     # Modifiers (used as @node kwargs; also available standalone)
