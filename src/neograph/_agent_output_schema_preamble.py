@@ -21,6 +21,7 @@ from __future__ import annotations
 from pydantic import BaseModel
 
 from neograph.describe_type import describe_type
+from neograph.errors import ConfigurationError
 
 # Phrased conditionally ("When finished with tools ...") so a well-behaved model
 # still calls its tools first and only emits JSON as its final answer — not
@@ -31,10 +32,18 @@ _PREFIX = (
 )
 
 
-def render_output_schema_instruction(output_model: type[BaseModel]) -> str:
-    """Render the final-answer JSON-schema instruction for an agent/act node.
+def render_output_schema_preamble(output_model: type[BaseModel]) -> str:
+    """Render the final-answer JSON-schema preamble for an agent/act node.
 
     A thin passthrough to ``describe_type`` with an agent-specific prefix — it
     does NOT hand-concatenate around ``describe_type``'s default prefix.
     """
+    if output_model is None:
+        raise ConfigurationError.build(
+            "agent/act node has no output model to render a schema preamble",
+            expected="a Pydantic BaseModel output type",
+            found="None",
+            hint="agent/act nodes must declare outputs= so the final ReAct turn "
+                 "can be parsed as that type.",
+        )
     return describe_type(output_model, prefix=_PREFIX)

@@ -197,28 +197,6 @@ def compile(
     # typed LlmConfig.output_strategy Literal field (pej0). The prior runtime
     # _VALID_STRATEGIES check is redundant and was removed.
 
-    # Warn: output_strategy is inert for agent/act nodes. The
-    # ReAct loop's final turn is always parsed as JSON directly — there is no
-    # separate constrained-decoding pass — so an explicitly-set output_strategy
-    # does nothing. Fire only when it was set explicitly (in model_fields_set),
-    # never on the default. Non-silent counterpart to the locked trade-off.
-    import warnings
-
-    for item in construct.nodes:
-        if (
-            isinstance(item, Node)
-            and item.mode in ("agent", "act")
-            and item.llm_config is not None
-            and "output_strategy" in item.llm_config.model_fields_set
-        ):
-            warnings.warn(
-                f"output_strategy={item.llm_config.output_strategy!r} is inert for "
-                f"agent/act node {item.name!r}; the final ReAct turn is parsed as JSON "
-                "directly. output_strategy only affects single-shot (think) nodes.",
-                UserWarning,
-                stacklevel=2,
-            )
-
     # 1. Generate state model from node I/O
     state_model = compile_state_model(construct, context_types=_context_types)
 

@@ -1695,15 +1695,14 @@ class TestReActMaxIterationsGuard:
         tool_calls on the next invocation, the loop force-breaks instead of
         looping forever (the _guard_fired safety net).
 
-        neograph-f7nt: agent mode no longer force-generates a structured result
-        via a separate constrained-decoding call. A stubborn model that never
-        emits a JSON final answer therefore terminates the loop (the safety net
-        works — no hang) and surfaces a bounded ExecutionError rather than a
-        magically-constrained Claims. The safety net is what this pins."""
-        import pytest
-
+        neograph-eoi8: the stubborn model never emits a JSON final turn, so the
+        direct parse of messages[-1] fails; because output_strategy defaults to
+        'structured', the parse-failure fallback runs constrained decoding
+        (_call_structured), which StubbornFake satisfies via with_structured_output
+        and yields a Claims. So this pins BOTH properties: the safety net
+        terminates the loop (no hang) AND the structured fallback recovers a typed
+        result (weak-model recourse)."""
         from neograph._tool_loop import invoke_with_tools
-        from neograph.errors import ExecutionError
         from neograph.tool import ToolBudgetTracker
         from tests.fakes import register_tool_factory
 
@@ -1715,21 +1714,22 @@ class TestReActMaxIterationsGuard:
         tools = [Tool("search", budget=0)]
         tracker = ToolBudgetTracker(tools)
 
-        # With max_iterations=1, guard fires on first iteration, but the LLM
-        # keeps calling tools — must force-break (not infinite loop) and then,
-        # having no parseable final answer, raise a bounded error.
-        with pytest.raises(ExecutionError):
-            invoke_with_tools(runtime=build_fake_runtime(_llm_kw['llm_factory'], _llm_kw['prompt_compiler']),
-                model_tier="fast",
-                prompt_template="test",
-                input_data="test",
-                output_model=Claims,
-                tools=tools,
-                budget_tracker=tracker,
-                config={"configurable": {}},
-                llm_config={"max_iterations": 1},
-                tool_factory_lookup=build_fake_tool_lookup(),
-            )
+        # max_iterations=1: guard fires immediately; the LLM keeps calling tools,
+        # so the loop force-breaks (no infinite loop). The structured fallback
+        # then recovers a typed result.
+        result, _interactions = invoke_with_tools(
+            runtime=build_fake_runtime(_llm_kw['llm_factory'], _llm_kw['prompt_compiler']),
+            model_tier="fast",
+            prompt_template="test",
+            input_data="test",
+            output_model=Claims,
+            tools=tools,
+            budget_tracker=tracker,
+            config={"configurable": {}},
+            llm_config={"max_iterations": 1},
+            tool_factory_lookup=build_fake_tool_lookup(),
+        )
+        assert isinstance(result, Claims)
 
 
 
@@ -4830,6 +4830,392 @@ class _HappyAgentFake:
         return _Wrap()
 
 
+class _NonJsonFinalAgentFake:
+    """Agent fake whose FINAL ReAct turn emits NON-JSON prose (unparseable).
+
+    Drives neograph-eoi8's parse-failure fallback: the happy-path parse of
+    ``messages[-1]`` fails, so the agent tail must dispatch on
+    ``cfg.output_strategy``:
+
+    - ``structured`` -> ``_call_structured`` (constrained decoding). That path
+      calls ``with_structured_output(model, include_raw=True)``; this fake's
+      wrapper returns ``structured_return`` (a ``{"parsed": ..., "raw": ...}``
+      dict the adapter normalizes) and bumps ``structured_calls`` so the test
+      can assert the constrained re-gen actually ran.
+    - ``json_mode``/``text`` -> the tail's ``recover_dsml`` (no-op, non-DSML) then
+      ``_invoke_json_with_retry``, which re-invokes the BASE ``invoke``. When
+      ``base_retry_json`` is set, that retry recovers to it -- WITHOUT touching
+      ``with_structured_output`` (``structured_calls`` stays 0).
+
+    ``react_calls`` counts base ``invoke`` (K tool turns + 1 final + any json
+    retries); ``structured_calls`` counts the constrained-decoding arm.
+    """
+
+    def __init__(
+        self,
+        k_tool_turns,
+        non_json_final,
+        structured_return,
+        *,
+        base_retry_json=None,
+        tool_name="search",
+    ):
+        self.react_calls = 0
+        self.structured_calls = 0
+        self.seen_messages = []
+        self._k = k_tool_turns
+        self._final = non_json_final
+        self._structured_return = structured_return
+        self._base_retry_json = base_retry_json
+        self._tool_name = tool_name
+        self._react_idx = 0
+
+    def bind_tools(self, tools):
+        return self
+
+    def invoke(self, messages, **kwargs):
+        self.react_calls += 1
+        self.seen_messages.append(list(messages))
+        self._react_idx += 1
+        if self._react_idx <= self._k:
+            msg = _AIMessage(content="")
+            msg.tool_calls = [
+                {"name": self._tool_name, "args": {"q": "x"}, "id": f"c{self._react_idx}"}
+            ]
+            return msg
+        if self._react_idx == self._k + 1:
+            # Final ReAct turn: non-JSON prose -> parse fails -> fallback fires.
+            return _AIMessage(content=self._final)
+        # Later invokes = the json_mode/text retry path (base llm re-prompt).
+        if self._base_retry_json is not None:
+            return _AIMessage(content=self._base_retry_json)
+        return _AIMessage(content=self._final)
+
+    def with_structured_output(self, model, include_raw=False, **kwargs):
+        self.structured_calls += 1
+        ret = self._structured_return
+
+        class _Wrap:
+            def invoke(self, messages, **kw):
+                return ret
+
+        return _Wrap()
+
+
+class TestAgentStrategyAwareFallback:
+    """neograph-eoi8 (Option A): agent/act produces its typed output in ONE
+    generation on the happy path (the ReAct final turn IS the answer, parsed
+    from messages[-1]); a SECOND generation happens ONLY inside the
+    parse-failure branch, and cfg.output_strategy selects the FALLBACK
+    mechanism -- 'structured' -> _call_structured (constrained decoding),
+    'json_mode'/'text' -> recover_dsml + _invoke_json_with_retry. The agent
+    tail NEVER returns a silent None: on an unrecoverable structured fallback
+    it RAISES ExecutionError (REFINEMENT MEDIUM-1)."""
+
+    @staticmethod
+    def _answer_model():
+        class Answer(_BaseModel):
+            answer: str
+
+        return Answer
+
+    def test_happy_path_parses_final_turn_without_structured_regen(self):
+        """GUARD (stays green): output_strategy='structured', VALID JSON final
+        ReAct turn -> parsed directly, K+1 base invokes, ZERO constrained
+        re-gen. Pins that the double-gen elimination survives Option A."""
+        from neograph._tool_loop import invoke_with_tools
+        from neograph.tool import ToolBudgetTracker
+        from tests.fakes import register_tool_factory
+
+        Answer = self._answer_model()
+        register_tool_factory("search", lambda cfg, tc: FakeTool("search", response="found"))
+
+        K = 2
+        fake = _NonJsonFinalAgentFake(
+            k_tool_turns=K,
+            non_json_final='{"answer": "from_final_react_turn"}',  # valid JSON => happy
+            structured_return={"parsed": Answer(answer="from_constrained"), "raw": _AIMessage(content="")},
+        )
+        tools = [Tool("search", budget=5)]
+
+        result, _ = invoke_with_tools(
+            runtime=build_fake_runtime(lambda tier: fake),
+            model_tier="fast",
+            prompt_template="diagnose",
+            input_data={},
+            output_model=Answer,
+            tools=tools,
+            budget_tracker=ToolBudgetTracker(tools),
+            config={"configurable": {}},
+            llm_config={"output_strategy": "structured"},
+            tool_factory_lookup=build_fake_tool_lookup(),
+        )
+
+        assert result.answer == "from_final_react_turn"
+        assert fake.react_calls == K + 1
+        assert fake.structured_calls == 0, "happy path must NOT trigger constrained re-gen"
+
+    def test_structured_fallback_fires_call_structured_on_parse_failure(self):
+        """RED today: output_strategy='structured', NON-JSON final ReAct turn ->
+        the parse-failure fallback calls _call_structured (constrained decoding)
+        and returns ITS result. Weak-model recourse -- the whole point of eoi8.
+
+        Today the agent tail ignores output_strategy and routes the parse
+        failure through _invoke_json_with_retry, so the constrained arm is never
+        touched (structured_calls == 0) and the returned value comes from the
+        json retry, not the constrained sentinel."""
+        from neograph._tool_loop import invoke_with_tools
+        from neograph.tool import ToolBudgetTracker
+        from tests.fakes import register_tool_factory
+
+        Answer = self._answer_model()
+        register_tool_factory("search", lambda cfg, tc: FakeTool("search", response="found"))
+
+        K = 2
+        sentinel = Answer(answer="from_constrained_decoding")
+        fake = _NonJsonFinalAgentFake(
+            k_tool_turns=K,
+            non_json_final="I could not find a definitive answer.",  # unparseable prose
+            structured_return={"parsed": sentinel, "raw": _AIMessage(content="")},
+            # If the json-retry path were (wrongly) taken today, it recovers to a
+            # DIFFERENT value, so the assertion fails cleanly rather than erroring.
+            base_retry_json='{"answer": "from_json_retry_not_structured"}',
+        )
+        tools = [Tool("search", budget=5)]
+
+        result, _ = invoke_with_tools(
+            runtime=build_fake_runtime(lambda tier: fake),
+            model_tier="fast",
+            prompt_template="diagnose",
+            input_data={},
+            output_model=Answer,
+            tools=tools,
+            budget_tracker=ToolBudgetTracker(tools),
+            config={"configurable": {}},
+            llm_config={"output_strategy": "structured"},
+            tool_factory_lookup=build_fake_tool_lookup(),
+        )
+
+        assert fake.structured_calls == 1, (
+            "structured parse-failure fallback must invoke _call_structured "
+            "(constrained decoding); got no constrained re-gen"
+        )
+        assert result.answer == "from_constrained_decoding", (
+            "the returned object must be the constrained-decoding result, "
+            f"not the json-retry value; got {result.answer!r}"
+        )
+
+    def test_json_mode_fallback_uses_json_retry_not_constrained_decoding(self):
+        """GUARD (stays green): output_strategy='json_mode', NON-JSON final then
+        parseable-on-retry -> recovers via _invoke_json_with_retry, and NEVER
+        calls _call_structured / with_structured_output (structured_calls==0)."""
+        from neograph._tool_loop import invoke_with_tools
+        from neograph.tool import ToolBudgetTracker
+        from tests.fakes import register_tool_factory
+
+        Answer = self._answer_model()
+        register_tool_factory("search", lambda cfg, tc: FakeTool("search", response="found"))
+
+        K = 1
+        fake = _NonJsonFinalAgentFake(
+            k_tool_turns=K,
+            non_json_final="thinking out loud, no json yet",
+            structured_return={"parsed": Answer(answer="constrained_should_not_run"), "raw": _AIMessage(content="")},
+            base_retry_json='{"answer": "recovered_via_json_retry"}',
+        )
+        tools = [Tool("search", budget=5)]
+
+        result, _ = invoke_with_tools(
+            runtime=build_fake_runtime(lambda tier: fake),
+            model_tier="fast",
+            prompt_template="diagnose",
+            input_data={},
+            output_model=Answer,
+            tools=tools,
+            budget_tracker=ToolBudgetTracker(tools),
+            config={"configurable": {}},
+            llm_config={"output_strategy": "json_mode"},
+            tool_factory_lookup=build_fake_tool_lookup(),
+        )
+
+        assert result.answer == "recovered_via_json_retry"
+        assert fake.structured_calls == 0, "json_mode must NOT use constrained decoding"
+
+    def test_structured_fallback_raises_execution_error_on_silent_none(self):
+        """RED today (REFINEMENT MEDIUM-1): output_strategy='structured', parse
+        fails, and _call_structured hits its silent-None variant (parsed=None,
+        no DSML) -> the agent tail RAISES ExecutionError, it does NOT leak a
+        silent None downstream.
+
+        Today the tail ignores output_strategy and recovers the parse failure
+        via _invoke_json_with_retry (base_retry_json parses cleanly), so it
+        RETURNS a value instead of raising -> pytest.raises fails."""
+        from neograph._tool_loop import invoke_with_tools
+        from neograph.errors import ExecutionError
+        from neograph.tool import ToolBudgetTracker
+        from tests.fakes import register_tool_factory
+
+        Answer = self._answer_model()
+        register_tool_factory("search", lambda cfg, tc: FakeTool("search", response="found"))
+
+        fake = _NonJsonFinalAgentFake(
+            k_tool_turns=1,
+            non_json_final="no structured content here",  # unparseable, non-DSML
+            # silent-None variant: parsed=None, raw has no DSML markup.
+            structured_return={"parsed": None, "raw": _AIMessage(content="still no json")},
+            # Today's json-retry path would recover to this (proving the raise is
+            # absent today); the structured fallback must ignore it and raise.
+            base_retry_json='{"answer": "json_retry_would_recover"}',
+        )
+        tools = [Tool("search", budget=5)]
+
+        with pytest.raises(ExecutionError):
+            invoke_with_tools(
+                runtime=build_fake_runtime(lambda tier: fake),
+                model_tier="fast",
+                prompt_template="diagnose",
+                input_data={},
+                output_model=Answer,
+                tools=tools,
+                budget_tracker=ToolBudgetTracker(tools),
+                config={"configurable": {}},
+                llm_config={"output_strategy": "structured"},
+                tool_factory_lookup=build_fake_tool_lookup(),
+            )
+
+    def test_structured_dsml_final_turn_recovers_via_call_structured_internal(self):
+        """LOW-2 (route a): output_strategy='structured' + DSML markup in the
+        final ReAct turn -> recovered via _call_structured's INTERNAL
+        recover_dsml (a fresh constrained call). Preserves neograph-0tid."""
+        from neograph._tool_loop import invoke_with_tools
+        from neograph.tool import ToolBudgetTracker
+        from tests.fakes import register_tool_factory
+
+        Answer = self._answer_model()
+        dsml_markup = (
+            '<｜DSML｜tool_calls>\n'
+            '<｜DSML｜invoke name="search">\n'
+            '<｜DSML｜parameter name="q">more</｜DSML｜parameter>\n'
+            '</｜DSML｜invoke>\n'
+            '</｜DSML｜tool_calls>'
+        )
+        register_tool_factory("search", lambda cfg, tc: FakeTool("search", response="found"))
+
+        fake = _DsmlAgentFake(dsml_markup, '{"answer": "recovered-structured-route"}')
+        tools = [Tool("search", budget=5)]
+
+        parsed, _ = invoke_with_tools(
+            runtime=build_fake_runtime(lambda tier: fake),
+            model_tier="fast",
+            prompt_template="diagnose",
+            input_data={},
+            output_model=Answer,
+            tools=tools,
+            budget_tracker=ToolBudgetTracker(tools),
+            config={"configurable": {}},
+            llm_config={"output_strategy": "structured"},
+            tool_factory_lookup=build_fake_tool_lookup(),
+        )
+
+        assert parsed.answer == "recovered-structured-route"
+
+    def test_json_mode_dsml_final_turn_recovers_via_tail_recover_dsml(self):
+        """LOW-2 (route b): output_strategy='json_mode' + DSML markup in the
+        final ReAct turn -> recovered via the tail's EXPLICIT recover_dsml.
+        Preserves neograph-0tid."""
+        from neograph._tool_loop import invoke_with_tools
+        from neograph.tool import ToolBudgetTracker
+        from tests.fakes import register_tool_factory
+
+        Answer = self._answer_model()
+        dsml_markup = (
+            '<｜DSML｜tool_calls>\n'
+            '<｜DSML｜invoke name="search">\n'
+            '<｜DSML｜parameter name="q">more</｜DSML｜parameter>\n'
+            '</｜DSML｜invoke>\n'
+            '</｜DSML｜tool_calls>'
+        )
+        register_tool_factory("search", lambda cfg, tc: FakeTool("search", response="found"))
+
+        fake = _DsmlAgentFake(dsml_markup, '{"answer": "recovered-json-route"}')
+        tools = [Tool("search", budget=5)]
+
+        parsed, _ = invoke_with_tools(
+            runtime=build_fake_runtime(lambda tier: fake),
+            model_tier="fast",
+            prompt_template="diagnose",
+            input_data={},
+            output_model=Answer,
+            tools=tools,
+            budget_tracker=ToolBudgetTracker(tools),
+            config={"configurable": {}},
+            llm_config={"output_strategy": "json_mode"},
+            tool_factory_lookup=build_fake_tool_lookup(),
+        )
+
+        assert parsed.answer == "recovered-json-route"
+
+    def test_explicit_output_strategy_on_agent_node_does_not_warn(self):
+        """RED today: output_strategy is MEANINGFUL again in agent mode (it
+        selects the parse-failure fallback), so compiling an agent/act node with
+        output_strategy explicitly set must NOT emit any 'inert' UserWarning.
+
+        Inverse of the removed f7nt warn-tests. Today the compiler warning block
+        fires (and PP-01: it false-fires under any construct-level llm_config
+        default), so this assertion fails."""
+        import warnings
+
+        from tests.fakes import register_tool_factory
+
+        register_tool_factory("search", lambda cfg, tc: FakeTool("search", response="ok"))
+
+        agent = Node(
+            "agent_explicit",
+            mode="agent",
+            model="fast",
+            prompt="p",
+            outputs=Claims,
+            tools=[Tool("search", budget=2)],
+            llm_config={"output_strategy": "structured"},
+        )
+        assert "output_strategy" in agent.llm_config.model_fields_set
+        pipeline = Construct("no-warn-explicit", nodes=[agent])
+
+        with warnings.catch_warnings(record=True) as rec:
+            warnings.simplefilter("always")
+            compile(
+                pipeline,
+                llm_factory=lambda tier: ReActFake(
+                    tool_calls=[[]], final=lambda m: m(items=["x"])
+                ),
+                prompt_compiler=lambda t, d, **kw: [{"role": "user", "content": "go"}],
+                **build_test_compile_kwargs(),
+            )
+
+        offending = [
+            w for w in rec
+            if issubclass(w.category, UserWarning) and "output_strategy" in str(w.message)
+        ]
+        assert not offending, (
+            "eoi8: the 'output_strategy inert for agent/act' warning must be "
+            f"removed; got: {[str(w.message) for w in offending]}"
+        )
+
+    def test_render_output_schema_preamble_is_the_public_helper_name(self):
+        """RED today (CON-01): the agent output-schema helper is renamed to
+        render_output_schema_preamble (module-stem symmetry with
+        render_tool_budget_preamble). Today the symbol is still named
+        render_output_schema_instruction, so this import/attr check fails."""
+        from neograph import _agent_output_schema_preamble as mod
+
+        assert hasattr(mod, "render_output_schema_preamble"), (
+            "CON-01: render_output_schema_instruction must be renamed to "
+            "render_output_schema_preamble"
+        )
+        rendered = mod.render_output_schema_preamble(Claims)
+        assert "items" in rendered
+
+
 class TestAgentSingleGenerationOutput:
     """neograph-f7nt: agent/act output is produced in exactly ONE generation."""
 
@@ -5009,76 +5395,6 @@ class TestAgentSingleGenerationOutput:
 
         assert parsed.answer == "ok"
         assert len(interactions) == 1
-
-    def test_explicit_output_strategy_on_agent_node_warns(self):
-        """REFINEMENT MEDIUM-1: building an agent node with output_strategy
-        EXPLICITLY set (in llm_config.model_fields_set) emits a UserWarning
-        that output_strategy is inert for agent/act nodes.
-
-        RED today: no warning is emitted.
-        """
-        from tests.fakes import register_tool_factory
-
-        register_tool_factory("search", lambda cfg, tc: FakeTool("search", response="ok"))
-
-        agent = Node(
-            "agent_explicit",
-            mode="agent",
-            model="fast",
-            prompt="p",
-            outputs=Claims,
-            tools=[Tool("search", budget=2)],
-            llm_config={"output_strategy": "structured"},
-        )
-        assert "output_strategy" in agent.llm_config.model_fields_set
-        pipeline = Construct("warn-explicit", nodes=[agent])
-
-        with pytest.warns(UserWarning, match="output_strategy"):
-            compile(
-                pipeline,
-                llm_factory=lambda tier: ReActFake(
-                    tool_calls=[[]], final=lambda m: m(items=["x"])
-                ),
-                prompt_compiler=lambda t, d, **kw: [{"role": "user", "content": "go"}],
-                **build_test_compile_kwargs(),
-            )
-
-    def test_default_output_strategy_on_agent_node_does_not_warn(self):
-        """REFINEMENT MEDIUM-1: an agent node with output_strategy UNSET emits
-        NO inertness warning (default/unset -> silent)."""
-        import warnings
-
-        from tests.fakes import register_tool_factory
-
-        register_tool_factory("search", lambda cfg, tc: FakeTool("search", response="ok"))
-
-        agent = Node(
-            "agent_default",
-            mode="agent",
-            model="fast",
-            prompt="p",
-            outputs=Claims,
-            tools=[Tool("search", budget=2)],
-        )
-        assert "output_strategy" not in agent.llm_config.model_fields_set
-        pipeline = Construct("warn-default", nodes=[agent])
-
-        with warnings.catch_warnings(record=True) as rec:
-            warnings.simplefilter("always")
-            compile(
-                pipeline,
-                llm_factory=lambda tier: ReActFake(
-                    tool_calls=[[]], final=lambda m: m(items=["x"])
-                ),
-                prompt_compiler=lambda t, d, **kw: [{"role": "user", "content": "go"}],
-                **build_test_compile_kwargs(),
-            )
-
-        offending = [
-            w for w in rec
-            if issubclass(w.category, UserWarning) and "output_strategy" in str(w.message)
-        ]
-        assert not offending, f"unexpected inertness warning for unset strategy: {offending}"
 
     def test_think_structured_still_routes_through_call_structured(self):
         """Think-path-unchanged guard: a single-shot think node with

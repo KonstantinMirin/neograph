@@ -33,13 +33,13 @@ class LlmConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     # Known framework fields -- the ONLY place defaults live.
-    # output_strategy governs how a SINGLE-SHOT (think) node's structured output
-    # is produced: 'structured' uses provider constrained decoding
-    # (with_structured_output); 'json_mode'/'text' inject the schema into the
-    # prompt and parse the reply. It is INERT for agent/act nodes: the ReAct
-    # loop's final turn is always parsed as JSON directly (no separate
-    # constrained-decoding pass), so setting it on an agent/act node has no
-    # effect and emits a UserWarning at compile time.
+    # output_strategy: how a node's typed output is produced.
+    #   Single-shot (think): 'structured' = provider constrained decoding
+    #   (with_structured_output); 'json_mode'/'text' = schema in prompt + parse.
+    #   Agent/act: the ReAct loop's final turn is parsed directly (0 extra calls);
+    #   output_strategy selects the PARSE-FAILURE fallback only -- 'structured' =
+    #   constrained-decoding fallback (weak-model recourse), 'json_mode'/'text' =
+    #   parse-retry fallback. It is NOT inert for agent/act; it picks the recovery.
     output_strategy: Literal["structured", "json_mode", "text"] = "structured"
     max_retries: int = 1
     max_iterations: int = 20

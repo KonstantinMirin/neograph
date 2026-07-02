@@ -64,24 +64,28 @@ def _final_json_content(
     if output_model is not None:
         return final(output_model).model_dump_json()
 
-    captured: dict[str, Any] = {}
-
+    # Each proxy instance holds its OWN kwargs so nested calls
+    # (final=lambda m: m(x=m(y=1))) nest correctly instead of flattening or
+    # str()-ing an inner proxy (PP-03).
     class _Capture:
         def __init__(self, **kwargs: Any) -> None:
-            captured.update(kwargs)
+            self._data = kwargs
 
     result = final(_Capture)  # type: ignore[arg-type]
     if isinstance(result, BaseModel):
         return result.model_dump_json()
+    data = result._data if isinstance(result, _Capture) else {}
 
     def _default(o: Any) -> Any:
+        if isinstance(o, _Capture):
+            return o._data
         if isinstance(o, BaseModel):
             return o.model_dump(mode="json")
         if isinstance(o, Enum):
             return o.value
         return str(o)
 
-    return json.dumps(captured, default=_default)
+    return json.dumps(data, default=_default)
 
 
 def register_scripted(name: str, fn: _Callable) -> None:

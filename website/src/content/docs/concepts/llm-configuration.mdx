@@ -209,8 +209,8 @@ def load_context(
 
 Many models (DeepSeek-R1, o1, QwQ, local models) don't support `with_structured_output`. NeoGraph provides three output strategies, selected per-node via `llm_config["output_strategy"]`:
 
-:::note[Agent/act nodes ignore `output_strategy`]
-`output_strategy` governs how a **single-shot (`think`) node** produces its typed output. For **agent/act nodes** it is inert: the ReAct loop's final turn is parsed as JSON directly (the output schema is injected into the loop up front), so there is no separate constrained-decoding pass. Setting `output_strategy` on an agent/act node has no effect and emits a warning at compile time. This keeps agent runs to a single generation instead of re-generating the answer after the tool loop.
+:::note[`output_strategy` on agent/act nodes selects the fallback]
+For a **single-shot (`think`) node**, `output_strategy` governs how the typed output is produced (below). For **agent/act nodes** the ReAct loop's final turn is parsed as JSON directly — the output schema is injected into the loop up front, so on the happy path there is **no** separate constrained-decoding pass (a single generation). `output_strategy` then selects only the **parse-failure fallback**: `"structured"` falls back to provider constrained decoding (`with_structured_output`) for weak models that don't reliably emit valid JSON; `"json_mode"`/`"text"` fall back to parse-and-retry. So agent runs stay at one generation when the model cooperates, and keep a recourse when it doesn't.
 :::
 
 | Strategy | How it works | Best for |

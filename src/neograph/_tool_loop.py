@@ -15,10 +15,11 @@ import structlog
 from langchain_core.runnables import RunnableConfig
 from pydantic import BaseModel
 
-from neograph._agent_output_schema_preamble import render_output_schema_instruction
+from neograph._agent_output_schema_preamble import render_output_schema_preamble
 from neograph._dsml import message_text
 from neograph._llm import _get_llm, _notify_cost
 from neograph._llm_config import LlmConfig, _coerce_llm_config
+from neograph._llm_dispatch import _call_structured
 from neograph._llm_render import _compile_prompt
 from neograph._llm_retry import (
     _invoke_json_with_retry,
@@ -216,7 +217,7 @@ def invoke_with_tools(
         0,
         {
             "role": "system",
-            "content": render_output_schema_instruction(output_model),
+            "content": render_output_schema_preamble(output_model),
         },
     )
 
@@ -381,36 +382,63 @@ def invoke_with_tools(
     elapsed = time.monotonic() - t0
 
     # Parse the ReAct final turn as the node's structured output.
-    # Agent/act mode ALWAYS parses messages[-1] directly — the schema was
-    # injected into the loop above, so the final turn is the answer. There is NO
-    # separate _call_structured re-generation regardless of cfg.output_strategy
-    # (which is inert here; a warning is emitted at build time when it is set).
-    # Constrained decoding stays the single-shot think path's job (_llm.py).
+    # Agent/act mode parses messages[-1] directly — the schema was injected into
+    # the loop above, so the final turn is the answer (0 extra calls on the happy
+    # path). Only ON PARSE FAILURE do we fall back, and cfg.output_strategy
+    # selects the fallback mechanism (not the primary path):
+    #   'structured'         -> constrained decoding via _call_structured
+    #                           (weak-model recourse; its own DSML recovery)
+    #   'json_mode' / 'text' -> recover_dsml + _invoke_json_with_retry
+    # The agent tail never returns None — an unrecoverable fallback raises.
     assert config is not None
     strategy = cfg.output_strategy
     max_retries = cfg.max_retries
 
     last_msg = messages[-1]
     raw_text = message_text(last_msg)
+    fallback_usage = None
     try:
         parse_result = _parse_json_response(raw_text, output_model)
     except ExecutionError:
-        # Layer C: DSML/XML tool-call markup in final response — strategy-orthogonal
-        # recovery via shared helper. See neograph-0tid.
-        recovered = recover_dsml(
-            raw_text, output_model, llm, messages, config, cfg,
-            strategy=strategy,
-        )
-        if recovered is not None:
-            parse_result = recovered
-        else:
-            # Layer B: no DSML markup detected — fall through to generic retry
-            parse_result, _ = _invoke_json_with_retry(
-                llm, messages, output_model, config, max_retries=max_retries,
+        if strategy == "structured":
+            # Constrained-decoding fallback. _call_structured handles DSML
+            # recovery internally (Raw(dsml=True)/Failed arms). It can surface a
+            # silent None (parsed=None, no markup) — agent/act nodes must produce
+            # a typed object or error, so raise rather than leak None downstream.
+            parse_result, fallback_usage = _call_structured(
+                llm, messages, output_model, strategy, config,
+                cfg=cfg, max_retries=max_retries,
             )
+            if parse_result is None:
+                raise ExecutionError.build(
+                    "agent structured fallback produced no parseable output",
+                    expected=f"valid {output_model.__name__}",
+                    found="model returned no structured content and no recoverable markup",
+                    hint="The ReAct final turn was unparseable and the structured "
+                         "fallback returned nothing. Check the model/prompt or set "
+                         "output_strategy='json_mode'.",
+                ) from None
+        else:
+            # Layer C: DSML/XML tool-call markup in final response — strategy-
+            # orthogonal recovery via shared helper. See neograph-0tid.
+            recovered = recover_dsml(
+                raw_text, output_model, llm, messages, config, cfg,
+                strategy=strategy,
+            )
+            if recovered is not None:
+                parse_result = recovered
+            else:
+                # Layer B: no DSML markup detected — fall through to generic retry.
+                # NOTE (pre-existing, out of scope): recover_dsml discards its
+                # retry usage, so a successful DSML recovery here under-counts
+                # tokens. Not introduced by this change.
+                parse_result, fallback_usage = _invoke_json_with_retry(
+                    llm, messages, output_model, config, max_retries=max_retries,
+                )
 
-    # Collect total usage. The final turn's usage lives in messages, so it is
-    # already counted by the loop — no separate re-generation usage to re-add.
+    # Collect total usage. The final turn's usage lives in messages (already
+    # summed below). A fallback re-generation, when taken, is a SEPARATE call
+    # whose usage is not in messages — add it once here.
     total_input_tokens = 0
     total_output_tokens = 0
     for msg in messages:
@@ -418,6 +446,9 @@ def invoke_with_tools(
         if msg_usage:
             total_input_tokens += msg_usage.get("input_tokens", 0)
             total_output_tokens += msg_usage.get("output_tokens", 0)
+    if fallback_usage:
+        total_input_tokens += fallback_usage.get("input_tokens", 0)
+        total_output_tokens += fallback_usage.get("output_tokens", 0)
 
     usage_info = {}
     if total_input_tokens or total_output_tokens:

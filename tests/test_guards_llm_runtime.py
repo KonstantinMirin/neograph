@@ -1323,60 +1323,88 @@ class TestToolBudgetPreambleSingleSource:
 
 
 class TestAgentModeNoStructuredRegeneration:
-    """Agent/act mode never re-generates its output via _call_structured.
+    """Agent/act mode does not UNCONDITIONALLY re-generate its output.
 
-    neograph-f7nt eliminated the double-generation: the ReAct loop's final turn
-    IS the structured answer (parsed from messages[-1]), so _call_structured
-    (constrained-decoding, a fresh LLM call) must NOT be invoked from the tool
-    loop. It stays the single-shot think path's job (_llm.py). This guard pins
-    the class-level fix: a future PR that re-adds a _call_structured call inside
-    _tool_loop.py reintroduces the double-gen and fails here.
+    neograph-eoi8 (refining f7nt): the ReAct loop's final turn is parsed from
+    messages[-1] on the happy path (0 extra calls). A constrained-decoding
+    re-generation via _call_structured is allowed ONLY as a parse-failure
+    fallback (output_strategy='structured'). So any _call_structured call inside
+    _tool_loop.py must live inside an `except` block, never on the happy path.
+
+    LIMITS (do not over-trust this AST scan): it is a lexical, single-file
+    approximation. It cannot catch a happy-path re-gen introduced via a helper
+    in ANOTHER module (the name scan is _tool_loop.py-only), and it treats ANY
+    `except` as the parse-failure branch (it does not prove the except catches
+    the parse error specifically). The REAL invariant pins are the behavioral
+    tests: TestAgentStrategyAwareFallback (happy path = K+1, fallback only on
+    parse failure) and the with_structured_output-absent assertion below.
     """
 
     @staticmethod
-    def _files_calling(func_name: str, corpus: dict[str, str]) -> list[str]:
-        """Return the filenames whose AST contains a call to func_name."""
-        hits = []
-        for name, src in corpus.items():
-            try:
-                tree = ast.parse(src)
-            except SyntaxError:
-                continue
-            for node in ast.walk(tree):
-                if isinstance(node, ast.Call):
-                    fn = node.func
-                    if isinstance(fn, ast.Name) and fn.id == func_name:
-                        hits.append(name)
-                        break
-        return sorted(hits)
+    def _call_ids_in_except(func_name: str, tree: ast.AST) -> set[int]:
+        ids: set[int] = set()
+        for handler in ast.walk(tree):
+            if isinstance(handler, ast.ExceptHandler):
+                for node in ast.walk(handler):
+                    if (isinstance(node, ast.Call)
+                            and isinstance(node.func, ast.Name)
+                            and node.func.id == func_name):
+                        ids.add(id(node))
+        return ids
 
-    def _src_corpus(self) -> dict[str, str]:
-        return {py.name: py.read_text() for py in SRC_DIR.glob("*.py")}
+    @staticmethod
+    def _all_call_ids(func_name: str, tree: ast.AST) -> set[int]:
+        return {
+            id(node) for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == func_name
+        }
 
-    def test_call_structured_not_invoked_in_tool_loop(self):
-        """The live tree: _call_structured is called only from the think path,
-        never from _tool_loop.py (agent mode)."""
-        callers = self._files_calling("_call_structured", self._src_corpus())
-        assert "_tool_loop.py" not in callers, (
-            f"_call_structured is called in _tool_loop.py ({callers}); agent mode "
-            "must parse the ReAct final turn as JSON (no separate re-generation). "
-            "Constrained decoding is the single-shot think path's job (_llm.py)."
+    @classmethod
+    def _unconditional_calls(cls, func_name: str, src: str) -> int:
+        """Count func_name calls that are NOT inside any except handler."""
+        tree = ast.parse(src)
+        return len(cls._all_call_ids(func_name, tree) - cls._call_ids_in_except(func_name, tree))
+
+    @classmethod
+    def _total_calls(cls, func_name: str, src: str) -> int:
+        return len(cls._all_call_ids(func_name, ast.parse(src)))
+
+    def _tool_loop_src(self) -> str:
+        return (SRC_DIR / "_tool_loop.py").read_text()
+
+    def test_call_structured_only_in_failure_branch_in_tool_loop(self):
+        """Live tree: _call_structured appears in _tool_loop.py (the fallback)
+        but every call is inside an except block — none on the happy path."""
+        src = self._tool_loop_src()
+        assert self._total_calls("_call_structured", src) >= 1, (
+            "expected a _call_structured fallback in _tool_loop.py"
         )
-        # Positive: the think path IS still a caller (constrained decoding kept).
-        assert "_llm.py" in callers
+        assert self._unconditional_calls("_call_structured", src) == 0, (
+            "_call_structured is called OUTSIDE an except block in _tool_loop.py; "
+            "agent mode must parse messages[-1] first and only fall back to "
+            "constrained decoding ON parse failure (no unconditional re-generation)."
+        )
 
-    def test_scanner_flags_a_tool_loop_caller(self):
-        """Negative meta-test: a _call_structured call in _tool_loop.py is detected."""
-        corpus = {
-            "_llm.py": "def f():\n    return _call_structured(a, b)\n",
-            "_tool_loop.py": "def g():\n    return _call_structured(x, y)\n",
-        }
-        assert self._files_calling("_call_structured", corpus) == ["_llm.py", "_tool_loop.py"]
+    def test_no_with_structured_output_in_tool_loop(self):
+        """AR-03: the loop must not bypass the fallback discipline by calling
+        with_structured_output (the primitive _call_structured wraps) directly."""
+        assert "with_structured_output" not in self._tool_loop_src()
 
-    def test_scanner_accepts_think_path_only(self):
-        """Positive meta-test: only the think path calling it is the sanctioned state."""
-        corpus = {
-            "_llm.py": "def f():\n    return _call_structured(a, b)\n",
-            "_tool_loop.py": "def g():\n    return parse(messages[-1])  # no re-gen\n",
-        }
-        assert self._files_calling("_call_structured", corpus) == ["_llm.py"]
+    def test_scanner_flags_unconditional_call(self):
+        """Negative meta-test: a top-level (non-except) call is flagged."""
+        src = "def g():\n    return _call_structured(x, y)\n"
+        assert self._unconditional_calls("_call_structured", src) == 1
+
+    def test_scanner_accepts_except_only_call(self):
+        """Positive meta-test: a call reachable only inside except is accepted."""
+        src = (
+            "def g():\n"
+            "    try:\n"
+            "        return parse(m)\n"
+            "    except ExecutionError:\n"
+            "        return _call_structured(x, y)\n"
+        )
+        assert self._total_calls("_call_structured", src) == 1
+        assert self._unconditional_calls("_call_structured", src) == 0
