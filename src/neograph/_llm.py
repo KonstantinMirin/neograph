@@ -22,7 +22,7 @@ from langchain_core.runnables import RunnableConfig
 from pydantic import BaseModel
 
 from neograph._llm_config import LlmConfig, _coerce_llm_config
-from neograph._llm_dispatch import _call_structured
+from neograph._llm_dispatch import _acall_structured, _call_structured
 from neograph._llm_protocols import CostCallback, LlmFactory, PromptCompiler  # noqa: F401 — re-exported
 from neograph._llm_render import _compile_prompt, render_prompt  # noqa: F401 — re-exported
 from neograph._llm_runtime import (
@@ -153,6 +153,34 @@ def invoke_structured(
     elif runtime is None:
         runtime = EMPTY_RUNTIME
     cfg = _coerce_llm_config(llm_config)
+    llm, messages, strategy, llm_log = _prepare_structured_call(
+        runtime, model_tier, prompt_template, input_data,
+        output_model, config, node_name, cfg, context,
+    )
+    max_retries = cfg.max_retries
+    t0 = time.monotonic()
+    assert config is not None
+    result, usage = _call_structured(llm, messages, output_model, strategy, config, max_retries=max_retries)
+    return _finish_structured_call(result, usage, t0, llm_log, runtime, model_tier, node_name)
+
+
+def _prepare_structured_call(
+    runtime: LlmRuntime,
+    model_tier: str | None,
+    prompt_template: str | None,
+    input_data: Any,
+    output_model: Any,
+    config: RunnableConfig | None,
+    node_name: str,
+    cfg: Any,
+    context: dict[str, Any] | None,
+) -> tuple[Any, list, str, Any]:
+    """Pure preamble shared by invoke_structured and ainvoke_structured.
+
+    No network I/O (``_get_llm`` is a factory call, ``_compile_prompt`` renders
+    the prompt). Returns (llm, messages, strategy, llm_log) so the sync and async
+    orchestrators diverge only at the awaited ``_call_structured`` seam.
+    """
     strategy = cfg.output_strategy
     llm_log = log.bind(tier=model_tier, prompt=prompt_template, output=output_model.__name__, strategy=strategy)
 
@@ -172,11 +200,19 @@ def invoke_structured(
         output_schema=output_schema,
         context=context,
     )
+    return llm, messages, strategy, llm_log
 
-    max_retries = cfg.max_retries
-    t0 = time.monotonic()
-    assert config is not None
-    result, usage = _call_structured(llm, messages, output_model, strategy, config, max_retries=max_retries)
+
+def _finish_structured_call(
+    result: Any,
+    usage: Any,
+    t0: float,
+    llm_log: Any,
+    runtime: LlmRuntime,
+    model_tier: str | None,
+    node_name: str,
+) -> BaseModel:
+    """Pure postamble shared by invoke_structured and ainvoke_structured."""
     elapsed = time.monotonic() - t0
 
     usage_info = {}
@@ -190,3 +226,37 @@ def invoke_structured(
     llm_log.info("llm_call", mode="think", duration_s=round(elapsed, 3), **usage_info)
     _notify_cost(runtime, model_tier, usage, node_name=node_name, mode="think", duration_s=round(elapsed, 3))
     return result
+
+
+async def ainvoke_structured(
+    *args: Any,
+    model_tier: str | None = None,
+    prompt_template: str | None = None,
+    input_data: Any = None,
+    output_model: Any = None,
+    config: RunnableConfig | None = None,
+    node_name: str = "",
+    llm_config: LlmConfig | dict | None = None,
+    context: dict[str, Any] | None = None,
+    runtime: LlmRuntime | None = None,
+) -> BaseModel:
+    """Async twin of :func:`invoke_structured` (Phase 1c).
+
+    Shares the pure preamble (_prepare_structured_call) and postamble
+    (_finish_structured_call) verbatim; the only divergence is awaiting the
+    network seam ``_acall_structured``.
+    """
+    if args and isinstance(args[0], LlmRuntime):
+        runtime = args[0]
+    elif runtime is None:
+        runtime = EMPTY_RUNTIME
+    cfg = _coerce_llm_config(llm_config)
+    llm, messages, strategy, llm_log = _prepare_structured_call(
+        runtime, model_tier, prompt_template, input_data,
+        output_model, config, node_name, cfg, context,
+    )
+    max_retries = cfg.max_retries
+    t0 = time.monotonic()
+    assert config is not None
+    result, usage = await _acall_structured(llm, messages, output_model, strategy, config, max_retries=max_retries)
+    return _finish_structured_call(result, usage, t0, llm_log, runtime, model_tier, node_name)

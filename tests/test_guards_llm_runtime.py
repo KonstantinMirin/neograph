@@ -176,9 +176,16 @@ class TestLlmResponsibilityDiscipline:
             "invoke_structured",
             "_get_llm",
             "_notify_cost",
+            # neograph-w74k.2.3 (Phase 1c): async twin + the pure preamble/
+            # postamble helpers both orchestrators share (anti-drift extraction).
+            "ainvoke_structured",
+            "_prepare_structured_call",
+            "_finish_structured_call",
         }),
         "_llm_dispatch.py": frozenset({
             "_call_structured",
+            # neograph-w74k.2.3: async twin of the strategy dispatch.
+            "_acall_structured",
         }),
         # neograph-ble3: DSML detection extracted to its own pure leaf module.
         "_dsml.py": frozenset({
@@ -197,6 +204,9 @@ class TestLlmResponsibilityDiscipline:
             "IncludeRawCompatDecorator",
             "DsmlClassifierDecorator",
             "build_default_adapter",
+            # neograph-w74k.2.3: pure classifiers shared by the sync/async adapters.
+            "_classify_lc_result",
+            "_reclassify_dsml",
         }),
         "_llm_retry.py": frozenset({
             "_extract_json",
@@ -210,6 +220,9 @@ class TestLlmResponsibilityDiscipline:
             # side of the DSML story; detection moved to _dsml. Renamed from
             # _attempt_dsml_recovery to recover_dsml.
             "recover_dsml",
+            # neograph-w74k.2.3: async twins of the retry + DSML-recovery seams.
+            "_ainvoke_json_with_retry",
+            "arecover_dsml",
         }),
         "_llm_render.py": frozenset({
             "_is_inline_prompt",
@@ -224,22 +237,27 @@ class TestLlmResponsibilityDiscipline:
 
     # Coarse line-count budget. Not the load-bearing assertion (the name set
     # is); a proxy that catches accretion that escapes name-level review.
+    # neograph-w74k.2.3 (Phase 1c): budgets raised to accommodate the async
+    # twins across the LLM vertical. The twins are thin over shared pure
+    # preamble/postamble/classify helpers (anti-drift), but adding an awaiting
+    # mirror of each orchestrator is a real, reviewed line increase — not
+    # accretion. The name-set assertion remains the load-bearing guard.
     LINE_BUDGETS = {
-        "_llm.py": 260,
+        "_llm.py": 290,
         # neograph-ble3: tightened 130 -> 115. The 5-path include_raw try/except
         # ladder collapsed to a match on the StructuredResult variant; the
         # provider-quirk wiring moved to the compat shim. Locks the deletion.
-        "_llm_dispatch.py": 115,
+        "_llm_dispatch.py": 200,
         # neograph-ble3: tightened 365 -> 360. _DSML_PATTERN regex moved to
         # _dsml.py; recover_dsml is detection-free. Locks the deletion.
         # neograph-s1u4: 360 -> 375. _apply_null_defaults gained a guarded
         # default_factory coercion branch (a real fix, not accretion).
-        "_llm_retry.py": 375,
+        "_llm_retry.py": 480,
         "_llm_render.py": 310,
         # neograph-ble3: new pure-leaf detection module.
         "_dsml.py": 55,
         # neograph-ble3: compat shim — sum-type + Protocol + 3 adapters + factory.
-        "_llm_structured_compat.py": 180,
+        "_llm_structured_compat.py": 220,
     }
 
     def _top_level_defs(self, path: pathlib.Path) -> set[str]:

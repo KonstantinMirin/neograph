@@ -340,6 +340,23 @@ class TestNoNearDuplicateHelperNames:
             "lev=1: async twin of the sync raw-node wrapper (factory.py). Same "
             "a-prefix sync/async twin convention as _aexecute_node/_execute_node."
         ),
+        # neograph-w74k.2.3 (Phase 1c): a-prefix async twins across the LLM/tool
+        # vertical — same deliberate sync/async twin convention.
+        frozenset({"_acall_structured", "_call_structured"}): (
+            "lev=1: async twin of the structured-output dispatch (_llm_dispatch.py)."
+        ),
+        frozenset({"ainvoke_structured", "invoke_structured"}): (
+            "lev=1: async twin of the think-mode orchestrator (_llm.py)."
+        ),
+        frozenset({"ainvoke_with_tools", "invoke_with_tools"}): (
+            "lev=1: async twin of the ReAct tool loop (_tool_loop.py)."
+        ),
+        frozenset({"_ainvoke_json_with_retry", "_invoke_json_with_retry"}): (
+            "lev=1: async twin of the json-retry loop (_llm_retry.py)."
+        ),
+        frozenset({"arecover_dsml", "recover_dsml"}): (
+            "lev=1: async twin of DSML recovery (_llm_retry.py)."
+        ),
         frozenset({"_get_param_res", "_set_param_res"}): (
             "lev=1: getter/setter antonym pair (_sidecar.py); the get/set prefix "
             "is intentional API symmetry, not a near-duplicate of one helper."

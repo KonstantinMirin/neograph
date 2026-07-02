@@ -470,14 +470,6 @@ def _has_arbitrary_types_justification(
 # review. Update the key when the line moves, and confirm the boundary
 # reason still applies.
 NEOGRAPH_ERROR_ALLOWLIST: dict[str, str] = {
-    # ── _dispatch.py — async LLM/tool dispatch fail-loud stubs (Phase 1a) ──
-    # ThinkDispatch/ToolDispatch.aexecute raise NotImplementedError rather than
-    # silently sync-delegate (review H2: a sync-delegate would block the event
-    # loop invisibly). The real awaiting bodies land in Phase 1c, which removes
-    # these two entries. NotImplementedError is the correct "not yet" contract.
-    "_dispatch.py:196": "async LLM dispatch fail-loud stub; awaiting body lands in Phase 1c (neograph-w74k.2.3)",
-    "_dispatch.py:278": "async tool dispatch fail-loud stub; awaiting body lands in Phase 1c (neograph-w74k.2.3)",
-
     # ── conditions.py — string-grammar parser (stdlib parser contract) ──
     # parse_condition() implements a tiny expression grammar; ValueError is
     # the documented contract and tests depend on it. AttributeError raises

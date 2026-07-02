@@ -370,3 +370,95 @@ def recover_dsml(
             llm, retry_messages, output_model, config, max_retries=max_retries,
         )
         return parse_result
+
+
+async def _ainvoke_json_with_retry(
+    llm: Any,
+    messages: list,
+    output_model: type[BaseModel],
+    config: RunnableConfig,
+    max_retries: int = 2,
+) -> tuple[BaseModel, Any]:
+    """Async twin of :func:`_invoke_json_with_retry`.
+
+    Identical error-feedback retry loop; the only divergence is awaiting the
+    network call (``await llm.ainvoke``). The pure parse/retry-message helpers
+    (_parse_json_response, _build_retry_msg) are reused verbatim.
+    """
+    response = await llm.ainvoke(messages, config=config)
+    raw_text = response.content if hasattr(response, "content") else str(response)
+    usage = getattr(response, "usage_metadata", None) or {}
+    total_input = usage.get("input_tokens", 0)
+    total_output = usage.get("output_tokens", 0)
+
+    for _attempt in range(max_retries):
+        try:
+            combined_usage = {
+                "input_tokens": total_input,
+                "output_tokens": total_output,
+                "total_tokens": total_input + total_output,
+            } if (total_input or total_output) else usage
+            return _parse_json_response(raw_text, output_model), combined_usage
+        except ExecutionError as exc:
+            retry_messages = messages + [
+                {"role": "assistant", "content": raw_text},
+                {"role": "user", "content": _build_retry_msg(exc, output_model)},
+            ]
+            response = await llm.ainvoke(retry_messages, config=config)
+            raw_text = response.content if hasattr(response, "content") else str(response)
+            retry_usage = getattr(response, "usage_metadata", None) or {}
+            total_input += retry_usage.get("input_tokens", 0)
+            total_output += retry_usage.get("output_tokens", 0)
+
+    combined_usage = {
+        "input_tokens": total_input,
+        "output_tokens": total_output,
+        "total_tokens": total_input + total_output,
+    } if (total_input or total_output) else None
+    return _parse_json_response(raw_text, output_model), combined_usage
+
+
+async def arecover_dsml(
+    raw_text: str,
+    output_model: type[BaseModel],
+    llm: Any,
+    messages: list,
+    config: RunnableConfig,
+    cfg: Any,
+    *,
+    strategy: str,
+) -> BaseModel | None:
+    """Async twin of :func:`recover_dsml`.
+
+    Same targeted DSML re-prompt; awaits ``llm.ainvoke`` and delegates the
+    generic fallback to :func:`_ainvoke_json_with_retry`. Detection/parse helpers
+    reused verbatim.
+    """
+    import structlog
+    _log = structlog.get_logger("neograph")
+
+    if not contains_dsml(raw_text):
+        return None
+
+    _log.warning(
+        "trailing_tool_call_markup",
+        strategy=strategy,
+        hint="model emitted tool-call markup; retrying with targeted directive",
+    )
+    budget_msg = cfg.resolved_budget_exhausted_message(output_model.__name__)
+    retry_messages = list(messages)
+    retry_messages.append({"role": "assistant", "content": raw_text})
+    retry_messages.append({"role": "user", "content": budget_msg})
+    try:
+        retry_response = await llm.ainvoke(retry_messages, config=config)
+        retry_text = (
+            retry_response.content if hasattr(retry_response, "content")
+            else str(retry_response)
+        )
+        return _parse_json_response(retry_text, output_model)
+    except ExecutionError:
+        max_retries = getattr(cfg, "max_retries", 1)
+        parse_result, _ = await _ainvoke_json_with_retry(
+            llm, retry_messages, output_model, config, max_retries=max_retries,
+        )
+        return parse_result

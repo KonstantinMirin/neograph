@@ -21,7 +21,7 @@ from pydantic import BaseModel
 from neograph import _llm, _tool_loop
 from neograph._llm_render import _is_inline_prompt
 from neograph._llm_runtime import EMPTY_RUNTIME, LlmRuntime
-from neograph._normalize import normalize_outputs
+from neograph._normalize import NormalizedOutputs, normalize_outputs
 from neograph.errors import ConfigurationError
 from neograph.node import Node, TypeSpecStatic
 from neograph.renderers import build_rendered_input
@@ -190,10 +190,27 @@ class ThinkDispatch:
         config: RunnableConfig,
         context_data: dict[str, str] | None,
     ) -> NodeOutput:
-        # Fail loud rather than silently threadpool the sync LLM vertical
-        # (review H2 — a sync-delegate here blocks the event loop invisibly).
-        # The awaiting async LLM path lands in Phase 1c.
-        raise NotImplementedError("async LLM/tool dispatch lands in Phase 1c")
+        # Async twin of execute(): same pure preamble/postamble, awaits the LLM
+        # vertical (_llm.ainvoke_structured) instead of blocking it.
+        rendered = _render_input(node, input_data.value, runtime=self.runtime)
+        output_model, primary_key = _resolve_primary_output(node)
+        effective_model = config.get("configurable", {}).get("_oracle_model", node.model) or ""
+
+        result = await _llm.ainvoke_structured(
+            self.runtime,
+            model_tier=effective_model,
+            prompt_template=node.prompt or "",
+            input_data=rendered,
+            output_model=cast(type[BaseModel], output_model),
+            config=config,
+            node_name=node.name,
+            llm_config=node.llm_config,
+            context=context_data,
+        )
+
+        if primary_key is not None and result is not None:
+            return NodeOutput(multi={primary_key: result})
+        return NodeOutput(single=result)
 
 
 class ToolDispatch:
@@ -213,6 +230,38 @@ class ToolDispatch:
         self.runtime = runtime
         self.tool_factory_lookup = tool_factory_lookup or {}
 
+    def _tool_loop_kwargs(
+        self, node: Node, input_data: NodeInput, config: RunnableConfig,
+        context_data: dict[str, str] | None,
+    ) -> tuple[dict[str, Any], NormalizedOutputs, str | None]:
+        """Pure preamble shared by execute/aexecute: build the invoke_with_tools
+        kwargs plus (normalized_outputs, primary_key) for output shaping."""
+        rendered = _render_input(node, input_data.value, runtime=self.runtime)
+        output_model, primary_key = _resolve_primary_output(node)
+        no = normalize_outputs(node.outputs)
+        effective_renderer = node.renderer or self.runtime.renderer
+        effective_model = config.get("configurable", {}).get("_oracle_model", node.model) or ""
+
+        oracle_gen_type = output_model
+        if no.is_dict_form and primary_key is not None:
+            oracle_gen_type = no.all_keys[primary_key]
+
+        kwargs = {
+            "model_tier": effective_model,
+            "prompt_template": node.prompt or "",
+            "input_data": rendered,
+            "output_model": cast(type[BaseModel], oracle_gen_type),
+            "tools": node.tools,
+            "budget_tracker": ToolBudgetTracker(node.tools),
+            "config": config,
+            "node_name": node.name,
+            "llm_config": node.llm_config,
+            "renderer": effective_renderer,
+            "context": context_data,
+            "tool_factory_lookup": self.tool_factory_lookup,
+        }
+        return kwargs, no, primary_key
+
     def execute(
         self,
         node: Node,
@@ -220,51 +269,9 @@ class ToolDispatch:
         config: RunnableConfig,
         context_data: dict[str, str] | None,
     ) -> NodeOutput:
-        rendered = _render_input(node, input_data.value, runtime=self.runtime)
-        output_model, primary_key = _resolve_primary_output(node)
-        no = normalize_outputs(node.outputs)
-
-        budget_tracker = ToolBudgetTracker(node.tools)
-
-        # Renderer resolution: node-level renderer takes priority, then runtime
-        effective_renderer = node.renderer or self.runtime.renderer
-
-        effective_model = config.get("configurable", {}).get("_oracle_model", node.model) or ""
-
-        # Resolve oracle_gen_type for dict-form outputs with tools
-        oracle_gen_type = output_model
-        if no.is_dict_form and primary_key is not None:
-            oracle_gen_type = no.all_keys[primary_key]
-
-        result, tool_interactions = _tool_loop.invoke_with_tools(
-            self.runtime,
-            model_tier=effective_model,
-            prompt_template=node.prompt or "",
-            input_data=rendered,
-            output_model=cast(type[BaseModel], oracle_gen_type),
-            tools=node.tools,
-            budget_tracker=budget_tracker,
-            config=config,
-            node_name=node.name,
-            llm_config=node.llm_config,
-            renderer=effective_renderer,
-            context=context_data,
-            tool_factory_lookup=self.tool_factory_lookup,
-        )
-
-        if primary_key is not None and result is not None:
-            result_dict: dict[str, Any] = {primary_key: result}
-            if no.is_dict_form and "tool_log" in no.all_keys:
-                result_dict["tool_log"] = tool_interactions
-            return NodeOutput(multi=result_dict)
-        elif no.is_dict_form:
-            pk = no.primary_key
-            assert pk is not None  # is_dict_form implies primary_key is set
-            result_dict = {pk: result} if result is not None else {}
-            if result is not None and "tool_log" in no.all_keys:
-                result_dict["tool_log"] = tool_interactions
-            return NodeOutput(multi=result_dict) if result_dict else NodeOutput()
-        return NodeOutput(single=result)
+        kwargs, no, primary_key = self._tool_loop_kwargs(node, input_data, config, context_data)
+        result, tool_interactions = _tool_loop.invoke_with_tools(self.runtime, **kwargs)
+        return _shape_tool_output(result, tool_interactions, no, primary_key)
 
     async def aexecute(
         self,
@@ -273,9 +280,32 @@ class ToolDispatch:
         config: RunnableConfig,
         context_data: dict[str, str] | None,
     ) -> NodeOutput:
-        # Fail loud rather than silently threadpool the sync tool loop
-        # (review H2). The awaiting async tool loop lands in Phase 1c.
-        raise NotImplementedError("async LLM/tool dispatch lands in Phase 1c")
+        # Async twin of execute(): same pure preamble/postamble, awaits the tool
+        # loop (_tool_loop.ainvoke_with_tools) instead of blocking it.
+        kwargs, no, primary_key = self._tool_loop_kwargs(node, input_data, config, context_data)
+        result, tool_interactions = await _tool_loop.ainvoke_with_tools(self.runtime, **kwargs)
+        return _shape_tool_output(result, tool_interactions, no, primary_key)
+
+
+def _shape_tool_output(
+    result: BaseModel | None, tool_interactions: list, no: NormalizedOutputs,
+    primary_key: str | None,
+) -> NodeOutput:
+    """Pure postamble shared by ToolDispatch.execute/aexecute: shape the ReAct
+    result + tool_log into a NodeOutput (single or dict-form)."""
+    if primary_key is not None and result is not None:
+        result_dict: dict[str, Any] = {primary_key: result}
+        if no.is_dict_form and "tool_log" in no.all_keys:
+            result_dict["tool_log"] = tool_interactions
+        return NodeOutput(multi=result_dict)
+    elif no.is_dict_form:
+        pk = no.primary_key
+        assert pk is not None  # is_dict_form implies primary_key is set
+        result_dict = {pk: result} if result is not None else {}
+        if result is not None and "tool_log" in no.all_keys:
+            result_dict["tool_log"] = tool_interactions
+        return NodeOutput(multi=result_dict) if result_dict else NodeOutput()
+    return NodeOutput(single=result)
 
 
 def _render_input(

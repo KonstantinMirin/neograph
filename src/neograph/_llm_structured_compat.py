@@ -79,6 +79,31 @@ class StructuredOutputAdapter(Protocol):
         self, llm: Any, model: type[BaseModel], messages: list, config: Any,
     ) -> StructuredResult: ...
 
+    async def ainvoke(
+        self, llm: Any, model: type[BaseModel], messages: list, config: Any,
+    ) -> StructuredResult: ...
+
+
+def _classify_lc_result(result: Any) -> StructuredResult:
+    """Pure classifier for a with_structured_output(include_raw=True) return.
+
+    Shared by LangChainStructuredAdapter.invoke and .ainvoke so the sync and
+    async paths cannot drift — the only difference between them is the awaited
+    ``.ainvoke`` network call that produces ``result``.
+    """
+    if isinstance(result, dict) and "parsed" in result:
+        parsed = result.get("parsed")
+        raw_msg = result.get("raw")
+        usage = getattr(raw_msg, "usage_metadata", None) if raw_msg is not None else None
+        if parsed is not None:
+            return Parsed(model=parsed, usage=usage)
+        return Raw(
+            raw_text=message_text(raw_msg),
+            parsing_error=result.get("parsing_error"),
+            usage=usage,
+        )
+    return Parsed(model=result)
+
 
 class LangChainStructuredAdapter:
     """Canonical adapter: ``with_structured_output(model, include_raw=True)``.
@@ -93,19 +118,15 @@ class LangChainStructuredAdapter:
             result = structured.invoke(messages, config=config)
         except TypeError as exc:
             return Failed(error=exc, raw_text=message_text(messages[-1]) if messages else None)
+        return _classify_lc_result(result)
 
-        if isinstance(result, dict) and "parsed" in result:
-            parsed = result.get("parsed")
-            raw_msg = result.get("raw")
-            usage = getattr(raw_msg, "usage_metadata", None) if raw_msg is not None else None
-            if parsed is not None:
-                return Parsed(model=parsed, usage=usage)
-            return Raw(
-                raw_text=message_text(raw_msg),
-                parsing_error=result.get("parsing_error"),
-                usage=usage,
-            )
-        return Parsed(model=result)
+    async def ainvoke(self, llm, model, messages, config) -> StructuredResult:
+        try:
+            structured = llm.with_structured_output(model, include_raw=True)
+            result = await structured.ainvoke(messages, config=config)
+        except TypeError as exc:
+            return Failed(error=exc, raw_text=message_text(messages[-1]) if messages else None)
+        return _classify_lc_result(result)
 
 
 class IncludeRawCompatDecorator:
@@ -131,6 +152,34 @@ class IncludeRawCompatDecorator:
         except TypeError as exc:
             return Failed(error=exc, raw_text=result.raw_text)
 
+    async def ainvoke(self, llm, model, messages, config) -> StructuredResult:
+        result = await self._inner.ainvoke(llm, model, messages, config)
+        if not (isinstance(result, Failed) and isinstance(result.error, TypeError)):
+            return result
+        try:
+            structured = llm.with_structured_output(model)
+            parsed = await structured.ainvoke(messages, config=config)
+            return Parsed(model=parsed)
+        except TypeError as exc:
+            return Failed(error=exc, raw_text=result.raw_text)
+
+
+def _reclassify_dsml(result: StructuredResult) -> StructuredResult:
+    """Pure DSML reclassification of an already-in-hand result (no network).
+
+    Shared by DsmlClassifierDecorator.invoke and .ainvoke.
+    """
+    if isinstance(result, Raw) and not result.dsml and contains_dsml(result.raw_text):
+        return Raw(
+            raw_text=result.raw_text,
+            dsml=True,
+            parsing_error=result.parsing_error,
+            usage=result.usage,
+        )
+    if isinstance(result, Failed) and result.raw_text and contains_dsml(result.raw_text):
+        return Raw(raw_text=result.raw_text, dsml=True)
+    return result
+
 
 class DsmlClassifierDecorator:
     """Quirk: provider emits DSML/XML tool-call markup instead of JSON.
@@ -147,16 +196,11 @@ class DsmlClassifierDecorator:
 
     def invoke(self, llm, model, messages, config) -> StructuredResult:
         result = self._inner.invoke(llm, model, messages, config)
-        if isinstance(result, Raw) and not result.dsml and contains_dsml(result.raw_text):
-            return Raw(
-                raw_text=result.raw_text,
-                dsml=True,
-                parsing_error=result.parsing_error,
-                usage=result.usage,
-            )
-        if isinstance(result, Failed) and result.raw_text and contains_dsml(result.raw_text):
-            return Raw(raw_text=result.raw_text, dsml=True)
-        return result
+        return _reclassify_dsml(result)
+
+    async def ainvoke(self, llm, model, messages, config) -> StructuredResult:
+        result = await self._inner.ainvoke(llm, model, messages, config)
+        return _reclassify_dsml(result)
 
 
 def build_default_adapter() -> StructuredOutputAdapter:
