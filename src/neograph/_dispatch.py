@@ -5,7 +5,11 @@ strategies injected into the unified ``_execute_node`` path:
 
     ScriptedDispatch — deterministic Python function
     ThinkDispatch    — single LLM call, structured JSON output
-    ToolDispatch     — ReAct tool loop with tools (read-only or mutation)
+
+Agent/act modes do NOT dispatch here — they compile to a multi-node inline ReAct
+cycle (``_agent_cycle`` via ``_wiring._add_agent_cycle``). ``_shape_tool_output``
+/ ``_render_input`` / ``_resolve_primary_output`` remain here because the cycle's
+parse node reuses them.
 """
 
 from __future__ import annotations
@@ -18,14 +22,13 @@ from typing import Any, Protocol, cast
 from langchain_core.runnables import RunnableConfig
 from pydantic import BaseModel
 
-from neograph import _llm, _tool_loop
+from neograph import _llm
 from neograph._llm_render import _is_inline_prompt
 from neograph._llm_runtime import EMPTY_RUNTIME, LlmRuntime
 from neograph._normalize import NormalizedOutputs, normalize_outputs
 from neograph.errors import ConfigurationError
 from neograph.node import Node, TypeSpecStatic
 from neograph.renderers import build_rendered_input
-from neograph.tool import ToolBudgetTracker
 
 # ── Typed dispatch containers (architecture-v2 section 1) ────────────────
 #
@@ -213,85 +216,11 @@ class ThinkDispatch:
         return NodeOutput(single=result)
 
 
-class ToolDispatch:
-    """Dispatch for agent/act modes — ReAct tool loop.
-
-    Handles: rendering, output model resolution, ToolBudgetTracker creation,
-    dual-path renderer resolution (node.renderer > runtime.renderer), Oracle
-    model override, oracle_gen_type resolution for dict-form outputs with
-    tools, invoke_with_tools call, tool_log wiring.
-    """
-
-    def __init__(
-        self,
-        runtime: LlmRuntime = EMPTY_RUNTIME,
-        tool_factory_lookup: dict[str, Callable] | None = None,
-    ) -> None:
-        self.runtime = runtime
-        self.tool_factory_lookup = tool_factory_lookup or {}
-
-    def _tool_loop_kwargs(
-        self, node: Node, input_data: NodeInput, config: RunnableConfig,
-        context_data: dict[str, str] | None,
-    ) -> tuple[dict[str, Any], NormalizedOutputs, str | None]:
-        """Pure preamble shared by execute/aexecute: build the invoke_with_tools
-        kwargs plus (normalized_outputs, primary_key) for output shaping."""
-        rendered = _render_input(node, input_data.value, runtime=self.runtime)
-        output_model, primary_key = _resolve_primary_output(node)
-        no = normalize_outputs(node.outputs)
-        effective_renderer = node.renderer or self.runtime.renderer
-        effective_model = config.get("configurable", {}).get("_oracle_model", node.model) or ""
-
-        oracle_gen_type = output_model
-        if no.is_dict_form and primary_key is not None:
-            oracle_gen_type = no.all_keys[primary_key]
-
-        kwargs = {
-            "model_tier": effective_model,
-            "prompt_template": node.prompt or "",
-            "input_data": rendered,
-            "output_model": cast(type[BaseModel], oracle_gen_type),
-            "tools": node.tools,
-            "budget_tracker": ToolBudgetTracker(node.tools),
-            "config": config,
-            "node_name": node.name,
-            "llm_config": node.llm_config,
-            "renderer": effective_renderer,
-            "context": context_data,
-            "tool_factory_lookup": self.tool_factory_lookup,
-        }
-        return kwargs, no, primary_key
-
-    def execute(
-        self,
-        node: Node,
-        input_data: NodeInput,
-        config: RunnableConfig,
-        context_data: dict[str, str] | None,
-    ) -> NodeOutput:
-        kwargs, no, primary_key = self._tool_loop_kwargs(node, input_data, config, context_data)
-        result, tool_interactions = _tool_loop.invoke_with_tools(self.runtime, **kwargs)
-        return _shape_tool_output(result, tool_interactions, no, primary_key)
-
-    async def aexecute(
-        self,
-        node: Node,
-        input_data: NodeInput,
-        config: RunnableConfig,
-        context_data: dict[str, str] | None,
-    ) -> NodeOutput:
-        # Async twin of execute(): same pure preamble/postamble, awaits the tool
-        # loop (_tool_loop.ainvoke_with_tools) instead of blocking it.
-        kwargs, no, primary_key = self._tool_loop_kwargs(node, input_data, config, context_data)
-        result, tool_interactions = await _tool_loop.ainvoke_with_tools(self.runtime, **kwargs)
-        return _shape_tool_output(result, tool_interactions, no, primary_key)
-
-
 def _shape_tool_output(
     result: BaseModel | None, tool_interactions: list, no: NormalizedOutputs,
     primary_key: str | None,
 ) -> NodeOutput:
-    """Pure postamble shared by ToolDispatch.execute/aexecute: shape the ReAct
+    """Pure postamble reused by the agent cycle's parse node: shape the ReAct
     result + tool_log into a NodeOutput (single or dict-form)."""
     if primary_key is not None and result is not None:
         result_dict: dict[str, Any] = {primary_key: result}
@@ -364,7 +293,11 @@ def _dispatch_for_mode(
     Scripted: delegates to the registered function via ScriptedDispatch.
     The function is looked up in ``scripted_lookup`` (per-compile dict).
     Think: single LLM call via ThinkDispatch (captures runtime).
-    Agent/Act: ReAct tool loop via ToolDispatch (captures runtime).
+
+    Agent/Act do NOT resolve here — they compile to a multi-node inline ReAct
+    cycle (``_wiring._add_agent_cycle`` / ``_agent_cycle``), not a single
+    ``_execute_node`` dispatch. Reaching this function with an agent/act node is a
+    wiring bug (the compiler routes them to the cycle before ``make_node_fn``).
     """
     if node.mode == "scripted":
         if node.scripted_fn is None:
@@ -384,7 +317,14 @@ def _dispatch_for_mode(
     if node.mode == "think":
         return ThinkDispatch(runtime)
     if node.mode in ("agent", "act"):
-        return ToolDispatch(runtime, tool_factory_lookup=tool_factory_lookup)
+        raise ConfigurationError.build(
+            f"agent/act node '{node.name}' cannot use single-node dispatch",
+            expected="compile via the inline agent cycle (_wiring._add_agent_cycle)",
+            found=f"_dispatch_for_mode reached with mode='{node.mode}'",
+            hint="This is an internal wiring error — agent/act nodes are expanded "
+                 "to an agent/tools/parse cycle, not make_node_fn.",
+            node=node.name,
+        )
     raise ConfigurationError.build(
         f"Unknown mode '{node.mode}'",
         expected="scripted, think, agent, or act",

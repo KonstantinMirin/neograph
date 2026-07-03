@@ -115,7 +115,7 @@ def register_bound_tool_factories(
 class ToolInteraction(BaseModel, frozen=True):
     """Record of a single tool call during a ReAct loop.
 
-    Collected by invoke_with_tools and exposed as a secondary output
+    Collected by the agent cycle (_agent_cycle) and exposed as a secondary output
     when the agent/act node declares it in dict-form outputs.
 
     ``result`` is the rendered string form (backward compat — existing code

@@ -59,8 +59,11 @@ DISPATCH_PATH = SRC / "_dispatch.py"
 # drift (empty detection passes the per-class loop vacuously) AND a future
 # 4th class sprouting `execute` (desirable friction — a new dispatch mode
 # must consciously acknowledge the dual-path invariant).
+# ToolDispatch was removed in neograph-m6d3.3: agent/act nodes no longer
+# dispatch through a single _execute_node ModeDispatch — they compile to a
+# multi-node inline ReAct cycle (_agent_cycle via _wiring._add_agent_cycle).
 EXPECTED_DISPATCH_CLASSES = frozenset(
-    {"ModeDispatch", "ScriptedDispatch", "ThinkDispatch", "ToolDispatch"}
+    {"ModeDispatch", "ScriptedDispatch", "ThinkDispatch"}
 )
 
 FuncDef = ast.FunctionDef | ast.AsyncFunctionDef
@@ -289,7 +292,10 @@ class TestAsyncTwinCoLocation:
     # {module_filename: [(sync_name, async_name), ...]}
     TWIN_TABLE: dict[str, list[tuple[str, str]]] = {
         "_execute.py": [("_execute_node", "_aexecute_node")],
-        "_tool_loop.py": [("invoke_with_tools", "ainvoke_with_tools")],
+        # invoke_with_tools/ainvoke_with_tools (the monolith) deleted in
+        # neograph-m6d3.3; the surviving sync/async twin is the shared final-parse
+        # cluster the inline cycle's parse node reuses.
+        "_tool_loop.py": [("_parse_final_turn", "_aparse_final_turn")],
         "runner.py": [
             ("run", "arun"),
             ("stream", "astream"),

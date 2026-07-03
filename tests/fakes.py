@@ -833,3 +833,79 @@ def build_fake_tool_lookup() -> dict[str, _Callable]:
     what `compile()` would have built from `tool_factories=` kwarg.
     """
     return dict(_TEST_TOOL_FACTORIES)
+
+
+def drive_agent_via_cycle(
+    *args: Any,
+    model_tier: str | None = None,
+    prompt_template: str | None = None,
+    input_data: Any = None,
+    output_model: Any = None,
+    tools: list | None = None,
+    budget_tracker: Any = None,  # ignored — the cycle derives budget from tools
+    config: Any = None,
+    node_name: str = "agent",
+    llm_config: Any = None,
+    renderer: Any = None,
+    context: Any = None,
+    runtime: Any = None,
+    tool_factory_lookup: dict[str, _Callable] | None = None,
+) -> tuple[Any, list]:
+    """Test driver for the inline agent cycle (neograph-m6d3.3).
+
+    Drop-in replacement for the deleted ``_tool_loop.invoke_with_tools``: builds a
+    single agent node, compiles it to the real inline ReAct cycle (agent/tools/
+    parse), runs it, and returns ``(result, tool_interactions)`` — the same shape
+    the monolith returned. Lets the tool-loop unit tests keep their assertions
+    verbatim while exercising the NEW mechanism end-to-end through run().
+
+    ``budget_tracker`` is accepted for signature compatibility but ignored (the
+    cycle derives budget from each Tool's ``budget``). ``context=`` is not
+    supported here — migrate such tests to a full compile()/run() with an upstream
+    context producer.
+    """
+    from langgraph.checkpoint.memory import MemorySaver
+
+    from neograph import Construct, Node, ToolInteraction, compile, run
+    from neograph._llm_runtime import LlmRuntime
+
+    if args and isinstance(args[0], LlmRuntime):
+        runtime = args[0]
+    if context is not None:
+        raise NotImplementedError(
+            "drive_agent_via_cycle: context= not supported — migrate to compile()/run() "
+            "with an upstream context producer node."
+        )
+
+    node_kwargs: dict[str, Any] = {
+        "name": node_name or "agent",
+        "mode": "agent",
+        "outputs": {"result": output_model, "tool_log": list[ToolInteraction]},
+        "model": model_tier or "fast",
+        "prompt": prompt_template or "test",
+        "tools": tools or [],
+    }
+    if llm_config is not None:
+        node_kwargs["llm_config"] = llm_config
+    if renderer is not None:
+        node_kwargs["renderer"] = renderer
+    node = Node(**node_kwargs)
+    pipeline = Construct("agent_unit", nodes=[node])
+
+    ckwargs: dict[str, Any] = {}
+    if runtime is not None:
+        ckwargs["_runtime"] = runtime
+    if tool_factory_lookup:
+        ckwargs["tool_factories"] = tool_factory_lookup
+
+    graph = compile(pipeline, checkpointer=MemorySaver(), **ckwargs)
+
+    run_input = input_data if isinstance(input_data, dict) else {}
+    run_config = {**(config or {})}
+    run_config.setdefault("configurable", {})
+    run_config["configurable"] = {**run_config["configurable"]}
+    run_config["configurable"].setdefault("thread_id", "agent-unit")
+
+    result = run(graph, input=run_input, config=run_config)
+    field = node_name or "agent"
+    return result.get(f"{field}_result"), result.get(f"{field}_tool_log", []) or []

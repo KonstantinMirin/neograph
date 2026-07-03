@@ -348,12 +348,9 @@ class TestNoNearDuplicateHelperNames:
         frozenset({"ainvoke_structured", "invoke_structured"}): (
             "lev=1: async twin of the think-mode orchestrator (_llm.py)."
         ),
-        frozenset({"ainvoke_with_tools", "invoke_with_tools"}): (
-            "lev=1: async twin of the ReAct tool loop (_tool_loop.py)."
-        ),
-        # neograph-m6d3 (agent-as-subgraph): a-prefix async twin of the shared
-        # final-parse cluster used by both the monolith tail and the inline
-        # agent-cycle parse node (_tool_loop.py).
+        # neograph-m6d3.3: the invoke_with_tools/ainvoke_with_tools monolith was
+        # deleted (agent/act compile to the inline cycle). The surviving _tool_loop
+        # twin is the shared final-parse cluster the cycle's parse node reuses.
         frozenset({"_aparse_final_turn", "_parse_final_turn"}): (
             "lev=1: async twin of the ReAct final-parse + fallback cluster."
         ),

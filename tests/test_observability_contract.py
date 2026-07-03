@@ -45,8 +45,8 @@ class TestReActMaxIterationsExceededEvent:
     the loop state (loops, tool_calls, max_iterations)."""
 
     def test_event_name_emitted_when_max_iterations_hit(self):
-        from neograph._tool_loop import invoke_with_tools
         from neograph.tool import ToolBudgetTracker
+        from tests.fakes import drive_agent_via_cycle as invoke_with_tools
         from tests.fakes import register_tool_factory
 
         fake_tool = FakeTool("search", response="found")
@@ -80,8 +80,8 @@ class TestReActMaxIterationsExceededEvent:
         )
 
     def test_event_payload_includes_max_iterations_and_loop_state(self):
-        from neograph._tool_loop import invoke_with_tools
         from neograph.tool import ToolBudgetTracker
+        from tests.fakes import drive_agent_via_cycle as invoke_with_tools
         from tests.fakes import register_tool_factory
 
         fake_tool = FakeTool("search", response="found")
@@ -125,8 +125,8 @@ class TestReActTokenBudgetExceededEvent:
     consumption (cumulative_input_tokens, token_budget)."""
 
     def test_event_name_emitted_when_token_budget_hit(self):
-        from neograph._tool_loop import invoke_with_tools
         from neograph.tool import ToolBudgetTracker
+        from tests.fakes import drive_agent_via_cycle as invoke_with_tools
         from tests.fakes import register_tool_factory
 
         fake_tool = FakeTool("search", response="found")
@@ -160,8 +160,8 @@ class TestReActTokenBudgetExceededEvent:
         )
 
     def test_event_payload_includes_token_budget_state(self):
-        from neograph._tool_loop import invoke_with_tools
         from neograph.tool import ToolBudgetTracker
+        from tests.fakes import drive_agent_via_cycle as invoke_with_tools
         from tests.fakes import register_tool_factory
 
         fake_tool = FakeTool("search", response="found")
@@ -207,8 +207,8 @@ class TestTrailingToolCallMarkupEvent:
     def test_event_name_emitted_when_dsml_markup_in_final_response(self):
         from langchain_core.messages import AIMessage
 
-        from neograph._tool_loop import invoke_with_tools
         from neograph.tool import ToolBudgetTracker
+        from tests.fakes import drive_agent_via_cycle as invoke_with_tools
         from tests.fakes import register_tool_factory
 
         class Answer(BaseModel):
@@ -275,8 +275,8 @@ class TestTrailingToolCallMarkupEvent:
     def test_event_severity_is_warning(self):
         from langchain_core.messages import AIMessage
 
-        from neograph._tool_loop import invoke_with_tools
         from neograph.tool import ToolBudgetTracker
+        from tests.fakes import drive_agent_via_cycle as invoke_with_tools
         from tests.fakes import register_tool_factory
 
         class Answer(BaseModel):
@@ -349,8 +349,8 @@ class TestReActGuardForcedBreakEvent:
         from langchain_core.messages import AIMessage
         from langchain_core.tools import StructuredTool
 
-        from neograph._tool_loop import invoke_with_tools
         from neograph.tool import ToolBudgetTracker
+        from tests.fakes import drive_agent_via_cycle as invoke_with_tools
         from tests.fakes import register_tool_factory
 
         class Result(BaseModel):
@@ -411,8 +411,8 @@ class TestReActGuardForcedBreakEvent:
         from langchain_core.messages import AIMessage
         from langchain_core.tools import StructuredTool
 
-        from neograph._tool_loop import invoke_with_tools
         from neograph.tool import ToolBudgetTracker
+        from tests.fakes import drive_agent_via_cycle as invoke_with_tools
         from tests.fakes import register_tool_factory
 
         class Result(BaseModel):

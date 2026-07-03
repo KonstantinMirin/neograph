@@ -1,7 +1,7 @@
 """Framework-generated tool-budget preamble.
 
 The ONE canonical place per-tool call budgets are turned into prose for the
-model. Rendered inside ``invoke_with_tools`` — the only site that holds the
+model. Rendered inside ``_prepare_tool_loop`` (agent-cycle seed) — the site that holds the
 ``Tool`` specs and ``cfg.max_iterations`` together — so the numbers the model
 is TOLD are the same numbers that are ENFORCED, by construction. No caller ever
 hand-writes a budget number (which drifts from enforcement).

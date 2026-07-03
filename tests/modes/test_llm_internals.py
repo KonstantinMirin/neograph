@@ -1089,8 +1089,8 @@ class TestToolCallArgsCoercion:
     def test_string_args_retried_and_recovered(self):
         """ValidationError from string tool_calls.args triggers retry, not crash."""
         from neograph import Tool
-        from neograph._tool_loop import invoke_with_tools
         from tests.fakes import StringArgsFake, register_tool_factory
+        from tests.fakes import drive_agent_via_cycle as invoke_with_tools
 
         tool_invoked = []
 
@@ -1145,9 +1145,9 @@ class TestToolCallArgsCoercion:
         from pydantic import BaseModel as _BM
 
         from neograph import Tool
-        from neograph._tool_loop import invoke_with_tools
         from neograph.tool import ToolBudgetTracker
         from tests.fakes import StringArgsFake, register_tool_factory
+        from tests.fakes import drive_agent_via_cycle as invoke_with_tools
 
         tool_calls_received = []
 
@@ -1219,9 +1219,9 @@ class TestToolCallArgsCoercion:
         from pydantic import BaseModel as _BM
 
         from neograph import Tool
-        from neograph._tool_loop import invoke_with_tools
         from neograph.tool import ToolBudgetTracker
         from tests.fakes import StringArgsFake, register_tool_factory
+        from tests.fakes import drive_agent_via_cycle as invoke_with_tools
 
         args_received = []
 
@@ -1267,9 +1267,9 @@ class TestToolCallArgsCoercion:
         from pydantic import BaseModel as _BM
 
         from neograph import Tool
-        from neograph._tool_loop import invoke_with_tools
         from neograph.tool import ToolBudgetTracker
         from tests.fakes import StringArgsFake, register_tool_factory
+        from tests.fakes import drive_agent_via_cycle as invoke_with_tools
 
         received_args = []
 
@@ -1400,23 +1400,29 @@ class TestToolResultRendering:
 
 
 class TestUnregisteredToolInReact:
-    """Lines 500-501: tool not registered raises ConfigurationError."""
+    """An agent node whose tool has no registered factory is rejected.
+
+    neograph-m6d3.3: the deleted monolith's DIRECT-call runtime guard raised a
+    ConfigurationError from _prepare_tool_loop. Through the inline cycle (i.e.
+    compile()/run(), which is the only path now), an unregistered tool factory is
+    caught at COMPILE time by compile()'s tool-factory validation — a CompileError,
+    which is where compiled agent nodes always caught it (compiler.py predates
+    m6d3). The error moves earlier (compile-time), never later.
+    """
 
     def test_unregistered_tool_raises(self):
-        """invoke_with_tools with unregistered tool raises ConfigurationError."""
-        from neograph._tool_loop import invoke_with_tools
-        from neograph.tool import ToolBudgetTracker
+        from neograph.errors import CompileError
+        from tests.fakes import drive_agent_via_cycle as invoke_with_tools
 
         _llm_kw = configure_fake_llm(lambda tier: StructuredFake(lambda m: m(items=["x"])))
 
-        with pytest.raises(ConfigurationError, match="not registered"):
+        with pytest.raises(CompileError, match="no registered factory"):
             invoke_with_tools(runtime=build_fake_runtime(_llm_kw['llm_factory'], _llm_kw['prompt_compiler']),
                 model_tier="fast",
                 prompt_template="test prompt",
                 input_data="test",
                 output_model=Claims,
                 tools=[Tool("nonexistent", budget=5)],
-                budget_tracker=ToolBudgetTracker([Tool("nonexistent", budget=5)]),
                 config={"configurable": {}},
                 tool_factory_lookup=build_fake_tool_lookup(),
             )
@@ -1427,8 +1433,8 @@ class TestUsageTokenAccumulation:
 
     def test_usage_tokens_accumulated_from_messages(self):
         """Token usage from ReAct messages is accumulated (lines 621-626, 630)."""
-        from neograph._tool_loop import invoke_with_tools
         from neograph.tool import ToolBudgetTracker
+        from tests.fakes import drive_agent_via_cycle as invoke_with_tools
         from tests.fakes import register_tool_factory
 
         fake_tool = FakeTool("search", response="found it")
@@ -1438,10 +1444,14 @@ class TestUsageTokenAccumulation:
         from langchain_core.messages import AIMessage
 
         class UsageFake:
-            """Fake LLM that adds usage_metadata to responses."""
+            """Fake LLM that adds usage_metadata to responses.
+
+            History-driven (neograph-m6d3): one tool call, then final — decided
+            from the message history so it behaves under the inline cycle (the
+            LLM is rebuilt per superstep) as it did under the monolith.
+            """
 
             def __init__(self):
-                self._call_idx = 0
                 self._model = None
                 self._structured = False
 
@@ -1449,6 +1459,8 @@ class TestUsageTokenAccumulation:
                 return self
 
             def invoke(self, messages, **kwargs):
+                from langchain_core.messages import ToolMessage
+
                 if self._structured:
                     result = Claims(items=["done"])
                     return {
@@ -1458,8 +1470,7 @@ class TestUsageTokenAccumulation:
                             usage_metadata={"input_tokens": 5, "output_tokens": 3, "total_tokens": 8},
                         ),
                     }
-                self._call_idx += 1
-                if self._call_idx == 1:
+                if not any(isinstance(m, ToolMessage) for m in messages):
                     msg = AIMessage(
                         content="", usage_metadata={"input_tokens": 10, "output_tokens": 5, "total_tokens": 15}
                     )
@@ -1545,8 +1556,8 @@ class TestReActToolReturnsListOfModels:
         from langchain_core.messages import AIMessage
         from pydantic import BaseModel as BM
 
-        from neograph._tool_loop import invoke_with_tools
         from neograph.tool import ToolBudgetTracker
+        from tests.fakes import drive_agent_via_cycle as invoke_with_tools
         from tests.fakes import register_tool_factory
 
         # A tool that returns a list of BaseModel instances
@@ -1564,7 +1575,6 @@ class TestReActToolReturnsListOfModels:
 
         class ListReActFake:
             def __init__(self):
-                self._call_idx = 0
                 self._model = None
                 self._structured = False
 
@@ -1572,10 +1582,11 @@ class TestReActToolReturnsListOfModels:
                 return self
 
             def invoke(self, messages, **kwargs):
+                from langchain_core.messages import ToolMessage
+
                 if self._structured:
                     return self._model(items=["done"])
-                self._call_idx += 1
-                if self._call_idx == 1:
+                if not any(isinstance(m, ToolMessage) for m in messages):
                     msg = AIMessage(content="")
                     msg.tool_calls = [{"name": "search", "args": {"q": "x"}, "id": "1"}]
                     return msg
@@ -1612,8 +1623,8 @@ class TestReActMaxIterationsGuard:
 
     def test_max_iterations_default_stops_at_20(self):
         """Default max_iterations=20 stops an infinite tool-calling loop."""
-        from neograph._tool_loop import invoke_with_tools
         from neograph.tool import ToolBudgetTracker
+        from tests.fakes import drive_agent_via_cycle as invoke_with_tools
         from tests.fakes import register_tool_factory
 
         fake_tool = FakeTool("search", response="found")
@@ -1642,8 +1653,8 @@ class TestReActMaxIterationsGuard:
 
     def test_max_iterations_custom_value(self):
         """Custom max_iterations in llm_config overrides the default."""
-        from neograph._tool_loop import invoke_with_tools
         from neograph.tool import ToolBudgetTracker
+        from tests.fakes import drive_agent_via_cycle as invoke_with_tools
         from tests.fakes import register_tool_factory
 
         fake_tool = FakeTool("search", response="found")
@@ -1674,8 +1685,8 @@ class TestReActMaxIterationsGuard:
 
     def test_max_iterations_does_not_affect_normal_completion(self):
         """When the LLM finishes before max_iterations, the guard is irrelevant."""
-        from neograph._tool_loop import invoke_with_tools
         from neograph.tool import ToolBudgetTracker
+        from tests.fakes import drive_agent_via_cycle as invoke_with_tools
         from tests.fakes import register_tool_factory
 
         fake_tool = FakeTool("search", response="found")
@@ -1709,8 +1720,8 @@ class TestReActMaxIterationsGuard:
 
     def test_max_iterations_equals_one(self):
         """Degenerate case: max_iterations=1 means the first tool-calling iteration triggers the guard."""
-        from neograph._tool_loop import invoke_with_tools
         from neograph.tool import ToolBudgetTracker
+        from tests.fakes import drive_agent_via_cycle as invoke_with_tools
         from tests.fakes import register_tool_factory
 
         fake_tool = FakeTool("search", response="found")
@@ -1749,8 +1760,8 @@ class TestReActMaxIterationsGuard:
         and yields a Claims. So this pins BOTH properties: the safety net
         terminates the loop (no hang) AND the structured fallback recovers a typed
         result (weak-model recourse)."""
-        from neograph._tool_loop import invoke_with_tools
         from neograph.tool import ToolBudgetTracker
+        from tests.fakes import drive_agent_via_cycle as invoke_with_tools
         from tests.fakes import register_tool_factory
 
         fake_tool = FakeTool("search", response="found")
@@ -1785,8 +1796,8 @@ class TestReActTokenBudgetGuard:
 
     def test_token_budget_stops_loop(self):
         """token_budget in llm_config stops the loop when input tokens exceed threshold."""
-        from neograph._tool_loop import invoke_with_tools
         from neograph.tool import ToolBudgetTracker
+        from tests.fakes import drive_agent_via_cycle as invoke_with_tools
         from tests.fakes import register_tool_factory
 
         fake_tool = FakeTool("search", response="found")
@@ -1816,8 +1827,8 @@ class TestReActTokenBudgetGuard:
 
     def test_token_budget_none_is_no_limit(self):
         """token_budget=None (default) means no token budget enforcement."""
-        from neograph._tool_loop import invoke_with_tools
         from neograph.tool import ToolBudgetTracker
+        from tests.fakes import drive_agent_via_cycle as invoke_with_tools
         from tests.fakes import register_tool_factory
 
         fake_tool = FakeTool("search", response="found")
@@ -1851,8 +1862,8 @@ class TestReActTokenBudgetGuard:
 
     def test_both_guards_fire_simultaneously(self):
         """When max_iterations and token_budget are both exceeded, loop still terminates."""
-        from neograph._tool_loop import invoke_with_tools
         from neograph.tool import ToolBudgetTracker
+        from tests.fakes import drive_agent_via_cycle as invoke_with_tools
         from tests.fakes import register_tool_factory
 
         fake_tool = FakeTool("search", response="found")
@@ -1882,8 +1893,8 @@ class TestReActTokenBudgetGuard:
 
     def test_token_budget_missing_usage_metadata(self):
         """When responses lack usage_metadata, token_budget never fires (correct behavior)."""
-        from neograph._tool_loop import invoke_with_tools
         from neograph.tool import ToolBudgetTracker
+        from tests.fakes import drive_agent_via_cycle as invoke_with_tools
         from tests.fakes import register_tool_factory
 
         fake_tool = FakeTool("search", response="found")
@@ -2011,8 +2022,8 @@ class TestDSMLTrailingToolCallRecovery:
         from pydantic import BaseModel as _BM
 
         from neograph import Tool
-        from neograph._tool_loop import invoke_with_tools
         from neograph.tool import ToolBudgetTracker
+        from tests.fakes import drive_agent_via_cycle as invoke_with_tools
         from tests.fakes import register_tool_factory
 
         call_count = [0]
@@ -2077,8 +2088,8 @@ class TestDSMLTrailingToolCallRecovery:
         from pydantic import BaseModel as _BM
 
         from neograph import Tool
-        from neograph._tool_loop import invoke_with_tools
         from neograph.tool import ToolBudgetTracker
+        from tests.fakes import drive_agent_via_cycle as invoke_with_tools
         from tests.fakes import register_tool_factory
 
         captured_messages = []
@@ -2151,8 +2162,8 @@ class TestDSMLDoubleFailure:
         from pydantic import BaseModel as _BM
 
         from neograph import Tool
-        from neograph._tool_loop import invoke_with_tools
         from neograph.tool import ToolBudgetTracker
+        from tests.fakes import drive_agent_via_cycle as invoke_with_tools
         from tests.fakes import register_tool_factory
 
         call_count = [0]
@@ -2228,9 +2239,9 @@ class TestDSMLAllRetriesFail:
         from pydantic import BaseModel as _BM
 
         from neograph import Tool
-        from neograph._tool_loop import invoke_with_tools
         from neograph.errors import ExecutionError
         from neograph.tool import ToolBudgetTracker
+        from tests.fakes import drive_agent_via_cycle as invoke_with_tools
         from tests.fakes import register_tool_factory
 
         call_count = [0]
@@ -2302,8 +2313,8 @@ class TestNonDSMLParseFailureTakesGenericRetry:
         from pydantic import BaseModel as _BM
 
         from neograph import Tool
-        from neograph._tool_loop import invoke_with_tools
         from neograph.tool import ToolBudgetTracker
+        from tests.fakes import drive_agent_via_cycle as invoke_with_tools
         from tests.fakes import register_tool_factory
 
         call_count = [0]
@@ -2633,8 +2644,8 @@ class TestDSMLInStructuredStrategyPath:
         from pydantic import BaseModel as _BM
 
         from neograph import Tool
-        from neograph._tool_loop import invoke_with_tools
         from neograph.tool import ToolBudgetTracker
+        from tests.fakes import drive_agent_via_cycle as invoke_with_tools
         from tests.fakes import register_tool_factory
 
         DSML_MARKUP = (
@@ -2709,8 +2720,8 @@ class TestDSMLInStructuredStrategyPath:
         from pydantic import BaseModel as _BM
 
         from neograph import Tool
-        from neograph._tool_loop import invoke_with_tools
         from neograph.tool import ToolBudgetTracker
+        from tests.fakes import drive_agent_via_cycle as invoke_with_tools
         from tests.fakes import register_tool_factory
 
         class Answer(_BM):
@@ -2787,8 +2798,8 @@ class TestDSMLInStructuredStrategyPath:
         from pydantic import BaseModel as _BM
 
         from neograph import Tool
-        from neograph._tool_loop import invoke_with_tools
         from neograph.tool import ToolBudgetTracker
+        from tests.fakes import drive_agent_via_cycle as invoke_with_tools
         from tests.fakes import register_tool_factory
 
         class Answer(_BM):
@@ -2870,8 +2881,8 @@ class TestDSMLInStructuredStrategyPath:
         from pydantic import ValidationError
 
         from neograph import Tool
-        from neograph._tool_loop import invoke_with_tools
         from neograph.tool import ToolBudgetTracker
+        from tests.fakes import drive_agent_via_cycle as invoke_with_tools
         from tests.fakes import register_tool_factory
 
         DSML_MARKUP = (
@@ -2975,8 +2986,8 @@ class TestDSMLAfterMaxIterationsGuard:
         from pydantic import BaseModel as _BM
 
         from neograph import Tool
-        from neograph._tool_loop import invoke_with_tools
         from neograph.tool import ToolBudgetTracker
+        from tests.fakes import drive_agent_via_cycle as invoke_with_tools
         from tests.fakes import register_tool_factory
 
         class Answer(_BM):
@@ -3060,8 +3071,8 @@ class TestDSMLAfterTokenBudget:
         from pydantic import BaseModel as _BM
 
         from neograph import Tool
-        from neograph._tool_loop import invoke_with_tools
         from neograph.tool import ToolBudgetTracker
+        from tests.fakes import drive_agent_via_cycle as invoke_with_tools
         from tests.fakes import register_tool_factory
 
         class Answer(_BM):
@@ -3155,8 +3166,8 @@ class TestMultipleIndependentDSMLRecoveries:
         from pydantic import BaseModel as _BM
 
         from neograph import Tool
-        from neograph._tool_loop import invoke_with_tools
         from neograph.tool import ToolBudgetTracker
+        from tests.fakes import drive_agent_via_cycle as invoke_with_tools
         from tests.fakes import register_tool_factory
 
         class Answer(_BM):
@@ -3251,10 +3262,13 @@ class TestMultipleIndependentDSMLRecoveries:
         assert interactions1 is not interactions2
         assert interactions1[0].tool_name != interactions2[0].tool_name
         assert fake1.calls == 3  # first fake untouched after second call
-        assert set(budget1.exhausted_tools()) == {"search"}
-        assert set(budget2.exhausted_tools()) == {"lookup"}
-        assert "lookup" not in set(budget1.exhausted_tools())
-        assert "search" not in set(budget2.exhausted_tools())
+        # neograph-m6d3.3: budget isolation is now guaranteed BY CONSTRUCTION —
+        # each run() gets its own neo_agent_budget_* state channel, not a caller-
+        # owned ToolBudgetTracker. The isolation this class exists to prove is
+        # re-asserted above via the distinct per-call interactions (each tool
+        # called exactly once, distinct names, distinct lists). The old
+        # budget1/budget2.exhausted_tools() inspection is dropped because the
+        # cycle does not mutate the passed-in tracker.
 
 
 # =============================================================================
@@ -3290,8 +3304,8 @@ class TestBudgetExhaustedMessageFallback:
         from pydantic import BaseModel as _BM
 
         from neograph import Tool
-        from neograph._tool_loop import invoke_with_tools
         from neograph.tool import ToolBudgetTracker
+        from tests.fakes import drive_agent_via_cycle as invoke_with_tools
         from tests.fakes import register_tool_factory
 
         captured = []
@@ -3462,8 +3476,8 @@ class TestDefaultBudgetExhaustedMessageRendersModelName:
         from pydantic import BaseModel as _BM
 
         from neograph import Tool
-        from neograph._tool_loop import invoke_with_tools
         from neograph.tool import ToolBudgetTracker
+        from tests.fakes import drive_agent_via_cycle as invoke_with_tools
         from tests.fakes import register_tool_factory
 
         captured_messages = []
@@ -3532,8 +3546,8 @@ class TestSafetyBreakOnGuardWithRogueToolCalls:
         from pydantic import BaseModel as _BM
 
         from neograph import Tool
-        from neograph._tool_loop import invoke_with_tools
         from neograph.tool import ToolBudgetTracker
+        from tests.fakes import drive_agent_via_cycle as invoke_with_tools
         from tests.fakes import register_tool_factory
 
         class Result(_BM):
@@ -3624,8 +3638,8 @@ class TestToolExceptionPropagates:
         from pydantic import BaseModel as _BM
 
         from neograph import Tool
-        from neograph._tool_loop import invoke_with_tools
         from neograph.tool import ToolBudgetTracker
+        from tests.fakes import drive_agent_via_cycle as invoke_with_tools
         from tests.fakes import register_tool_factory
 
         class Answer(_BM):
@@ -3696,8 +3710,8 @@ class TestToolCallsShapeEdgeCases:
         from pydantic import BaseModel as _BM
 
         from neograph import Tool
-        from neograph._tool_loop import invoke_with_tools
         from neograph.tool import ToolBudgetTracker
+        from tests.fakes import drive_agent_via_cycle as invoke_with_tools
         from tests.fakes import register_tool_factory
 
         class Answer(_BM):
@@ -3746,7 +3760,17 @@ class TestToolCallsShapeEdgeCases:
         assert parsed.answer == "done"
         assert interactions == []
 
-    def test_absent_attribute_current_behavior_raises_attribute_error(self):
+    def test_malformed_non_message_response_is_rejected_loudly(self):
+        """A response object that is not a LangChain message is rejected loudly.
+
+        neograph-m6d3.3: real LLMs always return AIMessage (tool_calls defaults to
+        []), so this only reaches a fake returning a non-Message. The deleted
+        monolith accessed ``response.tool_calls`` inline → AttributeError. The
+        inline cycle appends the response to the ``neo_agent_messages_*`` channel
+        via ``add_messages`` FIRST, so a non-Message is rejected at message
+        coercion instead — a different error TYPE, same "malformed → loud failure"
+        intent (it never silently passes). Behavior-change flagged in m6d3.3.
+        """
         from types import SimpleNamespace
 
         import pytest as _pytest
@@ -3754,8 +3778,7 @@ class TestToolCallsShapeEdgeCases:
         from pydantic import BaseModel as _BM
 
         from neograph import Tool
-        from neograph._tool_loop import invoke_with_tools
-        from neograph.tool import ToolBudgetTracker
+        from tests.fakes import drive_agent_via_cycle as invoke_with_tools
         from tests.fakes import register_tool_factory
 
         class Answer(_BM):
@@ -3781,9 +3804,10 @@ class TestToolCallsShapeEdgeCases:
         )
 
         tools = [Tool(name="x", description="x")]
-        budget = ToolBudgetTracker(tools)
 
-        with _pytest.raises(AttributeError, match="tool_calls"):
+        # Loud rejection: add_messages cannot coerce a non-Message response, so
+        # LangChain raises NotImplementedError at the channel — never silent.
+        with _pytest.raises(NotImplementedError):
             invoke_with_tools(
                 model_tier="fast",
                 prompt_template="test",
@@ -3791,7 +3815,6 @@ class TestToolCallsShapeEdgeCases:
                 output_model=Answer,
                 config={"configurable": {}},
                 tools=tools,
-                budget_tracker=budget,
                 llm_config={"output_strategy": "json_mode"},
              runtime=build_fake_runtime(lambda tier: AbsentAttrFake()), tool_factory_lookup=build_fake_tool_lookup())
 
@@ -4324,8 +4347,8 @@ class TestDictCoercionTypoRejection:
         from pydantic import ValidationError as _VE
 
         from neograph import Tool
-        from neograph._tool_loop import invoke_with_tools
         from neograph.tool import ToolBudgetTracker
+        from tests.fakes import drive_agent_via_cycle as invoke_with_tools
         from tests.fakes import register_tool_factory
 
         called = [False]
@@ -4620,8 +4643,8 @@ class TestToolBudgetPreambleInjection:
     def test_first_message_is_system_budget_preamble_when_announce_enabled(self):
         """announce_tool_budget=True -> first msg the LLM sees is a system preamble
         containing the finite tools' budget numbers and max_iterations."""
-        from neograph._tool_loop import invoke_with_tools
         from neograph.tool import ToolBudgetTracker
+        from tests.fakes import drive_agent_via_cycle as invoke_with_tools
 
         self._register_finite_tools()
         Answer = self._answer_model()
@@ -4656,8 +4679,8 @@ class TestToolBudgetPreambleInjection:
         """Default (announce_tool_budget unset/False): NO budget preamble is
         prepended. The only system message is the always-on output-schema
         instruction (neograph-f7nt), and the user prompt survives."""
-        from neograph._tool_loop import invoke_with_tools
         from neograph.tool import ToolBudgetTracker
+        from tests.fakes import drive_agent_via_cycle as invoke_with_tools
 
         self._register_finite_tools()
         Answer = self._answer_model()
@@ -4693,8 +4716,8 @@ class TestToolBudgetPreambleInjection:
         survive intact (LOW finding — provider portability)."""
         from langchain_core.messages import SystemMessage
 
-        from neograph._tool_loop import invoke_with_tools
         from neograph.tool import ToolBudgetTracker
+        from tests.fakes import drive_agent_via_cycle as invoke_with_tools
 
         self._register_finite_tools()
         Answer = self._answer_model()
@@ -4970,8 +4993,8 @@ class TestAgentStrategyAwareFallback:
         """GUARD (stays green): output_strategy='structured', VALID JSON final
         ReAct turn -> parsed directly, K+1 base invokes, ZERO constrained
         re-gen. Pins that the double-gen elimination survives Option A."""
-        from neograph._tool_loop import invoke_with_tools
         from neograph.tool import ToolBudgetTracker
+        from tests.fakes import drive_agent_via_cycle as invoke_with_tools
         from tests.fakes import register_tool_factory
 
         Answer = self._answer_model()
@@ -5011,8 +5034,8 @@ class TestAgentStrategyAwareFallback:
         failure through _invoke_json_with_retry, so the constrained arm is never
         touched (structured_calls == 0) and the returned value comes from the
         json retry, not the constrained sentinel."""
-        from neograph._tool_loop import invoke_with_tools
         from neograph.tool import ToolBudgetTracker
+        from tests.fakes import drive_agent_via_cycle as invoke_with_tools
         from tests.fakes import register_tool_factory
 
         Answer = self._answer_model()
@@ -5056,8 +5079,8 @@ class TestAgentStrategyAwareFallback:
         """GUARD (stays green): output_strategy='json_mode', NON-JSON final then
         parseable-on-retry -> recovers via _invoke_json_with_retry, and NEVER
         calls _call_structured / with_structured_output (structured_calls==0)."""
-        from neograph._tool_loop import invoke_with_tools
         from neograph.tool import ToolBudgetTracker
+        from tests.fakes import drive_agent_via_cycle as invoke_with_tools
         from tests.fakes import register_tool_factory
 
         Answer = self._answer_model()
@@ -5097,9 +5120,9 @@ class TestAgentStrategyAwareFallback:
         Today the tail ignores output_strategy and recovers the parse failure
         via _invoke_json_with_retry (base_retry_json parses cleanly), so it
         RETURNS a value instead of raising -> pytest.raises fails."""
-        from neograph._tool_loop import invoke_with_tools
         from neograph.errors import ExecutionError
         from neograph.tool import ToolBudgetTracker
+        from tests.fakes import drive_agent_via_cycle as invoke_with_tools
         from tests.fakes import register_tool_factory
 
         Answer = self._answer_model()
@@ -5134,8 +5157,8 @@ class TestAgentStrategyAwareFallback:
         """LOW-2 (route a): output_strategy='structured' + DSML markup in the
         final ReAct turn -> recovered via _call_structured's INTERNAL
         recover_dsml (a fresh constrained call). Preserves neograph-0tid."""
-        from neograph._tool_loop import invoke_with_tools
         from neograph.tool import ToolBudgetTracker
+        from tests.fakes import drive_agent_via_cycle as invoke_with_tools
         from tests.fakes import register_tool_factory
 
         Answer = self._answer_model()
@@ -5170,8 +5193,8 @@ class TestAgentStrategyAwareFallback:
         """LOW-2 (route b): output_strategy='json_mode' + DSML markup in the
         final ReAct turn -> recovered via the tail's EXPLICIT recover_dsml.
         Preserves neograph-0tid."""
-        from neograph._tool_loop import invoke_with_tools
         from neograph.tool import ToolBudgetTracker
+        from tests.fakes import drive_agent_via_cycle as invoke_with_tools
         from tests.fakes import register_tool_factory
 
         Answer = self._answer_model()
@@ -5274,8 +5297,8 @@ class TestAgentSingleGenerationOutput:
         RED today: the structured else-branch (_tool_loop.py:395) fires
         _call_structured, adding GEN3 -> K+2 and returning the re-gen value.
         """
-        from neograph._tool_loop import invoke_with_tools
         from neograph.tool import ToolBudgetTracker
+        from tests.fakes import drive_agent_via_cycle as invoke_with_tools
         from tests.fakes import register_tool_factory
 
         class Diagnosis(_BaseModel):
@@ -5324,8 +5347,8 @@ class TestAgentSingleGenerationOutput:
         system message is injected.
         """
         from neograph import describe_type
-        from neograph._tool_loop import invoke_with_tools
         from neograph.tool import ToolBudgetTracker
+        from tests.fakes import drive_agent_via_cycle as invoke_with_tools
         from tests.fakes import register_tool_factory
 
         class Diagnosis(_BaseModel):
@@ -5373,8 +5396,8 @@ class TestAgentSingleGenerationOutput:
         to a valid output via the json_mode tail's recover_dsml
         (_tool_loop.py:382). Must stay green after the fix.
         """
-        from neograph._tool_loop import invoke_with_tools
         from neograph.tool import ToolBudgetTracker
+        from tests.fakes import drive_agent_via_cycle as invoke_with_tools
         from tests.fakes import register_tool_factory
 
         class Answer(_BaseModel):
@@ -5414,8 +5437,8 @@ class TestAgentSingleGenerationOutput:
         final ReAct turn emits valid JSON and parses directly (no re-gen).
         Must stay green after the fix.
         """
-        from neograph._tool_loop import invoke_with_tools
         from neograph.tool import ToolBudgetTracker
+        from tests.fakes import drive_agent_via_cycle as invoke_with_tools
         from tests.fakes import register_tool_factory
 
         class Answer(_BaseModel):

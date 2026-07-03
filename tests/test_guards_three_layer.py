@@ -398,3 +398,71 @@ class TestRunLayerNotImportedByCompileLayer:
         assert not _imports_runner("from neograph.compiler import compile\n")
         # a comment/docstring mentioning the runner is not an import
         assert not _imports_runner('"""the runner drives this"""\nx = 1\n')
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# neograph-m6d3.5 — no while-True ReAct loop in a node body
+#
+# Agent/act cognition compiles to a LangGraph subgraph of supersteps
+# (_agent_cycle via _wiring._add_agent_cycle), NOT a `while True` loop driving
+# LLM + tool turns inside one node body. The deleted monolith
+# (_tool_loop.invoke_with_tools) was exactly that anti-pattern; this guard bans
+# its re-introduction. Locks the principle the way the H2 dual-path guard locks
+# async: cognition lives at superstep boundaries the checkpointer can see, so a
+# mid-loop interrupt pauses at a turn boundary (turn-boundary idempotency).
+# ═══════════════════════════════════════════════════════════════════════════
+
+# The modules that host agent-cognition node bodies. A ReAct loop would regress
+# HERE. _llm_retry.py's bounded JSON-fix retry loop is a Layer-2 parse helper,
+# not agent cognition, and is deliberately out of scope.
+_AGENT_COGNITION_MODULES = ("_agent_cycle.py", "_tool_loop.py", "_dispatch.py")
+
+
+def _while_loops_driving_llm(source: str) -> list[int]:
+    """Line numbers of ``while`` loops whose body contains an ``.invoke`` /
+    ``.ainvoke`` call — the monolithic ReAct-loop signature (LLM turns driven by
+    a Python loop instead of LangGraph supersteps)."""
+    tree = ast.parse(source)
+    hits: list[int] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.While):
+            for inner in ast.walk(node):
+                if (
+                    isinstance(inner, ast.Call)
+                    and isinstance(inner.func, ast.Attribute)
+                    and inner.func.attr in ("invoke", "ainvoke")
+                ):
+                    hits.append(node.lineno)
+                    break
+    return hits
+
+
+class TestNoReActLoopInNodeBody:
+    """m6d3.5: no while-loop drives LLM turns in an agent-cognition node body."""
+
+    def test_no_while_loop_drives_llm_in_cognition_modules(self) -> None:
+        problems: list[str] = []
+        for name in _AGENT_COGNITION_MODULES:
+            src = (SRC / name).read_text()
+            for ln in _while_loops_driving_llm(src):
+                problems.append(
+                    f"{name}:{ln}: a `while` loop drives an LLM `.invoke`/`.ainvoke` — "
+                    "the monolithic ReAct-loop anti-pattern deleted in m6d3.3"
+                )
+        assert not problems, (
+            "ReAct-loop-in-a-node-body reintroduced (neograph-m6d3.5):\n"
+            + "".join(f"  {p}\n" for p in problems)
+            + "\nAgent/act cognition must compile to a subgraph of supersteps "
+            "(_agent_cycle), not a Python while-True loop, so a mid-loop interrupt "
+            "pauses at a turn boundary the checkpointer can see."
+        )
+
+    # ── slip meta-tests ──
+
+    def test_meta_synthetic_react_loop_is_flagged(self) -> None:
+        src = "def f(llm, msgs):\n    while True:\n        r = llm.invoke(msgs)\n"
+        assert _while_loops_driving_llm(src) == [2]
+
+    def test_meta_bounded_retry_loop_without_llm_not_flagged(self) -> None:
+        src = "def f():\n    n = 0\n    while n < 3:\n        n += 1\n"
+        assert _while_loops_driving_llm(src) == []

@@ -375,6 +375,17 @@ class Node(Modifiable, BaseModel):
                 node=self.name,
             )
 
+        # Agent/act nodes compile to a multi-node inline ReAct cycle (agent/tools/
+        # parse + checkpointer for turn-boundary interrupts), so they cannot run as
+        # a single isolated node. Same rationale as the modifier restriction above.
+        if self.mode in ("agent", "act"):
+            raise NeographError.build(
+                f"Node '{self.name}' (mode={self.mode}) is a ReAct cycle; "
+                "run_isolated does not support agent/act nodes",
+                hint="use compile(construct, ...) + run(graph, ...) instead",
+                node=self.name,
+            )
+
         # Fail-loud check (§2): LLM-mode nodes require llm_factory +
         # prompt_compiler kwargs.
         if self.mode in ("think", "agent", "act"):

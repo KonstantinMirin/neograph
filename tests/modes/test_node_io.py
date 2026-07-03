@@ -502,11 +502,8 @@ class TestModeDispatch:
         td = ThinkDispatch()
         assert isinstance(td, ThinkDispatch)
 
-    def test_tool_dispatch_instantiates(self):
-        """ToolDispatch instantiates without arguments."""
-        from neograph._dispatch import ToolDispatch
-        td = ToolDispatch()
-        assert isinstance(td, ToolDispatch)
+    # ToolDispatch removed in neograph-m6d3.3 — agent/act nodes compile to the
+    # inline ReAct cycle (_agent_cycle), not a single-node ModeDispatch.
 
     def test_scripted_dispatch_execute_calls_fn(self):
         """ScriptedDispatch.execute delegates to the wrapped fn."""
@@ -558,22 +555,19 @@ class TestModeDispatch:
         td = ThinkDispatch()
         assert callable(getattr(td, "execute", None))
 
-    def test_tool_dispatch_has_execute_method(self):
-        """ToolDispatch conforms to ModeDispatch protocol (has execute method)."""
-        from neograph._dispatch import ToolDispatch
-        td = ToolDispatch()
-        assert callable(getattr(td, "execute", None))
-
     def test_all_dispatches_conform_to_protocol(self):
-        """All 3 dispatches are runtime-compatible with ModeDispatch."""
+        """All remaining dispatches are runtime-compatible with ModeDispatch.
+
+        (ToolDispatch removed in neograph-m6d3.3 — agent/act compile to a cycle.)
+        """
         import inspect
 
-        from neograph._dispatch import ScriptedDispatch, ThinkDispatch, ToolDispatch
+        from neograph._dispatch import ScriptedDispatch, ThinkDispatch
 
         def dummy_fn(input_data, config):
             return None
 
-        dispatches = [ScriptedDispatch(fn=dummy_fn), ThinkDispatch(), ToolDispatch()]
+        dispatches = [ScriptedDispatch(fn=dummy_fn), ThinkDispatch()]
         for d in dispatches:
             sig = inspect.signature(d.execute)
             params = list(sig.parameters.keys())

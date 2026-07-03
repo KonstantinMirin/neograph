@@ -192,6 +192,38 @@ def _record_turn_usage(response: Any, budget: dict[str, Any]) -> None:
     budget["cumulative_input_tokens"] += usage.get("input_tokens", 0)
 
 
+def _total_calls(budget: dict[str, Any]) -> int:
+    return sum(budget.get("calls", {}).values())
+
+
+def _emit_limit_event(tp: _TurnPrep, budget: dict[str, Any], max_iter_hit: bool, budget_hit: bool) -> None:
+    """Emit the ReAct loop-guard observability event (contract; preserved from the
+    monolith): ``react_{reason}_exceeded`` at warning level with the loop state."""
+    reason = (
+        "max_iterations+token_budget"
+        if max_iter_hit and budget_hit
+        else ("max_iterations" if max_iter_hit else "token_budget")
+    )
+    tp.prep.llm_log.warning(
+        f"react_{reason}_exceeded",
+        max_iterations=tp.prep.max_iterations,
+        token_budget=tp.prep.token_budget,
+        cumulative_input_tokens=budget.get("cumulative_input_tokens", 0),
+        loops=budget.get("iteration", 0),
+        tool_calls=_total_calls(budget),
+    )
+
+
+def _emit_guard_forced_break(tp: _TurnPrep, budget: dict[str, Any]) -> None:
+    """Emit ``react_guard_forced_break`` (contract): the forced-final turn ran
+    tools-unbound but the model still returned tool_calls (rogue dispatch)."""
+    tp.prep.llm_log.warning(
+        "react_guard_forced_break",
+        loops=budget.get("iteration", 0),
+        tool_calls=_total_calls(budget),
+    )
+
+
 def make_agent_cycle_bodies(
     node: Node,
     *,
@@ -222,11 +254,14 @@ def make_agent_cycle_bodies(
             log.bind(node=node.name, mode=node.mode).info(
                 "node_start", input_type=None, output_type=node.outputs.__name__
                 if isinstance(node.outputs, type) else None)
+        was_forced = budget.get("forced_final", False)
         tp = _build_turn_prep(node, runtime, tfl, state, config)
         working, seed = _agent_working_messages(tp.prep, channel_msgs)
         caller = _agent_caller(tp.prep, node, budget)
         response = caller.invoke(working, config=config)
         _record_turn_usage(response, budget)
+        if was_forced and getattr(response, "tool_calls", None):
+            _emit_guard_forced_break(tp, budget)
         return {msgs_key: [*seed, response], budget_key: budget}
 
     async def aagent_body(state: BaseModel, config: RunnableConfig) -> dict[str, Any]:
@@ -240,11 +275,14 @@ def make_agent_cycle_bodies(
             log.bind(node=node.name, mode=node.mode).info(
                 "node_start", input_type=None, output_type=node.outputs.__name__
                 if isinstance(node.outputs, type) else None)
+        was_forced = budget.get("forced_final", False)
         tp = _build_turn_prep(node, runtime, tfl, state, config)
         working, seed = _agent_working_messages(tp.prep, channel_msgs)
         caller = _agent_caller(tp.prep, node, budget)
         response = await caller.ainvoke(working, config=config)
         _record_turn_usage(response, budget)
+        if was_forced and getattr(response, "tool_calls", None):
+            _emit_guard_forced_break(tp, budget)
         return {msgs_key: [*seed, response], budget_key: budget}
 
     # ── router after {node}__agent ────────────────────────────────────────
@@ -287,6 +325,7 @@ def make_agent_cycle_bodies(
 
         max_iter_hit, budget_hit = _tools_guards(tp, budget)
         if max_iter_hit or budget_hit:
+            _emit_limit_event(tp, budget, max_iter_hit, budget_hit)
             budget["forced_final"] = True
             return {msgs_key: _limit_messages(tool_calls, max_iter_hit), budget_key: budget}
 
@@ -338,6 +377,7 @@ def make_agent_cycle_bodies(
 
         max_iter_hit, budget_hit = _tools_guards(tp, budget)
         if max_iter_hit or budget_hit:
+            _emit_limit_event(tp, budget, max_iter_hit, budget_hit)
             budget["forced_final"] = True
             return {msgs_key: _limit_messages(tool_calls, max_iter_hit), budget_key: budget}
 

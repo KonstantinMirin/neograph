@@ -60,9 +60,9 @@ class TestSyncDriverRejectsAsyncOnlyTool:
     async-only, pointing the user at arun()."""
 
     def test_sync_loop_raises_clear_error_for_async_only_tool(self):
-        from neograph._tool_loop import invoke_with_tools
         from neograph.errors import ConfigurationError
         from neograph.tool import ToolBudgetTracker
+        from tests.fakes import drive_agent_via_cycle as invoke_with_tools
 
         async_tool = _make_async_only_tool("mcp_echo")
         register_tool_factory("mcp_echo", lambda cfg, tc: async_tool)
