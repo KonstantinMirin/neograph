@@ -15,15 +15,21 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
+import structlog
+
 from neograph._ir_branch import iter_with_arms
 from neograph._ir_protocols import ConstructItem
 from neograph._llm_runtime import collect_llm_nodes, missing_runtime_kwargs
 from neograph._normalize import normalize_inputs
+from neograph._runtime_registry import _decoration_registry
 from neograph._sidecar import _get_param_res, get_merge_fn_metadata
 from neograph._state_keys import StateKeys
 from neograph.construct import Construct
 from neograph.di import DIBinding, DIKind
 from neograph.node import Node
+from neograph.tool import Tool, is_async_only_tool
+
+log = structlog.get_logger()
 
 # Standard keys always available in state / config
 _KNOWN_EXTRAS: frozenset[str] = frozenset({
@@ -124,6 +130,7 @@ def lint(
     llm_factory: Any = None,
     prompt_compiler: Any = None,
     conditions: dict[str, Callable] | None = None,
+    tool_factories: dict[str, Callable] | None = None,
 ) -> list[LintIssue]:
     """Validate DI bindings and template placeholders in *construct*.
 
@@ -162,10 +169,17 @@ def lint(
     issues: list[LintIssue] = []
     _emit_missing_llm_kwargs_issue(construct, llm_factory, prompt_compiler, issues)
 
+    # Seed the tool-factory lookup the same way compile() does: decoration-time
+    # registrations (@tool, auto-registered raw BaseTools) plus explicit kwargs.
+    tool_factory_lookup: dict[str, Callable] = dict(_decoration_registry.tool_factory)
+    if tool_factories:
+        tool_factory_lookup.update(tool_factories)
+
     all_known = _KNOWN_EXTRAS | (known_template_vars or set())
     _walk(construct, config, issues, known_vars=all_known,
           template_resolver=template_resolver,
-          conditions=conditions)
+          conditions=conditions,
+          tool_factories=tool_factory_lookup)
     return issues
 
 
@@ -210,6 +224,7 @@ def _walk(
     known_vars: frozenset[str] | set[str] = _KNOWN_EXTRAS,
     template_resolver: Callable[[str], str | None] | None = None,
     conditions: dict[str, Callable] | None = None,
+    tool_factories: dict[str, Callable] | None = None,
 ) -> None:
     """Recursively walk a construct and check DI bindings + template placeholders."""
     if isinstance(item, Construct):
@@ -221,7 +236,8 @@ def _walk(
         for child in iter_with_arms(item):
             _walk(child, config, issues, known_vars=known_vars,
                   template_resolver=template_resolver,
-                  conditions=conditions)
+                  conditions=conditions,
+                  tool_factories=tool_factories)
         return
 
     if not isinstance(item, Node):
@@ -250,6 +266,9 @@ def _walk(
 
     # 3. Loop condition checks
     _check_loop_condition(item, issues, conditions=conditions)
+
+    # 4. Async-only (MCP) tool checks
+    _check_async_only_tools(item, issues, tool_factories=tool_factories)
 
 
 def _check_template_placeholders(
@@ -416,6 +435,69 @@ def _check_loop_condition(
                     "None guard: lambda d: d is None or <condition>"
                 ),
             ))
+
+
+def _check_async_only_tools(
+    node: Node,
+    issues: list[LintIssue],
+    *,
+    tool_factories: dict[str, Callable] | None = None,
+) -> None:
+    """Flag agent/act nodes bound to an async-only (MCP) tool.
+
+    An async-only tool (StructuredTool with a coroutine and no sync func — the
+    langchain-mcp-adapters shape) cannot run under the sync ``run()`` driver;
+    it requires ``arun()``. lint() cannot know the driver statically, so it
+    warns whenever such a tool is bound. The tool object is resolved either from
+    ``Tool._bound_tool`` (raw BaseTool passed in tools=) or by instantiating the
+    registered factory.
+    """
+    if node.mode not in ("agent", "act") or not node.tools:
+        return
+
+    for spec in node.tools:
+        tool_obj = _resolve_tool_object(spec, tool_factories)
+        if tool_obj is None:
+            continue
+        tool_name = getattr(spec, "name", None) or getattr(tool_obj, "name", "?")
+        if is_async_only_tool(tool_obj):
+            issues.append(LintIssue(
+                node_name=f"Node '{node.name}'",
+                param=tool_name,
+                kind="tool_requires_async_driver",
+                required=False,
+                message=(
+                    f"Node '{node.name}': tool '{tool_name}' is async-only "
+                    "(e.g. an MCP tool) and cannot run under the sync run() "
+                    "driver. Drive this graph with arun() so the async tool "
+                    "loop is used."
+                ),
+            ))
+
+
+def _resolve_tool_object(spec: Any, tool_factories: dict[str, Callable] | None) -> Any:
+    """Resolve the concrete tool object for a Tool spec, or None if unavailable.
+
+    Prefers the bound tool carried on a spec synthesized from a raw BaseTool;
+    otherwise instantiates the registered factory. Never raises — lint must not
+    fail because a factory misbehaves.
+    """
+    if isinstance(spec, Tool):
+        bound = getattr(spec, "_bound_tool", None)
+        if bound is not None:
+            return bound
+        factory = (tool_factories or {}).get(spec.name)
+        if factory is None:
+            return None
+        try:
+            return factory({}, spec.config)
+        except Exception as exc:  # noqa: BLE001
+            # lint must not crash because a tool factory misbehaves; a tool it
+            # cannot instantiate simply yields no async-only finding.
+            log.debug("lint_tool_factory_failed", tool=spec.name, error=str(exc))
+            return None
+    # A raw BaseTool that slipped through un-normalized — introspect directly.
+    return spec
 
 
 def _extract_format_placeholders(text: str) -> list[str]:

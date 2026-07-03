@@ -26,7 +26,8 @@ from collections.abc import Callable
 from typing import Annotated, Any, Literal, Protocol, cast, runtime_checkable
 
 from langchain_core.runnables import RunnableConfig
-from pydantic import BaseModel, Field, PlainValidator, PrivateAttr
+from langchain_core.tools import BaseTool
+from pydantic import BaseModel, Field, PlainValidator, PrivateAttr, field_validator
 from typing_extensions import TypeVar
 
 from neograph._llm_config import LlmConfig
@@ -168,8 +169,27 @@ class Node(Modifiable, BaseModel):
     prompt: str | None = None       # template name in prompt registry
     llm_config: LlmConfig = Field(default_factory=LlmConfig)  # framework knobs + provider_kwargs (typed)
 
-    # Tools with per-tool budgets
-    tools: list[Tool] = []
+    # Tools with per-tool budgets. A raw LangChain BaseTool may be passed
+    # directly; the validator below normalizes it to a Tool spec (name from
+    # tool.name) carrying the tool on Tool._bound_tool. The compile seam then
+    # auto-registers a factory — no register_tool_factory boilerplate needed.
+    tools: list[Tool | BaseTool] = []
+
+    @field_validator("tools", mode="before")
+    @classmethod
+    def _normalize_raw_base_tools(cls, value: Any) -> Any:
+        """Convert any raw LangChain BaseTool in tools= to a Tool spec.
+
+        Pure normalization (no registration side effect — that lives at the
+        compile assembly seam). Runs before pydantic union validation so a
+        StructuredTool is never coerced into a Tool by field-shape matching.
+        """
+        if not isinstance(value, list):
+            return value
+        return [
+            Tool.from_base_tool(item) if isinstance(item, BaseTool) else item
+            for item in value
+        ]
 
     # Deterministic implementation (scripted mode only)
     scripted_fn: str | None = None

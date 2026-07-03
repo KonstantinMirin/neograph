@@ -459,7 +459,25 @@ def invoke_with_tools(
                 continue
 
             tool_t0 = time.monotonic()
-            result = tool_fn.invoke(tool_call["args"])
+            try:
+                result = tool_fn.invoke(tool_call["args"])
+            except NotImplementedError as exc:
+                # An async-only tool (e.g. an MCP tool loaded via
+                # langchain-mcp-adapters) has no sync implementation. The sync
+                # run() driver cannot execute it — the async driver arun() must
+                # be used so the async tool loop (ainvoke) runs instead. Surface
+                # a clear neograph error instead of leaking NotImplementedError.
+                raise ConfigurationError.build(
+                    f"Tool '{tool_name}' does not support synchronous invocation",
+                    expected="an async driver (arun())",
+                    found="sync run() driving an async-only tool",
+                    hint=(
+                        "This tool is async-only (e.g. an MCP tool). Drive the "
+                        "graph with arun() instead of run() so the async tool "
+                        "loop (ainvoke) is used."
+                    ),
+                    node=node_name or None,
+                ) from exc
             tool_elapsed = time.monotonic() - tool_t0
 
             budget_tracker.record_call(tool_name)

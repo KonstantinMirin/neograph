@@ -187,6 +187,14 @@ FUNCTION_LOCAL_IMPORT_ALLOWLIST: set[tuple[str, str, frozenset[str]]] = {
     # registry (leaf _runtime_registry, neograph-v3xx HIGH-01). Function-local
     # import inside the decorator defers the registry import to decoration time.
     ("tool.py", "neograph._runtime_registry", frozenset({"register_tool_factory"})),
+    # tool.py — register_bound_tool_factories walks the construct (iter_with_arms)
+    # to auto-register factories for raw BaseTools passed in Node(tools=[...]).
+    # REAL cycle: node.py imports `from neograph.tool import Tool` at module level,
+    # so tool.py cannot import node/_ir_branch at module level (tool -> _ir_branch
+    # -> node -> tool). Function-local imports keep tool.py a leaf (neograph-w74k.3).
+    # Retire when the bound-tool walk moves to a non-leaf assembly module.
+    ("tool.py", "neograph._ir_branch", frozenset({"iter_with_arms"})),
+    ("tool.py", "neograph.node", frozenset({"Node"})),
 }
 
 

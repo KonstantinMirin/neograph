@@ -21,7 +21,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, PrivateAttr
 
 
 class Tool(BaseModel, frozen=True):
@@ -36,11 +36,80 @@ class Tool(BaseModel, frozen=True):
     budget: int = 0  # max calls for this tool (0 = unlimited)
     config: dict[str, Any] = Field(default_factory=dict)
 
+    # Set when this spec was synthesized from a raw LangChain BaseTool passed
+    # directly in Node(tools=[...]). Carries the original tool so the compile
+    # seam can auto-register a factory and lint can introspect it (async-only
+    # detection) without instantiating anything. PrivateAttr survives
+    # model_copy (pipe/deepcopy), so it round-trips through modifier chains.
+    _bound_tool: Any = PrivateAttr(default=None)
+
     def __init__(self, name_: str | None = None, /, **kwargs):
         """Tool accepts name positionally or as a keyword argument."""
         if name_ is not None:
             kwargs["name"] = name_
         super().__init__(**kwargs)
+
+    @classmethod
+    def from_base_tool(cls, base_tool: Any) -> Tool:
+        """Synthesize a Tool spec from a raw LangChain BaseTool.
+
+        Name is taken from ``base_tool.name``; the original tool is carried on
+        the ``_bound_tool`` private attribute for later factory registration.
+        """
+        spec = cls(name=base_tool.name)
+        spec._bound_tool = base_tool
+        return spec
+
+
+def is_async_only_tool(tool: Any) -> bool:
+    """True when a LangChain tool supports only async invocation.
+
+    MCP tools loaded via langchain-mcp-adapters are ``StructuredTool`` instances
+    with a coroutine but no sync ``func`` — calling ``.invoke()`` raises
+    ``NotImplementedError``. Such a tool requires the async driver (``arun()``);
+    a sync ``run()`` cannot execute it. A generic ``BaseTool`` subclass counts
+    as async-only when it overrides ``_arun`` but leaves ``_run`` as the base
+    (which raises).
+    """
+    try:
+        from langchain_core.tools import BaseTool, StructuredTool
+    except ImportError:  # pragma: no cover - langchain always present in practice
+        return False
+
+    if isinstance(tool, StructuredTool):
+        return tool.coroutine is not None and tool.func is None
+    if isinstance(tool, BaseTool):
+        cls = type(tool)
+        run_overridden = cls._run is not BaseTool._run
+        arun_overridden = cls._arun is not BaseTool._arun
+        return arun_overridden and not run_overridden
+    return False
+
+
+def register_bound_tool_factories(
+    construct: Any, tool_factory_lookup: dict[str, Callable]
+) -> None:
+    """Auto-register factories for raw BaseTools passed via ``Node(tools=[...])``.
+
+    A ``Tool`` spec synthesized from a raw LangChain BaseTool carries the
+    original tool on ``Tool._bound_tool``. Register a factory returning it so
+    the ReAct loop can instantiate the tool without the user calling
+    ``register_tool_factory``. Explicit ``tool_factories=`` entries win
+    (``setdefault``). Called from the compile assembly seam over the same node
+    traversal as tool-factory verification (``iter_with_arms``).
+    """
+    from neograph._ir_branch import iter_with_arms
+    from neograph.node import Node
+
+    for item in iter_with_arms(construct):
+        if isinstance(item, Node) and item.tools:
+            for spec in item.tools:
+                bound = getattr(spec, "_bound_tool", None)
+                if bound is not None:
+                    tool_factory_lookup.setdefault(
+                        spec.name,
+                        lambda config, tool_config, _t=bound: _t,
+                    )
 
 
 class ToolInteraction(BaseModel, frozen=True):

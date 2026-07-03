@@ -46,6 +46,7 @@ from neograph.modifiers import ModifierCombo, classify_modifiers
 from neograph.naming import field_name_for
 from neograph.node import Node
 from neograph.state import compile_state_model, compute_node_fingerprints, compute_schema_fingerprint
+from neograph.tool import register_bound_tool_factories
 
 log = structlog.get_logger()
 
@@ -134,6 +135,9 @@ def compile(
     tool_factory_lookup: dict[str, Callable] = dict(_decoration_registry.tool_factory)
     if tool_factories:
         tool_factory_lookup.update(tool_factories)
+    # Auto-register factories for raw LangChain BaseTools passed via tools=.
+    # Explicit tool_factories= (merged above) win; bound tools fill the gaps.
+    register_bound_tool_factories(construct, tool_factory_lookup)
 
     compile_log.info("compile_start",
                      node_names=[n.name for n in construct.nodes],
