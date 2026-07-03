@@ -560,6 +560,54 @@ class TestNoInternalStateLeaks:
         )
 
 
+class TestEngineLevelInternalFiltering:
+    """Promise: the COMPILED ENGINE itself filters neo_* framework channels
+    via output_schema declared at compile time — NOT the runner's
+    _strip_internals wrapper.
+
+    This is the Core Invariant of neograph-pjqe: enforcement must be DECLARED
+    to LangGraph at compile time and honored by the engine, not hand-wrapped
+    around the engine's runtime output. run()/arun() strip today, so a test
+    that goes through run() passes both before AND after the migration and
+    cannot be TDD-red. This test reaches the RAW CompiledStateGraph
+    (compiled.graph) and invokes it directly, bypassing run()'s wrapper, to
+    pin that the engine — not the wrapper — owns the filtering.
+
+    Breaks if: compiler.py:241 does not pass output_schema=<non-neo_ fields>
+    to StateGraph, leaving neo_* channels in the raw invoke result.
+
+    One-line break: drop the output_schema kwarg in compile()."""
+
+    def test_raw_engine_invoke_returns_no_neo_keys(self):
+        """Invoking the raw compiled LangGraph graph directly (bypassing run's
+        _strip_internals) must return a dict with NO neo_-prefixed keys.
+
+        An Oracle pipeline writes the neo_oracle_gen collector channel into
+        user state; today that channel surfaces in the raw engine result and
+        is only scrubbed by the runner. output_schema at compile time must
+        exclude it so the engine returns neo_-free output on its own."""
+        from tests.schemas import Claims
+
+        register_scripted("g", lambda input_data, config: Claims(items=["x"]))
+        register_scripted("m", lambda variants, config: Claims(items=["merged"]))
+
+        node = Node.scripted("gen", fn="g", outputs=Claims) | Oracle(n=2, merge_fn="m")
+        pipeline = Construct("engine-filter-oracle", nodes=[node])
+        compiled = compile(pipeline, **build_test_compile_kwargs())
+
+        # Reach the RAW CompiledStateGraph and invoke directly — no run(),
+        # no _strip_internals. The engine must have filtered neo_* itself.
+        raw_result = compiled.graph.invoke({"node_id": "test-001"})
+
+        neo_keys = sorted(k for k in raw_result if k.startswith("neo_"))
+        assert neo_keys == [], (
+            f"Raw engine invoke leaked framework channels {neo_keys}. "
+            "output_schema (non-neo_ fields) must be declared on the compiled "
+            "StateGraph so the ENGINE filters neo_* — enforcement declared, "
+            f"not wrapped. Raw result keys: {sorted(raw_result.keys())}"
+        )
+
+
 class TestOracleCallsGeneratorNTimes:
     """Promise: Oracle(n=N) calls the generator node N times, merge once."""
 

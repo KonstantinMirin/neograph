@@ -276,6 +276,12 @@ def check(analyze: Analysis) -> ValidationResult: ...
 graph = compile(pipeline, conditions={"needs_review": needs_review})
 ```
 
+### When to reach for a raw interrupt instead
+
+The Operator earns its place when the interrupt is **conditional** — the `interrupt_when=` predicate decides at runtime whether to pause, based on the state (a low coverage score, a failed validation, a risky action). That predicate is the value neograph adds.
+
+If you only need an **unconditional** pause — always stop at this node for human sign-off — an Operator adds nothing over LangGraph's own `interrupt_before`. A predicate that returns a payload every time is just a static gate wearing a callable. For that case, prefer the engine's static breakpoint via the compile facade (`interrupt_before=["node_name"]`); it declares the gate to the engine directly instead of routing an always-true condition through the Operator machinery. Keep the Operator for the conditional case it exists to serve.
+
 ## Loop with loop_when and max_iterations
 
 Repeat a node until a condition is met. The node's output feeds back as its own input on the next iteration.

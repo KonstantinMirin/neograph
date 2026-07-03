@@ -275,6 +275,30 @@ def compile_state_model(
     return create_model(f"{construct.name}State", **fields)
 
 
+def build_output_schema_model(state_model: type[BaseModel]) -> type[BaseModel]:
+    """Build the StateGraph ``output_schema``: every state field NOT ``neo_``-prefixed.
+
+    Declared at compile time (``StateGraph(state_model, output_schema=...)``) so the
+    ENGINE itself filters framework plumbing out of ``invoke``/``ainvoke`` results —
+    replacing the hand-rolled ``_strip_internals`` wrap the runner and sub-construct
+    exits used to carry (neograph-pjqe: declare, don't wrap). The filter is the
+    ``neo_`` prefix, mirroring ``_strip_internals`` EXACTLY: the three non-``neo_``
+    framework-injected fields (``node_id``/``project_root``/``human_feedback``) still
+    surface, so the user-visible contract is unchanged; only enforcement moves from a
+    runtime wrapper we own to a compile-time declaration the engine honours.
+
+    Field annotations (including reducer ``Annotated`` metadata) are preserved via
+    ``rebuild_annotation`` so the output channels match the state channels exactly.
+    See docs/design/langgraph-output-schema-research-2026-07-03.md (R1/R3).
+    """
+    fields: dict[str, Any] = {
+        name: (finfo.rebuild_annotation(), finfo)
+        for name, finfo in state_model.model_fields.items()
+        if not name.startswith(StateKeys.FRAMEWORK_PREFIX)
+    }
+    return create_model(f"{state_model.__name__}Output", **fields)
+
+
 def compute_node_fingerprints(construct: Any) -> dict[str, str]:
     """Compute per-node output type fingerprints for checkpoint invalidation.
 

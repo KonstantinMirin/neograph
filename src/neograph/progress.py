@@ -107,6 +107,14 @@ def emit_progress(event: BaseModel) -> None:
         # Called outside any runnable context (not inside a node at all).
         writer = None
 
+    # STREAM_CUSTOM stays a DOCUMENTED KEEP, not a hand-rolled parallel mechanism
+    # (neograph-pjqe Item B). We cannot swap the flag for writer-presence detection:
+    # in langgraph 1.2.4 get_stream_writer() returns the PRIVATE
+    # langgraph.runtime._no_op_stream_writer (a live closure) when no custom-mode
+    # consumer is attached — there is no public no-op sentinel to compare against,
+    # so a live progress consumer is indistinguishable from a non-streaming driver
+    # by the writer alone. The config flag is the robust discriminator.
+    # See docs/design/langgraph-output-schema-research-2026-07-03.md (R4).
     if writer is None or not _custom_stream_active():
         _warn_progress_dropped()
 

@@ -61,6 +61,11 @@ class StateKeys:
     # progress consumer from a non-streaming driver and warn on the latter
     # instead of vanishing silently (review L1). Never enters state — a config
     # flag, so it cannot touch the schema fingerprint.
+    # DOCUMENTED KEEP (neograph-pjqe Item B): this is NOT an engine-duplicating
+    # hand-roll — langgraph 1.2.4's get_stream_writer() has no public no-op
+    # sentinel (returns a private live closure when no consumer is attached), so
+    # writer-presence cannot replace this flag. See docs/design/
+    # langgraph-output-schema-research-2026-07-03.md (R4).
     STREAM_CUSTOM = "_neo_stream_custom"
 
     # Non-`neo_`-prefixed framework state keys (CON-01). These are DI-context

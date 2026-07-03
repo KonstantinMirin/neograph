@@ -439,6 +439,13 @@ def _finalize_by_mode(payload: Any, mode: str) -> Any:
     * anything else (``custom`` / ``messages`` / ``debug``) — a user payload or
       token tuple; return it UNTOUCHED (identity), never stripped.
     """
+    # ENGINE-GAP RESIDUE, see neograph-pjqe: compile declares output_schema so the
+    # engine strips neo_* from invoke/ainvoke results, and run()/arun()/sub-construct
+    # exits no longer wrap. But langgraph 1.2.4's output_schema does NOT filter
+    # streamed chunks — stream_mode=values/updates emit raw channel writes, so a
+    # synthesized barrier writing neo_oracle_* would leak here. These two arms are
+    # the only surviving _strip_internals sites, kept by cited necessity, not habit.
+    # See docs/design/langgraph-output-schema-research-2026-07-03.md (R1).
     if mode == "values":
         return _strip_internals(payload)
     if mode == "updates":
@@ -506,7 +513,9 @@ def run(
     engine_input, config = _prepare(
         graph, input=input, resume=resume, config=config, auto_resume=auto_resume
     )
-    return _strip_internals(graph.invoke(engine_input, config=config))
+    # No strip: compile declares output_schema=non-neo_ fields, so the engine
+    # filters framework channels out of invoke() results. See neograph-pjqe.
+    return graph.invoke(engine_input, config=config)
 
 
 def stream(
@@ -679,7 +688,9 @@ async def arun(
     engine_input, config = await _aprepare(
         graph, input=input, resume=resume, config=config, auto_resume=auto_resume
     )
-    return _strip_internals(await graph.ainvoke(engine_input, config=config))
+    # No strip: output_schema (declared at compile) filters ainvoke() results too.
+    # See neograph-pjqe. Symmetric with the sync run() exit above.
+    return await graph.ainvoke(engine_input, config=config)
 
 
 async def astream(

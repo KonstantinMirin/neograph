@@ -84,6 +84,51 @@ class TestSubgraph:
         assert "lookup" not in result
         assert "score" not in result
 
+    def test_multi_producer_child_surfaces_last_wins_value(self):
+        """A sub-construct with TWO internal nodes producing the SAME output
+        type must surface the LAST (reverse-scan) value to the parent.
+
+        Guards the neograph-pjqe refinement: the child output_schema must be
+        the child's NON-neo_ fields (mirroring _strip_internals), NOT the
+        single field named after sub.output. Both internal producers write
+        the same output type; _scan_subgraph_output (_subconstruct.py:43)
+        reverse-scans ALL surviving values and picks the last. Narrowing the
+        child output_schema to one field would collapse the second producer's
+        channel and silently change which value wins."""
+        from tests.fakes import register_scripted
+
+        register_scripted("seed", lambda input_data, config: RawText(text="seed"))
+        register_scripted("first", lambda input_data, config: Claims(items=["first"]))
+        register_scripted("second", lambda input_data, config: Claims(items=["second"]))
+
+        # Two internal nodes, both producing Claims (== sub.output type).
+        sub = Construct(
+            "refine",
+            input=RawText,
+            output=Claims,
+            nodes=[
+                Node.scripted("first", fn="first", inputs=RawText, outputs=Claims),
+                Node.scripted("second", fn="second", inputs=Claims, outputs=Claims),
+            ],
+        )
+        parent = Construct("parent", nodes=[
+            Node.scripted("seed", fn="seed", outputs=RawText),
+            sub,
+        ])
+        graph = compile(parent, **build_test_compile_kwargs())
+        result = run(graph, input={"node_id": "test-001"})
+
+        # Last producer wins — the reverse-scan must see BOTH surviving
+        # channels and select "second".
+        assert isinstance(result["refine"], Claims)
+        assert result["refine"].items == ["second"], (
+            f"Expected last-wins value ['second'], got {result['refine'].items}. "
+            "Child output_schema must keep all non-neo_ producer channels so "
+            "_scan_subgraph_output's reverse-scan last-wins is preserved."
+        )
+        # And no framework leakage from the sub-construct boundary.
+        assert not any(k.startswith("neo_") for k in result)
+
     def test_no_collision_when_parent_and_sub_share_node_name(self):
         """Sub-construct's internal fields don't collide with parent fields."""
         from tests.fakes import register_scripted

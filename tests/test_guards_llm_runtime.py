@@ -1502,3 +1502,91 @@ class TestDefaultFactoryCoercionIsGuarded:
             "        data['x'] = factory(data)\n"
         )
         assert self._func_default_factory_is_typeerror_guarded(src, "_apply_null_defaults")
+
+
+class TestNoHandRolledExitStrip:
+    """neo_* filtering must be DECLARED to the engine (output_schema), never
+    hand-wrapped around invoke/ainvoke exits (neograph-pjqe).
+
+    The disease: wrapping engine results in ``_strip_internals(...)`` at run()/
+    arun()/sub-construct exits — a parallel mechanism for a concern the engine
+    already owns via StateGraph(output_schema=...). After neograph-pjqe the ONLY
+    sanctioned ``_strip_internals`` call sites are the two stream arms in
+    runner.py's ``_finalize_by_mode`` (a cited engine gap: langgraph 1.2.4 does
+    not filter streamed chunks). Any other call site re-introduces the disease.
+
+    AST-walk guard (no regex-slip case): positive + negative meta-tests suffice.
+    """
+
+    # The one function permitted to call _strip_internals (the stream-arm residue).
+    _ALLOWED_CALLERS = frozenset({"_finalize_by_mode"})
+
+    @staticmethod
+    def _functions_calling(source: str, callee: str) -> set[str]:
+        """Names of def/async-def functions that CALL ``callee`` in ``source``."""
+        tree = ast.parse(source)
+        hits: set[str] = set()
+        for func in ast.walk(tree):
+            if isinstance(func, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                for node in ast.walk(func):
+                    if (
+                        isinstance(node, ast.Call)
+                        and isinstance(node.func, ast.Name)
+                        and node.func.id == callee
+                    ):
+                        hits.add(func.name)
+        return hits
+
+    def test_strip_internals_called_only_in_finalize_by_mode(self):
+        """No source file may call _strip_internals outside the sanctioned
+        stream-arm residue — else the hand-rolled exit-strip disease is back."""
+        violations = []
+        for py_file in sorted(SRC_DIR.glob("*.py")):
+            callers = self._functions_calling(py_file.read_text(), "_strip_internals")
+            stray = callers - self._ALLOWED_CALLERS
+            for fn in sorted(stray):
+                violations.append(f"  {py_file.name}: {fn}() calls _strip_internals")
+        assert violations == [], (
+            "\n_strip_internals called outside _finalize_by_mode "
+            "(hand-rolled exit-strip re-introduced — declare output_schema instead, "
+            "see neograph-pjqe):\n" + "\n".join(violations)
+        )
+
+    def test_compile_declares_output_schema(self):
+        """compiler.py must pass output_schema to StateGraph — the engine-level
+        replacement for the deleted exit strips. Pins the cure in place."""
+        tree = ast.parse((SRC_DIR / "compiler.py").read_text())
+        declared = any(
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "StateGraph"
+            and any(kw.arg == "output_schema" for kw in node.keywords)
+            for node in ast.walk(tree)
+        )
+        assert declared, (
+            "compiler.py no longer declares StateGraph(output_schema=...) — the "
+            "engine-level neo_ filter is gone; exits would leak framework channels "
+            "(neograph-pjqe)."
+        )
+
+    # ---- meta-tests: prove the guard actually discriminates ----
+
+    def test_meta_positive_stray_call_is_caught(self):
+        """A _strip_internals call in a non-sanctioned function is flagged."""
+        src = (
+            "def run(graph, x):\n"
+            "    return _strip_internals(graph.invoke(x))\n"
+        )
+        stray = self._functions_calling(src, "_strip_internals") - self._ALLOWED_CALLERS
+        assert stray == {"run"}
+
+    def test_meta_negative_sanctioned_call_is_allowed(self):
+        """The stream-arm residue in _finalize_by_mode is not flagged."""
+        src = (
+            "def _finalize_by_mode(payload, mode):\n"
+            "    if mode == 'values':\n"
+            "        return _strip_internals(payload)\n"
+            "    return payload\n"
+        )
+        stray = self._functions_calling(src, "_strip_internals") - self._ALLOWED_CALLERS
+        assert stray == set()

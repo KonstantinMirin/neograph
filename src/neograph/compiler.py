@@ -46,7 +46,12 @@ from neograph.factory import make_node_fn
 from neograph.modifiers import ModifierCombo, classify_modifiers
 from neograph.naming import field_name_for
 from neograph.node import Node
-from neograph.state import compile_state_model, compute_node_fingerprints, compute_schema_fingerprint
+from neograph.state import (
+    build_output_schema_model,
+    compile_state_model,
+    compute_node_fingerprints,
+    compute_schema_fingerprint,
+)
 from neograph.tool import register_bound_tool_factories
 
 log = structlog.get_logger()
@@ -237,8 +242,13 @@ def compile(
     # 1. Generate state model from node I/O
     state_model = compile_state_model(construct, context_types=_context_types)
 
-    # 2. Build graph
-    graph = StateGraph(state_model)
+    # 2. Build graph. Declare output_schema = non-neo_ fields so the ENGINE filters
+    # framework plumbing out of invoke/ainvoke results (neograph-pjqe: declare, don't
+    # wrap). This is recursive — the sub-construct compile at _add_subgraph re-enters
+    # compile(), so child graphs get the same declaration and their invoke() results
+    # are neo_-free without a _strip_internals wrap. Stream chunks are NOT covered by
+    # output_schema in langgraph 1.2.4 (see runner._finalize_by_mode).
+    graph = StateGraph(state_model, output_schema=build_output_schema_model(state_model))
 
     prev_node: str | None = None
 

@@ -44,7 +44,7 @@ Two-level experiment mirroring `make_subgraph_fn` (child graph invoked inside a 
 - Child WITH `output_schema=ChildOut`: `child.invoke()` → `{'child_out': ...}` — **no strip needed**.
 - Parent-level `output_schema` is orthogonal (filtering applies only at parent exits; parent updates chunks still raw, consistent with R1).
 
-**Verdict**: the CHILD compile can use `output_schema` to replace both `_strip_internals` calls in `make_subgraph_fn` (`_subconstruct.py:169` sync, `:178` async). Caveat: declare the child `output_schema` to include exactly `sub.output`'s field, which is what `_scan_subgraph_output`'s type-scan wants.
+**Verdict**: the CHILD compile can use `output_schema` to replace both `_strip_internals` calls in `make_subgraph_fn` (`_subconstruct.py:169` sync, `:178` async). Declare the child `output_schema` to include **all child state-model fields NOT prefixed `neo_`** — the SAME filter as the top-level compile, mirroring `_strip_internals` exactly. (Correction, 2026-07-03 refine per neograph-8unp.20 architect-review MEDIUM: an earlier draft of this line said "exactly `sub.output`'s field". That is WRONG — `_scan_subgraph_output` (`_subconstruct.py:43`) reverse-scans ALL values of the stripped child result for the last one matching `sub.output`'s type, giving last-wins across multiple internal nodes that produce the same type. Narrowing the child `output_schema` to a single field would collapse those channels and could change which value the reverse-scan returns for a multi-producer child. Keep the non-`neo_` filter so the returned dict is identical to what `_strip_internals` produced today.)
 
 ## R4 — `get_stream_writer()` no-op detection (Item B)
 

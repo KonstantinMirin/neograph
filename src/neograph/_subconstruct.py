@@ -11,7 +11,7 @@ from pydantic import BaseModel
 from neograph._ir_branch import iter_with_arms
 from neograph._oracle import _inject_oracle_config
 from neograph._state_bus import StateBus, adapt_state
-from neograph._state_keys import StateKeys, _strip_internals
+from neograph._state_keys import StateKeys
 from neograph.construct import Construct
 from neograph.di import _unwrap_loop_value
 from neograph.errors import ExecutionError
@@ -166,7 +166,10 @@ def make_subgraph_fn(sub: Construct, sub_graph: CompiledStateGraph) -> RunnableL
     def subgraph_node(state: BaseModel | dict[str, Any], config: RunnableConfig) -> dict:
         sub_log.info("subgraph_start")
         sub_input, bus, config = _build_sub_input(state, config)
-        sub_result = _strip_internals(sub_graph.invoke(sub_input, config=config))
+        # No strip: the child compile declared output_schema=non-neo_ fields, so
+        # sub_graph.invoke() already returns neo_-free results. See neograph-pjqe.
+        # The reverse-scan in _build_update sees the same dict _strip_internals made.
+        sub_result = sub_graph.invoke(sub_input, config=config)
         return _build_update(sub_result, bus)
 
     async def asubgraph_node(state: BaseModel | dict[str, Any], config: RunnableConfig) -> dict:
@@ -175,7 +178,8 @@ def make_subgraph_fn(sub: Construct, sub_graph: CompiledStateGraph) -> RunnableL
         # Async twin: await the child's ainvoke so a sub-construct under the async
         # driver propagates async selection into the child graph, instead of
         # blocking the loop on sub_graph.invoke. See neograph-expi.
-        sub_result = _strip_internals(await sub_graph.ainvoke(sub_input, config=config))
+        # No strip: child output_schema filters ainvoke() results. See neograph-pjqe.
+        sub_result = await sub_graph.ainvoke(sub_input, config=config)
         return _build_update(sub_result, bus)
 
     # Driver-selected dual path. __name__ stays informational; routing is the
