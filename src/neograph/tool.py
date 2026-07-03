@@ -57,7 +57,10 @@ class Tool(BaseModel, frozen=True):
         the ``_bound_tool`` private attribute for later factory registration.
         """
         spec = cls(name=base_tool.name)
-        spec._bound_tool = base_tool
+        # Tool is frozen=True; set the PrivateAttr via object.__setattr__ (the
+        # canonical frozen-model mutation path) so the assignment is honest to
+        # both the runtime and the type checker.
+        object.__setattr__(spec, "_bound_tool", base_tool)
         return spec
 
 

@@ -338,8 +338,13 @@ already makes) becomes deliverable as an Operator on the tool node; agent
 token streaming and honest budget enforcement fall out of the same change;
 `@task`-per-tool-call journaling (Temporal-lite, per the replay research)
 becomes reachable later. Blast radius is known and concentrated (§2.4).
-The A.5 lint survives (it becomes "agent/act + Operator without subgraph
-compile → warn" during migration, then retires).
+The A.5 lint reconciliation turned out to be a no-op: the migration landed
+atomically (agent/act nodes ALWAYS compile to the real agent/tools/parse
+subgraph), so the transitional "agent/act + Operator without subgraph compile →
+warn" lint was never needed and was never built. Tool-gating is delivered
+instead by the `gate_tools_when=` node kwarg (neograph-m6d3.4), which inserts a
+gate on the `{node}__tools` boundary. The unrelated `ask_human_in_mutating_node`
+lint (from p8wz) stays as-is.
 
 ### 3.4 w74k.3 (Phase 3, MCP) — re-scoped DOWN
 

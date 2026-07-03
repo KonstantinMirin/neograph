@@ -1590,3 +1590,43 @@ class TestNoHandRolledExitStrip:
         )
         stray = self._functions_calling(src, "_strip_internals") - self._ALLOWED_CALLERS
         assert stray == set()
+
+
+class TestAgentCycleTurnsAreSupersteps:
+    """An agent/act node's ReAct turns are REAL parent supersteps
+    ({node}__agent / {node}__tools / {node}__parse), NOT a ``while`` loop inside
+    one node (neograph-m6d3.4 Core Invariant, restating _agent_cycle.py's own
+    docstring). The ReAct iteration is the graph's tools->agent edge; the
+    tool-gating gate is a real inserted node. This guard pins that no in-node
+    loop is ever reintroduced into the cycle-body module — which is what makes
+    every payoff (turn-boundary interrupts, tool-gating, honest budgets across a
+    checkpoint) possible.
+
+    AST-walk guard (no regex-slip case): positive + negative meta-tests suffice.
+    """
+
+    @staticmethod
+    def _has_while_loop(source: str) -> bool:
+        """True if the source contains any ``while`` statement."""
+        return any(isinstance(n, ast.While) for n in ast.walk(ast.parse(source)))
+
+    def test_agent_cycle_module_has_no_while_loop(self):
+        """_agent_cycle.py (the ReAct cycle bodies + router) must contain no
+        ``while`` loop — turns are supersteps, not an in-node loop."""
+        src = (SRC_DIR / "_agent_cycle.py").read_text()
+        assert not self._has_while_loop(src), (
+            "_agent_cycle.py contains a `while` loop — the ReAct turn loop must be "
+            "the graph's {node}__tools -> {node}__agent edge (real supersteps), NOT "
+            "an in-node while loop (neograph-m6d3.4 Core Invariant)."
+        )
+
+    # ---- meta-tests: prove the guard actually discriminates ----
+
+    def test_meta_positive_while_loop_is_detected(self):
+        src = "def agent_turn(state):\n    while True:\n        break\n    return {}\n"
+        assert self._has_while_loop(src) is True
+
+    def test_meta_negative_for_loop_is_allowed(self):
+        # A `for` over tool_calls is fine — that is per-turn work, not the ReAct loop.
+        src = "def tools_turn(state):\n    for tc in state['calls']:\n        run(tc)\n    return {}\n"
+        assert self._has_while_loop(src) is False

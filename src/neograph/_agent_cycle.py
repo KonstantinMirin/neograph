@@ -34,7 +34,7 @@ from __future__ import annotations
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 import structlog
 from langchain_core.messages import ToolMessage
@@ -59,7 +59,7 @@ from neograph._tool_loop import (
 from neograph.errors import ConfigurationError
 from neograph.naming import field_name_for
 from neograph.node import Node
-from neograph.tool import ToolBudgetTracker, ToolInteraction
+from neograph.tool import Tool, ToolBudgetTracker, ToolInteraction
 
 log = structlog.get_logger()
 
@@ -159,7 +159,11 @@ def _maybe_skip(node: Node, bus: Any, field: str, budget: dict[str, Any]) -> dic
 
 
 def _tracker_from_budget(node: Node, budget: dict[str, Any]) -> ToolBudgetTracker:
-    tracker = ToolBudgetTracker(node.tools)
+    # node.tools is declared list[Tool | BaseTool], but _normalize_raw_base_tools
+    # (node.py) converts every BaseTool -> Tool at construction, so it is always
+    # list[Tool] here. Cast documents that invariant rather than widening the
+    # tracker signature (which would mask it). See neograph-m6d3.4 refine.
+    tracker = ToolBudgetTracker(cast(list[Tool], node.tools))
     tracker._counts = dict(budget.get("calls", {}))
     return tracker
 

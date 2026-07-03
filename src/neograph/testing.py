@@ -25,12 +25,13 @@ Usage:
 from __future__ import annotations
 
 import os
-from typing import Any
+from typing import Any, cast
 
 from neograph._normalize import normalize_inputs, normalize_outputs
 from neograph.construct import Construct
 from neograph.naming import field_name_for
 from neograph.node import Node
+from neograph.tool import Tool
 
 # ── Node introspection ───────────────────────────────────────────────────
 
@@ -45,7 +46,10 @@ def _node_info(node: Node) -> dict[str, Any]:
     each = node.modifier_set.each
     loop = node.modifier_set.loop
     operator = node.modifier_set.operator
-    tools = node.tools or []
+    # node.tools is declared list[Tool | BaseTool], but _normalize_raw_base_tools
+    # (node.py) converts every BaseTool -> Tool at construction, so every element
+    # has .budget. Cast documents that invariant. See neograph-m6d3.4 refine.
+    tools = cast(list[Tool], node.tools or [])
 
     return {
         "name": node.name,

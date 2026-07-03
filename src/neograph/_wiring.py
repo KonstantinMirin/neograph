@@ -732,6 +732,7 @@ def _add_agent_cycle(
     *,
     runtime: LlmRuntime = EMPTY_RUNTIME,
     tool_factory_lookup: dict[str, Callable] | None = None,
+    condition_lookup: dict[str, Callable] | None = None,
 ) -> str:
     """Expand an agent/act node into an inline ReAct cycle of supersteps.
 
@@ -760,10 +761,43 @@ def _add_agent_cycle(
     else:
         graph.add_edge(START, names.agent)
 
-    # 3-way router after the agent turn: tools (loop) | parse (done/forced-final).
-    graph.add_conditional_edges(
-        names.agent, parts["router"], path_map=[names.tools, names.parse],
-    )
+    base_router = parts["router"]
+
+    if node.gate_tools_when is not None:
+        # Tool-gating HITL (neograph-m6d3.4): insert a gate node on the router's
+        # tools arm so a human can approve BEFORE the {node}__tools body — and its
+        # side effects — run. The gate runs the predicate; a truthy result triggers
+        # interrupt(payload) (pausing at this turn-boundary superstep, so the tool
+        # has not executed yet) and records the resume value on HUMAN_FEEDBACK.
+        # Reuses the same interrupt() body pattern as _add_operator_check; no new
+        # interrupt path.
+        gate_name = f"{node.name}__tools_gate"
+        gate_condition = _resolve_condition(node.gate_tools_when, condition_lookup)
+
+        def tools_gate(state: Any) -> dict:
+            payload = gate_condition(state)
+            if payload:
+                human_input = interrupt(payload)
+                return {StateKeys.HUMAN_FEEDBACK: human_input}
+            return {}
+
+        def gated_router(state: Any) -> str:
+            # Preserve the base 3-way decision, but send the tools branch through
+            # the gate first.
+            dest = base_router(state)
+            return gate_name if dest == names.tools else dest
+
+        graph.add_node(gate_name, tools_gate)
+        graph.add_conditional_edges(
+            names.agent, gated_router, path_map=[gate_name, names.parse],
+        )
+        graph.add_edge(gate_name, names.tools)
+    else:
+        # 3-way router after the agent turn: tools (loop) | parse (done/forced-final).
+        graph.add_conditional_edges(
+            names.agent, base_router, path_map=[names.tools, names.parse],
+        )
+
     # ReAct loopback: after executing tools, take another agent turn.
     graph.add_edge(names.tools, names.agent)
 

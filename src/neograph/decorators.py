@@ -251,6 +251,7 @@ def node(
     context: list[str] | None = None,
     skip_when: Callable | None = None,
     skip_value: Callable | None = None,
+    gate_tools_when: Callable | str | None = None,
     loop_when: str | Callable | None = None,
     max_iterations: int | None = None,
     on_exhaust: Literal["error", "last"] | None = None,
@@ -552,6 +553,7 @@ def node(
             context=context,
             skip_when=skip_when,
             skip_value=skip_value,
+            gate_tools_when=gate_tools_when,
         )
 
         # -- Oracle kwargs detection (needed for combined check) ----------------

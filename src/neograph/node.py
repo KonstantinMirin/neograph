@@ -220,6 +220,16 @@ class Node(Modifiable, BaseModel):
     skip_when: SkipPredicate | None = None
     skip_value: SkipValueFactory | None = None
 
+    # Tool-gating HITL (agent/act only): pause the ReAct cycle for human
+    # approval BEFORE the {node}__tools body executes — i.e. before any tool
+    # side effect runs. A callable predicate (or registered condition name)
+    # receiving the full state; a truthy return is the interrupt payload shown
+    # to the human, a falsy return lets tools run without pausing. Mirrors the
+    # Operator `when` contract, but targets the synthesized tools boundary the
+    # user cannot name. Only meaningful where a {node}__tools node exists, so
+    # setting it on a non-agent/act node raises at construction (see below).
+    gate_tools_when: Callable | str | None = None
+
     # Oracle generator output type — when merge_fn transforms types (A → B),
     # this is A (per-variant type). The LLM produces this type, the merge_fn
     # converts list[A] → B (= node.outputs). Inferred from merge_fn signature.
@@ -259,6 +269,21 @@ class Node(Modifiable, BaseModel):
             )
         super().__init__(**kwargs)
         self._validate_skip_callables()
+        self._validate_gate_tools_when()
+
+    def _validate_gate_tools_when(self) -> None:
+        """gate_tools_when only makes sense where a {node}__tools node exists —
+        i.e. agent/act mode. Reject it on any other mode at construction time."""
+        if self.gate_tools_when is not None and self.mode not in ("agent", "act"):
+            raise ConstructError.build(
+                "gate_tools_when requires an agent/act node",
+                expected="mode='agent' or mode='act' (a node with a tools boundary)",
+                found=f"mode={self.mode!r}",
+                hint="Tool-gating pauses before the {node}__tools superstep, which "
+                "only exists for agent/act nodes. Remove gate_tools_when or set "
+                "mode='agent'/'act'.",
+                node=self.name,
+            )
 
     def _validate_skip_callables(self) -> None:
         """Check skip_when/skip_value accept at least 1 positional arg."""

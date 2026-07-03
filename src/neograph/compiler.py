@@ -525,7 +525,7 @@ def _add_node_to_graph(
         case ModifierCombo.BARE | ModifierCombo.OPERATOR:
             if node.mode in ("agent", "act"):
                 # Agent/act: inline ReAct cycle (agent/tools/parse + conditional router).
-                last_name = _add_agent_cycle(graph, node, prev_node, runtime=runtime, tool_factory_lookup=tool_factory_lookup)
+                last_name = _add_agent_cycle(graph, node, prev_node, runtime=runtime, tool_factory_lookup=tool_factory_lookup, condition_lookup=condition_lookup)
             else:
                 # Simple node — no modifiers (or Operator only)
                 node_name = node.name
