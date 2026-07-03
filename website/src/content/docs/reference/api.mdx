@@ -401,19 +401,40 @@ result = await arun(graph, input={"topic": "security"})
 
 `arun()` is a drop-in replacement for `run()` in async contexts — it does not require the pipeline itself to be async, but it lets async nodes execute without blocking the loop.
 
-### Async facade verbs
+### `stream(graph, *, input=None, resume=None, config=None, auto_resume=True, stream_mode="values")`
 
-`compile()` returns a `CompiledNeograph` facade over the underlying LangGraph graph. Beyond `run()`/`arun()`, the facade delegates a closed set of methods for inspection and streaming — sync: `invoke`, `get_state`, `get_state_history`, `get_graph`; async: `ainvoke`, `aget_state`, `aget_state_history`, `astream`. The raw LangGraph graph is available as `.graph` for anything outside this set (for example sync `stream()` or `astream_events()`, which are not delegated).
+Streaming twin of `run()`. Yields chunks as the graph runs instead of returning the final state. Mirrors `run()`'s three modes (new input / resume / crash recovery) and adds `stream_mode` (a str or a list, passed straight to LangGraph — `"values"`, `"updates"`, `"custom"`, `"messages"`, `"debug"`). `values` and `updates` chunks are stripped of framework-internal (`neo_*`) fields; `custom` / `messages` / `debug` payloads pass through untouched. `astream(...)` is the async twin (`async for`).
+
+```python
+from neograph import stream, astream
+
+for chunk in stream(graph, input={"topic": "x"}, stream_mode="updates"):
+    print(chunk)  # per-node deltas
+
+async for chunk in astream(graph, input={"topic": "x"}, stream_mode="values"):
+    print(chunk)  # full state snapshot per step
+```
+
+### `emit_progress(event)`
+
+Called from inside a node body (any mode) to push a typed progress/domain event onto the `custom` stream. `event` must be a Pydantic `BaseModel`; it is wrapped in a stable envelope — `{"neograph_event": "progress", "event_type": "<ClassName>", "data": <model_dump>}` — and delivered when the graph is driven by `stream`/`astream` with `"custom"` in `stream_mode`. Under a non-streaming driver it warns once (per process) rather than dropping the event silently.
+
+### Facade verbs
+
+`compile()` returns a `CompiledNeograph` facade over the underlying LangGraph graph. Beyond `run()`/`arun()`/`stream()`/`astream()`, the facade delegates a closed set of methods for inspection, streaming, and state editing — sync: `invoke`, `stream`, `get_state`, `get_state_history`, `get_graph`, `update_state`; async: `ainvoke`, `astream`, `astream_events`, `aget_state`, `aget_state_history`, `aupdate_state`. The raw LangGraph graph is available as `.graph` for anything outside this set.
 
 ```python
 graph = compile(pipeline, checkpointer=saver)
 
-# Async streaming of steps/tokens:
-async for chunk in graph.astream({"topic": "x"}, config=config):
+# Event-level streaming (token/step observability):
+async for event in graph.astream_events({"topic": "x"}, config=config, version="v2"):
     ...
 
 # Inspect checkpointed state without re-running:
 snapshot = await graph.aget_state(config)
+
+# Edit state before a HITL resume:
+graph.update_state(config, {"human_approved": True})
 ```
 
 ### `describe_graph(compiled) -> str`

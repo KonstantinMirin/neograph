@@ -71,6 +71,7 @@ The `kind` field tells you where the parameter expected to be resolved from:
 | `template_placeholder_known_vars_only` | WARN | Placeholder only resolvable via `known_template_vars`, not from actual `@node` parameter names. Advisory: verify the consumer bridge supplies it at runtime. |
 | `loop_condition_unregistered` | ERROR | Loop `when` is a string that is not registered in the condition registry |
 | `loop_condition_none_unsafe` | ERROR/WARN | Loop `when` callable raises when called with `None`. ERROR for registered string conditions (always crash), WARN for user-supplied callables (may handle None via other means). |
+| `tool_requires_async_driver` | WARN | An `agent`/`act` node is bound to an async-only tool (e.g. an MCP tool) that cannot run under the sync `run()` driver. Drive the graph with `arun()`. |
 
 ## What it checks
 
@@ -174,6 +175,24 @@ node = Node("refine", ...) | Loop(when="score_check", max_iterations=3)
 lint(pipeline, conditions=conditions)
 # LintIssue(kind="loop_condition_none_unsafe", required=True, ...)
 ```
+
+### Async-only tool checks
+
+`lint()` flags an `agent` or `act` node bound to a tool that supports only asynchronous invocation. The canonical case is an MCP tool loaded via `langchain-mcp-adapters`: it is a `StructuredTool` backed by a coroutine with no sync `func`, so calling `.invoke()` raises `NotImplementedError`. Such a tool cannot run under the sync `run()` driver -- the graph must be driven with `arun()`.
+
+Because `lint()` cannot know statically which driver you will use, it reports this as a WARN whenever an async-only tool is bound:
+
+```python
+# `search` is a raw async-only BaseTool (e.g. from load_mcp_tools)
+node = Node("explore", mode="agent", tools=[search], ...)
+pipeline = Construct("mcp", nodes=[node])
+issues = lint(pipeline)
+# LintIssue(kind="tool_requires_async_driver", required=False,
+#           message="Node 'explore': tool 'search' is async-only ... Drive this
+#                    graph with arun() so the async tool loop is used.")
+```
+
+Lint resolves the concrete tool object two ways: from a raw `BaseTool` passed directly in `tools=` (carried on the synthesized spec), or by instantiating the registered `tool_factories=` entry. Tool-factory failures are swallowed -- a tool `lint` cannot instantiate simply yields no async-only finding, never a crash. See [Raw LangChain tools (and MCP)](/walkthrough/produce-and-gather/#raw-langchain-tools-and-mcp) for the runtime side.
 
 ## Example: full lint workflow
 

@@ -318,6 +318,34 @@ graph = compile(
 
 This lets you create tools that depend on runtime context (API keys, rate limiters, database connections) without hardcoding them.
 
+## Raw LangChain tools (and MCP)
+
+`Tool(name, budget)` + `tool_factories=` is the wiring for tools you configure at compile time. When you already have a live LangChain `BaseTool` instance -- most commonly the tools returned by `load_mcp_tools(session)` from `langchain-mcp-adapters` -- you can hand it to `tools=` directly, with no spec and no factory:
+
+```python
+from langchain_mcp_adapters.tools import load_mcp_tools
+
+mcp_tools = await load_mcp_tools(session)  # list[BaseTool]
+
+@node(mode="agent", outputs=ExplorationResult, model="reason", prompt="explore",
+      tools=mcp_tools)
+def explore(decompose: Claims) -> ExplorationResult:
+    ...
+```
+
+At compile time NeoGraph normalizes each raw `BaseTool` to a `Tool` spec (name taken from `base_tool.name`) and auto-registers a factory that returns the bound instance -- so you skip both the `Tool(name)` declaration and the `register_tool_factory` / `tool_factories=` step. Explicit `tool_factories=` entries still win if you register the same name yourself. To attach a call budget to a raw tool, pass a `Tool(name="...", budget=n)` spec alongside it (matched by name) instead of the bare instance.
+
+### Async-only tools require `arun()`
+
+MCP tools are async-only: `langchain-mcp-adapters` produces `StructuredTool` instances backed by a coroutine with no sync `func`, so calling `.invoke()` raises `NotImplementedError`. A graph with such a tool **must** be driven with the async driver `arun()` (or `astream()`), which runs the async tool loop via `await tool.ainvoke(...)`.
+
+Two safety nets catch the wrong driver:
+
+- **At runtime**, driving the graph with the sync `run()` raises a clear `ConfigurationError` (`Tool '<name>' does not support synchronous invocation`) instead of leaking `NotImplementedError`.
+- **At compile time**, `lint()` flags an agent/act node bound to an async-only tool with the issue kind `tool_requires_async_driver` (a WARN -- `lint` cannot know statically which driver you will use). See [Static Linting](/concepts/lint/#async-only-tool-checks).
+
+A complete, runnable version -- a raw async-only `BaseTool`, a fake LLM, driven by `arun()`, no real API keys or MCP server needed -- is `examples/13b_mcp_tools.py`.
+
 ---
 
 Documentation &copy; 2025-2026 Constantine Mirin, [mirin.pro](https://mirin.pro). Licensed under [CC BY-ND 4.0](https://creativecommons.org/licenses/by-nd/4.0/).

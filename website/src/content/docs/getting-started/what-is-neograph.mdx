@@ -5,7 +5,7 @@ description: Three API surfaces, one compiler. NeoGraph compiles Python function
 
 NeoGraph is a compiler for LLM pipelines. You write Python functions. NeoGraph infers the graph topology, validates types at assembly time, and compiles to an executable LangGraph `StateGraph`.
 
-NeoGraph is not a replacement for LangGraph. It is a layer on top of it. The compiled output wraps a standard LangGraph graph with access to checkpointing, async streaming (via `astream`), and the LangGraph ecosystem -- and the raw graph is one attribute away (`.graph`) when you need the full LangGraph surface.
+NeoGraph is not a replacement for LangGraph. It is a layer on top of it. The compiled output wraps a standard LangGraph graph with access to checkpointing, streaming (the `neograph.stream()` / `astream()` verbs, plus a delegated `astream_events()`), typed progress events (`emit_progress`), and the LangGraph ecosystem -- and the raw graph is one attribute away (`.graph`) when you need the full LangGraph surface.
 
 ## Philosophy
 

@@ -183,7 +183,7 @@ Behind the scenes, NeoGraph did the following:
 2. `construct_from_module` scanned the module for all `@node` functions, built the dependency graph from parameter names (`classify` depends on `decompose` because it has a parameter named `decompose`), topologically sorted the nodes, and created a `Construct`
 3. `compile()` inferred a Pydantic state model with fields for each node's output type, created LangGraph node functions that call your `llm_factory` and `prompt_compiler`, wired `START -> decompose -> classify -> summarize -> END`, and compiled the LangGraph `StateGraph`
 
-You got a compiled graph wrapping a standard LangGraph graph. You can async-stream it (`astream`), checkpoint it, visualize it, or deploy the underlying graph (via `.graph`) with LangGraph Platform -- NeoGraph does not change the runtime, only the authoring.
+You got a compiled graph wrapping a standard LangGraph graph. You can stream it (sync `stream()` or async `astream()`), checkpoint it, visualize it, or deploy the underlying graph (via `.graph`) with LangGraph Platform -- NeoGraph does not change the runtime, only the authoring.
 
 ### Running async
 
@@ -196,7 +196,49 @@ result = await arun(graph, input={"topic": "microservice authentication"})
 print(result["summarize"].text)
 ```
 
-The compiled graph also delegates async facade verbs -- `astream` for step/token streaming and `aget_state` / `aget_state_history` for inspecting checkpointed state. See the [API reference](/reference/api/) for the full delegated set.
+The compiled graph also delegates async facade verbs -- `aget_state` / `aget_state_history` for inspecting checkpointed state and `astream_events` for event-level observability. See the [API reference](/reference/api/) for the full delegated set.
+
+### Streaming
+
+Instead of waiting for the final state, stream the graph as it runs. NeoGraph exposes top-level `stream()` (sync) and `astream()` (async) verbs that mirror `run()`/`arun()` -- same new-input / resume / crash-recovery modes -- and add a `stream_mode` argument (a str or a list, passed straight to LangGraph):
+
+```python
+from neograph import stream
+
+for chunk in stream(graph, input={"topic": "microservice authentication"},
+                    stream_mode="updates"):
+    print(chunk)  # per-node deltas as each node finishes
+```
+
+The async twin drives the same graph on the event loop -- the production surface for SSE / AG-UI consumers:
+
+```python
+from neograph import astream
+
+async for chunk in astream(graph, input={"topic": "..."}, stream_mode="values"):
+    print(chunk)  # full state snapshot after each step
+```
+
+`values` and `updates` chunks are stripped of framework-internal (`neo_*`) fields; `custom`, `messages`, and `debug` payloads pass through untouched.
+
+### Typed progress events
+
+A node body can push a typed domain event onto the stream with `emit_progress`. Pass a Pydantic model; it is wrapped in a stable envelope (`{"neograph_event": "progress", "event_type": "<ClassName>", "data": {...}}`) and delivered on the `custom` stream:
+
+```python
+from pydantic import BaseModel
+from neograph import node, emit_progress
+
+class Scanned(BaseModel):
+    count: int
+
+@node(outputs=Claims)
+def decompose(topic: RawText) -> Claims:
+    emit_progress(Scanned(count=3))
+    return Claims(items=[...])
+```
+
+Consume it by driving the graph with `stream`/`astream` and including `"custom"` in `stream_mode`. Under a non-streaming driver (`run`/`arun`, or a stream without `custom`) the event has no consumer, so `emit_progress` warns once rather than dropping it silently.
 
 ## Next Steps
 
