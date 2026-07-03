@@ -115,10 +115,12 @@ def main():
     # ── Resume: only the failed item re-runs ─────────────────────────
     print("=== Run 2: resuming from checkpoint ===")
     try:
-        # invoke(None, config) resumes from the last checkpoint.
+        # run(graph, config=...) resumes from the last checkpoint — it runs
+        # the checkpoint-schema verify and strips framework fields, which the
+        # raw graph.invoke(None, config) would bypass.
         # Succeeded items (doc-01, 02, 04, 05) are already stored.
         # Only doc-03 re-executes.
-        result = graph.invoke(None, config=config)
+        result = run(graph, config=config)
 
         # Strip framework fields for clean output
         analyze = result.get("analyze", {})

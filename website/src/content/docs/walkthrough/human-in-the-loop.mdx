@@ -7,6 +7,10 @@ Some pipelines can't run end-to-end without a human in the loop. A validation st
 
 NeoGraph makes this a one-line addition: pass `interrupt_when=` to `@node`. When the condition returns a truthy value, the graph pauses via LangGraph's `interrupt()` mechanism, checkpoints its state, and waits. Resume with `run(graph, resume={...}, config=config)`.
 
+:::caution[Interrupts fire at node boundaries only]
+`interrupt_when=` evaluates *between* nodes, on a node's completed output. It cannot pause **inside** an `agent`/`act` node's tool loop: that ReAct loop runs to completion (or its tool budget) as one opaque step, so a tool call's side effect happens before the interrupt can fire. Use interrupts to review a node's finished result — not to gate an individual tool call before it executes. Per-tool gating ("approve *this* mutation before it runs") is not yet supported; if you need it today, split the mutating step into its own scripted node and interrupt on that node's boundary.
+:::
+
 ## The graph
 
 ```mermaid

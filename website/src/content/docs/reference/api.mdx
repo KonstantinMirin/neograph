@@ -379,9 +379,42 @@ Retry concerns live in their own layers, not at the `compile()` boundary. See [R
 
 ### `run(graph, *, input=None, resume=None, config=None, auto_resume=True) -> dict`
 
-Executes a compiled graph. Use `input=` for the first run, `resume=` to continue from an interrupt. Returns the final state dict with framework internals stripped.
+Executes a compiled graph. Three modes:
+
+- **`run(graph, input={...})`** — new execution.
+- **`run(graph, resume={...}, config=...)`** — continue after an Operator interrupt.
+- **`run(graph, config=...)`** — resume from the last checkpoint (crash recovery). Requires a `thread_id` in config and a persistent checkpointer; completed supersteps are skipped. Prefer this over calling the raw graph's `invoke(None, config)` — `run()` runs the checkpoint-schema verify and strips framework internals, which the raw call bypasses.
+
+Returns the final state dict with framework internals stripped.
 
 - **`auto_resume`** — When `True` (default), automatically rewinds to the checkpoint before the earliest changed node when schema fingerprints mismatch. When `False`, raises `CheckpointSchemaError` instead. Based on the Prefect cache-miss model. See [Checkpoint Resume](/concepts/checkpoint-resume/) for details.
+
+### `arun(graph, *, input=None, resume=None, config=None, auto_resume=True) -> dict`
+
+Async twin of `run()`. Same three modes and the same signature; awaits the graph's async I/O internally (`ainvoke` and the async checkpoint helpers). Use it when your `@node` bodies, tools, or `llm_factory` are async, or when you want the pipeline to run cooperatively under an existing event loop.
+
+```python
+from neograph import arun
+
+result = await arun(graph, input={"topic": "security"})
+```
+
+`arun()` is a drop-in replacement for `run()` in async contexts — it does not require the pipeline itself to be async, but it lets async nodes execute without blocking the loop.
+
+### Async facade verbs
+
+`compile()` returns a `CompiledNeograph` facade over the underlying LangGraph graph. Beyond `run()`/`arun()`, the facade delegates a closed set of methods for inspection and streaming — sync: `invoke`, `get_state`, `get_state_history`, `get_graph`; async: `ainvoke`, `aget_state`, `aget_state_history`, `astream`. The raw LangGraph graph is available as `.graph` for anything outside this set (for example sync `stream()` or `astream_events()`, which are not delegated).
+
+```python
+graph = compile(pipeline, checkpointer=saver)
+
+# Async streaming of steps/tokens:
+async for chunk in graph.astream({"topic": "x"}, config=config):
+    ...
+
+# Inspect checkpointed state without re-running:
+snapshot = await graph.aget_state(config)
+```
 
 ### `describe_graph(compiled) -> str`
 

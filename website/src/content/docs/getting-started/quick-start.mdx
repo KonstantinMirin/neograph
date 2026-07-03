@@ -183,7 +183,20 @@ Behind the scenes, NeoGraph did the following:
 2. `construct_from_module` scanned the module for all `@node` functions, built the dependency graph from parameter names (`classify` depends on `decompose` because it has a parameter named `decompose`), topologically sorted the nodes, and created a `Construct`
 3. `compile()` inferred a Pydantic state model with fields for each node's output type, created LangGraph node functions that call your `llm_factory` and `prompt_compiler`, wired `START -> decompose -> classify -> summarize -> END`, and compiled the LangGraph `StateGraph`
 
-You got a standard LangGraph graph. You can stream it, checkpoint it, visualize it, or deploy it with LangGraph Platform -- NeoGraph does not change the runtime, only the authoring.
+You got a compiled graph wrapping a standard LangGraph graph. You can async-stream it (`astream`), checkpoint it, visualize it, or deploy the underlying graph (via `.graph`) with LangGraph Platform -- NeoGraph does not change the runtime, only the authoring.
+
+### Running async
+
+`run()` has an async twin, `arun()`, with the identical signature. Use it when your nodes, tools, or `llm_factory` are async, or to run the pipeline under an existing event loop:
+
+```python
+from neograph import arun
+
+result = await arun(graph, input={"topic": "microservice authentication"})
+print(result["summarize"].text)
+```
+
+The compiled graph also delegates async facade verbs -- `astream` for step/token streaming and `aget_state` / `aget_state_history` for inspecting checkpointed state. See the [API reference](/reference/api/) for the full delegated set.
 
 ## Next Steps
 

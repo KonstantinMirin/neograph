@@ -401,9 +401,10 @@ A Construct with `input`/`output` types becomes an isolated subgraph automatical
 NeoGraph compiles to LangGraph. Everything LangGraph provides at runtime still works:
 
 - **Checkpointing** -- pass `checkpointer=` to `compile()`, same as LangGraph
-- **Streaming** -- the compiled graph supports `.stream()` and `.astream_events()`
+- **Async streaming** -- the compiled graph delegates `astream()` for token/step streaming. (Sync `.stream()` and `.astream_events()` are not on the facade yet -- reach for the raw graph via `.graph` if you need them.)
+- **Inspection** -- the facade delegates `invoke`/`ainvoke`, `get_state`/`aget_state`, `get_state_history`/`aget_state_history`, and `get_graph`
 - **Visualization** -- call `.get_graph().draw_mermaid()` on the compiled graph
-- **LangGraph Platform** -- deploy the compiled graph with LangGraph Cloud or self-hosted
+- **LangGraph Platform** -- deploy the underlying LangGraph graph, reachable via `.graph` on the compiled result, with LangGraph Cloud or self-hosted
 - **Callbacks** -- Langfuse, LangSmith, or any LangChain callback handler flows through via `config`
 
 NeoGraph removes the repetitive authoring. It does not change the runtime.

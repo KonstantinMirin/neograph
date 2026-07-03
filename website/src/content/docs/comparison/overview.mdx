@@ -233,11 +233,11 @@ Sub-constructs are the one place NeoGraph keeps the declarative form — the typ
 
 NeoGraph adds value when your pipeline is **typed, structured, and modular**. It adds less when:
 
-- You need LangGraph features NeoGraph hasn't wrapped yet (custom reducers beyond what `Each`/`Oracle` cover, advanced streaming modes)
+- You need LangGraph features NeoGraph hasn't wrapped yet (custom reducers beyond what `Each`/`Oracle` cover, or streaming modes off the facade — `astream` is delegated, but sync `stream()` and `astream_events()` are not)
 - Your pipeline is one-off glue code where the plumbing IS the logic
 - You're building a library that runs arbitrary user-provided graphs
 
-In those cases, use LangGraph directly. NeoGraph is a standard LangGraph graph underneath — you can always drop down to the raw API. The `Node(mode='raw', ...)` escape hatch exists exactly for this: a function with the standard `(state, config) -> dict` signature runs inside an otherwise @node-decorated pipeline.
+In those cases, use LangGraph directly. NeoGraph wraps a standard LangGraph graph underneath — you can always drop down to it via `.graph` on the compiled result to reach any method the facade doesn't delegate. The `Node(mode='raw', ...)` escape hatch exists for the same reason at the node level: a function with the standard `(state, config) -> dict` signature runs inside an otherwise @node-decorated pipeline.
 
 ## Summary
 
