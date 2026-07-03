@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 import structlog
-from langchain_core.runnables import RunnableConfig
+from langchain_core.runnables import RunnableConfig, RunnableLambda
 from pydantic import BaseModel
 
 from neograph._oracle import _inject_oracle_config
@@ -54,11 +53,22 @@ def _scan_subgraph_output(sub_result: dict[str, Any], sub_output_type: type) -> 
     return None
 
 
-def make_subgraph_fn(sub: Construct, sub_graph: CompiledStateGraph) -> Callable:
-    """Create a function that runs a sub-Construct in isolation.
+def make_subgraph_fn(sub: Construct, sub_graph: CompiledStateGraph) -> RunnableLambda:
+    """Create a Runnable that runs a sub-Construct in isolation.
 
-    Extracts input from parent state by type, runs sub_graph,
-    extracts output by type, returns {field_name: output}.
+    Extracts input from parent state by type, runs sub_graph, extracts output
+    by type, returns {field_name: output}.
+
+    Dual-path (driver-selected, neograph-expi): returns
+    ``RunnableLambda(subgraph_node, afunc=asubgraph_node)`` so the DRIVER picks
+    the path — ``graph.invoke`` runs the sync twin (``sub_graph.invoke``),
+    ``graph.ainvoke`` runs the async twin (``await sub_graph.ainvoke``). Without
+    the afunc twin, LangGraph threadpools the sync closure under ``ainvoke`` and
+    the ENTIRE child runs synchronously, blocking the loop and silently
+    downgrading any async-only leaf inside the child (Phase-1 H2 invariant: async
+    must propagate through every nesting level). The two twins share the same
+    input-extraction (``_build_sub_input``) and update-shaping
+    (``_build_update``) helpers so the sync/async paths cannot drift.
     """
     from neograph.runner import _strip_internals
 
@@ -68,8 +78,12 @@ def make_subgraph_fn(sub: Construct, sub_graph: CompiledStateGraph) -> Callable:
     sub_combo, _ = classify_modifiers(sub)
     has_loop = sub_combo in (ModifierCombo.LOOP, ModifierCombo.LOOP_OPERATOR)
 
-    def subgraph_node(state: BaseModel | dict[str, Any], config: RunnableConfig) -> dict:
-        sub_log.info("subgraph_start")
+    def _build_sub_input(state: BaseModel | dict[str, Any], config: RunnableConfig) -> tuple[dict[str, Any], StateBus, RunnableConfig]:
+        """Shared pre-invoke logic: extract input, forward context, inject config.
+
+        Returns ``(sub_input, bus, config)``. Identical for both twins — the only
+        difference between sync and async is the ``invoke`` vs ``ainvoke`` call.
+        """
         bus = adapt_state(state)
 
         # Loop re-entry: on iteration 2+, read from own append-list.
@@ -82,9 +96,12 @@ def make_subgraph_fn(sub: Construct, sub_graph: CompiledStateGraph) -> Callable:
             # StateBus.get optional: loop-bootstrap — sub-construct's own field
             # is unbound on iteration 0.
             own_val = bus.get(field_name)
-            if isinstance(own_val, list) and own_val:
-                latest = own_val[-1]
-                if sub.input is None or isinstance(latest, sub.input):
+            if isinstance(own_val, list):
+                # Latest-of-append-list unwrap delegates to the di monopoly
+                # per neograph-ovx1: None for the unbound/empty first iteration,
+                # own_val[-1] otherwise.
+                latest = _unwrap_loop_value(own_val, object)
+                if latest is not None and (sub.input is None or isinstance(latest, sub.input)):
                     input_data = latest
 
         # First iteration, non-loop, or input!=output loop re-entry:
@@ -113,9 +130,13 @@ def make_subgraph_fn(sub: Construct, sub_graph: CompiledStateGraph) -> Callable:
 
         # Forward Oracle gen_id + model override from parent state into config
         config = _inject_oracle_config(bus, config)
+        return sub_input, bus, config
 
-        sub_result = _strip_internals(sub_graph.invoke(sub_input, config=config))
+    def _build_update(sub_result: dict[str, Any], bus: StateBus) -> dict[str, Any]:
+        """Shared post-invoke logic: extract declared output, shape state update.
 
+        Identical for both twins.
+        """
         # Extract the declared output type from sub result.
         output_val = None
         if sub.output is not None:
@@ -140,6 +161,22 @@ def make_subgraph_fn(sub: Construct, sub_graph: CompiledStateGraph) -> Callable:
             update[count_field] = current + 1
         return update
 
-    # __name__ stays informational; routing is the graph.add_node(name, fn)
-    # argument (always sub.name/item.name). See neograph-y20i.
-    return subgraph_node
+    def subgraph_node(state: BaseModel | dict[str, Any], config: RunnableConfig) -> dict:
+        sub_log.info("subgraph_start")
+        sub_input, bus, config = _build_sub_input(state, config)
+        sub_result = _strip_internals(sub_graph.invoke(sub_input, config=config))
+        return _build_update(sub_result, bus)
+
+    async def asubgraph_node(state: BaseModel | dict[str, Any], config: RunnableConfig) -> dict:
+        sub_log.info("subgraph_start")
+        sub_input, bus, config = _build_sub_input(state, config)
+        # Async twin: await the child's ainvoke so a sub-construct under the async
+        # driver propagates async selection into the child graph, instead of
+        # blocking the loop on sub_graph.invoke. See neograph-expi.
+        sub_result = _strip_internals(await sub_graph.ainvoke(sub_input, config=config))
+        return _build_update(sub_result, bus)
+
+    # Driver-selected dual path. __name__ stays informational; routing is the
+    # graph.add_node(name, fn) argument (always sub.name/item.name). See
+    # neograph-y20i.
+    return RunnableLambda(subgraph_node, afunc=asubgraph_node)

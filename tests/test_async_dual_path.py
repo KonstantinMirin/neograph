@@ -186,6 +186,92 @@ class TestSubConstructOracleWrapSurvivesMigration:
         assert sync_result["osub"] == async_result["osub"]
 
 
+class TestSubConstructAsyncTwin:
+    """neograph-expi — a sub-construct under the async driver must run its child
+    via ``sub_graph.ainvoke``, not ``sub_graph.invoke``.
+
+    ``make_subgraph_fn`` today (``_subconstruct.py:117``) has ONE sync path:
+    ``subgraph_node`` calls ``sub_graph.invoke(...)`` unconditionally, and the
+    compiler adds that bare closure to the parent graph (``compiler.py:430``) with
+    no ``afunc`` twin. Under ``graph.ainvoke`` LangGraph threadpools the sync
+    ``subgraph_node`` onto a worker thread, where ``sub_graph.invoke`` runs the
+    ENTIRE child synchronously — blocking the loop and silently downgrading any
+    async-only leaf inside the child to the sync path. This violates the Phase-1
+    H2 invariant: async is DRIVER-selected and must propagate through every
+    nesting level.
+
+    Load-bearing RED (thread-identity, NOT parity): under ``ainvoke`` the child's
+    leaf node must run INLINE on the event-loop thread (proving the parent
+    subgraph node routed through a RunnableLambda ``afunc`` that awaited
+    ``sub_graph.ainvoke``), not on a threadpool worker (today's sync path).
+    Result parity is green pre-fix and worthless as the red — see the module
+    docstring.
+
+    Three-surface parity (AGENTS.md neograph-ts7): a sub-construct is authored
+    declaratively (``Construct(input=, output=, nodes=[Node.scripted(...)])``) or
+    from ``@node`` functions (``construct_from_functions(input=, output=)``); both
+    lower to the same ``make_subgraph_fn`` path, so both must go green together.
+    """
+
+    def test_declarative_subconstruct_child_runs_inline_under_ainvoke(self):
+        """Surface 1 — declarative ``Construct(input=, output=, nodes=[...])``."""
+        node_thread: dict = {}
+
+        def leaf(input_data, config):
+            node_thread["tid"] = threading.get_ident()
+            return Claims(items=[input_data.text.upper()])
+
+        register_scripted("leaf", leaf)
+        register_scripted("seed", lambda input_data, config: RawText(text="hi"))
+
+        sub = Construct(
+            "child",
+            input=RawText,
+            output=Claims,
+            nodes=[Node.scripted("leaf", fn="leaf", inputs=RawText, outputs=Claims)],
+        )
+        parent = Construct(
+            "parent",
+            nodes=[Node.scripted("seed", fn="seed", outputs=RawText), sub],
+        )
+        graph = compile(parent, **build_test_compile_kwargs())
+
+        sync_v, async_v, loop_tid, node_tid = _sync_async_node_thread(graph, "child", node_thread)
+
+        assert sync_v == async_v == Claims(items=["HI"])  # same-layer parity
+        assert node_tid == loop_tid, (
+            "ainvoke threadpooled the sync subgraph_node instead of routing "
+            "through a RunnableLambda afunc that awaits sub_graph.ainvoke — the "
+            "child ran on the sync path (neograph-expi)"
+        )
+
+    def test_node_subconstruct_child_runs_inline_under_ainvoke(self):
+        """Surface 2 — ``@node`` sub-construct via ``construct_from_functions``."""
+        node_thread: dict = {}
+
+        @node(outputs=Claims)
+        def leaf(port: RawText) -> Claims:
+            node_thread["tid"] = threading.get_ident()
+            return Claims(items=[port.text.upper()])
+
+        child = construct_from_functions("child", [leaf], input=RawText, output=Claims)
+        register_scripted("seed", lambda input_data, config: RawText(text="hi"))
+        parent = Construct(
+            "parent",
+            nodes=[Node.scripted("seed", fn="seed", outputs=RawText), child],
+        )
+        graph = compile(parent, **build_test_compile_kwargs())
+
+        sync_v, async_v, loop_tid, node_tid = _sync_async_node_thread(graph, "child", node_thread)
+
+        assert sync_v == async_v == Claims(items=["HI"])
+        assert node_tid == loop_tid, (
+            "ainvoke threadpooled the sync subgraph_node instead of routing "
+            "through a RunnableLambda afunc that awaits sub_graph.ainvoke — the "
+            "child ran on the sync path (neograph-expi)"
+        )
+
+
 class TestRunIsolatedSurvivesRunnableMigration:
     """Locks ``node.py:422`` ``Node.run_isolated`` (sync) against the make_node_fn
     return-type change. ``run_isolated`` calls the factory return directly; when

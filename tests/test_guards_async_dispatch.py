@@ -100,6 +100,44 @@ def _top_level_defs(source: str) -> dict[str, FuncDef]:
     }
 
 
+def _func_named(source: str, name: str) -> FuncDef | None:
+    """Return the first def named ``name`` anywhere in ``source`` (top-level or
+    nested), or None. Used to reach into a factory whose twins are closures."""
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef) and node.name == name:
+            return node
+    return None
+
+
+def _returns_runnable_with_afunc(fn: FuncDef) -> bool:
+    """True if ``fn`` has a ``return RunnableLambda(..., afunc=...)`` — i.e. it
+    hands the DRIVER an async twin, not a sync-only closure."""
+    for node in ast.walk(fn):
+        if (
+            isinstance(node, ast.Return)
+            and isinstance(node.value, ast.Call)
+            and isinstance(node.value.func, ast.Name)
+            and node.value.func.id == "RunnableLambda"
+            and any(kw.arg == "afunc" for kw in node.value.keywords)
+        ):
+            return True
+    return False
+
+
+def _calls_attr(fn: FuncDef, attr: str) -> bool:
+    """True if ``fn`` (or a nested closure) calls ``something.<attr>(...)`` —
+    e.g. ``sub_graph.ainvoke(...)``. Proves the async twin actually drives the
+    child async instead of a band-aid afunc that re-calls the sync path."""
+    for node in ast.walk(fn):
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == attr
+        ):
+            return True
+    return False
+
+
 class TestDualPathDispatchCompleteness:
     """GUARD A: every dispatch class in _dispatch.py exposes sync execute AND
     async aexecute — the structural counter to the H2 sync-only hazard."""
@@ -278,3 +316,98 @@ class TestAsyncTwinCoLocation:
         # the twin is NOT co-located in module_a; guard scanning module_a flags it
         assert "_awork" not in defs_a
         assert "_awork" in defs_b  # it exists, but in the wrong module
+
+
+class TestSubgraphFnDualPath:
+    """GUARD C (neograph-expi): ``make_subgraph_fn`` must be dual-path.
+
+    A sub-construct node-callable factory whose twins are CLOSURES (not
+    top-level defs, so GUARD B's co-location table can't reach them) is pinned
+    here by two structural facts that together defeat the sync-only regression
+    AND the band-aid variant:
+
+    1. It returns ``RunnableLambda(..., afunc=...)`` — the DRIVER gets an async
+       twin. A bare ``return subgraph_node`` or ``RunnableLambda(subgraph_node)``
+       (no afunc) is threadpooled under ``ainvoke`` and runs the whole child on
+       the sync path — the exact neograph-expi bug.
+    2. Its body calls ``<x>.ainvoke(...)`` — the async twin actually drives the
+       child graph asynchronously. This blocks the subtle band-aid: an afunc twin
+       that still calls ``sub_graph.invoke`` (afunc present but async selection
+       does NOT propagate into the child). This is GUARD C's analog of a
+       regex-slip meta-case.
+
+    Non-vacuity is proven by the synthetic negative meta-tests below.
+    """
+
+    SUBCONSTRUCT_PATH = SRC / "_subconstruct.py"
+
+    def test_make_subgraph_fn_returns_runnable_with_afunc(self):
+        fn = _func_named(self.SUBCONSTRUCT_PATH.read_text(), "make_subgraph_fn")
+        assert fn is not None, "make_subgraph_fn not found in _subconstruct.py"
+        assert _returns_runnable_with_afunc(fn), (
+            "make_subgraph_fn must `return RunnableLambda(subgraph_node, "
+            "afunc=asubgraph_node)` — a sync-only return threadpools the child "
+            "under ainvoke and runs it on the sync path (neograph-expi)."
+        )
+
+    def test_make_subgraph_fn_drives_child_via_ainvoke(self):
+        fn = _func_named(self.SUBCONSTRUCT_PATH.read_text(), "make_subgraph_fn")
+        assert fn is not None
+        assert _calls_attr(fn, "ainvoke"), (
+            "make_subgraph_fn's async twin must call sub_graph.ainvoke — an afunc "
+            "that still calls sub_graph.invoke does NOT propagate async selection "
+            "into the child (band-aid, neograph-expi)."
+        )
+
+    # ── slip meta-tests: synthetic factories prove both facts are enforced ──
+
+    def test_meta_positive_dualpath_factory_passes(self):
+        src = (
+            "def make_x(sub, sub_graph):\n"
+            "    def node(s, c):\n"
+            "        return sub_graph.invoke(s, config=c)\n"
+            "    async def anode(s, c):\n"
+            "        return await sub_graph.ainvoke(s, config=c)\n"
+            "    return RunnableLambda(node, afunc=anode)\n"
+        )
+        fn = _func_named(src, "make_x")
+        assert fn is not None
+        assert _returns_runnable_with_afunc(fn)
+        assert _calls_attr(fn, "ainvoke")
+
+    def test_meta_negative_sync_only_return_is_flagged(self):
+        src = (
+            "def make_x(sub, sub_graph):\n"
+            "    def node(s, c):\n"
+            "        return sub_graph.invoke(s, config=c)\n"
+            "    return node\n"
+        )
+        fn = _func_named(src, "make_x")
+        assert fn is not None
+        assert not _returns_runnable_with_afunc(fn)  # no afunc twin -> flagged
+
+    def test_meta_negative_runnable_without_afunc_is_flagged(self):
+        src = (
+            "def make_x(sub, sub_graph):\n"
+            "    def node(s, c):\n"
+            "        return sub_graph.invoke(s, config=c)\n"
+            "    return RunnableLambda(node)\n"
+        )
+        fn = _func_named(src, "make_x")
+        assert fn is not None
+        assert not _returns_runnable_with_afunc(fn)  # RunnableLambda(node) alone -> flagged
+
+    def test_meta_negative_afunc_without_ainvoke_is_flagged(self):
+        """Band-aid case: afunc present but the twin re-calls sync ``invoke``."""
+        src = (
+            "def make_x(sub, sub_graph):\n"
+            "    def node(s, c):\n"
+            "        return sub_graph.invoke(s, config=c)\n"
+            "    async def anode(s, c):\n"
+            "        return sub_graph.invoke(s, config=c)\n"
+            "    return RunnableLambda(node, afunc=anode)\n"
+        )
+        fn = _func_named(src, "make_x")
+        assert fn is not None
+        assert _returns_runnable_with_afunc(fn)  # afunc is present...
+        assert not _calls_attr(fn, "ainvoke")  # ...but never drives the child async -> flagged
