@@ -271,8 +271,17 @@ def compute_node_fingerprints(construct: Any) -> dict[str, str]:
 
     from neograph.naming import field_name_for
 
-    result = {}
-    for item in construct.nodes:
+    result: dict[str, str] = {}
+
+    def _fingerprint_item(item: Any) -> None:
+        """Fingerprint one Node (per output key) or Construct (its output).
+
+        Shared between top-level items and branch-arm items so an arm node's
+        output type is invalidated on change exactly like a top-level node's.
+        Kept as its own walk rather than routed through ``iter_nodes`` to
+        preserve the top-level-only granularity: a sub-construct is
+        fingerprinted by its declared output, not by its internal nodes.
+        """
         if hasattr(item, "outputs") and item.outputs is not None:
             fname = field_name_for(item.name)
             no = normalize_outputs(item.outputs)
@@ -296,6 +305,14 @@ def compute_node_fingerprints(construct: Any) -> dict[str, str]:
                 result[fname] = hashlib.sha256(
                     f"{fname}:{typ.__qualname__ if isinstance(typ, type) else str(typ)}".encode()
                 ).hexdigest()[:12]
+
+    for item in construct.nodes:
+        if isinstance(item, _BranchNode):
+            meta = item._neo_branch_meta
+            for arm_item in meta.true_arm_nodes + meta.false_arm_nodes:
+                _fingerprint_item(arm_item)
+        else:
+            _fingerprint_item(item)
     return result
 
 

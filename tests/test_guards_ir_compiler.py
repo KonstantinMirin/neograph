@@ -388,6 +388,69 @@ class TestBranchNodeIsNotDuckTyped:
             )
 
 
+class TestIterNodesCoversBranchArms:
+    """iter_nodes -- the single source of truth for the IR node-tree walk --
+    MUST descend into _BranchNode arm contents.
+
+    Regression pin for neograph-tdbb: iter_nodes previously skipped _BranchNode
+    sentinels, so nodes inside branch arms were invisible to every
+    iter_nodes-based walk (scripted-shim collection, required-DI collection,
+    LLM-node discovery). A scripted @node in a branch arm then failed to
+    compile with 'Scripted function ... not registered'.
+
+    Behavioral guard (not regex): positive asserts the invariant holds; the
+    negative meta-test re-implements the OLD arm-skipping walk and proves it
+    would miss the arm node -- i.e. the arm descent is load-bearing, not
+    incidental.
+    """
+
+    @staticmethod
+    def _parent_with_arm_node():
+        from neograph import Node
+        from neograph._ir_branch import _BranchMeta, _BranchNode, _ConditionSpec
+        from neograph.construct import Construct
+
+        seed = Node.scripted("seed", fn="seed_fn", outputs=int)
+        arm = Node.scripted("arm-node", fn="arm_fn", inputs=int, outputs=int)
+        cond = _ConditionSpec(
+            source_node=seed, attr_chain=["x"],
+            op_fn=lambda v, _t: bool(v), op_str="route", threshold=None,
+        )
+        meta = _BranchMeta(condition_spec=cond, true_arm_nodes=[arm], false_arm_nodes=[])
+        return Construct("parent", nodes=[seed, _BranchNode(meta, 0)])
+
+    def test_iter_nodes_yields_a_node_inside_a_branch_arm(self):
+        from neograph.construct import iter_nodes
+
+        parent = self._parent_with_arm_node()
+        names = {n.name for n in iter_nodes(parent)}
+        assert "arm-node" in names, (
+            "iter_nodes must descend into _BranchNode arms; a node inside a "
+            "branch arm was not yielded (neograph-tdbb regression)."
+        )
+
+    def test_old_arm_skipping_walk_would_miss_the_arm_node(self):
+        """Meta-test: the pre-fix walk (Node/Construct dispatch only, no arm
+        descent) misses the arm node -- proving this guard distinguishes the
+        fixed walk from the broken one."""
+        from neograph import Node
+        from neograph.construct import Construct
+
+        def _old_iter(construct):
+            for item in construct.nodes:
+                if isinstance(item, Construct):
+                    yield from _old_iter(item)
+                elif isinstance(item, Node):
+                    yield item
+
+        parent = self._parent_with_arm_node()
+        old_names = {n.name for n in _old_iter(parent)}
+        assert "arm-node" not in old_names, (
+            "meta-test invariant broken: the old arm-skipping walk should NOT "
+            "see the arm node; if it does, this guard no longer proves the fix."
+        )
+
+
 class TestBuildConstructBodySize:
     """_build_construct_from_decorated must be a thin orchestrator, not a monolith.
 

@@ -26,6 +26,7 @@ from typing import Annotated, Any
 from pydantic import BaseModel, BeforeValidator, Field
 
 from neograph._construct_validation import ConstructError, _validate_node_chain
+from neograph._ir_branch import _BranchNode
 from neograph._ir_normalize import normalize_ir
 from neograph._ir_protocols import ConstructItem
 from neograph._llm_config import LlmConfig
@@ -55,17 +56,31 @@ __all__ = ["Construct", "ConstructError", "iter_nodes"]
 
 
 def iter_nodes(construct: Construct) -> Iterator[Node]:
-    """Yield every leaf ``Node`` in ``construct``, recursing into sub-constructs.
+    """Yield every leaf ``Node`` in ``construct``, recursing into sub-constructs
+    and into ``_BranchNode`` arm contents.
 
     Single source of truth for the IR node-tree walk. Replaces the hand-rolled
     ``isinstance(item, Construct) -> recurse; isinstance(item, Node) -> body``
     skeleton that was duplicated across the compiler, the LLM runtime, and lint.
-    ``_BranchNode`` sentinels (neither Node nor Construct) are skipped, matching
-    the prior walks' ``isinstance(Node)`` gate.
+
+    ``_BranchNode`` sentinels carry ``_BranchMeta.true_arm_nodes`` /
+    ``false_arm_nodes`` (each a ``list[Node | Construct]``) that are real IR
+    nodes reachable only through the arm. Descending into them keeps every
+    ``iter_nodes`` consumer (scripted-shim collection, required-DI collection,
+    LLM-node discovery) correct for nodes placed inside a branch arm. Arm nodes
+    are arm-exclusive (``forward.py`` builds arms from ``true_only`` /
+    ``false_only``), so each is yielded exactly once.
     """
     for item in construct.nodes:
         if isinstance(item, Construct):
             yield from iter_nodes(item)
+        elif isinstance(item, _BranchNode):
+            meta = item._neo_branch_meta
+            for arm_item in (*meta.true_arm_nodes, *meta.false_arm_nodes):
+                if isinstance(arm_item, Construct):
+                    yield from iter_nodes(arm_item)
+                elif isinstance(arm_item, Node):
+                    yield arm_item
         elif isinstance(item, Node):
             yield item
 
