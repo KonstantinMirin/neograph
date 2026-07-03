@@ -14,6 +14,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from neograph._ir_branch import iter_with_arms
 from neograph.construct import Construct
 from neograph.naming import field_name_for
 
@@ -160,9 +161,12 @@ def cmd_check(args: argparse.Namespace) -> int:
         # 1. Compile (auto-supply MemorySaver for Operator constructs)
         checkpointer = None
         from neograph.compiler import classify_modifiers
+        # iter_with_arms so an Operator living only in a branch arm still
+        # triggers the auto-MemorySaver supply — otherwise `neograph check`
+        # would fail a valid arm-Operator pipeline. See neograph-vn5f (site 10).
         has_operator = any(
             "operator" in classify_modifiers(item)[1]
-            for item in construct.nodes
+            for item in iter_with_arms(construct)
             if hasattr(item, "modifiers")
         )
         if has_operator:

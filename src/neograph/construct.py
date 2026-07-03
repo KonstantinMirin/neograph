@@ -26,7 +26,7 @@ from typing import Annotated, Any
 from pydantic import BaseModel, BeforeValidator, Field
 
 from neograph._construct_validation import ConstructError, _validate_node_chain
-from neograph._ir_branch import _BranchNode
+from neograph._ir_branch import _BranchNode, iter_item_slots
 from neograph._ir_normalize import normalize_ir
 from neograph._ir_protocols import ConstructItem
 from neograph._llm_config import LlmConfig
@@ -167,7 +167,12 @@ class Construct(Modifiable, BaseModel):
         parent_has_overrides = bool(
             self.llm_config.model_fields_set or self.llm_config.provider_kwargs
         )
-        for i, item in enumerate(self.nodes):
+        # iter_item_slots descends into _BranchNode arms so a bare arm LLM node
+        # inherits the parent Construct's llm_config / renderer overrides just
+        # like a top-level node — otherwise it would run with the wrong
+        # output_strategy / renderer. See neograph-vn5f (site 9).
+        for container, i in iter_item_slots(self):
+            item = container[i]
             updates: dict[str, Any] = {}
             if parent_has_overrides and hasattr(item, "llm_config"):
                 updates["llm_config"] = self.llm_config.merged_with(item.llm_config)
@@ -177,7 +182,7 @@ class Construct(Modifiable, BaseModel):
                 # All paths that populate `updates` first gate on hasattr for
                 # the field — both gates only fire on BaseModel children.
                 assert isinstance(item, BaseModel)
-                self.nodes[i] = item.model_copy(update=updates)
+                container[i] = item.model_copy(update=updates)
         # IR-parity: inferred IR-level fields (fan_out_param, oracle_gen_type)
         # must be identical regardless of which API surface built this
         # Construct. normalize_ir is the single inference site — run once,

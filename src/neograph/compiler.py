@@ -19,7 +19,7 @@ from pydantic import BaseModel
 
 from neograph._compiled import CompiledNeograph
 from neograph._dev_warnings import DEV_MODE
-from neograph._ir_branch import _BranchNode
+from neograph._ir_branch import _BranchNode, iter_with_arms
 from neograph._llm_runtime import EMPTY_RUNTIME, LlmRuntime, check_llm_kwargs_or_raise
 from neograph._oracle import (
     make_each_redirect_fn,
@@ -143,7 +143,10 @@ def compile(
 
     # Validate: Operator string conditions are registered.
     # Check BEFORE the checkpointer guard so the real error isn't masked.
-    for item in construct.nodes:
+    # iter_with_arms so a bare arm Operator node's condition is validated too —
+    # bare arm Nodes bypass make_node_fn validation entirely (arm Constructs
+    # self-validate via _wiring's recursive _compile). See neograph-vn5f (6-8).
+    for item in iter_with_arms(construct):
         if isinstance(item, (Node, Construct)):
             _, item_mods = classify_modifiers(item)
             op = item_mods.get("operator")
@@ -159,7 +162,7 @@ def compile(
 
     # Validate: Operator requires checkpointer
     has_operator = any(
-        "operator" in classify_modifiers(item)[1] for item in construct.nodes
+        "operator" in classify_modifiers(item)[1] for item in iter_with_arms(construct)
         if isinstance(item, (Node, Construct))
     )
     if has_operator and checkpointer is None:
@@ -180,7 +183,9 @@ def compile(
     )
 
     # Validate: tool factory registrations
-    for item in construct.nodes:
+    # iter_with_arms so a bare arm agent/act node's tool factories are validated
+    # at compile time. See neograph-vn5f (site 8).
+    for item in iter_with_arms(construct):
         if isinstance(item, Node) and item.mode in ("agent", "act") and item.tools:
             for t in item.tools:
                 if t.name not in tool_factory_lookup:

@@ -15,6 +15,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
+from neograph._ir_branch import iter_with_arms
 from neograph._ir_protocols import ConstructItem
 from neograph._llm_runtime import collect_llm_nodes, missing_runtime_kwargs
 from neograph._normalize import normalize_inputs
@@ -214,7 +215,10 @@ def _walk(
     if isinstance(item, Construct):
         # Check Loop condition on the Construct itself (Construct | Loop)
         _check_loop_condition(item, issues, conditions=conditions)
-        for child in item.nodes:
+        # iter_with_arms expands _BranchNode sentinels so a bare arm Node's DI
+        # bindings + template placeholders are linted like any other node. See
+        # neograph-vn5f (site 3).
+        for child in iter_with_arms(item):
             _walk(child, config, issues, known_vars=known_vars,
                   template_resolver=template_resolver,
                   conditions=conditions)

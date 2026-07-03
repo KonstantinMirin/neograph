@@ -29,6 +29,7 @@ from __future__ import annotations
 from collections import OrderedDict
 from enum import Enum
 
+from neograph._ir_branch import iter_with_arms
 from neograph._ir_protocols import ConstructLike
 from neograph._normalize import _declared_output
 from neograph._state_keys import StateKeys
@@ -125,7 +126,17 @@ def _validate_node_chain(
             label=f"construct '{construct.name}' input port",
         )
 
-    for item in construct.nodes:
+    # iter_with_arms expands _BranchNode sentinels into their arm items so a
+    # bare arm Node is producer-registered and input-type-validated at the
+    # parent level (arm Constructs self-validate via the recursion below, as
+    # before). Registering a conditional arm output as a parent-scope producer
+    # is intentional: it matches the state field compile_state_model actually
+    # creates for that arm node. Cross-arm leakage (a false-arm node reading a
+    # true-arm output) is NOT caught here — arms are flattened without recording
+    # which arm each producer belongs to; this is a documented limitation, not a
+    # regression (it was uncaught before this walk saw arm nodes at all). See
+    # neograph-vn5f (site 1).
+    for item in iter_with_arms(construct):
         # Node has `inputs` (plural) since neograph-kqd.1. Construct still
         # uses `input` (singular) as its sub-construct boundary port —
         # that's handled above via construct.input, not here. The

@@ -19,6 +19,7 @@ from langchain_core.runnables import RunnableConfig
 from langgraph.types import Command
 
 from neograph._compiled import CompiledNeograph
+from neograph._ir_branch import iter_with_arms
 from neograph._state_keys import StateKeys, _strip_internals
 from neograph.errors import CheckpointSchemaError, ExecutionError
 from neograph.naming import field_name_for
@@ -203,7 +204,11 @@ def _build_producer_consumer_adjacency(construct: Any) -> dict[str, set[str]]:
     def add_edge(producer_key: str, consumer_field: str) -> None:
         adjacency.setdefault(producer_key, set()).add(consumer_field)
 
-    for item in getattr(construct, "nodes", []):
+    # iter_with_arms expands _BranchNode sentinels so a bare arm consumer
+    # contributes its producer->consumer edges — otherwise a change to an
+    # upstream field would not mark the arm node for checkpoint re-execution.
+    # See neograph-vn5f (site 5).
+    for item in iter_with_arms(construct):
         consumer_name = getattr(item, "name", None)
         if consumer_name is None:
             continue

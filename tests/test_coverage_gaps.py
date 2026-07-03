@@ -1388,7 +1388,14 @@ class TestBranchArmContextFields:
         )
         branch = _BranchNode(meta, branch_id=4)
 
-        pipeline = Construct("ctx-test", nodes=[seed_node, branch])
+        # Sub-construct (input=) so the arm node's context= is forwarded from the
+        # parent rather than requiring a local producer. As a top-level construct
+        # this pipeline is now correctly rejected at assembly (neograph-vn5f made
+        # branch-arm nodes validate their context= like top-level and non-arm
+        # sub-construct nodes); the deferred-context sub-construct form is the
+        # scenario where compile_state_model's arm-context-field path applies.
+        pipeline = Construct("ctx-test", input=Draft, output=RawText,
+                             nodes=[seed_node, branch])
         state_model = compile_state_model(pipeline)
 
         # Context field should be created
@@ -1430,7 +1437,11 @@ class TestBranchArmContextFields:
         )
         branch = _BranchNode(meta, branch_id=5)
 
-        pipeline = Construct("ccs-test", nodes=[seed_node, branch])
+        # Sub-construct (input=) so arm-node context= is forwarded from the parent
+        # rather than requiring a local producer — see the companion test above
+        # (neograph-vn5f made branch-arm context validate like top-level nodes).
+        pipeline = Construct("ccs-test", input=Draft, output=SubOutput,
+                             nodes=[seed_node, branch])
         state_model = compile_state_model(pipeline)
 
         # Node's context should be present, Construct's internal context should NOT

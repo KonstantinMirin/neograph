@@ -8,6 +8,7 @@ import structlog
 from langchain_core.runnables import RunnableConfig, RunnableLambda
 from pydantic import BaseModel
 
+from neograph._ir_branch import iter_with_arms
 from neograph._oracle import _inject_oracle_config
 from neograph._state_bus import StateBus, adapt_state
 from neograph._state_keys import StateKeys, _strip_internals
@@ -115,7 +116,10 @@ def make_subgraph_fn(sub: Construct, sub_graph: CompiledStateGraph) -> RunnableL
             sub_input[StateKeys.SUBGRAPH_INPUT] = input_data
 
         # Forward context fields from parent state into sub-construct.
-        for n in sub.nodes:
+        # iter_with_arms so a context node living inside a branch arm of the
+        # sub-construct gets its context field forwarded, not resolved to None.
+        # See neograph-vn5f (site 11).
+        for n in iter_with_arms(sub):
             if hasattr(n, "context") and n.context:
                 for ctx_name in n.context:
                     ctx_field = field_name_for(ctx_name)

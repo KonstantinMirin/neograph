@@ -12,6 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from neograph._ir_branch import iter_with_arms
 from neograph._ir_protocols import ConstructItem
 from neograph.construct import Construct
 from neograph.naming import field_name_for
@@ -88,7 +89,10 @@ def _walk(
 ) -> None:
     """Recursively walk construct tree and check each node."""
     if isinstance(item, Construct):
-        for child in item.nodes:
+        # iter_with_arms expands _BranchNode sentinels so bare arm Nodes get
+        # scripted-fn / state-field / condition-registration verification. See
+        # neograph-vn5f (site 4).
+        for child in iter_with_arms(item):
             _walk(
                 child, issues, state_fields,
                 has_llm_ref=has_llm_ref,
@@ -159,8 +163,12 @@ def _check_condition_registrations(
 
 
 def _has_llm_nodes(construct: Construct) -> bool:
-    """Check if any node in the construct tree uses an LLM mode."""
-    for item in construct.nodes:
+    """Check if any node in the construct tree uses an LLM mode.
+
+    iter_with_arms expands _BranchNode sentinels so an LLM-mode node living only
+    in a branch arm is counted. See neograph-vn5f (site 4).
+    """
+    for item in iter_with_arms(construct):
         if isinstance(item, Construct):
             if _has_llm_nodes(item):
                 return True

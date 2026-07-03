@@ -34,6 +34,7 @@ from typing import TYPE_CHECKING, Any, Protocol, cast
 
 from pydantic import BaseModel
 
+from neograph._ir_branch import iter_item_slots
 from neograph._ir_protocols import ConstructItem
 from neograph._normalize import normalize_inputs, normalize_outputs
 from neograph._sidecar import infer_oracle_gen_type
@@ -222,10 +223,21 @@ def normalize_ir(construct: Construct) -> None:
     # multi-output nodes contribute per-output-key fields ({base}_{key}), not
     # the bare base. Built from the shared declared_output_fields helper so the
     # two views cannot drift. See neograph-bcct.
+    #
+    # Peer set stays TOP-LEVEL only (construct.nodes), not arm-inclusive: a
+    # branch-arm Each node that reads an arm-SIBLING producer would misinfer its
+    # fan_out_param receiver against this set. No consumer needs arm-sibling
+    # fan-in today, so the limitation is documented rather than closed here.
+    # See neograph-vn5f (site 2).
     peer_field_names: set[str] = set()
     for item in construct.nodes:
         peer_field_names |= declared_output_fields(item)
-    for i, item in enumerate(construct.nodes):
+    # iter_item_slots descends into _BranchNode arms and yields each arm node's
+    # OWN storage slot (meta.true_arm_nodes[j] / false_arm_nodes[j]), so the
+    # model_copy write-back lands where the compiler reads it — not in a
+    # detached copy. See neograph-vn5f (site 2).
+    for container, idx in iter_item_slots(construct):
+        item = container[idx]
         if not isinstance(item, Node):
             continue
         updates: dict[str, Any] = {}
@@ -233,4 +245,4 @@ def normalize_ir(construct: Construct) -> None:
             if normalizer.applies_to(item):
                 updates.update(normalizer.apply(item, peer_field_names))
         if updates:
-            construct.nodes[i] = item.model_copy(update=updates)
+            container[idx] = item.model_copy(update=updates)
