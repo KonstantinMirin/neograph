@@ -368,6 +368,17 @@ class TestNoNearDuplicateHelperNames:
         frozenset({"_aauto_resume_from_divergence", "_auto_resume_from_divergence"}): (
             "lev=1: async twin of the auto-resume rewind (runner.py)."
         ),
+        # neograph-p3c7: a-prefix async twins of the Oracle merge barrier — same
+        # deliberate sync/async twin convention (merge runs on the loop under arun).
+        frozenset({"_arun_merge_prompt", "_run_merge_prompt"}): (
+            "lev=1: async twin of the LLM-judge merge step (_oracle.py)."
+        ),
+        frozenset({"_amerge_variants", "_merge_variants"}): (
+            "lev=1: async twin of the canonical Oracle merge (_oracle.py)."
+        ),
+        frozenset({"_amerge_one_group", "_merge_one_group"}): (
+            "lev=1: async twin of the Each×Oracle per-group merge (_wiring.py)."
+        ),
         frozenset({"_get_param_res", "_set_param_res"}): (
             "lev=1: getter/setter antonym pair (_sidecar.py); the get/set prefix "
             "is intentional API symmetry, not a near-duplicate of one helper."

@@ -138,6 +138,39 @@ def _calls_attr(fn: FuncDef, attr: str) -> bool:
     return False
 
 
+def _calls_func(fn: FuncDef, name: str) -> bool:
+    """True if ``fn`` (or a nested closure) calls a bare ``<name>(...)`` —
+    e.g. ``ainvoke_structured(...)``. Distinguishes an async twin that awaits the
+    async LLM seam from a band-aid that re-calls the sync ``invoke_structured``."""
+    for node in ast.walk(fn):
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == name
+        ):
+            return True
+    return False
+
+
+def _wraps_with_afunc(source: str, wrapped: str) -> bool:
+    """True if ``source`` has a ``RunnableLambda(<wrapped>, afunc=...)`` call —
+    i.e. a closure ``wrapped`` handed to the graph with an async twin. Used for
+    barriers added via ``graph.add_node(RunnableLambda(fn, afunc=afn), ...)``
+    rather than returned from a factory."""
+    for node in ast.walk(ast.parse(source)):
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "RunnableLambda"
+            and node.args
+            and isinstance(node.args[0], ast.Name)
+            and node.args[0].id == wrapped
+            and any(kw.arg == "afunc" for kw in node.keywords)
+        ):
+            return True
+    return False
+
+
 class TestDualPathDispatchCompleteness:
     """GUARD A: every dispatch class in _dispatch.py exposes sync execute AND
     async aexecute — the structural counter to the H2 sync-only hazard."""
@@ -411,3 +444,70 @@ class TestSubgraphFnDualPath:
         assert fn is not None
         assert _returns_runnable_with_afunc(fn)  # afunc is present...
         assert not _calls_attr(fn, "ainvoke")  # ...but never drives the child async -> flagged
+
+
+class TestOracleMergeBarrierDualPath:
+    """GUARD D (neograph-p3c7): the Oracle merge BARRIERS must be dual-path.
+
+    The generator redirects were made dual-path in Phase 1a; the merge barriers
+    (which invoke a sync LLM merge via ``invoke_structured``) were missed and ran
+    threadpooled under ``graph.ainvoke``. Three structural facts pin the fix and
+    defeat both the sync-only regression and the band-aid variant:
+
+    1. ``make_oracle_merge_fn`` (single-group) returns ``RunnableLambda(..., afunc=...)``.
+    2. ``group_merge_barrier`` (Each×Oracle fused) is handed to the graph wrapped
+       as ``RunnableLambda(group_merge_barrier, afunc=...)`` — it is add_node'd,
+       not returned, so it is pinned by the wrap-site, not a return.
+    3. ``_arun_merge_prompt`` (the async merge_prompt twin) calls
+       ``ainvoke_structured`` — an afunc that re-called the sync ``invoke_structured``
+       would present an async twin that still blocks the loop (the band-aid).
+    """
+
+    ORACLE_PATH = SRC / "_oracle.py"
+    WIRING_PATH = SRC / "_wiring.py"
+
+    def test_make_oracle_merge_fn_returns_runnable_with_afunc(self):
+        fn = _func_named(self.ORACLE_PATH.read_text(), "make_oracle_merge_fn")
+        assert fn is not None, "make_oracle_merge_fn not found in _oracle.py"
+        assert _returns_runnable_with_afunc(fn), (
+            "make_oracle_merge_fn must return RunnableLambda(merge_fn, afunc=amerge_fn) "
+            "— a sync-only merge barrier threadpools the LLM merge under ainvoke "
+            "(neograph-p3c7)."
+        )
+
+    def test_group_merge_barrier_is_wrapped_with_afunc(self):
+        assert _wraps_with_afunc(self.WIRING_PATH.read_text(), "group_merge_barrier"), (
+            "group_merge_barrier must be add_node'd as RunnableLambda(group_merge_barrier, "
+            "afunc=agroup_merge_barrier) — the Each×Oracle fused merge otherwise runs on "
+            "the sync path under ainvoke (neograph-p3c7)."
+        )
+
+    def test_async_merge_prompt_twin_awaits_async_llm_seam(self):
+        fn = _func_named(self.ORACLE_PATH.read_text(), "_arun_merge_prompt")
+        assert fn is not None, "_arun_merge_prompt (async merge twin) not found"
+        assert _calls_func(fn, "ainvoke_structured"), (
+            "_arun_merge_prompt must call ainvoke_structured — an async merge twin "
+            "that re-calls the sync invoke_structured still blocks the loop (band-aid, "
+            "neograph-p3c7)."
+        )
+
+    # ── slip meta-tests: synthetic sources prove all three facts are enforced ──
+
+    def test_meta_positive_wrapped_barrier_passes(self):
+        src = "graph.add_node(n, RunnableLambda(group_merge_barrier, afunc=agroup_merge_barrier), defer=True)\n"
+        assert _wraps_with_afunc(src, "group_merge_barrier")
+
+    def test_meta_negative_unwrapped_barrier_is_flagged(self):
+        src = "graph.add_node(n, group_merge_barrier, defer=True)\n"
+        assert not _wraps_with_afunc(src, "group_merge_barrier")
+
+    def test_meta_negative_wrapped_without_afunc_is_flagged(self):
+        src = "graph.add_node(n, RunnableLambda(group_merge_barrier), defer=True)\n"
+        assert not _wraps_with_afunc(src, "group_merge_barrier")
+
+    def test_meta_negative_async_twin_calling_sync_seam_is_flagged(self):
+        """Band-aid: an async merge twin that re-calls the sync seam."""
+        good = "async def _arun(): return await ainvoke_structured(x)\n"
+        bad = "async def _arun(): return invoke_structured(x)\n"
+        assert _calls_func(_func_named(good, "_arun"), "ainvoke_structured")
+        assert not _calls_func(_func_named(bad, "_arun"), "ainvoke_structured")

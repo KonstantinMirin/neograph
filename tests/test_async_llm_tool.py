@@ -41,7 +41,16 @@ from __future__ import annotations
 
 import asyncio
 
-from neograph import Tool, compile, construct_from_functions, node
+from neograph import (
+    Construct,
+    Each,
+    Node,
+    Oracle,
+    Tool,
+    compile,
+    construct_from_functions,
+    node,
+)
 from tests.fakes import (
     FakeTool,
     GatedAsyncFake,
@@ -50,9 +59,10 @@ from tests.fakes import (
     StructuredFake,
     build_fake_llm_kwargs,
     build_test_compile_kwargs,
+    register_scripted,
     register_tool_factory,
 )
-from tests.schemas import Claims
+from tests.schemas import Claims, ClusterGroup, Clusters, MatchResult
 
 _CFG = {"configurable": {}}
 _INPUT = {"node_id": "t"}
@@ -299,3 +309,121 @@ class TestAsyncThinkConfigThreading:
             "async think twin dropped the configurable marker on the .ainvoke hop "
             "— observability (callbacks/tracer) would not survive the await (M6a)"
         )
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Cell 6 — Oracle merge barrier async seam (neograph-p3c7)
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+async def _drive_until_parked_or_done(graph, fake):
+    """Launch ``graph.ainvoke`` as a task; spin the loop until the merge either
+    parks on ``fake.ainvoke`` or the task finishes. Returns the task."""
+    task = asyncio.create_task(graph.graph.ainvoke(dict(_INPUT), dict(_CFG)))
+    for _ in range(60):
+        if fake.enter_count or task.done():
+            break
+        await asyncio.sleep(0.01)
+    return task
+
+
+class TestOracleMergeAsyncSeam:
+    """neograph-p3c7 — the Oracle merge BARRIER (LLM-judge merge) must await its
+    async twin under ``graph.ainvoke``, same as the generator side already does.
+
+    Today ``make_oracle_merge_fn`` (single-group) and ``_wiring.group_merge_barrier``
+    (Each×Oracle fused) return a single sync closure calling ``invoke_structured``
+    (a SYNC LLM call) — no ``afunc`` twin. Under ``graph.ainvoke`` LangGraph
+    threadpools the barrier and the LLM merge runs on the sync path, blocking the
+    loop (Phase-1 H2 invariant violation). The generator redirects were made
+    dual-path in Phase 1a; the merge barriers were missed.
+
+    Discriminator (gate-parking, NOT parity — see module docstring): ``GatedAsyncFake``
+    has NO sync ``invoke``. Generators are SCRIPTED so the ONLY LLM call is the
+    merge (``merge_prompt``). On the async path the merge awaits
+    ``ainvoke_structured`` -> ``fake.ainvoke`` and PARKS (``enter_count == 1``,
+    task not done); on the sync path (today) it calls ``invoke_structured`` ->
+    ``fake.invoke`` and the run fails fast with ``AttributeError`` — the run never
+    parks. RED now: ``enter_count == 0`` and the task is already done (failed).
+    """
+
+    def test_single_group_oracle_merge_parks_on_async_seam(self):
+        """``make_oracle_merge_fn`` — programmatic ``Node.scripted | Oracle``."""
+        register_scripted("mg_gen", lambda input_data, config: Claims(items=["v"]))
+        fake = GatedAsyncFake(lambda m: m(items=["merged"]))
+
+        pipeline = Construct(
+            "p",
+            nodes=[
+                Node.scripted("mg_gen", fn="mg_gen", outputs=Claims)
+                | Oracle(n=2, merge_prompt="test/merge"),
+            ],
+        )
+        graph = compile(
+            pipeline,
+            **build_test_compile_kwargs(),
+            **build_fake_llm_kwargs(lambda tier: fake),
+        )
+
+        async def run_it():
+            task = await _drive_until_parked_or_done(graph, fake)
+            assert fake.enter_count == 1 and not task.done(), (
+                "Oracle merge barrier did not park on GatedAsyncFake.ainvoke — the "
+                "merge ran on the sync path (invoke_structured) under graph.ainvoke "
+                "instead of awaiting ainvoke_structured (neograph-p3c7). "
+                f"enter_count={fake.enter_count}, task.done={task.done()}"
+            )
+            fake.release()
+            result = await asyncio.wait_for(task, timeout=2.0)
+            return result
+
+        result = asyncio.run(run_it())
+        assert result["mg_gen"] == Claims(items=["merged"])
+
+    def test_each_oracle_group_merge_parks_on_async_seam(self):
+        """``_wiring.group_merge_barrier`` — FLAT Each×Oracle fusion (``map_over``
+        + ``ensemble_n`` on ONE node) with an LLM ``merge_prompt``. This routes to
+        ``ModifierCombo.EACH_ORACLE`` -> ``_wire_each_oracle`` ->
+        ``group_merge_barrier`` — a distinct closure from make_oracle_merge_fn.
+
+        Single group (one item) so exactly one merge fires: on the async path it
+        awaits ``ainvoke_structured`` and parks; on the sync path (today) it calls
+        ``invoke_structured`` -> ``fake.invoke`` and fails fast.
+        """
+        fake = GatedAsyncFake(lambda m: m(cluster_label="merged", matched=["x"]))
+
+        register_scripted(
+            "eo_mk",
+            lambda _in, _cfg: Clusters(groups=[ClusterGroup(label="a", claim_ids=["c1"])]),
+        )
+        register_scripted(
+            "eo_gen",
+            lambda item, cfg: MatchResult(cluster_label="item", matched=["m"]),
+        )
+        pipeline = Construct(
+            "p",
+            nodes=[
+                Node.scripted("eo_mk", fn="eo_mk", outputs=Clusters),
+                Node.scripted("eo_gen", fn="eo_gen", inputs=ClusterGroup, outputs=MatchResult)
+                | Oracle(n=2, merge_prompt="test/merge")
+                | Each(over="eo_mk.groups", key="label"),
+            ],
+        )
+        graph = compile(
+            pipeline,
+            **build_test_compile_kwargs(),
+            **build_fake_llm_kwargs(lambda tier: fake),
+        )
+
+        async def run_it():
+            task = await _drive_until_parked_or_done(graph, fake)
+            assert fake.enter_count >= 1 and not task.done(), (
+                "Each×Oracle group_merge_barrier did not park on GatedAsyncFake."
+                "ainvoke — the fused merge ran on the sync path under graph.ainvoke "
+                "instead of awaiting ainvoke_structured (neograph-p3c7). "
+                f"enter_count={fake.enter_count}, task.done={task.done()}"
+            )
+            fake.release()
+            await asyncio.wait_for(task, timeout=2.0)
+
+        asyncio.run(run_it())

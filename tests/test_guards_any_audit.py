@@ -112,12 +112,27 @@ ANY_ALLOWLIST: dict[str, str] = {
     "_oracle.py:_merge_variants:upstream_context": "heterogeneous upstream model instances keyed by input name",
     "_oracle.py:_merge_variants:state_for_di": "dynamically-shaped LangGraph state object (from_state DI source)",
     "_oracle.py:_merge_variants:return": "user-supplied merge result; type declared by node.outputs",
+    # neograph-p3c7 — async merge twins + extracted pure helpers; same user-data
+    # boundaries as their sync counterparts above.
+    "_oracle.py:_merge_prompt_input:upstream_context": "heterogeneous upstream model instances keyed by input name",
+    "_oracle.py:_merge_prompt_input:return": "merge LLM input_data (user models) + primary output model",
+    "_oracle.py:_merge_prompt_post:merged": "user-supplied merge result; type declared by node.outputs",
+    "_oracle.py:_merge_prompt_post:return": "user-supplied merge result; type declared by node.outputs",
+    "_oracle.py:_arun_merge_prompt:upstream_context": "heterogeneous upstream model instances keyed by input name",
+    "_oracle.py:_arun_merge_prompt:return": "user-supplied merge result; type declared by node.outputs",
+    "_oracle.py:_amerge_variants:upstream_context": "heterogeneous upstream model instances keyed by input name",
+    "_oracle.py:_amerge_variants:state_for_di": "dynamically-shaped LangGraph state object (from_state DI source)",
+    "_oracle.py:_amerge_variants:return": "user-supplied merge result; type declared by node.outputs",
     # ── _wiring.py — Callable fn pointers ──
     # gen_fn / merge_fn / fan_fn / subgraph_fn are runtime-built closures whose
     # precise signatures are determined by the user's modifier configuration.
     "_wiring.py:_merge_one_group:return": "user-supplied merge result; type declared by node.outputs",
     "_wiring.py:_merge_one_group:upstream_context": "heterogeneous upstream model instances keyed by input name",
     "_wiring.py:_merge_one_group:state": "dynamically-shaped LangGraph state object (from_state DI source)",
+    # neograph-p3c7 — async twin of _merge_one_group; same boundaries.
+    "_wiring.py:_amerge_one_group:return": "user-supplied merge result; type declared by node.outputs",
+    "_wiring.py:_amerge_one_group:upstream_context": "heterogeneous upstream model instances keyed by input name",
+    "_wiring.py:_amerge_one_group:state": "dynamically-shaped LangGraph state object (from_state DI source)",
     "_wiring.py:_construct_loop_unwrap:return": "user-supplied loop value; type declared by the sub-construct output",
     # ── _ir_normalize.py — IrNormalizer.apply update dict ──
     "_ir_normalize.py:IrNormalizer.apply:return": "model_copy update dict; heterogeneous IR field values (str fan_out_param, type[BaseModel] oracle_gen_type)",

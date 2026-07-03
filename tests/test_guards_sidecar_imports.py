@@ -119,6 +119,9 @@ FUNCTION_LOCAL_IMPORT_ALLOWLIST: set[tuple[str, str, frozenset[str]]] = {
     # _oracle.py — cycle: oracle merges call invoke_structured (_llm). Retires
     # when §2 -lyvi collapses _llm globals.
     ("_oracle.py", "neograph._llm", frozenset({"invoke_structured"})),
+    # _oracle.py — async twin (_arun_merge_prompt) awaits ainvoke_structured;
+    # same _llm cycle (neograph-p3c7). Retires with the sync entry above.
+    ("_oracle.py", "neograph._llm", frozenset({"ainvoke_structured"})),
     # NOTE (ARCH-4 / neograph-v3xx / HIGH-09): the former _oracle -> decorators
     # function-local imports of get_merge_fn_metadata + _resolve_merge_args were
     # illusory cycles — those symbols live in the leaf modules _sidecar and

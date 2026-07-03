@@ -11,7 +11,7 @@ from collections.abc import Callable
 from typing import Any, cast
 
 import structlog
-from langchain_core.runnables import Runnable, RunnableConfig
+from langchain_core.runnables import Runnable, RunnableConfig, RunnableLambda
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Send, interrupt
 
@@ -19,6 +19,7 @@ from neograph._ir_branch import _BranchNode
 from neograph._llm_runtime import EMPTY_RUNTIME, LlmRuntime
 from neograph._normalize import normalize_outputs, primary_output_field
 from neograph._oracle import (
+    _amerge_variants,
     _assert_merge_fn_registered,
     _build_upstream_context,
     _merge_variants,
@@ -258,33 +259,24 @@ def _add_each_oracle_fused(
 
     # Group-merge barrier: partitions by each.key, delegates each group to the
     # canonical merge step in _oracle.py (no merge algorithm lives here).
-    def group_merge_barrier(state: Any, config: RunnableConfig) -> dict:
+    # Dual-path per neograph-p3c7: sync + async twins share the group-collection
+    # (_collect_groups) and result-shaping (_shape_merged) helpers so an LLM-judge
+    # merge_prompt runs on the loop under graph.ainvoke instead of blocking it.
+    def _collect_groups(state: Any) -> tuple[dict[str, list], Any]:
         from collections import defaultdict
         bus = adapt_state(state)
         # StateBus.get optional: collector is unbound until the first fused
         # generator writes a tagged result; empty-list default is the zero.
         collector = bus.get(collector_field, [])
-
-        # Group tagged results by each_key
         groups: dict[str, list] = defaultdict(list)
         for key, result in collector:
             groups[key].append(result)
-
         # Upstream-context for merge_prompt injection — built ONCE from the
         # barrier's state (parity with make_oracle_merge_fn's single-group path).
         upstream_context = _build_upstream_context(bus, node.inputs)
+        return groups, upstream_context
 
-        # Call merge per group
-        merged: dict[str, Any] = {}
-        for key, variants in groups.items():
-            merged[key] = _merge_one_group(
-                oracle, node, variants, config,
-                upstream_context=upstream_context,
-                runtime=runtime,
-                scripted_lookup=scripted_lookup,
-                state=state,
-            )
-
+    def _shape_merged(merged: dict[str, Any]) -> dict:
         # For dict-form outputs: write to per-key fields
         if normalize_outputs(node.outputs).is_dict_form:
             update: dict[str, Any] = {}
@@ -298,7 +290,37 @@ def _add_each_oracle_fused(
             return update
         return {field_name: merged}
 
-    graph.add_node(barrier_name, group_merge_barrier, defer=True)
+    def group_merge_barrier(state: Any, config: RunnableConfig) -> dict:
+        groups, upstream_context = _collect_groups(state)
+        merged: dict[str, Any] = {}
+        for key, variants in groups.items():
+            merged[key] = _merge_one_group(
+                oracle, node, variants, config,
+                upstream_context=upstream_context,
+                runtime=runtime,
+                scripted_lookup=scripted_lookup,
+                state=state,
+            )
+        return _shape_merged(merged)
+
+    async def agroup_merge_barrier(state: Any, config: RunnableConfig) -> dict:
+        groups, upstream_context = _collect_groups(state)
+        merged: dict[str, Any] = {}
+        for key, variants in groups.items():
+            merged[key] = await _amerge_one_group(
+                oracle, node, variants, config,
+                upstream_context=upstream_context,
+                runtime=runtime,
+                scripted_lookup=scripted_lookup,
+                state=state,
+            )
+        return _shape_merged(merged)
+
+    graph.add_node(
+        barrier_name,
+        RunnableLambda(group_merge_barrier, afunc=agroup_merge_barrier),
+        defer=True,
+    )
     graph.add_edge([gen_name], barrier_name)
     graph.add_edge(empty_name, barrier_name)
 
@@ -327,6 +349,34 @@ def _merge_one_group(
     output_model = node.outputs
     assert output_model is not None, f"Oracle merge on '{node.name}' requires outputs"
     return _merge_variants(
+        oracle, variants, output_model, config,
+        upstream_context=upstream_context,
+        llm_config=node.llm_config,
+        runtime=runtime,
+        scripted_lookup=scripted_lookup,
+        state_for_di=state,
+    )
+
+
+async def _amerge_one_group(
+    oracle: Oracle,
+    node: Node,
+    variants: list,
+    config: RunnableConfig,
+    *,
+    upstream_context: dict[str, Any] | None = None,
+    runtime: LlmRuntime = EMPTY_RUNTIME,
+    scripted_lookup: dict[str, Callable] | None = None,
+    state: Any = None,
+) -> Any:
+    """Async twin of :func:`_merge_one_group` per neograph-p3c7.
+
+    Pure delegation to the async canonical merge step ``_oracle._amerge_variants``
+    — same per-group call shape as the sync twin, only the seam differs.
+    """
+    output_model = node.outputs
+    assert output_model is not None, f"Oracle merge on '{node.name}' requires outputs"
+    return await _amerge_variants(
         oracle, variants, output_model, config,
         upstream_context=upstream_context,
         llm_config=node.llm_config,

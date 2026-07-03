@@ -256,21 +256,17 @@ def _run_merge_prompt(
     injected); otherwise input_data is ``{"variants": variants, **upstream}``.
     Applies merge_fallback (on invoke_structured error) and merge_post_process
     (on success). Returns the merged value.
+
+    Sync twin of :func:`_arun_merge_prompt`. Both share the pure input build
+    (``_merge_prompt_input``) and post-process (``_merge_prompt_post``); only the
+    LLM seam differs (invoke_structured vs await ainvoke_structured), mirroring
+    _llm.invoke_structured / ainvoke_structured. See neograph-p3c7.
     """
     from neograph._llm import invoke_structured
 
-    assert oracle.merge_prompt is not None  # narrowing — caller guards on it
-
-    input_data: BaseModel | dict[str, Any] | str
-    if oracle.merge_pre_process is not None:
-        input_data = oracle.merge_pre_process(variants)
-    else:
-        input_data = {"variants": variants}
-        if upstream_context:
-            input_data.update(upstream_context)
-
-    primary_output_model = cast(type[BaseModel], normalize_outputs(output_model).primary)
-
+    input_data, primary_output_model = _merge_prompt_input(
+        oracle, variants, output_model, upstream_context,
+    )
     used_fallback = False
     try:
         merged = invoke_structured(
@@ -288,11 +284,80 @@ def _run_merge_prompt(
             used_fallback = True
         else:
             raise
+    return _merge_prompt_post(oracle, variants, merged, used_fallback)
 
+
+def _merge_prompt_input(
+    oracle: Oracle,
+    variants: list,
+    output_model: TypeSpecStatic,
+    upstream_context: dict[str, Any] | None,
+) -> tuple[Any, type[BaseModel]]:
+    """Pure pre-seam: build the merge LLM input_data + primary output model.
+
+    Shared by the sync/async merge_prompt twins so the pre_process-vs-default
+    input branch cannot drift.
+    """
+    assert oracle.merge_prompt is not None  # narrowing — caller guards on it
+    input_data: BaseModel | dict[str, Any] | str
+    if oracle.merge_pre_process is not None:
+        input_data = oracle.merge_pre_process(variants)
+    else:
+        input_data = {"variants": variants}
+        if upstream_context:
+            input_data.update(upstream_context)
+    primary_output_model = cast(type[BaseModel], normalize_outputs(output_model).primary)
+    return input_data, primary_output_model
+
+
+def _merge_prompt_post(
+    oracle: Oracle, variants: list, merged: Any, used_fallback: bool
+) -> Any:
+    """Pure post-seam: apply merge_post_process on success. Shared by the twins."""
     if oracle.merge_post_process is not None and not used_fallback:
         merged = oracle.merge_post_process(merged, variants)
-
     return merged
+
+
+async def _arun_merge_prompt(
+    oracle: Oracle,
+    variants: list,
+    output_model: TypeSpecStatic,
+    config: RunnableConfig,
+    *,
+    upstream_context: dict[str, Any] | None = None,
+    llm_config: LlmConfig | None = None,
+    runtime: LlmRuntime = EMPTY_RUNTIME,
+) -> Any:
+    """Async twin of :func:`_run_merge_prompt` per neograph-p3c7.
+
+    Awaits ``_llm.ainvoke_structured`` so an LLM-judge merge under the async
+    driver runs on the loop instead of blocking it. Shares the pure input build
+    and post-process with the sync twin; only the seam differs.
+    """
+    from neograph._llm import ainvoke_structured
+
+    input_data, primary_output_model = _merge_prompt_input(
+        oracle, variants, output_model, upstream_context,
+    )
+    used_fallback = False
+    try:
+        merged = await ainvoke_structured(
+            runtime,
+            model_tier=oracle.merge_model,
+            prompt_template=oracle.merge_prompt,
+            input_data=input_data,
+            output_model=primary_output_model,
+            config=config,
+            llm_config=llm_config,
+        )
+    except Exception as exc:
+        if oracle.merge_fallback is not None:
+            merged = oracle.merge_fallback(variants, exc)
+            used_fallback = True
+        else:
+            raise
+    return _merge_prompt_post(oracle, variants, merged, used_fallback)
 
 
 def _run_merge_fn(
@@ -380,6 +445,36 @@ def _merge_variants(
     )
 
 
+async def _amerge_variants(
+    oracle: Oracle,
+    variants: list,
+    output_model: TypeSpecStatic,
+    config: RunnableConfig,
+    *,
+    upstream_context: dict[str, Any] | None = None,
+    llm_config: LlmConfig | None = None,
+    runtime: LlmRuntime = EMPTY_RUNTIME,
+    scripted_lookup: dict[str, Callable] | None = None,
+    state_for_di: Any = None,
+) -> Any:
+    """Async twin of :func:`_merge_variants` per neograph-p3c7.
+
+    Same ONE merge algorithm; only the merge_prompt (LLM-judge) branch differs —
+    it awaits ``_arun_merge_prompt`` so the merge runs on the loop under the async
+    driver. The merge_fn (scripted) branch is pure Python (no I/O) and is reused
+    verbatim from the sync path.
+    """
+    if oracle.merge_prompt:
+        return await _arun_merge_prompt(
+            oracle, variants, output_model, config,
+            upstream_context=upstream_context, llm_config=llm_config, runtime=runtime,
+        )
+    return _run_merge_fn(
+        oracle, variants, config,
+        scripted_lookup=scripted_lookup, state_for_di=state_for_di,
+    )
+
+
 def make_oracle_merge_fn(
     oracle: Oracle,
     field_name: str,
@@ -390,7 +485,7 @@ def make_oracle_merge_fn(
     *,
     runtime: LlmRuntime = EMPTY_RUNTIME,
     scripted_lookup: dict[str, Callable] | None = None,
-) -> Callable:
+) -> RunnableLambda:
     """Create the merge barrier function for Oracle (single-group orchestrator).
 
     Reads variants from ``collector_field`` on state, runs the canonical merge
@@ -407,13 +502,19 @@ def make_oracle_merge_fn(
     # unregistered name surfaces as a ConfigurationError at compile, not at run.
     _assert_merge_fn_registered(oracle, scripted_lookup)
 
-    def merge_fn(state: Any, config: RunnableConfig) -> dict:
+    def _prep(state: Any) -> tuple[list, Any, Any]:
+        """Shared pre-merge read: collector variants + upstream context. Keeps the
+        sync/async twins from drifting on state reads and result shaping."""
         bus = adapt_state(state)
         # StateBus.get optional: collector field is unbound until the first
         # generator writes a variant; empty-list default is the correct zero.
         results = bus.get(collector_field, [])
         primary, secondaries = _unwrap_oracle_results(results, field_name, output_model)
         upstream_context = _build_upstream_context(bus, _node_inputs)
+        return primary, secondaries, upstream_context
+
+    def merge_fn(state: Any, config: RunnableConfig) -> dict:
+        primary, secondaries, upstream_context = _prep(state)
         merged = _merge_variants(
             oracle, primary, output_model, config,
             upstream_context=upstream_context,
@@ -424,7 +525,23 @@ def make_oracle_merge_fn(
         )
         return _build_oracle_merge_result(merged, field_name, output_model, secondaries)
 
-    return merge_fn
+    async def amerge_fn(state: Any, config: RunnableConfig) -> dict:
+        primary, secondaries, upstream_context = _prep(state)
+        # Async twin: await the merge so an LLM-judge merge_prompt runs on the
+        # loop instead of blocking it under graph.ainvoke per neograph-p3c7.
+        merged = await _amerge_variants(
+            oracle, primary, output_model, config,
+            upstream_context=upstream_context,
+            llm_config=llm_config,
+            runtime=runtime,
+            scripted_lookup=scripted_lookup,
+            state_for_di=state,
+        )
+        return _build_oracle_merge_result(merged, field_name, output_model, secondaries)
+
+    # Driver-selected dual path: graph.invoke -> merge_fn (sync invoke_structured),
+    # graph.ainvoke -> amerge_fn (await ainvoke_structured). See neograph-p3c7.
+    return RunnableLambda(merge_fn, afunc=amerge_fn)
 
 
 def make_each_redirect_fn(
