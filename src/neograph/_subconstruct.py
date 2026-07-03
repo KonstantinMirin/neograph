@@ -10,7 +10,7 @@ from pydantic import BaseModel
 
 from neograph._oracle import _inject_oracle_config
 from neograph._state_bus import StateBus, adapt_state
-from neograph._state_keys import StateKeys
+from neograph._state_keys import StateKeys, _strip_internals
 from neograph.construct import Construct
 from neograph.di import _unwrap_loop_value
 from neograph.errors import ExecutionError
@@ -70,8 +70,6 @@ def make_subgraph_fn(sub: Construct, sub_graph: CompiledStateGraph) -> RunnableL
     input-extraction (``_build_sub_input``) and update-shaping
     (``_build_update``) helpers so the sync/async paths cannot drift.
     """
-    from neograph.runner import _strip_internals
-
     sub_log = log.bind(subgraph=sub.name)
     field_name = field_name_for(sub.name)
 

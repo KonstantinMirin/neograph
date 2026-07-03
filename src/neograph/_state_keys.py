@@ -15,6 +15,8 @@ node's `field_name`) are static methods.
 
 from __future__ import annotations
 
+from typing import Any
+
 
 class StateKeys:
     """Named `neo_*` state-bus keys.
@@ -83,3 +85,16 @@ class StateKeys:
     def eachoracle_collector(field_name: str) -> str:
         """Each+Oracle composed barrier/collector field name."""
         return f"neo_eachoracle_{field_name}"
+
+
+def _strip_internals(result: Any) -> Any:
+    """Remove `neo_*` framework plumbing from a result dict.
+
+    Pure result-shaping utility. Lives here (a neutral low-level module) rather
+    than in the run layer so both the run layer (``runner.py``) and the compile
+    layer (``_subconstruct.py``, which strips internals off sub-graph results)
+    can import it at module level without a compile->run inversion.
+    """
+    if not isinstance(result, dict):
+        return result
+    return {k: v for k, v in result.items() if not k.startswith(StateKeys.FRAMEWORK_PREFIX)}

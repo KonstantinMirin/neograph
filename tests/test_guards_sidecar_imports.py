@@ -146,10 +146,12 @@ FUNCTION_LOCAL_IMPORT_ALLOWLIST: set[tuple[str, str, frozenset[str]]] = {
     # kernel at module level and performs no merge step, so the former
     # decorators/_llm function-local allowlist entries are retired here.
     ("_wiring.py", "neograph.compiler", frozenset({"compile"})),
-    # _subconstruct.py — cycle: sub-construct invocation strips internal fields
-    # that runner.py owns. Inherited from factory.py when make_subgraph_fn moved
-    # out (gm-4). Will retire when runner.py loses its internal-field knowledge.
-    ("_subconstruct.py", "neograph.runner", frozenset({"_strip_internals"})),
+    # NOTE (neograph-sseh): the former _subconstruct.py -> runner function-local
+    # import of _strip_internals was a compile-layer -> run-layer inversion. The
+    # helper is a pure result-shaping utility with no run-layer dependency, so it
+    # moved to the neutral leaf _state_keys.py. Both _subconstruct.py and
+    # runner.py now import it at MODULE level from _state_keys — no cycle, entry
+    # retired (not relocated: the allowlist shrank).
     # modifiers.py — cycle: Loop validation lives in _construct_validation,
     # which imports modifier types. Function-local import keeps modifiers.py a
     # leaf. Retires when validation rules move out of _construct_validation.

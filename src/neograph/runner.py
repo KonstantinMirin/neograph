@@ -19,16 +19,9 @@ from langchain_core.runnables import RunnableConfig
 from langgraph.types import Command
 
 from neograph._compiled import CompiledNeograph
-from neograph._state_keys import StateKeys
+from neograph._state_keys import StateKeys, _strip_internals
 from neograph.errors import CheckpointSchemaError, ExecutionError
 from neograph.naming import field_name_for
-
-
-def _strip_internals(result: Any) -> Any:
-    """Remove neo_* framework plumbing from the result dict."""
-    if not isinstance(result, dict):
-        return result
-    return {k: v for k, v in result.items() if not k.startswith(StateKeys.FRAMEWORK_PREFIX)}
 
 
 def _preflight_di_check(graph: CompiledNeograph, config: RunnableConfig) -> None:
