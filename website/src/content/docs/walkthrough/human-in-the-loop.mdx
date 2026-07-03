@@ -7,8 +7,14 @@ Some pipelines can't run end-to-end without a human in the loop. A validation st
 
 NeoGraph makes this a one-line addition: pass `interrupt_when=` to `@node`. When the condition returns a truthy value, the graph pauses via LangGraph's `interrupt()` mechanism, checkpoints its state, and waits. Resume with `run(graph, resume={...}, config=config)`.
 
-:::note[Two kinds of pause: node-boundary vs mid-loop]
-`interrupt_when=` evaluates *between* nodes, on a node's completed output — use it to review a node's finished result. To pause **inside** an `agent`/`act` node's tool loop — a tool that stops to ask a human before it decides — use [`ask_human()`](#mid-loop-pauses-inside-an-agentact-tool-loop) (or raw LangGraph `interrupt()`) from within the tool body. Both are supported; they cover different moments.
+:::note[Three kinds of pause: node-boundary, tool-gate, mid-loop]
+They cover three different moments:
+
+- **`interrupt_when=`** evaluates *between* nodes, on a node's completed output — use it to review a node's finished result.
+- **`gate_tools_when=`** evaluates *before* an `agent`/`act` node's tools run — use it to [approve tool calls before any side effect executes](#gating-tools-before-side-effects-gate_tools_when), declaratively, without touching the tool code.
+- **[`ask_human()`](#mid-loop-pauses-inside-an-agentact-tool-loop)** (or raw LangGraph `interrupt()`) pauses **inside** a specific tool body — use it when the tool itself needs to stop and ask before it can decide.
+
+All three are supported.
 :::
 
 ## The graph
@@ -147,9 +153,52 @@ If `analyze.coverage_pct` had been 85% instead of 55%, `check` would return `pas
 
 The `Operator` modifier still exists for [runtime construction](/runtime/programmatic/). For pipelines written with `@node`, `interrupt_when=` is the cleaner path — the condition lambda is co-located with the node it guards, and the graph wiring happens automatically at `construct_from_module` time.
 
+## Gating tools before side effects: `gate_tools_when=`
+
+`interrupt_when=` reviews a node's *finished* output — too late to stop a tool that already ran. For an `agent`/`act` node whose tools have side effects (write a file, charge a card, send a message), you often want the opposite: pause and get approval **before** the tools run at all. That is `gate_tools_when=`.
+
+Pass it a predicate on `@node`. On every ReAct turn where the agent wants to call tools, the predicate runs *before* the tool step. Return a truthy payload to pause — the graph checkpoints and surfaces the payload as an interrupt, exactly like `interrupt_when=`. Return a falsy value to let the tools run untouched.
+
+```python
+from neograph import node, Tool
+
+
+def approve_tools(state) -> dict | None:
+    # Any truthy return pauses BEFORE the tools run; the value is the
+    # interrupt payload shown to the human. Return None to run without pausing.
+    return {"pending": "tool calls", "message": "approve before running?"}
+
+
+@node(
+    mode="agent",
+    outputs=Report,
+    model="reason",
+    prompt="research/summarize",
+    tools=[Tool(name="write_file", budget=3)],
+    gate_tools_when=approve_tools,
+)
+def research() -> Report: ...
+```
+
+The run pauses before `write_file` ever executes, so nothing has happened yet when the human sees the request:
+
+```python
+result = run(graph, input={"node_id": "REQ-1"}, config=config)
+
+if "__interrupt__" in result:
+    # result["__interrupt__"][0].value == {"pending": "tool calls",
+    #                                       "message": "approve before running?"}
+    result = run(graph, resume={"approved": True}, config=config)
+    # NOW the tools run — exactly once.
+```
+
+Because the gate sits on the tools boundary of the agent subgraph, it works the same across `run`/`arun` and survives a checkpointed resume. This is the structural version of "approve before side effects": you never modify the tool, and the tool cannot fire before approval.
+
+`gate_tools_when=` only makes sense on an `agent`/`act` node (the only nodes with a tool step) — setting it on any other node raises `ConstructError` at assembly. It gates the *whole* tool step per turn; to pause inside one specific tool's logic, use `ask_human()` below.
+
 ## Mid-loop pauses: inside an `agent`/`act` tool loop
 
-`interrupt_when=` pauses at node boundaries. But an `agent`/`act` node runs a ReAct loop — many tool calls inside one node — and sometimes a *tool itself* needs to stop and ask a human before it can decide. `ask_human()` is the blessed path for that: call it from inside a tool body.
+`interrupt_when=` pauses at node boundaries and `gate_tools_when=` pauses before the tool step. But sometimes a *single tool itself* needs to stop and ask a human partway through its own logic. `ask_human()` is the blessed path for that: call it from inside a tool body.
 
 ```python
 from pydantic import BaseModel
@@ -198,14 +247,18 @@ from langgraph.types import interrupt
 answer = interrupt({"question": "Approve this candidate?"})
 ```
 
-:::caution[Idempotency at node granularity]
-LangGraph checkpoints and replays at **node** granularity. In a ReAct loop, a non-idempotent side effect performed *before* an `ask_human()` pause in the same node can **double-fire** on resume. Keep any mutation before the pause idempotent, or move it after. The linter warns (`ask_human_in_mutating_node`) when it sees `ask_human()` reachable from an `act`-mode (mutating) node — a nudge to check this ordering.
+:::note[Idempotency: mostly a guarantee now, not a footgun]
+Each ReAct **turn** compiles to its own checkpointed superstep (`{node}__agent` → `{node}__tools` → back), so a tool that ran in an **earlier** turn is already committed when a **later** turn pauses — it does **not** re-fire on resume. This is idempotency *by construction* across turns: a pre-interrupt side-effecting tool runs **exactly once** across an interrupt+resume (pinned by the `test_pre_interrupt_tool_runs_exactly_once_across_resume` keystone). The old monolithic agent loop re-ran the whole node on resume and would double-fire; that footgun is gone.
+
+The one case that still needs care is *within a single turn*: if the model requests several tool calls in the same turn and one of them calls `ask_human()`, side effects from the earlier calls in that same turn can replay on resume. Keep same-turn mutations before an `ask_human()` idempotent — or reach for `gate_tools_when=` above, which pauses before *any* tool in the turn runs, so nothing has fired when the human is asked. The linter still warns (`ask_human_in_mutating_node`) when `ask_human()` is reachable from an `act`-mode node — a nudge to check same-turn ordering.
 :::
 
 ## Key takeaways
 
 - `interrupt_when=` pauses the graph when the condition returns a truthy payload
-- `ask_human()` pauses *inside* an `agent`/`act` tool loop, with an optional typed resume contract
+- `gate_tools_when=` pauses an `agent`/`act` node *before* its tools run — approve side effects before they happen, without touching tool code
+- `ask_human()` pauses *inside* a specific tool body, with an optional typed resume contract
+- Idempotency across ReAct turns is by construction — a pre-interrupt tool runs exactly once across resume
 - Inline lambdas are cleaner than registered conditions for most cases
 - A checkpointer is required — `MemorySaver` for dev, persistent savers for prod
 - `run(resume={...}, config=config)` continues from the checkpoint

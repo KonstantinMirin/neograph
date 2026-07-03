@@ -13,7 +13,7 @@ This is fundamentally different from hardcoded pipelines. The LLM can:
 - Pick which nodes to include based on the input
 - Decide whether to run an ensemble or a single pass
 - Add fan-out when the input is a collection
-- Insert human-in-the-loop checks on a node's output for sensitive results (interrupts fire at node boundaries, so this reviews a completed node's output — it does not gate individual tool calls inside an `agent`/`act` node; see [Human-in-the-Loop](/walkthrough/human-in-the-loop/))
+- Insert human-in-the-loop checks: `interrupt_when=` reviews a node's completed output at node boundaries, and `gate_tools_when=` pauses an `agent`/`act` node *before* its tools run so side effects can be approved first (see [Human-in-the-Loop](/walkthrough/human-in-the-loop/))
 - Skip steps that aren't needed for this particular request
 
 ## Example: LLM emits a pipeline spec
