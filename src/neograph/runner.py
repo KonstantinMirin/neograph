@@ -20,9 +20,63 @@ from langgraph.types import Command
 
 from neograph._compiled import CompiledNeograph
 from neograph._ir_branch import iter_with_arms
+from neograph._llm_config import _coerce_llm_config
 from neograph._state_keys import StateKeys, _strip_internals
+from neograph.construct import iter_nodes
 from neograph.errors import CheckpointSchemaError, ExecutionError
 from neograph.naming import field_name_for
+from neograph.node import Node
+
+# LangGraph's default per-invoke superstep ceiling. Agent/act nodes compile to an
+# inline ReAct cycle (2 supersteps/turn: agent + tools), so a loop near its
+# max_iterations bound can exceed this ceiling BEFORE the graceful budget-exhaust
+# forced-final fires. This bites most in a NESTED agent (a sub-construct invoke
+# defaults to 25); the raised top-level limit propagates into the child invoke.
+# _ensure_agent_recursion_limit raises the ceiling so the forced-final edge is
+# reachable at any max_iterations.
+_LANGGRAPH_DEFAULT_RECURSION_LIMIT = 25
+# Supersteps a single agent turn costs (agent node + tools node).
+_SUPERSTEPS_PER_AGENT_TURN = 2
+# Per-agent overhead beyond the turns: the parse node + the forced-final turn.
+_AGENT_CYCLE_OVERHEAD = 3
+
+
+def _ensure_agent_recursion_limit(
+    graph: CompiledNeograph, config: RunnableConfig | None,
+) -> RunnableConfig | None:
+    """Raise ``recursion_limit`` so an agent/act cycle can reach its graceful
+    budget-exhaust → forced-final edge instead of hitting LangGraph's default
+    superstep ceiling first.
+
+    Each agent/act node's cycle can cost ``max_iterations * 2 + overhead``
+    supersteps; sequential agent nodes run in distinct supersteps, so their costs
+    ADD across the run. The floor sums every agent/act node's worst case on top of
+    the default (which already covers the surrounding non-agent nodes). Only
+    RAISES to the floor — a larger user-supplied ``recursion_limit`` is kept.
+    Pure config mutation (no engine verb); shared verbatim by ``_prepare`` and
+    ``_aprepare``.
+    """
+    construct = getattr(graph, "construct", None)
+    if construct is None:
+        return config
+
+    agent_cost = 0
+    for node in iter_nodes(construct):
+        if isinstance(node, Node) and node.mode in ("agent", "act"):
+            max_iters = _coerce_llm_config(node.llm_config).max_iterations
+            agent_cost += max_iters * _SUPERSTEPS_PER_AGENT_TURN + _AGENT_CYCLE_OVERHEAD
+
+    if agent_cost == 0:
+        return config  # no agent/act nodes — leave the default untouched
+
+    floor = _LANGGRAPH_DEFAULT_RECURSION_LIMIT + agent_cost
+    current = (config or {}).get("recursion_limit", _LANGGRAPH_DEFAULT_RECURSION_LIMIT)
+    if current >= floor:
+        return config  # user asked for at least what agents need — keep theirs
+
+    new_config: RunnableConfig = {**(config or {})}
+    new_config["recursion_limit"] = floor
+    return new_config
 
 
 def _preflight_di_check(graph: CompiledNeograph, config: RunnableConfig) -> None:
@@ -371,6 +425,7 @@ def _prepare(
 
     if stream_custom:
         config = _mark_stream_custom(config)
+    config = _ensure_agent_recursion_limit(graph, config)
     return engine_input, config
 
 
@@ -605,6 +660,7 @@ async def _aprepare(
 
     if stream_custom:
         config = _mark_stream_custom(config)
+    config = _ensure_agent_recursion_limit(graph, config)
     return engine_input, config
 
 

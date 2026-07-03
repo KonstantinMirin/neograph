@@ -343,6 +343,111 @@ def _finish_tool_loop(
     return parse_result, tool_interactions
 
 
+def _parse_final_turn(
+    *,
+    messages: list,
+    output_model: Any,
+    cfg: Any,
+    config: RunnableConfig,
+    llm: Any,
+) -> tuple[Any, Any]:
+    """Parse the ReAct final turn as the node's structured output.
+
+    Agent/act parses ``messages[-1]`` directly (the schema was seeded into the
+    loop, so the final turn is the answer — 0 extra calls on the happy path).
+    Only ON PARSE FAILURE does it fall back, with ``cfg.output_strategy``
+    selecting the fallback mechanism (not the primary path):
+      'structured'         -> constrained decoding via _call_structured
+      'json_mode' / 'text' -> recover_dsml + _invoke_json_with_retry
+    Never returns None — an unrecoverable fallback raises. Returns
+    ``(parse_result, fallback_usage)``.
+
+    Single source of truth for the hard cluster — shared by the monolithic tool
+    loop and the inline agent-cycle parse node so they cannot drift.
+    """
+    strategy = cfg.output_strategy
+    max_retries = cfg.max_retries
+
+    last_msg = messages[-1]
+    raw_text = message_text(last_msg)
+    fallback_usage = None
+    try:
+        parse_result = _parse_json_response(raw_text, output_model)
+    except ExecutionError:
+        if strategy == "structured":
+            parse_result, fallback_usage = _call_structured(
+                llm, messages, output_model, strategy, config,
+                cfg=cfg, max_retries=max_retries,
+            )
+            if parse_result is None:
+                raise ExecutionError.build(
+                    "agent structured fallback produced no parseable output",
+                    expected=f"valid {output_model.__name__}",
+                    found="model returned no structured content and no recoverable markup",
+                    hint="The ReAct final turn was unparseable and the structured "
+                         "fallback returned nothing. Check the model/prompt or set "
+                         "output_strategy='json_mode'.",
+                ) from None
+        else:
+            recovered = recover_dsml(
+                raw_text, output_model, llm, messages, config, cfg,
+                strategy=strategy,
+            )
+            if recovered is not None:
+                parse_result = recovered
+            else:
+                parse_result, fallback_usage = _invoke_json_with_retry(
+                    llm, messages, output_model, config, max_retries=max_retries,
+                )
+    return parse_result, fallback_usage
+
+
+async def _aparse_final_turn(
+    *,
+    messages: list,
+    output_model: Any,
+    cfg: Any,
+    config: RunnableConfig,
+    llm: Any,
+) -> tuple[Any, Any]:
+    """Async twin of :func:`_parse_final_turn` — awaits the async fallback seams."""
+    strategy = cfg.output_strategy
+    max_retries = cfg.max_retries
+
+    last_msg = messages[-1]
+    raw_text = message_text(last_msg)
+    fallback_usage = None
+    try:
+        parse_result = _parse_json_response(raw_text, output_model)
+    except ExecutionError:
+        if strategy == "structured":
+            parse_result, fallback_usage = await _acall_structured(
+                llm, messages, output_model, strategy, config,
+                cfg=cfg, max_retries=max_retries,
+            )
+            if parse_result is None:
+                raise ExecutionError.build(
+                    "agent structured fallback produced no parseable output",
+                    expected=f"valid {output_model.__name__}",
+                    found="model returned no structured content and no recoverable markup",
+                    hint="The ReAct final turn was unparseable and the structured "
+                         "fallback returned nothing. Check the model/prompt or set "
+                         "output_strategy='json_mode'.",
+                ) from None
+        else:
+            recovered = await arecover_dsml(
+                raw_text, output_model, llm, messages, config, cfg,
+                strategy=strategy,
+            )
+            if recovered is not None:
+                parse_result = recovered
+            else:
+                parse_result, fallback_usage = await _ainvoke_json_with_retry(
+                    llm, messages, output_model, config, max_retries=max_retries,
+                )
+    return parse_result, fallback_usage
+
+
 def invoke_with_tools(
     *args: Any,
     model_tier: str | None = None,
@@ -545,50 +650,9 @@ def invoke_with_tools(
     #   'json_mode' / 'text' -> recover_dsml + _invoke_json_with_retry
     # The agent tail never returns None — an unrecoverable fallback raises.
     assert config is not None
-    strategy = cfg.output_strategy
-    max_retries = cfg.max_retries
-
-    last_msg = messages[-1]
-    raw_text = message_text(last_msg)
-    fallback_usage = None
-    try:
-        parse_result = _parse_json_response(raw_text, output_model)
-    except ExecutionError:
-        if strategy == "structured":
-            # Constrained-decoding fallback. _call_structured handles DSML
-            # recovery internally (Raw(dsml=True)/Failed arms). It can surface a
-            # silent None (parsed=None, no markup) — agent/act nodes must produce
-            # a typed object or error, so raise rather than leak None downstream.
-            parse_result, fallback_usage = _call_structured(
-                llm, messages, output_model, strategy, config,
-                cfg=cfg, max_retries=max_retries,
-            )
-            if parse_result is None:
-                raise ExecutionError.build(
-                    "agent structured fallback produced no parseable output",
-                    expected=f"valid {output_model.__name__}",
-                    found="model returned no structured content and no recoverable markup",
-                    hint="The ReAct final turn was unparseable and the structured "
-                         "fallback returned nothing. Check the model/prompt or set "
-                         "output_strategy='json_mode'.",
-                ) from None
-        else:
-            # Layer C: DSML/XML tool-call markup in final response — strategy-
-            # orthogonal recovery via shared helper. See neograph-0tid.
-            recovered = recover_dsml(
-                raw_text, output_model, llm, messages, config, cfg,
-                strategy=strategy,
-            )
-            if recovered is not None:
-                parse_result = recovered
-            else:
-                # Layer B: no DSML markup detected — fall through to generic retry.
-                # NOTE (pre-existing, out of scope): recover_dsml discards its
-                # retry usage, so a successful DSML recovery here under-counts
-                # tokens. Not introduced by this change.
-                parse_result, fallback_usage = _invoke_json_with_retry(
-                    llm, messages, output_model, config, max_retries=max_retries,
-                )
+    parse_result, fallback_usage = _parse_final_turn(
+        messages=messages, output_model=output_model, cfg=cfg, config=config, llm=llm,
+    )
 
     return _finish_tool_loop(
         messages=messages, fallback_usage=fallback_usage, parse_result=parse_result,
@@ -763,40 +827,9 @@ async def ainvoke_with_tools(
             llm_with_tools = _CoercingToolWrapper(llm.bind_tools(active_tools))
 
     assert config is not None
-    strategy = cfg.output_strategy
-    max_retries = cfg.max_retries
-
-    last_msg = messages[-1]
-    raw_text = message_text(last_msg)
-    fallback_usage = None
-    try:
-        parse_result = _parse_json_response(raw_text, output_model)
-    except ExecutionError:
-        if strategy == "structured":
-            parse_result, fallback_usage = await _acall_structured(
-                llm, messages, output_model, strategy, config,
-                cfg=cfg, max_retries=max_retries,
-            )
-            if parse_result is None:
-                raise ExecutionError.build(
-                    "agent structured fallback produced no parseable output",
-                    expected=f"valid {output_model.__name__}",
-                    found="model returned no structured content and no recoverable markup",
-                    hint="The ReAct final turn was unparseable and the structured "
-                         "fallback returned nothing. Check the model/prompt or set "
-                         "output_strategy='json_mode'.",
-                ) from None
-        else:
-            recovered = await arecover_dsml(
-                raw_text, output_model, llm, messages, config, cfg,
-                strategy=strategy,
-            )
-            if recovered is not None:
-                parse_result = recovered
-            else:
-                parse_result, fallback_usage = await _ainvoke_json_with_retry(
-                    llm, messages, output_model, config, max_retries=max_retries,
-                )
+    parse_result, fallback_usage = await _aparse_final_turn(
+        messages=messages, output_model=output_model, cfg=cfg, config=config, llm=llm,
+    )
 
     return _finish_tool_loop(
         messages=messages, fallback_usage=fallback_usage, parse_result=parse_result,

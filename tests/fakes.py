@@ -307,13 +307,22 @@ class ReActFake:
             assert self._final is not None, "ReActFake needs a final callable for structured output"
             return self._final(self._model)
 
-        # Normal ReAct invocation
-        if self._call_idx >= len(self._tool_calls):
+        # History-driven turn index (neograph-m6d3): count prior tool-call turns
+        # in the message history rather than a persistent counter. This behaves
+        # correctly whether the agent runs as one node body (the LLM instance is
+        # reused across turns) OR as a cycle of supersteps (the instance is rebuilt
+        # each turn and replays the accumulated history) — a real stateless LLM
+        # works both ways.
+        idx = sum(
+            1 for m in messages
+            if getattr(m, "tool_calls", None) and not isinstance(m, dict)
+        )
+        self._call_idx = idx  # kept in sync for with_structured_output clones
+
+        if idx >= len(self._tool_calls):
             return self._final_message()
 
-        calls = self._tool_calls[self._call_idx]
-        self._call_idx += 1
-
+        calls = self._tool_calls[idx]
         if not calls:
             return self._final_message()
 

@@ -351,6 +351,12 @@ class TestNoNearDuplicateHelperNames:
         frozenset({"ainvoke_with_tools", "invoke_with_tools"}): (
             "lev=1: async twin of the ReAct tool loop (_tool_loop.py)."
         ),
+        # neograph-m6d3 (agent-as-subgraph): a-prefix async twin of the shared
+        # final-parse cluster used by both the monolith tail and the inline
+        # agent-cycle parse node (_tool_loop.py).
+        frozenset({"_aparse_final_turn", "_parse_final_turn"}): (
+            "lev=1: async twin of the ReAct final-parse + fallback cluster."
+        ),
         frozenset({"_ainvoke_json_with_retry", "_invoke_json_with_retry"}): (
             "lev=1: async twin of the json-retry loop (_llm_retry.py)."
         ),

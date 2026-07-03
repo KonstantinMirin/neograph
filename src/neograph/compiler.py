@@ -30,6 +30,7 @@ from neograph._runtime_registry import _decoration_registry
 from neograph._state_keys import StateKeys
 from neograph._subconstruct import make_subgraph_fn
 from neograph._wiring import (
+    _add_agent_cycle,
     _add_branch_to_graph,
     _add_each_oracle_fused,
     _add_loop_back_edge,
@@ -185,6 +186,33 @@ def compile(
         runtime.prompt_compiler,
         source="compile()",
     )
+
+    # Validate: Each/Oracle/Loop over an agent/act node is unsupported.
+    # An agent/act node compiles to a multi-node inline ReAct cycle
+    # ({node}__agent/tools/parse); a fan modifier Sends/loops to a single node
+    # and cannot wrap that region. Raise a deliberate compile-time error (a
+    # runtime miswire is not acceptable). Checked BEFORE tool-factory validation
+    # so the structural incompatibility is reported first. The principled fix
+    # (generalize the fan target to (entry, exit)) is neograph-m6d3.6.
+    # iter_with_arms so arm agent/act nodes are covered too.
+    for item in iter_with_arms(construct):
+        if isinstance(item, Node) and item.mode in ("agent", "act"):
+            _combo, _mods = classify_modifiers(item)
+            _wrapping = "Each" if "each" in _mods else ("Oracle" if "oracle" in _mods else ("Loop" if "loop" in _mods else None))
+            if _wrapping is not None:
+                raise CompileError.build(
+                    f"{_wrapping} over an agent/act node is not supported",
+                    expected="the modifier on a scripted/think node, or the agent wrapped in a sub-construct",
+                    found=f"{_wrapping} modifier on agent/act node '{item.name}'",
+                    hint=(
+                        "An agent/act node compiles to a multi-node ReAct cycle that "
+                        "a single-target fan modifier cannot wrap. Move the modifier "
+                        "to a scripted/think node, or wrap the agent node in a "
+                        "sub-construct. Tracking: neograph-m6d3.6."
+                    ),
+                    node=item.name,
+                    construct=construct.name,
+                )
 
     # Validate: tool factory registrations
     # iter_with_arms so a bare arm agent/act node's tool factories are validated
@@ -467,6 +495,10 @@ def _add_node_to_graph(
     combo, mods = classify_modifiers(node)
     operator = mods.get("operator")
 
+    # NOTE: Each/Oracle/Loop over an agent/act node is rejected earlier in
+    # compile() (before tool-factory validation) — see the fail-fast pass there.
+    # By here, an agent/act node is guaranteed BARE or OPERATOR-only.
+
     match combo:
         case ModifierCombo.EACH_ORACLE | ModifierCombo.EACH_ORACLE_OPERATOR:
             # Each x Oracle fusion: flat M x N Send topology
@@ -481,15 +513,19 @@ def _add_node_to_graph(
             # Loop: conditional back-edge
             last_name = _add_loop_back_edge(graph, node, mods["loop"], prev_node, runtime=runtime, scripted_lookup=scripted_lookup, condition_lookup=condition_lookup, tool_factory_lookup=tool_factory_lookup)
         case ModifierCombo.BARE | ModifierCombo.OPERATOR:
-            # Simple node — no modifiers (or Operator only)
-            node_name = node.name
-            node_fn = make_node_fn(node, runtime=runtime, scripted_lookup=scripted_lookup, tool_factory_lookup=tool_factory_lookup)
-            graph.add_node(node_name, node_fn)
-            if prev_node:
-                graph.add_edge(prev_node, node_name)
+            if node.mode in ("agent", "act"):
+                # Agent/act: inline ReAct cycle (agent/tools/parse + conditional router).
+                last_name = _add_agent_cycle(graph, node, prev_node, runtime=runtime, tool_factory_lookup=tool_factory_lookup)
             else:
-                graph.add_edge(START, node_name)
-            last_name = node_name
+                # Simple node — no modifiers (or Operator only)
+                node_name = node.name
+                node_fn = make_node_fn(node, runtime=runtime, scripted_lookup=scripted_lookup, tool_factory_lookup=tool_factory_lookup)
+                graph.add_node(node_name, node_fn)
+                if prev_node:
+                    graph.add_edge(prev_node, node_name)
+                else:
+                    graph.add_edge(START, node_name)
+                last_name = node_name
         case _ as unreachable:
             assert_never(unreachable)
 

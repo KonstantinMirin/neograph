@@ -87,18 +87,22 @@ class FakeExploreLLM:
 
     The ReAct loop runs: LLM calls tool → tool returns → LLM responds "done" →
     framework does final structured parse to get ExplorationResult.
+
+    History-driven (stateless), like a real model: it decides its next move from
+    the message history it is handed, not an internal call counter — so it behaves
+    correctly whether the agent runs as one node body or as a cycle of supersteps
+    (each turn rebuilds the client and replays the accumulated history).
     """
 
     def __init__(self):
-        self._call_count = 0
         self._structured = False
 
     def bind_tools(self, tools):
-        clone = FakeExploreLLM()
-        clone._call_count = self._call_count
-        return clone
+        return self
 
     def invoke(self, messages, **kwargs):
+        from langchain_core.messages import ToolMessage
+
         if self._structured:
             return self._model(
                 evidence=["auth.py:42", "crypto.py:18"],
@@ -110,8 +114,8 @@ class FakeExploreLLM:
                 if role == "system":
                     announced["preamble"] = m.get("content") if isinstance(m, dict) else m.content
                     break
-        self._call_count += 1
-        if self._call_count == 1:
+        searched = any(isinstance(m, ToolMessage) for m in messages)
+        if not searched:
             msg = AIMessage(content="")
             msg.tool_calls = [{
                 "name": "search_evidence",
@@ -119,8 +123,8 @@ class FakeExploreLLM:
                 "id": "call-1",
             }]
             return msg
-        # Agent mode parses the final ReAct turn as JSON (schema injected up
-        # front), so emit a valid ExplorationResult.
+        # A tool result is in the history — emit the final structured answer.
+        # Agent mode parses the final ReAct turn as JSON (schema injected up front).
         return AIMessage(
             content=ExplorationResult(
                 evidence=["auth.py:42", "crypto.py:18"],
@@ -130,7 +134,6 @@ class FakeExploreLLM:
 
     def with_structured_output(self, model, **kwargs):
         clone = FakeExploreLLM()
-        clone._call_count = self._call_count
         clone._model = model
         clone._structured = True
         return clone

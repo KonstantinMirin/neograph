@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from enum import Enum
-from typing import Any, assert_never
+from typing import Any, assert_never, cast
 
 from neograph._normalize import normalize_inputs, primary_output_field
 from neograph._state_bus import StateBus
@@ -145,3 +145,26 @@ def _extract_input(state: StateBus, node: Node) -> Any:
         case InputShape.SINGLE_TYPE:
             return _extract_single_type(state, node)
     assert_never(shape)
+
+
+def _extract_context(state: StateBus, node: Node) -> dict[str, str] | None:
+    """Extract verbatim context fields from state for LLM nodes.
+
+    Returns a dict of ``{context_name: state_value}`` if the node declares
+    context fields, or None if none is configured. Context values are
+    user-declared string fields rendered verbatim into prompts.
+
+    Read-side input shaping (sibling of ``_extract_input``); lives here so both
+    node-body executors — the straight-line ``_execute`` lifecycle and the
+    inline agent cycle (``_agent_cycle``) — reuse ONE implementation. It was
+    parked in ``_execute`` only while ``_execute_node`` was its sole caller.
+    """
+    if not node.context:
+        return None
+    # REQUIRED: context fields are validator-guaranteed (see
+    # _construct_validation.py); missing → wiring bug, fail loud rather than
+    # render the literal string "None" into the LLM prompt.
+    return {
+        name: cast(str, state.get_required(field_name_for(name), node_label=node.name))
+        for name in node.context
+    }

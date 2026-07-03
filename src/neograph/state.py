@@ -55,6 +55,19 @@ def _append_tagged(existing: Any, new: Any) -> list:
     return [*existing, new]
 
 
+def _append_tool_log(existing: Any, new: Any) -> list:
+    """Reducer: accumulate ToolInteraction records across agent-cycle turns.
+
+    The tool node emits a list of the interactions from one turn; the reducer
+    concatenates them so the full tool_log survives per-turn checkpoints.
+    """
+    if existing is None:
+        existing = []
+    if isinstance(new, list):
+        return existing + new
+    return [*existing, new]
+
+
 def _merge_dicts(existing: Any, new: dict) -> dict:
     """Reducer: merge dicts additively (for fan-out results).
 
@@ -118,6 +131,7 @@ def compile_state_model(
 
     for node in nodes_only:
         _add_output_field(node, fields)
+        _add_agent_channels(node, fields)
 
     # Branch arm nodes: add state fields for nodes inside branch arms.
     # Arms can contain both Nodes and Constructs (e.g., self.loop() in
@@ -338,6 +352,29 @@ def compute_schema_fingerprint(state_model: type[BaseModel]) -> str:
     items.sort()
     raw = repr(items).encode()
     return hashlib.sha256(raw).hexdigest()[:16]
+
+
+def _add_agent_channels(node: Node, fields: dict[str, Any]) -> None:
+    """Add the agent-cycle state channels for an agent/act node.
+
+    These carry the ReAct loop's per-turn state — message history, tool_log, and
+    budget/iteration counters — so the inline agent-cycle expander (``_wiring.
+    _add_agent_cycle``) can make every turn a checkpointed superstep. All three
+    are ``neo_``-prefixed, so ``_strip_internals`` removes them from returned
+    state and ``compute_schema_fingerprint`` excludes them.
+
+    Only agent/act nodes get channels; think/scripted/raw nodes never enter a
+    ReAct loop.
+    """
+    from langgraph.graph.message import add_messages
+
+    if node.mode not in ("agent", "act"):
+        return
+
+    field_name = field_name_for(node.name)
+    fields[StateKeys.agent_messages(field_name)] = (Annotated[list, add_messages], [])
+    fields[StateKeys.agent_tool_log(field_name)] = (Annotated[list, _append_tool_log], [])
+    fields[StateKeys.agent_budget(field_name)] = (dict | None, None)
 
 
 def _add_output_field(node: Node, fields: dict[str, Any]) -> None:

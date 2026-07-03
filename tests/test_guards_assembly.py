@@ -844,7 +844,10 @@ class TestLifecycleSeparation:
         names = {
             n.name for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)
         }
-        for required in ("_execute_node", "_type_name", "_extract_context"):
+        # _extract_context relocated to _input_shape.py (neograph-m6d3): its
+        # caller set grew 1→2 (the inline agent cycle now reuses it too), so it
+        # moved to its cohesive read-side home next to _extract_input.
+        for required in ("_execute_node", "_type_name"):
             assert required in names, (
                 f"_execute.py must define {required} (gm-3 Cluster B)."
             )
@@ -907,6 +910,8 @@ class TestInputShapeRename:
         for fn in (
             "_classify_input_shape",
             "_extract_input",
+            "_extract_context",  # relocated from _execute.py (neograph-m6d3): read-side
+                                 # input shaping, now reused by the inline agent cycle too.
             "_extract_loop_reentry",
             "_extract_each_item",
             "_extract_fan_in_dict",
@@ -932,8 +937,11 @@ class TestInputShapeRename:
             f"_execute.py must import from _input_shape.py, got importers: {importers}"
         )
         # Apart from factory.py (re-export) and _execute.py (real), no one
-        # else may import.
-        allowed = {"_execute.py", "factory.py"}
+        # else may import — except _agent_cycle.py, the second node-body module
+        # (agent-as-subgraph, neograph-m6d3): its agent/tools/parse bodies extract
+        # node input the same way _execute does. A deliberate architecture change,
+        # not drift — the inline ReAct cycle is a peer node-body executor.
+        allowed = {"_execute.py", "factory.py", "_agent_cycle.py"}
         extras = set(importers) - allowed
         assert not extras, (
             f"_input_shape.py imported by unexpected modules: {extras}; "

@@ -499,39 +499,24 @@ class TestOracleModels:
         assert len(gen_tiers) == 3, f"Expected 3 generator calls with model overrides, got tiers: {seen_tiers}"
         assert set(gen_tiers) == {"reason", "fast", "creative"}
 
-    def test_oracle_models_on_agent_mode_node(self):
-        """Oracle(models=) must override model tier for agent-mode (tool) nodes.
+    def test_oracle_over_agent_node_is_a_compile_error(self):
+        """Oracle over an agent/act node is a deliberate compile-time error
+        (neograph-m6d3 binding condition 3).
 
-        Bug (pre-neograph-y8ww): the tool wrapper read _oracle_model from
-        config but never transferred neo_oracle_model from state to config.
-        Now all modes share _execute_node preamble which calls
-        _inject_oracle_config. Regression test for neograph-lbsf.
+        An agent/act node compiles to a multi-node inline ReAct cycle
+        ({node}__agent/tools/parse); Oracle's fan-out Sends to a single node and
+        cannot wrap that multi-node region. Rather than miswire at runtime, the
+        compiler raises. The principled fix — generalize the fan target to
+        (entry, exit) so Oracle CAN wrap the cycle — is neograph-m6d3.6.
+
+        Was ``test_oracle_models_on_agent_mode_node`` (asserted Oracle models on
+        an agent node worked against the monolith); that capability is
+        intentionally withdrawn under the agent-as-subgraph lock until m6d3.6.
         """
-        from tests.fakes import register_scripted
+        from neograph.errors import CompileError
 
-        seen_tiers = []
         fake_tool = FakeTool("agent_search", response="found")
         register_tool_factory("agent_search", lambda config, tool_config: fake_tool)
-
-        def tier_capturing_factory(tier):
-            seen_tiers.append(tier)
-            return ReActFake(
-                tool_calls=[
-                    [{"name": "agent_search", "args": {}, "id": "c1"}],
-                    [],  # stop
-                ],
-                final=lambda m: m(items=[f"from-{tier}"]),
-            )
-
-        __llm_kw = configure_fake_llm(tier_capturing_factory)
-
-        def agent_merge(variants, config):
-            all_items = []
-            for v in variants:
-                all_items.extend(v.items)
-            return Claims(items=all_items)
-
-        register_scripted("agent_models_merge", agent_merge)
 
         gen_node = (
             Node(
@@ -545,13 +530,9 @@ class TestOracleModels:
             | Oracle(models=["reason", "fast"], merge_fn="agent_models_merge")
         )
         pipeline = Construct("test-agent-oracle-models", nodes=[gen_node])
-        graph = compile(pipeline, **build_test_compile_kwargs(), **__llm_kw)
-        result = run(graph, input={"node_id": "agent-oracle-models"})
-
-        # Filter to only the generator tiers (exclude merge/final-parse calls)
-        gen_tiers = [t for t in seen_tiers if t in ("reason", "fast")]
-        assert len(gen_tiers) == 2, f"Expected 2 generator calls with model overrides, got tiers: {seen_tiers}"
-        assert set(gen_tiers) == {"reason", "fast"}
+        with pytest.raises(CompileError, match="Oracle over an agent/act node is not supported"):
+            compile(pipeline, **build_test_compile_kwargs(),
+                    **configure_fake_llm(lambda tier: ReActFake(tool_calls=[[]], final=lambda m: m(items=[]))))
 
     def test_oracle_models_round_robin_on_think_mode(self):
         """Round-robin model assignment works on think-mode nodes when n > len(models)."""

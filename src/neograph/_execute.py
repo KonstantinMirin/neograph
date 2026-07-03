@@ -3,17 +3,17 @@
 from __future__ import annotations
 
 import time
-from typing import Any, cast
+from typing import Any
 
 import structlog
 from langchain_core.runnables import RunnableConfig
 from pydantic import BaseModel
 
 from neograph._dispatch import ModeDispatch, NodeInput
-from neograph._input_shape import _extract_input
+from neograph._input_shape import _extract_context, _extract_input
 from neograph._normalize import normalize_inputs
 from neograph._oracle import _inject_oracle_config
-from neograph._state_bus import StateBus, adapt_state
+from neograph._state_bus import adapt_state
 from neograph._state_write import _apply_skip_when, _build_state_update
 from neograph.describe_type import type_display_name
 from neograph.naming import field_name_for
@@ -32,24 +32,6 @@ def _type_name(t: TypeSpecStatic) -> str | None:
     if t is None:
         return None
     return type_display_name(t)
-
-
-def _extract_context(state: StateBus, node: Node) -> dict[str, str] | None:
-    """Extract verbatim context fields from state for LLM nodes.
-
-    Returns a dict of {context_name: state_value} if the node declares
-    context fields, or None if no context is configured. Context values
-    are user-declared string fields rendered verbatim into prompts.
-    """
-    if not node.context:
-        return None
-    # REQUIRED: context fields are validator-guaranteed (see
-    # _construct_validation.py); missing → wiring bug, fail loud rather than
-    # render the literal string "None" into the LLM prompt.
-    return {
-        name: cast(str, state.get_required(field_name_for(name), node_label=node.name))
-        for name in node.context
-    }
 
 
 def _execute_node(

@@ -15,6 +15,7 @@ from langchain_core.runnables import Runnable, RunnableConfig, RunnableLambda
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Send, interrupt
 
+from neograph._agent_cycle import make_agent_cycle_bodies
 from neograph._ir_branch import _BranchNode
 from neograph._llm_runtime import EMPTY_RUNTIME, LlmRuntime
 from neograph._normalize import normalize_outputs, primary_output_field
@@ -722,6 +723,51 @@ def _add_branch_to_graph(
         graph.add_edge(false_last, join_name)
 
     return join_name
+
+
+def _add_agent_cycle(
+    graph: StateGraph,
+    node: Node,
+    prev_node: str | None,
+    *,
+    runtime: LlmRuntime = EMPTY_RUNTIME,
+    tool_factory_lookup: dict[str, Callable] | None = None,
+) -> str:
+    """Expand an agent/act node into an inline ReAct cycle of supersteps.
+
+    Adds three parent nodes — ``{node}__agent`` / ``{node}__tools`` /
+    ``{node}__parse`` — with a 3-way conditional router and a tools→agent
+    loopback. Every ReAct turn is a checkpointed superstep, so a mid-loop
+    interrupt pauses at a turn boundary (turn-boundary idempotency by
+    construction). Mirrors the four other expanders (Each/Oracle/Branch/Loop):
+    one IR node → several parent nodes + reducer channels + conditional routing.
+
+    The node bodies live in ``_agent_cycle`` (Layer-2 cognition; no engine verb).
+    """
+    parts = make_agent_cycle_bodies(node, runtime=runtime, tool_factory_lookup=tool_factory_lookup)
+    names = parts["names"]
+
+    agent_sync, agent_async = parts["agent"]
+    tools_sync, tools_async = parts["tools"]
+    parse_sync, parse_async = parts["parse"]
+
+    graph.add_node(names.agent, RunnableLambda(agent_sync, afunc=agent_async))
+    graph.add_node(names.tools, RunnableLambda(tools_sync, afunc=tools_async))
+    graph.add_node(names.parse, RunnableLambda(parse_sync, afunc=parse_async))
+
+    if prev_node:
+        graph.add_edge(prev_node, names.agent)
+    else:
+        graph.add_edge(START, names.agent)
+
+    # 3-way router after the agent turn: tools (loop) | parse (done/forced-final).
+    graph.add_conditional_edges(
+        names.agent, parts["router"], path_map=[names.tools, names.parse],
+    )
+    # ReAct loopback: after executing tools, take another agent turn.
+    graph.add_edge(names.tools, names.agent)
+
+    return names.parse
 
 
 def _add_operator_check(

@@ -89,6 +89,28 @@ class StateKeys:
         return f"neo_oracle_{field_name}"
 
     @staticmethod
+    def agent_messages(field_name: str) -> str:
+        """Agent-cycle message-history channel for an agent/act node.
+
+        `neo_`-prefixed so the full ReAct message history is stripped from the
+        returned state (_strip_internals) and excluded from the schema
+        fingerprint — it is turn-by-turn plumbing, not durable user output.
+        """
+        return f"neo_agent_messages_{field_name}"
+
+    @staticmethod
+    def agent_tool_log(field_name: str) -> str:
+        """Agent-cycle tool_log channel (accumulated ToolInteraction records)."""
+        return f"neo_agent_tool_log_{field_name}"
+
+    @staticmethod
+    def agent_budget(field_name: str) -> str:
+        """Agent-cycle budget/iteration channel (per-tool call counts, iteration
+        count, cumulative input tokens) — survives per-turn checkpoints, unlike
+        the in-memory ToolBudgetTracker the monolith used."""
+        return f"neo_agent_budget_{field_name}"
+
+    @staticmethod
     def eachoracle_collector(field_name: str) -> str:
         """Each+Oracle composed barrier/collector field name."""
         return f"neo_eachoracle_{field_name}"
