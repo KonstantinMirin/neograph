@@ -7,8 +7,8 @@ Some pipelines can't run end-to-end without a human in the loop. A validation st
 
 NeoGraph makes this a one-line addition: pass `interrupt_when=` to `@node`. When the condition returns a truthy value, the graph pauses via LangGraph's `interrupt()` mechanism, checkpoints its state, and waits. Resume with `run(graph, resume={...}, config=config)`.
 
-:::caution[Interrupts fire at node boundaries only]
-`interrupt_when=` evaluates *between* nodes, on a node's completed output. It cannot pause **inside** an `agent`/`act` node's tool loop: that ReAct loop runs to completion (or its tool budget) as one opaque step, so a tool call's side effect happens before the interrupt can fire. Use interrupts to review a node's finished result — not to gate an individual tool call before it executes. Per-tool gating ("approve *this* mutation before it runs") is not yet supported; if you need it today, split the mutating step into its own scripted node and interrupt on that node's boundary.
+:::note[Two kinds of pause: node-boundary vs mid-loop]
+`interrupt_when=` evaluates *between* nodes, on a node's completed output — use it to review a node's finished result. To pause **inside** an `agent`/`act` node's tool loop — a tool that stops to ask a human before it decides — use [`ask_human()`](#mid-loop-pauses-inside-an-agentact-tool-loop) (or raw LangGraph `interrupt()`) from within the tool body. Both are supported; they cover different moments.
 :::
 
 ## The graph
@@ -147,9 +147,65 @@ If `analyze.coverage_pct` had been 85% instead of 55%, `check` would return `pas
 
 The `Operator` modifier still exists for [runtime construction](/runtime/programmatic/). For pipelines written with `@node`, `interrupt_when=` is the cleaner path — the condition lambda is co-located with the node it guards, and the graph wiring happens automatically at `construct_from_module` time.
 
+## Mid-loop pauses: inside an `agent`/`act` tool loop
+
+`interrupt_when=` pauses at node boundaries. But an `agent`/`act` node runs a ReAct loop — many tool calls inside one node — and sometimes a *tool itself* needs to stop and ask a human before it can decide. `ask_human()` is the blessed path for that: call it from inside a tool body.
+
+```python
+from pydantic import BaseModel
+from neograph import ask_human
+
+
+class ReviewRequest(BaseModel):
+    question: str
+    candidate: str
+
+class Decision(BaseModel):
+    approved: bool
+    note: str
+
+
+class DecideTool:
+    name = "decide"
+
+    def invoke(self, args: dict) -> str:
+        # Pause the tool loop and ask a human. The graph checkpoints here.
+        decision = ask_human(
+            ReviewRequest(question="Approve this candidate?", candidate=args["name"]),
+            resume_model=Decision,
+        )
+        # After resume, `decision` is a validated Decision instance.
+        return f"approved={decision.approved}: {decision.note}"
+
+    async def ainvoke(self, *a, **k) -> str:
+        return self.invoke(*a, **k)
+```
+
+The payload surfaces exactly like any other interrupt — `result["__interrupt__"][0].value` holds `payload.model_dump()`. Resume the graph the same way:
+
+```python
+result = run(graph, resume={"approved": True, "note": "looks good"}, config=config)
+```
+
+When you pass `resume_model=`, the resumed dict is **validated** into that model before your tool sees it — a malformed answer raises `pydantic.ValidationError` at the `ask_human()` call, not deep inside your tool. Omit `resume_model=` to receive the raw resume value unchanged.
+
+`ask_human()` is pure, optional sugar: it adds the typed contract and makes the pause a marker the [linter](/runtime/lint/) can see. It contains **zero** execution logic — the pause/resume path is byte-identical to calling LangGraph's `interrupt()` directly, which **remains fully supported**. Use whichever you prefer:
+
+```python
+from langgraph.types import interrupt
+
+# Raw path — no typed contract, but works identically.
+answer = interrupt({"question": "Approve this candidate?"})
+```
+
+:::caution[Idempotency at node granularity]
+LangGraph checkpoints and replays at **node** granularity. In a ReAct loop, a non-idempotent side effect performed *before* an `ask_human()` pause in the same node can **double-fire** on resume. Keep any mutation before the pause idempotent, or move it after. The linter warns (`ask_human_in_mutating_node`) when it sees `ask_human()` reachable from an `act`-mode (mutating) node — a nudge to check this ordering.
+:::
+
 ## Key takeaways
 
 - `interrupt_when=` pauses the graph when the condition returns a truthy payload
+- `ask_human()` pauses *inside* an `agent`/`act` tool loop, with an optional typed resume contract
 - Inline lambdas are cleaner than registered conditions for most cases
 - A checkpointer is required — `MemorySaver` for dev, persistent savers for prod
 - `run(resume={...}, config=config)` continues from the checkpoint

@@ -46,6 +46,7 @@ from neograph.errors import (
     NeographError,
 )
 from neograph.forward import ForwardConstruct
+from neograph.hitl import ask_human
 from neograph.lint import LintIssue, lint
 from neograph.loader import load_spec
 from neograph.modifiers import (
@@ -87,6 +88,8 @@ __all__ = [
     "emit_progress",
     "tool",
     "merge_fn",
+    # Human-in-the-loop sugar (agent/act tool bodies)
+    "ask_human",
     # Modifiers (used as @node kwargs; also available standalone)
     "Oracle",
     "Each",

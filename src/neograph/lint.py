@@ -270,6 +270,9 @@ def _walk(
     # 4. Async-only (MCP) tool checks
     _check_async_only_tools(item, issues, tool_factories=tool_factories)
 
+    # 5. ask_human reachable from an act-mode (mutating) node (A.5 safety)
+    _check_ask_human_in_mutating_node(item, issues, tool_factories=tool_factories)
+
 
 def _check_template_placeholders(
     node: Node,
@@ -459,7 +462,7 @@ def _check_async_only_tools(
         tool_obj = _resolve_tool_object(spec, tool_factories)
         if tool_obj is None:
             continue
-        tool_name = getattr(spec, "name", None) or getattr(tool_obj, "name", "?")
+        tool_name = str(getattr(spec, "name", None) or getattr(tool_obj, "name", "?"))
         if is_async_only_tool(tool_obj):
             issues.append(LintIssue(
                 node_name=f"Node '{node.name}'",
@@ -471,6 +474,81 @@ def _check_async_only_tools(
                     "(e.g. an MCP tool) and cannot run under the sync run() "
                     "driver. Drive this graph with arun() so the async tool "
                     "loop is used."
+                ),
+            ))
+
+
+# Attribute names under which a tool object may carry its callable body. Covers
+# every shape ask_human can hide in: StructuredTool (@tool) uses .func/.coroutine,
+# a BaseTool subclass uses ._run/._arun, and a duck-typed class tool (the keystone
+# _AskTool shape) puts logic in .invoke/.ainvoke. Introspecting all of them keeps
+# the rule from silently no-opping on a shape it doesn't recognize.
+_TOOL_BODY_ATTRS = ("func", "coroutine", "_run", "_arun", "invoke", "ainvoke")
+
+
+def _tool_references_ask_human(tool_obj: Any) -> bool:
+    """True when any of a tool's callable bodies references ``ask_human`` by name.
+
+    Direct-reference heuristic: scans each body's ``__code__.co_names`` (which
+    includes imported and attribute-accessed names) for ``"ask_human"``. This is
+    exactly why ``ask_human`` is a NAMED marker — a raw ``interrupt()`` call is
+    invisible, but ``from neograph.hitl import ask_human`` shows up here. The
+    heuristic misses alias imports and indirection through helpers; a consumer
+    who alias-hides ``ask_human`` opts out of this safety net.
+    """
+    for attr in _TOOL_BODY_ATTRS:
+        fn = getattr(tool_obj, attr, None)
+        if fn is None:
+            continue
+        code = getattr(fn, "__code__", None) or getattr(
+            getattr(fn, "__func__", None), "__code__", None
+        )
+        if code is not None and "ask_human" in code.co_names:
+            return True
+    return False
+
+
+def _check_ask_human_in_mutating_node(
+    node: Node,
+    issues: list[LintIssue],
+    *,
+    tool_factories: dict[str, Callable] | None = None,
+) -> None:
+    """Warn when ``ask_human`` is reachable from an act-mode (mutating) node.
+
+    A non-idempotent side effect performed *before* a mid-loop pause in the same
+    node can double-fire on resume — LangGraph memoizes at node granularity, and
+    a ReAct loop runs many tool steps inside one node (the residual "Level-B"
+    case documented in docs/design/durable-execution-replay-research-2026-07-02.md).
+    ``ask_human`` makes the pause a marker the linter can see, so an act-mode
+    node carrying it is flagged.
+
+    This is a WARN (``required=False``): the legitimate ask_human-then-idempotent
+    -mutate pattern must not be blocked. The rule gates on the DECLARED
+    ``node.mode == 'act'`` (act == mutations, agent == read-only); a mutating tool
+    mislabeled ``mode='agent'`` escapes the net — an accepted limitation of
+    trusting the declared mode.
+    """
+    if node.mode != "act" or not node.tools:
+        return
+
+    for spec in node.tools:
+        tool_obj = _resolve_tool_object(spec, tool_factories)
+        if tool_obj is None:
+            continue
+        if _tool_references_ask_human(tool_obj):
+            tool_name = str(getattr(spec, "name", None) or getattr(tool_obj, "name", "?"))
+            issues.append(LintIssue(
+                node_name=f"Node '{node.name}'",
+                param=tool_name,
+                kind="ask_human_in_mutating_node",
+                required=False,
+                message=(
+                    f"Node '{node.name}': act-mode (mutating) tool '{tool_name}' "
+                    "calls ask_human(). A non-idempotent side effect before the "
+                    "mid-loop pause can double-fire on resume (node-granularity "
+                    "replay). Ensure any mutation before the ask_human() is "
+                    "idempotent, or move it after the pause."
                 ),
             ))
 

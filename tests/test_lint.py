@@ -551,3 +551,73 @@ class TestLoopConditionLint:
         assert any(i.required is True for i in loop_issues)
 
 
+# ── ask_human-in-a-mutating-node lint rule (neograph-p8wz, A.5 safety) ──────
+#
+# ask_human is a first-class marker the validator can SEE: a raw interrupt()
+# buried in an opaque tool callable is invisible to lint, but a named ask_human
+# reference shows up in the tool callable's __code__.co_names. The rule flags an
+# ACT-mode node (act == mutations) bound to a tool that reaches ask_human, since a
+# non-idempotent side effect before a mid-loop pause can double-fire on resume.
+# It is a WARN (required=False) and gates on the DECLARED node.mode == 'act';
+# agent-mode (read-only) ask_human is fine and must NOT fire.
+
+
+class _AskHumanClassTool:
+    """Duck-typed class tool (the keystone _AskTool shape the E2E reuses): the
+    HITL logic lives in .invoke, which references ask_human by name."""
+
+    name = "ask_tool"
+
+    def invoke(self, args: dict) -> str:
+        from neograph.hitl import ask_human
+
+        class _P(BaseModel):
+            q: str
+
+        return f"decided: {ask_human(_P(q='x'))}"
+
+    async def ainvoke(self, *a, **k) -> str:
+        return self.invoke(*a, **k)
+
+
+class TestAskHumanInMutatingNodeLint:
+    """lint() should flag ask_human reachable from an ACT-mode (mutating) node,
+    and must NOT flag it on an AGENT-mode (read-only) node."""
+
+    _ISSUE_KIND = "ask_human_in_mutating_node"
+
+    def _construct(self, *, mode: str):
+        from neograph import Tool
+
+        n = Node(
+            "actor",
+            mode=mode,
+            outputs=Claims,
+            model="fast",
+            prompt="test/scan",
+            tools=[Tool("ask_tool", budget=0)],
+        )
+        return Construct(f"ask-human-{mode}", nodes=[n])
+
+    def test_flags_ask_human_in_act_mode_node(self):
+        construct = self._construct(mode="act")
+        issues = lint(
+            construct,
+            tool_factories={"ask_tool": lambda config, tool_config: _AskHumanClassTool()},
+        )
+
+        ask_issues = [i for i in issues if i.kind == self._ISSUE_KIND]
+        assert len(ask_issues) == 1, [i.kind for i in issues]
+        # WARN, not ERROR — legitimate ask_human-then-idempotent-mutate must not block.
+        assert ask_issues[0].required is False
+
+    def test_no_issue_for_ask_human_in_agent_mode_node(self):
+        construct = self._construct(mode="agent")
+        issues = lint(
+            construct,
+            tool_factories={"ask_tool": lambda config, tool_config: _AskHumanClassTool()},
+        )
+
+        assert [i for i in issues if i.kind == self._ISSUE_KIND] == []
+
+
