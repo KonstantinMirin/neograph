@@ -595,8 +595,10 @@ def _add_branch_to_graph(
     branch_node: _BranchNode,
     prev_node: str | None,
     *,
+    checkpointer: Any = None,
     runtime: LlmRuntime = EMPTY_RUNTIME,
     scripted_lookup: dict[str, Callable] | None = None,
+    condition_lookup: dict[str, Callable] | None = None,
     tool_factory_lookup: dict[str, Callable] | None = None,
 ) -> str:
     """Lower a _BranchNode into conditional edges in the graph.
@@ -623,7 +625,13 @@ def _add_branch_to_graph(
     # We only add the node function here — edge wiring is handled below.
     for item in true_nodes:
         if isinstance(item, Construct):
-            sub_graph = _compile(item, checkpointer=None, _runtime=runtime, _scripted_lookup=scripted_lookup, tool_factories=tool_factory_lookup)
+            # Thread the parent checkpointer + condition_lookup into the arm
+            # sub-construct exactly like the main sub-construct path
+            # (compiler.py::_add_subgraph). Without the checkpointer an Operator
+            # sub-construct in an arm fails the "Operator requires a
+            # checkpointer" compile guard; without conditions a string Operator
+            # condition inside the arm cannot resolve. See neograph-faf8.
+            sub_graph = _compile(item, checkpointer=checkpointer, _runtime=runtime, _scripted_lookup=scripted_lookup, conditions=condition_lookup, tool_factories=tool_factory_lookup)
             subgraph_fn = make_subgraph_fn(item, sub_graph.graph)
             graph.add_node(item.name, subgraph_fn)
         else:
@@ -632,7 +640,7 @@ def _add_branch_to_graph(
 
     for item in false_nodes:
         if isinstance(item, Construct):
-            sub_graph = _compile(item, checkpointer=None, _runtime=runtime, _scripted_lookup=scripted_lookup, tool_factories=tool_factory_lookup)
+            sub_graph = _compile(item, checkpointer=checkpointer, _runtime=runtime, _scripted_lookup=scripted_lookup, conditions=condition_lookup, tool_factories=tool_factory_lookup)
             subgraph_fn = make_subgraph_fn(item, sub_graph.graph)
             graph.add_node(item.name, subgraph_fn)
         else:

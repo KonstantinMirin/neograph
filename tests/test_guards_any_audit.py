@@ -134,6 +134,7 @@ ANY_ALLOWLIST: dict[str, str] = {
     "_wiring.py:_amerge_one_group:upstream_context": "heterogeneous upstream model instances keyed by input name",
     "_wiring.py:_amerge_one_group:state": "dynamically-shaped LangGraph state object (from_state DI source)",
     "_wiring.py:_construct_loop_unwrap:return": "user-supplied loop value; type declared by the sub-construct output",
+    "_wiring.py:_add_branch_to_graph:checkpointer": "LangGraph checkpointer (BaseCheckpointSaver | None) threaded opaquely into the arm sub-construct compile; mirrors _add_subgraph's checkpointer: Any (neograph-faf8)",
     # ── _ir_normalize.py — IrNormalizer.apply update dict ──
     "_ir_normalize.py:IrNormalizer.apply:return": "model_copy update dict; heterogeneous IR field values (str fan_out_param, type[BaseModel] oracle_gen_type)",
 }

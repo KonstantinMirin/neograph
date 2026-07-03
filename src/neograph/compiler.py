@@ -207,7 +207,7 @@ def compile(
 
     for item in construct.nodes:
         if isinstance(item, _BranchNode):
-            prev_node = _add_branch_to_graph(graph, item, prev_node, runtime=runtime, scripted_lookup=scripted_lookup, tool_factory_lookup=tool_factory_lookup)
+            prev_node = _add_branch_to_graph(graph, item, prev_node, checkpointer=checkpointer, runtime=runtime, scripted_lookup=scripted_lookup, condition_lookup=condition_lookup, tool_factory_lookup=tool_factory_lookup)
         elif isinstance(item, Construct):
             prev_node = _add_subgraph(graph, item, prev_node, checkpointer=checkpointer, parent_state_model=state_model, runtime=runtime, scripted_lookup=scripted_lookup, condition_lookup=condition_lookup, tool_factory_lookup=tool_factory_lookup)
         else:
