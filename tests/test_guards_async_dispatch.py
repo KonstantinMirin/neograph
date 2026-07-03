@@ -292,6 +292,8 @@ class TestAsyncTwinCoLocation:
         "_tool_loop.py": [("invoke_with_tools", "ainvoke_with_tools")],
         "runner.py": [
             ("run", "arun"),
+            ("stream", "astream"),
+            ("_prepare", "_aprepare"),
             ("_has_existing_checkpoint", "_ahas_existing_checkpoint"),
             ("_verify_checkpoint_schema", "_averify_checkpoint_schema"),
             ("_auto_resume_from_divergence", "_aauto_resume_from_divergence"),

@@ -368,6 +368,15 @@ class TestNoNearDuplicateHelperNames:
         frozenset({"_aauto_resume_from_divergence", "_auto_resume_from_divergence"}): (
             "lev=1: async twin of the auto-resume rewind (runner.py)."
         ),
+        # neograph-q8ec (Phase 2, streaming): a-prefix async twins of the
+        # runner's prepare brain and stream verb — same sync/async twin
+        # convention (astream/_aprepare run the vertical on the event loop).
+        frozenset({"_aprepare", "_prepare"}): (
+            "lev=1: async twin of the pre-engine prepare brain (runner.py)."
+        ),
+        frozenset({"astream", "stream"}): (
+            "lev=1: async twin of the sync stream verb (runner.py)."
+        ),
         # neograph-p3c7: a-prefix async twins of the Oracle merge barrier — same
         # deliberate sync/async twin convention (merge runs on the loop under arun).
         frozenset({"_arun_merge_prompt", "_run_merge_prompt"}): (

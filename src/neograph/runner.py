@@ -300,6 +300,118 @@ def _prepare_new_input(
     return input, config
 
 
+def _mark_stream_custom(config: RunnableConfig | None) -> RunnableConfig:
+    """Return a config whose ``configurable`` carries the STREAM_CUSTOM flag.
+
+    Set by the streaming verbs when the driver consumes ``stream_mode='custom'``
+    so ``emit_progress`` can distinguish a live progress consumer from a
+    non-streaming driver (review L1). Builds a fresh dict — never mutates the
+    caller's config in place. The flag is a config['configurable'] entry, so it
+    never enters state and cannot touch the schema fingerprint."""
+    config = config or {}
+    configurable = {**config.get("configurable", {}), StateKeys.STREAM_CUSTOM: True}
+    return {**config, "configurable": configurable}
+
+
+def _wants_custom(stream_mode: str | list[str]) -> bool:
+    """True if ``stream_mode`` requests LangGraph's ``custom`` channel."""
+    if isinstance(stream_mode, str):
+        return stream_mode == "custom"
+    return "custom" in stream_mode
+
+
+def _prepare(
+    graph: CompiledNeograph,
+    *,
+    input: dict[str, Any] | None = None,
+    resume: dict[str, Any] | None = None,
+    config: RunnableConfig | None = None,
+    auto_resume: bool = True,
+    stream_custom: bool = False,
+) -> tuple[Any, RunnableConfig | None]:
+    """Compute ``(engine_input, config)`` for ONE execution — the single
+    pre-engine brain shared by every driver verb (run/stream and, via
+    ``_aprepare``, arun/astream).
+
+    ``engine_input`` is exactly what the engine verb receives:
+        * ``Command(resume=...)`` — resume after an Operator interrupt;
+        * ``None`` — resume from an existing checkpoint (post-input resume or
+          crash recovery); LangGraph's ``invoke(None, config)`` continues the
+          thread;
+        * the fingerprint-injected input dict — a fresh new execution.
+
+    All pre-engine responsibilities live here so no verb re-implements them:
+    CONFIG_INPUT stash / re-inject, input→config injection, defensive input
+    copy, fingerprint injection, preflight-DI, checkpoint-exists probe, and the
+    auto-resume rewind. The rewind is pure config mutation and runs HERE (not
+    lazily inside a stream generator) so the first streamed chunk fires against
+    the already-rewound checkpoint.
+    """
+    if resume is not None:
+        config = _prepare_resume_config(config)
+        engine_input: Any = Command(resume=resume)
+    elif input is not None:
+        input, config = _prepare_new_input(graph, input, config)
+        _preflight_di_check(graph, config)
+        # A checkpoint for this thread means "resume, don't restart": pass None
+        # so LangGraph continues from it; input is already stashed for DI.
+        if _has_existing_checkpoint(graph, config):
+            _verify_checkpoint_schema(graph, config, auto_resume=auto_resume)
+            engine_input = None
+        else:
+            engine_input = input
+    else:
+        # Crash recovery. DI contract: the caller re-provides DI in config
+        # because checkpoints do not persist config (same rule as FromConfig).
+        if config is not None:
+            _preflight_di_check(graph, config)
+        if _has_existing_checkpoint(graph, config or {}):
+            _verify_checkpoint_schema(graph, config or {}, auto_resume=auto_resume)
+        engine_input = None
+
+    if stream_custom:
+        config = _mark_stream_custom(config)
+    return engine_input, config
+
+
+def _finalize_by_mode(payload: Any, mode: str) -> Any:
+    """Strip framework plumbing from ONE chunk according to its stream mode.
+
+    * ``values`` — a full state dict; strip top-level ``neo_*`` keys.
+    * ``updates`` — a ``{node: delta}`` dict; strip ``neo_*`` inside each per-node
+      delta (a delta can carry fingerprints), but leave non-dict values (e.g.
+      the ``__interrupt__`` tuple) untouched.
+    * anything else (``custom`` / ``messages`` / ``debug``) — a user payload or
+      token tuple; return it UNTOUCHED (identity), never stripped.
+    """
+    if mode == "values":
+        return _strip_internals(payload)
+    if mode == "updates":
+        if isinstance(payload, dict):
+            return {
+                node: (_strip_internals(delta) if isinstance(delta, dict) else delta)
+                for node, delta in payload.items()
+            }
+        return payload
+    return payload
+
+
+def _finalize_chunk(chunk: Any, stream_mode: str | list[str]) -> Any:
+    """Finalize one streamed chunk. The ONLY place that can leak ``neo_*`` or
+    corrupt a user payload, so its stripping is mode-exact.
+
+    A ``str`` ``stream_mode`` yields bare chunks finalized by that mode. A
+    ``list`` ``stream_mode`` makes LangGraph yield ``(mode, chunk)`` tuples;
+    each is finalized by ITS OWN mode and re-wrapped as a tuple.
+    """
+    if isinstance(stream_mode, str):
+        return _finalize_by_mode(chunk, stream_mode)
+    if isinstance(chunk, tuple) and len(chunk) == 2 and isinstance(chunk[0], str):
+        mode, payload = chunk
+        return (mode, _finalize_by_mode(payload, mode))
+    return chunk
+
+
 def run(
     graph: CompiledNeograph,
     input: dict[str, Any] | None = None,
@@ -307,7 +419,7 @@ def run(
     config: RunnableConfig | None = None,
     auto_resume: bool = True,
 ) -> Any:
-    """Execute a compiled neograph graph.
+    """Execute a compiled neograph graph (batch). Thin verb over ``_prepare``.
 
     Three modes:
         run(graph, input={...})              -- new execution
@@ -336,39 +448,38 @@ def run(
 
             run(graph, config={"configurable": {"thread_id": "same-id"}})
     """
-    if resume is not None:
-        config = _prepare_resume_config(config)
-        return _strip_internals(graph.invoke(Command(resume=resume), config=config))
+    engine_input, config = _prepare(
+        graph, input=input, resume=resume, config=config, auto_resume=auto_resume
+    )
+    return _strip_internals(graph.invoke(engine_input, config=config))
 
-    if input is not None:
-        input, config = _prepare_new_input(graph, input, config)
 
-        # Pre-flight: check all required DI params are present
-        _preflight_di_check(graph, config)
+def stream(
+    graph: CompiledNeograph,
+    input: dict[str, Any] | None = None,
+    resume: dict[str, Any] | None = None,
+    config: RunnableConfig | None = None,
+    auto_resume: bool = True,
+    stream_mode: str | list[str] = "values",
+) -> Any:
+    """Stream a compiled neograph graph (sync). Thin verb over ``_prepare`` +
+    ``_finalize_chunk``.
 
-        # Check if a checkpoint already exists for this thread.
-        # If yes: this is a resume — inject input into config for DI but
-        # pass None to graph.invoke() so LangGraph resumes from checkpoint.
-        # If no: this is a new execution — pass input normally.
-        if _has_existing_checkpoint(graph, config):
-            _verify_checkpoint_schema(graph, config, auto_resume=auto_resume)
-            return _strip_internals(graph.invoke(None, config=config))
-
-        return _strip_internals(graph.invoke(input, config=config))
-
-    # No input, no resume: resume from checkpoint.
-    # LangGraph's _first() treats invoke(None, config) as "resume from last
-    # checkpoint" when the thread already has saved state. This is the crash
-    # recovery path — skips completed supersteps, continues from failure point.
-    #
-    # DI contract: the caller must re-provide DI values in config['configurable']
-    # because checkpoints do not persist config. This is the same contract as
-    # FromConfig (rate limiters, shared resources are never checkpointed).
-    if config is not None:
-        _preflight_di_check(graph, config)
-    if _has_existing_checkpoint(graph, config or {}):
-        _verify_checkpoint_schema(graph, config or {}, auto_resume=auto_resume)
-    return _strip_internals(graph.invoke(None, config=config))
+    Mirrors ``run``'s three modes (new input / resume / crash recovery) and adds
+    ``stream_mode`` (str or list — see LangGraph). Each yielded chunk is passed
+    through ``_finalize_chunk`` so ``values``/``updates`` chunks are ``neo_*``-
+    free while ``custom``/``messages``/``debug`` payloads pass through untouched.
+    """
+    engine_input, config = _prepare(
+        graph,
+        input=input,
+        resume=resume,
+        config=config,
+        auto_resume=auto_resume,
+        stream_custom=_wants_custom(stream_mode),
+    )
+    for chunk in graph.stream(engine_input, config=config, stream_mode=stream_mode):
+        yield _finalize_chunk(chunk, stream_mode)
 
 
 async def _ahas_existing_checkpoint(graph: CompiledNeograph, config: RunnableConfig) -> bool:
@@ -456,6 +567,47 @@ async def _aauto_resume_from_divergence(
         config.setdefault("configurable", {})["checkpoint_id"] = rewind_checkpoint_id
 
 
+async def _aprepare(
+    graph: CompiledNeograph,
+    *,
+    input: dict[str, Any] | None = None,
+    resume: dict[str, Any] | None = None,
+    config: RunnableConfig | None = None,
+    auto_resume: bool = True,
+    stream_custom: bool = False,
+) -> tuple[Any, RunnableConfig | None]:
+    """Async twin of :func:`_prepare`.
+
+    Identical mode dispatch and pre-engine responsibilities; diverges ONLY where
+    the sync helpers touch the checkpointer I/O — ``await
+    _ahas_existing_checkpoint`` / ``await _averify_checkpoint_schema`` (which
+    ``async for`` the async state history). The pure helpers
+    (_prepare_resume_config / _prepare_new_input / _preflight_di_check /
+    _mark_stream_custom) are shared verbatim with the sync path.
+    """
+    if resume is not None:
+        config = _prepare_resume_config(config)
+        engine_input: Any = Command(resume=resume)
+    elif input is not None:
+        input, config = _prepare_new_input(graph, input, config)
+        _preflight_di_check(graph, config)
+        if await _ahas_existing_checkpoint(graph, config):
+            await _averify_checkpoint_schema(graph, config, auto_resume=auto_resume)
+            engine_input = None
+        else:
+            engine_input = input
+    else:
+        if config is not None:
+            _preflight_di_check(graph, config)
+        if await _ahas_existing_checkpoint(graph, config or {}):
+            await _averify_checkpoint_schema(graph, config or {}, auto_resume=auto_resume)
+        engine_input = None
+
+    if stream_custom:
+        config = _mark_stream_custom(config)
+    return engine_input, config
+
+
 async def arun(
     graph: CompiledNeograph,
     input: dict[str, Any] | None = None,
@@ -463,31 +615,40 @@ async def arun(
     config: RunnableConfig | None = None,
     auto_resume: bool = True,
 ) -> Any:
-    """Async twin of :func:`run` (Phase 1d).
+    """Async twin of :func:`run` (batch). Thin verb over ``_aprepare``.
 
-    Driver-parallel to run(): mirrors the exact three-mode branch structure
-    (resume / input+nested-checkpoint / crash-recovery), reuses the shared pure
-    prep helpers (_prepare_resume_config / _prepare_new_input / _preflight_di_check
-    / _strip_internals), and diverges ONLY at the graph/checkpointer I/O —
-    ``await graph.ainvoke`` and the async checkpoint twins.
+    Driver-parallel to run(): shares the entire pre-engine brain via
+    ``_aprepare`` and diverges ONLY at the engine I/O — ``await graph.ainvoke``.
     """
-    if resume is not None:
-        config = _prepare_resume_config(config)
-        return _strip_internals(await graph.ainvoke(Command(resume=resume), config=config))
+    engine_input, config = await _aprepare(
+        graph, input=input, resume=resume, config=config, auto_resume=auto_resume
+    )
+    return _strip_internals(await graph.ainvoke(engine_input, config=config))
 
-    if input is not None:
-        input, config = _prepare_new_input(graph, input, config)
 
-        _preflight_di_check(graph, config)
+async def astream(
+    graph: CompiledNeograph,
+    input: dict[str, Any] | None = None,
+    resume: dict[str, Any] | None = None,
+    config: RunnableConfig | None = None,
+    auto_resume: bool = True,
+    stream_mode: str | list[str] = "values",
+) -> Any:
+    """Async twin of :func:`stream`. Thin verb over ``_aprepare`` +
+    ``_finalize_chunk``.
 
-        if await _ahas_existing_checkpoint(graph, config):
-            await _averify_checkpoint_schema(graph, config, auto_resume=auto_resume)
-            return _strip_internals(await graph.ainvoke(None, config=config))
-
-        return _strip_internals(await graph.ainvoke(input, config=config))
-
-    if config is not None:
-        _preflight_di_check(graph, config)
-    if await _ahas_existing_checkpoint(graph, config or {}):
-        await _averify_checkpoint_schema(graph, config or {}, auto_resume=auto_resume)
-    return _strip_internals(await graph.ainvoke(None, config=config))
+    The production streaming surface for AG-UI/SSE consumers: yields the same
+    finalized chunks as ``stream`` while running the LLM/tool vertical on the
+    event loop. The auto-resume rewind runs inside ``_aprepare`` BEFORE the first
+    ``astream`` chunk, so the stream never fires against an un-rewound checkpoint.
+    """
+    engine_input, config = await _aprepare(
+        graph,
+        input=input,
+        resume=resume,
+        config=config,
+        auto_resume=auto_resume,
+        stream_custom=_wants_custom(stream_mode),
+    )
+    async for chunk in graph.astream(engine_input, config=config, stream_mode=stream_mode):
+        yield _finalize_chunk(chunk, stream_mode)

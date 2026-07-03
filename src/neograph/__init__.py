@@ -59,6 +59,7 @@ from neograph.modifiers import (
     Oracle,
 )
 from neograph.node import Node, RawNodeFn, SkipPredicate, SkipValueFactory, TypeSpecStatic
+from neograph.progress import emit_progress
 from neograph.renderers import (
     DelimitedRenderer,
     JsonRenderer,
@@ -66,7 +67,7 @@ from neograph.renderers import (
     XmlRenderer,
     render_input,
 )
-from neograph.runner import arun, run
+from neograph.runner import arun, astream, run, stream
 from neograph.spec_types import lookup_type, register_type
 from neograph.tool import Tool, ToolInteraction, tool
 from neograph.verify import VerifyIssue, verify_compiled
@@ -81,6 +82,9 @@ __all__ = [
     "compile",
     "run",
     "arun",
+    "stream",
+    "astream",
+    "emit_progress",
     "tool",
     "merge_fn",
     # Modifiers (used as @node kwargs; also available standalone)

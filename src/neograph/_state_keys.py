@@ -55,6 +55,13 @@ class StateKeys:
     # CONFIG_INPUT is a config['configurable'] key (NOT a state-bus key): the
     # runner stashes the run input there for re-injection on resume (runner.py).
     CONFIG_INPUT = "_neo_input"
+    # STREAM_CUSTOM is a config['configurable'] key (NOT a state-bus key): the
+    # streaming verbs (stream/astream) set it True when the driver is consuming
+    # stream_mode='custom', so emit_progress (progress.py) can tell a live
+    # progress consumer from a non-streaming driver and warn on the latter
+    # instead of vanishing silently (review L1). Never enters state — a config
+    # flag, so it cannot touch the schema fingerprint.
+    STREAM_CUSTOM = "_neo_stream_custom"
 
     # Non-`neo_`-prefixed framework state keys (CON-01). These are DI-context
     # state-bus fields the compiler always adds (node_id, project_root) plus the
