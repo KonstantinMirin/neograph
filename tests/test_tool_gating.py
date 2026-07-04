@@ -462,3 +462,74 @@ class TestBudgetAcrossCheckpoint:
                 f"agent ReAct internal channel leaked into returned state "
                 f"(binding condition 2): {sorted(res)}"
             )
+
+
+# ── Item (a) deny keystone — RED for neograph-whq0 ────────────────────────
+#
+# The approve path (TestToolGatingKeystone) proves the gate PAUSES before the
+# tool superstep. neograph-whq0: the resume DECISION is written to
+# HUMAN_FEEDBACK (_wiring.py) but never read — an unconditional gate->tools edge
+# runs the tool regardless. A deny therefore executes the tool anyway, which is
+# worse than no gate (false sense of a safety control). The gate must honor the
+# decision: deny must NOT run the pending tool and must feed a denial back to
+# the agent so the loop continues to a final answer.
+
+
+@pytest.mark.parametrize("surface", ["node", "programmatic"])
+@pytest.mark.parametrize("is_async", [False, True], ids=["run", "arun"])
+class TestToolGatingDenyKeystone:
+    """RED (neograph-whq0): resuming a tool gate with a deny decision must NOT
+    execute the pending tool, and must feed the denial back to the agent so it
+    produces a final answer. Today the deny is silently ignored — the
+    unconditional gate->tools edge runs the tool anyway."""
+
+    def test_deny_does_not_run_tool_and_agent_finalizes(
+        self, is_async: bool, surface: str
+    ) -> None:
+        counter = [0]
+        graph = _build_gated_graph(counter, surface=surface)
+        config = {"configurable": {"thread_id": f"deny-{surface}-{is_async}"}}
+
+        # First run — the gate pauses before the tool superstep.
+        result1 = _drive(
+            graph, input={"node_id": "REQ-1"}, resume=None, config=config, is_async=is_async
+        )
+        assert "__interrupt__" in result1, (
+            "agent node did not pause at the tool gate before deny"
+        )
+        assert counter[0] == 0, "tool ran before the human decided"
+
+        # Resume with a DENY — the gate must reject the pending tool call.
+        result2 = _drive(
+            graph, input=None, resume={"approved": False}, config=config, is_async=is_async
+        )
+
+        # THE DENY KEYSTONE: the side-effecting tool MUST NOT have run.
+        assert counter[0] == 0, (
+            f"DENY VIOLATION: gated tool 'record' ran {counter[0]}x after a DENY "
+            f"— gate_tools_when ignored the deny decision and executed the tool "
+            f"anyway (neograph-whq0)"
+        )
+        # The agent received the denial and still produced a final answer
+        # (the loop continues rather than crashing or hanging).
+        assert result2.get("research") == KResult(items=["done"]), (
+            f"agent did not finalize after the tool call was denied: {result2!r}"
+        )
+
+        # M7: the denial must actually reach the agent as a ToolMessage answering
+        # the pending tool_call (one per denied call) — 'agent sees why', pinned
+        # directly rather than inferred from finalization.
+        snapshot = graph.get_state(config)
+        msgs = snapshot.values.get("neo_agent_messages_research", [])
+        denial_tool_msgs = [
+            m for m in msgs
+            if isinstance(m, ToolMessage) and "denied by a human reviewer" in str(m.content)
+        ]
+        assert denial_tool_msgs, (
+            f"no denial ToolMessage was fed back to the agent after deny; the LLM "
+            f"could not see why the tool was rejected. messages={msgs!r}"
+        )
+        assert denial_tool_msgs[0].tool_call_id == "r1", (
+            f"denial ToolMessage did not answer the pending tool_call id 'r1': "
+            f"{denial_tool_msgs[0]!r}"
+        )

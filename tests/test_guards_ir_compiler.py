@@ -619,3 +619,188 @@ class TestNoModuleLevelRegistryDicts:
         )
 
 
+
+
+class TestToolGateRoutesConditionally:
+    """Structural guard for neograph-whq0: a ``gate_tools_when`` tool-gate must
+    route on the human's decision — a conditional edge with BOTH a proceed arm
+    (``{node}__tools``) and a deny arm (``{node}__agent``). The original bug was
+    an UNCONDITIONAL ``gate -> tools`` edge that ran the tool regardless of the
+    resume value. This guard inspects the COMPILED graph topology (not source
+    text), so any future refactor that reintroduces an unconditional gate->tools
+    edge — or drops the deny arm — is caught even if the behavioral deny test is
+    deleted.
+    """
+
+    @staticmethod
+    def _gate_edges(compiled):
+        dg = compiled.get_graph()
+        return [
+            (e.source, e.target, bool(getattr(e, "conditional", False)))
+            for e in dg.edges
+            if e.source.endswith("__tools_gate")
+        ]
+
+    @classmethod
+    def _gate_is_diseased(cls, compiled) -> bool:
+        """True when a tool-gate cannot honor a deny: it reaches tools but has no
+        conditional deny (``__agent``) arm. No gate present -> not diseased (N/A)."""
+        edges = cls._gate_edges(compiled)
+        if not edges:
+            return False
+        reaches_tools = any(t.endswith("__tools") for (_, t, _) in edges)
+        has_conditional_deny_arm = any(
+            t.endswith("__agent") and cond for (_, t, cond) in edges
+        )
+        return reaches_tools and not has_conditional_deny_arm
+
+    def _build_real_gated_graph(self):
+        from typing import Any
+
+        from langchain_core.messages import AIMessage, ToolMessage
+        from langgraph.checkpoint.memory import MemorySaver
+        from pydantic import BaseModel
+
+        from neograph import Tool, compile, construct_from_functions, node
+        from tests.fakes import (
+            build_fake_llm_kwargs,
+            build_test_compile_kwargs,
+            register_tool_factory,
+        )
+
+        class GResult(BaseModel, frozen=True):
+            items: list[str]
+
+        class _Fake:
+            def bind_tools(self, tools):
+                return self
+
+            def abind_tools(self, *a, **k):
+                return self
+
+            def invoke(self, messages, **k):
+                n = sum(isinstance(m, ToolMessage) for m in messages)
+                if n == 0:
+                    msg = AIMessage(content="")
+                    msg.tool_calls = [{"name": "record", "args": {}, "id": "r1"}]
+                    return msg
+                return AIMessage(content='{"items": ["done"]}')
+
+            async def ainvoke(self, *a, **k):
+                return self.invoke(*a, **k)
+
+            def with_structured_output(self, model, **k):
+                inst = _Fake()
+                inst._m = model
+                inst.invoke = lambda messages, **kk: model(items=["done"])  # type: ignore[assignment]
+                return inst
+
+        class _Rec:
+            name = "record"
+
+            def invoke(self, args):
+                return "ok"
+
+            async def ainvoke(self, *a, **k):
+                return "ok"
+
+        register_tool_factory("record", lambda config, tool_config: _Rec())
+
+        @node(
+            mode="agent",
+            outputs=GResult,
+            model="reason",
+            prompt="test/explore",
+            tools=[Tool(name="record", budget=3)],
+            gate_tools_when=lambda state: {"reason": "approve?"},
+        )
+        def research() -> GResult: ...
+
+        return compile(
+            construct_from_functions("guard-gating", [research]),
+            checkpointer=MemorySaver(),
+            **build_test_compile_kwargs(),
+            **build_fake_llm_kwargs(lambda tier: _Fake()),
+        )
+
+    def test_real_gated_graph_routes_conditionally_with_deny_arm(self):
+        """POSITIVE: the real compiled gate routes to BOTH tools and agent, all
+        conditional — never an unconditional gate->tools edge."""
+        compiled = self._build_real_gated_graph()
+        edges = self._gate_edges(compiled)
+        assert edges, "no __tools_gate node found in the compiled gated graph"
+        targets = {t for (_, t, _) in edges}
+        assert any(t.endswith("__tools") for t in targets), (
+            f"gate has no proceed (tools) arm: {edges}"
+        )
+        assert any(t.endswith("__agent") for t in targets), (
+            f"gate has no deny (agent) arm — deny cannot be honored (whq0): {edges}"
+        )
+        assert all(cond for (_, _, cond) in edges), (
+            f"gate has an UNCONDITIONAL edge — the whq0 disease: {edges}"
+        )
+        assert not self._gate_is_diseased(compiled)
+
+    def test_guard_catches_unconditional_gate_to_tools(self):
+        """NEGATIVE meta-test: a gate wired with an UNCONDITIONAL gate->tools edge
+        (the original whq0 disease) must be flagged by the predicate."""
+        from typing import TypedDict
+
+        from langgraph.graph import END, START, StateGraph
+
+        class S(TypedDict):
+            x: int
+
+        b = StateGraph(S)
+        b.add_node("r__agent", lambda s: s)
+        b.add_node("r__tools_gate", lambda s: s)
+        b.add_node("r__tools", lambda s: s)
+        b.add_edge(START, "r__agent")
+        b.add_conditional_edges("r__agent", lambda s: "r__tools_gate", path_map=["r__tools_gate"])
+        b.add_edge("r__tools_gate", "r__tools")  # DISEASE: unconditional, no deny arm
+        b.add_edge("r__tools", END)
+        compiled = b.compile()
+        assert self._gate_is_diseased(compiled), (
+            "guard failed to flag an unconditional gate->tools edge (whq0 disease)"
+        )
+
+    def test_guard_catches_conditional_gate_without_deny_arm(self):
+        """NEGATIVE meta-test (would-be-missed variant): even a CONDITIONAL gate
+        edge is diseased if it only ever reaches tools and has no deny (agent)
+        arm — a conditional edge is not enough; the deny arm must exist."""
+        from typing import TypedDict
+
+        from langgraph.graph import END, START, StateGraph
+
+        class S(TypedDict):
+            x: int
+
+        b = StateGraph(S)
+        b.add_node("r__agent", lambda s: s)
+        b.add_node("r__tools_gate", lambda s: s)
+        b.add_node("r__tools", lambda s: s)
+        b.add_edge(START, "r__agent")
+        b.add_conditional_edges("r__agent", lambda s: "r__tools_gate", path_map=["r__tools_gate"])
+        # Conditional, but the only reachable target is tools — no deny arm.
+        b.add_conditional_edges("r__tools_gate", lambda s: "r__tools", path_map=["r__tools"])
+        b.add_edge("r__tools", END)
+        compiled = b.compile()
+        assert self._gate_is_diseased(compiled), (
+            "guard failed to flag a conditional gate that has no deny (agent) arm"
+        )
+
+    def test_predicate_is_na_when_no_gate(self):
+        """A graph with no tool-gate is not diseased (N/A), so the guard never
+        fires on ungated agent pipelines."""
+        from typing import TypedDict
+
+        from langgraph.graph import END, START, StateGraph
+
+        class S(TypedDict):
+            x: int
+
+        b = StateGraph(S)
+        b.add_node("r__agent", lambda s: s)
+        b.add_edge(START, "r__agent")
+        b.add_edge("r__agent", END)
+        assert not self._gate_is_diseased(b.compile())

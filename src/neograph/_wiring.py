@@ -15,7 +15,7 @@ from langchain_core.runnables import Runnable, RunnableConfig, RunnableLambda
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Send, interrupt
 
-from neograph._agent_cycle import make_agent_cycle_bodies
+from neograph._agent_cycle import make_agent_cycle_bodies, make_tool_gate_bodies
 from neograph._ir_branch import _BranchNode
 from neograph._llm_runtime import EMPTY_RUNTIME, LlmRuntime
 from neograph._normalize import normalize_outputs, primary_output_field
@@ -764,22 +764,19 @@ def _add_agent_cycle(
     base_router = parts["router"]
 
     if node.gate_tools_when is not None:
-        # Tool-gating HITL (neograph-m6d3.4): insert a gate node on the router's
-        # tools arm so a human can approve BEFORE the {node}__tools body — and its
-        # side effects — run. The gate runs the predicate; a truthy result triggers
-        # interrupt(payload) (pausing at this turn-boundary superstep, so the tool
-        # has not executed yet) and records the resume value on HUMAN_FEEDBACK.
-        # Reuses the same interrupt() body pattern as _add_operator_check; no new
-        # interrupt path.
+        # Tool-gating HITL (neograph-m6d3.4 + neograph-whq0): insert a gate node
+        # on the router's tools arm so a human can approve BEFORE the {node}__tools
+        # body — and its side effects — run. The gate runs the predicate; a truthy
+        # result triggers interrupt(payload) (pausing at this turn-boundary
+        # superstep, so the tool has not executed yet). On resume the gate HONORS
+        # the decision: approve → {node}__tools; deny (fail-closed) → back to
+        # {node}__agent with denial ToolMessages appended so the loop continues.
+        # The decision is a Layer-1 conditional edge (gate_router), not an in-body
+        # check in the tools node; the gate body lives in _agent_cycle where the
+        # message channel is owned.
         gate_name = f"{node.name}__tools_gate"
         gate_condition = _resolve_condition(node.gate_tools_when, condition_lookup)
-
-        def tools_gate(state: Any) -> dict:
-            payload = gate_condition(state)
-            if payload:
-                human_input = interrupt(payload)
-                return {StateKeys.HUMAN_FEEDBACK: human_input}
-            return {}
+        gate_parts = make_tool_gate_bodies(node, gate_condition)
 
         def gated_router(state: Any) -> str:
             # Preserve the base 3-way decision, but send the tools branch through
@@ -787,11 +784,13 @@ def _add_agent_cycle(
             dest = base_router(state)
             return gate_name if dest == names.tools else dest
 
-        graph.add_node(gate_name, tools_gate)
+        graph.add_node(gate_name, gate_parts["gate"])
         graph.add_conditional_edges(
             names.agent, gated_router, path_map=[gate_name, names.parse],
         )
-        graph.add_edge(gate_name, names.tools)
+        graph.add_conditional_edges(
+            gate_name, gate_parts["router"], path_map=[names.tools, names.agent],
+        )
     else:
         # 3-way router after the agent turn: tools (loop) | parse (done/forced-final).
         graph.add_conditional_edges(
