@@ -2007,7 +2007,7 @@ class TestGatherProduceSubConstruct:
 
         class TypedEvidenceTool:
             name = "find_evidence"
-            def invoke(self, args):
+            def invoke(self, args, config=None, **kwargs):
                 return EvidenceHit(ref="auth.py:42", confidence=0.9)
 
         register_tool_factory("find_evidence", lambda cfg, tc: TypedEvidenceTool())
@@ -2455,3 +2455,158 @@ class TestPrimaryOutputField:
         assert field == "verify_result"
 
 
+
+
+class TestEachOnErrorCollect:
+    """Each(on_error='collect') — per-item partial-failure collection.
+
+    A sub-construct fanned under Each: when one item's sub-construct raises,
+    'collect' keys a typed EachFailure into the barrier instead of aborting
+    the whole run, so consumers can assert set-equality over planned keys.
+    The default ('raise') preserves the abort-the-run behavior.
+    """
+
+    def _build_parent(self, on_error: str) -> Construct:
+        from tests.hypothesis.conftest import FanCollection, FanItem
+
+        register_scripted(
+            "eok4_seed",
+            lambda _i, _c: FanCollection(items=[
+                FanItem(item_id="item1"),
+                FanItem(item_id="item2"),
+                FanItem(item_id="item3"),
+            ]),
+        )
+
+        def _inner(input_data: Any, config: Any) -> RawText:
+            # input_data is the per-item FanItem (sub-construct input port).
+            if input_data.item_id == "item2":
+                raise RuntimeError("boom on item2")
+            return RawText(text=f"ok-{input_data.item_id}")
+
+        register_scripted("eok4_inner", _inner)
+
+        from tests.hypothesis.conftest import FanItem as _FanItem
+
+        sub = Construct(
+            "eok4-sub",
+            input=_FanItem,
+            output=RawText,
+            nodes=[
+                Node.scripted("eok4-inner", fn="eok4_inner", inputs=_FanItem, outputs=RawText),
+            ],
+        )
+        sub_each = sub | Each(over="eok4_seed.items", key="item_id", on_error=on_error)
+        return Construct("eok4-parent", nodes=[
+            Node.scripted("eok4-seed", fn="eok4_seed", outputs=FanCollection),
+            sub_each,
+        ])
+
+    def test_barrier_collects_typed_failure_when_item_raises_and_on_error_collect(self):
+        """3-item .map, item2's sub-construct raises → barrier has 2 successes
+        + 1 EachFailure{key='item2'}; the run completes (no abort)."""
+        from neograph import EachFailure
+
+        parent = self._build_parent(on_error="collect")
+        graph = compile(parent, **build_test_compile_kwargs())
+        result = run(graph, input={"node_id": "test-eok4"})
+
+        barrier = result["eok4_sub"]
+        assert isinstance(barrier, dict)
+        # Set-equality: every planned key present as success-or-failure.
+        assert set(barrier.keys()) == {"item1", "item2", "item3"}
+
+        assert isinstance(barrier["item1"], RawText)
+        assert barrier["item1"].text == "ok-item1"
+        assert isinstance(barrier["item3"], RawText)
+        assert barrier["item3"].text == "ok-item3"
+
+        failure = barrier["item2"]
+        assert isinstance(failure, EachFailure)
+        assert failure.key == "item2"
+        assert failure.error_type == "RuntimeError"
+        assert "boom on item2" in failure.message
+
+    def test_run_aborts_when_item_raises_and_on_error_raise_default(self):
+        """Default on_error='raise' still aborts the whole run — regression."""
+        parent = self._build_parent(on_error="raise")
+        graph = compile(parent, **build_test_compile_kwargs())
+        with pytest.raises(RuntimeError, match="boom on item2"):
+            run(graph, input={"node_id": "test-eok4"})
+
+    def test_graph_interrupt_propagates_and_is_not_collected(self):
+        """collect must NOT swallow LangGraph control-flow bubble-ups. A
+        GraphInterrupt (HITL/interrupt()) raised inside a collected fan-out
+        item must propagate as a pause, never be converted into an
+        EachFailure — otherwise HITL and cancellation break inside a
+        collect-mode Each."""
+        from langgraph.errors import GraphInterrupt
+        from langgraph.types import Interrupt
+
+        from neograph import EachFailure
+        from tests.hypothesis.conftest import FanCollection, FanItem
+
+        register_scripted(
+            "eok4_int_seed",
+            lambda _i, _c: FanCollection(items=[
+                FanItem(item_id="item1"),
+                FanItem(item_id="item2"),
+            ]),
+        )
+
+        def _inner(input_data: Any, config: Any) -> RawText:
+            if input_data.item_id == "item2":
+                raise GraphInterrupt((Interrupt(value="need approval"),))
+            return RawText(text=f"ok-{input_data.item_id}")
+
+        register_scripted("eok4_int_inner", _inner)
+
+        sub = Construct(
+            "eok4-int-sub",
+            input=FanItem,
+            output=RawText,
+            nodes=[
+                Node.scripted("eok4-int-inner", fn="eok4_int_inner", inputs=FanItem, outputs=RawText),
+            ],
+        )
+        sub_each = sub | Each(over="eok4_int_seed.items", key="item_id", on_error="collect")
+        parent = Construct("eok4-int-parent", nodes=[
+            Node.scripted("eok4-int-seed", fn="eok4_int_seed", outputs=FanCollection),
+            sub_each,
+        ])
+        graph = compile(parent, **build_test_compile_kwargs())
+        result = run(graph, input={"node_id": "test-eok4-int"})
+
+        # The interrupt bubbled up and paused the run instead of being
+        # collected: __interrupt__ surfaces the pending Interrupt.
+        interrupts = result.get("__interrupt__")
+        assert interrupts, f"expected the GraphInterrupt to pause the run, got {result!r}"
+        assert any(getattr(i, "value", None) == "need approval" for i in interrupts)
+
+        # And item2 was NOT turned into an EachFailure — no barrier value is
+        # an EachFailure.
+        barrier = result.get("eok4_int_sub") or {}
+        assert not any(isinstance(v, EachFailure) for v in barrier.values()), barrier
+
+    def test_each_rejects_invalid_on_error_literal(self):
+        """Each validates on_error against the literal set at construction."""
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError):
+            Each(over="seed.items", key="item_id", on_error="swallow")
+
+    def test_on_error_defaults_to_raise(self):
+        """Omitting on_error yields the raise-default (zero behavior change)."""
+        each = Each(over="seed.items", key="item_id")
+        assert each.on_error == "raise"
+
+    def test_map_sugar_forwards_on_error_to_each(self):
+        """The .map() ergonomic surface forwards on_error onto the Each it
+        builds — three-surface parity with the programmatic | Each(...) form."""
+        from tests.hypothesis.conftest import FanItem
+
+        node = Node.scripted("m", fn="eok4_inner", inputs=FanItem, outputs=RawText)
+        mapped = node.map("eok4_seed.items", key="item_id", on_error="collect")
+        each = mapped.get_modifier(Each)
+        assert each is not None
+        assert each.on_error == "collect"

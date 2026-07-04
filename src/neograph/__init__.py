@@ -51,6 +51,7 @@ from neograph.lint import LintIssue, lint
 from neograph.loader import load_spec
 from neograph.modifiers import (
     Each,
+    EachFailure,
     Loop,
     MergeFallback,
     MergePostProcess,
@@ -93,6 +94,7 @@ __all__ = [
     # Modifiers (used as @node kwargs; also available standalone)
     "Oracle",
     "Each",
+    "EachFailure",
     "Loop",
     "Operator",
     # Low-level IR (advanced use: programmatic construction, IR tests)

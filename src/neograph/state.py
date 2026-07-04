@@ -21,7 +21,7 @@ from typing import assert_never
 
 from neograph._normalize import normalize_outputs
 from neograph._state_keys import StateKeys
-from neograph.modifiers import ModifierCombo, classify_modifiers
+from neograph.modifiers import EachFailure, ModifierCombo, classify_modifiers
 from neograph.node import Node
 
 
@@ -177,8 +177,16 @@ def compile_state_model(
                 )
                 fields[field_name] = (sub.output | None, None)  # type: ignore[name-defined]
             case ModifierCombo.EACH | ModifierCombo.EACH_OPERATOR:
-                # Each on Construct: dict field
-                field_type = dict[str, sub.output] | None  # type: ignore[name-defined]
+                # Each on Construct: dict field. Under on_error='collect' the
+                # barrier may hold a typed EachFailure per thrown item, so the
+                # value type widens to accept it (default 'raise' unchanged).
+                each_mod = mods["each"]
+                value_type: Any = (
+                    sub.output | EachFailure  # type: ignore[name-defined]
+                    if each_mod.on_error == "collect"
+                    else sub.output
+                )
+                field_type = dict[str, value_type] | None  # type: ignore[name-defined,valid-type]
                 fields[field_name] = (
                     Annotated[field_type, _merge_dicts],
                     None,

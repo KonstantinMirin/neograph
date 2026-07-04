@@ -12,6 +12,7 @@ from collections.abc import Callable
 from typing import Any, cast
 
 from langchain_core.runnables import Runnable, RunnableConfig, RunnableLambda
+from langgraph.errors import GraphBubbleUp
 from pydantic import BaseModel
 
 from neograph._di_classify import _resolve_merge_args
@@ -22,7 +23,7 @@ from neograph._sidecar import get_merge_fn_metadata
 from neograph._state_bus import StateBus, adapt_state
 from neograph._state_keys import StateKeys
 from neograph.errors import ConfigurationError, ExecutionError
-from neograph.modifiers import Each, Oracle
+from neograph.modifiers import Each, EachFailure, Oracle
 from neograph.naming import field_name_for, output_field_name, split_output_field
 from neograph.node import HasName, TypeSpecStatic
 
@@ -556,23 +557,54 @@ def make_each_redirect_fn(
     IR object directly, never threaded as a string.
     """
 
-    def _project(state: Any, result: dict) -> dict:
+    def _key_val(state: Any) -> Any:
         # REQUIRED: Each router always populates EACH_ITEM in the Send payload.
         each_item = adapt_state(state).get_required(
             StateKeys.EACH_ITEM, node_label=item.name,
         )
+        return getattr(each_item, each.key, str(each_item))
+
+    def _project(state: Any, result: dict) -> dict:
         val = result.get(field_name)
         if val is not None:
-            key_val = getattr(each_item, each.key, str(each_item))
-            return {field_name: {key_val: val}}
+            return {field_name: {_key_val(state): val}}
         return result
+
+    def _project_failure(state: Any, exc: Exception) -> dict:
+        # on_error='collect': key a typed EachFailure into the barrier so the
+        # barrier always completes with one entry per planned key.
+        key_val = _key_val(state)
+        failure = EachFailure(
+            key=str(key_val),
+            error_type=type(exc).__name__,
+            message=str(exc),
+        )
+        return {field_name: {key_val: failure}}
 
     # raw_fn is a RunnableLambda (make_node_fn or a wrapped subgraph_fn);
     # .invoke(state, None) is safe (langchain synthesizes a config).
     def each_redirect_fn(state: Any, config: RunnableConfig = None) -> dict:  # type: ignore[assignment]
+        if each.on_error == "collect":
+            try:
+                return _project(state, raw_fn.invoke(state, config))
+            except GraphBubbleUp:
+                # HITL interrupt / Command routing / cancellation must propagate,
+                # never be collected into an EachFailure.
+                raise
+            except Exception as exc:  # noqa: BLE001 — collect any per-item fault
+                return _project_failure(state, exc)
         return _project(state, raw_fn.invoke(state, config))
 
     async def aeach_redirect_fn(state: Any, config: RunnableConfig = None) -> dict:  # type: ignore[assignment]
+        if each.on_error == "collect":
+            try:
+                return _project(state, await raw_fn.ainvoke(state, config))
+            except GraphBubbleUp:
+                # HITL interrupt / Command routing / cancellation must propagate,
+                # never be collected into an EachFailure.
+                raise
+            except Exception as exc:  # noqa: BLE001 — collect any per-item fault
+                return _project_failure(state, exc)
         return _project(state, await raw_fn.ainvoke(state, config))
 
     return RunnableLambda(each_redirect_fn, afunc=aeach_redirect_fn)

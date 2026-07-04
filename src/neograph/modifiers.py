@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from enum import Enum, auto
-from typing import TYPE_CHECKING, Any, Protocol, Self, runtime_checkable
+from typing import TYPE_CHECKING, Any, Literal, Protocol, Self, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, field_validator
 from typing_extensions import TypeVar
@@ -282,7 +282,13 @@ class Modifiable:
             return self.modifier_set.operator
         return None
 
-    def map(self, source: str | Callable[[Any], Any], *, key: str) -> Self:
+    def map(
+        self,
+        source: str | Callable[[Any], Any],
+        *,
+        key: str,
+        on_error: Literal["raise", "collect"] = "raise",
+    ) -> Self:
         """Fan-out over a collection — sugar over `| Each(over=..., key=...)`.
 
         Usage:
@@ -305,6 +311,9 @@ class Modifiable:
                 TypeError.
             key: Field on each iterated item used as the dispatch key
                 (same semantics as `Each.key`).
+            on_error: Per-item fault handling, forwarded to `Each.on_error`.
+                `'raise'` (default) aborts the run on a thrown item; `'collect'`
+                keys a typed `EachFailure` into the barrier instead.
 
         Returns:
             A new instance of the same type with an `Each` modifier
@@ -351,7 +360,7 @@ class Modifiable:
                 found=type(source).__name__,
             )
 
-        return self | Each(over=over, key=key)
+        return self | Each(over=over, key=key, on_error=on_error)
 
 
 class Oracle(Modifier, frozen=True):
@@ -445,6 +454,19 @@ class Oracle(Modifier, frozen=True):
                 object.__setattr__(self, 'n', len(self.models))
 
 
+class EachFailure(BaseModel, frozen=True):
+    """Typed per-item failure written into an Each barrier under ``on_error='collect'``.
+
+    Replaces a thrown item's result in the keyed barrier dict so the barrier
+    always completes with one entry per planned key. Consumers assert
+    set-equality over planned keys and branch on ``isinstance(v, EachFailure)``.
+    """
+
+    key: str          # the Each dispatch key of the item that failed
+    error_type: str   # exception class name (e.g., "RuntimeError")
+    message: str      # str() of the caught exception
+
+
 class Each(Modifier, frozen=True):
     """Fan-out modifier: dispatch parallel instances over a collection.
 
@@ -455,10 +477,16 @@ class Each(Modifier, frozen=True):
 
     Usage:
         match_verify = Node(...) | Each(over="clusters.clusters", key="label")
+
+    ``on_error`` controls per-item fault handling:
+    - ``'raise'`` (default): a thrown item aborts the whole fan-out run.
+    - ``'collect'``: a thrown item is caught and keyed into the barrier as a
+      typed ``EachFailure`` instead of aborting; the barrier always completes.
     """
 
     over: str       # dotted path to collection in state (e.g., "clusters.clusters")
     key: str        # field on each item used as the dispatch key
+    on_error: Literal["raise", "collect"] = "raise"
 
     @field_validator('over')
     @classmethod
