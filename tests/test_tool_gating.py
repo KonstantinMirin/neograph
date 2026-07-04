@@ -117,7 +117,7 @@ class _RecordTool:
     def __init__(self, counter: list[int]) -> None:
         self._counter = counter
 
-    def invoke(self, args: dict) -> str:
+    def invoke(self, args: dict, config: Any = None, **kwargs: Any) -> str:
         self._counter[0] += 1
         return "recorded"
 
@@ -374,7 +374,7 @@ class _AskTool:
 
     name = "ask"
 
-    def invoke(self, args: dict) -> str:
+    def invoke(self, args: dict, config: Any = None, **kwargs: Any) -> str:
         answer = interrupt({"question": "approve mid-cycle?"})
         return f"answered: {answer}"
 
@@ -388,7 +388,7 @@ class _CountingTool:
     def __init__(self, counter: list[int]) -> None:
         self._counter = counter
 
-    def invoke(self, args: dict) -> str:
+    def invoke(self, args: dict, config: Any = None, **kwargs: Any) -> str:
         self._counter[0] += 1
         return "looped"
 

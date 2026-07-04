@@ -441,7 +441,7 @@ class TestGatherToolCollection:
         class TypedFakeTool:
             name = "typed_search"
 
-            def invoke(self, args):
+            def invoke(self, args, config=None, **kwargs):
                 return SearchHit(node_id="UC-001", score=0.95)
 
         register_tool_factory("typed_search", lambda cfg, tc: TypedFakeTool())
@@ -539,7 +539,7 @@ class TestGatherToolCollection:
         class TypedTool:
             name = "schema_search"
 
-            def invoke(self, args):
+            def invoke(self, args, config=None, **kwargs):
                 return SearchHit(node_id="UC-042", score=0.9)
 
         register_tool_factory("schema_search", lambda cfg, tc: TypedTool())

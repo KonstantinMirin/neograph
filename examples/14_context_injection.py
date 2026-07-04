@@ -115,7 +115,7 @@ class FakeAgentLLM:
 class FakeSearch:
     name = "search_evidence"
 
-    def invoke(self, args):
+    def invoke(self, args, config=None, **kwargs):
         return EvidenceHit(source="auth.py", line=42, relevance=0.95)
 
 

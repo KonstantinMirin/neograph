@@ -1568,7 +1568,7 @@ class TestReActToolReturnsListOfModels:
         class ListTool:
             name = "search"
 
-            def invoke(self, args):
+            def invoke(self, args, config=None, **kwargs):
                 return [SearchResult(title="a", score=0.9), SearchResult(title="b", score=0.8)]
 
         register_tool_factory("search", lambda cfg, tc: ListTool())

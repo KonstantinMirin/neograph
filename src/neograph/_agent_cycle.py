@@ -348,7 +348,7 @@ def make_agent_cycle_bodies(
                 continue
             t0 = time.monotonic()
             try:
-                result = tool_fn.invoke(tc["args"])
+                result = tool_fn.invoke(tc["args"], config=config)
             except NotImplementedError as exc:
                 raise ConfigurationError.build(
                     f"Tool '{name}' does not support synchronous invocation",
@@ -399,7 +399,7 @@ def make_agent_cycle_bodies(
                 new_msgs.append(ToolMessage(content=f"Unknown tool: {name}", tool_call_id=tc["id"]))
                 continue
             t0 = time.monotonic()
-            result = await tool_fn.ainvoke(tc["args"])
+            result = await tool_fn.ainvoke(tc["args"], config=config)
             elapsed = time.monotonic() - t0
             tracker.record_call(name)
             rendered = _render_tool_result_for_llm(result, tp.effective_renderer)

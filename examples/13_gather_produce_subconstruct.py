@@ -166,7 +166,7 @@ class FakeEvidenceSearch:
     In production, this would query a code search index or knowledge graph."""
     name = "search_evidence"
 
-    def invoke(self, args):
+    def invoke(self, args, config=None, **kwargs):
         return EvidenceHit(
             source_file="auth.py",
             line=42,
@@ -183,7 +183,7 @@ class FakeLocalLookup:
     intentionally omitted from the announced budget."""
     name = "local_lookup"
 
-    def invoke(self, args):
+    def invoke(self, args, config=None, **kwargs):
         return EvidenceHit(source_file="cache", line=0, snippet="", relevance=0.0)
 
 

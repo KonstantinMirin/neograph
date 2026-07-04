@@ -153,7 +153,7 @@ class _TypedAskTool:
     def __init__(self, received: list) -> None:
         self._received = received
 
-    def invoke(self, args: dict) -> str:
+    def invoke(self, args: dict, config: Any = None, **kwargs: Any) -> str:
         from neograph.hitl import ask_human
 
         answer = ask_human(AskPayload(question=_KEYSTONE_QUESTION), resume_model=ResumeDecision)
@@ -173,7 +173,7 @@ class _RawAskTool:
     def __init__(self, received: list) -> None:
         self._received = received
 
-    def invoke(self, args: dict) -> str:
+    def invoke(self, args: dict, config: Any = None, **kwargs: Any) -> str:
         from neograph.hitl import ask_human
 
         answer = ask_human(AskPayload(question=_KEYSTONE_QUESTION))
@@ -192,7 +192,7 @@ class _RecordTool:
     def __init__(self, counter: list[int]) -> None:
         self._counter = counter
 
-    def invoke(self, args: dict) -> str:
+    def invoke(self, args: dict, config: Any = None, **kwargs: Any) -> str:
         self._counter[0] += 1
         return "recorded"
 

@@ -568,7 +568,7 @@ class _AskHumanClassTool:
 
     name = "ask_tool"
 
-    def invoke(self, args: dict) -> str:
+    def invoke(self, args: dict, config=None, **kwargs) -> str:
         from neograph.hitl import ask_human
 
         class _P(BaseModel):

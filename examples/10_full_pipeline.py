@@ -111,7 +111,7 @@ class FakeGatherLLM:
 class FakeSearchTool:
     name = "search_code"
 
-    def invoke(self, args):
+    def invoke(self, args, config=None, **kwargs):
         call_count["search"] += 1
         return f"Found reference #{call_count['search']}"
 

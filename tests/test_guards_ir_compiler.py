@@ -696,7 +696,7 @@ class TestToolGateRoutesConditionally:
         class _Rec:
             name = "record"
 
-            def invoke(self, args):
+            def invoke(self, args, config=None, **kwargs):
                 return "ok"
 
             async def ainvoke(self, *a, **k):

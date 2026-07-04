@@ -121,7 +121,7 @@ class _RecordTool:
     def __init__(self, counter: list[int]) -> None:
         self._counter = counter
 
-    def invoke(self, args: dict) -> str:
+    def invoke(self, args: dict, config: Any = None, **kwargs: Any) -> str:
         self._counter[0] += 1
         return "recorded"
 
@@ -138,7 +138,7 @@ class _AskTool:
     def __init__(self, received: list) -> None:
         self._received = received
 
-    def invoke(self, args: dict) -> str:
+    def invoke(self, args: dict, config: Any = None, **kwargs: Any) -> str:
         answer = interrupt({"question": "found person left the company — decide?"})
         self._received.append(answer)
         return f"operator decided: {answer}"
@@ -298,7 +298,7 @@ class _CountingTool:
     def __init__(self, counter: list[int]) -> None:
         self._counter = counter
 
-    def invoke(self, args: dict) -> str:
+    def invoke(self, args: dict, config: Any = None, **kwargs: Any) -> str:
         self._counter[0] += 1
         return "looped"
 
@@ -452,7 +452,7 @@ def _build_greedy_named_graph(construct_name: str) -> Any:
     class _Rec:
         name = "record"
 
-        def invoke(self, args):
+        def invoke(self, args, config=None, **kwargs):
             counter[0] += 1
             return "ok"
 

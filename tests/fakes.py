@@ -498,7 +498,9 @@ class FakeTool:
         self.response = response
         self.calls: list[dict] = []
 
-    def invoke(self, args: dict) -> Any:
+    def invoke(self, args: dict, config: Any = None, **kwargs: Any) -> Any:
+        # config= accepted (and ignored) to mirror a real LangChain BaseTool —
+        # the agent cycle threads the run config into every tool call (neograph-zmfx).
         self.calls.append(args)
         return self.response
 

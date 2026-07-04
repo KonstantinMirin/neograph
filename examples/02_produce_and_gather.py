@@ -132,7 +132,7 @@ class FakeSearchTool:
     The framework preserves it in ToolInteraction.typed_result."""
     name = "search_codebase"
 
-    def invoke(self, args):
+    def invoke(self, args, config=None, **kwargs):
         search_count["n"] += 1
         query = args.get("query", "?")
         return CodeReference(query=query, matches=3, top_file="auth.py")
