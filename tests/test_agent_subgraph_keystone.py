@@ -402,3 +402,109 @@ def test_forced_finalize_reachable_for_nested_agent_at_default_recursion_limit(i
     assert 0 < counter[0] <= 20, (
         f"loop_tool ran {counter[0]}x — expected the default max_iterations=20 to bound it"
     )
+
+
+# ── Deterministic cross-compile channel isolation (neograph-9o3j) ─────────────
+#
+# neograph-9o3j observed intermittent neo_agent_* channel leaks and suspected
+# cross-compile / cross-file pollution (both the keystone file and test_tool_gating
+# define a node named `greedy`, so both synthesize identically-named
+# neo_agent_*_greedy channels). This guard pins the SCOPING invariant
+# deterministically — no reliance on test ordering or a heisenbug: two pipelines
+# that share a node name (hence identical channel names) are compiled and run in
+# ONE process, and NEITHER result may carry ANY neo_ / agent-internal channel.
+# Passes today (per-compile state models + per-compile output_schema are correctly
+# scoped); it exists to CATCH a future regression that makes agent-cycle channel
+# synthesis or output_schema declaration leak across compiles.
+
+
+class _IsolationFake:
+    def bind_tools(self, tools):
+        return self
+
+    def abind_tools(self, *a, **k):
+        return self
+
+    def invoke(self, messages, **kwargs):
+        n = sum(isinstance(m, ToolMessage) for m in messages)
+        if n == 0:
+            msg = AIMessage(content="")
+            msg.tool_calls = [{"name": "record", "args": {}, "id": "r1"}]
+            return msg
+        return AIMessage(content='{"items": ["done"]}')
+
+    async def ainvoke(self, *a, **k):
+        return self.invoke(*a, **k)
+
+    def with_structured_output(self, model, **kwargs):
+        clone = _IsolationFake()
+        clone.invoke = lambda messages, **kk: model(items=["done"])  # type: ignore[assignment]
+        return clone
+
+
+def _build_greedy_named_graph(construct_name: str) -> Any:
+    """A single-agent-node pipeline whose node is named `greedy` — so it
+    synthesizes neo_agent_*_greedy channels identical to the OTHER files that use
+    a `greedy` node. ``construct_name`` varies the construct (and thus the state
+    model __name__) so we also exercise same-node-name across distinct compiles."""
+    counter = [0]
+
+    class _Rec:
+        name = "record"
+
+        def invoke(self, args):
+            counter[0] += 1
+            return "ok"
+
+        async def ainvoke(self, *a, **k):
+            return self.invoke(*a, **k)
+
+    register_tool_factory("record", lambda config, tool_config: _Rec())
+
+    @node(
+        mode="agent",
+        outputs=KResult,
+        model="reason",
+        prompt="test/explore",
+        tools=[Tool(name="record", budget=3)],
+    )
+    def greedy() -> KResult: ...
+
+    return compile(
+        construct_from_functions(construct_name, [greedy]),
+        checkpointer=MemorySaver(),
+        **build_test_compile_kwargs(),
+        **build_fake_llm_kwargs(lambda tier: _IsolationFake()),
+    )
+
+
+@pytest.mark.parametrize("is_async", [False, True], ids=["run", "arun"])
+class TestCrossCompileChannelIsolation:
+    """DETERMINISTIC guard for neograph-9o3j: two pipelines sharing a node name
+    (identical neo_agent_*_greedy channels) compiled+run in one process must not
+    leak any neo_/agent-internal channel into EITHER result. No test-ordering
+    dependency — the leak, if the scoping regressed, would be deterministic."""
+
+    def test_same_named_node_pipelines_do_not_cross_leak(self, is_async: bool) -> None:
+        gA = _build_greedy_named_graph("iso_pipe_a")
+        gB = _build_greedy_named_graph("iso_pipe_b")
+        cA = {"configurable": {"thread_id": f"iso-a-{is_async}"}}
+        cB = {"configurable": {"thread_id": f"iso-b-{is_async}"}}
+
+        rA = _drive(gA, input={"node_id": "1"}, resume=None, config=cA, is_async=is_async)
+        rB = _drive(gB, input={"node_id": "1"}, resume=None, config=cB, is_async=is_async)
+
+        for name, res in (("A", rA), ("B", rB)):
+            assert res.get("greedy") == KResult(items=["done"]), (
+                f"pipeline {name} did not finalize: {res!r}"
+            )
+            assert not any(k.startswith("neo_") for k in res), (
+                f"pipeline {name} leaked a neo_ framework channel (9o3j scoping "
+                f"regression): {sorted(res)}"
+            )
+            assert not any(
+                ("messages" in k or "tool_log" in k or "budget" in k) for k in res
+            ), (
+                f"pipeline {name} leaked an agent ReAct internal channel "
+                f"(9o3j): {sorted(res)}"
+            )

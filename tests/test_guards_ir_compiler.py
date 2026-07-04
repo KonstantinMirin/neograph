@@ -655,8 +655,6 @@ class TestToolGateRoutesConditionally:
         return reaches_tools and not has_conditional_deny_arm
 
     def _build_real_gated_graph(self):
-        from typing import Any
-
         from langchain_core.messages import AIMessage, ToolMessage
         from langgraph.checkpoint.memory import MemorySaver
         from pydantic import BaseModel
