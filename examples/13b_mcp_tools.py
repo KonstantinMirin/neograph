@@ -90,16 +90,35 @@ class FakeAsyncExploreLLM:
     """Async agent-mode LLM: one tool call, then a structured final answer.
 
     The async ReAct loop calls `await llm.ainvoke(...)`: the first turn asks for
-    the tool, the second (no tool calls) is parsed as the ExplorationResult JSON.
+    the tool, the second (no tool calls) is the final turn. Agent mode then
+    parses the final answer through `with_structured_output(...)` -- exactly the
+    method a real BaseChatModel exposes -- so the fake implements it too and
+    returns the declared output model (a bare model is accepted by the
+    structured-output classifier as Parsed).
     """
+
+    _ANSWER = ExplorationResult(
+        evidence=["auth.py:42"],
+        summary="found a supporting reference via the MCP tool",
+    )
 
     def __init__(self) -> None:
         self._calls = 0
+        self._structured = False
 
     def bind_tools(self, tools: list) -> FakeAsyncExploreLLM:
         return self  # keep the call counter across rebinds
 
-    async def ainvoke(self, messages: list, **kwargs) -> AIMessage:
+    def with_structured_output(self, model: type, **kwargs) -> FakeAsyncExploreLLM:
+        clone = FakeAsyncExploreLLM()
+        clone._calls = self._calls
+        clone._structured = True
+        return clone
+
+    async def ainvoke(self, messages: list, **kwargs) -> AIMessage | ExplorationResult:
+        if self._structured:
+            # Final-turn structured parse: return the declared output model.
+            return self._ANSWER
         self._calls += 1
         if self._calls == 1:
             msg = AIMessage(content="")
@@ -107,13 +126,9 @@ class FakeAsyncExploreLLM:
                 {"name": "search_evidence", "args": {"query": "verify claim"}, "id": "c1"}
             ]
             return msg
-        # Final turn: agent mode parses this as the output model's JSON.
-        return AIMessage(
-            content=ExplorationResult(
-                evidence=["auth.py:42"],
-                summary="found a supporting reference via the MCP tool",
-            ).model_dump_json()
-        )
+        # Final turn (no tool calls): also carries the answer as JSON so the
+        # loop can exit; the structured parse above produces the typed model.
+        return AIMessage(content=self._ANSWER.model_dump_json())
 
 
 def llm_factory(tier: str) -> FakeAsyncExploreLLM:
