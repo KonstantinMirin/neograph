@@ -32,6 +32,9 @@ import asyncio
 import inspect
 import threading
 
+import pytest
+
+import neograph
 from neograph import (
     Construct,
     Node,
@@ -40,6 +43,7 @@ from neograph import (
     construct_from_functions,
     node,
 )
+from neograph.errors import NeographError
 from neograph.factory import make_node_fn
 from tests.fakes import build_test_compile_kwargs, register_scripted
 from tests.schemas import Claims, RawText
@@ -458,3 +462,100 @@ class TestAsyncScriptedBody:
         assert not inspect.isawaitable(got)
         assert isinstance(got, Claims)
         assert got == Claims(items=["S"])
+
+
+class TestAsyncBodyUnderSyncRunFailsLoud:
+    """neograph-khff — an ``async def`` scripted/raw body run under the SYNC
+    driver (``run()`` / ``graph.invoke``) must FAIL LOUD, not silently store an
+    un-awaited coroutine.
+
+    The async driver awaits the awaitable (``ScriptedDispatch.aexecute`` /
+    ``araw_node_wrapper`` via ``inspect.isawaitable``). The SYNC twins
+    (``ScriptedDispatch.execute``, ``raw_node_wrapper``) cannot await, so instead
+    of returning ``self.fn(...)`` directly they must detect the awaitable and
+    raise ``NeographError`` telling the user to use ``arun()``. Otherwise a
+    coroutine object flows into state where a model is expected — silent wrong
+    behavior.
+
+    RED before the fix: today the sync path returns the coroutine and no error is
+    raised, so ``pytest.raises(NeographError)`` fails.
+    """
+
+    def test_scripted_async_body_under_sync_run_raises(self):
+        """Scripted ``@node`` with an ``async def`` body run via sync ``run()``
+        raises ``NeographError`` mentioning ``arun()``.
+        """
+        @node(outputs=RawText)
+        def raw_src() -> RawText:
+            return RawText(text="hi")
+
+        @node(outputs=Claims)
+        async def f(raw_src: RawText) -> Claims:
+            await asyncio.sleep(0)
+            return Claims(items=[raw_src.text.upper()])
+
+        graph = compile(
+            construct_from_functions("p", [raw_src, f]),
+            **build_test_compile_kwargs(),
+        )
+
+        with pytest.raises(NeographError, match="arun"):
+            neograph.run(graph, input={"node_id": "t"})
+
+    def test_raw_async_body_under_sync_run_raises(self):
+        """``mode='raw'`` node with an ``async def`` body run via sync ``run()``
+        raises ``NeographError`` mentioning ``arun()``.
+        """
+        @node(mode="raw", outputs=Claims)
+        async def araw(state, config):
+            await asyncio.sleep(0)
+            return {"araw": Claims(items=["R"])}
+
+        graph = compile(
+            construct_from_functions("p", [araw]),
+            **build_test_compile_kwargs(),
+        )
+
+        with pytest.raises(NeographError, match="arun"):
+            neograph.run(graph, input={"node_id": "t"})
+
+    def test_scripted_async_body_under_arun_still_works(self):
+        """Positive regression: the SAME async scripted body run via ``arun()``
+        awaits correctly and produces the declared model — the fail-loud guard is
+        sync-path only and must not touch the async path.
+        """
+        @node(outputs=RawText)
+        def raw_src() -> RawText:
+            return RawText(text="hi")
+
+        @node(outputs=Claims)
+        async def f(raw_src: RawText) -> Claims:
+            await asyncio.sleep(0)
+            return Claims(items=[raw_src.text.upper()])
+
+        graph = compile(
+            construct_from_functions("p", [raw_src, f]),
+            **build_test_compile_kwargs(),
+        )
+
+        result = asyncio.run(neograph.arun(graph, input={"node_id": "t"}))
+
+        assert result["f"] == Claims(items=["HI"])
+
+    def test_raw_async_body_under_arun_still_works(self):
+        """Positive regression: the SAME async raw body run via ``arun()`` awaits
+        correctly and produces the declared model.
+        """
+        @node(mode="raw", outputs=Claims)
+        async def araw(state, config):
+            await asyncio.sleep(0)
+            return {"araw": Claims(items=["R"])}
+
+        graph = compile(
+            construct_from_functions("p", [araw]),
+            **build_test_compile_kwargs(),
+        )
+
+        result = asyncio.run(neograph.arun(graph, input={"node_id": "t"}))
+
+        assert result["araw"] == Claims(items=["R"])

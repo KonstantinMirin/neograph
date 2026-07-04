@@ -26,7 +26,7 @@ from neograph import _llm
 from neograph._llm_render import _is_inline_prompt
 from neograph._llm_runtime import EMPTY_RUNTIME, LlmRuntime
 from neograph._normalize import NormalizedOutputs, normalize_outputs
-from neograph.errors import ConfigurationError
+from neograph.errors import ConfigurationError, ExecutionError
 from neograph.node import Node, TypeSpecStatic
 from neograph.renderers import build_rendered_input
 
@@ -125,6 +125,18 @@ class ScriptedDispatch:
     ) -> NodeOutput:
         # context_data intentionally unused — scripted functions don't need LLM context
         result = self.fn(input_data.value, config)
+        if inspect.isawaitable(result):
+            # An `async def` body under the SYNC driver: we cannot await here, and
+            # returning the coroutine would flow un-awaited into state (silent wrong
+            # behavior). Fail loud — the async twin aexecute() awaits correctly.
+            if hasattr(result, "close"):
+                result.close()  # suppress the "never awaited" RuntimeWarning
+            raise ExecutionError.build(
+                "async node body invoked under sync run(); use arun()",
+                node=node.name,
+                hint="An `async def` scripted body requires the async driver. "
+                     "Call arun(graph, ...) / graph.ainvoke instead of run() / graph.invoke.",
+            )
         return NodeOutput(single=result)
 
     async def aexecute(

@@ -14,7 +14,7 @@ from pydantic import BaseModel
 from neograph._dispatch import _dispatch_for_mode
 from neograph._execute import _aexecute_node, _execute_node, _type_name
 from neograph._llm_runtime import EMPTY_RUNTIME, LlmRuntime
-from neograph.errors import ConfigurationError
+from neograph.errors import ConfigurationError, ExecutionError
 from neograph.node import Node
 
 log = structlog.get_logger()
@@ -100,6 +100,18 @@ def _make_raw_wrapper(node: Node) -> Callable:
         t0 = time.monotonic()
 
         result = raw_fn(state, config)
+        if inspect.isawaitable(result):
+            # An `async def` raw body under the SYNC driver: we cannot await here,
+            # and returning the coroutine would flow un-awaited into state (silent
+            # wrong behavior). Fail loud — araw_node_wrapper awaits correctly.
+            if hasattr(result, "close"):
+                result.close()  # suppress the "never awaited" RuntimeWarning
+            raise ExecutionError.build(
+                "async node body invoked under sync run(); use arun()",
+                node=node.name,
+                hint="An `async def` raw body requires the async driver. "
+                     "Call arun(graph, ...) / graph.ainvoke instead of run() / graph.invoke.",
+            )
 
         elapsed = time.monotonic() - t0
         node_log.info("node_complete", duration_s=round(elapsed, 3))
