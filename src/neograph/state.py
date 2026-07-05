@@ -6,6 +6,7 @@ No monolithic state that grows with every derivation type.
 
 from __future__ import annotations
 
+import warnings
 from typing import Annotated, Any
 
 import structlog
@@ -304,7 +305,19 @@ def build_output_schema_model(state_model: type[BaseModel]) -> type[BaseModel]:
         for name, finfo in state_model.model_fields.items()
         if not name.startswith(StateKeys.FRAMEWORK_PREFIX)
     }
-    return create_model(f"{state_model.__name__}Output", **fields)
+    # A user node named e.g. ``validate`` produces a state field that shadows a
+    # BaseModel attribute; Pydantic already warned once when ``state_model`` was
+    # built. This synthesized Output model mirrors the same fields, so it would
+    # re-emit the identical warning — a duplicate the user can do nothing about.
+    # Suppress ONLY the framework copy here; the user-facing original still fires
+    # on their own state model. See neograph-tj53.
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message='Field name .* shadows an attribute in parent .*',
+            category=UserWarning,
+        )
+        return create_model(f"{state_model.__name__}Output", **fields)
 
 
 def compute_node_fingerprints(construct: Any) -> dict[str, str]:

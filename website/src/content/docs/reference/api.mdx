@@ -68,6 +68,7 @@ Decorator that turns a function into a Node with signature-inferred dependencies
     merge_post_process: Callable | None = None,
     merge_fallback: Callable | None = None,
     interrupt_when: str | Callable | None = None,
+    gate_tools_when: str | Callable | None = None,
     loop_when: str | Callable | None = None,
     max_iterations: int | None = None,
     on_exhaust: "error" | "last" | None = None,
@@ -88,6 +89,7 @@ Decorator that turns a function into a Node with signature-inferred dependencies
 - **`merge_fallback`** — `fn(variants, error) -> result`. Catches LLM errors during merge and returns a deterministic result.
 - **`models`** — Multi-model ensemble: list of model tiers. Each generator gets a different model round-robin. Infers `ensemble_n` from `len(models)`. When `models=` is set without `merge_fn`/`merge_prompt`, the function body IS the merge.
 - **`interrupt_when`** — Human-in-the-loop: inline callable or registered condition name.
+- **`gate_tools_when`** — Tool-approval gate for `agent` / `act` nodes only. A callable (or registered condition name) receiving the full state; it pauses BEFORE the synthesized `{node}__tools` superstep so a human approves before any tool side effect runs. A truthy return is the interrupt payload shown to the human; a falsy return lets the tools run without pausing. On resume, only an explicit `{"approved": True}` proceeds — any other payload is fail-closed as a denial, which appends a denial `ToolMessage` and routes back to the agent to keep reasoning. Setting it on a non-agent/act node raises at construction.
 - **`loop_when`** — Loop: callable or registered condition name. Return `True` to continue looping. The value may be `None` on the first iteration, so the callable must be None-safe.
 - **`max_iterations`** — Loop iteration cap. Default 10. Used with `loop_when=`.
 - **`on_exhaust`** — `"error"` (default) raises `ExecutionError` when max reached; `"last"` exits with last result.

@@ -1569,6 +1569,29 @@ class TestNoHandRolledExitStrip:
             "(neograph-pjqe)."
         )
 
+    def test_compile_does_not_declare_input_schema(self):
+        """compiler.py must NOT pass input_schema to StateGraph. R1 (docs/design/
+        langgraph-output-schema-research-2026-07-03.md) proved a narrowed
+        input_schema silently drops the schema/node fingerprints run() seeds
+        through the initial input dict — breaking checkpoint auto-rewind. The
+        state_model (first positional arg) IS the input schema; narrowing it must
+        never be reintroduced. Pins the omission in place."""
+        tree = ast.parse((SRC_DIR / "compiler.py").read_text())
+        offenders = [
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "StateGraph"
+            and any(kw.arg == "input_schema" for kw in node.keywords)
+        ]
+        assert offenders == [], (
+            "compiler.py passes StateGraph(input_schema=...) — a narrowed input "
+            "schema silently drops the fingerprints run() seeds through the initial "
+            "input, breaking checkpoint auto-rewind (R1, langgraph-output-schema-"
+            "research-2026-07-03.md). The full state_model must remain the input."
+        )
+
     # ---- meta-tests: prove the guard actually discriminates ----
 
     def test_meta_positive_stray_call_is_caught(self):
@@ -1590,6 +1613,28 @@ class TestNoHandRolledExitStrip:
         )
         stray = self._functions_calling(src, "_strip_internals") - self._ALLOWED_CALLERS
         assert stray == set()
+
+    @staticmethod
+    def _stategraph_has_input_schema(source: str) -> bool:
+        """True if any StateGraph(...) call in source passes input_schema=."""
+        tree = ast.parse(source)
+        return any(
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "StateGraph"
+            and any(kw.arg == "input_schema" for kw in node.keywords)
+            for node in ast.walk(tree)
+        )
+
+    def test_meta_positive_input_schema_kwarg_is_detected(self):
+        """A StateGraph(..., input_schema=...) call is caught by the AST check."""
+        src = "g = StateGraph(State, output_schema=Out, input_schema=In)\n"
+        assert self._stategraph_has_input_schema(src) is True
+
+    def test_meta_negative_output_schema_only_is_allowed(self):
+        """StateGraph with only output_schema= (current code) is not flagged."""
+        src = "g = StateGraph(State, output_schema=Out)\n"
+        assert self._stategraph_has_input_schema(src) is False
 
 
 class TestAgentCycleTurnsAreSupersteps:

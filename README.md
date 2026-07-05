@@ -87,6 +87,21 @@ def decompose(chunk: ReadContext) -> ClaimGroupingResult: ...
       interrupt_when=lambda s: {'issues': s.check_quality.issues} if not s.check_quality.passed else None)
 def check_quality(claims: Claims) -> ValidationResult: ...
 
+# Tool-approval gate — pause before an agent/act tool runs; fail-closed on deny
+@node(outputs=WriteResult, mode='act', model='ops', prompt='apply',
+      tools=[Tool("write_file", budget=3)],
+      gate_tools_when=lambda s: {'action': 'about to write files'})
+def apply_changes(plan: Plan) -> WriteResult: ...
+
+# ask_human — pause mid-tool for a typed answer (sugar over LangGraph interrupt())
+from neograph import ask_human
+
+@tool
+def confirm(path: str) -> str:
+    '''Ask a human to approve writing to path.'''
+    answer = ask_human(ConfirmRequest(path=path), resume_model=ConfirmReply)
+    return "ok" if answer.approved else "skipped"
+
 # Agent with tools — typed tool results preserved
 @node(outputs={"result": ExplorationResult, "tool_log": list[ToolInteraction]},
       mode='agent', model='research', prompt='explore',

@@ -38,6 +38,62 @@ from tests.schemas import (
 )
 
 
+class TestOutputSchemaShadowWarning:
+    """build_output_schema_model must not re-emit Pydantic's shadow warning.
+
+    A user node named e.g. ``validate`` produces a state field that shadows a
+    BaseModel attribute; Pydantic warns once when the STATE model is built. The
+    synthesized Output model mirrors the same fields, so a naive rebuild emits
+    the identical warning a second time — a duplicate the user can do nothing
+    about. Only the framework's synthesized copy is silenced; the user-facing
+    original still fires on their own state model (neograph-tj53).
+    """
+
+    def test_synthesized_output_model_does_not_re_emit_shadow_warning(self):
+        import warnings
+
+        from pydantic import create_model
+
+        from neograph.state import build_output_schema_model
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            state_model = create_model("ShadowState", validate=(str, ""))
+            after_state = [
+                w for w in caught if "shadows an attribute" in str(w.message)
+            ]
+            build_output_schema_model(state_model)
+            after_output = [
+                w for w in caught if "shadows an attribute" in str(w.message)
+            ]
+
+        # The user's own state model still warns exactly once...
+        assert len(after_state) == 1, (
+            "The user-facing shadow warning on their own state model must NOT be "
+            "suppressed — it is genuine feedback about the field name."
+        )
+        # ...and the synthesized Output model must NOT add a second copy.
+        assert len(after_output) == 1, (
+            "build_output_schema_model re-emitted the shadow warning on the "
+            "synthesized Output model — silence the framework duplicate only "
+            "(neograph-tj53)."
+        )
+
+    def test_non_shadowing_fields_emit_no_warning(self):
+        import warnings
+
+        from pydantic import create_model
+
+        from neograph.state import build_output_schema_model
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            state_model = create_model("CleanState", topic=(str, ""))
+            build_output_schema_model(state_model)
+
+        assert not [w for w in caught if "shadows an attribute" in str(w.message)]
+
+
 class TestSubgraph:
     """Sub-construct with isolated state inside a parent pipeline."""
 
