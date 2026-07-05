@@ -101,9 +101,10 @@ _ALLOWLIST: Counter = Counter({
      "sub_constructs = [n for n in construct.nodes if isinstance(n, Construct)]"): 1,
     ("state.py",
      "branch_nodes = [n for n in construct.nodes if isinstance(n, _BranchNode)]"): 1,
-    # Test-scaffold codegen introspection — arm-blindness deferred to
-    # neograph-gfoq (tooling only, not runtime/compile correctness).
-    ("testing.py", "for item in construct.nodes:"): 2,
+    # Test-scaffold codegen introspection. The two top-level _collect_items /
+    # _collect_edges walks were migrated to iter_with_arms in neograph-gfoq; the
+    # remaining inner walk descends a sub-construct's own node list one level
+    # down (sub-construct arm-descent is owned by the sub-construct itself).
     ("testing.py",
      "sub_nodes = [_node_info(n) for n in item.nodes if isinstance(n, Node)]"): 1,
 })

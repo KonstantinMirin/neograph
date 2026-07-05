@@ -27,6 +27,7 @@ from __future__ import annotations
 import os
 from typing import Any, cast
 
+from neograph._ir_branch import iter_with_arms
 from neograph._normalize import normalize_inputs, normalize_outputs
 from neograph.construct import Construct
 from neograph.naming import field_name_for
@@ -73,7 +74,7 @@ def _node_info(node: Node) -> dict[str, Any]:
 def _collect_items(construct: Construct) -> tuple[list[dict], list[dict]]:
     """Returns (top_level_nodes, sub_constructs)."""
     nodes, subs = [], []
-    for item in construct.nodes:
+    for item in iter_with_arms(construct):
         if isinstance(item, Node):
             nodes.append(_node_info(item))
         elif isinstance(item, Construct):
@@ -91,7 +92,7 @@ def _collect_items(construct: Construct) -> tuple[list[dict], list[dict]]:
 
 def _collect_edges(construct: Construct) -> list[tuple[str, str]]:
     edges = []
-    for item in construct.nodes:
+    for item in iter_with_arms(construct):
         if isinstance(item, Node):
             ni = normalize_inputs(item.inputs)
             if ni.is_dict_form:
