@@ -23,7 +23,7 @@ from neograph._ir_branch import iter_with_arms
 from neograph._llm_config import _coerce_llm_config
 from neograph._state_keys import StateKeys, _strip_internals
 from neograph.construct import iter_nodes
-from neograph.errors import CheckpointSchemaError, ExecutionError
+from neograph.errors import CheckpointSchemaError, ConfigurationError, ExecutionError
 from neograph.naming import field_name_for
 from neograph.node import Node
 
@@ -302,6 +302,91 @@ def _transitive_closure(seeds: set[str], adjacency: dict[str, set[str]]) -> set[
     return closure
 
 
+def _required_checkpointer_driver(checkpointer: object) -> str | None:
+    """Classify which driver a saver can ONLY be used with, or ``None`` if it is
+    dual-capable / unknown.
+
+    Returns ``"async"`` for async-only savers, ``"sync"`` for sync-only savers,
+    ``None`` otherwise. The two mismatch cases each fail badly at the checkpoint
+    probe, so the guard needs one authoritative classifier:
+
+    * ``"async"`` — async-only savers (``AsyncSqliteSaver``, ``AsyncPostgresSaver``)
+      capture an asyncio event loop at construction and bridge their *sync*
+      ``get_tuple`` onto it via ``run_coroutine_threadsafe``. Driven from a sync
+      ``run()`` that loop is not running in a background thread, so ``get_tuple``
+      BLOCKS forever (or, when called from within the loop's own thread, raises
+      ``InvalidStateError``). The bound event loop is the mechanism-level marker.
+    * ``"sync"`` — sync-only savers (``SqliteSaver``, ``PostgresSaver``) follow
+      LangGraph's convention of stubbing the async API: ``aget_tuple`` raises
+      ``NotImplementedError``, which surfaces raw deep in ``arun()``'s checkpoint
+      probe. We detect the stub without invoking it (invoking needs an event
+      loop) by reading the method source for the ``NotImplementedError`` raise —
+      the signal LangGraph's base ``BaseCheckpointSaver.aget_tuple`` and the
+      sqlite/postgres sync savers share. A dual-capable saver (``MemorySaver``)
+      implements ``aget_tuple`` for real, so its source carries no such raise.
+
+    The event-loop check runs first, so a saver is never classified as both.
+    """
+    import asyncio
+
+    if isinstance(getattr(checkpointer, "loop", None), asyncio.AbstractEventLoop):
+        return "async"
+    aget = getattr(type(checkpointer), "aget_tuple", None)
+    if aget is None:
+        return None
+    import inspect
+
+    try:
+        source = inspect.getsource(aget)
+    except (OSError, TypeError):
+        return None
+    return "sync" if "NotImplementedError" in source else None
+
+
+def _assert_checkpointer_matches_driver(
+    graph: CompiledNeograph, *, is_async: bool,
+) -> None:
+    """Fail loud at run/arun ENTRY when the checkpointer's sync/async capability
+    does not match the driver.
+
+    The wrong-driver mismatch otherwise fails badly: a sync ``run()`` with an
+    async-only saver BLOCKS on the bridged ``get_tuple`` (and the swallow in
+    ``_has_existing_checkpoint`` can even discard the failure and SILENTLY start
+    a fresh run that ignores an existing checkpoint), while an ``arun()`` with a
+    sync-only saver raises a raw ``NotImplementedError``. Detecting the mismatch
+    here — before any checkpoint I/O — replaces both with a clear
+    ``ConfigurationError`` that names the right driver. Called from the shared
+    ``_prepare`` / ``_aprepare`` brains, so it covers every driver verb.
+    """
+    checkpointer = getattr(graph, "checkpointer", None)
+    if checkpointer is None:
+        return
+    required = _required_checkpointer_driver(checkpointer)
+    saver_name = type(checkpointer).__name__
+    if not is_async and required == "async":
+        raise ConfigurationError.build(
+            "Async-only checkpointer passed to a synchronous driver (run/stream).",
+            found=f"{saver_name} (async-only)",
+            expected="a synchronous checkpointer (e.g. SqliteSaver, PostgresSaver, MemorySaver)",
+            hint=(
+                "Drive this saver with arun()/astream(), or pass a sync saver to "
+                "run()/stream(). An async-only saver bridges get_tuple() onto its "
+                "own event loop, which blocks a synchronous run()."
+            ),
+        )
+    if is_async and required == "sync":
+        raise ConfigurationError.build(
+            "Sync-only checkpointer passed to an async driver (arun/astream).",
+            found=f"{saver_name} (sync-only)",
+            expected="an async checkpointer (e.g. AsyncSqliteSaver, AsyncPostgresSaver, MemorySaver)",
+            hint=(
+                "Drive this saver with run()/stream(), or pass an async saver to "
+                "arun()/astream(). A sync-only saver's aget_tuple() raises "
+                "NotImplementedError under the async driver."
+            ),
+        )
+
+
 def _has_existing_checkpoint(graph: CompiledNeograph, config: RunnableConfig) -> bool:
     """Check if a checkpoint exists for this thread_id.
 
@@ -401,6 +486,7 @@ def _prepare(
     lazily inside a stream generator) so the first streamed chunk fires against
     the already-rewound checkpoint.
     """
+    _assert_checkpointer_matches_driver(graph, is_async=False)
     if resume is not None:
         config = _prepare_resume_config(config)
         engine_input: Any = Command(resume=resume)
@@ -649,6 +735,7 @@ async def _aprepare(
     (_prepare_resume_config / _prepare_new_input / _preflight_di_check /
     _mark_stream_custom) are shared verbatim with the sync path.
     """
+    _assert_checkpointer_matches_driver(graph, is_async=True)
     if resume is not None:
         config = _prepare_resume_config(config)
         engine_input: Any = Command(resume=resume)

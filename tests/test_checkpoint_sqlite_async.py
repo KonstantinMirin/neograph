@@ -36,11 +36,14 @@ from __future__ import annotations
 
 import types as _types
 
+import pytest
+from langgraph.checkpoint.memory import MemorySaver
 from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
 import neograph
 from neograph import compile, construct_from_module, node, run
+from neograph.errors import ConfigurationError
 from tests.fakes import build_test_compile_kwargs
 from tests.schemas import Claims, RawText, ValidationResult
 
@@ -284,3 +287,87 @@ async def test_crash_recovery_async_across_reopened_saver(tmp_path):
         )
 
     assert completed["finalize"] == Claims(items=["done"])
+
+
+class TestWrongDriverCheckpointerGuard:
+    """neograph-dqt5 — wrong-driver checkpointer misuse must FAIL LOUD.
+
+    Passing an async-only saver (AsyncSqliteSaver) to the SYNCHRONOUS driver
+    (``run``/``stream``) or a sync-only saver (SqliteSaver) to the ASYNC driver
+    (``arun``/``astream``) is user error. Before the guard, the wrong-driver
+    checkpoint probe either BLOCKED forever (sync ``run`` -> ``AsyncSqliteSaver.
+    get_tuple`` bridges to a non-running loop via ``run_coroutine_threadsafe``)
+    or raised a raw ``NotImplementedError`` (async ``arun`` ->
+    ``SqliteSaver.aget_tuple``); the ``_has_existing_checkpoint`` swallow could
+    even discard the failure and SILENTLY start a fresh run that IGNORES an
+    existing checkpoint. The guard detects the mismatch at run/arun ENTRY and
+    raises a clear ``ConfigurationError`` naming the right driver.
+    """
+
+    def _graph_with(self, saver):
+        return compile(
+            _trivial_pipeline(),
+            checkpointer=saver,
+            **build_test_compile_kwargs(),
+        )
+
+    async def test_sync_run_rejects_async_only_saver(self, tmp_path):
+        """``run`` with an ``AsyncSqliteSaver`` raises a clear ConfigurationError
+        at entry instead of blocking on the bridged ``get_tuple``."""
+        db = str(tmp_path / "ckpt.db")
+        config = {"configurable": {"thread_id": "wrong-driver-async-saver"}}
+        async with AsyncSqliteSaver.from_conn_string(db) as saver:
+            graph = self._graph_with(saver)
+            with pytest.raises(ConfigurationError) as exc:
+                run(graph, input={"node_id": "x"}, config=config)
+        msg = str(exc.value)
+        assert "async" in msg.lower()
+        # The hint must point the user at the async driver.
+        assert "arun" in msg
+
+    async def test_arun_rejects_sync_only_saver(self, tmp_path):
+        """``arun`` with a ``SqliteSaver`` raises a clear ConfigurationError at
+        entry instead of a raw ``NotImplementedError`` from ``aget_tuple``."""
+        db = str(tmp_path / "ckpt.db")
+        config = {"configurable": {"thread_id": "wrong-driver-sync-saver"}}
+        with SqliteSaver.from_conn_string(db) as saver:
+            graph = self._graph_with(saver)
+            with pytest.raises(ConfigurationError) as exc:
+                await neograph.arun(graph, input={"node_id": "x"}, config=config)
+        msg = str(exc.value)
+        assert "sync" in msg.lower()
+        # The hint must point the user at the sync driver.
+        assert "run" in msg
+
+    async def test_sync_stream_rejects_async_only_saver(self, tmp_path):
+        """The guard lives in the shared ``_prepare`` brain, so ``stream``
+        (sync) rejects an async-only saver too."""
+        db = str(tmp_path / "ckpt.db")
+        config = {"configurable": {"thread_id": "wrong-driver-async-stream"}}
+        async with AsyncSqliteSaver.from_conn_string(db) as saver:
+            graph = self._graph_with(saver)
+            with pytest.raises(ConfigurationError):
+                # stream is lazy; the guard runs in _prepare BEFORE the first
+                # chunk, so merely starting iteration must raise.
+                list(neograph.stream(graph, input={"node_id": "x"}, config=config))
+
+    async def test_dual_capable_memory_saver_accepted_by_both_drivers(self, tmp_path):
+        """No false positives: a dual-capable ``MemorySaver`` (both get_tuple and
+        aget_tuple genuinely implemented, no bound event loop) is accepted by
+        BOTH ``run`` and ``arun``."""
+        saver = MemorySaver()
+        graph = self._graph_with(saver)
+
+        sync_out = run(
+            graph,
+            input={"node_id": "dual-sync"},
+            config={"configurable": {"thread_id": "dual-sync-1"}},
+        )
+        assert sync_out["process"] == Claims(items=["HELLO"])
+
+        async_out = await neograph.arun(
+            graph,
+            input={"node_id": "dual-async"},
+            config={"configurable": {"thread_id": "dual-async-1"}},
+        )
+        assert async_out["process"] == Claims(items=["HELLO"])
