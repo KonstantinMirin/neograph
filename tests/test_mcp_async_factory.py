@@ -339,3 +339,85 @@ class TestPerRunIdentityBinding:
         assert set(sink) == {token_a, token_b}, f"per-run token binding wrong: {sink!r}"
         assert token_b not in sink[: sink.index(token_b)], "operator B's token appeared during run A"
         assert token_a not in sink[sink.index(token_b):], "operator A's token appeared during run B"
+
+
+class TestCancellationDuringAsyncFactory:
+    """Re-scoped neograph-51tr: an SSE consumer disconnecting mid-astream cancels
+    the run and leaves the checkpoint consistent — for an agent whose MCP tool is
+    built by an async tool factory (the w74k.3.1 path).
+
+    NO live-MCP-session-disposal assertion: w74k.3.1 established neograph owns no
+    MCP session (guard tests/test_guards_mcp_session_ownership.py), so there is
+    nothing for neograph to dispose on cancel. The remaining invariant is that
+    cancelling mid-factory-await raises CancelledError cleanly AND does not corrupt
+    the checkpoint — a fresh re-arun of the same thread_id still completes.
+    """
+
+    def test_cancel_mid_async_factory_leaves_checkpoint_consistent(self, tmp_path):
+        gate = asyncio.Event()
+        entered: list[bool] = []
+
+        def _make_gated_factory():
+            async def _factory(config, tool_config):
+                # Park here — models a slow per-run token mint / MCP client build.
+                entered.append(True)
+                await gate.wait()
+                return StructuredTool.from_function(
+                    func=lambda text: f"echo:{text}", name="mcp_echo", description="x"
+                )
+            return _factory
+
+        db = str(tmp_path / "cancel-mcp.db")
+        cfg = {"configurable": {"thread_id": "cancel-mcp"}}
+
+        async def _drive():
+            register_tool_factory("mcp_echo", _make_gated_factory())
+            _llm_kw = configure_fake_llm(lambda tier: _react_fake("mcp_echo"))
+
+            async with AsyncSqliteSaver.from_conn_string(db) as saver:
+                graph = compile(
+                    _build_node_surface("mcp_echo"),
+                    checkpointer=saver, **build_test_compile_kwargs(), **_llm_kw,
+                )
+                task = asyncio.create_task(
+                    neograph.arun(graph, input={"node_id": "cx"}, config=cfg)
+                )
+
+                # Poll until arun parks INSIDE the async tool factory's await.
+                for _ in range(300):
+                    if entered or task.done():
+                        break
+                    await asyncio.sleep(0.005)
+                assert entered and not task.done(), (
+                    "arun did not park in the async tool factory — cannot test a "
+                    "mid-factory cancellation"
+                )
+
+                # (a) SSE disconnect == cancel the consuming task: raises cleanly.
+                task.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await asyncio.wait_for(task, timeout=2.0)
+                gate.set()  # release the (already-cancelled) gated coroutine
+
+                # (b) Checkpoint consistent/resumable: a fresh ungated factory
+                # re-arun-s the SAME thread_id under the SAME open saver to
+                # completion (no corrupt checkpoint, no torn saver connection).
+                calls: list[str] = []
+                register_tool_factory(
+                    "mcp_echo", _make_recording_async_factory("mcp_echo", calls)
+                )
+                resume_kw = configure_fake_llm(lambda tier: _react_fake("mcp_echo"))
+                resume_graph = compile(
+                    _build_node_surface("mcp_echo"),
+                    checkpointer=saver, **build_test_compile_kwargs(), **resume_kw,
+                )
+                return await asyncio.wait_for(
+                    neograph.arun(resume_graph, input={"node_id": "cx"}, config=cfg),
+                    timeout=5.0,
+                )
+
+        completed = asyncio.run(_drive())
+        assert completed["scan"] == Claims(items=["done"]), (
+            "re-arun of the same thread_id after a mid-factory cancel did not "
+            "complete cleanly — the cancel left the checkpoint inconsistent"
+        )
