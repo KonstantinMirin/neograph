@@ -42,7 +42,12 @@ from langchain_core.runnables import RunnableConfig
 from langgraph.types import interrupt
 from pydantic import BaseModel
 
-from neograph._dispatch import _render_input, _resolve_primary_output, _shape_tool_output
+from neograph._dispatch import (
+    _inject_di_inputs,
+    _render_input,
+    _resolve_primary_output,
+    _shape_tool_output,
+)
 from neograph._input_shape import _extract_context, _extract_input
 from neograph._llm_runtime import EMPTY_RUNTIME, LlmRuntime
 from neograph._normalize import normalize_outputs
@@ -105,6 +110,11 @@ def _turn_prep_kwargs(
     """Shared pre-prep for both turn-prep twins: extract + render input, resolve
     the generation type, and assemble the kwargs passed to (a)prepare_tool_loop.
     Returns (prepare_kwargs, gen_type, effective_model, effective_renderer)."""
+    # Agent/act nodes bypass ThinkDispatch, so resolve FromInput/FromConfig
+    # params into config here (the single shared pre-prep both twins call)
+    # before the cycle's _compile_prompt reads them — same injector, key, and
+    # copy-not-mutate contract as think mode.
+    config = _inject_di_inputs(node, config)
     bus = adapt_state(state)
     raw_input = _extract_input(bus, node)
     rendered = _render_input(node, raw_input, runtime=runtime)

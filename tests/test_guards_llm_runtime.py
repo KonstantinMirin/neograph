@@ -1933,3 +1933,137 @@ class TestTwinThinness:
         )
         assert self._find_func(src, "body") is not None
         assert self._find_func(src, "abody") is not None
+
+
+class TestDiInputsInjectedAtLlmDispatchSeams:
+    """di_inputs must be injected at every LLM-mode dispatch seam BEFORE that
+    mode's prompt is compiled. The disease this bans (the agent-stark incident):
+    a mode dispatch reaches ``_compile_prompt`` without ``_inject_di_inputs``
+    having run, so a ``{FromInput}`` template placeholder ships to the model as
+    the literal ``{domain}`` instead of the resolved value.
+
+    Two structural facts pin the invariant:
+
+    1. Every KNOWN dispatch seam still calls ``_inject_di_inputs``. Think/raw
+       inject in ``_dispatch.py`` (ThinkDispatch); agent/act inject in
+       ``_agent_cycle.py`` (``_turn_prep_kwargs``, the single shared pre-prep
+       both sync/async turn-prep twins call). Dropping the call from either
+       seam is a regression.
+    2. No NEW module calls ``_compile_prompt``. The compile sites are a small
+       reviewed set (``_llm.py``/``_tool_loop.py`` downstream of a seam, plus
+       ``_llm_render.py`` which owns the definition + the ``render_prompt``
+       inspection helper). A new compile site is a new dispatch path — it must
+       be reviewed for injection and consciously allowlisted, not added
+       silently.
+    """
+
+    # Modules that own a mode-dispatch seam feeding an LLM prompt compile.
+    INJECTION_SEAM_MODULES = frozenset({"_dispatch.py", "_agent_cycle.py"})
+
+    # Modules allowed to CALL _compile_prompt (downstream of a seam, or the
+    # inspection helper + the definition site). Extend ONLY after confirming
+    # the owning dispatch seam injects di_inputs first.
+    COMPILE_SITE_MODULES = frozenset({"_llm.py", "_tool_loop.py", "_llm_render.py"})
+
+    @staticmethod
+    def _calls_named(tree: ast.AST, name: str) -> list[int]:
+        """Line numbers of every ``name(...)`` call in the tree (bare Name or
+        attribute-tail ``obj.name(...)``). Imports and string examples are AST
+        nodes of other types, so they never count."""
+        hits: list[int] = []
+        for n in ast.walk(tree):
+            if not isinstance(n, ast.Call):
+                continue
+            fn = n.func
+            if isinstance(fn, ast.Name) and fn.id == name:
+                hits.append(n.lineno)
+            elif isinstance(fn, ast.Attribute) and fn.attr == name:
+                hits.append(n.lineno)
+        return hits
+
+    @classmethod
+    def _seams_missing_injection(cls, src_dir: pathlib.Path) -> list[str]:
+        missing: list[str] = []
+        for mod in sorted(cls.INJECTION_SEAM_MODULES):
+            path = src_dir / mod
+            if not path.exists():
+                continue
+            tree = ast.parse(path.read_text(), filename=str(path))
+            if not cls._calls_named(tree, "_inject_di_inputs"):
+                missing.append(mod)
+        return missing
+
+    @classmethod
+    def _unreviewed_compile_sites(cls, src_dir: pathlib.Path) -> list[str]:
+        offenders: list[str] = []
+        for path in sorted(src_dir.glob("*.py")):
+            if path.name in cls.COMPILE_SITE_MODULES:
+                continue
+            tree = ast.parse(path.read_text(), filename=str(path))
+            for lineno in cls._calls_named(tree, "_compile_prompt"):
+                offenders.append(f"{path.name}:{lineno}")
+        return offenders
+
+    def test_every_injection_seam_injects_di_inputs(self):
+        missing = self._seams_missing_injection(SRC_DIR)
+        assert missing == [], (
+            f"LLM-mode dispatch seam(s) no longer call _inject_di_inputs: "
+            f"{missing}. di_inputs would stop reaching that mode's prompt — a "
+            f"{{FromInput}} template would ship the literal placeholder to the "
+            f"model. Re-add the injection at the seam's shared pre-prep."
+        )
+
+    def test_no_unreviewed_compile_prompt_call_sites(self):
+        offenders = self._unreviewed_compile_sites(SRC_DIR)
+        assert offenders == [], (
+            f"_compile_prompt called outside the reviewed set "
+            f"{sorted(self.COMPILE_SITE_MODULES)}: {offenders}. A new compile "
+            f"site is a new dispatch path — ensure its owning seam calls "
+            f"_inject_di_inputs, then add the module to COMPILE_SITE_MODULES."
+        )
+
+    def test_mutation_seam_without_injection_detected(self, tmp_path: pathlib.Path):
+        """A seam module that stops calling _inject_di_inputs is flagged."""
+        (tmp_path / "_agent_cycle.py").write_text(
+            "def _turn_prep_kwargs(node, config):\n"
+            "    return {'config': config}\n"
+        )
+        assert "_agent_cycle.py" in self._seams_missing_injection(tmp_path)
+
+    def test_mutation_seam_with_injection_passes(self, tmp_path: pathlib.Path):
+        """A seam that keeps the injection call is NOT flagged."""
+        (tmp_path / "_dispatch.py").write_text(
+            "def execute(node, config):\n"
+            "    config = _inject_di_inputs(node, config)\n"
+            "    return config\n"
+        )
+        assert self._seams_missing_injection(tmp_path) == []
+
+    def test_mutation_new_compile_site_detected(self, tmp_path: pathlib.Path):
+        """A _compile_prompt call in a NEW (non-allowlisted) module is flagged."""
+        (tmp_path / "_newmode.py").write_text(
+            "def dispatch(runtime, node, config):\n"
+            "    return _compile_prompt(runtime, node.prompt, config=config)\n"
+        )
+        offenders = self._unreviewed_compile_sites(tmp_path)
+        assert any(o.startswith("_newmode.py:") for o in offenders), offenders
+
+    def test_mutation_allowlisted_compile_site_passes(self, tmp_path: pathlib.Path):
+        """A _compile_prompt call in an allowlisted module is NOT flagged (the
+        injection happens upstream at the dispatch seam, not here)."""
+        (tmp_path / "_llm.py").write_text(
+            "def invoke_structured(runtime, node, config):\n"
+            "    return _compile_prompt(runtime, node.prompt, config=config)\n"
+        )
+        assert self._unreviewed_compile_sites(tmp_path) == []
+
+    def test_mutation_import_of_inject_is_not_a_call(self, tmp_path: pathlib.Path):
+        """The would-be-missed case: a seam that merely IMPORTS _inject_di_inputs
+        but never CALLS it must still be flagged as missing — an import is not
+        an injection."""
+        (tmp_path / "_agent_cycle.py").write_text(
+            "from neograph._dispatch import _inject_di_inputs\n"
+            "def _turn_prep_kwargs(node, config):\n"
+            "    return {'config': config}\n"
+        )
+        assert "_agent_cycle.py" in self._seams_missing_injection(tmp_path)

@@ -519,6 +519,103 @@ class TestDiInputReachesModelEndToEnd:
         assert received["saw_di_inputs"] is False
 
 
+class TestDiInputReachesAgentModelEndToEnd:
+    """neograph-jhz4 (TDD RED): the SAME production incident as the think-mode
+    ``TestDiInputReachesModelEndToEnd`` above, but for an AGENT-mode node — a
+    ``domain: Annotated[str, FromInput]`` param whose ``{domain}`` template
+    placeholder must be filled with the value from ``run(input={'domain': ...})``,
+    with NO scripted seed node.
+
+    ``euyh`` wired ``di_inputs`` for think mode only. Agent/act nodes compile to
+    the ReAct cycle (``_agent_cycle.py`` / ``_tool_loop.py``) and bypass
+    ``_dispatch._inject_di_inputs``, so the resolved DI value never rides ``config``
+    into the cycle's ``_compile_prompt`` — the ``di_inputs`` column is ``None`` and
+    ``{domain}`` ships unresolved. RED now; passes once
+    ``_agent_cycle._turn_prep_kwargs`` calls the same injector (neograph-jhz4).
+
+    Three-surface parity is EXEMPT by construction: ``di_inputs`` is sourced from
+    ``node._param_res``, populated only by ``@node`` ``_classify_di_params``.
+    Declarative/programmatic nodes carry empty ``_param_res``, so
+    ``_inject_di_inputs`` is a no-op for them — matching the think-mode precedent.
+    Hence this E2E is ``@node``-built only.
+    """
+
+    def test_from_input_value_reaches_agent_model_via_template_when_no_seed_node(
+        self, tmp_path
+    ):
+        """agent-stark shape end-to-end on an ``@node(mode='agent')`` node: the
+        resolved ``FromInput`` value reaches the agent cycle's prompt compiler as
+        ``di_inputs`` and is rendered into the user message the model receives —
+        via a TEMPLATE-REF ``{domain}`` prompt (inline ``${domain}`` never gets the
+        di_inputs column), with a ``domain`` name distinct from every upstream
+        field (so upstream-output-shadows-di_inputs precedence cannot mask the
+        path) and NO scripted seed node copying run-input onto the bus."""
+        from typing import Annotated
+
+        from neograph import (
+            DefaultPromptCompiler,
+            FromInput,
+            Tool,
+            construct_from_functions,
+        )
+        from tests.fakes import FakeTool, ReActFake, register_tool_factory
+
+        prompts = tmp_path / "prompts"
+        prompts.mkdir(parents=True, exist_ok=True)
+        (prompts / "explore.md").write_text("Analyze the {domain} domain.\n")
+
+        # strict=False so the RED run COMPLETES (an unresolved {domain} ships
+        # verbatim instead of raising PromptVarMissing) and the failure surfaces
+        # as the BEHAVIORAL di_inputs assertion below, not a crash. In GREEN the
+        # injected di_inputs fills {domain} regardless of strict.
+        base = DefaultPromptCompiler(prompts, strict=False)
+        captured: dict[str, object] = {}
+
+        def capturing_compiler(*a, **kw):
+            captured["di_inputs"] = kw.get("di_inputs")
+            messages = base(*a, **kw)
+            captured["messages"] = messages
+            return messages
+
+        lookup = FakeTool("lookup", response="found")
+        register_tool_factory("lookup", lambda config, tool_config: lookup)
+
+        fake = ReActFake(
+            tool_calls=[
+                [{"name": "lookup", "args": {"q": "x"}, "id": "c1"}],
+                [],  # stop — final structured turn
+            ],
+            final=lambda m: m(items=["done"]),
+            output_model=Claims,
+        )
+
+        @node(
+            mode="agent",
+            outputs=Claims,
+            model="reason",
+            prompt="explore",
+            tools=[Tool(name="lookup", budget=2)],
+        )
+        def explore(domain: Annotated[str, FromInput]) -> Claims: ...
+
+        graph = compile(
+            construct_from_functions("p", [explore]),
+            **build_test_compile_kwargs(
+                llm_factory=lambda tier: fake,
+                prompt_compiler=capturing_compiler,
+            ),
+        )
+        result = run(graph, input={"domain": "oncology", "node_id": "explore"})
+
+        assert isinstance(result["explore"], Claims)
+        # The resolved FromInput value reached the agent cycle's prompt compiler...
+        assert captured["di_inputs"] == {"domain": "oncology"}
+        # ...and is rendered into the user message the model received.
+        content = _user_content(captured["messages"])  # type: ignore[arg-type]
+        assert "Analyze the oncology domain." in content
+        assert "{domain}" not in content
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # 8. OPT-IN proof — an existing custom prompt_compiler is untouched
 # ═══════════════════════════════════════════════════════════════════════════
