@@ -8,9 +8,11 @@ Import graph: _tool_loop → _llm (one-way, no cycles).
 
 from __future__ import annotations
 
+import asyncio
+import inspect
 import time
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, NoReturn
 
 import structlog
 from langchain_core.runnables import RunnableConfig
@@ -207,7 +209,83 @@ class _ToolLoopPrep:
     token_budget: int | None
 
 
-def _prepare_tool_loop(
+def _raise_async_factory_error(tool_name: str, node_name: str) -> NoReturn:
+    """Fail-loud when a sync run() drives an async (coroutine / awaitable-returning)
+    tool factory. Mirrors the async-only-tool error at _agent_cycle.py:352 — a
+    driver/config mismatch, not a runtime execution fault."""
+    raise ConfigurationError.build(
+        f"Tool '{tool_name}' has an async tool factory",
+        expected="an async driver (arun())",
+        found="sync run() driving an async tool factory",
+        hint=(
+            "This tool's factory is async (e.g. it awaits a per-run token "
+            "provider or builds an MCP client). Drive the graph with arun() "
+            "instead of run() so the async tool loop awaits the factory."
+        ),
+        node=node_name or None,
+    )
+
+
+def _lookup_factory(
+    tool_name: str, per_compile_tools: dict[str, Any]
+) -> Any:
+    factory = per_compile_tools.get(tool_name)
+    if factory is None:
+        raise ConfigurationError.build(
+            f"Tool '{tool_name}' not registered",
+            hint="Pass tool_factories={'" + tool_name + "': factory_fn} to compile().",
+        )
+    return factory
+
+
+def _instantiate_tools(
+    tools: list,
+    tool_factory_lookup: dict[str, Any] | None,
+    config: RunnableConfig | None,
+    node_name: str,
+) -> dict[str, Any]:
+    """Sync tool instantiation. Fails loud on an async factory: a coroutine
+    function is caught BEFORE it is called (so no un-awaited coroutine is
+    created); a sync factory that returns an awaitable is caught after."""
+    per_compile_tools = tool_factory_lookup or {}
+    tool_instances: dict[str, Any] = {}
+    for tool_spec in tools:
+        factory = _lookup_factory(tool_spec.name, per_compile_tools)
+        if asyncio.iscoroutinefunction(factory):
+            _raise_async_factory_error(tool_spec.name, node_name)
+        result = factory(config, tool_spec.config)
+        if inspect.isawaitable(result):
+            # Close a coroutine to avoid the 'coroutine was never awaited' warning
+            # (a non-coroutine awaitable has no close()).
+            close = getattr(result, "close", None)
+            if close is not None:
+                close()
+            _raise_async_factory_error(tool_spec.name, node_name)
+        tool_instances[tool_spec.name] = result
+    return tool_instances
+
+
+async def _ainstantiate_tools(
+    tools: list,
+    tool_factory_lookup: dict[str, Any] | None,
+    config: RunnableConfig | None,
+    node_name: str,
+) -> dict[str, Any]:
+    """Async twin of _instantiate_tools: awaits coroutine / awaitable-returning
+    factories (per-run token mint / MCP client build), passes sync factories
+    through unchanged."""
+    per_compile_tools = tool_factory_lookup or {}
+    tool_instances: dict[str, Any] = {}
+    for tool_spec in tools:
+        factory = _lookup_factory(tool_spec.name, per_compile_tools)
+        result = factory(config, tool_spec.config)
+        if inspect.isawaitable(result):
+            result = await result
+        tool_instances[tool_spec.name] = result
+    return tool_instances
+
+
+def _build_loop_preamble(
     *,
     runtime: LlmRuntime,
     model_tier: str | None,
@@ -219,11 +297,10 @@ def _prepare_tool_loop(
     node_name: str,
     llm_config: Any,
     context: dict[str, Any] | None,
-    tool_factory_lookup: dict[str, Any] | None,
-) -> _ToolLoopPrep:
-    """Pure preamble: build llm, messages (+schema/budget preambles), tool
-    instances, and the tool-bound wrapper. No network I/O (bind_tools is local).
-    Shared verbatim by the sync and async tool loops."""
+) -> tuple[Any, Any, Any, list]:
+    """Shared preamble for both tool-loop twins: build llm + messages (schema and
+    budget preambles). No tool instantiation, no network I/O. Returns
+    (llm_log, cfg, llm, messages)."""
     llm_log = log.bind(
         tier=model_tier,
         prompt=prompt_template,
@@ -263,20 +340,16 @@ def _prepare_tool_loop(
             },
         )
 
-    per_compile_tools = tool_factory_lookup or {}
-    tool_instances = {}
-    for tool_spec in tools:
-        factory = per_compile_tools.get(tool_spec.name)
-        if factory is None:
-            raise ConfigurationError.build(
-                f"Tool '{tool_spec.name}' not registered",
-                hint="Pass tool_factories={'" + tool_spec.name + "': factory_fn} to compile().",
-            )
-        tool_instances[tool_spec.name] = factory(config, tool_spec.config)
+    return llm_log, cfg, llm, messages
 
+
+def _assemble_tool_loop_prep(
+    *, runtime: LlmRuntime, llm_log: Any, cfg: Any, llm: Any, messages: list,
+    tool_instances: dict[str, Any],
+) -> _ToolLoopPrep:
+    """Bind the instantiated tools and assemble the prep. Shared by both twins."""
     active_tools = list(tool_instances.values())
     llm_with_tools = _CoercingToolWrapper(llm.bind_tools(active_tools))
-
     return _ToolLoopPrep(
         runtime=runtime,
         llm_log=llm_log,
@@ -287,6 +360,64 @@ def _prepare_tool_loop(
         llm_with_tools=llm_with_tools,
         max_iterations=cfg.max_iterations,
         token_budget=cfg.token_budget,
+    )
+
+
+def _prepare_tool_loop(
+    *,
+    runtime: LlmRuntime,
+    model_tier: str | None,
+    prompt_template: str | None,
+    input_data: Any,
+    output_model: Any,
+    tools: list,
+    config: RunnableConfig | None,
+    node_name: str,
+    llm_config: Any,
+    context: dict[str, Any] | None,
+    tool_factory_lookup: dict[str, Any] | None,
+) -> _ToolLoopPrep:
+    """Pure preamble: build llm, messages (+schema/budget preambles), tool
+    instances, and the tool-bound wrapper. No network I/O (bind_tools is local).
+    Sync driver path: an async tool factory fails loud (drive with arun())."""
+    llm_log, cfg, llm, messages = _build_loop_preamble(
+        runtime=runtime, model_tier=model_tier, prompt_template=prompt_template,
+        input_data=input_data, output_model=output_model, tools=tools,
+        config=config, node_name=node_name, llm_config=llm_config, context=context,
+    )
+    tool_instances = _instantiate_tools(tools, tool_factory_lookup, config, node_name)
+    return _assemble_tool_loop_prep(
+        runtime=runtime, llm_log=llm_log, cfg=cfg, llm=llm, messages=messages,
+        tool_instances=tool_instances,
+    )
+
+
+async def _aprepare_tool_loop(
+    *,
+    runtime: LlmRuntime,
+    model_tier: str | None,
+    prompt_template: str | None,
+    input_data: Any,
+    output_model: Any,
+    tools: list,
+    config: RunnableConfig | None,
+    node_name: str,
+    llm_config: Any,
+    context: dict[str, Any] | None,
+    tool_factory_lookup: dict[str, Any] | None,
+) -> _ToolLoopPrep:
+    """Async twin of _prepare_tool_loop: awaits coroutine / awaitable-returning
+    tool factories so per-run identity (token mint / MCP client build) is native
+    on the arun() path. All other preamble work is identical to the sync twin."""
+    llm_log, cfg, llm, messages = _build_loop_preamble(
+        runtime=runtime, model_tier=model_tier, prompt_template=prompt_template,
+        input_data=input_data, output_model=output_model, tools=tools,
+        config=config, node_name=node_name, llm_config=llm_config, context=context,
+    )
+    tool_instances = await _ainstantiate_tools(tools, tool_factory_lookup, config, node_name)
+    return _assemble_tool_loop_prep(
+        runtime=runtime, llm_log=llm_log, cfg=cfg, llm=llm, messages=messages,
+        tool_instances=tool_instances,
     )
 
 

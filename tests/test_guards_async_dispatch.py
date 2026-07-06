@@ -295,7 +295,13 @@ class TestAsyncTwinCoLocation:
         # invoke_with_tools/ainvoke_with_tools (the monolith) deleted in
         # neograph-m6d3.3; the surviving sync/async twin is the shared final-parse
         # cluster the inline cycle's parse node reuses.
-        "_tool_loop.py": [("_parse_final_turn", "_aparse_final_turn")],
+        "_tool_loop.py": [
+            ("_parse_final_turn", "_aparse_final_turn"),
+            # async tool factories on the arun() path (w74k.3.1): the async twin
+            # awaits coroutine/awaitable factories; the sync twin fails loud.
+            ("_prepare_tool_loop", "_aprepare_tool_loop"),
+        ],
+        "_agent_cycle.py": [("_build_turn_prep", "_abuild_turn_prep")],
         "runner.py": [
             ("run", "arun"),
             ("stream", "astream"),

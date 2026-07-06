@@ -382,6 +382,18 @@ class TestNoNearDuplicateHelperNames:
         ),
         # neograph-p3c7: a-prefix async twins of the Oracle merge barrier — same
         # deliberate sync/async twin convention (merge runs on the loop under arun).
+        # neograph-w74k.3.1: a-prefix async twins of the tool-loop factory
+        # instantiation — the async path awaits coroutine/awaitable tool factories
+        # (per-run MCP identity), the sync twin fails loud. Same twin convention.
+        frozenset({"_ainstantiate_tools", "_instantiate_tools"}): (
+            "lev=1: async twin of the tool-factory instantiation (_tool_loop.py)."
+        ),
+        frozenset({"_aprepare_tool_loop", "_prepare_tool_loop"}): (
+            "lev=1: async twin of the tool-loop preamble (_tool_loop.py)."
+        ),
+        frozenset({"_abuild_turn_prep", "_build_turn_prep"}): (
+            "lev=1: async twin of the per-superstep turn prep (_agent_cycle.py)."
+        ),
         frozenset({"_arun_merge_prompt", "_run_merge_prompt"}): (
             "lev=1: async twin of the LLM-judge merge step (_oracle.py)."
         ),

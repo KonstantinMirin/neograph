@@ -10,6 +10,7 @@ flags any agent/act node bound to an async-only tool with a
 from __future__ import annotations
 
 import types as _types
+import warnings
 
 from langchain_core.tools import StructuredTool
 
@@ -86,5 +87,45 @@ class TestAsyncOnlyToolLintRule:
         construct = _agent_construct([Tool("unknown_tool", budget=0)], name="lint-mcp-nofac")
 
         issues = lint(construct)
+
+        assert [i for i in issues if i.kind == _ISSUE_KIND] == []
+
+
+class TestAsyncToolFactoryLintRule:
+    """An async (coroutine) tool factory requires arun(). lint must classify it
+    WITHOUT calling it (w74k.3.1 item 2) — calling would create an un-awaited
+    coroutine (RuntimeWarning) and misintrospect the coroutine object as a tool.
+    """
+
+    def test_flags_async_factory_without_calling_it(self):
+        called = []
+
+        async def _async_factory(config, tool_config):
+            called.append(True)  # must NEVER run
+            return _make_sync_tool("mcp_remote")
+
+        construct = _agent_construct(
+            [Tool("mcp_remote", budget=0)], name="lint-mcp-async-factory"
+        )
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", RuntimeWarning)  # 'coroutine never awaited' -> error
+            issues = lint(construct, tool_factories={"mcp_remote": _async_factory})
+
+        mcp_issues = [i for i in issues if i.kind == _ISSUE_KIND]
+        assert len(mcp_issues) == 1, [i.kind for i in issues]
+        assert "mcp_remote" in mcp_issues[0].message
+        assert "arun()" in mcp_issues[0].message
+        assert called == [], "lint must NOT invoke an async tool factory"
+
+    def test_no_issue_for_sync_factory_returning_sync_tool(self):
+        construct = _agent_construct(
+            [Tool("sync_search", budget=0)], name="lint-mcp-sync-factory"
+        )
+
+        issues = lint(
+            construct,
+            tool_factories={"sync_search": lambda config, tc: _make_sync_tool("sync_search")},
+        )
 
         assert [i for i in issues if i.kind == _ISSUE_KIND] == []

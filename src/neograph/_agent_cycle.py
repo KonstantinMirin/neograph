@@ -51,6 +51,7 @@ from neograph._state_keys import StateKeys
 from neograph._state_write import _apply_skip_when, _build_state_update
 from neograph._tool_loop import (
     _aparse_final_turn,
+    _aprepare_tool_loop,
     _CoercingToolWrapper,
     _finish_tool_loop,
     _parse_final_turn,
@@ -93,16 +94,16 @@ class _TurnPrep:
     effective_renderer: Any
 
 
-def _build_turn_prep(
+def _turn_prep_kwargs(
     node: Node,
     runtime: LlmRuntime,
     tool_factory_lookup: dict[str, Callable],
     state: BaseModel,
     config: RunnableConfig,
-) -> _TurnPrep:
-    """Rebuild the tool-loop preamble for one superstep. Factories are
-    re-invocable (two-lifetime rule §5), so rebuilding per superstep is correct
-    on resume (a fresh process re-mints tool instances)."""
+) -> tuple[dict[str, Any], Any, str, Any]:
+    """Shared pre-prep for both turn-prep twins: extract + render input, resolve
+    the generation type, and assemble the kwargs passed to (a)prepare_tool_loop.
+    Returns (prepare_kwargs, gen_type, effective_model, effective_renderer)."""
     bus = adapt_state(state)
     raw_input = _extract_input(bus, node)
     rendered = _render_input(node, raw_input, runtime=runtime)
@@ -117,19 +118,55 @@ def _build_turn_prep(
     effective_model = config.get("configurable", {}).get("_oracle_model", node.model) or ""
     effective_renderer = node.renderer or runtime.renderer
 
-    prep = _prepare_tool_loop(
-        runtime=runtime,
-        model_tier=effective_model,
-        prompt_template=node.prompt or "",
-        input_data=rendered,
-        output_model=gen_type,
-        tools=node.tools,
-        config=config,
-        node_name=node.name,
-        llm_config=node.llm_config,
-        context=context,
-        tool_factory_lookup=tool_factory_lookup,
+    prepare_kwargs = {
+        "runtime": runtime,
+        "model_tier": effective_model,
+        "prompt_template": node.prompt or "",
+        "input_data": rendered,
+        "output_model": gen_type,
+        "tools": node.tools,
+        "config": config,
+        "node_name": node.name,
+        "llm_config": node.llm_config,
+        "context": context,
+        "tool_factory_lookup": tool_factory_lookup,
+    }
+    return prepare_kwargs, gen_type, effective_model, effective_renderer
+
+
+def _build_turn_prep(
+    node: Node,
+    runtime: LlmRuntime,
+    tool_factory_lookup: dict[str, Callable],
+    state: BaseModel,
+    config: RunnableConfig,
+) -> _TurnPrep:
+    """Rebuild the tool-loop preamble for one superstep. Factories are
+    re-invocable (two-lifetime rule §5), so rebuilding per superstep is correct
+    on resume (a fresh process re-mints tool instances). Sync driver path — an
+    async tool factory fails loud (drive with arun())."""
+    prepare_kwargs, gen_type, effective_model, effective_renderer = _turn_prep_kwargs(
+        node, runtime, tool_factory_lookup, state, config
     )
+    prep = _prepare_tool_loop(**prepare_kwargs)
+    return _TurnPrep(prep=prep, output_model=gen_type, effective_model=effective_model,
+                     effective_renderer=effective_renderer)
+
+
+async def _abuild_turn_prep(
+    node: Node,
+    runtime: LlmRuntime,
+    tool_factory_lookup: dict[str, Callable],
+    state: BaseModel,
+    config: RunnableConfig,
+) -> _TurnPrep:
+    """Async twin of _build_turn_prep: awaits _aprepare_tool_loop so an async
+    tool factory (per-run token mint / MCP client build) is native on the arun()
+    path. All pre-prep work is shared with the sync twin via _turn_prep_kwargs."""
+    prepare_kwargs, gen_type, effective_model, effective_renderer = _turn_prep_kwargs(
+        node, runtime, tool_factory_lookup, state, config
+    )
+    prep = await _aprepare_tool_loop(**prepare_kwargs)
     return _TurnPrep(prep=prep, output_model=gen_type, effective_model=effective_model,
                      effective_renderer=effective_renderer)
 
@@ -281,7 +318,7 @@ def make_agent_cycle_bodies(
                 "node_start", input_type=None, output_type=node.outputs.__name__
                 if isinstance(node.outputs, type) else None)
         was_forced = budget.get("forced_final", False)
-        tp = _build_turn_prep(node, runtime, tfl, state, config)
+        tp = await _abuild_turn_prep(node, runtime, tfl, state, config)
         working, seed = _agent_working_messages(tp.prep, channel_msgs)
         caller = _agent_caller(tp.prep, node, budget)
         response = await caller.ainvoke(working, config=config)
@@ -376,7 +413,7 @@ def make_agent_cycle_bodies(
         bus = adapt_state(state)
         channel_msgs = bus.get(msgs_key) or []
         budget = _init_budget(bus.get(budget_key))
-        tp = _build_turn_prep(node, runtime, tfl, state, config)
+        tp = await _abuild_turn_prep(node, runtime, tfl, state, config)
         last = channel_msgs[-1] if channel_msgs else None
         tool_calls = list(getattr(last, "tool_calls", None) or [])
 
@@ -448,7 +485,7 @@ def make_agent_cycle_bodies(
             return {}  # output already written by the skip update
         channel_msgs = list(bus.get(msgs_key) or [])
         tool_interactions = list(bus.get(tlog_key) or [])
-        tp = _build_turn_prep(node, runtime, tfl, state, config)
+        tp = await _abuild_turn_prep(node, runtime, tfl, state, config)
         parse_result, fallback_usage = await _aparse_final_turn(
             messages=channel_msgs, output_model=tp.output_model, cfg=tp.prep.cfg,
             config=config, llm=tp.prep.llm,

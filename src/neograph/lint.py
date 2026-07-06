@@ -9,6 +9,7 @@ Returns a list of LintIssue dataclass instances (never raises — reports all pr
 
 from __future__ import annotations
 
+import asyncio
 import re
 import string
 from collections.abc import Callable
@@ -459,6 +460,26 @@ def _check_async_only_tools(
         return
 
     for spec in node.tools:
+        factory = _spec_factory(spec, tool_factories)
+        if factory is not None and asyncio.iscoroutinefunction(factory):
+            # An async tool factory requires the arun() driver. Classify it
+            # WITHOUT calling: invoking a coroutine factory here would create an
+            # un-awaited coroutine (RuntimeWarning) and misintrospect that
+            # coroutine object as the tool.
+            tool_name = str(getattr(spec, "name", None) or "?")
+            issues.append(LintIssue(
+                node_name=f"Node '{node.name}'",
+                param=tool_name,
+                kind="tool_requires_async_driver",
+                required=False,
+                message=(
+                    f"Node '{node.name}': tool '{tool_name}' has an async tool "
+                    "factory (e.g. it awaits a per-run token provider or builds "
+                    "an MCP client) and cannot run under the sync run() driver. "
+                    "Drive this graph with arun() so the async tool loop is used."
+                ),
+            ))
+            continue
         tool_obj = _resolve_tool_object(spec, tool_factories)
         if tool_obj is None:
             continue
@@ -551,6 +572,15 @@ def _check_ask_human_in_mutating_node(
                     "idempotent, or move it after the pause."
                 ),
             ))
+
+
+def _spec_factory(spec: Any, tool_factories: dict[str, Callable] | None) -> Any:
+    """The registered factory for a Tool spec, or None when the spec carries a
+    pre-bound tool (raw BaseTool) or is not a Tool. Used to introspect a factory
+    (e.g. detect a coroutine factory) WITHOUT calling it."""
+    if isinstance(spec, Tool) and getattr(spec, "_bound_tool", None) is None:
+        return (tool_factories or {}).get(spec.name)
+    return None
 
 
 def _resolve_tool_object(spec: Any, tool_factories: dict[str, Callable] | None) -> Any:
