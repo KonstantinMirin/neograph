@@ -19,6 +19,7 @@ from pydantic import BaseModel, ValidationError
 from pydantic_core import PydanticUndefined
 
 from neograph._dsml import contains_dsml
+from neograph._usage import _usage_dict
 from neograph.describe_type import describe_type
 from neograph.errors import ExecutionError
 
@@ -290,11 +291,7 @@ def _invoke_json_with_retry(
 
     for _attempt in range(max_retries):
         try:
-            combined_usage = {
-                "input_tokens": total_input,
-                "output_tokens": total_output,
-                "total_tokens": total_input + total_output,
-            } if (total_input or total_output) else usage
+            combined_usage = _usage_dict(total_input, total_output, empty=usage)
             return _parse_json_response(raw_text, output_model), combined_usage
         except ExecutionError as exc:
             retry_messages = messages + [
@@ -307,12 +304,38 @@ def _invoke_json_with_retry(
             total_input += retry_usage.get("input_tokens", 0)
             total_output += retry_usage.get("output_tokens", 0)
 
-    combined_usage = {
-        "input_tokens": total_input,
-        "output_tokens": total_output,
-        "total_tokens": total_input + total_output,
-    } if (total_input or total_output) else None
-    return _parse_json_response(raw_text, output_model), combined_usage
+    return _parse_json_response(raw_text, output_model), _usage_dict(total_input, total_output)
+
+
+def _dsml_recovery_messages(
+    raw_text: str,
+    output_model: type[BaseModel],
+    messages: list,
+    cfg: Any,
+    *,
+    strategy: str,
+) -> list | None:
+    """Shared prep for the DSML re-prompt (sync + async twins).
+
+    Detection (``contains_dsml``), the warning log, and the targeted-retry
+    message assembly are single-site here so only the awaiting ``llm.ainvoke``
+    seam and the generic-fallback delegate differ between the twins. Returns the
+    retry message list, or ``None`` when there is no DSML markup to recover.
+    """
+    if not contains_dsml(raw_text):
+        return None
+
+    import structlog
+    structlog.get_logger("neograph").warning(
+        "trailing_tool_call_markup",
+        strategy=strategy,
+        hint="model emitted tool-call markup; retrying with targeted directive",
+    )
+    budget_msg = cfg.resolved_budget_exhausted_message(output_model.__name__)
+    retry_messages = list(messages)
+    retry_messages.append({"role": "assistant", "content": raw_text})
+    retry_messages.append({"role": "user", "content": budget_msg})
+    return retry_messages
 
 
 def recover_dsml(
@@ -341,21 +364,11 @@ def recover_dsml(
         ExecutionError if DSML detected but the targeted retry also failed
         AND the generic retry path also failed.
     """
-    import structlog
-    _log = structlog.get_logger("neograph")
-
-    if not contains_dsml(raw_text):
-        return None
-
-    _log.warning(
-        "trailing_tool_call_markup",
-        strategy=strategy,
-        hint="model emitted tool-call markup; retrying with targeted directive",
+    retry_messages = _dsml_recovery_messages(
+        raw_text, output_model, messages, cfg, strategy=strategy
     )
-    budget_msg = cfg.resolved_budget_exhausted_message(output_model.__name__)
-    retry_messages = list(messages)
-    retry_messages.append({"role": "assistant", "content": raw_text})
-    retry_messages.append({"role": "user", "content": budget_msg})
+    if retry_messages is None:
+        return None
     try:
         retry_response = llm.invoke(retry_messages, config=config)
         retry_text = (
@@ -393,11 +406,7 @@ async def _ainvoke_json_with_retry(
 
     for _attempt in range(max_retries):
         try:
-            combined_usage = {
-                "input_tokens": total_input,
-                "output_tokens": total_output,
-                "total_tokens": total_input + total_output,
-            } if (total_input or total_output) else usage
+            combined_usage = _usage_dict(total_input, total_output, empty=usage)
             return _parse_json_response(raw_text, output_model), combined_usage
         except ExecutionError as exc:
             retry_messages = messages + [
@@ -410,12 +419,7 @@ async def _ainvoke_json_with_retry(
             total_input += retry_usage.get("input_tokens", 0)
             total_output += retry_usage.get("output_tokens", 0)
 
-    combined_usage = {
-        "input_tokens": total_input,
-        "output_tokens": total_output,
-        "total_tokens": total_input + total_output,
-    } if (total_input or total_output) else None
-    return _parse_json_response(raw_text, output_model), combined_usage
+    return _parse_json_response(raw_text, output_model), _usage_dict(total_input, total_output)
 
 
 async def arecover_dsml(
@@ -434,21 +438,11 @@ async def arecover_dsml(
     generic fallback to :func:`_ainvoke_json_with_retry`. Detection/parse helpers
     reused verbatim.
     """
-    import structlog
-    _log = structlog.get_logger("neograph")
-
-    if not contains_dsml(raw_text):
-        return None
-
-    _log.warning(
-        "trailing_tool_call_markup",
-        strategy=strategy,
-        hint="model emitted tool-call markup; retrying with targeted directive",
+    retry_messages = _dsml_recovery_messages(
+        raw_text, output_model, messages, cfg, strategy=strategy
     )
-    budget_msg = cfg.resolved_budget_exhausted_message(output_model.__name__)
-    retry_messages = list(messages)
-    retry_messages.append({"role": "assistant", "content": raw_text})
-    retry_messages.append({"role": "user", "content": budget_msg})
+    if retry_messages is None:
+        return None
     try:
         retry_response = await llm.ainvoke(retry_messages, config=config)
         retry_text = (

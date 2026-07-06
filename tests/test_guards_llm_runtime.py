@@ -189,6 +189,12 @@ class TestLlmResponsibilityDiscipline:
             # neograph-7wya: shared fail-loud for the structured path's
             # parsed=None silent variant (sync + async arms).
             "_raise_decoded_none",
+            # neograph-ykun: the four dispatch fail-loud helpers, single-sited so
+            # a message edit lands once across the sync/async twins.
+            "_raise_markup_unrecoverable",
+            "_raise_dispatch_failed",
+            "_raise_unknown_strategy",
+            "_raise_unexpected_variant",
         }),
         # neograph-ble3: DSML detection extracted to its own pure leaf module.
         "_dsml.py": frozenset({
@@ -226,6 +232,9 @@ class TestLlmResponsibilityDiscipline:
             # neograph-w74k.2.3: async twins of the retry + DSML-recovery seams.
             "_ainvoke_json_with_retry",
             "arecover_dsml",
+            # neograph-ykun: shared DSML re-prompt prep (detection + warning log +
+            # targeted-retry message assembly) single-sited across the twins.
+            "_dsml_recovery_messages",
         }),
         "_llm_render.py": frozenset({
             "_is_inline_prompt",
@@ -246,16 +255,22 @@ class TestLlmResponsibilityDiscipline:
     # mirror of each orchestrator is a real, reviewed line increase — not
     # accretion. The name-set assertion remains the load-bearing guard.
     LINE_BUDGETS = {
-        "_llm.py": 290,
+        # neograph-ykun: 290 -> 265. The async twins route through the shared
+        # pure preamble/postamble; the raised budget is no longer needed.
+        "_llm.py": 265,
         # neograph-ble3: tightened 130 -> 115. The 5-path include_raw try/except
         # ladder collapsed to a match on the StructuredResult variant; the
         # provider-quirk wiring moved to the compat shim. Locks the deletion.
-        "_llm_dispatch.py": 200,
+        # neograph-ykun: the four ExecutionError builders are now single-site
+        # module-level fns; the twin match arms collapsed to one-line raises.
+        "_llm_dispatch.py": 199,
         # neograph-ble3: tightened 365 -> 360. _DSML_PATTERN regex moved to
         # _dsml.py; recover_dsml is detection-free. Locks the deletion.
         # neograph-s1u4: 360 -> 375. _apply_null_defaults gained a guarded
         # default_factory coercion branch (a real fix, not accretion).
-        "_llm_retry.py": 480,
+        # neograph-ykun: 480 -> 460. The usage-dict shape moved to _usage._usage_dict
+        # and the DSML re-prompt prep is single-sited across the retry twins.
+        "_llm_retry.py": 460,
         "_llm_render.py": 310,
         # neograph-ble3: new pure-leaf detection module.
         "_dsml.py": 55,
@@ -1678,3 +1693,243 @@ class TestAgentCycleTurnsAreSupersteps:
         # A `for` over tool_calls is fine — that is per-turn work, not the ReAct loop.
         src = "def tools_turn(state):\n    for tc in state['calls']:\n        run(tc)\n    return {}\n"
         assert self._has_while_loop(src) is False
+
+
+class TestTwinThinness:
+    """THINNESS guard for sync/async twin pairs across the LLM/tool vertical +
+    runner (neograph-ykun, review PAT-01).
+
+    ## The invariant
+    A sync/async twin pair must route through shared pure helpers and differ
+    ONLY at the ``await`` seam. In particular, every *value-builder block* — an
+    ``ExecutionError``/``CheckpointSchemaError``/``ConfigurationError`` builder,
+    a logger event (``log.info``/``.warning``/...), a ``ToolMessage`` builder,
+    or the ``{input_tokens, output_tokens, total_tokens}`` usage dict — must be
+    SINGLE-SITE: it may not appear word-for-word in BOTH twins of a pair. If it
+    does, the two copies drift independently (a bug fix or message edit must be
+    applied twice). The reference implementations ``_oracle.py`` and
+    ``_subconstruct.py`` show the target shape: the awaiting control skeleton may
+    stay in each twin (it is irreducible under async), but the *content* — error
+    strings, log events, result dicts — lives in one shared helper.
+
+    ## Why "builder blocks", not "body-size delta"
+    The await seam is genuinely irreducible: a shared skeleton cannot straddle
+    ``await`` (a match arm or retry loop that awaits in the async twin must be
+    duplicated). So a naive body-length/line-delta budget would either license
+    the drift (verbatim copies have delta≈0) or forbid the irreducible skeleton
+    forever. Single-siting the value-builder blocks is the part of the invariant
+    that IS reducible and IS the maintenance hazard the review found — so that is
+    what this guard pins.
+
+    ## The closure hole this closes
+    The pre-existing co-location guard (``test_guards_async_dispatch.py``) checks
+    only that twin *names* co-exist and CANNOT see the worst twins, which are
+    nested closures inside ``make_agent_cycle_bodies`` (``agent_body`` /
+    ``tools_body`` / ...). This walker descends closures via ``ast.walk`` +
+    name lookup, so those twins are in scope.
+
+    Non-vacuity is proven by the slip meta-tests: a synthetic twin pair sharing
+    a builder block IS flagged; one that routes the builder through a shared
+    helper is NOT.
+    """
+
+    # {module_filename: [(sync_name, async_name), ...]} — includes nested-closure
+    # body twins (agent_body/tools_body/...) the co-location guard cannot see.
+    TWIN_TABLE: dict[str, list[tuple[str, str]]] = {
+        "_agent_cycle.py": [
+            ("agent_body", "aagent_body"),
+            ("tools_body", "atools_body"),
+            ("parse_body", "aparse_body"),
+            ("_build_turn_prep", "_abuild_turn_prep"),
+        ],
+        "_tool_loop.py": [
+            ("_parse_final_turn", "_aparse_final_turn"),
+            ("_prepare_tool_loop", "_aprepare_tool_loop"),
+        ],
+        "_llm_dispatch.py": [("_call_structured", "_acall_structured")],
+        "_llm_retry.py": [
+            ("_invoke_json_with_retry", "_ainvoke_json_with_retry"),
+            ("recover_dsml", "arecover_dsml"),
+        ],
+        "_llm.py": [("invoke_structured", "ainvoke_structured")],
+        "runner.py": [
+            ("_verify_checkpoint_schema", "_averify_checkpoint_schema"),
+            ("_auto_resume_from_divergence", "_aauto_resume_from_divergence"),
+        ],
+    }
+
+    # Error builders (``X.build(...)``) whose X is a known error class.
+    _ERROR_BUILDER_CLASSES = ERROR_CLASSES
+    # Direct-constructor value builders that carry user-facing content.
+    _CONSTRUCTOR_BUILDERS = frozenset({"CheckpointSchemaError", "ToolMessage"})
+    # Logger event methods (structlog): first positional arg is the event string.
+    _LOG_METHODS = frozenset({"info", "warning", "error", "debug", "exception"})
+    # A dict literal is treated as the usage shape iff it carries this key.
+    _USAGE_DICT_MARKER = "total_tokens"
+
+    # Async→sync identifier renames so a builder/log block that references an
+    # async seam normalizes to its sync twin's spelling. Longest-first so a
+    # short key cannot corrupt a longer identifier. Builders rarely reference
+    # these, but keeping the map makes the match await-agnostic.
+    _ASYNC_RENAMES = (
+        ("_aauto_resume_from_divergence", "_auto_resume_from_divergence"),
+        ("_averify_checkpoint_schema", "_verify_checkpoint_schema"),
+        ("_ainvoke_json_with_retry", "_invoke_json_with_retry"),
+        ("_aprepare_tool_loop", "_prepare_tool_loop"),
+        ("_abuild_turn_prep", "_build_turn_prep"),
+        ("_aparse_final_turn", "_parse_final_turn"),
+        ("_acall_structured", "_call_structured"),
+        ("ainvoke_structured", "invoke_structured"),
+        ("arecover_dsml", "recover_dsml"),
+        ("aget_tuple", "get_tuple"),
+        ("ainvoke", "invoke"),
+    )
+
+    @classmethod
+    def _normalize(cls, text: str) -> str:
+        """Await-agnostic normalization of an unparsed AST block."""
+        text = text.replace("await ", "").replace("async ", "")
+        for a, s in cls._ASYNC_RENAMES:
+            text = text.replace(a, s)
+        return " ".join(text.split())
+
+    @staticmethod
+    def _find_func(source: str, name: str) -> ast.AST | None:
+        """First def named ``name`` anywhere (top-level OR nested closure)."""
+        for node in ast.walk(ast.parse(source)):
+            if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef) and node.name == name:
+                return node
+        return None
+
+    @classmethod
+    def _first_arg_is_str(cls, call: ast.Call) -> bool:
+        return bool(call.args) and isinstance(call.args[0], ast.Constant) and isinstance(
+            call.args[0].value, str
+        )
+
+    @classmethod
+    def _builder_blocks(cls, fn: ast.AST) -> list[str]:
+        """Collect normalized value-builder blocks defined DIRECTLY in ``fn``'s
+        body (not in sibling/nested helper functions it merely calls)."""
+        # Do not descend into nested function defs — a builder that lives in a
+        # nested helper is already single-site by construction.
+        skip: set[int] = set()
+        for sub in ast.walk(fn):
+            if sub is not fn and isinstance(sub, ast.FunctionDef | ast.AsyncFunctionDef):
+                for inner in ast.walk(sub):
+                    skip.add(id(inner))
+
+        blocks: list[str] = []
+
+        def emit(node: ast.AST) -> None:
+            if id(node) in skip:
+                return
+            blocks.append(cls._normalize(ast.unparse(node)))
+
+        for node in ast.walk(fn):
+            if isinstance(node, ast.Call):
+                func = node.func
+                # X.build(...) where X is an error class
+                if (
+                    isinstance(func, ast.Attribute)
+                    and func.attr == "build"
+                    and isinstance(func.value, ast.Name)
+                    and func.value.id in cls._ERROR_BUILDER_CLASSES
+                ):
+                    emit(node)
+                # direct constructor builders: CheckpointSchemaError(...), ToolMessage(...)
+                elif isinstance(func, ast.Name) and func.id in cls._CONSTRUCTOR_BUILDERS:
+                    emit(node)
+                # logger event: <x>.info("event", ...) with a string event
+                elif (
+                    isinstance(func, ast.Attribute)
+                    and func.attr in cls._LOG_METHODS
+                    and cls._first_arg_is_str(node)
+                ):
+                    emit(node)
+            elif isinstance(node, ast.Dict):
+                keys = [k.value for k in node.keys if isinstance(k, ast.Constant)]
+                if cls._USAGE_DICT_MARKER in keys:
+                    emit(node)
+        return blocks
+
+    def test_no_value_builder_block_is_duplicated_across_twins(self):
+        violations: list[str] = []
+        for filename, pairs in self.TWIN_TABLE.items():
+            source = (SRC_DIR / filename).read_text()
+            for sync_name, async_name in pairs:
+                sync_fn = self._find_func(source, sync_name)
+                async_fn = self._find_func(source, async_name)
+                assert sync_fn is not None, f"{filename}: twin `{sync_name}` not found"
+                assert async_fn is not None, f"{filename}: twin `{async_name}` not found"
+                shared = set(self._builder_blocks(sync_fn)) & set(
+                    self._builder_blocks(async_fn)
+                )
+                for block in sorted(shared):
+                    violations.append(
+                        f"  {filename}: {sync_name}/{async_name} both build:\n"
+                        f"      {block[:140]}"
+                    )
+        assert not violations, (
+            f"\n{len(violations)} value-builder block(s) duplicated across sync/async "
+            "twins — extract each into ONE shared pure helper (error/log/result "
+            "builders must be single-site so a fix is applied once):\n"
+            + "\n".join(violations)
+            + "\n\nThe awaiting control skeleton may stay per-twin; the CONTENT "
+            "(error strings, log events, usage dicts, ToolMessages) may not. See "
+            "_oracle.py / _subconstruct.py for the target shape (neograph-ykun)."
+        )
+
+    # ── slip meta-tests: synthetic twins prove the guard discriminates ──
+
+    def test_meta_positive_shared_builder_block_is_flagged(self):
+        src = (
+            "def f():\n"
+            "    raise ExecutionError.build('boom', hint='x')\n"
+            "async def af():\n"
+            "    raise ExecutionError.build('boom', hint='x')\n"
+        )
+        sync_fn = self._find_func(src, "f")
+        async_fn = self._find_func(src, "af")
+        shared = set(self._builder_blocks(sync_fn)) & set(self._builder_blocks(async_fn))
+        assert shared, "a byte-identical error builder in both twins must be flagged"
+
+    def test_meta_negative_helper_routed_builder_is_not_flagged(self):
+        src = (
+            "def f():\n"
+            "    raise _boom_error()\n"
+            "async def af():\n"
+            "    raise _boom_error()\n"
+        )
+        sync_fn = self._find_func(src, "f")
+        async_fn = self._find_func(src, "af")
+        shared = set(self._builder_blocks(sync_fn)) & set(self._builder_blocks(async_fn))
+        assert not shared, "a builder routed through a shared helper must NOT be flagged"
+
+    def test_meta_await_normalization_matches_seam_twins(self):
+        """A usage dict built after a sync vs awaited call still matches."""
+        src = (
+            "def f():\n"
+            "    r = llm.invoke(m)\n"
+            "    return {'input_tokens': 1, 'output_tokens': 2, 'total_tokens': 3}\n"
+            "async def af():\n"
+            "    r = await llm.ainvoke(m)\n"
+            "    return {'input_tokens': 1, 'output_tokens': 2, 'total_tokens': 3}\n"
+        )
+        sync_fn = self._find_func(src, "f")
+        async_fn = self._find_func(src, "af")
+        shared = set(self._builder_blocks(sync_fn)) & set(self._builder_blocks(async_fn))
+        assert shared, "the duplicated usage dict must be flagged across the twins"
+
+    def test_meta_finds_nested_closure_twins(self):
+        """The walker must reach body twins nested inside a factory function."""
+        src = (
+            "def make():\n"
+            "    def body(s):\n"
+            "        return ToolMessage(content='x', tool_call_id=1)\n"
+            "    async def abody(s):\n"
+            "        return ToolMessage(content='x', tool_call_id=1)\n"
+            "    return body, abody\n"
+        )
+        assert self._find_func(src, "body") is not None
+        assert self._find_func(src, "abody") is not None

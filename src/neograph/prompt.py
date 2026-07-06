@@ -90,8 +90,16 @@ def render_inputs(
 
     A thin exported wrapper over ``build_rendered_input(...).for_template_ref`` —
     the same internal rendering path dispatch uses, not a re-implementation.
+
+    Total dict contract: template-ref prompts bind vars by name, so any input
+    with no named keys collapses to ``{}`` — ``None`` (an all-DI leaf think node
+    fed purely by ``run(input=...)``) and single-type non-dict values (a bare
+    ``str``/``BaseModel`` has no name to bind a var to). This owns the non-dict
+    contract at the primitive so ``inject_schema``/``substitute`` downstream never
+    see a non-dict (neograph-4tsd: ``dict(None)`` crashed ``inject_schema``).
     """
-    return build_rendered_input(input_data, renderer).for_template_ref
+    view = build_rendered_input(input_data, renderer).for_template_ref
+    return view if isinstance(view, dict) else {}
 
 
 def inject_schema(
@@ -166,9 +174,25 @@ class DefaultPromptCompiler:
         *,
         output_model: type[BaseModel] | None = None,
         output_schema: str | None = None,
+        di_inputs: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """Render inputs and, when an output type is known, inject its schema."""
-        vars = render_inputs(input_data)
+        """Render inputs and, when an output type is known, inject its schema.
+
+        ``di_inputs`` are the resolved ``FromInput``/``FromConfig`` values keyed
+        by the node's parameter names (e.g. ``{"domain": "oncology"}``). They
+        form the BASE layer of the vars dict; upstream node OUTPUTS rendered from
+        ``input_data`` are laid on top, so on a name collision the node-local
+        output shadows the DI value. Rationale: an upstream producer named
+        ``domain`` is the more specific, dataflow-derived value for this node,
+        while ``di_inputs`` is run-wide ambient context — the narrower binding
+        wins. This is ALSO the zero-behavior-change rule: di_inputs only fills
+        names not already produced by an upstream node, so no existing pipeline's
+        ``{name}`` binding changes meaning when a FromInput param happens to
+        collide. ``None`` collapses to ``{}`` (the render_inputs total-dict
+        contract), so an all-DI leaf node still gets its ``{domain}`` var.
+        """
+        vars: dict[str, Any] = dict(di_inputs or {})
+        vars.update(render_inputs(input_data))
         if output_model is not None or output_schema is not None:
             vars = inject_schema(
                 vars,
@@ -195,6 +219,7 @@ class DefaultPromptCompiler:
         *,
         output_model: type[BaseModel] | None = None,
         output_schema: str | None = None,
+        di_inputs: dict[str, Any] | None = None,
         **_kw: Any,
     ) -> list[dict[str, str]]:
         text = self.load_template(template)
@@ -202,5 +227,6 @@ class DefaultPromptCompiler:
             input_data,
             output_model=output_model,
             output_schema=output_schema,
+            di_inputs=di_inputs,
         )
         return self.render_messages(text, vars)

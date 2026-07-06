@@ -34,7 +34,7 @@ from __future__ import annotations
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import Any, NoReturn, cast
 
 import structlog
 from langchain_core.messages import ToolMessage
@@ -58,9 +58,10 @@ from neograph._tool_loop import (
     _prepare_tool_loop,
     _render_tool_result_for_llm,
 )
+from neograph.describe_type import type_display_name
 from neograph.errors import ConfigurationError
 from neograph.naming import field_name_for
-from neograph.node import Node
+from neograph.node import Node, TypeSpecStatic
 from neograph.tool import Tool, ToolBudgetTracker, ToolInteraction
 
 log = structlog.get_logger()
@@ -266,6 +267,114 @@ def _emit_guard_forced_break(tp: _TurnPrep, budget: dict[str, Any]) -> None:
     )
 
 
+# ── shared agent-turn skeleton (sync/async twins differ only at the seam) ──
+
+
+def _obs_type_name(t: TypeSpecStatic) -> str | None:
+    """Render a type for a structlog field via ``type_display_name`` (the single
+    renderer, dict-form/generic aware), adapting ``None -> None`` so the field is
+    omitted when absent. Mirrors ``_execute._type_name``; kept local because
+    ``_execute`` is walled to a single importer."""
+    return type_display_name(t) if t is not None else None
+
+
+def _agent_start_log(node: Node) -> None:
+    """Single-site the first-turn ``node_start`` event and route it through the
+    shared ``type_display_name`` renderer (PAT-02): agent/act nodes now log the
+    real ``input_type`` and a dict-form-aware ``output_type`` instead of the
+    previous hard-coded ``input_type=None`` + inline ``__name__`` form."""
+    log.bind(node=node.name, mode=node.mode).info(
+        "node_start",
+        input_type=_obs_type_name(node.inputs),
+        output_type=_obs_type_name(node.outputs),
+    )
+
+
+def _agent_turn_prelude(
+    node: Node, bus: Any, field: str, msgs_key: str, budget_key: str,
+) -> tuple[dict[str, Any] | None, list, dict[str, Any], bool]:
+    """Pure preamble shared by both agent-turn twins: read the channel + budget,
+    run the first-turn skip check, emit node_start once. Returns
+    ``(early_return, channel_msgs, budget, was_forced)`` — a non-None
+    ``early_return`` means the skip predicate fired and the caller must return it
+    verbatim (skip output already written)."""
+    channel_msgs = bus.get(msgs_key) or []
+    budget = _init_budget(bus.get(budget_key))
+    if not channel_msgs:
+        skipped = _maybe_skip(node, bus, field, budget)
+        if skipped is not None:
+            return skipped, channel_msgs, budget, False
+        _agent_start_log(node)
+    was_forced = budget.get("forced_final", False)
+    return None, channel_msgs, budget, was_forced
+
+
+def _agent_turn_finalize(
+    tp: _TurnPrep, response: Any, budget: dict[str, Any], was_forced: bool,
+    seed: list, msgs_key: str, budget_key: str,
+) -> dict[str, Any]:
+    """Pure postamble shared by both agent-turn twins: record usage, emit the
+    guard-forced-break warning on rogue dispatch, assemble the state update."""
+    _record_turn_usage(response, budget)
+    if was_forced and getattr(response, "tool_calls", None):
+        _emit_guard_forced_break(tp, budget)
+    return {msgs_key: [*seed, response], budget_key: budget}
+
+
+# ── shared per-tool-call handling (the DRY-01 extraction) ──
+
+
+def _raise_sync_tool_async(node_name: str, tool_name: str, exc: Exception) -> NoReturn:
+    """Fail loud when a sync run() drove an async-only tool. Mirrors
+    ``_tool_loop._raise_async_factory_error`` (same driver/config mismatch);
+    ``from exc`` preserves the NotImplementedError cause the inline raise had."""
+    raise ConfigurationError.build(
+        f"Tool '{tool_name}' does not support synchronous invocation",
+        expected="an async driver (arun())",
+        found="sync run() driving an async-only tool",
+        hint=(
+            "This tool is async-only (e.g. an MCP tool). Drive the graph "
+            "with arun() instead of run() so the async tool loop (ainvoke) "
+            "is used."
+        ),
+        node=node_name or None,
+    ) from exc
+
+
+def _tool_call_precheck(
+    tc: dict, tracker: ToolBudgetTracker, tool_instances: dict,
+) -> tuple[str, Any]:
+    """Pure pre-invoke check for one tool call. Returns ``("msg", ToolMessage)``
+    to short-circuit (budget exhausted / unknown tool) or ``("run", tool_fn)``.
+    Single-sites the two short-circuit ToolMessage builders across the twins."""
+    name = tc["name"]
+    if not tracker.can_call(name):
+        return "msg", ToolMessage(
+            content=f"Tool '{name}' budget exhausted. Use remaining tools or respond.",
+            tool_call_id=tc["id"],
+        )
+    tool_fn = tool_instances.get(name)
+    if tool_fn is None:
+        return "msg", ToolMessage(content=f"Unknown tool: {name}", tool_call_id=tc["id"])
+    return "run", tool_fn
+
+
+def _record_tool_result(
+    tc: dict, result: Any, elapsed_ms: int, tracker: ToolBudgetTracker, renderer: Any,
+) -> tuple[ToolInteraction, ToolMessage]:
+    """Pure post-invoke recording for one tool call: advance the tracker, render
+    the result, build the ToolInteraction + ToolMessage. Single-sites the
+    result-ToolMessage + interaction builders across the twins."""
+    name = tc["name"]
+    tracker.record_call(name)
+    rendered = _render_tool_result_for_llm(result, renderer)
+    interaction = ToolInteraction(
+        tool_name=name, args=tc.get("args", {}), result=rendered,
+        typed_result=result, duration_ms=elapsed_ms,
+    )
+    return interaction, ToolMessage(content=rendered, tool_call_id=tc["id"])
+
+
 def make_agent_cycle_bodies(
     node: Node,
     *,
@@ -287,45 +396,27 @@ def make_agent_cycle_bodies(
     # ── {node}__agent ─────────────────────────────────────────────────────
     def agent_body(state: BaseModel, config: RunnableConfig) -> dict[str, Any]:
         bus = adapt_state(state)
-        channel_msgs = bus.get(msgs_key) or []
-        budget = _init_budget(bus.get(budget_key))
-        if not channel_msgs:
-            skipped = _maybe_skip(node, bus, field, budget)
-            if skipped is not None:
-                return skipped
-            log.bind(node=node.name, mode=node.mode).info(
-                "node_start", input_type=None, output_type=node.outputs.__name__
-                if isinstance(node.outputs, type) else None)
-        was_forced = budget.get("forced_final", False)
+        early, channel_msgs, budget, was_forced = _agent_turn_prelude(
+            node, bus, field, msgs_key, budget_key)
+        if early is not None:
+            return early
         tp = _build_turn_prep(node, runtime, tfl, state, config)
         working, seed = _agent_working_messages(tp.prep, channel_msgs)
         caller = _agent_caller(tp.prep, node, budget)
         response = caller.invoke(working, config=config)
-        _record_turn_usage(response, budget)
-        if was_forced and getattr(response, "tool_calls", None):
-            _emit_guard_forced_break(tp, budget)
-        return {msgs_key: [*seed, response], budget_key: budget}
+        return _agent_turn_finalize(tp, response, budget, was_forced, seed, msgs_key, budget_key)
 
     async def aagent_body(state: BaseModel, config: RunnableConfig) -> dict[str, Any]:
         bus = adapt_state(state)
-        channel_msgs = bus.get(msgs_key) or []
-        budget = _init_budget(bus.get(budget_key))
-        if not channel_msgs:
-            skipped = _maybe_skip(node, bus, field, budget)
-            if skipped is not None:
-                return skipped
-            log.bind(node=node.name, mode=node.mode).info(
-                "node_start", input_type=None, output_type=node.outputs.__name__
-                if isinstance(node.outputs, type) else None)
-        was_forced = budget.get("forced_final", False)
+        early, channel_msgs, budget, was_forced = _agent_turn_prelude(
+            node, bus, field, msgs_key, budget_key)
+        if early is not None:
+            return early
         tp = await _abuild_turn_prep(node, runtime, tfl, state, config)
         working, seed = _agent_working_messages(tp.prep, channel_msgs)
         caller = _agent_caller(tp.prep, node, budget)
         response = await caller.ainvoke(working, config=config)
-        _record_turn_usage(response, budget)
-        if was_forced and getattr(response, "tool_calls", None):
-            _emit_guard_forced_break(tp, budget)
-        return {msgs_key: [*seed, response], budget_key: budget}
+        return _agent_turn_finalize(tp, response, budget, was_forced, seed, msgs_key, budget_key)
 
     # ── router after {node}__agent ────────────────────────────────────────
     def router(state: BaseModel) -> str:
@@ -375,34 +466,19 @@ def make_agent_cycle_bodies(
         new_msgs: list = []
         interactions: list = []
         for tc in tool_calls:
-            name = tc["name"]
-            if not tracker.can_call(name):
-                new_msgs.append(ToolMessage(content=f"Tool '{name}' budget exhausted. Use remaining tools or respond.", tool_call_id=tc["id"]))
-                continue
-            tool_fn = tp.prep.tool_instances.get(name)
-            if tool_fn is None:
-                new_msgs.append(ToolMessage(content=f"Unknown tool: {name}", tool_call_id=tc["id"]))
+            kind, payload = _tool_call_precheck(tc, tracker, tp.prep.tool_instances)
+            if kind == "msg":
+                new_msgs.append(payload)
                 continue
             t0 = time.monotonic()
             try:
-                result = tool_fn.invoke(tc["args"], config=config)
+                result = payload.invoke(tc["args"], config=config)
             except NotImplementedError as exc:
-                raise ConfigurationError.build(
-                    f"Tool '{name}' does not support synchronous invocation",
-                    expected="an async driver (arun())",
-                    found="sync run() driving an async-only tool",
-                    hint=(
-                        "This tool is async-only (e.g. an MCP tool). Drive the graph "
-                        "with arun() instead of run() so the async tool loop (ainvoke) "
-                        "is used."
-                    ),
-                    node=node.name or None,
-                ) from exc
-            elapsed = time.monotonic() - t0
-            tracker.record_call(name)
-            rendered = _render_tool_result_for_llm(result, tp.effective_renderer)
-            interactions.append(ToolInteraction(tool_name=name, args=tc.get("args", {}), result=rendered, typed_result=result, duration_ms=int(elapsed * 1000)))
-            new_msgs.append(ToolMessage(content=rendered, tool_call_id=tc["id"]))
+                _raise_sync_tool_async(node.name, tc["name"], exc)
+            elapsed_ms = int((time.monotonic() - t0) * 1000)
+            interaction, msg = _record_tool_result(tc, result, elapsed_ms, tracker, tp.effective_renderer)
+            interactions.append(interaction)
+            new_msgs.append(msg)
 
         budget["calls"] = dict(tracker._counts)
         if tracker.all_exhausted():
@@ -424,24 +500,19 @@ def make_agent_cycle_bodies(
             return {msgs_key: _limit_messages(tool_calls, max_iter_hit), budget_key: budget}
 
         tracker = _tracker_from_budget(node, budget)
-        new_msgs = []
-        interactions = []
+        new_msgs: list = []
+        interactions: list = []
         for tc in tool_calls:
-            name = tc["name"]
-            if not tracker.can_call(name):
-                new_msgs.append(ToolMessage(content=f"Tool '{name}' budget exhausted. Use remaining tools or respond.", tool_call_id=tc["id"]))
-                continue
-            tool_fn = tp.prep.tool_instances.get(name)
-            if tool_fn is None:
-                new_msgs.append(ToolMessage(content=f"Unknown tool: {name}", tool_call_id=tc["id"]))
+            kind, payload = _tool_call_precheck(tc, tracker, tp.prep.tool_instances)
+            if kind == "msg":
+                new_msgs.append(payload)
                 continue
             t0 = time.monotonic()
-            result = await tool_fn.ainvoke(tc["args"], config=config)
-            elapsed = time.monotonic() - t0
-            tracker.record_call(name)
-            rendered = _render_tool_result_for_llm(result, tp.effective_renderer)
-            interactions.append(ToolInteraction(tool_name=name, args=tc.get("args", {}), result=rendered, typed_result=result, duration_ms=int(elapsed * 1000)))
-            new_msgs.append(ToolMessage(content=rendered, tool_call_id=tc["id"]))
+            result = await payload.ainvoke(tc["args"], config=config)
+            elapsed_ms = int((time.monotonic() - t0) * 1000)
+            interaction, msg = _record_tool_result(tc, result, elapsed_ms, tracker, tp.effective_renderer)
+            interactions.append(interaction)
+            new_msgs.append(msg)
 
         budget["calls"] = dict(tracker._counts)
         if tracker.all_exhausted():
@@ -461,7 +532,9 @@ def make_agent_cycle_bodies(
         _, primary_key = _resolve_primary_output(node)
         output = _shape_tool_output(result, tool_interactions, no, primary_key)
         update = _build_state_update(node, field, output.value, adapt_state(state))
-        log.bind(node=node.name, mode=node.mode).info("node_complete", loops=budget.get("iteration", 0))
+        elapsed = time.monotonic() - budget.get("t0", time.monotonic())
+        log.bind(node=node.name, mode=node.mode).info(
+            "node_complete", loops=budget.get("iteration", 0), duration_s=round(elapsed, 3))
         return update
 
     def parse_body(state: BaseModel, config: RunnableConfig) -> dict[str, Any]:

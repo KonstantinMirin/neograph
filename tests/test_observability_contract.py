@@ -14,6 +14,8 @@ Events covered:
 - ``trailing_tool_call_markup`` — DSML/XML markup detected in final response
 - ``react_guard_forced_break`` — safety break when guard set but rogue tool_calls
 - ``auto_resume_schema_change`` — checkpoint schema fingerprint mismatch
+- ``node_start`` / ``node_complete`` — agent/act node lifecycle (PAT-02 shape:
+  ``input_type``/``output_type`` via ``type_display_name``; ``duration_s``)
 """
 
 from __future__ import annotations
@@ -560,6 +562,82 @@ class TestAutoResumeSchemaChangeEvent:
         # Severity contract: info, not warning — schema change is a normal
         # development workflow event.
         assert evt.get("log_level") == "info"
+
+
+class TestAgentNodeLifecycleEvents:
+    """Contract: agent/act nodes emit ``node_start`` and ``node_complete`` with
+    the PAT-02 observability shape (neograph-ykun).
+
+    ``node_start`` routes ``input_type``/``output_type`` through the shared
+    ``type_display_name`` renderer, so a node declaring dict-form outputs
+    (``{"result": ..., "tool_log": ...}``) reports a real ``output_type`` instead
+    of the pre-PAT-02 hard-coded ``None`` (the old ``node.outputs.__name__ if
+    isinstance(node.outputs, type) else None`` collapsed dict-form to ``None``).
+    ``node_complete`` carries ``duration_s`` derived from the turn's stashed
+    ``t0``. Both assertions below fail against the pre-PAT-02 shape.
+    """
+
+    def _drive_clean_completion(self):
+        from neograph.tool import ToolBudgetTracker
+        from tests.fakes import ReActFake
+        from tests.fakes import drive_agent_via_cycle as invoke_with_tools
+
+        # First turn returns no tool calls -> the loop parses the final answer,
+        # so the cycle runs node_start (first turn) through node_complete (parse).
+        fake = ReActFake(
+            tool_calls=[[]],
+            final=lambda m: m(items=["done"]),
+            output_model=Claims,
+        )
+        _llm_kw = configure_fake_llm(lambda tier: fake)
+        tools: list = []
+
+        with capture_logs() as logs:
+            invoke_with_tools(
+                runtime=build_fake_runtime(
+                    _llm_kw["llm_factory"], _llm_kw["prompt_compiler"]
+                ),
+                model_tier="fast",
+                prompt_template="test",
+                input_data="test",
+                output_model=Claims,
+                tools=tools,
+                budget_tracker=ToolBudgetTracker(tools),
+                config={"configurable": {}},
+                node_name="research",
+                tool_factory_lookup=build_fake_tool_lookup(),
+            )
+        return logs
+
+    def test_node_start_reports_dict_form_output_type_via_type_display_name(self):
+        logs = self._drive_clean_completion()
+        starts = [e for e in logs if e.get("event") == "node_start"]
+        assert starts, (
+            f"contract: agent node must emit ``node_start``. "
+            f"Events observed: {[e.get('event') for e in logs]}"
+        )
+        evt = starts[0]
+        # PAT-02: dict-form outputs now render a real ``output_type`` string;
+        # the pre-PAT-02 code emitted None for a non-``type`` outputs value.
+        assert evt.get("output_type") is not None, (
+            "PAT-02 regression: node_start output_type is None for a node with "
+            "dict-form outputs — the pre-PAT-02 hard-coded shape."
+        )
+        assert isinstance(evt.get("output_type"), str)
+
+    def test_node_complete_includes_duration_s(self):
+        logs = self._drive_clean_completion()
+        completes = [e for e in logs if e.get("event") == "node_complete"]
+        assert completes, (
+            f"contract: agent node must emit ``node_complete``. "
+            f"Events observed: {[e.get('event') for e in logs]}"
+        )
+        evt = completes[0]
+        # PAT-02: node_complete now carries duration_s (absent pre-PAT-02).
+        assert "duration_s" in evt, (
+            "PAT-02 regression: node_complete dropped duration_s."
+        )
+        assert isinstance(evt["duration_s"], (int, float))
 
 
 # A note on the audit's ``token_budget_exhausted`` and ``auto_resume_rewind``

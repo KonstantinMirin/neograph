@@ -33,6 +33,7 @@ from neograph._llm_retry import (
 )
 from neograph._llm_runtime import LlmRuntime
 from neograph._tool_budget_preamble import render_tool_budget_preamble
+from neograph._usage import _usage_dict
 from neograph.describe_type import describe_value
 from neograph.errors import ConfigurationError, ExecutionError
 from neograph.renderers import Renderer
@@ -451,13 +452,7 @@ def _finish_tool_loop(
         total_input_tokens += fallback_usage.get("input_tokens", 0)
         total_output_tokens += fallback_usage.get("output_tokens", 0)
 
-    usage_info = {}
-    if total_input_tokens or total_output_tokens:
-        usage_info = {
-            "input_tokens": total_input_tokens,
-            "output_tokens": total_output_tokens,
-            "total_tokens": total_input_tokens + total_output_tokens,
-        }
+    usage_info = _usage_dict(total_input_tokens, total_output_tokens, empty={})
 
     llm_log.info(
         "llm_call",
@@ -471,6 +466,20 @@ def _finish_tool_loop(
     _notify_cost(runtime, model_tier, usage_info if usage_info else None,
                  node_name=node_name, mode="react", duration_s=round(elapsed, 3))
     return parse_result, tool_interactions
+
+
+def _raise_no_structured_output(output_model: Any) -> NoReturn:
+    """Single-site fail-loud for the "structured fallback produced nothing" case,
+    shared by the sync and async final-parse twins. ``from None`` suppresses the
+    handled-ExecutionError context exactly as the inline raise did."""
+    raise ExecutionError.build(
+        "agent structured fallback produced no parseable output",
+        expected=f"valid {output_model.__name__}",
+        found="model returned no structured content and no recoverable markup",
+        hint="The ReAct final turn was unparseable and the structured "
+             "fallback returned nothing. Check the model/prompt or set "
+             "output_strategy='json_mode'.",
+    ) from None
 
 
 def _parse_final_turn(
@@ -510,14 +519,7 @@ def _parse_final_turn(
                 cfg=cfg, max_retries=max_retries,
             )
             if parse_result is None:
-                raise ExecutionError.build(
-                    "agent structured fallback produced no parseable output",
-                    expected=f"valid {output_model.__name__}",
-                    found="model returned no structured content and no recoverable markup",
-                    hint="The ReAct final turn was unparseable and the structured "
-                         "fallback returned nothing. Check the model/prompt or set "
-                         "output_strategy='json_mode'.",
-                ) from None
+                _raise_no_structured_output(output_model)
         else:
             recovered = recover_dsml(
                 raw_text, output_model, llm, messages, config, cfg,
@@ -556,14 +558,7 @@ async def _aparse_final_turn(
                 cfg=cfg, max_retries=max_retries,
             )
             if parse_result is None:
-                raise ExecutionError.build(
-                    "agent structured fallback produced no parseable output",
-                    expected=f"valid {output_model.__name__}",
-                    found="model returned no structured content and no recoverable markup",
-                    hint="The ReAct final turn was unparseable and the structured "
-                         "fallback returned nothing. Check the model/prompt or set "
-                         "output_strategy='json_mode'.",
-                ) from None
+                _raise_no_structured_output(output_model)
         else:
             recovered = await arecover_dsml(
                 raw_text, output_model, llm, messages, config, cfg,

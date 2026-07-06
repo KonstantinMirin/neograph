@@ -124,27 +124,29 @@ def _inject_input_to_config(
     return {**config, "configurable": merged}
 
 
-def _verify_checkpoint_schema(graph: CompiledNeograph, config: RunnableConfig, *, auto_resume: bool = True) -> None:
-    """Verify checkpoint state schema matches the current graph.
+def _decide_checkpoint_schema(
+    graph: CompiledNeograph, saved: Any, *, auto_resume: bool,
+) -> set[str] | None:
+    """Pure checkpoint-schema decision shared by both verify twins.
 
-    Compares the neo_schema_fingerprint stored in the checkpoint against
-    the fingerprint computed at compile time. When auto_resume is True,
-    rewinds to the checkpoint before the earliest changed node and re-invokes.
-    When False, raises CheckpointSchemaError.
+    Given the fetched checkpoint tuple ``saved`` (sync ``get_tuple`` / async
+    ``aget_tuple`` — the only twin difference), decide whether the stored schema
+    fingerprint diverged from the current graph:
+
+    - returns ``None`` when there is nothing to do (no fingerprint, no
+      checkpoint, pre-fingerprint checkpoint, or a clean match);
+    - returns the invalidated node set (possibly empty) to rewind when the
+      fingerprints differ and ``auto_resume`` is True;
+    - raises :class:`CheckpointSchemaError` when they differ and ``auto_resume``
+      is False.
+
+    Single-sites the mismatch error message and the auto-resume log so a change
+    to either lands once (neograph-ykun / DRY-09).
     """
     current_fp = graph.schema_fingerprint
-    if current_fp is None:
-        return  # no fingerprint on graph (pre-feature compile)
+    if current_fp is None or saved is None:
+        return None
 
-    checkpointer = getattr(graph, "checkpointer", None)
-    if checkpointer is None:
-        return
-
-    saved = checkpointer.get_tuple(config)
-    if saved is None:
-        return
-
-    # Extract fingerprint from checkpoint's channel values
     channel_values = saved.checkpoint.get("channel_values", {})
     stored_fp = None
     if isinstance(channel_values, dict):
@@ -152,30 +154,48 @@ def _verify_checkpoint_schema(graph: CompiledNeograph, config: RunnableConfig, *
     elif hasattr(channel_values, "get"):
         stored_fp = channel_values.get(StateKeys.SCHEMA_FINGERPRINT)
 
-    if stored_fp is None or stored_fp == "":
-        return  # checkpoint from before fingerprinting was added
+    if stored_fp is None or stored_fp == "" or stored_fp == current_fp:
+        return None
 
-    if stored_fp != current_fp:
-        invalidated = _compute_invalidated_nodes(graph, channel_values)
+    invalidated = _compute_invalidated_nodes(graph, channel_values)
 
-        if not auto_resume:
-            raise CheckpointSchemaError(
-                f"Checkpoint schema fingerprint mismatch: "
-                f"stored={stored_fp!r}, current={current_fp!r}. "
-                f"Invalidated nodes: {sorted(invalidated) if invalidated else 'all'}. "
-                f"Invalidate the checkpoint or migrate the state.",
-                invalidated_nodes=invalidated,
-            )
-
-        # Auto-resume: rewind to before the earliest changed node
-        import structlog
-        log = structlog.get_logger()
-        log.info(
-            "auto_resume_schema_change",
-            invalidated=sorted(invalidated),
-            stored_fp=stored_fp,
-            current_fp=current_fp,
+    if not auto_resume:
+        raise CheckpointSchemaError(
+            f"Checkpoint schema fingerprint mismatch: "
+            f"stored={stored_fp!r}, current={current_fp!r}. "
+            f"Invalidated nodes: {sorted(invalidated) if invalidated else 'all'}. "
+            f"Invalidate the checkpoint or migrate the state.",
+            invalidated_nodes=invalidated,
         )
+
+    import structlog
+    log = structlog.get_logger()
+    log.info(
+        "auto_resume_schema_change",
+        invalidated=sorted(invalidated),
+        stored_fp=stored_fp,
+        current_fp=current_fp,
+    )
+    return invalidated
+
+
+def _verify_checkpoint_schema(graph: CompiledNeograph, config: RunnableConfig, *, auto_resume: bool = True) -> None:
+    """Verify checkpoint state schema matches the current graph.
+
+    Compares the neo_schema_fingerprint stored in the checkpoint against
+    the fingerprint computed at compile time. When auto_resume is True,
+    rewinds to the checkpoint before the earliest changed node and re-invokes.
+    When False, raises CheckpointSchemaError. Fetch (sync ``get_tuple``) is the
+    only divergence from the async twin; the decision is shared via
+    ``_decide_checkpoint_schema``.
+    """
+    checkpointer = getattr(graph, "checkpointer", None)
+    if checkpointer is None or graph.schema_fingerprint is None:
+        return
+
+    saved = checkpointer.get_tuple(config)
+    invalidated = _decide_checkpoint_schema(graph, saved, auto_resume=auto_resume)
+    if invalidated is not None:
         _auto_resume_from_divergence(graph, config, invalidated)
 
 
@@ -746,50 +766,16 @@ async def _averify_checkpoint_schema(graph: CompiledNeograph, config: RunnableCo
     """Async twin of :func:`_verify_checkpoint_schema`.
 
     Identical fingerprint-compare/invalidation logic; awaits ``aget_tuple`` and,
-    on mismatch, ``_aauto_resume_from_divergence``. Reuses _compute_invalidated_nodes.
+    on mismatch, ``_aauto_resume_from_divergence``. The decision (incl. the error
+    message and auto-resume log) is shared via ``_decide_checkpoint_schema``.
     """
-    current_fp = graph.schema_fingerprint
-    if current_fp is None:
-        return
-
     checkpointer = getattr(graph, "checkpointer", None)
-    if checkpointer is None:
+    if checkpointer is None or graph.schema_fingerprint is None:
         return
 
     saved = await checkpointer.aget_tuple(config)
-    if saved is None:
-        return
-
-    channel_values = saved.checkpoint.get("channel_values", {})
-    stored_fp = None
-    if isinstance(channel_values, dict):
-        stored_fp = channel_values.get(StateKeys.SCHEMA_FINGERPRINT)
-    elif hasattr(channel_values, "get"):
-        stored_fp = channel_values.get(StateKeys.SCHEMA_FINGERPRINT)
-
-    if stored_fp is None or stored_fp == "":
-        return
-
-    if stored_fp != current_fp:
-        invalidated = _compute_invalidated_nodes(graph, channel_values)
-
-        if not auto_resume:
-            raise CheckpointSchemaError(
-                f"Checkpoint schema fingerprint mismatch: "
-                f"stored={stored_fp!r}, current={current_fp!r}. "
-                f"Invalidated nodes: {sorted(invalidated) if invalidated else 'all'}. "
-                f"Invalidate the checkpoint or migrate the state.",
-                invalidated_nodes=invalidated,
-            )
-
-        import structlog
-        log = structlog.get_logger()
-        log.info(
-            "auto_resume_schema_change",
-            invalidated=sorted(invalidated),
-            stored_fp=stored_fp,
-            current_fp=current_fp,
-        )
+    invalidated = _decide_checkpoint_schema(graph, saved, auto_resume=auto_resume)
+    if invalidated is not None:
         await _aauto_resume_from_divergence(graph, config, invalidated)
 
 

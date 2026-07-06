@@ -298,6 +298,10 @@ lint(construct, *, config=None, known_template_vars=None, template_resolver=None
 
 **The inline/template-ref key asymmetry** is the most common lint confusion. Inline prompts see fewer keys because they resolve via raw attribute access (no rendering pipeline). Template-ref prompts see more keys because the rendering pipeline produces flattened fields and framework extras.
 
+**The THIRD column — `di_inputs` (neograph-euyh)**: a template-ref prompt can ALSO reference a node's `FromInput`/`FromConfig` parameter names (e.g. `{domain}` for `domain: Annotated[str, FromInput]`) — but ONLY when the app's `prompt_compiler` opts in by declaring a `di_inputs` parameter (or `**kwargs`). `lint(construct, ..., prompt_compiler=...)` introspects the compiler's signature with the same `_accepted_params` helper the runtime uses to gate the kwarg; when it accepts `di_inputs`, the node's DI param names become valid template-ref placeholders (`_di_template_var_names`). Without opt-in the placeholder is flagged `template_placeholder_unresolvable` — because the resolved value never reaches the template and the literal `{domain}` would ship to the model (the agent-stark production incident). Inline `${var}` prompts NEVER get this column: they resolve via raw attribute access, not the compiler seam. So the full asymmetry is: inline = raw input keys; template-ref = input keys + flattened + framework extras; template-ref WITH a di_inputs-aware compiler = the above **+ DI param names**.
+
+**Runtime-vs-lint coverage caveat (don't let them silently diverge)**: the lint column lights up for ANY LLM-mode node (think/agent/act) whose compiler accepts `di_inputs` — but at RUNTIME, di_inputs is currently injected for `think` mode ONLY (see the `di_inputs` section below). Agent/act nodes bypass `ThinkDispatch` (they compile to the ReAct cycle), so their DI values do not yet reach the template even when lint says the placeholder is valid. Wiring agent/act is tracked by the follow-up (neograph-jhz4); until it lands, a `{domain}` in an agent/act template passes lint but resolves empty at runtime. Keep the lint rule and runtime coverage in lockstep as that ticket closes.
+
 **`_predict_input_keys(node, include_flattened=True)`** — internal helper that computes what keys a node will see at runtime. `include_flattened=False` for inline, `True` for template-ref.
 
 **Setup module exports** for `neograph check --setup`:
@@ -310,6 +314,20 @@ lint(construct, *, config=None, known_template_vars=None, template_resolver=None
 - `loop_condition_none_unsafe` (WARN for callables, ERROR for string conditions): smoke-tests `when(None)` to catch the most common Loop bug -- `lambda d: d.score < 0.8` without a `d is None or` guard
 
 **Oracle merge_prompt upstream context**: `merge_prompt` now passes upstream context alongside the variant list. `make_oracle_merge_fn` accepts a `node_inputs` parameter and builds `{"variants": primary, **upstream_from_state}` as input_data. Templates use `${variants}` for the variant list and `${upstream.field}` for upstream data.
+
+---
+
+## `di_inputs` — resolved DI values reaching prompt templates (neograph-euyh)
+
+An LLM-mode node (`think`/`agent`/`act`) never runs its body, so — unlike scripted nodes, whose shim resolves DI — its `FromInput`/`FromConfig` params were historically dropped: a `domain: Annotated[str, FromInput]` referenced as `{domain}` in a template never became a template var, and a fail-soft compiler shipped the literal `'{domain}'` to the model (the agent-stark incident; the only workaround was a scripted seed node copying run-input onto the bus). `di_inputs` removes that need.
+
+**Plumbing (config side-channel, mirrors `_oracle_model`)**: `ThinkDispatch` (`_dispatch.py:_inject_di_inputs`) resolves the node's `_param_res` bindings ONCE via the canonical `DIBinding.resolve(config)` (no second resolver — same path `_resolve_di_args` uses) and stashes the `{param_name: value}` map into `config['configurable']` under `StateKeys.DI_INPUTS` (`_neo_di_inputs`, a config-only key — never enters state, never touches the schema fingerprint). `_compile_prompt` (`_llm_render.py`) reads it back and passes it to the compiler as an **introspection-gated** kwarg via the existing `prompt_compiler_params`/`_ACCEPT_ALL` filter — so only a compiler declaring `di_inputs` (or `**kwargs`) receives it. This avoids threading a new positional through the `_llm`/`_tool_loop` call chain. Only which DI kinds are template-usable is centralized in `di.DI_TEMPLATE_KINDS` (FROM_INPUT/FROM_CONFIG + their MODEL forms; CONSTANT and FROM_STATE excluded).
+
+**Precedence (collision rule)**: in `DefaultPromptCompiler.build_vars`, `di_inputs` is the BASE layer and rendered upstream OUTPUTS are laid on top — on a name collision the **upstream output shadows the di_input**. Rationale: an upstream producer named `domain` is the node-local, dataflow-derived value; `di_inputs` is run-wide ambient context, so the narrower binding wins. This is also the **zero-behavior-change** justification: `di_inputs` only fills names not already produced by an upstream node, so no existing pipeline's `{name}` binding changes meaning when a FromInput param collides. `None` collapses to `{}` (the `render_inputs` total-dict contract), so an all-DI leaf node still gets its `{domain}` var.
+
+**Three-surface parity — decorator-only, by construction**: `di_inputs` is sourced from `node._param_res`, which is populated ONLY by the `@node` decorator's `_classify_di_params`. Declarative `Node(...)` and programmatic `Node() | Modifier()` surfaces carry no `FromInput`/`FromConfig` bindings (DI markers are an `Annotated`-param, decorator-layer concept), so `_param_res` is empty and `_inject_di_inputs` returns config unchanged. The other two surfaces are therefore EXEMPT — there is no DI binding to expose. The lint third-column (`_di_template_var_names`) reflects the same: it reads `_param_res`, so it only lights up for `@node`-built nodes.
+
+**Agent/act (`_agent_cycle.py`) — NOT yet wired**: agent/act nodes compile to a multi-node ReAct cycle that does NOT go through `_execute_node`/`ThinkDispatch`, so `_inject_di_inputs` does not run for them. Only `think` mode reaches the model with di_inputs today; agent/act need a matching injection in `_agent_cycle.py` (filed as follow-up).
 
 ---
 

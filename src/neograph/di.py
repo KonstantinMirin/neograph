@@ -40,6 +40,18 @@ class DIKind(Enum):
     CONSTANT = "constant"
 
 
+# DI kinds whose resolved value can serve as a prompt template variable on an
+# LLM-mode node (keyed by the parameter name). Excludes CONSTANT (a plain
+# default, not run-input context) and FROM_STATE (merge_fn-only, meaningless
+# outside an Oracle merge). Shared by the LLM dispatch layer (which resolves and
+# stashes these — see `_dispatch._inject_di_inputs`) and lint (which treats them
+# as valid template-ref placeholders when the prompt_compiler accepts di_inputs).
+DI_TEMPLATE_KINDS: frozenset[DIKind] = frozenset({
+    DIKind.FROM_INPUT, DIKind.FROM_CONFIG,
+    DIKind.FROM_INPUT_MODEL, DIKind.FROM_CONFIG_MODEL,
+})
+
+
 def _get_configurable(config: Any, key: str) -> Any:
     """Read a key from config['configurable'], handling dict and attr forms."""
     cfg = config or {}

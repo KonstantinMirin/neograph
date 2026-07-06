@@ -46,6 +46,45 @@ def _raise_decoded_none(output_model: type[BaseModel], raw_text: str | None) -> 
     )
 
 
+# Single-site fail-loud helpers shared by the sync/async dispatch twins so a
+# message edit lands once; the twins differ only at the await seam. NoReturn
+# (like _raise_decoded_none) so the ExecutionError content lives in one place.
+def _raise_markup_unrecoverable(output_model: type[BaseModel], raw_text: str) -> NoReturn:
+    raise ExecutionError.build(
+        "structured output contained unrecoverable tool-call markup",
+        expected=f"valid {output_model.__name__}",
+        found=f"DSML markup (first 200 chars): {raw_text[:200]!r}",
+        hint="Model emitted tool-call markup instead of structured output.",
+    )
+
+
+def _raise_dispatch_failed(output_model: type[BaseModel], err: Any) -> NoReturn:
+    raise ExecutionError.build(
+        "structured output dispatch failed",
+        expected=f"valid {output_model.__name__}",
+        found=repr(err),
+        hint="Provider rejected include_raw=True and the compat retry also failed.",
+    ) from err
+
+
+def _raise_unknown_strategy(strategy: str) -> NoReturn:
+    raise ExecutionError.build(
+        "Unknown output_strategy",
+        expected="'structured', 'json_mode', or 'text'",
+        found=repr(strategy),
+        hint="Set output_strategy in llm_config to one of the supported values.",
+    )
+
+
+def _raise_unexpected_variant(result: Any) -> NoReturn:
+    raise ExecutionError.build(
+        "unexpected structured-output result variant",
+        expected="Parsed | Raw | Failed",
+        found=repr(result),
+        hint="A new StructuredResult variant needs a matching case in _call_structured.",
+    )
+
+
 def _call_structured(
     llm: Any,
     messages: list,
@@ -84,12 +123,7 @@ def _call_structured(
                     )
                     if recovered is not None:
                         return recovered, usage
-                raise ExecutionError.build(
-                    "structured output contained unrecoverable tool-call markup",
-                    expected=f"valid {output_model.__name__}",
-                    found=f"DSML markup (first 200 chars): {raw_text[:200]!r}",
-                    hint="Model emitted tool-call markup instead of structured output.",
-                )
+                _raise_markup_unrecoverable(output_model, raw_text)
             case Raw(raw_text=raw_text, usage=_usage):
                 _raise_decoded_none(output_model, raw_text)
             case Failed(error=err, raw_text=raw_text):
@@ -102,29 +136,14 @@ def _call_structured(
                         )
                         if recovered is not None:
                             return recovered, None
-                raise ExecutionError.build(
-                    "structured output dispatch failed",
-                    expected=f"valid {output_model.__name__}",
-                    found=repr(err),
-                    hint="Provider rejected include_raw=True and the compat retry also failed.",
-                ) from err
+                _raise_dispatch_failed(output_model, err)
             case _:  # defensive: a future StructuredResult variant added without a dispatch arm
-                raise ExecutionError.build(
-                    "unexpected structured-output result variant",
-                    expected="Parsed | Raw | Failed",
-                    found=repr(result),
-                    hint="A new StructuredResult variant needs a matching case in _call_structured.",
-                )
+                _raise_unexpected_variant(result)
 
     if strategy in ("json_mode", "text"):
         return _invoke_json_with_retry(llm, messages, output_model, config, max_retries=max_retries)
 
-    raise ExecutionError.build(
-        "Unknown output_strategy",
-        expected="'structured', 'json_mode', or 'text'",
-        found=repr(strategy),
-        hint="Set output_strategy in llm_config to one of the supported values.",
-    )
+    _raise_unknown_strategy(strategy)
 
 
 async def _acall_structured(
@@ -157,12 +176,7 @@ async def _acall_structured(
                     )
                     if recovered is not None:
                         return recovered, usage
-                raise ExecutionError.build(
-                    "structured output contained unrecoverable tool-call markup",
-                    expected=f"valid {output_model.__name__}",
-                    found=f"DSML markup (first 200 chars): {raw_text[:200]!r}",
-                    hint="Model emitted tool-call markup instead of structured output.",
-                )
+                _raise_markup_unrecoverable(output_model, raw_text)
             case Raw(raw_text=raw_text, usage=_usage):
                 _raise_decoded_none(output_model, raw_text)  # async twin
             case Failed(error=err, raw_text=raw_text):
@@ -175,26 +189,11 @@ async def _acall_structured(
                         )
                         if recovered is not None:
                             return recovered, None
-                raise ExecutionError.build(
-                    "structured output dispatch failed",
-                    expected=f"valid {output_model.__name__}",
-                    found=repr(err),
-                    hint="Provider rejected include_raw=True and the compat retry also failed.",
-                ) from err
+                _raise_dispatch_failed(output_model, err)
             case _:
-                raise ExecutionError.build(
-                    "unexpected structured-output result variant",
-                    expected="Parsed | Raw | Failed",
-                    found=repr(result),
-                    hint="A new StructuredResult variant needs a matching case in _call_structured.",
-                )
+                _raise_unexpected_variant(result)
 
     if strategy in ("json_mode", "text"):
         return await _ainvoke_json_with_retry(llm, messages, output_model, config, max_retries=max_retries)
 
-    raise ExecutionError.build(
-        "Unknown output_strategy",
-        expected="'structured', 'json_mode', or 'text'",
-        found=repr(strategy),
-        hint="Set output_strategy in llm_config to one of the supported values.",
-    )
+    _raise_unknown_strategy(strategy)

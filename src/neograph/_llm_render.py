@@ -21,6 +21,7 @@ from neograph._llm_config import LlmConfig, _coerce_llm_config
 from neograph._llm_runtime import _ACCEPT_ALL, EMPTY_RUNTIME, LlmRuntime
 from neograph._placeholders import DOLLAR_RE as _VAR_RE
 from neograph._placeholders import apply_scanner
+from neograph._state_keys import StateKeys
 from neograph.describe_type import describe_type, describe_value
 from neograph.errors import ConfigurationError
 from neograph.renderers import build_rendered_input
@@ -202,6 +203,12 @@ def _compile_prompt(
     }
     if context is not None:
         all_kwargs["context"] = context
+    # di_inputs: the dispatch layer resolves a node's FromInput/FromConfig params
+    # once and stashes them on config under DI_INPUTS (the _oracle_model-style
+    # side-channel); reading here keeps DI resolution single-sourced.
+    di_inputs = config.get("configurable", {}).get(StateKeys.DI_INPUTS) if isinstance(config, dict) else None
+    if di_inputs:
+        all_kwargs["di_inputs"] = di_inputs
     if runtime.prompt_compiler is None:
         raise ConfigurationError.build(
             "prompt compiler not configured",

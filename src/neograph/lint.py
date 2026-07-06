@@ -19,14 +19,19 @@ import structlog
 
 from neograph._ir_branch import iter_with_arms
 from neograph._ir_protocols import ConstructItem
-from neograph._llm_runtime import collect_llm_nodes, missing_runtime_kwargs
+from neograph._llm_runtime import (
+    _ACCEPT_ALL,
+    _accepted_params,
+    collect_llm_nodes,
+    missing_runtime_kwargs,
+)
 from neograph._normalize import normalize_inputs
 from neograph._placeholders import DOLLAR_RE
 from neograph._runtime_registry import _decoration_registry
 from neograph._sidecar import _get_param_res, get_merge_fn_metadata
 from neograph._state_keys import StateKeys
 from neograph.construct import Construct
-from neograph.di import DIBinding, DIKind
+from neograph.di import DI_TEMPLATE_KINDS, DIBinding, DIKind
 from neograph.node import Node
 from neograph.tool import Tool, is_async_only_tool
 
@@ -182,8 +187,25 @@ def lint(
     _walk(construct, config, issues, known_vars=all_known,
           template_resolver=template_resolver,
           conditions=conditions,
-          tool_factories=tool_factory_lookup)
+          tool_factories=tool_factory_lookup,
+          di_inputs_enabled=_compiler_accepts_di_inputs(prompt_compiler))
     return issues
+
+
+def _compiler_accepts_di_inputs(prompt_compiler: Any) -> bool:
+    """True when *prompt_compiler* declares a ``di_inputs`` param (or ``**kwargs``).
+
+    This is the third column of the inline/template-ref key asymmetry: a
+    FromInput/FromConfig parameter name is a VALID template-ref placeholder only
+    when the app's compiler opts in by accepting ``di_inputs`` — otherwise the
+    resolved DI value never reaches the template and the placeholder is
+    unresolvable. Reuses the ONE signature-introspection helper
+    (``_accepted_params``) that the runtime uses to gate the kwarg.
+    """
+    if prompt_compiler is None:
+        return False
+    params = _accepted_params(prompt_compiler)
+    return params is _ACCEPT_ALL or "di_inputs" in params
 
 
 def _emit_missing_llm_kwargs_issue(
@@ -228,6 +250,7 @@ def _walk(
     template_resolver: Callable[[str], str | None] | None = None,
     conditions: dict[str, Callable] | None = None,
     tool_factories: dict[str, Callable] | None = None,
+    di_inputs_enabled: bool = False,
 ) -> None:
     """Recursively walk a construct and check DI bindings + template placeholders."""
     if isinstance(item, Construct):
@@ -240,7 +263,8 @@ def _walk(
             _walk(child, config, issues, known_vars=known_vars,
                   template_resolver=template_resolver,
                   conditions=conditions,
-                  tool_factories=tool_factories)
+                  tool_factories=tool_factories,
+                  di_inputs_enabled=di_inputs_enabled)
         return
 
     if not isinstance(item, Node):
@@ -265,7 +289,8 @@ def _walk(
 
     # 2. Template placeholder checks
     _check_template_placeholders(item, issues, known_vars=known_vars,
-                                 template_resolver=template_resolver)
+                                 template_resolver=template_resolver,
+                                 di_inputs_enabled=di_inputs_enabled)
 
     # 3. Loop condition checks
     _check_loop_condition(item, issues, conditions=conditions)
@@ -283,6 +308,7 @@ def _check_template_placeholders(
     *,
     known_vars: frozenset[str] | set[str],
     template_resolver: Callable[[str], str | None] | None = None,
+    di_inputs_enabled: bool = False,
 ) -> None:
     """Check that prompt placeholders resolve to known input keys.
 
@@ -290,6 +316,13 @@ def _check_template_placeholders(
     - Inline prompts (space or ${} in prompt): extract ${var} placeholders.
     - Template-ref prompts (bare name like "rw/summarize"): if template_resolver
       is provided, read the template text and extract {placeholder} names.
+
+    The valid-key set for a template-ref prompt has THREE columns:
+    predicted input keys (upstream outputs + flattened), consumer *known_vars*,
+    and — when *di_inputs_enabled* (the compiler declares a ``di_inputs`` param)
+    — the node's FromInput/FromConfig parameter names. Inline ``${var}`` prompts
+    never see di_inputs (they resolve via raw attribute access, not the compiler
+    seam), so the third column applies to template-ref prompts only.
     """
     prompt = node.prompt
     if not prompt or node.mode == "scripted":
@@ -324,8 +357,13 @@ def _check_template_placeholders(
     else:
         # Template-ref prompts get rendered data: flattened fields, known
         # extras, framework extras are all available to the prompt_compiler.
+        # Third column: FromInput/FromConfig param names, but ONLY when the
+        # compiler opted into di_inputs — otherwise the resolved DI value never
+        # reaches the template and the placeholder is genuinely unresolvable.
         predicted_keys = _predict_input_keys(node)
         valid_keys = predicted_keys | known_vars
+        if di_inputs_enabled:
+            valid_keys = valid_keys | _di_template_var_names(node)
 
     consumer_known = known_vars - _KNOWN_EXTRAS - predicted_keys
 
@@ -622,6 +660,21 @@ def _extract_format_placeholders(text: str) -> list[str]:
         if field_name is not None and field_name != "":
             names.append(field_name)
     return names
+
+
+def _di_template_var_names(node: Node) -> set[str]:
+    """The node's FromInput/FromConfig parameter names usable as template vars.
+
+    These become valid template-ref placeholders when the prompt_compiler
+    accepts ``di_inputs`` (the dispatch layer resolves them and the compiler
+    binds them by parameter name). Bundled-model kinds contribute the bundle's
+    parameter name (matching the first segment of a dotted ``{ctx.field}``).
+    """
+    param_res = _get_param_res(node)
+    return {
+        name for name, binding in (param_res or {}).items()
+        if binding.kind in DI_TEMPLATE_KINDS
+    }
 
 
 def _predict_input_keys(node: Node, *, include_flattened: bool = True) -> set[str]:

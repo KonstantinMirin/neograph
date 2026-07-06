@@ -9,6 +9,7 @@ from neograph import (
     Construct,
     Node,
     construct_from_functions,
+    construct_from_module,
     node,
 )
 
@@ -985,3 +986,96 @@ class TestTemplateRefLint:
         assert flagged == {"bad1", "bad2"}
 
 
+
+
+class TestDiInputTemplateRefColumn:
+    """Third column of the inline/template-ref key asymmetry (neograph-euyh).
+
+    A ``FromInput``/``FromConfig`` parameter name is a VALID template-ref
+    placeholder ONLY when the app's prompt_compiler opts into ``di_inputs`` (the
+    dispatch layer resolves the value and the compiler binds it by param name).
+    When the compiler does not declare ``di_inputs``, the resolved value never
+    reaches the template, so the placeholder stays unresolvable.
+
+    Requires ``@node``: DI bindings live in the decorator sidecar (``_param_res``).
+    Declarative/programmatic Nodes carry no bindings, so the column is empty for
+    them — the documented three-surface exemption.
+    """
+
+    def _build(self):
+        import types
+        from typing import Annotated
+
+        from neograph import FromInput
+
+        class Claims(BaseModel):
+            items: list[str]
+
+        mod = types.ModuleType("test_di_lint_col_mod")
+
+        @node(outputs=Claims, mode="think", model="fast", prompt="leaf")
+        def analyze(domain: Annotated[str, FromInput]) -> Claims: ...
+
+        mod.analyze = analyze
+        return construct_from_module(mod)
+
+    @staticmethod
+    def _resolver(name):
+        return "Analyze the {domain} domain." if name == "leaf" else None
+
+    def test_di_param_valid_template_ref_when_compiler_accepts_di_inputs(self):
+        """ACCEPT case: compiler declares ``di_inputs`` → ``{domain}`` is valid."""
+        from neograph.lint import lint
+
+        def compiler_with_di(template, input_data, *, di_inputs=None):
+            return [{"role": "user", "content": "x"}]
+
+        c = self._build()
+        issues = lint(
+            c,
+            template_resolver=self._resolver,
+            prompt_compiler=compiler_with_di,
+            llm_factory=lambda tier: None,
+            config={"domain": "oncology"},
+        )
+        unresolvable = [i for i in issues if i.kind == "template_placeholder_unresolvable"]
+        assert unresolvable == []
+
+    def test_di_param_unresolvable_when_compiler_lacks_di_inputs(self):
+        """NOT-ACCEPT case: compiler has no ``di_inputs`` param → ``{domain}`` is
+        flagged unresolvable (the literal would ship to the model — agent-stark)."""
+        from neograph.lint import lint
+
+        def compiler_no_di(template, input_data, *, output_model=None):
+            return [{"role": "user", "content": "x"}]
+
+        c = self._build()
+        issues = lint(
+            c,
+            template_resolver=self._resolver,
+            prompt_compiler=compiler_no_di,
+            llm_factory=lambda tier: None,
+            config={"domain": "oncology"},
+        )
+        unresolvable = [i for i in issues if i.kind == "template_placeholder_unresolvable"]
+        assert len(unresolvable) == 1
+        assert unresolvable[0].param == "domain"
+
+    def test_accept_all_kwargs_compiler_enables_di_column(self):
+        """A ``**kwargs`` compiler accepts di_inputs (the _ACCEPT_ALL sentinel), so
+        the column is enabled and ``{domain}`` is valid."""
+        from neograph.lint import lint
+
+        def compiler_kwargs(template, input_data, **kw):
+            return [{"role": "user", "content": "x"}]
+
+        c = self._build()
+        issues = lint(
+            c,
+            template_resolver=self._resolver,
+            prompt_compiler=compiler_kwargs,
+            llm_factory=lambda tier: None,
+            config={"domain": "oncology"},
+        )
+        unresolvable = [i for i in issues if i.kind == "template_placeholder_unresolvable"]
+        assert unresolvable == []

@@ -200,6 +200,25 @@ class TestRenderInputs:
         expected = build_rendered_input(input_data).for_template_ref
         assert render_inputs(input_data) == expected
 
+    def test_returns_empty_dict_when_input_is_none(self):
+        """An all-DI leaf think node yields input_data=None (no upstream). The
+        primitive owns a total dict contract: None -> {} so the downstream
+        ``inject_schema``/``substitute`` never sees a non-dict (neograph-4tsd:
+        ``dict(None)`` TypeError before the fix)."""
+        from neograph import render_inputs
+
+        assert render_inputs(None) == {}
+
+    def test_returns_empty_dict_when_single_nondict_value(self):
+        """Single-type (non-dict) inputs have no bindable var name; template-ref
+        prompts address vars by name, so a nameless value contributes no vars.
+        The contract is uniform with None: any non-dict view collapses to {}
+        (before the fix these returned a bare str -> ``dict(str)`` ValueError)."""
+        from neograph import render_inputs
+
+        assert render_inputs("bare string") == {}
+        assert render_inputs(RawText(text="x")) == {}
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 6. inject_schema — rides describe_type
@@ -268,6 +287,45 @@ class TestDefaultPromptCompilerEndToEnd:
         assert isinstance(result["analyze"], Claims)
         assert result["analyze"].items == ["ok"]
 
+    def test_all_di_think_node_runs_when_input_is_none(self, tmp_path):
+        """A leaf think node whose params are ALL DI (no upstream node) yields
+        input_data=None through the compile()+run() seam. DefaultPromptCompiler
+        must render it (schema-only vars) rather than crashing on ``dict(None)``.
+
+        This is the agent-stark ``{domain}`` leaf shape (neograph-4tsd): a think
+        node driven purely by ``run(input=...)`` DI, no upstream producer."""
+        from typing import Annotated
+
+        from neograph import DefaultPromptCompiler, FromInput
+
+        prompts = tmp_path / "prompts"
+        prompts.mkdir(parents=True, exist_ok=True)
+        # No upstream var to reference — the only var is the injected schema.
+        (prompts / "leaf.md").write_text(
+            "Analyze the domain.\n\nRespond per schema:\n{json_schema}\n"
+        )
+
+        import types
+
+        mod = types.ModuleType("test_all_di_think_mod")
+
+        @node(outputs=Claims, mode="think", model="fast", prompt="leaf")
+        def analyze(domain: Annotated[str, FromInput]) -> Claims: ...
+
+        mod.analyze = analyze
+        pipeline = construct_from_module(mod)
+
+        graph = compile(
+            pipeline,
+            llm_factory=lambda tier: StructuredFake(lambda m: m(items=["ok"])),
+            prompt_compiler=DefaultPromptCompiler(prompts),
+            **build_test_compile_kwargs(),
+        )
+        result = run(graph, input={"domain": "finance", "node_id": "leaf"})
+
+        assert isinstance(result["analyze"], Claims)
+        assert result["analyze"].items == ["ok"]
+
     def test_call_returns_rendered_message_list_when_invoked_directly(self, tmp_path):
         """The compiler satisfies the PromptCompiler protocol: __call__ loads the
         template, renders inputs, injects the schema, and substitutes — returning
@@ -291,6 +349,174 @@ class TestDefaultPromptCompilerEndToEnd:
         assert "hello world" in content
         assert describe_type(Claims) in content
         assert "{" in content  # the schema's own literal braces
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 7b. di_inputs — resolved FromInput/FromConfig values reach the template
+#     (neograph-euyh, GH issue 5 layer 3). The agent-stark {domain} incident.
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def _user_content(messages: list) -> str:
+    """Join the user-role message content(s) into one string."""
+    return " ".join(
+        m["content"] for m in messages
+        if isinstance(m, dict) and m.get("role") == "user"
+    )
+
+
+class TestDefaultPromptCompilerDiInputs:
+    """build_vars exposes di_inputs as a BASE layer; upstream outputs shadow it."""
+
+    def test_di_input_var_renders_when_no_upstream_output(self):
+        """A ``{domain}`` placeholder fed purely by di_inputs renders — the
+        agent-stark leaf shape where a FromInput param is the only var."""
+        from neograph import DefaultPromptCompiler
+
+        compiler = DefaultPromptCompiler(lambda name: "The domain is {domain}.")
+        messages = compiler("t", None, di_inputs={"domain": "oncology"})
+
+        content = _user_content(messages)
+        assert "The domain is oncology." in content
+        assert "{domain}" not in content
+
+    def test_upstream_output_shadows_di_input_on_name_collision(self):
+        """Precedence decision (neograph-euyh): on a name collision the upstream
+        node OUTPUT wins over the di_input — the node-local, dataflow-derived
+        value is more specific than run-wide ambient DI context.
+
+        This is the zero-behavior-change rule: di_inputs only fills names NOT
+        already produced upstream, so no existing pipeline's {name} binding
+        changes meaning when a FromInput param happens to collide."""
+        from neograph import DefaultPromptCompiler
+
+        compiler = DefaultPromptCompiler(lambda name: "value={domain}")
+        # 'domain' is present BOTH as an upstream output (input_data) and a
+        # di_input. The output must win.
+        messages = compiler(
+            "t", {"domain": "FROM_OUTPUT"}, di_inputs={"domain": "FROM_DI"}
+        )
+
+        content = _user_content(messages)
+        assert "value=FROM_OUTPUT" in content
+        assert "FROM_DI" not in content
+
+    def test_build_vars_layers_di_inputs_under_rendered_inputs(self):
+        """Unit-level precedence proof on build_vars directly: di_inputs is the
+        base, render_inputs(input_data) overlays it."""
+        from neograph import DefaultPromptCompiler
+
+        compiler = DefaultPromptCompiler(lambda name: "x")
+        vars = compiler.build_vars(
+            {"topic": "sky"}, di_inputs={"domain": "finance", "topic": "SHADOWED"}
+        )
+        assert vars["domain"] == "finance"      # di_input survives (no collision)
+        assert vars["topic"] == "sky"           # rendered output shadows di_input
+
+    def test_di_inputs_none_preserves_total_dict_contract(self):
+        """di_inputs=None collapses to {} — no crash, mirrors render_inputs(None)."""
+        from neograph import DefaultPromptCompiler
+
+        compiler = DefaultPromptCompiler(lambda name: "no vars")
+        messages = compiler("t", None, di_inputs=None)
+        assert _user_content(messages) == "no vars"
+
+
+class TestDiInputReachesModelEndToEnd:
+    """The production incident, fixed: a think node references a FromInput param
+    in its template and the RESOLVED value reaches the model — no seed node."""
+
+    def test_from_input_value_reaches_model_via_template_when_compiler_opts_in(
+        self, tmp_path
+    ):
+        """agent-stark shape end-to-end: ``domain: Annotated[str, FromInput]`` on a
+        think node whose ``{domain}`` template placeholder is filled with the value
+        from ``run(input={'domain': ...})`` — with NO scripted seed node copying
+        run-input onto the bus."""
+        from typing import Annotated
+
+        from neograph import DefaultPromptCompiler, FromInput
+
+        prompts = tmp_path / "prompts"
+        prompts.mkdir(parents=True, exist_ok=True)
+        (prompts / "leaf.md").write_text(
+            "Analyze the {domain} domain.\n\nRespond per schema:\n{json_schema}\n"
+        )
+
+        # Wrap DefaultPromptCompiler to capture the messages handed to the LLM.
+        base = DefaultPromptCompiler(prompts)
+        captured: dict[str, object] = {}
+
+        def capturing_compiler(*a, **kw):
+            messages = base(*a, **kw)
+            captured["messages"] = messages
+            captured["di_inputs"] = kw.get("di_inputs")
+            return messages
+
+        import types
+
+        mod = types.ModuleType("test_di_reaches_model_mod")
+
+        @node(outputs=Claims, mode="think", model="fast", prompt="leaf")
+        def analyze(domain: Annotated[str, FromInput]) -> Claims: ...
+
+        mod.analyze = analyze
+        pipeline = construct_from_module(mod)
+
+        graph = compile(
+            pipeline,
+            llm_factory=lambda tier: StructuredFake(lambda m: m(items=["ok"])),
+            prompt_compiler=capturing_compiler,
+            **build_test_compile_kwargs(),
+        )
+        result = run(graph, input={"domain": "oncology", "node_id": "leaf"})
+
+        assert isinstance(result["analyze"], Claims)
+        # The resolved FromInput value reached the compiler as di_inputs...
+        assert captured["di_inputs"] == {"domain": "oncology"}
+        # ...and is rendered into the user message the model received.
+        content = _user_content(captured["messages"])  # type: ignore[arg-type]
+        assert "Analyze the oncology domain." in content
+        assert "{domain}" not in content
+
+    def test_from_input_dropped_when_compiler_does_not_opt_in(self, tmp_path):
+        """Opt-in preserved: a compiler that does NOT declare di_inputs never
+        receives it (the introspection gate). The literal ``{domain}`` would ship
+        unresolved — this is exactly what lint flags as unresolvable."""
+        from typing import Annotated
+
+        from neograph import FromInput
+
+        received: dict[str, object] = {}
+
+        # Explicit params only — no **kwargs, no di_inputs. The gate must not
+        # pass di_inputs to this compiler.
+        def strict_compiler(template, input_data, *, output_model=None,
+                            output_schema=None, config=None, node_name="",
+                            llm_config=None):
+            received["saw_di_inputs"] = False
+            return [{"role": "user", "content": "static"}]
+
+        import types
+
+        mod = types.ModuleType("test_no_optin_mod")
+
+        @node(outputs=Claims, mode="think", model="fast", prompt="leaf")
+        def analyze(domain: Annotated[str, FromInput]) -> Claims: ...
+
+        mod.analyze = analyze
+        pipeline = construct_from_module(mod)
+
+        graph = compile(
+            pipeline,
+            llm_factory=lambda tier: StructuredFake(lambda m: m(items=["ok"])),
+            prompt_compiler=strict_compiler,
+            **build_test_compile_kwargs(),
+        )
+        # Must not raise a TypeError from an unexpected di_inputs kwarg.
+        result = run(graph, input={"domain": "oncology", "node_id": "leaf"})
+        assert isinstance(result["analyze"], Claims)
+        assert received["saw_di_inputs"] is False
 
 
 # ═══════════════════════════════════════════════════════════════════════════

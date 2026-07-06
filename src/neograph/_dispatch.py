@@ -26,9 +26,39 @@ from neograph import _llm
 from neograph._llm_render import _is_inline_prompt
 from neograph._llm_runtime import EMPTY_RUNTIME, LlmRuntime
 from neograph._normalize import NormalizedOutputs, normalize_outputs
+from neograph._sidecar import _get_param_res
+from neograph._state_keys import StateKeys
+from neograph.di import DI_TEMPLATE_KINDS
 from neograph.errors import ConfigurationError, ExecutionError
 from neograph.node import Node, TypeSpecStatic
 from neograph.renderers import build_rendered_input
+
+
+def _inject_di_inputs(node: Node, config: RunnableConfig) -> RunnableConfig:
+    """Resolve a node's FromInput/FromConfig params and stash them on config.
+
+    LLM-mode nodes never run their body, so — unlike scripted nodes, whose shim
+    resolves DI — their FromInput/FromConfig params are otherwise dropped. That
+    is the production bug where a ``domain: Annotated[str, FromInput]`` declared
+    on a think node never reached its ``{domain}`` template placeholder. This
+    resolves those params ONCE through the canonical ``DIBinding.resolve`` and
+    injects the ``{param_name: value}`` map under ``StateKeys.DI_INPUTS``
+    (copy-not-mutate, mirroring ``_inject_oracle_config``), so ``_compile_prompt``
+    can offer it to a ``di_inputs``-aware prompt_compiler. Returns config
+    unchanged when the node declares no template-usable DI params.
+    """
+    param_res = _get_param_res(node)
+    if not param_res:
+        return config
+    di_inputs = {
+        name: binding.resolve(config)
+        for name, binding in param_res.items()
+        if binding.kind in DI_TEMPLATE_KINDS
+    }
+    if not di_inputs:
+        return config
+    configurable = config.get("configurable", {})
+    return {**config, "configurable": {**configurable, StateKeys.DI_INPUTS: di_inputs}}
 
 # ── Typed dispatch containers (architecture-v2 section 1) ────────────────
 #
@@ -175,6 +205,7 @@ class ThinkDispatch:
         config: RunnableConfig,
         context_data: dict[str, str] | None,
     ) -> NodeOutput:
+        config = _inject_di_inputs(node, config)
         rendered = _render_input(node, input_data.value, runtime=self.runtime)
         output_model, primary_key = _resolve_primary_output(node)
         effective_model = config.get("configurable", {}).get("_oracle_model", node.model) or ""
@@ -207,6 +238,7 @@ class ThinkDispatch:
     ) -> NodeOutput:
         # Async twin of execute(): same pure preamble/postamble, awaits the LLM
         # vertical (_llm.ainvoke_structured) instead of blocking it.
+        config = _inject_di_inputs(node, config)
         rendered = _render_input(node, input_data.value, runtime=self.runtime)
         output_model, primary_key = _resolve_primary_output(node)
         effective_model = config.get("configurable", {}).get("_oracle_model", node.model) or ""

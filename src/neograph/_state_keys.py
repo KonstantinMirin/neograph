@@ -67,6 +67,15 @@ class StateKeys:
     # writer-presence cannot replace this flag. See docs/design/
     # langgraph-output-schema-research-2026-07-03.md (R4).
     STREAM_CUSTOM = "_neo_stream_custom"
+    # DI_INPUTS is a config['configurable'] key (NOT a state-bus key): the LLM
+    # dispatch layer stashes the resolved FromInput/FromConfig values (keyed by
+    # the node's parameter names) here so the prompt-compilation seam
+    # (`_compile_prompt`) can hand them to a prompt_compiler that declares a
+    # `di_inputs` param — WITHOUT re-resolving DI or threading a new positional
+    # through the `_llm`/`_tool_loop` call chain. Mirrors the `_oracle_model`
+    # config-injection pattern (`_inject_oracle_config`). Never enters state — a
+    # config-only key, so it cannot touch the schema fingerprint.
+    DI_INPUTS = "_neo_di_inputs"
 
     # Non-`neo_`-prefixed framework state keys (CON-01). These are DI-context
     # state-bus fields the compiler always adds (node_id, project_root) plus the
