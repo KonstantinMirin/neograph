@@ -140,29 +140,19 @@ def _gen_conftest(construct_var: str, mod_import: str, nodes: list[dict]) -> str
     if llm_nodes:
         L.extend([
             '',
-            '# TODO: configure a FakeLLM that returns correct types per node.',
-            '# Example:',
+            '# Use the public, loop-compatible fake — FakeLLM({node_name: output}).',
+            '# It routes per node_name and emits real langchain_core AIMessage types,',
+            '# so think / agent / act / oracle-merge nodes all resolve.',
+            '# from neograph.testing import FakeLLM, install_fake_llm',
             '#',
-            '# class FakeLLM:',
-            '#     def __init__(self, responses):',
-            '#         self._responses = responses',
-            '#         self._output_model = None',
-            '#',
-            '#     def with_structured_output(self, model, **kw):',
-            '#         clone = FakeLLM(self._responses)',
-            '#         clone._output_model = model',
-            '#         return clone',
-            '#',
-            '#     def invoke(self, messages, **kw):',
-            '#         factory = self._responses.get(self._output_model)',
-            '#         return factory() if factory else self._output_model()',
-            '#',
-            '# RESPONSES = {',
+            '# FAKE = FakeLLM({',
         ])
         for n in llm_nodes:
-            L.append(f'#     {n["outputs_name"]}: lambda: {n["outputs_name"]}(...),  # {n["name"]}')
+            L.append(f'#     "{n["name"]}": {n["outputs_name"]}(...),')
         L.extend([
-            '# }',
+            '# })',
+            '# ... compile(pipeline, llm_factory=FAKE, prompt_compiler=...) ',
+            '# (or install_fake_llm(monkeypatch, {...}) for a graph compiled in app code)',
             '',
         ])
     if agent_nodes:

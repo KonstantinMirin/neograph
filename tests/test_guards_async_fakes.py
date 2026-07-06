@@ -22,8 +22,15 @@ from __future__ import annotations
 
 import ast
 import pathlib
+import re
 
-FAKES_PATH = pathlib.Path(__file__).resolve().parent / "fakes.py"
+# dyp3: the shared fakes were promoted to the public package. The bare-delegation
+# async-mirror invariant now guards the SOURCE OF TRUTH at its new home; tests/
+# fakes.py only re-exports these (no class bodies to scan there anymore).
+FAKES_PATH = (
+    pathlib.Path(__file__).resolve().parent.parent
+    / "src" / "neograph" / "testing" / "fakes.py"
+)
 
 # The 8 shared deterministic fakes that MUST each gain an async ``ainvoke``
 # mirror (disease-scan MIGRATE rows 1-8 in neograph-w74k.1 notes).
@@ -209,3 +216,101 @@ class TestAsyncFakeDelegationGuard:
             "async def ainvoke(self, *a, **k):\n    return self.respond(*a, **k)\n"
         ).body[0]
         assert not _is_bare_delegation(wrong_target, "invoke")
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# TEST: neograph-dyp3 — one fake-LLM implementation; both _get_llm seams patched
+# ═══════════════════════════════════════════════════════════════════════════
+
+_REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
+_SRC = _REPO_ROOT / "src" / "neograph"
+_TESTS_FAKES = _REPO_ROOT / "tests" / "fakes.py"
+
+# The doubles promoted to neograph.testing.fakes (dyp3). tests/fakes.py must
+# RE-EXPORT these, never redefine them (Core Invariant: exactly one impl).
+_MIGRATED = frozenset({
+    "StructuredFake", "StructuredFakeWithRaw", "ReActFake", "StringArgsFake",
+    "TextFake", "FakeTool", "GuardFake", "StubbornFake", "GatedAsyncFake",
+    "_final_json_content",
+})
+
+# Extracts the module a ``monkeypatch.setattr("<module>._get_llm", ...)`` targets.
+# Quote-agnostic (single OR double) so a differently-quoted patch line cannot slip
+# past the seam-monopoly check.
+_PATCH_SITE_RE = re.compile(r"""setattr\(\s*['"]([\w.]+)\._get_llm['"]""")
+
+
+def _redefined_migrated(source: str) -> set[str]:
+    """Names in *_MIGRATED* that *source* DEFINES (class/def), i.e. duplicates
+    of the public implementation rather than re-exports/imports."""
+    tree = ast.parse(source)
+    defined = {
+        n.name
+        for n in ast.walk(tree)
+        if isinstance(n, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    return _MIGRATED & defined
+
+
+class TestPublicFakesMonopoly:
+    """dyp3: the fake-LLM contract has ONE implementation (neograph.testing.fakes),
+    and install_fake_llm patches EVERY _get_llm binding site.
+
+    - tests/fakes.py re-exports the migrated doubles; a re-introduced copy there
+      (or anywhere) re-opens the divergence that broke consumers.
+    - _get_llm is defined in _llm and imported into _tool_loop's namespace, so
+      install_fake_llm must patch BOTH; the set of importer modules must equal the
+      set of modules install_fake_llm setattrs.
+    """
+
+    def test_tests_fakes_does_not_redefine_migrated_doubles(self):
+        redefined = _redefined_migrated(_TESTS_FAKES.read_text())
+        assert not redefined, (
+            f"tests/fakes.py redefines migrated fake(s) {sorted(redefined)} — after "
+            "dyp3 these must be re-exported from neograph.testing.fakes, not "
+            "duplicated (one implementation, two consumers)."
+        )
+
+    def test_meta_pure_reexport_passes(self):
+        """POSITIVE: an import-only shim redefines nothing."""
+        src = "from neograph.testing.fakes import StructuredFake, ReActFake\n"
+        assert _redefined_migrated(src) == set()
+
+    def test_meta_redefinition_is_flagged(self):
+        """NEGATIVE: a re-introduced class body is caught (the regression shape)."""
+        src = (
+            "from neograph.testing.fakes import ReActFake\n"
+            "class StructuredFake:\n"
+            "    def invoke(self, m, **k):\n        return None\n"
+        )
+        assert _redefined_migrated(src) == {"StructuredFake"}
+
+    def test_get_llm_seams_all_patched_by_install_fake_llm(self):
+        """The modules that bind _get_llm must EXACTLY equal the modules
+        install_fake_llm patches — a new importer that install_fake_llm forgets
+        would silently leave that path on the real factory."""
+        importers = set()
+        for py in sorted(_SRC.rglob("*.py")):
+            tree = ast.parse(py.read_text())
+            for n in ast.walk(tree):
+                if isinstance(n, ast.ImportFrom) and n.module == "neograph._llm":
+                    if any(a.name == "_get_llm" for a in n.names):
+                        importers.add(f"neograph.{py.stem}")
+        importers.add("neograph._llm")  # the defining module
+
+        fakes_src = (_SRC / "testing" / "fakes.py").read_text()
+        patched = set(_PATCH_SITE_RE.findall(fakes_src))
+
+        assert importers == patched, (
+            f"install_fake_llm patch sites {sorted(patched)} != _get_llm binding "
+            f"modules {sorted(importers)}. A binding site that is not patched leaves "
+            "that path on the real factory (a mistyped/missing setattr)."
+        )
+
+    def test_slip_patch_site_re(self):
+        """The patch-site regex is quote-agnostic — a single-quoted setattr target
+        (the shape a naive double-quote pattern would miss) is still extracted."""
+        double = 'monkeypatch.setattr("neograph._tool_loop._get_llm", fn)'
+        single = "monkeypatch.setattr('neograph._tool_loop._get_llm', fn)"
+        assert _PATCH_SITE_RE.findall(double) == ["neograph._tool_loop"]
+        assert _PATCH_SITE_RE.findall(single) == ["neograph._tool_loop"]

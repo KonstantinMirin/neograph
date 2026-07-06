@@ -33,7 +33,7 @@ SRC_DIR = pathlib.Path(__file__).resolve().parent.parent / "src" / "neograph"
 MONOPOLIES = {
     "_attr_chain_after_prefix": ("forward.py", 2),
     "_build_condition_spec": ("forward.py", 2),
-    "_emit_set_block": ("testing.py", 4),
+    "_emit_set_block": ("testing/scaffold.py", 4),
 }
 
 # helper name -> the unique inline idiom that must appear exactly once (the def).

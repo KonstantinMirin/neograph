@@ -357,9 +357,10 @@ class Node(Modifiable, BaseModel):
             assert result.text == "hello"
 
             # Unit test a produce node
+            from neograph.testing import FakeLLM
             result = classify.run_isolated(
                 input=Claims(items=["x"]),
-                llm_factory=lambda tier: FakeLLM(),
+                llm_factory=FakeLLM({"classify": Classified(...)}),
                 prompt_compiler=lambda t, d, **kw: [{"role": "user", "content": "x"}],
             )
             assert isinstance(result, Classified)

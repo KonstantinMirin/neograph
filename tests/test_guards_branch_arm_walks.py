@@ -59,7 +59,10 @@ def _is_dot_nodes(expr: ast.AST) -> bool:
 def _collect_raw_nodes_walks() -> Counter:
     """Content-keyed Counter of every raw ``.nodes`` iteration in the source."""
     found: Counter = Counter()
-    for py_file in sorted(SRC_DIR.glob("*.py")):
+    # rglob (not glob): cover subpackages too (src/neograph/testing, schemas) so
+    # a .nodes walk moved into a subpackage stays visible to this guard (dyp3
+    # moved the scaffold codegen into testing/scaffold.py).
+    for py_file in sorted(SRC_DIR.rglob("*.py")):
         src = py_file.read_text()
         lines = src.splitlines()
         tree = ast.parse(src)
@@ -105,7 +108,7 @@ _ALLOWLIST: Counter = Counter({
     # _collect_edges walks were migrated to iter_with_arms in neograph-gfoq; the
     # remaining inner walk descends a sub-construct's own node list one level
     # down (sub-construct arm-descent is owned by the sub-construct itself).
-    ("testing.py",
+    ("scaffold.py",
      "sub_nodes = [_node_info(n) for n in item.nodes if isinstance(n, Node)]"): 1,
 })
 
