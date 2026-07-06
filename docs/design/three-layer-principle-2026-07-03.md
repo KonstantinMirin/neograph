@@ -69,6 +69,40 @@ something non-pure (tool calls) was living inside a node body
 documentation; it is moving the boundary — compile agent mode to an
 agent-node / tool-node subgraph so every ReAct turn is a superstep.
 
+### 1.2.1 Worked example: config as the Layer-1→Layer-2 carrier (`_neo_di_inputs`)
+
+_Added 2026-07-06 after the euyh/jhz4 adversarial architecture review — the
+permanent rationale, not the coordination history._
+
+**DI-resolved `FromInput`/`FromConfig` values reach LLM-node prompt templates
+via a config side-channel (`config['configurable']['_neo_di_inputs']`), not by
+threading a kwarg through the render call chain.** LLM-mode nodes never run
+their body, so their DI params — which scripted nodes resolve in their shim —
+would otherwise be dropped. The dispatch layer resolves them once through the
+canonical `DIBinding.resolve` and stashes them on config; `_compile_prompt`
+reads them back and offers them to a `di_inputs`-aware prompt_compiler behind
+the existing introspection gate.
+
+Why config, not a threaded kwarg:
+
+1. Config is the sanctioned Layer-1→Layer-2 carrier; DI resolution is Layer-2
+   cognition.
+2. `_neo_` config keys never enter state, so they cannot touch the schema
+   fingerprint and are re-derived fresh on every node execution — making
+   interrupt/resume correct by construction (the value rides `CONFIG_INPUT`
+   re-injection, never the checkpoint).
+3. Threading a kwarg would duplicate a new signature across the sync/async
+   twins of `_llm.py` and `_tool_loop.py` for zero consumer-visible gain — the
+   compiler receives the same `di_inputs=` kwarg either way.
+4. It mirrors the proven `_inject_oracle_config` / `_oracle_model` pattern.
+
+**Single resolver** (`DIBinding.resolve`), **single key**
+(`StateKeys.DI_INPUTS`), **single reader** (`_compile_prompt`), injected at
+every LLM-mode seam — pinned by `TestDiInputsInjectedAtLlmDispatchSeams`.
+Precedence: di_inputs is the base layer; upstream node outputs shadow it on
+name collision (the more specific dataflow value wins; no existing `{name}`
+binding changes meaning).
+
 ### 1.3 What is explicitly allowed (justified exceptions)
 
 - **Sub-constructs invoked inside a wrapper function** (`_subconstruct.py`):
