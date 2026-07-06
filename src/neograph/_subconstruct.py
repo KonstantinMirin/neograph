@@ -184,5 +184,8 @@ def make_subgraph_fn(sub: Construct, sub_graph: CompiledStateGraph) -> RunnableL
 
     # Driver-selected dual path. __name__ stays informational; routing is the
     # graph.add_node(name, fn) argument (always sub.name/item.name). See
-    # neograph-y20i.
+    # neograph-y20i. Trace-span naming per neograph-3fm1 is applied by the
+    # graph-assembly layer (`named(...)` at the add_node sites in compiler.py and
+    # _wiring._add_arm_nodes) so this factory keeps returning the bare
+    # dual-path RunnableLambda the async guard pins.
     return RunnableLambda(subgraph_node, afunc=asubgraph_node)

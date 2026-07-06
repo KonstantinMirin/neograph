@@ -29,6 +29,7 @@ from neograph._oracle import (
 from neograph._state_bus import StateBus, adapt_state, snapshot_state
 from neograph._state_keys import StateKeys
 from neograph._subconstruct import make_subgraph_fn
+from neograph._trace import named
 from neograph.construct import Construct
 from neograph.di import _unwrap_loop_value
 from neograph.errors import ConfigurationError, ExecutionError
@@ -104,6 +105,91 @@ def _collect_each_items(bus: StateBus, each: Each, *, fan_out: str) -> list:
     return unique_items
 
 
+def _empty_each_bypass(field: str) -> Callable[[Any], dict]:
+    """Build the empty-collection bypass body for an Each fan-out.
+
+    Writes an empty dict to the Each ``field`` so downstream nodes proceed when
+    the collection is empty. Follows the ``__loop_exit_`` pass-through pattern.
+    Single source shared by ``_wire_each`` (single Each) and
+    ``_add_each_oracle_fused`` (Each×Oracle fusion) so the one bypass rule cannot
+    drift between the two topologies (DRY-08 / neograph-7w0d).
+    """
+
+    def empty_bypass(state: Any) -> dict:
+        return {field: {}}
+
+    return empty_bypass
+
+
+def _add_arm_nodes(
+    graph: StateGraph,
+    nodes: list,
+    *,
+    checkpointer: Any = None,
+    runtime: LlmRuntime = EMPTY_RUNTIME,
+    scripted_lookup: dict[str, Callable] | None = None,
+    condition_lookup: dict[str, Callable] | None = None,
+    tool_factory_lookup: dict[str, Callable] | None = None,
+) -> None:
+    """Add every node of one branch arm to the graph.
+
+    Arms can contain both Nodes and Constructs (e.g. ``self.loop()`` produces a
+    Construct in the arm). Constructs are compiled with the parent checkpointer +
+    condition/tool lookups threaded in — exactly like the main sub-construct path
+    (``compiler.py::_add_subgraph``). Without the checkpointer an Operator
+    sub-construct in an arm fails the "Operator requires a checkpointer" compile
+    guard; without conditions a string Operator condition inside the arm cannot
+    resolve. See neograph-faf8.
+
+    Single source for both branch arms (DRY-07 / neograph-7w0d) — the true-arm
+    and false-arm node-add loops were verbatim-identical, the exact shape the
+    vn5f arm-descent primitives exist to kill. Edge wiring is handled separately
+    by :func:`_wire_arm_edges`.
+    """
+    # Circular import: arm Constructs compile via compile(). Import here to avoid
+    # the import cycle (compiler.py imports this module).
+    from neograph.compiler import compile as _compile
+
+    for item in nodes:
+        if isinstance(item, Construct):
+            sub_graph = _compile(
+                item,
+                checkpointer=checkpointer,
+                _runtime=runtime,
+                _scripted_lookup=scripted_lookup,
+                conditions=condition_lookup,
+                tool_factories=tool_factory_lookup,
+            )
+            subgraph_fn = make_subgraph_fn(item, sub_graph.graph)
+            # `named` so the arm sub-construct's engine span reads as the construct
+            # name (not the leaking `subgraph_node` __name__). See neograph-3fm1.
+            graph.add_node(item.name, cast(Any, named(
+                subgraph_fn,
+                item.name,
+                mode="subgraph",
+                output_type=item.output.__name__ if item.output is not None else None,
+            )))
+        else:
+            # make_node_fn already self-names its wrapper per neograph-3fm1.
+            node_fn = make_node_fn(
+                item,
+                runtime=runtime,
+                scripted_lookup=scripted_lookup,
+                tool_factory_lookup=tool_factory_lookup,
+            )
+            graph.add_node(item.name, node_fn)
+
+
+def _wire_arm_edges(graph: StateGraph, nodes: list) -> None:
+    """Wire the sequential edges within one branch arm.
+
+    Single source for both arms (DRY-07 / neograph-7w0d) — the two duplicated
+    ``range(1, len(...))`` edge loops collapse here.
+    """
+    for i in range(1, len(nodes)):
+        graph.add_edge(nodes[i - 1].name, nodes[i].name)
+
+
 def _wire_oracle(
     graph: StateGraph,
     gen_name: str,
@@ -118,8 +204,9 @@ def _wire_oracle(
     """
     merge_name = f"merge_{gen_name}"
 
-    # Generator node (called N times via Send)
-    graph.add_node(gen_name, cast(Any, gen_fn))
+    # Generator node (called N times via Send). `named` so the engine span reads
+    # as the node (not the leaking redirect __name__). See neograph-3fm1.
+    graph.add_node(gen_name, cast(Any, named(cast(Runnable, gen_fn), gen_name, mode="oracle")))
 
     # Router that dispatches N generators
     models = oracle.models
@@ -144,7 +231,7 @@ def _wire_oracle(
         graph.add_conditional_edges(START, oracle_router, path_map=[gen_name])
 
     # Merge barrier
-    graph.add_node(merge_name, cast(Any, merge_fn), defer=True)
+    graph.add_node(merge_name, cast(Any, named(cast(Runnable, merge_fn), merge_name, mode="oracle_merge")), defer=True)
     graph.add_edge([gen_name], merge_name)
 
     return merge_name
@@ -165,14 +252,13 @@ def _wire_each(
     barrier_name = f"assemble_{fan_name}"
     empty_name = f"__each_empty_{fan_name}"
 
-    graph.add_node(fan_name, cast(Any, fan_fn))
+    # `named` so the fan-out node's engine span reads as the node (not the
+    # leaking wrapper __name__). See neograph-3fm1.
+    graph.add_node(fan_name, cast(Any, named(cast(Runnable, fan_fn), fan_name, mode="each")))
 
     # Empty-collection bypass: writes empty dict to the Each field so
     # downstream nodes proceed. Follows the __loop_exit_ pattern.
-    def empty_bypass(state: Any) -> dict:
-        return {field_name_for(fan_name): {}}
-
-    graph.add_node(empty_name, empty_bypass)
+    graph.add_node(empty_name, cast(Any, _empty_each_bypass(field_name_for(fan_name))))
 
     def each_router(state: Any) -> list:
         bus = adapt_state(state)
@@ -233,13 +319,10 @@ def _add_each_oracle_fused(
     redirect_fn = make_eachoracle_redirect_fn(
         raw_fn, field_name, collector_field, each.key, item=node,
     )
-    graph.add_node(gen_name, redirect_fn)
+    graph.add_node(gen_name, cast(Any, named(redirect_fn, gen_name, mode="each_oracle")))
 
     # Empty-collection bypass for Each x Oracle fusion
-    def empty_bypass(state: Any) -> dict:
-        return {field_name: {}}
-
-    graph.add_node(empty_name, empty_bypass)
+    graph.add_node(empty_name, cast(Any, _empty_each_bypass(field_name)))
 
     # Flat router: M items x N generators = M x N Send() calls
     models = oracle.models
@@ -337,7 +420,11 @@ def _add_each_oracle_fused(
 
     graph.add_node(
         barrier_name,
-        RunnableLambda(group_merge_barrier, afunc=agroup_merge_barrier),
+        cast(Any, named(
+            RunnableLambda(group_merge_barrier, afunc=agroup_merge_barrier),
+            barrier_name,
+            mode="each_oracle_merge",
+        )),
         defer=True,
     )
     graph.add_edge([gen_name], barrier_name)
@@ -630,48 +717,26 @@ def _add_branch_to_graph(
     The router function evaluates the branch condition against live state
     and returns the name of the first node in the appropriate arm.
     """
-    # Circular import: _add_branch_to_graph calls compile() for sub-constructs
-    # inside branch arms. Import here to avoid import cycle.
-    from neograph.compiler import compile as _compile
-
     meta = branch_node._neo_branch_meta
     cond_spec = meta.condition_spec
     true_nodes = meta.true_arm_nodes
     false_nodes = meta.false_arm_nodes
 
-    # Add all arm nodes to the graph. Arms can contain both Nodes and
-    # Constructs (e.g., self.loop() produces a Construct in the arm).
-    # We only add the node function here — edge wiring is handled below.
-    for item in true_nodes:
-        if isinstance(item, Construct):
-            # Thread the parent checkpointer + condition_lookup into the arm
-            # sub-construct exactly like the main sub-construct path
-            # (compiler.py::_add_subgraph). Without the checkpointer an Operator
-            # sub-construct in an arm fails the "Operator requires a
-            # checkpointer" compile guard; without conditions a string Operator
-            # condition inside the arm cannot resolve. See neograph-faf8.
-            sub_graph = _compile(item, checkpointer=checkpointer, _runtime=runtime, _scripted_lookup=scripted_lookup, conditions=condition_lookup, tool_factories=tool_factory_lookup)
-            subgraph_fn = make_subgraph_fn(item, sub_graph.graph)
-            graph.add_node(item.name, subgraph_fn)
-        else:
-            node_fn = make_node_fn(item, runtime=runtime, scripted_lookup=scripted_lookup, tool_factory_lookup=tool_factory_lookup)
-            graph.add_node(item.name, node_fn)
+    # Add all arm nodes to the graph, then wire each arm's sequential edges.
+    # Both arms go through the single-source arm-descent primitives (DRY-07 /
+    # neograph-7w0d): one node-add path, one edge-wiring path, called per arm.
+    arm_kwargs: dict[str, Any] = {
+        "checkpointer": checkpointer,
+        "runtime": runtime,
+        "scripted_lookup": scripted_lookup,
+        "condition_lookup": condition_lookup,
+        "tool_factory_lookup": tool_factory_lookup,
+    }
+    _add_arm_nodes(graph, true_nodes, **arm_kwargs)
+    _add_arm_nodes(graph, false_nodes, **arm_kwargs)
 
-    for item in false_nodes:
-        if isinstance(item, Construct):
-            sub_graph = _compile(item, checkpointer=checkpointer, _runtime=runtime, _scripted_lookup=scripted_lookup, conditions=condition_lookup, tool_factories=tool_factory_lookup)
-            subgraph_fn = make_subgraph_fn(item, sub_graph.graph)
-            graph.add_node(item.name, subgraph_fn)
-        else:
-            node_fn = make_node_fn(item, runtime=runtime, scripted_lookup=scripted_lookup, tool_factory_lookup=tool_factory_lookup)
-            graph.add_node(item.name, node_fn)
-
-    # Wire sequential edges within each arm
-    for i in range(1, len(true_nodes)):
-        graph.add_edge(true_nodes[i - 1].name, true_nodes[i].name)
-
-    for i in range(1, len(false_nodes)):
-        graph.add_edge(false_nodes[i - 1].name, false_nodes[i].name)
+    _wire_arm_edges(graph, true_nodes)
+    _wire_arm_edges(graph, false_nodes)
 
     # Build the router function
     true_target = true_nodes[0].name if true_nodes else END
@@ -770,9 +835,15 @@ def _add_agent_cycle(
     tools_sync, tools_async = parts["tools"]
     parse_sync, parse_async = parts["parse"]
 
-    graph.add_node(names.agent, RunnableLambda(agent_sync, afunc=agent_async))
-    graph.add_node(names.tools, RunnableLambda(tools_sync, afunc=tools_async))
-    graph.add_node(names.parse, RunnableLambda(parse_sync, afunc=parse_async))
+    # `named` so each ReAct-cycle body's engine span reads as {node}__agent /
+    # {node}__tools / {node}__parse (not the leaking body __name__). See
+    # neograph-3fm1.
+    graph.add_node(names.agent, cast(Any, named(
+        RunnableLambda(agent_sync, afunc=agent_async), names.agent, mode=node.mode)))
+    graph.add_node(names.tools, cast(Any, named(
+        RunnableLambda(tools_sync, afunc=tools_async), names.tools, mode=node.mode)))
+    graph.add_node(names.parse, cast(Any, named(
+        RunnableLambda(parse_sync, afunc=parse_async), names.parse, mode=node.mode)))
 
     if prev_node:
         graph.add_edge(prev_node, names.agent)

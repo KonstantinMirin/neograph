@@ -29,6 +29,7 @@ from neograph._oracle import (
 from neograph._runtime_registry import _decoration_registry
 from neograph._state_keys import StateKeys
 from neograph._subconstruct import make_subgraph_fn
+from neograph._trace import named
 from neograph._wiring import (
     _add_agent_cycle,
     _add_branch_to_graph,
@@ -437,7 +438,16 @@ def _add_subgraph(
 
     # Build the subgraph node function via factory. compile() returns the
     # CompiledNeograph facade; make_subgraph_fn drives the raw LangGraph graph.
-    subgraph_fn = make_subgraph_fn(sub, sub_graph.graph)
+    # `named` binds run_name=sub.name here (not inside make_subgraph_fn, whose
+    # bare dual-path return is pinned by the async guard) so the sub-construct's
+    # engine span reads as the construct name across every modifier branch below
+    # (bare / oracle-redirect / each-redirect / loop). See neograph-3fm1.
+    subgraph_fn = named(
+        make_subgraph_fn(sub, sub_graph.graph),
+        sub.name,
+        mode="subgraph",
+        output_type=sub.output.__name__ if sub.output is not None else None,
+    )
 
     from typing import assert_never
 

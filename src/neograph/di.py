@@ -20,9 +20,16 @@ from typing import get_origin as _get_origin
 import structlog
 from pydantic import ValidationError
 
+from neograph.errors import ConfigurationError as _ConfigurationError
 from neograph.errors import ExecutionError as _ExecutionError
 
 log = structlog.get_logger(__name__)
+
+# Config['configurable'] key holding the consumer-supplied resource fetcher —
+# an ``async def fetch(uri) -> (content, mime)`` callable. Consumer-owned, exactly
+# like tool factories and the per-run token provider (no session ownership). Shared
+# by ``resource_reader`` (tool.py) and ``FromResource`` DI (DIBinding.aresolve).
+RESOURCE_FETCHER_KEY = "mcp_resource_fetcher"
 
 
 class DIKind(Enum):
@@ -38,6 +45,10 @@ class DIKind(Enum):
     FROM_CONFIG_MODEL = "from_config_model"
     FROM_STATE = "from_state"  # merge_fn only — resolved from graph state
     CONSTANT = "constant"
+    # A resource read via config['configurable']['mcp_resource_fetcher']. The
+    # fetch is AWAITED, so this kind resolves ONLY through the async twin
+    # ``DIBinding.aresolve``; the sync ``resolve()`` fails loud (see below).
+    FROM_RESOURCE = "from_resource"
 
 
 # DI kinds whose resolved value can serve as a prompt template variable on an
@@ -58,6 +69,46 @@ def _get_configurable(config: Any, key: str) -> Any:
     if isinstance(cfg, dict):
         return cfg.get("configurable", {}).get(key)
     return getattr(cfg, "configurable", {}).get(key)
+
+
+def parse_resource_content(
+    content: Any,
+    mime: str | None,
+    output_model: Any,
+    parse: Any = None,
+    *,
+    marker_mime: str | None = None,
+) -> Any:
+    """Turn a fetched resource blob into the declared type. v1 rules:
+
+    - explicit ``parse(content, mime)`` callable wins (the general escape hatch);
+    - ``str`` target -> raw text passthrough (decode bytes);
+    - ``application/json`` (or ``*+json``, or an absent mime) into a BaseModel ->
+      ``model_validate_json``;
+    - any other mime into a BaseModel with no parser -> FAIL LOUD. neograph NEVER
+      runs a silent LLM parse inside DI/resource resolution (banned hidden
+      cognition + cost). The caller supplies an explicit ``parse=`` for text/*.
+
+    Shared by ``resource_reader`` (tool.py) and ``FromResource`` (aresolve).
+    """
+    if parse is not None:
+        return parse(content, mime)
+
+    if output_model is str:
+        return content.decode() if isinstance(content, bytes) else content
+
+    base = (mime or marker_mime or "").split(";")[0].strip().lower()
+    if base == "" or base == "application/json" or base.endswith("+json"):
+        return output_model.model_validate_json(content)
+
+    model_name = getattr(output_model, "__name__", str(output_model))
+    raise _ConfigurationError.build(
+        f"resource mime '{mime or marker_mime or '?'}' cannot be parsed into "
+        f"{model_name} without an explicit parser",
+        hint="pass parse=(content, mime)->model (or type the param as str for raw "
+             "text passthrough); neograph never runs a silent LLM parse inside "
+             "DI/resource resolution",
+    )
 
 
 def _unwrap_loop_value(val: Any, expected_type: Any) -> Any:
@@ -140,6 +191,9 @@ class DIBinding:
     required: bool
     default_value: Any = None  # CONSTANT only: the literal default value
     model_cls: Any = None      # MODEL kinds only: the Pydantic BaseModel subclass
+    uri: str | None = None          # FROM_RESOURCE only: the (static, v1) resource URI
+    parse_fn: Any = None            # FROM_RESOURCE only: explicit (content, mime)->model
+    resource_mime: str | None = None  # FROM_RESOURCE only: mime hint from the marker
 
     def resolve(self, config: Any, *, state: Any = None) -> Any:
         """The ONE resolution path for DI parameters.
@@ -208,4 +262,44 @@ class DIBinding:
             val = _unwrap_loop_value(val, self.inner_type)
             return val
 
+        if self.kind == DIKind.FROM_RESOURCE:
+            # The fetch is awaited — it CANNOT resolve on the sync path. Fail loud
+            # rather than silently drop the value (mirrors the async-only-tool /
+            # async-body-under-run guards). Reached directly (e.g. the scripted
+            # shim under the sync driver builds an async shim and ScriptedDispatch
+            # .execute fails loud first; this is the direct-call safety net).
+            raise _ConfigurationError.build(
+                f"resource DI parameter '{self.name}' cannot resolve synchronously",
+                hint="FromResource fetches are awaited — drive the graph with "
+                     "arun(). resolve() has no fetcher to await; use aresolve().",
+            )
+
         return None
+
+    async def aresolve(self, config: Any, *, state: Any = None) -> Any:
+        """Async resolution twin. Only FROM_RESOURCE needs to await (it fetches);
+        every other kind delegates to the synchronous ``resolve``.
+
+        FROM_RESOURCE: read the consumer-supplied fetcher from
+        ``config['configurable'][RESOURCE_FETCHER_KEY]`` (async
+        ``fetch(uri) -> (content, mime)``), await it, and parse the blob into
+        ``inner_type`` via ``parse_resource_content`` (v1: static URI; json ->
+        model_validate_json; text -> explicit parser or str).
+        """
+        if self.kind != DIKind.FROM_RESOURCE:
+            return self.resolve(config, state=state)
+
+        fetcher = _get_configurable(config, RESOURCE_FETCHER_KEY)
+        if fetcher is None:
+            if not self.required:
+                return None
+            raise _ConfigurationError.build(
+                f"resource DI parameter '{self.name}' has no fetcher to resolve from",
+                hint=f"provide config['configurable']['{RESOURCE_FETCHER_KEY}'] = "
+                     "an async 'fetch(uri) -> (content, mime)' callable",
+            )
+        content, mime = await fetcher(self.uri)
+        return parse_resource_content(
+            content, mime, self.inner_type, self.parse_fn,
+            marker_mime=self.resource_mime,
+        )

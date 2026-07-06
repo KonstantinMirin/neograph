@@ -14,6 +14,7 @@ from pydantic import BaseModel
 from neograph._dispatch import _dispatch_for_mode
 from neograph._execute import _aexecute_node, _execute_node, _type_name
 from neograph._llm_runtime import EMPTY_RUNTIME, LlmRuntime
+from neograph._trace import named
 from neograph.errors import ConfigurationError, ExecutionError
 from neograph.node import Node
 
@@ -52,7 +53,8 @@ def make_node_fn(
     # graph.invoke -> sync raw wrapper, graph.ainvoke -> async raw wrapper that
     # awaits an `async def` raw body (Phase 1b).
     if node.raw_fn is not None:
-        return RunnableLambda(_make_raw_wrapper(node), afunc=_make_araw_wrapper(node))
+        raw = RunnableLambda(_make_raw_wrapper(node), afunc=_make_araw_wrapper(node))
+        return named(raw, node.name, mode="raw", output_type=_type_name(node.outputs))
 
     # Validate scripted registration early
     if node.mode == "scripted":
@@ -81,7 +83,12 @@ def make_node_fn(
     # graph.ainvoke -> anode_wrapper (async). Routing identity is the explicit
     # graph.add_node(name, fn) argument, not this closure's __name__ (which stays
     # informational). Display labels come from node.name. See neograph-y20i.
-    return RunnableLambda(node_wrapper, afunc=anode_wrapper)
+    #
+    # `named` binds run_name=node.name so the engine's callback span reads as the
+    # user's node (not the leaking `node_wrapper` __name__) and carries the node's
+    # mode + declared output type as span metadata. See neograph-3fm1.
+    wrapper = RunnableLambda(node_wrapper, afunc=anode_wrapper)
+    return named(wrapper, node.name, mode=node.mode, output_type=_type_name(node.outputs))
 
 
 def _make_raw_wrapper(node: Node) -> Callable:

@@ -82,6 +82,46 @@ class FromConfig:
         self.required = required
 
 
+class FromResource:
+    """Dependency-injection marker: parameter value is FETCHED from an MCP-style
+    resource at node entry, then parsed into the declared type.
+
+    Use as a marker inside ``typing.Annotated``. Unlike ``FromInput``/``FromConfig``
+    the resource read is AWAITED, so a node carrying a ``FromResource`` param
+    resolves only under the async driver (``arun()``); the sync ``run()`` fails
+    loud. The fetch goes through the consumer-supplied
+    ``config['configurable']['mcp_resource_fetcher']`` (async
+    ``fetch(uri) -> (content, mime)``) — neograph owns no MCP session::
+
+        from typing import Annotated
+        from neograph import node, FromResource
+
+        @node(outputs=Assessment)
+        async def assess(
+            doc: Annotated[ContractDoc, FromResource("crm://deals/42/contract")],
+            claims: Claims,
+        ) -> Assessment: ...
+
+    v1: the ``uri`` is a static string. ``application/json`` content is validated
+    via ``model_validate_json``; ``text/*`` content requires either an explicit
+    ``parse=(content, mime)->model`` callable OR a ``str``-typed parameter (raw
+    text passthrough). neograph NEVER runs a silent LLM parse inside DI.
+    """
+
+    def __init__(
+        self,
+        uri: str,
+        *,
+        mime: str | None = None,
+        parse: Callable[[Any, str | None], Any] | None = None,
+        required: bool = True,
+    ) -> None:
+        self.uri = uri
+        self.mime = mime
+        self.parse = parse
+        self.required = required
+
+
 def _build_annotation_namespace(
     f: Callable,
     caller_ns: dict[str, Any] | None = None,
@@ -107,6 +147,7 @@ def _build_annotation_namespace(
     ns: dict[str, Any] = {
         "FromInput": FromInput,
         "FromConfig": FromConfig,
+        "FromResource": FromResource,
         "Annotated": Annotated,
     }
     try:
@@ -167,22 +208,40 @@ def _classify_di_params(
             continue
         inner_type, *markers = args
 
-        # Match the first FromInput/FromConfig marker we find. Users can
-        # stack other Annotated metadata (docs, validators) alongside ---
-        # we only care about DI markers. Both the bare class (FromInput)
-        # and instances (FromInput(required=True)) are supported.
+        # Match the first FromInput/FromConfig/FromResource marker we find. Users
+        # can stack other Annotated metadata (docs, validators) alongside --- we
+        # only care about DI markers. Both the bare class (FromInput) and
+        # instances (FromInput(required=True)) are supported.
         # Reject ambiguous double DI markers.
         di_markers = [
             m for m in markers
             if m is FromInput or isinstance(m, FromInput)
             or m is FromConfig or isinstance(m, FromConfig)
+            or m is FromResource or isinstance(m, FromResource)
         ]
         if len(di_markers) > 1:
             raise ConstructError.build(
                 f"parameter '{p.name}' has multiple DI markers",
                 found=str([type(m).__name__ for m in di_markers]),
-                hint="use exactly one of FromInput or FromConfig",
+                hint="use exactly one of FromInput, FromConfig, or FromResource",
             )
+
+        # FromResource is fixed-kind (it carries its own uri/mime/parse) — build
+        # the binding directly and skip the input/config classification below.
+        res_marker = next((m for m in markers if isinstance(m, FromResource)), None)
+        if any(m is FromResource for m in markers) and res_marker is None:
+            raise ConstructError.build(
+                f"parameter '{p.name}' uses the bare FromResource class",
+                hint="FromResource requires a uri: FromResource('crm://deals/42/contract')",
+            )
+        if res_marker is not None:
+            param_res[p.name] = DIBinding(
+                name=p.name, kind=DIKind.FROM_RESOURCE, inner_type=inner_type,
+                required=res_marker.required, uri=res_marker.uri,
+                parse_fn=res_marker.parse, resource_mime=res_marker.mime,
+            )
+            continue
+
         kind_base: str | None = None
         required: bool = True
         for marker in markers:

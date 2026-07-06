@@ -26,6 +26,7 @@ from neograph.construct import Construct
 from neograph.decorators import (
     FromConfig,
     FromInput,
+    FromResource,
     construct_from_functions,
     construct_from_module,
     merge_fn,
@@ -79,7 +80,14 @@ from neograph.renderers import (
 )
 from neograph.runner import arun, astream, run, stream
 from neograph.spec_types import lookup_type, register_type
-from neograph.tool import Tool, ToolInteraction, tool
+from neograph.tool import (
+    BlobResult,
+    Tool,
+    ToolInteraction,
+    read_blob,
+    resource_reader,
+    tool,
+)
 from neograph.verify import VerifyIssue, verify_compiled
 
 __all__ = [
@@ -89,6 +97,7 @@ __all__ = [
     "construct_from_functions",
     "FromInput",
     "FromConfig",
+    "FromResource",
     "compile",
     "run",
     "arun",
@@ -96,6 +105,9 @@ __all__ = [
     "astream",
     "emit_progress",
     "tool",
+    "resource_reader",
+    "read_blob",
+    "BlobResult",
     "merge_fn",
     # Human-in-the-loop sugar (agent/act tool bodies)
     "ask_human",

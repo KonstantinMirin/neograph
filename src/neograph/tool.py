@@ -18,10 +18,23 @@ Two ways to define a tool:
 
 from __future__ import annotations
 
+import base64
+import re
 from collections.abc import Callable
 from typing import Any
+from urllib.parse import quote
 
+# Module-level so get_type_hints() on the nested resource-reader coroutines can
+# resolve the stringified `config: RunnableConfig` annotation (under
+# `from __future__ import annotations`) — LangChain's _get_runnable_config_param
+# resolves against the function's __globals__, i.e. THIS module's namespace. A
+# function-local import would leave the hint unresolved and config injection
+# would silently not fire.
+from langchain_core.runnables import RunnableConfig
 from pydantic import BaseModel, Field, PrivateAttr
+
+from neograph.di import RESOURCE_FETCHER_KEY, parse_resource_content
+from neograph.errors import ConfigurationError
 
 
 class Tool(BaseModel, frozen=True):
@@ -55,8 +68,16 @@ class Tool(BaseModel, frozen=True):
 
         Name is taken from ``base_tool.name``; the original tool is carried on
         the ``_bound_tool`` private attribute for later factory registration.
+        A per-tool budget hint stashed under
+        ``base_tool.metadata['ng_tool_budget']`` (e.g. by
+        ``resource_reader(budget=...)``) is lifted onto the spec so the existing
+        budget/tracker path applies without the user re-wrapping.
         """
-        spec = cls(name=base_tool.name)
+        budget = 0
+        meta = getattr(base_tool, "metadata", None)
+        if isinstance(meta, dict):
+            budget = meta.get("ng_tool_budget", 0) or 0
+        spec = cls(name=base_tool.name, budget=budget)
         # Tool is frozen=True; set the PrivateAttr via object.__setattr__ (the
         # canonical frozen-model mutation path) so the assignment is honest to
         # both the runtime and the type checker.
@@ -222,4 +243,160 @@ def tool(
     if fn is not None:
         return decorator(fn)
     return decorator
+
+
+# ── Typed resource readers — neograph-2dtk ─────────────────────────────────────
+#
+# resource_reader() turns (uri template + output model + name) into a properly
+# TYPED async BaseTool — the antidote to the untyped read_resource(uri)->bytes
+# trap. It emits a StructuredTool with a coroutine and NO func (async-only, so
+# is_async_only_tool()/the tool_requires_async_driver lint fire for free), plugs
+# into Node(tools=[...]) unchanged (register_bound_tool_factories auto-registers
+# it), and its return flows through ToolInteraction.typed_result as the parsed
+# model. ZERO new tool infrastructure.
+
+
+class BlobResult(BaseModel, frozen=True):
+    """Typed escape hatch for genuinely opaque resource content — the exception,
+    not the default. Prefer a typed ``resource_reader`` unless the content has no
+    schema. Keeps ``typed_result`` honest (a ``BlobResult``, not raw bytes)."""
+
+    uri: str
+    mime: str | None = None
+    text: str | None = None
+    bytes_b64: str | None = None
+    size: int | None = None
+
+
+# RFC 6570 (subset): {var}, {+var}, {?a,b}, {&a}. group 1 = operator, group 2 =
+# comma-separated var list; a trailing '*' explode modifier is stripped.
+_URI_VAR_RE = re.compile(r"\{([+#./;?&]?)([^{}]+)\}")
+
+
+def _extract_uri_vars(uri_template: str) -> list[str]:
+    """Ordered, de-duplicated variable names from an RFC 6570 uri template."""
+    names: list[str] = []
+    for _op, body in _URI_VAR_RE.findall(uri_template):
+        for raw in body.split(","):
+            nm = raw.strip().rstrip("*")
+            if nm and nm not in names:
+                names.append(nm)
+    return names
+
+
+def _expand_uri(uri_template: str, values: dict[str, Any]) -> str:
+    """Interpolate an RFC 6570 (subset) uri template from ``values``.
+
+    Supports simple ``{var}`` / reserved ``{+var}`` string expansion and
+    form-query ``{?a,b}`` / ``{&a}`` expansion — enough for the static and
+    templated resource URIs v1 emits. Missing values are omitted.
+    """
+    def _sub(match: re.Match[str]) -> str:
+        op, body = match.group(1), match.group(2)
+        varnames = [v.strip().rstrip("*") for v in body.split(",")]
+        if op in ("?", "&"):
+            pairs = [
+                f"{vn}={quote(str(values[vn]), safe='')}"
+                for vn in varnames
+                if values.get(vn) is not None
+            ]
+            return (op + "&".join(pairs)) if pairs else ""
+        out = [
+            str(values[vn]) if op == "+" else quote(str(values[vn]), safe="")
+            for vn in varnames
+            if values.get(vn) is not None
+        ]
+        return ",".join(out)
+
+    return _URI_VAR_RE.sub(_sub, uri_template)
+
+
+def _resolve_fetcher(config: Any, tool_name: str) -> Callable:
+    """Read the consumer-owned async resource fetcher from config; fail loud."""
+    cfg = (config or {}).get("configurable", {}) or {}
+    fetcher = cfg.get(RESOURCE_FETCHER_KEY)
+    if fetcher is None:
+        raise ConfigurationError.build(
+            f"resource tool '{tool_name}' has no resource fetcher to call",
+            hint=f"provide config['configurable']['{RESOURCE_FETCHER_KEY}'] = "
+                 "an async 'fetch(uri) -> (content, mime)' callable",
+        )
+    return fetcher
+
+
+def resource_reader(
+    name: str,
+    *,
+    uri_template: str,
+    output_model: type[BaseModel],
+    description: str,
+    parse: Callable[[Any, str | None], BaseModel] | None = None,
+    budget: int = 0,
+) -> Any:
+    """Emit a typed, async LangChain BaseTool that reads ONE known resource KIND.
+
+    The tool's args schema is derived from ``uri_template``'s RFC 6570 vars, so
+    the LLM (agent mode) or the caller (scripted/DI) supplies typed parameters.
+    At call time it resolves the fetcher from
+    ``config['configurable']['mcp_resource_fetcher']`` (consumer-owned, async),
+    reads the interpolated URI, and parses the blob into ``output_model`` (via
+    ``parse`` if given, else ``application/json`` -> ``model_validate_json``).
+    Returns the typed model instance, so ``ToolInteraction.typed_result`` carries
+    the Pydantic model, not a repr string.
+    """
+    from langchain_core.tools import StructuredTool
+    from pydantic import create_model
+
+    var_names = _extract_uri_vars(uri_template)
+    field_defs: dict[str, Any] = dict.fromkeys(var_names, (str, ...))
+    args_schema = create_model(f"{name}_Args", **field_defs)
+
+    async def _read(config: RunnableConfig, **kwargs: Any) -> Any:
+        uri = _expand_uri(uri_template, kwargs)
+        fetcher = _resolve_fetcher(config, name)
+        content, mime = await fetcher(uri)
+        return parse_resource_content(content, mime, output_model, parse)
+
+    return StructuredTool(
+        name=name,
+        description=description,
+        args_schema=args_schema,
+        coroutine=_read,
+        func=None,
+        metadata={"ng_tool_budget": budget} if budget else None,
+    )
+
+
+def _build_read_blob() -> Any:
+    """Construct the singleton ``read_blob`` async tool (the escape hatch)."""
+    from langchain_core.tools import StructuredTool
+    from pydantic import create_model
+
+    args_schema = create_model("read_blob_Args", uri=(str, ...))
+
+    async def _read(uri: str, config: RunnableConfig) -> BlobResult:
+        fetcher = _resolve_fetcher(config, "read_blob")
+        content, mime = await fetcher(uri)
+        if isinstance(content, bytes):
+            return BlobResult(
+                uri=uri, mime=mime,
+                bytes_b64=base64.b64encode(content).decode("ascii"),
+                size=len(content),
+            )
+        return BlobResult(uri=uri, mime=mime, text=content, size=len(content))
+
+    return StructuredTool(
+        name="read_blob",
+        description=(
+            "Read an opaque MCP resource as a typed BlobResult (bytes/text + mime "
+            "+ size). Use a typed resource_reader unless the content has no schema."
+        ),
+        args_schema=args_schema,
+        coroutine=_read,
+        func=None,
+    )
+
+
+# The escape hatch is a ready-to-use async-only tool: Node(tools=[read_blob]).
+read_blob = _build_read_blob()
 

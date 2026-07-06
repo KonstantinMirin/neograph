@@ -27,12 +27,12 @@ class StrictModel(BaseModel):
 
 
 class TestDIKind:
-    """DIKind enum has exactly 6 values, no UPSTREAM."""
+    """DIKind enum has exactly 7 values (6 original + from_resource), no UPSTREAM."""
 
-    def test_has_six_values(self):
+    def test_has_seven_values(self):
         from neograph.di import DIKind
 
-        assert len(DIKind) == 6
+        assert len(DIKind) == 7
 
     def test_values(self):
         from neograph.di import DIKind
@@ -40,9 +40,16 @@ class TestDIKind:
         expected = {
             "from_input", "from_config",
             "from_input_model", "from_config_model",
-            "from_state", "constant",
+            "from_state", "constant", "from_resource",
         }
         assert {k.value for k in DIKind} == expected
+
+    def test_from_resource_excluded_from_template_kinds(self):
+        """A fetched resource is not run-input ambient context — it must NOT be a
+        prompt template var (no sync di_inputs injection can resolve it anyway)."""
+        from neograph.di import DI_TEMPLATE_KINDS, DIKind
+
+        assert DIKind.FROM_RESOURCE not in DI_TEMPLATE_KINDS
 
     def test_no_upstream(self):
         from neograph.di import DIKind
@@ -372,6 +379,147 @@ class TestDIBindingTypedFields:
         )
         state = SimpleNamespace(field="hello")
         assert b.resolve({}, state=state) == "hello"
+
+
+# ── FromResource marker + async resolution twin (neograph-vx9a) ───────
+
+
+class Doc(BaseModel):
+    title: str
+    body: str
+
+
+def _make_fetcher(content, mime):
+    """Build an async fetcher matching the config['configurable']['mcp_resource_fetcher']
+    contract: ``async def fetch(uri) -> (content, mime)``."""
+
+    async def _fetch(uri: str):
+        import asyncio as _a
+        await _a.sleep(0)
+        return content, mime
+
+    return _fetch
+
+
+class TestFromResourceClassification:
+    """FromResource is classified once in _classify_di_params → all three
+    surfaces inherit (in practice only @node can carry an Annotated marker)."""
+
+    def test_from_resource_param_classified_as_from_resource_kind(self):
+        import inspect
+
+        from neograph._di_classify import FromResource, _classify_di_params
+        from neograph.di import DIKind
+
+        def f(doc: Annotated[Doc, FromResource('crm://deals/42/contract')]): ...
+
+        from typing import Annotated  # noqa: F401 — used by the string annotation
+        sig = inspect.signature(f)
+        param_res = _classify_di_params(f, sig, caller_ns=locals())
+
+        assert "doc" in param_res
+        b = param_res["doc"]
+        assert b.kind is DIKind.FROM_RESOURCE
+        assert b.uri == "crm://deals/42/contract"
+        assert b.inner_type is Doc
+
+    def test_from_resource_carries_marker_mime_and_parse(self):
+        import inspect
+
+        from neograph._di_classify import FromResource, _classify_di_params
+
+        def myparse(content, mime):
+            return content
+
+        def f(hist: Annotated[str, FromResource('crm://x', mime='text', parse=myparse)]): ...
+
+        from typing import Annotated  # noqa: F401
+        sig = inspect.signature(f)
+        param_res = _classify_di_params(f, sig, caller_ns={**locals(), "myparse": myparse})
+
+        b = param_res["hist"]
+        assert b.resource_mime == "text"
+        assert b.parse_fn is myparse
+
+
+class TestFromResourceResolve:
+    """Sync resolve() FAILS LOUD; aresolve() awaits the fetcher + parses."""
+
+    def _binding(self, inner_type=Doc, *, parse_fn=None, resource_mime=None, uri="crm://x"):
+        from neograph.di import DIBinding, DIKind
+
+        return DIBinding(
+            name="doc", kind=DIKind.FROM_RESOURCE, inner_type=inner_type,
+            required=True, uri=uri, parse_fn=parse_fn, resource_mime=resource_mime,
+        )
+
+    def test_sync_resolve_fails_loud_with_configuration_error(self):
+        from neograph.errors import ConfigurationError
+
+        b = self._binding()
+        with pytest.raises(ConfigurationError, match="arun"):
+            b.resolve({"configurable": {}})
+
+    def test_aresolve_json_validates_into_model(self):
+        import asyncio
+
+        fetcher = _make_fetcher(b'{"title": "T", "body": "B"}', "application/json")
+        b = self._binding()
+        config = {"configurable": {"mcp_resource_fetcher": fetcher}}
+
+        got = asyncio.run(b.aresolve(config))
+
+        assert isinstance(got, Doc)
+        assert got == Doc(title="T", body="B")
+
+    def test_aresolve_text_with_explicit_parser(self):
+        import asyncio
+
+        def _p(content, mime):
+            text = content.decode() if isinstance(content, bytes) else content
+            return Doc(title=text.split("|")[0], body=text.split("|")[1])
+
+        fetcher = _make_fetcher("HELLO|WORLD", "text/plain")
+        b = self._binding(parse_fn=_p)
+        config = {"configurable": {"mcp_resource_fetcher": fetcher}}
+
+        got = asyncio.run(b.aresolve(config))
+
+        assert got == Doc(title="HELLO", body="WORLD")
+
+    def test_aresolve_text_into_str_param_passes_through(self):
+        import asyncio
+
+        fetcher = _make_fetcher("raw history text", "text/plain")
+        b = self._binding(inner_type=str)
+        config = {"configurable": {"mcp_resource_fetcher": fetcher}}
+
+        got = asyncio.run(b.aresolve(config))
+
+        assert got == "raw history text"
+
+    def test_aresolve_text_into_model_without_parser_fails_loud(self):
+        """text/* into a BaseModel with no parser must FAIL LOUD — no silent
+        LLM parse inside DI resolution (the explicitly-banned hidden cognition)."""
+        import asyncio
+
+        from neograph.errors import ConfigurationError
+
+        fetcher = _make_fetcher("some prose", "text/plain")
+        b = self._binding()  # inner_type=Doc, no parse_fn
+        config = {"configurable": {"mcp_resource_fetcher": fetcher}}
+
+        with pytest.raises(ConfigurationError, match="parse"):
+            asyncio.run(b.aresolve(config))
+
+    def test_aresolve_missing_fetcher_fails_loud(self):
+        import asyncio
+
+        from neograph.errors import ConfigurationError
+
+        b = self._binding()
+        with pytest.raises(ConfigurationError, match="mcp_resource_fetcher"):
+            asyncio.run(b.aresolve({"configurable": {}}))
 
 
 # ── Import path ───────────────────────────────────────────────────────

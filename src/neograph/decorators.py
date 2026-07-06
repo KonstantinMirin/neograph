@@ -69,6 +69,7 @@ from neograph._construct_validation import ConstructError
 from neograph._di_classify import (  # noqa: F401 — re-exported for backward compat
     FromConfig,
     FromInput,
+    FromResource,
     ParamResolution,
     _build_annotation_namespace,
     _classify_di_params,
