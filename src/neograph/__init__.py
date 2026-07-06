@@ -45,6 +45,7 @@ from neograph.errors import (
     ExecutionError,
     NeographError,
     NodeOutputError,
+    PromptVarMissing,
 )
 from neograph.forward import ForwardConstruct
 from neograph.hitl import ask_human
@@ -63,6 +64,12 @@ from neograph.modifiers import (
 )
 from neograph.node import Node, RawNodeFn, SkipPredicate, SkipValueFactory, TypeSpecStatic
 from neograph.progress import emit_progress
+from neograph.prompt import (
+    DefaultPromptCompiler,
+    inject_schema,
+    render_inputs,
+    substitute,
+)
 from neograph.renderers import (
     DelimitedRenderer,
     JsonRenderer,
@@ -111,6 +118,12 @@ __all__ = [
     "ConfigurationError",
     "ExecutionError",
     "NodeOutputError",
+    "PromptVarMissing",
+    # Prompt primitives + default compiler (Layer-2 node DX)
+    "substitute",
+    "render_inputs",
+    "inject_schema",
+    "DefaultPromptCompiler",
     # Schema rendering
     "describe_type",
     "describe_value",

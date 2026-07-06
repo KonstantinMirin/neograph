@@ -331,6 +331,20 @@ class TestNoNearDuplicateHelperNames:
 
     # Allowlist: frozenset({name_a, name_b}) -> reason (includes lev distance).
     ALLOWLIST: dict[frozenset[str], str] = {
+        # neograph-hjwv: render_inputs is the ticket-mandated public prompt
+        # primitive (the exported dict view of build_rendered_input(...).
+        # for_template_ref — ALL inputs, template-ref). It is semantically
+        # distinct from render_input/_render_input, which render a SINGLE value's
+        # inline view. Different arity, different consumer, ticket-finalized name.
+        frozenset({"render_input", "render_inputs"}): (
+            "lev=1: render_inputs (prompt.py) exports the template-ref dict of all "
+            "inputs; render_input (renderers.py) renders one value's inline view. "
+            "Ticket-mandated public name (hjwv)."
+        ),
+        frozenset({"_render_input", "render_inputs"}): (
+            "lev=2: render_inputs (prompt.py, public) vs _render_input (_dispatch.py, "
+            "private mode-dispatch helper). Distinct layer + arity; hjwv public name."
+        ),
         frozenset({"_aexecute_node", "_execute_node"}): (
             "lev=1: async twin of the sync node executor (_execute.py). The "
             "a-prefix (aexecute/ainvoke/arun) is the deliberate sync/async twin "

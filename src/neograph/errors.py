@@ -140,6 +140,37 @@ class ExecutionError(NeographError):
         return cls(msg, validation_errors=validation_errors)
 
 
+class PromptVarMissing(ExecutionError):
+    """A ``strict`` ``substitute()`` found a placeholder with no matching variable.
+
+    The fail-loud counter to the silent ``{domain}``-reaches-the-model class:
+    under ``strict=True`` an unfilled placeholder raises here instead of leaving
+    the literal token in the prompt and shipping it to the LLM. Carries the
+    offending ``var`` name and the sorted list of ``available`` variables so the
+    caller can see exactly what was on offer.
+    """
+
+    def __init__(
+        self,
+        *args: object,
+        var: str = "",
+        available: list[str] | None = None,
+    ) -> None:
+        super().__init__(*args)
+        self.var = var
+        self.available = available if available is not None else []
+
+    @classmethod
+    def of(cls, var: str, available: list[str]) -> PromptVarMissing:
+        """Build a PromptVarMissing for *var*, listing the *available* keys."""
+        avail = ", ".join(available) if available else "(none)"
+        msg = NeographError.build(
+            f"prompt variable '{var}' has no value",
+            hint=f"available variables: {avail}",
+        )
+        return cls(str(msg), var=var, available=list(available))
+
+
 class StateMissingError(NeographError):
     """Raised when ``StateBus.get_required()`` finds a missing key.
 

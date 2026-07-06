@@ -10,7 +10,6 @@ Returns a list of LintIssue dataclass instances (never raises — reports all pr
 from __future__ import annotations
 
 import asyncio
-import re
 import string
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -22,6 +21,7 @@ from neograph._ir_branch import iter_with_arms
 from neograph._ir_protocols import ConstructItem
 from neograph._llm_runtime import collect_llm_nodes, missing_runtime_kwargs
 from neograph._normalize import normalize_inputs
+from neograph._placeholders import DOLLAR_RE
 from neograph._runtime_registry import _decoration_registry
 from neograph._sidecar import _get_param_res, get_merge_fn_metadata
 from neograph._state_keys import StateKeys
@@ -37,8 +37,10 @@ _KNOWN_EXTRAS: frozenset[str] = frozenset({
     StateKeys.NODE_ID, StateKeys.PROJECT_ROOT, StateKeys.HUMAN_FEEDBACK,
 })
 
-# Matches ${var} and ${var.field} in inline prompts
-_PLACEHOLDER_RE = re.compile(r"\$\{([^}]+)\}")
+# The ${var} scanner is the ONE shared in _placeholders — imported, not redefined
+# (byte-identical dedup: lint collects names, prompt.substitute fills them, both
+# off one grammar). Aliased to preserve the existing local name.
+_PLACEHOLDER_RE = DOLLAR_RE
 
 
 @dataclass

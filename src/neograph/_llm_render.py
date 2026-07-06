@@ -19,6 +19,8 @@ from pydantic import BaseModel
 from neograph._image import resolve_image
 from neograph._llm_config import LlmConfig, _coerce_llm_config
 from neograph._llm_runtime import _ACCEPT_ALL, EMPTY_RUNTIME, LlmRuntime
+from neograph._placeholders import DOLLAR_RE as _VAR_RE
+from neograph._placeholders import apply_scanner
 from neograph.describe_type import describe_type, describe_value
 from neograph.errors import ConfigurationError
 from neograph.renderers import build_rendered_input
@@ -26,7 +28,10 @@ from neograph.renderers import build_rendered_input
 log = structlog.get_logger()
 
 
-_VAR_RE = re.compile(r"\$\{([^}]+)\}")
+# The ``${var}`` scanner is the shared one in _placeholders (fail-SOFT resolver
+# here, fail-LOUD in prompt.substitute — one scanner, two policies). ``_IMAGE_RE``
+# is a distinct multimodal grammar (``${image:...}`` builds image content blocks,
+# not text substitution) and stays local.
 _IMAGE_RE = re.compile(r"\$\{image:([^}]+)\}")
 
 
@@ -108,8 +113,8 @@ def _resolve_var_raw(path: str, input_data: Any) -> Any:
 
 
 def _substitute_vars(template: str, input_data: Any) -> str:
-    """Replace all ``${...}`` placeholders in *template*."""
-    return _VAR_RE.sub(lambda m: _resolve_var(m.group(1), input_data), template)
+    """Replace all ``${...}`` placeholders in *template* (fail-soft resolver)."""
+    return apply_scanner(template, _VAR_RE, lambda name: _resolve_var(name, input_data))
 
 
 def _compile_multimodal_prompt(template: str, input_data: Any) -> list[dict[str, Any]]:

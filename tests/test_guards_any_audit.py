@@ -560,6 +560,7 @@ class TestPublicFunctionsRaiseNeographError:
         "CheckpointSchemaError",
         "StateMissingError",
         "NodeOutputError",
+        "PromptVarMissing",
     })
 
     def test_no_bare_stdlib_raises(self):

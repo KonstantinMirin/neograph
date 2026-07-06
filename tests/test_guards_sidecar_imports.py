@@ -526,6 +526,109 @@ class TestNoPrivateLanggraphImports:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# TEST: neograph-hjwv -- ONE placeholder scanner; prompt.py stays engine-free
+# ═══════════════════════════════════════════════════════════════════════════
+class TestPromptScannerMonopoly:
+    """The ``${var}`` placeholder scanner is defined exactly ONCE in src/ and the
+    public prompt primitives module imports no engine.
+
+    hjwv anti-duplication invariant: one substitution rule, one scanner. The
+    dollar-brace regex lives only in ``_placeholders.py`` (``DOLLAR_RE``); every
+    consumer (``_llm_render``, ``lint``, ``prompt``) imports it. A second copy —
+    the exact ``_llm_render._VAR_RE`` / ``lint._PLACEHOLDER_RE`` duplication this
+    ticket removed — reintroduces the divergent-substitution disease.
+    """
+
+    # The compiled PATTERN STRING (post-parse value, quote/whitespace-agnostic)
+    # of the shared dollar-brace scanner. The distinct multimodal ``${image:...}``
+    # grammar (``_IMAGE_RE``) is a DIFFERENT pattern and is excluded by value, so
+    # it never trips this monopoly check.
+    _SCANNER_PATTERN = r"\$\{([^}]+)\}"
+
+    @classmethod
+    def _files_defining_scanner(cls, root: pathlib.Path) -> list[str]:
+        """Return the basenames of files under *root* that call ``re.compile``
+        with the dollar-scanner pattern.
+
+        AST-based on the parsed string VALUE — so a duplicate written with single
+        quotes, extra whitespace, or a different variable name is still caught
+        (a plain text ``.count`` would slip those). Matches the pattern by
+        semantic value, not source text.
+        """
+        defining: list[str] = []
+        for py_file in sorted(root.rglob("*.py")):
+            try:
+                tree = ast.parse(py_file.read_text(), filename=str(py_file))
+            except SyntaxError:
+                continue
+            count = 0
+            for node in ast.walk(tree):
+                if (
+                    isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "compile"
+                    and node.args
+                    and isinstance(node.args[0], ast.Constant)
+                    and node.args[0].value == cls._SCANNER_PATTERN
+                ):
+                    count += 1
+            if count:
+                defining.append(f"{py_file.name} (x{count})")
+        return defining
+
+    def test_dollar_scanner_literal_defined_exactly_once(self):
+        defining = self._files_defining_scanner(SRC_DIR)
+        assert defining == ["_placeholders.py (x1)"], (
+            "The `${var}` placeholder scanner must be compiled exactly once, in "
+            "_placeholders.py (DOLLAR_RE). Found: "
+            f"{defining or 'nowhere'}. Import the shared scanner instead of "
+            "redefining the regex — a second copy is the divergent-substitution "
+            "disease hjwv eliminated (was _llm_render._VAR_RE + lint._PLACEHOLDER_RE)."
+        )
+
+    def test_meta_single_definition_passes(self, tmp_path):
+        """POSITIVE meta-test: exactly one definition -> one file reported."""
+        (tmp_path / "a.py").write_text('import re\nX = re.compile(r"\\$\\{([^}]+)\\}")\n')
+        (tmp_path / "b.py").write_text("from x import X\nY = X\n")
+        assert self._files_defining_scanner(tmp_path) == ["a.py (x1)"]
+
+    def test_meta_second_definition_is_flagged(self, tmp_path):
+        """NEGATIVE meta-test: a re-introduced copy is caught even when it uses a
+        DIFFERENT quote style and variable name (the real regression shape)."""
+        (tmp_path / "canon.py").write_text('import re\nDOLLAR_RE = re.compile(r"\\$\\{([^}]+)\\}")\n')
+        # single quotes + different name: a text .count on the double-quoted literal
+        # would MISS this; the AST value-match catches it.
+        (tmp_path / "dupe.py").write_text("import re\n_VAR_RE = re.compile(r'\\$\\{([^}]+)\\}')\n")
+        assert self._files_defining_scanner(tmp_path) == ["canon.py (x1)", "dupe.py (x1)"]
+
+    def test_meta_image_grammar_not_counted(self, tmp_path):
+        """The distinct ``${image:...}`` scanner is a different pattern value and
+        must NOT be counted as a dollar-scanner definition."""
+        (tmp_path / "img.py").write_text('import re\nIMG = re.compile(r"\\$\\{image:([^}]+)\\}")\n')
+        assert self._files_defining_scanner(tmp_path) == []
+
+    def test_prompt_module_has_no_langgraph_import(self):
+        """prompt.py is a Layer-2 node-runtime helper — it composes rendering
+        primitives and must never import the engine (langgraph)."""
+        source = (SRC_DIR / "prompt.py").read_text()
+        tree = ast.parse(source, filename="prompt.py")
+        offenders = []
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.module:
+                if node.module.split(".")[0] == "langgraph":
+                    offenders.append(f"line {node.lineno}: from {node.module} import ...")
+            elif isinstance(node, ast.Import):
+                for alias in node.names:
+                    if alias.name.split(".")[0] == "langgraph":
+                        offenders.append(f"line {node.lineno}: import {alias.name}")
+
+        assert offenders == [], (
+            "src/neograph/prompt.py must stay engine-free (no langgraph import). "
+            f"Found: {offenders}."
+        )
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # TEST: neograph-l2vr -- Tool.config remains pass-through (no framework reads)
 # ═══════════════════════════════════════════════════════════════════════════
 class TestToolConfigOnlyPassedPositionally:
