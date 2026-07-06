@@ -345,6 +345,139 @@ class TestFunctionLocalImportAllowlist:
         )
 
 
+def _scan_module_level_langfuse_imports(
+    src_dir: pathlib.Path,
+) -> list[tuple[str, int, str]]:
+    """Walk every .py file under *src_dir* (recursively) and return MODULE-LEVEL
+    langfuse imports as ``(relative_path, lineno, imported_name)``.
+
+    This is the INVERSE of :func:`_scan_function_local_neograph_imports`: it uses
+    the same depth-tracking ``ast.NodeVisitor`` but flags langfuse imports at
+    ``depth == 0`` (module-level — including class bodies, which execute at
+    import time) and ALLOWS ``depth > 0`` (function-local, the sanctioned lazy
+    observe-path import). langfuse is the OPTIONAL ``[langfuse]`` extra; a
+    module-level ``import langfuse`` anywhere in src/ would break every install
+    that did not opt into the extra, so the core import graph must stay clean.
+
+    Covers both ``import langfuse[.sub]`` (``ast.Import``) and
+    ``from langfuse[.sub] import ...`` (``ast.ImportFrom``). Scans via ``rglob``
+    so subpackages are included, not just top-level modules.
+    """
+
+    class _Scanner(ast.NodeVisitor):
+        def __init__(self, filename: str) -> None:
+            self.filename = filename
+            self._depth = 0
+            self.found: list[tuple[str, int, str]] = []
+
+        def visit_FunctionDef(self, fn: ast.FunctionDef) -> None:
+            self._depth += 1
+            try:
+                self.generic_visit(fn)
+            finally:
+                self._depth -= 1
+
+        def visit_AsyncFunctionDef(self, fn: ast.AsyncFunctionDef) -> None:
+            self._depth += 1
+            try:
+                self.generic_visit(fn)
+            finally:
+                self._depth -= 1
+
+        def visit_Import(self, imp: ast.Import) -> None:
+            if self._depth == 0:
+                for alias in imp.names:
+                    if alias.name == "langfuse" or alias.name.startswith("langfuse."):
+                        self.found.append((self.filename, imp.lineno, alias.name))
+
+        def visit_ImportFrom(self, imp: ast.ImportFrom) -> None:
+            if (
+                self._depth == 0
+                and imp.module
+                and (imp.module == "langfuse" or imp.module.startswith("langfuse."))
+            ):
+                self.found.append((self.filename, imp.lineno, imp.module))
+
+    out: list[tuple[str, int, str]] = []
+    for py_file in sorted(src_dir.rglob("*.py")):
+        scanner = _Scanner(str(py_file.relative_to(src_dir)))
+        scanner.visit(ast.parse(py_file.read_text()))
+        out.extend(scanner.found)
+    return out
+
+
+class TestNoModuleLevelLangfuseImports:
+    """nva4 non-negotiable (3): langfuse is imported ONLY function-locally inside
+    the observe path — NEVER at module level anywhere in src/.
+
+    The existing function-local allowlist scanner only inspects ``from neograph...``
+    imports (it matches on the ``neograph`` module prefix), so it does NOT police
+    the optional THIRD-PARTY langfuse extra. This guard closes that gap: it flags
+    every module-level (``depth == 0``) langfuse import and permits function-local
+    (``depth > 0``) ones — so ``_merge_observe_callbacks`` / ``_flush_observe`` can
+    lazily ``from langfuse.langchain import CallbackHandler`` /
+    ``from langfuse import get_client`` inside their bodies while the core import
+    graph stays langfuse-free for installs without the extra.
+
+    The main guard is GREEN from birth (src/ has zero langfuse today), so the
+    RED-first proof is the META-TESTS below, which feed synthetic source to the
+    depth-tracking visitor and assert it flags module-level and passes
+    function-local. A regression (someone adds a top-level ``import langfuse``)
+    trips the main guard.
+    """
+
+    def test_no_module_level_langfuse_import_in_src(self):
+        offenders = _scan_module_level_langfuse_imports(SRC_DIR)
+        assert offenders == [], (
+            f"\n{len(offenders)} module-level langfuse import(s) in src/:\n"
+            + "\n".join(f"  {f}:{ln}: {mod}" for (f, ln, mod) in offenders)
+            + "\n\nlangfuse is the OPTIONAL [langfuse] extra. Import it "
+            "FUNCTION-LOCALLY inside the observe path only "
+            "(e.g. `from langfuse.langchain import CallbackHandler` inside "
+            "_merge_observe_callbacks) so installs without the extra keep a clean "
+            "core import graph. See nva4 non-negotiable (3)."
+        )
+
+    def test_meta_scanner_flags_module_level_import(self, tmp_path: pathlib.Path):
+        """RED-proof: a synthetic module-level ``import langfuse`` IS flagged."""
+        synthetic_dir = tmp_path / "neograph_fake"
+        synthetic_dir.mkdir()
+        (synthetic_dir / "topmod.py").write_text(
+            "from __future__ import annotations\n"
+            "import langfuse\n"
+            "from langfuse.langchain import CallbackHandler\n"
+            "\n"
+            "def go():\n"
+            "    return CallbackHandler\n"
+        )
+        found = _scan_module_level_langfuse_imports(synthetic_dir)
+        modules = {mod for (_, _, mod) in found}
+        assert modules == {"langfuse", "langfuse.langchain"}, (
+            f"scanner failed to flag module-level langfuse imports; found={found}"
+        )
+
+    def test_meta_scanner_allows_function_local_import(self, tmp_path: pathlib.Path):
+        """POSITIVE: a function-local langfuse import (the sanctioned observe-path
+        form) is NOT flagged — only module-level imports are."""
+        synthetic_dir = tmp_path / "neograph_fake"
+        synthetic_dir.mkdir()
+        (synthetic_dir / "lazymod.py").write_text(
+            "from __future__ import annotations\n"
+            "\n"
+            "def _merge_observe_callbacks(config, observe):\n"
+            "    from langfuse.langchain import CallbackHandler\n"
+            "    return CallbackHandler()\n"
+            "\n"
+            "def _flush_observe(observe):\n"
+            "    from langfuse import get_client\n"
+            "    get_client().flush()\n"
+        )
+        found = _scan_module_level_langfuse_imports(synthetic_dir)
+        assert found == [], (
+            f"scanner false-positive on function-local langfuse imports; found={found}"
+        )
+
+
 class TestNoBareExceptException:
     """No bare 'except Exception' that swallows errors silently.
 

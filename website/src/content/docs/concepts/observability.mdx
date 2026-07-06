@@ -1,6 +1,6 @@
 ---
 title: Observability
-description: Structured logging on every node, Annotated[T, FromConfig] for trace providers, and opt-in LLM tracing via callbacks.
+description: Structured logging on every node, Annotated[T, FromConfig] for trace providers, and opt-in Langfuse tracing via observe=True.
 ---
 
 NeoGraph provides observability at two layers. The framework layer (structlog) is always on and captures every node execution, LLM call, tool invocation, and budget event. The tracing layer (Langfuse or any LangChain callback) is opt-in and provides deep LLM call traces with token-level detail.
@@ -176,27 +176,48 @@ This means your prompt compiler, LLM factory, and scripted functions can all acc
 
 ## Langfuse: opt-in LLM tracing
 
-[Langfuse](https://langfuse.com/) provides deep LLM call tracing -- prompt/completion pairs, token counts, latency waterfalls, cost tracking. NeoGraph supports it (and any LangChain-compatible callback) through the standard `config["callbacks"]` mechanism.
+[Langfuse](https://langfuse.com/) provides deep LLM call tracing -- prompt/completion pairs, token counts, latency waterfalls, cost tracking. NeoGraph wires it for you through `observe=`.
 
-### One-line setup
+### One-line setup: `observe=True`
 
 ```python
-from langfuse.langchain import CallbackHandler
 from neograph import compile, run
-
-# Reads LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY, LANGFUSE_HOST from env
-langfuse_handler = CallbackHandler()
 
 graph = compile(pipeline)
 
+# Auto-attaches the Langfuse CallbackHandler and flushes on completion.
+result = run(graph, input={"node_id": "BR-042"}, observe=True)
+```
+
+`observe=True` (equivalently `observe="langfuse"`) is a per-run option on every verb -- `run`, `arun`, `stream`, `astream`. It:
+
+- **gates on the env keys** -- attaches only when both `LANGFUSE_SECRET_KEY` and `LANGFUSE_PUBLIC_KEY` are set, so it is a clean no-op offline and in CI (never crashes when keys are absent);
+- **merges, never clobbers** -- if you already pass handlers in `config["callbacks"]`, the Langfuse handler is added alongside them (and it will not double-attach if you already wired a Langfuse handler yourself);
+- **flushes on completion** -- for `run`/`arun` after the call, and for `stream`/`astream` after the generator is exhausted (or closed early), so no trace batch is stranded.
+
+Install the extra to enable it: `pip install "neograph[langfuse]"`.
+
+Every LLM call inside every node -- think, agent, act, and even Oracle merge calls -- appears in your Langfuse dashboard with full prompt/completion detail, token counts, and timing.
+
+### Escape hatch: attach the handler yourself
+
+`observe=` covers the 90% case. When you need full control -- a custom handler, extra Langfuse config, your own flush timing -- attach the handler through the standard `config["callbacks"]` mechanism and flush manually:
+
+```python
+from langfuse.langchain import CallbackHandler
+from langfuse import get_client
+from neograph import compile, run
+
+graph = compile(pipeline)
 result = run(
     graph,
     input={"node_id": "BR-042"},
-    config={"callbacks": [langfuse_handler]},
+    config={"callbacks": [CallbackHandler()]},
 )
+get_client().flush()
 ```
 
-Every LLM call inside every node -- think, agent, act, and even Oracle merge calls -- will appear in your Langfuse dashboard with full prompt/completion detail, token counts, and timing.
+`observe=` merges into `config["callbacks"]`, so the two forms compose -- but pick one Langfuse handler per run to avoid duplicate traces.
 
 ### How it works
 
@@ -221,7 +242,7 @@ The two layers complement each other:
 - **structlog** gives you the framework-level view: which node ran, how long it took, how many tool calls, total tokens. Useful for pipeline debugging and operational monitoring.
 - **Langfuse/callbacks** give you the LLM-level view: exact prompts, completions, per-call token breakdown, cost. Useful for prompt engineering and model evaluation.
 
-Both run simultaneously. structlog is always on; callbacks activate only when you pass them.
+Both run simultaneously. structlog is always on; Langfuse activates only when you pass `observe=True` (or attach a handler yourself).
 
 ---
 

@@ -104,21 +104,35 @@ def report(decompose: Claims) -> Topic:
 
 pipeline = construct_from_module(sys.modules[__name__], name="observable-demo")
 
-# ── Run with Langfuse callback ───────────────────────────────────────────
+
+# ── Escape hatch (documented) ────────────────────────────────────────────
+# observe=True is the one-liner below. If you need full control — a custom
+# handler, extra config, your own flush timing — attach the Langfuse handler
+# yourself and pass it through config.callbacks. observe= merges (never
+# clobbers), so you can even combine the two; the manual form is here as the
+# fully-explicit reference.
+def run_with_manual_handler(graph):
+    """The pre-observe= manual form: attach the handler and flush by hand."""
+    from langfuse import get_client
+
+    langfuse_handler = CallbackHandler()
+    result = run(graph, input={"node_id": "demo-001"}, config={"callbacks": [langfuse_handler]})
+    get_client().flush()
+    return result
+
+
+# ── Run with Langfuse tracing ────────────────────────────────────────────
 
 if __name__ == "__main__":
-    langfuse_handler = CallbackHandler()
-
     graph = compile(
         pipeline,
         llm_factory=llm_factory,
         prompt_compiler=prompt_compiler,
     )
-    result = run(
-        graph,
-        input={"node_id": "demo-001"},
-        config={"callbacks": [langfuse_handler]},
-    )
+    # observe=True auto-attaches the Langfuse CallbackHandler (gated on the
+    # LANGFUSE_* env keys — a clean no-op offline) and flushes on completion.
+    # No handler wiring, no manual flush.
+    result = run(graph, input={"node_id": "demo-001"}, observe=True)
 
     print("\n" + "=" * 60)
     print("RESULT:")
@@ -134,7 +148,4 @@ if __name__ == "__main__":
     if report_out:
         print(f"\n  Report:\n{report_out.text}")
 
-    # Flush traces to Langfuse
-    from langfuse import get_client
-    get_client().flush()
     print("\n\nTraces pushed to Langfuse.")

@@ -13,6 +13,7 @@
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 from langchain_core.runnables import RunnableConfig
@@ -459,6 +460,89 @@ def _wants_custom(stream_mode: str | list[str]) -> bool:
     return "custom" in stream_mode
 
 
+# ── observe= : opt-in Langfuse auto-attach (per-run config merge + finalize flush)
+#
+# A THIN-VERB concern (docs/design/three-layer-principle): observe= merges a
+# CallbackHandler into config BEFORE the engine verb and flushes AFTER it — it
+# NEVER wraps the engine. langfuse is the OPTIONAL [langfuse] extra, so every
+# langfuse import here is FUNCTION-LOCAL inside the observe path (enforced by
+# TestNoModuleLevelLangfuseImports); the core import graph stays langfuse-free.
+
+
+def _observe_wants_langfuse(observe: bool | str | None) -> bool:
+    """Normalize the ``observe`` argument to 'is Langfuse requested?'.
+
+    ``None`` / ``False`` -> off; ``True`` / ``'langfuse'`` -> on; any other string
+    is an explicit misconfiguration and raises (fail-loud on a typo'd backend)."""
+    if observe is None or observe is False:
+        return False
+    if observe is True or observe == "langfuse":
+        return True
+    raise ConfigurationError.build(
+        f"unknown observe backend {observe!r}",
+        hint="use observe=True or observe='langfuse' (the only backend today).",
+    )
+
+
+def _langfuse_keys_present() -> bool:
+    """Both Langfuse keys must be set before we attach or flush.
+
+    Gating on BOTH LANGFUSE_SECRET_KEY and LANGFUSE_PUBLIC_KEY is the clean-no-op
+    boundary: a half-configured handler warns and silently drops traces, and
+    ``get_client().flush()`` would flush a mis-configured client. Absent/partial
+    keys -> observe is a no-op, so offline/CI stays green."""
+    return bool(os.environ.get("LANGFUSE_SECRET_KEY")) and bool(
+        os.environ.get("LANGFUSE_PUBLIC_KEY")
+    )
+
+
+def _merge_observe_callbacks(
+    config: RunnableConfig | None, observe: bool | str | None
+) -> RunnableConfig | None:
+    """Return a config with a Langfuse ``CallbackHandler`` MERGED into
+    ``callbacks`` — fresh dict, fresh list, never mutating the caller's, never
+    clobbering a user-supplied handler.
+
+    No-op (returns the config unchanged) when observe is off or the env gate
+    fails. Deduplicates: if a Langfuse handler is already present (the user wired
+    one manually), no second one is added."""
+    if not _observe_wants_langfuse(observe) or not _langfuse_keys_present():
+        return config
+
+    from langfuse.langchain import CallbackHandler  # function-local: optional extra
+
+    config = config or {}
+    existing = config.get("callbacks")
+    if existing is None:
+        existing_list: list[Any] = []
+    elif isinstance(existing, list):
+        existing_list = existing
+    else:
+        # A BaseCallbackManager (or other non-list) — attaching to it would mean
+        # mutating a shared object. Fail loud with the documented escape hatch.
+        raise ConfigurationError.build(
+            "observe= requires config['callbacks'] to be a list (or absent)",
+            found=type(existing).__name__,
+            hint="pass callbacks as a list, or attach the Langfuse handler manually.",
+        )
+
+    if any(isinstance(h, CallbackHandler) for h in existing_list):
+        return config  # dedupe: user already wired a Langfuse handler
+
+    return {**config, "callbacks": [*existing_list, CallbackHandler()]}
+
+
+def _flush_observe(observe: bool | str | None) -> None:
+    """Flush the Langfuse client on completion — symmetric with the attach gate
+    (flush iff we would have attached), so a mis-configured client is never
+    flushed. Safe to call unconditionally from a verb's ``finally``."""
+    if not _observe_wants_langfuse(observe) or not _langfuse_keys_present():
+        return
+    from langfuse import get_client  # function-local: optional extra
+
+    get_client().flush()
+
+
 def _prepare(
     graph: CompiledNeograph,
     *,
@@ -467,6 +551,7 @@ def _prepare(
     config: RunnableConfig | None = None,
     auto_resume: bool = True,
     stream_custom: bool = False,
+    observe: bool | str | None = None,
 ) -> tuple[Any, RunnableConfig | None]:
     """Compute ``(engine_input, config)`` for ONE execution — the single
     pre-engine brain shared by every driver verb (run/stream and, via
@@ -511,6 +596,7 @@ def _prepare(
 
     if stream_custom:
         config = _mark_stream_custom(config)
+    config = _merge_observe_callbacks(config, observe)
     config = _ensure_agent_recursion_limit(graph, config)
     return engine_input, config
 
@@ -566,6 +652,7 @@ def run(
     resume: dict[str, Any] | None = None,
     config: RunnableConfig | None = None,
     auto_resume: bool = True,
+    observe: bool | str | None = None,
 ) -> Any:
     """Execute a compiled neograph graph (batch). Thin verb over ``_prepare``.
 
@@ -597,11 +684,15 @@ def run(
             run(graph, config={"configurable": {"thread_id": "same-id"}})
     """
     engine_input, config = _prepare(
-        graph, input=input, resume=resume, config=config, auto_resume=auto_resume
+        graph, input=input, resume=resume, config=config, auto_resume=auto_resume,
+        observe=observe,
     )
     # No strip: compile declares output_schema=non-neo_ fields, so the engine
     # filters framework channels out of invoke() results. See neograph-pjqe.
-    return graph.invoke(engine_input, config=config)
+    try:
+        return graph.invoke(engine_input, config=config)
+    finally:
+        _flush_observe(observe)
 
 
 def stream(
@@ -611,6 +702,7 @@ def stream(
     config: RunnableConfig | None = None,
     auto_resume: bool = True,
     stream_mode: str | list[str] = "values",
+    observe: bool | str | None = None,
 ) -> Any:
     """Stream a compiled neograph graph (sync). Thin verb over ``_prepare`` +
     ``_finalize_chunk``.
@@ -627,9 +719,15 @@ def stream(
         config=config,
         auto_resume=auto_resume,
         stream_custom=_wants_custom(stream_mode),
+        observe=observe,
     )
-    for chunk in graph.stream(engine_input, config=config, stream_mode=stream_mode):
-        yield _finalize_chunk(chunk, stream_mode)
+    # flush in finally so it fires after exhaustion AND on early GeneratorExit
+    # (consumer .close()/GC) — no trace batch is stranded on a partial stream.
+    try:
+        for chunk in graph.stream(engine_input, config=config, stream_mode=stream_mode):
+            yield _finalize_chunk(chunk, stream_mode)
+    finally:
+        _flush_observe(observe)
 
 
 async def _ahas_existing_checkpoint(graph: CompiledNeograph, config: RunnableConfig) -> bool:
@@ -725,6 +823,7 @@ async def _aprepare(
     config: RunnableConfig | None = None,
     auto_resume: bool = True,
     stream_custom: bool = False,
+    observe: bool | str | None = None,
 ) -> tuple[Any, RunnableConfig | None]:
     """Async twin of :func:`_prepare`.
 
@@ -756,6 +855,7 @@ async def _aprepare(
 
     if stream_custom:
         config = _mark_stream_custom(config)
+    config = _merge_observe_callbacks(config, observe)
     config = _ensure_agent_recursion_limit(graph, config)
     return engine_input, config
 
@@ -766,6 +866,7 @@ async def arun(
     resume: dict[str, Any] | None = None,
     config: RunnableConfig | None = None,
     auto_resume: bool = True,
+    observe: bool | str | None = None,
 ) -> Any:
     """Async twin of :func:`run` (batch). Thin verb over ``_aprepare``.
 
@@ -773,11 +874,15 @@ async def arun(
     ``_aprepare`` and diverges ONLY at the engine I/O — ``await graph.ainvoke``.
     """
     engine_input, config = await _aprepare(
-        graph, input=input, resume=resume, config=config, auto_resume=auto_resume
+        graph, input=input, resume=resume, config=config, auto_resume=auto_resume,
+        observe=observe,
     )
     # No strip: output_schema (declared at compile) filters ainvoke() results too.
     # See neograph-pjqe. Symmetric with the sync run() exit above.
-    return await graph.ainvoke(engine_input, config=config)
+    try:
+        return await graph.ainvoke(engine_input, config=config)
+    finally:
+        _flush_observe(observe)
 
 
 async def astream(
@@ -787,6 +892,7 @@ async def astream(
     config: RunnableConfig | None = None,
     auto_resume: bool = True,
     stream_mode: str | list[str] = "values",
+    observe: bool | str | None = None,
 ) -> Any:
     """Async twin of :func:`stream`. Thin verb over ``_aprepare`` +
     ``_finalize_chunk``.
@@ -803,6 +909,11 @@ async def astream(
         config=config,
         auto_resume=auto_resume,
         stream_custom=_wants_custom(stream_mode),
+        observe=observe,
     )
-    async for chunk in graph.astream(engine_input, config=config, stream_mode=stream_mode):
-        yield _finalize_chunk(chunk, stream_mode)
+    # flush in finally: after exhaustion AND on early GeneratorExit/cancellation.
+    try:
+        async for chunk in graph.astream(engine_input, config=config, stream_mode=stream_mode):
+            yield _finalize_chunk(chunk, stream_mode)
+    finally:
+        _flush_observe(observe)
