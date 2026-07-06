@@ -31,7 +31,7 @@ _BANNED = re.compile(
     r"\bClientSession\b"
     r"|\bMultiServerMCPClient\b"
     r"|\blangchain_mcp_adapters\b"
-    r"|(?<![\w.])\.session\s*\("       # `client.session(` context-manager ownership
+    r"|\.session\s*\("                 # `client.session(` context-manager ownership
     r"|^\s*from\s+mcp\b"
     r"|^\s*import\s+mcp\b",
     re.MULTILINE,
@@ -66,6 +66,20 @@ class TestNoMcpSessionOwnershipInSrc:
             "        return s\n"
         )
         assert _scan(bad), "scanner failed to flag planted MCP session ownership"
+
+    def test_slip_banned_flags_bare_session_call_without_imports(self, tmp_path: pathlib.Path):
+        """Slip meta-test: the ``.session(`` clause must fire ON ITS OWN — an
+        ownership form that dodges the import clauses (e.g. a client object
+        threaded in from elsewhere) is still session ownership. Verification
+        2026-07-06 found the original lookbehind ``(?<![\\w.])`` could never
+        match the idiomatic ``client.session(`` (the char before the dot is a
+        word char), so the clause was dead weight carried by the import lines."""
+        bad = (
+            "async def build(config, tc, client):\n"
+            "    async with client.session() as s:\n"
+            "        return s\n"
+        )
+        assert _scan(bad), "scanner failed to flag bare client.session( ownership"
 
     def test_scanner_accepts_clean_factory_source(self):
         """A consumer-neutral async factory (no session ownership) is NOT flagged."""
