@@ -64,9 +64,27 @@ def _collect_each_items(bus: StateBus, each: Each, *, fan_out: str) -> list:
     root, segments = split_each_path(each.over)
     # StateBus.get optional: the Each ``over`` root is validated at assembly
     # time; a runtime-absent root surfaces as an empty/None collection below.
+    # A None/absent root (untaken branch arm, skip_when with no skip_value) or a
+    # dotted path whose intermediate attr is None must fail CLOSED to [] so
+    # each_router/flat_router route to their empty_bypass — never crash the
+    # navigation before the bypass can fire.
     obj = bus.get(root)
     for part in segments:
-        obj = getattr(obj, part) if hasattr(obj, part) else obj[part]
+        if obj is None:
+            break
+        if hasattr(obj, part):
+            obj = getattr(obj, part)
+        else:
+            try:
+                obj = obj[part]
+            except (TypeError, KeyError, IndexError):
+                obj = None
+    if obj is None:
+        # Diagnosable-empty: an unexpected zero-item fan-out is logged so the
+        # companion ran-and-returned-None contract violation is not masked by a
+        # silent empty collection.
+        log.info("each_over_absent", fan_out=fan_out, path=each.over)
+        return []
 
     seen_keys: dict[str, int] = {}
     unique_items: list = []

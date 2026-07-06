@@ -980,7 +980,8 @@ class TestMergePromptUpstreamContext:
             return UpstreamContext(site_name="Acme Corp", tone="professional")
 
         @node(outputs=Draft, ensemble_n=2,
-              merge_prompt="Pick the best considering ${enrich.site_name}: ${variants}")
+              merge_prompt="Pick the best considering ${enrich.site_name}: ${variants}",
+              prompt="draft using ${enrich.site_name}", model="fast")
         def write(enrich: UpstreamContext) -> Draft: ...
 
         mod = self._fresh_module("test_merge_ctx")

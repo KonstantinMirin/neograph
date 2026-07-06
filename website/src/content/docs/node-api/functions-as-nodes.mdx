@@ -174,6 +174,44 @@ def fetch_claims() -> Claims:
 pipeline = construct_from_module(sys.modules[__name__], name="review")
 ```
 
+## The output contract: a node that runs must produce its declared type
+
+A node that **runs** and returns `None` against its declared `outputs=` type is a
+mistake, not a silent no-op. neograph fails loud at the state-write boundary with a
+`NodeOutputError` that names the node, its declared type, and the state field that
+stayed empty:
+
+```python
+@node(outputs=Claims)
+def hypothesize(topic: RawText) -> Claims:
+    ...  # forgot to return — or an LLM decode flake produced nothing
+    # NodeOutputError: [Node 'hypothesize'] declared output but the node body
+    #   produced None
+    #     expected: Claims
+    #     found: None
+    #     at state field 'hypothesize'
+```
+
+Without this, a `None` slips onto the state bus and surfaces far from its source —
+as a `TypeError` inside a downstream fan-out router, or as a confusing fan-in type
+mismatch several nodes later. Failing at the boundary points you straight at the
+node that misbehaved.
+
+The rule is **ran-and-returned-None**, not "the field is absent":
+
+- **Enforced (fails loud):** the node executed and produced `None` (single-type
+  outputs), or a dict-form result whose **primary** output key is `None`. Think
+  and agent modes get the same guarantee — a structured decode that yields nothing
+  raises at the source rather than returning `None`.
+- **Tolerated (stays absent, no error):** a node that **never ran** — an untaken
+  branch arm, or a [`skip_when`](/node-api/modifier-kwargs/) node that skips without
+  a `skip_value`. These leave their field absent by design. Secondary dict-form
+  output keys (framework-collected extras such as `tool_log`) are demand-driven and
+  may also be `None` without error.
+
+`NodeOutputError` is exported from `neograph` and inherits from `NeographError`, so
+`except NeographError` catches it alongside the other runtime failures.
+
 ## What's next
 
 - [Modifier keywords](/node-api/modifier-kwargs/) — fan-out, ensemble, and interrupt as `@node` kwargs

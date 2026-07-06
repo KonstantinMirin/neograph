@@ -161,6 +161,21 @@ class StateMissingError(NeographError):
         return cls(msg)
 
 
+class NodeOutputError(NeographError):
+    """A node RAN and produced None against its declared ``outputs=`` type.
+
+    Fail-loud backstop at the state-write boundary (``_build_state_update``).
+    A node that executed and returned ``None`` (or a dict whose primary output
+    key is ``None``) against a declared output contract is a silent-swallow
+    footgun: the field never reaches the state bus and the ``None`` surfaces far
+    from its source (e.g. as a ``TypeError`` in a downstream fan-out router).
+
+    This is distinct from never-ran / legitimately-absent fields (untaken branch
+    arms, ``skip_when`` without ``skip_value``) which never reach the write
+    boundary with a ran result and stay tolerant.
+    """
+
+
 class CheckpointSchemaError(NeographError):
     """Checkpoint state schema does not match the current graph.
 

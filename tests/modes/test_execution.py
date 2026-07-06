@@ -1357,3 +1357,171 @@ class TestAutoResumeFromSchemaDivergence:
         assert "c" in exec_log
 
 
+
+
+class TestNodeOutputContract:
+    """neograph-7wya: a node that RAN and produced None against its declared
+    ``outputs=`` type must FAIL LOUD at the write boundary (NodeOutputError),
+    while never-ran / legitimately-absent fields (skip_when, untaken branches)
+    stay tolerant.
+    """
+
+    def test_raises_node_output_error_when_scripted_node_returns_none(self):
+        """A scripted node declaring outputs=Claims that returns None raises
+        NodeOutputError naming the node + declared type (not a silent {})."""
+        from neograph import NodeOutputError
+        from tests.fakes import register_scripted
+
+        register_scripted("seed_rt", lambda i, c: RawText(text="x"))
+        register_scripted("none_gen", lambda i, c: None)
+
+        pipeline = Construct("none-contract", nodes=[
+            Node.scripted("seed", fn="seed_rt", outputs=RawText),
+            Node.scripted("hypothesize", fn="none_gen", inputs=RawText, outputs=Claims),
+        ])
+        graph = compile(pipeline, **build_test_compile_kwargs())
+
+        with pytest.raises(NodeOutputError) as ei:
+            run(graph, input={"node_id": "test-001"})
+        msg = str(ei.value)
+        assert "hypothesize" in msg
+        assert "Claims" in msg
+        assert "None" in msg
+
+    def test_writes_normally_when_scripted_node_returns_valid_output(self):
+        """Regression: a node returning a valid declared value writes normally."""
+        from tests.fakes import register_scripted
+
+        register_scripted("seed_rt2", lambda i, c: RawText(text="x"))
+        register_scripted("ok_gen", lambda i, c: Claims(items=["a"]))
+
+        pipeline = Construct("ok-contract", nodes=[
+            Node.scripted("seed", fn="seed_rt2", outputs=RawText),
+            Node.scripted("gen", fn="ok_gen", inputs=RawText, outputs=Claims),
+        ])
+        graph = compile(pipeline, **build_test_compile_kwargs())
+
+        result = run(graph, input={"node_id": "test-001"})
+        assert result["gen"].items == ["a"]
+
+    def test_skip_when_leaves_field_absent_without_raising(self):
+        """A skip_when node (no skip_value) that never produces a value leaves
+        its field absent WITHOUT raising — never-ran is tolerant by design."""
+        import types as _types
+
+        from neograph import construct_from_module, node
+
+        mod = _types.ModuleType("test_7wya_skip_mod")
+
+        @node(outputs=RawText)
+        def seed() -> RawText:
+            return RawText(text="seed")
+
+        @node(outputs=Claims, skip_when=lambda _rt: True)
+        def maybe(seed: RawText) -> Claims:
+            return Claims(items=["should-not-run"])
+
+        mod.seed = seed
+        mod.maybe = maybe
+
+        pipeline = construct_from_module(mod, name="skip-absent")
+        graph = compile(pipeline, **build_test_compile_kwargs())
+
+        # Must not raise — the skipped node's field is legitimately absent.
+        result = run(graph, input={"node_id": "test-001"})
+        assert result.get("maybe") is None
+
+    def test_no_contract_node_returns_empty_when_outputs_none(self):
+        """A node with outputs=None declares no contract — a None result writes
+        nothing and does NOT raise (the boundary distinguishes no-contract from
+        ran-and-violated-contract)."""
+        from neograph._state_write import _build_state_update
+        from neograph.naming import field_name_for
+
+        node = Node.scripted("noout", fn="f", outputs=None)
+        assert _build_state_update(node, field_name_for("noout"), None, None) == {}
+
+    def test_raises_when_dict_form_primary_key_is_none(self):
+        """Dict-form outputs: the PRIMARY key producing None raises — the
+        per-key equivalent of the single-type contract."""
+        from neograph import NodeOutputError
+        from neograph._state_write import _build_state_update
+        from neograph.naming import field_name_for
+
+        node = Node.scripted(
+            "multi", fn="f",
+            outputs={"result": Claims, "meta": RawText},
+        )
+        with pytest.raises(NodeOutputError) as ei:
+            _build_state_update(node, field_name_for("multi"), {"result": None}, None)
+        msg = str(ei.value)
+        assert "multi" in msg
+        assert "Claims" in msg
+        assert "result" in msg
+
+    def test_tolerates_dict_form_secondary_key_none_when_primary_present(self):
+        """Dict-form outputs: a SECONDARY (framework-collected, demand-driven)
+        key producing None is tolerated as long as the primary is present."""
+        from neograph._state_write import _build_state_update
+        from neograph.naming import field_name_for
+
+        node = Node.scripted(
+            "multi2", fn="f",
+            outputs={"result": Claims, "meta": RawText},
+        )
+        update = _build_state_update(
+            node, field_name_for("multi2"),
+            {"result": Claims(items=["ok"]), "meta": None}, None,
+        )
+        assert update["multi2_result"] == Claims(items=["ok"])
+        assert "multi2_meta" not in update
+
+    def test_raises_across_three_surfaces_when_node_returns_none(self):
+        """Three-surface parity: the None-write contract is enforced at the
+        shared boundary regardless of how the node was authored."""
+        import types as _types
+
+        from neograph import NodeOutputError, construct_from_module, node
+        from tests.fakes import register_scripted
+
+        # Surface A — @node decorator (scripted).
+        mod = _types.ModuleType("test_7wya_surface_a")
+
+        @node(outputs=Claims)
+        def gen_a() -> Claims:
+            return None  # type: ignore[return-value]
+
+        mod.gen_a = gen_a
+        graph_a = compile(construct_from_module(mod, name="sa"), **build_test_compile_kwargs())
+        with pytest.raises(NodeOutputError) as ei_a:
+            run(graph_a, input={"node_id": "test-001"})
+        assert "gen" in str(ei_a.value) and "Claims" in str(ei_a.value)
+
+        # Surface B — declarative Node.scripted().
+        register_scripted("none_b", lambda i, c: None)
+        graph_b = compile(
+            Construct("sb", nodes=[Node.scripted("gen_b", fn="none_b", outputs=Claims)]),
+            **build_test_compile_kwargs(),
+        )
+        with pytest.raises(NodeOutputError) as ei_b:
+            run(graph_b, input={"node_id": "test-001"})
+        assert "gen_b" in str(ei_b.value) and "Claims" in str(ei_b.value)
+
+        # Surface C — programmatic Node() | Each (fan-out node returning None).
+        register_scripted("seed_list", lambda i, c: Clusters(groups=[
+            ClusterGroup(label="a", claim_ids=["1"]),
+        ]))
+        register_scripted("none_c", lambda i, c: None)
+        each_node = Node.scripted(
+            "gen_c", fn="none_c", inputs=ClusterGroup, outputs=Claims,
+        ) | Each(over="seed.groups", key="label")
+        graph_c = compile(
+            Construct("sc", nodes=[
+                Node.scripted("seed", fn="seed_list", outputs=Clusters),
+                each_node,
+            ]),
+            **build_test_compile_kwargs(),
+        )
+        with pytest.raises(NodeOutputError) as ei_c:
+            run(graph_c, input={"node_id": "test-001"})
+        assert "gen_c" in str(ei_c.value) and "Claims" in str(ei_c.value)

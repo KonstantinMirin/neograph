@@ -44,6 +44,7 @@ from neograph.errors import (
     ConstructError,
     ExecutionError,
     NeographError,
+    NodeOutputError,
 )
 from neograph.forward import ForwardConstruct
 from neograph.hitl import ask_human
@@ -109,6 +110,7 @@ __all__ = [
     "CompileError",
     "ConfigurationError",
     "ExecutionError",
+    "NodeOutputError",
     # Schema rendering
     "describe_type",
     "describe_value",

@@ -4532,15 +4532,19 @@ class TestStructuredCompatShim:
         assert "DSML" in result.raw_text
 
 
-class TestCallStructuredCPrimeUsagePreserved:
-    """neograph-ble3 (R1): the C' path — parsed=None with NO DSML markup and
-    cfg=None — preserves legacy behavior: return (None, usage). The usage from
-    the raw message must NOT be dropped (architect HIGH finding).
+class TestCallStructuredParsedNoneFailsLoud:
+    """neograph-7wya: the C' path — parsed=None with NO DSML markup — used to
+    silently return (None, usage), letting the None flow to the write boundary
+    and surface far from its source. It now FAILS LOUD at the source with an
+    ExecutionError naming the output model and the unparseable response.
+
+    Supersedes neograph-ble3 (R1), which pinned the legacy silent-None return.
     """
 
-    def test_parsed_none_no_dsml_returns_none_and_preserves_usage(self):
+    def test_parsed_none_no_dsml_raises_execution_error(self):
         from langchain_core.messages import AIMessage
 
+        from neograph import ExecutionError
         from neograph._llm_dispatch import _call_structured
 
         class CPrimeLLM:
@@ -4554,14 +4558,14 @@ class TestCallStructuredCPrimeUsagePreserved:
 
                 return _Wrap()
 
-        # cfg defaults to None -> C' passthrough path
-        result, usage = _call_structured(
-            CPrimeLLM(), [], Claims, "structured", {"configurable": {}},
-        )
-
-        assert result is None
-        # R1: usage carried through, not dropped.
-        assert usage == {"input_tokens": 9, "output_tokens": 13}
+        # cfg defaults to None -> C' path now raises instead of returning None.
+        with pytest.raises(ExecutionError) as ei:
+            _call_structured(
+                CPrimeLLM(), [], Claims, "structured", {"configurable": {}},
+            )
+        msg = str(ei.value)
+        assert "Claims" in msg
+        assert "decoded to None" in msg
 
 
 # ═══════════════════════════════════════════════════════════════════════════

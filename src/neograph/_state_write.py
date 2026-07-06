@@ -10,10 +10,34 @@ from structlog.stdlib import BoundLogger
 from neograph._normalize import normalize_outputs
 from neograph._state_bus import StateBus
 from neograph._state_keys import StateKeys
-from neograph.errors import ExecutionError
+from neograph.describe_type import type_display_name
+from neograph.errors import ExecutionError, NodeOutputError
 from neograph.modifiers import Each, ModifierCombo, classify_modifiers
 from neograph.naming import output_field_name
 from neograph.node import Node
+
+
+def _raise_none_output(
+    node: Node, declared: object, field: str, *, key: str | None = None,
+) -> None:
+    """Fail loud when a node RAN and produced None against its declared output.
+
+    Backstop for the single write boundary. ``declared`` is the
+    declared output type (single-type or a dict-form key's type); ``field`` is
+    the state field that stayed empty; ``key`` names the dict-form output key
+    when applicable.
+    """
+    where = f" output key '{key}'" if key is not None else ""
+    raise NodeOutputError.build(
+        f"declared{where} output but the node body produced None",
+        expected=type_display_name(declared),
+        found="None",
+        node=node.name,
+        location=f"state field '{field}'",
+        hint="A node that runs must return a value of its declared outputs= type. "
+             "For a node that may legitimately produce nothing, use skip_when / an "
+             "untaken branch arm (never-ran fields stay absent) rather than returning None.",
+    )
 
 
 def _build_state_update(
@@ -31,8 +55,15 @@ def _build_state_update(
 
     For single-type outputs: writes to ``{field_name}`` as before.
     """
-    if result is None or node.outputs is None:
+    if node.outputs is None:
+        # No declared output contract — nothing to write, nothing to enforce.
         return {}
+    if result is None:
+        # RAN-AND-VIOLATED-CONTRACT: node executed but produced None against a
+        # declared outputs= type. Fail loud. Never-ran / legitimately-absent
+        # fields (untaken branches, skip_when without skip_value) never reach
+        # here with a ran result.
+        _raise_none_output(node, normalize_outputs(node.outputs).primary, field_name)
 
     combo, mods = classify_modifiers(node)
 
@@ -62,6 +93,14 @@ def _build_state_update(
         for key in no.all_keys:
             val = result.get(key)
             if val is None:
+                if key == no.primary_key:
+                    # Primary key None is the dict-form equivalent of the
+                    # single-type contract violation — fail loud.
+                    _raise_none_output(
+                        node, no.primary, output_field_name(field_name, key), key=key,
+                    )
+                # Secondary keys (framework-collected, e.g. tool_log) are
+                # demand-driven and legitimately absent — stay tolerant.
                 continue
             key_field = output_field_name(field_name, key)
             if each_mod and each_item is not None:

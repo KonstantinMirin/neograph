@@ -9,6 +9,7 @@ from neograph import (
     ConstructError,
     Each,
     Node,
+    Oracle,
     compile,
     construct_from_functions,
     construct_from_module,
@@ -578,3 +579,250 @@ class TestSkipWhenWithEach:
 # ═══════════════════════════════════════════════════════════════════════════
 
 
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# TestEachAbsentOverSource (neograph-bali)
+#
+# When the Each `over` source is genuinely ABSENT at runtime (untaken branch
+# arm, skip_when leaving the field unwritten, or a dotted path whose
+# intermediate attr is None), _collect_each_items must resolve to an empty
+# collection so each_router/flat_router route to the existing empty_bypass —
+# NOT crash with `TypeError: 'NoneType' object is not subscriptable`.
+#
+# _collect_each_items is the SINGLE monopolized navigation rule shared by
+# each_router (single Each) AND flat_router (Each×Oracle fusion), so the unit
+# tests below cover both topologies; the integration tests exercise each
+# router end-to-end.
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TestCollectEachItemsAbsentSource:
+    """Unit: _collect_each_items must fail-closed (return []) on a None/absent
+    resolved root instead of crashing during dotted-path navigation."""
+
+    def test_returns_empty_when_root_value_is_none(self):
+        """bus.get(root) is None (zero dotted segments) -> [] not TypeError."""
+        from structlog.testing import capture_logs
+
+        from neograph._state_bus import adapt_state
+        from neograph._wiring import _collect_each_items
+
+        bus = adapt_state({"make_clusters": None})
+        each = Each(over="make_clusters", key="label")
+
+        with capture_logs() as logs:
+            items = _collect_each_items(bus, each, fan_out="verify")
+
+        assert items == []
+        assert any(e.get("event") == "each_over_absent" for e in logs), logs
+
+    def test_returns_empty_when_root_field_absent(self):
+        """The root field is not bound at all -> bus.get default None -> []."""
+        from neograph._state_bus import adapt_state
+        from neograph._wiring import _collect_each_items
+
+        bus = adapt_state({})  # make_clusters never written
+        each = Each(over="make_clusters.groups", key="label")
+
+        items = _collect_each_items(bus, each, fan_out="verify")
+        assert items == []
+
+    def test_returns_empty_when_intermediate_dotted_attr_is_none(self):
+        """A dotted path whose INTERMEDIATE attr resolves to None -> [] not a
+        crash on the next getattr/subscript."""
+        from structlog.testing import capture_logs
+
+        from neograph._state_bus import adapt_state
+        from neograph._wiring import _collect_each_items
+
+        # root.inner is None; navigation must stop and fail-closed before
+        # dereferencing `.groups` on None.
+        bus = adapt_state({"root": Clusters(groups=[])})
+        # `Clusters` has no `.missing` attr and is not subscriptable, so the
+        # first segment resolves to None; the second must not crash.
+        each = Each(over="root.missing.groups", key="label")
+
+        with capture_logs() as logs:
+            items = _collect_each_items(bus, each, fan_out="fanned")
+
+        assert items == []
+        assert any(e.get("event") == "each_over_absent" for e in logs), logs
+
+    def test_still_collects_when_root_present(self):
+        """Regression guard: a present collection still navigates + dedups."""
+        from neograph._state_bus import adapt_state
+        from neograph._wiring import _collect_each_items
+
+        clusters = Clusters(groups=[
+            ClusterGroup(label="a", claim_ids=["c1"]),
+            ClusterGroup(label="b", claim_ids=["c2"]),
+        ])
+        bus = adapt_state({"make_clusters": clusters})
+        each = Each(over="make_clusters.groups", key="label")
+
+        items = _collect_each_items(bus, each, fan_out="verify")
+        assert [g.label for g in items] == ["a", "b"]
+
+
+class TestEachRouterEmptyBypassWhenSourceAbsent:
+    """Integration: a genuinely-absent Each `over` source routes each_router to
+    the empty_bypass and a consumer AFTER the bypass still runs. The absent
+    source is produced by a skip_when'd upstream (no skip_value -> field never
+    written) — NOT a node that ran and returned None (that path now correctly
+    fails loud; see companion neograph-7wya)."""
+
+    def test_downstream_runs_when_each_source_absent_programmatic(self):
+        """Programmatic Node() | Each(): absent over-root -> bypass -> summarize
+        still runs with an empty fan-out."""
+        from neograph import compile, run
+        from tests.fakes import register_scripted
+
+        register_scripted("bali_seed", lambda i, c: RawText(text="seed"))
+        # make_clusters is skipped (no skip_value) so its field stays unwritten.
+        register_scripted("bali_mk", lambda i, c: Clusters(groups=[]))
+        register_scripted(
+            "bali_verify",
+            lambda i, c: MatchResult(cluster_label=i.label, matched=i.claim_ids),
+        )
+        summarize_calls = []
+
+        def bali_summarize(input_data, config):
+            summarize_calls.append(list(input_data))
+            return MergedResult(final_text=f"n={len(input_data)}")
+
+        register_scripted("bali_summarize", bali_summarize)
+
+        seed = Node.scripted("seed", fn="bali_seed", outputs=RawText)
+        make_clusters = Node(
+            "make_clusters", mode="scripted", scripted_fn="bali_mk",
+            inputs=RawText, outputs=Clusters,
+            skip_when=lambda data: True,  # always skip -> field absent
+        )
+        verify = (
+            Node.scripted(
+                "verify", fn="bali_verify",
+                inputs=ClusterGroup, outputs=MatchResult,
+            )
+            | Each(over="make_clusters.groups", key="label")
+        )
+        summarize = Node.scripted(
+            "summarize", fn="bali_summarize",
+            inputs=list[MatchResult], outputs=MergedResult,
+        )
+        pipeline = Construct(
+            "bali-absent-prog", nodes=[seed, make_clusters, verify, summarize],
+        )
+        graph = compile(pipeline, **build_test_compile_kwargs())
+
+        result = run(graph, input={"node_id": "bali-prog"})
+
+        # Consumer after the bypass ran, with an empty fan-out.
+        assert summarize_calls == [[]]
+        assert result["summarize"].final_text == "n=0"
+
+    def test_downstream_runs_when_each_source_absent_node_api(self):
+        """@node map_over surface: absent over-root -> bypass -> summarize runs."""
+        import types as _types
+
+        from neograph import compile, construct_from_module, run
+
+        mod = _types.ModuleType("test_bali_absent_node")
+        summarize_calls = []
+
+        @node(mode="scripted", outputs=RawText)
+        def seed() -> RawText:
+            return RawText(text="seed")
+
+        @node(
+            mode="scripted", outputs=Clusters,
+            skip_when=lambda data: True,  # always skip -> field absent
+        )
+        def make_clusters(seed: RawText) -> Clusters:
+            return Clusters(groups=[])
+
+        @node(
+            mode="scripted", outputs=MatchResult,
+            map_over="make_clusters.groups", map_key="label",
+        )
+        def verify(cluster: ClusterGroup) -> MatchResult:
+            return MatchResult(cluster_label=cluster.label, matched=cluster.claim_ids)
+
+        @node(mode="scripted", outputs=MergedResult)
+        def summarize(verify: list[MatchResult]) -> MergedResult:
+            summarize_calls.append(list(verify))
+            return MergedResult(final_text=f"n={len(verify)}")
+
+        mod.seed = seed
+        mod.make_clusters = make_clusters
+        mod.verify = verify
+        mod.summarize = summarize
+
+        pipeline = construct_from_module(mod, name="bali-absent-node")
+        graph = compile(pipeline, **build_test_compile_kwargs())
+
+        result = run(graph, input={"node_id": "bali-node"})
+
+        assert summarize_calls == [[]]
+        assert result["summarize"].final_text == "n=0"
+
+
+class TestFlatRouterEmptyBypassWhenSourceAbsent:
+    """Integration: the Each×Oracle FUSION path (flat_router) shares the same
+    _collect_each_items navigation, so an absent over-source must likewise
+    route to the fused empty_bypass rather than crash."""
+
+    def test_downstream_runs_when_fused_each_source_absent(self):
+        """Node | Oracle | Each with an absent over-root -> flat_router bypass ->
+        summarize still runs with zero fan-out (no generators dispatched)."""
+        from neograph import compile, run
+        from tests.fakes import register_scripted
+
+        register_scripted("bali_f_seed", lambda i, c: RawText(text="seed"))
+        register_scripted("bali_f_mk", lambda i, c: Clusters(groups=[]))
+        gen_calls = []
+
+        def bali_f_gen(input_data, config):
+            gen_calls.append(1)
+            return MatchResult(cluster_label=input_data.label, matched=input_data.claim_ids)
+
+        register_scripted("bali_f_gen", bali_f_gen)
+        register_scripted("bali_f_merge", lambda variants, config: variants[0])
+
+        summarize_calls = []
+
+        def bali_f_summarize(input_data, config):
+            summarize_calls.append(list(input_data))
+            return MergedResult(final_text=f"n={len(input_data)}")
+
+        register_scripted("bali_f_summarize", bali_f_summarize)
+
+        seed = Node.scripted("seed", fn="bali_f_seed", outputs=RawText)
+        make_clusters = Node(
+            "make_clusters", mode="scripted", scripted_fn="bali_f_mk",
+            inputs=RawText, outputs=Clusters,
+            skip_when=lambda data: True,  # always skip -> field absent
+        )
+        fused = (
+            Node.scripted(
+                "fused", fn="bali_f_gen",
+                inputs=ClusterGroup, outputs=MatchResult,
+            )
+            | Oracle(n=2, merge_fn="bali_f_merge")
+            | Each(over="make_clusters.groups", key="label")
+        )
+        summarize = Node.scripted(
+            "summarize", fn="bali_f_summarize",
+            inputs=list[MatchResult], outputs=MergedResult,
+        )
+        pipeline = Construct(
+            "bali-absent-fused", nodes=[seed, make_clusters, fused, summarize],
+        )
+        graph = compile(pipeline, **build_test_compile_kwargs())
+
+        result = run(graph, input={"node_id": "bali-fused"})
+
+        # No generators dispatched (empty fan-out), consumer after bypass ran.
+        assert gen_calls == []
+        assert summarize_calls == [[]]
+        assert result["summarize"].final_text == "n=0"

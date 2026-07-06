@@ -14,7 +14,7 @@ a new branch here.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, NoReturn
 
 from langchain_core.runnables import RunnableConfig
 from pydantic import BaseModel
@@ -33,6 +33,17 @@ from neograph._llm_structured_compat import (
     build_default_adapter,
 )
 from neograph.errors import ExecutionError
+
+
+def _raise_decoded_none(output_model: type[BaseModel], raw_text: str | None) -> NoReturn:
+    """Fail loud on the structured path's parsed=None silent variant (undecodable
+    response), not surface None which the write boundary swallows. Sync+async."""
+    raise ExecutionError.build(
+        "structured output decoded to None",
+        expected=f"valid {output_model.__name__}",
+        found=f"unparseable response (first 200 chars): {(raw_text or '')[:200]!r}",
+        hint="Response undecodable into the output model with no tool-call markup to recover — usually a transient decode flake.",
+    )
 
 
 def _call_structured(
@@ -79,10 +90,8 @@ def _call_structured(
                     found=f"DSML markup (first 200 chars): {raw_text[:200]!r}",
                     hint="Model emitted tool-call markup instead of structured output.",
                 )
-            case Raw(raw_text=_, usage=usage):
-                # Silent variant: parsed=None with no DSML markup. Legacy
-                # behavior surfaced None to the caller; preserve it (and usage).
-                return None, usage  # type: ignore[return-value]
+            case Raw(raw_text=raw_text, usage=_usage):
+                _raise_decoded_none(output_model, raw_text)
             case Failed(error=err, raw_text=raw_text):
                 if cfg is not None:
                     text = raw_text or message_text(llm.invoke(messages, config=config))
@@ -154,8 +163,8 @@ async def _acall_structured(
                     found=f"DSML markup (first 200 chars): {raw_text[:200]!r}",
                     hint="Model emitted tool-call markup instead of structured output.",
                 )
-            case Raw(raw_text=_, usage=usage):
-                return None, usage  # type: ignore[return-value]
+            case Raw(raw_text=raw_text, usage=_usage):
+                _raise_decoded_none(output_model, raw_text)  # async twin
             case Failed(error=err, raw_text=raw_text):
                 if cfg is not None:
                     text = raw_text or message_text(await llm.ainvoke(messages, config=config))

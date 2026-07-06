@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from neograph import (
     Construct,
     Node,
@@ -591,3 +593,33 @@ class TestGatherToolCollection:
         assert "UC-042" in content
 
 
+
+
+class TestStructuredSilentNoneSource:
+    """neograph-7wya (source defense): think-mode structured strategy must not
+    silently return None when the provider response parses to ``parsed=None``
+    with no DSML markup (the gemini structured-decode flake). It must FAIL LOUD
+    at the source (ExecutionError), complementary to the write-boundary backstop.
+    """
+
+    def test_structured_strategy_raises_when_provider_parses_to_none(self):
+        """The Raw(parsed=None) legacy passthrough now raises ExecutionError
+        instead of returning None to the caller."""
+        from neograph import ExecutionError
+        from neograph._llm import invoke_structured
+        from tests.fakes import StructuredFakeWithRaw, build_fake_runtime
+
+        # respond returns None -> include_raw dict {"parsed": None, ...} -> Raw
+        fake = StructuredFakeWithRaw(lambda model: None)
+        runtime = build_fake_runtime(factory=lambda tier: fake)
+
+        with pytest.raises(ExecutionError, match=r"Claims"):
+            invoke_structured(
+                runtime,
+                model_tier="reason",
+                prompt_template="test",
+                input_data="test",
+                output_model=Claims,
+                config={"configurable": {}},
+                node_name="hypothesize",
+            )

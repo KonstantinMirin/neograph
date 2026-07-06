@@ -559,6 +559,7 @@ class TestPublicFunctionsRaiseNeographError:
         "ConfigurationError",
         "CheckpointSchemaError",
         "StateMissingError",
+        "NodeOutputError",
     })
 
     def test_no_bare_stdlib_raises(self):

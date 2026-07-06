@@ -791,13 +791,23 @@ class TestRendererFallback:
 class TestBuildStateUpdate:
     """_build_state_update edge cases."""
 
-    def test_returns_empty_when_result_none(self):
-        """When result is None, returns empty dict (line 193-194)."""
+    def test_raises_when_result_none_against_declared_output(self):
+        """neograph-7wya: a node that RAN and returned None against a declared
+        outputs= type fails loud (NodeOutputError), not a silent {}."""
+        from neograph import NodeOutputError
         from neograph._state_write import _build_state_update
 
         n = Node("test", outputs=RawText)
-        result = _build_state_update(n, "test", None, None)
-        assert result == {}
+        with pytest.raises(NodeOutputError):
+            _build_state_update(n, "test", None, None)
+
+    def test_returns_empty_when_result_none_and_no_declared_output(self):
+        """A node with outputs=None declares no contract — None writes nothing
+        and does not raise."""
+        from neograph._state_write import _build_state_update
+
+        n = Node("test", outputs=None)
+        assert _build_state_update(n, "test", None, None) == {}
 
     def test_dict_form_skips_none_values(self):
         """Dict-form outputs skip None values (line 208-209)."""

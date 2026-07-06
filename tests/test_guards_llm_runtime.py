@@ -186,6 +186,9 @@ class TestLlmResponsibilityDiscipline:
             "_call_structured",
             # neograph-w74k.2.3: async twin of the strategy dispatch.
             "_acall_structured",
+            # neograph-7wya: shared fail-loud for the structured path's
+            # parsed=None silent variant (sync + async arms).
+            "_raise_decoded_none",
         }),
         # neograph-ble3: DSML detection extracted to its own pure leaf module.
         "_dsml.py": frozenset({
