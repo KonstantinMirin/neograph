@@ -14,11 +14,11 @@ from neograph.describe_type import type_display_name
 from neograph.errors import ExecutionError, NodeOutputError
 from neograph.modifiers import Each, ModifierCombo, classify_modifiers
 from neograph.naming import output_field_name
-from neograph.node import Node
+from neograph.node import Node, TypeSpecStatic
 
 
 def _raise_none_output(
-    node: Node, declared: object, field: str, *, key: str | None = None,
+    node: Node, declared: TypeSpecStatic, field: str, *, key: str | None = None,
 ) -> None:
     """Fail loud when a node RAN and produced None against its declared output.
 
