@@ -10,6 +10,7 @@ from neograph import (
     Each,
     Node,
     Oracle,
+    Tool,
     compile,
     construct_from_functions,
     construct_from_module,
@@ -46,6 +47,34 @@ from tests.schemas import (
 # This proves: Each modifier expands to Send() per item,
 # barrier collects, dict reducer merges results.
 # ═══════════════════════════════════════════════════════════════════════════
+
+class TestEachOverAgentFailsLoud:
+    """Each over an agent/act node is fail-loud (neograph-m6d3.6 + neograph-1h8c).
+
+    Fan-over-agent is implemented ONLY for Oracle over a self-contained agent
+    (auto-wrap into an isolated sub-construct — see
+    docs/design/fan-over-agent-node-2026-07-07.md). Each-over-agent needs a
+    design call for how the fanned ``neo_each_item`` reaches the wrapped agent
+    across the subgraph boundary, so it raises an assembly-time ConstructError
+    rather than silently shipping a broken graph."""
+
+    def test_each_over_agent_node_raises_construct_error(self):
+        agent = (
+            Node(
+                name="agent-gen",
+                mode="agent",
+                outputs=Claims,
+                model="default-tier",
+                prompt="test/search",
+                tools=[Tool(name="agent_search", budget=5)],
+            )
+            | Each(over="upstream", key="text")
+        )
+        with pytest.raises(
+            ConstructError, match="Each over an agent/act node is not supported"
+        ):
+            Construct("bad-each-over-agent", nodes=[agent])
+
 
 class TestEach:
     def test_each_dispatches_per_item_when_collection_provided(self):

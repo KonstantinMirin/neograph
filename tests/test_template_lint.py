@@ -1079,3 +1079,83 @@ class TestDiInputTemplateRefColumn:
         )
         unresolvable = [i for i in issues if i.kind == "template_placeholder_unresolvable"]
         assert unresolvable == []
+
+
+class TestResourceTemplateRefColumn:
+    """FROM_RESOURCE as a template-ref var (neograph-3q6j).
+
+    Runtime serves a ``{history}`` FROM_RESOURCE placeholder only on the async
+    ``arun()`` driver (the fetch is awaited); the sync ``run()`` driver fails
+    loud. Lint mirrors that in lockstep:
+
+    - with a ``di_inputs``-aware compiler the placeholder is VALID (it resolves on
+      async), but earns a WARN (``template_var_requires_async_driver``) naming the
+      param, because it needs arun();
+    - without one the value never reaches the template, so it is
+      ``template_placeholder_unresolvable`` — same as any other DI kind.
+    """
+
+    def _build(self):
+        import types
+        from typing import Annotated
+
+        from neograph import FromResource
+
+        class Out(BaseModel):
+            ok: bool = True
+
+        mod = types.ModuleType("test_resource_lint_col_mod")
+
+        @node(outputs=Out, mode="think", model="fast", prompt="leaf")
+        def analyze(history: Annotated[str, FromResource("crm://history")]) -> Out: ...
+
+        mod.analyze = analyze
+        return construct_from_module(mod)
+
+    @staticmethod
+    def _resolver(name):
+        return "History:\n{history}" if name == "leaf" else None
+
+    def test_resource_var_valid_but_warns_async_driver_when_compiler_accepts_di_inputs(self):
+        """COVERED case: compiler declares ``di_inputs`` → ``{history}`` is valid,
+        but flagged with the async-driver WARN (runtime serves it only on arun())."""
+        from neograph.lint import lint
+
+        def compiler_with_di(template, input_data, *, di_inputs=None):
+            return [{"role": "user", "content": "x"}]
+
+        c = self._build()
+        issues = lint(
+            c,
+            template_resolver=self._resolver,
+            prompt_compiler=compiler_with_di,
+            llm_factory=lambda tier: None,
+            config={},
+        )
+        unresolvable = [i for i in issues if i.kind == "template_placeholder_unresolvable"]
+        assert unresolvable == [], "a covered FROM_RESOURCE template var must not be unresolvable"
+        async_warn = [i for i in issues if i.kind == "template_var_requires_async_driver"]
+        assert len(async_warn) == 1
+        assert async_warn[0].param == "history"
+        assert async_warn[0].required is False
+
+    def test_resource_var_unresolvable_when_compiler_lacks_di_inputs(self):
+        """UNCOVERED case: compiler has no ``di_inputs`` param → ``{history}`` never
+        reaches the template, so it is flagged unresolvable (no async-driver warn)."""
+        from neograph.lint import lint
+
+        def compiler_no_di(template, input_data, *, output_model=None):
+            return [{"role": "user", "content": "x"}]
+
+        c = self._build()
+        issues = lint(
+            c,
+            template_resolver=self._resolver,
+            prompt_compiler=compiler_no_di,
+            llm_factory=lambda tier: None,
+            config={},
+        )
+        unresolvable = [i for i in issues if i.kind == "template_placeholder_unresolvable"]
+        assert len(unresolvable) == 1
+        assert unresolvable[0].param == "history"
+        assert [i for i in issues if i.kind == "template_var_requires_async_driver"] == []

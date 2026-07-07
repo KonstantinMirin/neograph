@@ -28,7 +28,7 @@ from neograph._llm_runtime import EMPTY_RUNTIME, LlmRuntime
 from neograph._normalize import NormalizedOutputs, normalize_outputs
 from neograph._sidecar import _get_param_res
 from neograph._state_keys import StateKeys
-from neograph.di import DI_TEMPLATE_KINDS
+from neograph.di import DI_TEMPLATE_KINDS, DIKind
 from neograph.errors import ConfigurationError, ExecutionError
 from neograph.node import Node, TypeSpecStatic
 from neograph.renderers import build_rendered_input
@@ -50,11 +50,55 @@ def _inject_di_inputs(node: Node, config: RunnableConfig) -> RunnableConfig:
     param_res = _get_param_res(node)
     if not param_res:
         return config
+    # FROM_RESOURCE on an LLM-mode node is only ever a template var (the body
+    # never runs), and its value is an AWAITED fetch — the sync driver cannot
+    # serve it. Fail loud (naming param + node) rather than silently dropping the
+    # template var (the R2 silent-no-op hole, neograph-3q6j). arun() routes to
+    # `_ainject_di_inputs`, which awaits the fetch.
+    resource_params = sorted(
+        name for name, b in param_res.items() if b.kind is DIKind.FROM_RESOURCE
+    )
+    if resource_params:
+        raise ConfigurationError.build(
+            f"resource DI parameter(s) {resource_params} cannot resolve on the "
+            f"sync run() driver (a FromResource fetch is awaited)",
+            node=node.name,
+            hint="drive the graph with arun() so the async di_inputs twin can "
+                 "await the fetch and feed the fetched text to the prompt template.",
+        )
     di_inputs = {
         name: binding.resolve(config)
         for name, binding in param_res.items()
         if binding.kind in DI_TEMPLATE_KINDS
     }
+    if not di_inputs:
+        return config
+    configurable = config.get("configurable", {})
+    return {**config, "configurable": {**configurable, StateKeys.DI_INPUTS: di_inputs}}
+
+
+async def _ainject_di_inputs(node: Node, config: RunnableConfig) -> RunnableConfig:
+    """Async twin of :func:`_inject_di_inputs`. See neograph-3q6j.
+
+    Same contract and DI_INPUTS side-channel, but AWAITS FROM_RESOURCE bindings
+    (the fetch) in addition to the synchronous DI_TEMPLATE_KINDS — so a fetched
+    resource's text can serve as an LLM-mode prompt template var (e.g. ``{history}``)
+    on the arun() path. Reuses the canonical ``DIBinding.aresolve`` (no second
+    resolver): it awaits FROM_RESOURCE and delegates every other kind to the sync
+    ``resolve``. Gate is DI_TEMPLATE_KINDS-or-FROM_RESOURCE (the sync twin stays
+    DI_TEMPLATE_KINDS only and fails loud on FROM_RESOURCE). Copy-not-mutate, so
+    per-superstep re-injection is idempotent. Returns config unchanged when the
+    node declares no template-usable DI params.
+    """
+    param_res = _get_param_res(node)
+    if not param_res:
+        return config
+    di_inputs = {}
+    for name, binding in param_res.items():
+        if binding.kind in DI_TEMPLATE_KINDS:
+            di_inputs[name] = binding.resolve(config)
+        elif binding.kind is DIKind.FROM_RESOURCE:
+            di_inputs[name] = await binding.aresolve(config)
     if not di_inputs:
         return config
     configurable = config.get("configurable", {})
@@ -237,8 +281,9 @@ class ThinkDispatch:
         context_data: dict[str, str] | None,
     ) -> NodeOutput:
         # Async twin of execute(): same pure preamble/postamble, awaits the LLM
-        # vertical (_llm.ainvoke_structured) instead of blocking it.
-        config = _inject_di_inputs(node, config)
+        # vertical (_llm.ainvoke_structured) instead of blocking it. The async
+        # injector twin additionally awaits FROM_RESOURCE bindings. See neograph-3q6j.
+        config = await _ainject_di_inputs(node, config)
         rendered = _render_input(node, input_data.value, runtime=self.runtime)
         output_model, primary_key = _resolve_primary_output(node)
         effective_model = config.get("configurable", {}).get("_oracle_model", node.model) or ""

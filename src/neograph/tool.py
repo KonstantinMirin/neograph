@@ -49,6 +49,15 @@ class Tool(BaseModel, frozen=True):
     budget: int = 0  # max calls for this tool (0 = unlimited)
     config: dict[str, Any] = Field(default_factory=dict)
 
+    # Replay-safety gate; see neograph-lhc6. True only when re-invoking this tool is
+    # side-effect-safe -- read-only, or an idempotent mutation (e.g. an HTTP PUT).
+    # Default is the CONSERVATIVE non-idempotent: a bare Tool must not be replayed
+    # to re-derive an expired resource, because replaying an act-mode producer
+    # would double-apply the mutation. Hydration replay (out-of-repo, neograph-a5nh)
+    # gates on this and raises NonIdempotentReplayError for a non-idempotent
+    # producer; lint warns when an act-mode node's tools are ALL idempotent.
+    idempotent: bool = False
+
     # Set when this spec was synthesized from a raw LangChain BaseTool passed
     # directly in Node(tools=[...]). Carries the original tool so the compile
     # seam can auto-register a factory and lint can introspect it (async-only
@@ -74,10 +83,14 @@ class Tool(BaseModel, frozen=True):
         budget/tracker path applies without the user re-wrapping.
         """
         budget = 0
+        idempotent = False
         meta = getattr(base_tool, "metadata", None)
         if isinstance(meta, dict):
             budget = meta.get("ng_tool_budget", 0) or 0
-        spec = cls(name=base_tool.name, budget=budget)
+            # resource_reader() stashes ng_idempotent=True (read-only by nature);
+            # a bare BaseTool carries no hint and stays conservatively non-idempotent.
+            idempotent = bool(meta.get("ng_idempotent", False))
+        spec = cls(name=base_tool.name, budget=budget, idempotent=idempotent)
         # Tool is frozen=True; set the PrivateAttr via object.__setattr__ (the
         # canonical frozen-model mutation path) so the assignment is honest to
         # both the runtime and the type checker.
@@ -332,6 +345,7 @@ def resource_reader(
     description: str,
     parse: Callable[[Any, str | None], BaseModel] | None = None,
     budget: int = 0,
+    idempotent: bool = True,
 ) -> Any:
     """Emit a typed, async LangChain BaseTool that reads ONE known resource KIND.
 
@@ -343,6 +357,11 @@ def resource_reader(
     ``parse`` if given, else ``application/json`` -> ``model_validate_json``).
     Returns the typed model instance, so ``ToolInteraction.typed_result`` carries
     the Pydantic model, not a repr string.
+
+    ``idempotent`` (default True) marks the reader replay-safe -- readers are
+    read-only by nature, so re-invoking one to re-derive an expired resource does
+    not double-apply a side effect. Lifted onto the ``Tool`` spec via
+    ``Tool.from_base_tool`` (metadata key ``ng_idempotent``).
     """
     from langchain_core.tools import StructuredTool
     from pydantic import create_model
@@ -357,13 +376,17 @@ def resource_reader(
         content, mime = await fetcher(uri)
         return parse_resource_content(content, mime, output_model, parse)
 
+    metadata: dict[str, Any] = {"ng_idempotent": idempotent}
+    if budget:
+        metadata["ng_tool_budget"] = budget
+
     return StructuredTool(
         name=name,
         description=description,
         args_schema=args_schema,
         coroutine=_read,
         func=None,
-        metadata={"ng_tool_budget": budget} if budget else None,
+        metadata=metadata,
     )
 
 

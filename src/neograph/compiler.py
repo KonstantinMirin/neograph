@@ -19,6 +19,7 @@ from pydantic import BaseModel
 
 from neograph._compiled import CompiledNeograph
 from neograph._dev_warnings import DEV_MODE
+from neograph._fan_agent_wrap import wrap_fan_over_agents
 from neograph._ir_branch import _BranchNode, iter_with_arms
 from neograph._llm_runtime import EMPTY_RUNTIME, LlmRuntime, check_llm_kwargs_or_raise
 from neograph._oracle import (
@@ -142,6 +143,16 @@ def compile(
     tool_factory_lookup: dict[str, Callable] = dict(_decoration_registry.tool_factory)
     if tool_factories:
         tool_factory_lookup.update(tool_factories)
+    # Pre-pass: fan-over-agent auto-wrap (neograph-m6d3.6). Oracle over a
+    # self-contained agent/act node is rewritten into an isolated single-node
+    # sub-construct so the fan runs over isolated subgraph state — the ONLY
+    # correct mechanism (an inline fan Sends into the ReAct cycle's SHARED
+    # reducer channels and collapses N>1 branches; see _fan_agent +
+    # docs/design/fan-over-agent-node-2026-07-07.md). Unsupported shapes already
+    # failed loud at assembly. Runs BEFORE the state model + all validation below
+    # so everything downstream sees the wrapped sub-construct uniformly.
+    construct = wrap_fan_over_agents(construct)
+
     # Auto-register factories for raw LangChain BaseTools passed via tools=.
     # Explicit tool_factories= (merged above) win; bound tools fill the gaps.
     register_bound_tool_factories(construct, tool_factory_lookup)
@@ -192,33 +203,6 @@ def compile(
         runtime.prompt_compiler,
         source="compile()",
     )
-
-    # Validate: Each/Oracle/Loop over an agent/act node is unsupported.
-    # An agent/act node compiles to a multi-node inline ReAct cycle
-    # ({node}__agent/tools/parse); a fan modifier Sends/loops to a single node
-    # and cannot wrap that region. Raise a deliberate compile-time error (a
-    # runtime miswire is not acceptable). Checked BEFORE tool-factory validation
-    # so the structural incompatibility is reported first. The principled fix
-    # (generalize the fan target to (entry, exit)) is neograph-m6d3.6.
-    # iter_with_arms so arm agent/act nodes are covered too.
-    for item in iter_with_arms(construct):
-        if isinstance(item, Node) and item.mode in ("agent", "act"):
-            _combo, _mods = classify_modifiers(item)
-            _wrapping = "Each" if "each" in _mods else ("Oracle" if "oracle" in _mods else ("Loop" if "loop" in _mods else None))
-            if _wrapping is not None:
-                raise CompileError.build(
-                    f"{_wrapping} over an agent/act node is not supported",
-                    expected="the modifier on a scripted/think node, or the agent wrapped in a sub-construct",
-                    found=f"{_wrapping} modifier on agent/act node '{item.name}'",
-                    hint=(
-                        "An agent/act node compiles to a multi-node ReAct cycle that "
-                        "a single-target fan modifier cannot wrap. Move the modifier "
-                        "to a scripted/think node, or wrap the agent node in a "
-                        "sub-construct. Tracking: neograph-m6d3.6."
-                    ),
-                    node=item.name,
-                    construct=construct.name,
-                )
 
     # Validate: tool factory registrations
     # iter_with_arms so a bare arm agent/act node's tool factories are validated
@@ -515,9 +499,13 @@ def _add_node_to_graph(
     combo, mods = classify_modifiers(node)
     operator = mods.get("operator")
 
-    # NOTE: Each/Oracle/Loop over an agent/act node is rejected earlier in
-    # compile() (before tool-factory validation) — see the fail-fast pass there.
-    # By here, an agent/act node is guaranteed BARE or OPERATOR-only.
+    # NOTE: a fan (Each/Oracle/Loop) modifier over an agent/act node never
+    # reaches this dispatch as a bare Node. Unsupported shapes are rejected at
+    # assembly time (_construct_validation -> _fan_agent); the one supported
+    # shape (Oracle over a self-contained agent) is rewritten into a sub-construct
+    # by the _wrap_fan_over_agents pre-pass in compile() before the state model is
+    # built, so it arrives here as a Construct via _add_subgraph. By here an
+    # agent/act Node is guaranteed BARE or OPERATOR-only. See neograph-m6d3.6.
 
     match combo:
         case ModifierCombo.EACH_ORACLE | ModifierCombo.EACH_ORACLE_OPERATOR:

@@ -2022,6 +2022,28 @@ class TestDiInputsInjectedAtLlmDispatchSeams:
             f"_inject_di_inputs, then add the module to COMPILE_SITE_MODULES."
         )
 
+    def test_every_injection_seam_injects_async_di_inputs(self):
+        """Lockstep async twin (neograph-3q6j): every LLM-mode seam ALSO calls the
+        async injector ``_ainject_di_inputs`` on its arun() path, so a FROM_RESOURCE
+        template var (fetched, awaited) reaches the prompt on the async driver. Think
+        injects in ``_dispatch.py`` (ThinkDispatch.aexecute); agent/act in
+        ``_agent_cycle.py`` (``_abuild_turn_prep``). Dropping either async call would
+        silently strand FROM_RESOURCE template vars on that mode's async path."""
+        missing: list[str] = []
+        for mod in sorted(self.INJECTION_SEAM_MODULES):
+            path = SRC_DIR / mod
+            if not path.exists():
+                continue
+            tree = ast.parse(path.read_text(), filename=str(path))
+            if not self._calls_named(tree, "_ainject_di_inputs"):
+                missing.append(mod)
+        assert missing == [], (
+            f"LLM-mode dispatch seam(s) no longer call _ainject_di_inputs: "
+            f"{missing}. FROM_RESOURCE template vars would stop reaching that "
+            f"mode's prompt on the arun() path. Re-add the async injection at the "
+            f"seam's async pre-prep twin."
+        )
+
     def test_mutation_seam_without_injection_detected(self, tmp_path: pathlib.Path):
         """A seam module that stops calling _inject_di_inputs is flagged."""
         (tmp_path / "_agent_cycle.py").write_text(

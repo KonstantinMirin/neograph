@@ -309,6 +309,36 @@ class TestEachPlusLoop:
 class TestLoopValidation:
     """Assembly-time validation for Loop modifier."""
 
+    def test_loop_over_agent_node_raises_construct_error(self):
+        """Loop over an agent/act node is fail-loud (neograph-m6d3.6 + neograph-gk3e).
+
+        Fan-over-agent is implemented only for Oracle over a self-contained agent
+        (auto-wrap into an isolated sub-construct — see
+        docs/design/fan-over-agent-node-2026-07-07.md). Loop-over-agent needs a
+        design call (the loop condition must read the wrapped subgraph output), so
+        it raises an assembly-time ConstructError instead of shipping a broken
+        graph."""
+        from neograph import Loop, Tool
+
+        class AgentOut(BaseModel, frozen=True):
+            items: list[str]
+
+        agent = (
+            Node(
+                name="agent-gen",
+                mode="agent",
+                outputs=AgentOut,
+                model="default-tier",
+                prompt="test/search",
+                tools=[Tool(name="agent_search", budget=5)],
+            )
+            | Loop(when=lambda d: False, max_iterations=3)
+        )
+        with pytest.raises(
+            ConstructError, match="Loop over an agent/act node is not supported"
+        ):
+            Construct("bad-loop-over-agent", nodes=[agent])
+
     def test_raises_when_loop_output_incompatible_with_input(self):
         """Self-loop: outputs must be compatible with inputs for back-edge."""
         from neograph import Loop

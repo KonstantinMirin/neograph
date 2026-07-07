@@ -499,24 +499,38 @@ class TestOracleModels:
         assert len(gen_tiers) == 3, f"Expected 3 generator calls with model overrides, got tiers: {seen_tiers}"
         assert set(gen_tiers) == {"reason", "fast", "creative"}
 
-    def test_oracle_over_agent_node_is_a_compile_error(self):
-        """Oracle over an agent/act node is a deliberate compile-time error
-        (neograph-m6d3 binding condition 3).
+    def _agent_oracle_fake(self, tier):
+        """A history-driven ReAct fake: call the tool once, then answer.
 
-        An agent/act node compiles to a multi-node inline ReAct cycle
-        ({node}__agent/tools/parse); Oracle's fan-out Sends to a single node and
-        cannot wrap that multi-node region. Rather than miswire at runtime, the
-        compiler raises. The principled fix — generalize the fan target to
-        (entry, exit) so Oracle CAN wrap the cycle — is neograph-m6d3.6.
-
-        Was ``test_oracle_models_on_agent_mode_node`` (asserted Oracle models on
-        an agent node worked against the monolith); that capability is
-        intentionally withdrawn under the agent-as-subgraph lock until m6d3.6.
+        Fresh per factory call, so each of the N isolated subgraph invocations
+        (the auto-wrapped ReAct cycles) drives its own tool loop independently.
         """
-        from neograph.errors import CompileError
+        return ReActFake(
+            tool_calls=[[{"name": "agent_search", "args": {}, "id": "s1"}], []],
+            final=lambda m: m(items=["variant"]),
+            output_model=Claims,
+        )
 
+    def test_oracle_over_self_contained_agent_node_runs(self):
+        """Oracle(n) over a SELF-CONTAINED agent/act node compiles AND runs.
+
+        neograph-m6d3.6: the inline ``(entry, exit)`` fan target the ticket
+        prescribed is impossible — an agent's ReAct cycle keeps per-turn state in
+        SHARED reducer channels, so ``Send``-ing N branches into it collapses them
+        (see docs/design/fan-over-agent-node-2026-07-07.md). The isolation-correct
+        fix is the AUTO-WRAP: the ReAct cycle is wrapped in an isolated single-node
+        sub-construct and Oracle fans over THAT via the existing subgraph path.
+
+        This is the declarative surface (``Node(mode="agent") | Oracle``). Asserts
+        N=2 ISOLATED variants reach the merge (``merged-2``) — the proof the two
+        ReAct cycles ran with isolated message channels, not one merged channel.
+        """
         fake_tool = FakeTool("agent_search", response="found")
         register_tool_factory("agent_search", lambda config, tool_config: fake_tool)
+        register_scripted(
+            "agent_merge_count",
+            lambda variants, config: Claims(items=[f"merged-{len(variants)}"]),
+        )
 
         gen_node = (
             Node(
@@ -527,12 +541,66 @@ class TestOracleModels:
                 prompt="test/search",
                 tools=[Tool(name="agent_search", budget=5)],
             )
-            | Oracle(models=["reason", "fast"], merge_fn="agent_models_merge")
+            | Oracle(n=2, merge_fn="agent_merge_count")
         )
-        pipeline = Construct("test-agent-oracle-models", nodes=[gen_node])
-        with pytest.raises(CompileError, match="Oracle over an agent/act node is not supported"):
-            compile(pipeline, **build_test_compile_kwargs(),
-                    **configure_fake_llm(lambda tier: ReActFake(tool_calls=[[]], final=lambda m: m(items=[]))))
+        pipeline = Construct("test-agent-oracle", nodes=[gen_node])
+        graph = compile(pipeline, **build_test_compile_kwargs(),
+                        **configure_fake_llm(self._agent_oracle_fake))
+        result = run(graph, input={"node_id": "agent-oracle"})
+        assert result["agent_gen"] == Claims(items=["merged-2"]), result
+
+    def test_oracle_over_self_contained_agent_node_runs_via_node_decorator(self):
+        """Same auto-wrap, the ``@node`` agent surface (three-surface parity).
+
+        A ``@node(mode="agent")`` function with no params is self-contained; the
+        decorator path must reach the same isolated-subgraph fan as the
+        declarative ``Node(...)`` above.
+        """
+        fake_tool = FakeTool("agent_search", response="found")
+        register_tool_factory("agent_search", lambda config, tool_config: fake_tool)
+        register_scripted(
+            "agent_merge_count_dec",
+            lambda variants, config: Claims(items=[f"merged-{len(variants)}"]),
+        )
+
+        @node(
+            mode="agent",
+            outputs=Claims,
+            model="default-tier",
+            prompt="test/search",
+            tools=[Tool(name="agent_search", budget=5)],
+        )
+        def researcher() -> Claims: ...
+
+        gen_node = researcher | Oracle(n=2, merge_fn="agent_merge_count_dec")
+        pipeline = Construct("test-agent-oracle-dec", nodes=[gen_node])
+        graph = compile(pipeline, **build_test_compile_kwargs(),
+                        **configure_fake_llm(self._agent_oracle_fake))
+        result = run(graph, input={"node_id": "agent-oracle-dec"})
+        assert result["researcher"] == Claims(items=["merged-2"]), result
+
+    def test_oracle_over_agent_node_with_upstream_inputs_fails_loud(self):
+        """Fan-over-agent with UPSTREAM INPUTS is fail-loud (port synthesis is an
+        open design Q — neograph-qot6). The auto-wrap only handles self-contained
+        agents; an agent that consumes upstream state must not silently ship a
+        broken graph."""
+        gen_node = (
+            Node(
+                name="agent-gen",
+                mode="agent",
+                inputs={"upstream": Claims},
+                outputs=Claims,
+                model="default-tier",
+                prompt="test/search",
+                tools=[Tool(name="agent_search", budget=5)],
+            )
+            | Oracle(n=2, merge_fn="agent_merge_count")
+        )
+        with pytest.raises(
+            ConstructError,
+            match="Oracle over an agent/act node with upstream inputs is not supported",
+        ):
+            Construct("bad-agent-oracle-inputs", nodes=[gen_node])
 
     def test_oracle_models_round_robin_on_think_mode(self):
         """Round-robin model assignment works on think-mode nodes when n > len(models)."""

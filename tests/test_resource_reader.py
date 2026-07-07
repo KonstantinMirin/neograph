@@ -224,3 +224,79 @@ class TestResourceReaderAgentModeEndToEnd:
 
         with pytest.raises(NeographError, match="arun"):
             run(graph, input={"node_id": "n1"}, config=cfg)
+
+
+# ── Idempotency / replay-safety annotation (neograph-lhc6) ─────────────────────
+#
+# Replaying a producing tool call to re-derive an expired resource is only safe
+# for idempotent/read-only tools. `Tool.idempotent` is the replay-safety gate.
+# A bare Tool defaults to the CONSERVATIVE non-idempotent (must not be replayed);
+# `resource_reader()` (read-only by nature) defaults idempotent=True.
+
+
+class TestToolIdempotencyAnnotation:
+    """`Tool.idempotent` defaults conservative; resource_reader defaults safe."""
+
+    def test_bare_tool_defaults_non_idempotent(self):
+        from neograph import Tool
+
+        assert Tool("mutate_deal").idempotent is False
+
+    def test_tool_idempotent_flag_round_trips_through_pipe(self):
+        from neograph import Tool
+        from neograph.modifiers import Each
+
+        spec = Tool("read_deal", idempotent=True)
+        assert spec.idempotent is True
+        # frozen model_copy preserves the field through modifier chains
+        assert spec.model_copy().idempotent is True
+
+    def test_resource_reader_marks_tool_idempotent(self):
+        t = resource_reader(
+            "read_deal", uri_template="crm://deals/{deal_id}",
+            output_model=Deal, description="d",
+        )
+        # The reader stashes its idempotency in metadata so from_base_tool lifts it.
+        assert (t.metadata or {}).get("ng_idempotent") is True
+
+    def test_from_base_tool_lifts_idempotent_from_resource_reader(self):
+        from neograph import Tool
+
+        t = resource_reader(
+            "read_deal", uri_template="crm://deals/{deal_id}",
+            output_model=Deal, description="d",
+        )
+        spec = Tool.from_base_tool(t)
+        assert spec.idempotent is True
+
+    def test_from_base_tool_defaults_non_idempotent_for_bare_base_tool(self):
+        from langchain_core.tools import StructuredTool
+        from pydantic import create_model
+
+        from neograph import Tool
+
+        bare = StructuredTool(
+            name="bare", description="d",
+            args_schema=create_model("bare_Args", x=(str, ...)),
+            coroutine=None, func=lambda x: x,
+        )
+        assert Tool.from_base_tool(bare).idempotent is False
+
+
+class TestNonIdempotentReplayError:
+    """The typed refusal hydration replay raises for a non-idempotent producer."""
+
+    def test_error_type_exists_and_is_raisable(self):
+        from neograph.errors import NeographError, NonIdempotentReplayError
+
+        assert issubclass(NonIdempotentReplayError, NeographError)
+        err = NonIdempotentReplayError.of("mutate_deal", node="writer")
+        assert err.tool_name == "mutate_deal"
+        assert err.node == "writer"
+        with pytest.raises(NonIdempotentReplayError, match="mutate_deal"):
+            raise err
+
+    def test_error_is_exported_from_package_root(self):
+        import neograph
+
+        assert hasattr(neograph, "NonIdempotentReplayError")

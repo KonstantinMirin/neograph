@@ -29,6 +29,7 @@ from __future__ import annotations
 from collections import OrderedDict
 from enum import Enum
 
+from neograph._fan_agent import raise_if_unsupported_fan_over_agent
 from neograph._ir_branch import iter_with_arms
 from neograph._ir_protocols import ConstructLike
 from neograph._normalize import _declared_output
@@ -137,6 +138,13 @@ def _validate_node_chain(
     # regression (it was uncaught before this walk saw arm nodes at all). See
     # neograph-vn5f (site 1).
     for item in iter_with_arms(construct):
+        # Fail loud, first: a fan (Each/Oracle/Loop) modifier over an agent/act
+        # node is only supported for Oracle over a self-contained agent (the
+        # compiler auto-wraps that into an isolated sub-construct). Every other
+        # shape raises here at assembly time rather than shipping a broken graph.
+        # See _fan_agent + docs/design/fan-over-agent-node-2026-07-07.md.
+        raise_if_unsupported_fan_over_agent(item)
+
         # Node has `inputs` (plural) since neograph-kqd.1. Construct still
         # uses `input` (singular) as its sub-construct boundary port —
         # that's handled above via construct.input, not here. The

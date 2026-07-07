@@ -110,6 +110,13 @@ _ALLOWLIST: Counter = Counter({
     # down (sub-construct arm-descent is owned by the sub-construct itself).
     ("scaffold.py",
      "sub_nodes = [_node_info(n) for n in item.nodes if isinstance(n, Node)]"): 1,
+    # wrap_fan_over_agents — the fan-over-agent auto-wrap pre-pass (neograph-m6d3.6).
+    # Deliberately TOP-LEVEL only: it rewrites supported fan-over-agent nodes into
+    # isolating sub-constructs, but arm nodes CANNOT be wrapped here (they are added
+    # verbatim by _add_arm_nodes). Arm-nested cases are caught fail-loud by the
+    # iter_with_arms scan immediately after this walk, so routing this walk through
+    # iter_with_arms would be wrong (it must NOT descend into arms).
+    ("_fan_agent_wrap.py", "for item in construct.nodes:"): 1,
 })
 
 

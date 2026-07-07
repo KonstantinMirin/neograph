@@ -301,6 +301,9 @@ def _walk(
     # 5. ask_human reachable from an act-mode (mutating) node (A.5 safety)
     _check_ask_human_in_mutating_node(item, issues, tool_factories=tool_factories)
 
+    # 6. act-mode node whose tools are ALL idempotent (probably mode='agent')
+    _check_act_mode_all_idempotent(item, issues)
+
 
 def _check_template_placeholders(
     node: Node,
@@ -347,6 +350,12 @@ def _check_template_placeholders(
     node_label = f"Node '{node.name}'"
     placeholder_syntax = "${%s}" if is_inline else "{%s}"
 
+    # FROM_RESOURCE param names that are valid template-ref vars but resolve ONLY
+    # under the async arun() driver (their fetch is awaited). Populated for the
+    # template-ref + di_inputs_enabled case below; used to emit the async-driver
+    # WARN in lockstep with runtime. See neograph-3q6j.
+    resource_vars: set[str] = set()
+
     if is_inline:
         # Inline prompts only have access to raw input dict keys.
         # Flattened fields from render_for_prompt are NOT available (inline
@@ -364,6 +373,8 @@ def _check_template_placeholders(
         valid_keys = predicted_keys | known_vars
         if di_inputs_enabled:
             valid_keys = valid_keys | _di_template_var_names(node)
+            resource_vars = _di_resource_template_var_names(node)
+            valid_keys = valid_keys | resource_vars
 
     consumer_known = known_vars - _KNOWN_EXTRAS - predicted_keys
 
@@ -381,6 +392,23 @@ def _check_template_placeholders(
                     f"not found in predicted input keys {sorted(predicted_keys)} "
                     f"or known extras {sorted(_KNOWN_EXTRAS)} "
                     f"(prompt: {prompt!r})"
+                ),
+            ))
+        elif first_segment in resource_vars:
+            # A FROM_RESOURCE template var IS valid, but its fetch is awaited — it
+            # resolves only under arun() (the sync run() driver fails loud at the
+            # injector). WARN so lint stays in lockstep with runtime coverage.
+            issues.append(LintIssue(
+                node_name=node_label,
+                param=first_segment,
+                kind="template_var_requires_async_driver",
+                required=False,
+                message=(
+                    f"{node_label}: template var "
+                    f"'{placeholder_syntax % first_segment}' is a FromResource DI "
+                    f"param — its fetch is awaited, so it resolves ONLY under the "
+                    f"async arun() driver (the sync run() driver fails loud). Drive "
+                    f"this graph with arun()."
                 ),
             ))
         elif first_segment in consumer_known and first_segment not in predicted_keys and first_segment not in _KNOWN_EXTRAS:
@@ -614,6 +642,43 @@ def _check_ask_human_in_mutating_node(
             ))
 
 
+def _check_act_mode_all_idempotent(
+    node: Node,
+    issues: list[LintIssue],
+) -> None:
+    """Warn when an act-mode node's tools are ALL idempotent. See neograph-lhc6.
+
+    ``act`` declares mutations, ``agent`` declares read-only. A node whose every
+    tool is marked ``idempotent=True`` performs no non-idempotent side effect, so
+    ``mode='act'`` is almost certainly a misclassification -- it should be
+    ``agent`` (read-only). Flagging it keeps the act/agent distinction honest,
+    which the replay-safety gate (hydration re-derivation) relies on.
+
+    WARN (``required=False``): a genuinely idempotent mutation (HTTP PUT) is a
+    legitimate act-mode-of-idempotent-tools shape, so this must not block. The
+    rule fires only when EVERY tool is a ``Tool`` spec known to be idempotent; a
+    raw BaseTool or any non-idempotent spec has unknown/mutating side effects, so
+    the node cannot be concluded misclassified and the rule stays silent.
+    """
+    if node.mode != "act" or not node.tools:
+        return
+
+    if all(isinstance(spec, Tool) and spec.idempotent for spec in node.tools):
+        tool_names = ", ".join(str(spec.name) for spec in node.tools)
+        issues.append(LintIssue(
+            node_name=f"Node '{node.name}'",
+            param="mode",
+            kind="act_mode_all_idempotent_tools",
+            required=False,
+            message=(
+                f"Node '{node.name}': mode='act' (mutations) but all tools "
+                f"({tool_names}) are idempotent=True (read-only). This is probably "
+                "a misclassification -- use mode='agent'. If a tool is a genuinely "
+                "idempotent mutation, this warning is expected and can be ignored."
+            ),
+        ))
+
+
 def _spec_factory(spec: Any, tool_factories: dict[str, Callable] | None) -> Any:
     """The registered factory for a Tool spec, or None when the spec carries a
     pre-bound tool (raw BaseTool) or is not a Tool. Used to introspect a factory
@@ -674,6 +739,22 @@ def _di_template_var_names(node: Node) -> set[str]:
     return {
         name for name, binding in (param_res or {}).items()
         if binding.kind in DI_TEMPLATE_KINDS
+    }
+
+
+def _di_resource_template_var_names(node: Node) -> set[str]:
+    """The node's FromResource parameter names usable as template vars. See neograph-3q6j.
+
+    Kept separate from ``_di_template_var_names`` because a FROM_RESOURCE var
+    resolves ONLY on the async arun() driver (its fetch is awaited): it is a VALID
+    template-ref placeholder when the compiler accepts ``di_inputs`` — the async
+    injector twin stashes the fetched value — but the lint layer flags it with an
+    async-driver WARN, in lockstep with the sync-driver fail-loud at runtime.
+    """
+    param_res = _get_param_res(node)
+    return {
+        name for name, binding in (param_res or {}).items()
+        if binding.kind is DIKind.FROM_RESOURCE
     }
 
 

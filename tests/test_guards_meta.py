@@ -374,6 +374,12 @@ class TestNoNearDuplicateHelperNames:
         frozenset({"arecover_dsml", "recover_dsml"}): (
             "lev=1: async twin of DSML recovery (_llm_retry.py)."
         ),
+        # neograph-3q6j: the di_inputs injector's async twin awaits FROM_RESOURCE
+        # bindings (DIBinding.aresolve) before _compile_prompt — same a-prefix
+        # sync/async twin convention; the sync form fails loud on FROM_RESOURCE.
+        frozenset({"_ainject_di_inputs", "_inject_di_inputs"}): (
+            "lev=1: async twin of the di_inputs injector (_dispatch.py)."
+        ),
         # neograph-w74k.2.4 (Phase 1d): a-prefix async twins of the runner's
         # checkpoint helpers (arun path).
         frozenset({"_ahas_existing_checkpoint", "_has_existing_checkpoint"}): (

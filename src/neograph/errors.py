@@ -219,3 +219,38 @@ class CheckpointSchemaError(NeographError):
     def __init__(self, *args: object, invalidated_nodes: set[str] | None = None) -> None:
         super().__init__(*args)
         self.invalidated_nodes = invalidated_nodes or set()
+
+
+class NonIdempotentReplayError(NeographError):
+    """Refused to replay a non-idempotent producing tool call. See neograph-lhc6.
+
+    Re-deriving an expired resource by replaying the tool call that produced it
+    is only safe when that tool is idempotent (read-only, or a replay-safe
+    mutation like an HTTP PUT). Replaying a non-idempotent producer -- an
+    act-mode mutation -- would double-apply the side effect, so hydration replay
+    (manifest-driven re-derivation, neograph-a5nh) raises this instead, refusing
+    the unsafe replay rather than silently double-mutating.
+
+    Carries the offending ``tool_name`` and the optional ``node`` it ran in so
+    the caller can pinpoint which producer must be marked ``idempotent=True`` (if
+    replay is genuinely safe) or re-fetched from source instead of replayed.
+    """
+
+    def __init__(
+        self, *args: object, tool_name: str | None = None, node: str | None = None
+    ) -> None:
+        super().__init__(*args)
+        self.tool_name = tool_name
+        self.node = node
+
+    @classmethod
+    def of(cls, tool_name: str, *, node: str | None = None) -> NonIdempotentReplayError:
+        """Build a NonIdempotentReplayError for the producing *tool_name*."""
+        where = f" in node '{node}'" if node else ""
+        msg = NeographError.build(
+            f"refusing to replay non-idempotent producing tool '{tool_name}'{where}",
+            hint="mark the tool idempotent=True only if replay is side-effect-safe "
+            "(read-only, or an idempotent mutation); otherwise re-derivation must "
+            "fail loud rather than double-apply the side effect",
+        )
+        return cls(str(msg), tool_name=tool_name, node=node)

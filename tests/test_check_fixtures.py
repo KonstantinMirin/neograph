@@ -55,13 +55,19 @@ def _extract_error_pattern(path: Path) -> str | None:
     return None
 
 
-def _try_compile(mod: object) -> Exception | None:
+def _try_compile(mod: object, *, try_without_llm: bool = True) -> Exception | None:
     """Find Constructs in the module and try to compile them.
 
     Pass placeholder LLM kwargs so the §2 fail-loud check doesn't mask
     other expected failures (missing tool, unregistered merge_fn, etc.).
     Fixtures that test the LLM-kwargs-missing error itself supply their
     own pattern and don't need these placeholders to fire.
+
+    ``try_without_llm`` (should_fail only): a second compile WITHOUT LLM kwargs,
+    so a should_fail fixture whose expected error IS "LLM not configured" surfaces
+    it (the first, placeholder-LLM compile would hide it). should_pass fixtures set
+    this False — an LLM-mode node (e.g. an agent) legitimately requires runtime
+    config, so it can only be expected to compile WITH the placeholder LLM.
     """
     from neograph.compiler import compile
     from neograph.construct import Construct
@@ -81,11 +87,12 @@ def _try_compile(mod: object) -> Exception | None:
             except Exception as exc:
                 return exc
             # Second attempt without LLM kwargs (in case the fixture's
-            # expected error is "LLM not configured").
-            try:
-                compile(obj, **build_test_compile_kwargs())
-            except Exception as exc:
-                return exc
+            # expected error is "LLM not configured"). should_fail only.
+            if try_without_llm:
+                try:
+                    compile(obj, **build_test_compile_kwargs())
+                except Exception as exc:
+                    return exc
     return None
 
 
@@ -140,7 +147,10 @@ def test_should_pass(fixture_path: Path):
         f"Fixture {fixture_path.name} should import cleanly but raised: {import_error}"
     )
 
-    compile_error = _try_compile(mod)
+    # should_pass fixtures compile once, WITH the placeholder LLM — an LLM-mode
+    # node (agent/act/think) legitimately requires runtime config, so the
+    # no-LLM second compile (a should_fail probe) must not gate should_pass.
+    compile_error = _try_compile(mod, try_without_llm=False)
     assert compile_error is None, (
         f"Fixture {fixture_path.name} should compile cleanly but raised: {compile_error}"
     )

@@ -52,10 +52,14 @@ class DIKind(Enum):
 
 
 # DI kinds whose resolved value can serve as a prompt template variable on an
-# LLM-mode node (keyed by the parameter name). Excludes CONSTANT (a plain
-# default, not run-input context) and FROM_STATE (merge_fn-only, meaningless
-# outside an Oracle merge). Shared by the LLM dispatch layer (which resolves and
-# stashes these — see `_dispatch._inject_di_inputs`) and lint (which treats them
+# LLM-mode node (keyed by the parameter name) SYNCHRONOUSLY. Excludes CONSTANT (a
+# plain default, not run-input context) and FROM_STATE (merge_fn-only, meaningless
+# outside an Oracle merge). Also excludes FROM_RESOURCE: a fetched resource is not
+# ambient run-input and the SYNC di_inputs injection cannot await its fetch — the
+# async twin `_dispatch._ainject_di_inputs` awaits `DIBinding.aresolve` for
+# FROM_RESOURCE and stashes it as a template var on the arun() path, while the sync
+# path fails loud (neograph-3q6j; see `_dispatch._inject_di_inputs`). Shared by the
+# LLM dispatch layer (which resolves and stashes these) and lint (which treats them
 # as valid template-ref placeholders when the prompt_compiler accepts di_inputs).
 DI_TEMPLATE_KINDS: frozenset[DIKind] = frozenset({
     DIKind.FROM_INPUT, DIKind.FROM_CONFIG,

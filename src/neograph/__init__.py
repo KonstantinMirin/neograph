@@ -46,6 +46,7 @@ from neograph.errors import (
     ExecutionError,
     NeographError,
     NodeOutputError,
+    NonIdempotentReplayError,
     PromptVarMissing,
 )
 from neograph.forward import ForwardConstruct
@@ -130,6 +131,7 @@ __all__ = [
     "ConfigurationError",
     "ExecutionError",
     "NodeOutputError",
+    "NonIdempotentReplayError",
     "PromptVarMissing",
     # Prompt primitives + default compiler (Layer-2 node DX)
     "substitute",

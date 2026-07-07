@@ -621,3 +621,61 @@ class TestAskHumanInMutatingNodeLint:
         assert [i for i in issues if i.kind == self._ISSUE_KIND] == []
 
 
+# neograph-lhc6: an act-mode node (act == mutations) whose tools are ALL
+# idempotent is probably misclassified — it should be mode='agent'. WARN
+# (required=False); gates on the DECLARED mode. Silent when any tool is
+# non-idempotent or of unknown side-effect (a raw BaseTool), and for agent mode.
+
+
+class TestActModeAllIdempotentToolsLint:
+    """lint() should WARN when an act-mode node's tools are all idempotent."""
+
+    _ISSUE_KIND = "act_mode_all_idempotent_tools"
+
+    def _construct(self, *, mode: str, tools):
+        n = Node(
+            "writer",
+            mode=mode,
+            outputs=Claims,
+            model="fast",
+            prompt="test/scan",
+            tools=tools,
+        )
+        return Construct(f"idem-{mode}", nodes=[n])
+
+    def test_warns_when_act_mode_tools_all_idempotent(self):
+        from neograph import Tool
+
+        construct = self._construct(
+            mode="act",
+            tools=[Tool("read_a", idempotent=True), Tool("read_b", idempotent=True)],
+        )
+        issues = lint(construct)
+
+        hits = [i for i in issues if i.kind == self._ISSUE_KIND]
+        assert len(hits) == 1, [i.kind for i in issues]
+        assert hits[0].required is False
+
+    def test_no_warning_for_agent_mode(self):
+        from neograph import Tool
+
+        construct = self._construct(
+            mode="agent",
+            tools=[Tool("read_a", idempotent=True)],
+        )
+        issues = lint(construct)
+
+        assert [i for i in issues if i.kind == self._ISSUE_KIND] == []
+
+    def test_no_warning_when_any_tool_non_idempotent(self):
+        from neograph import Tool
+
+        construct = self._construct(
+            mode="act",
+            tools=[Tool("read_a", idempotent=True), Tool("mutate_b")],
+        )
+        issues = lint(construct)
+
+        assert [i for i in issues if i.kind == self._ISSUE_KIND] == []
+
+

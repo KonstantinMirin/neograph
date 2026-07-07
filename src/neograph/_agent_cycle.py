@@ -43,6 +43,7 @@ from langgraph.types import interrupt
 from pydantic import BaseModel
 
 from neograph._dispatch import (
+    _ainject_di_inputs,
     _inject_di_inputs,
     _render_input,
     _resolve_primary_output,
@@ -109,12 +110,13 @@ def _turn_prep_kwargs(
 ) -> tuple[dict[str, Any], Any, str, Any]:
     """Shared pre-prep for both turn-prep twins: extract + render input, resolve
     the generation type, and assemble the kwargs passed to (a)prepare_tool_loop.
-    Returns (prepare_kwargs, gen_type, effective_model, effective_renderer)."""
-    # Agent/act nodes bypass ThinkDispatch, so resolve FromInput/FromConfig
-    # params into config here (the single shared pre-prep both twins call)
-    # before the cycle's _compile_prompt reads them — same injector, key, and
-    # copy-not-mutate contract as think mode.
-    config = _inject_di_inputs(node, config)
+    Returns (prepare_kwargs, gen_type, effective_model, effective_renderer).
+
+    ``config`` MUST already carry the di_inputs injection — each twin runs its own
+    driver-matched injector (sync ``_inject_di_inputs`` / async ``_ainject_di_inputs``)
+    before calling here, mirroring the ``_prepare_tool_loop`` / ``_aprepare_tool_loop``
+    sync/async split. FROM_RESOURCE template vars need the awaited async injector,
+    which cannot live in this sync helper. See neograph-3q6j."""
     bus = adapt_state(state)
     raw_input = _extract_input(bus, node)
     rendered = _render_input(node, raw_input, runtime=runtime)
@@ -156,6 +158,9 @@ def _build_turn_prep(
     re-invocable (two-lifetime rule §5), so rebuilding per superstep is correct
     on resume (a fresh process re-mints tool instances). Sync driver path — an
     async tool factory fails loud (drive with arun())."""
+    # Sync injector: fails loud on a FROM_RESOURCE template var (its fetch is
+    # awaited); resolves FromInput/FromConfig into config before _compile_prompt.
+    config = _inject_di_inputs(node, config)
     prepare_kwargs, gen_type, effective_model, effective_renderer = _turn_prep_kwargs(
         node, runtime, tool_factory_lookup, state, config
     )
@@ -174,6 +179,9 @@ async def _abuild_turn_prep(
     """Async twin of _build_turn_prep: awaits _aprepare_tool_loop so an async
     tool factory (per-run token mint / MCP client build) is native on the arun()
     path. All pre-prep work is shared with the sync twin via _turn_prep_kwargs."""
+    # Async injector twin: awaits FROM_RESOURCE bindings so a fetched resource's
+    # text reaches the cycle's _compile_prompt as a template var. See neograph-3q6j.
+    config = await _ainject_di_inputs(node, config)
     prepare_kwargs, gen_type, effective_model, effective_renderer = _turn_prep_kwargs(
         node, runtime, tool_factory_lookup, state, config
     )
