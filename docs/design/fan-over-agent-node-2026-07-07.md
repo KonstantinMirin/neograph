@@ -145,3 +145,28 @@ graph = compile(Construct("p", nodes=[sub]),
 print(run(graph, input={"topic": "x"}))
 # -> {'agent_sub': Res(items=['done', 'done'])}  — 2 isolated ReAct cycles, both merged.
 ```
+
+---
+
+## Addendum 2026-07-07: independent adversarial verification
+
+A fresh-context architect re-derived the impossibility with its own repros
+(N=2 Send into a 2-node cycle over a shared reducer channel -> ONE merged
+entry; a last-value channel -> InvalidUpdateError "Can receive only one value
+per step" — so reducer channels merge silently and static channels crash;
+neither isolates) and confirmed NO missed engine mechanism: Send seeds only
+the first superstep; LangGraph channel keys are static (no per-branch
+namespacing); subgraph-per-Send is the only isolation primitive — which is the
+shipped auto-wrap fix. Verdict: impossibility CONFIRMED; auto-wrap is the
+architecturally right answer (it reuses the framework's one isolation
+primitive and automates what the old compile error's hint already told users
+to do; the (entry,exit) signature was the wrong abstraction — the real axis is
+single-node vs multi-superstep region, which sub-constructs already
+discriminate).
+
+Deferred-case estimates and REQUIRED SEQUENCE (front-load the keystone):
+qot6 (input-port synthesis, ~2-3d, genuinely hard: dict-form fan-in + DI +
+neo_subgraph_input surface) -> 1h8c (each-item across the boundary, ~0.5-1d
+once a non-empty port exists) -> gk3e (loop-over-agent, ~1-1.5d, gated on
+qot6's port work). Repro scripts (session scratchpad, ephemeral):
+repro_merge.py, repro_send_namespace.py, repro_subgraph_isolation.py.
