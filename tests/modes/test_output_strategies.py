@@ -16,6 +16,7 @@ from tests.fakes import (
     ReActFake,
     StructuredFake,
     TextFake,
+    build_fake_runtime,
     build_test_compile_kwargs,
     configure_fake_llm,
     register_tool_factory,
@@ -198,6 +199,239 @@ class TestOutputStrategyJsonMode:
         # count is implementation detail; soften to a lower bound.
         assert result["extract"].items == ["third-time"]
         assert call_n["n"] >= 3
+
+
+class _SeqBindFake:
+    """json_mode fake that records bind kwargs and returns a scripted sequence of
+    raw responses (garbage first, then valid JSON). ``invoke`` asserts it is the
+    ``response_format``-bound clone — so the error-feedback retry reusing the SAME
+    bound client is proven for both twins. ``ainvoke`` bare-delegates (async guard).
+    """
+
+    def __init__(self, responses, *, bound=False, bind_calls=None):
+        self._responses = responses
+        self._i = 0
+        self._bound = bound
+        self.bind_calls = bind_calls if bind_calls is not None else []
+
+    def bind(self, **kw):
+        self.bind_calls.append(dict(kw))
+        return _SeqBindFake(
+            self._responses,
+            bound=self._bound or ("response_format" in kw),
+            bind_calls=self.bind_calls,
+        )
+
+    def invoke(self, messages, **kwargs):
+        from langchain_core.messages import AIMessage
+
+        assert self._bound, "retry must reuse the response_format-bound client"
+        r = self._responses[min(self._i, len(self._responses) - 1)]
+        self._i += 1
+        return AIMessage(content=r)
+
+    async def ainvoke(self, *a, **k):
+        return self.invoke(*a, **k)
+
+
+def _json_runtime(fake, prompt_compiler=None):
+    return build_fake_runtime(factory=lambda tier: fake, prompt_compiler=prompt_compiler)
+
+
+def _json_call_kwargs(**over):
+    base = {
+        "model_tier": "fast",
+        "prompt_template": "test",
+        "input_data": "test",
+        "output_model": Claims,
+        "config": {"configurable": {}},
+        "node_name": "x",
+        "llm_config": {"output_strategy": "json_mode"},
+    }
+    base.update(over)
+    return base
+
+
+class TestJsonModeNativeResponseFormat:
+    """json_mode SENDS the provider-native response_format={'type':'json_object'}
+    at the shared _prepare_structured_call seam (neograph-15s2), so BOTH the sync
+    invoke_structured and async ainvoke_structured twins inherit it from ONE site.
+    Schema-in-prompt + parse stays the universal fallback. ATTEMPT-BIND-AND-FALL-
+    BACK is done independently by each entrypoint. Every scenario is covered for
+    sync AND async.
+    """
+
+    _RESPONSE_FORMAT = {"response_format": {"type": "json_object"}}
+
+    # ── sync twin (invoke_structured) ──────────────────────────────────────
+
+    def test_response_format_bound_when_json_mode_sync(self):
+        from neograph._llm import invoke_structured
+
+        fake = TextFake('{"items": ["native"]}')
+        result = invoke_structured(_json_runtime(fake), **_json_call_kwargs())
+
+        assert result.items == ["native"]
+        assert fake.bind_calls == [self._RESPONSE_FORMAT]
+
+    def test_falls_back_to_unbound_when_provider_rejects_sync(self):
+        from structlog.testing import capture_logs
+
+        from neograph._llm import invoke_structured
+
+        fake = TextFake('{"items": ["recovered-native"]}', reject_response_format=True)
+        with capture_logs() as logs:
+            result = invoke_structured(_json_runtime(fake), **_json_call_kwargs())
+
+        assert result.items == ["recovered-native"]
+        assert fake.bind_calls == [self._RESPONSE_FORMAT]
+        events = [e for e in logs if e.get("event") == "json_mode_native_unsupported"]
+        assert len(events) == 1
+        assert events[0]["provider"] == "TextFake"
+
+    def test_retry_reuses_bound_client_sync(self):
+        from neograph._llm import invoke_structured
+
+        fake = _SeqBindFake(["not json at all", '{"items": ["second-try"]}'])
+        result = invoke_structured(
+            _json_runtime(fake),
+            **_json_call_kwargs(llm_config={"output_strategy": "json_mode", "max_retries": 2}),
+        )
+
+        assert result.items == ["second-try"]
+        # Bound exactly once (reused across the retry), never rebound per attempt.
+        assert fake.bind_calls == [self._RESPONSE_FORMAT]
+
+    # ── async twin (ainvoke_structured) ────────────────────────────────────
+    # Driven via asyncio.run inside sync test fns — the repo's async-test
+    # convention (this venv has no pytest-asyncio plugin).
+
+    def test_response_format_bound_when_json_mode_async(self):
+        import asyncio
+
+        from neograph._llm import ainvoke_structured
+
+        fake = TextFake('{"items": ["native-async"]}')
+        result = asyncio.run(ainvoke_structured(_json_runtime(fake), **_json_call_kwargs()))
+
+        assert result.items == ["native-async"]
+        assert fake.bind_calls == [self._RESPONSE_FORMAT]
+
+    def test_falls_back_to_unbound_when_provider_rejects_async(self):
+        import asyncio
+
+        from structlog.testing import capture_logs
+
+        from neograph._llm import ainvoke_structured
+
+        fake = TextFake('{"items": ["recovered-async"]}', reject_response_format=True)
+        with capture_logs() as logs:
+            result = asyncio.run(ainvoke_structured(_json_runtime(fake), **_json_call_kwargs()))
+
+        assert result.items == ["recovered-async"]
+        assert fake.bind_calls == [self._RESPONSE_FORMAT]
+        events = [e for e in logs if e.get("event") == "json_mode_native_unsupported"]
+        assert len(events) == 1
+        assert events[0]["provider"] == "TextFake"
+
+    def test_retry_reuses_bound_client_async(self):
+        import asyncio
+
+        from neograph._llm import ainvoke_structured
+
+        fake = _SeqBindFake(["not json at all", '{"items": ["second-async"]}'])
+        result = asyncio.run(
+            ainvoke_structured(
+                _json_runtime(fake),
+                **_json_call_kwargs(llm_config={"output_strategy": "json_mode", "max_retries": 2}),
+            )
+        )
+
+        assert result.items == ["second-async"]
+        assert fake.bind_calls == [self._RESPONSE_FORMAT]
+
+    # ── json-word silent-400 guard (strategy-level, twin-agnostic) ─────────
+
+    def test_json_word_appended_when_prompt_lacks_it(self):
+        from neograph._llm import invoke_structured
+
+        # Default fake compiler content is "test" — no 'json' word.
+        fake = TextFake('{"items": ["ok"]}')
+        invoke_structured(_json_runtime(fake), **_json_call_kwargs())
+
+        seen = fake.messages_seen[0]
+        assert any(
+            isinstance(m, dict) and "json" in str(m.get("content", "")).lower()
+            for m in seen
+        ), f"json-word guard did not inject 'json' into messages: {seen}"
+
+    def test_json_word_not_duplicated_when_already_present(self):
+        from neograph._llm import invoke_structured
+
+        fake = TextFake('{"items": ["ok"]}')
+
+        def compiler(template, data, **kw):
+            return [{"role": "user", "content": "Return a json object."}]
+
+        invoke_structured(_json_runtime(fake, prompt_compiler=compiler), **_json_call_kwargs())
+
+        seen = fake.messages_seen[0]
+        assert len(seen) == 1, f"must not append when 'json' already present: {seen}"
+
+    # ── zero behavior change for the other strategies ──────────────────────
+
+    def test_structured_strategy_does_not_bind_response_format(self):
+        """Default structured strategy never binds response_format."""
+        fake = StructuredFake(lambda m: m(items=["via-structured"]))
+        _llm_kw = configure_fake_llm(lambda tier: fake)
+
+        node = Node(name="extract", mode="think", outputs=Claims, model="fast", prompt="test")
+        pipeline = Construct("test-structured-nobind", nodes=[node])
+        graph = compile(pipeline, **_llm_kw, **build_test_compile_kwargs())
+        result = run(graph, input={"node_id": "test"})
+
+        assert result["extract"].items == ["via-structured"]
+        assert fake.bind_calls == []
+
+    def test_text_strategy_does_not_bind_response_format(self):
+        """The text strategy is not wrapped/bound."""
+        fake = TextFake('{"items": ["from-text"]}')
+        _llm_kw = configure_fake_llm(lambda tier: fake)
+
+        node = Node(
+            name="extract",
+            mode="think",
+            outputs=Claims,
+            model="fast",
+            prompt="test",
+            llm_config={"output_strategy": "text"},
+        )
+        pipeline = Construct("test-text-nobind", nodes=[node])
+        graph = compile(pipeline, **_llm_kw, **build_test_compile_kwargs())
+        result = run(graph, input={"node_id": "test"})
+
+        assert result["extract"].items == ["from-text"]
+        assert fake.bind_calls == []
+
+    def test_end_to_end_bound_via_compile_run(self):
+        """Integration: a json_mode think node compiled and run binds natively."""
+        fake = TextFake('{"items": ["e2e"]}')
+        _llm_kw = configure_fake_llm(lambda tier: fake)
+
+        node = Node(
+            name="extract",
+            mode="think",
+            outputs=Claims,
+            model="fast",
+            prompt="test",
+            llm_config={"output_strategy": "json_mode"},
+        )
+        pipeline = Construct("test-native-e2e", nodes=[node])
+        graph = compile(pipeline, **_llm_kw, **build_test_compile_kwargs())
+        result = run(graph, input={"node_id": "test"})
+
+        assert result["extract"].items == ["e2e"]
+        assert fake.bind_calls == [self._RESPONSE_FORMAT]
 
 
 class TestOutputStrategyText:

@@ -181,6 +181,13 @@ class TestLlmResponsibilityDiscipline:
             "ainvoke_structured",
             "_prepare_structured_call",
             "_finish_structured_call",
+            # neograph-15s2: native json_mode call staging bound at the shared
+            # preamble (both twins inherit). Binding the provider-native
+            # response_format is part of "how a produce-mode call is staged
+            # (resolve LLM -> ...)" — the orchestrator's own change axis.
+            "_NativeJsonModeLLM",
+            "_is_response_format_rejection",
+            "_ensure_json_instruction",
         }),
         "_llm_dispatch.py": frozenset({
             "_call_structured",
@@ -257,7 +264,12 @@ class TestLlmResponsibilityDiscipline:
     LINE_BUDGETS = {
         # neograph-ykun: 290 -> 265. The async twins route through the shared
         # pure preamble/postamble; the raised budget is no longer needed.
-        "_llm.py": 265,
+        # neograph-15s2: 265 -> 385. Native json_mode call staging landed at the
+        # shared preamble (attempt-bind-and-fall-back wrapper with sync+async
+        # entrypoints + json-word guard + response_format rejection predicate).
+        # The load-bearing assertion is the name allowlist above; this coarse
+        # proxy is widened for the new, reviewed names.
+        "_llm.py": 385,
         # neograph-ble3: tightened 130 -> 115. The 5-path include_raw try/except
         # ladder collapsed to a match on the StructuredResult variant; the
         # provider-quirk wiring moved to the compat shim. Locks the deletion.

@@ -86,10 +86,24 @@ class StructuredFake:
     def __init__(self, respond: Callable[[type[BaseModel]], BaseModel]):
         self._respond = respond
         self._model: type[BaseModel] | None = None
+        # neograph-15s2: records the kwargs any ``bind`` call would forward to the
+        # provider, on a SHARED list so a test holding the original fake can assert
+        # what was bound. The ``structured`` strategy never binds ``response_format``
+        # — a test asserts ``bind_calls`` stays empty of it (zero behavior change).
+        self.bind_calls: list[dict[str, Any]] = []
 
     def with_structured_output(self, model: type[BaseModel], **kwargs) -> StructuredFake:
         clone = StructuredFake(self._respond)
         clone._model = model
+        clone.bind_calls = self.bind_calls
+        return clone
+
+    def bind(self, **kwargs: Any) -> StructuredFake:
+        """Capture provider kwargs the way a real ``BaseChatModel.bind`` would."""
+        self.bind_calls.append(dict(kwargs))
+        clone = StructuredFake(self._respond)
+        clone._model = self._model
+        clone.bind_calls = self.bind_calls
         return clone
 
     def invoke(self, messages: list, **kwargs) -> Any:
@@ -364,10 +378,35 @@ class TextFake:
     text into the node's output model.
     """
 
-    def __init__(self, text: str):
+    def __init__(self, text: str, *, reject_response_format: bool = False):
         self._text = text
+        # neograph-15s2: simulate a provider that does NOT support the native
+        # ``response_format`` kwarg (e.g. ChatAnthropic) — the bound clone raises
+        # on invoke so the ATTEMPT-BIND-AND-FALL-BACK path is testable offline.
+        self._reject_response_format = reject_response_format
+        self._bound_response_format = False
+        # Observability for native-binding tests. SHARED across bind clones so a
+        # test holding the original fake sees what was bound and what was invoked.
+        self.bind_calls: list[dict[str, Any]] = []
+        self.messages_seen: list = []
+
+    def bind(self, **kwargs: Any) -> TextFake:
+        """Capture native provider kwargs (e.g. ``response_format``) the way a
+        real LangChain ``BaseChatModel.bind`` would, returning a bound clone."""
+        self.bind_calls.append(dict(kwargs))
+        clone = TextFake(self._text, reject_response_format=self._reject_response_format)
+        clone.bind_calls = self.bind_calls
+        clone.messages_seen = self.messages_seen
+        clone._bound_response_format = self._bound_response_format or ("response_format" in kwargs)
+        return clone
 
     def invoke(self, messages: list, **kwargs) -> AIMessage:
+        self.messages_seen.append(messages)
+        if self._bound_response_format and self._reject_response_format:
+            # Mirror a provider whose API rejects the forwarded response_format.
+            raise TypeError(
+                "Completions.create() got an unexpected keyword argument 'response_format'"
+            )
         return AIMessage(content=self._text)
 
     async def ainvoke(self, *a, **k) -> AIMessage:

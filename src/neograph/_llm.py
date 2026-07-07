@@ -36,6 +36,100 @@ from neograph.errors import ConfigurationError
 
 log = structlog.get_logger()
 
+# Provider-native JSON-object mode payload. Bound onto the model for the
+# ``json_mode`` strategy so the provider constrains decoding server-side; the
+# schema-in-prompt + parse path (``_llm_retry``) stays the universal fallback.
+_JSON_OBJECT_RESPONSE_FORMAT = {"type": "json_object"}
+
+
+def _is_response_format_rejection(exc: BaseException) -> bool:
+    """True when a provider rejected the native ``response_format`` kwarg.
+
+    A provider without JSON-object mode either raises ``TypeError`` (the kwarg is
+    an unexpected keyword) or a provider ``BadRequest`` (the kwarg reached an API
+    that does not accept it). We identify the rejection by the kwarg name in the
+    message — NEVER by provider class name (that drifts). Any other error is a
+    genuine failure and must propagate untouched.
+    """
+    if "response_format" not in str(exc).lower():
+        return False
+    if isinstance(exc, TypeError):
+        return True
+    return "badrequest" in type(exc).__name__.lower()
+
+
+def _ensure_json_instruction(messages: list) -> list:
+    """Guarantee the literal word 'json' appears somewhere in the messages.
+
+    OpenAI-compatible ``response_format={'type':'json_object'}`` silently 400s
+    unless a message mentions 'json'. The ``describe_type`` schema block is
+    TypeScript-style and does not guarantee the literal word, and the prompt is
+    app-``prompt_compiler``-built, so the framework appends one instruction line
+    when the word is absent. Returns a new list; never mutates the compiled prompt.
+    """
+    for m in messages:
+        content = m.get("content") if isinstance(m, dict) else getattr(m, "content", "")
+        if isinstance(content, str) and "json" in content.lower():
+            return messages
+    return [*messages, {"role": "user", "content": "Respond with a single valid JSON object and nothing else."}]
+
+
+class _NativeJsonModeLLM:
+    """Attempt-bind-and-fall-back wrapper for json_mode native ``response_format``.
+
+    Sends the provider-native ``response_format={'type':'json_object'}`` on the
+    model call. If the provider rejects the kwarg (a provider without JSON-object
+    support, e.g. ``ChatAnthropic`` forwarding to an API that 400s), it logs ONCE
+    (``json_mode_native_unsupported``) and falls back to the UNBOUND client for
+    this and every subsequent call. The schema-in-prompt + ``_parse_json_response``
+    machinery stays the universal safety net either way — mirroring the
+    ``_llm_structured_compat`` philosophy (a quirk is handled at the boundary, not
+    branched into the dispatch).
+
+    Bound ONCE at the shared ``_prepare_structured_call`` seam so BOTH the sync
+    (``invoke`` -> ``_call_structured`` -> ``_invoke_json_with_retry``) and async
+    (``ainvoke`` -> ``_acall_structured`` -> ``_ainvoke_json_with_retry``) twins
+    inherit the SAME wrapper and reuse it across error-feedback retries. Each of
+    the two entrypoints does attempt-bind-and-fall-back independently; the
+    ``_fell_back`` flag is shared, so the first rejection (on either surface)
+    switches every subsequent call to the unbound client.
+    """
+
+    def __init__(self, llm: Any) -> None:
+        self._unbound = llm
+        self._bound = llm.bind(response_format=_JSON_OBJECT_RESPONSE_FORMAT)
+        self._fell_back = False
+
+    def _record_fallback(self, exc: BaseException) -> None:
+        log.warning(
+            "json_mode_native_unsupported",
+            provider=type(self._unbound).__name__,
+            error=str(exc),
+        )
+        self._fell_back = True
+
+    def invoke(self, messages: list, **kwargs: Any) -> Any:
+        if self._fell_back:
+            return self._unbound.invoke(messages, **kwargs)
+        try:
+            return self._bound.invoke(messages, **kwargs)
+        except Exception as exc:  # noqa: BLE001 — re-raised unless it is the known rejection
+            if not _is_response_format_rejection(exc):
+                raise
+            self._record_fallback(exc)
+            return self._unbound.invoke(messages, **kwargs)
+
+    async def ainvoke(self, messages: list, **kwargs: Any) -> Any:
+        if self._fell_back:
+            return await self._unbound.ainvoke(messages, **kwargs)
+        try:
+            return await self._bound.ainvoke(messages, **kwargs)
+        except Exception as exc:  # noqa: BLE001 — re-raised unless it is the known rejection
+            if not _is_response_format_rejection(exc):
+                raise
+            self._record_fallback(exc)
+            return await self._unbound.ainvoke(messages, **kwargs)
+
 
 def _notify_cost(
     *args: Any,
@@ -141,7 +235,15 @@ def invoke_structured(
 
     Output strategy (from llm_config.output_strategy):
         "structured" — llm.with_structured_output(model) (default, widest LangChain support)
-        "json_mode"  — inject schema into prompt, LLM returns raw JSON, framework parses
+        "json_mode"  — send the provider-native response_format={'type':'json_object'}
+                       (attempt-bind-and-fall-back: providers without it fall back
+                       unbound) AND inject the schema into the prompt; the LLM
+                       returns raw JSON that the framework parses. Native json mode
+                       constrains the emitted TEXT to a JSON object; it does NOT
+                       suppress a reasoning model's internal reasoning
+                       (gemini-2.5-pro / deepseek-reasoner still think first), which
+                       is exactly why the schema-in-prompt + reason-then-coerce
+                       raw-text parse remains the universal safety net.
         "text"       — LLM returns plain text, framework extracts and parses JSON from it
 
     Accepts both call shapes:
@@ -200,6 +302,20 @@ def _prepare_structured_call(
         output_schema=output_schema,
         context=context,
     )
+
+    if strategy == "json_mode":
+        # ONE site, both twins inherit: this preamble is shared by
+        # invoke_structured (sync) and ainvoke_structured (async). Guarantee the
+        # json-word (OpenAI-compat silent-400 trap), then bind the provider-native
+        # response_format. The wrapper flows into _call_structured /
+        # _acall_structured -> _(a)invoke_json_with_retry, so the initial call AND
+        # its error-feedback retries reuse the bound client (one bind). An LLM
+        # double without .bind can't do native json mode -> stay on the
+        # schema-in-prompt fallback unchanged.
+        messages = _ensure_json_instruction(messages)
+        if hasattr(llm, "bind"):
+            llm = _NativeJsonModeLLM(llm)
+
     return llm, messages, strategy, llm_log
 
 
