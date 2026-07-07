@@ -128,6 +128,20 @@ class StateKeys:
         return f"neo_agent_tool_log_{field_name}"
 
     @staticmethod
+    def resource_manifest(field_name: str) -> str:
+        """Agent-cycle resource-manifest channel (accumulated ResourceRef records
+        lifted from resource_link tool-result blocks).
+
+        ``neo_``-prefixed so ``_strip_internals`` removes it from returned state
+        and ``compute_schema_fingerprint`` excludes it — exactly like the sibling
+        ``agent_tool_log`` channel. It IS a checkpointed state channel (built in
+        ``state.py:_add_agent_channels`` with an append reducer), so a HITL pause
+        preserves the manifest across resume. Contrast with config-only ``_neo_``
+        keys (``DI_INPUTS``) which never enter state.
+        """
+        return f"neo_resource_manifest_{field_name}"
+
+    @staticmethod
     def agent_budget(field_name: str) -> str:
         """Agent-cycle budget/iteration channel (per-tool call counts, iteration
         count, cumulative input tokens) — survives per-turn checkpoints, unlike

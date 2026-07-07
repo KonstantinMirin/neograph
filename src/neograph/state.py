@@ -69,6 +69,20 @@ def _append_tool_log(existing: Any, new: Any) -> list:
     return [*existing, new]
 
 
+def _append_resource_manifest(existing: Any, new: Any) -> list:
+    """Reducer: accumulate ResourceRef records across agent-cycle turns.
+
+    The tool node emits a list of the refs lifted from one turn's resource_link
+    blocks; the reducer concatenates them so the full manifest survives per-turn
+    checkpoints (HITL-surviving tier). Mirrors ``_append_tool_log``.
+    """
+    if existing is None:
+        existing = []
+    if isinstance(new, list):
+        return existing + new
+    return [*existing, new]
+
+
 def _merge_dicts(existing: Any, new: dict) -> dict:
     """Reducer: merge dicts additively (for fan-out results).
 
@@ -402,11 +416,11 @@ def compute_schema_fingerprint(state_model: type[BaseModel]) -> str:
 def _add_agent_channels(node: Node, fields: dict[str, Any]) -> None:
     """Add the agent-cycle state channels for an agent/act node.
 
-    These carry the ReAct loop's per-turn state — message history, tool_log, and
-    budget/iteration counters — so the inline agent-cycle expander (``_wiring.
-    _add_agent_cycle``) can make every turn a checkpointed superstep. All three
-    are ``neo_``-prefixed, so ``_strip_internals`` removes them from returned
-    state and ``compute_schema_fingerprint`` excludes them.
+    These carry the ReAct loop's per-turn state — message history, tool_log,
+    resource manifest, and budget/iteration counters — so the inline agent-cycle
+    expander (``_wiring._add_agent_cycle``) can make every turn a checkpointed
+    superstep. All are ``neo_``-prefixed, so ``_strip_internals`` removes them
+    from returned state and ``compute_schema_fingerprint`` excludes them.
 
     Only agent/act nodes get channels; think/scripted/raw nodes never enter a
     ReAct loop.
@@ -419,6 +433,7 @@ def _add_agent_channels(node: Node, fields: dict[str, Any]) -> None:
     field_name = field_name_for(node.name)
     fields[StateKeys.agent_messages(field_name)] = (Annotated[list, add_messages], [])
     fields[StateKeys.agent_tool_log(field_name)] = (Annotated[list, _append_tool_log], [])
+    fields[StateKeys.resource_manifest(field_name)] = (Annotated[list, _append_resource_manifest], [])
     fields[StateKeys.agent_budget(field_name)] = (dict | None, None)
 
 

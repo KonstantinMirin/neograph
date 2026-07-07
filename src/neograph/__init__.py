@@ -83,6 +83,8 @@ from neograph.runner import arun, astream, run, stream
 from neograph.spec_types import lookup_type, register_type
 from neograph.tool import (
     BlobResult,
+    ProducingCall,
+    ResourceRef,
     Tool,
     ToolInteraction,
     read_blob,
@@ -121,6 +123,8 @@ __all__ = [
     # Low-level IR (advanced use: programmatic construction, IR tests)
     "Node",
     "Tool",
+    "ResourceRef",
+    "ProducingCall",
     "Construct",
     "ForwardConstruct",
     "TypeSpecStatic",

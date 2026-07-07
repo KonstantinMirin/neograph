@@ -168,6 +168,43 @@ class ToolInteraction(BaseModel, frozen=True):
     duration_ms: int = 0
 
 
+class ProducingCall(BaseModel, frozen=True):
+    """The tool call that emitted a resource_link — the replay path for a ref.
+
+    Frozen: a manifest entry's provenance must not mutate. Re-derivation of an
+    expired resource is exactly ``(tool_name, args)`` — the only path an MCP
+    ``resource_link`` (which carries no lifetime contract) reliably allows.
+    """
+
+    tool_name: str
+    args: dict[str, Any] = Field(default_factory=dict)
+
+
+class ResourceRef(BaseModel, frozen=True):
+    """A typed, self-healing reference to an MCP resource — the OPPOSITE of a
+    stringly ``file_id``.
+
+    Lifted from a ``resource_link`` tool-result block (``_agent_cycle.
+    _lift_resource_refs``) co-located with the ``ToolInteraction`` it corresponds
+    to, and parked in the checkpointed resource-manifest channel (``StateKeys.
+    resource_manifest`` — the HITL-surviving tier). It carries its ``producing_
+    call`` so an expired ref can be re-derived by replay.
+
+    Read/hydration/expiry (read -> replay -> fail loud) is a SEPARATE downstream
+    concern, neograph-a5nh; this model + its lift are the manifest tier only.
+    ``ttl_ms`` is reserved for the future SEP-2549 layered-expiry layer.
+    """
+
+    uri: str                       # the resource_link uri (server-defined stability)
+    kind: str                      # domain KIND: "email-history", "activity-history"
+    server: str                    # which MCP server (for the consumer's fetcher routing)
+    producing_call: ProducingCall  # THE re-derivation path
+    mime: str | None = None        # hint from the resource_link block
+    size: int | None = None        # hint from the resource_link block
+    fetched_at: str | None = None  # ISO ts when last hydrated (provenance; set at hydration)
+    ttl_ms: int | None = None      # future SEP-2549 layered expiry
+
+
 class ToolBudgetTracker:
     """Tracks per-tool call counts and enforces budgets at runtime.
 

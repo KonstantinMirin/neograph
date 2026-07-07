@@ -68,7 +68,13 @@ from neograph.describe_type import type_display_name
 from neograph.errors import ConfigurationError
 from neograph.naming import field_name_for
 from neograph.node import Node, TypeSpecStatic
-from neograph.tool import Tool, ToolBudgetTracker, ToolInteraction
+from neograph.tool import (
+    ProducingCall,
+    ResourceRef,
+    Tool,
+    ToolBudgetTracker,
+    ToolInteraction,
+)
 
 log = structlog.get_logger()
 
@@ -393,6 +399,70 @@ def _record_tool_result(
     return interaction, ToolMessage(content=rendered, tool_call_id=tc["id"])
 
 
+def _iter_content_blocks(result: Any) -> list:
+    """Yield candidate content blocks from a tool result.
+
+    MCP tools loaded via langchain-mcp-adapters return content as a list of
+    blocks; a ``content_and_artifact`` tool returns ``(content, artifact)``; some
+    return ``{"content": [...]}``. A plain string / Pydantic model (the common
+    case) carries no blocks. Kept permissive so a resource-emitting server's
+    ``resource_link`` blocks are found wherever they land, without coupling to a
+    single result shape."""
+    if isinstance(result, list):
+        return result
+    if isinstance(result, tuple):
+        return [b for part in result if isinstance(part, list) for b in part]
+    if isinstance(result, dict) and isinstance(result.get("content"), list):
+        return result["content"]
+    return []
+
+
+def _block_field(block: Any, key: str) -> Any:
+    """Read a content-block field from a dict block or an object block."""
+    if isinstance(block, dict):
+        return block.get(key)
+    return getattr(block, key, None)
+
+
+def _lift_resource_refs(result: Any, tc: dict) -> list[ResourceRef]:
+    """Lift typed ``ResourceRef``s from ``resource_link`` blocks in a tool result.
+
+    Called from ``tools_body``/``atools_body`` INSIDE the per-tool-call loop —
+    the ONLY point where the producing call (``tc`` name + args) and the raw
+    ``result`` are both in scope. Lifting in ``_finish_tool_loop`` would lose the
+    producing call (out of scope there), and the producing call is the sole
+    protocol-reliable re-derivation path for an MCP ``resource_link`` (which
+    carries no lifetime contract). Co-located with the ``ToolInteraction`` the
+    ref corresponds to.
+
+    Scans the result for MCP ``resource_link`` content blocks and emits one
+    frozen ``ResourceRef`` per block, stamped with the producing call. A result
+    without such blocks (a plain string / model — the common case) yields ``[]``.
+    ``fetched_at`` stays ``None``: this is a lift, not a hydration.
+    """
+    refs: list[ResourceRef] = []
+    for block in _iter_content_blocks(result):
+        if _block_field(block, "type") != "resource_link":
+            continue
+        uri = _block_field(block, "uri")
+        if not uri:
+            continue
+        scheme = uri.split("://", 1)[0] if "://" in uri else ""
+        refs.append(
+            ResourceRef(
+                uri=uri,
+                kind=_block_field(block, "name") or scheme or "resource",
+                server=scheme,
+                producing_call=ProducingCall(
+                    tool_name=tc["name"], args=tc.get("args", {}) or {}
+                ),
+                mime=_block_field(block, "mimeType"),
+                size=_block_field(block, "size"),
+            )
+        )
+    return refs
+
+
 def make_agent_cycle_bodies(
     node: Node,
     *,
@@ -408,6 +478,7 @@ def make_agent_cycle_bodies(
     field = field_name_for(node.name)
     msgs_key = StateKeys.agent_messages(field)
     tlog_key = StateKeys.agent_tool_log(field)
+    manifest_key = StateKeys.resource_manifest(field)
     budget_key = StateKeys.agent_budget(field)
     names = cycle_names(node.name)
 
@@ -483,6 +554,7 @@ def make_agent_cycle_bodies(
         tracker = _tracker_from_budget(node, budget)
         new_msgs: list = []
         interactions: list = []
+        refs: list = []
         for tc in tool_calls:
             kind, payload = _tool_call_precheck(tc, tracker, tp.prep.tool_instances)
             if kind == "msg":
@@ -496,12 +568,13 @@ def make_agent_cycle_bodies(
             elapsed_ms = int((time.monotonic() - t0) * 1000)
             interaction, msg = _record_tool_result(tc, result, elapsed_ms, tracker, tp.effective_renderer)
             interactions.append(interaction)
+            refs.extend(_lift_resource_refs(result, tc))
             new_msgs.append(msg)
 
         budget["calls"] = dict(tracker._counts)
         if tracker.all_exhausted():
             budget["forced_final"] = True
-        return {msgs_key: new_msgs, tlog_key: interactions, budget_key: budget}
+        return {msgs_key: new_msgs, tlog_key: interactions, manifest_key: refs, budget_key: budget}
 
     async def atools_body(state: BaseModel, config: RunnableConfig) -> dict[str, Any]:
         bus = adapt_state(state)
@@ -520,6 +593,7 @@ def make_agent_cycle_bodies(
         tracker = _tracker_from_budget(node, budget)
         new_msgs: list = []
         interactions: list = []
+        refs: list = []
         for tc in tool_calls:
             kind, payload = _tool_call_precheck(tc, tracker, tp.prep.tool_instances)
             if kind == "msg":
@@ -530,12 +604,13 @@ def make_agent_cycle_bodies(
             elapsed_ms = int((time.monotonic() - t0) * 1000)
             interaction, msg = _record_tool_result(tc, result, elapsed_ms, tracker, tp.effective_renderer)
             interactions.append(interaction)
+            refs.extend(_lift_resource_refs(result, tc))
             new_msgs.append(msg)
 
         budget["calls"] = dict(tracker._counts)
         if tracker.all_exhausted():
             budget["forced_final"] = True
-        return {msgs_key: new_msgs, tlog_key: interactions, budget_key: budget}
+        return {msgs_key: new_msgs, tlog_key: interactions, manifest_key: refs, budget_key: budget}
 
     # ── {node}__parse ─────────────────────────────────────────────────────
     def _finish_and_shape(state, config, tp, channel_msgs, tool_interactions, budget, parse_result, fallback_usage):
