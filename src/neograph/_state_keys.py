@@ -76,6 +76,16 @@ class StateKeys:
     # config-injection pattern (`_inject_oracle_config`). Never enters state — a
     # config-only key, so it cannot touch the schema fingerprint.
     DI_INPUTS = "_neo_di_inputs"
+    # RUN_ID is a config['configurable'] key (NOT a state-bus key): a
+    # framework-minted per-run correlation id, minted fresh per execution attempt
+    # by ``_mint_run_id`` in the pre-engine brains (``_prepare`` / ``_aprepare``),
+    # stable across every superstep of one run, and NEVER user-supplied. Two-
+    # lifetime-correct BY CONSTRUCTION: a config-only key never enters state, so it
+    # cannot touch the schema fingerprint or persist in a checkpoint; resume re-runs
+    # ``_prepare`` -> a NEW id (invalidate-on-resume for free). Mirrors the
+    # STREAM_CUSTOM / DI_INPUTS config-injection pattern. Surfaced read-only to
+    # nodes via config['configurable'] (the node_id/project_root DI-context path).
+    RUN_ID = "_neo_run_id"
 
     # Non-`neo_`-prefixed framework state keys (CON-01). These are DI-context
     # state-bus fields the compiler always adds (node_id, project_root) plus the

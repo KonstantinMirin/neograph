@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import os
 from typing import Any
+from uuid import uuid4
 
 from langchain_core.runnables import RunnableConfig
 from langgraph.types import Command
@@ -473,6 +474,23 @@ def _mark_stream_custom(config: RunnableConfig | None) -> RunnableConfig:
     return {**config, "configurable": configurable}
 
 
+def _mint_run_id(config: RunnableConfig | None) -> RunnableConfig:
+    """Return a config whose ``configurable`` carries a FRESH per-run id.
+
+    Minted by the pre-engine brains (``_prepare`` / ``_aprepare``) once per
+    execution attempt, so it is stable across every superstep of the run and
+    re-minted on resume (resume re-enters ``_prepare`` -> a new id). Mirrors
+    ``_mark_stream_custom`` EXACTLY: builds a fresh dict — never mutates the
+    caller's config in place — so two ``arun`` calls sharing one config dict each
+    get their own id. ``RUN_ID`` is a config['configurable'] entry, so it never
+    enters state and cannot touch the schema fingerprint or persist in a
+    checkpoint. NOT accepted from the caller — always framework-minted via
+    ``uuid4().hex`` — which is what keeps it fresh-per-attempt."""
+    config = config or {}
+    configurable = {**config.get("configurable", {}), StateKeys.RUN_ID: uuid4().hex}
+    return {**config, "configurable": configurable}
+
+
 def _wants_custom(stream_mode: str | list[str]) -> bool:
     """True if ``stream_mode`` requests LangGraph's ``custom`` channel."""
     if isinstance(stream_mode, str):
@@ -614,6 +632,10 @@ def _prepare(
             _verify_checkpoint_schema(graph, config or {}, auto_resume=auto_resume)
         engine_input = None
 
+    # Mint the per-run id LAST, after all config normalization — a fresh id per
+    # execution attempt (re-minted on resume because _prepare re-runs), stable
+    # across every superstep of this run. Config-only, so it never enters state.
+    config = _mint_run_id(config)
     if stream_custom:
         config = _mark_stream_custom(config)
     config = _merge_observe_callbacks(config, observe)
@@ -839,6 +861,10 @@ async def _aprepare(
             await _averify_checkpoint_schema(graph, config or {}, auto_resume=auto_resume)
         engine_input = None
 
+    # Mint the per-run id LAST, after all config normalization — a fresh id per
+    # execution attempt (re-minted on resume because _prepare re-runs), stable
+    # across every superstep of this run. Config-only, so it never enters state.
+    config = _mint_run_id(config)
     if stream_custom:
         config = _mark_stream_custom(config)
     config = _merge_observe_callbacks(config, observe)

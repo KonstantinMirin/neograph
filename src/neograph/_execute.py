@@ -14,6 +14,7 @@ from neograph._input_shape import _extract_context, _extract_input
 from neograph._normalize import normalize_inputs
 from neograph._oracle import _inject_oracle_config
 from neograph._state_bus import adapt_state
+from neograph._state_keys import StateKeys
 from neograph._state_write import _apply_skip_when, _build_state_update
 from neograph.describe_type import type_display_name
 from neograph.naming import field_name_for
@@ -34,6 +35,18 @@ def _type_name(t: TypeSpecStatic) -> str | None:
     return type_display_name(t)
 
 
+def _run_id_binds(config: RunnableConfig) -> dict[str, str]:
+    """structlog bind kwargs carrying the per-run id, or ``{}`` when absent.
+
+    The framework-minted ``RUN_ID`` (config['configurable']) is a natural
+    trace-correlation key. Surfaced here on the node lifecycle spans so every
+    node_start/node_complete line for one run shares the same id. Omitted (not
+    bound as ``None``) when the id is absent — e.g. a node invoked outside a
+    run()/arun() driver — so a direct-invoke log line stays clean."""
+    run_id = (config or {}).get("configurable", {}).get(StateKeys.RUN_ID)
+    return {"run_id": run_id} if run_id else {}
+
+
 def _execute_node(
     node: Node,
     state: BaseModel,
@@ -50,7 +63,7 @@ def _execute_node(
     non-None, we return immediately and do NOT call _build_state_update.
     """
     field_name = field_name_for(node.name)
-    node_log = log.bind(node=node.name, mode=node.mode)
+    node_log = log.bind(node=node.name, mode=node.mode, **_run_id_binds(config))
     node_log.info("node_start", input_type=_type_name(node.inputs), output_type=_type_name(node.outputs))
 
     t0 = time.monotonic()
@@ -94,7 +107,7 @@ async def _aexecute_node(
     sync and async node paths cannot silently drift (Core Invariant).
     """
     field_name = field_name_for(node.name)
-    node_log = log.bind(node=node.name, mode=node.mode)
+    node_log = log.bind(node=node.name, mode=node.mode, **_run_id_binds(config))
     node_log.info("node_start", input_type=_type_name(node.inputs), output_type=_type_name(node.outputs))
 
     t0 = time.monotonic()
