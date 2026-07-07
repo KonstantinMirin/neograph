@@ -48,6 +48,7 @@ from neograph.errors import (
     NodeOutputError,
     NonIdempotentReplayError,
     PromptVarMissing,
+    ResourceExpiredError,
 )
 from neograph.forward import ForwardConstruct
 from neograph.hitl import ask_human
@@ -137,6 +138,7 @@ __all__ = [
     "NodeOutputError",
     "NonIdempotentReplayError",
     "PromptVarMissing",
+    "ResourceExpiredError",
     # Prompt primitives + default compiler (Layer-2 node DX)
     "substitute",
     "render_inputs",

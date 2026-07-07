@@ -20,8 +20,13 @@ from typing import get_origin as _get_origin
 import structlog
 from pydantic import ValidationError
 
+from neograph._content_blocks import _first_resource_link_uri
+from neograph._state_keys import StateKeys
+from neograph._uri_template import _expand_uri
 from neograph.errors import ConfigurationError as _ConfigurationError
 from neograph.errors import ExecutionError as _ExecutionError
+from neograph.errors import NonIdempotentReplayError as _NonIdempotentReplayError
+from neograph.errors import ResourceExpiredError as _ResourceExpiredError
 
 log = structlog.get_logger(__name__)
 
@@ -30,6 +35,14 @@ log = structlog.get_logger(__name__)
 # like tool factories and the per-run token provider (no session ownership). Shared
 # by ``resource_reader`` (tool.py) and ``FromResource`` DI (DIBinding.aresolve).
 RESOURCE_FETCHER_KEY = "mcp_resource_fetcher"
+
+# Config['configurable'] key holding the consumer-supplied resource REPLAYER — an
+# ``async def replay(tool_name, args) -> raw_tool_result`` callable that re-invokes
+# a producing tool call so an EXPIRED ``resource_link`` can be re-derived (layered
+# expiry step 2, neograph-a5nh). Consumer-owned (no session ownership), exactly
+# like the fetcher. Optional: absent -> an expired ref fails loud rather than
+# replaying. Only ever consulted for an IDEMPOTENT producer (the hard gate).
+RESOURCE_REPLAYER_KEY = "mcp_resource_replayer"
 
 
 class DIKind(Enum):
@@ -115,6 +128,107 @@ def parse_resource_content(
     )
 
 
+def _configurable_dict(config: Any) -> dict[str, Any]:
+    """The whole ``config['configurable']`` mapping (for URI-template interpolation)."""
+    cfg = config or {}
+    if isinstance(cfg, dict):
+        return cfg.get("configurable", {}) or {}
+    return getattr(cfg, "configurable", {}) or {}
+
+
+def _enforce_max_bytes(
+    content: Any, max_bytes: int | None, *, name: str, uri: str
+) -> None:
+    """Fail loud when a fetched resource exceeds ``max_bytes`` (Risk-2 mitigation).
+
+    Called AFTER the fetch but BEFORE parse/return, so an oversized blob turns
+    into a clean fail-loud-at-node-entry naming the param + size + limit rather
+    than a confusing downstream provider 400 once the text hits the prompt. Only
+    sizes bytes/str (the fetch content); a non-sized object is left alone."""
+    if max_bytes is None:
+        return
+    size = len(content) if isinstance(content, (bytes, bytearray, str)) else None
+    if size is not None and size > max_bytes:
+        raise _ConfigurationError.build(
+            f"resource '{name}' ({uri}) is {size} bytes, exceeds max_bytes {max_bytes}",
+            hint="use a templated resource_reader / FromResource(uri) to slice the "
+                 "resource (e.g. ?range=1-5) instead of hydrating the whole blob "
+                 "into a prompt",
+        )
+
+
+async def hydrate_resource_ref(
+    ref: Any,
+    config: Any,
+    output_model: Any,
+    *,
+    parse: Any = None,
+    marker_mime: str | None = None,
+    max_bytes: int | None = None,
+    node: str | None = None,
+) -> Any:
+    """Hydrate a ``ResourceRef`` with LAYERED EXPIRY neograph-a5nh.
+
+    1. **read** ``ref.uri`` via the consumer's ``RESOURCE_FETCHER_KEY`` fetcher.
+       On success, size-check + parse into ``output_model`` and return. A PARSE
+       failure here propagates unchanged (it is NOT expiry — never masked by a
+       replay).
+    2. **replay** on a fetch failure (``-32002`` / any fetch error): the ONLY
+       protocol-reliable re-derivation path for a lifetime-free MCP resource_link
+       is to re-invoke the producing tool call. This is gated on the HARD
+       IDEMPOTENCY GATE — a non-idempotent producer (an ``act``-mode mutation)
+       refuses replay with ``NonIdempotentReplayError`` rather than double-apply
+       the side effect (a read may replay, a mutation may not). The replayer
+       (``RESOURCE_REPLAYER_KEY``) re-invokes ``ref.producing_call`` and the fresh
+       ``resource_link`` uri it emits is read.
+    3. **fail loud** with ``ResourceExpiredError`` if replay is impossible (no
+       replayer configured) or the replay itself fails. Silent staleness is worse
+       than a loud failure.
+    """
+    fetcher = _get_configurable(config, RESOURCE_FETCHER_KEY)
+    if fetcher is None:
+        raise _ConfigurationError.build(
+            f"resource ref '{getattr(ref, 'uri', '?')}' has no fetcher to read from",
+            hint=f"provide config['configurable']['{RESOURCE_FETCHER_KEY}'] = "
+                 "an async 'fetch(uri) -> (content, mime)' callable",
+        )
+
+    # 1. read
+    read_error: Exception | None = None
+    try:
+        content, mime = await fetcher(ref.uri)
+    except Exception as exc:  # noqa: BLE001 - any fetch failure = candidate expiry
+        read_error = exc
+    if read_error is None:
+        _enforce_max_bytes(content, max_bytes, name=getattr(ref, "kind", "?"), uri=ref.uri)
+        return parse_resource_content(content, mime, output_model, parse, marker_mime=marker_mime)
+
+    # 2. replay — gated on the producer's idempotency (the hard gate)
+    producing = ref.producing_call
+    if not getattr(producing, "producer_idempotent", False):
+        raise _NonIdempotentReplayError.of(producing.tool_name, node=node)
+
+    replayer = _get_configurable(config, RESOURCE_REPLAYER_KEY)
+    if replayer is None:
+        raise _ResourceExpiredError.of(
+            ref, node=node,
+            detail="no resource replayer configured to re-derive the expired ref",
+            cause=read_error,
+        )
+    try:
+        replay_result = await replayer(producing.tool_name, producing.args)
+        fresh_uri = _first_resource_link_uri(replay_result) or ref.uri
+        content, mime = await fetcher(fresh_uri)
+    except Exception as exc:  # noqa: BLE001 - replay failure = confirmed expiry
+        raise _ResourceExpiredError.of(
+            ref, node=node,
+            detail="replaying the producing call failed to re-derive the resource",
+            cause=exc,
+        ) from exc
+    _enforce_max_bytes(content, max_bytes, name=getattr(ref, "kind", "?"), uri=fresh_uri)
+    return parse_resource_content(content, mime, output_model, parse, marker_mime=marker_mime)
+
+
 def _unwrap_loop_value(val: Any, expected_type: Any) -> Any:
     """Unwrap a Loop append-list to the latest value.
 
@@ -195,9 +309,11 @@ class DIBinding:
     required: bool
     default_value: Any = None  # CONSTANT only: the literal default value
     model_cls: Any = None      # MODEL kinds only: the Pydantic BaseModel subclass
-    uri: str | None = None          # FROM_RESOURCE only: the (static, v1) resource URI
+    uri: str | None = None          # FROM_RESOURCE only: the (static or templated) URI
     parse_fn: Any = None            # FROM_RESOURCE only: explicit (content, mime)->model
     resource_mime: str | None = None  # FROM_RESOURCE only: mime hint from the marker
+    ref_kind: str | None = None     # FROM_RESOURCE(ref=) only: manifest KIND to hydrate
+    max_bytes: int | None = None    # FROM_RESOURCE only: fail-loud size cap at node entry
 
     def resolve(self, config: Any, *, state: Any = None) -> Any:
         """The ONE resolution path for DI parameters.
@@ -284,14 +400,25 @@ class DIBinding:
         """Async resolution twin. Only FROM_RESOURCE needs to await (it fetches);
         every other kind delegates to the synchronous ``resolve``.
 
-        FROM_RESOURCE: read the consumer-supplied fetcher from
-        ``config['configurable'][RESOURCE_FETCHER_KEY]`` (async
-        ``fetch(uri) -> (content, mime)``), await it, and parse the blob into
-        ``inner_type`` via ``parse_resource_content`` (v1: static URI; json ->
-        model_validate_json; text -> explicit parser or str).
+        FROM_RESOURCE has two faces neograph-a5nh:
+
+        * **URI mode** (``uri=``, v1 + v2 templated): the URI is interpolated from
+          ``config['configurable']`` values (RFC-6570 vars, e.g. ``{deal_id}``
+          bound from a sibling ``FromInput``), fetched once via the consumer's
+          ``RESOURCE_FETCHER_KEY`` fetcher, size-checked against ``max_bytes``
+          (fail loud BEFORE parse so an oversized blob never reaches a prompt),
+          then parsed into ``inner_type``.
+        * **Manifest mode** (``ref_kind=``, v2): the matching ``ResourceRef`` is
+          looked up in the injected manifest (``StateKeys.RESOURCE_MANIFEST_INJECT``,
+          populated from the checkpointed manifest channel by
+          ``_execute._inject_resource_manifest``) and hydrated with LAYERED EXPIRY
+          (read -> replay producing_call -> fail loud) via ``hydrate_resource_ref``.
         """
         if self.kind != DIKind.FROM_RESOURCE:
             return self.resolve(config, state=state)
+
+        if self.ref_kind is not None:
+            return await self._aresolve_from_manifest(config)
 
         fetcher = _get_configurable(config, RESOURCE_FETCHER_KEY)
         if fetcher is None:
@@ -302,8 +429,37 @@ class DIBinding:
                 hint=f"provide config['configurable']['{RESOURCE_FETCHER_KEY}'] = "
                      "an async 'fetch(uri) -> (content, mime)' callable",
             )
-        content, mime = await fetcher(self.uri)
+        uri = _expand_uri(self.uri or "", _configurable_dict(config))
+        content, mime = await fetcher(uri)
+        _enforce_max_bytes(content, self.max_bytes, name=self.name, uri=uri)
         return parse_resource_content(
             content, mime, self.inner_type, self.parse_fn,
             marker_mime=self.resource_mime,
+        )
+
+    async def _aresolve_from_manifest(self, config: Any) -> Any:
+        """Manifest-driven hydration for a ``FromResource(ref=<kind>)`` binding.
+
+        Selects the FIRST ``ResourceRef`` of ``self.ref_kind`` from the injected
+        manifest and hydrates it with layered expiry. A missing kind fails loud
+        (naming the param + kind) rather than silently returning ``None`` — a
+        confusing far-from-cause miss is worse than a clear one; lint
+        (``resource_hydration_kind_unmatched``) catches the static case earlier.
+        """
+        manifest = _get_configurable(config, StateKeys.RESOURCE_MANIFEST_INJECT) or []
+        match = next((r for r in manifest if getattr(r, "kind", None) == self.ref_kind), None)
+        if match is None:
+            if not self.required:
+                return None
+            raise _ExecutionError(
+                f"resource DI parameter '{self.name}' found no ResourceRef of kind "
+                f"'{self.ref_kind}' in the manifest. An upstream agent/act node must "
+                f"emit a resource_link of that kind before this node runs (flat "
+                f"servers that emit no resource_link fall back to a templated "
+                f"FromResource(uri=...) / resource_reader tool)."
+            )
+        return await hydrate_resource_ref(
+            match, config, self.inner_type,
+            parse=self.parse_fn, marker_mime=self.resource_mime,
+            max_bytes=self.max_bytes,
         )

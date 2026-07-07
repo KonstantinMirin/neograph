@@ -188,8 +188,63 @@ def lint(
           template_resolver=template_resolver,
           conditions=conditions,
           tool_factories=tool_factory_lookup,
-          di_inputs_enabled=_compiler_accepts_di_inputs(prompt_compiler))
+          di_inputs_enabled=_compiler_accepts_di_inputs(prompt_compiler),
+          resource_producer_present=_has_resource_link_producer(construct))
     return issues
+
+
+def _has_resource_link_producer(construct: Construct) -> bool:
+    """True when the construct contains any agent/act node bound to tools.
+
+    Only an agent/act node running tools can emit an MCP ``resource_link`` that the
+    manifest lift captures. This is the static approximation the
+    ``resource_hydration_kind_unmatched`` check uses: a manifest-driven
+    ``FromResource(ref=...)`` needs SOME upstream resource_link producer, else the
+    manifest is empty and the ref hydration fails far from its cause at runtime.
+    Per-kind matching is not statically knowable (kinds are lifted at runtime), so
+    producer-existence is the honest static gate. See neograph-a5nh Risk 3."""
+    stack: list[Any] = [construct]
+    while stack:
+        item = stack.pop()
+        if isinstance(item, Construct):
+            stack.extend(iter_with_arms(item))
+        elif isinstance(item, Node) and item.mode in ("agent", "act") and item.tools:
+            return True
+    return False
+
+
+def _check_resource_hydration(
+    node: Node,
+    param_res: Any,
+    issues: list[LintIssue],
+    resource_producer_present: bool,
+) -> None:
+    """Flag a manifest-driven FromResource(ref=<kind>) with no possible producer.
+
+    ERROR (``required=True``): a node hydrates a manifest ``kind`` but no upstream
+    agent/act node can emit a ``resource_link`` at all, so the manifest is
+    guaranteed empty and the ref hydration would fail loud at runtime far from the
+    cause. The documented fallback for a flat server (one that emits no
+    ``resource_link``) is a templated ``FromResource(uri=...)`` / ``resource_reader``
+    tool — the two mechanisms cover each other's gaps (Risk 3)."""
+    if resource_producer_present or not param_res:
+        return
+    for binding in param_res.values():
+        if binding.kind is DIKind.FROM_RESOURCE and binding.ref_kind is not None:
+            issues.append(LintIssue(
+                node_name=f"Node '{node.name}'",
+                param=binding.name,
+                kind="resource_hydration_kind_unmatched",
+                required=True,
+                message=(
+                    f"Node '{node.name}': parameter '{binding.name}' hydrates "
+                    f"manifest kind='{binding.ref_kind}' but no upstream agent/act "
+                    "node produces resource_links. Add a resource_link-emitting "
+                    "agent/act producer upstream, or use a templated "
+                    "FromResource(uri=...) / resource_reader tool (the flat-server "
+                    "fallback)."
+                ),
+            ))
 
 
 def _compiler_accepts_di_inputs(prompt_compiler: Any) -> bool:
@@ -251,6 +306,7 @@ def _walk(
     conditions: dict[str, Callable] | None = None,
     tool_factories: dict[str, Callable] | None = None,
     di_inputs_enabled: bool = False,
+    resource_producer_present: bool = False,
 ) -> None:
     """Recursively walk a construct and check DI bindings + template placeholders."""
     if isinstance(item, Construct):
@@ -264,7 +320,8 @@ def _walk(
                   template_resolver=template_resolver,
                   conditions=conditions,
                   tool_factories=tool_factories,
-                  di_inputs_enabled=di_inputs_enabled)
+                  di_inputs_enabled=di_inputs_enabled,
+                  resource_producer_present=resource_producer_present)
         return
 
     if not isinstance(item, Node):
@@ -276,6 +333,10 @@ def _walk(
     # 1. DI binding checks (existing)
     for binding in (param_res or {}).values():
         _check_binding(node_label, binding, config, issues)
+
+    # 1b. Manifest-driven hydration: a FromResource(ref=<kind>) binding needs an
+    # upstream resource_link producer somewhere in the construct neograph-a5nh.
+    _check_resource_hydration(item, param_res, issues, resource_producer_present)
 
     # Check merge_fn DI bindings for Oracle nodes.
     oracle = item.modifier_set.oracle

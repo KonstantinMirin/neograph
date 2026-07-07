@@ -76,6 +76,14 @@ class StateKeys:
     # config-injection pattern (`_inject_oracle_config`). Never enters state — a
     # config-only key, so it cannot touch the schema fingerprint.
     DI_INPUTS = "_neo_di_inputs"
+    # RESOURCE_MANIFEST_INJECT is a config['configurable'] key (NOT a state-bus
+    # key): _execute._inject_resource_manifest collects every checkpointed
+    # resource-manifest channel's ResourceRefs off state and stashes the merged
+    # list here so the FROM_RESOURCE(ref=) DI resolver (di.aresolve) can look up a
+    # ref by kind WITHOUT threading full state through the scripted-shim signature.
+    # Mirrors the DI_INPUTS / _oracle_model config-injection pattern neograph-a5nh.
+    # Never enters state — a config-only key, so it cannot touch the fingerprint.
+    RESOURCE_MANIFEST_INJECT = "_neo_resource_manifest"
     # RUN_ID is a config['configurable'] key (NOT a state-bus key): a
     # framework-minted per-run correlation id, minted fresh per execution attempt
     # by ``_mint_run_id`` in the pre-engine brains (``_prepare`` / ``_aprepare``),
@@ -96,6 +104,10 @@ class StateKeys:
     NODE_ID = "node_id"
     PROJECT_ROOT = "project_root"
     HUMAN_FEEDBACK = "human_feedback"
+
+    # Shared prefix for the per-producer resource-manifest channels. A consumer
+    # (di / _execute) enumerates state fields by this prefix to collect all refs.
+    RESOURCE_MANIFEST_PREFIX = "neo_resource_manifest_"
 
     @staticmethod
     def loop_count(field_name: str) -> str:
@@ -139,7 +151,7 @@ class StateKeys:
         preserves the manifest across resume. Contrast with config-only ``_neo_``
         keys (``DI_INPUTS``) which never enter state.
         """
-        return f"neo_resource_manifest_{field_name}"
+        return f"{StateKeys.RESOURCE_MANIFEST_PREFIX}{field_name}"
 
     @staticmethod
     def agent_budget(field_name: str) -> str:

@@ -19,10 +19,8 @@ Two ways to define a tool:
 from __future__ import annotations
 
 import base64
-import re
 from collections.abc import Callable
 from typing import Any
-from urllib.parse import quote
 
 # Module-level so get_type_hints() on the nested resource-reader coroutines can
 # resolve the stringified `config: RunnableConfig` annotation (under
@@ -33,6 +31,7 @@ from urllib.parse import quote
 from langchain_core.runnables import RunnableConfig
 from pydantic import BaseModel, Field, PrivateAttr
 
+from neograph._uri_template import _expand_uri, _extract_uri_vars
 from neograph.di import RESOURCE_FETCHER_KEY, parse_resource_content
 from neograph.errors import ConfigurationError
 
@@ -174,10 +173,17 @@ class ProducingCall(BaseModel, frozen=True):
     Frozen: a manifest entry's provenance must not mutate. Re-derivation of an
     expired resource is exactly ``(tool_name, args)`` — the only path an MCP
     ``resource_link`` (which carries no lifetime contract) reliably allows.
+
+    ``producer_idempotent`` is the HARD REPLAY GATE neograph-a5nh: stamped at
+    lift time from the producing ``Tool.idempotent`` flag neograph-lhc6. Layered
+    expiry only replays a producing call when this is True — a read may replay, a
+    mutation may not. Defaults to the CONSERVATIVE False so an un-annotated
+    producer refuses replay rather than risk a double-mutate.
     """
 
     tool_name: str
     args: dict[str, Any] = Field(default_factory=dict)
+    producer_idempotent: bool = False
 
 
 class ResourceRef(BaseModel, frozen=True):
@@ -316,49 +322,6 @@ class BlobResult(BaseModel, frozen=True):
     text: str | None = None
     bytes_b64: str | None = None
     size: int | None = None
-
-
-# RFC 6570 (subset): {var}, {+var}, {?a,b}, {&a}. group 1 = operator, group 2 =
-# comma-separated var list; a trailing '*' explode modifier is stripped.
-_URI_VAR_RE = re.compile(r"\{([+#./;?&]?)([^{}]+)\}")
-
-
-def _extract_uri_vars(uri_template: str) -> list[str]:
-    """Ordered, de-duplicated variable names from an RFC 6570 uri template."""
-    names: list[str] = []
-    for _op, body in _URI_VAR_RE.findall(uri_template):
-        for raw in body.split(","):
-            nm = raw.strip().rstrip("*")
-            if nm and nm not in names:
-                names.append(nm)
-    return names
-
-
-def _expand_uri(uri_template: str, values: dict[str, Any]) -> str:
-    """Interpolate an RFC 6570 (subset) uri template from ``values``.
-
-    Supports simple ``{var}`` / reserved ``{+var}`` string expansion and
-    form-query ``{?a,b}`` / ``{&a}`` expansion — enough for the static and
-    templated resource URIs v1 emits. Missing values are omitted.
-    """
-    def _sub(match: re.Match[str]) -> str:
-        op, body = match.group(1), match.group(2)
-        varnames = [v.strip().rstrip("*") for v in body.split(",")]
-        if op in ("?", "&"):
-            pairs = [
-                f"{vn}={quote(str(values[vn]), safe='')}"
-                for vn in varnames
-                if values.get(vn) is not None
-            ]
-            return (op + "&".join(pairs)) if pairs else ""
-        out = [
-            str(values[vn]) if op == "+" else quote(str(values[vn]), safe="")
-            for vn in varnames
-            if values.get(vn) is not None
-        ]
-        return ",".join(out)
-
-    return _URI_VAR_RE.sub(_sub, uri_template)
 
 
 def _resolve_fetcher(config: Any, tool_name: str) -> Callable:

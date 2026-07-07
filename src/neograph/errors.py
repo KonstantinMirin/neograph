@@ -254,3 +254,54 @@ class NonIdempotentReplayError(NeographError):
             "fail loud rather than double-apply the side effect",
         )
         return cls(str(msg), tool_name=tool_name, node=node)
+
+
+class ResourceExpiredError(NeographError):
+    """A manifest-driven ``ResourceRef`` could not be hydrated. See neograph-a5nh.
+
+    Raised at the END of the layered-expiry fallback (read -> replay producing_call
+    -> fail loud): the direct read of ``ref.uri`` failed AND re-derivation by
+    replaying the producing call was either impossible (no replayer configured) or
+    itself failed. Silent staleness is worse than a loud failure — a stale/absent
+    resource that flows into a prompt corrupts the run invisibly, so hydration
+    fails loud here instead.
+
+    Carries the offending ``ref`` (its uri + producing call pinpoint what to
+    re-acquire), the optional ``node`` it was hydrated in, and the underlying
+    ``cause`` (the last read/replay exception) for diagnosis.
+    """
+
+    def __init__(
+        self,
+        *args: object,
+        ref: object | None = None,
+        node: str | None = None,
+        cause: BaseException | None = None,
+    ) -> None:
+        super().__init__(*args)
+        self.ref = ref
+        self.node = node
+        self.cause = cause
+
+    @classmethod
+    def of(
+        cls,
+        ref: object,
+        *,
+        node: str | None = None,
+        detail: str | None = None,
+        cause: BaseException | None = None,
+    ) -> ResourceExpiredError:
+        """Build a ResourceExpiredError for an unrecoverable *ref*."""
+        where = f" in node '{node}'" if node else ""
+        uri = getattr(ref, "uri", "?")
+        kind = getattr(ref, "kind", "?")
+        reason = f" ({detail})" if detail else ""
+        msg = NeographError.build(
+            f"resource ref kind='{kind}' uri='{uri}' expired and could not be "
+            f"re-derived{where}{reason}",
+            hint="the producing tool must be replay-eligible (idempotent=True) and "
+            "the consumer must supply config['configurable']['mcp_resource_replayer']; "
+            "otherwise re-acquire the resource from source",
+        )
+        return cls(str(msg), ref=ref, node=node, cause=cause)

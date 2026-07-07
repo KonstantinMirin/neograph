@@ -562,6 +562,8 @@ class TestPublicFunctionsRaiseNeographError:
         "StateMissingError",
         "NodeOutputError",
         "PromptVarMissing",
+        "NonIdempotentReplayError",
+        "ResourceExpiredError",
     })
 
     def test_no_bare_stdlib_raises(self):

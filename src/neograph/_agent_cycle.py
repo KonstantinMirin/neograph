@@ -42,6 +42,7 @@ from langchain_core.runnables import RunnableConfig
 from langgraph.types import interrupt
 from pydantic import BaseModel
 
+from neograph._content_blocks import _block_field, _iter_content_blocks
 from neograph._dispatch import (
     _ainject_di_inputs,
     _inject_di_inputs,
@@ -399,32 +400,9 @@ def _record_tool_result(
     return interaction, ToolMessage(content=rendered, tool_call_id=tc["id"])
 
 
-def _iter_content_blocks(result: Any) -> list:
-    """Yield candidate content blocks from a tool result.
-
-    MCP tools loaded via langchain-mcp-adapters return content as a list of
-    blocks; a ``content_and_artifact`` tool returns ``(content, artifact)``; some
-    return ``{"content": [...]}``. A plain string / Pydantic model (the common
-    case) carries no blocks. Kept permissive so a resource-emitting server's
-    ``resource_link`` blocks are found wherever they land, without coupling to a
-    single result shape."""
-    if isinstance(result, list):
-        return result
-    if isinstance(result, tuple):
-        return [b for part in result if isinstance(part, list) for b in part]
-    if isinstance(result, dict) and isinstance(result.get("content"), list):
-        return result["content"]
-    return []
-
-
-def _block_field(block: Any, key: str) -> Any:
-    """Read a content-block field from a dict block or an object block."""
-    if isinstance(block, dict):
-        return block.get(key)
-    return getattr(block, key, None)
-
-
-def _lift_resource_refs(result: Any, tc: dict) -> list[ResourceRef]:
+def _lift_resource_refs(
+    result: Any, tc: dict, idempotent: bool = False
+) -> list[ResourceRef]:
     """Lift typed ``ResourceRef``s from ``resource_link`` blocks in a tool result.
 
     Called from ``tools_body``/``atools_body`` INSIDE the per-tool-call loop —
@@ -439,6 +417,12 @@ def _lift_resource_refs(result: Any, tc: dict) -> list[ResourceRef]:
     frozen ``ResourceRef`` per block, stamped with the producing call. A result
     without such blocks (a plain string / model — the common case) yields ``[]``.
     ``fetched_at`` stays ``None``: this is a lift, not a hydration.
+
+    ``idempotent`` is the producing tool's ``Tool.idempotent`` flag neograph-lhc6,
+    stamped onto ``ProducingCall.producer_idempotent`` — the hard gate hydration
+    replay neograph-a5nh consults so a non-idempotent producer refuses replay.
+    Defaults to the conservative ``False`` so a bare/unknown producer is never
+    replay-eligible. A ``ttlMs`` hint (SEP-2549) is surfaced onto ``ref.ttl_ms``.
     """
     refs: list[ResourceRef] = []
     for block in _iter_content_blocks(result):
@@ -454,10 +438,12 @@ def _lift_resource_refs(result: Any, tc: dict) -> list[ResourceRef]:
                 kind=_block_field(block, "name") or scheme or "resource",
                 server=scheme,
                 producing_call=ProducingCall(
-                    tool_name=tc["name"], args=tc.get("args", {}) or {}
+                    tool_name=tc["name"], args=tc.get("args", {}) or {},
+                    producer_idempotent=idempotent,
                 ),
                 mime=_block_field(block, "mimeType"),
                 size=_block_field(block, "size"),
+                ttl_ms=_block_field(block, "ttlMs"),
             )
         )
     return refs
@@ -481,6 +467,13 @@ def make_agent_cycle_bodies(
     manifest_key = StateKeys.resource_manifest(field)
     budget_key = StateKeys.agent_budget(field)
     names = cycle_names(node.name)
+    # Per-tool idempotency neograph-lhc6 stamped onto each lifted ref's producing
+    # call so hydration replay neograph-a5nh can gate on it. A raw BaseTool with
+    # no Tool spec is conservatively non-idempotent.
+    idempotent_by_tool = {
+        spec.name: bool(getattr(spec, "idempotent", False))
+        for spec in (node.tools or [])
+    }
 
     # ── {node}__agent ─────────────────────────────────────────────────────
     def agent_body(state: BaseModel, config: RunnableConfig) -> dict[str, Any]:
@@ -568,7 +561,8 @@ def make_agent_cycle_bodies(
             elapsed_ms = int((time.monotonic() - t0) * 1000)
             interaction, msg = _record_tool_result(tc, result, elapsed_ms, tracker, tp.effective_renderer)
             interactions.append(interaction)
-            refs.extend(_lift_resource_refs(result, tc))
+            refs.extend(_lift_resource_refs(
+                result, tc, idempotent_by_tool.get(tc["name"], False)))
             new_msgs.append(msg)
 
         budget["calls"] = dict(tracker._counts)
@@ -604,7 +598,8 @@ def make_agent_cycle_bodies(
             elapsed_ms = int((time.monotonic() - t0) * 1000)
             interaction, msg = _record_tool_result(tc, result, elapsed_ms, tracker, tp.effective_renderer)
             interactions.append(interaction)
-            refs.extend(_lift_resource_refs(result, tc))
+            refs.extend(_lift_resource_refs(
+                result, tc, idempotent_by_tool.get(tc["name"], False)))
             new_msgs.append(msg)
 
         budget["calls"] = dict(tracker._counts)

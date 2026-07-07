@@ -13,10 +13,12 @@ from neograph._dispatch import ModeDispatch, NodeInput
 from neograph._input_shape import _extract_context, _extract_input
 from neograph._normalize import normalize_inputs
 from neograph._oracle import _inject_oracle_config
+from neograph._sidecar import _get_param_res
 from neograph._state_bus import adapt_state
 from neograph._state_keys import StateKeys
 from neograph._state_write import _apply_skip_when, _build_state_update
 from neograph.describe_type import type_display_name
+from neograph.di import DIKind
 from neograph.naming import field_name_for
 from neograph.node import Node, TypeSpecStatic
 
@@ -45,6 +47,43 @@ def _run_id_binds(config: RunnableConfig) -> dict[str, str]:
     run()/arun() driver — so a direct-invoke log line stays clean."""
     run_id = (config or {}).get("configurable", {}).get(StateKeys.RUN_ID)
     return {"run_id": run_id} if run_id else {}
+
+
+def _inject_resource_manifest(
+    state: BaseModel, node: Node, config: RunnableConfig
+) -> RunnableConfig:
+    """Stash the checkpointed resource manifest onto config for a ref-hydrating node.
+
+    A ``FromResource(ref=<kind>)`` binding hydrates a ``ResourceRef`` looked up
+    from the manifest, which lives in the CHECKPOINTED state channel(s) — not in
+    config. The scripted-shim / di_inputs resolution seams see only
+    ``(input_data, config)``, not full state, so this collects every
+    ``neo_resource_manifest_*`` channel's refs off ``state`` and injects the merged
+    list under ``StateKeys.RESOURCE_MANIFEST_INJECT`` (copy-not-mutate, mirroring
+    ``_inject_oracle_config`` / ``_inject_di_inputs``). Only fires for a node that
+    actually declares a ref binding — returns config unchanged otherwise, so it is
+    zero-overhead for the common case (async path only; the sync driver fails loud
+    on any FROM_RESOURCE binding before resolution). See neograph-a5nh.
+    """
+    param_res = _get_param_res(node)
+    if not param_res:
+        return config
+    if not any(
+        b.kind is DIKind.FROM_RESOURCE and b.ref_kind is not None
+        for b in param_res.values()
+    ):
+        return config
+    refs: list[Any] = []
+    for fname in type(state).model_fields:
+        if fname.startswith(StateKeys.RESOURCE_MANIFEST_PREFIX):
+            val = getattr(state, fname, None)
+            if val:
+                refs.extend(val)
+    configurable = config.get("configurable", {})
+    return {
+        **config,
+        "configurable": {**configurable, StateKeys.RESOURCE_MANIFEST_INJECT: refs},
+    }
 
 
 def _execute_node(
@@ -114,6 +153,7 @@ async def _aexecute_node(
 
     bus = adapt_state(state)
     config = _inject_oracle_config(bus, config)
+    config = _inject_resource_manifest(state, node, config)
     raw_input = _extract_input(bus, node)
 
     skip_result = _apply_skip_when(node, raw_input, field_name, t0, node_log, bus)

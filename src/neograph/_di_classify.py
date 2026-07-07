@@ -110,16 +110,32 @@ class FromResource:
 
     def __init__(
         self,
-        uri: str,
+        uri: str | None = None,
         *,
+        ref: str | None = None,
         mime: str | None = None,
         parse: Callable[[Any, str | None], Any] | None = None,
         required: bool = True,
+        max_bytes: int | None = None,
     ) -> None:
+        # Exactly one of uri / ref. URI mode = static-or-templated fetch (v1 + v2
+        # templated). Manifest mode (ref=<kind>) hydrates a lifted ResourceRef of
+        # that kind with layered expiry (v2, neograph-a5nh).
+        if (uri is None) == (ref is None):
+            # ConstructError subclasses ValueError — a marker-arg contract error is
+            # a construction defect, and ValueError keeps the ergonomic isinstance.
+            raise ConstructError.build(
+                "FromResource requires exactly one of uri= (a static/templated URI) "
+                "or ref= (a manifest resource KIND to hydrate), not both/neither",
+                hint="FromResource('crm://deals/42/contract') or "
+                     "FromResource(ref='email-history')",
+            )
         self.uri = uri
+        self.ref = ref
         self.mime = mime
         self.parse = parse
         self.required = required
+        self.max_bytes = max_bytes
 
 
 def _build_annotation_namespace(
@@ -232,13 +248,16 @@ def _classify_di_params(
         if any(m is FromResource for m in markers) and res_marker is None:
             raise ConstructError.build(
                 f"parameter '{p.name}' uses the bare FromResource class",
-                hint="FromResource requires a uri: FromResource('crm://deals/42/contract')",
+                hint="FromResource requires a uri or ref: "
+                     "FromResource('crm://deals/42/contract') or "
+                     "FromResource(ref='email-history')",
             )
         if res_marker is not None:
             param_res[p.name] = DIBinding(
                 name=p.name, kind=DIKind.FROM_RESOURCE, inner_type=inner_type,
                 required=res_marker.required, uri=res_marker.uri,
                 parse_fn=res_marker.parse, resource_mime=res_marker.mime,
+                ref_kind=res_marker.ref, max_bytes=res_marker.max_bytes,
             )
             continue
 
