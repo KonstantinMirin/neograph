@@ -15,6 +15,7 @@ here is cycle-free; ``compiler`` imports it at module top.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 from pydantic import BaseModel, create_model
@@ -30,12 +31,21 @@ from neograph.naming import field_name_for
 from neograph.node import Node
 
 
-def wrap_fan_over_agents(construct: Construct) -> Construct:
+def wrap_fan_over_agents(
+    construct: Construct, scripted_lookup: dict[str, Callable] | None = None
+) -> Construct:
     """Rewrite each supported fan-over-agent Node into an isolated single-node
     sub-construct. ``_fan_agent.is_supported_fan_over_agent`` is the single source
-    of truth for which shapes qualify (Oracle over a self-contained agent/act
-    node); unsupported shapes already failed loud at assembly. Returns the
-    construct unchanged when there is nothing to wrap.
+    of truth for which shapes qualify (Oracle/Each/Loop over a self-contained
+    agent/act node or one with a single upstream producer, plus Oracle over an
+    agent with MULTIPLE dict-form producers via packer synthesis); unsupported
+    shapes already failed loud at assembly. Returns the construct unchanged when
+    there is nothing to wrap.
+
+    ``scripted_lookup`` (the per-compile scripted dict) receives the shims for any
+    synthesized packer/unpacker nodes (see neograph-qzrv). It is threaded into the
+    recursive sub-construct compile by ``_add_subgraph``, so the inner unpackers
+    resolve inside the isolated sub-graph.
 
     Only TOP-LEVEL ``construct.nodes`` are rewritten. A supported fan-over-agent
     that appears inside a sub-construct is handled by that sub-construct's own
@@ -52,7 +62,11 @@ def wrap_fan_over_agents(construct: Construct) -> Construct:
     new_nodes: list[object] = []
     for item in construct.nodes:
         if is_supported_fan_over_agent(item):
-            new_nodes.append(_wrap_agent_node(item))
+            # A multi-producer Oracle agent expands to [packer, wrapped_sub]; every
+            # other supported shape expands to [wrapped_sub]. extend() splices the
+            # (possibly two-node) expansion into the parent node list in order, so
+            # the packer runs before the sub-construct reads its port.
+            new_nodes.extend(_expand_agent_node(item, scripted_lookup))
             changed = True
         else:
             new_nodes.append(item)
@@ -104,8 +118,9 @@ def _synthesize_port(node: Node) -> tuple[type[BaseModel], Any]:
     decorator strips them into ``_param_res``, preserved by ``model_copy``), so
     they ride the forwarded config into the sub-construct and need no port.
 
-    Multiple distinct dict-form producers cannot map to the single-value boundary
-    and are rejected fail-loud upstream (``_fan_agent._unsupported_reason``).
+    Multiple distinct dict-form producers do NOT reach here — they route through
+    ``_synthesize_packer_wrap`` instead (a packer bundles them into one port model;
+    see neograph-qzrv). Only single/zero-producer shapes call this helper.
     """
     ni = normalize_inputs(node.inputs)
     if ni.is_none:
@@ -139,7 +154,16 @@ def _wrap_agent_node(node: Node) -> Construct:
     port, inner_inputs = _synthesize_port(node)
     # model_copy preserves the @node sidecar/_param_res PrivateAttrs (Pydantic v2
     # copies __pydantic_private__), so a decorator-built agent keeps its DI bindings.
-    bare = node.model_copy(update={"modifier_set": ModifierSet(), "inputs": inner_inputs})
+    # Inside the isolated sub-construct the bare agent is NOT fanned (the Each fan
+    # runs at the PARENT level over the sub-construct); the fanned item arrives as
+    # neo_subgraph_input (see make_subgraph_fn._build_sub_input, neograph-1h8c),
+    # which inner_inputs already points the read at. A stale fan_out_param (from the
+    # dropped Each) is harmless — it names a key that no longer exists in the
+    # rewritten inputs, so _extract_fan_in_dict never matches it — and clearing it
+    # here would trip the "normalize_ir is the sole fan_out_param writer" guard.
+    bare = node.model_copy(
+        update={"modifier_set": ModifierSet(), "inputs": inner_inputs}
+    )
     return Construct(
         name=node.name,
         input=port,
@@ -147,3 +171,94 @@ def _wrap_agent_node(node: Node) -> Construct:
         nodes=[bare],
         modifier_set=node.modifier_set,
     )
+
+
+def _expand_agent_node(
+    node: Node, scripted_lookup: dict[str, Callable] | None
+) -> list[Node | Construct]:
+    """Expand one supported fan-over-agent Node into the parent-node sequence that
+    replaces it.
+
+    - Single/zero upstream producer -> ``[wrapped_sub]`` (the qot6/1h8c path).
+    - MULTIPLE dict-form producers (Oracle only; Each/Loop fail loud upstream) ->
+      ``[packer, wrapped_sub]`` with packer-port synthesis (see neograph-qzrv).
+    """
+    ni = normalize_inputs(node.inputs)
+    if ni.is_dict_form and len(ni.by_name) > 1:
+        return _synthesize_packer_wrap(node, scripted_lookup)
+    return [_wrap_agent_node(node)]
+
+
+def _synthesize_packer_wrap(
+    node: Node, scripted_lookup: dict[str, Callable] | None
+) -> list[Node | Construct]:
+    """Oracle over an agent with N distinct dict-form producers (see neograph-qzrv).
+
+    The single-value subgraph boundary (``neo_subgraph_input``) carries ONE typed
+    value, so N distinct producers are BUNDLED into one synthesized port model:
+
+    - A **packer** node runs in the PARENT: it fan-ins the N original upstreams
+      (``inputs={k1: T1, k2: T2, ...}``) and emits a synthesized ``_NeoAgentPort_*``
+      model bundling them. The wrapped sub-construct's ``input=`` is that model,
+      found by the subgraph's type-based scan and delivered as ``neo_subgraph_input``.
+    - Inside the sub-construct, one **unpacker** node PER key reads the port model
+      (single-type) and re-emits its field under the ORIGINAL key name, so the bare
+      agent's dict-form fan-in (``{k1: T1, ...}``) reads them as peer producers —
+      exactly as before wrapping. This PRESERVES the agent's prompt-var surface
+      (``{k1}``/``{k2}`` still resolve), the ambiguity qot6 flagged: the answer is
+      to re-expose the original keys, not rename them.
+
+    Packer/unpacker shims are registered into ``scripted_lookup`` (the per-compile
+    scripted dict), which ``_add_subgraph`` threads into the recursive sub-construct
+    compile so the inner unpackers resolve inside the isolated sub-graph.
+    """
+    field = field_name_for(node.name)
+    by_name = normalize_inputs(node.inputs).by_name
+
+    port_model = create_model(
+        f"_NeoAgentPort_{field}",
+        __base__=BaseModel,
+        **{key: (typ, ...) for key, typ in by_name.items()},
+    )
+
+    lookup = scripted_lookup if scripted_lookup is not None else {}
+
+    # Parent packer: bundle the N fan-in producers into the port model.
+    packer_fn = f"_neo_pack_{field}"
+
+    def _pack(input_data: Any, config: Any) -> Any:
+        # dict-form fan-in delivers {key: value}; construct the bundle model.
+        return port_model(**input_data)
+
+    lookup[packer_fn] = _pack
+    packer = Node.scripted(
+        f"neo-pack-{node.name}", fn=packer_fn, inputs=node.inputs, outputs=port_model
+    )
+
+    # Inner unpackers: one per key, re-exposing the original producer name so the
+    # bare agent's fan-in reads them as peers (prompt-var surface preserved).
+    unpackers: list[Node | Construct] = []
+    for key in by_name:
+        unpack_fn = f"_neo_unpack_{field}_{field_name_for(key)}"
+
+        def _unpack(input_data: Any, config: Any, _key: str = key) -> Any:
+            # input_data is the port model instance (single-type extraction).
+            return getattr(input_data, _key)
+
+        lookup[unpack_fn] = _unpack
+        unpackers.append(
+            Node.scripted(key, fn=unpack_fn, inputs=port_model, outputs=by_name[key])
+        )
+
+    # Bare agent keeps its ORIGINAL dict-form inputs (reads the unpacker peers);
+    # only the fan/operator modifiers move to the wrapper. Oracle never sets
+    # fan_out_param, so there is nothing to clear here.
+    bare = node.model_copy(update={"modifier_set": ModifierSet()})
+    sub = Construct(
+        name=node.name,
+        input=port_model,
+        output=node.outputs,
+        nodes=[*unpackers, bare],
+        modifier_set=node.modifier_set,
+    )
+    return [packer, sub]

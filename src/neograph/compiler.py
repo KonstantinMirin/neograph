@@ -151,7 +151,7 @@ def compile(
     # docs/design/fan-over-agent-node-2026-07-07.md). Unsupported shapes already
     # failed loud at assembly. Runs BEFORE the state model + all validation below
     # so everything downstream sees the wrapped sub-construct uniformly.
-    construct = wrap_fan_over_agents(construct)
+    construct = wrap_fan_over_agents(construct, scripted_lookup)
 
     # Auto-register factories for raw LangChain BaseTools passed via tools=.
     # Explicit tool_factories= (merged above) win; bound tools fill the gaps.

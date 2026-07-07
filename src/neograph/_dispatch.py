@@ -26,6 +26,7 @@ from neograph import _llm
 from neograph._llm_render import _is_inline_prompt
 from neograph._llm_runtime import EMPTY_RUNTIME, LlmRuntime
 from neograph._normalize import NormalizedOutputs, normalize_outputs
+from neograph._run_cache import aget_or_build
 from neograph._sidecar import _get_param_res
 from neograph._state_keys import StateKeys
 from neograph.di import DI_TEMPLATE_KINDS, DIKind
@@ -98,7 +99,17 @@ async def _ainject_di_inputs(node: Node, config: RunnableConfig) -> RunnableConf
         if binding.kind in DI_TEMPLATE_KINDS:
             di_inputs[name] = binding.resolve(config)
         elif binding.kind is DIKind.FROM_RESOURCE:
-            di_inputs[name] = await binding.aresolve(config)
+            # Per-run fetch cache: the agent cycle re-runs this
+            # injector every superstep, so a FROM_RESOURCE fetch would hit the
+            # consumer's fetcher each turn. Cache the awaited value on the
+            # framework-minted RUN_ID (config-only, re-minted on resume -> refetch).
+            # Copy-not-mutate idempotence is preserved: the resolved value is
+            # stashed into a fresh config copy below exactly as before.
+            di_inputs[name] = await aget_or_build(
+                config,
+                f"resource:{node.name}:{name}",
+                lambda binding=binding: binding.aresolve(config),
+            )
     if not di_inputs:
         return config
     configurable = config.get("configurable", {})

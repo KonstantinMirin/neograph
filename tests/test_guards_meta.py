@@ -436,6 +436,13 @@ class TestNoNearDuplicateHelperNames:
             "renderer entry (renderers.py); leading-underscore is the "
             "private/public convention, not a duplicate name."
         ),
+        # neograph-m6d3.8 / neograph-43do: a-prefix async twin of the per-run
+        # cache accessor (_run_cache.py) — the async form awaits the build/fetch
+        # callback on a miss. Same deliberate sync/async twin convention.
+        frozenset({"aget_or_build", "get_or_build"}): (
+            "lev=1: async twin of the per-run handle/resource cache accessor "
+            "(_run_cache.py); build callback awaited on a miss."
+        ),
     }
 
     @staticmethod

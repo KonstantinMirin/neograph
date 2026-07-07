@@ -212,3 +212,142 @@ the consistency we want. There is no existing behavior to preserve (this case wa
 fail-loud before), so no regression. Fixture `oracle_over_agent_with_inputs.py`
 moved should_fail -> should_pass; new should_fail `oracle_over_agent_multiple_inputs.py`
 pins the multi-producer guard.
+
+---
+
+## Addendum 2026-07-07: 1h8c delivered — Each-item delivery across the boundary
+
+Open design Q #2 (Each-item delivery) is now IMPLEMENTED. **Design call: option
+(2)** from the ticket — map the fanned `neo_each_item` AS the wrapping
+sub-construct's single-value input port (`neo_each_item` -> `neo_subgraph_input`),
+mirroring the qot6 single-key dict-form rewrite. Option (1) (thread a *separate*
+`neo_each_item` channel through the subgraph boundary INTO the isolated sub-state)
+was rejected: it would add a second item-delivery mechanism parallel to the port
+one, and the port is already the exact single-value carrier the item needs.
+Auto-wrap == manual `construct_from_functions(input=ItemType)` + `| Each(...)`.
+
+Mechanism (three touch points, symmetric with qot6):
+- `_fan_agent._unsupported_reason`: Oracle and Each now share ONE input-shape
+  support gate (self-contained OR single upstream producer; multi-producer and
+  multi-output stay fail-loud under qzrv). The ONE asymmetry: Each PERMITS a
+  fan-out receiver (`fan_out_param`) — that IS how an Each node consumes its item
+  — while Oracle rejects one (Oracle fans no per-item value).
+- `_fan_agent_wrap._wrap_agent_node`: the bare inner agent has `fan_out_param`
+  CLEARED. Inside the isolated sub-construct the agent is NOT fanned (the Each fan
+  runs at the PARENT level over the sub-construct); the item arrives as
+  `neo_subgraph_input`, which `_synthesize_port`'s dict-form rewrite already points
+  the read at. A stale `fan_out_param` would name a key no longer in `inputs`.
+- `_subconstruct.make_subgraph_fn._build_sub_input`: for an Each-carrying sub,
+  read `EACH_ITEM` from the (Send-populated) parent state and use it as
+  `input_data` -> `neo_subgraph_input`, taking precedence over the blind
+  `_scan_subgraph_input` type-scan (the scan could match the wrong instance; the
+  item is the SPECIFIC dispatched value). The parent state model already carries
+  `neo_each_item` because the wrapped sub classifies as EACH (`state.py`
+  `has_any_each` walks `nodes_only + sub_constructs`).
+
+**Self-contained Each-over-agent stays fail-loud** (new guard + should_fail
+fixture `each_over_self_contained_agent.py`): an agent with `inputs=None` has no
+port for the item, so every isolated cycle would run on empty input and emit
+identical results keyed by distinct Each keys — a silent broken fan. Require a
+consumed input (single-type or single-key dict-form).
+
+Value-delivery is PINNED, not probe-only: `TestEachOverAgent` uses an
+echo prompt-compiler (renders the upstream value into the user turn) + an echo
+ReAct fake (reflects the seen prompt into its typed output), and asserts each
+per-branch entry saw its OWN item value and NOT the sibling branch's — the
+positive proof that the fanned item crossed the boundary into an isolated cycle.
+Three surfaces covered: declarative single-type, declarative single-key dict-form,
+and `@node` `map_over`. Fixture `each_over_agent_node.py` moved
+should_fail -> should_pass (adjusted to declare `inputs=Item`).
+
+---
+
+## Addendum 2026-07-07: gk3e delivered — Loop-over-agent condition reads sub output
+
+Open design Q #3 (Loop-over-agent) is now IMPLEMENTED. **Design call: reuse the
+existing subgraph-loop path verbatim — NO new mechanism.** The auto-wrap isolates
+the agent's ReAct cycle in a single-node sub-construct carrying the Loop modifier;
+`_add_subgraph` classifies it LOOP and routes to `_add_subgraph_loop`, whose
+`loop_router` unwraps the loop value via `_construct_loop_unwrap`, which reads
+`field_name_for(sub.name)` — i.e. **the sub-construct's OUTPUT boundary surfaced
+onto the parent field** (`make_subgraph_fn._build_update` writes
+`{field_name: output_val}`). That is precisely the ticket's requirement ("the loop
+condition must read the subgraph output, not a node output field"): the isolated
+agent's typed output IS the sub output, and the router already reads that field,
+never an internal `{node}__parse` field. No code path in `_wiring`/`_subconstruct`
+needed changing for the read side.
+
+Re-entry / iteration-count semantics (verified by E2E, not just asserted from
+theory): the looped sub-construct's output field is an append-reducer list
+(`result["<agent>"]` is `list[Output]`, `[-1]` is the latest), so
+`make_subgraph_fn._build_sub_input`'s has_loop branch feeds the PRIOR typed output
+back as `neo_subgraph_input` (the refine pattern) — each iteration runs a FRESH
+isolated ReAct cycle seeded by the previous cycle's result. `_build_update`
+increments `StateKeys.loop_count(field_name)` once per subgraph invocation, and
+`loop_router` caps on `loop.max_iterations`. The three families now share ONE
+input-shape support gate in `_unsupported_reason` (Oracle/Each/Loop); the only
+per-family asymmetry is item-delivery (Each) vs a fan-out-receiver rejection
+(Oracle) — Loop needs neither.
+
+Value-delivery + convergence PINNED: `TestLoopOverAgent` drives a Draft-refine
+agent whose fake reads the fed-back score from the rendered prompt (echo
+prompt-compiler) and advances it +0.3 per cycle; asserts the loop converges
+0.3 -> 0.6 -> 0.9 across EXACTLY 3 isolated ReAct sub-construct invocations and
+exits when `score >= 0.8`. Two surfaces: declarative `| Loop(...)` and `@node`
+`loop_when=`. Fixture `loop_over_agent_node.py` moved should_fail -> should_pass
+(callable `when` reading `Draft.score`; declares `inputs=Draft` as the refine
+port). Multi-input/multi-output Loop-over-agent stays fail-loud under qzrv, same
+as Oracle/Each.
+
+---
+
+## Addendum 2026-07-07: qzrv delivered — packer-port synthesis (multi-input) + value-delivery pins
+
+Open design Q from qot6's fail-loud list is now PARTIALLY lifted with two
+deliberate design calls.
+
+**Multi-input (LIFTED for Oracle) — packer-port synthesis.** An Oracle over an
+agent with N distinct dict-form producers (`inputs={a: A, b: B, ...}`) compiles and
+runs. The single-value subgraph boundary (`neo_subgraph_input`) carries ONE typed
+value, so:
+- A synthesized **packer** node runs in the PARENT: it fan-ins the N original
+  upstreams and emits a synthesized `_NeoAgentPort_*` model bundling them. The
+  wrapped sub-construct's `input=` is that model, found by the subgraph type-scan.
+- Inside the sub-construct, one **unpacker** node PER key reads the port model
+  (single-type) and re-emits its field under the ORIGINAL producer name, so the
+  bare agent's dict-form fan-in reads them as peer producers — exactly as before
+  wrapping. **This resolves the "ambiguous prompt-var surface" qot6 flagged: the
+  answer is to re-expose the original keys (`{a}`/`{b}` still resolve), not rename
+  them to a bundle field.** Auto-wrap == manual wrap: what the user would hand-write.
+
+Mechanism: `wrap_fan_over_agents` now takes the per-compile `scripted_lookup` and
+registers the packer/unpacker shims into it; `_add_subgraph` already threads that
+dict into the recursive sub-construct compile, so the inner unpackers resolve in
+the isolated sub-graph. `_expand_agent_node` returns `[packer, wrapped_sub]` for
+the multi-producer case and `[wrapped_sub]` otherwise; `wrap_fan_over_agents`
+`extend()`s the expansion into the parent node list in order.
+
+**Scoped to Oracle.** Each/Loop multi-input stay fail-loud with a precise error:
+Each ALSO delivers a fanned `neo_each_item` and Loop ALSO feeds its output back —
+both compete for the same single-value boundary the packer occupies, so a sound
+wiring needs more design. Not punted-with-a-guess.
+
+**Multi-output (KEPT fail-loud) — design call.** Dict-form (multi-output) agent
+OUTPUTS stay fail-loud. The isolating sub-construct has ONE output boundary port,
+and an N-way merge of SECONDARY outputs (e.g. `tool_log`) across fanned variants is
+undefined — the Oracle `merge_fn` contract is single-type. Surfacing only the
+primary and silently dropping the declared secondaries would violate the user's
+declared output contract (the anti-band-aid rule), so the precise `ConstructError`
+stays. Pinned by `should_fail/oracle_over_agent_multi_output.py` +
+`test_multi_output_agent_stays_fail_loud`.
+
+**Wave-8 value-delivery pins (MANDATORY, committed).** The shipped qot6 agent-fan
+tests asserted merged-N wiring but NOT that each isolated cycle SAW its upstream
+value. `TestOracleOverAgentValueDelivery` now commits that property for the
+single-type, dict-form, and DI shapes via the echo pattern (prompt-compiler renders
+the upstream into the message; an echo ReAct fake reflects it into `Claims.items`;
+the merge concatenates), asserting the upstream value appears in EVERY variant's
+output. `TestOracleOverAgentMultiInputBundle` extends the same to the packer path,
+asserting BOTH bundled values (`AVAL` and `BVAL`) reach each isolated cycle.
+Fixture `oracle_over_agent_multiple_inputs.py` moved should_fail -> should_pass;
+new `should_fail/oracle_over_agent_multi_output.py` pins the multi-output guard.

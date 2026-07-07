@@ -17,7 +17,14 @@ from neograph import (
     node,
     run,
 )
-from tests.fakes import StructuredFake, build_test_compile_kwargs, configure_fake_llm, register_scripted
+from tests.fakes import (
+    FakeTool,
+    StructuredFake,
+    build_test_compile_kwargs,
+    configure_fake_llm,
+    register_scripted,
+    register_tool_factory,
+)
 from tests.schemas import (
     Claims,
     ClusterGroup,
@@ -48,22 +55,189 @@ from tests.schemas import (
 # barrier collects, dict reducer merges results.
 # ═══════════════════════════════════════════════════════════════════════════
 
-class TestEachOverAgentFailsLoud:
-    """Each over an agent/act node is fail-loud (neograph-m6d3.6 + neograph-1h8c).
+def _echo_prompt_compiler(template, input_data, **kwargs):
+    """A prompt compiler that renders the per-branch upstream value into the user
+    message, so the fake LLM's echo proves that value CROSSED the subgraph
+    boundary into this isolated ReAct cycle (neograph-1h8c value-delivery pin)."""
+    return [{"role": "user", "content": f"UPSTREAM={input_data!r}"}]
 
-    Fan-over-agent is implemented ONLY for Oracle over a self-contained agent
-    (auto-wrap into an isolated sub-construct — see
-    docs/design/fan-over-agent-node-2026-07-07.md). Each-over-agent needs a
-    design call for how the fanned ``neo_each_item`` reaches the wrapped agent
-    across the subgraph boundary, so it raises an assembly-time ConstructError
-    rather than silently shipping a broken graph."""
 
-    def test_each_over_agent_node_raises_construct_error(self):
+class _EchoReActFake:
+    """A ReAct fake whose FINAL turn reflects the last user message content into
+    its typed output. Paired with ``_echo_prompt_compiler`` this reflects the
+    rendered upstream value the isolated cycle actually SAW, so a per-branch
+    assertion proves each fanned item reached its OWN cycle (not a merged
+    channel). Optionally calls a tool first to exercise the multi-superstep cycle.
+    """
+
+    def __init__(self, *, call_tool: str | None = None):
+        self._model = None
+        self._structured = False
+        self._call_tool = call_tool
+
+    def bind_tools(self, tools):
+        return self
+
+    def abind_tools(self, *a, **k):
+        return self
+
+    def _seen_content(self, messages) -> str:
+        # Reflect the rendered PROMPT (the user turn carrying the upstream value),
+        # not a later tool-result message — that is what proves value delivery.
+        for m in messages:
+            content = m.get("content") if isinstance(m, dict) else getattr(m, "content", None)
+            if content and "UPSTREAM=" in str(content):
+                return str(content)
+        return ""
+
+    def invoke(self, messages, **kwargs):
+        import json
+
+        from langchain_core.messages import AIMessage, ToolMessage
+
+        n_tool_results = sum(isinstance(m, ToolMessage) for m in messages)
+        if self._call_tool and n_tool_results == 0:
+            msg = AIMessage(content="")
+            msg.tool_calls = [{"name": self._call_tool, "args": {}, "id": "t1"}]
+            return msg
+        seen = self._seen_content(messages)
+        return AIMessage(content=json.dumps({"cluster_label": "echo", "matched": [seen]}))
+
+    async def ainvoke(self, *a, **k):
+        return self.invoke(*a, **k)
+
+    def with_structured_output(self, model, **kwargs):
+        clone = _EchoReActFake(call_tool=self._call_tool)
+        clone._model = model
+        clone._structured = True
+        return clone
+
+
+class TestEachOverAgent:
+    """Each over an agent/act node is supported via auto-wrap (neograph-1h8c).
+
+    The agent's ReAct cycle is isolated in a single-node sub-construct and Each
+    fans over THAT via the existing subgraph path. Design call (2026-07-07,
+    written into docs/design/fan-over-agent-node-2026-07-07.md): the fanned
+    ``neo_each_item`` is delivered AS the sub-construct's single-value input port
+    (``neo_each_item`` -> ``neo_subgraph_input``), mirroring the qot6 single-key
+    dict-form rewrite. Each isolated cycle gets its OWN per-branch item value."""
+
+    @staticmethod
+    def _agent_over_groups(inputs):
+        return (
+            Node(
+                name="agent-gen",
+                mode="agent",
+                inputs=inputs,
+                outputs=MatchResult,
+                model="default-tier",
+                prompt="test/search",
+                tools=[Tool(name="agent_search", budget=5)],
+            )
+            | Each(over="make_clusters.groups", key="label")
+        )
+
+    def _run(self, agent):
+        register_tool_factory(
+            "agent_search", lambda config, tool_config: FakeTool("agent_search", response="found")
+        )
+        register_scripted(
+            "clusters_fn",
+            lambda input_data, config: Clusters(groups=[
+                ClusterGroup(label="alpha", claim_ids=["c1"]),
+                ClusterGroup(label="beta", claim_ids=["c2"]),
+            ]),
+        )
+        pipeline = Construct("each-over-agent", nodes=[
+            Node.scripted("make-clusters", fn="clusters_fn", outputs=Clusters),
+            agent,
+        ])
+        graph = compile(
+            pipeline,
+            **build_test_compile_kwargs(),
+            **configure_fake_llm(
+                lambda tier: _EchoReActFake(call_tool="agent_search"),
+                _echo_prompt_compiler,
+            ),
+        )
+        return run(graph, input={"node_id": "each-over-agent"})
+
+    def _assert_per_branch_isolation(self, result):
+        collected = result["agent_gen"]
+        assert set(collected) == {"alpha", "beta"}, collected
+        alpha_seen = collected["alpha"].matched[0]
+        beta_seen = collected["beta"].matched[0]
+        # Each isolated cycle SAW its own per-branch item value, not the other's.
+        assert "alpha" in alpha_seen and "beta" not in alpha_seen, alpha_seen
+        assert "beta" in beta_seen and "alpha" not in beta_seen, beta_seen
+
+    def test_each_over_agent_single_type_input_delivers_per_branch_item(self):
+        """Declarative single-type ``inputs=ClusterGroup``: the Each item is
+        delivered to the isolated cycle as ``neo_subgraph_input`` and read back
+        by single-type extraction."""
+        self._assert_per_branch_isolation(self._run(self._agent_over_groups(ClusterGroup)))
+
+    def test_each_over_agent_dict_form_input_delivers_per_branch_item(self):
+        """Declarative single-key dict-form ``inputs={'group': ClusterGroup}``:
+        the fan-out receiver key is rewritten to ``neo_subgraph_input`` (the qot6
+        convention) and reads the delivered Each item."""
+        self._assert_per_branch_isolation(
+            self._run(self._agent_over_groups({"group": ClusterGroup}))
+        )
+
+    def test_each_over_agent_via_node_decorator_delivers_per_branch_item(self):
+        """@node surface (three-surface parity): ``map_over`` composes the same
+        Each; the fanned item reaches the isolated cycle's typed param."""
+        register_tool_factory(
+            "agent_search", lambda config, tool_config: FakeTool("agent_search", response="found")
+        )
+        register_scripted(
+            "clusters_dec_fn",
+            lambda input_data, config: Clusters(groups=[
+                ClusterGroup(label="alpha", claim_ids=["c1"]),
+                ClusterGroup(label="beta", claim_ids=["c2"]),
+            ]),
+        )
+
+        @node(
+            mode="agent",
+            outputs=MatchResult,
+            model="default-tier",
+            prompt="test/search",
+            tools=[Tool(name="agent_search", budget=5)],
+            map_over="make_clusters.groups",
+            map_key="label",
+        )
+        def researcher(group: ClusterGroup) -> MatchResult: ...
+
+        pipeline = Construct("each-over-agent-dec", nodes=[
+            Node.scripted("make-clusters", fn="clusters_dec_fn", outputs=Clusters),
+            researcher,
+        ])
+        graph = compile(
+            pipeline,
+            **build_test_compile_kwargs(),
+            **configure_fake_llm(
+                lambda tier: _EchoReActFake(call_tool="agent_search"),
+                _echo_prompt_compiler,
+            ),
+        )
+        result = run(graph, input={"node_id": "each-over-agent-dec"})
+        collected = result["researcher"]
+        assert set(collected) == {"alpha", "beta"}, collected
+        assert "alpha" in collected["alpha"].matched[0]
+        assert "beta" in collected["beta"].matched[0]
+
+    def test_each_over_self_contained_agent_fails_loud(self):
+        """A self-contained agent (inputs=None) has no port for the fanned item —
+        every isolated cycle would run on empty input. Fail loud at assembly rather
+        than ship a silent broken fan (neograph-1h8c)."""
         agent = (
             Node(
                 name="agent-gen",
                 mode="agent",
-                outputs=Claims,
+                outputs=MatchResult,
                 model="default-tier",
                 prompt="test/search",
                 tools=[Tool(name="agent_search", budget=5)],
@@ -71,9 +245,9 @@ class TestEachOverAgentFailsLoud:
             | Each(over="upstream", key="text")
         )
         with pytest.raises(
-            ConstructError, match="Each over an agent/act node is not supported"
+            ConstructError, match="Each over a self-contained agent/act node is not supported"
         ):
-            Construct("bad-each-over-agent", nodes=[agent])
+            Construct("bad-each-over-self-contained", nodes=[agent])
 
 
 class TestEach:

@@ -309,36 +309,6 @@ class TestEachPlusLoop:
 class TestLoopValidation:
     """Assembly-time validation for Loop modifier."""
 
-    def test_loop_over_agent_node_raises_construct_error(self):
-        """Loop over an agent/act node is fail-loud (neograph-m6d3.6 + neograph-gk3e).
-
-        Fan-over-agent is implemented only for Oracle over a self-contained agent
-        (auto-wrap into an isolated sub-construct — see
-        docs/design/fan-over-agent-node-2026-07-07.md). Loop-over-agent needs a
-        design call (the loop condition must read the wrapped subgraph output), so
-        it raises an assembly-time ConstructError instead of shipping a broken
-        graph."""
-        from neograph import Loop, Tool
-
-        class AgentOut(BaseModel, frozen=True):
-            items: list[str]
-
-        agent = (
-            Node(
-                name="agent-gen",
-                mode="agent",
-                outputs=AgentOut,
-                model="default-tier",
-                prompt="test/search",
-                tools=[Tool(name="agent_search", budget=5)],
-            )
-            | Loop(when=lambda d: False, max_iterations=3)
-        )
-        with pytest.raises(
-            ConstructError, match="Loop over an agent/act node is not supported"
-        ):
-            Construct("bad-loop-over-agent", nodes=[agent])
-
     def test_raises_when_loop_output_incompatible_with_input(self):
         """Self-loop: outputs must be compatible with inputs for back-edge."""
         from neograph import Loop
@@ -1622,3 +1592,169 @@ class TestLoopInputNotEqualOutput:
         result = run(graph, input={"node_id": "fc-1"})
 
         assert fc_call_count["produce"] == 2
+
+
+# =============================================================================
+# Pattern 8: Loop over an agent/act node (neograph-gk3e)
+# =============================================================================
+
+
+def _draft_prompt_compiler(template, input_data, **kwargs):
+    """Render the fed-back Draft's score into the user turn, so the fake's next
+    output can advance it — proving the loop's typed output crossed the subgraph
+    boundary back into the next isolated ReAct cycle (gk3e value-delivery pin)."""
+    return [{"role": "user", "content": f"DRAFT={input_data!r}"}]
+
+
+class _RefineReActFake:
+    """A ReAct fake that calls a tool once per cycle, then emits a Draft whose
+    score is the SEEN (fed-back) score + 0.3 — a converging refinement driven by
+    the loop's own prior typed output, not a hidden counter."""
+
+    def __init__(self, *, call_tool: str | None = None):
+        self._model = None
+        self._structured = False
+        self._call_tool = call_tool
+
+    def bind_tools(self, tools):
+        return self
+
+    def abind_tools(self, *a, **k):
+        return self
+
+    def _seen_score(self, messages) -> float:
+        import re
+
+        for m in messages:
+            content = m.get("content") if isinstance(m, dict) else getattr(m, "content", None)
+            if content and "DRAFT=" in str(content):
+                match = re.search(r"score:\s*([0-9.]+)", str(content))
+                if match:
+                    return float(match.group(1))
+        return 0.0
+
+    def invoke(self, messages, **kwargs):
+        import json
+
+        from langchain_core.messages import AIMessage, ToolMessage
+
+        n_tool_results = sum(isinstance(m, ToolMessage) for m in messages)
+        if self._call_tool and n_tool_results == 0:
+            msg = AIMessage(content="")
+            msg.tool_calls = [{"name": self._call_tool, "args": {}, "id": "t1"}]
+            return msg
+        seen = self._seen_score(messages)
+        nxt = round(seen + 0.3, 2)
+        return AIMessage(
+            content=json.dumps({"content": f"refined@{nxt}", "iteration": 0, "score": nxt})
+        )
+
+    async def ainvoke(self, *a, **k):
+        return self.invoke(*a, **k)
+
+    def with_structured_output(self, model, **kwargs):
+        clone = _RefineReActFake(call_tool=self._call_tool)
+        clone._model = model
+        clone._structured = True
+        return clone
+
+
+class TestLoopOverAgent:
+    """Loop over an agent/act node is supported via auto-wrap (neograph-gk3e).
+
+    The agent's ReAct cycle is isolated in a single-node sub-construct and Loop
+    wires a conditional back-edge over THAT via the existing subgraph-loop path
+    (``_add_subgraph_loop``). Design call (2026-07-07): the loop ``when`` condition
+    reads the agent's typed output SURFACED onto the parent field (the sub-construct
+    output boundary), NOT an internal node output field — the subgraph-loop path
+    already does exactly this (``_construct_loop_unwrap`` reads ``field_name_for(sub)``).
+    Re-entry feeds the prior typed output back as the sub-construct's input port
+    (refine pattern), so each iteration runs an ISOLATED ReAct cycle on the prior
+    result."""
+
+    def _build(self):
+        from neograph import Loop, Tool
+        from tests.fakes import FakeTool, configure_fake_llm, register_tool_factory
+
+        register_tool_factory(
+            "agent_search", lambda config, tool_config: FakeTool("agent_search", response="found")
+        )
+        register_scripted("draft_seed", lambda input_data, config: Draft(content="seed", score=0.0))
+
+        agent = (
+            Node(
+                name="agent-refine",
+                mode="agent",
+                inputs=Draft,
+                outputs=Draft,
+                model="default-tier",
+                prompt="test/refine",
+                tools=[Tool(name="agent_search", budget=5)],
+            )
+            | Loop(when=lambda d: d is None or d.score < 0.8, max_iterations=10)
+        )
+        pipeline = Construct("loop-over-agent", nodes=[
+            Node.scripted("seed", fn="draft_seed", outputs=Draft),
+            agent,
+        ])
+        return compile(
+            pipeline,
+            **build_test_compile_kwargs(),
+            **configure_fake_llm(
+                lambda tier: _RefineReActFake(call_tool="agent_search"),
+                _draft_prompt_compiler,
+            ),
+        )
+
+    def test_loop_condition_converges_on_agent_typed_output(self):
+        """The loop reads the agent's typed subgraph output (Draft.score) and
+        converges across isolated ReAct sub-construct invocations: 0.0 -> 0.3 ->
+        0.6 -> 0.9 (>= 0.8), exactly 3 iterations."""
+        graph = self._build()
+        result = run(graph, input={"node_id": "loop-over-agent"})
+        history = result["agent_refine"]
+        # Loop output field is an append-list of each isolated cycle's typed output.
+        assert isinstance(history, list), history
+        assert len(history) == 3, [h.score for h in history]
+        assert history[-1].score == 0.9, history[-1]
+        # Each iteration advanced from the PRIOR cycle's fed-back score.
+        assert [h.score for h in history] == [0.3, 0.6, 0.9]
+
+    def test_loop_over_agent_via_node_decorator_converges(self):
+        """@node surface (three-surface parity): loop_when composes the same Loop
+        over the wrapped agent sub-construct."""
+        from neograph import Tool
+        from tests.fakes import FakeTool, configure_fake_llm, register_tool_factory
+
+        register_tool_factory(
+            "agent_search", lambda config, tool_config: FakeTool("agent_search", response="found")
+        )
+        register_scripted("draft_seed_dec", lambda input_data, config: Draft(content="seed", score=0.0))
+
+        @node(
+            mode="agent",
+            outputs=Draft,
+            model="default-tier",
+            prompt="test/refine",
+            tools=[Tool(name="agent_search", budget=5)],
+            loop_when=lambda d: d is None or d.score < 0.8,
+            max_iterations=10,
+        )
+        def refiner(seed: Draft) -> Draft: ...
+
+        pipeline = Construct("loop-over-agent-dec", nodes=[
+            Node.scripted("seed", fn="draft_seed_dec", outputs=Draft),
+            refiner,
+        ])
+        graph = compile(
+            pipeline,
+            **build_test_compile_kwargs(),
+            **configure_fake_llm(
+                lambda tier: _RefineReActFake(call_tool="agent_search"),
+                _draft_prompt_compiler,
+            ),
+        )
+        result = run(graph, input={"node_id": "loop-over-agent-dec"})
+        history = result["refiner"]
+        assert isinstance(history, list) and len(history) == 3, history
+        assert history[-1].score == 0.9

@@ -32,6 +32,7 @@ from neograph._llm_retry import (
     recover_dsml,
 )
 from neograph._llm_runtime import LlmRuntime
+from neograph._run_cache import aget_or_build, get_or_build
 from neograph._tool_budget_preamble import render_tool_budget_preamble
 from neograph._usage import _usage_dict
 from neograph.describe_type import describe_value
@@ -310,7 +311,15 @@ def _build_loop_preamble(
     )
 
     cfg = _coerce_llm_config(llm_config)
-    llm = _get_llm(runtime, model_tier, node_name=node_name, llm_config=cfg)
+    # Per-run live-handle reuse: within one run the agent cycle
+    # rebuilds this preamble every superstep, so cache the LLM client on the
+    # framework-minted RUN_ID (config-only, re-minted on resume -> rebuild). No
+    # RUN_ID (graph invoked directly) -> _get_llm runs uncached every call.
+    llm = get_or_build(
+        config,
+        f"llm:{node_name}:{model_tier}",
+        lambda: _get_llm(runtime, model_tier, node_name=node_name, llm_config=cfg),
+    )
     messages = list(
         _compile_prompt(
             runtime,
@@ -386,7 +395,13 @@ def _prepare_tool_loop(
         input_data=input_data, output_model=output_model, tools=tools,
         config=config, node_name=node_name, llm_config=llm_config, context=context,
     )
-    tool_instances = _instantiate_tools(tools, tool_factory_lookup, config, node_name)
+    # Per-run tool-handle reuse: same RUN_ID keying as the LLM
+    # handle — build the tool instances once per run, reuse across supersteps.
+    tool_instances = get_or_build(
+        config,
+        f"tools:{node_name}",
+        lambda: _instantiate_tools(tools, tool_factory_lookup, config, node_name),
+    )
     return _assemble_tool_loop_prep(
         runtime=runtime, llm_log=llm_log, cfg=cfg, llm=llm, messages=messages,
         tool_instances=tool_instances,
@@ -415,7 +430,13 @@ async def _aprepare_tool_loop(
         input_data=input_data, output_model=output_model, tools=tools,
         config=config, node_name=node_name, llm_config=llm_config, context=context,
     )
-    tool_instances = await _ainstantiate_tools(tools, tool_factory_lookup, config, node_name)
+    # Per-run tool-handle reuse, async twin: await the factory
+    # once per run (per-run token mint / MCP client build), reuse across supersteps.
+    tool_instances = await aget_or_build(
+        config,
+        f"tools:{node_name}",
+        lambda: _ainstantiate_tools(tools, tool_factory_lookup, config, node_name),
+    )
     return _assemble_tool_loop_prep(
         runtime=runtime, llm_log=llm_log, cfg=cfg, llm=llm, messages=messages,
         tool_instances=tool_instances,

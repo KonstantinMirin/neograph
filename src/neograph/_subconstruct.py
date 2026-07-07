@@ -76,6 +76,7 @@ def make_subgraph_fn(sub: Construct, sub_graph: CompiledStateGraph) -> RunnableL
 
     sub_combo, _ = classify_modifiers(sub)
     has_loop = sub_combo in (ModifierCombo.LOOP, ModifierCombo.LOOP_OPERATOR)
+    has_each = sub_combo in (ModifierCombo.EACH, ModifierCombo.EACH_OPERATOR)
 
     def _build_sub_input(state: BaseModel | dict[str, Any], config: RunnableConfig) -> tuple[dict[str, Any], StateBus, RunnableConfig]:
         """Shared pre-invoke logic: extract input, forward context, inject config.
@@ -102,6 +103,19 @@ def make_subgraph_fn(sub: Construct, sub_graph: CompiledStateGraph) -> RunnableL
                 latest = _unwrap_loop_value(own_val, object)
                 if latest is not None and (sub.input is None or isinstance(latest, sub.input)):
                     input_data = latest
+
+        # Each fan-over-agent (see neograph-1h8c): the parent's each_router put THIS
+        # branch's item into EACH_ITEM (the Send payload). Deliver it AS the
+        # sub-construct's single-value input port so the isolated ReAct cycle reads
+        # its OWN per-branch value — mirroring the qot6 single-key dict-form rewrite.
+        # Takes precedence over the type-scan below (EACH_ITEM is the specific
+        # dispatched value; a blind type-scan could match the wrong instance).
+        if has_each and input_data is None:
+            # StateBus.get optional: EACH_ITEM is populated by the each_router Send
+            # for every fanned branch; absent only on a mis-wired graph.
+            each_item = bus.get(StateKeys.EACH_ITEM)
+            if each_item is not None:
+                input_data = each_item
 
         # First iteration, non-loop, or input!=output loop re-entry:
         # extract input by type from parent state.

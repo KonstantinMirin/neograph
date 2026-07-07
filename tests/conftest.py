@@ -17,7 +17,7 @@ def _clean_registries():
     `tests/fakes.py` (register_scripted etc.) write into test-local dicts that
     `reset_test_registry()` clears.
     """
-    from neograph import _runtime_registry
+    from neograph import _run_cache, _runtime_registry
     from neograph._sidecar import _merge_fn_registry
     from neograph.spec_types import _type_registry
     from tests.fakes import reset_test_registry
@@ -26,6 +26,9 @@ def _clean_registries():
     _runtime_registry.reset()
     _merge_fn_registry.clear()
     _type_registry.clear()
+    # Drop any per-run handle/resource cache entries (keyed on RUN_ID) so a test
+    # session cannot accumulate them (neograph-m6d3.8 / neograph-43do).
+    _run_cache.clear()
     # Reset structlog to defaults so tests that capture warnings via stdout
     # (capsys) are not affected by an earlier test's reconfigure (e.g.
     # tests that route structlog through stdlib logging).

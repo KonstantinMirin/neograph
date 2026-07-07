@@ -723,12 +723,46 @@ class TestOracleModels:
         result = run(graph, input={"node_id": "agent-oracle-di-in", "topic": "birds"})
         assert result["researcher"] == Claims(items=["merged-2"]), result
 
-    def test_oracle_over_agent_node_with_multiple_producers_fails_loud(self):
-        """neograph-qot6: dict-form fan-in from MULTIPLE upstream producers stays
-        fail-loud. The single-value subgraph boundary (``neo_subgraph_input``)
-        carries one typed value; bundling N distinct producers needs a synthesized
-        packer/unpacker (tracked as a follow-up bead). Fail loud, never a broken
-        graph."""
+    def test_oracle_over_agent_node_with_multiple_producers_runs_via_node_decorator(self):
+        """neograph-qzrv: multi-producer Oracle over an agent now compiles AND runs
+        via packer-port synthesis. The ``@node`` surface (three-surface parity): a
+        function with TWO typed upstream params is bundled by a synthesized parent
+        packer and unbundled by inner per-key unpackers, so both reach the fan."""
+        fake_tool = FakeTool("agent_search", response="found")
+        register_tool_factory("agent_search", lambda config, tool_config: fake_tool)
+        register_scripted("agent_seed_claims", lambda input_data, config: Claims(items=["c"]))
+        register_scripted("agent_seed_raw_m", lambda input_data, config: RawText(text="r"))
+        register_scripted(
+            "agent_merge_multi",
+            lambda variants, config: Claims(items=[f"merged-{len(variants)}"]),
+        )
+
+        @node(
+            mode="agent",
+            outputs=Claims,
+            model="default-tier",
+            prompt="test/search",
+            tools=[Tool(name="agent_search", budget=5)],
+        )
+        def researcher(claims: Claims, raw: RawText) -> Claims: ...
+
+        gen_node = researcher | Oracle(n=2, merge_fn="agent_merge_multi")
+        pipeline = Construct("agent-oracle-multi-dec", nodes=[
+            Node.scripted("claims", fn="agent_seed_claims", outputs=Claims),
+            Node.scripted("raw", fn="agent_seed_raw_m", outputs=RawText),
+            gen_node,
+        ])
+        graph = compile(pipeline, **build_test_compile_kwargs(),
+                        **configure_fake_llm(self._agent_oracle_fake))
+        result = run(graph, input={"node_id": "agent-oracle-multi-dec"})
+        assert result["researcher"] == Claims(items=["merged-2"]), result
+
+    def test_each_over_agent_with_multiple_producers_fails_loud(self):
+        """neograph-qzrv: packer synthesis is wired for Oracle only. Each over an
+        agent with MULTIPLE producers stays fail-loud (Each also delivers a fanned
+        item, which competes for the single-value boundary the packer occupies)."""
+        from neograph import Each
+
         gen_node = (
             Node(
                 name="agent-gen",
@@ -739,13 +773,10 @@ class TestOracleModels:
                 prompt="test/search",
                 tools=[Tool(name="agent_search", budget=5)],
             )
-            | Oracle(n=2, merge_fn="agent_merge_count")
+            | Each(over="upstream", key="text")
         )
-        with pytest.raises(
-            ConstructError,
-            match="multiple upstream inputs",
-        ):
-            Construct("bad-agent-oracle-multi", nodes=[gen_node])
+        with pytest.raises(ConstructError, match="multiple upstream inputs"):
+            Construct("bad-each-agent-multi", nodes=[gen_node])
 
     def test_oracle_models_round_robin_on_think_mode(self):
         """Round-robin model assignment works on think-mode nodes when n > len(models)."""
@@ -2104,3 +2135,229 @@ class TestOracleMergeLlmConfig:
         )
 
 
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# neograph-qzrv: bundle-port synthesis (multi-input) + value-delivery pins
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class _Alpha(BaseModel, frozen=True):
+    a: str
+
+
+class _Beta(BaseModel, frozen=True):
+    b: str
+
+
+def _echo_oracle_prompt_compiler(template, input_data, **kwargs):
+    """Render the agent's resolved input into the user turn so the fake's echo
+    proves the upstream value(s) reached THIS isolated ReAct cycle across the
+    subgraph boundary (neograph-qzrv wave-8 value-delivery pin)."""
+    return [{"role": "user", "content": f"UPSTREAM={input_data!r}"}]
+
+
+class _EchoOracleReActFake:
+    """A ReAct fake whose FINAL turn reflects the rendered prompt (the upstream
+    value it SAW) into ``Claims.items``. One tool call first exercises the
+    multi-superstep cycle. Fresh per factory call so each isolated Oracle variant
+    drives its own loop."""
+
+    def __init__(self, *, call_tool: str | None = "agent_search"):
+        self._model = None
+        self._structured = False
+        self._call_tool = call_tool
+
+    def bind_tools(self, tools):
+        return self
+
+    def abind_tools(self, *a, **k):
+        return self
+
+    def _seen(self, messages) -> str:
+        for m in messages:
+            content = m.get("content") if isinstance(m, dict) else getattr(m, "content", None)
+            if content and "UPSTREAM=" in str(content):
+                return str(content)
+        return ""
+
+    def invoke(self, messages, **kwargs):
+        import json
+
+        from langchain_core.messages import AIMessage, ToolMessage
+
+        n_tool_results = sum(isinstance(m, ToolMessage) for m in messages)
+        if self._call_tool and n_tool_results == 0:
+            msg = AIMessage(content="")
+            msg.tool_calls = [{"name": self._call_tool, "args": {}, "id": "t1"}]
+            return msg
+        return AIMessage(content=json.dumps({"items": [self._seen(messages)]}))
+
+    async def ainvoke(self, *a, **k):
+        return self.invoke(*a, **k)
+
+    def with_structured_output(self, model, **kwargs):
+        clone = _EchoOracleReActFake(call_tool=self._call_tool)
+        clone._model = model
+        clone._structured = True
+        return clone
+
+
+def _echo_merge_concat(variants, config):
+    """Concatenate every variant's seen-content — so the assertion can confirm
+    EACH isolated cycle saw the upstream value (not just merged-N wiring)."""
+    seen = [item for v in variants for item in v.items]
+    return Claims(items=seen)
+
+
+class TestOracleOverAgentValueDelivery:
+    """Wave-8 pin (neograph-qzrv): the qot6 agent-fan tests assert merged-N wiring
+    but NOT that each isolated cycle SAW its upstream value. These echo-style tests
+    render the upstream into the prompt, reflect it via the fake, and concatenate in
+    the merge — so 'each isolated cycle saw its upstream value' is committed, for the
+    single-type, dict-form, and DI shapes."""
+
+    def _compile(self, pipeline):
+        return compile(
+            pipeline,
+            **build_test_compile_kwargs(),
+            **configure_fake_llm(
+                lambda tier: _EchoOracleReActFake(),
+                _echo_oracle_prompt_compiler,
+            ),
+        )
+
+    def _register_common(self):
+        register_tool_factory(
+            "agent_search", lambda config, tool_config: FakeTool("agent_search", response="found")
+        )
+        register_scripted("echo_merge", _echo_merge_concat)
+
+    def test_single_type_input_value_reaches_each_isolated_cycle(self):
+        self._register_common()
+        register_scripted("seed_raw_vd", lambda input_data, config: RawText(text="SEEDVAL"))
+        gen = (
+            Node(
+                name="agent-gen", mode="agent", inputs=RawText, outputs=Claims,
+                model="default-tier", prompt="test/search",
+                tools=[Tool(name="agent_search", budget=5)],
+            )
+            | Oracle(n=2, merge_fn="echo_merge")
+        )
+        pipeline = Construct("vd-single", nodes=[
+            Node.scripted("seed", fn="seed_raw_vd", outputs=RawText),
+            gen,
+        ])
+        result = run(self._compile(pipeline), input={"node_id": "vd-single"})
+        items = result["agent_gen"].items
+        assert len(items) == 2, items  # merged-2 wiring
+        assert all("SEEDVAL" in seen for seen in items), items  # value delivery
+
+    def test_dict_form_input_value_reaches_each_isolated_cycle(self):
+        self._register_common()
+        register_scripted("seed_raw_vd2", lambda input_data, config: RawText(text="SEEDVAL"))
+        gen = (
+            Node(
+                name="agent-gen", mode="agent", inputs={"seed": RawText}, outputs=Claims,
+                model="default-tier", prompt="test/search",
+                tools=[Tool(name="agent_search", budget=5)],
+            )
+            | Oracle(n=2, merge_fn="echo_merge")
+        )
+        pipeline = Construct("vd-dict", nodes=[
+            Node.scripted("seed", fn="seed_raw_vd2", outputs=RawText),
+            gen,
+        ])
+        result = run(self._compile(pipeline), input={"node_id": "vd-dict"})
+        items = result["agent_gen"].items
+        assert len(items) == 2, items
+        assert all("SEEDVAL" in seen for seen in items), items
+
+    def test_di_param_value_reaches_each_isolated_cycle(self):
+        from neograph import FromInput
+
+        self._register_common()
+        register_scripted("seed_raw_vd3", lambda input_data, config: RawText(text="SEEDVAL"))
+
+        @node(
+            mode="agent", outputs=Claims, model="default-tier", prompt="test/search",
+            tools=[Tool(name="agent_search", budget=5)],
+        )
+        def researcher(seed: RawText, topic: Annotated[str, FromInput]) -> Claims: ...
+
+        gen = researcher | Oracle(n=2, merge_fn="echo_merge")
+        pipeline = Construct("vd-di", nodes=[
+            Node.scripted("seed", fn="seed_raw_vd3", outputs=RawText),
+            gen,
+        ])
+        result = run(self._compile(pipeline), input={"node_id": "vd-di", "topic": "BIRDS"})
+        items = result["researcher"].items
+        assert len(items) == 2, items
+        # The upstream (seed) value reached each cycle.
+        assert all("SEEDVAL" in seen for seen in items), items
+
+
+class TestOracleOverAgentMultiInputBundle:
+    """neograph-qzrv: Oracle over an agent with MULTIPLE distinct dict-form
+    upstream producers is now supported via packer-port synthesis — a synthesized
+    parent 'packer' node bundles the N upstreams into one port model, and inner
+    per-key 'unpacker' nodes re-expose the ORIGINAL keys so the agent's prompt
+    surface is unchanged. Both bundled values reach each isolated cycle."""
+
+    def test_multiple_dict_form_producers_bundle_and_deliver(self):
+        register_tool_factory(
+            "agent_search", lambda config, tool_config: FakeTool("agent_search", response="found")
+        )
+        register_scripted("alpha_fn_vd", lambda input_data, config: _Alpha(a="AVAL"))
+        register_scripted("beta_fn_vd", lambda input_data, config: _Beta(b="BVAL"))
+        register_scripted("echo_merge", _echo_merge_concat)
+
+        gen = (
+            Node(
+                name="agent-gen", mode="agent",
+                inputs={"alpha": _Alpha, "beta": _Beta}, outputs=Claims,
+                model="default-tier", prompt="test/search",
+                tools=[Tool(name="agent_search", budget=5)],
+            )
+            | Oracle(n=2, merge_fn="echo_merge")
+        )
+        pipeline = Construct("vd-multi", nodes=[
+            Node.scripted("alpha", fn="alpha_fn_vd", outputs=_Alpha),
+            Node.scripted("beta", fn="beta_fn_vd", outputs=_Beta),
+            gen,
+        ])
+        graph = compile(
+            pipeline,
+            **build_test_compile_kwargs(),
+            **configure_fake_llm(
+                lambda tier: _EchoOracleReActFake(),
+                _echo_oracle_prompt_compiler,
+            ),
+        )
+        result = run(graph, input={"node_id": "vd-multi"})
+        items = result["agent_gen"].items
+        assert len(items) == 2, items  # merged-2 isolated variants
+        # BOTH bundled upstream values reached each isolated cycle.
+        assert all("AVAL" in seen and "BVAL" in seen for seen in items), items
+
+    def test_multi_output_agent_stays_fail_loud(self):
+        """Dict-form (multi-output) agent OUTPUTS stay fail-loud: the sub-construct
+        has a single output boundary port, and an N-way merge of secondary outputs
+        (e.g. tool_log) is undefined. Design call (neograph-qzrv): keep fail-loud
+        rather than silently drop declared outputs."""
+        from neograph import ToolInteraction
+
+        gen = (
+            Node(
+                name="agent-gen", mode="agent", inputs=RawText,
+                outputs={"result": Claims, "tool_log": list[ToolInteraction]},
+                model="default-tier", prompt="test/search",
+                tools=[Tool(name="agent_search", budget=5)],
+            )
+            | Oracle(n=2, merge_fn="echo_merge")
+        )
+        with pytest.raises(ConstructError, match="multi-output"):
+            Construct("bad-multi-output", nodes=[
+                Node.scripted("seed", fn="seed_raw_vd", outputs=RawText),
+                gen,
+            ])
