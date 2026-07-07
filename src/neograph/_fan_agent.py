@@ -17,13 +17,18 @@ single-node sub-construct and fan over THAT via the existing subgraph fan path
 ``_wire_oracle``/``_wire_each`` do the rest). This module is the single source of
 truth for WHICH fan-over-agent shapes that wrap supports.
 
-Supported today (the proven base case): **Oracle over a self-contained agent/act
-node** — no upstream ``inputs``, no ``fan_out_param``, single-type ``outputs``.
-Everything else is fail-loud (assembly-time ``ConstructError`` naming the exact
-unsupported combination + node), with a filed follow-up bead:
+Supported today: **Oracle over an agent/act node** that is either self-contained
+OR consumes a SINGLE upstream producer — single-type ``inputs`` (port is that
+type) or a single-key dict-form fan-in (port is that key's type), plus any DI
+(``FromInput``/``FromConfig``) params which ride the forwarded config and never
+enter ``inputs``. Input-port synthesis (see neograph-qot6) builds the
+sub-construct's ``input=`` boundary from that single value. Everything else is fail-loud
+(assembly-time ``ConstructError`` naming the exact unsupported combination +
+node), with a filed follow-up bead:
 
 - Each over an agent/act node                          -> neograph-1h8c
-- Oracle/Each over an agent/act node WITH inputs       -> neograph-qot6
+- Oracle over an agent with MULTIPLE upstream inputs   -> neograph-qzrv
+- Oracle over an agent with dict-form (multi) outputs  -> neograph-qzrv
 - Loop over an agent/act node                          -> neograph-gk3e
 
 This module imports only leaf IR types (Node, modifiers, _normalize, errors) — it
@@ -36,7 +41,7 @@ from __future__ import annotations
 
 from typing import Any, TypeGuard
 
-from neograph._normalize import normalize_outputs
+from neograph._normalize import normalize_inputs, normalize_outputs
 from neograph.errors import ConstructError
 from neograph.modifiers import classify_modifiers
 from neograph.node import Node
@@ -62,9 +67,10 @@ def _fan_modifier_label(mods: dict[str, Any]) -> str | None:
 
 
 def _unsupported_reason(item: Node, mods: dict[str, Any]) -> str | None:
-    """Return None when this fan-over-agent shape is supported (Oracle over a
-    self-contained agent), else the human-facing reason string for the
-    ConstructError. ``item`` is known to be an agent/act Node with a fan modifier.
+    """Return None when this fan-over-agent shape is supported (Oracle over an
+    agent with zero or one upstream producer), else the human-facing reason
+    string for the ConstructError. ``item`` is known to be an agent/act Node with
+    a fan modifier.
     """
     fan = _fan_modifier_label(mods)
     if fan is None:
@@ -86,35 +92,44 @@ def _unsupported_reason(item: Node, mods: dict[str, Any]) -> str | None:
             "sub-construct and Each over that, or move the Each to a scripted/think "
             "node."
         )
-    # Oracle — the one supported family, but only for a self-contained agent.
-    if item.inputs:
-        return (
-            "Oracle over an agent/act node with upstream inputs is not supported. "
-            "The auto-wrap synthesizes an isolated sub-construct with an empty input "
-            "port; synthesizing a real port from the agent's upstream inputs is an "
-            "open design question; tracking neograph-qot6. Wrap the agent in an explicit "
-            "sub-construct with input=/output= and Oracle over that."
-        )
+    # Oracle — the one supported family. A self-contained agent (empty port) OR
+    # a SINGLE upstream producer is supported via input-port synthesis (see
+    # neograph-qot6): single-type ``inputs`` -> port is that type; a single-key
+    # dict-form fan-in -> port is that key's type. Both collapse to one value the
+    # subgraph boundary (``neo_subgraph_input``) can carry. What stays fail-loud:
+    #   - MULTIPLE distinct dict-form producers: the single-value boundary can't
+    #     carry N values without a synthesized packer (tracking neograph-qzrv).
+    #   - a fan-out receiver (Each item): Oracle never sets one, but guard anyway.
+    #   - dict-form (multi-output) OUTPUTS: the sub-construct has one output port.
     if item.fan_out_param is not None:
         return (
             "Oracle over an agent/act node that consumes a fan-out item is not "
-            "supported; tracking neograph-qot6. Wrap the agent in an explicit "
+            "supported; tracking neograph-1h8c. Wrap the agent in an explicit "
             "sub-construct and fan over that."
+        )
+    ni = normalize_inputs(item.inputs)
+    if ni.is_dict_form and len(ni.by_name) > 1:
+        return (
+            "Oracle over an agent/act node with multiple upstream inputs is not "
+            "supported. The isolating sub-construct has a single-value input "
+            "boundary (neo_subgraph_input); bundling N distinct upstream producers "
+            "needs a synthesized packer node; tracking neograph-qzrv. Wrap the agent "
+            "in an explicit sub-construct with input=/output= and Oracle over that."
         )
     if normalize_outputs(item.outputs).is_dict_form:
         return (
             "Oracle over an agent/act node with multi-output (dict-form) outputs is "
             "not supported. The isolating sub-construct has a single output boundary "
-            "port; tracking neograph-qot6. Use single-type outputs, or wrap the agent "
+            "port; tracking neograph-qzrv. Use single-type outputs, or wrap the agent "
             "explicitly."
         )
     return None
 
 
 def is_supported_fan_over_agent(item: Any) -> TypeGuard[Node]:
-    """True iff ``item`` is the ONE supported fan-over-agent shape: Oracle over a
-    self-contained agent/act node. This is the predicate the compiler pre-pass
-    uses to decide what to auto-wrap."""
+    """True iff ``item`` is a supported fan-over-agent shape: Oracle over an
+    agent/act node that is self-contained or has a single upstream producer. This
+    is the predicate the compiler pre-pass uses to decide what to auto-wrap."""
     if not isinstance(item, Node) or item.mode not in _AGENT_MODES:
         return False
     _combo, mods = classify_modifiers(item)

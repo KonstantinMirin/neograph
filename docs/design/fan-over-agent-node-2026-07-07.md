@@ -170,3 +170,45 @@ neo_subgraph_input surface) -> 1h8c (each-item across the boundary, ~0.5-1d
 once a non-empty port exists) -> gk3e (loop-over-agent, ~1-1.5d, gated on
 qot6's port work). Repro scripts (session scratchpad, ephemeral):
 repro_merge.py, repro_send_namespace.py, repro_subgraph_isolation.py.
+
+---
+
+## Addendum 2026-07-07: qot6 delivered — input-port synthesis (single-producer)
+
+Open design Q #1 (input-port synthesis) is now IMPLEMENTED for the tractable,
+unambiguous cases. `_fan_agent_wrap._synthesize_port` derives the wrapping
+sub-construct's `input=` boundary + the bare agent's read side from the agent's
+declared upstream inputs. Three shapes are supported; two stay fail-loud.
+
+Supported (Oracle over an agent with **zero or one** upstream producer):
+- **Self-contained** (`inputs=None`) — empty synthesized port. The base case.
+- **Single-type** (`inputs=T`) — port IS `T`. The parent's upstream `T` is found
+  by the subgraph's existing type-based `_scan_subgraph_input` and delivered as
+  `neo_subgraph_input`; the bare agent keeps `inputs=T` and single-type
+  extraction reads it back. No inner rewrite.
+- **Single-key dict-form** (`inputs={k: T}`) — port is `T`; the bare agent's read
+  is rewritten to `{neo_subgraph_input: T}`, the same convention the `@node`
+  sub-construct port mechanism uses (`_construct_builder._cleanup_inputs_and_register`).
+  Fan-in extraction (`_extract_fan_in_dict`, which uses `get_required`) then reads
+  the boundary field — so a failed delivery crashes rather than silently passing.
+- **DI params ride free**: `FromInput`/`FromConfig` never enter `inputs` (the
+  decorator strips them into `_param_res`, preserved across `model_copy`), and the
+  subgraph forwards `config`, so DI resolves inside the sub-construct with no port
+  work. An agent with BOTH an upstream edge and DI params is supported.
+
+Fail-loud (precise `ConstructError`, follow-up bead **neograph-qzrv**):
+- **Multiple distinct dict-form producers** (`inputs={a: A, b: B}`) — the
+  single-value `neo_subgraph_input` boundary can't carry N values; a clean fix
+  needs a synthesized parent "packer" node (bundle the N upstreams into one port
+  model) + an inner unpacker or prompt-var mapping. Genuinely ambiguous (which
+  prompt vars the bundle exposes), so deferred rather than punted-with-a-guess.
+- **Dict-form (multi-output) agent OUTPUTS** — the sub-construct has one output
+  boundary port; also tracked under neograph-qzrv.
+
+Design note on the dict-form rewrite: the original prompt-var name `k` is NOT
+preserved — it becomes `neo_subgraph_input`, exactly matching a manual
+`construct_from_functions(input=...)` wrapping. Auto-wrap == manual wrap, which is
+the consistency we want. There is no existing behavior to preserve (this case was
+fail-loud before), so no regression. Fixture `oracle_over_agent_with_inputs.py`
+moved should_fail -> should_pass; new should_fail `oracle_over_agent_multiple_inputs.py`
+pins the multi-producer guard.

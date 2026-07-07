@@ -579,16 +579,161 @@ class TestOracleModels:
         result = run(graph, input={"node_id": "agent-oracle-dec"})
         assert result["researcher"] == Claims(items=["merged-2"]), result
 
-    def test_oracle_over_agent_node_with_upstream_inputs_fails_loud(self):
-        """Fan-over-agent with UPSTREAM INPUTS is fail-loud (port synthesis is an
-        open design Q — neograph-qot6). The auto-wrap only handles self-contained
-        agents; an agent that consumes upstream state must not silently ship a
-        broken graph."""
+    def test_oracle_over_agent_node_with_single_type_input_runs(self):
+        """neograph-qot6: Oracle over an agent that consumes a SINGLE-TYPE
+        upstream input compiles AND runs.
+
+        Input-port synthesis: the auto-wrap synthesizes ``input=RawText`` from
+        the agent's single-type ``inputs``. The parent's upstream ``RawText`` is
+        found by the subgraph's type-based input scan and delivered as
+        ``neo_subgraph_input``; inside the isolated sub-construct the bare agent
+        reads it via single-type extraction. N=2 isolated ReAct cycles reach the
+        merge (``merged-2``). Declarative surface.
+        """
+        fake_tool = FakeTool("agent_search", response="found")
+        register_tool_factory("agent_search", lambda config, tool_config: fake_tool)
+        register_scripted("agent_seed_raw", lambda input_data, config: RawText(text="seed"))
+        register_scripted(
+            "agent_merge_in",
+            lambda variants, config: Claims(items=[f"merged-{len(variants)}"]),
+        )
+
         gen_node = (
             Node(
                 name="agent-gen",
                 mode="agent",
-                inputs={"upstream": Claims},
+                inputs=RawText,
+                outputs=Claims,
+                model="default-tier",
+                prompt="test/search",
+                tools=[Tool(name="agent_search", budget=5)],
+            )
+            | Oracle(n=2, merge_fn="agent_merge_in")
+        )
+        pipeline = Construct("test-agent-oracle-single-in", nodes=[
+            Node.scripted("seed", fn="agent_seed_raw", outputs=RawText),
+            gen_node,
+        ])
+        graph = compile(pipeline, **build_test_compile_kwargs(),
+                        **configure_fake_llm(self._agent_oracle_fake))
+        result = run(graph, input={"node_id": "agent-oracle-single-in"})
+        assert result["agent_gen"] == Claims(items=["merged-2"]), result
+
+    def test_oracle_over_agent_node_with_dict_form_input_runs(self):
+        """neograph-qot6: Oracle over an agent with DICT-FORM (single-key) fan-in
+        input compiles AND runs. Declarative surface.
+
+        The auto-wrap synthesizes ``input=RawText`` from the single dict-form
+        input key and rewrites the inner agent's read to ``neo_subgraph_input``
+        (the proven ``@node`` sub-construct port convention). N=2 isolated cycles.
+        """
+        fake_tool = FakeTool("agent_search", response="found")
+        register_tool_factory("agent_search", lambda config, tool_config: fake_tool)
+        register_scripted("agent_seed_raw2", lambda input_data, config: RawText(text="seed"))
+        register_scripted(
+            "agent_merge_dict",
+            lambda variants, config: Claims(items=[f"merged-{len(variants)}"]),
+        )
+
+        gen_node = (
+            Node(
+                name="agent-gen",
+                mode="agent",
+                inputs={"seed": RawText},  # dict-form key names the upstream producer
+                outputs=Claims,
+                model="default-tier",
+                prompt="test/search",
+                tools=[Tool(name="agent_search", budget=5)],
+            )
+            | Oracle(n=2, merge_fn="agent_merge_dict")
+        )
+        pipeline = Construct("test-agent-oracle-dict-in", nodes=[
+            Node.scripted("seed", fn="agent_seed_raw2", outputs=RawText),
+            gen_node,
+        ])
+        graph = compile(pipeline, **build_test_compile_kwargs(),
+                        **configure_fake_llm(self._agent_oracle_fake))
+        result = run(graph, input={"node_id": "agent-oracle-dict-in"})
+        assert result["agent_gen"] == Claims(items=["merged-2"]), result
+
+    def test_oracle_over_agent_node_with_upstream_input_via_node_decorator(self):
+        """neograph-qot6: same input-port synthesis, the ``@node`` agent surface
+        (three-surface parity). A ``@node(mode='agent')`` function with a typed
+        upstream param is wrapped and fanned over the isolated subgraph.
+        """
+        fake_tool = FakeTool("agent_search", response="found")
+        register_tool_factory("agent_search", lambda config, tool_config: fake_tool)
+        register_scripted("agent_seed_dec", lambda input_data, config: RawText(text="seed"))
+        register_scripted(
+            "agent_merge_dec_in",
+            lambda variants, config: Claims(items=[f"merged-{len(variants)}"]),
+        )
+
+        @node(
+            mode="agent",
+            outputs=Claims,
+            model="default-tier",
+            prompt="test/search",
+            tools=[Tool(name="agent_search", budget=5)],
+        )
+        def researcher(seed: RawText) -> Claims: ...
+
+        gen_node = researcher | Oracle(n=2, merge_fn="agent_merge_dec_in")
+        pipeline = Construct("test-agent-oracle-dec-in", nodes=[
+            Node.scripted("seed", fn="agent_seed_dec", outputs=RawText),
+            gen_node,
+        ])
+        graph = compile(pipeline, **build_test_compile_kwargs(),
+                        **configure_fake_llm(self._agent_oracle_fake))
+        result = run(graph, input={"node_id": "agent-oracle-dec-in"})
+        assert result["researcher"] == Claims(items=["merged-2"]), result
+
+    def test_oracle_over_agent_node_with_input_and_di_param_runs(self):
+        """neograph-qot6: an agent with BOTH an upstream input AND a FromInput DI
+        param is wrapped and fanned. The DI param rides the forwarded config into
+        the isolated sub-construct (it never appears in ``inputs``), so only the
+        real upstream edge needs port synthesis.
+        """
+        from neograph import FromInput
+
+        fake_tool = FakeTool("agent_search", response="found")
+        register_tool_factory("agent_search", lambda config, tool_config: fake_tool)
+        register_scripted("agent_seed_di", lambda input_data, config: RawText(text="seed"))
+        register_scripted(
+            "agent_merge_di",
+            lambda variants, config: Claims(items=[f"merged-{len(variants)}"]),
+        )
+
+        @node(
+            mode="agent",
+            outputs=Claims,
+            model="default-tier",
+            prompt="test/search",
+            tools=[Tool(name="agent_search", budget=5)],
+        )
+        def researcher(seed: RawText, topic: Annotated[str, FromInput]) -> Claims: ...
+
+        gen_node = researcher | Oracle(n=2, merge_fn="agent_merge_di")
+        pipeline = Construct("test-agent-oracle-di-in", nodes=[
+            Node.scripted("seed", fn="agent_seed_di", outputs=RawText),
+            gen_node,
+        ])
+        graph = compile(pipeline, **build_test_compile_kwargs(),
+                        **configure_fake_llm(self._agent_oracle_fake))
+        result = run(graph, input={"node_id": "agent-oracle-di-in", "topic": "birds"})
+        assert result["researcher"] == Claims(items=["merged-2"]), result
+
+    def test_oracle_over_agent_node_with_multiple_producers_fails_loud(self):
+        """neograph-qot6: dict-form fan-in from MULTIPLE upstream producers stays
+        fail-loud. The single-value subgraph boundary (``neo_subgraph_input``)
+        carries one typed value; bundling N distinct producers needs a synthesized
+        packer/unpacker (tracked as a follow-up bead). Fail loud, never a broken
+        graph."""
+        gen_node = (
+            Node(
+                name="agent-gen",
+                mode="agent",
+                inputs={"claims": Claims, "raw": RawText},
                 outputs=Claims,
                 model="default-tier",
                 prompt="test/search",
@@ -598,9 +743,9 @@ class TestOracleModels:
         )
         with pytest.raises(
             ConstructError,
-            match="Oracle over an agent/act node with upstream inputs is not supported",
+            match="multiple upstream inputs",
         ):
-            Construct("bad-agent-oracle-inputs", nodes=[gen_node])
+            Construct("bad-agent-oracle-multi", nodes=[gen_node])
 
     def test_oracle_models_round_robin_on_think_mode(self):
         """Round-robin model assignment works on think-mode nodes when n > len(models)."""
