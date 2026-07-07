@@ -244,7 +244,6 @@ class TestToolIdempotencyAnnotation:
 
     def test_tool_idempotent_flag_round_trips_through_pipe(self):
         from neograph import Tool
-        from neograph.modifiers import Each
 
         spec = Tool("read_deal", idempotent=True)
         assert spec.idempotent is True
