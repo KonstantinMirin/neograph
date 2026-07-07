@@ -17,6 +17,7 @@ from __future__ import annotations
 import inspect
 from collections.abc import Callable
 from dataclasses import dataclass
+from functools import partial
 from typing import Any, Protocol, cast
 
 from langchain_core.runnables import RunnableConfig
@@ -108,7 +109,7 @@ async def _ainject_di_inputs(node: Node, config: RunnableConfig) -> RunnableConf
             di_inputs[name] = await aget_or_build(
                 config,
                 f"resource:{node.name}:{name}",
-                lambda binding=binding: binding.aresolve(config),
+                partial(binding.aresolve, config),
             )
     if not di_inputs:
         return config

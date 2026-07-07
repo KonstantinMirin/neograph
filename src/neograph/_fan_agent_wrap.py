@@ -215,11 +215,10 @@ def _synthesize_packer_wrap(
     field = field_name_for(node.name)
     by_name = normalize_inputs(node.inputs).by_name
 
-    port_model = create_model(
-        f"_NeoAgentPort_{field}",
-        __base__=BaseModel,
-        **{key: (typ, ...) for key, typ in by_name.items()},
-    )
+    # __base__ omitted (create_model defaults to BaseModel) — the explicit-base
+    # overload rejects our field-definition dict shape under mypy.
+    port_fields: dict[str, Any] = {key: (typ, ...) for key, typ in by_name.items()}
+    port_model = create_model(f"_NeoAgentPort_{field}", **port_fields)
 
     lookup = scripted_lookup if scripted_lookup is not None else {}
 
