@@ -403,6 +403,7 @@ class TestMergeFnDuplicateRegistration:
             return Claims(items=["first"])
 
         with pytest.raises(ConstructError) as exc_info:
+
             @merge_fn(name="dup_merge")
             def second(variants: list[Claims]) -> Claims:
                 return Claims(items=["second"])
@@ -423,6 +424,7 @@ class TestMergeFnDuplicateRegistration:
             return Claims(items=["a"])
 
         with pytest.raises(ConstructError):
+
             @merge_fn
             def combine(variants: list[Claims]) -> Claims:  # noqa: F811
                 return Claims(items=["b"])
@@ -446,6 +448,7 @@ class TestMergeFnDuplicateRegistration:
         from neograph import merge_fn
 
         for _ in range(3):
+
             @merge_fn(name="loop_merge")
             def combine(variants: list[Claims]) -> Claims:  # noqa: F811
                 return Claims(items=["x"])
@@ -461,3 +464,33 @@ class TestMergeFnDuplicateRegistration:
         @merge_fn(name="merge_beta")
         def beta(variants: list[Claims]) -> Claims:
             return Claims(items=["beta"])
+
+    def test_importlib_reload_is_idempotent(self, tmp_path, monkeypatch):
+        """Regression pin for the third _same_def_site branch (qualname + file +
+        firstlineno): importlib.reload re-executes the module, producing a
+        DIFFERENT function object with a DIFFERENT code object — only the
+        def-site identity saves the re-registration from the duplicate guard.
+        The shipped same-object / same-code-object tests cannot catch a
+        regression in this branch (wave-C verification follow-up)."""
+        import importlib
+        import sys
+
+        mod_file = tmp_path / "tj_reload_merge_mod.py"
+        mod_file.write_text(
+            "from pydantic import BaseModel\n"
+            "from neograph import merge_fn\n\n\n"
+            "class RClaims(BaseModel):\n"
+            "    items: list[str]\n\n\n"
+            "@merge_fn(name='tj_reload_merge')\n"
+            "def combine(variants: list[RClaims]) -> RClaims:\n"
+            "    return RClaims(items=['r'])\n"
+        )
+        monkeypatch.syspath_prepend(str(tmp_path))
+        mod = importlib.import_module("tj_reload_merge_mod")
+        first = mod.combine
+        reloaded = importlib.reload(mod)  # must NOT raise ConstructError
+        assert reloaded.combine is not first, "reload must produce a fresh object"
+        assert reloaded.combine.__code__ is not first.__code__, (
+            "reload must produce a fresh code object — otherwise this test is not exercising the def-site branch"
+        )
+        sys.modules.pop("tj_reload_merge_mod", None)

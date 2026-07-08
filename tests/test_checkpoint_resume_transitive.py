@@ -232,8 +232,7 @@ def test_schema_fingerprint_distinguishes_same_qualname_different_fields():
     g2 = compile(Construct("fp-pipe", nodes=[Node.scripted("a", fn="tj_a", outputs=p2)]), **build_test_compile_kwargs())
 
     assert g1.schema_fingerprint != g2.schema_fingerprint, (
-        "schema fingerprint gate stayed closed on a same-qualname field change; "
-        "auto-rewind would never trigger"
+        "schema fingerprint gate stayed closed on a same-qualname field change; auto-rewind would never trigger"
     )
 
 
@@ -249,6 +248,30 @@ def test_same_qualname_field_change_invalidates_node():
     g2 = compile(Construct("fp-pipe", nodes=[Node.scripted("a", fn="tj_a", outputs=p2)]), **build_test_compile_kwargs())
     invalidated = _compute_invalidated_nodes(g2, {"neo_node_fingerprints": stored})
     assert "a" in invalidated
+
+
+def test_dict_form_output_keys_get_distinct_structural_fingerprints():
+    """Regression pin for the metaclass-hash bug fixed in neograph-v63o: the old
+    dict-form branch hashed type(typ).__name__ — 'ModelMetaclass' for EVERY
+    BaseModel — collapsing all dict-form output keys of all models to one
+    identical hash, so a changed dict-form value type never invalidated. The
+    structural _type_signature must give distinct models distinct per-key
+    fingerprints, and a field change on ONE key must change ONLY that key."""
+    from pydantic import create_model
+
+    alpha = create_model("TjAlpha", a=(str, ...))
+    beta = create_model("TjBeta", b=(int, ...))
+    node = Node.scripted("d", fn="tj_a", outputs={"one": alpha, "two": beta})
+    fps = compute_node_fingerprints(Construct("fp-dict", nodes=[node]))
+    assert fps["d_one"] != fps["d_two"], (
+        "distinct dict-form value models must not share a fingerprint (the ModelMetaclass collapse)"
+    )
+
+    alpha2 = create_model("TjAlpha", a=(int, ...))  # same qualname, changed field type
+    node2 = Node.scripted("d", fn="tj_a", outputs={"one": alpha2, "two": beta})
+    fps2 = compute_node_fingerprints(Construct("fp-dict", nodes=[node2]))
+    assert fps2["d_one"] != fps["d_one"], "changed field type must change that key"
+    assert fps2["d_two"] == fps["d_two"], "untouched key must keep its fingerprint"
 
 
 def test_old_format_node_fingerprint_invalidates_on_upgrade():
