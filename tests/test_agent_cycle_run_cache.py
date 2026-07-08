@@ -20,6 +20,7 @@ framework-minted ``StateKeys.RUN_ID`` (config-only, minted fresh per run in
 
 from __future__ import annotations
 
+import asyncio
 from typing import Annotated, Any
 
 from langchain_core.messages import AIMessage, ToolMessage
@@ -38,6 +39,7 @@ from neograph import (
     node,
     run,
 )
+from neograph._state_keys import StateKeys
 from tests.fakes import (
     build_fake_llm_kwargs,
     build_test_compile_kwargs,
@@ -337,4 +339,163 @@ class TestPerRunResourceFetchCache:
         assert fetch_count[0] == 2, (
             f"resume must re-mint RUN_ID and refetch the resource (life-2), got "
             f"{fetch_count[0]}"
+        )
+
+
+# ── neograph-hhlr: per-key single-flight (sync + async twins) ───────────────
+
+
+class TestPerKeySingleFlight:
+    """Two concurrent misses on ONE (run_id, subkey) must build EXACTLY once —
+    the loser blocks on the per-key latch, then reuses the winner's value. Twin
+    thinness: the sync and async cases pin the same property on their surface."""
+
+    def test_sync_concurrent_misses_build_the_key_once(self):
+        import threading
+
+        from neograph._run_cache import get_or_build
+
+        config = {"configurable": {StateKeys.RUN_ID: "sf-sync"}}
+        build_count = [0]
+        entered = threading.Semaphore(0)
+        proceed = threading.Event()
+        results: dict[int, object] = {}
+
+        def build() -> object:
+            build_count[0] += 1
+            entered.release()  # signal "a build is in-flight, holding the latch"
+            proceed.wait(2.0)
+            return object()
+
+        def worker(i: int) -> None:
+            results[i] = get_or_build(config, "k", build)
+
+        t1 = threading.Thread(target=worker, args=(0,))
+        t1.start()
+        # Winner is now parked INSIDE build() holding the per-key latch.
+        assert entered.acquire(timeout=2.0)
+
+        t2 = threading.Thread(target=worker, args=(1,))
+        t2.start()
+        # Without single-flight the loser also enters build() (double-build);
+        # with it, the loser blocks on the latch and never reaches build().
+        proceed.set()
+        t1.join(2.0)
+        t2.join(2.0)
+
+        assert build_count[0] == 1, (
+            f"concurrent misses on one key double-built (no single-flight): "
+            f"build_count={build_count[0]}"
+        )
+        assert results[0] is results[1], "loser did not reuse the winner's value"
+
+    async def test_async_concurrent_misses_build_the_key_once(self):
+        from neograph._run_cache import aget_or_build
+
+        config = {"configurable": {StateKeys.RUN_ID: "sf-async"}}
+        build_count = [0]
+        entered = asyncio.Event()
+        proceed = asyncio.Event()
+
+        async def build() -> object:
+            build_count[0] += 1
+            entered.set()
+            await proceed.wait()
+            return object()
+
+        t1 = asyncio.create_task(aget_or_build(config, "k", build))
+        await entered.wait()  # winner parked inside build(), holding the latch
+        t2 = asyncio.create_task(aget_or_build(config, "k", build))
+        await asyncio.sleep(0)  # let the loser reach the latch (miss -> acquire)
+        proceed.set()
+        r1, r2 = await asyncio.gather(t1, t2)
+
+        assert build_count[0] == 1, (
+            f"concurrent misses on one key double-built (no single-flight): "
+            f"build_count={build_count[0]}"
+        )
+        assert r1 is r2, "loser did not reuse the winner's value"
+
+    def test_async_latch_is_loop_affine_across_separate_loops(self):
+        """A miss on the SAME (run_id, subkey) under two DIFFERENT event loops
+        must not reuse one ``asyncio.Lock`` — awaiting a lock bound to a dead
+        loop raises. The loop-affine latch map mints a fresh lock per loop, so
+        the second loop rebuilds cleanly rather than raising."""
+        from neograph import _run_cache
+        from neograph._run_cache import aget_or_build
+
+        config = {"configurable": {StateKeys.RUN_ID: "loop-affine"}}
+        build_count = [0]
+
+        async def build() -> object:
+            build_count[0] += 1
+            return object()
+
+        async def once() -> object:
+            return await aget_or_build(config, "k", build)
+
+        asyncio.run(once())  # loop 1: mints + binds a latch for this key
+        # Force a miss on loop 2 WITHOUT dropping the latch map — this is the
+        # exact hazard: a shared lock would still carry loop-1's binding.
+        with _run_cache._lock:
+            _run_cache._cache.clear()
+        asyncio.run(once())  # loop 2: must NOT raise "bound to a different loop"
+
+        assert build_count[0] == 2, "loop 2 did not rebuild after the forced miss"
+
+
+# ── neograph-hhlr: run-end eviction ─────────────────────────────────────────
+
+
+class TestRunEndEviction:
+    """A run's cache entries are dropped the moment its driver verb returns, so
+    loop-bound handles do not linger until LRU pressure."""
+
+    def test_evict_run_drops_only_that_runs_keys(self):
+        from neograph._run_cache import evict_run, get_or_build
+
+        c1 = {"configurable": {StateKeys.RUN_ID: "r1"}}
+        c2 = {"configurable": {StateKeys.RUN_ID: "r2"}}
+        get_or_build(c1, "a", lambda: "1a")
+        get_or_build(c1, "b", lambda: "1b")
+        get_or_build(c2, "a", lambda: "2a")
+
+        evict_run("r1")
+
+        # r1's keys are gone -> a fresh build replaces them; r2 is untouched.
+        assert get_or_build(c1, "a", lambda: "REBUILT") == "REBUILT"
+        assert get_or_build(c2, "a", lambda: "REBUILT") == "2a"
+
+    def test_run_verb_evicts_its_cache_on_completion(self):
+        """After ``run`` returns, no cache entry survives for that run — the
+        finalize-seam eviction fired in the verb's ``finally``."""
+        from neograph import _run_cache
+
+        counter = [0]
+        register_tool_factory("record", lambda cfg, tc: _RecordTool(counter))
+
+        @node(
+            mode="agent",
+            outputs=KResult,
+            model="reason",
+            prompt="test/explore",
+            tools=[Tool(name="record", budget=5)],
+        )
+        def research() -> KResult: ...
+
+        graph = compile(
+            construct_from_functions("rc_evict", [research]),
+            checkpointer=MemorySaver(),
+            **build_test_compile_kwargs(),
+            **build_fake_llm_kwargs(lambda tier: _MultiTurnFake()),
+        )
+        _run_cache.clear()
+        result = run(
+            graph, input={"node_id": "X"}, config={"configurable": {"thread_id": "rc-evict"}}
+        )
+
+        assert result.get("research") == KResult(items=["done"])
+        assert len(_run_cache._cache) == 0, (
+            f"run() must evict its run's cache entries in finally; leftover: "
+            f"{list(_run_cache._cache)}"
         )

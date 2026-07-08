@@ -105,7 +105,9 @@ def _unsupported_reason(item: Node, mods: dict[str, Any]) -> str | None:
             "supported (Oracle does not fan a per-item value); use Each to fan over "
             "a collection, or wrap the agent in an explicit sub-construct."
         )
-    fan = "Each" if "each" in mods else ("Loop" if "loop" in mods else "Oracle")
+    # `fan` (from _fan_modifier_label above) is the single label site — do not
+    # re-derive it here (review DRY-L2). Stacked combos are unsupported anyway,
+    # so the first-hit label is the right one to name in these errors.
     ni = normalize_inputs(item.inputs)
     if "each" in mods and ni.is_none:
         # Design (2), neograph-1h8c: the fanned item is delivered AS the

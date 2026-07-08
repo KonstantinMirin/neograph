@@ -521,9 +521,13 @@ class TestOracleModels:
         fix is the AUTO-WRAP: the ReAct cycle is wrapped in an isolated single-node
         sub-construct and Oracle fans over THAT via the existing subgraph path.
 
-        This is the declarative surface (``Node(mode="agent") | Oracle``). Asserts
-        N=2 ISOLATED variants reach the merge (``merged-2``) — the proof the two
-        ReAct cycles ran with isolated message channels, not one merged channel.
+        This is the declarative surface (``Node(mode="agent") | Oracle``). The
+        ``merged-2`` assertion detects variant-count COLLAPSE: if the two ReAct
+        cycles had shared one tangled message channel instead of isolating, the
+        fan would collapse to fewer than 2 variants at the merge. It does NOT
+        prove each cycle saw distinct CONTENT — that (content isolation) is the
+        echo-style ``TestOracleOverAgentValueDelivery`` suite below, modeled on
+        the Each content-isolation suite (``tests/modifiers/test_each.py``).
         """
         fake_tool = FakeTool("agent_search", response="found")
         register_tool_factory("agent_search", lambda config, tool_config: fake_tool)
@@ -587,8 +591,10 @@ class TestOracleModels:
         the agent's single-type ``inputs``. The parent's upstream ``RawText`` is
         found by the subgraph's type-based input scan and delivered as
         ``neo_subgraph_input``; inside the isolated sub-construct the bare agent
-        reads it via single-type extraction. N=2 isolated ReAct cycles reach the
-        merge (``merged-2``). Declarative surface.
+        reads it via single-type extraction. The ``merged-2`` assertion detects
+        variant-count COLLAPSE (2 variants reach the merge), not per-cycle content
+        isolation — the latter is the echo-style
+        ``TestOracleOverAgentValueDelivery`` suite below. Declarative surface.
         """
         fake_tool = FakeTool("agent_search", response="found")
         register_tool_factory("agent_search", lambda config, tool_config: fake_tool)

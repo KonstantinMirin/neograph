@@ -116,7 +116,7 @@ class TestDIBinding:
             required=True,
         )
         config = {"configurable": {}}
-        with pytest.raises(ExecutionError, match="Required DI parameter 'topic'"):
+        with pytest.raises(ExecutionError, match="required DI parameter 'topic'"):
             b.resolve(config)
 
     def test_resolve_from_config_required_missing_raises(self):
@@ -131,7 +131,7 @@ class TestDIBinding:
             required=True,
         )
         config = {"configurable": {}}
-        with pytest.raises(ExecutionError, match="Required DI parameter 'limiter'"):
+        with pytest.raises(ExecutionError, match="required DI parameter 'limiter'"):
             b.resolve(config)
 
     def test_resolve_from_input_optional_missing_returns_none(self):

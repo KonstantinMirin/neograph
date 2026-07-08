@@ -325,18 +325,19 @@ class DIBinding:
             val = _get_configurable(config, self.name)
             if val is None and self.required:
                 source = "input" if self.kind == DIKind.FROM_INPUT else "config"
-                raise _ExecutionError(
-                    f"Required DI parameter '{self.name}' (from {source}) is missing "
-                    f"from config['configurable']. Provide it via "
-                    f"run(input={{'{self.name}': ...}})."
+                raise _ExecutionError.build(
+                    f"required DI parameter '{self.name}' (from {source}) is missing "
+                    f"from config['configurable']",
+                    hint=f"provide it via run(input={{'{self.name}': ...}})",
                 )
             if val is not None and self.inner_type is not None:
                 if not _isinstance_safe(val, self.inner_type):
                     source = "input" if self.kind == DIKind.FROM_INPUT else "config"
-                    raise _ExecutionError(
-                        f"DI parameter '{self.name}' (from {source}) expects "
-                        f"{self.inner_type.__name__}, got {type(val).__name__}. "
-                        f"Provide the correct type via run(input={{'{self.name}': ...}})."
+                    raise _ExecutionError.build(
+                        f"DI parameter '{self.name}' (from {source}) has the wrong type",
+                        expected=self.inner_type.__name__,
+                        found=type(val).__name__,
+                        hint=f"provide the correct type via run(input={{'{self.name}': ...}})",
                     )
             return val
 
@@ -351,20 +352,22 @@ class DIBinding:
                 missing = [f for f in model.model_fields if f not in field_values]
                 if missing:
                     source = "input" if self.kind == DIKind.FROM_INPUT_MODEL else "config"
-                    raise _ExecutionError(
-                        f"Required DI bundled model '{self.name}' ({model.__name__}) "
-                        f"is missing fields from {source}: {sorted(missing)}. "
-                        f"Provide them via run(input={{...}})."
+                    raise _ExecutionError.build(
+                        f"required DI bundled model '{self.name}' ({model.__name__}) "
+                        f"is missing fields from {source}",
+                        found=f"missing: {sorted(missing)}",
+                        hint="provide them via run(input={...})",
                     )
             try:
                 return model(**field_values)
             except (ValidationError, TypeError, ValueError):
                 if self.required:
                     source = "input" if self.kind == DIKind.FROM_INPUT_MODEL else "config"
-                    raise _ExecutionError(
-                        f"Required DI bundled model '{self.name}' ({model.__name__}) "
-                        f"construction failed. Provide all fields via "
-                        f"run(input={{...}}) or config['configurable']."
+                    raise _ExecutionError.build(
+                        f"required DI bundled model '{self.name}' ({model.__name__}) "
+                        f"construction failed",
+                        hint="provide all fields via run(input={...}) or "
+                             "config['configurable']",
                     ) from None
                 log.warning(
                     "DI model construction failed, returning None",
@@ -451,12 +454,13 @@ class DIBinding:
         if match is None:
             if not self.required:
                 return None
-            raise _ExecutionError(
+            raise _ExecutionError.build(
                 f"resource DI parameter '{self.name}' found no ResourceRef of kind "
-                f"'{self.ref_kind}' in the manifest. An upstream agent/act node must "
-                f"emit a resource_link of that kind before this node runs (flat "
-                f"servers that emit no resource_link fall back to a templated "
-                f"FromResource(uri=...) / resource_reader tool)."
+                f"'{self.ref_kind}' in the manifest",
+                hint="an upstream agent/act node must emit a resource_link of that "
+                     "kind before this node runs (flat servers that emit no "
+                     "resource_link fall back to a templated FromResource(uri=...) / "
+                     "resource_reader tool)",
             )
         return await hydrate_resource_ref(
             match, config, self.inner_type,

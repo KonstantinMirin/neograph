@@ -24,6 +24,7 @@ from langchain_core.runnables import RunnableConfig
 from pydantic import BaseModel
 
 from neograph import _llm
+from neograph._config_carrier import _with_configurable
 from neograph._llm_render import _is_inline_prompt
 from neograph._llm_runtime import EMPTY_RUNTIME, LlmRuntime
 from neograph._normalize import NormalizedOutputs, normalize_outputs
@@ -75,8 +76,7 @@ def _inject_di_inputs(node: Node, config: RunnableConfig) -> RunnableConfig:
     }
     if not di_inputs:
         return config
-    configurable = config.get("configurable", {})
-    return {**config, "configurable": {**configurable, StateKeys.DI_INPUTS: di_inputs}}
+    return _with_configurable(config, **{StateKeys.DI_INPUTS: di_inputs})
 
 
 async def _ainject_di_inputs(node: Node, config: RunnableConfig) -> RunnableConfig:
@@ -113,8 +113,7 @@ async def _ainject_di_inputs(node: Node, config: RunnableConfig) -> RunnableConf
             )
     if not di_inputs:
         return config
-    configurable = config.get("configurable", {})
-    return {**config, "configurable": {**configurable, StateKeys.DI_INPUTS: di_inputs}}
+    return _with_configurable(config, **{StateKeys.DI_INPUTS: di_inputs})
 
 # ── Typed dispatch containers (architecture-v2 section 1) ────────────────
 #

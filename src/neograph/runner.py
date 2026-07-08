@@ -23,6 +23,7 @@ from langgraph.types import Command
 from neograph._compiled import CompiledNeograph
 from neograph._ir_branch import iter_with_arms
 from neograph._llm_config import _coerce_llm_config
+from neograph._run_cache import evict_run
 from neograph._state_keys import StateKeys, _strip_internals
 from neograph.construct import iter_nodes
 from neograph.errors import CheckpointSchemaError, ConfigurationError, ExecutionError
@@ -581,6 +582,17 @@ def _flush_observe(observe: bool | str | None) -> None:
     get_client().flush()
 
 
+def _evict_run_cache(config: RunnableConfig | None) -> None:
+    """Drop this run's per-run handle/resource cache entries — the SAME finalize
+    seam as ``_flush_observe``, wired into every verb's ``finally``. ``_prepare``
+    minted the RUN_ID into ``config['configurable']``; reading it back here (not
+    threading it through) keeps one hook per verb. No RUN_ID (graph invoked
+    directly) -> nothing was cached -> no-op."""
+    run_id = (config or {}).get("configurable", {}).get(StateKeys.RUN_ID)
+    if run_id is not None:
+        evict_run(run_id)
+
+
 def _prepare(
     graph: CompiledNeograph,
     *,
@@ -735,6 +747,7 @@ def run(
         return graph.invoke(engine_input, config=config)
     finally:
         _flush_observe(observe)
+        _evict_run_cache(config)
 
 
 def stream(
@@ -770,6 +783,7 @@ def stream(
             yield _finalize_chunk(chunk, stream_mode)
     finally:
         _flush_observe(observe)
+        _evict_run_cache(config)
 
 
 async def _ahas_existing_checkpoint(graph: CompiledNeograph, config: RunnableConfig) -> bool:
@@ -895,6 +909,7 @@ async def arun(
         return await graph.ainvoke(engine_input, config=config)
     finally:
         _flush_observe(observe)
+        _evict_run_cache(config)
 
 
 async def astream(
@@ -929,3 +944,4 @@ async def astream(
             yield _finalize_chunk(chunk, stream_mode)
     finally:
         _flush_observe(observe)
+        _evict_run_cache(config)

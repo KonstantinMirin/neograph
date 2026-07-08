@@ -15,6 +15,7 @@ from langchain_core.runnables import Runnable, RunnableConfig, RunnableLambda
 from langgraph.errors import GraphBubbleUp
 from pydantic import BaseModel
 
+from neograph._config_carrier import _with_configurable
 from neograph._di_classify import _resolve_merge_args
 from neograph._llm_config import LlmConfig
 from neograph._llm_runtime import EMPTY_RUNTIME, LlmRuntime
@@ -40,14 +41,13 @@ def _inject_oracle_config(state: StateBus, config: RunnableConfig) -> RunnableCo
     oracle_gen_id = state.get(StateKeys.ORACLE_GEN_ID)
     if oracle_gen_id is None:
         return config
-    configurable = config.get("configurable", {})
     extra = {"_generator_id": oracle_gen_id}
     # StateBus.get optional: framework — neo_oracle_model only present when
     # Oracle was configured with models=; legitimately absent otherwise.
     oracle_model = state.get(StateKeys.ORACLE_MODEL)
     if oracle_model is not None:
         extra["_oracle_model"] = oracle_model
-    return {**config, "configurable": {**configurable, **extra}}
+    return _with_configurable(config, **extra)
 
 
 def make_oracle_redirect_fn(

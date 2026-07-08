@@ -9,6 +9,7 @@ import structlog
 from langchain_core.runnables import RunnableConfig
 from pydantic import BaseModel
 
+from neograph._config_carrier import _with_configurable, run_id_of
 from neograph._dispatch import ModeDispatch, NodeInput
 from neograph._input_shape import _extract_context, _extract_input
 from neograph._normalize import normalize_inputs
@@ -45,7 +46,7 @@ def _run_id_binds(config: RunnableConfig) -> dict[str, str]:
     node_start/node_complete line for one run shares the same id. Omitted (not
     bound as ``None``) when the id is absent — e.g. a node invoked outside a
     run()/arun() driver — so a direct-invoke log line stays clean."""
-    run_id = (config or {}).get("configurable", {}).get(StateKeys.RUN_ID)
+    run_id = run_id_of(config)
     return {"run_id": run_id} if run_id else {}
 
 
@@ -79,11 +80,7 @@ def _inject_resource_manifest(
             val = getattr(state, fname, None)
             if val:
                 refs.extend(val)
-    configurable = config.get("configurable", {})
-    return {
-        **config,
-        "configurable": {**configurable, StateKeys.RESOURCE_MANIFEST_INJECT: refs},
-    }
+    return _with_configurable(config, **{StateKeys.RESOURCE_MANIFEST_INJECT: refs})
 
 
 def _execute_node(

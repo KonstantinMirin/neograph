@@ -443,6 +443,14 @@ class TestNoNearDuplicateHelperNames:
             "lev=1: async twin of the per-run handle/resource cache accessor "
             "(_run_cache.py); build callback awaited on a miss."
         ),
+        # neograph-hhlr: a-prefix async twin of the per-key single-flight latch
+        # minter (_run_cache.py). The async form mints a LOOP-AFFINE asyncio.Lock
+        # keyed by running-loop id; the sync form mints a threading.Lock. Same
+        # deliberate sync/async twin convention.
+        frozenset({"_alatch", "_latch"}): (
+            "lev=1: async twin of the sync single-flight latch minter "
+            "(_run_cache.py); loop-affine asyncio.Lock vs threading.Lock."
+        ),
     }
 
     @staticmethod

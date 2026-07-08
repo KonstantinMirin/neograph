@@ -608,18 +608,25 @@ class AnalysisResult(BaseModel):
 
 ### Error Hierarchy
 
+Parentage follows one rule, by lifecycle phase: a failure raised **while the graph is executing** subclasses `ExecutionError`; an **assembly/validation** failure is a `ConstructError`; a **compile()** failure is a `CompileError`; a **bad or missing configuration** (including a resume-time precondition mismatch) is a `ConfigurationError`. This means a single `except ExecutionError` around `run()` catches every runtime failure — including resource-expiry and non-idempotent-replay.
+
 ```
 NeographError (base)
   ├── ConstructError (ValueError)  — assembly-time validation failures
   ├── CompileError                 — compilation failures
   ├── ConfigurationError           — missing LLM config, unregistered tools
-  ├── CheckpointSchemaError        — checkpoint state schema mismatch on resume
-  └── ExecutionError               — runtime failures (duplicate keys, reducer errors)
+  │     └── CheckpointSchemaError  — checkpoint state schema mismatch on resume
+  └── ExecutionError               — runtime failures during a run
+        ├── PromptVarMissing          — strict prompt placeholder had no value
+        ├── StateMissingError         — required state read missed
+        ├── NodeOutputError           — a node ran and produced None vs its declared output
+        ├── NonIdempotentReplayError  — refused to replay a non-idempotent producing tool
+        └── ResourceExpiredError      — a manifest ResourceRef could not be hydrated
 ```
 
-**`CheckpointSchemaError`** — raised when resuming from a checkpoint whose state schema fingerprint differs from the current graph. Has an `invalidated_nodes: set[str]` attribute listing which state fields changed. Only raised when `auto_resume=False`; when `auto_resume=True` (the default), `run()` automatically rewinds instead.
+**`CheckpointSchemaError`** — raised when resuming from a checkpoint whose state schema fingerprint differs from the current graph. Has an `invalidated_nodes: set[str]` attribute listing which state fields changed. Only raised when `auto_resume=False`; when `auto_resume=True` (the default), `run()` automatically rewinds instead. It subclasses `ConfigurationError`, not `ExecutionError`: it fires at resume, before any node re-executes, as a precondition check on the persisted checkpoint against the current graph — a configuration mismatch you resolve with a new `thread_id` or a schema migration, not a retry of node logic.
 
-All errors are importable: `from neograph import ConstructError, CompileError, ConfigurationError, CheckpointSchemaError, ExecutionError`.
+All errors are importable: `from neograph import ConstructError, CompileError, ConfigurationError, CheckpointSchemaError, ExecutionError, PromptVarMissing, NonIdempotentReplayError, ResourceExpiredError`.
 
 ### Runtime wiring (compile() dict kwargs)
 

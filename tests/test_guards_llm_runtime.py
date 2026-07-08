@@ -1754,6 +1754,11 @@ class TestTwinThinness:
             ("parse_body", "aparse_body"),
             ("_build_turn_prep", "_abuild_turn_prep"),
         ],
+        # The di_inputs injector twins (review PAT-02): both built the
+        # config-carrier dict verbatim — the un-tabled twin blind spot this
+        # guard was extended (carrier shape below) to close. Now single-sited on
+        # `_with_configurable`; tabling the pair keeps a re-inline visible.
+        "_dispatch.py": [("_inject_di_inputs", "_ainject_di_inputs")],
         "_tool_loop.py": [
             ("_parse_final_turn", "_aparse_final_turn"),
             ("_prepare_tool_loop", "_aprepare_tool_loop"),
@@ -1778,6 +1783,12 @@ class TestTwinThinness:
     _LOG_METHODS = frozenset({"info", "warning", "error", "debug", "exception"})
     # A dict literal is treated as the usage shape iff it carries this key.
     _USAGE_DICT_MARKER = "total_tokens"
+    # A dict literal is treated as the config-carrier shape iff it carries this
+    # key (``{**config, "configurable": {...}}``) — the copy-not-mutate write to
+    # config['configurable'] (review PAT-02). Single-sited on
+    # ``_config_carrier._with_configurable``; a re-inline in BOTH twins of a pair
+    # (as the di_inputs injectors once did) is the drift this pins.
+    _CARRIER_DICT_MARKER = "configurable"
 
     # Async→sync identifier renames so a builder/log block that references an
     # async seam normalizes to its sync twin's spelling. Longest-first so a
@@ -1861,7 +1872,7 @@ class TestTwinThinness:
                     emit(node)
             elif isinstance(node, ast.Dict):
                 keys = [k.value for k in node.keys if isinstance(k, ast.Constant)]
-                if cls._USAGE_DICT_MARKER in keys:
+                if cls._USAGE_DICT_MARKER in keys or cls._CARRIER_DICT_MARKER in keys:
                     emit(node)
         return blocks
 
@@ -1945,6 +1956,34 @@ class TestTwinThinness:
         )
         assert self._find_func(src, "body") is not None
         assert self._find_func(src, "abody") is not None
+
+    def test_meta_positive_shared_config_carrier_dict_is_flagged(self):
+        """A re-inlined ``{**config, 'configurable': {...}}`` in BOTH twins (the
+        PAT-02 di_inputs blind spot) must be flagged by the carrier-shape rule."""
+        src = (
+            "def f(config):\n"
+            "    return {**config, 'configurable': {**cfg, 'k': v}}\n"
+            "async def af(config):\n"
+            "    return {**config, 'configurable': {**cfg, 'k': v}}\n"
+        )
+        sync_fn = self._find_func(src, "f")
+        async_fn = self._find_func(src, "af")
+        shared = set(self._builder_blocks(sync_fn)) & set(self._builder_blocks(async_fn))
+        assert shared, "a duplicated config-carrier dict in both twins must be flagged"
+
+    def test_meta_negative_helper_routed_config_carrier_is_not_flagged(self):
+        """The carrier routed through ``_with_configurable`` in both twins is a
+        bare call, no dict literal — so it is NOT flagged (the migrated shape)."""
+        src = (
+            "def f(config):\n"
+            "    return _with_configurable(config, k=v)\n"
+            "async def af(config):\n"
+            "    return _with_configurable(config, k=v)\n"
+        )
+        sync_fn = self._find_func(src, "f")
+        async_fn = self._find_func(src, "af")
+        shared = set(self._builder_blocks(sync_fn)) & set(self._builder_blocks(async_fn))
+        assert not shared, "a carrier routed through a shared helper must NOT be flagged"
 
 
 class TestDiInputsInjectedAtLlmDispatchSeams:

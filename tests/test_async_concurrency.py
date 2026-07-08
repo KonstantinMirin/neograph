@@ -44,12 +44,19 @@ from __future__ import annotations
 import asyncio
 import time
 import types as _types
+from typing import Annotated
 
 import pytest
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 
 import neograph
-from neograph import compile, construct_from_functions, construct_from_module, node
+from neograph import (
+    FromResource,
+    compile,
+    construct_from_functions,
+    construct_from_module,
+    node,
+)
 from tests.fakes import (
     GatedAsyncFake,
     StructuredFake,
@@ -231,4 +238,109 @@ async def test_cancel_parked_arun_leaves_saver_reusable(tmp_path):
     assert completed["gen"] == Claims(items=["resumed"]), (
         "re-arun of the same thread_id after cancel did not complete cleanly — "
         "the cancel left the saver/checkpoint in an inconsistent state"
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# neograph-hhlr — Wave-8 per-run-cache interaction pins (moved from yc38)
+#
+# The two properties the WITHIN-run reuse tests (test_agent_cycle_run_cache.py)
+# CANNOT prove, because both need the RUN boundary — concurrent cross-run
+# isolation and replay-refetch. Both drive REAL neograph.arun; the fetcher is
+# the observable "factory" (per-run FROM_RESOURCE cache, _dispatch._ainject_di_inputs).
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def _resource_think_graph(fake, fetch):
+    """A single-node THINK pipeline whose node pulls one FROM_RESOURCE var, so
+    ``arun`` awaits ``fetch`` through the per-run cache before the LLM park."""
+
+    @node(mode="think", outputs=Claims, model="fast", prompt="test/extract")
+    def gen(history: Annotated[str, FromResource("crm://history")]) -> Claims: ...
+
+    return compile(
+        construct_from_functions("rp", [gen]),
+        **build_test_compile_kwargs(),
+        **build_fake_llm_kwargs(lambda tier: fake),
+    )
+
+
+async def test_parallel_aruns_isolate_the_per_run_cache_across_runs():
+    """Two concurrent ``arun`` tasks share ONE caller resource (the same
+    ``fetch`` in each config) but each mints its OWN run_id, so the per-run cache
+    does NOT dedup across runs: the fetcher fires ONCE PER run (== 2, not
+    collapsed to 1), and after release each run returns its OWN result. The gated
+    fakes prove the runs are genuinely in-flight together; the fetch precedes the
+    LLM park, so both runs have already fetched by the time both are parked.
+    Single-flight dedups WITHIN a key; distinct runs' keys never collide."""
+    fetch_count = [0]
+
+    async def fetch(uri: str):
+        fetch_count[0] += 1
+        return "HISTORY", "text/plain"
+
+    fakes = [GatedAsyncFake(lambda m, v=i: m(items=[f"g{v}"])) for i in range(2)]
+    graphs = [_resource_think_graph(fakes[i], fetch) for i in range(2)]
+
+    tasks = [
+        asyncio.create_task(
+            neograph.arun(
+                graphs[i],
+                input={"node_id": f"c{i}"},
+                config={"configurable": {"mcp_resource_fetcher": fetch, "node_id": f"c{i}"}},
+            )
+        )
+        for i in range(2)
+    ]
+
+    for _ in range(300):
+        if all(f.enter_count == 1 for f in fakes) or any(t.done() for t in tasks):
+            break
+        await asyncio.sleep(0.005)
+
+    assert all(f.enter_count == 1 for f in fakes), (
+        f"runs did not interleave at their gates: enter_counts="
+        f"{[f.enter_count for f in fakes]}"
+    )
+    assert not any(t.done() for t in tasks)
+    assert fetch_count[0] == 2, (
+        f"per-run cache leaked across concurrent runs — the shared fetcher should "
+        f"fire once PER run (== 2), got {fetch_count[0]}"
+    )
+
+    for f in fakes:
+        f.release()
+    results = await asyncio.gather(*tasks)
+    for i, r in enumerate(results):
+        assert r["gen"] == Claims(items=[f"g{i}"]), (
+            f"run {i} cross-contaminated across the concurrent runs: {r['gen']}"
+        )
+
+
+async def test_replay_remints_run_id_so_the_cache_refetches():
+    """Expiry-vs-cache, by DESIGN: there is NO mid-run expiry recheck — a cached
+    resource is served for the whole run. The ONLY thing that forces a refetch is
+    a fresh run_id, which every fresh ``arun`` (a replay of the same work) mints.
+    Two sequential aruns of the same graph therefore fetch TWICE (miss each run),
+    never serving run-1's value into run-2."""
+    fetch_count = [0]
+
+    async def fetch(uri: str):
+        fetch_count[0] += 1
+        return "HISTORY", "text/plain"
+
+    graph = _resource_think_graph(
+        StructuredFake(lambda m: m(items=["done"])), fetch
+    )
+    config = {"configurable": {"mcp_resource_fetcher": fetch, "node_id": "t"}}
+
+    r1 = await neograph.arun(graph, input={"node_id": "t"}, config=config)
+    assert r1["gen"] == Claims(items=["done"])
+    assert fetch_count[0] == 1, "run 1 must fetch exactly once"
+
+    r2 = await neograph.arun(graph, input={"node_id": "t"}, config=config)
+    assert r2["gen"] == Claims(items=["done"])
+    assert fetch_count[0] == 2, (
+        f"replay (fresh run_id) must MISS the per-run cache and refetch; got "
+        f"{fetch_count[0]} — a stale run-1 value was served into run 2"
     )

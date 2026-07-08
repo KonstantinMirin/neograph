@@ -1294,7 +1294,7 @@ class TestDIErrorMessages:
         p = construct_from_functions("wt-err", [wt_src, wt_needs])
         g = compile(p, **build_test_compile_kwargs())
 
-        with pytest.raises(ExecutionError, match="count.*expects int.*got str"):
+        with pytest.raises(ExecutionError, match="(?s)count.*expected: int.*found: str"):
             run(g, input={"count": "not_an_int"})
 
 

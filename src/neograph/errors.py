@@ -4,13 +4,35 @@ All neograph-originated errors inherit from ``NeographError``.
 Downstream code that wants a broad catch can use ``except NeographError``;
 code that needs to distinguish failure modes catches the specific subclass.
 
+THE RULE (parentage by lifecycle phase — do NOT parent a new error ad hoc)::
+
+    a failure raised while the graph is EXECUTING (a run)   -> ExecutionError
+    a failure during Construct assembly / validation         -> ConstructError
+    a failure during compile()                               -> CompileError
+    a bad/missing configuration or resume-time precondition  -> ConfigurationError
+
+The motivating incident (review PAT-01 / HIGH-01): error types were parented
+one ticket at a time, so ``ResourceExpiredError`` and ``NonIdempotentReplayError``
+— both raised DURING execution — sat under bare ``NeographError`` while the
+equally-runtime ``PromptVarMissing`` sat under ``ExecutionError``. A consumer
+writing ``except ExecutionError`` around ``run()`` silently missed the first two.
+The fix is this rule + a table-driven parentage guard in
+``tests/test_error_hierarchy.py`` (every public error type is pinned to its
+category; a new type must be added there or the guard fails).
+
 Hierarchy::
 
     NeographError (Exception)
         ConstructError (+ ValueError for backward compat)
         CompileError
         ConfigurationError
+            CheckpointSchemaError      (resume-time precondition mismatch)
         ExecutionError
+            PromptVarMissing
+            StateMissingError
+            NodeOutputError
+            NonIdempotentReplayError
+            ResourceExpiredError
 
 ``ConstructError`` keeps ``ValueError`` as a second parent so existing
 ``pytest.raises(ValueError)`` patterns in downstream tests continue to
@@ -171,11 +193,14 @@ class PromptVarMissing(ExecutionError):
         return cls(str(msg), var=var, available=list(available))
 
 
-class StateMissingError(NeographError):
+class StateMissingError(ExecutionError):
     """Raised when ``StateBus.get_required()`` finds a missing key.
 
     §7: required reads raise; optional reads return None with a documented
     justification. Silent-None reads of required fields are bugs.
+
+    Parentage (THE RULE): a required state read that misses happens WHILE a node
+    is executing, so this is an execution-time failure -> ``ExecutionError``.
     """
 
     @classmethod
@@ -192,7 +217,7 @@ class StateMissingError(NeographError):
         return cls(msg)
 
 
-class NodeOutputError(NeographError):
+class NodeOutputError(ExecutionError):
     """A node RAN and produced None against its declared ``outputs=`` type.
 
     Fail-loud backstop at the state-write boundary (``_build_state_update``).
@@ -204,16 +229,31 @@ class NodeOutputError(NeographError):
     This is distinct from never-ran / legitimately-absent fields (untaken branch
     arms, ``skip_when`` without ``skip_value``) which never reach the write
     boundary with a ran result and stay tolerant.
+
+    Parentage (THE RULE): the node ran, so this is an execution-time failure at
+    the state-write boundary -> ``ExecutionError``.
     """
 
 
-class CheckpointSchemaError(NeographError):
+class CheckpointSchemaError(ConfigurationError):
     """Checkpoint state schema does not match the current graph.
 
     Raised when resuming from a checkpoint whose state model has a different
     fingerprint than the current compiled graph. This prevents silent coercion
     where Pydantic fills defaults for missing fields and ignores extras,
     producing ghost state that looks "complete" but contains stale data.
+
+    Parentage (THE RULE, decided WITH the rule — neograph-12dc): this is the one
+    public error raised DURING a run that is NOT an execution failure. It fires
+    at resume, BEFORE any node body re-executes, as a precondition check that the
+    persisted checkpoint (a configuration input to the run, keyed by
+    ``thread_id``) still matches the current compiled graph's schema. Grouping it
+    with ``ConfigurationError`` matches consumer intent: the resolution is a
+    configuration change (new ``thread_id`` or a schema migration), not a retry
+    of node logic. The ``auto_resume=False`` contract reinforces this — it hands
+    the caller ``invalidated_nodes`` as an actionable setup signal, not a crash.
+    Contrast ``StateMissingError``: a required read that misses WHILE a node runs
+    is an execution failure -> ``ExecutionError``.
     """
 
     def __init__(self, *args: object, invalidated_nodes: set[str] | None = None) -> None:
@@ -221,7 +261,7 @@ class CheckpointSchemaError(NeographError):
         self.invalidated_nodes = invalidated_nodes or set()
 
 
-class NonIdempotentReplayError(NeographError):
+class NonIdempotentReplayError(ExecutionError):
     """Refused to replay a non-idempotent producing tool call. See neograph-lhc6.
 
     Re-deriving an expired resource by replaying the tool call that produced it
@@ -256,7 +296,7 @@ class NonIdempotentReplayError(NeographError):
         return cls(str(msg), tool_name=tool_name, node=node)
 
 
-class ResourceExpiredError(NeographError):
+class ResourceExpiredError(ExecutionError):
     """A manifest-driven ``ResourceRef`` could not be hydrated. See neograph-a5nh.
 
     Raised at the END of the layered-expiry fallback (read -> replay producing_call
