@@ -38,17 +38,35 @@ The demo domain (shared by both examples): a tiny CRM.
 
   AUTH ECHO
     stdio has no HTTP headers, so per-operator identity travels as a ``token``
-    tool ARGUMENT that every tool stamps into its result. Example 23 runs the
-    pipeline as operator-A then operator-B and observes which token each run's
-    tools carried. (The streamable-http variant would use httpx.Auth / bearer
-    headers instead — documented in comments only; see run() at the bottom.)
+    tool ARGUMENT that every tool stamps into its result under ``acting_as``.
+    Example 23 runs the pipeline as operator-A then operator-B and observes
+    which token each run's tools carried.
 
-TRANSPORT: stdio only. The client spawns this file as
-``StdioConnection(command=sys.executable, args=[<this file>], env={...})`` via
-``MultiServerMCPClient``. No ports, no network — CI-safe.
+    Over streamable-http, identity instead travels as a bearer ``Authorization``
+    header (``neograph_mcp``'s ``HttpServer`` + ``token_provider`` mint it there;
+    the ``token`` tool argument is deliberately left alone — see
+    ``_client.py``'s ``isinstance(spec, StdioServer)`` guard). Every tool also
+    stamps the incoming header, when present, into its result under
+    ``bearer_identity`` (``None`` over stdio, or over http with no header) — a
+    field DISTINCT from ``acting_as`` so a test can observe both channels at
+    once: the header arriving, and the ``token`` argument staying untouched.
+
+TRANSPORT: stdio (default) or streamable-http.
+
+  stdio: the client spawns this file as ``StdioConnection(command=sys.executable,
+  args=[<this file>], env={...})`` via ``MultiServerMCPClient``. No ports, no
+  network — CI-safe.
+
+  http: set ``NEOGRAPH_MCP_DEMO_TRANSPORT=http`` and
+  ``NEOGRAPH_MCP_DEMO_HTTP_PORT=<port>`` (``NEOGRAPH_MCP_DEMO_HTTP_HOST``
+  optional, defaults to 127.0.0.1). Binds FastMCP's streamable-http transport to
+  that host/port — still 127.0.0.1-only, still no real network. Tests reserve an
+  ephemeral port and pass it through ``env`` so parallel test runs don't collide.
 
 Run standalone (for debugging):
     uv run --extra mcp-examples python examples/_mcp_demo_server.py
+    NEOGRAPH_MCP_DEMO_TRANSPORT=http NEOGRAPH_MCP_DEMO_HTTP_PORT=8765 \
+        uv run --extra mcp-examples python examples/_mcp_demo_server.py
 
 ────────────────────────────────────────────────────────────────────────────
 APPENDIX — two verified FastMCP SDK gaps (mcp 1.28.x), and why this plain
@@ -147,6 +165,26 @@ def _email_history_expired_once() -> bool:
 mcp = FastMCP("neograph-crm-demo")
 
 
+def _bearer_identity() -> str | None:
+    """The incoming ``Authorization`` header, minus a ``Bearer `` prefix.
+
+    ``None`` over stdio (no HTTP request in scope — see the module docstring's
+    APPENDIX-adjacent AUTH ECHO section) or over http with no header sent.
+    Reading it does not require any low-level handler: FastMCP's own
+    ``Context.request_context.request`` already carries the raw Starlette
+    request for streamable-http, and is simply unset for stdio.
+    """
+    request = mcp.get_context().request_context.request
+    if request is None:
+        return None
+    auth = request.headers.get("authorization")
+    if not auth:
+        return None
+    if auth.lower().startswith("bearer "):
+        return auth[len("bearer ") :]
+    return auth
+
+
 # ── Tools ────────────────────────────────────────────────────────────────────
 
 
@@ -154,18 +192,24 @@ mcp = FastMCP("neograph-crm-demo")
 def crm_search(query: str, token: str = "anon") -> dict:
     """Read-only, idempotent. Returns deals whose name matches `query`.
 
-    `token` is echoed under `acting_as` — the per-operator identity beat."""
+    `token` is echoed under `acting_as` — the stdio per-operator identity beat.
+    `bearer_identity` echoes the http Authorization header, when present."""
     q = query.lower()
     hits = [
         {"id": d["id"], "name": d["name"], "stage": d["stage"]} for d in _DEALS.values() if q in str(d["name"]).lower()
     ]
-    return {"query": query, "hits": hits, "acting_as": token}
+    return {"query": query, "hits": hits, "acting_as": token, "bearer_identity": _bearer_identity()}
 
 
 @mcp.tool()
 def kb_lookup(topic: str, token: str = "anon") -> dict:
     """Read-only, idempotent. Returns a knowledge-base article for `topic`."""
-    return {"topic": topic, "article": _KB.get(topic, "No article found."), "acting_as": token}
+    return {
+        "topic": topic,
+        "article": _KB.get(topic, "No article found."),
+        "acting_as": token,
+        "bearer_identity": _bearer_identity(),
+    }
 
 
 @mcp.tool()
@@ -179,7 +223,7 @@ def get_deal(deal_id: str, token: str = "anon") -> list:
     selectively."""
     deal = _DEALS.get(deal_id, {"id": deal_id, "error": "unknown deal"})
     return [
-        TextContent(type="text", text=json.dumps({**deal, "acting_as": token})),
+        TextContent(type="text", text=json.dumps({**deal, "acting_as": token, "bearer_identity": _bearer_identity()})),
         ResourceLink(
             type="resource_link",
             uri=AnyUrl(f"mcp://crm/deals/{deal_id}/activity"),
@@ -204,10 +248,17 @@ def update_deal(deal_id: str, stage: str, token: str = "anon") -> dict:
     not durable CRM state.)"""
     deal = _DEALS.get(deal_id)
     if deal is None:
-        return {"ok": False, "error": "unknown deal", "acting_as": token}
+        return {"ok": False, "error": "unknown deal", "acting_as": token, "bearer_identity": _bearer_identity()}
     prior = deal["stage"]
     deal["stage"] = stage
-    return {"ok": True, "id": deal_id, "prior_stage": prior, "new_stage": stage, "acting_as": token}
+    return {
+        "ok": True,
+        "id": deal_id,
+        "prior_stage": prior,
+        "new_stage": stage,
+        "acting_as": token,
+        "bearer_identity": _bearer_identity(),
+    }
 
 
 @mcp.tool()
@@ -244,10 +295,16 @@ def email_history(deal_id: str, start: str, end: str) -> str:
 
 
 if __name__ == "__main__":
-    # stdio transport: no ports, no network. The client spawns this process.
+    # stdio (default): no ports, no network. The client spawns this process.
     #
-    # Streamable-HTTP variant (documented, not used by the offline examples):
-    #     mcp.run(transport="streamable-http")   # then the client connects over
-    # HTTP and passes per-operator identity as a bearer header via httpx.Auth,
-    # instead of the stdio `token` argument echoed above.
-    mcp.run(transport="stdio")
+    # http (tests/test_mcp_battery.py, tests/test_mcp_examples_e2e.py): the
+    # NEOGRAPH_MCP_DEMO_TRANSPORT env var switches to FastMCP's streamable-http
+    # transport, still bound to 127.0.0.1 on a caller-chosen (ephemeral) port —
+    # see the module docstring's TRANSPORT section.
+    _transport = os.environ.get("NEOGRAPH_MCP_DEMO_TRANSPORT", "stdio")
+    if _transport == "http":
+        mcp.settings.host = os.environ.get("NEOGRAPH_MCP_DEMO_HTTP_HOST", "127.0.0.1")
+        mcp.settings.port = int(os.environ["NEOGRAPH_MCP_DEMO_HTTP_PORT"])
+        mcp.run(transport="streamable-http")
+    else:
+        mcp.run(transport="stdio")

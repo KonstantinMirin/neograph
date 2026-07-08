@@ -26,9 +26,13 @@ Run the gated tier with::
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import importlib.util
+import os
+import socket
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -97,6 +101,72 @@ def _demo_stdio_server():
     from neograph_mcp import StdioServer
 
     return StdioServer(command=sys.executable, args=[str(DEMO_SERVER)])
+
+
+# ── http transport (neograph-jahj: HttpServer/bearer path, untested until now) ─
+
+
+def _free_port() -> int:
+    """Reserve an ephemeral localhost port for the http demo server.
+
+    Bind-then-close: a small, accepted race (standard test-harness practice) —
+    the OS won't hand the port back out before the subprocess below binds it.
+    """
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.bind(("127.0.0.1", 0))
+    port = s.getsockname()[1]
+    s.close()
+    return port
+
+
+def _wait_for_listening(host: str, port: int, timeout: float = 10.0) -> None:
+    """Poll until the demo server's http listener accepts a TCP connection."""
+    deadline = time.monotonic() + timeout
+    last_error: OSError | None = None
+    while time.monotonic() < deadline:
+        try:
+            with socket.create_connection((host, port), timeout=0.2):
+                return
+        except OSError as exc:
+            last_error = exc
+            time.sleep(0.05)
+    raise TimeoutError(f"demo http server never listened on {host}:{port}") from last_error
+
+
+@contextlib.contextmanager
+def _demo_http_server(state_file: Path):
+    """Launch the demo server in http mode on an ephemeral 127.0.0.1 port — the
+    HttpServer counterpart of ``_demo_stdio_server``, same server file."""
+    port = _free_port()
+    env = {
+        **os.environ,
+        "NEOGRAPH_MCP_DEMO_TRANSPORT": "http",
+        "NEOGRAPH_MCP_DEMO_HTTP_PORT": str(port),
+        "NEOGRAPH_MCP_DEMO_STATE": str(state_file),
+    }
+    proc = subprocess.Popen(
+        [sys.executable, str(DEMO_SERVER)],
+        env=env,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        cwd=str(REPO_ROOT),
+    )
+    try:
+        _wait_for_listening("127.0.0.1", port)
+        yield f"http://127.0.0.1:{port}/mcp"
+    finally:
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait(timeout=5)
+
+
+def _demo_http_server_spec(url: str):
+    from neograph_mcp import HttpServer
+
+    return HttpServer(url=url)
 
 
 def _build_agent_construct(tool_name: str):
@@ -235,3 +305,84 @@ def test_resource_fetcher_builder_returns_fetcher_and_replayer():
     fetcher, replayer = mcp_resource_fetcher({"crm": _demo_stdio_server()})
     assert asyncio.iscoroutinefunction(fetcher)
     assert asyncio.iscoroutinefunction(replayer)
+
+
+# ── HttpServer / bearer transport (neograph-jahj) ──────────────────────────────
+#
+# Every test above drives StdioServer. HttpServer's bearer-via-Authorization-
+# header path (_client.py:88-93) shipped with zero coverage — validated only by
+# reading the isinstance check, never by observing a bearer token actually
+# arrive at a server. These tests close that gap against the SAME demo server,
+# launched in its http mode (examples/_mcp_demo_server.py).
+
+
+@requires_mcp
+class TestHttpServerSmoke:
+    """Bind a tool over HttpServer via the battery and observe the bearer path."""
+
+    async def test_bearer_token_arrives_via_tool_factory(self, tmp_path):
+        """``mcp_tool_factories`` with ``HttpServer`` + ``token_provider`` mints a
+        bearer header per factory call, and the demo server observably receives
+        it (echoed back under ``bearer_identity``) — the http counterpart of the
+        stdio ``acting_as`` smoke in ``TestOneConsumerSmoke``."""
+        import json
+
+        from neograph_mcp import mcp_tool_factories
+
+        with _demo_http_server(tmp_path / "state.marker") as url:
+            factories = mcp_tool_factories(
+                {"crm": _demo_http_server_spec(url)},
+                token_provider=lambda configurable: configurable.get("op", "anon"),
+                namespace=False,
+            )
+            config = {"configurable": {"op": "operator-A"}}
+            tool = await factories["crm_search"](config, None)
+            result = json.loads((await tool.ainvoke({"query": "acme"}))[0]["text"])
+
+        assert result["bearer_identity"] == "operator-A"
+
+    async def test_stdio_token_arg_not_applied_over_http(self, tmp_path):
+        """``stdio_token_arg`` is a stdio-only mechanism: ``_client.py`` only calls
+        ``_inject_stdio_token`` for ``isinstance(spec, StdioServer)``. Over
+        ``HttpServer`` the returned tool must be the RAW tool — an explicit
+        ``token`` kwarg a caller passes must flow straight through untouched,
+        even though a ``token_provider`` is configured and would (on stdio)
+        override it. This is the behavioral proof; before this test the claim
+        was pinned only by reading the isinstance check."""
+        import json
+
+        from neograph_mcp import mcp_tool_factories
+
+        with _demo_http_server(tmp_path / "state.marker") as url:
+            factories = mcp_tool_factories(
+                {"crm": _demo_http_server_spec(url)},
+                token_provider=lambda configurable: configurable.get("op", "anon"),
+                stdio_token_arg="token",
+                namespace=False,
+            )
+            config = {"configurable": {"op": "operator-A"}}
+            tool = await factories["crm_search"](config, None)
+            result = json.loads((await tool.ainvoke({"query": "acme", "token": "explicit-caller-value"}))[0]["text"])
+
+        # The caller's own "token" argument survives unmodified...
+        assert result["acting_as"] == "explicit-caller-value"
+        # ...while the framework's per-run identity arrived via the bearer
+        # header instead, proving the two channels are genuinely independent.
+        assert result["bearer_identity"] == "operator-A"
+
+    async def test_resource_fetcher_reads_real_content_over_http(self, tmp_path):
+        """``mcp_resource_fetcher`` over ``HttpServer`` actually reads a resource
+        end-to-end — beyond the shape-only stdio smoke above (which only checks
+        the returned callables are coroutines)."""
+        import json
+
+        from neograph_mcp import mcp_resource_fetcher
+
+        with _demo_http_server(tmp_path / "state.marker") as url:
+            fetcher, _replayer = mcp_resource_fetcher({"crm": _demo_http_server_spec(url)})
+            content, mime = await fetcher("mcp://crm/deals/D1/activity")
+
+        payload = json.loads(content)
+        assert payload["deal_id"] == "D1"
+        assert payload["events"], "expected the real activity history, not a shape-only stub"
+        assert mime == "application/json"

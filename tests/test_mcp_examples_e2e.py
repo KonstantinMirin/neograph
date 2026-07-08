@@ -29,8 +29,12 @@ stays light and skips this file. Run the MCP E2Es with::
 
 from __future__ import annotations
 
+import contextlib
+import os
+import socket
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -167,6 +171,120 @@ class TestDemoServerContract:
         async with client.session("crm") as session:
             healed = await session.read_resource(AnyUrl("mcp://crm/deals/D1/emails/2024-01-01/2024-12-31"))
         assert healed.contents[0].text  # non-empty typed payload
+
+
+# ── http transport (neograph-jahj: bearer-header path, untested until now) ────
+
+
+def _free_port() -> int:
+    """Reserve an ephemeral localhost port for the http demo server.
+
+    Bind-then-close: a small, accepted race (standard test-harness practice) —
+    the OS won't hand the port back out before the subprocess below binds it.
+    """
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.bind(("127.0.0.1", 0))
+    port = s.getsockname()[1]
+    s.close()
+    return port
+
+
+def _wait_for_listening(host: str, port: int, timeout: float = 10.0) -> None:
+    """Poll until the demo server's http listener accepts a TCP connection."""
+    deadline = time.monotonic() + timeout
+    last_error: OSError | None = None
+    while time.monotonic() < deadline:
+        try:
+            with socket.create_connection((host, port), timeout=0.2):
+                return
+        except OSError as exc:
+            last_error = exc
+            time.sleep(0.05)
+    raise TimeoutError(f"demo http server never listened on {host}:{port}") from last_error
+
+
+@contextlib.contextmanager
+def _demo_http_server(state_file: Path):
+    """Launch the demo server in http mode on an ephemeral 127.0.0.1 port.
+
+    Mirrors ``_demo_connection`` (stdio) for the http transport: still no real
+    network, still CI-safe, just a different launch mode of the SAME server file.
+    """
+    port = _free_port()
+    env = {
+        **os.environ,
+        "NEOGRAPH_MCP_DEMO_TRANSPORT": "http",
+        "NEOGRAPH_MCP_DEMO_HTTP_PORT": str(port),
+        "NEOGRAPH_MCP_DEMO_STATE": str(state_file),
+    }
+    proc = subprocess.Popen(
+        [sys.executable, str(DEMO_SERVER)],
+        env=env,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        cwd=str(REPO_ROOT),
+    )
+    try:
+        _wait_for_listening("127.0.0.1", port)
+        yield f"http://127.0.0.1:{port}/mcp"
+    finally:
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait(timeout=5)
+
+
+class TestDemoServerHttpContract:
+    """The shared FastMCP demo server exercised over real streamable-http MCP.
+
+    Mirrors ``TestDemoServerContract`` (stdio) for the transport that ships
+    UNTESTED today: bearer auth via the ``Authorization`` header, instead of
+    the stdio ``token`` tool argument.
+    """
+
+    async def test_tools_are_discoverable_over_http(self, tmp_path):
+        from langchain_mcp_adapters.client import MultiServerMCPClient
+
+        with _demo_http_server(tmp_path / "state.marker") as url:
+            client = MultiServerMCPClient({"crm": {"transport": "streamable_http", "url": url}})
+            tools = await client.get_tools()
+            names = {t.name for t in tools}
+            assert {"crm_search", "kb_lookup", "get_deal", "update_deal", "arm_email_expiry"} <= names
+
+    async def test_bearer_auth_is_echoed_per_operator(self, tmp_path):
+        """Two clients with DIFFERENT bearer tokens observably carry their own
+        identity through ``bearer_identity`` — the http counterpart of
+        ``test_auth_token_is_echoed_per_operator`` (stdio's ``token`` argument
+        beat). Uses two separate clients since the bearer header is set once
+        per ``MultiServerMCPClient`` connection, not per call."""
+        import json
+
+        from langchain_mcp_adapters.client import MultiServerMCPClient
+
+        with _demo_http_server(tmp_path / "state.marker") as url:
+            client_a = MultiServerMCPClient(
+                {"crm": {"transport": "streamable_http", "url": url, "headers": {"Authorization": "Bearer operator-A"}}}
+            )
+            client_b = MultiServerMCPClient(
+                {"crm": {"transport": "streamable_http", "url": url, "headers": {"Authorization": "Bearer operator-B"}}}
+            )
+            tools_a = await client_a.get_tools()
+            tools_b = await client_b.get_tools()
+            crm_search_a = next(t for t in tools_a if t.name == "crm_search")
+            crm_search_b = next(t for t in tools_b if t.name == "crm_search")
+
+            a = json.loads((await crm_search_a.ainvoke({"query": "acme"}))[0]["text"])
+            b = json.loads((await crm_search_b.ainvoke({"query": "acme"}))[0]["text"])
+
+        assert a["bearer_identity"] == "operator-A"
+        assert b["bearer_identity"] == "operator-B"
+        # http carries no token tool-argument from the client above, so both
+        # sides fall back to the tool's own default — proving identity rode the
+        # header, not a tool argument the caller never sent.
+        assert a["acting_as"] == "anon"
+        assert b["acting_as"] == "anon"
 
 
 # ── Reusable example runner (examples 23/24 plug in here) ─────────────────────
