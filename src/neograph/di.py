@@ -20,7 +20,7 @@ from typing import get_origin as _get_origin
 import structlog
 from pydantic import ValidationError
 
-from neograph._content_blocks import _first_resource_link_uri
+from neograph._content_blocks import _first_resource_link_uri, _resource_link_uri_for_kind
 from neograph._state_keys import StateKeys
 from neograph._uri_template import _expand_uri
 from neograph.errors import ConfigurationError as _ConfigurationError
@@ -219,7 +219,15 @@ async def hydrate_resource_ref(
         )
     try:
         replay_result = await replayer(producing.tool_name, producing.args)
-        fresh_uri = _first_resource_link_uri(replay_result) or ref.uri
+        # Re-derive by the ref's KIND first: a multi-link producer (e.g. get_deal
+        # emitting both activity- and email-history links) must heal THIS ref to
+        # its own kind, not blindly the first link. Fall back to first-link
+        # (single-link producers) then the original uri. neograph-m9sj
+        fresh_uri = (
+            _resource_link_uri_for_kind(replay_result, getattr(ref, "kind", ""))
+            or _first_resource_link_uri(replay_result)
+            or ref.uri
+        )
         content, mime = await fetcher(fresh_uri)
     except Exception as exc:  # noqa: BLE001 - replay failure = confirmed expiry
         raise _ResourceExpiredError.of(

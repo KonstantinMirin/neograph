@@ -146,3 +146,121 @@ def test_manifest_checkpointed_and_excluded_from_user_output(is_async: bool):
     assert not any(k.startswith("neo_") for k in result)
     # And the strip mechanism the channel relies on genuinely removes it.
     assert manifest_key not in _strip_internals(state_values)
+
+
+# ── Layer 3: hydration replay must re-derive by ref.kind (neograph-m9sj) ────
+
+
+def _multi_link_replay_result() -> list:
+    """A producing call (``get_deal``) that emits TWO ``resource_link`` blocks —
+    activity FIRST, then email — the real multi-corpus CRM shape that exposed
+    neograph-m9sj. The FIRST link is NOT the email ref we are healing."""
+    return [
+        {"type": "text", "text": "deal summary"},
+        {"type": "resource_link", "uri": "crm://deals/42/activity/fresh", "name": "activity-history"},
+        {"type": "resource_link", "uri": "crm://deals/42/emails/fresh", "name": "email-history"},
+    ]
+
+
+class _CorpusPage(pydantic.BaseModel):
+    corpus: str
+
+
+class TestHydrationReDerivationIsKindAware:
+    """neograph-m9sj: on the replay path an expired ``ResourceRef`` must
+    re-derive to the ``resource_link`` whose KIND matches ``ref.kind`` — never
+    blindly the first link. A multi-link producer (activity BEFORE email) used to
+    heal an email ref to the activity blob and silently parse it into the wrong
+    model.
+
+    Hydration is surface-agnostic — ``FromResource`` DI resolves identically for
+    the @node, declarative, and programmatic surfaces — so this single
+    hydration-level regression covers all three."""
+
+    def test_uri_for_kind_selects_matching_link_not_first(self):
+        from neograph._content_blocks import _first_resource_link_uri, _resource_link_uri_for_kind
+
+        result = _multi_link_replay_result()
+        # first-link (kind-blind) lands on ACTIVITY — the old, wrong target.
+        assert _first_resource_link_uri(result) == "crm://deals/42/activity/fresh"
+        # kind-aware selection lands on the correct corpus for each kind.
+        assert _resource_link_uri_for_kind(result, "email-history") == "crm://deals/42/emails/fresh"
+        assert _resource_link_uri_for_kind(result, "activity-history") == "crm://deals/42/activity/fresh"
+        assert _resource_link_uri_for_kind(result, "no-such-kind") is None
+
+    def test_multi_link_producer_heals_to_the_ref_kind_not_first_link(self):
+        from neograph.di import RESOURCE_FETCHER_KEY, RESOURCE_REPLAYER_KEY, hydrate_resource_ref
+        from neograph.tool import ProducingCall
+
+        expired_uri = "crm://deals/42/emails"  # the email ref's stale uri
+        fresh = {
+            "crm://deals/42/emails/fresh": ('{"corpus": "emails"}', "application/json"),
+            "crm://deals/42/activity/fresh": ('{"corpus": "activity"}', "application/json"),
+        }
+
+        async def fetcher(uri):
+            if uri == expired_uri:
+                raise RuntimeError("resource_link expired")  # any read failure = candidate expiry
+            return fresh[uri]
+
+        async def replayer(tool_name, args):
+            assert tool_name == "get_deal"
+            return _multi_link_replay_result()
+
+        ref = ResourceRef(
+            uri=expired_uri,
+            kind="email-history",
+            server="crm",
+            producing_call=ProducingCall(tool_name="get_deal", args={"deal_id": 42}, producer_idempotent=True),
+        )
+        config = {"configurable": {RESOURCE_FETCHER_KEY: fetcher, RESOURCE_REPLAYER_KEY: replayer}}
+
+        healed = asyncio.run(hydrate_resource_ref(ref, config, _CorpusPage))
+        # Pre-fix: replay took the FIRST link (activity) and healed to the WRONG
+        # corpus. Kind-aware re-derivation reads the email link.
+        assert healed.corpus == "emails"
+
+    def test_heals_when_replay_blocks_carry_anyurl_uris(self):
+        """The SHIPPED replayer (mcp_resource_fetcher) returns RAW mcp
+        ``ResourceLink`` OBJECTS whose ``.uri`` is a pydantic ``AnyUrl`` — NOT a
+        str. The kind derivation must not assume a str uri (``"://" in AnyUrl``
+        raises TypeError, which the replay try-block would mask as a spurious
+        ResourceExpiredError). Faithful to the real replay-path block shape, which
+        the dict-based cases above do not exercise (neograph-m9sj)."""
+        from pydantic import AnyUrl
+
+        from neograph.di import RESOURCE_FETCHER_KEY, RESOURCE_REPLAYER_KEY, hydrate_resource_ref
+        from neograph.tool import ProducingCall
+
+        expired_uri = "crm://deals/42/emails"
+        fresh = {
+            "crm://deals/42/emails/fresh": ('{"corpus": "emails"}', "application/json"),
+            "crm://deals/42/activity/fresh": ('{"corpus": "activity"}', "application/json"),
+        }
+
+        async def fetcher(uri):
+            if uri == expired_uri:
+                raise RuntimeError("resource_link expired")
+            return fresh[uri]  # keyed by str — the re-derived uri must be coerced
+
+        def _link(uri: str, name: str):
+            # object block (getattr access) with an AnyUrl uri — the raw session shape.
+            return types.SimpleNamespace(type="resource_link", uri=AnyUrl(uri), name=name)
+
+        async def replayer(tool_name, args):
+            return [
+                types.SimpleNamespace(type="text", text="deal summary"),
+                _link("crm://deals/42/activity/fresh", "activity-history"),
+                _link("crm://deals/42/emails/fresh", "email-history"),
+            ]
+
+        ref = ResourceRef(
+            uri=expired_uri,
+            kind="email-history",
+            server="crm",
+            producing_call=ProducingCall(tool_name="get_deal", args={"deal_id": 42}, producer_idempotent=True),
+        )
+        config = {"configurable": {RESOURCE_FETCHER_KEY: fetcher, RESOURCE_REPLAYER_KEY: replayer}}
+
+        healed = asyncio.run(hydrate_resource_ref(ref, config, _CorpusPage))
+        assert healed.corpus == "emails"

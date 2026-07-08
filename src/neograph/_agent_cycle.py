@@ -42,7 +42,7 @@ from langchain_core.runnables import RunnableConfig
 from langgraph.types import interrupt
 from pydantic import BaseModel
 
-from neograph._content_blocks import _block_field, _iter_content_blocks
+from neograph._content_blocks import _block_field, _iter_content_blocks, _resource_link_kind
 from neograph._dispatch import (
     _ainject_di_inputs,
     _inject_di_inputs,
@@ -453,7 +453,7 @@ def _lift_resource_refs(result: Any, tc: dict, idempotent: bool = False) -> list
         refs.append(
             ResourceRef(
                 uri=uri,
-                kind=_block_field(block, "name") or scheme or "resource",
+                kind=_resource_link_kind(block),
                 server=scheme,
                 producing_call=ProducingCall(
                     tool_name=tc["name"],
