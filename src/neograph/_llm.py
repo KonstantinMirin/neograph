@@ -24,7 +24,11 @@ from pydantic import BaseModel
 from neograph._llm_config import LlmConfig, _coerce_llm_config
 from neograph._llm_dispatch import _acall_structured, _call_structured
 from neograph._llm_protocols import CostCallback, LlmFactory, PromptCompiler  # noqa: F401 — re-exported
-from neograph._llm_render import _compile_prompt, render_prompt  # noqa: F401 — re-exported
+from neograph._llm_render import (  # noqa: F401 — re-exported
+    _compile_prompt,
+    compile_prompt,
+    render_prompt,
+)
 from neograph._llm_runtime import (
     _ACCEPT_ALL,
     EMPTY_RUNTIME,

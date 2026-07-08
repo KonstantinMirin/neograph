@@ -24,8 +24,8 @@ from neograph import (
     Tool, tool, ToolInteraction,
     # BAML rendering
     describe_type, describe_value,
-    # Prompt inspection
-    render_prompt,
+    # Prompt inspection + standalone compilation
+    render_prompt, compile_prompt,
     # Renderers (opt-in alternatives to BAML)
     Renderer, XmlRenderer, DelimitedRenderer, JsonRenderer,
     # Shared
@@ -598,6 +598,19 @@ Used for tool result rendering in ToolMessage content.
 ### `render_prompt(node, input_data, *, config=None) -> str`
 
 Returns the exact prompt that would be sent to the LLM, without calling the LLM. For debugging and testing prompt templates.
+
+### `compile_prompt(template, input_data, *, output_model=None, output_schema=None, di_inputs=None, prompt_compiler=None, renderer=None, node_name="", template_text=None, loader=None) -> list[dict]`
+
+Compiles a prompt to a message list **standalone** — no compiled graph, no run — producing byte-identical messages to what a compiled `think` node sends for the same inputs (same renderer dispatch, same schema injection, same `di_inputs` layering). It routes through the exact internal seam the graph uses, so an eval harness tests the REAL prompt instead of a re-implementation. See [Evaluating your prompts](/concepts/evaluating-prompts/).
+
+- **`template`** — the template name a file-ref `prompt_compiler` resolves (e.g. `"rw/classify"`), or an inline template (`"Summarize ${topic}"`, no compiler needed).
+- **`input_data`** — the input the node consumes: a Pydantic model, a dict of upstream-name → value (fan-in), or `None` for an all-DI leaf node.
+- **`output_model`** / **`output_schema`** — inject the output schema (a `describe_type` string) into the compiler's schema var. Pass `output_model` (schema derived) or a precomputed `output_schema`.
+- **`di_inputs`** — resolved `FromInput`/`FromConfig` values keyed by parameter name; layered as the base namespace (upstream outputs shadow on a name collision), exactly as the graph does.
+- **`prompt_compiler`** — the file-ref compiler. Pass the SAME one production uses for byte-identity. Not needed for an inline template.
+- **`renderer`** — the input renderer (`None` → BAML `describe_value` default).
+- **`node_name`** — threaded to a `render_messages` override for per-node role shaping.
+- **`template_text`** / **`loader`** — the template-source override for eval variants: wrap a raw variant string (`template_text`) or a `name → text` loader in a `DefaultPromptCompiler` so a harness can parameterize the filename-versioned variant convention. Mutually exclusive with `prompt_compiler`.
 
 ### `RenderedInput`
 

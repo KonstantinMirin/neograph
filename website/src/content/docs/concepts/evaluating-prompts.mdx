@@ -1,0 +1,115 @@
+---
+title: Evaluating your prompts
+description: compile_prompt() hands an eval harness the exact messages your graph sends — byte-identical, no re-implementation, no drift.
+sidebar:
+  order: 40
+---
+
+The moment you evaluate a prompt, you face a trap: the eval harness runs *outside* the pipeline, so it rebuilds the prompt itself — a second template loader, a second renderer, a second schema serializer. Now you are evaluating a **re-implementation** of your prompt, not the prompt your graph actually sends. When the two drift (a different JSON-schema mechanism, a renderer that formats a list slightly differently), your evals pass while production regresses.
+
+`compile_prompt()` closes that gap. It is the exact internal path a compiled `think` node uses to build its messages, promoted to a public, standalone function — no compiled graph, no run required.
+
+## Byte-identical, by construction
+
+```python
+from neograph import compile_prompt, DefaultPromptCompiler
+from pathlib import Path
+
+messages = compile_prompt(
+    "classify",                                   # the @node(prompt=...) name
+    {"claims": my_claims},                        # the input the node consumes
+    output_model=Classified,                      # its outputs= type
+    prompt_compiler=DefaultPromptCompiler(Path("prompts")),
+)
+# messages == what the graph's `classify` think node hands its LLM
+```
+
+`compile_prompt` applies the **same renderer dispatch**, the **same output-schema injection**, and the **same `di_inputs` layering** as the runtime, routed through the one internal seam (`_render_and_compile` → `_compile_prompt`) the graph itself calls. To get byte-identity with production, pass the **same `prompt_compiler`** (and the same `renderer=`, if you set one) your `compile()` call uses.
+
+This parity is pinned by a test in neograph's own suite: it captures the message list a compiled think node sends and asserts `compile_prompt` reproduces it exactly. If a future change made the two diverge, that test fails.
+
+### What to pass
+
+| Argument | What it is |
+|---|---|
+| `template` | the string from `@node(prompt=...)` — a file-ref name, or an inline `${var}` template (no compiler needed) |
+| `input_data` | the node's input: a Pydantic model, a `dict` of upstream-name → value (fan-in), or `None` for an all-DI leaf |
+| `output_model` | the node's `outputs=` type — its schema is injected exactly as the runtime injects it |
+| `di_inputs` | the resolved `FromInput`/`FromConfig` values (keyed by param name) your run would provide, e.g. `{"domain": "oncology"}` |
+| `prompt_compiler` | the SAME compiler your `compile()` uses (omit for inline templates) |
+| `node_name` | the node's name — only needed if your compiler shapes messages per node |
+
+## Parameterizing variants
+
+Prompt evaluation usually means comparing **variants** — `classify-v7` vs `classify-v8`, a filename-versioned convention. `compile_prompt` gives you two hooks so the harness can swap the template source **without** rebuilding the rendering pipeline:
+
+```python
+# 1. A raw variant string (an experiment not yet committed to a file):
+compile_prompt("x", {"claims": my_claims}, output_model=Classified,
+               template_text="Classify these claims: {claims}\n\n{json_schema}")
+
+# 2. A loader that selects a versioned file by name:
+loader = DefaultPromptCompiler(Path("variants"), suffix=".txt").load_template
+compile_prompt("classify-v8", {"claims": my_claims},
+               output_model=Classified, loader=loader)
+```
+
+Both wrap the override in the default rendering pipeline (BAML input rendering, schema injection, fail-loud substitution), so a variant renders through the same machinery as everything else. `template_text` and `loader` are mutually exclusive with `prompt_compiler` — pass one *or* the other.
+
+:::note[Scope: rendering, not lifecycle]
+neograph blesses the **filename-versioned variant convention** and gives evals the compile hook. It deliberately does **not** ship a variant registry, experiment tracking, or A/B lifecycle — that is ecosystem territory ([promptfoo](https://promptfoo.dev/), [Langfuse](https://langfuse.com/) own experiments). `compile_prompt` produces the messages; your eval tool owns the run, the scoring, and the variant matrix.
+:::
+
+## Recipe: a promptfoo provider
+
+[promptfoo](https://promptfoo.dev/) drives a matrix of prompts × test cases × assertions. Point its Python provider at `compile_prompt` so every eval scores the REAL prompt:
+
+```python
+# neograph_provider.py
+from pathlib import Path
+from neograph import compile_prompt, DefaultPromptCompiler
+from my_project.schemas import Classified
+
+_COMPILER = DefaultPromptCompiler(Path("prompts"), suffix=".txt")
+
+def call_api(prompt, options, context):
+    """promptfoo Python provider. `prompt` is the template NAME (or variant);
+    `context['vars']` carries the test-case inputs."""
+    vars = context["vars"]
+    messages = compile_prompt(
+        prompt,                                 # e.g. "classify" or "classify-v8"
+        {"claims": vars["claims"]},
+        output_model=Classified,
+        di_inputs={"domain": vars.get("domain", "")},
+        prompt_compiler=_COMPILER,
+    )
+    # Hand the byte-identical messages to whatever model your eval targets.
+    return {"output": _run_model(messages)}
+```
+
+```yaml
+# promptfooconfig.yaml
+providers:
+  - id: "python:neograph_provider.py"
+prompts:
+  - "classify"        # production
+  - "classify-v8"     # candidate variant
+tests:
+  - vars: { claims: "...", domain: "oncology" }
+    assert:
+      - type: is-json
+      - type: llm-rubric
+        value: "Every claim is assigned exactly one category"
+```
+
+Because the provider calls `compile_prompt` with your production compiler, the messages promptfoo scores are the ones your graph would send — the eval and the pipeline can no longer drift.
+
+## Related
+
+- [Prompt Compiler](/concepts/prompt-compiler/) — the compiler seam `compile_prompt` drives, and `DefaultPromptCompiler`.
+- [Input Renderers](/concepts/renderers/) — how input is BAML-rendered before it reaches the template.
+- `render_prompt(node, input_data)` — the sibling inspector that returns a human-readable **string** (for eyeballing a prompt) rather than the machine message list `compile_prompt` returns for evals.
+
+---
+
+Documentation &copy; 2025-2026 Constantine Mirin, [mirin.pro](https://mirin.pro). Licensed under [CC BY-ND 4.0](https://creativecommons.org/licenses/by-nd/4.0/).

@@ -269,6 +269,48 @@ Key differences:
 
 Lists of BaseModel instances are rendered via `describe_value()` in the same BAML notation as single models, producing an array of typed objects. When an explicit renderer is configured, the renderer's `render()` method handles the list instead.
 
+## Framework container shapes
+
+Two container shapes are produced by the framework itself at fan-in, and the BAML default (no explicit renderer) renders them specially so you don't have to re-teach the renderer in your prompt compiler. Both rules apply only to the BAML default -- an explicit `XmlRenderer`/`DelimitedRenderer`/`JsonRenderer` walks dicts and lists its own way.
+
+### `dict[str, BaseModel]` -- merged fan-out
+
+When an [`Each`](/concepts/each-oracle-fusion/) upstream's fanned-out results merge back onto the bus, a downstream node consuming them as a whole receives a `dict[str, BaseModel]` (result-key -> model). The BAML default renders **each value** via `describe_value()`, joined by a blank line:
+
+```
+{
+  cluster_label: "auth"
+  matched: ["SSO", "OAuth"]
+}
+
+{
+  cluster_label: "observability"
+  matched: ["trace IDs"]
+}
+```
+
+The **keys are dropped**: an `Each` barrier collects results in arrival order under framework-synthesized keys, so the keys carry no semantic meaning -- the dict is an unordered bag of results. (If you need deterministic ordering, consume the upstream as `dict[str, X]` and sort on the key in a scripted node before the LLM node.)
+
+### `list[ToolInteraction]` -- research packet
+
+An `agent`/`act` node that declares a `tool_log` output produces a `list[ToolInteraction]`. When a downstream LLM node consumes it, the BAML default folds each interaction into a **research packet** -- a `{tool_name}:` header plus its `.result` (the already-rendered tool output), entries joined by a `\n\n---\n\n` separator:
+
+```
+search_records:
+found 3 matching records for "SSO"
+
+---
+
+fetch_rfc:
+fetched RFC-6749 section 4.1
+```
+
+The `tool_name` is kept as **provenance** -- a downstream node reasoning over a tool_log must know which tool produced each result. Only the bookkeeping fields (`args`, `duration_ms`, `typed_result`) are omitted.
+
+### `None` and `str`
+
+A `None` value renders as the empty string (`""`), not the literal `"None"`. A `str` value passes through unchanged. Plain scalar dicts (`dict[str, int]`, `dict[str, str]`) also pass through untouched -- only a dict whose values are **all** BaseModels gets the merged-fan-out treatment.
+
 ## describe_type: schema descriptions for prompts
 
 The `describe_type()` function renders a Pydantic model's schema in TypeScript-style notation. This is used internally for structured output instructions but is also available for custom prompt construction.

@@ -24,6 +24,7 @@ from neograph._placeholders import apply_scanner
 from neograph._state_keys import StateKeys
 from neograph.describe_type import describe_type, describe_value
 from neograph.errors import ConfigurationError
+from neograph.prompt import DefaultPromptCompiler
 from neograph.renderers import build_rendered_input
 
 log = structlog.get_logger()
@@ -225,6 +226,133 @@ def _compile_prompt(
     return runtime.prompt_compiler(template, input_data, **kwargs)
 
 
+def _render_and_compile(
+    runtime: LlmRuntime,
+    template: str,
+    input_data: Any,
+    *,
+    renderer: Any,
+    node_name: str,
+    config: RunnableConfig | None,
+    output_model: type[BaseModel] | None,
+    output_schema: str | None,
+) -> list:
+    """The shared render-then-compile core: apply the renderer via RenderedInput
+    (raw for inline, for_template_ref for file-ref — exactly ``_render_input``'s
+    split), then hand off to ``_compile_prompt``.
+
+    This is the ONE seam ``render_prompt``, ``compile_prompt``, and the runtime
+    ThinkDispatch path all funnel through — no second rendering path, no second
+    compile path (the hjwv anti-duplication invariant).
+    """
+    ri = build_rendered_input(input_data, renderer=renderer)
+    rendered = ri.raw if _is_inline_prompt(template) else ri.for_template_ref
+    return _compile_prompt(
+        runtime,
+        template,
+        rendered,
+        node_name=node_name,
+        config=config,
+        output_model=output_model,
+        output_schema=output_schema,
+    )
+
+
+def compile_prompt(
+    template: str,
+    input_data: Any,
+    *,
+    output_model: type[BaseModel] | None = None,
+    output_schema: str | None = None,
+    di_inputs: dict[str, Any] | None = None,
+    prompt_compiler: Any | None = None,
+    renderer: Any | None = None,
+    node_name: str = "",
+    template_text: str | None = None,
+    loader: Any | None = None,
+) -> list[dict]:
+    """Compile a prompt to a message list — standalone, no compiled graph, no run.
+
+    Produces BYTE-IDENTICAL messages to what a compiled ``think`` node sends for
+    the same inputs: the same renderer dispatch, the same schema injection, the
+    same ``di_inputs`` layering, routed through the exact internal seam the graph
+    uses (``_render_and_compile`` -> ``_compile_prompt``). This is the eval-parity
+    unlock (survey F4): an eval harness calls the REAL prompt path instead of
+    re-implementing rendering and schema formatting beside the pipeline.
+
+    Args:
+        template: the template name a file-ref ``prompt_compiler`` resolves (e.g.
+            ``"rw/classify"``), OR an inline template (``"Summarize ${topic}"``).
+        input_data: the input the node consumes — a Pydantic model, a dict of
+            upstream-name -> value (fan-in), or ``None`` for an all-DI leaf node.
+        output_model: the node's output type; its ``describe_type`` schema is
+            injected under the compiler's schema var (the ``structured`` strategy's
+            behavior — the same schema string ``json_mode`` precomputes).
+        output_schema: a precomputed schema string, when the caller already has one.
+        di_inputs: resolved ``FromInput``/``FromConfig`` values keyed by parameter
+            name — the run-wide ambient context an LLM-mode node's template can
+            reference. Layered as the BASE (upstream outputs shadow on collision),
+            exactly as the graph does.
+        prompt_compiler: the file-ref compiler (pass the SAME one production uses to
+            get byte-identity). Not needed for an inline template.
+        renderer: the input renderer (``node.renderer or runtime.renderer`` in the
+            graph). ``None`` => the BAML ``describe_value`` default.
+        node_name: the node's name — threaded to a ``render_messages`` override for
+            per-node role shaping.
+        template_text / loader: the TEMPLATE-SOURCE OVERRIDE for eval variants —
+            wrap a raw variant string (``template_text``) or a name->text ``loader``
+            in a ``DefaultPromptCompiler`` so a harness can parameterize the
+            filename-versioned variant convention without wiring a compiler. Only
+            when no ``prompt_compiler`` is given (they are mutually exclusive; the
+            variant registry / A-B lifecycle stays out of scope — ecosystem
+            territory, survey F5).
+
+    Returns:
+        The compiled message list (``[{"role": ..., "content": ...}, ...]``).
+    """
+    compiler = _resolve_variant_compiler(prompt_compiler, template_text, loader)
+    runtime = LlmRuntime.build(prompt_compiler=compiler, renderer=renderer)
+    config: RunnableConfig | None = {"configurable": {StateKeys.DI_INPUTS: di_inputs}} if di_inputs else None
+    return _render_and_compile(
+        runtime,
+        template,
+        input_data,
+        renderer=renderer,
+        node_name=node_name,
+        config=config,
+        output_model=output_model,
+        output_schema=output_schema,
+    )
+
+
+def _resolve_variant_compiler(
+    prompt_compiler: Any | None,
+    template_text: str | None,
+    loader: Any | None,
+) -> Any | None:
+    """Pick the prompt_compiler for ``compile_prompt``.
+
+    A given ``prompt_compiler`` wins (and forbids a source override — you cannot
+    swap the template source of a compiler that owns its own loader). Otherwise a
+    ``template_text`` or ``loader`` override is wrapped in a ``DefaultPromptCompiler``
+    so eval variants render through the SAME default pipeline. ``None`` is returned
+    for the inline path (``_compile_prompt`` needs no compiler for inline text).
+    """
+    if prompt_compiler is not None:
+        if template_text is not None or loader is not None:
+            raise ConfigurationError.build(
+                "compile_prompt: template_text/loader override cannot combine with an explicit prompt_compiler",
+                hint="pass EITHER prompt_compiler= (byte-identity with production) OR "
+                "a template_text=/loader= override (variant experimentation).",
+            )
+        return prompt_compiler
+    if template_text is not None:
+        return DefaultPromptCompiler(lambda _name: template_text)
+    if loader is not None:
+        return DefaultPromptCompiler(loader)
+    return None
+
+
 def render_prompt(
     node: Any,
     input_data: Any,
@@ -260,11 +388,6 @@ def render_prompt(
 
     prompt = getattr(node, "prompt", "") or ""
     effective_renderer = getattr(node, "renderer", None) or runtime.renderer
-    ri = build_rendered_input(input_data, renderer=effective_renderer)
-    if _is_inline_prompt(prompt):
-        input_data = ri.raw
-    else:
-        input_data = ri.for_template_ref
 
     output_schema = None
     cfg = _coerce_llm_config(getattr(node, "llm_config", None))
@@ -273,14 +396,14 @@ def render_prompt(
     if strategy == "json_mode" and output_model is not None:
         output_schema = describe_type(output_model)
 
-    messages = _compile_prompt(
+    messages = _render_and_compile(
         runtime,
-        getattr(node, "prompt", "") or "",
+        prompt,
         input_data,
+        renderer=effective_renderer,
         node_name=getattr(node, "name", ""),
         config=config,
         output_model=output_model,
-        llm_config=cfg,
         output_schema=output_schema,
     )
 

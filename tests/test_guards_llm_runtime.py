@@ -281,6 +281,15 @@ class TestLlmResponsibilityDiscipline:
                 "_substitute_vars",
                 "_compile_prompt",
                 "render_prompt",
+                # neograph-v569: the public standalone compile_prompt (eval-parity)
+                # and its shared render-then-compile core + variant-source resolver.
+                # Squarely this module's change axis ("how a prompt template is
+                # turned into a message list") — the SAME seam render_prompt and the
+                # runtime ThinkDispatch use, promoted to a public function. NOT a
+                # second rendering/compile path (the anti-duplication invariant).
+                "compile_prompt",
+                "_render_and_compile",
+                "_resolve_variant_compiler",
             }
         ),
     }
@@ -322,7 +331,13 @@ class TestLlmResponsibilityDiscipline:
         # that the new structured re-prompt builders (build_structured_repair_message,
         # structured_retry_messages) reuse. Reviewed increase — shared, not duplicated.
         "_llm_retry.py": 510,
-        "_llm_render.py": 310,
+        # neograph-v569: 310 -> 445. The public standalone compile_prompt landed
+        # here (its change axis) with a thorough public docstring, a shared
+        # render-then-compile core (_render_and_compile, which render_prompt now
+        # also routes through — a net dedup), and the variant-source resolver. The
+        # load-bearing assertion is the name allowlist above; this proxy is widened
+        # for the reviewed new names.
+        "_llm_render.py": 445,
         # neograph-ble3: new pure-leaf detection module.
         "_dsml.py": 55,
         # neograph-ble3: compat shim — sum-type + Protocol + 3 adapters + factory.

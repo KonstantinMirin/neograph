@@ -97,6 +97,74 @@ graph = compile(
 
 **The examples ship this helper at `examples/_shared.py`. It is NOT part of neograph's public API** — every production project has different prompt needs, and trying to ship a single "right" compiler turns the framework into either a kwarg-soup or a callback-tower. Write your own.
 
+## Batteries-included: `DefaultPromptCompiler`
+
+If your needs are the common ones — load `prompts/{name}` from disk, BAML-render the input, inject the output schema, fail loud on a missing placeholder — neograph ships `DefaultPromptCompiler` so you write **zero** compiler code:
+
+```python
+from pathlib import Path
+from neograph import DefaultPromptCompiler, compile
+
+graph = compile(
+    pipeline,
+    llm_factory=my_factory,
+    prompt_compiler=DefaultPromptCompiler(Path("prompts")),
+)
+```
+
+It loads `prompts/{template}.md`, calls `render_inputs()` (the same BAML pipeline dispatch uses — see [Input Renderers](/concepts/renderers/)), injects the output schema under `{json_schema}`, and substitutes with the fail-loud, brace-safe `substitute` primitive (a literal `{}` in an injected JSON schema survives; a `str.format` would crash). It also layers [`di_inputs`](/concepts/llm-configuration/) as a base namespace so a `FromInput` param reaches its `{domain}` placeholder.
+
+### `.txt` (and other) template suffixes
+
+The dir loader defaults to `{name}.md`. If your templates are `.txt` (or any other extension), pass `suffix=`:
+
+```python
+DefaultPromptCompiler(Path("prompts"), suffix=".txt")   # loads prompts/{name}.txt
+```
+
+For a non-directory source (a registry, a database, an in-memory dict), pass any `name -> text` callable as the loader instead:
+
+```python
+DefaultPromptCompiler(lambda name: my_registry.get(name))
+```
+
+### Constructor options
+
+| Option | Default | Purpose |
+|---|---|---|
+| `loader` | (required) | A directory path, or a `name -> text` callable |
+| `suffix` | `".md"` | Template file extension for the dir loader |
+| `system` | `None` | A constant system message prepended to every node's messages |
+| `strict` | `True` | Raise `PromptVarMissing` on an unfilled placeholder (vs. leave it verbatim) |
+| `syntax` | `"brace"` | Placeholder grammar: `"brace"` (`{var}`), `"dollar"` (`${var}`), or a callable tokenizer |
+| `schema_var` | `"json_schema"` | The template var name the injected output schema fills |
+
+### Message-shaping recipe (per-node roles)
+
+For most projects a constant `system=` message plus the file-loaded user message is enough. When you need **per-node** message shaping — e.g. an `explore` node that sends a single user message while every other node gets a system line naming the node — override `render_messages`. It receives the node's `node_name` (threaded from the graph at runtime), so a ~10-line subclass covers the whole policy while keeping the rest of the pipeline (loading, rendering, schema injection) untouched:
+
+```python
+from neograph import DefaultPromptCompiler
+from neograph.prompt import substitute
+
+class RoleCompiler(DefaultPromptCompiler):
+    def render_messages(self, template_text, vars, *, node_name=""):
+        body = substitute(template_text, vars, strict=self.strict, syntax=self.syntax)
+        if node_name == "explore":
+            return [{"role": "user", "content": body}]
+        return [
+            {"role": "system", "content": f"You are the {node_name} node."},
+            {"role": "user", "content": body},
+        ]
+
+graph = compile(pipeline, llm_factory=my_factory,
+                prompt_compiler=RoleCompiler(Path("prompts"), suffix=".txt"))
+```
+
+The other two override hooks are `load_template(template)` (swap the template source) and `build_vars(input_data, *, output_model, output_schema, di_inputs)` (change the variable namespace). Override exactly one; keep the rest.
+
+When neither the default nor a small subclass fits, write a compiler from scratch — the next section shows the production-shaped pattern.
+
 ## Richer compiler (system messages, schema injection, registry lookup)
 
 When you need more — system/user splits, JSON schema injection for structured-output prompts, multi-template lookup chains, alias forwarding for legacy templates — write your own compiler. A production-shaped pattern looks like this:

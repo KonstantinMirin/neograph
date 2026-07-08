@@ -641,3 +641,134 @@ class TestExistingCompilerUnchanged:
         assert received["template"] == "mytemplate"
         assert isinstance(result["analyze2"], Claims)
         assert result["analyze2"].items == ["done"]
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 8. Loader convenience (.txt suffix) + message-shaping recipe (node_name)
+#    neograph-rndl / survey F3.2-3.3.
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TestDefaultPromptCompilerSuffix:
+    """The dir-loader defaults to `{name}.md`; consumers with `.txt` template
+    dirs pass `suffix='.txt'` instead of hand-rolling a callable loader."""
+
+    def test_dir_loader_loads_txt_when_suffix_given(self, tmp_path):
+        from neograph import DefaultPromptCompiler
+
+        prompts = tmp_path / "prompts"
+        prompts.mkdir()
+        (prompts / "greet.txt").write_text("Hello {seed}")
+
+        compiler = DefaultPromptCompiler(prompts, suffix=".txt")
+        assert compiler.load_template("greet") == "Hello {seed}"
+
+    def test_dir_loader_defaults_to_md_when_no_suffix(self, tmp_path):
+        from neograph import DefaultPromptCompiler
+
+        prompts = tmp_path / "prompts"
+        prompts.mkdir()
+        (prompts / "greet.md").write_text("Hi {seed}")
+
+        compiler = DefaultPromptCompiler(prompts)
+        assert compiler.load_template("greet") == "Hi {seed}"
+
+    def test_txt_template_renders_end_to_end(self, tmp_path):
+        from neograph import DefaultPromptCompiler
+
+        prompts = tmp_path / "prompts"
+        prompts.mkdir()
+        (prompts / "greet.txt").write_text("Analyze: {seed}\n\n{json_schema}\n")
+
+        compiler = DefaultPromptCompiler(prompts, suffix=".txt")
+        messages = compiler("greet", {"seed": RawText(text="hi there")}, output_model=Claims)
+        content = _user_content(messages)
+        assert "hi there" in content
+        assert describe_type(Claims) in content
+
+
+class TestRenderMessagesReceivesNodeName:
+    """render_messages is handed the node_name so per-node role shaping (piarch's
+    explore -> single user message; else system + user with a node-specific line)
+    is a ~10-line override. The graph passes node.name at runtime."""
+
+    def test_render_messages_override_receives_node_name_on_direct_call(self, tmp_path):
+        from neograph import DefaultPromptCompiler
+
+        prompts = tmp_path / "prompts"
+        prompts.mkdir()
+        (prompts / "explore.txt").write_text("Explore {seed}")
+        (prompts / "score.txt").write_text("Score {seed}")
+
+        seen: list[str] = []
+
+        class RoleCompiler(DefaultPromptCompiler):
+            def render_messages(self, template_text, vars, *, node_name=""):
+                seen.append(node_name)
+                from neograph.prompt import substitute
+
+                body = substitute(template_text, vars, strict=self.strict, syntax=self.syntax)
+                if node_name == "explore":
+                    return [{"role": "user", "content": body}]
+                return [
+                    {"role": "system", "content": f"You are the {node_name} node."},
+                    {"role": "user", "content": body},
+                ]
+
+        compiler = RoleCompiler(prompts, suffix=".txt")
+
+        explore_msgs = compiler("explore", {"seed": RawText(text="x")}, node_name="explore")
+        score_msgs = compiler("score", {"seed": RawText(text="y")}, node_name="score")
+
+        assert seen == ["explore", "score"]
+        assert [m["role"] for m in explore_msgs] == ["user"]
+        assert [m["role"] for m in score_msgs] == ["system", "user"]
+        assert "score node" in score_msgs[0]["content"]
+
+    def test_node_name_reaches_override_at_runtime(self, tmp_path):
+        """End-to-end: the compiled think node passes node.name into the compiler,
+        so the override's node_name branch fires during run()."""
+        import types
+
+        from neograph import DefaultPromptCompiler
+
+        prompts = tmp_path / "prompts"
+        prompts.mkdir()
+        (prompts / "analyze.txt").write_text("Analyze {seed}\n\n{json_schema}\n")
+
+        captured: list[str] = []
+
+        class RoleCompiler(DefaultPromptCompiler):
+            def render_messages(self, template_text, vars, *, node_name=""):
+                captured.append(node_name)
+                from neograph.prompt import substitute
+
+                body = substitute(template_text, vars, strict=self.strict, syntax=self.syntax)
+                return [
+                    {"role": "system", "content": f"node={node_name}"},
+                    {"role": "user", "content": body},
+                ]
+
+        mod = types.ModuleType("test_node_name_runtime_mod")
+
+        @node(outputs=RawText)
+        def seed() -> RawText:
+            return RawText(text="hello")
+
+        @node(outputs=Claims, mode="think", model="fast", prompt="analyze")
+        def analyze(seed: RawText) -> Claims: ...
+
+        mod.seed = seed
+        mod.analyze = analyze
+        pipeline = construct_from_module(mod)
+
+        graph = compile(
+            pipeline,
+            llm_factory=lambda tier: StructuredFake(lambda m: m(items=["ok"])),
+            prompt_compiler=RoleCompiler(prompts, suffix=".txt"),
+            **build_test_compile_kwargs(),
+        )
+        result = run(graph, input={"node_id": "e2e"})
+
+        assert result["analyze"].items == ["ok"]
+        assert "analyze" in captured

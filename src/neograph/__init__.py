@@ -19,7 +19,13 @@ sub-constructs), see Node and Construct directly.
 """
 
 from neograph._image import configure_image, resolve_image
-from neograph._llm import CostCallback, LlmFactory, PromptCompiler, render_prompt
+from neograph._llm import (
+    CostCallback,
+    LlmFactory,
+    PromptCompiler,
+    compile_prompt,
+    render_prompt,
+)
 from neograph.compiler import compile, describe_graph
 from neograph.conditions import parse_condition
 from neograph.construct import Construct
@@ -152,6 +158,7 @@ __all__ = [
     "ExcludeFromOutput",
     # Prompt inspection
     "render_prompt",
+    "compile_prompt",
     # Multimodal utilities
     "configure_image",
     "resolve_image",

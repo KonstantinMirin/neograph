@@ -427,6 +427,16 @@ class TestNoNearDuplicateHelperNames:
             "lev=1: async twin of the sync single-flight latch minter "
             "(_run_cache.py); loop-affine asyncio.Lock vs threading.Lock."
         ),
+        # neograph-v569: public compile_prompt is the PROMOTED, ticket-mandated
+        # public wrapper over the internal _compile_prompt seam (both in
+        # _llm_render.py) — same compiler brain, byte-identical output. The
+        # leading-underscore is the private/public convention; the public name IS
+        # the API contract (parallel to the render_inputs/render_input entry).
+        frozenset({"_compile_prompt", "compile_prompt"}): (
+            "lev=1: public compile_prompt (the standalone eval-parity entry) wraps "
+            "the private _compile_prompt seam (_llm_render.py); private/public "
+            "underscore convention, ticket-mandated public name (v569)."
+        ),
     }
 
     @staticmethod

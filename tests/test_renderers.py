@@ -2359,3 +2359,88 @@ class TestTypeDisplayName:
         # list[int] / dict[str, int] are generic aliases (not dict instances)
         assert type_display_name(list[int]) in ("list", "list[int]")
         assert type_display_name(dict[str, int]) in ("dict", "dict[str, int]")
+
+
+class ScoredClaim(BaseModel):
+    """Local fixture model for container-rendering tests (distinct from the
+    frozen schemas.MatchResult so its field values are easy to assert on)."""
+
+    claim: str
+    score: float
+
+
+class TestContainerRendering:
+    """render_input BAML-default rendering of the container shapes the framework
+    itself produces at fan-in: dict[str, BaseModel] (Each merges) and
+    list[ToolInteraction] (agent tool logs). neograph-rndl / survey F3.1.
+
+    Conventions (documented in prompt-compiler.mdx):
+    - dict[str, BaseModel] -> each value rendered via describe_value, joined by a
+      blank line. Keys are dropped (Each merge keys are arrival-order synthesized).
+    - list[ToolInteraction] -> each entry folded as '{tool_name}:\\n{result}' into a
+      research packet, joined by a '\\n\\n---\\n\\n' separator. The tool_name stays
+      (provenance is the observability contract); args/duration_ms are dropped.
+    - None -> '' (empty string, not the literal 'None').
+    - str passes through unchanged.
+    """
+
+    def test_dict_of_models_joins_describe_value_per_value_when_baml_default(self):
+        from neograph.describe_type import describe_value
+        from neograph.renderers import render_input
+
+        d = {
+            "verify": {
+                "c0": ScoredClaim(claim="a", score=0.9),
+                "c1": ScoredClaim(claim="b", score=0.4),
+            }
+        }
+        out = render_input(d, renderer=None)
+        expected = (
+            describe_value(ScoredClaim(claim="a", score=0.9))
+            + "\n\n"
+            + describe_value(ScoredClaim(claim="b", score=0.4))
+        )
+        assert out["verify"] == expected
+
+    def test_tool_interaction_list_folds_result_into_research_packet(self):
+        from neograph.renderers import render_input
+        from neograph.tool import ToolInteraction
+
+        tis = [
+            ToolInteraction(tool_name="search", args={"q": "x"}, result="found X"),
+            ToolInteraction(tool_name="fetch", result="got Y"),
+        ]
+        out = render_input({"research": tis}, renderer=None)
+        # tool_name header per entry (provenance), then the result; entries fenced.
+        assert out["research"] == "search:\nfound X\n\n---\n\nfetch:\ngot Y"
+
+    def test_tool_interaction_packet_preserves_tool_name_provenance(self):
+        # The observability contract: a downstream consumer of a tool_log must see
+        # WHICH tool produced each result (test_composition's gather->produce chain).
+        from neograph.renderers import render_input
+        from neograph.tool import ToolInteraction
+
+        tis = [ToolInteraction(tool_name="find_evidence", result="ref: auth.py:42")]
+        out = render_input({"log": tis}, renderer=None)
+        assert "find_evidence" in out["log"]
+        assert "ref: auth.py:42" in out["log"]
+
+    def test_none_value_renders_as_empty_string(self):
+        from neograph.renderers import render_input
+
+        out = render_input({"maybe": None}, renderer=None)
+        assert out["maybe"] == ""
+
+    def test_str_value_passes_through_unchanged(self):
+        from neograph.renderers import render_input
+
+        out = render_input({"topic": "oncology"}, renderer=None)
+        assert out["topic"] == "oncology"
+
+    def test_plain_dict_of_scalars_still_passes_through(self):
+        # Only dict[str, BaseModel] gets the join treatment; a scalar dict is
+        # left untouched (it has no describe_value rendering).
+        from neograph.renderers import render_input
+
+        out = render_input({"meta": {"a": 1, "b": 2}}, renderer=None)
+        assert out["meta"] == {"a": 1, "b": 2}

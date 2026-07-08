@@ -154,19 +154,26 @@ class DefaultPromptCompiler:
         syntax: SyntaxSpec = "brace",
         system: str | None = None,
         schema_var: str = "json_schema",
+        suffix: str = ".md",
     ) -> None:
         self.loader = loader
         self.strict = strict
         self.syntax = syntax
         self.system = system
         self.schema_var = schema_var
+        self.suffix = suffix
 
     def load_template(self, template: str) -> str:
-        """Resolve ``template`` to its raw text (``{name}.md`` under a dir loader,
-        or ``loader(template)`` for a callable loader)."""
+        """Resolve ``template`` to its raw text (``{name}{suffix}`` under a dir
+        loader, or ``loader(template)`` for a callable loader).
+
+        ``suffix`` defaults to ``.md``; pass ``suffix='.txt'`` for a ``.txt``
+        template dir (the shape all three shipped consumers use) instead of
+        hand-rolling a callable loader.
+        """
         if callable(self.loader):
             return self.loader(template)
-        return (Path(self.loader) / f"{template}.md").read_text()
+        return (Path(self.loader) / f"{template}{self.suffix}").read_text()
 
     def build_vars(
         self,
@@ -202,9 +209,23 @@ class DefaultPromptCompiler:
             )
         return vars
 
-    def render_messages(self, template_text: str, vars: dict[str, Any]) -> list[dict[str, str]]:
+    def render_messages(
+        self,
+        template_text: str,
+        vars: dict[str, Any],
+        *,
+        node_name: str = "",
+    ) -> list[dict[str, str]]:
         """Substitute ``vars`` into the template and wrap as a message list
-        (optional system message + user message)."""
+        (optional system message + user message).
+
+        ``node_name`` is the name of the node whose prompt is being compiled —
+        threaded from the graph at runtime (and from ``__call__``). The default
+        implementation ignores it; override to shape per-node roles (e.g. an
+        ``explore`` node emitting a single user message while every other node
+        gets a system line naming the node). See the message-shaping recipe in
+        the prompt-compiler docs.
+        """
         content = substitute(template_text, vars, strict=self.strict, syntax=self.syntax)
         messages: list[dict[str, str]] = []
         if self.system is not None:
@@ -220,6 +241,7 @@ class DefaultPromptCompiler:
         output_model: type[BaseModel] | None = None,
         output_schema: str | None = None,
         di_inputs: dict[str, Any] | None = None,
+        node_name: str = "",
         **_kw: Any,
     ) -> list[dict[str, str]]:
         text = self.load_template(template)
@@ -229,4 +251,4 @@ class DefaultPromptCompiler:
             output_schema=output_schema,
             di_inputs=di_inputs,
         )
-        return self.render_messages(text, vars)
+        return self.render_messages(text, vars, node_name=node_name)

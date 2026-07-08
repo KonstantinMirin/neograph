@@ -26,6 +26,7 @@ from typing import Any, Literal, Protocol, runtime_checkable
 from pydantic import BaseModel
 
 from neograph.describe_type import describe_value
+from neograph.tool import ToolInteraction
 
 
 @dataclass
@@ -243,6 +244,56 @@ class JsonRenderer:
         return json.dumps(value, indent=self.indent, default=str)
 
 
+# Separator between folded tool-interaction results in a research packet. A
+# blank-line-fenced rule reads as a section break to the model without inventing
+# a heading grammar the consumer must learn.
+_TOOL_PACKET_SEP = "\n\n---\n\n"
+# Separator between rendered values of a dict[str, BaseModel] fan-in. A blank
+# line keeps each describe_value block visually distinct.
+_MODEL_DICT_SEP = "\n\n"
+
+
+def _is_model_dict(value: Any) -> bool:
+    """True when *value* is a non-empty dict whose values are ALL BaseModels.
+
+    This is the shape an ``Each`` fan-out produces when its results merge back
+    onto the bus (``dict[str, output]`` per state.py:_add_output_field). A dict
+    with any non-model value is left untouched (existing passthrough).
+    """
+    return isinstance(value, dict) and len(value) > 0 and all(isinstance(v, BaseModel) for v in value.values())
+
+
+def _is_tool_interaction_list(value: Any) -> bool:
+    """True when *value* is a non-empty list of ``ToolInteraction`` records."""
+    if not isinstance(value, list) or not value:
+        return False
+    return all(isinstance(v, ToolInteraction) for v in value)
+
+
+def _render_tool_interactions(value: list) -> str:
+    """Fold a ``list[ToolInteraction]`` into a research packet: each entry is its
+    ``tool_name`` header + ``.result`` (already the rendered form), entries joined
+    by ``_TOOL_PACKET_SEP``.
+
+    The ``tool_name`` is kept, not dropped: a downstream node consuming a tool_log
+    must see WHICH tool produced each result — that provenance is the observability
+    contract (test_composition's gather->produce chain asserts it). Only the
+    bookkeeping fields (``args``/``duration_ms``/``typed_result``) are omitted.
+    """
+    return _TOOL_PACKET_SEP.join(f"{ti.tool_name}:\n{ti.result}" for ti in value)
+
+
+def _render_model_dict(value: dict) -> str:
+    """Render a ``dict[str, BaseModel]`` as its values' ``describe_value`` blocks
+    joined by ``_MODEL_DICT_SEP``.
+
+    Keys are dropped: an ``Each`` barrier collects results in arrival order under
+    synthesized keys (see the ordering caveat in AGENTS.md), so the keys carry no
+    semantic meaning — the dict is an unordered bag of results.
+    """
+    return _MODEL_DICT_SEP.join(describe_value(v) for v in value.values())
+
+
 def render_input(input_data: Any, *, renderer: Renderer | None) -> Any:
     """Dispatch helper: render input data for prompt insertion.
 
@@ -374,15 +425,25 @@ def _render_single(value: Any, renderer: Renderer | None) -> Any:
             return describe_value(result)
         return result
 
-    # 2. Explicit renderer
+    # 2. Explicit renderer — the renderer owns its own container handling
+    # (XmlRenderer/DelimitedRenderer already walk dicts and lists), so the
+    # framework-container rules below apply only to the BAML default.
     if renderer is not None:
         return renderer.render(value)
 
-    # 3. BAML default for Pydantic models and lists of models
+    # 3. BAML default. None renders empty (not the literal 'None'); the two
+    # framework-produced container shapes render before the generic
+    # list[BaseModel] rule so their specialized folding wins.
+    if value is None:
+        return ""
     if isinstance(value, BaseModel):
         return describe_value(value)
+    if _is_tool_interaction_list(value):
+        return _render_tool_interactions(value)
     if isinstance(value, list) and value and isinstance(value[0], BaseModel):
         return describe_value(value)
+    if _is_model_dict(value):
+        return _render_model_dict(value)
 
-    # 4. Primitives pass through
+    # 4. Primitives (str, int, plain dicts, non-model lists) pass through
     return value
