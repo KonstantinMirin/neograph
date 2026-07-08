@@ -43,6 +43,55 @@ work. This is a deliberate migration bridge -- new test code should catch
 from __future__ import annotations
 
 
+def _format_message(
+    what: str,
+    *,
+    expected: str | None = None,
+    found: str | None = None,
+    hint: str | None = None,
+    location: str | None = None,
+    node: str | None = None,
+    construct: str | None = None,
+) -> str:
+    """The single source of truth for the structured error-message body.
+
+    Every ``.build`` classmethod delegates its formatting here — see
+    ``TestErrorBuildBodyMonopoly`` in ``tests/test_guards_assembly.py``, which
+    fails if any ``build`` re-inlines the ``parts``/``msg`` assembly instead of
+    calling this helper. CON-02 / PAT-01: ``ExecutionError.build`` used to
+    duplicate this body verbatim in a place the ``.build()`` call-site guard
+    could not see it drift.
+
+    Format::
+
+        [Node 'X' in 'Y'] what
+          expected: ...
+          found: ...
+          hint: ...
+          at file.py:42
+    """
+    parts: list[str] = []
+    if node and construct:
+        parts.append(f"[Node '{node}' in construct '{construct}']")
+    elif node:
+        parts.append(f"[Node '{node}']")
+    elif construct:
+        parts.append(f"[Construct '{construct}']")
+    parts.append(what)
+
+    msg = " ".join(parts)
+    if expected:
+        msg += f"\n  expected: {expected}"
+    if found:
+        msg += f"\n  found: {found}"
+    if hint:
+        msg += f"\n  hint: {hint}"
+    if location:
+        msg += f"\n  at {location}"
+
+    return msg
+
+
 class NeographError(Exception):
     """Base for all neograph-originated errors."""
 
@@ -58,35 +107,16 @@ class NeographError(Exception):
         node: str | None = None,
         construct: str | None = None,
     ) -> NeographError:
-        """Structured error builder. All neograph errors go through here.
-
-        Format::
-
-            [Node 'X' in 'Y'] what
-              expected: ...
-              found: ...
-              hint: ...
-              at file.py:42
-        """
-        parts: list[str] = []
-        if node and construct:
-            parts.append(f"[Node '{node}' in construct '{construct}']")
-        elif node:
-            parts.append(f"[Node '{node}']")
-        elif construct:
-            parts.append(f"[Construct '{construct}']")
-        parts.append(what)
-
-        msg = " ".join(parts)
-        if expected:
-            msg += f"\n  expected: {expected}"
-        if found:
-            msg += f"\n  found: {found}"
-        if hint:
-            msg += f"\n  hint: {hint}"
-        if location:
-            msg += f"\n  at {location}"
-
+        """Structured error builder. All neograph errors go through here."""
+        msg = _format_message(
+            what,
+            expected=expected,
+            found=found,
+            hint=hint,
+            location=location,
+            node=node,
+            construct=construct,
+        )
         return cls(msg)
 
 
@@ -140,25 +170,15 @@ class ExecutionError(NeographError):
         validation_errors: str | None = None,
     ) -> ExecutionError:
         """Override to pass validation_errors to ExecutionError.__init__."""
-        parts: list[str] = []
-        if node and construct:
-            parts.append(f"[Node '{node}' in construct '{construct}']")
-        elif node:
-            parts.append(f"[Node '{node}']")
-        elif construct:
-            parts.append(f"[Construct '{construct}']")
-        parts.append(what)
-
-        msg = " ".join(parts)
-        if expected:
-            msg += f"\n  expected: {expected}"
-        if found:
-            msg += f"\n  found: {found}"
-        if hint:
-            msg += f"\n  hint: {hint}"
-        if location:
-            msg += f"\n  at {location}"
-
+        msg = _format_message(
+            what,
+            expected=expected,
+            found=found,
+            hint=hint,
+            location=location,
+            node=node,
+            construct=construct,
+        )
         return cls(msg, validation_errors=validation_errors)
 
 
@@ -210,10 +230,13 @@ class StateMissingError(ExecutionError):
         key: str,
         node_label: str | None = None,
     ) -> StateMissingError:
+        # Delegates to the shared formatter like every other build (the
+        # TestErrorBuildBodyMonopoly monopoly). The node/no-node casing split is
+        # preserved via the `what` argument: node-prefixed reads lowercase.
         if node_label:
-            msg = f"[Node '{node_label}'] required state key '{key}' not found"
+            msg = _format_message(f"required state key '{key}' not found", node=node_label)
         else:
-            msg = f"Required state key '{key}' not found"
+            msg = _format_message(f"Required state key '{key}' not found")
         return cls(msg)
 
 

@@ -380,3 +380,84 @@ class TestResolveDiArgsFiltering:
         config = {"configurable": {"topic": "hello"}}
         result = _resolve_di_args(param_res, config)
         assert result == ["hello"]
+
+
+class TestMergeFnDuplicateRegistration:
+    """neograph-pbya — @merge_fn must fail loud on same-name collision.
+
+    Two modules defining merge helpers under a common name (`merge`/`combine`)
+    used to silently overwrite each other in ``_merge_fn_registry`` — the second
+    definition corrupted the first's Oracles with zero signal. Registration now
+    raises, naming both definition sites. Re-registering the *identical* function
+    object (module reload / re-import) stays idempotent.
+    """
+
+    def test_raises_when_two_different_functions_share_a_name(self):
+        """A second @merge_fn under the same name but a different body raises,
+        naming both definition sites."""
+        from neograph import merge_fn
+        from neograph.errors import ConstructError
+
+        @merge_fn(name="dup_merge")
+        def first(variants: list[Claims]) -> Claims:
+            return Claims(items=["first"])
+
+        with pytest.raises(ConstructError) as exc_info:
+            @merge_fn(name="dup_merge")
+            def second(variants: list[Claims]) -> Claims:
+                return Claims(items=["second"])
+
+        msg = str(exc_info.value)
+        # Both sites named: the already-registered function and the new one.
+        assert "dup_merge" in msg
+        assert "first" in msg
+        assert "second" in msg
+
+    def test_raises_on_bare_name_collision_via_function_name(self):
+        """Collision keyed on the function's own __name__ (no explicit name=)."""
+        from neograph import merge_fn
+        from neograph.errors import ConstructError
+
+        @merge_fn
+        def combine(variants: list[Claims]) -> Claims:  # noqa: F811
+            return Claims(items=["a"])
+
+        with pytest.raises(ConstructError):
+            @merge_fn
+            def combine(variants: list[Claims]) -> Claims:  # noqa: F811
+                return Claims(items=["b"])
+
+    def test_reregistering_same_function_object_is_idempotent(self):
+        """Re-registering the SAME function object (module reload / re-import)
+        must NOT raise."""
+        from neograph import merge_fn
+
+        def combine(variants: list[Claims]) -> Claims:
+            return Claims(items=["a"])
+
+        merge_fn(combine)
+        # Re-decorating the identical object — as a module re-import would — is a no-op.
+        merge_fn(combine)  # must not raise
+
+    def test_reexecuting_same_def_statement_is_idempotent(self):
+        """Re-running the same ``def`` (loop / hypothesis example) yields new
+        function objects sharing one code object — that is the same definition
+        site, not a collision, so it must NOT raise."""
+        from neograph import merge_fn
+
+        for _ in range(3):
+            @merge_fn(name="loop_merge")
+            def combine(variants: list[Claims]) -> Claims:  # noqa: F811
+                return Claims(items=["x"])
+
+    def test_different_names_do_not_collide(self):
+        """Two distinct names coexist without error."""
+        from neograph import merge_fn
+
+        @merge_fn(name="merge_alpha")
+        def alpha(variants: list[Claims]) -> Claims:
+            return Claims(items=["alpha"])
+
+        @merge_fn(name="merge_beta")
+        def beta(variants: list[Claims]) -> Claims:
+            return Claims(items=["beta"])

@@ -401,6 +401,25 @@ def _alias_subgraph_input_port(
     flattened[alias] = rendered_dict[StateKeys.SUBGRAPH_INPUT]
 
 
+def _render_prompt_result(result: Any, renderer: Renderer | None) -> Any:
+    """Render the return value of a ``render_for_prompt()`` override.
+
+    Decodes the render_for_prompt return-type contract in ONE place (DRY-01): a
+    str is verbatim; a BaseModel or non-empty list[BaseModel] goes through the
+    explicit renderer or the BAML ``describe_value`` default; anything else
+    passes through unchanged. Both ``_render_single`` (inline/raw) and
+    ``_render_with_flattening`` (template-ref) wrap this so the two rendering
+    tails can never silently diverge on the contract.
+    """
+    if isinstance(result, str):
+        return result
+    if isinstance(result, BaseModel):
+        return renderer.render(result) if renderer is not None else describe_value(result)
+    if isinstance(result, list) and result and isinstance(result[0], BaseModel):
+        return renderer.render(result) if renderer is not None else describe_value(result)
+    return result
+
+
 def _render_with_flattening(
     value: Any,
     renderer: Renderer | None,
@@ -413,8 +432,8 @@ def _render_with_flattening(
     """
     if hasattr(value, "render_for_prompt") and callable(value.render_for_prompt):
         result = value.render_for_prompt()
+        whole = _render_prompt_result(result, renderer)
         if isinstance(result, BaseModel):
-            whole = renderer.render(result) if renderer else describe_value(result)
             fields: dict[str, Any] = {}
             for fname, finfo in result.__class__.model_fields.items():
                 if finfo.exclude:
@@ -429,13 +448,7 @@ def _render_with_flattening(
                 else:
                     fields[fname] = _render_single(fval, renderer)
             return whole, fields
-        if isinstance(result, str):
-            return result, {}
-        # list[BaseModel] or other non-str/non-BaseModel returns: render via _render_single
-        if isinstance(result, list) and result and isinstance(result[0], BaseModel):
-            rendered = renderer.render(result) if renderer else describe_value(result)
-            return rendered, {}
-        return result, {}
+        return whole, {}
     return _render_single(value, renderer), {}
 
 
@@ -447,18 +460,7 @@ def _render_single(value: Any, renderer: Renderer | None) -> Any:
     """
     # 1. render_for_prompt() always wins, regardless of renderer config
     if hasattr(value, "render_for_prompt") and callable(value.render_for_prompt):
-        result = value.render_for_prompt()
-        if isinstance(result, str):
-            return result
-        if isinstance(result, BaseModel):
-            if renderer is not None:
-                return renderer.render(result)
-            return describe_value(result)
-        if isinstance(result, list) and result and isinstance(result[0], BaseModel):
-            if renderer is not None:
-                return renderer.render(result)
-            return describe_value(result)
-        return result
+        return _render_prompt_result(value.render_for_prompt(), renderer)
 
     # 2. Explicit renderer — the renderer owns its own container handling
     # (XmlRenderer/DelimitedRenderer already walk dicts and lists), so the

@@ -278,6 +278,10 @@ class TestLlmResponsibilityDiscipline:
                 "_compile_multimodal_prompt",
                 "_resolve_var",
                 "_resolve_var_raw",
+                # shared ${path} walker that _resolve_var (BAML-rendered) and
+                # _resolve_var_raw (verbatim) both thin onto — the dedup'd spine,
+                # not a second render path.
+                "_walk_var_path",
                 "_substitute_vars",
                 "_compile_prompt",
                 "render_prompt",

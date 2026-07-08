@@ -47,53 +47,18 @@ def _is_inline_prompt(template: str) -> bool:
     return " " in template or "${" in template
 
 
-def _resolve_var(path: str, input_data: Any) -> str:
-    """Resolve a single ``${path}`` variable against *input_data*.
+def _walk_var_path(path: str, input_data: Any) -> Any:
+    """Walk a ``${path}`` against *input_data* and return the raw resolved object.
 
-    *path* may be a plain name (``claim``) or dotted (``claim.text``).
+    *path* may be a plain name (``claim``) or dotted (``claim.text``). When
+    *input_data* is a dict the first segment is looked up as a key; when it is a
+    single value (non-dict) the whole value is the root, and subsequent segments
+    are resolved via ``getattr``. Fail-soft: a missing key or attribute logs a
+    warning and yields ``""``.
 
-    When *input_data* is a dict the first segment is looked up as a key;
-    when it is a single value (non-dict) the whole value is used as the root,
-    and subsequent segments are resolved via ``getattr``.
-
-    BaseModel values at any resolution stage are BAML-rendered via
-    describe_value() instead of using str() (which gives Pydantic repr).
-    This makes inline prompt output symmetric with template-ref rendering.
-    """
-    from pydantic import BaseModel as _BM
-
-    parts = path.split(".")
-
-    if isinstance(input_data, dict):
-        if parts[0] not in input_data:
-            log.warning(
-                "prompt_var_missing",
-                var=path,
-                available=sorted(input_data.keys()),
-            )
-        root = input_data.get(parts[0], "")
-        rest = parts[1:]
-    else:
-        root = input_data
-        rest = parts[1:]
-
-    obj = root
-    for attr in rest:
-        if not hasattr(obj, attr):
-            log.warning("prompt_var_missing", var=path, segment=attr)
-        obj = getattr(obj, attr, "")
-    if obj is None:
-        return ""
-    if isinstance(obj, _BM):
-        return describe_value(obj)
-    return str(obj)
-
-
-def _resolve_var_raw(path: str, input_data: Any) -> Any:
-    """Like _resolve_var but returns the raw object without BAML rendering.
-
-    Used for image resolution where the resolved value must be a string
-    (file path or base64), not a BAML-rendered model description.
+    This is the shared spine of ``_resolve_var`` (which BAML-renders the result)
+    and ``_resolve_var_raw`` (which returns it verbatim). A single walker keeps
+    inline text and inline image resolution from silently diverging (DRY-02).
     """
     parts = path.split(".")
 
@@ -112,6 +77,30 @@ def _resolve_var_raw(path: str, input_data: Any) -> Any:
             log.warning("prompt_var_missing", var=path, segment=attr)
         obj = getattr(obj, attr, "")
     return obj
+
+
+def _resolve_var(path: str, input_data: Any) -> str:
+    """Resolve a single ``${path}`` variable against *input_data* to a string.
+
+    BaseModel values at the resolved stage are BAML-rendered via
+    describe_value() instead of using str() (which gives Pydantic repr).
+    This makes inline prompt output symmetric with template-ref rendering.
+    """
+    obj = _walk_var_path(path, input_data)
+    if obj is None:
+        return ""
+    if isinstance(obj, BaseModel):
+        return describe_value(obj)
+    return str(obj)
+
+
+def _resolve_var_raw(path: str, input_data: Any) -> Any:
+    """Like _resolve_var but returns the raw object without BAML rendering.
+
+    Used for image resolution where the resolved value must be a string
+    (file path or base64), not a BAML-rendered model description.
+    """
+    return _walk_var_path(path, input_data)
 
 
 def _substitute_vars(template: str, input_data: Any) -> str:

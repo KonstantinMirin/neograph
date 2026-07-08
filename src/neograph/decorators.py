@@ -53,6 +53,7 @@ from __future__ import annotations
 
 import ast
 import inspect
+import os
 import secrets
 import sys
 import textwrap
@@ -667,6 +668,44 @@ def node(
 # and infer_oracle_gen_type are re-exported via the import block above.
 
 
+def _qualname_site(f: Callable) -> str:
+    """Human-readable definition site for a function: ``module.qualname (file.py:lineno)``.
+
+    Used to name both sides of a @merge_fn collision so the error points at the
+    two competing definitions rather than just the shared registry name.
+    """
+    module = getattr(f, "__module__", None) or "<unknown>"
+    qualname = getattr(f, "__qualname__", None) or getattr(f, "__name__", repr(f))
+    label = f"{module}.{qualname}"
+    code = getattr(f, "__code__", None)
+    if code is not None:
+        label += f" ({os.path.basename(code.co_filename)}:{code.co_firstlineno})"
+    return label
+
+
+def _same_def_site(a: Callable, b: Callable) -> bool:
+    """True when two callables originate from the same ``def`` statement.
+
+    A collision is two *distinct* definitions competing for one registry name;
+    re-executing the same ``def`` is not one. This is the same object (``is``),
+    the same code object (a ``def`` re-run in a loop / hypothesis example — new
+    function object, shared code object), or the same source site with a matching
+    qualname (a module reload recompiles the code object but keeps file/line/name).
+    """
+    if a is b:
+        return True
+    ca, cb = getattr(a, "__code__", None), getattr(b, "__code__", None)
+    if ca is not None and ca is cb:
+        return True
+    if ca is None or cb is None:
+        return False
+    return (
+        getattr(a, "__qualname__", None) == getattr(b, "__qualname__", None)
+        and ca.co_filename == cb.co_filename
+        and ca.co_firstlineno == cb.co_firstlineno
+    )
+
+
 def merge_fn(
     fn: Callable | None = None,
     *,
@@ -760,6 +799,23 @@ def merge_fn(
         param_res = ordered_res
 
         fn_name = name or f.__name__
+        # Fail loud on a same-name collision between two *different* functions.
+        # Oracle references a merge_fn by string name, so a silent overwrite in
+        # _merge_fn_registry lets two modules with a common helper name
+        # (merge/combine) corrupt each other's Oracles with zero signal.
+        # Re-registering the identical function object — as a module reload /
+        # re-import does — stays idempotent.
+        existing = _merge_fn_registry.get(fn_name)
+        if existing is not None and not _same_def_site(existing[0], f):
+            prior = existing[0]
+            raise ConstructError.build(
+                f"merge_fn name '{fn_name}' is already registered by a different function",
+                found=f"{_qualname_site(prior)} then {_qualname_site(f)}",
+                hint=(
+                    "Two @merge_fn functions cannot share a registry name. Give one a "
+                    "distinct name via @merge_fn(name='...'), or rename the function."
+                ),
+            )
         _merge_fn_registry[fn_name] = (f, param_res)
         _merge_fn_caller_ns[fn_name] = caller_ns
 

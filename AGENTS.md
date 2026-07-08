@@ -171,6 +171,12 @@ Concrete rules derived from this:
 - **The only exception**: when a genuinely new IR capability is needed (e.g., `ForwardConstruct` needed `_BranchNode` sentinel support in `compiler.py` + `state.py`). Adding those was deliberate and documented.
 - **Sub-constructs can be @node or declarative.** `construct_from_functions("verify", [explore, score], input=VerifyClaim, output=ClaimResult)` builds a sub-construct from `@node` functions. Params whose type matches `input=` are port params — they read from `neo_subgraph_input` instead of a peer `@node`. The declarative form `Construct(input=X, output=Y, nodes=[...])` also works. Both produce the same IR.
 
+### Naming policy: `__all__` is the public contract; the `_` module prefix is advisory only
+
+The leading-underscore on a *module* name (e.g. `_llm.py`, `_dispatch.py`) is a weak, advisory hint — it does NOT reliably signal public vs internal in either direction. Some unprefixed modules are internal-only (`factory.py`, `state.py`, `di.py`, `naming.py`), and some underscore-prefixed modules export public API through `__all__` (`_llm.py`, `_image.py`). **The single source of truth for what is public is the package facade: a symbol is public iff it is re-exported from `neograph/__init__.py` and listed in its `__all__`.** Do NOT infer a module's or symbol's visibility from its underscore prefix, and do NOT mass-rename to "fix" the mismatch pre-release — the churn is not worth it for one downstream consumer. When adding a new public symbol, wire it through `__init__.__all__`; when adding an internal one, no rename ceremony is required.
+
+**Review checklist item**: when reviewing a change that adds or moves a symbol, confirm its public/internal status is expressed through `neograph/__init__.py`'s `__all__` (the contract), not inferred from the module-name `_` prefix (advisory only).
+
 ---
 
 ## DI surface (post-0.2): `Annotated[T, FromInput/FromConfig]`
@@ -195,15 +201,16 @@ def my_node(
 
 **Why the bundle rule exists**: piarch had 60+ lines of boilerplate repeating `node_id: Annotated[str, FromInput], project_root: Annotated[str, FromInput], ...` across 20 nodes. Bundling a `RunCtx(BaseModel)` eliminates the repetition. See `neograph-6jd`.
 
-**Classifier implementation notes** (`_classify_di_params` in `decorators.py`):
+**Classifier implementation notes** (`_classify_di_params` in `_di_classify.py`, imported by `decorators.py`):
 - Uses `typing.get_type_hints(f, localns=..., include_extras=True)` to preserve `Annotated` metadata.
-- Walks the caller's frame stack (8 hops max) to capture locally-defined classes. Needed because `from __future__ import annotations` strips closure references, so `class RunCtx` defined inside a test method isn't findable via `f.__globals__` or `f.__closure__`. Pydantic uses the same technique for forward-ref resolution.
-- `frame_depth=2` means: from inside `_classify_di_params`, frame 0 is the helper, frame 1 is `decorator(f)` inside `node()`, frame 2 is the user's call site. Anything deeper misses the decorated function's enclosing scope.
+- Captures the caller's local namespace in a single shot: `node()` / `merge_fn()` grab `sys._getframe(1).f_locals` ONCE at decoration time (`decorators.py:324`, `:742`) and pass it explicitly as `caller_ns` down to `_classify_di_params` → `_build_annotation_namespace`. No frame-stack walk and no frame-depth arithmetic — the closure carries the captured namespace into `decorator(f)`, so the one hop from user call site to `node()`'s frame is fixed and correct for both the `@node(...)` and bare-`@node` forms. This matters because `from __future__ import annotations` stringifies annotations and strips closure references, so a `class RunCtx` defined inside a test method isn't findable via `f.__globals__` or `f.__closure__`; `caller_ns` supplies it as `localns`. `_build_annotation_namespace` merges the DI markers, the function's closure vars (`inspect.getclosurevars`), and the caller ns (skipping `_`-prefixed names and never shadowing markers).
 
-**Runtime resolution** (`_resolve_di_value` in `decorators.py`):
-- `from_input` / `from_config` → read `config['configurable'][param_name]`
-- `from_input_model` / `from_config_model` → construct the model by pulling each field from `config['configurable'][field_name]`
-- `constant` → use the captured default value
+**Runtime resolution** — one path, `DIBinding.resolve(config)` (`di.py:329`); `_resolve_di_args` (`_di_classify.py`) maps a node's `ParamResolution` to positional args by calling `resolve()` per binding:
+- `FROM_INPUT` / `FROM_CONFIG` → read `config['configurable'][name]`; type-check against `inner_type`; raise `ExecutionError` when `required` and missing
+- `FROM_INPUT_MODEL` / `FROM_CONFIG_MODEL` → construct `model_cls` by pulling each field from `config['configurable'][field_name]`
+- `FROM_RESOURCE` → hydrate from the MCP resource URI/ref (with `max_bytes` cap)
+- `FROM_STATE` (merge_fn only) → read from the passed `state`
+- `CONSTANT` → use the captured `default_value`
 - Unmatched → `None` passed (user code handles missing data)
 
 Shared between `@node` raw adapters and `@merge_fn` wrappers. One resolver, one classifier, both decorators.
@@ -229,7 +236,7 @@ Both are `PrivateAttr(default=None)`, preserved by `model_copy` (Pydantic v2 cop
 
 ## `describe_type` / `describe_value` — LLM-facing schema rendering
 
-`src/neograph/describe_type.py` (433 lines, 13 functions) renders Pydantic models into a TypeScript-style notation that LLMs parse more reliably than JSON Schema. Used by the factory layer to build structured output instructions.
+`src/neograph/describe_type.py` (512 lines, 15 functions) renders Pydantic models into a TypeScript-style notation that LLMs parse more reliably than JSON Schema. Used by the factory layer to build structured output instructions.
 
 **Two public functions** (both re-exported from `neograph`):
 - `describe_type(model, prefix=..., hoist_classes=...)` — renders a model class into a schema string with auto-hoisted nested classes
@@ -245,7 +252,7 @@ Both are `PrivateAttr(default=None)`, preserved by `model_copy` (Pydantic v2 cop
 
 ## RenderedInput — single rendering abstraction
 
-`src/neograph/renderers.py` (dataclass at line 32). The single object that bundles all rendering artifacts for prompt construction. Produced by `build_rendered_input(input_data, renderer=None)`.
+`src/neograph/renderers.py` (`RenderedInput` dataclass at line 33). The single object that bundles all rendering artifacts for prompt construction. Produced by `build_rendered_input(input_data, renderer=None)`.
 
 **Five fields**:
 - `raw: dict[str, Any] | Any` — original Pydantic models, used by inline `${var}` prompts for dotted attribute access
@@ -256,7 +263,7 @@ Both are `PrivateAttr(default=None)`, preserved by `model_copy` (Pydantic v2 cop
 
 **`for_template_ref` property** — merges `rendered` and `flattened` dicts, with `rendered` keys taking precedence. This is what the `prompt_compiler` receives.
 
-**Consumers**: `_dispatch.py:_render_input()` (mode dispatch layer) and `_llm.py:render_prompt()` (prompt inspection).
+**Consumers**: `_dispatch.py:_render_input()` (mode dispatch layer) and `_llm_render.py:render_prompt()` (prompt inspection).
 
 **The inline/template-ref split**: inline prompts (`${var}`) get `ri.raw` — raw Pydantic objects for `getattr` chains. Template-ref prompts get `ri.for_template_ref` — pre-rendered strings + flattened fields. Flattened fields and framework extras (`node_id`, `project_root`) are NOT available in inline prompts.
 
@@ -267,19 +274,22 @@ Both are `PrivateAttr(default=None)`, preserved by `model_copy` (Pydantic v2 cop
 When a pipeline runs with a checkpointer and the same `thread_id`, neograph detects schema changes and automatically rewinds to re-execute only the affected nodes.
 
 **Schema fingerprinting** (`state.py`):
-- `compute_schema_fingerprint(state_model)` — SHA-256 prefix of sorted `(field_name, annotation_string)` pairs, excluding framework fields (`neo_*`). Attached to compiled graph as `_neo_schema_fingerprint`.
-- `compute_node_fingerprints(construct)` — `dict[str, str]` mapping each node's state field to a SHA-256 prefix of `"{field_name}:{type.__qualname__}"`. Attached as `_neo_node_fingerprints`.
+- `compute_schema_fingerprint(state_model)` — SHA-256 prefix of sorted `(field_name, _type_signature(annotation))` pairs, excluding framework fields (`neo_*`). Stashed on the compiled graph as `graph.schema_fingerprint`.
+- `compute_node_fingerprints(construct)` — `dict[str, str]` mapping each node's state field to a SHA-256 prefix of `"{field_name}:{_type_signature(type)}"`. Dict-form outputs are fingerprinted per key (`{node}_{key}`). Stashed as `graph.node_fingerprints`.
+- **`_type_signature(typ)` (structural, not qualname-only — neograph-v63o)** — BOTH fingerprints fold one level of field detail through this shared helper: a Pydantic model hashes `module.Qualname` + sorted `(field, str(annotation))` pairs; generics (`list[X]`, `dict[K,V]`, Each's `dict[str, X]`) are unwrapped so a change on the wrapped model is visible. This replaced qualname-only hashing so a **same-`__qualname__` model with a changed field type now invalidates** — the old coarse hash was a false-negative that stopped the rewind from triggering at all. Both fingerprints had to move in lockstep: `str(annotation)` on a same-qualname changed field is identical, so without folding the signature into `compute_schema_fingerprint` too, the schema-fp GATE (`_decide_checkpoint_schema` returns `None` on a match) never opens and the enriched node fingerprint would be dead code.
 
-**At compile time** (`compiler.py:204-205`): both fingerprints are stashed on the compiled graph.
+**At compile time** (`compiler.py:300-301`): both fingerprints are stashed on the compiled graph.
 
-**At run time** (`runner.py:267-272`): fingerprints are injected into the initial state dict so they persist in the checkpoint.
+**At run time** (`runner.py:497-500`): the schema fingerprint is injected into the initial state dict (under `StateKeys.SCHEMA_FINGERPRINT`) so it persists in the checkpoint.
 
-**On resume** (`runner.py:_verify_checkpoint_schema`): stored fingerprints are compared against current. If they differ:
-- `_compute_invalidated_nodes()` diffs per-node fingerprints to find which nodes changed
-- `auto_resume=True` (default): `_auto_resume_from_divergence()` walks `get_state_history()` backwards, finds the checkpoint where the earliest changed node was in `.next`, injects that `checkpoint_id` into config, and `invoke(None)` resumes from there
-- `auto_resume=False`: raises `CheckpointSchemaError(invalidated_nodes=...)` for explicit handling
+**On resume** (`runner.py:_verify_checkpoint_schema` → `_decide_checkpoint_schema`): the stored schema fingerprint is compared against current. If they differ:
+- `_compute_invalidated_nodes()` (`runner.py:267`) diffs per-node fingerprints to find which nodes changed.
+- `auto_resume=True` (default): `_auto_resume_from_divergence()` walks `get_state_history()` backwards for the OLDEST checkpoint whose `.next` intersects the invalidated set, injects that `checkpoint_id` into config, and `invoke(None)` resumes from there. **Fail-loud on no rewind point (neograph-v63o):** if `invalidated` is non-empty but NO snapshot has an invalidated node pending in `.next` (history pruned, or every invalidated node already ran), it does NOT silently resume from the tip — it raises `CheckpointSchemaError(invalidated_nodes=...)` via the single-sited `_raise_no_rewind_point`, surfaced BEFORE any node re-executes. Silently resuming would re-hand the caller stale results (the durability pitch's one actively-false spot). Empty `invalidated` stays a genuine no-op (nothing changed).
+- `auto_resume=False`: raises `CheckpointSchemaError(invalidated_nodes=...)` for explicit handling.
 
-**What triggers invalidation**: output class renamed, field added/removed/type-changed. Prompt text changes do NOT trigger invalidation (fingerprints are type-based, not content-based).
+**Migration (correct-and-desired, pinned)**: the fingerprint FORMAT changed with `_type_signature`, so existing pre-v63o checkpoints show a schema mismatch on first resume after upgrade → every node looks changed → one full re-run. This is deliberate (better than trusting a coarser stale signature) and pinned by `test_old_format_node_fingerprint_invalidates_on_upgrade`.
+
+**What triggers invalidation**: output class renamed, field added/removed/type-changed (including a same-name-class field-type change, post-v63o). Prompt text changes do NOT trigger invalidation (fingerprints are type-based, not content-based).
 
 ---
 
@@ -366,14 +376,21 @@ An LLM-mode node (`think`/`agent`/`act`) never runs its body, so — unlike scri
 
 ## Test conventions
 
-### Test file layout (36 files across 5 packages)
+### Test file layout
 
-**Root tests** (28 files):
+The suite grows every wave, so the counts below rot fast — recount rather than
+trust a frozen number: `ls tests/test_*.py | wc -l` (root),
+`ls tests/{decorator,modes,modifiers,hypothesis}/test_*.py | wc -l` (packages).
+As of 2026-07-08: **89 root `test_*.py` files + 29 package files = 118 total.**
+
+**Root tests** (~89 files). The table below is a REPRESENTATIVE index of the
+primary suites, not an exhaustive enumeration — many focused files (async,
+checkpoint, MCP, guards, observability) are not listed row-by-row.
 
 `test_validation.py` and `test_structural_guards.py` were split by concern in
 neograph-e8jg (no file exceeds 1200 lines; class names unchanged so guards stay
-discoverable). The validation suite is now 5 files; the structural-guard suite
-is 6 files.
+discoverable). The validation suite is now several files; the structural-guard
+suite has since grown to ~17 `test_guards_*.py` files (`ls tests/test_guards_*.py`).
 
 | File | Scope | Tests |
 |------|-------|-------|
@@ -405,15 +422,16 @@ is 6 files.
 | `test_model_compat.py` | Pydantic model compatibility | ~14 |
 | `test_fakes.py` | LLM fake infrastructure tests | ~7 |
 | `test_check_fixtures.py` | Compiler safety net (parametrized fixtures) | ~2 |
+| `test_checkpoint_auto_rewind.py` | Schema-aware auto-rewind: fail-loud-on-no-rewind-point contract, sync + async | ~5 |
 
-**Package tests** (18 files in 4 packages):
+**Package tests** (29 `test_*.py` files across 4 packages):
 
 | Package | Files | Scope | Tests |
 |---------|-------|-------|-------|
-| `decorator/` | 5 files | @node, @tool, @merge_fn decorators; mode inference; DI; construct assembly; edge cases | ~165 |
-| `modes/` | 5 files | Scripted/think/agent/act/raw modes; execution; output strategies; LLM internals; I/O | ~156 |
+| `decorator/` | 5 files | @node, @tool, @merge_fn decorators; mode inference; DI (incl. `TestMergeFnDuplicateRegistration`); construct assembly; edge cases | ~165 |
+| `modes/` | 10 files | Scripted/think/agent/act/raw modes; execution; output strategies; LLM internals; I/O | ~156 |
 | `modifiers/` | 5 files | Oracle, Each, Operator, compositions, modifier edge cases | ~119 |
-| `hypothesis/` | 3 files | Property-based testing: topologies, invariants, regression | ~71 |
+| `hypothesis/` | 9 files | Property-based testing: topologies, invariants, regression | ~71 |
 
 Supporting files: `conftest.py` (registry cleanup fixture), `schemas.py` (shared Pydantic models + `_producer`/`_consumer` helpers), `fakes.py` (LLM fakes).
 
@@ -425,13 +443,18 @@ Supporting files: `conftest.py` (registry cleanup fixture), `schemas.py` (shared
 |-----------|---------|------------|
 | `should_fail/` | Each file has one known defect. Must raise during import or compile. | `# CHECK_ERROR: <regex>` comment matches the expected error message |
 | `should_pass/` | Valid pipelines. Must import and compile cleanly. | No special comment needed |
-| `known_gaps/` | Defects the validator SHOULD catch but doesn't yet. Each is a filed bug. | Same `# CHECK_ERROR:` as should_fail; moves to should_fail when the validator is fixed |
+
+Only these two directories exist and are scanned by `test_check_fixtures.py`. A
+`known_gaps/` tier (validator-SHOULD-catch-but-doesn't-yet fixtures) was
+documented previously but was never created — the backlog for validation
+improvements lives in beads, not a fixture directory. If you want a fixture tier
+for known gaps, create `known_gaps/` AND teach `test_check_fixtures.py` to scan
+it (xfail-style) before documenting it here.
 
 **Rules:**
 - Every new validation rule gets a corresponding should_fail fixture AND a should_pass fixture.
 - Fixtures derived from real consumer code (piarch patterns) are higher quality than hypothetical ones. When adding fixtures, look at actual usage in `piarch/src/derive_ensemble/constructs/`.
 - The fixture author should be different from the validation author when possible — neograph-a9n2 was caught by a fixture written AFTER the validation was "done."
-- `known_gaps/` IS the backlog for validation improvements. When a fixture should_fail but doesn't, move it there and file a bug.
 - Keep fixtures minimal — one Construct, one defect, ~15 lines.
 
 ### General test conventions
@@ -512,7 +535,7 @@ Both are Starlight slot overrides configured in `website/astro.config.mjs` under
 
 These aren't bugs, just things worth considering for future sessions:
 
-- `@merge_fn` uses a function-name-keyed registry (`_merge_fn_registry` in `decorators.py`). Parallel to the `@node` id-keyed sidecar. Both patterns work; the name-keyed form is cleaner for merge_fn because Oracle references them by string name anyway. If you add another decorator that's referenced by string name, copy that pattern.
+- `@merge_fn` uses a function-name-keyed registry (`_merge_fn_registry` in `decorators.py`). This is NOT registry debt and the name-keyed pattern is the RIGHT shape here (neograph-pbya evaluated migrating it to the `@node` PrivateAttr-sidecar / per-compile shape and DECIDED TO KEEP the name-keyed global). Structural reason: `@node` can self-store on a sidecar because it *returns the Node it decorates* — decoration site and storage target are the same object. `@merge_fn` decorates a standalone function, returns the bare function, and that function is referenced from a DIFFERENT object (`Oracle(merge_fn='combine')`) purely by STRING NAME. No Node/Oracle is in scope at decoration time, so a name→metadata map is a structurally-required symbol table, not incidental global state (mirrors conditions/tool_factories, which the 2026-05 per-compile architecture still seeds from a decoration-time global). The prior silent-overwrite defect is closed: a same-name collision between two DIFFERENT definition sites now FAILS LOUD (`ConstructError` naming both `module.qualname` + `file:lineno`). Idempotent for the same definition site — re-importing the same function object, re-running the same `def` in a loop/hypothesis example (new fn object, shared code object), and module reloads (recompiled code object, same source site + qualname) all stay safe via `_same_def_site`. If you add another decorator referenced by string name, copy this pattern (name-keyed registry + fail-loud collision guard).
 - The sponsor banner on neograph.pro is hardcoded in a component. If we ever add more sponsors or commercial positioning, it should probably move to config.
 
 ---

@@ -14,7 +14,7 @@ result = run(graph, resume={"approved": True}, config=config)
 from __future__ import annotations
 
 import os
-from typing import Any
+from typing import Any, NoReturn
 from uuid import uuid4
 
 import structlog
@@ -217,6 +217,11 @@ def _auto_resume_from_divergence(
     where the earliest invalidated node was about to execute (in ``next``).
     Overwrites the main config's checkpoint_id to point to that checkpoint,
     so the subsequent ``invoke(None, config)`` resumes from the rewind point.
+
+    Fail-loud: if ``invalidated`` is non-empty but no snapshot has an
+    invalidated node pending in ``.next``, raises ``CheckpointSchemaError``
+    (via ``_raise_no_rewind_point``) rather than silently resuming from the
+    tip with stale results. See neograph-v63o.
     """
     if not invalidated:
         return
@@ -231,8 +236,32 @@ def _auto_resume_from_divergence(
             candidate = state_snapshot.config.get("configurable", {}).get("checkpoint_id")
             if candidate is not None:
                 rewind_checkpoint_id = candidate
-    if rewind_checkpoint_id is not None:
-        config.setdefault("configurable", {})["checkpoint_id"] = rewind_checkpoint_id
+    if rewind_checkpoint_id is None:
+        _raise_no_rewind_point(invalidated)
+    config.setdefault("configurable", {})["checkpoint_id"] = rewind_checkpoint_id
+
+
+def _raise_no_rewind_point(invalidated: set[str]) -> NoReturn:
+    """Fail loud when auto_resume finds invalidated nodes but no rewind point.
+
+    Single-sited between the sync and async rewind twins. The schema changed and
+    ``invalidated`` is non-empty, yet no checkpoint in the thread's history has
+    any invalidated node pending in ``.next`` — because the history was pruned,
+    or every invalidated node already ran to completion. Resuming from the tip
+    would silently re-hand the caller stale results (the durability pitch's one
+    false spot). We refuse: this is a resume-time precondition failure, surfaced
+    BEFORE any node re-executes, with ``invalidated_nodes`` as the actionable
+    signal — the same contract as ``auto_resume=False``. See neograph-v63o.
+    """
+    raise CheckpointSchemaError(
+        "auto_resume could not find a rewind point. The checkpoint schema changed "
+        f"and these nodes are invalidated: {sorted(invalidated)}, but no checkpoint "
+        "in this thread's history has any of them pending in `.next` (history "
+        "pruned, or every invalidated node already ran to completion). Resuming "
+        "from the tip would silently skip them and return stale results. Start a "
+        "new thread_id, or invalidate this checkpoint to re-run from scratch.",
+        invalidated_nodes=invalidated,
+    )
 
 
 def _compute_invalidated_nodes(graph: CompiledNeograph, channel_values: Any) -> set[str]:
@@ -837,7 +866,9 @@ async def _aauto_resume_from_divergence(
     """Async twin of :func:`_auto_resume_from_divergence`.
 
     ``aget_state_history`` is an async generator — consumed via ``async for``,
-    never awaited. Identical rewind-checkpoint-id selection + config mutation.
+    never awaited. Identical rewind-checkpoint-id selection + config mutation,
+    including the fail-loud ``_raise_no_rewind_point`` raise when no snapshot has
+    an invalidated node pending in ``.next``. See neograph-v63o.
     """
     if not invalidated:
         return
@@ -849,8 +880,9 @@ async def _aauto_resume_from_divergence(
             candidate = state_snapshot.config.get("configurable", {}).get("checkpoint_id")
             if candidate is not None:
                 rewind_checkpoint_id = candidate
-    if rewind_checkpoint_id is not None:
-        config.setdefault("configurable", {})["checkpoint_id"] = rewind_checkpoint_id
+    if rewind_checkpoint_id is None:
+        _raise_no_rewind_point(invalidated)
+    config.setdefault("configurable", {})["checkpoint_id"] = rewind_checkpoint_id
 
 
 async def _aprepare(

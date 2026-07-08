@@ -80,6 +80,96 @@ class TestErrorBuilderEnforcement:
         )
 
 
+class TestErrorBuildBodyMonopoly:
+    """Every ``.build`` classmethod delegates message formatting to one helper.
+
+    CON-02 / PAT-01: ``ExecutionError.build`` used to duplicate the entire
+    ``NeographError.build`` format body verbatim. The ``.build()`` call-site
+    guard (``TestErrorBuilderEnforcement``) forces call SITES through ``build``
+    but structurally cannot see the two ``build`` BODIES diverge — the drift
+    lived in the gap between guards. This guard closes it: any ``build`` method
+    in ``errors.py`` that re-inlines the format assembly (builds a ``parts``
+    list or joins a ``msg`` string itself) instead of calling ``_format_message``
+    fails here at authoring time.
+    """
+
+    def _build_methods(self, tree: ast.Module) -> list[ast.FunctionDef]:
+        found: list[ast.FunctionDef] = []
+        for node in ast.walk(tree):
+            if isinstance(node, ast.FunctionDef) and node.name == "build":
+                found.append(node)
+        return found
+
+    def _reinlines_format_body(self, fn: ast.FunctionDef) -> bool:
+        """True if the body assembles the message itself instead of delegating.
+
+        The tell is a local assignment to ``parts`` or ``msg`` — the two names
+        the shared ``_format_message`` helper owns. A delegating ``build`` only
+        assigns ``msg = _format_message(...)``, so we treat an assignment whose
+        value is a call to ``_format_message`` as clean.
+        """
+        for node in ast.walk(fn):
+            if not isinstance(node, ast.Assign):
+                continue
+            targets = [t.id for t in node.targets if isinstance(t, ast.Name)]
+            if "parts" in targets:
+                return True
+            if "msg" in targets:
+                value = node.value
+                delegates = (
+                    isinstance(value, ast.Call)
+                    and isinstance(value.func, ast.Name)
+                    and value.func.id == "_format_message"
+                )
+                if not delegates:
+                    return True
+        return False
+
+    def test_build_methods_delegate_to_format_message(self):
+        errors_file = SRC_DIR / "errors.py"
+        tree = ast.parse(errors_file.read_text(), filename=str(errors_file))
+
+        builds = self._build_methods(tree)
+        assert builds, "expected at least one build() classmethod in errors.py"
+
+        violations = [
+            f"  errors.py:{fn.lineno}: build() re-inlines the format body — "
+            "call _format_message(...) instead of assembling parts/msg locally"
+            for fn in builds
+            if self._reinlines_format_body(fn)
+        ]
+        assert violations == [], (
+            f"\n{len(violations)} build() method(s) duplicate the format body:\n"
+            + "\n".join(violations)
+            + "\n\nEvery .build must delegate to _format_message (errors.py). "
+            "See TestErrorBuildBodyMonopoly / CON-02."
+        )
+
+    def test_detector_flags_a_reinlined_build(self):
+        """Slip check: the detector must fire on a re-inlined format body."""
+        src = (
+            "def build(cls, what):\n"
+            "    parts = []\n"
+            "    parts.append(what)\n"
+            "    msg = ' '.join(parts)\n"
+            "    return cls(msg)\n"
+        )
+        fn = ast.parse(src).body[0]
+        assert isinstance(fn, ast.FunctionDef)
+        assert self._reinlines_format_body(fn) is True
+
+    def test_detector_passes_a_delegating_build(self):
+        """Slip check: a build() that delegates to _format_message is clean."""
+        src = (
+            "def build(cls, what):\n"
+            "    msg = _format_message(what)\n"
+            "    return cls(msg)\n"
+        )
+        fn = ast.parse(src).body[0]
+        assert isinstance(fn, ast.FunctionDef)
+        assert self._reinlines_format_body(fn) is False
+
+
 class TestFileSplitEnforcement:
     """Functions extracted from decorators.py must not drift back.
 
@@ -1499,29 +1589,41 @@ class TestValidationModuleBoundary:
 
 
 class TestLowerLayersDoNotImportForwardDX:
-    """neograph-9epk — DIP: the DX layer is forward.py. No lower-layer module
-    (compiler, state, wiring, IR, validation, factory cluster) may import from
-    it. Core-IR concepts that the compiler needs (e.g. the branch sentinel)
-    live in neutral low-level modules (_ir_branch.py), so the dependency points
+    """neograph-9epk / LR-01 — DIP: the DX layer is BOTH ``forward.py`` and
+    ``decorators.py`` (AGENTS.md names both). No lower-layer module (compiler,
+    state, wiring, IR, validation, factory cluster) may import from either.
+    Core-IR concepts the compiler needs (e.g. the branch sentinel) live in
+    neutral low-level modules (_ir_branch.py), so the dependency points
     DX -> IR, never IR -> DX.
 
-    Only the package facade ``__init__.py`` may import forward.py (it re-exports
-    the PUBLIC ``ForwardConstruct`` for the top-level API).
+    Originally this guard covered only ``forward.py``; the reviewer
+    mutation-verified that its twin ``decorators.py`` was an unguarded backdoor
+    (decorators.py re-exports the DI symbols, so an IR module importing it left
+    the full guard suite green). Both DX modules are now banned.
+
+    Only the package facade ``__init__.py`` may import them (it re-exports the
+    PUBLIC ``ForwardConstruct`` / ``@node`` for the top-level API). The two DX
+    modules may import each other (peer DX, not a downward edge).
     """
 
-    # The package facade re-exports the public DX class — allowed.
+    # The two modules AGENTS.md designates as the DX layer.
+    DX_MODULES = frozenset({"forward", "decorators"})
+    # The package facade re-exports the public DX symbols — allowed.
     FORWARD_IMPORT_ALLOWLIST = {"__init__"}
 
-    def test_no_lower_layer_imports_forward(self):
+    def test_no_lower_layer_imports_dx(self):
         offenders: list[str] = []
         for path in SRC_DIR.glob("*.py"):
             mod = path.stem
-            if mod == "forward" or mod in self.FORWARD_IMPORT_ALLOWLIST:
+            # A DX module itself and the facade are exempt; DX modules may also
+            # import each other (peer edge, not IR -> DX).
+            if mod in self.DX_MODULES or mod in self.FORWARD_IMPORT_ALLOWLIST:
                 continue
-            if "forward" in _parse_neograph_imports(path):
-                offenders.append(f"  {mod}.py imports from neograph.forward (DX layer)")
+            imported = _parse_neograph_imports(path)
+            for dx in sorted(self.DX_MODULES & imported):
+                offenders.append(f"  {mod}.py imports from neograph.{dx} (DX layer)")
         assert not offenders, (
-            "Lower-layer modules must not import the DX layer (forward.py). "
+            "Lower-layer modules must not import the DX layer (forward.py / decorators.py). "
             "Move shared core-IR concepts to a neutral module (e.g. _ir_branch.py):\n" + "\n".join(offenders)
         )
 
@@ -1531,8 +1633,15 @@ class TestLowerLayersDoNotImportForwardDX:
         fake.write_text("from neograph.forward import _BranchNode\n")
         assert "forward" in _parse_neograph_imports(fake)
 
+    def test_meta_detects_decorators_import(self, tmp_path):
+        """Positive: a module importing from neograph.decorators is detected —
+        the LR-01 hole the reviewer mutation-verified."""
+        fake = tmp_path / "_fake_lower_dec.py"
+        fake.write_text("from neograph.decorators import _classify_di_params\n")
+        assert "decorators" in _parse_neograph_imports(fake) & self.DX_MODULES
+
     def test_meta_passes_neutral_ir_import(self, tmp_path):
-        """Negative: importing the neutral IR module is not a forward import."""
+        """Negative: importing the neutral IR module is not a DX import."""
         fake = tmp_path / "_fake_ok.py"
         fake.write_text("from neograph._ir_branch import _BranchNode\n")
-        assert "forward" not in _parse_neograph_imports(fake)
+        assert not (self.DX_MODULES & _parse_neograph_imports(fake))

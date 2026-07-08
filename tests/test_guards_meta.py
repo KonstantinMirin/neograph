@@ -518,3 +518,50 @@ class TestNoNearDuplicateHelperNames:
     def test_meta_negative_respects_allowlist(self) -> None:
         flagged = self._find_near_duplicates({"_get_param_res": ["a.py:1(def)"], "_set_param_res": ["a.py:2(def)"]})
         assert flagged == []
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# Slip meta-test for the DX-import guard (LR-01)
+# ════════════════════════════════════════════════════════════════════════════
+class TestDXImportGuardCoversDecorators:
+    """Slip meta-test: the DX-import guard must fire on a ``decorators.py``
+    import, not only ``forward.py``.
+
+    LR-01 was an unguarded HOLE: the "lower layers must not import the DX layer"
+    guard (``TestLowerLayersDoNotImportForwardDX`` in test_guards_assembly.py)
+    was written for forward.py and never extended to its twin decorators.py, so
+    an IR module importing decorators left the full guard suite green — the
+    reviewer mutation-verified it. This meta-test pins the extension: if a
+    future edit drops ``decorators`` from the guard's ``DX_MODULES`` set (or the
+    parser stops seeing the import), the guard silently reopens the hole and
+    THIS test catches it.
+    """
+
+    def _guard(self):
+        from tests.test_guards_assembly import TestLowerLayersDoNotImportForwardDX
+
+        return TestLowerLayersDoNotImportForwardDX
+
+    def test_decorators_is_in_the_guards_banned_dx_set(self) -> None:
+        guard = self._guard()
+        assert "decorators" in guard.DX_MODULES, (
+            "decorators.py must be in the DX-import guard's banned set (LR-01). "
+            "Removing it reopens the mutation-verified backdoor."
+        )
+        assert "forward" in guard.DX_MODULES
+
+    def test_guard_logic_flags_a_synthetic_decorators_import(self, tmp_path) -> None:
+        """Replay the guard's offender loop against a synthetic IR module that
+        imports decorators — it must be flagged as an offender."""
+        from tests.test_guards_assembly import _parse_neograph_imports
+
+        guard = self._guard()
+        fake = tmp_path / "_fake_ir_module.py"
+        fake.write_text("from neograph.decorators import _classify_di_params\n")
+
+        imported = _parse_neograph_imports(fake)
+        offenders = sorted(guard.DX_MODULES & imported)
+        assert offenders == ["decorators"], (
+            "The DX-import guard must flag an IR module that imports "
+            f"neograph.decorators; got offenders={offenders}"
+        )

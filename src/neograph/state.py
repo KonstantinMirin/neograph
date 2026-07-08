@@ -7,7 +7,7 @@ No monolithic state that grows with every derivation type.
 from __future__ import annotations
 
 import warnings
-from typing import Annotated, Any
+from typing import Annotated, Any, get_args, get_origin
 
 import structlog
 from pydantic import BaseModel, create_model
@@ -337,6 +337,36 @@ def build_output_schema_model(state_model: type[BaseModel]) -> type[BaseModel]:
         return create_model(f"{state_model.__name__}Output", **fields)
 
 
+def _type_signature(typ: Any) -> str:
+    """Structural signature of a type, used by both fingerprint computations.
+
+    Qualname alone is too coarse: two structurally-different models that share a
+    ``__qualname__`` (or the same class after a field-level edit) collide into a
+    false negative, so the schema/node fingerprints never change and the
+    checkpoint auto-rewind never triggers (neograph-v63o / review 080726 PAT-03).
+
+    This folds one level of field detail into the signature — the same
+    ``(field_name, str(annotation))`` detail ``compute_schema_fingerprint``
+    records — so a same-name field add/remove/retype changes the signature:
+
+    - Pydantic model  -> ``module.Qualname`` + sorted ``(field, str(annotation))``
+      pairs. Nested models contribute their ``str(annotation)`` (not their own
+      structure) to stay cycle-safe, matching the schema fingerprint's depth.
+    - Generic (``list[X]``, ``dict[K,V]``, Each's ``dict[str, X]``) -> unwrapped
+      so a field change on the wrapped model ``X`` is still visible.
+    - Anything else -> ``str(typ)`` (already carries module + qualname).
+    """
+    args = get_args(typ)
+    if args:
+        origin = get_origin(typ)
+        origin_name = getattr(origin, "__qualname__", str(origin))
+        return f"{origin_name}[{','.join(_type_signature(a) for a in args)}]"
+    if isinstance(typ, type) and issubclass(typ, BaseModel):
+        fields = sorted((fname, str(finfo.annotation)) for fname, finfo in typ.model_fields.items())
+        return f"{typ.__module__}.{typ.__qualname__}{fields!r}"
+    return str(typ)
+
+
 def compute_node_fingerprints(construct: Any) -> dict[str, str]:
     """Compute per-node output type fingerprints for checkpoint invalidation.
 
@@ -366,21 +396,17 @@ def compute_node_fingerprints(construct: Any) -> dict[str, str]:
                 for key, typ in no.all_keys.items():
                     full_name = output_field_name(fname, key)
                     result[full_name] = hashlib.sha256(
-                        f"{full_name}:{type(typ).__name__ if isinstance(typ, type) else str(typ)}".encode()
+                        f"{full_name}:{_type_signature(typ)}".encode()
                     ).hexdigest()[:12]
             else:
                 typ = no.primary
-                result[fname] = hashlib.sha256(
-                    f"{fname}:{typ.__qualname__ if isinstance(typ, type) else str(typ)}".encode()
-                ).hexdigest()[:12]
+                result[fname] = hashlib.sha256(f"{fname}:{_type_signature(typ)}".encode()).hexdigest()[:12]
         elif hasattr(item, "nodes"):
             # Sub-construct: fingerprint its output
             fname = field_name_for(item.name)
             if hasattr(item, "output") and item.output is not None:
                 typ = item.output
-                result[fname] = hashlib.sha256(
-                    f"{fname}:{typ.__qualname__ if isinstance(typ, type) else str(typ)}".encode()
-                ).hexdigest()[:12]
+                result[fname] = hashlib.sha256(f"{fname}:{_type_signature(typ)}".encode()).hexdigest()[:12]
 
     for item in construct.nodes:
         if isinstance(item, _BranchNode):
@@ -411,7 +437,10 @@ def compute_schema_fingerprint(state_model: type[BaseModel]) -> str:
     for fname, finfo in state_model.model_fields.items():
         if any(fname.startswith(p) or fname == p for p in _FRAMEWORK_PREFIXES):
             continue
-        items.append((fname, str(finfo.annotation)))
+        # _type_signature (not bare str(annotation)) so a same-qualname field
+        # change opens the gate -- otherwise the enriched node fingerprint below
+        # is never reached; see neograph-v63o. Keeps both fingerprints in lockstep.
+        items.append((fname, _type_signature(finfo.annotation)))
     items.sort()
     raw = repr(items).encode()
     return hashlib.sha256(raw).hexdigest()[:16]

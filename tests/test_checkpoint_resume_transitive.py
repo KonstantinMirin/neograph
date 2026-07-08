@@ -11,11 +11,14 @@ state-field names.
 
 from __future__ import annotations
 
+import hashlib
+
 import pytest
 from pydantic import BaseModel
 
 from neograph import Construct, Each, Node, compile
 from neograph.runner import _compute_invalidated_nodes
+from neograph.state import compute_node_fingerprints
 from tests.fakes import build_test_compile_kwargs, register_scripted
 
 # Dummy shims for compile() — these tests inspect fingerprints only, never
@@ -172,3 +175,94 @@ def test_compute_invalidated_nodes_handles_diamond():
 
     invalidated = _compute_invalidated_nodes(graph_v2, {"neo_node_fingerprints": stored_fps})
     assert invalidated == {"a", "b", "c", "d"}, f"Diamond: expected all four nodes, got {sorted(invalidated)}"
+
+
+# ---------------------------------------------------------------------------
+# Fingerprint coarseness (neograph-v63o / review 080726 PAT-03, LOW-01).
+# The per-node fingerprint used to hash ONLY ``type.__qualname__``, so a
+# field-level change to an output model that keeps the SAME class name did not
+# change the fingerprint -> the node was never marked invalidated and the
+# auto-rewind never triggered. These pin the structural (field-aware) fingerprint.
+# ---------------------------------------------------------------------------
+
+
+def _make_same_qualname_model(with_extra: bool) -> type:
+    """Two models with an IDENTICAL ``__qualname__`` (``_make...<locals>.Payload``)
+    differing only by a field. This is the exact false-negative the qualname-only
+    fingerprint missed."""
+    if with_extra:
+
+        class Payload(BaseModel):
+            val: str = "x"
+            extra: int = 0
+
+    else:
+
+        class Payload(BaseModel):
+            val: str = "x"
+
+    return Payload
+
+
+def test_node_fingerprint_distinguishes_same_qualname_different_fields():
+    """Same class name, changed field set -> the node fingerprint must differ."""
+    p1 = _make_same_qualname_model(with_extra=False)
+    p2 = _make_same_qualname_model(with_extra=True)
+    assert p1.__qualname__ == p2.__qualname__, "precondition: identical qualname"
+
+    c1 = Construct("fp-pipe", nodes=[Node.scripted("a", fn="tj_a", outputs=p1)])
+    c2 = Construct("fp-pipe", nodes=[Node.scripted("a", fn="tj_a", outputs=p2)])
+
+    fp1 = compute_node_fingerprints(c1)
+    fp2 = compute_node_fingerprints(c2)
+    assert fp1["a"] != fp2["a"], (
+        "qualname-only fingerprint collided two structurally-different models; "
+        "a same-name field change must change the per-node fingerprint"
+    )
+
+
+def test_schema_fingerprint_distinguishes_same_qualname_different_fields():
+    """The schema fingerprint GATES the whole auto-rewind check (a match returns
+    early). It too must open on a same-qualname field change, or the enriched
+    node fingerprint is never reached."""
+    p1 = _make_same_qualname_model(with_extra=False)
+    p2 = _make_same_qualname_model(with_extra=True)
+
+    g1 = compile(Construct("fp-pipe", nodes=[Node.scripted("a", fn="tj_a", outputs=p1)]), **build_test_compile_kwargs())
+    g2 = compile(Construct("fp-pipe", nodes=[Node.scripted("a", fn="tj_a", outputs=p2)]), **build_test_compile_kwargs())
+
+    assert g1.schema_fingerprint != g2.schema_fingerprint, (
+        "schema fingerprint gate stayed closed on a same-qualname field change; "
+        "auto-rewind would never trigger"
+    )
+
+
+def test_same_qualname_field_change_invalidates_node():
+    """End-to-end at the invalidation layer: recompiling with a same-qualname
+    output model that gained a field must flag the node as invalidated."""
+    p1 = _make_same_qualname_model(with_extra=False)
+    p2 = _make_same_qualname_model(with_extra=True)
+
+    g1 = compile(Construct("fp-pipe", nodes=[Node.scripted("a", fn="tj_a", outputs=p1)]), **build_test_compile_kwargs())
+    stored = dict(g1.node_fingerprints)
+
+    g2 = compile(Construct("fp-pipe", nodes=[Node.scripted("a", fn="tj_a", outputs=p2)]), **build_test_compile_kwargs())
+    invalidated = _compute_invalidated_nodes(g2, {"neo_node_fingerprints": stored})
+    assert "a" in invalidated
+
+
+def test_old_format_node_fingerprint_invalidates_on_upgrade():
+    """Migration behavior (DESIRED + pinned): checkpoints written before v63o
+    carry qualname-only node fingerprints. On the first resume after upgrade the
+    new structural fingerprint differs from the stored one, so every node is
+    invalidated -> one full re-run. Better than silently trusting a stale, coarser
+    signature."""
+    graph = compile(_linear_chain(_A), **build_test_compile_kwargs())
+
+    # Reconstruct the OLD (pre-v63o) formula: sha256(f"{fname}:{qualname}")[:12].
+    old_a = hashlib.sha256(f"a:{_A.__qualname__}".encode()).hexdigest()[:12]
+    stored = dict(graph.node_fingerprints)
+    stored["a"] = old_a
+
+    invalidated = _compute_invalidated_nodes(graph, {"neo_node_fingerprints": stored})
+    assert "a" in invalidated, "old-format stored fingerprint must be seen as changed after upgrade"
