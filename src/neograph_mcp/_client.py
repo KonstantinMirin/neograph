@@ -1,0 +1,358 @@
+"""Consumer-side MCP client stitching — the shipped, overridable battery.
+
+This module graduates the ``MultiServerMCPClient`` + transport-config +
+token-provider glue the g4q9 MCP examples hand-rolled into a supported helper, in
+the shape of the ``DefaultPromptCompiler`` seam-plus-battery precedent: the seam is
+``compile(tool_factories=...)`` / the resource-fetcher config keys (already in
+neograph core, unchanged); this is only an OPTIONAL default on top of it. A
+consumer who wants house rules hand-rolls their own factory exactly as before.
+
+## The nmb2 invariant (do NOT reopen)
+
+The ``MultiServerMCPClient`` / ``ClientSession`` is created and OWNED **inside** the
+returned factories/callables, which the CONSUMER holds via ``config`` — neograph
+core NEVER creates, holds, or disposes it. The factories are re-invoked per
+superstep (reading ``config`` fresh), so per-run identity is minted per run by the
+``token_provider``. This module imports the adapter but NOTHING from the langgraph
+engine or neograph run-layer internals — it produces plain factories/callables the
+existing seams already accept (enforced by
+``tests/test_guards_mcp_session_ownership.py``).
+
+## Transport-aware per-run identity
+
+stdio has no HTTP headers, so per-run identity rides as a tool ARGUMENT (default
+name ``token``; the demo server echoes it under ``acting_as``). streamable-http
+uses a bearer ``Authorization`` header. ``mcp_tool_factories`` handles both.
+
+## namespace / collision policy
+
+``namespace=True`` (default) keys each factory ``"{server}::{tool}"`` and RENAMES
+the returned tool to match (so the LLM-facing name, the ``Tool`` spec name, and the
+factory-lookup key all agree). ``namespace=False`` keys by the bare tool name and
+raises ``ValueError`` if two servers expose the same tool name. The return is a
+DICT so a consumer can slice it per node for least-privilege selective binding.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import concurrent.futures
+import inspect
+from collections.abc import Awaitable, Callable, Coroutine
+from dataclasses import dataclass
+from typing import Any, cast
+from urllib.parse import urlparse
+
+# A consumer-owned tool factory: (config, tool_config) -> tool (or awaitable of one).
+# The MCP-style factories this module builds are async (they await a token
+# provider / build an MCP client), so they must be driven by arun().
+ToolFactory = Callable[[Any, Any], Any]
+
+# token_provider: mints per-run identity from config['configurable'] (tool path) or
+# with no arguments (resource path — the fetch seam carries no config). Sync or async.
+TokenProvider = Callable[..., Awaitable[str] | str]
+
+
+@dataclass(frozen=True)
+class StdioServer:
+    """A stdio MCP server spawned as a subprocess (no ports, no network).
+
+    Per-run identity rides as a tool argument (stdio has no HTTP headers) — see
+    ``mcp_tool_factories(stdio_token_arg=...)``.
+    """
+
+    command: str
+    args: list[str]
+    env: dict[str, str] | None = None
+
+
+@dataclass(frozen=True)
+class HttpServer:
+    """A streamable-http MCP server. Per-run identity rides as a bearer
+    ``Authorization`` header minted by the ``token_provider``."""
+
+    url: str
+    headers: dict[str, str] | None = None
+
+
+# ── transport wiring ──────────────────────────────────────────────────────────
+
+
+def _connection(spec: StdioServer | HttpServer, token: str | None) -> dict[str, Any]:
+    """Build the langchain-mcp-adapters connection dict for one server + identity."""
+    if isinstance(spec, StdioServer):
+        conn: dict[str, Any] = {"transport": "stdio", "command": spec.command, "args": list(spec.args)}
+        if spec.env is not None:
+            conn["env"] = dict(spec.env)
+        return conn
+    headers = dict(spec.headers or {})
+    if token is not None:
+        headers["Authorization"] = f"Bearer {token}"
+    conn = {"transport": "streamable_http", "url": spec.url}
+    if headers:
+        conn["headers"] = headers
+    return conn
+
+
+def _client_for(server_key: str, spec: StdioServer | HttpServer, token: str | None) -> Any:
+    """Create a consumer-held MultiServerMCPClient for ONE server (function-local
+    import keeps the module import light and the fail-loud check in ``__init__``)."""
+    from langchain_mcp_adapters.client import MultiServerMCPClient
+
+    # The connection dict matches the adapter's Stdio/StreamableHttp TypedDicts at
+    # runtime; cast past the structural mismatch the plain dict builder produces.
+    return MultiServerMCPClient(cast(Any, {server_key: _connection(spec, token)}))
+
+
+async def _resolve_token(token_provider: TokenProvider | None, config: Any) -> str | None:
+    """Mint per-run identity from ``config['configurable']`` (tool path). Sync or async."""
+    if token_provider is None:
+        return None
+    if isinstance(config, dict):
+        configurable = config.get("configurable", {}) or {}
+    else:
+        configurable = getattr(config, "configurable", {}) or {}
+    result = token_provider(configurable)
+    if inspect.isawaitable(result):
+        result = await result
+    return result
+
+
+async def _resolve_token_no_config(token_provider: TokenProvider | None) -> str | None:
+    """Mint identity on the resource path, which carries no config: the provider is
+    called with no arguments (a per-run closure), falling back to ``{}`` for a
+    provider written against the configurable-dict tool-path shape."""
+    if token_provider is None:
+        return None
+    try:
+        result = token_provider()
+    except TypeError:
+        result = token_provider({})
+    if inspect.isawaitable(result):
+        result = await result
+    return result
+
+
+def _run_sync(coro: Coroutine[Any, Any, Any]) -> Any:
+    """Drive ``coro`` to completion from a sync call site — even when a loop is
+    already running (an async test / notebook), by using a worker thread. Build-time
+    tool discovery is sync (``mcp_tool_factories`` returns a plain dict), but the
+    adapter's ``get_tools`` is async; this bridges the two without forcing the
+    consumer to await the builder."""
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+        return ex.submit(asyncio.run, coro).result()
+
+
+# ── tool factories ────────────────────────────────────────────────────────────
+
+
+def _inject_stdio_token(tool: Any, token: str, arg_name: str) -> Any:
+    """Wrap a stdio tool so every call carries per-run identity as ``arg_name``.
+
+    stdio has no headers, so identity travels as a tool argument. Only injected
+    when the tool actually declares ``arg_name`` (else the server would reject an
+    unknown kwarg); our value overrides any model-supplied one so identity is
+    framework-carried, never LLM-chosen."""
+    try:
+        declares = arg_name in (tool.args or {})
+    except Exception:  # noqa: BLE001 - a tool without an introspectable schema
+        declares = False
+    if not declares:
+        return tool
+
+    original = tool.coroutine
+
+    async def _with_identity(**kwargs: Any) -> Any:
+        kwargs[arg_name] = token
+        return await original(**kwargs)
+
+    return tool.model_copy(update={"coroutine": _with_identity})
+
+
+async def _discover_tool_names(server_key: str, spec: StdioServer | HttpServer) -> list[str]:
+    """Connect once (identity-agnostic) to enumerate the server's tool names."""
+    client = _client_for(server_key, spec, None)
+    tools = await client.get_tools(server_name=server_key)
+    return [t.name for t in tools]
+
+
+def _make_tool_factory(
+    server_key: str,
+    spec: StdioServer | HttpServer,
+    tool_name: str,
+    rename_to: str | None,
+    token_provider: TokenProvider | None,
+    stdio_token_arg: str,
+) -> ToolFactory:
+    """Build ONE consumer-owned async factory for ``tool_name`` on ``server_key``.
+
+    Per superstep: mint identity from config, build a fresh client (owned here,
+    disposed by the adapter's stateless-per-call session model), fetch the tool,
+    bind per-run identity, and (when namespaced) rename it so the LLM-facing name
+    matches the ``Tool`` spec / factory key."""
+
+    async def _factory(config: Any, tool_config: Any) -> Any:
+        token = await _resolve_token(token_provider, config)
+        client = _client_for(server_key, spec, token)
+        tools = await client.get_tools(server_name=server_key)
+        tool = next((t for t in tools if t.name == tool_name), None)
+        if tool is None:
+            raise ValueError(
+                f"MCP server '{server_key}' no longer exposes tool '{tool_name}' "
+                f"(available: {sorted(t.name for t in tools)})"
+            )
+        if isinstance(spec, StdioServer) and token is not None:
+            tool = _inject_stdio_token(tool, token, stdio_token_arg)
+        if rename_to is not None:
+            tool = tool.model_copy(update={"name": rename_to})
+        return tool
+
+    return _factory
+
+
+def mcp_tool_factories(
+    servers: dict[str, StdioServer | HttpServer],
+    *,
+    token_provider: TokenProvider | None = None,
+    namespace: bool = True,
+    stdio_token_arg: str = "token",
+) -> dict[str, ToolFactory]:
+    """Build the ``{name: async factory}`` dict for ``compile(tool_factories=...)``.
+
+    Connects once per server at call time to enumerate tools, then returns a
+    consumer-owned async factory per tool — the ``MultiServerMCPClient`` is created
+    and owned INSIDE each factory (per the nmb2 invariant; neograph core never
+    holds it). Slice the returned dict per node for least-privilege binding.
+
+    ``token_provider`` mints per-run identity from ``config['configurable']`` on the
+    ``arun()`` path; ``namespace=True`` keys ``"{server}::{tool}"`` and renames the
+    tool to match; ``stdio_token_arg`` is the tool-argument name identity rides on
+    for stdio servers (streamable-http uses a bearer header instead).
+
+    Note (deviation from the pinned sketch): ``stdio_token_arg`` is an added
+    keyword — stdio has no headers, so the transport-aware token path needs to know
+    which tool argument carries identity (default ``"token"``, matching the demo
+    server's echoed arg).
+    """
+    factories: dict[str, ToolFactory] = {}
+    for server_key, spec in servers.items():
+        names = _run_sync(_discover_tool_names(server_key, spec))
+        for name in names:
+            key = f"{server_key}::{name}" if namespace else name
+            if key in factories:
+                raise ValueError(
+                    f"tool name collision on '{key}': two servers expose '{name}'. "
+                    "Pass namespace=True to key factories as 'server::tool'."
+                )
+            factories[key] = _make_tool_factory(
+                server_key,
+                spec,
+                name,
+                key if namespace else None,
+                token_provider,
+                stdio_token_arg,
+            )
+    return factories
+
+
+# ── resource fetcher / replayer ───────────────────────────────────────────────
+
+
+def _route_uri(servers: dict[str, StdioServer | HttpServer], uri: str) -> str:
+    """Pick the server for a resource ``uri``: single server -> it; else match the
+    uri host (``mcp://<host>/...``) against a server key."""
+    if len(servers) == 1:
+        return next(iter(servers))
+    host = urlparse(uri).netloc
+    if host in servers:
+        return host
+    raise ValueError(f"cannot route resource uri '{uri}' to any of {sorted(servers)} (host '{host}' unmatched)")
+
+
+def _route_tool(servers: dict[str, StdioServer | HttpServer], tool_name: str) -> tuple[str, str]:
+    """Pick (server_key, real_tool_name) for a replayed producing call. A namespaced
+    ``server::tool`` name routes explicitly; otherwise a single server is assumed."""
+    if "::" in tool_name:
+        server_key, real = tool_name.split("::", 1)
+        if server_key not in servers:
+            raise ValueError(f"replay tool '{tool_name}' names unknown server '{server_key}'")
+        return server_key, real
+    if len(servers) == 1:
+        return next(iter(servers)), tool_name
+    raise ValueError(f"ambiguous replay tool '{tool_name}' across {sorted(servers)}; use a 'server::tool' name")
+
+
+def _read_resource_content(result: Any) -> tuple[Any, str | None]:
+    """Unpack the first content block of a ``read_resource`` result into (content, mime)."""
+    contents = getattr(result, "contents", None) or []
+    if not contents:
+        return "", None
+    block = contents[0]
+    text = getattr(block, "text", None)
+    mime = getattr(block, "mimeType", None)
+    if text is not None:
+        return text, mime
+    return getattr(block, "blob", None), mime
+
+
+def mcp_resource_fetcher(
+    servers: dict[str, StdioServer | HttpServer],
+    *,
+    token_provider: TokenProvider | None = None,
+) -> tuple[Callable[[str], Awaitable[tuple[Any, str | None]]], Callable[[str, dict], Awaitable[Any]]]:
+    """Return ``(fetcher, replayer)`` for ``config['configurable']`` so FromResource
+    hydration + layered-expiry replay work out of the box.
+
+    - ``fetcher(uri) -> (content, mime)``: reads a resource over a consumer-owned
+      session. An ``McpError`` (e.g. a ``-32002`` expiry) is caught INSIDE the
+      session context and re-raised AFTER the ``async with`` closes — so it escapes
+      as a bare ``McpError`` rather than an anyio-teardown ``ExceptionGroup``, which
+      is exactly what ``hydrate_resource_ref`` treats as candidate expiry (-> replay).
+    - ``replayer(tool_name, args) -> raw_result``: re-invokes the producing call
+      through the same client so an expired ``resource_link`` can be re-derived. The
+      raw session's ``resource_link`` blocks are preserved (unlike the langchain
+      adapter, which surfaces them as ``file`` blocks), so neograph's
+      ``_first_resource_link_uri`` finds the fresh uri. The idempotency GATE is
+      enforced upstream in ``hydrate_resource_ref`` (a non-idempotent producer never
+      reaches the replayer), so no idempotency logic lives here.
+
+    Since the fetch seam carries no ``config``, ``token_provider`` is invoked with no
+    arguments on this path (bind per-run identity by constructing the fetcher inside
+    the run scope, or return a static token).
+    """
+    from mcp.shared.exceptions import McpError
+    from pydantic import AnyUrl
+
+    async def fetcher(uri: str) -> tuple[Any, str | None]:
+        server_key = _route_uri(servers, uri)
+        token = await _resolve_token_no_config(token_provider)
+        client = _client_for(server_key, servers[server_key], token)
+        error: McpError | None = None
+        result: Any = None
+        async with client.session(server_key) as session:
+            try:
+                result = await session.read_resource(AnyUrl(uri))
+            except McpError as exc:
+                # Catch in-scope: escaping the `async with` wraps it in an anyio
+                # ExceptionGroup; re-raise the bare McpError after the block closes.
+                error = exc
+        if error is not None:
+            raise error
+        return _read_resource_content(result)
+
+    async def replayer(tool_name: str, args: dict) -> Any:
+        server_key, real = _route_tool(servers, tool_name)
+        token = await _resolve_token_no_config(token_provider)
+        client = _client_for(server_key, servers[server_key], token)
+        async with client.session(server_key) as session:
+            result = await session.call_tool(real, args or {})
+        # Return the raw content list so neograph's _first_resource_link_uri scans
+        # the fresh resource_link blocks (raw session preserves the 'resource_link'
+        # block type; the langchain adapter would rewrite it to 'file').
+        return list(getattr(result, "content", None) or [])
+
+    return fetcher, replayer

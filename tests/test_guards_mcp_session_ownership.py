@@ -85,3 +85,45 @@ class TestNoMcpSessionOwnershipInSrc:
             "    return build_tools(auth=token)\n"
         )
         assert _scan(good) == []
+
+
+# ── Battery-side import discipline (neograph-xdt2) ────────────────────────────
+
+_MCP_BATTERY_DIR = pathlib.Path(__file__).resolve().parent.parent / "src" / "neograph_mcp"
+
+# The battery (src/neograph_mcp) MAY import the langchain-mcp adapter — that is its
+# whole job. It must NOT import the langgraph engine or neograph run-layer
+# internals: it produces only plain factories/callables the existing seams accept,
+# so it can never re-open the session-ownership / engine-coupling surface nmb2
+# killed. This is the complement of the src/neograph scan above.
+_BATTERY_BANNED = re.compile(
+    r"^\s*(?:from|import)\s+langgraph\b"  # langgraph engine surfaces
+    r"|\bfrom\s+neograph\.(?:runner|compiler|factory|_agent_cycle|_tool_loop|_dispatch|_execute)\b"
+    r"|\bimport\s+neograph\.(?:runner|compiler|factory|_agent_cycle|_tool_loop|_dispatch|_execute)\b",
+    re.MULTILINE,
+)
+
+
+class TestMcpBatteryImportsNoEngineSurfaces:
+    """The optional battery imports the adapter but no engine / run-layer internals."""
+
+    def test_battery_does_not_import_langgraph_or_run_layer(self):
+        if not _MCP_BATTERY_DIR.exists():
+            import pytest
+
+            pytest.skip("src/neograph_mcp not present")
+        offenders: dict[str, list[str]] = {}
+        for path in _MCP_BATTERY_DIR.rglob("*.py"):
+            hits = [m.group(0).strip() for m in _BATTERY_BANNED.finditer(path.read_text())]
+            if hits:
+                offenders[str(path.relative_to(_MCP_BATTERY_DIR))] = hits
+        assert offenders == {}, (
+            "src/neograph_mcp (the [mcp] battery) must import the adapter ONLY — never "
+            "langgraph engine surfaces or neograph run-layer internals. It produces "
+            f"plain factories/callables the existing seams accept. Offenders: {offenders}"
+        )
+
+    def test_slip_battery_banned_flags_a_planted_engine_import(self):
+        """Non-vacuity: the battery scanner FLAGS a planted engine/run-layer import."""
+        bad = "from langgraph.graph import StateGraph\nfrom neograph.runner import run\n"
+        assert [m.group(0).strip() for m in _BATTERY_BANNED.finditer(bad)]

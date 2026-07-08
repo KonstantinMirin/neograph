@@ -1058,6 +1058,10 @@ dev = [
 langfuse = [
     { name = "langfuse" },
 ]
+mcp = [
+    { name = "langchain-mcp-adapters" },
+    { name = "mcp" },
+]
 mcp-examples = [
     { name = "langchain-mcp-adapters" },
     { name = "mcp" },
@@ -1079,10 +1083,12 @@ requires-dist = [
     { name = "json-repair", specifier = ">=0.30" },
     { name = "jsonschema", specifier = ">=4.26.0" },
     { name = "langchain-core", specifier = ">=1.2,<2.0" },
+    { name = "langchain-mcp-adapters", marker = "extra == 'mcp'", specifier = ">=0.3" },
     { name = "langchain-mcp-adapters", marker = "extra == 'mcp-examples'", specifier = ">=0.3" },
     { name = "langfuse", marker = "extra == 'langfuse'", specifier = ">=3.0" },
     { name = "langgraph", specifier = ">=1.1,<2.0" },
     { name = "langgraph-checkpoint", specifier = ">=4.0,<5.0" },
+    { name = "mcp", marker = "extra == 'mcp'", specifier = ">=1.28,<2" },
     { name = "mcp", marker = "extra == 'mcp-examples'", specifier = ">=1.28,<2" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.8" },
     { name = "pydantic", specifier = ">=2.0" },
@@ -1092,7 +1098,7 @@ requires-dist = [
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.3" },
     { name = "structlog", specifier = ">=23.0" },
 ]
-provides-extras = ["langfuse", "mcp-examples", "dev"]
+provides-extras = ["langfuse", "mcp", "mcp-examples", "dev"]
 
 [package.metadata.requires-dev]
 dev = [

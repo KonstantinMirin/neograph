@@ -33,6 +33,19 @@ dependencies = [
 
 [project.optional-dependencies]
 langfuse = ["langfuse>=3.0"]
+# neograph-xdt2: the optional consumer-side MCP client DX battery ships as a
+# SECOND top-level package (src/neograph_mcp) — graduating the client stitching
+# the g4q9 examples hand-roll into a shipped, overridable helper. Same deps/pin as
+# the mcp-examples extra below; src/neograph itself stays MCP-free (the
+# no-session-ownership guard scans src/neograph only). Importing neograph_mcp
+# without this extra fails loud with an install hint. Run its tests with:
+#   uv run --extra dev --extra mcp pytest tests/test_mcp_battery.py
+mcp = [
+    "langchain-mcp-adapters>=0.3",
+    # <2 pin: mcp 2.0 renames FastMCP -> MCPServer; langchain-mcp-adapters 0.3.x
+    # targets the mcp 1.x API (matches the mcp-examples pin).
+    "mcp>=1.28,<2",
+]
 # neograph-g4q9: MCP examples (23/24) exercise the REAL Model Context Protocol
 # over stdio against examples/_mcp_demo_server.py. NOT core deps — src/neograph
 # stays MCP-free (the no-session-ownership guard scans src/ only; consumer-side
@@ -66,11 +79,16 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/neograph"]
+# neograph-xdt2: two top-level packages in one distribution. src/neograph_mcp is
+# the OPTIONAL [mcp] battery; it imports langchain-mcp-adapters but nothing from
+# the langgraph engine or neograph run-layer internals, so src/neograph stays
+# trivially MCP-free (the no-session-ownership guard scans src/neograph only).
+packages = ["src/neograph", "src/neograph_mcp"]
 
 [tool.hatch.build.targets.sdist]
 include = [
     "src/neograph",
+    "src/neograph_mcp",
     "README.md",
     "LICENSE",
     "CHANGELOG.md",
