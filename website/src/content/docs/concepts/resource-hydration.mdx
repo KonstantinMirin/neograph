@@ -9,6 +9,10 @@ Like `FromInput` and `FromConfig`, it is a marker inside `typing.Annotated`. Unl
 
 neograph owns no MCP session. Every fetch goes through a consumer-supplied async callable you pass in config, so routing, auth, and connection lifetime stay in your hands.
 
+:::tip[See it end to end]
+The [MCP Resources walkthrough](/walkthrough/mcp-resources/) runs this whole surface against a real MCP server — typed fraction reads, the lifted manifest, hydration across a human pause, and a link that expires mid-pause and self-heals. It names the pattern: **Typed Resource Manifest with Ephemeral Hydration**.
+:::
+
 ## The fetcher — where bytes come from
 
 `FromResource` never opens a connection itself. It reads an async `fetch(uri) -> (content, mime)` callable from `config["configurable"]["mcp_resource_fetcher"]`:
@@ -97,7 +101,7 @@ If no ref of the requested kind is present in the manifest, hydration fails loud
 An MCP `resource_link` carries no lifetime contract: the URI a tool returned an hour and a checkpoint ago may already be dead. Manifest-mode hydration handles that with three ordered layers:
 
 1. **Read.** Fetch `ref.uri` through the fetcher. On success, size-check and parse — done. A *parse* failure here propagates unchanged: a malformed-but-present resource is a real bug, never masked by a replay.
-2. **Replay.** If the *fetch* fails (an expired link), the only protocol-reliable way to re-derive a lifetime-free `resource_link` is to re-invoke the tool call that produced it. neograph reads a second consumer callable, the replayer, re-runs `ref.producing_call`, and fetches the fresh URI the replay emits.
+2. **Replay.** On any read failure (e.g. `-32002 Resource not found`, or a code-agnostic server error), the only protocol-reliable way to re-derive a lifetime-free `resource_link` is to re-invoke the tool call that produced it. The trigger is deliberately code-agnostic: `hydrate_resource_ref` treats *any* fetch failure as candidate expiry, which is safe because replay is idempotency-gated. neograph reads a second consumer callable, the replayer, re-runs `ref.producing_call`, and fetches the fresh URI the replay emits.
 3. **Fail loud.** If no replayer is configured, or the replay itself fails, hydration raises `ResourceExpiredError`. Silent staleness is worse than a loud failure — a stale resource flowing into a prompt corrupts a run invisibly.
 
 URI mode (`uri=`) does a single read with no replay layer: there is no producing call to re-invoke, so an expired static/templated URI simply surfaces the fetch error.

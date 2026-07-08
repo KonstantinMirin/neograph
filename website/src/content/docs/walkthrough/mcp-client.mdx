@@ -1,0 +1,204 @@
+---
+title: "MCP Client"
+description: "Consume Model Context Protocol tools with per-node least privilege, per-run identity, and a human gate in front of every mutation."
+---
+
+The Model Context Protocol (MCP) lets an agent call tools that live in an external server — a CRM, a knowledge base, a ticketing system. NeoGraph is an MCP *client*: you bind those tools to nodes and the LLM calls them. The interesting part is everything you get for free once they are neograph nodes — per-node tool binding, per-run identity, and a checkpointed human gate before any mutation fires.
+
+This walkthrough follows `examples/23_mcp_client_selective_binding.py`, a CRM deal-review pipeline talking to a **real** MCP server (a plain FastMCP server spawned as a stdio subprocess). The MCP layer is genuine end-to-end — tool discovery, per-operator auth, structured results all round-trip over real stdio JSON-RPC. The only fakes are the LLMs, so the example runs with no API keys and no network beyond the local subprocess.
+
+## The battery: one call, a factory per tool
+
+The shipped `neograph[mcp]` battery turns a typed server config into the `{name: async factory}` dict that `compile(tool_factories=...)` already accepts:
+
+```python
+from neograph_mcp import StdioServer, mcp_tool_factories
+
+CRM = StdioServer(command=sys.executable, args=[DEMO_SERVER])
+
+def token_provider(configurable: dict) -> str:
+    return configurable.get("mcp_auth", "anon")
+
+FACTORIES = mcp_tool_factories(
+    {"crm": CRM},
+    token_provider=token_provider,
+    namespace=False,  # single server → bare tool names
+)
+# FACTORIES == {"crm_search": <factory>, "kb_lookup": <factory>,
+#               "get_deal": <factory>, "update_deal": <factory>, ...}
+```
+
+`mcp_tool_factories` connects to the server once to enumerate its tools, then returns a **dict** — one async factory per tool. It is an *overridable default*: the seam is `compile(tool_factories=...)`, and the battery is one convenient way to fill it. When you want house rules, hand-roll the factory (see [The escape hatch](#the-escape-hatch-hand-rolled-factories) below). The returned dict being a dict — not one bundled agent — is what makes the next beat possible.
+
+:::note[Install the extra]
+The battery ships in a separate wheel so neograph core stays MCP-free. Install it with `pip install 'neograph[mcp]'` (or `uv add 'neograph[mcp]'`). Importing `neograph_mcp` without it fails loud with the install hint.
+:::
+
+## Beat 1 — selective binding
+
+The point of an MCP client over "one agent holds every tool" is **least privilege per node**. Slice the battery's dict so each node binds only the tools it needs:
+
+```python
+READER_TOOLS = ["crm_search", "kb_lookup"]  # read-only slice
+MUTATOR_TOOLS = ["update_deal"]             # the mutating slice
+
+@node(
+    mode="agent",
+    outputs={"result": ResearchBrief, "tool_log": list[ToolInteraction]},
+    model="research",
+    prompt="research/brief",
+    # This agent CANNOT call update_deal — it is not in its tools=.
+    tools=[
+        Tool("crm_search", budget=2, idempotent=True),
+        Tool("kb_lookup", budget=1, idempotent=True),
+    ],
+    llm_config={"announce_tool_budget": True},
+)
+def research() -> ResearchBrief: ...
+
+@node(
+    mode="act",  # act mode = mutating tools
+    outputs=ActionOutcome,
+    model="action",
+    prompt="action/apply",
+    tools=[Tool("update_deal", budget=1)],  # the mutating tool ONLY
+    gate_tools_when=lambda state: {"pending_tool": "update_deal", "reason": "Approve CRM mutation?"},
+)
+def apply_action() -> ActionOutcome: ...
+```
+
+Each node's `compile()` gets only its slice, so the least-privilege boundary is enforced at two levels:
+
+```python
+research_graph = compile(
+    research_pipeline, llm_factory=llm_factory, prompt_compiler=prompt_compiler,
+    tool_factories={k: FACTORIES[k] for k in READER_TOOLS},   # readers only
+)
+action_graph = compile(
+    action_pipeline, llm_factory=llm_factory, prompt_compiler=prompt_compiler,
+    tool_factories={k: FACTORIES[k] for k in MUTATOR_TOOLS},  # the mutator only
+    checkpointer=MemorySaver(),
+)
+```
+
+The research agent literally cannot mutate — `update_deal` is neither in its `tools=` nor in its `tool_factories`. One client, many nodes, least privilege per node.
+
+## Beat 2 — raw BaseTool passthrough and the lint guard
+
+A battery factory yields a real LangChain `BaseTool`; you can hand one straight to a node in `tools=[raw_tool]` with zero ceremony:
+
+```python
+raw_search = await FACTORIES["crm_search"]({"configurable": {"mcp_auth": "svc"}}, None)
+
+@node(mode="agent", outputs=ResearchBrief, model="research",
+      prompt="research/brief", tools=[raw_search])
+def raw_research() -> ResearchBrief: ...
+```
+
+MCP tools are **async-only** — langchain-mcp-adapters produces a `StructuredTool` backed by a coroutine with no sync `func`, so `.invoke()` raises. `lint()` catches this before you run:
+
+```python
+issues = [i for i in lint(raw_pipeline) if i.kind == "tool_requires_async_driver"]
+# [Issue(kind="tool_requires_async_driver",
+#        message="Node 'raw-research': tool 'crm_search' is async-only … Drive with arun()")]
+```
+
+So a sync `run()` fails loud with a `ConfigurationError` pointing you to `arun()`; the async driver runs the tool loop fine. The guard is compile-time when the tool is a raw `BaseTool` (lint can introspect it) and runtime for the factory path.
+
+## Beat 3 — per-run identity
+
+Each run carries its own identity. The `token_provider` reads `config['configurable']['mcp_auth']` and mints the token; neograph never inspects it — it only carries it from config to the tool.
+
+```python
+for operator in ("operator-A", "operator-B"):
+    result = await arun(
+        research_graph,
+        input={"node_id": "REVIEW-1"},
+        config={"configurable": {"mcp_auth": operator}},
+    )
+    tool_log = result["research_tool_log"]
+    who = {i.tool_name: _parse_mcp_json(i.typed_result).get("acting_as") for i in tool_log}
+    # operator-A → {'crm_search': 'operator-A', 'kb_lookup': 'operator-A'}
+    # operator-B → {'crm_search': 'operator-B', 'kb_lookup': 'operator-B'}
+```
+
+The server echoes the identity it saw under `acting_as`, so each run's tools observably carried that operator's token — read straight back out of the tool log.
+
+:::caution[stdio carries identity as a tool argument, not a header]
+stdio has **no HTTP headers**. Over stdio the token rides as a tool *argument* (the demo server declares a `token` arg and echoes it); the battery injects the run's token into that argument, overriding any model-supplied value so identity is framework-carried, never LLM-chosen.
+
+In **production against a streamable-http server**, identity rides as a bearer `Authorization` header minted **per request** by an `httpx.Auth` — swap `StdioServer` for `HttpServer` and supply the auth; nothing else changes. The MCP SDK ships `OAuthClientProvider` / `ClientCredentialsOAuthProvider` / `PrivateKeyJWTOAuthProvider` (all `httpx.Auth`) for the OAuth 2.1 / on-behalf-of cases. The token lives in the adapter's httpx client — never in neograph state, the checkpoint, or the schema fingerprint. Do not assume header auth works over stdio; it does not.
+:::
+
+## Beat 4 — gated mutation
+
+`gate_tools_when` on the action node pauses the run **before** `update_deal` fires. Because an `act` node's tool step is a real checkpointed superstep, nothing has happened yet when the human is asked:
+
+```python
+config = {"configurable": {"thread_id": "deal-1", "mcp_auth": "operator-A"}}
+
+paused = await arun(action_graph, input={"node_id": "REVIEW-1"}, config=config)
+# paused["__interrupt__"][0].value == {"pending_tool": "update_deal", "reason": "Approve CRM mutation?"}
+
+# Approve → the tool runs exactly once:
+result = await arun(action_graph, resume={"approved": True}, config=config)
+# result["apply_action"].status == "applied"
+```
+
+Resume with a **deny** and the tool never runs — the agent is told why (a denial `ToolMessage` is fed back answering the pending call) and finalizes anyway:
+
+```python
+result = await arun(action_graph, resume={"approved": False}, config=config)
+# result["apply_action"].status == "blocked"  — update_deal never executed
+```
+
+This is the structural version of "approve before side effects": you never touch the tool, and an MCP mutation cannot fire before a human approves. See the [Human-in-the-Loop walkthrough](/walkthrough/human-in-the-loop/) for the full gate/interrupt story.
+
+## Beat 5 — typed results
+
+`ToolInteraction.typed_result` preserves the structured MCP payload — not a repr string — so you get typed data back:
+
+```python
+search = next(i for i in tool_log if i.tool_name == "crm_search")
+hit = _parse_mcp_json(search.typed_result)["hits"][0]
+deal = Deal(**hit)   # Deal(id='D1', name='Acme renewal', stage='negotiation')
+```
+
+langchain-mcp-adapters surfaces a structured result as a list of content blocks (`[{"type": "text", "text": "<json>"}]`); `typed_result` holds that structure verbatim, ready to parse into a declared model. Read-only readers are marked `idempotent=True`, which flags them replay-safe: a read may be re-invoked to re-derive an expired resource, but a mutation may not (the default is the conservative non-idempotent).
+
+## The escape hatch: hand-rolled factories
+
+The battery is an overridable default. A tool factory is just an async callable `(config, tool_config) -> tool` that **owns its client** — neograph core never holds an MCP session:
+
+```python
+from langchain_mcp_adapters.client import MultiServerMCPClient
+
+async def crm_search_factory(config, tool_config):
+    token = config["configurable"].get("mcp_auth", "anon")
+    client = MultiServerMCPClient({"crm": {
+        "transport": "stdio", "command": sys.executable, "args": [DEMO_SERVER]}})
+    tools = await client.get_tools(server_name="crm")
+    tool = next(t for t in tools if t.name == "crm_search")
+    original = tool.coroutine
+    async def with_identity(**kw): return await original(**{**kw, "token": token})
+    return tool.model_copy(update={"coroutine": with_identity})
+
+compile(pipeline, tool_factories={"crm_search": crm_search_factory})
+```
+
+Same shape as `DefaultPromptCompiler`: a productized 90%-case battery over a seam you can always fill by hand.
+
+## Key takeaways
+
+- `mcp_tool_factories(...)` returns a **dict** — slice it per node for least-privilege binding
+- Each node's `tools=` (and `tool_factories=`) is its privilege boundary; a research agent with no `update_deal` cannot mutate
+- MCP tools are async-only — drive with `arun()`; `lint()` flags `tool_requires_async_driver` for a sync `run()`
+- `token_provider` reads `config['configurable']['mcp_auth']` for per-run identity — a tool argument over stdio, a bearer header (`httpx.Auth`) over streamable-http
+- `gate_tools_when` pauses before a mutation fires; approve runs it exactly once, deny never runs it and the agent is told why
+- `ToolInteraction.typed_result` carries the structured MCP payload; mark read-only readers `idempotent=True`
+
+See `examples/23_mcp_client_selective_binding.py` for the full runnable example (`uv run --extra dev --extra mcp-examples python examples/23_mcp_client_selective_binding.py`).
+
+---
+
+Documentation © 2025-2026 Constantine Mirin, [mirin.pro](https://mirin.pro). Licensed under [CC BY-ND 4.0](https://creativecommons.org/licenses/by-nd/4.0/).
