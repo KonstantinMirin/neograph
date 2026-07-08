@@ -1,0 +1,205 @@
+---
+title: Migrating your prompt compiler
+description: Three worked recipes for replacing a hand-rolled prompt compiler with DefaultPromptCompiler, plus the blessed variant convention for eval harnesses.
+sidebar:
+  order: 36
+---
+
+If your project already renders inputs with `describe_value()` and injects output schemas with `describe_type()` — the pattern nearly every neograph pipeline converges on independently — you likely hand-rolled the glue around them: a template loader, a `render_inputs`-shaped substitution step, fail-loud placeholder checking, message wrapping. `DefaultPromptCompiler` (see [Prompt Compiler](/concepts/prompt-compiler/)) is that glue, shipped. This page is not the reference for the primitives; it is three concrete before/after migrations, one per shape of hand-rolled compiler this framework has seen.
+
+Pick the recipe that matches your compiler's shape. All three assume your templates already use `describe_value`/`describe_type` output — if they don't, migrate that first (it's a smaller, orthogonal change).
+
+## Recipe 1: the single-seam swap
+
+This is the shape of a compiler with one call site, a regex-based fail-loud substitute, a `.txt` template directory, and a constant system message. If your pipeline looks like this, most of your compiler is a direct match for the defaults.
+
+**Before** — roughly 90 lines: a template loader, a hand-written placeholder scanner, a `RuntimeError` on an unfilled `{var}`, message wrapping, and — because there was no way for a `think`/`agent` node's `FromInput` params to reach its own template — a scripted **seed node** whose only job was to copy `run(input=...)` values onto the state bus so a downstream template could reference them as if they were an upstream output:
+
+```python
+# bridge.py (before) — hand-rolled compiler + a seed node working around it
+import re
+
+_PLACEHOLDER = re.compile(r"\{(\w+)\}")
+
+def prompt_compiler(template, data, **kw):
+    text = (PROMPTS_DIR / f"{template}.txt").read_text()
+    unfilled = [m.group(1) for m in _PLACEHOLDER.finditer(text) if m.group(1) not in data]
+    if unfilled:
+        raise RuntimeError(f"missing template vars: {unfilled}")
+    content = _PLACEHOLDER.sub(lambda m: str(data.get(m.group(1), m.group(0))), text)
+    return [
+        {"role": "system", "content": SYSTEM},
+        {"role": "user", "content": content},
+    ]
+
+# seed.py — exists ONLY so `{domain}` reaches a downstream template
+@node(outputs=DomainEcho)
+def seed_domain(domain: Annotated[str, FromInput]) -> DomainEcho:
+    return DomainEcho(domain=domain)
+
+@node(outputs=Classified, prompt="classify", model="reason")
+def classify(claims: Claims, domain_echo: DomainEcho) -> Classified: ...
+```
+
+**After** — the compiler is one line, and the seed node is deleted because `di_inputs` (see [LLM Configuration](/concepts/llm-configuration/)) layers a `think`/`agent`/`act` node's own `FromInput`/`FromConfig` values into its template namespace directly:
+
+```python
+from pathlib import Path
+from neograph import DefaultPromptCompiler, compile
+
+graph = compile(
+    pipeline,
+    llm_factory=my_factory,
+    prompt_compiler=DefaultPromptCompiler(Path("prompts"), suffix=".txt", system=SYSTEM),
+)
+
+@node(outputs=Classified, prompt="classify", model="reason")
+def classify(claims: Claims, domain: Annotated[str, FromInput]) -> Classified: ...
+```
+
+`classify`'s template can now reference `{domain}` directly — no seed node, no upstream field standing in for a run input. The `.txt` suffix and constant `system=` are both constructor options; `strict=True` (fail-loud on an unfilled placeholder) is the default, so the `RuntimeError` behavior carries over without any code.
+
+**What's deleted**: the placeholder scanner, the fail-loud check, the message-wrapping boilerplate, and the seed node plus its output type — roughly 85 of 90 lines, plus every downstream node's dependency on a seed-node output it never otherwise needed.
+
+## Recipe 2: the N-compiler collapse
+
+This is the shape of a project with several near-identical compilers — one per node family, differing mainly in which upstream shape they render. If you have three or four ~40-line compilers that are 90% copy-paste of each other, the difference is usually in how each one hand-rolls rendering for a **container shape** the framework itself produces: a merged `Each` fan-out (`dict[str, Model]`) or a `tool_log` (`list[ToolInteraction]`). `render_inputs` now renders both container shapes itself (see [Input Renderers](/concepts/renderers/) — "Framework container shapes"), so the custom per-shape rendering that justified separate compilers is gone.
+
+**Before** — four compilers, differing mainly in a hand-rolled renderer for whichever container shape that node family consumes:
+
+```python
+def _render_verifications(verify: dict[str, MatchResult]) -> str:
+    # hand-rolled: describe_value each result, join with blank lines
+    return "\n\n".join(describe_value(v) for v in verify.values())
+
+def compiler_for_verify_merge(template, data, **kw):
+    text = load(template)
+    vars = dict(data)
+    if "verify" in vars and isinstance(vars["verify"], dict):
+        vars["verify"] = _render_verifications(vars["verify"])
+    return [{"role": "user", "content": substitute(text, vars)}]
+
+def compiler_for_research(template, data, **kw):
+    text = load(template)
+    vars = dict(data)
+    if "tool_log" in vars:
+        vars["tool_log"] = "\n\n---\n\n".join(
+            f"{i.tool_name}:\n{i.result}" for i in vars["tool_log"]
+        )
+    return [{"role": "user", "content": substitute(text, vars)}]
+
+# ...two more compilers, each a variation on the same theme
+```
+
+**After** — one `DefaultPromptCompiler` for every node family. `render_inputs` (which `build_vars` calls internally) already folds `dict[str, BaseModel]` fan-in and `list[ToolInteraction]` tool logs, so there is nothing left for a per-family compiler to special-case:
+
+```python
+from pathlib import Path
+from neograph import DefaultPromptCompiler, compile
+
+graph = compile(
+    pipeline,
+    llm_factory=my_factory,
+    prompt_compiler=DefaultPromptCompiler(Path("prompts"), suffix=".txt"),
+)
+
+@node(outputs=ClusterSummary, prompt="summarize_verify", model="reason")
+def summarize(verify: dict[str, MatchResult]) -> ClusterSummary: ...  # {verify} auto-folds
+
+@node(outputs=ResearchReport, prompt="report", model="reason")
+def report(tool_log: list[ToolInteraction]) -> ResearchReport: ...   # {tool_log} auto-folds
+```
+
+**What's deleted**: all four compilers, plus the standalone `evals/prompts/*` re-implementations that existed only because the eval harness couldn't call the pipeline's own compiler standalone — see [Evaluating your prompts](/concepts/evaluating-prompts/) for `compile_prompt()`, which closes that gap directly.
+
+## Recipe 3: the bridge with per-node roles
+
+This is the shape of a project whose message shaping genuinely varies by node — e.g. one node family (`explore`) sends a single user message while every other node gets a system line naming the node, and the bridge also handles legacy template aliases and dotted attribute access on model-shaped context. Not every line of a compiler like this is deletable, but the parts that duplicate `DefaultPromptCompiler`'s job are.
+
+**Before** — a ~150-line bridge mixing per-node role logic with template loading, rendering, and schema injection that duplicate the shipped primitives:
+
+```python
+def neograph_bridge_compiler(template, data, *, node_name=None, output_schema=None, **kw):
+    text = (PROMPTS_DIR / f"{RESOLVE_ALIAS.get(template, template)}.txt").read_text()
+    vars = _hand_render(data)                 # duplicates render_inputs
+    if output_schema:
+        vars["json_schema"] = output_schema    # duplicates inject_schema
+    content = _fail_loud_format(text, vars)     # duplicates substitute
+    if node_name == "explore":
+        return [{"role": "user", "content": content}]
+    return [
+        {"role": "system", "content": f"You are the {node_name} node."},
+        {"role": "user", "content": content},
+    ]
+```
+
+**After** — subclass `DefaultPromptCompiler` and override only `render_messages`, the one hook that actually carries project-specific logic. `node_name` reaches the override exactly as it did the hand-rolled version, threaded from the graph at runtime:
+
+```python
+from pathlib import Path
+from neograph import DefaultPromptCompiler
+from neograph.prompt import substitute
+
+class BridgeCompiler(DefaultPromptCompiler):
+    def load_template(self, template: str) -> str:
+        return super().load_template(RESOLVE_ALIAS.get(template, template))
+
+    def render_messages(self, template_text, vars, *, node_name=""):
+        body = substitute(template_text, vars, strict=self.strict, syntax=self.syntax)
+        if node_name == "explore":
+            return [{"role": "user", "content": body}]
+        return [
+            {"role": "system", "content": f"You are the {node_name} node."},
+            {"role": "user", "content": body},
+        ]
+
+graph = compile(
+    pipeline,
+    llm_factory=my_factory,
+    prompt_compiler=BridgeCompiler(Path("prompts"), suffix=".txt"),
+)
+```
+
+**What stays**: legacy template aliasing (a two-line `load_template` override), the per-node role policy (the `render_messages` override above), and anything downstream that reasons over raw model objects rather than rendered strings — that's what inline `${var}` prompts are for, not the file-ref compiler (see [Input Renderers](/concepts/renderers/) — "Inline vs template-ref prompts"). **What's deleted**: the hand-rolled render step, the hand-rolled schema injection, and the hand-rolled fail-loud formatter — roughly two-thirds of the bridge, plus any now-dead schema-injection fallback branch that predates `describe_type` adoption.
+
+## The blessed variant convention
+
+All three recipes above are about rendering — turning input + template into messages. A separate, recurring need is prompt **management**: keeping more than one version of a template around and choosing between them for production vs. an eval run. neograph blesses one convention for this rather than building a registry:
+
+1. **Filename-versioned templates.** Keep every variant as its own file: `classify-v7.txt`, `classify-v8.txt`. Never overwrite a template in place — a new variant is a new filename, so old evals stay reproducible against the exact template they scored.
+2. **A flip constant selects production.** One constant in your bridge module names which variant is live:
+
+   ```python
+   # bridge.py
+   ACTIVE_CLASSIFY_VARIANT = "classify-v8"
+
+   @node(outputs=Classified, prompt=ACTIVE_CLASSIFY_VARIANT, model="reason")
+   def classify(claims: Claims) -> Classified: ...
+   ```
+
+   Promoting a variant to production is a one-line change (flip the constant), not a template rewrite or a registry migration.
+3. **`compile_prompt`'s template-source override lets evals reach non-active variants** without touching the flip constant or rebuilding the rendering pipeline — see [Evaluating your prompts](/concepts/evaluating-prompts/) for the full recipe:
+
+   ```python
+   from neograph import compile_prompt, DefaultPromptCompiler
+
+   loader = DefaultPromptCompiler(Path("prompts"), suffix=".txt").load_template
+   messages_v7 = compile_prompt("classify-v7", {"claims": my_claims}, output_model=Classified, loader=loader)
+   messages_v8 = compile_prompt("classify-v8", {"claims": my_claims}, output_model=Classified, loader=loader)
+   # both render through the SAME pipeline the graph uses — no second implementation to drift
+   ```
+
+:::note[Scope: the convention and the compile hook, not a lifecycle]
+This is the entire extent of what neograph ships for prompt management: the filename-versioning convention, the flip-constant pattern, and `compile_prompt`'s template-source override. A **variant registry, A/B assignment, or experiment tracking is explicitly out of scope** — that's ecosystem territory ([promptfoo](https://promptfoo.dev/), [Langfuse](https://langfuse.com/) already own experiment lifecycle well). neograph's job stops at producing byte-identical messages for whichever variant name you hand it; which variant is "active," which are being A/B tested, and how results are scored belongs to your eval tool, not the framework.
+:::
+
+## Related
+
+- [Prompt Compiler](/concepts/prompt-compiler/) — the `DefaultPromptCompiler` reference these recipes migrate onto.
+- [Evaluating your prompts](/concepts/evaluating-prompts/) — `compile_prompt()`, the eval-parity primitive the variant convention depends on.
+- [Input Renderers](/concepts/renderers/) — `render_inputs` and the framework container shapes (`Each` fan-in, `tool_log`) Recipe 2 relies on.
+- [LLM Configuration](/concepts/llm-configuration/) — `FromInput`/`FromConfig` and `di_inputs`, the mechanism Recipe 1's seed-node deletion depends on.
+
+---
+
+Documentation &copy; 2025-2026 Constantine Mirin, [mirin.pro](https://mirin.pro). Licensed under [CC BY-ND 4.0](https://creativecommons.org/licenses/by-nd/4.0/).

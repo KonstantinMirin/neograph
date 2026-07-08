@@ -49,6 +49,7 @@ export default defineConfig({
 						{ label: 'LLM Configuration', slug: 'concepts/llm-configuration' },
 						{ label: 'Resource Hydration', slug: 'concepts/resource-hydration' },
 						{ label: 'Prompt Compiler', slug: 'concepts/prompt-compiler' },
+						{ label: 'Migrating your prompt compiler', slug: 'concepts/migrating-prompt-compilers' },
 						{ label: 'Evaluating Prompts', slug: 'concepts/evaluating-prompts' },
 						{ label: 'Retry Semantics', slug: 'concepts/retry-semantics' },
 						{ label: 'Pipeline Spec Format', slug: 'concepts/spec-format' },
