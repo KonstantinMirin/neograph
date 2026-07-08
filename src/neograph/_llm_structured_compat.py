@@ -27,7 +27,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from neograph._dsml import contains_dsml, message_text
 
@@ -97,9 +97,18 @@ def _classify_lc_result(result: Any) -> StructuredResult:
         usage = getattr(raw_msg, "usage_metadata", None) if raw_msg is not None else None
         if parsed is not None:
             return Parsed(model=parsed, usage=usage)
+        parsing_error = result.get("parsing_error")
+        # A weakly-enforced constrained decode returns structurally-valid JSON
+        # that fails Pydantic validation: include_raw=True surfaces it as
+        # parsed=None + parsing_error=ValidationError. Classify it as a Failed
+        # validation error so the dispatch layer can re-prompt per neograph-zcxd,
+        # distinct from the genuinely-undecodable parsed=None (no ValidationError)
+        # that stays Raw and fails loud.
+        if isinstance(parsing_error, ValidationError):
+            return Failed(error=parsing_error, raw_text=message_text(raw_msg))
         return Raw(
             raw_text=message_text(raw_msg),
-            parsing_error=result.get("parsing_error"),
+            parsing_error=parsing_error,
             usage=usage,
         )
     return Parsed(model=result)
@@ -135,7 +144,10 @@ class IncludeRawCompatDecorator:
     On a ``Failed(TypeError)`` from the inner adapter, retries
     ``with_structured_output(model)`` without ``include_raw``. Success yields
     ``Parsed``; a second ``TypeError`` stays ``Failed`` (carrying trailing
-    text for the DSML classifier).
+    text for the DSML classifier). A ``ValidationError`` from the no-include_raw
+    decode (a weakly-enforced provider) surfaces as ``Failed(ValidationError)``
+    so the dispatch layer re-prompts it per neograph-zcxd rather than letting the
+    raw exception escape the adapter chain.
     """
 
     def __init__(self, inner: StructuredOutputAdapter):
@@ -149,7 +161,7 @@ class IncludeRawCompatDecorator:
             structured = llm.with_structured_output(model)
             parsed = structured.invoke(messages, config=config)
             return Parsed(model=parsed)
-        except TypeError as exc:
+        except (TypeError, ValidationError) as exc:
             return Failed(error=exc, raw_text=result.raw_text)
 
     async def ainvoke(self, llm, model, messages, config) -> StructuredResult:
@@ -160,7 +172,7 @@ class IncludeRawCompatDecorator:
             structured = llm.with_structured_output(model)
             parsed = await structured.ainvoke(messages, config=config)
             return Parsed(model=parsed)
-        except TypeError as exc:
+        except (TypeError, ValidationError) as exc:
             return Failed(error=exc, raw_text=result.raw_text)
 
 

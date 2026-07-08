@@ -3,9 +3,9 @@ title: Non-Node Parameters
 description: FromInput, FromConfig, and default values — how to pass runtime inputs, shared resources, and constants to @node functions.
 ---
 
-Not every parameter in a `@node` function is an upstream dependency. NeoGraph recognizes four kinds of parameters and resolves each one differently at runtime.
+Not every parameter in a `@node` function is an upstream dependency. NeoGraph recognizes several kinds of parameters and resolves each one differently at runtime — the four covered first below (upstream, runtime input, shared resource, constant), plus the `FromResource` marker for MCP resource fetches.
 
-The DI surface uses `typing.Annotated` with `FromInput` / `FromConfig` as markers — the same FastAPI-style pattern `Annotated[User, Depends(...)]` uses. The primary annotation is the real type; the marker tells neograph where the value comes from.
+The DI surface uses `typing.Annotated` with `FromInput` / `FromConfig` / `FromResource` as markers — the same FastAPI-style pattern `Annotated[User, Depends(...)]` uses. The primary annotation is the real type; the marker tells neograph where the value comes from.
 
 ## The four kinds
 
@@ -102,6 +102,23 @@ result = run(graph, input={"node_id": "x"}, config={
 
 Both `FromInput` and `FromConfig` resolve from `config["configurable"]` at runtime. The distinction is semantic — `FromInput` communicates "per-execution data" while `FromConfig` communicates "shared infrastructure."
 
+## Annotated[T, FromResource]
+
+A third DI marker fetches an MCP-style resource at node entry and parses it into the declared type, so a large document lives behind a small typed reference instead of being carried inline through the graph. The fetch is *awaited* — a node with a `FromResource` parameter must be `async def` and driven by `arun()`.
+
+```python
+from typing import Annotated
+from neograph import node, FromResource
+
+@node(outputs=Assessment)
+async def assess(
+    doc: Annotated[ContractDoc, FromResource("crm://deals/42/contract")],
+    claims: Claims,
+) -> Assessment: ...
+```
+
+`FromResource` supports static and RFC-6570-templated URIs, manifest-driven refs (`ref=<kind>`), a `max_bytes` size cap, and a layered read/replay/fail-loud expiry story. It is covered on its own page: [Resource Hydration](/concepts/resource-hydration/).
+
 ## Default values
 
 Parameters with a default value that don't match any upstream `@node` are treated as compile-time constants.
@@ -175,9 +192,10 @@ When `construct_from_module` processes a parameter:
 
 1. If annotated `Annotated[T, FromInput]` — classified as runtime input.
 2. If annotated `Annotated[T, FromConfig]` — classified as shared resource.
-3. If the name matches a decorated `@node` in the module — classified as upstream dependency (creates an edge).
-4. If the parameter has a default value — classified as constant.
-5. Otherwise — `ConstructError` with a message listing available `@node` names.
+3. If annotated `Annotated[T, FromResource(...)]` — classified as an awaited resource fetch (see [Resource Hydration](/concepts/resource-hydration/)).
+4. If the name matches a decorated `@node` in the module — classified as upstream dependency (creates an edge).
+5. If the parameter has a default value — classified as constant.
+6. Otherwise — `ConstructError` with a message listing available `@node` names.
 
 This means a parameter named `claims` with a default value of `[]` will be treated as an upstream dependency if there's a `@node` function called `claims` in the module — the upstream match takes priority over the default.
 

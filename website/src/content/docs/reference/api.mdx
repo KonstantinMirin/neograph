@@ -175,6 +175,37 @@ run(graph, input={...}, config={'configurable': {'tracer': my_tracer}})
 
 `FromConfig` also bundles for Pydantic models — `Annotated[Shared, FromConfig]` constructs a `Shared` instance from per-field `configurable` entries.
 
+### `FromResource(uri=None, *, ref=None, mime=None, parse=None, required=True, max_bytes=None)`
+
+Dependency-injection marker used inside `typing.Annotated`. Fetches an MCP resource at node entry and parses it into the declared type. The read is *awaited*, so the node must be `async def` and driven by `arun()`; the sync `run()` fails loud. Pass exactly one of `uri=` (a static or RFC-6570-templated URI) or `ref=` (a manifest resource kind to hydrate) — both or neither is a `ConstructError`.
+
+```python
+from typing import Annotated
+from neograph import node, FromResource
+
+@node(outputs=Assessment)
+async def assess(
+    doc: Annotated[ContractDoc, FromResource("crm://deals/{deal_id}/contract")],
+) -> Assessment: ...
+```
+
+- **`uri`** — static or templated resource URI; template vars are interpolated from `config['configurable']` (e.g. sibling `FromInput` values).
+- **`ref`** — a manifest `kind`; hydrates the first lifted `ResourceRef` of that kind with layered read/replay/fail-loud expiry.
+- **`mime`** — content-type hint for parsing.
+- **`parse`** — explicit `(content, mime) -> model` callable; required for `text/*` content unless the parameter is `str`-typed.
+- **`required`** — when `False`, a missing fetcher or unmatched ref yields `None` instead of failing loud.
+- **`max_bytes`** — fail loud at node entry if the fetched blob exceeds this size, before it reaches a prompt.
+
+Fetches go through the consumer-supplied async `fetch(uri) -> (content, mime)` at `config['configurable']['mcp_resource_fetcher']`; manifest-mode replay uses `config['configurable']['mcp_resource_replayer']` (an async `replay(tool_name, args) -> raw_tool_result`). Full surface: [Resource Hydration](/concepts/resource-hydration/).
+
+### `resource_reader(name, *, uri_template, output_model, description, parse=None, budget=0, idempotent=True)`
+
+Emits a typed, async LangChain `BaseTool` that reads one known resource kind. The tool's argument schema is derived from `uri_template`'s RFC 6570 variables; at call time it reads `config['configurable']['mcp_resource_fetcher']`, fetches the interpolated URI, and parses the blob into `output_model` (via `parse` if given, else `application/json` → `model_validate_json`). The parsed model flows through `ToolInteraction.typed_result`. `idempotent=True` (default) marks the reader replay-safe. Drop it into an agent's `tools=`; async-only, so drive with `arun()`.
+
+### `ResourceRef`, `ProducingCall`, `BlobResult`
+
+Frozen Pydantic models on the resource surface. `ResourceRef` is a lifted `resource_link` (`uri`, `kind`, `server`, `producing_call`, `mime`, `size`, `fetched_at`, `ttl_ms`); `ProducingCall` carries the `(tool_name, args, producer_idempotent)` replay path stamped from the producing `Tool.idempotent` flag; `BlobResult` is the typed escape hatch for opaque content (`uri`, `mime`, `text`, `bytes_b64`, `size`).
+
 ---
 
 ## ForwardConstruct
@@ -489,6 +520,7 @@ class LintIssue:
 | `from_config_model` | varies | `FromConfig` bundled model field missing from config |
 | `loop_condition_unregistered` | ERROR | Loop `when=` string not in condition registry |
 | `loop_condition_none_unsafe` | WARN/ERROR | Loop `when=` callable/condition crashes when called with `None` (first iteration value). WARN for callables, ERROR for registered string conditions (which always crash) |
+| `resource_hydration_kind_unmatched` | ERROR | `FromResource(ref=<kind>)` param with no upstream `agent`/`act` node able to emit a `resource_link` (manifest guaranteed empty) |
 
 ### `parse_condition(expr) -> Callable[[Any], bool]`
 

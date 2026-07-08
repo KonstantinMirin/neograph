@@ -219,7 +219,7 @@ def _parse_json_response(text: str, output_model: type[BaseModel]) -> BaseModel:
     try:
         return output_model.model_validate_json(repaired)
     except ValidationError as exc:
-        details = "; ".join(f"{'.'.join(str(l) for l in e['loc'])}: {e['msg']}" for e in exc.errors())
+        details = _validation_error_details(exc)
         raise ExecutionError.build(
             f"Validation failed for {output_model.__name__}",
             expected=f"valid {output_model.__name__} fields",
@@ -236,23 +236,30 @@ def _parse_json_response(text: str, output_model: type[BaseModel]) -> BaseModel:
         ) from exc
 
 
-def _build_retry_msg(
-    error: ExecutionError,
-    output_model: type[BaseModel] | None = None,
-) -> str:
-    """Build a retry message with validation details and schema.
+def _validation_error_details(exc: ValidationError) -> str:
+    """One-line ``loc: msg; loc: msg`` digest of a Pydantic ValidationError.
 
-    Includes the full output schema so the LLM sees the expected structure.
-    This is critical when the LLM simplifies nested objects to flat strings
-    on long prompts — the schema shows exactly what fields are required.
-    """
+    Single site so the json-parse path (_parse_json_response) and the structured
+    re-prompt path (build_structured_repair_message) format validation failures
+    identically."""
+    return "; ".join(
+        f"{'.'.join(str(loc) for loc in e['loc'])}: {e['msg']}" for e in exc.errors()
+    )
+
+
+def _repair_hint(details: str | None, output_model: type[BaseModel] | None) -> str:
+    """Pure repair-hint message: validation details + expected schema + directive.
+
+    Shared by json_mode's :func:`_build_retry_msg` and the structured strategy's
+    :func:`build_structured_repair_message` so both re-prompts phrase the schema
+    and the "correct the JSON" directive identically. When *details* is falsy the
+    message covers the unparseable-response case."""
     schema_block = ""
     if output_model is not None:
         schema_block = (
             f"\n\nExpected output schema:\n{describe_type(output_model, prefix='')}\n"
         )
 
-    details = getattr(error, "validation_errors", None)
     if details:
         return (
             f"Your response failed validation:\n{details}"
@@ -268,6 +275,47 @@ def _build_retry_msg(
         "Respond with ONLY the JSON object. No markdown fences, no XML, "
         "no explanation."
     )
+
+
+def _build_retry_msg(
+    error: ExecutionError,
+    output_model: type[BaseModel] | None = None,
+) -> str:
+    """Build a json_mode/text retry message from an ExecutionError's validation
+    details. Thin wrapper over :func:`_repair_hint`."""
+    return _repair_hint(getattr(error, "validation_errors", None), output_model)
+
+
+def build_structured_repair_message(
+    error: ValidationError,
+    output_model: type[BaseModel] | None = None,
+) -> str:
+    """Build a repair hint for the ``structured`` strategy's re-prompt.
+
+    The structured path holds the Pydantic ``ValidationError`` directly (not an
+    ExecutionError), so it formats the details here and reuses the SAME schema +
+    directive body as json_mode via :func:`_repair_hint`."""
+    return _repair_hint(_validation_error_details(error), output_model)
+
+
+def structured_retry_messages(
+    messages: list,
+    raw_text: str | None,
+    error: ValidationError,
+    output_model: type[BaseModel] | None,
+) -> list:
+    """Pure re-prompt message assembly for the structured retry (sync + async).
+
+    Appends the model's failing output (when captured) and a repair hint so the
+    next constrained decode sees exactly which constraint it violated. No network
+    — the dispatch twins own the re-invocation."""
+    retry = list(messages)
+    if raw_text:
+        retry.append({"role": "assistant", "content": raw_text})
+    retry.append(
+        {"role": "user", "content": build_structured_repair_message(error, output_model)}
+    )
+    return retry
 
 
 def _invoke_json_with_retry(

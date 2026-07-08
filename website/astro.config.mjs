@@ -47,6 +47,7 @@ export default defineConfig({
 						{ label: 'Subgraphs', slug: 'concepts/subgraphs' },
 						{ label: 'Observability', slug: 'concepts/observability' },
 						{ label: 'LLM Configuration', slug: 'concepts/llm-configuration' },
+						{ label: 'Resource Hydration', slug: 'concepts/resource-hydration' },
 						{ label: 'Prompt Compiler', slug: 'concepts/prompt-compiler' },
 						{ label: 'Retry Semantics', slug: 'concepts/retry-semantics' },
 						{ label: 'Pipeline Spec Format', slug: 'concepts/spec-format' },

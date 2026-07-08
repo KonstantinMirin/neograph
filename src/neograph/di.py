@@ -465,5 +465,5 @@ class DIBinding:
         return await hydrate_resource_ref(
             match, config, self.inner_type,
             parse=self.parse_fn, marker_mime=self.resource_mime,
-            max_bytes=self.max_bytes,
+            max_bytes=self.max_bytes, node=self.name,
         )

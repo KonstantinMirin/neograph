@@ -17,6 +17,7 @@ import os
 from typing import Any
 from uuid import uuid4
 
+import structlog
 from langchain_core.runnables import RunnableConfig
 from langgraph.types import Command
 
@@ -29,6 +30,8 @@ from neograph.construct import iter_nodes
 from neograph.errors import CheckpointSchemaError, ConfigurationError, ExecutionError
 from neograph.naming import field_name_for
 from neograph.node import Node
+
+log = structlog.get_logger()
 
 # LangGraph's default per-invoke superstep ceiling. Agent/act nodes compile to an
 # inline ReAct cycle (2 supersteps/turn: agent + tools), so a loop near its
@@ -170,8 +173,6 @@ def _decide_checkpoint_schema(
             invalidated_nodes=invalidated,
         )
 
-    import structlog
-    log = structlog.get_logger()
     log.info(
         "auto_resume_schema_change",
         invalidated=sorted(invalidated),
@@ -423,7 +424,8 @@ def _has_existing_checkpoint(graph: CompiledNeograph, config: RunnableConfig) ->
     try:
         saved = checkpointer.get_tuple(config)
         return saved is not None and bool(saved.checkpoint.get("channel_versions"))
-    except (AttributeError, TypeError, KeyError):
+    except (AttributeError, TypeError, KeyError) as exc:
+        log.debug("checkpoint_probe_failed", error=str(exc))
         return False
 
 
@@ -794,7 +796,8 @@ async def _ahas_existing_checkpoint(graph: CompiledNeograph, config: RunnableCon
     try:
         saved = await checkpointer.aget_tuple(config)
         return saved is not None and bool(saved.checkpoint.get("channel_versions"))
-    except (AttributeError, TypeError, KeyError):
+    except (AttributeError, TypeError, KeyError) as exc:
+        log.debug("checkpoint_probe_failed", error=str(exc))
         return False
 
 

@@ -78,6 +78,18 @@ class _CoercingToolWrapper:
     handles string arguments correctly (``default_tool_parser`` calls
     ``json.loads`` on them).
 
+    Recovery caveat (documented intent): the ``_generate``/``_agenerate``
+    recovery re-invokes the model's low-level generate method directly, which
+    re-emits WITHOUT the bound tools — the ``bind_tools`` kwargs (the ``tools=``
+    schema) are a ``RunnableBinding`` concern that ``_generate`` bypasses. This
+    is acceptable because the recovery runs ONLY after the provider already
+    emitted a full tool_calls turn (the string-args ValidationError proves the
+    tool call happened); we are re-materializing that same already-returned
+    message, not soliciting a fresh tool decision. ``_generate`` is also a
+    langchain-core private method, so a bump that renames/removes it must
+    surface in CI (see the pinned attribute test) instead of silently taking
+    the empty-``AIMessage`` fallback branch below.
+
     Usage (automatic — applied by ``invoke_with_tools``)::
 
         wrapped = _CoercingToolWrapper(llm.bind_tools(tools))

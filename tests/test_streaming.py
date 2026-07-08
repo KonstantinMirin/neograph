@@ -213,6 +213,86 @@ class TestBatchVerbsUnchanged:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# Early-close eviction — the finally is inside the generator body (yc38)
+# ═══════════════════════════════════════════════════════════════════════════
+class TestStreamEarlyCloseEvictsRunCache:
+    """``stream``/``astream`` wire ``_evict_run_cache`` into a ``finally`` INSIDE
+    the generator body, so a consumer that abandons the stream early (``.close()``
+    / GC) still fires ``GeneratorExit`` through that finally and drops the run's
+    per-run cache entries — a loop-bound handle never lingers past its run. Only
+    normal-completion eviction was covered; this pins the early-close path."""
+
+    def test_sync_stream_close_after_one_chunk_evicts(self, monkeypatch):
+        import neograph.runner as _runner
+
+        evicted: list[str] = []
+        monkeypatch.setattr(_runner, "evict_run", lambda run_id: evicted.append(run_id))
+
+        graph = compile(_trivial_pipeline(), **build_test_compile_kwargs())
+        gen = _runner.stream(graph, input={"node_id": "ec-001"}, stream_mode="values")
+        next(gen)  # consume exactly one chunk, then abandon the stream
+        gen.close()
+
+        assert evicted, "early .close() did not fire the eviction finally"
+
+    async def test_astream_close_after_one_chunk_evicts(self, monkeypatch):
+        import neograph.runner as _runner
+
+        evicted: list[str] = []
+        monkeypatch.setattr(_runner, "evict_run", lambda run_id: evicted.append(run_id))
+
+        graph = compile(_trivial_pipeline(), **build_test_compile_kwargs())
+        agen = _runner.astream(graph, input={"node_id": "ec-002"}, stream_mode="values")
+        await agen.__anext__()  # one chunk
+        await agen.aclose()
+
+        assert evicted, "early .aclose() did not fire the eviction finally"
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# di_inputs anti-leak — _neo_di_inputs is a config-only side-channel (yc38)
+# ═══════════════════════════════════════════════════════════════════════════
+class TestDiInputsNeverLeaks:
+    """``_neo_di_inputs`` (``StateKeys.DI_INPUTS``) is a config-only side-channel
+    that carries resolved ``FromInput``/``FromConfig`` values to an LLM-mode
+    node's prompt compiler — it NEVER enters state (mirrors ``STREAM_CUSTOM``).
+    Locked by name here: a run whose think node HAS di_inputs injected must still
+    surface neither in the ``run()`` result dict nor in any streamed chunk."""
+
+    def _think_pipeline(self):
+        from typing import Annotated
+
+        from neograph import FromInput
+
+        mod = _types.ModuleType("test_streaming_dileak_mod")
+
+        @node(outputs=Claims, mode="think", model="fast", prompt="tmpl")
+        def analyze(domain: Annotated[str, FromInput]) -> Claims: ...
+
+        mod.analyze = analyze
+        return construct_from_module(mod, name="streaming-dileak")
+
+    def test_di_inputs_absent_from_run_result_and_stream(self):
+        from neograph import stream
+        from tests.fakes import StructuredFake, build_fake_llm_kwargs
+
+        llm_kw = build_fake_llm_kwargs(lambda tier: StructuredFake(lambda m: m(items=["ok"])))
+        cfg = {"configurable": {"domain": "oncology"}}
+
+        graph = compile(self._think_pipeline(), **llm_kw, **build_test_compile_kwargs())
+        result = run(graph, input={"node_id": "d-001"}, config=dict(cfg))
+        assert StateKeys.DI_INPUTS not in result
+
+        graph2 = compile(self._think_pipeline(), **llm_kw, **build_test_compile_kwargs())
+        chunks = list(
+            stream(graph2, input={"node_id": "d-002"}, config=dict(cfg), stream_mode="values")
+        )
+        assert chunks, "stream produced no chunks"
+        for ch in chunks:
+            assert StateKeys.DI_INPUTS not in ch
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # Facade delegations completed for the claimed capability set (three-layer §2.2)
 # ═══════════════════════════════════════════════════════════════════════════
 class TestFacadeDelegations:

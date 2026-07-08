@@ -522,6 +522,45 @@ class TestFromResourceResolve:
             asyncio.run(b.aresolve({"configurable": {}}))
 
 
+class TestManifestPathNamesHydratingNode:
+    """The manifest-driven hydration path (``ref_kind=``) must thread the
+    parameter name into ``hydrate_resource_ref`` so an expiry error on the
+    MANIFEST path names the hydrating node — parity with the URI-direct path,
+    which already carries it (Wave-7 Low; neograph-yc38)."""
+
+    def test_manifest_expiry_error_names_the_param(self):
+        import asyncio
+
+        from neograph._state_keys import StateKeys
+        from neograph.di import DIBinding, DIKind
+        from neograph.errors import ResourceExpiredError
+        from neograph.tool import ProducingCall, ResourceRef
+
+        async def _failing_fetch(uri: str):  # read fails -> candidate expiry
+            raise RuntimeError("link expired")
+
+        ref = ResourceRef(
+            uri="crm://deals/42/emails", kind="email-history", server="crm",
+            producing_call=ProducingCall(
+                tool_name="list_emails", args={"deal_id": 42},
+                producer_idempotent=True,
+            ),
+        )
+        binding = DIBinding(
+            name="doc", kind=DIKind.FROM_RESOURCE, inner_type=Doc, required=True,
+            ref_kind="email-history",
+        )
+        # No replayer configured -> read-fail falls through to fail-loud.
+        config = {"configurable": {
+            "mcp_resource_fetcher": _failing_fetch,
+            StateKeys.RESOURCE_MANIFEST_INJECT: [ref],
+        }}
+
+        with pytest.raises(ResourceExpiredError, match="doc") as ei:
+            asyncio.run(binding.aresolve(config))
+        assert ei.value.node == "doc"
+
+
 # ── Import path ───────────────────────────────────────────────────────
 
 

@@ -61,7 +61,6 @@ from neograph.modifiers import (
     MergeFallback,
     MergePostProcess,
     MergePreProcess,
-    ModifierSet,
     Operator,
     Oracle,
 )
@@ -124,6 +123,7 @@ __all__ = [
     # Low-level IR (advanced use: programmatic construction, IR tests)
     "Node",
     "Tool",
+    "ToolInteraction",
     "ResourceRef",
     "ProducingCall",
     "Construct",
@@ -139,6 +139,7 @@ __all__ = [
     "NonIdempotentReplayError",
     "PromptVarMissing",
     "ResourceExpiredError",
+    "CheckpointSchemaError",
     # Prompt primitives + default compiler (Layer-2 node DX)
     "substitute",
     "render_inputs",

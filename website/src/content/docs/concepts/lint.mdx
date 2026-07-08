@@ -72,6 +72,7 @@ The `kind` field tells you where the parameter expected to be resolved from:
 | `loop_condition_unregistered` | ERROR | Loop `when` is a string that is not registered in the condition registry |
 | `loop_condition_none_unsafe` | ERROR/WARN | Loop `when` callable raises when called with `None`. ERROR for registered string conditions (always crash), WARN for user-supplied callables (may handle None via other means). |
 | `tool_requires_async_driver` | WARN | An `agent`/`act` node is bound to an async-only tool (e.g. an MCP tool) that cannot run under the sync `run()` driver. Drive the graph with `arun()`. |
+| `resource_hydration_kind_unmatched` | ERROR | A node hydrates a manifest kind via `FromResource(ref=...)` but the construct has no upstream `agent`/`act` node that can emit a `resource_link`, so the manifest is guaranteed empty at runtime. |
 
 ## What it checks
 
@@ -193,6 +194,22 @@ issues = lint(pipeline)
 ```
 
 Lint resolves the concrete tool object two ways: from a raw `BaseTool` passed directly in `tools=` (carried on the synthesized spec), or by instantiating the registered `tool_factories=` entry. Tool-factory failures are swallowed -- a tool `lint` cannot instantiate simply yields no async-only finding, never a crash. See [Raw LangChain tools (and MCP)](/walkthrough/produce-and-gather/#raw-langchain-tools-and-mcp) for the runtime side.
+
+### Resource hydration manifest checks
+
+A manifest-driven `FromResource(ref=<kind>)` parameter (see [Resource Hydration](/concepts/resource-hydration/)) can only resolve if some upstream `agent`/`act` node emits a `resource_link` to populate the manifest. `lint()` walks the construct for any resource-link-producing node; if a ref-hydrating parameter exists but no such producer does, the manifest is guaranteed empty and hydration would fail loud at runtime, far from the cause.
+
+```python
+node = Node("assess", ...)  # hydrates FromResource(ref="email-history")
+pipeline = Construct("flat", nodes=[seed, node])  # no agent/act producer
+issues = lint(pipeline)
+# LintIssue(kind="resource_hydration_kind_unmatched", required=True,
+#           message="Node 'assess': parameter 'history' hydrates manifest
+#                    kind='email-history' but no upstream agent/act node produces
+#                    resource_links...")
+```
+
+This is an ERROR. Per-kind matching is not statically knowable -- kinds are lifted at runtime -- so lint uses producer *existence* as the honest static gate. The fix is an upstream resource-link producer, or the flat-server fallback: a templated `FromResource(uri=...)` or a `resource_reader` tool.
 
 ## Example: full lint workflow
 

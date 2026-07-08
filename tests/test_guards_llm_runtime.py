@@ -202,6 +202,9 @@ class TestLlmResponsibilityDiscipline:
             "_raise_dispatch_failed",
             "_raise_unknown_strategy",
             "_raise_unexpected_variant",
+            # neograph-zcxd: shared fail-loud for the structured re-prompt loop's
+            # max_retries exhaustion on a validation failure (sync + async twins).
+            "_raise_structured_retry_exhausted",
         }),
         # neograph-ble3: DSML detection extracted to its own pure leaf module.
         "_dsml.py": frozenset({
@@ -242,6 +245,15 @@ class TestLlmResponsibilityDiscipline:
             # neograph-ykun: shared DSML re-prompt prep (detection + warning log +
             # targeted-retry message assembly) single-sited across the twins.
             "_dsml_recovery_messages",
+            # neograph-zcxd: structured-strategy validation-retry helpers. The
+            # pure repair-hint body (_repair_hint) + one-line detail digest
+            # (_validation_error_details) are shared with the json_mode retry
+            # builder; build_structured_repair_message / structured_retry_messages
+            # are the structured-flavored re-prompt assembly the dispatch twins call.
+            "_validation_error_details",
+            "_repair_hint",
+            "build_structured_repair_message",
+            "structured_retry_messages",
         }),
         "_llm_render.py": frozenset({
             "_is_inline_prompt",
@@ -275,19 +287,30 @@ class TestLlmResponsibilityDiscipline:
         # provider-quirk wiring moved to the compat shim. Locks the deletion.
         # neograph-ykun: the four ExecutionError builders are now single-site
         # module-level fns; the twin match arms collapsed to one-line raises.
-        "_llm_dispatch.py": 199,
+        # neograph-zcxd: 199 -> 250. The structured branch of each twin gained a
+        # bounded validation re-prompt loop (parity with json_mode) plus a shared
+        # exhaustion-raise helper. Reviewed increase; the re-prompt message
+        # assembly is single-sited in _llm_retry.structured_retry_messages.
+        "_llm_dispatch.py": 250,
         # neograph-ble3: tightened 365 -> 360. _DSML_PATTERN regex moved to
         # _dsml.py; recover_dsml is detection-free. Locks the deletion.
         # neograph-s1u4: 360 -> 375. _apply_null_defaults gained a guarded
         # default_factory coercion branch (a real fix, not accretion).
         # neograph-ykun: 480 -> 460. The usage-dict shape moved to _usage._usage_dict
         # and the DSML re-prompt prep is single-sited across the retry twins.
-        "_llm_retry.py": 460,
+        # neograph-zcxd: 460 -> 510. The json_mode retry builder was refactored
+        # into a shared pure repair-hint body (_repair_hint + _validation_error_details)
+        # that the new structured re-prompt builders (build_structured_repair_message,
+        # structured_retry_messages) reuse. Reviewed increase — shared, not duplicated.
+        "_llm_retry.py": 510,
         "_llm_render.py": 310,
         # neograph-ble3: new pure-leaf detection module.
         "_dsml.py": 55,
         # neograph-ble3: compat shim — sum-type + Protocol + 3 adapters + factory.
-        "_llm_structured_compat.py": 220,
+        # neograph-zcxd: 220 -> 235. _classify_lc_result now discriminates a
+        # ValidationError parsing_error (weak decode -> Failed, retryable) from the
+        # silent parsed=None (stays Raw); IncludeRawCompat also catches ValidationError.
+        "_llm_structured_compat.py": 235,
     }
 
     def _top_level_defs(self, path: pathlib.Path) -> set[str]:

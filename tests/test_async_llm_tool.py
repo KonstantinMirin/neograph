@@ -247,6 +247,45 @@ class TestCoercingToolWrapperAsyncRecovery:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# Cell 4b — _generate/_agenerate stay valid attributes (langchain-core contract)
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TestCoercingWrapperGenerateAttributePin:
+    """PP-01 (neograph-yc38): the string-args recovery re-invokes the model's
+    low-level ``_generate``/``_agenerate`` — langchain-core private methods.
+
+    If a langchain-core bump renames or removes them, ``getattr`` would raise
+    inside the recovery ``try`` and the wrapper would SILENTLY take the
+    empty-``AIMessage`` fallback (a real tool turn dropped to a blank response).
+    Pin the attribute on a REAL ``BaseChatModel`` and through the wrapper's
+    ``__getattr__`` forwarding so such a bump breaks CI here, loudly, instead."""
+
+    def test_generate_is_a_valid_attribute_on_base_chat_model(self):
+        from langchain_core.language_models.chat_models import BaseChatModel
+
+        # The recovery depends on both hooks existing on the model base class.
+        assert hasattr(BaseChatModel, "_generate")
+        assert hasattr(BaseChatModel, "_agenerate")
+
+    def test_wrapper_forwards_generate_to_a_real_bound_model(self):
+        from langchain_core.language_models.fake_chat_models import (
+            GenericFakeChatModel,
+        )
+        from langchain_core.messages import AIMessage
+
+        from neograph._tool_loop import _CoercingToolWrapper
+
+        model = GenericFakeChatModel(messages=iter([AIMessage(content="x")]))
+        wrapper = _CoercingToolWrapper(model)
+
+        # __getattr__ forwards to self._bound; a rename in langchain-core would
+        # make these raise AttributeError instead of resolving to a callable.
+        assert callable(wrapper._generate)
+        assert callable(wrapper._agenerate)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # Cell 5 — M6a config-threading on the async think hop
 # ═══════════════════════════════════════════════════════════════════════════
 

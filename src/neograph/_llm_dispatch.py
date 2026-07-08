@@ -17,7 +17,7 @@ from __future__ import annotations
 from typing import Any, NoReturn
 
 from langchain_core.runnables import RunnableConfig
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from neograph._dsml import contains_dsml, message_text
 from neograph._llm_retry import (
@@ -25,6 +25,7 @@ from neograph._llm_retry import (
     _invoke_json_with_retry,
     arecover_dsml,
     recover_dsml,
+    structured_retry_messages,
 )
 from neograph._llm_structured_compat import (
     Failed,
@@ -67,6 +68,21 @@ def _raise_dispatch_failed(output_model: type[BaseModel], err: Any) -> NoReturn:
     ) from err
 
 
+def _raise_structured_retry_exhausted(
+    output_model: type[BaseModel], err: ValidationError, attempts: int,
+) -> NoReturn:
+    """The structured re-prompt loop exhausted ``max_retries`` on a validation
+    failure. Single-site so the sync/async twins share the message. neograph-zcxd."""
+    raise ExecutionError.build(
+        f"structured output failed validation after {attempts} re-prompt(s)",
+        expected=f"valid {output_model.__name__}",
+        found=repr(err),
+        hint="The provider's constrained decode kept emitting output that fails the "
+        "output model's validation; raise max_retries or switch this node to "
+        "output_strategy='json_mode'.",
+    ) from err
+
+
 def _raise_unknown_strategy(strategy: str) -> NoReturn:
     raise ExecutionError.build(
         "Unknown output_strategy",
@@ -105,40 +121,58 @@ def _call_structured(
       retry concern); usage from the original response is preserved.
     - ``Raw`` (no DSML, the ``parsed=None`` silent variant) — preserve the
       legacy passthrough: return ``(None, usage)`` without re-prompting.
-    - ``Failed`` — ``include_raw`` was rejected and the compat retry also
+    - ``Failed(ValidationError)`` — the provider's constrained decode emitted
+      structurally-valid JSON that failed the output model's validation (a
+      weakly-enforced decode). Re-prompt the SAME structured adapter with the
+      validation error as a repair hint, bounded by ``max_retries`` (parity with
+      json_mode); exhaustion raises. Constrained decode stays engaged on the
+      retries.
+    - ``Failed`` (other) — ``include_raw`` was rejected and the compat retry also
       failed. As a last resort fetch the provider's real output here (the
       orchestration boundary owns this IO, not the compat decorators) and, if
       it is DSML, recover; otherwise surface the dispatch error.
     """
     if strategy == "structured":
-        result = build_default_adapter().invoke(llm, output_model, messages, config)
-        match result:
-            case Parsed(model=parsed, usage=usage):
-                return parsed, usage
-            case Raw(dsml=True, raw_text=raw_text, usage=usage):
-                if cfg is not None:
-                    recovered = recover_dsml(
-                        raw_text, output_model, llm, messages, config, cfg,
-                        strategy="structured",
-                    )
-                    if recovered is not None:
-                        return recovered, usage
-                _raise_markup_unrecoverable(output_model, raw_text)
-            case Raw(raw_text=raw_text, usage=_usage):
-                _raise_decoded_none(output_model, raw_text)
-            case Failed(error=err, raw_text=raw_text):
-                if cfg is not None:
-                    text = raw_text or message_text(llm.invoke(messages, config=config))
-                    if contains_dsml(text):
+        adapter = build_default_adapter()
+        current_messages = messages
+        attempts = 0
+        while True:
+            result = adapter.invoke(llm, output_model, current_messages, config)
+            match result:
+                case Parsed(model=parsed, usage=usage):
+                    return parsed, usage
+                case Raw(dsml=True, raw_text=raw_text, usage=usage):
+                    if cfg is not None:
                         recovered = recover_dsml(
-                            text, output_model, llm, messages, config, cfg,
+                            raw_text, output_model, llm, messages, config, cfg,
                             strategy="structured",
                         )
                         if recovered is not None:
-                            return recovered, None
-                _raise_dispatch_failed(output_model, err)
-            case _:  # defensive: a future StructuredResult variant added without a dispatch arm
-                _raise_unexpected_variant(result)
+                            return recovered, usage
+                    _raise_markup_unrecoverable(output_model, raw_text)
+                case Raw(raw_text=raw_text, usage=_usage):
+                    _raise_decoded_none(output_model, raw_text)
+                case Failed(error=err, raw_text=raw_text) if isinstance(err, ValidationError):
+                    if attempts >= max_retries:
+                        _raise_structured_retry_exhausted(output_model, err, attempts)
+                    attempts += 1
+                    current_messages = structured_retry_messages(
+                        current_messages, raw_text, err, output_model,
+                    )
+                    continue
+                case Failed(error=err, raw_text=raw_text):
+                    if cfg is not None:
+                        text = raw_text or message_text(llm.invoke(messages, config=config))
+                        if contains_dsml(text):
+                            recovered = recover_dsml(
+                                text, output_model, llm, messages, config, cfg,
+                                strategy="structured",
+                            )
+                            if recovered is not None:
+                                return recovered, None
+                    _raise_dispatch_failed(output_model, err)
+                case _:  # defensive: a future StructuredResult variant added without a dispatch arm
+                    _raise_unexpected_variant(result)
 
     if strategy in ("json_mode", "text"):
         return _invoke_json_with_retry(llm, messages, output_model, config, max_retries=max_retries)
@@ -164,34 +198,46 @@ async def _acall_structured(
     ``_ainvoke_json_with_retry``. config threads into every awaited hop (M6a).
     """
     if strategy == "structured":
-        result = await build_default_adapter().ainvoke(llm, output_model, messages, config)
-        match result:
-            case Parsed(model=parsed, usage=usage):
-                return parsed, usage
-            case Raw(dsml=True, raw_text=raw_text, usage=usage):
-                if cfg is not None:
-                    recovered = await arecover_dsml(
-                        raw_text, output_model, llm, messages, config, cfg,
-                        strategy="structured",
-                    )
-                    if recovered is not None:
-                        return recovered, usage
-                _raise_markup_unrecoverable(output_model, raw_text)
-            case Raw(raw_text=raw_text, usage=_usage):
-                _raise_decoded_none(output_model, raw_text)  # async twin
-            case Failed(error=err, raw_text=raw_text):
-                if cfg is not None:
-                    text = raw_text or message_text(await llm.ainvoke(messages, config=config))
-                    if contains_dsml(text):
+        adapter = build_default_adapter()
+        current_messages = messages
+        attempts = 0
+        while True:
+            result = await adapter.ainvoke(llm, output_model, current_messages, config)
+            match result:
+                case Parsed(model=parsed, usage=usage):
+                    return parsed, usage
+                case Raw(dsml=True, raw_text=raw_text, usage=usage):
+                    if cfg is not None:
                         recovered = await arecover_dsml(
-                            text, output_model, llm, messages, config, cfg,
+                            raw_text, output_model, llm, messages, config, cfg,
                             strategy="structured",
                         )
                         if recovered is not None:
-                            return recovered, None
-                _raise_dispatch_failed(output_model, err)
-            case _:
-                _raise_unexpected_variant(result)
+                            return recovered, usage
+                    _raise_markup_unrecoverable(output_model, raw_text)
+                case Raw(raw_text=raw_text, usage=_usage):
+                    _raise_decoded_none(output_model, raw_text)  # async twin
+                case Failed(error=err, raw_text=raw_text) if isinstance(err, ValidationError):
+                    if attempts >= max_retries:
+                        _raise_structured_retry_exhausted(output_model, err, attempts)
+                    attempts += 1
+                    current_messages = structured_retry_messages(
+                        current_messages, raw_text, err, output_model,
+                    )
+                    continue
+                case Failed(error=err, raw_text=raw_text):
+                    if cfg is not None:
+                        text = raw_text or message_text(await llm.ainvoke(messages, config=config))
+                        if contains_dsml(text):
+                            recovered = await arecover_dsml(
+                                text, output_model, llm, messages, config, cfg,
+                                strategy="structured",
+                            )
+                            if recovered is not None:
+                                return recovered, None
+                    _raise_dispatch_failed(output_model, err)
+                case _:
+                    _raise_unexpected_variant(result)
 
     if strategy in ("json_mode", "text"):
         return await _ainvoke_json_with_retry(llm, messages, output_model, config, max_retries=max_retries)

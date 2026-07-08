@@ -1,0 +1,196 @@
+---
+title: Resource Hydration
+description: Fetch MCP resources into typed @node parameters with FromResource — static and templated URIs, manifest-driven refs, size caps, and layered read/replay/fail-loud expiry.
+---
+
+An agent that returns a 40-page contract inline burns tokens and context on every turn. The MCP answer is a `resource_link`: the tool returns a small typed *reference* (a URI + kind), and the actual bytes are fetched on demand, only by the node that needs them. `FromResource` is neograph's dependency-injection marker for that fetch — it reads a resource at node entry and parses the blob into the declared parameter type before your function runs.
+
+Like `FromInput` and `FromConfig`, it is a marker inside `typing.Annotated`. Unlike them, the read is *awaited*: a node carrying a `FromResource` parameter resolves only under the async driver `arun()`. The sync `run()` fails loud rather than silently skipping the fetch.
+
+neograph owns no MCP session. Every fetch goes through a consumer-supplied async callable you pass in config, so routing, auth, and connection lifetime stay in your hands.
+
+## The fetcher — where bytes come from
+
+`FromResource` never opens a connection itself. It reads an async `fetch(uri) -> (content, mime)` callable from `config["configurable"]["mcp_resource_fetcher"]`:
+
+```python
+async def fetch(uri: str) -> tuple[bytes | str, str | None]:
+    # your MCP client / HTTP client / file reader — you own the session
+    content, mime = await my_mcp_client.read_resource(uri)
+    return content, mime
+
+result = await arun(graph, input={"deal_id": "42"}, config={
+    "configurable": {"mcp_resource_fetcher": fetch},
+})
+```
+
+Content typed `application/json` is validated with `model_validate_json` into the parameter's model. `text/*` content needs either a `str`-typed parameter (raw passthrough) or an explicit `parse=(content, mime) -> model` callable. neograph never runs a silent LLM parse inside DI — the read is deterministic or it fails.
+
+## URI mode
+
+Pass a URI as the first argument. The node reads exactly that resource.
+
+### Static URI
+
+```python
+from typing import Annotated
+from neograph import node, FromResource
+
+@node(outputs=Assessment)
+async def assess(
+    doc: Annotated[ContractDoc, FromResource("crm://deals/42/contract")],
+    claims: Claims,
+) -> Assessment:
+    return Assessment(risk=score(doc, claims))
+```
+
+### Templated URI (RFC 6570)
+
+The URI can carry RFC 6570 template variables, interpolated from the node's `FromInput` values (and anything else in `config["configurable"]`) at resolution time. This is how one node definition reads a different resource on every run:
+
+```python
+from typing import Annotated
+from neograph import node, FromInput, FromResource
+
+@node(outputs=Assessment)
+async def assess(
+    deal_id: Annotated[str, FromInput],
+    doc: Annotated[ContractDoc, FromResource(uri="crm://deals/{deal_id}/contract")],
+) -> Assessment:
+    ...
+
+# arun(graph, input={"deal_id": "42"}, ...) fetches crm://deals/42/contract
+```
+
+The interpolator supports the subset the resource layer emits: simple `{var}` and reserved `{+var}` string expansion, plus form-query `{?a,b}` / continuation `{&a}` expansion. Missing values are omitted (a `{?range}` with no `range` present collapses away). The same helper powers the `resource_reader` tool below, so a templated tool and a templated `FromResource` interpolate identically.
+
+## Manifest mode — `FromResource(ref=<kind>)`
+
+Templated URIs work when *you* know the URI shape. But when an upstream `agent`/`act` node discovers resources dynamically, you do not know the URIs at author time — the agent does, at runtime. For that, neograph lifts every `resource_link` an agent emits into a checkpointed *resource manifest*, tagged by a domain `kind`. A downstream node hydrates one by kind instead of by URI:
+
+```python
+from typing import Annotated
+from neograph import node, FromResource
+
+@node(mode="agent", outputs=Findings, model="reason", prompt="investigate",
+      tools=mcp_tools)
+def investigate(claims: Claims) -> Findings:
+    ...  # emits resource_links; neograph lifts them into the manifest
+
+@node(outputs=Assessment)
+async def assess(
+    history: Annotated[EmailHistory, FromResource(ref="email-history")],
+    findings: Findings,
+) -> Assessment:
+    # the first manifest ref of kind "email-history" is fetched and parsed
+    return Assessment(...)
+```
+
+Each lifted reference is a `ResourceRef` — a typed, self-healing pointer, the opposite of a stringly `file_id`. It carries the `uri`, the `kind`, the `server` (for fetcher routing), and its `producing_call`: the exact `(tool_name, args)` that emitted the link. That provenance is what makes expiry recoverable.
+
+Exactly one of `uri=` or `ref=` may be set — passing both, or neither, is a construction-time `ConstructError`.
+
+If no ref of the requested kind is present in the manifest, hydration fails loud naming the parameter and kind, rather than passing `None` into a prompt far from the cause. A flat MCP server that returns no `resource_link` at all can never populate the manifest — for that case, use a templated `FromResource(uri=...)` or a [`resource_reader` tool](#resourcereader--typed-reads-and-the-flat-server-fallback). The [lint rule below](#lint-resourcehydrationkindunmatched) catches the empty-manifest case statically.
+
+## Layered expiry — read, replay, fail loud
+
+An MCP `resource_link` carries no lifetime contract: the URI a tool returned an hour and a checkpoint ago may already be dead. Manifest-mode hydration handles that with three ordered layers:
+
+1. **Read.** Fetch `ref.uri` through the fetcher. On success, size-check and parse — done. A *parse* failure here propagates unchanged: a malformed-but-present resource is a real bug, never masked by a replay.
+2. **Replay.** If the *fetch* fails (an expired link), the only protocol-reliable way to re-derive a lifetime-free `resource_link` is to re-invoke the tool call that produced it. neograph reads a second consumer callable, the replayer, re-runs `ref.producing_call`, and fetches the fresh URI the replay emits.
+3. **Fail loud.** If no replayer is configured, or the replay itself fails, hydration raises `ResourceExpiredError`. Silent staleness is worse than a loud failure — a stale resource flowing into a prompt corrupts a run invisibly.
+
+URI mode (`uri=`) does a single read with no replay layer: there is no producing call to re-invoke, so an expired static/templated URI simply surfaces the fetch error.
+
+### The replayer
+
+The replayer is an async `replay(tool_name, args) -> raw_tool_result` callable under `config["configurable"]["mcp_resource_replayer"]`. Like the fetcher, it is consumer-owned (neograph holds no session) and optional — absent, an expired ref fails loud rather than replaying:
+
+```python
+async def replay(tool_name: str, args: dict) -> object:
+    # re-invoke the producing tool; return its raw result (neograph scans it
+    # for the fresh resource_link)
+    return await my_mcp_client.call_tool(tool_name, args)
+
+result = await arun(graph, input={...}, config={"configurable": {
+    "mcp_resource_fetcher": fetch,
+    "mcp_resource_replayer": replay,
+}})
+```
+
+### The idempotency gate
+
+Replay re-invokes a tool. Re-invoking a *read* is safe; re-invoking a *mutation* (an `act`-mode side effect) could double-apply it. So replay is gated on the producer's idempotency — a hard gate, not a heuristic.
+
+Every tool carries a `Tool.idempotent` flag (default conservative `False`). A `resource_reader` sets it `True` by default (readers are read-only by nature). When a `resource_link` is lifted into the manifest, that flag is stamped onto the ref's `ProducingCall.producer_idempotent`. If a non-idempotent producer's ref expires, replay is refused with `NonIdempotentReplayError` instead of risking a double-mutate — a read may replay, a mutation may not. Mark a mutating tool honestly and the framework protects the invariant for you.
+
+Both `ResourceExpiredError` and `NonIdempotentReplayError` subclass `ExecutionError`, so a single `except ExecutionError` around `arun()` catches them. See the [error hierarchy](/reference/api/#error-hierarchy).
+
+## `max_bytes` — a size cap at node entry
+
+A resource that fetches fine can still be too large to put in a prompt — the failure would otherwise surface as a confusing provider 400 once the text hits the model. `max_bytes` moves the failure earlier and makes it legible: the fetched blob is size-checked at node entry, before parse, before it reaches any prompt.
+
+```python
+@node(outputs=Summary)
+async def summarize(
+    doc: Annotated[str, FromResource("crm://deals/42/notes", max_bytes=200_000)],
+) -> Summary:
+    ...
+```
+
+An oversized resource fails loud naming the parameter, the actual size, and the limit, with a hint to slice the resource with a templated URI (`?range=1-5`) instead of hydrating the whole blob. `max_bytes` applies in both URI and manifest mode, and to both the initial read and a post-replay read.
+
+## `resource_reader` — typed reads and the flat-server fallback
+
+`FromResource` is DI: the *framework* fetches the resource before your node runs. When the *model* should decide whether and what to read, expose a typed reader tool instead. `resource_reader` turns a URI template + output model into an async, typed `BaseTool` you drop into an agent's `tools=`:
+
+```python
+from neograph import resource_reader
+
+read_contract = resource_reader(
+    "read_contract",
+    uri_template="crm://deals/{deal_id}/contract",
+    output_model=ContractDoc,
+    description="Read the signed contract for a deal.",
+    idempotent=True,   # default; marks the reader replay-safe
+)
+
+@node(mode="agent", outputs=Findings, model="reason", prompt="investigate",
+      tools=[read_contract])
+def investigate(claims: Claims) -> Findings:
+    ...
+```
+
+The tool's argument schema is derived from the template's RFC 6570 variables, so the model supplies typed parameters and the parsed model flows through `ToolInteraction.typed_result` — not a repr string. Because it is async-only, driving the graph with sync `run()` fails loud, and `lint()` warns (`tool_requires_async_driver`); use `arun()`. See [Raw LangChain tools (and MCP)](/walkthrough/produce-and-gather/#raw-langchain-tools-and-mcp).
+
+The two mechanisms cover each other's gaps: use `FromResource(ref=...)` when an agent discovers resources for a later node to consume; use `resource_reader` (or a templated `FromResource(uri=...)`) when the URI shape is known, or when the server is flat and emits no `resource_link` to lift.
+
+For genuinely opaque content with no schema, `output_model=BlobResult` is the typed escape hatch — it keeps `typed_result` honest (a `BlobResult` with `uri`/`mime`/`text`/`size`, never raw bytes) rather than leaking an untyped blob.
+
+## Lint: `resource_hydration_kind_unmatched`
+
+A manifest-mode `FromResource(ref=<kind>)` is only satisfiable if *some* upstream `agent`/`act` node can emit a `resource_link` to populate the manifest. `lint()` checks this statically: if a node hydrates a manifest kind but the construct contains no resource-link-producing agent/act node at all, the manifest is guaranteed empty and hydration would fail loud at runtime, far from the cause.
+
+```python
+issues = lint(pipeline)
+# LintIssue(kind="resource_hydration_kind_unmatched", required=True,
+#   message="Node 'assess': parameter 'history' hydrates manifest kind=
+#            'email-history' but no upstream agent/act node produces
+#            resource_links. Add a resource_link-emitting agent/act producer
+#            upstream, or use a templated FromResource(uri=...) /
+#            resource_reader tool (the flat-server fallback).")
+```
+
+This is an ERROR. Per-kind matching is not statically knowable — kinds are lifted at runtime — so lint uses the honest static gate: producer *existence*. The fix is either an upstream resource-link producer, or the flat-server fallback (a templated URI or `resource_reader`). See [Static Linting](/concepts/lint/#resource-hydration-manifest-checks).
+
+## Async only, by design
+
+Every `FromResource` node must be `async def` and driven by `arun()` (or `astream()`) — the read is awaited. The sync `run()` driver fails loud on any `FromResource` binding rather than silently skipping the fetch and passing `None`. This mirrors the async-only rule for MCP tools.
+
+## Three-surface note
+
+`FromResource` is an `Annotated` decorator-layer marker, so only the `@node` decorator produces `FromResource` bindings. The declarative `Node(...)` and programmatic `Node() | Modifier()` surfaces carry no DI markers and are exempt by construction — there is no binding to resolve. See [Non-Node Parameters](/node-api/parameters/).
+
+---
+
+Documentation &copy; 2025-2026 Constantine Mirin, [mirin.pro](https://mirin.pro). Licensed under [CC BY-ND 4.0](https://creativecommons.org/licenses/by-nd/4.0/).
