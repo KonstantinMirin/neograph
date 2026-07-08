@@ -1513,6 +1513,38 @@ class TestNodeSubConstruct:
         assert "jc3" in rendered
         assert "claim_id" in rendered
 
+    def test_subconstruct_port_alias_yields_to_colliding_producer(self):
+        """Collision rule pin (neograph-bluv, wave-B verification follow-up):
+        when a REAL key named like the port's type already exists in the
+        rendered/flattened vars, the synthesized alias is SKIPPED -- the
+        producer wins and the port stays reachable only via the internal
+        neo_subgraph_input key (same shadowing rule di_inputs uses). Pins the
+        guard branch at renderers.py::_alias_subgraph_input_port directly."""
+        from neograph._state_keys import StateKeys
+        from neograph.renderers import _alias_subgraph_input_port
+
+        port = VerifyClaim(claim_id="c-port", text="from the port")
+        input_data = {StateKeys.SUBGRAPH_INPUT: port}
+        rendered = {StateKeys.SUBGRAPH_INPUT: "rendered-port"}
+        flattened: dict = {}
+
+        # No collision: alias lands in flattened, internal key untouched.
+        _alias_subgraph_input_port(input_data, rendered, flattened)
+        assert flattened["VerifyClaim"] == "rendered-port"
+        assert StateKeys.SUBGRAPH_INPUT in rendered
+
+        # Collision in rendered_dict: producer value wins, alias skipped.
+        rendered2 = {StateKeys.SUBGRAPH_INPUT: "rendered-port", "VerifyClaim": "producer-wins"}
+        flattened2: dict = {}
+        _alias_subgraph_input_port(input_data, rendered2, flattened2)
+        assert "VerifyClaim" not in flattened2, "alias must yield to a real producer key"
+        assert rendered2["VerifyClaim"] == "producer-wins"
+
+        # Collision in flattened: same rule.
+        flattened3: dict = {"VerifyClaim": "flattened-producer"}
+        _alias_subgraph_input_port(input_data, dict(rendered), flattened3)
+        assert flattened3["VerifyClaim"] == "flattened-producer"
+
     def test_subconstruct_port_alias_via_node_decorator(self):
         """@node sub-construct port: template-ref input_data exposes the port
         value under BOTH the framework-internal neo_subgraph_input key (kept
