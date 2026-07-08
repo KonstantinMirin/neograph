@@ -146,7 +146,8 @@ def _notify_cost(
 
     Extra kwargs (node_name, mode, duration_s) are passed through to the
     callback. Old-style callbacks that only accept (tier, input_tokens,
-    output_tokens) are supported via TypeError fallback.
+    output_tokens) are supported by signature introspection (_accepted_params)
+    — the callback is invoked exactly once with only the kwargs it declares.
 
     Accepts both call shapes:
         _notify_cost(runtime, tier, usage, ...)  # post-§2
