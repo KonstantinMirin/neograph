@@ -5,9 +5,12 @@ Two things live here:
 1. A **server-contract E2E** — spawns ``examples/_mcp_demo_server.py`` as a real
    stdio subprocess via ``MultiServerMCPClient`` and asserts the actual Model
    Context Protocol behaviors the examples depend on: tool discovery, the
-   ``get_deal`` resource_link manifest, the RFC-6570 email fraction read, the
-   per-operator auth echo, and a REAL ``-32002`` on the one-shot expiry (plus the
-   self-heal that follows). This proves the shared server end-to-end, offline.
+   ``get_deal`` resource_link manifest, the path-segment email fraction read, the
+   per-operator auth echo, and the one-shot expiry (plus the self-heal that
+   follows). The server is PLAIN FastMCP — copy-paste-safe, no low-level
+   handlers — so the expired resource surfaces as FastMCP's own code-0-wrapped
+   error, not a hand-crafted ``-32002``; neograph heals code-agnostically. This
+   proves the shared server end-to-end, offline.
 
 2. A **reusable example runner** — ``run_example_subprocess(path)`` runs a full
    example file as a subprocess and asserts a clean exit. The parametrized
@@ -83,31 +86,36 @@ class TestDemoServerContract:
         links = [b for b in blocks if isinstance(b, dict) and b.get("type") == "file"]
         urls = {b.get("url") for b in links}
         assert any(u.endswith("/D1/activity") for u in urls)
-        assert any("/D1/emails?from=" in u for u in urls)
+        assert any("/D1/emails/" in u for u in urls)
 
-    async def test_read_email_fraction_via_query_template(self, tmp_path):
-        """The RFC-6570 {?from,to} fraction read returns only in-range emails —
-        the 'query a fraction of a corpus with a typed result' beat."""
+    async def test_read_email_fraction_via_path_template(self, tmp_path):
+        """The path-segment ``emails/{start}/{end}`` fraction read returns only
+        in-range emails — the 'query a fraction of a corpus with a typed result'
+        beat. Path segments are what plain FastMCP's ``@mcp.resource`` supports
+        natively (query templates are not expressible — see the server docstring)."""
         from langchain_mcp_adapters.client import MultiServerMCPClient
 
         client = MultiServerMCPClient({"crm": _demo_connection(tmp_path / "state.marker")})
         async with client.session("crm") as session:
-            result = await session.read_resource(AnyUrl("mcp://crm/deals/D1/emails?from=2024-04-01&to=2024-12-31"))
+            result = await session.read_resource(AnyUrl("mcp://crm/deals/D1/emails/2024-04-01/2024-12-31"))
         import json
 
         payload = json.loads(result.contents[0].text)
-        # D1 has emails on 02-10, 04-22, 06-30 — the from=2024-04-01 fraction drops the first.
+        # D1 has emails on 02-10, 04-22, 06-30 — the start=2024-04-01 fraction drops the first.
         stamps = {e["ts"] for e in payload["emails"]}
         assert stamps == {"2024-04-22", "2024-06-30"}
 
-    async def test_resource_templates_advertise_query_form(self, tmp_path):
+    async def test_resource_templates_advertise_path_form(self, tmp_path):
+        """Plain FastMCP auto-advertises the parameterized resources as templates —
+        no custom ``list_resource_templates`` handler."""
         from langchain_mcp_adapters.client import MultiServerMCPClient
 
         client = MultiServerMCPClient({"crm": _demo_connection(tmp_path / "state.marker")})
         async with client.session("crm") as session:
             listed = await session.list_resource_templates()
         forms = {t.uriTemplate for t in listed.resourceTemplates}
-        assert "mcp://crm/deals/{deal_id}/emails{?from,to}" in forms
+        assert "mcp://crm/deals/{deal_id}/emails/{start}/{end}" in forms
+        assert "mcp://crm/deals/{deal_id}/activity" in forms
 
     async def test_auth_token_is_echoed_per_operator(self, tmp_path):
         """Two runs with different tokens observably carry their own identity —
@@ -125,9 +133,16 @@ class TestDemoServerContract:
         assert a["acting_as"] == "operator-A"
         assert b["acting_as"] == "operator-B"
 
-    async def test_expiry_emits_real_minus_32002_then_self_heals(self, tmp_path):
-        """Arm the one-shot expiry (server-side), read once -> real -32002, read
-        again -> success. This is example 24's self-healing hydration beat."""
+    async def test_expiry_error_is_code_agnostic_then_self_heals(self, tmp_path):
+        """Arm the one-shot expiry (server-side), read once -> error, read again
+        -> success. This is example 24's self-healing hydration beat, and the
+        PRIMARY expiry path now that the server is plain FastMCP.
+
+        Plain FastMCP's ``@mcp.resource`` wrapper swallows JSON-RPC error codes: a
+        handler-raised exception reaches the client as a generic ``code: 0``, NOT
+        a hand-crafted ``-32002``. That is the point — neograph's replay-on-any-
+        fetch-failure heal (di.py hydrate_resource_ref) is code-agnostic, so the
+        demo does NOT need a low-level handler forging a specific code."""
         from langchain_mcp_adapters.client import MultiServerMCPClient
         from mcp.shared.exceptions import McpError
 
@@ -138,16 +153,19 @@ class TestDemoServerContract:
 
         # Catch INSIDE the session: the session's anyio task-group teardown wraps
         # any exception escaping the `async with` in an ExceptionGroup, so the
-        # bare McpError (and its -32002 code) is only observable in-scope. This is
-        # exactly how example 24's fetcher catches the expiry to trigger self-heal.
+        # McpError is only observable in-scope. This is exactly how example 24's
+        # fetcher catches the expiry to trigger self-heal — on ANY fetch failure,
+        # not a specific code.
         async with client.session("crm") as session:
             with pytest.raises(McpError) as excinfo:
-                await session.read_resource(AnyUrl("mcp://crm/deals/D1/emails?from=2024-01-01&to=2024-12-31"))
-        assert excinfo.value.error.code == -32002
+                await session.read_resource(AnyUrl("mcp://crm/deals/D1/emails/2024-01-01/2024-12-31"))
+        # code-0-wrapped by plain FastMCP (the swallowed-code SDK gap) — the heal
+        # below does NOT depend on this code, proving code-agnostic robustness.
+        assert excinfo.value.error.code == 0
 
         # One-shot: the very next read succeeds (the replay/self-heal path).
         async with client.session("crm") as session:
-            healed = await session.read_resource(AnyUrl("mcp://crm/deals/D1/emails?from=2024-01-01&to=2024-12-31"))
+            healed = await session.read_resource(AnyUrl("mcp://crm/deals/D1/emails/2024-01-01/2024-12-31"))
         assert healed.contents[0].text  # non-empty typed payload
 
 

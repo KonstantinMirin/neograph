@@ -9,7 +9,14 @@ CLIENT; only their LLMs stay fakes.
 Why a real server instead of fake MCP-shaped tools: a fake ``StructuredTool`` demos
 neograph, not MCP. Against a real server the per-operator identity beat (example 23)
 carries a token through a real round-trip, and the self-healing hydration beat
-(example 24) gets a REAL ``-32002`` resource-not-found from a real server.
+(example 24) gets a REAL server-side error on resume that neograph heals from.
+
+This server is PLAIN FastMCP on purpose — only ``@mcp.tool`` / ``@mcp.resource``,
+no low-level handlers. A demo's job is to be copied, and every workaround line gets
+copied too; the majority of MCP servers people write are plain FastMCP, so the demo
+stays plain FastMCP. Two SDK gaps that a low-level handler could paper over are
+handled by DESIGN instead (path-segment templates; code-agnostic expiry) and
+documented in the APPENDIX at the bottom of this docstring.
 
 The demo domain (shared by both examples): a tiny CRM.
 
@@ -21,11 +28,13 @@ The demo domain (shared by both examples): a tiny CRM.
                                activity-history and email-history resources
     update_deal(deal_id, ...)  MUTATING — the gated-mutation beat (example 23)
     arm_email_expiry()         control tool — arms the one-shot email-history
-                               expiry so example 24 gets a real -32002 on resume
+                               expiry so example 24 gets a real server error on
+                               resume
 
-  RESOURCES (served by a custom low-level read_resource handler — see below)
-    mcp://crm/deals/{id}/activity         activity history (JSON)
-    mcp://crm/deals/{id}/emails{?from,to} email history, RFC-6570 query fraction
+  RESOURCES (plain ``@mcp.resource`` — parameterized, auto-listed as templates)
+    mcp://crm/deals/{deal_id}/activity              activity history (JSON)
+    mcp://crm/deals/{deal_id}/emails/{start}/{end}  email history, a date-range
+                                                    FRACTION via PATH SEGMENTS
 
   AUTH ECHO
     stdio has no HTTP headers, so per-operator identity travels as a ``token``
@@ -38,33 +47,34 @@ TRANSPORT: stdio only. The client spawns this file as
 ``StdioConnection(command=sys.executable, args=[<this file>], env={...})`` via
 ``MultiServerMCPClient``. No ports, no network — CI-safe.
 
-────────────────────────────────────────────────────────────────────────────
-TWO VERIFIED SDK GAPS (mcp 1.28.x) and how this server works around them
-────────────────────────────────────────────────────────────────────────────
-
-1. FastMCP's ``@mcp.resource`` decorator CANNOT express RFC-6570 query templates.
-   It extracts URI params with ``re.findall(r"{(\\w+)}", uri)`` and matches reads
-   with ``uri_template.replace("{","(?P<").replace("}", ">[^/]+)")`` — so
-   ``{?from,to}`` never parses and a ``?from=..&to=..`` query string on a read URI
-   breaks the ``$``-anchored match. WORKAROUND: we do not use ``@mcp.resource`` for
-   reads at all. A custom low-level ``read_resource`` handler parses the full URI —
-   query string included — with ``urllib.parse``, so the ``emails{?from,to}``
-   fraction query works exactly as written.
-
-2. FastMCP's ``@mcp.tool`` / ``@mcp.resource`` wrappers SWALLOW JSON-RPC error
-   codes: a resource handler's exception is re-raised as ``ValueError`` then
-   ``ResourceError``, reaching the client as a generic ``code: 0``. So neither
-   decorator can emit a real ``-32002``. WORKAROUND: the custom low-level
-   ``read_resource`` handler (registered directly on ``mcp._mcp_server``, where the
-   request loop preserves a handler-raised ``McpError`` verbatim) raises
-   ``McpError(ErrorData(code=-32002, ...))`` and the client receives a real -32002.
-
-The custom low-level ``read_resource`` handler registers into the same
-``request_handlers[ReadResourceRequest]`` slot FastMCP uses, and last registration
-wins — so it must be defined AFTER ``FastMCP(...)`` construction (it is).
-
 Run standalone (for debugging):
     uv run --extra mcp-examples python examples/_mcp_demo_server.py
+
+────────────────────────────────────────────────────────────────────────────
+APPENDIX — two verified FastMCP SDK gaps (mcp 1.28.x), and why this plain
+server does not need to work around them
+────────────────────────────────────────────────────────────────────────────
+
+1. Query templates are inexpressible in ``@mcp.resource``. FastMCP extracts URI
+   params with ``re.findall(r"{(\\w+)}", uri)`` and matches reads with
+   ``uri_template.replace("{","(?P<").replace("}", ">[^/]+)")``, so an RFC-6570
+   query fraction like ``emails{?from,to}`` never parses and a ``?from=..&to=..``
+   query string on a read URI breaks the ``$``-anchored match. Rather than a
+   low-level ``read_resource`` handler that parses the query string by hand, we
+   express the date-range fraction as PATH SEGMENTS —
+   ``emails/{start}/{end}`` — which ``@mcp.resource`` supports natively and which
+   neograph's client-side RFC-6570 level-1 expansion (``_uri_template._expand_uri``)
+   interpolates without any special-casing.
+
+2. The ``@tool`` / ``@resource`` wrappers swallow JSON-RPC error codes. A resource
+   handler's exception is re-raised through ``ResourceError`` and reaches the
+   client as a generic ``code: 0`` — so a decorator-based resource CANNOT emit a
+   real ``-32002``. We do NOT forge one with a low-level handler. neograph's
+   self-heal is code-agnostic: ``di.hydrate_resource_ref`` replays the (idempotent)
+   producing call on ANY fetch failure, so a plain ``raise`` from the expired
+   ``email_history`` resource — surfacing as ``code: 0`` — triggers the exact same
+   replay-and-retry a ``-32002`` would. The robustness is the feature; the demo
+   proves it with the error real FastMCP actually produces.
 """
 
 from __future__ import annotations
@@ -72,17 +82,10 @@ from __future__ import annotations
 import json
 import os
 import pathlib
-from urllib.parse import parse_qs, urlparse
 
 from mcp.server.fastmcp import FastMCP
-from mcp.server.lowlevel.helper_types import ReadResourceContents
-from mcp.shared.exceptions import McpError
-from mcp.types import ErrorData, ResourceLink, ResourceTemplate, TextContent
+from mcp.types import ResourceLink, TextContent
 from pydantic import AnyUrl
-
-# JSON-RPC "resource not found / no longer available". The MCP spec assigns
-# -32002 to this; mcp.types does NOT export a named constant, so we spell it out.
-RESOURCE_NOT_FOUND = -32002
 
 # ── In-memory CRM domain ─────────────────────────────────────────────────────
 
@@ -105,7 +108,7 @@ _ACTIVITY: dict[str, list[dict[str, str]]] = {
 }
 
 # Email corpus per deal — the "large corpus consumed selectively" that example 24
-# queries a FRACTION of via the {?from,to} date-range template.
+# queries a FRACTION of via the emails/{start}/{end} date-range path template.
 _EMAILS: dict[str, list[dict[str, str]]] = {
     "D1": [
         {"ts": "2024-02-10", "subject": "Intro", "from": "alice@acme"},
@@ -131,7 +134,7 @@ def _email_history_expired_once() -> bool:
     """True on the FIRST email read after expiry is armed; self-clears afterward.
 
     The one-shot shape is what makes example 24's self-heal deterministic: the
-    resume read hits -32002 exactly once, the pipeline replays the (idempotent)
+    resume read fails exactly once, the pipeline replays the (idempotent)
     producing call, and the retry succeeds.
     """
     marker = _state_file()
@@ -171,8 +174,9 @@ def get_deal(deal_id: str, token: str = "anon") -> list:
 
     The two resource_links are the manifest example 24 lifts onto the bus: refs
     to the activity-history and email-history resources — blobs stay on the
-    server, only the links travel. The email-history link carries the RFC-6570
-    query fraction (`?from=..&to=..`) example 24 reads selectively."""
+    server, only the links travel. The email-history link carries a date-range
+    FRACTION as path segments (`/emails/<start>/<end>`) example 24 reads
+    selectively."""
     deal = _DEALS.get(deal_id, {"id": deal_id, "error": "unknown deal"})
     return [
         TextContent(type="text", text=json.dumps({**deal, "acting_as": token})),
@@ -184,7 +188,7 @@ def get_deal(deal_id: str, token: str = "anon") -> list:
         ),
         ResourceLink(
             type="resource_link",
-            uri=AnyUrl(f"mcp://crm/deals/{deal_id}/emails?from=2024-01-01&to=2024-12-31"),
+            uri=AnyUrl(f"mcp://crm/deals/{deal_id}/emails/2024-01-01/2024-12-31"),
             name="email-history",
             mimeType="application/json",
         ),
@@ -210,60 +214,33 @@ def update_deal(deal_id: str, stage: str, token: str = "anon") -> dict:
 def arm_email_expiry() -> str:
     """Control tool: arm the one-shot email-history expiry.
 
-    Example 24 calls this during the Operator pause; the resume read then gets a
-    real -32002 from the email-history resource exactly once."""
+    Example 24 calls this during the Operator pause; the resume read then fails
+    once from the email-history resource, and neograph self-heals by replaying
+    the idempotent producing call."""
     _state_file().write_text("armed")
     return "email-history expiry armed (one-shot)"
 
 
-# ── Resources: custom low-level handlers (see module docstring for why) ───────
+# ── Resources: plain @mcp.resource (parameterized -> auto-listed templates) ───
 
 
-@mcp._mcp_server.read_resource()
-async def _read_resource(uri) -> list[ReadResourceContents]:
-    """Serve activity + email-history resources; emit a real -32002 on expiry.
-
-    Parses the full URI including the query string, so the emails{?from,to}
-    fraction query works despite FastMCP's decorator not supporting query
-    templates."""
-    parsed = urlparse(str(uri))
-    segments = parsed.path.strip("/").split("/")  # deals/<id>/<kind>
-    deal_id = segments[1] if len(segments) > 1 else ""
-    kind = segments[-1] if segments else ""
-
-    if kind == "emails":
-        if _email_history_expired_once():
-            raise McpError(ErrorData(code=RESOURCE_NOT_FOUND, message=f"email-history no longer available: {uri}"))
-        qs = parse_qs(parsed.query)
-        lo = qs.get("from", [""])[0]
-        hi = qs.get("to", [""])[0]
-        emails = [e for e in _EMAILS.get(deal_id, []) if (not lo or e["ts"] >= lo) and (not hi or e["ts"] <= hi)]
-        body = {"deal_id": deal_id, "from": lo, "to": hi, "emails": emails}
-        return [ReadResourceContents(content=json.dumps(body), mime_type="application/json")]
-
-    if kind == "activity":
-        body = {"deal_id": deal_id, "events": _ACTIVITY.get(deal_id, [])}
-        return [ReadResourceContents(content=json.dumps(body), mime_type="application/json")]
-
-    raise McpError(ErrorData(code=RESOURCE_NOT_FOUND, message=f"unknown resource: {uri}"))
+@mcp.resource("mcp://crm/deals/{deal_id}/activity", mime_type="application/json")
+def activity_history(deal_id: str) -> str:
+    """Activity history for a deal (static path template)."""
+    return json.dumps({"deal_id": deal_id, "events": _ACTIVITY.get(deal_id, [])})
 
 
-@mcp._mcp_server.list_resource_templates()
-async def _list_resource_templates() -> list[ResourceTemplate]:
-    """Advertise both resource templates — including the RFC-6570 query form for
-    email-history, so a client can discover the typed reader's shape."""
-    return [
-        ResourceTemplate(
-            uriTemplate="mcp://crm/deals/{deal_id}/activity",
-            name="activity-history",
-            mimeType="application/json",
-        ),
-        ResourceTemplate(
-            uriTemplate="mcp://crm/deals/{deal_id}/emails{?from,to}",
-            name="email-history",
-            mimeType="application/json",
-        ),
-    ]
+@mcp.resource("mcp://crm/deals/{deal_id}/emails/{start}/{end}", mime_type="application/json")
+def email_history(deal_id: str, start: str, end: str) -> str:
+    """Email-history FRACTION between ``start`` and ``end`` (inclusive), by path.
+
+    On the one-shot expiry a plain ``raise`` is enough: FastMCP wraps it as a
+    code-0 error and neograph's replay-on-any-fetch-failure heals regardless
+    (see APPENDIX gap 2 in the module docstring)."""
+    if _email_history_expired_once():
+        raise ValueError(f"email-history no longer available: deals/{deal_id}/emails/{start}/{end}")
+    emails = [e for e in _EMAILS.get(deal_id, []) if (not start or e["ts"] >= start) and (not end or e["ts"] <= end)]
+    return json.dumps({"deal_id": deal_id, "start": start, "end": end, "emails": emails})
 
 
 if __name__ == "__main__":
