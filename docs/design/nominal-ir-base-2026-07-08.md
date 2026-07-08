@@ -541,3 +541,36 @@ rebase onto D. No other collisions (`_ir_item.py` is new; `_normalize.py`,
 3. **Export `IRItem`?** Recommendation: **no** (keep internal); revisit only if
    piarch needs to write a walker over IR items.
 ```
+
+---
+
+## Addendum: reconciliation with the 105-class guard inventory
+
+A parallel exhaustive inventory (105 guard classes read first-hand) rated
+6 classes RETIRE / 10 SHRINK — higher than this design's honest count
+(RETIRE 2, SHRINK 1). Both are correct under their own assumptions; the
+difference is scope, and the decided design resolves it:
+
+1. The inventory's three extra retire-candidates —
+   `TestNodeIOPolymorphismNormalized`, `TestPrimaryOutputMonopoly`,
+   `TestPrimaryOutputFieldMonopoly` — police the `Node.inputs/outputs`
+   `type | dict | None` trichotomy. They retire only if the base ALSO
+   carries a typed I/O-normalization surface (`NormalizedInputs`/
+   `NormalizedOutputs` as base-level properties). **The decided v1 surface
+   deliberately excludes that** (minimal surface: `declared_output` +
+   `name`/`modifier_set` only), so under this design those three guards
+   STAY. Carrying typed I/O normalization on the base is the documented
+   **v2 option** for a later iteration — it would retire the three
+   trichotomy guards at the cost of a wider migration (the ~22
+   isinstance-on-shape sites).
+2. The inventory's mypy optimism predates the decisive negative probe:
+   mypy's hasattr-narrowing legitimizes the bypass form, so scanner
+   guards for `hasattr`/`getattr` spellings are PERMANENT regardless of
+   any base surface. Any future retirement claim must come with a
+   per-guard mypy-failure demo, per the retirement protocol.
+3. Inventory corrections accepted: `TestNoSidecarPattern` STAYS (storage
+   pattern, not IR typing); `TestNodeIRTyping` SHRINKS at most.
+
+For the 0.7 implementer: the v1 numbers are RETIRE 2 / SHRINK 1; the full
+105-class inventory (in the review-cycle records) is the map for the v2
+option, not the v1 work list.
