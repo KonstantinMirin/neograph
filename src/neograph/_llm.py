@@ -175,17 +175,29 @@ def _notify_cost(
         kwargs["mode"] = mode
     if duration_s is not None:
         kwargs["duration_s"] = duration_s
+    # Pick the callback's accepted kwargs via signature introspection ONCE, then
+    # invoke exactly once. The old `try cb(**full) except TypeError: cb(**core)`
+    # arity probe re-invoked the callback whenever its BODY raised TypeError for a
+    # real reason — double-counting cost. A body TypeError now
+    # propagates to the log path below with no second call.
+    accepted = _accepted_params(cb)
+    if accepted is _ACCEPT_ALL:
+        call_kwargs = kwargs
+    elif accepted:
+        call_kwargs = {k: v for k, v in kwargs.items() if k in accepted}
+    else:
+        # Un-introspectable callable (builtin/C extension): best-effort core triple.
+        call_kwargs = {
+            "tier": tier,
+            "input_tokens": kwargs["input_tokens"],
+            "output_tokens": kwargs["output_tokens"],
+        }
     try:
-        cb(**kwargs)
-    except TypeError:
-        try:
-            cb(
-                tier=tier,
-                input_tokens=kwargs["input_tokens"],
-                output_tokens=kwargs["output_tokens"],
-            )
-        except TypeError as exc:
-            log.warning("cost_callback_failed", error=str(exc))
+        cb(**call_kwargs)
+    except TypeError as exc:
+        # Signature genuinely incompatible (or a wrong builtin guess). Log — do
+        # NOT retry; re-invoking on a body TypeError would double-count cost.
+        log.warning("cost_callback_failed", error=str(exc))
 
 
 def _get_llm(

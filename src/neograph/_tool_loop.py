@@ -112,11 +112,10 @@ class _CoercingToolWrapper:
                 coerced = _coerce_string_args_result(raw_result)
                 if coerced is not None:
                     return coerced
+                reason = "coercion recovery produced no message"
             except Exception as inner:
-                _log_coercion_generate_failed(inner)
-            from langchain_core.messages import AIMessage
-
-            return AIMessage(content="")
+                reason = f"coercion _generate failed: {inner}"
+            return _empty_recovery_message(reason)
 
     async def ainvoke(self, messages: list, **kwargs: Any) -> Any:
         # MUST be an explicit override — __getattr__ would forward `ainvoke` to
@@ -134,11 +133,10 @@ class _CoercingToolWrapper:
                 coerced = _coerce_string_args_result(raw_result)
                 if coerced is not None:
                     return coerced
+                reason = "coercion recovery produced no message"
             except Exception as inner:
-                _log_coercion_generate_failed(inner)
-            from langchain_core.messages import AIMessage
-
-            return AIMessage(content="")
+                reason = f"coercion _agenerate failed: {inner}"
+            return _empty_recovery_message(reason)
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._bound, name)
@@ -194,13 +192,45 @@ def _coerce_string_args_result(raw_result: Any) -> Any | None:
                     try:
                         tc["args"] = _json.loads(tc["args"])
                     except (_json.JSONDecodeError, TypeError):
+                        # The provider returned tool_calls.args as a string that
+                        # is ALSO not valid JSON — we cannot reconstruct the
+                        # intended arguments. Blanking to {} silently runs the
+                        # tool with empty args (wrong result for optional-arg
+                        # tools). Warn so the degradation is visible; the tool
+                        # still receives {} because the tool schema requires a
+                        # dict. NOTE: surfacing a retriable ToolMessage ERROR to
+                        # the LLM would be strictly better but requires the
+                        # ToolMessage-building path in _agent_cycle.py (out of
+                        # this task's file scope) — filed as follow-up (7ymj).
+                        log.warning(
+                            "tool_calls_args_unparseable",
+                            tool=tc.get("name"),
+                            raw_args=tc["args"],
+                            hint="provider returned tool_calls.args as a non-JSON string; "
+                            "the tool will run with empty args",
+                        )
                         tc["args"] = {}
         return raw_msg
     return None
 
 
-def _log_coercion_generate_failed(inner: Exception) -> None:
-    log.warning("tool_calls_coercion_generate_failed", error=str(inner), hint="falling back to empty response")
+def _empty_recovery_message(reason: str) -> Any:
+    """Build the empty-``AIMessage`` string-args coercion fallback, WARNING first.
+
+    Both the ``_generate`` raised branch and the coercion-produced-nothing branch
+    land here. Pre-audit only the raised branch logged; the produced-nothing
+    branch shipped an empty "the model said nothing" turn silently (7ymj). The
+    warning names the recovery failure so the empty turn is never a silent
+    dead-end for the caller.
+    """
+    from langchain_core.messages import AIMessage
+
+    log.warning(
+        "tool_calls_coercion_empty_fallback",
+        reason=reason,
+        hint="string-args coercion could not recover a message; returning an empty AIMessage",
+    )
+    return AIMessage(content="")
 
 
 # ═══════════════════════════════════════════════════════════════════════════

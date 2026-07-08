@@ -1,4 +1,4 @@
-# CHECK_ERROR: Scripted function.*not registered
+# CHECK_ERROR: Scripted function 'totally_nonexistent_fn' not registered
 from pydantic import BaseModel
 
 from neograph import Construct, Node

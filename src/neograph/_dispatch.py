@@ -262,7 +262,7 @@ class ThinkDispatch:
         config = _inject_di_inputs(node, config)
         rendered = _render_input(node, input_data.value, runtime=self.runtime)
         output_model, primary_key = _resolve_primary_output(node)
-        effective_model = config.get("configurable", {}).get("_oracle_model", node.model) or ""
+        effective_model = config.get("configurable", {}).get(StateKeys.ORACLE_MODEL_OVERRIDE, node.model) or ""
 
         # think mode always resolves to a concrete BaseModel class
         # (TypeSpecStatic includes dict-form for multi-output Nodes; the
@@ -296,7 +296,7 @@ class ThinkDispatch:
         config = await _ainject_di_inputs(node, config)
         rendered = _render_input(node, input_data.value, runtime=self.runtime)
         output_model, primary_key = _resolve_primary_output(node)
-        effective_model = config.get("configurable", {}).get("_oracle_model", node.model) or ""
+        effective_model = config.get("configurable", {}).get(StateKeys.ORACLE_MODEL_OVERRIDE, node.model) or ""
 
         result = await _llm.ainvoke_structured(
             self.runtime,

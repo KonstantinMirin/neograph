@@ -1,4 +1,4 @@
-# CHECK_ERROR: Loop.*already|duplicate.*Loop|multiple.*Loop
+# CHECK_ERROR: Duplicate Loop modifier
 # Two Loop modifiers on the same node. Should this be caught?
 from pydantic import BaseModel
 

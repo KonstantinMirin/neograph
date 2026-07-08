@@ -104,7 +104,8 @@ def describe_type(
     # Pass 1: count class occurrences to decide what to hoist.
     class_counts: dict[type, int] = {}
     enum_classes: set[type] = set()
-    _count_classes(model, class_counts, enum_classes, visited=set())
+    recursive: set[type] = set()
+    _count_classes(model, class_counts, enum_classes, recursive, visited=set(), path=set())
 
     # Determine which classes to hoist.
     hoisted: set[type] = set()
@@ -115,6 +116,11 @@ def describe_type(
     else:
         name_set = set(hoist_classes)
         hoisted = {cls for cls in class_counts if cls.__name__ in name_set}
+
+    # Recursive models MUST be hoisted regardless of the hoist policy: the
+    # back-edge renders a bare `Name` reference, so without a `type Name = {...}`
+    # declaration the LLM sees a dangling type name.
+    hoisted |= recursive
 
     if always_hoist_enums:
         hoisted |= enum_classes
@@ -168,24 +174,37 @@ def _count_classes(
     model: type[BaseModel],
     counts: dict[type, int],
     enum_classes: set[type],
+    recursive: set[type],
     visited: set[type],
+    path: set[type],
 ) -> None:
-    """Recursively count how many times each nested BaseModel/Enum appears."""
+    """Recursively count how many times each nested BaseModel/Enum appears.
+
+    ``visited`` is a global dedup set (each model's subtree is walked once, so
+    counts stay accurate for repeated siblings). ``path`` is the current
+    ancestor chain, used to detect back-edges — a model reachable from itself is
+    recorded in ``recursive`` and later force-hoisted.
+    """
     if model in visited:
         return
     visited.add(model)
+    path.add(model)
 
     for _name, field_info in model.model_fields.items():
         if field_info.exclude or _is_output_excluded(field_info):
             continue
-        _count_annotation(field_info.annotation, counts, enum_classes, visited)
+        _count_annotation(field_info.annotation, counts, enum_classes, recursive, visited, path)
+
+    path.discard(model)
 
 
 def _count_annotation(
     annotation: Any,
     counts: dict[type, int],
     enum_classes: set[type],
+    recursive: set[type],
     visited: set[type],
+    path: set[type],
 ) -> None:
     """Count occurrences within a single type annotation."""
     if annotation is None or annotation is type(None):
@@ -196,7 +215,7 @@ def _count_annotation(
 
     if origin is Union or origin is types.UnionType:
         for arg in args:
-            _count_annotation(arg, counts, enum_classes, visited)
+            _count_annotation(arg, counts, enum_classes, recursive, visited, path)
         return
 
     if origin is Literal:
@@ -204,12 +223,12 @@ def _count_annotation(
 
     if origin in (list, tuple, frozenset, set):
         for arg in args:
-            _count_annotation(arg, counts, enum_classes, visited)
+            _count_annotation(arg, counts, enum_classes, recursive, visited, path)
         return
 
     if origin is dict:
         for arg in args:
-            _count_annotation(arg, counts, enum_classes, visited)
+            _count_annotation(arg, counts, enum_classes, recursive, visited, path)
         return
 
     if isinstance(annotation, type) and issubclass(annotation, enum.Enum):
@@ -219,7 +238,10 @@ def _count_annotation(
 
     if isinstance(annotation, type) and issubclass(annotation, BaseModel):
         counts[annotation] = counts.get(annotation, 0) + 1
-        _count_classes(annotation, counts, enum_classes, visited)
+        # A back-edge to an ancestor currently on the path is a recursion cycle.
+        if annotation in path:
+            recursive.add(annotation)
+        _count_classes(annotation, counts, enum_classes, recursive, visited, path)
         return
 
 
@@ -313,7 +335,25 @@ def _render_type(
         parts = [f'"{v}"' if isinstance(v, str) else str(v) for v in args]
         return or_splitter.join(parts)
 
-    # list / tuple / set / frozenset.
+    # Heterogeneous tuple: tuple[A, B, ...] keeps every positional member.
+    # Variadic tuple[X, ...] and bare tuple fall through to the array arm below.
+    if origin is tuple and args and not (len(args) == 2 and args[1] is Ellipsis):
+        parts = [
+            _render_type(
+                arg,
+                indent=indent,
+                depth=depth,
+                or_splitter=or_splitter,
+                hoisted=hoisted,
+                visited=visited,
+            )
+            for arg in args
+        ]
+        return "[" + ", ".join(parts) + "]"
+
+    # list / tuple / set / frozenset — single-element array notation. For a
+    # variadic tuple[X, ...] the second member is the Ellipsis sentinel, so
+    # args[0] is the element type.
     if origin in (list, tuple, frozenset, set):
         if args:
             inner = _render_type(

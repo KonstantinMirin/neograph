@@ -1,4 +1,4 @@
-# CHECK_ERROR: Each.*already|duplicate.*Each|multiple.*Each
+# CHECK_ERROR: Duplicate Each modifier
 # Two Each modifiers on the same node. Should this be caught?
 # Each wiring assumes one Each per node.
 from pydantic import BaseModel

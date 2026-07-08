@@ -1,4 +1,4 @@
-# CHECK_ERROR: does not resolve|no field|not.*model
+# CHECK_ERROR: Each\(over='outer\.label\.chars'\) path 'outer\.label\.chars' does not resolve
 # Each.over path where an intermediate segment is a plain type (str), not a Pydantic
 # model. Path resolution should fail because str has no model_fields.
 from pydantic import BaseModel

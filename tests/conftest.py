@@ -1,9 +1,72 @@
 """Test fixtures — registry isolation between tests."""
 
 import asyncio
+import hashlib
+import subprocess
+from pathlib import Path
 
 import pytest
 import structlog
+
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+_SRC_DIR = _REPO_ROOT / "src" / "neograph"
+
+
+def _src_tree_signature() -> str | None:
+    """Hash the current uncommitted state of git-tracked ``src/neograph``.
+
+    Combines ``git diff`` (tracked-content changes vs HEAD) and
+    ``git status --porcelain`` (also surfaces new/deleted files) so any
+    mutation of the source tree — modification, creation, or deletion —
+    changes the digest. Returns ``None`` when git is unavailable so the
+    guard degrades to a no-op instead of failing the suite.
+    """
+    try:
+        diff = subprocess.run(
+            ["git", "diff", "--", "src/neograph"],
+            cwd=_REPO_ROOT,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
+        status = subprocess.run(
+            ["git", "status", "--porcelain", "--", "src/neograph"],
+            cwd=_REPO_ROOT,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    return hashlib.sha256((diff + "\x00" + status).encode("utf-8", "surrogatepass")).hexdigest()
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _src_tree_unmodified_by_suite():
+    """Permanent alarm: the test run must not mutate git-tracked ``src/neograph``.
+
+    A source-mutating guard test that skips its finally-restore once leaked a
+    MUTATION-PROBE line into the real ``naming.py`` (TQ-03). This session-scoped
+    fixture captures a signature of the source tree's uncommitted state at the
+    START of the run and re-checks it at the END, failing loudly on any delta.
+
+    It compares a session-start SNAPSHOT against session-end — NOT ``git diff``
+    against HEAD — so the legitimate uncommitted changes already present in the
+    working tree do not trip it; only a change introduced *by the test run*
+    does. Degrades to a no-op when git is unavailable.
+    """
+    before = _src_tree_signature()
+    yield
+    if before is None:
+        return
+    after = _src_tree_signature()
+    assert after == before, (
+        "The test run modified git-tracked source under src/neograph/. A "
+        "source-mutating guard/verification test likely skipped its "
+        "finally-restore. Inspect `git status src/neograph` and ensure every "
+        "test that writes real source files restores them in a finally block "
+        "(or writes to tmp_path instead)."
+    )
 
 
 @pytest.fixture(autouse=True)

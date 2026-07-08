@@ -1,4 +1,4 @@
-# CHECK_ERROR: shadow|ambig|conflict|upstream
+# CHECK_ERROR: parameter 'produce' is annotated as FromInput but 'produce' is also a known upstream
 # Attack vector: FromInput param has the same name as an upstream @node.
 # The classifier marks 'produce' as from_input, so it gets excluded from
 # the inputs dict (line ~639 in decorators.py: "if p.name in param_res: continue").

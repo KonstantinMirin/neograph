@@ -1,4 +1,4 @@
-# CHECK_ERROR: type.*compatible|no upstream produces
+# CHECK_ERROR: declares inputs=Scores but no upstream produces a compatible value[\s\S]*Claims \| str
 # Attack vector 6: Union type output — Claims | str
 # Validator should reject union outputs because the consumer can't be sure
 # which branch it gets at runtime.

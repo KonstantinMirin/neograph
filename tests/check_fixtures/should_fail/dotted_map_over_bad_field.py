@@ -1,4 +1,4 @@
-# CHECK_ERROR: conditions.*not found|has no field.*conditions
+# CHECK_ERROR: Each\(over='filter\.conditions'\) path 'filter\.conditions' does not resolve
 # Scenario 5: dotted map_over path references a field that doesn't exist
 from pydantic import BaseModel
 

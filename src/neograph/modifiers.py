@@ -242,12 +242,19 @@ class Modifiable:
         result = self.model_copy(update={"modifier_set": new_ms})  # type: ignore[attr-defined]
         # Loop validation at | time: check type compatibility immediately.
         if isinstance(modifier, Loop):
-            if hasattr(result, "outputs"):
+            # Discriminate Node vs Construct via isinstance, not hand-rolled
+            # hasattr(.,'outputs')/(.,'output') probes. Lazy imports: node.py and
+            # construct.py both import modifiers (Modifiable base), so a top-level
+            # import here would cycle.
+            from neograph.construct import Construct
+            from neograph.node import Node
+
+            if isinstance(result, Node):
                 # Node: validate output compat with inputs
                 from neograph._construct_validation import validate_loop_self_edge
 
                 validate_loop_self_edge(result)
-            elif hasattr(result, "output") and hasattr(result, "input"):
+            elif isinstance(result, Construct):
                 # Construct-level Loop with history=True — not supported yet
                 if modifier.history:
                     raise ConstructError.build(

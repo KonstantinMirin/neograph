@@ -403,7 +403,7 @@ class TestSubgraph:
         through an intermediate sub-construct into the innermost scripted node.
 
         neograph-kqbd: make_subgraph_fn forwards neo_oracle_model from parent
-        state into child config as _oracle_model. At depth > 1 the config
+        state into child config as StateKeys.ORACLE_MODEL_OVERRIDE. At depth > 1 the config
         (not state) carries the model tier. This test verifies the full chain:
           Oracle Send → sub_a make_subgraph_fn → sub_b make_subgraph_fn → inner node config.
         """
@@ -411,9 +411,11 @@ class TestSubgraph:
 
         seen_models = []
 
-        # Innermost node: captures _oracle_model from config
+        # Innermost node: captures the oracle model override from config
+        from neograph._state_keys import StateKeys
+
         def inner_capture(input_data, config):
-            model = config.get("configurable", {}).get("_oracle_model")
+            model = config.get("configurable", {}).get(StateKeys.ORACLE_MODEL_OVERRIDE)
             seen_models.append(model)
             return RawText(text=f"from-{model}")
 

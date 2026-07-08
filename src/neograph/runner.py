@@ -397,7 +397,30 @@ def _required_checkpointer_driver(checkpointer: object) -> str | None:
 
     try:
         source = inspect.getsource(aget)
-    except (OSError, TypeError):
+    except (OSError, TypeError) as exc:
+        # Introspection failed — we can't classify this saver's driver. Do NOT
+        # raise (third-party savers are legitimate), but do NOT stay silent
+        # either: the returned None is the mismatch guard's SOLE input, so a
+        # None here BYPASSES the sync/async protection for this saver. Warn so
+        # the bypass is traceable (7ymj).
+        #
+        # Capability-probing (does the saver own aget_tuple/get_tuple natively?)
+        # was evaluated as a replacement for this source-sniffing and REJECTED:
+        # LangGraph's sync SqliteSaver/PostgresSaver define their OWN aget_tuple
+        # stub (qualname 'SqliteSaver.aget_tuple') that raises NotImplementedError,
+        # so a method-owner probe cannot distinguish a sync-only saver from a
+        # dual-capable one (InMemorySaver also owns aget_tuple). Reading the
+        # method source for the NotImplementedError raise is the only signal
+        # that separates the stub from a real async implementation.
+        log.warning(
+            "checkpointer_driver_introspection_failed",
+            saver=type(checkpointer).__name__,
+            error=str(exc),
+            hint=(
+                "could not read aget_tuple source to classify sync/async driver; "
+                "the sync/async mismatch guard is BYPASSED for this saver"
+            ),
+        )
         return None
     return "sync" if "NotImplementedError" in source else None
 
@@ -460,10 +483,21 @@ def _has_existing_checkpoint(graph: CompiledNeograph, config: RunnableConfig) ->
         return False
     try:
         saved = checkpointer.get_tuple(config)
-        return saved is not None and bool(saved.checkpoint.get("channel_versions"))
     except (AttributeError, TypeError, KeyError) as exc:
-        log.debug("checkpoint_probe_failed", error=str(exc))
-        return False
+        # yc38: a checkpoint READ that raises means the stored state is corrupt
+        # or the saver is misconfigured — NOT "no checkpoint". Absent state
+        # returns None from get_tuple; a raise is genuine corruption. Silently
+        # returning False here would start a FRESH run that ignores durable
+        # state (the durability pitch's worst false spot), so surface it (7ymj).
+        raise ConfigurationError.build(
+            "checkpoint read failed",
+            found=f"{type(checkpointer).__name__}.get_tuple raised {type(exc).__name__}: {exc}",
+            hint=(
+                "the stored checkpoint appears corrupt or the saver is "
+                "misconfigured; inspect the checkpoint backend for this thread_id"
+            ),
+        ) from exc
+    return saved is not None and bool(saved.checkpoint.get("channel_versions"))
 
 
 def _prepare_resume_config(config: RunnableConfig | None) -> RunnableConfig | None:
@@ -833,10 +867,19 @@ async def _ahas_existing_checkpoint(graph: CompiledNeograph, config: RunnableCon
         return False
     try:
         saved = await checkpointer.aget_tuple(config)
-        return saved is not None and bool(saved.checkpoint.get("channel_versions"))
     except (AttributeError, TypeError, KeyError) as exc:
-        log.debug("checkpoint_probe_failed", error=str(exc))
-        return False
+        # yc38 (async twin): mirror the sync corrupt-read policy — a raising
+        # read is corruption/misconfig, not "no checkpoint"; fail loud rather
+        # than silently starting a fresh run that ignores durable state (7ymj).
+        raise ConfigurationError.build(
+            "checkpoint read failed",
+            found=f"{type(checkpointer).__name__}.aget_tuple raised {type(exc).__name__}: {exc}",
+            hint=(
+                "the stored checkpoint appears corrupt or the saver is "
+                "misconfigured; inspect the checkpoint backend for this thread_id"
+            ),
+        ) from exc
+    return saved is not None and bool(saved.checkpoint.get("channel_versions"))
 
 
 async def _averify_checkpoint_schema(

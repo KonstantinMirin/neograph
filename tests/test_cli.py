@@ -105,20 +105,20 @@ class TestLoadConfig:
     def test_load_config_json(self):
         """--config with valid JSON returns parsed dict."""
         args = argparse.Namespace(config='{"key": "value"}', setup=None)
-        result = _load_config(args)
+        result = _load_config(None, args)
         assert result == {"key": "value"}
 
     def test_load_config_invalid_json_exits(self):
         """--config with invalid JSON calls sys.exit(2)."""
         args = argparse.Namespace(config="not json", setup=None)
         with pytest.raises(SystemExit) as exc_info:
-            _load_config(args)
+            _load_config(None, args)
         assert exc_info.value.code == 2
 
     def test_load_config_none_when_no_flags(self):
         """No --config or --setup returns None."""
         args = argparse.Namespace(config=None, setup=None)
-        assert _load_config(args) is None
+        assert _load_config(None, args) is None
 
     def test_load_config_setup_module(self, tmp_path):
         """--setup with valid module calls get_check_config()."""
@@ -130,7 +130,8 @@ class TestLoadConfig:
         """)
         )
         args = argparse.Namespace(config=None, setup=str(setup_file))
-        result = _load_config(args)
+        setup_mod = _import_module(str(setup_file))
+        result = _load_config(setup_mod, args)
         assert result == {"node_id": "test"}
 
     def test_load_config_setup_missing_function_exits(self, tmp_path):
@@ -138,8 +139,9 @@ class TestLoadConfig:
         setup_file = tmp_path / "bad_setup.py"
         setup_file.write_text("x = 1\n")
         args = argparse.Namespace(config=None, setup=str(setup_file))
+        setup_mod = _import_module(str(setup_file))
         with pytest.raises(SystemExit) as exc_info:
-            _load_config(args)
+            _load_config(setup_mod, args)
         assert exc_info.value.code == 2
 
 

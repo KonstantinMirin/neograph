@@ -1,4 +1,4 @@
-# CHECK_ERROR: type.*compatible|no upstream produces
+# CHECK_ERROR: declares inputs=TypeB but no upstream produces a compatible value[\s\S]*node 'first': TypeA
 # Attack vector 5b: Reverse Liskov — producer is superclass, consumer expects subclass.
 # TypeA is NOT a TypeB. Should fail.
 from pydantic import BaseModel

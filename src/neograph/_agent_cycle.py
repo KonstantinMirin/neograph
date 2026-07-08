@@ -31,6 +31,7 @@ owns the topology (add_node / conditional edges). No engine execution verb
 
 from __future__ import annotations
 
+import asyncio
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -135,7 +136,7 @@ def _turn_prep_kwargs(
     if no.is_dict_form and primary_key is not None:
         gen_type = no.all_keys[primary_key]
 
-    effective_model = config.get("configurable", {}).get("_oracle_model", node.model) or ""
+    effective_model = config.get("configurable", {}).get(StateKeys.ORACLE_MODEL_OVERRIDE, node.model) or ""
     effective_renderer = node.renderer or runtime.renderer
 
     prepare_kwargs = {
@@ -397,18 +398,18 @@ def _tool_call_precheck(
     return "run", tool_fn
 
 
-def _record_tool_result(
+def _build_tool_interaction(
     tc: dict,
     result: Any,
     elapsed_ms: int,
-    tracker: ToolBudgetTracker,
     renderer: Any,
 ) -> tuple[ToolInteraction, ToolMessage]:
-    """Pure post-invoke recording for one tool call: advance the tracker, render
-    the result, build the ToolInteraction + ToolMessage. Single-sites the
-    result-ToolMessage + interaction builders across the twins."""
+    """Pure result rendering: render the tool result, build the ToolInteraction +
+    ToolMessage. Does NOT touch the tracker — budget accounting is caller-owned.
+    The sync twin advances the tracker THEN builds (via _record_tool_result); the
+    async twin PRE-RESERVES the budget in tool_call order before gathering, then
+    builds here (so it never double-counts). See neograph-dyy7."""
     name = tc["name"]
-    tracker.record_call(name)
     rendered = _render_tool_result_for_llm(result, renderer)
     interaction = ToolInteraction(
         tool_name=name,
@@ -418,6 +419,30 @@ def _record_tool_result(
         duration_ms=elapsed_ms,
     )
     return interaction, ToolMessage(content=rendered, tool_call_id=tc["id"])
+
+
+def _record_tool_result(
+    tc: dict,
+    result: Any,
+    elapsed_ms: int,
+    tracker: ToolBudgetTracker,
+    renderer: Any,
+) -> tuple[ToolInteraction, ToolMessage]:
+    """Pure post-invoke recording for one tool call: advance the tracker, then
+    render + build the ToolInteraction + ToolMessage. The sync twin's single-turn
+    call path — advance-then-build."""
+    tracker.record_call(tc["name"])
+    return _build_tool_interaction(tc, result, elapsed_ms, renderer)
+
+
+async def _ainvoke_tool_timed(tool_fn: Any, tc: dict, config: RunnableConfig) -> tuple[Any, int]:
+    """Await one tool's ``ainvoke`` and return ``(result, elapsed_ms)``. Each call
+    times its OWN duration so a gathered batch records per-call latency, not the
+    batch wall-clock. Used by the async tools superstep's concurrent gather."""
+    t0 = time.monotonic()
+    result = await tool_fn.ainvoke(tc["args"], config=config)
+    elapsed_ms = int((time.monotonic() - t0) * 1000)
+    return result, elapsed_ms
 
 
 def _lift_resource_refs(result: Any, tc: dict, idempotent: bool = False) -> list[ResourceRef]:
@@ -598,18 +623,42 @@ def make_agent_cycle_bodies(
             return {msgs_key: _limit_messages(tool_calls, max_iter_hit), budget_key: budget}
 
         tracker = _tracker_from_budget(node, budget)
-        new_msgs: list = []
-        interactions: list = []
-        refs: list = []
+
+        # Phase 1 (sequential, in tool_call order): precheck + PRE-RESERVE budget.
+        # Reserving each runnable call's budget BEFORE the concurrent gather keeps
+        # per-tool budget enforcement identical to the sync twin: two parallel
+        # calls to a budget=1 tool see the first's reservation, so the second
+        # short-circuits. A plain gather-then-record would let both through
+        # because their can_call checks would race ahead of any record_call.
+        # ``plan`` preserves the original tool_call order — the ToolMessage /
+        # ToolInteraction message-history contract holds regardless of which
+        # coroutine finishes first.
+        plan: list[tuple[str, Any]] = []  # ("msg", ToolMessage) | ("run", tc)
+        coros = []
         for tc in tool_calls:
             kind, payload = _tool_call_precheck(tc, tracker, tp.prep.tool_instances)
             if kind == "msg":
+                plan.append(("msg", payload))
+                continue
+            tracker.record_call(tc["name"])  # pre-reserve so parallel calls honor budget
+            plan.append(("run", tc))
+            coros.append(_ainvoke_tool_timed(payload, tc, config))
+
+        # Phase 2 (concurrent): await all runnable tool calls together.
+        results = await asyncio.gather(*coros) if coros else []
+
+        # Phase 3 (sequential, in original order): render + assemble.
+        new_msgs: list = []
+        interactions: list = []
+        refs: list = []
+        result_iter = iter(results)
+        for kind, payload in plan:
+            if kind == "msg":
                 new_msgs.append(payload)
                 continue
-            t0 = time.monotonic()
-            result = await payload.ainvoke(tc["args"], config=config)
-            elapsed_ms = int((time.monotonic() - t0) * 1000)
-            interaction, msg = _record_tool_result(tc, result, elapsed_ms, tracker, tp.effective_renderer)
+            tc = payload
+            result, elapsed_ms = next(result_iter)
+            interaction, msg = _build_tool_interaction(tc, result, elapsed_ms, tp.effective_renderer)
             interactions.append(interaction)
             refs.extend(_lift_resource_refs(result, tc, idempotent_by_tool.get(tc["name"], False)))
             new_msgs.append(msg)

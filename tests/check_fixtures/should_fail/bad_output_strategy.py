@@ -1,4 +1,4 @@
-# CHECK_ERROR: output_strategy
+# CHECK_ERROR: output_strategy[\s\S]*Input should be 'structured'
 from pydantic import BaseModel
 
 from neograph import Construct, Node

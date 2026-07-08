@@ -1,4 +1,4 @@
-# CHECK_ERROR: self.reference|not available|no.*producer|does not exist|own output
+# CHECK_ERROR: merge_fn 'combine' param 'generate' references the node's own output
 # Attack vector: @merge_fn param named after the Oracle node itself.
 # The merge barrier runs BEFORE the node's output is written to state,
 # so referencing the node's own field is a temporal self-reference that

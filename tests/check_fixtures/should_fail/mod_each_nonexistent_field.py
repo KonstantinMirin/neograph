@@ -1,4 +1,4 @@
-# CHECK_ERROR: does not resolve|no field
+# CHECK_ERROR: Each\(over='cluster\.nonexistent_field'\) path 'cluster\.nonexistent_field' does not resolve
 # Each.over path where the dotted segment points to a field that doesn't exist
 # on the upstream output model. Should fail at assembly-time validation.
 from pydantic import BaseModel

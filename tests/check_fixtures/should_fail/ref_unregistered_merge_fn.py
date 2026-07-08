@@ -1,4 +1,4 @@
-# CHECK_ERROR: Scripted function.*not registered|merge_fn.*not
+# CHECK_ERROR: Scripted function 'nonexistent_merge' not registered
 from pydantic import BaseModel
 
 from neograph import Construct, Node

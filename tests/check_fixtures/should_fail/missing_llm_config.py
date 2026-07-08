@@ -1,4 +1,4 @@
-# CHECK_ERROR: LLM-mode nodes
+# CHECK_ERROR: LLM-mode nodes \(gen\) require runtime configuration
 from pydantic import BaseModel
 
 from neograph import Construct, Node

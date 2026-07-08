@@ -27,7 +27,7 @@ from typing import Annotated, Any, Literal, Protocol, cast, runtime_checkable
 
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import BaseTool
-from pydantic import BaseModel, Field, PlainValidator, PrivateAttr, field_validator
+from pydantic import BaseModel, ConfigDict, Field, PlainValidator, PrivateAttr, field_validator
 from typing_extensions import TypeVar
 
 from neograph._llm_config import LlmConfig
@@ -251,7 +251,7 @@ class Node(Modifiable, BaseModel):
     # arbitrary_types_allowed: required for the runtime_checkable Protocol
     # fields ``raw_fn``, ``renderer``, ``skip_when``, ``skip_value`` (none of
     # which are Pydantic models) and the ``tools`` list of ``Tool`` runnables.
-    model_config = {"arbitrary_types_allowed": True}
+    model_config = ConfigDict(arbitrary_types_allowed=True)
 
     def __init__(self, name_: str | None = None, /, **kwargs):
         """Node accepts name positionally or as a keyword argument."""

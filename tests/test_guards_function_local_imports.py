@@ -631,6 +631,42 @@ class TestNeoStateKeysCentralized:
             "must NOT be flagged -- only state-dict KEY positions"
         )
 
+    def test_oracle_model_override_config_key_is_centralized(self):
+        """CON-01 / neograph-awor: the Oracle model-override config side-channel
+        key was the literal ``"_oracle_model"`` — un-prefixed, so invisible to
+        this guard's ``_neo_`` matcher, and a typo at any of its read sites
+        silently fell back to ``node.model``. It is now
+        ``StateKeys.ORACLE_MODEL_OVERRIDE`` with the ``_neo_`` convention, so the
+        guard covers it automatically. Pin: (a) the constant exists and follows
+        the convention; (b) the old un-prefixed literal is gone from src; (c) a
+        ``_neo_oracle_model_override`` literal in key position IS now caught.
+        """
+        from neograph._state_keys import StateKeys
+
+        assert StateKeys.ORACLE_MODEL_OVERRIDE.startswith("_neo_"), (
+            "ORACLE_MODEL_OVERRIDE must adopt the `_neo_` config-key convention"
+        )
+        # No un-prefixed "_oracle_model" literal survives anywhere in src.
+        # (_state_keys.py is exempt: its comment documents the rename by name.)
+        offenders = [
+            py.name
+            for py in sorted(SRC_DIR.glob("*.py"))
+            if py.name != "_state_keys.py" and '"_oracle_model"' in py.read_text()
+        ]
+        assert offenders == [], (
+            f"un-prefixed '_oracle_model' config literal still present in {offenders}; "
+            "use StateKeys.ORACLE_MODEL_OVERRIDE."
+        )
+
+    def test_slip_oracle_model_override_literal_now_caught(self, tmp_path):
+        """slip test: had the key stayed un-prefixed a typo would be invisible;
+        now a stray ``_neo_oracle_model_override`` literal in key position is
+        flagged, so re-inlining the config key instead of using the constant
+        fails the guard."""
+        bad = tmp_path / "slip.py"
+        bad.write_text('def f(config):\n    return config.get("_neo_oracle_model_override")\n')
+        assert self._scan(bad), "slip: _neo_ config key literal must be caught in key position"
+
 
 class TestNoLlmModuleGlobals:
     """LLM runtime configuration must not live in module-level mutable state.

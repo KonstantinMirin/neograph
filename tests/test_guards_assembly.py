@@ -356,7 +356,18 @@ class TestConstructBuilderSplit:
 def _parse_neograph_imports(path: pathlib.Path) -> set[str]:
     """Return the set of `neograph.*` modules imported by the file.
 
-    Walks both `from neograph.X import Y` and `import neograph.X` forms.
+    Walks three forms:
+      - `from neograph.X import Y`      (dotted submodule)
+      - `import neograph.X`             (dotted submodule)
+      - `from neograph import X`        (from-PACKAGE form) — where `X` names a
+        submodule (`neograph/X.py` exists). This form was previously DROPPED ON
+        THE FLOOR (neograph-awor / PAT-01 / LR-01): a cardinal-rule layering
+        violation like `from neograph import decorators` in a lower-layer module
+        passed every import-DAG guard green because the parser only matched the
+        dotted `stmt.module == "neograph.X"` shape. A `from neograph import X`
+        where `X` is a public SYMBOL re-export (e.g. `__version__`, `node` the
+        decorator) is NOT a module edge and is excluded via the `X.py`-exists
+        submodule check.
     Returns module names without the `neograph.` prefix
     (e.g., `_execute`, `factory`, `_oracle`).
     """
@@ -368,6 +379,12 @@ def _parse_neograph_imports(path: pathlib.Path) -> set[str]:
         if isinstance(stmt, ast.ImportFrom):
             if stmt.module and stmt.module.startswith("neograph.") and stmt.level == 0:
                 mods.add(stmt.module[len("neograph.") :])
+            elif stmt.module == "neograph" and stmt.level == 0:
+                # from-package form: only count names that are real submodules,
+                # not public symbol re-exports.
+                for alias in stmt.names:
+                    if (SRC_DIR / f"{alias.name}.py").exists():
+                        mods.add(alias.name)
         elif isinstance(stmt, ast.Import):
             for alias in stmt.names:
                 if alias.name.startswith("neograph."):
@@ -1348,6 +1365,36 @@ class TestNoSidecarPattern:
             + "\n\nPrivateAttr data lives on the Node — no external cleanup needed."
         )
 
+    def test_param_res_accessed_only_via_accessor(self):
+        """neograph-awor (LR-02): raw ``item._param_res`` attribute access is
+        banned outside _sidecar.py; every other module must go through the
+        ``_get_param_res`` / ``_set_param_res`` accessor. compiler.py was the sole
+        raw reader (``item._param_res`` in _collect_required_di); migrating it
+        makes _sidecar.py the single home. AST-scan (attribute access only — the
+        ``_param_res: ... = PrivateAttr(...)`` field DECLARATION in node.py is an
+        assignment target, not an attribute access, so it is not flagged).
+        """
+        offenders: list[str] = []
+        for py_file in sorted(SRC_DIR.glob("*.py")):
+            if py_file.name == "_sidecar.py":
+                continue
+            for node in ast.walk(ast.parse(py_file.read_text())):
+                if isinstance(node, ast.Attribute) and node.attr == "_param_res":
+                    offenders.append(f"  {py_file.name}:{node.lineno}")
+        assert offenders == [], (
+            f"\n{len(offenders)} raw ._param_res access(es) outside _sidecar.py:\n"
+            + "\n".join(offenders)
+            + "\n\nUse _get_param_res(node) / _set_param_res(node, ...) from neograph._sidecar."
+        )
+
+    def test_meta_param_res_scanner_catches_raw_access(self):
+        """slip test: a raw ``x._param_res`` read is detected; the accessor call
+        ``_get_param_res(x)`` is not."""
+        raw = ast.parse("def f(x):\n    return x._param_res\n")
+        assert any(isinstance(n, ast.Attribute) and n.attr == "_param_res" for n in ast.walk(raw))
+        clean = ast.parse("def f(x):\n    return _get_param_res(x)\n")
+        assert not any(isinstance(n, ast.Attribute) and n.attr == "_param_res" for n in ast.walk(clean))
+
     def test_node_has_private_attrs(self):
         """Node must declare PrivateAttr fields for sidecar data."""
         from neograph.node import Node
@@ -1639,6 +1686,23 @@ class TestLowerLayersDoNotImportForwardDX:
         fake = tmp_path / "_fake_lower_dec.py"
         fake.write_text("from neograph.decorators import _classify_di_params\n")
         assert "decorators" in _parse_neograph_imports(fake) & self.DX_MODULES
+
+    def test_meta_detects_from_package_dx_import(self, tmp_path):
+        """slip test (neograph-awor / LR-01): the from-PACKAGE spelling
+        `from neograph import decorators` is a DX import too, and must be caught
+        exactly like the dotted `from neograph.decorators import X` form. Before
+        the parser learned this shape it dropped it on the floor, so a lower-layer
+        module could import the DX layer with every guard green."""
+        fake = tmp_path / "_fake_from_pkg.py"
+        fake.write_text("from neograph import decorators\n")
+        assert "decorators" in _parse_neograph_imports(fake) & self.DX_MODULES
+
+    def test_meta_from_package_symbol_reexport_is_not_module_edge(self, tmp_path):
+        """Negative: `from neograph import <public symbol>` (no matching
+        submodule file, e.g. __version__) is NOT counted as a module edge."""
+        fake = tmp_path / "_fake_symbol.py"
+        fake.write_text("from neograph import __version__\n")
+        assert "__version__" not in _parse_neograph_imports(fake)
 
     def test_meta_passes_neutral_ir_import(self, tmp_path):
         """Negative: importing the neutral IR module is not a DX import."""

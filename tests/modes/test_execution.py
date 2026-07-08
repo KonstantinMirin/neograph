@@ -605,8 +605,14 @@ class TestCheckpointResume:
         graph = compile(pipeline, **build_test_compile_kwargs())  # no checkpointer
         assert not _has_existing_checkpoint(graph, {"configurable": {"thread_id": "x"}})
 
-    def test_checkpoint_check_handles_broken_checkpointer(self):
-        """_has_existing_checkpoint returns False on exception (exception path)."""
+    def test_checkpoint_check_raises_on_broken_checkpointer(self):
+        """A checkpoint READ that raises is corruption, NOT 'no checkpoint'.
+
+        neograph-7ymj / PAT-02: the pre-audit code swallowed the read error and
+        returned False, silently starting a fresh run that ignores durable
+        state. It must now fail loud with the probe error chained.
+        """
+        from neograph.errors import ConfigurationError
         from neograph.runner import _has_existing_checkpoint
 
         class BrokenCheckpointer:
@@ -616,7 +622,9 @@ class TestCheckpointResume:
         class FakeGraph:
             checkpointer = BrokenCheckpointer()
 
-        assert not _has_existing_checkpoint(FakeGraph(), {"configurable": {"thread_id": "x"}})
+        with pytest.raises(ConfigurationError) as exc:
+            _has_existing_checkpoint(FakeGraph(), {"configurable": {"thread_id": "x"}})
+        assert isinstance(exc.value.__cause__, TypeError)
 
     def test_run_with_config_none_and_no_input(self):
         """run(graph) with config=None skips preflight, passes to LangGraph (path 3c)."""

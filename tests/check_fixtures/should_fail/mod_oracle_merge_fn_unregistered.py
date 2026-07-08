@@ -1,4 +1,4 @@
-# CHECK_ERROR: not registered|merge_fn.*not found|no.*merge|Scripted function.*not registered
+# CHECK_ERROR: Scripted function 'this_merge_fn_does_not_exist' not registered
 # Oracle with merge_fn pointing to a function name that was never registered.
 # Uses a scripted node to avoid the configure_llm() guard masking the real check.
 from pydantic import BaseModel

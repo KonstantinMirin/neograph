@@ -74,6 +74,29 @@ class TestWrongVariantType:
         with pytest.raises(ConstructError, match="merge_fallback"):
             Construct("test", nodes=[n])
 
+    def test_post_process_variant_error_names_the_variants_param(self):
+        """neograph-dyy7: for merge_post_process the VARIANTS param is index 1
+        (index 0 is the result). The type-mismatch message previously
+        interpolated ``param_names[0]`` — naming the RESULT param where it means
+        the VARIANTS param. The message must name the second param ('variants'),
+        never the first ('result')."""
+
+        def bad_post(result: ModelA, variants: list[ModelB]) -> ModelA:
+            return result
+
+        n = Node("gen", mode="think", outputs=ModelA, prompt="gen", model="fast") | Oracle(
+            n=2,
+            merge_prompt="merge: ${variants}",
+            merge_post_process=bad_post,
+        )
+        with pytest.raises(ConstructError) as excinfo:
+            Construct("test", nodes=[n])
+        msg = str(excinfo.value)
+        assert "variants param 'variants'" in msg, (
+            f"message should name the VARIANTS param ('variants'), got: {msg}"
+        )
+        assert "'result'" not in msg, f"message wrongly names the RESULT param: {msg}"
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 # WRONG RETURN TYPE

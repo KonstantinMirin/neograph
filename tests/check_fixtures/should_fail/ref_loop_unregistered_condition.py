@@ -1,4 +1,4 @@
-# CHECK_ERROR: Condition.*not registered
+# CHECK_ERROR: Condition 'ghost_loop_condition' not registered
 from pydantic import BaseModel
 
 from neograph import Construct, Node

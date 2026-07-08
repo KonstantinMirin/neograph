@@ -1,4 +1,4 @@
-# CHECK_ERROR: loop.*back-edge|output type.*not compatible.*input
+# CHECK_ERROR: loop back-edge: output type not compatible with reentry input type
 # Loop on a Node where output type differs from input type.
 # Self-loop requires output -> input compatibility.
 from pydantic import BaseModel

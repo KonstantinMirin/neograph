@@ -1,4 +1,4 @@
-# CHECK_ERROR: merge_post_process.*return type mismatch|declared ModelB
+# CHECK_ERROR: merge_post_process return type mismatch
 # Attack vector: merge_post_process returns wrong type.
 # At runtime the LangGraph state write would silently accept the wrong
 # type (no validation), but downstream consumers see the wrong model.

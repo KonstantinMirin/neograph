@@ -170,7 +170,8 @@ def _validate_merge_hooks(oracle: Oracle, node: Node, construct_name: str) -> No
         # fallback: first param is variants
         variants_idx = 1 if hook_name == "merge_post_process" else 0
         if len(param_names) > variants_idx:
-            variants_hint = hints.get(param_names[variants_idx])
+            variants_name = param_names[variants_idx]
+            variants_hint = hints.get(variants_name)
             if variants_hint is not None:
                 # Expect list[T] where T is compatible with gen_type
                 origin = get_origin(variants_hint)
@@ -181,7 +182,7 @@ def _validate_merge_hooks(oracle: Oracle, node: Node, construct_name: str) -> No
                         if isinstance(elem_type, type) and isinstance(gen_type, type):
                             if not _types_compatible(gen_type, elem_type):
                                 raise ConstructError.build(
-                                    f"{hook_name} variants param '{param_names[0]}' "
+                                    f"{hook_name} variants param '{variants_name}' "
                                     f"type mismatch: declared list[{_fmt_type(elem_type)}] "
                                     f"but Oracle generates {_fmt_type(gen_type)}",
                                     expected=f"list[{_fmt_type(gen_type)}]",

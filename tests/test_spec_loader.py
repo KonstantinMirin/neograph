@@ -278,8 +278,10 @@ class TestLoadSpecOracle:
 
         seen_models = []
 
+        from neograph._state_keys import StateKeys
+
         def oracle_gen(input_data, config):
-            model = config.get("configurable", {}).get("_oracle_model", "unknown")
+            model = config.get("configurable", {}).get(StateKeys.ORACLE_MODEL_OVERRIDE, "unknown")
             seen_models.append(model)
             return Draft(content=f"from-{model}", score=0.5)
 

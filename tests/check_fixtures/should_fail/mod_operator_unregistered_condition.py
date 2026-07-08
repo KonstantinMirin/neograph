@@ -1,4 +1,4 @@
-# CHECK_ERROR: not registered|Condition.*not registered
+# CHECK_ERROR: Condition 'this_condition_does_not_exist' not registered
 # Operator.when with a condition name that was never registered.
 # Uses a fake checkpointer to get past the checkpointer guard.
 from pydantic import BaseModel

@@ -84,6 +84,18 @@ class StateKeys:
     # Mirrors the DI_INPUTS / _oracle_model config-injection pattern neograph-a5nh.
     # Never enters state — a config-only key, so it cannot touch the fingerprint.
     RESOURCE_MANIFEST_INJECT = "_neo_resource_manifest"
+    # ORACLE_MODEL_OVERRIDE is a config['configurable'] key (NOT a state-bus key):
+    # _inject_oracle_config copies the per-generator model tier off state
+    # (ORACLE_MODEL, the neo_oracle_model STATE channel) into config here so the
+    # LLM dispatch layer (_dispatch / _agent_cycle) can pick the effective model
+    # WITHOUT threading it through the call chain. Distinct from ORACLE_MODEL: that
+    # is the state-bus channel the value ARRIVES on; this is the config side-channel
+    # it is FORWARDED on. Mirrors the DI_INPUTS / RESOURCE_MANIFEST_INJECT pattern.
+    # Never enters state — a config-only key, so it cannot touch the schema
+    # fingerprint. Renamed from the un-prefixed literal "_oracle_model" (CON-01 /
+    # neograph-awor) so TestNeoStateKeysCentralized's `_neo_` matcher can see it —
+    # config keys never persist, so the rename has no checkpoint/compat impact.
+    ORACLE_MODEL_OVERRIDE = "_neo_oracle_model_override"
     # RUN_ID is a config['configurable'] key (NOT a state-bus key): a
     # framework-minted per-run correlation id, minted fresh per execution attempt
     # by ``_mint_run_id`` in the pre-engine brains (``_prepare`` / ``_aprepare``),

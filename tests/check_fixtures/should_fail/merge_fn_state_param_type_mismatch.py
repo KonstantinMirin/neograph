@@ -1,4 +1,4 @@
-# CHECK_ERROR: type.*mismatch|not compatible|expects.*Context.*produces.*Claims|wrong type
+# CHECK_ERROR: merge_fn 'combine' param 'prepare' type mismatch with node 'prepare'
 # Attack vector: @merge_fn has a bare typed param whose name matches an
 # upstream node, but the type annotation doesn't match what that node
 # produces. State auto-wiring should catch the type incompatibility.

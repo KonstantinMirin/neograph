@@ -1,4 +1,4 @@
-# CHECK_ERROR: no upstream node named|type.*compatible
+# CHECK_ERROR: inputs\['source_wrong'\]=Claims but no upstream node named 'source_wrong' exists
 # Attack vector 4: dict-form outputs where consumer references wrong key
 # Producer has outputs={"result": Claims, "log": str}, state fields are
 # "source_result" and "source_log". Consumer references "source_log" correctly

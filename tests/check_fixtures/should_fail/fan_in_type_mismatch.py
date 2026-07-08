@@ -1,4 +1,4 @@
-# CHECK_ERROR: TypeB.*produces TypeC|type.*compatible
+# CHECK_ERROR: inputs\['source_b'\]=TypeB but upstream 'source_b' produces TypeC
 # Scenario 15: fan-in where one upstream produces wrong type
 from pydantic import BaseModel
 

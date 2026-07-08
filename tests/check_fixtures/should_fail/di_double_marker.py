@@ -1,4 +1,4 @@
-# CHECK_ERROR: ambig|conflict|both.*FromInput.*FromConfig|FromInput.*FromConfig
+# CHECK_ERROR: parameter 'topic' has multiple DI markers
 # Attack vector: Both FromInput AND FromConfig on the same param.
 # Annotated[str, FromInput, FromConfig] — which marker wins? The classifier
 # picks the first one it finds. This is ambiguous and should arguably be

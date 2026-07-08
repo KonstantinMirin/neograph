@@ -19,6 +19,7 @@ from collections.abc import Callable
 from typing import Any
 
 from neograph._di_classify import _build_annotation_namespace
+from neograph._hints import resolve_hints
 from neograph.di import DIBinding
 from neograph.node import Node
 
@@ -114,11 +115,13 @@ def infer_oracle_gen_type(merge_fn_name: str) -> Any | None:
     # If the merge_fn was decorated with @merge_fn, use the caller_ns
     # captured at decoration time. Otherwise fall back to closure vars only.
     stored_ns = _merge_fn_caller_ns.get(merge_fn_name)
-    try:
-        extra_ns = _build_annotation_namespace(fn, caller_ns=stored_ns)
-        hints = typing.get_type_hints(fn, localns=extra_ns, include_extras=False)
-    except (NameError, AttributeError, TypeError):
-        hints = {}
+    # Per-annotation resolution (7ymj): a sibling param's unresolvable forward
+    # ref no longer discards the first param's hint. Best-effort inference with
+    # its OWN documented fallback below (raw-signature) and a terminal None that
+    # oracle_gen_type_for handles by leaving oracle_gen_type unset — an omitted
+    # hint degrades gracefully, no raise needed.
+    extra_ns = _build_annotation_namespace(fn, caller_ns=stored_ns)
+    hints = resolve_hints(fn, localns=extra_ns, owner=merge_fn_name)
 
     if not hints:
         # Fallback: try raw signature annotations

@@ -57,11 +57,10 @@ def _discover_constructs(mod: Any) -> list[tuple[str, Construct]]:
     return found
 
 
-def _load_config(args: argparse.Namespace) -> dict[str, Any] | None:
-    """Load config from --config JSON or --setup module."""
-    if args.setup:
-        mod = _import_module(args.setup)
-        fn = getattr(mod, "get_check_config", None)
+def _load_config(setup_mod: Any, args: argparse.Namespace) -> dict[str, Any] | None:
+    """Load config from --config JSON or the pre-loaded --setup module."""
+    if setup_mod is not None:
+        fn = getattr(setup_mod, "get_check_config", None)
         if fn is None:
             print(
                 f"Error: --setup module '{args.setup}' must export a get_check_config() function",
@@ -78,28 +77,26 @@ def _load_config(args: argparse.Namespace) -> dict[str, Any] | None:
     return None
 
 
-def _load_template_resolver(args: argparse.Namespace):
-    """Load template_resolver from --setup module if available."""
-    if args.setup:
-        mod = _import_module(args.setup)
-        fn = getattr(mod, "get_template_resolver", None)
+def _load_template_resolver(setup_mod: Any):
+    """Load template_resolver from the pre-loaded --setup module if available."""
+    if setup_mod is not None:
+        fn = getattr(setup_mod, "get_template_resolver", None)
         if fn is not None:
             return fn()
     return None
 
 
-def _load_known_template_vars(args: argparse.Namespace) -> set[str] | None:
-    """Load known_template_vars from --setup module if available."""
-    if args.setup:
-        mod = _import_module(args.setup)
-        fn = getattr(mod, "get_known_template_vars", None)
+def _load_known_template_vars(setup_mod: Any) -> set[str] | None:
+    """Load known_template_vars from the pre-loaded --setup module if available."""
+    if setup_mod is not None:
+        fn = getattr(setup_mod, "get_known_template_vars", None)
         if fn is not None:
             return set(fn())
     return None
 
 
-def _load_compile_kwargs(args: argparse.Namespace) -> dict[str, Any]:
-    """Load the post-§2 compile() runtime kwargs from --setup module.
+def _load_compile_kwargs(setup_mod: Any) -> dict[str, Any]:
+    """Load the post-§2 compile() runtime kwargs from the pre-loaded --setup module.
 
     Looks for optional `get_scripted()`, `get_tool_factories()`,
     `get_conditions()`, `get_llm_factory()`, `get_prompt_compiler()` hooks
@@ -107,9 +104,9 @@ def _load_compile_kwargs(args: argparse.Namespace) -> dict[str, Any]:
     omitted from the returned dict so compile() applies its own defaults.
     """
     out: dict[str, Any] = {}
-    if not args.setup:
+    if setup_mod is None:
         return out
-    mod = _import_module(args.setup)
+    mod = setup_mod
     for hook_name, kwarg in (
         ("get_scripted", "scripted"),
         ("get_tool_factories", "tool_factories"),
@@ -145,12 +142,18 @@ def cmd_check(args: argparse.Namespace) -> int:
         print(f"No Construct objects found in {args.target}")
         return 1
 
-    config = _load_config(args)
+    # Import the --setup module ONCE and thread the module object through every
+    # loader. Re-importing per loader re-executes the module (file-path imports
+    # exec a fresh spec each time), which the loaders' idempotency previously
+    # masked — 4 executions per check run.
+    setup_mod = _import_module(args.setup) if args.setup else None
+
+    config = _load_config(setup_mod, args)
     cli_vars = set(args.known_vars.split(",")) if args.known_vars else None
-    setup_vars = _load_known_template_vars(args)
+    setup_vars = _load_known_template_vars(setup_mod)
     known_vars = (cli_vars or set()) | (setup_vars or set()) or None
-    template_resolver = _load_template_resolver(args)
-    compile_kwargs = _load_compile_kwargs(args)
+    template_resolver = _load_template_resolver(setup_mod)
+    compile_kwargs = _load_compile_kwargs(setup_mod)
     failed = 0
 
     for var_name, construct in constructs:

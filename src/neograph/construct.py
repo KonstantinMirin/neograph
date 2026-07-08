@@ -23,7 +23,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 from typing import Annotated, Any
 
-from pydantic import BaseModel, BeforeValidator, Field
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field
 
 from neograph._construct_validation import ConstructError, _validate_node_chain
 from neograph._ir_branch import _BranchNode, iter_item_slots
@@ -139,7 +139,7 @@ class Construct(Modifiable, BaseModel):
     # arbitrary_types_allowed: required for ``nodes`` (holds the ``_BranchNode``
     # sentinel from ForwardConstruct, which is not a Pydantic model) and
     # ``renderer`` (a runtime_checkable Protocol, not a BaseModel).
-    model_config = {"arbitrary_types_allowed": True}
+    model_config = ConfigDict(arbitrary_types_allowed=True)
 
     def __init__(self, name_: str | None = None, /, **kwargs: Any) -> None:
         if name_ is not None:

@@ -46,7 +46,7 @@ def _inject_oracle_config(state: StateBus, config: RunnableConfig) -> RunnableCo
     # Oracle was configured with models=; legitimately absent otherwise.
     oracle_model = state.get(StateKeys.ORACLE_MODEL)
     if oracle_model is not None:
-        extra["_oracle_model"] = oracle_model
+        extra[StateKeys.ORACLE_MODEL_OVERRIDE] = oracle_model
     return _with_configurable(config, **extra)
 
 
@@ -284,12 +284,9 @@ def _run_merge_prompt(
             config=config,
             llm_config=llm_config,
         )
-    except Exception as exc:
-        if oracle.merge_fallback is not None:
-            merged = oracle.merge_fallback(variants, exc)
-            used_fallback = True
-        else:
-            raise
+    except Exception as exc:  # noqa: BLE001 — _merge_fallback_or_reraise re-raises bubble-ups/no-fallback
+        merged = _merge_fallback_or_reraise(oracle, variants, exc)
+        used_fallback = True
     return _merge_prompt_post(oracle, variants, merged, used_fallback)
 
 
@@ -321,6 +318,23 @@ def _merge_prompt_post(oracle: Oracle, variants: list, merged: Any, used_fallbac
     if oracle.merge_post_process is not None and not used_fallback:
         merged = oracle.merge_post_process(merged, variants)
     return merged
+
+
+def _merge_fallback_or_reraise(oracle: Oracle, variants: list, exc: Exception) -> Any:
+    """Except-branch shared by the sync/async merge_prompt twins.
+
+    Re-raises LangGraph control-flow signals (``GraphBubbleUp``: HITL interrupt /
+    ``Command`` routing / cancellation) so they are NEVER captured into
+    ``merge_fallback`` — mirrors the guard ``make_each_redirect_fn`` already has.
+    Otherwise applies ``merge_fallback`` if set, or re-raises the original error.
+    Callers set ``used_fallback=True`` only when this returns (it raises when it
+    does not fall back).
+    """
+    if isinstance(exc, GraphBubbleUp):
+        raise exc
+    if oracle.merge_fallback is None:
+        raise exc
+    return oracle.merge_fallback(variants, exc)
 
 
 async def _arun_merge_prompt(
@@ -358,12 +372,9 @@ async def _arun_merge_prompt(
             config=config,
             llm_config=llm_config,
         )
-    except Exception as exc:
-        if oracle.merge_fallback is not None:
-            merged = oracle.merge_fallback(variants, exc)
-            used_fallback = True
-        else:
-            raise
+    except Exception as exc:  # noqa: BLE001 — _merge_fallback_or_reraise re-raises bubble-ups/no-fallback
+        merged = _merge_fallback_or_reraise(oracle, variants, exc)
+        used_fallback = True
     return _merge_prompt_post(oracle, variants, merged, used_fallback)
 
 

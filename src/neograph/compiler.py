@@ -28,6 +28,7 @@ from neograph._oracle import (
     make_oracle_redirect_fn,
 )
 from neograph._runtime_registry import _decoration_registry
+from neograph._sidecar import _get_param_res
 from neograph._state_keys import StateKeys
 from neograph._subconstruct import make_subgraph_fn
 from neograph._trace import named
@@ -337,7 +338,7 @@ def _collect_required_di(construct: Construct) -> dict[str, set[str]]:
     """
     required: dict[str, set[str]] = {"input": set(), "config": set()}
     for item in iter_nodes(construct):
-        param_res = item._param_res
+        param_res = _get_param_res(item)
         if not param_res:
             continue
         for _pname, binding in param_res.items():

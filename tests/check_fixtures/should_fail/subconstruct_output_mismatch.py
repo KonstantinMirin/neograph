@@ -1,4 +1,4 @@
-# CHECK_ERROR: output.*TypeA.*no.*node.*produces|boundary.*contract
+# CHECK_ERROR: declares output=TypeA but no internal node produces a compatible type
 # Scenario 7 variant: sub-construct declares output=TypeA but no internal node produces TypeA
 from pydantic import BaseModel
 

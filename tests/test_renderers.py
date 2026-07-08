@@ -1395,6 +1395,102 @@ class TestDescribeTypeCoverageGaps:
         assert "ts:" in result
 
 
+class TestDescribeTypeRenderCorrectness:
+    """Render-correctness bugs in the LLM-facing schema notation (neograph-04jt).
+
+    Two defects from the 080726_2107 review Low table:
+    (a) a recursive model renders a dangling reference with no hoisted declaration;
+    (b) tuple[A, B] renders as [A] (drops the second member).
+    """
+
+    def test_recursive_model_reference_has_hoisted_declaration(self):
+        """A self-referential model must emit a `type Name = {...}` declaration.
+
+        Otherwise the recursive back-edge renders a bare `TreeNode` reference
+        with nothing declaring it — the LLM sees a dangling type name.
+        """
+        from neograph import describe_type
+
+        class TreeNode(BaseModel):
+            value: int
+            children: list[TreeNode] = []
+
+        TreeNode.model_rebuild()
+
+        result = describe_type(TreeNode, prefix="")
+        # The recursive back-edge renders the bare name...
+        assert "TreeNode" in result
+        # ...so there MUST be a declaration for it (no dangling reference).
+        assert "type TreeNode = {" in result
+        assert "value: int" in result
+
+    def test_heterogeneous_tuple_renders_all_members(self):
+        """tuple[str, int] renders as [string, int], not [string]."""
+        from neograph.describe_type import _render_type
+
+        result = _render_type(
+            tuple[str, int],
+            indent="  ",
+            depth=0,
+            or_splitter=" or ",
+            hoisted=set(),
+            visited=set(),
+        )
+        assert result == "[string, int]"
+
+    def test_three_member_tuple_renders_all_members(self):
+        """tuple[str, int, bool] keeps every positional member."""
+        from neograph.describe_type import _render_type
+
+        result = _render_type(
+            tuple[str, int, bool],
+            indent="  ",
+            depth=0,
+            or_splitter=" or ",
+            hoisted=set(),
+            visited=set(),
+        )
+        assert result == "[string, int, bool]"
+
+    def test_variadic_tuple_renders_as_single_element_array(self):
+        """tuple[str, ...] (variadic) renders like a list: [string]."""
+        from neograph.describe_type import _render_type
+
+        result = _render_type(
+            tuple[str, ...],
+            indent="  ",
+            depth=0,
+            or_splitter=" or ",
+            hoisted=set(),
+            visited=set(),
+        )
+        assert result == "[string]"
+
+    def test_list_still_renders_single_element(self):
+        """Regression guard: list[X] stays [X] after the tuple arm split."""
+        from neograph.describe_type import _render_type
+
+        result = _render_type(
+            list[int],
+            indent="  ",
+            depth=0,
+            or_splitter=" or ",
+            hoisted=set(),
+            visited=set(),
+        )
+        assert result == "[int]"
+
+    def test_heterogeneous_tuple_field_in_model(self):
+        """A tuple field on a model renders both members end-to-end."""
+        from neograph import describe_type
+
+        class Pair(BaseModel):
+            coord: tuple[float, str]
+
+        result = describe_type(Pair, prefix="")
+        assert "coord: [float, string]" in result
+
+
 class TestDescribeValueCoverageGaps:
     """Tests covering previously uncovered lines in describe_value."""
 

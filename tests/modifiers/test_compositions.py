@@ -21,6 +21,7 @@ from neograph import (
     node,
     run,
 )
+from neograph._state_keys import StateKeys
 from tests.fakes import (
     FakeTool,
     ReActFake,
@@ -1098,7 +1099,7 @@ class TestEachOracleFusion:
             "tpgi_gen",
             lambda i, c: Result(
                 text="processed",
-                model=c.get("configurable", {}).get("_oracle_model", "default"),
+                model=c.get("configurable", {}).get(StateKeys.ORACLE_MODEL_OVERRIDE, "default"),
             ),
         )
 
@@ -1320,7 +1321,7 @@ class TestEachOracleFusion:
         register_scripted(
             "tpgi2_model_gen",
             lambda i, c: Tpgi2ModelResult(
-                model_used=c.get("configurable", {}).get("_oracle_model", "none"),
+                model_used=c.get("configurable", {}).get(StateKeys.ORACLE_MODEL_OVERRIDE, "none"),
             ),
         )
 

@@ -120,6 +120,7 @@ ANY_ALLOWLIST: dict[str, str] = {
     "_oracle.py:_merge_prompt_input:return": "merge LLM input_data (user models) + primary output model",
     "_oracle.py:_merge_prompt_post:merged": "user-supplied merge result; type declared by node.outputs",
     "_oracle.py:_merge_prompt_post:return": "user-supplied merge result; type declared by node.outputs",
+    "_oracle.py:_merge_fallback_or_reraise:return": "user-supplied merge_fallback result; type declared by node.outputs",
     "_oracle.py:_arun_merge_prompt:upstream_context": "heterogeneous upstream model instances keyed by input name",
     "_oracle.py:_arun_merge_prompt:return": "user-supplied merge result; type declared by node.outputs",
     "_oracle.py:_amerge_variants:upstream_context": "heterogeneous upstream model instances keyed by input name",
@@ -426,6 +427,10 @@ class TestArbitraryTypesJustified:
 # the dict-literal form where the key is quoted.
 _ARBITRARY_TYPES_RE = re.compile(r'arbitrary_types_allowed["\']?\s*(?:=|:)\s*True')
 
+# Dunder names embedded in an allowlist reason string (e.g. "__bool__ misuse"),
+# used to cross-check that a reason naming a dunder sits in a method of that name.
+_DUNDER_IN_REASON_RE = re.compile(r"__\w+__")
+
 
 def _find_arbitrary_types_hits(src_dir: pathlib.Path) -> list[tuple[str, int, str]]:
     """Return (filename, lineno, raw_line) for every arbitrary_types_allowed=True use."""
@@ -493,17 +498,17 @@ NEOGRAPH_ERROR_ALLOWLIST: dict[str, str] = {
     # the Python protocol contract (a non-iterable used in `for` raises
     # TypeError, not NeographError). forward() raises NotImplementedError as
     # a Python abstract-method idiom.
-    "forward.py:176": "NotImplementedError is the Python abstract-method idiom",
-    "forward.py:205": "AttributeError is the Python attribute-protocol contract (hasattr depends on it)",
-    "forward.py:240": "TypeError is the Python protocol contract for __bool__ misuse",
-    "forward.py:234": "TypeError is the Python protocol contract for __iter__ misuse",
-    "forward.py:267": "TypeError is the Python protocol contract for __bool__ misuse on _ConditionProxy",
+    "forward.py:178": "NotImplementedError is the Python abstract-method idiom",
+    "forward.py:207": "AttributeError is the Python attribute-protocol contract (hasattr depends on it)",
+    "forward.py:236": "TypeError is the Python protocol contract for __bool__ misuse",
+    "forward.py:242": "TypeError is the Python protocol contract for __iter__ misuse",
+    "forward.py:269": "TypeError is the Python protocol contract for __bool__ misuse on _ConditionProxy",
     # ── modifiers.py — Pydantic field_validator + proxy attribute protocol ──
     # _PathRecorder.__getattr__ implements the attribute protocol. Pydantic
     # @field_validator boundaries catch ValueError into ValidationError.
     "modifiers.py:187": "AttributeError is the Python attribute-protocol contract (private-attr guard)",
-    "modifiers.py:422": "Pydantic @field_validator boundary; ValueError is rolled into ValidationError",
-    "modifiers.py:497": "Pydantic @field_validator boundary; ValueError is rolled into ValidationError",
+    "modifiers.py:429": "Pydantic @field_validator boundary; ValueError is rolled into ValidationError",
+    "modifiers.py:504": "Pydantic @field_validator boundary; ValueError is rolled into ValidationError",
     # ── node.py — Pydantic BeforeValidator boundary ──
     # _validate_type_spec runs inside Pydantic field validation; Pydantic
     # catches TypeError and rolls it into ValidationError.
@@ -583,6 +588,61 @@ class TestPublicFunctionsRaiseNeographError:
         offenders = self._scan_bare_raises(tmp_path, {"fake_module.py:2": "test boundary"})
         assert offenders == [], f"allowlist not honored: {offenders}"
 
+    def test_allowlist_dunder_reason_matches_enclosing_method(self):
+        """neograph-awor / CON-03: the pinned allowlist keys the file:line but
+        historically DID NOT verify the human-written reason is TRUE of that
+        line — so the __bool__/__iter__ reasons sat silently SWAPPED (line 234,
+        which is __bool__, was documented as __iter__ misuse and vice versa). This
+        extension closes that: for every allowlist entry whose reason names a
+        dunder (``__bool__`` / ``__iter__`` / ...), the raise at that line MUST be
+        lexically enclosed by a method of exactly that name. Reasons naming no
+        dunder are unconstrained here.
+        """
+        mismatches: list[str] = []
+        for key, reason in NEOGRAPH_ERROR_ALLOWLIST.items():
+            dunders = _DUNDER_IN_REASON_RE.findall(reason)
+            if not dunders:
+                continue
+            fname, _, lineno_s = key.partition(":")
+            path = SRC_DIR / fname
+            if not path.exists():
+                mismatches.append(f"{key}: file missing")
+                continue
+            enclosing = _enclosing_def_name(path, int(lineno_s))
+            for dunder in dunders:
+                if enclosing != dunder:
+                    mismatches.append(
+                        f"{key}: reason names {dunder} but the raise is inside "
+                        f"{enclosing!r} — swapped/stale reason string"
+                    )
+        assert mismatches == [], (
+            "\nAllowlist reason strings disagree with the raise site's enclosing "
+            "method:\n" + "\n".join(f"  {m}" for m in mismatches)
+        )
+
+    def test_meta_enclosing_def_name_resolves_method(self, tmp_path: pathlib.Path):
+        """slip test: the enclosing-method resolver used above pins the line to
+        its method, so a future swap of the __bool__/__iter__ reasons is caught."""
+        f = tmp_path / "m.py"
+        f.write_text(
+            "class C:\n"
+            "    def __bool__(self):\n"
+            "        raise TypeError('x')\n"
+            "    def __iter__(self):\n"
+            "        raise TypeError('y')\n"
+        )
+        assert _enclosing_def_name(f, 3) == "__bool__"
+        assert _enclosing_def_name(f, 5) == "__iter__"
+
+    def test_slip_dunder_in_reason_re(self):
+        """Regex-slip: the reason-vs-method cross-check only fires on reasons
+        that actually name a dunder, so the extractor must match ``__bool__``
+        forms and NOT plain words — else a swapped reason with no dunder token
+        would be skipped, or a non-dunder reason would be falsely constrained."""
+        assert _DUNDER_IN_REASON_RE.findall("TypeError for __bool__ misuse") == ["__bool__"]
+        assert _DUNDER_IN_REASON_RE.findall("__bool__ and __iter__") == ["__bool__", "__iter__"]
+        assert _DUNDER_IN_REASON_RE.findall("Pydantic BeforeValidator boundary") == []
+
     @classmethod
     def _scan_bare_raises(
         cls,
@@ -619,6 +679,25 @@ class TestPublicFunctionsRaiseNeographError:
                     continue
                 offenders.append(f"{key}: raise {exc_name}(...)")
         return offenders
+
+
+def _enclosing_def_name(path: pathlib.Path, lineno: int) -> str | None:
+    """Return the name of the innermost function/method enclosing ``lineno``.
+
+    Used to verify that a pinned-allowlist reason string naming a dunder
+    (``__bool__`` / ``__iter__``) actually sits inside a method of that name —
+    the check that catches a swapped/stale reason (neograph-awor / CON-03).
+    Picks the innermost (largest lineno) def whose body span contains the line.
+    """
+    tree = ast.parse(path.read_text(), filename=str(path))
+    best: tuple[int, str] | None = None
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            start = node.lineno
+            end = getattr(node, "end_lineno", start)
+            if start <= lineno <= end and (best is None or start > best[0]):
+                best = (start, node.name)
+    return best[1] if best else None
 
 
 def _raised_exception_name(exc_node: ast.expr) -> str | None:

@@ -1,4 +1,4 @@
-# CHECK_ERROR: Cannot combine Each and Loop|Each and Loop
+# CHECK_ERROR: Cannot combine Each and Loop on the same item
 # Bypass the | operator by constructing ModifierSet directly.
 # ModifierSet.model_post_init rejects illegal combos at construction time.
 from pydantic import BaseModel

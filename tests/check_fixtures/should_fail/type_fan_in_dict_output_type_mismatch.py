@@ -1,4 +1,4 @@
-# CHECK_ERROR: type.*compatible|produces
+# CHECK_ERROR: inputs\['source_result'\]=int but upstream 'source_result' produces Claims
 # Attack vector 4b: dict-form output, consumer references correct key name
 # but with wrong type. source has outputs={"result": Claims, "log": str}.
 # State fields are "source_result" and "source_log".

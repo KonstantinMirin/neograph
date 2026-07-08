@@ -313,7 +313,11 @@ class TestLlmResponsibilityDiscipline:
         # entrypoints + json-word guard + response_format rejection predicate).
         # The load-bearing assertion is the name allowlist above; this coarse
         # proxy is widened for the new, reviewed names.
-        "_llm.py": 400,  # m0tv format rewrap (392 actual)
+        # neograph-dyy7: 400 -> 410. _notify_cost's arity probe changed from a
+        # try/except-retry (which double-counted cost on a body TypeError) to
+        # single-invocation _accepted_params introspection; correctness fix, +12
+        # lines. The load-bearing check is the name allowlist above.
+        "_llm.py": 410,  # 408 actual
         # neograph-ble3: tightened 130 -> 115. The 5-path include_raw try/except
         # ladder collapsed to a match on the StructuredResult variant; the
         # provider-quirk wiring moved to the compat shim. Locks the deletion.

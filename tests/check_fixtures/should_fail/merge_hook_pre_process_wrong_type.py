@@ -1,4 +1,4 @@
-# CHECK_ERROR: merge_pre_process.*type mismatch|declared list\[ModelB\]
+# CHECK_ERROR: merge_pre_process variants param 'variants' type mismatch
 # Attack vector: merge_pre_process annotated with wrong variant type.
 # The real piarch-1kz2a bug: pre_process(variants: list[WrongType])
 # silently filters all variants at runtime. Must be caught at assembly.

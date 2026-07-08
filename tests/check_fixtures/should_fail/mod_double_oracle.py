@@ -1,4 +1,4 @@
-# CHECK_ERROR: Oracle.*already|duplicate.*Oracle|multiple.*Oracle
+# CHECK_ERROR: Duplicate Oracle modifier
 # Two Oracle modifiers on the same node. Should this be caught?
 # Oracle fan-out + merge wiring assumes one Oracle per node.
 from pydantic import BaseModel

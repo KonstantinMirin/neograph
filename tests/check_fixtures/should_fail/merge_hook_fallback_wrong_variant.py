@@ -1,4 +1,4 @@
-# CHECK_ERROR: merge_fallback.*type mismatch|declared list\[ModelB\]
+# CHECK_ERROR: merge_fallback variants param 'variants' type mismatch
 # Attack vector: merge_fallback annotated with wrong variant type.
 
 from pydantic import BaseModel

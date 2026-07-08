@@ -1,4 +1,4 @@
-# CHECK_ERROR: ghost_id|no field
+# CHECK_ERROR: key='ghost_id'\) — Item has no field 'ghost_id'
 # Scenario: Each.key references a field that doesn't exist on a Pydantic item type
 from pydantic import BaseModel
 

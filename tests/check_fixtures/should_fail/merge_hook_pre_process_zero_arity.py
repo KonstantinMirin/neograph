@@ -1,4 +1,4 @@
-# CHECK_ERROR: merge_pre_process.*requires.*1.*positional
+# CHECK_ERROR: merge_pre_process requires 1 positional parameter
 # Attack vector: merge_pre_process with no params at all.
 
 from pydantic import BaseModel

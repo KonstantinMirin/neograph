@@ -76,6 +76,7 @@ from neograph._di_classify import (  # noqa: F401 — re-exported for backward c
     _resolve_di_args,
     _resolve_merge_args,
 )
+from neograph._hints import resolve_hints
 from neograph._ir_normalize import oracle_gen_type_for
 from neograph._llm_config import LlmConfig
 
@@ -448,27 +449,20 @@ def node(
         if effective_mode != "raw":
             param_res = _classify_di_params(f, sig, caller_ns=caller_ns)
 
+        # Resolve stringified annotations (from __future__ import annotations)
+        # ONCE for both output-inference and inputs-inference below. Uses the
+        # shared resolve_hints, which isolates unresolvable annotations
+        # per-parameter: one bad forward-ref no longer discards the OTHER
+        # params' resolved types (the pre-audit all-or-nothing bug, 7ymj).
+        extra_ns = _build_annotation_namespace(f, caller_ns=caller_ns)
+        resolved_hints = resolve_hints(f, localns=extra_ns, owner=node_label)
+
         # Output inference: explicit kwarg wins; fall back to return annotation.
-        # Uses get_type_hints to resolve stringified annotations from
-        # `from __future__ import annotations`.
         #
         # Mismatch check: when outputs= is explicit AND
         # a return annotation exists, they must agree. Dict-form outputs=
         # is exempt (multi-output can't be expressed as an annotation).
-        try:
-            import typing as _typing
-
-            extra_ns = _build_annotation_namespace(f, caller_ns=caller_ns)
-            all_hints = _typing.get_type_hints(
-                f,
-                localns=extra_ns,
-                include_extras=False,
-            )
-            ret_hint = all_hints.get("return")
-        except (NameError, AttributeError, TypeError):
-            ret_hint = sig.return_annotation
-            if ret_hint is inspect.Signature.empty:
-                ret_hint = None
+        ret_hint = resolved_hints.get("return")
 
         inferred_output = outputs
         if inferred_output is None:
@@ -508,30 +502,14 @@ def node(
         # _build_construct_from_decorated time — we can't identify them yet
         # without the full module context.
         #
-        # Resolve string annotations (from __future__ import annotations)
-        # via typing.get_type_hints so the dict carries real types, not
-        # ForwardRef strings. Include locals from the caller's frame to
-        # catch class definitions inside test methods, same trick as
-        # _classify_di_params.
+        # Reuses ``resolved_hints`` (computed once above via resolve_hints) so
+        # the dict carries real types, not ForwardRef strings.
         inferred_inputs: Any
         if inputs is not None:
             inferred_inputs = inputs
         elif effective_mode == "raw":
             inferred_inputs = None
         else:
-            resolved_hints: dict[str, Any] = {}
-            try:
-                import typing as _typing
-
-                extra_ns = _build_annotation_namespace(f, caller_ns=caller_ns)
-                resolved_hints = _typing.get_type_hints(
-                    f,
-                    localns=extra_ns,
-                    include_extras=False,
-                )
-            except (NameError, AttributeError, TypeError):
-                resolved_hints = {}
-
             inputs_dict: dict[str, Any] = {}
             for p in sig.parameters.values():
                 if p.name in param_res:
@@ -759,19 +737,12 @@ def merge_fn(
         # Params without FromInput/FromConfig markers that have type
         # annotations are treated as state params — resolved from graph
         # state at merge time, matching @node's upstream wiring pattern.
-        # Rebuild param_res in function signature order so positional
-        # args match the function's parameter order.
-        try:
-            import typing as _typing
-
-            extra_ns = _build_annotation_namespace(f, caller_ns=caller_ns)
-            all_hints = _typing.get_type_hints(
-                f,
-                localns=extra_ns,
-                include_extras=False,
-            )
-        except (NameError, AttributeError, TypeError):
-            all_hints = {}
+        # Rebuild param_res in function signature order so positional args match
+        # the function's parameter order. Per-annotation resolution (7ymj): one
+        # unresolvable annotation no longer drops the OTHER params' hints and
+        # mis-types their FROM_STATE bindings.
+        extra_ns = _build_annotation_namespace(f, caller_ns=caller_ns)
+        all_hints = resolve_hints(f, localns=extra_ns, owner=getattr(f, "__name__", None))
 
         ordered_res: ParamResolution = {}
         for p in rest_params:

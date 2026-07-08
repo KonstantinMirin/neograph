@@ -1,4 +1,4 @@
-# CHECK_ERROR: type.*compatible|no upstream produces
+# CHECK_ERROR: declares inputs=Scores but no upstream produces a compatible value[\s\S]*node 'first': Claims
 # Attack vector: two unrelated BaseModel subclasses. Claims is not Scores.
 from pydantic import BaseModel
 

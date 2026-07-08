@@ -21,6 +21,7 @@ from neograph import (
     node,
     run,
 )
+from neograph._state_keys import StateKeys
 from tests.fakes import (
     FakeTool,
     ReActFake,
@@ -244,7 +245,7 @@ class TestConstructOracle:
         seen_models = []
 
         def model_capturing_step(input_data, config):
-            model = config.get("configurable", {}).get("_oracle_model")
+            model = config.get("configurable", {}).get(StateKeys.ORACLE_MODEL_OVERRIDE)
             seen_models.append(model)
             return RawText(text=f"from-{model}")
 
@@ -285,7 +286,7 @@ class TestConstructOracle:
         seen_models = []
 
         def check_no_model(input_data, config):
-            model = config.get("configurable", {}).get("_oracle_model")
+            model = config.get("configurable", {}).get(StateKeys.ORACLE_MODEL_OVERRIDE)
             seen_models.append(model)
             return RawText(text="ok")
 
@@ -338,7 +339,7 @@ class TestOracleModels:
 
         def gen(input_data, config):
             # The generator should see a model override in config or state
-            model = config.get("configurable", {}).get("_oracle_model")
+            model = config.get("configurable", {}).get(StateKeys.ORACLE_MODEL_OVERRIDE)
             seen_models.append(model)
             return Claims(items=[f"from-{model}"])
 
@@ -374,7 +375,7 @@ class TestOracleModels:
         seen_models = []
 
         def rr_gen(input_data, config):
-            model = config.get("configurable", {}).get("_oracle_model")
+            model = config.get("configurable", {}).get(StateKeys.ORACLE_MODEL_OVERRIDE)
             seen_models.append(model)
             return Claims(items=[f"from-{model}"])
 
@@ -412,7 +413,7 @@ class TestOracleModels:
 
         def bam_gen(input_data, config):
             gen_count[0] += 1
-            model = config.get("configurable", {}).get("_oracle_model", "unknown")
+            model = config.get("configurable", {}).get(StateKeys.ORACLE_MODEL_OVERRIDE, "unknown")
             return Claims(items=[f"from-{model}"])
 
         register_scripted("bam_gen", bam_gen)
@@ -886,7 +887,7 @@ class TestOracleModels:
 
         # Generator: registered scripted so we control exactly what it returns
         def bam_typed_gen(input_data, config):
-            model = config.get("configurable", {}).get("_oracle_model", "x")
+            model = config.get("configurable", {}).get(StateKeys.ORACLE_MODEL_OVERRIDE, "x")
             return Claims(items=[f"from-{model}"])
 
         register_scripted("bam_typed_gen", bam_typed_gen)
@@ -2449,3 +2450,74 @@ class TestOracleOverAgentMultiInputBundle:
                     gen,
                 ],
             )
+
+
+class TestMergePromptBubbleUp:
+    """neograph-dyy7: a LangGraph control-flow signal (``GraphBubbleUp`` — HITL
+    interrupt / ``Command`` routing / cancellation) bubbling through the merge
+    LLM call must PROPAGATE, never be captured into ``merge_fallback``. The
+    merge_prompt twins previously swallowed it into the broad ``except Exception``
+    where ``make_each_redirect_fn`` correctly re-raises it first. Both twins are
+    pinned here (sync + async)."""
+
+    class _Merged(BaseModel):
+        text: str
+
+    def _oracle(self, fallback_calls: list) -> Oracle:
+        def fb(variants: list, exc: Exception) -> TestMergePromptBubbleUp._Merged:
+            fallback_calls.append(exc)
+            return TestMergePromptBubbleUp._Merged(text="fallback")
+
+        return Oracle(n=2, merge_prompt="merge: ${variants}", merge_fallback=fb)
+
+    def test_sync_merge_prompt_reraises_graphbubbleup_not_fallback(self, monkeypatch):
+        from langgraph.errors import GraphBubbleUp
+
+        import neograph._llm as _llm
+        from neograph._oracle import _run_merge_prompt
+
+        class _Bubble(GraphBubbleUp): ...
+
+        def boom(*args, **kwargs):
+            raise _Bubble()
+
+        monkeypatch.setattr(_llm, "invoke_structured", boom)
+        fallback_calls: list = []
+        oracle = self._oracle(fallback_calls)
+        with pytest.raises(GraphBubbleUp):
+            _run_merge_prompt(oracle, [self._Merged(text="a")], self._Merged, {})
+        assert fallback_calls == [], "merge_fallback wrongly captured a control-flow signal (sync twin)"
+
+    async def test_async_merge_prompt_reraises_graphbubbleup_not_fallback(self, monkeypatch):
+        from langgraph.errors import GraphBubbleUp
+
+        import neograph._llm as _llm
+        from neograph._oracle import _arun_merge_prompt
+
+        class _Bubble(GraphBubbleUp): ...
+
+        async def aboom(*args, **kwargs):
+            raise _Bubble()
+
+        monkeypatch.setattr(_llm, "ainvoke_structured", aboom)
+        fallback_calls: list = []
+        oracle = self._oracle(fallback_calls)
+        with pytest.raises(GraphBubbleUp):
+            await _arun_merge_prompt(oracle, [self._Merged(text="a")], self._Merged, {})
+        assert fallback_calls == [], "merge_fallback wrongly captured a control-flow signal (async twin)"
+
+    def test_sync_merge_prompt_still_uses_fallback_on_real_error(self, monkeypatch):
+        """Negative: an ordinary (non-bubbling) error STILL routes to merge_fallback —
+        the GraphBubbleUp guard must not disable the fallback path."""
+        import neograph._llm as _llm
+        from neograph._oracle import _run_merge_prompt
+
+        def boom(*args, **kwargs):
+            raise RuntimeError("llm down")
+
+        monkeypatch.setattr(_llm, "invoke_structured", boom)
+        fallback_calls: list = []
+        oracle = self._oracle(fallback_calls)
+        merged = _run_merge_prompt(oracle, [self._Merged(text="a")], self._Merged, {})
+        assert merged == self._Merged(text="fallback")
+        assert len(fallback_calls) == 1

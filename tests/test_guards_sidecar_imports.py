@@ -71,6 +71,15 @@ FUNCTION_LOCAL_IMPORT_ALLOWLIST: set[tuple[str, str, frozenset[str]]] = {
     ("__main__.py", "neograph.compiler", frozenset({"classify_modifiers"})),
     ("__main__.py", "neograph.testing", frozenset({"scaffold_tests"})),
     ("__main__.py", "neograph", frozenset({"__version__"})),
+    # modifiers.py — REAL cycle: Loop-modifier validation discriminates Node vs
+    # Construct via isinstance (replacing the hand-rolled hasattr probes that
+    # bypassed the _declared_output monopoly, neograph-awor). node.py and
+    # construct.py both import Modifiable/ModifierSet from modifiers at module
+    # level, so a top-level import of Node/Construct here cycles. Function-local
+    # import is the truthful fix. Retires if the Modifiable base relocates out of
+    # modifiers.py.
+    ("modifiers.py", "neograph.construct", frozenset({"Construct"})),
+    ("modifiers.py", "neograph.node", frozenset({"Node"})),
     # _construct_graph.py — cycle: the graph builder imports validation helpers
     # which themselves transitively touch decorator metadata. Break tracked by
     # the §4 epic (neograph-pgso). Relocated here from _construct_builder.py when

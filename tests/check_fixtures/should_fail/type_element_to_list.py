@@ -1,4 +1,4 @@
-# CHECK_ERROR: type.*compatible|no upstream produces
+# CHECK_ERROR: declares inputs=list but no upstream produces a compatible value[\s\S]*node 'first': Claims
 # Attack vector 3b: X output connected to list[X] consumer.
 # Claims is not list[Claims].
 from pydantic import BaseModel

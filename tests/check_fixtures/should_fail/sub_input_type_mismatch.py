@@ -1,4 +1,4 @@
-# CHECK_ERROR: TypeB.*no upstream
+# CHECK_ERROR: declares input=TypeB but no upstream produces a compatible value
 # Sub-construct input type doesn't match upstream producer
 from pydantic import BaseModel
 

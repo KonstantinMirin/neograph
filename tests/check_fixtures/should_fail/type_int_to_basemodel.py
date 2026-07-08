@@ -1,4 +1,4 @@
-# CHECK_ERROR: type.*compatible|no upstream produces
+# CHECK_ERROR: declares inputs=SomeModel but no upstream produces a compatible value[\s\S]*node 'first': int
 # Attack vector 2b: int output connected to BaseModel consumer
 # int is not a BaseModel subclass, should fail type check.
 from pydantic import BaseModel

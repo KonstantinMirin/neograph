@@ -1,4 +1,4 @@
-# CHECK_ERROR: output.*TypeA.*no.*node.*produces
+# CHECK_ERROR: declares output=TypeA but no internal node produces a compatible type
 # Known gap: sub-construct output=TypeA, input=TypeA, inner node produces TypeB.
 # The input port satisfies the output boundary check (input==output), so assembly
 # passes. At runtime, make_subgraph_fn iterates sub_result.values() looking for

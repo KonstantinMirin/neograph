@@ -20,7 +20,7 @@ from neograph.naming import field_name_for, output_field_name
 log = structlog.get_logger()
 from typing import assert_never
 
-from neograph._normalize import normalize_outputs
+from neograph._normalize import _declared_output, normalize_outputs
 from neograph._state_keys import StateKeys
 from neograph.modifiers import EachFailure, ModifierCombo, classify_modifiers
 from neograph.node import Node
@@ -388,25 +388,22 @@ def compute_node_fingerprints(construct: Any) -> dict[str, str]:
         preserve the top-level-only granularity: a sub-construct is
         fingerprinted by its declared output, not by its internal nodes.
         """
-        if hasattr(item, "outputs") and item.outputs is not None:
-            fname = field_name_for(item.name)
-            no = normalize_outputs(item.outputs)
-            if no.is_dict_form:
-                # Dict-form outputs: fingerprint each key
-                for key, typ in no.all_keys.items():
-                    full_name = output_field_name(fname, key)
-                    result[full_name] = hashlib.sha256(
-                        f"{full_name}:{_type_signature(typ)}".encode()
-                    ).hexdigest()[:12]
-            else:
-                typ = no.primary
-                result[fname] = hashlib.sha256(f"{fname}:{_type_signature(typ)}".encode()).hexdigest()[:12]
-        elif hasattr(item, "nodes"):
-            # Sub-construct: fingerprint its output
-            fname = field_name_for(item.name)
-            if hasattr(item, "output") and item.output is not None:
-                typ = item.output
-                result[fname] = hashlib.sha256(f"{fname}:{_type_signature(typ)}".encode()).hexdigest()[:12]
+        # _declared_output abstracts the Node.outputs (plural) / Construct.output
+        # (singular) split — Node dict-form is fingerprinted per key, a Construct's
+        # single declared output as one field. No hand-rolled hasattr discrimination.
+        declared = _declared_output(item)
+        if declared is None:
+            return
+        fname = field_name_for(item.name)
+        no = normalize_outputs(declared)
+        if no.is_dict_form:
+            # Dict-form outputs: fingerprint each key
+            for key, typ in no.all_keys.items():
+                full_name = output_field_name(fname, key)
+                result[full_name] = hashlib.sha256(f"{full_name}:{_type_signature(typ)}".encode()).hexdigest()[:12]
+        else:
+            typ = no.primary
+            result[fname] = hashlib.sha256(f"{fname}:{_type_signature(typ)}".encode()).hexdigest()[:12]
 
     for item in construct.nodes:
         if isinstance(item, _BranchNode):

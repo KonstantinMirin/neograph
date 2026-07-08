@@ -469,6 +469,28 @@ def _getattr_output_sites(tree: ast.AST) -> bool:
     return False
 
 
+def _hasattr_output_sites(tree: ast.AST) -> bool:
+    """True if the tree contains ``hasattr(<x>, 'output')`` or
+    ``hasattr(<x>, 'outputs')`` — the SIBLING SPELLING of the declared-output
+    selector (neograph-awor / PAT-01). Hand-rolling Node-vs-Construct
+    discrimination via ``hasattr(item, 'outputs')`` (a Node) /
+    ``hasattr(item, 'output')`` (a Construct) is the same monopoly violation as
+    the ``getattr(item, 'output', None)`` form, in a spelling the getattr-only
+    matcher could not see. Both string forms are caught here.
+    """
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "hasattr"
+            and len(node.args) == 2
+            and isinstance(node.args[1], ast.Constant)
+            and node.args[1].value in ("output", "outputs")
+        ):
+            return True
+    return False
+
+
 class TestDeclaredOutputSelectorMonopoly:
     """neograph-8cqd: the Node.outputs/Construct.output declared-output selector
     has ONE home (_declared_output in _normalize.py). No other module may
@@ -490,6 +512,22 @@ class TestDeclaredOutputSelectorMonopoly:
             f"selector(s): {offenders}.\nUse _declared_output(item) from neograph._normalize."
         )
 
+    def test_no_handrolled_hasattr_output_selector(self):
+        """neograph-awor / PAT-01: the hasattr-on-output(s) sibling spelling of
+        the declared-output selector is banned outside _normalize.py exactly like
+        the getattr form. Node-vs-Construct discrimination goes through
+        _declared_output / isinstance(item, Node), never hasattr(item, 'outputs').
+        """
+        offenders = [
+            py.name
+            for py in sorted(SRC_DIR.glob("*.py"))
+            if py.name not in self._EXEMPT_FILES and _hasattr_output_sites(ast.parse(py.read_text()))
+        ]
+        assert offenders == [], (
+            f"\n{len(offenders)} hand-rolled hasattr(_, 'output'|'outputs') declared-output "
+            f"selector(s): {offenders}.\nUse _declared_output(item) or isinstance(item, Node)."
+        )
+
     def test_meta_getattr_output_scanner_catches(self):
         tree = ast.parse("def f(x):\n    return getattr(x, 'output', None)\n")
         assert _getattr_output_sites(tree)
@@ -497,6 +535,15 @@ class TestDeclaredOutputSelectorMonopoly:
     def test_meta_getattr_output_scanner_ignores_other_attrs(self):
         tree = ast.parse("def f(x):\n    return getattr(x, 'input', None), getattr(x, 'nodes', None)\n")
         assert not _getattr_output_sites(tree)
+
+    def test_meta_hasattr_output_scanner_catches_both_spellings(self):
+        """slip test: a new hasattr-form bypass in EITHER spelling is caught."""
+        assert _hasattr_output_sites(ast.parse("def f(x):\n    return hasattr(x, 'output')\n"))
+        assert _hasattr_output_sites(ast.parse("def f(x):\n    return hasattr(x, 'outputs')\n"))
+
+    def test_meta_hasattr_output_scanner_ignores_other_attrs(self):
+        tree = ast.parse("def f(x):\n    return hasattr(x, 'input'), hasattr(x, 'nodes')\n")
+        assert not _hasattr_output_sites(tree)
 
 
 class TestNoTsPortJustification:

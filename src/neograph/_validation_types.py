@@ -25,9 +25,9 @@ from typing import (
     cast,
     get_args,
     get_origin,
-    get_type_hints,
 )
 
+from neograph._hints import resolve_hints
 from neograph._ir_protocols import ConstructItem, ConstructLike
 from neograph._normalize import _declared_output
 from neograph.describe_type import type_display_name
@@ -149,10 +149,13 @@ def _resolve_field_annotation(model_class: TypeSpecStatic, field_name: str) -> T
     model_fields = getattr(model_class, "model_fields", None) or {}
     if field_name not in model_fields:
         return cast(TypeSpecStatic, _MISSING)
-    try:
-        hints = get_type_hints(model_class)
-    except (NameError, AttributeError, TypeError):
-        hints = {}
+    # Per-annotation resolution (7ymj): a SIBLING field's unresolvable
+    # forward-ref no longer forces THIS field back to its raw (possibly string)
+    # annotation. Pydantic also resolves each field at model-build time, so
+    # ``model_fields[name].annotation`` remains a genuine per-field fallback;
+    # if this field itself is unresolved the _MISSING sentinel below fails loud
+    # downstream with a precise "path does not resolve" error.
+    hints = resolve_hints(model_class, owner=getattr(model_class, "__qualname__", None))
     ann = hints.get(field_name, model_fields[field_name].annotation)
     if ann is None or isinstance(ann, (str, ForwardRef)):
         return cast(TypeSpecStatic, _MISSING)

@@ -12,6 +12,7 @@ from collections.abc import Callable
 from typing import Annotated, Any, get_args, get_origin
 
 from neograph._construct_validation import ConstructError
+from neograph._hints import resolve_hints
 from neograph.di import DIBinding, DIKind
 
 ParamResolution = dict[str, DIBinding]
@@ -202,17 +203,19 @@ def _classify_di_params(
 
     extra_locals = _build_annotation_namespace(f, caller_ns=caller_ns)
 
-    try:
-        import typing as _typing
-
-        # include_extras=True preserves the Annotated marker metadata.
-        resolved = _typing.get_type_hints(
-            f,
-            localns=extra_locals,
-            include_extras=True,
-        )
-    except (NameError, AttributeError, TypeError):
-        resolved = {}
+    # include_extras=True preserves the Annotated marker metadata. Per-annotation
+    # resolution (7ymj): one param's unresolvable annotation no longer discards
+    # the OTHER params' hints and mis-classifies their DI bindings. A param whose
+    # own annotation cannot resolve (e.g. a locally-scoped non-DI marker under
+    # `from __future__ import annotations`) is simply omitted here and wired as a
+    # by-name upstream downstream — the legitimate case that a blanket raise
+    # would have broken.
+    resolved = resolve_hints(
+        f,
+        localns=extra_locals,
+        include_extras=True,
+        owner=getattr(f, "__qualname__", None),
+    )
 
     param_res: ParamResolution = {}
     for p in sig.parameters.values():

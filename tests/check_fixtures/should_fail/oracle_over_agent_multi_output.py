@@ -1,4 +1,4 @@
-# CHECK_ERROR: multi-output
+# CHECK_ERROR: Oracle over an agent/act node with multi-output \(dict-form\) outputs is not supported
 # neograph-qzrv design call: Oracle over an agent with dict-form (multi-output)
 # OUTPUTS stays fail-loud. The isolating sub-construct has a SINGLE output boundary
 # port, and an N-way merge of secondary outputs (e.g. tool_log) across fanned

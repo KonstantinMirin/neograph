@@ -1,4 +1,4 @@
-# CHECK_ERROR: no field.*badkey|has no field 'badkey'
+# CHECK_ERROR: key='badkey'\) — Item has no field 'badkey'
 # Each.key references a field that doesn't exist on the element type.
 # Should fail at assembly-time validation.
 from pydantic import BaseModel

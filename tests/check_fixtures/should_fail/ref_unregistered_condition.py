@@ -1,4 +1,4 @@
-# CHECK_ERROR: Condition.*not registered
+# CHECK_ERROR: Condition 'ghost_condition' not registered
 # NOTE: Operator requires a checkpointer. The fixture harness doesn't pass one,
 # so it hits the checkpointer check first. This fixture validates via direct
 # compile() with a checkpointer in the inline test below.

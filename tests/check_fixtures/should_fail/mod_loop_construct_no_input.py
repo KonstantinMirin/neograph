@@ -1,4 +1,4 @@
-# CHECK_ERROR: Loop.*requires both input.*and output|input.*output.*declared
+# CHECK_ERROR: Loop requires both input= and output= declared
 # Loop on a Construct that has output but no input declared.
 # Back-edge can't wire without both.
 from pydantic import BaseModel

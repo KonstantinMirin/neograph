@@ -54,6 +54,8 @@ import operator as op_module
 from collections.abc import Iterator
 from typing import Any
 
+from pydantic import ConfigDict
+
 from neograph._ir_branch import _BranchMeta, _BranchNode, _ConditionSpec
 from neograph._normalize import _declared_output, normalize_outputs
 from neograph.conditions import OPERATORS
@@ -118,7 +120,7 @@ class ForwardConstruct(Construct):
     # so the ``ignored_types=(Node,)`` config can keep Node class attributes —
     # pipeline declarations, not model fields — without Pydantic raising
     # "non-annotated attribute" errors on ForwardConstruct subclasses.
-    model_config = {"arbitrary_types_allowed": True, "ignored_types": (Node,)}
+    model_config = ConfigDict(arbitrary_types_allowed=True, ignored_types=(Node,))
 
     def __init__(self, name_: str | None = None, /, **kwargs: Any) -> None:
         # Discover Node class attributes

@@ -1,4 +1,4 @@
-# CHECK_ERROR: type.*compatible|type.*mismatch|expected.*got
+# CHECK_ERROR: declares inputs=TypeB but no upstream produces a compatible value[\s\S]*node 'first': TypeA
 from pydantic import BaseModel
 
 from neograph import Construct, Node

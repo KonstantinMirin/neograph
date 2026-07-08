@@ -1,4 +1,4 @@
-# CHECK_ERROR: no.*producer|does not exist|not found|unknown.*field|no upstream
+# CHECK_ERROR: merge_fn 'combine' param 'ghost' does not match any upstream node
 # Attack vector: @merge_fn has a bare typed param whose name doesn't match
 # any node in the pipeline. State auto-wiring should fail at compile time
 # because there is no state field to read from.

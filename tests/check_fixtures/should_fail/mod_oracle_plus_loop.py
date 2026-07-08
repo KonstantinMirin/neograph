@@ -1,4 +1,4 @@
-# CHECK_ERROR: Cannot combine Oracle and Loop
+# CHECK_ERROR: Cannot combine Oracle and Loop on the same item
 # Oracle + Loop on the same node is forbidden (mutual exclusion).
 from pydantic import BaseModel
 

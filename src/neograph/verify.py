@@ -53,8 +53,6 @@ def verify_compiled(graph: Any) -> list[VerifyIssue]:
     state_schema = getattr(getattr(graph, "builder", None), "state_schema", None)
     state_fields = set(state_schema.model_fields.keys()) if state_schema else set()
 
-    # Check if any LLM node exists (to validate LLM factory)
-    has_llm_node = False
     scripted_lookup: dict = getattr(graph, "scripted", {}) or {}
     condition_lookup: dict = getattr(graph, "conditions", {}) or {}
 
@@ -62,7 +60,6 @@ def verify_compiled(graph: Any) -> list[VerifyIssue]:
         construct,
         issues,
         state_fields,
-        has_llm_ref=has_llm_node,
         scripted_lookup=scripted_lookup,
         condition_lookup=condition_lookup,
     )
@@ -89,7 +86,6 @@ def _walk(
     issues: list[VerifyIssue],
     state_fields: set[str],
     *,
-    has_llm_ref: bool,
     scripted_lookup: dict | None = None,
     condition_lookup: dict | None = None,
 ) -> None:
@@ -103,7 +99,6 @@ def _walk(
                 child,
                 issues,
                 state_fields,
-                has_llm_ref=has_llm_ref,
                 scripted_lookup=scripted_lookup,
                 condition_lookup=condition_lookup,
             )

@@ -1,4 +1,4 @@
-# CHECK_ERROR: Cannot combine Oracle and Loop|Oracle and Loop
+# CHECK_ERROR: Cannot combine Oracle and Loop on the same item
 # Bypass the | operator by constructing ModifierSet directly.
 # ModifierSet.model_post_init rejects illegal combos at construction time.
 from pydantic import BaseModel

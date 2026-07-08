@@ -1,4 +1,4 @@
-# CHECK_ERROR: collision|both map to
+# CHECK_ERROR: node name collision[\s\S]*both map to state field 'my_node'
 # Attack vector 7: Two nodes with same normalized name (hyphen vs underscore)
 # "my-node" and "my_node" both normalize to state field "my_node"
 from pydantic import BaseModel
