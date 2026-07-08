@@ -25,6 +25,7 @@ from typing import Any, Literal, Protocol, runtime_checkable
 
 from pydantic import BaseModel
 
+from neograph._state_keys import StateKeys
 from neograph.describe_type import describe_value
 from neograph.tool import ToolInteraction
 
@@ -345,6 +346,8 @@ def build_rendered_input(
                 if fname not in flattened and fname not in rendered_dict:
                     flattened[fname] = fval
 
+        _alias_subgraph_input_port(input_data, rendered_dict, flattened)
+
         inline_keys = set(raw_dict.keys())
         template_keys = inline_keys | set(flattened.keys())
 
@@ -364,6 +367,38 @@ def build_rendered_input(
         available_keys_inline=set(),
         available_keys_template=set(),
     )
+
+
+def _alias_subgraph_input_port(
+    input_data: dict[str, Any],
+    rendered_dict: dict[str, Any],
+    flattened: dict[str, Any],
+) -> None:
+    """Expose a sub-construct's port value under a friendly, template-ref-only
+    alias -- the port's declared type name -- alongside the framework-internal
+    ``neo_subgraph_input`` key (neograph-bluv, F3.4).
+
+    Three IR-level mechanisms rewrite a node's ``inputs`` dict-form key to the
+    literal ``neo_subgraph_input`` (the ``@node`` port rewrite in
+    ``_construct_builder.py``, a hand-authored declarative port key, and the
+    qot6 fan-over-agent auto-wrap in ``_fan_agent_wrap.py``). All three converge
+    on this one ``{neo_subgraph_input: <value>}`` dict shape before rendering,
+    so one alias here covers all three -- no rewrite site needs to change.
+
+    ``neo_subgraph_input`` is NEVER removed (purely additive; back-compat for
+    existing consumer code that reads it directly, e.g.
+    ``_unwrap(input_data, "neo_subgraph_input", ...)``). The alias is skipped
+    if it would collide with an existing ``rendered_dict``/``flattened`` key --
+    mutates *flattened* only, so a real producer field of the same name wins
+    over the synthesized alias (the same shadowing rule ``di_inputs`` uses).
+    """
+    port_value = input_data.get(StateKeys.SUBGRAPH_INPUT)
+    if port_value is None:
+        return
+    alias = type(port_value).__name__
+    if alias in rendered_dict or alias in flattened:
+        return
+    flattened[alias] = rendered_dict[StateKeys.SUBGRAPH_INPUT]
 
 
 def _render_with_flattening(

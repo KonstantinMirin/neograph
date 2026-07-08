@@ -1513,6 +1513,106 @@ class TestNodeSubConstruct:
         assert "jc3" in rendered
         assert "claim_id" in rendered
 
+    def test_subconstruct_port_alias_via_node_decorator(self):
+        """@node sub-construct port: template-ref input_data exposes the port
+        value under BOTH the framework-internal neo_subgraph_input key (kept
+        for back-compat) AND a friendly alias -- the port's declared type name
+        (neograph-bluv, killing the ox-demo `_unwrap(..., "neo_subgraph_input",
+        ...)` leak). The original parameter name (`claim`) is NOT resurrected;
+        only the type name is."""
+        from tests.fakes import StructuredFakeWithRaw, configure_fake_llm
+
+        captured = {}
+
+        def capturing_compiler(template, data, **kw):
+            captured[template] = data
+            return [{"role": "user", "content": "test"}]
+
+        __llm_kw = configure_fake_llm(
+            lambda tier: StructuredFakeWithRaw(
+                lambda model: model(claim_id="c1", disposition="aliased"),
+            ),
+            prompt_compiler=capturing_compiler,
+        )
+
+        @node(mode="think", outputs=ClaimResult, model="default", prompt="bluv/node-score")
+        def llm_score(claim: VerifyClaim) -> ClaimResult: ...
+
+        sub = construct_from_functions("bluv-node-sub", [llm_score], input=VerifyClaim, output=ClaimResult)
+
+        register_scripted(
+            "bluv_node_seed",
+            lambda _in, _cfg: VerifyClaim(claim_id="bluv-node", text="alias test"),
+        )
+        parent = Construct(
+            "parent",
+            nodes=[
+                Node.scripted("seed", fn="bluv_node_seed", outputs=VerifyClaim),
+                sub,
+            ],
+        )
+        graph = compile(parent, **build_test_compile_kwargs(), **__llm_kw)
+        run(graph, input={"node_id": "bluv-node"})
+
+        data = captured["bluv/node-score"]
+        assert "neo_subgraph_input" in data, "back-compat: internal key stays readable"
+        assert "VerifyClaim" in data, "friendly alias: the port's declared type name"
+        assert data["VerifyClaim"] == data["neo_subgraph_input"]
+        assert "claim" not in data, "the original parameter name is NOT resurrected"
+
+    def test_subconstruct_port_alias_declarative(self):
+        """Declarative sub-construct (Node authored with inputs={'neo_subgraph_input': T}
+        directly, no @node rewrite involved): the same friendly alias appears in
+        template-ref input_data (neograph-bluv). Proves the fix lives at the
+        rendering layer, not in any one surface's assembly-time rewrite."""
+        from tests.fakes import StructuredFakeWithRaw, configure_fake_llm
+
+        captured = {}
+
+        def capturing_compiler(template, data, **kw):
+            captured[template] = data
+            return [{"role": "user", "content": "test"}]
+
+        __llm_kw = configure_fake_llm(
+            lambda tier: StructuredFakeWithRaw(
+                lambda model: model(claim_id="c1", disposition="aliased-decl"),
+            ),
+            prompt_compiler=capturing_compiler,
+        )
+
+        decl_sub = Construct(
+            "bluv-decl-sub",
+            input=VerifyClaim,
+            output=ClaimResult,
+            nodes=[
+                Node(
+                    "score",
+                    prompt="bluv/decl-score",
+                    model="default",
+                    outputs=ClaimResult,
+                    inputs={"neo_subgraph_input": VerifyClaim},
+                ),
+            ],
+        )
+        register_scripted(
+            "bluv_decl_seed",
+            lambda _in, _cfg: VerifyClaim(claim_id="bluv-decl", text="alias test"),
+        )
+        parent = Construct(
+            "parent",
+            nodes=[
+                Node.scripted("seed", fn="bluv_decl_seed", outputs=VerifyClaim),
+                decl_sub,
+            ],
+        )
+        graph = compile(parent, **build_test_compile_kwargs(), **__llm_kw)
+        run(graph, input={"node_id": "bluv-decl"})
+
+        data = captured["bluv/decl-score"]
+        assert "neo_subgraph_input" in data, "back-compat: internal key stays readable"
+        assert "VerifyClaim" in data, "friendly alias: the port's declared type name"
+        assert data["VerifyClaim"] == data["neo_subgraph_input"]
+
     def test_construct_from_module_with_input_output_builds_sub_construct(self):
         """construct_from_module(mod, input=X, output=Y) builds a working sub-construct (neograph-xjt)."""
         import types

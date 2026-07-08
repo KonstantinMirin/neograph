@@ -202,6 +202,50 @@ class TestTemplatePlaceholderLint:
         assert len(template_issues) >= 1
         assert "text_input" in template_issues[0].message
 
+    def test_sub_construct_port_alias_valid_in_template_ref(self):
+        """Template-ref {PortType} -- the friendly alias for neo_subgraph_input
+        (the port's declared type name) -- resolves without a lint issue, and
+        {neo_subgraph_input} itself stays valid too (back-compat, neograph-bluv,
+        F3.4). Lint's third-column prediction must stay in lockstep with the
+        runtime alias added in renderers.build_rendered_input."""
+        from neograph.lint import lint
+
+        class Input(BaseModel):
+            text: str
+
+        class Output(BaseModel):
+            result: str
+
+        sub = Construct(
+            "sub",
+            input=Input,
+            output=Output,
+            nodes=[
+                Node(
+                    "proc",
+                    prompt="tmpl/proc",
+                    model="default",
+                    outputs=Output,
+                    inputs={"neo_subgraph_input": Input},
+                ),
+            ],
+        )
+        parent = Construct(
+            "parent",
+            nodes=[
+                Node.scripted("seed", fn="noop", outputs=Input),
+                sub,
+            ],
+        )
+
+        def resolver(name):
+            return "Alias: {Input}, internal: {neo_subgraph_input}" if name == "tmpl/proc" else None
+
+        issues = lint(parent, template_resolver=resolver)
+        template_issues = [i for i in issues if "template" in i.kind]
+        errors = [i for i in template_issues if i.required]
+        assert errors == []
+
     # ── Known extras & custom vars ──────────────────────────────────────
 
     def test_known_extras_not_flagged_in_template_ref(self):

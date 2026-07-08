@@ -185,6 +185,48 @@ class TestEachOverAgent:
         convention) and reads the delivered Each item."""
         self._assert_per_branch_isolation(self._run(self._agent_over_groups({"group": ClusterGroup})))
 
+    def test_each_over_agent_dict_form_port_alias_in_template_ref(self):
+        """qot6 auto-wrap rewrites the single-key dict-form port to
+        neo_subgraph_input; the template-ref renderer must ALSO expose it under
+        the friendly alias (the port type's declared name) so a consumer prompt
+        compiler doesn't need to know the framework-internal key (neograph-bluv,
+        F3.4). This is the THIRD distinct rewrite site (alongside the @node port
+        rewrite and the declarative manual port key) the render-layer fix must
+        cover for free."""
+        captured: dict = {}
+
+        def capturing_compiler(template, input_data, **kwargs):
+            captured[template] = input_data
+            return [{"role": "user", "content": "ok"}]
+
+        register_tool_factory("agent_search", lambda config, tool_config: FakeTool("agent_search", response="found"))
+        register_scripted(
+            "clusters_alias_fn",
+            lambda input_data, config: Clusters(groups=[ClusterGroup(label="alpha", claim_ids=["c1"])]),
+        )
+        pipeline = Construct(
+            "each-over-agent-alias",
+            nodes=[
+                Node.scripted("make-clusters", fn="clusters_alias_fn", outputs=Clusters),
+                self._agent_over_groups({"group": ClusterGroup}),
+            ],
+        )
+        graph = compile(
+            pipeline,
+            **build_test_compile_kwargs(),
+            **configure_fake_llm(
+                lambda tier: _EchoReActFake(call_tool="agent_search"),
+                capturing_compiler,
+            ),
+        )
+        run(graph, input={"node_id": "each-over-agent-alias"})
+
+        assert "test/search" in captured
+        data = captured["test/search"]
+        assert "neo_subgraph_input" in data, "back-compat: internal key stays readable"
+        assert "ClusterGroup" in data, "friendly alias: the port's declared type name"
+        assert data["ClusterGroup"] == data["neo_subgraph_input"]
+
     def test_each_over_agent_via_node_decorator_delivers_per_branch_item(self):
         """@node surface (three-surface parity): ``map_over`` composes the same
         Each; the fanned item reaches the isolated cycle's typed param."""

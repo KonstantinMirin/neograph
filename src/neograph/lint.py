@@ -874,6 +874,12 @@ def _predict_input_keys(node: Node, *, include_flattened: bool = True) -> set[st
         if include_flattened:
             for input_type in ni.by_name.values():
                 keys |= _get_flattened_field_names(input_type)
+            # Sub-construct port alias (neograph-bluv, F3.4): mirrors
+            # renderers._alias_subgraph_input_port exactly, so lint's
+            # template-ref prediction and the runtime alias cannot drift.
+            port_type = ni.by_name.get(StateKeys.SUBGRAPH_INPUT)
+            if port_type is not None:
+                keys.add(port_type.__name__)
         return keys
     # Single-type inputs: no dict keys predictable
     return set()
