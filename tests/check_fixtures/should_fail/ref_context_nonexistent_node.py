@@ -17,7 +17,17 @@ class Output(BaseModel, frozen=True):
     result: str
 
 
-pipeline = Construct("broken", nodes=[
-    Node(name="first", mode="think", inputs=Input, outputs=Output,
-         model="fast", prompt="test", context=["nonexistent_node"]),
-])
+pipeline = Construct(
+    "broken",
+    nodes=[
+        Node(
+            name="first",
+            mode="think",
+            inputs=Input,
+            outputs=Output,
+            model="fast",
+            prompt="test",
+            context=["nonexistent_node"],
+        ),
+    ],
+)

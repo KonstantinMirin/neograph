@@ -127,8 +127,7 @@ class FromResource:
             raise ConstructError.build(
                 "FromResource requires exactly one of uri= (a static/templated URI) "
                 "or ref= (a manifest resource KIND to hydrate), not both/neither",
-                hint="FromResource('crm://deals/42/contract') or "
-                     "FromResource(ref='email-history')",
+                hint="FromResource('crm://deals/42/contract') or FromResource(ref='email-history')",
             )
         self.uri = uri
         self.ref = ref
@@ -205,9 +204,12 @@ def _classify_di_params(
 
     try:
         import typing as _typing
+
         # include_extras=True preserves the Annotated marker metadata.
         resolved = _typing.get_type_hints(
-            f, localns=extra_locals, include_extras=True,
+            f,
+            localns=extra_locals,
+            include_extras=True,
         )
     except (NameError, AttributeError, TypeError):
         resolved = {}
@@ -230,10 +232,14 @@ def _classify_di_params(
         # instances (FromInput(required=True)) are supported.
         # Reject ambiguous double DI markers.
         di_markers = [
-            m for m in markers
-            if m is FromInput or isinstance(m, FromInput)
-            or m is FromConfig or isinstance(m, FromConfig)
-            or m is FromResource or isinstance(m, FromResource)
+            m
+            for m in markers
+            if m is FromInput
+            or isinstance(m, FromInput)
+            or m is FromConfig
+            or isinstance(m, FromConfig)
+            or m is FromResource
+            or isinstance(m, FromResource)
         ]
         if len(di_markers) > 1:
             raise ConstructError.build(
@@ -249,15 +255,20 @@ def _classify_di_params(
             raise ConstructError.build(
                 f"parameter '{p.name}' uses the bare FromResource class",
                 hint="FromResource requires a uri or ref: "
-                     "FromResource('crm://deals/42/contract') or "
-                     "FromResource(ref='email-history')",
+                "FromResource('crm://deals/42/contract') or "
+                "FromResource(ref='email-history')",
             )
         if res_marker is not None:
             param_res[p.name] = DIBinding(
-                name=p.name, kind=DIKind.FROM_RESOURCE, inner_type=inner_type,
-                required=res_marker.required, uri=res_marker.uri,
-                parse_fn=res_marker.parse, resource_mime=res_marker.mime,
-                ref_kind=res_marker.ref, max_bytes=res_marker.max_bytes,
+                name=p.name,
+                kind=DIKind.FROM_RESOURCE,
+                inner_type=inner_type,
+                required=res_marker.required,
+                uri=res_marker.uri,
+                parse_fn=res_marker.parse,
+                resource_mime=res_marker.mime,
+                ref_kind=res_marker.ref,
+                max_bytes=res_marker.max_bytes,
             )
             continue
 
@@ -286,13 +297,18 @@ def _classify_di_params(
         if isinstance(inner_type, type) and issubclass(inner_type, _BaseModel):
             di_kind = _KIND_MAP[f"{kind_base}_model"]
             param_res[p.name] = DIBinding(
-                name=p.name, kind=di_kind, inner_type=inner_type,
-                required=required, model_cls=inner_type,
+                name=p.name,
+                kind=di_kind,
+                inner_type=inner_type,
+                required=required,
+                model_cls=inner_type,
             )
         else:
             di_kind = _KIND_MAP[kind_base]
             param_res[p.name] = DIBinding(
-                name=p.name, kind=di_kind, inner_type=inner_type,
+                name=p.name,
+                kind=di_kind,
+                inner_type=inner_type,
                 required=required,
             )
 
@@ -305,11 +321,7 @@ def _resolve_di_args(param_res: ParamResolution, config: Any) -> list[Any]:
     Shared between the @merge_fn legacy shim and factory.make_oracle_merge_fn.
     Does NOT resolve from_state params --- use _resolve_merge_args for those.
     """
-    return [
-        binding.resolve(config)
-        for binding in param_res.values()
-        if binding.kind != DIKind.FROM_STATE
-    ]
+    return [binding.resolve(config) for binding in param_res.values() if binding.kind != DIKind.FROM_STATE]
 
 
 def _resolve_merge_args(
@@ -323,7 +335,4 @@ def _resolve_merge_args(
     For DI params (from_input, from_config, etc.), resolves from config.
     All use DIBinding.resolve() directly.
     """
-    return [
-        binding.resolve(config, state=state)
-        for binding in param_res.values()
-    ]
+    return [binding.resolve(config, state=state) for binding in param_res.values()]

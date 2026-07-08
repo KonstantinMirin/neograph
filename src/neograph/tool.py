@@ -122,9 +122,7 @@ def is_async_only_tool(tool: Any) -> bool:
     return False
 
 
-def register_bound_tool_factories(
-    construct: Any, tool_factory_lookup: dict[str, Callable]
-) -> None:
+def register_bound_tool_factories(construct: Any, tool_factory_lookup: dict[str, Callable]) -> None:
     """Auto-register factories for raw BaseTools passed via ``Node(tools=[...])``.
 
     A ``Tool`` spec synthesized from a raw LangChain BaseTool carries the
@@ -201,14 +199,14 @@ class ResourceRef(BaseModel, frozen=True):
     ``ttl_ms`` is reserved for the future SEP-2549 layered-expiry layer.
     """
 
-    uri: str                       # the resource_link uri (server-defined stability)
-    kind: str                      # domain KIND: "email-history", "activity-history"
-    server: str                    # which MCP server (for the consumer's fetcher routing)
+    uri: str  # the resource_link uri (server-defined stability)
+    kind: str  # domain KIND: "email-history", "activity-history"
+    server: str  # which MCP server (for the consumer's fetcher routing)
     producing_call: ProducingCall  # THE re-derivation path
-    mime: str | None = None        # hint from the resource_link block
-    size: int | None = None        # hint from the resource_link block
+    mime: str | None = None  # hint from the resource_link block
+    size: int | None = None  # hint from the resource_link block
     fetched_at: str | None = None  # ISO ts when last hydrated (provenance; set at hydration)
-    ttl_ms: int | None = None      # future SEP-2549 layered expiry
+    ttl_ms: int | None = None  # future SEP-2549 layered expiry
 
 
 class ToolBudgetTracker:
@@ -237,11 +235,7 @@ class ToolBudgetTracker:
 
     def exhausted_tools(self) -> set[str]:
         """Return names of tools that have hit their budget."""
-        return {
-            name
-            for name, budget in self._budgets.items()
-            if budget > 0 and self._counts.get(name, 0) >= budget
-        }
+        return {name for name, budget in self._budgets.items() if budget > 0 and self._counts.get(name, 0) >= budget}
 
     def all_exhausted(self) -> bool:
         """True if every budgeted tool is spent. Unlimited tools (budget=0) never exhaust."""
@@ -280,6 +274,7 @@ def tool(
     attached as .fn), so it can be passed directly to Node's tools= list.
     The factory is auto-registered under the tool's name.
     """
+
     def decorator(f: Callable) -> Tool:
         from neograph._runtime_registry import register_tool_factory
 
@@ -287,6 +282,7 @@ def tool(
 
         # Build a LangChain-compatible tool from the function
         from langchain_core.tools import tool as lc_tool
+
         lc_tool_instance = lc_tool(f)
 
         # Register the factory so the ReAct loop can instantiate it
@@ -332,7 +328,7 @@ def _resolve_fetcher(config: Any, tool_name: str) -> Callable:
         raise ConfigurationError.build(
             f"resource tool '{tool_name}' has no resource fetcher to call",
             hint=f"provide config['configurable']['{RESOURCE_FETCHER_KEY}'] = "
-                 "an async 'fetch(uri) -> (content, mime)' callable",
+            "an async 'fetch(uri) -> (content, mime)' callable",
         )
     return fetcher
 
@@ -402,7 +398,8 @@ def _build_read_blob() -> Any:
         content, mime = await fetcher(uri)
         if isinstance(content, bytes):
             return BlobResult(
-                uri=uri, mime=mime,
+                uri=uri,
+                mime=mime,
                 bytes_b64=base64.b64encode(content).decode("ascii"),
                 size=len(content),
             )
@@ -422,4 +419,3 @@ def _build_read_blob() -> Any:
 
 # The escape hatch is a ready-to-use async-only tool: Node(tools=[read_blob]).
 read_blob = _build_read_blob()
-

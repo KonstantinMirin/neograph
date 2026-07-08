@@ -38,9 +38,13 @@ from neograph.tool import Tool, is_async_only_tool
 log = structlog.get_logger()
 
 # Standard keys always available in state / config
-_KNOWN_EXTRAS: frozenset[str] = frozenset({
-    StateKeys.NODE_ID, StateKeys.PROJECT_ROOT, StateKeys.HUMAN_FEEDBACK,
-})
+_KNOWN_EXTRAS: frozenset[str] = frozenset(
+    {
+        StateKeys.NODE_ID,
+        StateKeys.PROJECT_ROOT,
+        StateKeys.HUMAN_FEEDBACK,
+    }
+)
 
 # The ${var} scanner is the ONE shared in _placeholders — imported, not redefined
 # (byte-identical dedup: lint collects names, prompt.substitute fills them, both
@@ -75,27 +79,28 @@ def _check_binding(
     if binding.kind in (DIKind.FROM_INPUT, DIKind.FROM_CONFIG):
         if config is not None:
             if binding.name not in config:
-                issues.append(LintIssue(
+                issues.append(
+                    LintIssue(
+                        node_name=node_label,
+                        param=binding.name,
+                        kind=kind_str,
+                        required=binding.required,
+                        message=(f"{node_label}: DI parameter '{binding.name}' ({kind_str}) not found in config"),
+                    )
+                )
+        elif binding.required:
+            issues.append(
+                LintIssue(
                     node_name=node_label,
                     param=binding.name,
                     kind=kind_str,
-                    required=binding.required,
+                    required=True,
                     message=(
-                        f"{node_label}: DI parameter '{binding.name}' "
-                        f"({kind_str}) not found in config"
+                        f"{node_label}: required DI parameter '{binding.name}' "
+                        f"({kind_str}) has no config to resolve from"
                     ),
-                ))
-        elif binding.required:
-            issues.append(LintIssue(
-                node_name=node_label,
-                param=binding.name,
-                kind=kind_str,
-                required=True,
-                message=(
-                    f"{node_label}: required DI parameter '{binding.name}' "
-                    f"({kind_str}) has no config to resolve from"
-                ),
-            ))
+                )
+            )
 
     elif binding.kind in (DIKind.FROM_INPUT_MODEL, DIKind.FROM_CONFIG_MODEL):
         model_cls: Any = binding.model_cls or binding.inner_type
@@ -103,30 +108,34 @@ def _check_binding(
         if config is not None:
             for fname in model_cls.model_fields:
                 if fname not in config:
-                    issues.append(LintIssue(
+                    issues.append(
+                        LintIssue(
+                            node_name=node_label,
+                            param=fname,
+                            kind=kind_str,
+                            required=required,
+                            message=(
+                                f"{node_label}: bundled model field "
+                                f"'{fname}' ({kind_str} via {model_cls.__name__}) "
+                                f"not found in config"
+                            ),
+                        )
+                    )
+        elif required:
+            for fname in model_cls.model_fields:
+                issues.append(
+                    LintIssue(
                         node_name=node_label,
                         param=fname,
                         kind=kind_str,
-                        required=required,
+                        required=True,
                         message=(
-                            f"{node_label}: bundled model field "
-                            f"'{fname}' ({kind_str} via {model_cls.__name__}) "
-                            f"not found in config"
+                            f"{node_label}: required bundled model "
+                            f"field '{fname}' ({kind_str} via "
+                            f"{model_cls.__name__}) has no config"
                         ),
-                    ))
-        elif required:
-            for fname in model_cls.model_fields:
-                issues.append(LintIssue(
-                    node_name=node_label,
-                    param=fname,
-                    kind=kind_str,
-                    required=True,
-                    message=(
-                        f"{node_label}: required bundled model "
-                        f"field '{fname}' ({kind_str} via "
-                        f"{model_cls.__name__}) has no config"
-                    ),
-                ))
+                    )
+                )
 
 
 def lint(
@@ -184,12 +193,17 @@ def lint(
         tool_factory_lookup.update(tool_factories)
 
     all_known = _KNOWN_EXTRAS | (known_template_vars or set())
-    _walk(construct, config, issues, known_vars=all_known,
-          template_resolver=template_resolver,
-          conditions=conditions,
-          tool_factories=tool_factory_lookup,
-          di_inputs_enabled=_compiler_accepts_di_inputs(prompt_compiler),
-          resource_producer_present=_has_resource_link_producer(construct))
+    _walk(
+        construct,
+        config,
+        issues,
+        known_vars=all_known,
+        template_resolver=template_resolver,
+        conditions=conditions,
+        tool_factories=tool_factory_lookup,
+        di_inputs_enabled=_compiler_accepts_di_inputs(prompt_compiler),
+        resource_producer_present=_has_resource_link_producer(construct),
+    )
     return issues
 
 
@@ -231,20 +245,22 @@ def _check_resource_hydration(
         return
     for binding in param_res.values():
         if binding.kind is DIKind.FROM_RESOURCE and binding.ref_kind is not None:
-            issues.append(LintIssue(
-                node_name=f"Node '{node.name}'",
-                param=binding.name,
-                kind="resource_hydration_kind_unmatched",
-                required=True,
-                message=(
-                    f"Node '{node.name}': parameter '{binding.name}' hydrates "
-                    f"manifest kind='{binding.ref_kind}' but no upstream agent/act "
-                    "node produces resource_links. Add a resource_link-emitting "
-                    "agent/act producer upstream, or use a templated "
-                    "FromResource(uri=...) / resource_reader tool (the flat-server "
-                    "fallback)."
-                ),
-            ))
+            issues.append(
+                LintIssue(
+                    node_name=f"Node '{node.name}'",
+                    param=binding.name,
+                    kind="resource_hydration_kind_unmatched",
+                    required=True,
+                    message=(
+                        f"Node '{node.name}': parameter '{binding.name}' hydrates "
+                        f"manifest kind='{binding.ref_kind}' but no upstream agent/act "
+                        "node produces resource_links. Add a resource_link-emitting "
+                        "agent/act producer upstream, or use a templated "
+                        "FromResource(uri=...) / resource_reader tool (the flat-server "
+                        "fallback)."
+                    ),
+                )
+            )
 
 
 def _compiler_accepts_di_inputs(prompt_compiler: Any) -> bool:
@@ -283,17 +299,19 @@ def _emit_missing_llm_kwargs_issue(
     if not missing:
         return
 
-    issues.append(LintIssue(
-        node_name=", ".join(llm_nodes),
-        param="",
-        kind="llm_kwargs_missing",
-        message=(
-            f"LLM-mode nodes ({', '.join(llm_nodes)}) require "
-            f"{' and '.join(missing)} at compile() time. "
-            "Pass these kwargs to compile() or configure them via "
-            "configure_llm() (legacy)."
-        ),
-    ))
+    issues.append(
+        LintIssue(
+            node_name=", ".join(llm_nodes),
+            param="",
+            kind="llm_kwargs_missing",
+            message=(
+                f"LLM-mode nodes ({', '.join(llm_nodes)}) require "
+                f"{' and '.join(missing)} at compile() time. "
+                "Pass these kwargs to compile() or configure them via "
+                "configure_llm() (legacy)."
+            ),
+        )
+    )
 
 
 def _walk(
@@ -316,12 +334,17 @@ def _walk(
         # bindings + template placeholders are linted like any other node. See
         # neograph-vn5f (site 3).
         for child in iter_with_arms(item):
-            _walk(child, config, issues, known_vars=known_vars,
-                  template_resolver=template_resolver,
-                  conditions=conditions,
-                  tool_factories=tool_factories,
-                  di_inputs_enabled=di_inputs_enabled,
-                  resource_producer_present=resource_producer_present)
+            _walk(
+                child,
+                config,
+                issues,
+                known_vars=known_vars,
+                template_resolver=template_resolver,
+                conditions=conditions,
+                tool_factories=tool_factories,
+                di_inputs_enabled=di_inputs_enabled,
+                resource_producer_present=resource_producer_present,
+            )
         return
 
     if not isinstance(item, Node):
@@ -349,9 +372,9 @@ def _walk(
                 _check_binding(merge_label, binding, config, issues)
 
     # 2. Template placeholder checks
-    _check_template_placeholders(item, issues, known_vars=known_vars,
-                                 template_resolver=template_resolver,
-                                 di_inputs_enabled=di_inputs_enabled)
+    _check_template_placeholders(
+        item, issues, known_vars=known_vars, template_resolver=template_resolver, di_inputs_enabled=di_inputs_enabled
+    )
 
     # 3. Loop condition checks
     _check_loop_condition(item, issues, conditions=conditions)
@@ -442,50 +465,60 @@ def _check_template_placeholders(
     for placeholder in placeholders:
         first_segment = placeholder.split(".")[0]
         if first_segment not in valid_keys:
-            issues.append(LintIssue(
-                node_name=node_label,
-                param=first_segment,
-                kind="template_placeholder_unresolvable",
-                required=True,
-                message=(
-                    f"{node_label}: prompt placeholder "
-                    f"'{placeholder_syntax % first_segment}' "
-                    f"not found in predicted input keys {sorted(predicted_keys)} "
-                    f"or known extras {sorted(_KNOWN_EXTRAS)} "
-                    f"(prompt: {prompt!r})"
-                ),
-            ))
+            issues.append(
+                LintIssue(
+                    node_name=node_label,
+                    param=first_segment,
+                    kind="template_placeholder_unresolvable",
+                    required=True,
+                    message=(
+                        f"{node_label}: prompt placeholder "
+                        f"'{placeholder_syntax % first_segment}' "
+                        f"not found in predicted input keys {sorted(predicted_keys)} "
+                        f"or known extras {sorted(_KNOWN_EXTRAS)} "
+                        f"(prompt: {prompt!r})"
+                    ),
+                )
+            )
         elif first_segment in resource_vars:
             # A FROM_RESOURCE template var IS valid, but its fetch is awaited — it
             # resolves only under arun() (the sync run() driver fails loud at the
             # injector). WARN so lint stays in lockstep with runtime coverage.
-            issues.append(LintIssue(
-                node_name=node_label,
-                param=first_segment,
-                kind="template_var_requires_async_driver",
-                required=False,
-                message=(
-                    f"{node_label}: template var "
-                    f"'{placeholder_syntax % first_segment}' is a FromResource DI "
-                    f"param — its fetch is awaited, so it resolves ONLY under the "
-                    f"async arun() driver (the sync run() driver fails loud). Drive "
-                    f"this graph with arun()."
-                ),
-            ))
-        elif first_segment in consumer_known and first_segment not in predicted_keys and first_segment not in _KNOWN_EXTRAS:
-            issues.append(LintIssue(
-                node_name=node_label,
-                param=first_segment,
-                kind="template_placeholder_known_vars_only",
-                required=False,
-                message=(
-                    f"{node_label}: placeholder "
-                    f"'{placeholder_syntax % first_segment}' resolved only "
-                    f"via known_vars — verify consumer bridge supplies it at runtime. "
-                    f"Consider using the actual @node parameter name instead of a "
-                    f"bridge alias."
-                ),
-            ))
+            issues.append(
+                LintIssue(
+                    node_name=node_label,
+                    param=first_segment,
+                    kind="template_var_requires_async_driver",
+                    required=False,
+                    message=(
+                        f"{node_label}: template var "
+                        f"'{placeholder_syntax % first_segment}' is a FromResource DI "
+                        f"param — its fetch is awaited, so it resolves ONLY under the "
+                        f"async arun() driver (the sync run() driver fails loud). Drive "
+                        f"this graph with arun()."
+                    ),
+                )
+            )
+        elif (
+            first_segment in consumer_known
+            and first_segment not in predicted_keys
+            and first_segment not in _KNOWN_EXTRAS
+        ):
+            issues.append(
+                LintIssue(
+                    node_name=node_label,
+                    param=first_segment,
+                    kind="template_placeholder_known_vars_only",
+                    required=False,
+                    message=(
+                        f"{node_label}: placeholder "
+                        f"'{placeholder_syntax % first_segment}' resolved only "
+                        f"via known_vars — verify consumer bridge supplies it at runtime. "
+                        f"Consider using the actual @node parameter name instead of a "
+                        f"bridge alias."
+                    ),
+                )
+            )
 
 
 def _check_loop_condition(
@@ -511,26 +544,25 @@ def _check_loop_condition(
     if loop is None:
         return
 
-    item_label = (
-        f"Construct '{item.name}'" if isinstance(item, Construct)
-        else f"Node '{item.name}'"
-    )
+    item_label = f"Construct '{item.name}'" if isinstance(item, Construct) else f"Node '{item.name}'"
     condition = loop.when
 
     if isinstance(condition, str):
         # Check 1: is the string condition registered?
         resolved = conditions.get(condition)
         if resolved is None:
-            issues.append(LintIssue(
-                node_name=item_label,
-                param="loop.when",
-                kind="loop_condition_unregistered",
-                required=True,
-                message=(
-                    f"Loop condition '{condition}' is not registered. "
-                    f"Pass conditions={{'{condition}': fn}} to compile()."
-                ),
-            ))
+            issues.append(
+                LintIssue(
+                    node_name=item_label,
+                    param="loop.when",
+                    kind="loop_condition_unregistered",
+                    required=True,
+                    message=(
+                        f"Loop condition '{condition}' is not registered. "
+                        f"Pass conditions={{'{condition}': fn}} to compile()."
+                    ),
+                )
+            )
             return  # can't test None-safety without the callable
 
         # Check 3: registered string condition — smoke-test with None.
@@ -539,17 +571,19 @@ def _check_loop_condition(
         try:
             resolved(None)
         except (AttributeError, TypeError):
-            issues.append(LintIssue(
-                node_name=item_label,
-                param="loop.when",
-                kind="loop_condition_none_unsafe",
-                required=True,
-                message=(
-                    f"Loop condition '{condition}' raises when called with None. "
-                    f"The first iteration's value may be None. Use a None-safe "
-                    f"wrapper: lambda d: d is None or {condition}(d)"
-                ),
-            ))
+            issues.append(
+                LintIssue(
+                    node_name=item_label,
+                    param="loop.when",
+                    kind="loop_condition_none_unsafe",
+                    required=True,
+                    message=(
+                        f"Loop condition '{condition}' raises when called with None. "
+                        f"The first iteration's value may be None. Use a None-safe "
+                        f"wrapper: lambda d: d is None or {condition}(d)"
+                    ),
+                )
+            )
     elif callable(condition):
         # Check 2: callable condition — smoke-test with None.
         # WARN (required=False) because the callable might handle None
@@ -557,17 +591,19 @@ def _check_loop_condition(
         try:
             condition(None)
         except (AttributeError, TypeError):
-            issues.append(LintIssue(
-                node_name=item_label,
-                param="loop.when",
-                kind="loop_condition_none_unsafe",
-                required=False,
-                message=(
-                    "Loop condition raises when called with None. "
-                    "The first iteration's value may be None — add a "
-                    "None guard: lambda d: d is None or <condition>"
-                ),
-            ))
+            issues.append(
+                LintIssue(
+                    node_name=item_label,
+                    param="loop.when",
+                    kind="loop_condition_none_unsafe",
+                    required=False,
+                    message=(
+                        "Loop condition raises when called with None. "
+                        "The first iteration's value may be None — add a "
+                        "None guard: lambda d: d is None or <condition>"
+                    ),
+                )
+            )
 
 
 def _check_async_only_tools(
@@ -596,36 +632,40 @@ def _check_async_only_tools(
             # un-awaited coroutine (RuntimeWarning) and misintrospect that
             # coroutine object as the tool.
             tool_name = str(getattr(spec, "name", None) or "?")
-            issues.append(LintIssue(
-                node_name=f"Node '{node.name}'",
-                param=tool_name,
-                kind="tool_requires_async_driver",
-                required=False,
-                message=(
-                    f"Node '{node.name}': tool '{tool_name}' has an async tool "
-                    "factory (e.g. it awaits a per-run token provider or builds "
-                    "an MCP client) and cannot run under the sync run() driver. "
-                    "Drive this graph with arun() so the async tool loop is used."
-                ),
-            ))
+            issues.append(
+                LintIssue(
+                    node_name=f"Node '{node.name}'",
+                    param=tool_name,
+                    kind="tool_requires_async_driver",
+                    required=False,
+                    message=(
+                        f"Node '{node.name}': tool '{tool_name}' has an async tool "
+                        "factory (e.g. it awaits a per-run token provider or builds "
+                        "an MCP client) and cannot run under the sync run() driver. "
+                        "Drive this graph with arun() so the async tool loop is used."
+                    ),
+                )
+            )
             continue
         tool_obj = _resolve_tool_object(spec, tool_factories)
         if tool_obj is None:
             continue
         tool_name = str(getattr(spec, "name", None) or getattr(tool_obj, "name", "?"))
         if is_async_only_tool(tool_obj):
-            issues.append(LintIssue(
-                node_name=f"Node '{node.name}'",
-                param=tool_name,
-                kind="tool_requires_async_driver",
-                required=False,
-                message=(
-                    f"Node '{node.name}': tool '{tool_name}' is async-only "
-                    "(e.g. an MCP tool) and cannot run under the sync run() "
-                    "driver. Drive this graph with arun() so the async tool "
-                    "loop is used."
-                ),
-            ))
+            issues.append(
+                LintIssue(
+                    node_name=f"Node '{node.name}'",
+                    param=tool_name,
+                    kind="tool_requires_async_driver",
+                    required=False,
+                    message=(
+                        f"Node '{node.name}': tool '{tool_name}' is async-only "
+                        "(e.g. an MCP tool) and cannot run under the sync run() "
+                        "driver. Drive this graph with arun() so the async tool "
+                        "loop is used."
+                    ),
+                )
+            )
 
 
 # Attribute names under which a tool object may carry its callable body. Covers
@@ -650,9 +690,7 @@ def _tool_references_ask_human(tool_obj: Any) -> bool:
         fn = getattr(tool_obj, attr, None)
         if fn is None:
             continue
-        code = getattr(fn, "__code__", None) or getattr(
-            getattr(fn, "__func__", None), "__code__", None
-        )
+        code = getattr(fn, "__code__", None) or getattr(getattr(fn, "__func__", None), "__code__", None)
         if code is not None and "ask_human" in code.co_names:
             return True
     return False
@@ -688,19 +726,21 @@ def _check_ask_human_in_mutating_node(
             continue
         if _tool_references_ask_human(tool_obj):
             tool_name = str(getattr(spec, "name", None) or getattr(tool_obj, "name", "?"))
-            issues.append(LintIssue(
-                node_name=f"Node '{node.name}'",
-                param=tool_name,
-                kind="ask_human_in_mutating_node",
-                required=False,
-                message=(
-                    f"Node '{node.name}': act-mode (mutating) tool '{tool_name}' "
-                    "calls ask_human(). A non-idempotent side effect before the "
-                    "mid-loop pause can double-fire on resume (node-granularity "
-                    "replay). Ensure any mutation before the ask_human() is "
-                    "idempotent, or move it after the pause."
-                ),
-            ))
+            issues.append(
+                LintIssue(
+                    node_name=f"Node '{node.name}'",
+                    param=tool_name,
+                    kind="ask_human_in_mutating_node",
+                    required=False,
+                    message=(
+                        f"Node '{node.name}': act-mode (mutating) tool '{tool_name}' "
+                        "calls ask_human(). A non-idempotent side effect before the "
+                        "mid-loop pause can double-fire on resume (node-granularity "
+                        "replay). Ensure any mutation before the ask_human() is "
+                        "idempotent, or move it after the pause."
+                    ),
+                )
+            )
 
 
 def _check_act_mode_all_idempotent(
@@ -726,18 +766,20 @@ def _check_act_mode_all_idempotent(
 
     if all(isinstance(spec, Tool) and spec.idempotent for spec in node.tools):
         tool_names = ", ".join(str(spec.name) for spec in node.tools)
-        issues.append(LintIssue(
-            node_name=f"Node '{node.name}'",
-            param="mode",
-            kind="act_mode_all_idempotent_tools",
-            required=False,
-            message=(
-                f"Node '{node.name}': mode='act' (mutations) but all tools "
-                f"({tool_names}) are idempotent=True (read-only). This is probably "
-                "a misclassification -- use mode='agent'. If a tool is a genuinely "
-                "idempotent mutation, this warning is expected and can be ignored."
-            ),
-        ))
+        issues.append(
+            LintIssue(
+                node_name=f"Node '{node.name}'",
+                param="mode",
+                kind="act_mode_all_idempotent_tools",
+                required=False,
+                message=(
+                    f"Node '{node.name}': mode='act' (mutations) but all tools "
+                    f"({tool_names}) are idempotent=True (read-only). This is probably "
+                    "a misclassification -- use mode='agent'. If a tool is a genuinely "
+                    "idempotent mutation, this warning is expected and can be ignored."
+                ),
+            )
+        )
 
 
 def _spec_factory(spec: Any, tool_factories: dict[str, Callable] | None) -> Any:
@@ -797,10 +839,7 @@ def _di_template_var_names(node: Node) -> set[str]:
     parameter name (matching the first segment of a dotted ``{ctx.field}``).
     """
     param_res = _get_param_res(node)
-    return {
-        name for name, binding in (param_res or {}).items()
-        if binding.kind in DI_TEMPLATE_KINDS
-    }
+    return {name for name, binding in (param_res or {}).items() if binding.kind in DI_TEMPLATE_KINDS}
 
 
 def _di_resource_template_var_names(node: Node) -> set[str]:
@@ -813,10 +852,7 @@ def _di_resource_template_var_names(node: Node) -> set[str]:
     async-driver WARN, in lockstep with the sync-driver fail-loud at runtime.
     """
     param_res = _get_param_res(node)
-    return {
-        name for name, binding in (param_res or {}).items()
-        if binding.kind is DIKind.FROM_RESOURCE
-    }
+    return {name for name, binding in (param_res or {}).items() if binding.kind is DIKind.FROM_RESOURCE}
 
 
 def _predict_input_keys(node: Node, *, include_flattened: bool = True) -> set[str]:
@@ -862,10 +898,7 @@ def _get_flattened_field_names(input_type: Any) -> set[str]:
         return set()
     if not (isinstance(ret_type, type) and issubclass(ret_type, _BM)):
         return set()
-    return {
-        fname for fname, finfo in ret_type.model_fields.items()
-        if not finfo.exclude
-    }
+    return {fname for fname, finfo in ret_type.model_fields.items() if not finfo.exclude}
 
 
 def _resolve_return_type(fn: Any, owner_cls: Any) -> Any:

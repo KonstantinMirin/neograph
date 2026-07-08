@@ -78,7 +78,9 @@ def make_subgraph_fn(sub: Construct, sub_graph: CompiledStateGraph) -> RunnableL
     has_loop = sub_combo in (ModifierCombo.LOOP, ModifierCombo.LOOP_OPERATOR)
     has_each = sub_combo in (ModifierCombo.EACH, ModifierCombo.EACH_OPERATOR)
 
-    def _build_sub_input(state: BaseModel | dict[str, Any], config: RunnableConfig) -> tuple[dict[str, Any], StateBus, RunnableConfig]:
+    def _build_sub_input(
+        state: BaseModel | dict[str, Any], config: RunnableConfig
+    ) -> tuple[dict[str, Any], StateBus, RunnableConfig]:
         """Shared pre-invoke logic: extract input, forward context, inject config.
 
         Returns ``(sub_input, bus, config)``. Identical for both twins — the only

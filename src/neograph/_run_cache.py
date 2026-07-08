@@ -135,9 +135,7 @@ def get_or_build(config: Any, subkey: str, build: Callable[[], Any]) -> Any:
         return value
 
 
-async def aget_or_build(
-    config: Any, subkey: str, build: Callable[[], Awaitable[Any]]
-) -> Any:
+async def aget_or_build(config: Any, subkey: str, build: Callable[[], Awaitable[Any]]) -> Any:
     """Async twin of :func:`get_or_build`; ``build`` is awaited on a miss. The
     single-flight latch is the loop-affine ``asyncio.Lock`` from
     :func:`_alatch`."""

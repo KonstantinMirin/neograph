@@ -74,10 +74,14 @@ class DIKind(Enum):
 # path fails loud (neograph-3q6j; see `_dispatch._inject_di_inputs`). Shared by the
 # LLM dispatch layer (which resolves and stashes these) and lint (which treats them
 # as valid template-ref placeholders when the prompt_compiler accepts di_inputs).
-DI_TEMPLATE_KINDS: frozenset[DIKind] = frozenset({
-    DIKind.FROM_INPUT, DIKind.FROM_CONFIG,
-    DIKind.FROM_INPUT_MODEL, DIKind.FROM_CONFIG_MODEL,
-})
+DI_TEMPLATE_KINDS: frozenset[DIKind] = frozenset(
+    {
+        DIKind.FROM_INPUT,
+        DIKind.FROM_CONFIG,
+        DIKind.FROM_INPUT_MODEL,
+        DIKind.FROM_CONFIG_MODEL,
+    }
+)
 
 
 def _get_configurable(config: Any, key: str) -> Any:
@@ -120,11 +124,10 @@ def parse_resource_content(
 
     model_name = getattr(output_model, "__name__", str(output_model))
     raise _ConfigurationError.build(
-        f"resource mime '{mime or marker_mime or '?'}' cannot be parsed into "
-        f"{model_name} without an explicit parser",
+        f"resource mime '{mime or marker_mime or '?'}' cannot be parsed into {model_name} without an explicit parser",
         hint="pass parse=(content, mime)->model (or type the param as str for raw "
-             "text passthrough); neograph never runs a silent LLM parse inside "
-             "DI/resource resolution",
+        "text passthrough); neograph never runs a silent LLM parse inside "
+        "DI/resource resolution",
     )
 
 
@@ -136,9 +139,7 @@ def _configurable_dict(config: Any) -> dict[str, Any]:
     return getattr(cfg, "configurable", {}) or {}
 
 
-def _enforce_max_bytes(
-    content: Any, max_bytes: int | None, *, name: str, uri: str
-) -> None:
+def _enforce_max_bytes(content: Any, max_bytes: int | None, *, name: str, uri: str) -> None:
     """Fail loud when a fetched resource exceeds ``max_bytes`` (Risk-2 mitigation).
 
     Called AFTER the fetch but BEFORE parse/return, so an oversized blob turns
@@ -152,8 +153,8 @@ def _enforce_max_bytes(
         raise _ConfigurationError.build(
             f"resource '{name}' ({uri}) is {size} bytes, exceeds max_bytes {max_bytes}",
             hint="use a templated resource_reader / FromResource(uri) to slice the "
-                 "resource (e.g. ?range=1-5) instead of hydrating the whole blob "
-                 "into a prompt",
+            "resource (e.g. ?range=1-5) instead of hydrating the whole blob "
+            "into a prompt",
         )
 
 
@@ -190,7 +191,7 @@ async def hydrate_resource_ref(
         raise _ConfigurationError.build(
             f"resource ref '{getattr(ref, 'uri', '?')}' has no fetcher to read from",
             hint=f"provide config['configurable']['{RESOURCE_FETCHER_KEY}'] = "
-                 "an async 'fetch(uri) -> (content, mime)' callable",
+            "an async 'fetch(uri) -> (content, mime)' callable",
         )
 
     # 1. read
@@ -211,7 +212,8 @@ async def hydrate_resource_ref(
     replayer = _get_configurable(config, RESOURCE_REPLAYER_KEY)
     if replayer is None:
         raise _ResourceExpiredError.of(
-            ref, node=node,
+            ref,
+            node=node,
             detail="no resource replayer configured to re-derive the expired ref",
             cause=read_error,
         )
@@ -221,7 +223,8 @@ async def hydrate_resource_ref(
         content, mime = await fetcher(fresh_uri)
     except Exception as exc:  # noqa: BLE001 - replay failure = confirmed expiry
         raise _ResourceExpiredError.of(
-            ref, node=node,
+            ref,
+            node=node,
             detail="replaying the producing call failed to re-derive the resource",
             cause=exc,
         ) from exc
@@ -308,12 +311,12 @@ class DIBinding:
     inner_type: type
     required: bool
     default_value: Any = None  # CONSTANT only: the literal default value
-    model_cls: Any = None      # MODEL kinds only: the Pydantic BaseModel subclass
-    uri: str | None = None          # FROM_RESOURCE only: the (static or templated) URI
-    parse_fn: Any = None            # FROM_RESOURCE only: explicit (content, mime)->model
+    model_cls: Any = None  # MODEL kinds only: the Pydantic BaseModel subclass
+    uri: str | None = None  # FROM_RESOURCE only: the (static or templated) URI
+    parse_fn: Any = None  # FROM_RESOURCE only: explicit (content, mime)->model
     resource_mime: str | None = None  # FROM_RESOURCE only: mime hint from the marker
-    ref_kind: str | None = None     # FROM_RESOURCE(ref=) only: manifest KIND to hydrate
-    max_bytes: int | None = None    # FROM_RESOURCE only: fail-loud size cap at node entry
+    ref_kind: str | None = None  # FROM_RESOURCE(ref=) only: manifest KIND to hydrate
+    max_bytes: int | None = None  # FROM_RESOURCE only: fail-loud size cap at node entry
 
     def resolve(self, config: Any, *, state: Any = None) -> Any:
         """The ONE resolution path for DI parameters.
@@ -326,8 +329,7 @@ class DIBinding:
             if val is None and self.required:
                 source = "input" if self.kind == DIKind.FROM_INPUT else "config"
                 raise _ExecutionError.build(
-                    f"required DI parameter '{self.name}' (from {source}) is missing "
-                    f"from config['configurable']",
+                    f"required DI parameter '{self.name}' (from {source}) is missing from config['configurable']",
                     hint=f"provide it via run(input={{'{self.name}': ...}})",
                 )
             if val is not None and self.inner_type is not None:
@@ -353,8 +355,7 @@ class DIBinding:
                 if missing:
                     source = "input" if self.kind == DIKind.FROM_INPUT_MODEL else "config"
                     raise _ExecutionError.build(
-                        f"required DI bundled model '{self.name}' ({model.__name__}) "
-                        f"is missing fields from {source}",
+                        f"required DI bundled model '{self.name}' ({model.__name__}) is missing fields from {source}",
                         found=f"missing: {sorted(missing)}",
                         hint="provide them via run(input={...})",
                     )
@@ -364,10 +365,8 @@ class DIBinding:
                 if self.required:
                     source = "input" if self.kind == DIKind.FROM_INPUT_MODEL else "config"
                     raise _ExecutionError.build(
-                        f"required DI bundled model '{self.name}' ({model.__name__}) "
-                        f"construction failed",
-                        hint="provide all fields via run(input={...}) or "
-                             "config['configurable']",
+                        f"required DI bundled model '{self.name}' ({model.__name__}) construction failed",
+                        hint="provide all fields via run(input={...}) or config['configurable']",
                     ) from None
                 log.warning(
                     "DI model construction failed, returning None",
@@ -394,7 +393,7 @@ class DIBinding:
             raise _ConfigurationError.build(
                 f"resource DI parameter '{self.name}' cannot resolve synchronously",
                 hint="FromResource fetches are awaited — drive the graph with "
-                     "arun(). resolve() has no fetcher to await; use aresolve().",
+                "arun(). resolve() has no fetcher to await; use aresolve().",
             )
 
         return None
@@ -430,13 +429,16 @@ class DIBinding:
             raise _ConfigurationError.build(
                 f"resource DI parameter '{self.name}' has no fetcher to resolve from",
                 hint=f"provide config['configurable']['{RESOURCE_FETCHER_KEY}'] = "
-                     "an async 'fetch(uri) -> (content, mime)' callable",
+                "an async 'fetch(uri) -> (content, mime)' callable",
             )
         uri = _expand_uri(self.uri or "", _configurable_dict(config))
         content, mime = await fetcher(uri)
         _enforce_max_bytes(content, self.max_bytes, name=self.name, uri=uri)
         return parse_resource_content(
-            content, mime, self.inner_type, self.parse_fn,
+            content,
+            mime,
+            self.inner_type,
+            self.parse_fn,
             marker_mime=self.resource_mime,
         )
 
@@ -455,15 +457,18 @@ class DIBinding:
             if not self.required:
                 return None
             raise _ExecutionError.build(
-                f"resource DI parameter '{self.name}' found no ResourceRef of kind "
-                f"'{self.ref_kind}' in the manifest",
+                f"resource DI parameter '{self.name}' found no ResourceRef of kind '{self.ref_kind}' in the manifest",
                 hint="an upstream agent/act node must emit a resource_link of that "
-                     "kind before this node runs (flat servers that emit no "
-                     "resource_link fall back to a templated FromResource(uri=...) / "
-                     "resource_reader tool)",
+                "kind before this node runs (flat servers that emit no "
+                "resource_link fall back to a templated FromResource(uri=...) / "
+                "resource_reader tool)",
             )
         return await hydrate_resource_ref(
-            match, config, self.inner_type,
-            parse=self.parse_fn, marker_mime=self.resource_mime,
-            max_bytes=self.max_bytes, node=self.name,
+            match,
+            config,
+            self.inner_type,
+            parse=self.parse_fn,
+            marker_mime=self.resource_mime,
+            max_bytes=self.max_bytes,
+            node=self.name,
         )

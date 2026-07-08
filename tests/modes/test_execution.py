@@ -208,7 +208,6 @@ class TestLLMUnknownToolCall:
                 clone._model = model
                 return clone
 
-
         node = Node(
             name="explore",
             mode="agent",
@@ -219,7 +218,12 @@ class TestLLMUnknownToolCall:
         )
 
         pipeline = Construct("test-hallucinated-tool", nodes=[node])
-        graph = compile(pipeline, llm_factory=lambda tier: FakeLLMHallucinator(), prompt_compiler=lambda template, data: [{"role": "user", "content": "test"}], **build_test_compile_kwargs())
+        graph = compile(
+            pipeline,
+            llm_factory=lambda tier: FakeLLMHallucinator(),
+            prompt_compiler=lambda template, data: [{"role": "user", "content": "test"}],
+            **build_test_compile_kwargs(),
+        )
         # Should complete without crashing — unknown tool gets error message
         result = run(graph, input={"node_id": "test-001"})
         assert isinstance(result["explore"], Claims)
@@ -439,10 +443,13 @@ class TestCheckpointResume:
         register_scripted("ckpt_a", lambda _i, _c: (call_log.append("a"), RawText(text="a"))[1])
         register_scripted("ckpt_b", lambda _i, _c: (call_log.append("b"), Claims(items=["b"]))[1])
 
-        pipeline = Construct("ckpt-test", nodes=[
-            Node.scripted("a", fn="ckpt_a", outputs=RawText),
-            Node.scripted("b", fn="ckpt_b", inputs=RawText, outputs=Claims),
-        ])
+        pipeline = Construct(
+            "ckpt-test",
+            nodes=[
+                Node.scripted("a", fn="ckpt_a", outputs=RawText),
+                Node.scripted("b", fn="ckpt_b", inputs=RawText, outputs=Claims),
+            ],
+        )
 
         checkpointer = MemorySaver()
         graph = compile(pipeline, checkpointer=checkpointer, **build_test_compile_kwargs())
@@ -487,10 +494,13 @@ class TestCheckpointResume:
         register_scripted("crash_a", node_a)
         register_scripted("crash_b", node_b)
 
-        pipeline = Construct("crash-test", nodes=[
-            Node.scripted("a", fn="crash_a", outputs=RawText),
-            Node.scripted("b", fn="crash_b", inputs=RawText, outputs=Claims),
-        ])
+        pipeline = Construct(
+            "crash-test",
+            nodes=[
+                Node.scripted("a", fn="crash_a", outputs=RawText),
+                Node.scripted("b", fn="crash_b", inputs=RawText, outputs=Claims),
+            ],
+        )
 
         checkpointer = MemorySaver()
         graph = compile(pipeline, checkpointer=checkpointer, **build_test_compile_kwargs())
@@ -498,6 +508,7 @@ class TestCheckpointResume:
 
         # First run — A succeeds, B crashes
         import pytest as _pytest
+
         with _pytest.raises(RuntimeError, match="simulated crash"):
             run(graph, input={"node_id": "test"}, config=config)
         assert call_log == ["a", "b"]
@@ -527,6 +538,7 @@ class TestCheckpointResume:
             return Claims(items=[topic])
 
         from neograph import construct_from_functions
+
         pipeline = construct_from_functions("di-resume", [needs_di])
 
         checkpointer = MemorySaver()
@@ -540,7 +552,6 @@ class TestCheckpointResume:
         fresh_config = {"configurable": {"thread_id": "test-di-resume-2"}}
         with pytest.raises(ExecutionError, match="Required DI"):
             run(graph, config=fresh_config)
-
 
     def test_operator_resume_without_neo_input_stash(self):
         """Operator resume when _neo_input is absent from config (path 1b).
@@ -556,10 +567,12 @@ class TestCheckpointResume:
         register_scripted("op_a", lambda _i, _c: (call_log.append("a"), RawText(text="a"))[1])
         register_condition("always_interrupt", lambda result: {"needs_review": True})
 
-        pipeline = Construct("op-resume-test", nodes=[
-            Node.scripted("a", fn="op_a", outputs=RawText)
-            | Operator(when="always_interrupt"),
-        ])
+        pipeline = Construct(
+            "op-resume-test",
+            nodes=[
+                Node.scripted("a", fn="op_a", outputs=RawText) | Operator(when="always_interrupt"),
+            ],
+        )
 
         checkpointer = MemorySaver()
         graph = compile(pipeline, checkpointer=checkpointer, **build_test_compile_kwargs())
@@ -583,9 +596,12 @@ class TestCheckpointResume:
         from tests.fakes import register_scripted
 
         register_scripted("no_ckpt", lambda _i, _c: RawText(text="x"))
-        pipeline = Construct("no-ckpt", nodes=[
-            Node.scripted("a", fn="no_ckpt", outputs=RawText),
-        ])
+        pipeline = Construct(
+            "no-ckpt",
+            nodes=[
+                Node.scripted("a", fn="no_ckpt", outputs=RawText),
+            ],
+        )
         graph = compile(pipeline, **build_test_compile_kwargs())  # no checkpointer
         assert not _has_existing_checkpoint(graph, {"configurable": {"thread_id": "x"}})
 
@@ -609,9 +625,12 @@ class TestCheckpointResume:
         from tests.fakes import register_scripted
 
         register_scripted("p3c", lambda _i, _c: RawText(text="x"))
-        pipeline = Construct("p3c-test", nodes=[
-            Node.scripted("a", fn="p3c", outputs=RawText),
-        ])
+        pipeline = Construct(
+            "p3c-test",
+            nodes=[
+                Node.scripted("a", fn="p3c", outputs=RawText),
+            ],
+        )
         graph = compile(pipeline, **build_test_compile_kwargs())
 
         # No checkpointer + no input + config=None → LangGraph EmptyInputError
@@ -627,9 +646,12 @@ class TestCheckpointResume:
         call_log = []
         register_scripted("new_a", lambda _i, _c: (call_log.append("a"), RawText(text="a"))[1])
 
-        pipeline = Construct("new-exec", nodes=[
-            Node.scripted("a", fn="new_a", outputs=RawText),
-        ])
+        pipeline = Construct(
+            "new-exec",
+            nodes=[
+                Node.scripted("a", fn="new_a", outputs=RawText),
+            ],
+        )
         checkpointer = MemorySaver()
         graph = compile(pipeline, checkpointer=checkpointer, **build_test_compile_kwargs())
 
@@ -683,7 +705,9 @@ class TestRunIsolated:
         register_scripted("cfg_test", fn)
         node = Node.scripted("cfg-test", fn="cfg_test", outputs=Claims)
 
-        result = node.run_isolated(**build_test_compile_kwargs(), config={"configurable": {"node_id": "TEST-001", "env": "staging"}})
+        result = node.run_isolated(
+            **build_test_compile_kwargs(), config={"configurable": {"node_id": "TEST-001", "env": "staging"}}
+        )
 
         assert result.items == ["ok"]
         assert seen_config["node_id"] == "TEST-001"
@@ -790,21 +814,25 @@ class TestStateGet:
     def test_returns_value_from_dict(self):
         """Dict-form state: key present → return value."""
         from neograph._state_bus import adapt_state
+
         assert adapt_state({"foo": 42}).get("foo") == 42
 
     def test_returns_none_for_missing_dict_key(self):
         """Dict-form state: key absent → None (not KeyError)."""
         from neograph._state_bus import adapt_state
+
         assert adapt_state({"foo": 42}).get("bar") is None
 
     def test_returns_value_from_pydantic_model(self):
         """Pydantic-form state: field present → return value."""
         from neograph._state_bus import adapt_state
+
         assert adapt_state(RawText(text="hello")).get("text") == "hello"
 
     def test_returns_none_for_missing_pydantic_field(self):
         """Pydantic-form state: field absent → None (not AttributeError)."""
         from neograph._state_bus import adapt_state
+
         assert adapt_state(RawText(text="hello")).get("nonexistent") is None
 
 
@@ -1020,17 +1048,23 @@ class TestCheckpointSchemaValidation:
         checkpointer = MemorySaver()
         config = {"configurable": {"thread_id": "schema-test-1"}}
 
-        pipe_v1 = Construct("sv-pipe", nodes=[
-            Node.scripted("a", fn="sv1_a", outputs=V1Output),
-        ])
+        pipe_v1 = Construct(
+            "sv-pipe",
+            nodes=[
+                Node.scripted("a", fn="sv1_a", outputs=V1Output),
+            ],
+        )
         graph_v1 = compile(pipe_v1, checkpointer=checkpointer, **build_test_compile_kwargs())
         run(graph_v1, input={"node_id": "test"}, config=config)
 
         # Run 2: compile with V2 schema (added field), same thread_id
         register_scripted("sv2_a", lambda _i, _c: V2Output(content="hello", score=0.9))
-        pipe_v2 = Construct("sv-pipe", nodes=[
-            Node.scripted("a", fn="sv2_a", outputs=V2Output),
-        ])
+        pipe_v2 = Construct(
+            "sv-pipe",
+            nodes=[
+                Node.scripted("a", fn="sv2_a", outputs=V2Output),
+            ],
+        )
         graph_v2 = compile(pipe_v2, checkpointer=checkpointer, **build_test_compile_kwargs())
 
         with pytest.raises(CheckpointSchemaError, match="schema.*changed|fingerprint"):
@@ -1046,6 +1080,7 @@ class TestCheckpointSchemaValidation:
             content: str
 
         call_count = [0]
+
         def counting_fn(_i, _c):
             call_count[0] += 1
             return StableOutput(content="hello")
@@ -1055,9 +1090,12 @@ class TestCheckpointSchemaValidation:
         checkpointer = MemorySaver()
         config = {"configurable": {"thread_id": "schema-test-2"}}
 
-        pipe = Construct("stable-pipe", nodes=[
-            Node.scripted("a", fn="stable_a", outputs=StableOutput),
-        ])
+        pipe = Construct(
+            "stable-pipe",
+            nodes=[
+                Node.scripted("a", fn="stable_a", outputs=StableOutput),
+            ],
+        )
 
         # Run 1
         graph = compile(pipe, checkpointer=checkpointer, **build_test_compile_kwargs())
@@ -1089,15 +1127,21 @@ class TestCheckpointSchemaValidation:
         checkpointer = MemorySaver()
         config = {"configurable": {"thread_id": "schema-test-3"}}
 
-        pipe1 = Construct("rn-pipe", nodes=[
-            Node.scripted("a", fn="rn_a1", outputs=OriginalName),
-        ])
+        pipe1 = Construct(
+            "rn-pipe",
+            nodes=[
+                Node.scripted("a", fn="rn_a1", outputs=OriginalName),
+            ],
+        )
         graph1 = compile(pipe1, checkpointer=checkpointer, **build_test_compile_kwargs())
         run(graph1, input={"node_id": "test"}, config=config)
 
-        pipe2 = Construct("rn-pipe", nodes=[
-            Node.scripted("a", fn="rn_a2", outputs=RenamedClass),
-        ])
+        pipe2 = Construct(
+            "rn-pipe",
+            nodes=[
+                Node.scripted("a", fn="rn_a2", outputs=RenamedClass),
+            ],
+        )
         graph2 = compile(pipe2, checkpointer=checkpointer, **build_test_compile_kwargs())
 
         with pytest.raises(CheckpointSchemaError):
@@ -1147,24 +1191,30 @@ class TestPerNodeCheckpointInvalidation:
         config = {"configurable": {"thread_id": "per-node-1"}}
 
         # Run 1: A→B→C(v1)→D
-        pipe_v1 = Construct("pn-pipe", nodes=[
-            Node.scripted("a", fn="pn_a", outputs=TypeA),
-            Node.scripted("b", fn="pn_b", inputs={"a": TypeA}, outputs=TypeB),
-            Node.scripted("c", fn="pn_c1", inputs={"b": TypeB}, outputs=TypeC_V1),
-            Node.scripted("d", fn="pn_d", inputs={"c": TypeC_V1}, outputs=TypeD),
-        ])
+        pipe_v1 = Construct(
+            "pn-pipe",
+            nodes=[
+                Node.scripted("a", fn="pn_a", outputs=TypeA),
+                Node.scripted("b", fn="pn_b", inputs={"a": TypeA}, outputs=TypeB),
+                Node.scripted("c", fn="pn_c1", inputs={"b": TypeB}, outputs=TypeC_V1),
+                Node.scripted("d", fn="pn_d", inputs={"c": TypeC_V1}, outputs=TypeD),
+            ],
+        )
         graph_v1 = compile(pipe_v1, checkpointer=checkpointer, **build_test_compile_kwargs())
         run(graph_v1, input={"node_id": "test"}, config=config)
         assert exec_log == ["a", "b", "c", "d"]
 
         # Run 2: change C's output type
         exec_log.clear()
-        pipe_v2 = Construct("pn-pipe", nodes=[
-            Node.scripted("a", fn="pn_a", outputs=TypeA),
-            Node.scripted("b", fn="pn_b", inputs={"a": TypeA}, outputs=TypeB),
-            Node.scripted("c", fn="pn_c2", inputs={"b": TypeB}, outputs=TypeC_V2),
-            Node.scripted("d", fn="pn_d", inputs={"c": TypeC_V2}, outputs=TypeD),
-        ])
+        pipe_v2 = Construct(
+            "pn-pipe",
+            nodes=[
+                Node.scripted("a", fn="pn_a", outputs=TypeA),
+                Node.scripted("b", fn="pn_b", inputs={"a": TypeA}, outputs=TypeB),
+                Node.scripted("c", fn="pn_c2", inputs={"b": TypeB}, outputs=TypeC_V2),
+                Node.scripted("d", fn="pn_d", inputs={"c": TypeC_V2}, outputs=TypeD),
+            ],
+        )
         graph_v2 = compile(pipe_v2, checkpointer=checkpointer, **build_test_compile_kwargs())
 
         # Should raise with invalidated_nodes containing C and D
@@ -1218,24 +1268,30 @@ class TestAutoResumeFromSchemaDivergence:
         config = {"configurable": {"thread_id": "auto-resume-1"}}
 
         # Run 1: full pipeline
-        pipe_v1 = Construct("ar-pipe", nodes=[
-            Node.scripted("a", fn="ar_a", outputs=TypeA),
-            Node.scripted("b", fn="ar_b", inputs={"a": TypeA}, outputs=TypeB),
-            Node.scripted("c", fn="ar_c1", inputs={"b": TypeB}, outputs=TypeC_V1),
-            Node.scripted("d", fn="ar_d", inputs={"c": TypeC_V1}, outputs=TypeD),
-        ])
+        pipe_v1 = Construct(
+            "ar-pipe",
+            nodes=[
+                Node.scripted("a", fn="ar_a", outputs=TypeA),
+                Node.scripted("b", fn="ar_b", inputs={"a": TypeA}, outputs=TypeB),
+                Node.scripted("c", fn="ar_c1", inputs={"b": TypeB}, outputs=TypeC_V1),
+                Node.scripted("d", fn="ar_d", inputs={"c": TypeC_V1}, outputs=TypeD),
+            ],
+        )
         graph_v1 = compile(pipe_v1, checkpointer=checkpointer, **build_test_compile_kwargs())
         run(graph_v1, input={"node_id": "test"}, config=config)
         assert exec_log == ["a", "b", "c", "d"]
 
         # Run 2: change C, auto_resume=True
         exec_log.clear()
-        pipe_v2 = Construct("ar-pipe", nodes=[
-            Node.scripted("a", fn="ar_a", outputs=TypeA),
-            Node.scripted("b", fn="ar_b", inputs={"a": TypeA}, outputs=TypeB),
-            Node.scripted("c", fn="ar_c2", inputs={"b": TypeB}, outputs=TypeC_V2),
-            Node.scripted("d", fn="ar_d", inputs={"c": TypeC_V2}, outputs=TypeD),
-        ])
+        pipe_v2 = Construct(
+            "ar-pipe",
+            nodes=[
+                Node.scripted("a", fn="ar_a", outputs=TypeA),
+                Node.scripted("b", fn="ar_b", inputs={"a": TypeA}, outputs=TypeB),
+                Node.scripted("c", fn="ar_c2", inputs={"b": TypeB}, outputs=TypeC_V2),
+                Node.scripted("d", fn="ar_d", inputs={"c": TypeC_V2}, outputs=TypeD),
+            ],
+        )
         graph_v2 = compile(pipe_v2, checkpointer=checkpointer, **build_test_compile_kwargs())
         result = run(graph_v2, input={"node_id": "test"}, config=config, auto_resume=True)
 
@@ -1286,6 +1342,7 @@ class TestAutoResumeFromSchemaDivergence:
             val: str = "ok"
 
         call_count = [0]
+
         def counting(_i, _c):
             call_count[0] += 1
             return Stable()
@@ -1334,29 +1391,33 @@ class TestAutoResumeFromSchemaDivergence:
         checkpointer = MemorySaver()
         config = {"configurable": {"thread_id": "auto-resume-4"}}
 
-        pipe_v1 = Construct("lc-pipe", nodes=[
-            Node.scripted("a", fn="lc_a", outputs=TypeA),
-            Node.scripted("b", fn="lc_b", inputs={"a": TypeA}, outputs=TypeB),
-            Node.scripted("c", fn="lc_c1", inputs={"b": TypeB}, outputs=TypeC_V1),
-        ])
+        pipe_v1 = Construct(
+            "lc-pipe",
+            nodes=[
+                Node.scripted("a", fn="lc_a", outputs=TypeA),
+                Node.scripted("b", fn="lc_b", inputs={"a": TypeA}, outputs=TypeB),
+                Node.scripted("c", fn="lc_c1", inputs={"b": TypeB}, outputs=TypeC_V1),
+            ],
+        )
         graph_v1 = compile(pipe_v1, checkpointer=checkpointer, **build_test_compile_kwargs())
         run(graph_v1, input={"node_id": "test"}, config=config)
         assert exec_log == ["a", "b", "c"]
 
         exec_log.clear()
-        pipe_v2 = Construct("lc-pipe", nodes=[
-            Node.scripted("a", fn="lc_a", outputs=TypeA),
-            Node.scripted("b", fn="lc_b", inputs={"a": TypeA}, outputs=TypeB),
-            Node.scripted("c", fn="lc_c2", inputs={"b": TypeB}, outputs=TypeC_V2),
-        ])
+        pipe_v2 = Construct(
+            "lc-pipe",
+            nodes=[
+                Node.scripted("a", fn="lc_a", outputs=TypeA),
+                Node.scripted("b", fn="lc_b", inputs={"a": TypeA}, outputs=TypeB),
+                Node.scripted("c", fn="lc_c2", inputs={"b": TypeB}, outputs=TypeC_V2),
+            ],
+        )
         graph_v2 = compile(pipe_v2, checkpointer=checkpointer, **build_test_compile_kwargs())
         result = run(graph_v2, input={"node_id": "test"}, config=config, auto_resume=True)
 
         assert "a" not in exec_log
         assert "b" not in exec_log
         assert "c" in exec_log
-
-
 
 
 class TestNodeOutputContract:
@@ -1375,10 +1436,13 @@ class TestNodeOutputContract:
         register_scripted("seed_rt", lambda i, c: RawText(text="x"))
         register_scripted("none_gen", lambda i, c: None)
 
-        pipeline = Construct("none-contract", nodes=[
-            Node.scripted("seed", fn="seed_rt", outputs=RawText),
-            Node.scripted("hypothesize", fn="none_gen", inputs=RawText, outputs=Claims),
-        ])
+        pipeline = Construct(
+            "none-contract",
+            nodes=[
+                Node.scripted("seed", fn="seed_rt", outputs=RawText),
+                Node.scripted("hypothesize", fn="none_gen", inputs=RawText, outputs=Claims),
+            ],
+        )
         graph = compile(pipeline, **build_test_compile_kwargs())
 
         with pytest.raises(NodeOutputError) as ei:
@@ -1395,10 +1459,13 @@ class TestNodeOutputContract:
         register_scripted("seed_rt2", lambda i, c: RawText(text="x"))
         register_scripted("ok_gen", lambda i, c: Claims(items=["a"]))
 
-        pipeline = Construct("ok-contract", nodes=[
-            Node.scripted("seed", fn="seed_rt2", outputs=RawText),
-            Node.scripted("gen", fn="ok_gen", inputs=RawText, outputs=Claims),
-        ])
+        pipeline = Construct(
+            "ok-contract",
+            nodes=[
+                Node.scripted("seed", fn="seed_rt2", outputs=RawText),
+                Node.scripted("gen", fn="ok_gen", inputs=RawText, outputs=Claims),
+            ],
+        )
         graph = compile(pipeline, **build_test_compile_kwargs())
 
         result = run(graph, input={"node_id": "test-001"})
@@ -1449,7 +1516,8 @@ class TestNodeOutputContract:
         from neograph.naming import field_name_for
 
         node = Node.scripted(
-            "multi", fn="f",
+            "multi",
+            fn="f",
             outputs={"result": Claims, "meta": RawText},
         )
         with pytest.raises(NodeOutputError) as ei:
@@ -1466,12 +1534,15 @@ class TestNodeOutputContract:
         from neograph.naming import field_name_for
 
         node = Node.scripted(
-            "multi2", fn="f",
+            "multi2",
+            fn="f",
             outputs={"result": Claims, "meta": RawText},
         )
         update = _build_state_update(
-            node, field_name_for("multi2"),
-            {"result": Claims(items=["ok"]), "meta": None}, None,
+            node,
+            field_name_for("multi2"),
+            {"result": Claims(items=["ok"]), "meta": None},
+            None,
         )
         assert update["multi2_result"] == Claims(items=["ok"])
         assert "multi2_meta" not in update
@@ -1508,18 +1579,29 @@ class TestNodeOutputContract:
         assert "gen_b" in str(ei_b.value) and "Claims" in str(ei_b.value)
 
         # Surface C — programmatic Node() | Each (fan-out node returning None).
-        register_scripted("seed_list", lambda i, c: Clusters(groups=[
-            ClusterGroup(label="a", claim_ids=["1"]),
-        ]))
+        register_scripted(
+            "seed_list",
+            lambda i, c: Clusters(
+                groups=[
+                    ClusterGroup(label="a", claim_ids=["1"]),
+                ]
+            ),
+        )
         register_scripted("none_c", lambda i, c: None)
         each_node = Node.scripted(
-            "gen_c", fn="none_c", inputs=ClusterGroup, outputs=Claims,
+            "gen_c",
+            fn="none_c",
+            inputs=ClusterGroup,
+            outputs=Claims,
         ) | Each(over="seed.groups", key="label")
         graph_c = compile(
-            Construct("sc", nodes=[
-                Node.scripted("seed", fn="seed_list", outputs=Clusters),
-                each_node,
-            ]),
+            Construct(
+                "sc",
+                nodes=[
+                    Node.scripted("seed", fn="seed_list", outputs=Clusters),
+                    each_node,
+                ],
+            ),
             **build_test_compile_kwargs(),
         )
         with pytest.raises(NodeOutputError) as ei_c:

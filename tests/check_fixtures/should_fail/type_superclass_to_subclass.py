@@ -10,13 +10,18 @@ from tests.fakes import register_scripted
 class TypeA(BaseModel, frozen=True):
     x: str
 
+
 class TypeB(TypeA, frozen=True):
     y: int = 0
+
 
 register_scripted("super_a", lambda i, c: TypeA(x="hello"))
 register_scripted("super_b", lambda i, c: TypeB(x="ok", y=1))
 
-pipeline = Construct("broken", nodes=[
-    Node.scripted("first", fn="super_a", outputs=TypeA),
-    Node.scripted("second", fn="super_b", inputs=TypeB, outputs=TypeB),
-])
+pipeline = Construct(
+    "broken",
+    nodes=[
+        Node.scripted("first", fn="super_a", outputs=TypeA),
+        Node.scripted("second", fn="super_b", inputs=TypeB, outputs=TypeB),
+    ],
+)

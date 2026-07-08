@@ -18,7 +18,11 @@ from neograph.node import Node, TypeSpecStatic
 
 
 def _raise_none_output(
-    node: Node, declared: TypeSpecStatic, field: str, *, key: str | None = None,
+    node: Node,
+    declared: TypeSpecStatic,
+    field: str,
+    *,
+    key: str | None = None,
 ) -> None:
     """Fail loud when a node RAN and produced None against its declared output.
 
@@ -35,8 +39,8 @@ def _raise_none_output(
         node=node.name,
         location=f"state field '{field}'",
         hint="A node that runs must return a value of its declared outputs= type. "
-             "For a node that may legitimately produce nothing, use skip_when / an "
-             "untaken branch arm (never-ran fields stay absent) rather than returning None.",
+        "For a node that may legitimately produce nothing, use skip_when / an "
+        "untaken branch arm (never-ran fields stay absent) rather than returning None.",
     )
 
 
@@ -77,7 +81,14 @@ def _build_state_update(
             each_mod = mods["each"]
         case ModifierCombo.EACH_ORACLE | ModifierCombo.EACH_ORACLE_OPERATOR:
             each_mod = None  # fusion handles tagging
-        case ModifierCombo.BARE | ModifierCombo.OPERATOR | ModifierCombo.ORACLE | ModifierCombo.ORACLE_OPERATOR | ModifierCombo.LOOP | ModifierCombo.LOOP_OPERATOR:
+        case (
+            ModifierCombo.BARE
+            | ModifierCombo.OPERATOR
+            | ModifierCombo.ORACLE
+            | ModifierCombo.ORACLE_OPERATOR
+            | ModifierCombo.LOOP
+            | ModifierCombo.LOOP_OPERATOR
+        ):
             each_mod = None
         case _ as unreachable:
             assert_never(unreachable)
@@ -97,7 +108,10 @@ def _build_state_update(
                     # Primary key None is the dict-form equivalent of the
                     # single-type contract violation — fail loud.
                     _raise_none_output(
-                        node, no.primary, output_field_name(field_name, key), key=key,
+                        node,
+                        no.primary,
+                        output_field_name(field_name, key),
+                        key=key,
                     )
                 # Secondary keys (framework-collected, e.g. tool_log) are
                 # demand-driven and legitimately absent — stay tolerant.

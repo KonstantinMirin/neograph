@@ -157,11 +157,15 @@ def compile(
     # Explicit tool_factories= (merged above) win; bound tools fill the gaps.
     register_bound_tool_factories(construct, tool_factory_lookup)
 
-    compile_log.info("compile_start",
-                     node_names=[n.name for n in construct.nodes],
-                     modifiers={n.name: n.modifier_set.combo.name
-                                for n in construct.nodes
-                                if isinstance(n, Node) and n.modifier_set.combo.name != "BARE"})
+    compile_log.info(
+        "compile_start",
+        node_names=[n.name for n in construct.nodes],
+        modifiers={
+            n.name: n.modifier_set.combo.name
+            for n in construct.nodes
+            if isinstance(n, Node) and n.modifier_set.combo.name != "BARE"
+        },
+    )
 
     # Validate: Operator string conditions are registered.
     # Check BEFORE the checkpointer guard so the real error isn't masked.
@@ -176,15 +180,13 @@ def compile(
                 if op.when not in condition_lookup:
                     raise ConfigurationError.build(
                         f"Condition '{op.when}' not registered",
-                        hint=(
-                            "Pass conditions={'" + op.when + "': fn} to compile() "
-                            "to register the condition."
-                        ),
+                        hint=("Pass conditions={'" + op.when + "': fn} to compile() to register the condition."),
                     )
 
     # Validate: Operator requires checkpointer
     has_operator = any(
-        "operator" in classify_modifiers(item)[1] for item in iter_with_arms(construct)
+        "operator" in classify_modifiers(item)[1]
+        for item in iter_with_arms(construct)
         if isinstance(item, (Node, Construct))
     )
     if has_operator and checkpointer is None:
@@ -239,12 +241,39 @@ def compile(
 
     for item in construct.nodes:
         if isinstance(item, _BranchNode):
-            prev_node = _add_branch_to_graph(graph, item, prev_node, checkpointer=checkpointer, runtime=runtime, scripted_lookup=scripted_lookup, condition_lookup=condition_lookup, tool_factory_lookup=tool_factory_lookup)
+            prev_node = _add_branch_to_graph(
+                graph,
+                item,
+                prev_node,
+                checkpointer=checkpointer,
+                runtime=runtime,
+                scripted_lookup=scripted_lookup,
+                condition_lookup=condition_lookup,
+                tool_factory_lookup=tool_factory_lookup,
+            )
         elif isinstance(item, Construct):
-            prev_node = _add_subgraph(graph, item, prev_node, checkpointer=checkpointer, parent_state_model=state_model, runtime=runtime, scripted_lookup=scripted_lookup, condition_lookup=condition_lookup, tool_factory_lookup=tool_factory_lookup)
+            prev_node = _add_subgraph(
+                graph,
+                item,
+                prev_node,
+                checkpointer=checkpointer,
+                parent_state_model=state_model,
+                runtime=runtime,
+                scripted_lookup=scripted_lookup,
+                condition_lookup=condition_lookup,
+                tool_factory_lookup=tool_factory_lookup,
+            )
         else:
             assert isinstance(item, Node)  # narrow ConstructItem Protocol to Node
-            prev_node = _add_node_to_graph(graph, item, prev_node, runtime=runtime, scripted_lookup=scripted_lookup, condition_lookup=condition_lookup, tool_factory_lookup=tool_factory_lookup)
+            prev_node = _add_node_to_graph(
+                graph,
+                item,
+                prev_node,
+                runtime=runtime,
+                scripted_lookup=scripted_lookup,
+                condition_lookup=condition_lookup,
+                tool_factory_lookup=tool_factory_lookup,
+            )
 
     # Final edge to END
     if prev_node:
@@ -354,6 +383,7 @@ def describe_graph(compiled: Any) -> str:
 def _print_dag_summary(compiled: Any, construct: Any) -> None:
     """Print a human-readable DAG summary to stderr in dev mode."""
     import sys
+
     try:
         lg_graph = compiled.get_graph()
     except (AttributeError, TypeError, ValueError):
@@ -451,12 +481,20 @@ def _add_subgraph(
             oracle = mods["oracle"]
             collector_field = StateKeys.oracle_collector(field_name)
             redirect_fn = make_oracle_redirect_fn(
-                subgraph_fn, field_name, collector_field, item=sub,
+                subgraph_fn,
+                field_name,
+                collector_field,
+                item=sub,
             )
-            merge_fn = make_oracle_merge_fn(oracle, field_name, collector_field, sub.output,
-                                               llm_config=sub.llm_config or None,
-                                               runtime=runtime,
-                                               scripted_lookup=scripted_lookup)
+            merge_fn = make_oracle_merge_fn(
+                oracle,
+                field_name,
+                collector_field,
+                sub.output,
+                llm_config=sub.llm_config or None,
+                runtime=runtime,
+                scripted_lookup=scripted_lookup,
+            )
             last_name = _wire_oracle(graph, sub.name, redirect_fn, merge_fn, oracle, prev_node)
         case ModifierCombo.EACH | ModifierCombo.EACH_OPERATOR:
             each = mods["each"]
@@ -510,24 +548,67 @@ def _add_node_to_graph(
     match combo:
         case ModifierCombo.EACH_ORACLE | ModifierCombo.EACH_ORACLE_OPERATOR:
             # Each x Oracle fusion: flat M x N Send topology
-            last_name = _add_each_oracle_fused(graph, node, mods["each"], mods["oracle"], prev_node, runtime=runtime, scripted_lookup=scripted_lookup, tool_factory_lookup=tool_factory_lookup)
+            last_name = _add_each_oracle_fused(
+                graph,
+                node,
+                mods["each"],
+                mods["oracle"],
+                prev_node,
+                runtime=runtime,
+                scripted_lookup=scripted_lookup,
+                tool_factory_lookup=tool_factory_lookup,
+            )
         case ModifierCombo.ORACLE | ModifierCombo.ORACLE_OPERATOR:
             # Oracle: expand to fan-out + merge
-            last_name = _add_oracle_nodes(graph, node, mods["oracle"], prev_node, runtime=runtime, scripted_lookup=scripted_lookup, tool_factory_lookup=tool_factory_lookup)
+            last_name = _add_oracle_nodes(
+                graph,
+                node,
+                mods["oracle"],
+                prev_node,
+                runtime=runtime,
+                scripted_lookup=scripted_lookup,
+                tool_factory_lookup=tool_factory_lookup,
+            )
         case ModifierCombo.EACH | ModifierCombo.EACH_OPERATOR:
             # Each: expand to fan-out + barrier
-            last_name = _add_each_nodes(graph, node, mods["each"], prev_node, runtime=runtime, scripted_lookup=scripted_lookup, tool_factory_lookup=tool_factory_lookup)
+            last_name = _add_each_nodes(
+                graph,
+                node,
+                mods["each"],
+                prev_node,
+                runtime=runtime,
+                scripted_lookup=scripted_lookup,
+                tool_factory_lookup=tool_factory_lookup,
+            )
         case ModifierCombo.LOOP | ModifierCombo.LOOP_OPERATOR:
             # Loop: conditional back-edge
-            last_name = _add_loop_back_edge(graph, node, mods["loop"], prev_node, runtime=runtime, scripted_lookup=scripted_lookup, condition_lookup=condition_lookup, tool_factory_lookup=tool_factory_lookup)
+            last_name = _add_loop_back_edge(
+                graph,
+                node,
+                mods["loop"],
+                prev_node,
+                runtime=runtime,
+                scripted_lookup=scripted_lookup,
+                condition_lookup=condition_lookup,
+                tool_factory_lookup=tool_factory_lookup,
+            )
         case ModifierCombo.BARE | ModifierCombo.OPERATOR:
             if node.mode in ("agent", "act"):
                 # Agent/act: inline ReAct cycle (agent/tools/parse + conditional router).
-                last_name = _add_agent_cycle(graph, node, prev_node, runtime=runtime, tool_factory_lookup=tool_factory_lookup, condition_lookup=condition_lookup)
+                last_name = _add_agent_cycle(
+                    graph,
+                    node,
+                    prev_node,
+                    runtime=runtime,
+                    tool_factory_lookup=tool_factory_lookup,
+                    condition_lookup=condition_lookup,
+                )
             else:
                 # Simple node — no modifiers (or Operator only)
                 node_name = node.name
-                node_fn = make_node_fn(node, runtime=runtime, scripted_lookup=scripted_lookup, tool_factory_lookup=tool_factory_lookup)
+                node_fn = make_node_fn(
+                    node, runtime=runtime, scripted_lookup=scripted_lookup, tool_factory_lookup=tool_factory_lookup
+                )
                 graph.add_node(node_name, node_fn)
                 if prev_node:
                     graph.add_edge(prev_node, node_name)
@@ -558,15 +639,25 @@ def _add_oracle_nodes(
     field_name = field_name_for(node.name)
     collector_field = StateKeys.oracle_collector(field_name)
 
-    raw_fn = make_node_fn(node, runtime=runtime, scripted_lookup=scripted_lookup, tool_factory_lookup=tool_factory_lookup)
-    redirect_fn = make_oracle_redirect_fn(
-        raw_fn, field_name, collector_field, item=node,
+    raw_fn = make_node_fn(
+        node, runtime=runtime, scripted_lookup=scripted_lookup, tool_factory_lookup=tool_factory_lookup
     )
-    merge_fn = make_oracle_merge_fn(oracle, field_name, collector_field, node.outputs,
-                                    node_inputs=node.inputs,
-                                    llm_config=node.llm_config or None,
-                                    runtime=runtime,
-                                    scripted_lookup=scripted_lookup)
+    redirect_fn = make_oracle_redirect_fn(
+        raw_fn,
+        field_name,
+        collector_field,
+        item=node,
+    )
+    merge_fn = make_oracle_merge_fn(
+        oracle,
+        field_name,
+        collector_field,
+        node.outputs,
+        node_inputs=node.inputs,
+        llm_config=node.llm_config or None,
+        runtime=runtime,
+        scripted_lookup=scripted_lookup,
+    )
 
     return _wire_oracle(graph, node.name, redirect_fn, merge_fn, oracle, prev_node)
 
@@ -582,5 +673,7 @@ def _add_each_nodes(
     tool_factory_lookup: dict[str, Callable] | None = None,
 ) -> str:
     """Expand Each modifier into fan-out dispatch + barrier."""
-    node_fn = make_node_fn(node, runtime=runtime, scripted_lookup=scripted_lookup, tool_factory_lookup=tool_factory_lookup)
+    node_fn = make_node_fn(
+        node, runtime=runtime, scripted_lookup=scripted_lookup, tool_factory_lookup=tool_factory_lookup
+    )
     return _wire_each(graph, node.name, node_fn, each, prev_node)

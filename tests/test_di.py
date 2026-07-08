@@ -38,9 +38,13 @@ class TestDIKind:
         from neograph.di import DIKind
 
         expected = {
-            "from_input", "from_config",
-            "from_input_model", "from_config_model",
-            "from_state", "constant", "from_resource",
+            "from_input",
+            "from_config",
+            "from_input_model",
+            "from_config_model",
+            "from_state",
+            "constant",
+            "from_resource",
         }
         assert {k.value for k in DIKind} == expected
 
@@ -335,26 +339,33 @@ class TestDIBindingTypedFields:
         import dataclasses
 
         from neograph.di import DIBinding
+
         field_names = {f.name for f in dataclasses.fields(DIBinding)}
-        assert "payload" not in field_names, (
-            "DIBinding still has 'payload' — should be replaced with typed fields"
-        )
+        assert "payload" not in field_names, "DIBinding still has 'payload' — should be replaced with typed fields"
 
     def test_constant_uses_default_value_field(self):
         """CONSTANT kind stores value in default_value, not payload."""
         from neograph.di import DIBinding, DIKind
+
         b = DIBinding(
-            name="max_items", kind=DIKind.CONSTANT,
-            inner_type=int, required=False, default_value=10,
+            name="max_items",
+            kind=DIKind.CONSTANT,
+            inner_type=int,
+            required=False,
+            default_value=10,
         )
         assert b.resolve({}) == 10
 
     def test_model_uses_model_cls_field(self):
         """MODEL kind stores model class in model_cls, not payload[0]."""
         from neograph.di import DIBinding, DIKind
+
         b = DIBinding(
-            name="ctx", kind=DIKind.FROM_INPUT_MODEL,
-            inner_type=RunCtx, required=False, model_cls=RunCtx,
+            name="ctx",
+            kind=DIKind.FROM_INPUT_MODEL,
+            inner_type=RunCtx,
+            required=False,
+            model_cls=RunCtx,
         )
         config = {"configurable": {"node_id": "n1", "project_root": "/p"}}
         result = b.resolve(config)
@@ -363,9 +374,12 @@ class TestDIBindingTypedFields:
     def test_from_input_no_extra_fields_needed(self):
         """FROM_INPUT needs only name, kind, inner_type, required."""
         from neograph.di import DIBinding, DIKind
+
         b = DIBinding(
-            name="topic", kind=DIKind.FROM_INPUT,
-            inner_type=str, required=True,
+            name="topic",
+            kind=DIKind.FROM_INPUT,
+            inner_type=str,
+            required=True,
         )
         config = {"configurable": {"topic": "test"}}
         assert b.resolve(config) == "test"
@@ -373,9 +387,12 @@ class TestDIBindingTypedFields:
     def test_from_state_no_extra_fields_needed(self):
         """FROM_STATE uses inner_type for unwrap, no extra payload."""
         from neograph.di import DIBinding, DIKind
+
         b = DIBinding(
-            name="field", kind=DIKind.FROM_STATE,
-            inner_type=str, required=False,
+            name="field",
+            kind=DIKind.FROM_STATE,
+            inner_type=str,
+            required=False,
         )
         state = SimpleNamespace(field="hello")
         assert b.resolve({}, state=state) == "hello"
@@ -395,6 +412,7 @@ def _make_fetcher(content, mime):
 
     async def _fetch(uri: str):
         import asyncio as _a
+
         await _a.sleep(0)
         return content, mime
 
@@ -411,9 +429,10 @@ class TestFromResourceClassification:
         from neograph._di_classify import FromResource, _classify_di_params
         from neograph.di import DIKind
 
-        def f(doc: Annotated[Doc, FromResource('crm://deals/42/contract')]): ...
+        def f(doc: Annotated[Doc, FromResource("crm://deals/42/contract")]): ...
 
         from typing import Annotated  # noqa: F401 — used by the string annotation
+
         sig = inspect.signature(f)
         param_res = _classify_di_params(f, sig, caller_ns=locals())
 
@@ -431,9 +450,10 @@ class TestFromResourceClassification:
         def myparse(content, mime):
             return content
 
-        def f(hist: Annotated[str, FromResource('crm://x', mime='text', parse=myparse)]): ...
+        def f(hist: Annotated[str, FromResource("crm://x", mime="text", parse=myparse)]): ...
 
         from typing import Annotated  # noqa: F401
+
         sig = inspect.signature(f)
         param_res = _classify_di_params(f, sig, caller_ns={**locals(), "myparse": myparse})
 
@@ -449,8 +469,13 @@ class TestFromResourceResolve:
         from neograph.di import DIBinding, DIKind
 
         return DIBinding(
-            name="doc", kind=DIKind.FROM_RESOURCE, inner_type=inner_type,
-            required=True, uri=uri, parse_fn=parse_fn, resource_mime=resource_mime,
+            name="doc",
+            kind=DIKind.FROM_RESOURCE,
+            inner_type=inner_type,
+            required=True,
+            uri=uri,
+            parse_fn=parse_fn,
+            resource_mime=resource_mime,
         )
 
     def test_sync_resolve_fails_loud_with_configuration_error(self):
@@ -540,21 +565,29 @@ class TestManifestPathNamesHydratingNode:
             raise RuntimeError("link expired")
 
         ref = ResourceRef(
-            uri="crm://deals/42/emails", kind="email-history", server="crm",
+            uri="crm://deals/42/emails",
+            kind="email-history",
+            server="crm",
             producing_call=ProducingCall(
-                tool_name="list_emails", args={"deal_id": 42},
+                tool_name="list_emails",
+                args={"deal_id": 42},
                 producer_idempotent=True,
             ),
         )
         binding = DIBinding(
-            name="doc", kind=DIKind.FROM_RESOURCE, inner_type=Doc, required=True,
+            name="doc",
+            kind=DIKind.FROM_RESOURCE,
+            inner_type=Doc,
+            required=True,
             ref_kind="email-history",
         )
         # No replayer configured -> read-fail falls through to fail-loud.
-        config = {"configurable": {
-            "mcp_resource_fetcher": _failing_fetch,
-            StateKeys.RESOURCE_MANIFEST_INJECT: [ref],
-        }}
+        config = {
+            "configurable": {
+                "mcp_resource_fetcher": _failing_fetch,
+                StateKeys.RESOURCE_MANIFEST_INJECT: [ref],
+            }
+        }
 
         with pytest.raises(ResourceExpiredError, match="doc") as ei:
             asyncio.run(binding.aresolve(config))

@@ -1,7 +1,16 @@
 # CHECK_ERROR: tool 'ghost_tool' has no registered factory
 from neograph import Construct, Node, Tool
 
-pipeline = Construct("broken", nodes=[
-    Node(name="search", mode="agent", outputs=None, model="fast",
-         prompt="test", tools=[Tool(name="ghost_tool", budget=1)]),
-])
+pipeline = Construct(
+    "broken",
+    nodes=[
+        Node(
+            name="search",
+            mode="agent",
+            outputs=None,
+            model="fast",
+            prompt="test",
+            tools=[Tool(name="ghost_tool", budget=1)],
+        ),
+    ],
+)

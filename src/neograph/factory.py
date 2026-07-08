@@ -117,7 +117,7 @@ def _make_raw_wrapper(node: Node) -> Callable:
                 "async node body invoked under sync run(); use arun()",
                 node=node.name,
                 hint="An `async def` raw body requires the async driver. "
-                     "Call arun(graph, ...) / graph.ainvoke instead of run() / graph.invoke.",
+                "Call arun(graph, ...) / graph.ainvoke instead of run() / graph.invoke.",
             )
 
         elapsed = time.monotonic() - t0

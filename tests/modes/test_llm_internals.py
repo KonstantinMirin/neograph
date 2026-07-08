@@ -105,8 +105,6 @@ class TestNodeContext:
             captured[template] = kw
             return [{"role": "user", "content": "test"}]
 
-
-
         mod = types.ModuleType("test_no_ctx_mod")
 
         @node(outputs=Claims, mode="think", model="fast", prompt="no-context")
@@ -114,7 +112,12 @@ class TestNodeContext:
 
         mod.simple = simple
         pipeline = construct_from_module(mod)
-        graph = compile(pipeline, llm_factory=lambda tier: StructuredFake(lambda m: m(items=["x"])), prompt_compiler=capturing_compiler, **build_test_compile_kwargs())
+        graph = compile(
+            pipeline,
+            llm_factory=lambda tier: StructuredFake(lambda m: m(items=["x"])),
+            prompt_compiler=capturing_compiler,
+            **build_test_compile_kwargs(),
+        )
         run(graph, input={})
 
         assert "no-context" in captured
@@ -132,7 +135,6 @@ class TestNodeContext:
         def capturing_compiler(template, data, **kw):
             captured[template] = {"data": data, "kw": kw}
             return [{"role": "user", "content": "test"}]
-
 
         register_tool_factory("ctx_tool", lambda cfg, tc: FakeTool("ctx_tool", response="ok"))
 
@@ -155,10 +157,15 @@ class TestNodeContext:
         mod.catalog = catalog
         mod.explore = explore
         pipeline = construct_from_module(mod)
-        graph = compile(pipeline, llm_factory=lambda tier: ReActFake(
+        graph = compile(
+            pipeline,
+            llm_factory=lambda tier: ReActFake(
                 tool_calls=[[{"name": "ctx_tool", "args": {}, "id": "t1"}], []],
                 final=lambda m: m(items=["found"]),
-            ), prompt_compiler=capturing_compiler, **build_test_compile_kwargs())
+            ),
+            prompt_compiler=capturing_compiler,
+            **build_test_compile_kwargs(),
+        )
         run(graph, input={})
 
         assert "agent-with-ctx" in captured
@@ -693,6 +700,7 @@ class TestRetryPromptIncludesSchema:
         import inspect
 
         from neograph._llm_retry import _invoke_json_with_retry
+
         sig = inspect.signature(_invoke_json_with_retry)
         assert sig.parameters["max_retries"].default == 2
 
@@ -870,7 +878,6 @@ class TestR1XmlAfterBudgetExhaustion:
                 # After budget exhaustion: XML instead of JSON
                 return AIMessage(content=XML_CONTENT)
 
-
         node = Node(
             name="research",
             mode="agent",
@@ -881,7 +888,12 @@ class TestR1XmlAfterBudgetExhaustion:
             llm_config={"output_strategy": "json_mode"},
         )
         pipeline = Construct("test-r1-xml", nodes=[node])
-        graph = compile(pipeline, llm_factory=lambda tier: FakeR1(), prompt_compiler=lambda template, data, **kw: [{"role": "user", "content": "go"}], **build_test_compile_kwargs())
+        graph = compile(
+            pipeline,
+            llm_factory=lambda tier: FakeR1(),
+            prompt_compiler=lambda template, data, **kw: [{"role": "user", "content": "go"}],
+            **build_test_compile_kwargs(),
+        )
 
         # Should raise ExecutionError (clear message), not ValidationError (cryptic)
         with pytest.raises(ExecutionError, match="(?i)structured output|json|xml"):
@@ -1052,10 +1064,10 @@ class TestTruncatedArraySilentEmpty:
         class Result(BaseModel):
             items: list[Item] = Field(default_factory=list)
 
-        truncated = '''[
+        truncated = """[
   {"id": "A", "value": "alpha"},
   {"id": "B", "value": "beta"},
-  {"id": "C", "value": "gam'''
+  {"id": "C", "value": "gam"""
 
         # This MUST either raise ExecutionError (triggering retry) or
         # return a Result with items populated. It must NOT silently
@@ -1096,9 +1108,11 @@ class TestToolCallArgsCoercion:
 
         def search_factory(config, tool_config):
             from langchain_core.tools import StructuredTool
+
             def search_fn(q: str) -> str:
                 tool_invoked.append(q)
                 return f"result for {q}"
+
             return StructuredTool.from_function(search_fn, name="search", description="search")
 
         register_tool_factory("search", search_factory)
@@ -1110,7 +1124,6 @@ class TestToolCallArgsCoercion:
             ],
             final=lambda m: m(answer="done"),
         )
-
 
         from pydantic import BaseModel as _BM
 
@@ -1153,9 +1166,11 @@ class TestToolCallArgsCoercion:
 
         def lookup_factory(config, tool_config):
             from langchain_core.tools import StructuredTool
+
             def lookup_fn(node_id: str) -> str:
                 tool_calls_received.append(node_id)
                 return f"found {node_id}"
+
             return StructuredTool.from_function(lookup_fn, name="lookup", description="lookup")
 
         register_tool_factory("lookup", lookup_factory)
@@ -1171,7 +1186,6 @@ class TestToolCallArgsCoercion:
             always_fail=True,
         )
 
-
         class Answer(_BM):
             answer: str
 
@@ -1186,7 +1200,9 @@ class TestToolCallArgsCoercion:
             config={"configurable": {}},
             tools=tools,
             budget_tracker=budget,
-         runtime=build_fake_runtime(lambda tier: fake), tool_factory_lookup=build_fake_tool_lookup())
+            runtime=build_fake_runtime(lambda tier: fake),
+            tool_factory_lookup=build_fake_tool_lookup(),
+        )
 
         assert parsed.answer == "analyzed"
         assert tool_calls_received == ["BR-UC-008", "FLOW-006"]
@@ -1202,12 +1218,14 @@ class TestToolCallArgsCoercion:
                 # Raise ValidationError for a completely different field
                 raise ValidationError.from_exception_data(
                     title="AIMessage",
-                    line_errors=[{
-                        "type": "string_type",
-                        "loc": ("content",),
-                        "msg": "Input should be a valid string",
-                        "input": 12345,
-                    }],
+                    line_errors=[
+                        {
+                            "type": "string_type",
+                            "loc": ("content",),
+                            "msg": "Input should be a valid string",
+                            "input": 12345,
+                        }
+                    ],
                 )
 
         wrapper = _CoercingToolWrapper(BadLLM())
@@ -1227,9 +1245,11 @@ class TestToolCallArgsCoercion:
 
         def multi_factory(config, tool_config):
             from langchain_core.tools import StructuredTool
+
             def fn(q: str) -> str:
                 args_received.append(q)
                 return f"result for {q}"
+
             return StructuredTool.from_function(fn, name="multi", description="multi")
 
         register_tool_factory("multi", multi_factory)
@@ -1246,7 +1266,6 @@ class TestToolCallArgsCoercion:
             always_fail=True,
         )
 
-
         class Answer(_BM):
             answer: str
 
@@ -1254,10 +1273,16 @@ class TestToolCallArgsCoercion:
         budget = ToolBudgetTracker(tools)
 
         parsed, _ = invoke_with_tools(
-            model_tier="fast", prompt_template="test", input_data={},
-            output_model=Answer, config={"configurable": {}},
-            tools=tools, budget_tracker=budget,
-         runtime=build_fake_runtime(lambda tier: fake), tool_factory_lookup=build_fake_tool_lookup())
+            model_tier="fast",
+            prompt_template="test",
+            input_data={},
+            output_model=Answer,
+            config={"configurable": {}},
+            tools=tools,
+            budget_tracker=budget,
+            runtime=build_fake_runtime(lambda tier: fake),
+            tool_factory_lookup=build_fake_tool_lookup(),
+        )
 
         assert parsed.answer == "done"
         assert args_received == ["first", "second"]
@@ -1275,9 +1300,11 @@ class TestToolCallArgsCoercion:
 
         def precise_factory(config, tool_config):
             from langchain_core.tools import StructuredTool
+
             def fn(node_id: str, depth: int = 1) -> str:
                 received_args.append({"node_id": node_id, "depth": depth})
                 return "ok"
+
             return StructuredTool.from_function(fn, name="precise", description="precise")
 
         register_tool_factory("precise", precise_factory)
@@ -1291,7 +1318,6 @@ class TestToolCallArgsCoercion:
             always_fail=True,
         )
 
-
         class Answer(_BM):
             answer: str
 
@@ -1299,10 +1325,16 @@ class TestToolCallArgsCoercion:
         budget = ToolBudgetTracker(tools)
 
         parsed, _ = invoke_with_tools(
-            model_tier="fast", prompt_template="test", input_data={},
-            output_model=Answer, config={"configurable": {}},
-            tools=tools, budget_tracker=budget,
-         runtime=build_fake_runtime(lambda tier: fake), tool_factory_lookup=build_fake_tool_lookup())
+            model_tier="fast",
+            prompt_template="test",
+            input_data={},
+            output_model=Answer,
+            config={"configurable": {}},
+            tools=tools,
+            budget_tracker=budget,
+            runtime=build_fake_runtime(lambda tier: fake),
+            tool_factory_lookup=build_fake_tool_lookup(),
+        )
 
         assert parsed.answer == "ok"
         assert len(received_args) == 1
@@ -1326,12 +1358,18 @@ class TestToolCallArgsCoercion:
 
             def _generate(self, messages, *, run_manager=None, **kw):
                 # Return via additional_kwargs with malformed args
-                msg = AIMessage(content="", additional_kwargs={
-                    "tool_calls": [{
-                        "id": "c1", "type": "function",
-                        "function": {"name": "search", "arguments": '{"q": "trun'},
-                    }]
-                })
+                msg = AIMessage(
+                    content="",
+                    additional_kwargs={
+                        "tool_calls": [
+                            {
+                                "id": "c1",
+                                "type": "function",
+                                "function": {"name": "search", "arguments": '{"q": "trun'},
+                            }
+                        ]
+                    },
+                )
                 return SimpleNamespace(generations=[SimpleNamespace(message=msg)])
 
         wrapper = _CoercingToolWrapper(MalformedArgsFake())
@@ -1355,12 +1393,18 @@ class TestToolCallArgsCoercion:
                 )
 
             def _generate(self, messages, *, run_manager=None, **kw):
-                msg = AIMessage(content="", additional_kwargs={
-                    "tool_calls": [{
-                        "id": "c1", "type": "function",
-                        "function": {"name": "search", "arguments": ""},
-                    }]
-                })
+                msg = AIMessage(
+                    content="",
+                    additional_kwargs={
+                        "tool_calls": [
+                            {
+                                "id": "c1",
+                                "type": "function",
+                                "function": {"name": "search", "arguments": ""},
+                            }
+                        ]
+                    },
+                )
                 return SimpleNamespace(generations=[SimpleNamespace(message=msg)])
 
         wrapper = _CoercingToolWrapper(EmptyArgsFake())
@@ -1417,7 +1461,8 @@ class TestUnregisteredToolInReact:
         _llm_kw = configure_fake_llm(lambda tier: StructuredFake(lambda m: m(items=["x"])))
 
         with pytest.raises(CompileError, match="no registered factory"):
-            invoke_with_tools(runtime=build_fake_runtime(_llm_kw['llm_factory'], _llm_kw['prompt_compiler']),
+            invoke_with_tools(
+                runtime=build_fake_runtime(_llm_kw["llm_factory"], _llm_kw["prompt_compiler"]),
                 model_tier="fast",
                 prompt_template="test prompt",
                 input_data="test",
@@ -1491,7 +1536,8 @@ class TestUsageTokenAccumulation:
 
         tools = [Tool("search", budget=5)]
         tracker = ToolBudgetTracker(tools)
-        result, interactions = invoke_with_tools(runtime=build_fake_runtime(_llm_kw['llm_factory'], _llm_kw['prompt_compiler']),
+        result, interactions = invoke_with_tools(
+            runtime=build_fake_runtime(_llm_kw["llm_factory"], _llm_kw["prompt_compiler"]),
             model_tier="fast",
             prompt_template="test prompt",
             input_data="test",
@@ -1602,7 +1648,8 @@ class TestReActToolReturnsListOfModels:
 
         tools = [Tool("search", budget=5)]
         tracker = ToolBudgetTracker(tools)
-        result, interactions = invoke_with_tools(runtime=build_fake_runtime(_llm_kw['llm_factory'], _llm_kw['prompt_compiler']),
+        result, interactions = invoke_with_tools(
+            runtime=build_fake_runtime(_llm_kw["llm_factory"], _llm_kw["prompt_compiler"]),
             model_tier="fast",
             prompt_template="test prompt",
             input_data="test",
@@ -1635,7 +1682,8 @@ class TestReActMaxIterationsGuard:
 
         tools = [Tool("search", budget=0)]  # unlimited per-tool budget
         tracker = ToolBudgetTracker(tools)
-        result, interactions = invoke_with_tools(runtime=build_fake_runtime(_llm_kw['llm_factory'], _llm_kw['prompt_compiler']),
+        result, interactions = invoke_with_tools(
+            runtime=build_fake_runtime(_llm_kw["llm_factory"], _llm_kw["prompt_compiler"]),
             model_tier="fast",
             prompt_template="test",
             input_data="test",
@@ -1667,7 +1715,8 @@ class TestReActMaxIterationsGuard:
         tracker = ToolBudgetTracker(tools)
 
         # max_iterations=3 — guard fires on iteration 3
-        result, interactions = invoke_with_tools(runtime=build_fake_runtime(_llm_kw['llm_factory'], _llm_kw['prompt_compiler']),
+        result, interactions = invoke_with_tools(
+            runtime=build_fake_runtime(_llm_kw["llm_factory"], _llm_kw["prompt_compiler"]),
             model_tier="fast",
             prompt_template="test",
             input_data="test",
@@ -1704,7 +1753,8 @@ class TestReActMaxIterationsGuard:
         tools = [Tool("search", budget=5)]
         tracker = ToolBudgetTracker(tools)
 
-        result, interactions = invoke_with_tools(runtime=build_fake_runtime(_llm_kw['llm_factory'], _llm_kw['prompt_compiler']),
+        result, interactions = invoke_with_tools(
+            runtime=build_fake_runtime(_llm_kw["llm_factory"], _llm_kw["prompt_compiler"]),
             model_tier="fast",
             prompt_template="test",
             input_data="test",
@@ -1733,7 +1783,8 @@ class TestReActMaxIterationsGuard:
         tools = [Tool("search", budget=0)]
         tracker = ToolBudgetTracker(tools)
 
-        result, interactions = invoke_with_tools(runtime=build_fake_runtime(_llm_kw['llm_factory'], _llm_kw['prompt_compiler']),
+        result, interactions = invoke_with_tools(
+            runtime=build_fake_runtime(_llm_kw["llm_factory"], _llm_kw["prompt_compiler"]),
             model_tier="fast",
             prompt_template="test",
             input_data="test",
@@ -1776,7 +1827,7 @@ class TestReActMaxIterationsGuard:
         # so the loop force-breaks (no infinite loop). The structured fallback
         # then recovers a typed result.
         result, _interactions = invoke_with_tools(
-            runtime=build_fake_runtime(_llm_kw['llm_factory'], _llm_kw['prompt_compiler']),
+            runtime=build_fake_runtime(_llm_kw["llm_factory"], _llm_kw["prompt_compiler"]),
             model_tier="fast",
             prompt_template="test",
             input_data="test",
@@ -1788,7 +1839,6 @@ class TestReActMaxIterationsGuard:
             tool_factory_lookup=build_fake_tool_lookup(),
         )
         assert isinstance(result, Claims)
-
 
 
 class TestReActTokenBudgetGuard:
@@ -1810,7 +1860,8 @@ class TestReActTokenBudgetGuard:
         tracker = ToolBudgetTracker(tools)
 
         # token_budget=2500 — after 3 iterations (3000 cumulative), guard fires
-        result, interactions = invoke_with_tools(runtime=build_fake_runtime(_llm_kw['llm_factory'], _llm_kw['prompt_compiler']),
+        result, interactions = invoke_with_tools(
+            runtime=build_fake_runtime(_llm_kw["llm_factory"], _llm_kw["prompt_compiler"]),
             model_tier="fast",
             prompt_template="test",
             input_data="test",
@@ -1846,7 +1897,8 @@ class TestReActTokenBudgetGuard:
         tools = [Tool("search", budget=5)]
         tracker = ToolBudgetTracker(tools)
 
-        result, interactions = invoke_with_tools(runtime=build_fake_runtime(_llm_kw['llm_factory'], _llm_kw['prompt_compiler']),
+        result, interactions = invoke_with_tools(
+            runtime=build_fake_runtime(_llm_kw["llm_factory"], _llm_kw["prompt_compiler"]),
             model_tier="fast",
             prompt_template="test",
             input_data="test",
@@ -1876,7 +1928,8 @@ class TestReActTokenBudgetGuard:
         tracker = ToolBudgetTracker(tools)
 
         # max_iterations=3 and token_budget=2500: both fire on iteration 3
-        result, interactions = invoke_with_tools(runtime=build_fake_runtime(_llm_kw['llm_factory'], _llm_kw['prompt_compiler']),
+        result, interactions = invoke_with_tools(
+            runtime=build_fake_runtime(_llm_kw["llm_factory"], _llm_kw["prompt_compiler"]),
             model_tier="fast",
             prompt_template="test",
             input_data="test",
@@ -1914,7 +1967,8 @@ class TestReActTokenBudgetGuard:
         tools = [Tool("search", budget=5)]
         tracker = ToolBudgetTracker(tools)
 
-        result, interactions = invoke_with_tools(runtime=build_fake_runtime(_llm_kw['llm_factory'], _llm_kw['prompt_compiler']),
+        result, interactions = invoke_with_tools(
+            runtime=build_fake_runtime(_llm_kw["llm_factory"], _llm_kw["prompt_compiler"]),
             model_tier="fast",
             prompt_template="test",
             input_data="test",
@@ -2041,13 +2095,15 @@ class TestDSMLTrailingToolCallRecovery:
                     return msg
                 if call_count[0] == 2:
                     # After tool execution: budget exhausted, emit DSML markup
-                    return AIMessage(content=(
-                        '<\uff5cDSML\uff5ctool_calls>\n'
-                        '<\uff5cDSML\uff5cinvoke name="search">\n'
-                        '<\uff5cDSML\uff5cparameter name="q">more search</\uff5cDSML\uff5cparameter>\n'
-                        '</\uff5cDSML\uff5cinvoke>\n'
-                        '</\uff5cDSML\uff5ctool_calls>'
-                    ))
+                    return AIMessage(
+                        content=(
+                            "<\uff5cDSML\uff5ctool_calls>\n"
+                            '<\uff5cDSML\uff5cinvoke name="search">\n'
+                            '<\uff5cDSML\uff5cparameter name="q">more search</\uff5cDSML\uff5cparameter>\n'
+                            "</\uff5cDSML\uff5cinvoke>\n"
+                            "</\uff5cDSML\uff5ctool_calls>"
+                        )
+                    )
                 # Targeted retry: produce valid JSON
                 return AIMessage(content='{"answer": "recovered"}')
 
@@ -2056,9 +2112,8 @@ class TestDSMLTrailingToolCallRecovery:
 
         def search_factory(config, tool_config):
             from langchain_core.tools import StructuredTool
-            return StructuredTool.from_function(
-                lambda q: f"found {q}", name="search", description="search"
-            )
+
+            return StructuredTool.from_function(lambda q: f"found {q}", name="search", description="search")
 
         register_tool_factory("search", search_factory)
 
@@ -2077,7 +2132,9 @@ class TestDSMLTrailingToolCallRecovery:
             tools=tools,
             budget_tracker=budget,
             llm_config={"output_strategy": "json_mode"},
-         runtime=build_fake_runtime(lambda tier: DSMLFake()), tool_factory_lookup=build_fake_tool_lookup())
+            runtime=build_fake_runtime(lambda tier: DSMLFake()),
+            tool_factory_lookup=build_fake_tool_lookup(),
+        )
 
         assert parsed.answer == "recovered"
         assert len(interactions) == 1  # one tool call succeeded before DSML
@@ -2109,10 +2166,12 @@ class TestDSMLTrailingToolCallRecovery:
             def with_structured_output(self, model, **kw):
                 return self
 
-        register_tool_factory("x", lambda c, tc: __import__(
-            "langchain_core.tools", fromlist=["StructuredTool"]
-        ).StructuredTool.from_function(lambda q="": "ok", name="x", description="x"))
-
+        register_tool_factory(
+            "x",
+            lambda c, tc: __import__("langchain_core.tools", fromlist=["StructuredTool"]).StructuredTool.from_function(
+                lambda q="": "ok", name="x", description="x"
+            ),
+        )
 
         class Answer(_BM):
             answer: str
@@ -2132,12 +2191,20 @@ class TestDSMLTrailingToolCallRecovery:
                 "output_strategy": "json_mode",
                 "budget_exhausted_message": "CUSTOM: stop calling tools, produce the answer",
             },
-         runtime=build_fake_runtime(lambda tier: CaptureFake()), tool_factory_lookup=build_fake_tool_lookup())
+            runtime=build_fake_runtime(lambda tier: CaptureFake()),
+            tool_factory_lookup=build_fake_tool_lookup(),
+        )
 
         assert parsed.answer == "ok"
         # The custom message should have been used in the retry
         retry_msg = captured_messages[-1]
-        content = retry_msg["content"] if isinstance(retry_msg, dict) else retry_msg.content if hasattr(retry_msg, "content") else str(retry_msg)
+        content = (
+            retry_msg["content"]
+            if isinstance(retry_msg, dict)
+            else retry_msg.content
+            if hasattr(retry_msg, "content")
+            else str(retry_msg)
+        )
         assert "CUSTOM" in content
 
 
@@ -2168,11 +2235,11 @@ class TestDSMLDoubleFailure:
 
         call_count = [0]
         dsml_payload = (
-            '<｜DSML｜tool_calls>\n'
+            "<｜DSML｜tool_calls>\n"
             '<｜DSML｜invoke name="search">\n'
             '<｜DSML｜parameter name="q">more search</｜DSML｜parameter>\n'
-            '</｜DSML｜invoke>\n'
-            '</｜DSML｜tool_calls>'
+            "</｜DSML｜invoke>\n"
+            "</｜DSML｜tool_calls>"
         )
 
         class DoubleDSMLFake:
@@ -2196,9 +2263,8 @@ class TestDSMLDoubleFailure:
 
         def search_factory(config, tool_config):
             from langchain_core.tools import StructuredTool
-            return StructuredTool.from_function(
-                lambda q: f"found {q}", name="search", description="search"
-            )
+
+            return StructuredTool.from_function(lambda q: f"found {q}", name="search", description="search")
 
         register_tool_factory("search", search_factory)
 
@@ -2217,7 +2283,9 @@ class TestDSMLDoubleFailure:
             tools=tools,
             budget_tracker=budget,
             llm_config={"output_strategy": "json_mode"},
-         runtime=build_fake_runtime(lambda tier: DoubleDSMLFake()), tool_factory_lookup=build_fake_tool_lookup())
+            runtime=build_fake_runtime(lambda tier: DoubleDSMLFake()),
+            tool_factory_lookup=build_fake_tool_lookup(),
+        )
 
         # Contract: double DSML still recovers through the generic retry path.
         # Drop the exact call_count == 4 pin; require at least the initial tool
@@ -2246,11 +2314,11 @@ class TestDSMLAllRetriesFail:
 
         call_count = [0]
         dsml_payload = (
-            '<｜DSML｜tool_calls>\n'
+            "<｜DSML｜tool_calls>\n"
             '<｜DSML｜invoke name="search">\n'
             '<｜DSML｜parameter name="q">more search</｜DSML｜parameter>\n'
-            '</｜DSML｜invoke>\n'
-            '</｜DSML｜tool_calls>'
+            "</｜DSML｜invoke>\n"
+            "</｜DSML｜tool_calls>"
         )
 
         class AllDSMLFake:
@@ -2270,9 +2338,8 @@ class TestDSMLAllRetriesFail:
 
         def search_factory(config, tool_config):
             from langchain_core.tools import StructuredTool
-            return StructuredTool.from_function(
-                lambda q: f"found {q}", name="search", description="search"
-            )
+
+            return StructuredTool.from_function(lambda q: f"found {q}", name="search", description="search")
 
         register_tool_factory("search", search_factory)
 
@@ -2292,7 +2359,9 @@ class TestDSMLAllRetriesFail:
                 tools=tools,
                 budget_tracker=budget,
                 llm_config={"output_strategy": "json_mode"},
-             runtime=build_fake_runtime(lambda tier: AllDSMLFake()), tool_factory_lookup=build_fake_tool_lookup())
+                runtime=build_fake_runtime(lambda tier: AllDSMLFake()),
+                tool_factory_lookup=build_fake_tool_lookup(),
+            )
 
         assert str(exc_info.value).strip()
         assert call_count[0] >= 3
@@ -2344,9 +2413,8 @@ class TestNonDSMLParseFailureTakesGenericRetry:
 
         def search_factory(config, tool_config):
             from langchain_core.tools import StructuredTool
-            return StructuredTool.from_function(
-                lambda q: f"found {q}", name="search", description="search"
-            )
+
+            return StructuredTool.from_function(lambda q: f"found {q}", name="search", description="search")
 
         register_tool_factory("search", search_factory)
 
@@ -2405,11 +2473,11 @@ class TestE2EDSMLRecoveryViaAgentMode:
 
         call_count = [0]
         dsml_payload = (
-            '<｜DSML｜tool_calls>\n'
+            "<｜DSML｜tool_calls>\n"
             '<｜DSML｜invoke name="search">\n'
             '<｜DSML｜parameter name="q">more search</｜DSML｜parameter>\n'
-            '</｜DSML｜invoke>\n'
-            '</｜DSML｜tool_calls>'
+            "</｜DSML｜invoke>\n"
+            "</｜DSML｜tool_calls>"
         )
 
         class DSMLFake:
@@ -2431,9 +2499,8 @@ class TestE2EDSMLRecoveryViaAgentMode:
 
         def search_factory(config, tool_config):
             from langchain_core.tools import StructuredTool
-            return StructuredTool.from_function(
-                lambda q: f"found {q}", name="search", description="search"
-            )
+
+            return StructuredTool.from_function(lambda q: f"found {q}", name="search", description="search")
 
         register_tool_factory("search", search_factory)
 
@@ -2451,7 +2518,12 @@ class TestE2EDSMLRecoveryViaAgentMode:
 
         mod.research = research
         pipeline = construct_from_module(mod, name="test-xrrt-e2e")
-        graph = compile(pipeline, llm_factory=lambda tier: DSMLFake(), prompt_compiler=lambda t, d, **kw: [{"role": "user", "content": "test"}], **build_test_compile_kwargs())
+        graph = compile(
+            pipeline,
+            llm_factory=lambda tier: DSMLFake(),
+            prompt_compiler=lambda t, d, **kw: [{"role": "user", "content": "test"}],
+            **build_test_compile_kwargs(),
+        )
         result = run(graph, input={"node_id": "test-xrrt"})
 
         # Contract: E2E DSML recovery returns the recovered answer.
@@ -2472,12 +2544,14 @@ class TestCoercingToolWrapperGenerateNotAvailable:
             def invoke(self, messages, **kw):
                 raise ValidationError.from_exception_data(
                     title="AIMessage",
-                    line_errors=[{
-                        "type": "dict_type",
-                        "loc": ("tool_calls", 0, "args"),
-                        "msg": "Input should be a valid dictionary",
-                        "input": "not a dict",
-                    }],
+                    line_errors=[
+                        {
+                            "type": "dict_type",
+                            "loc": ("tool_calls", 0, "args"),
+                            "msg": "Input should be a valid dictionary",
+                            "input": "not a dict",
+                        }
+                    ],
                 )
 
         assert not hasattr(NoGenerateFake(), "_generate")
@@ -2506,12 +2580,14 @@ class TestCoercingToolWrapperGenerateRaises:
             def invoke(self, messages, **kw):
                 raise ValidationError.from_exception_data(
                     title="AIMessage",
-                    line_errors=[{
-                        "type": "dict_type",
-                        "loc": ("tool_calls", 0, "args"),
-                        "msg": "Input should be a valid dictionary",
-                        "input": "bad",
-                    }],
+                    line_errors=[
+                        {
+                            "type": "dict_type",
+                            "loc": ("tool_calls", 0, "args"),
+                            "msg": "Input should be a valid dictionary",
+                            "input": "bad",
+                        }
+                    ],
                 )
 
             def _generate(self, messages, *, run_manager=None, **kw):
@@ -2568,12 +2644,14 @@ class TestCoercingToolWrapperMixedDictAndStringArgs:
             def invoke(self, messages, **kw):
                 raise ValidationError.from_exception_data(
                     title="AIMessage",
-                    line_errors=[{
-                        "type": "dict_type",
-                        "loc": ("tool_calls", 1, "args"),
-                        "msg": "Input should be a valid dictionary",
-                        "input": '{"query": "second-json"}',
-                    }],
+                    line_errors=[
+                        {
+                            "type": "dict_type",
+                            "loc": ("tool_calls", 1, "args"),
+                            "msg": "Input should be a valid dictionary",
+                            "input": '{"query": "second-json"}',
+                        }
+                    ],
                 )
 
             def _generate(self, messages, *, run_manager=None, **kw):
@@ -2585,9 +2663,7 @@ class TestCoercingToolWrapperMixedDictAndStringArgs:
                         {"name": "search", "args": {"query": "fourth"}, "id": "c4"},
                     ]
                 )
-                return SimpleNamespace(
-                    generations=[SimpleNamespace(message=fake_msg)]
-                )
+                return SimpleNamespace(generations=[SimpleNamespace(message=fake_msg)])
 
         wrapper = _CoercingToolWrapper(MixedArgsFake())
         response = wrapper.invoke([])
@@ -2649,11 +2725,11 @@ class TestDSMLInStructuredStrategyPath:
         from tests.fakes import register_tool_factory
 
         DSML_MARKUP = (
-            '<｜DSML｜tool_calls>\n'
+            "<｜DSML｜tool_calls>\n"
             '<｜DSML｜invoke name="search">\n'
             '<｜DSML｜parameter name="q">more</｜DSML｜parameter>\n'
-            '</｜DSML｜invoke>\n'
-            '</｜DSML｜tool_calls>'
+            "</｜DSML｜invoke>\n"
+            "</｜DSML｜tool_calls>"
         )
 
         class Answer(_BM):
@@ -2680,17 +2756,14 @@ class TestDSMLInStructuredStrategyPath:
             def with_structured_output(self, model, **kw):
                 class _StructuredWrap:
                     def invoke(self, messages, **kw2):
-                        raise TypeError(
-                            "Expected Answer but got non-JSON content: " + DSML_MARKUP[:50]
-                        )
+                        raise TypeError("Expected Answer but got non-JSON content: " + DSML_MARKUP[:50])
 
                 return _StructuredWrap()
 
         def search_factory(config, tool_config):
             from langchain_core.tools import StructuredTool
-            return StructuredTool.from_function(
-                lambda q: f"found {q}", name="search", description="search"
-            )
+
+            return StructuredTool.from_function(lambda q: f"found {q}", name="search", description="search")
 
         register_tool_factory("search", search_factory)
 
@@ -2759,9 +2832,8 @@ class TestDSMLInStructuredStrategyPath:
 
         def search_factory(config, tool_config):
             from langchain_core.tools import StructuredTool
-            return StructuredTool.from_function(
-                lambda q: f"found {q}", name="search", description="search"
-            )
+
+            return StructuredTool.from_function(lambda q: f"found {q}", name="search", description="search")
 
         register_tool_factory("search", search_factory)
 
@@ -2777,7 +2849,9 @@ class TestDSMLInStructuredStrategyPath:
             tools=tools,
             budget_tracker=budget,
             llm_config={"output_strategy": "structured"},
-         runtime=build_fake_runtime(lambda tier: HappyFake()), tool_factory_lookup=build_fake_tool_lookup())
+            runtime=build_fake_runtime(lambda tier: HappyFake()),
+            tool_factory_lookup=build_fake_tool_lookup(),
+        )
 
         # Contract (neograph-f7nt): agent mode parses the ReAct final turn as
         # JSON directly — no separate structured re-generation — and the scripted
@@ -2837,9 +2911,8 @@ class TestDSMLInStructuredStrategyPath:
 
         def search_factory(config, tool_config):
             from langchain_core.tools import StructuredTool
-            return StructuredTool.from_function(
-                lambda q: f"found {q}", name="search", description="search"
-            )
+
+            return StructuredTool.from_function(lambda q: f"found {q}", name="search", description="search")
 
         register_tool_factory("search", search_factory)
 
@@ -2886,11 +2959,11 @@ class TestDSMLInStructuredStrategyPath:
         from tests.fakes import register_tool_factory
 
         DSML_MARKUP = (
-            '<｜DSML｜tool_calls>\n'
+            "<｜DSML｜tool_calls>\n"
             '<｜DSML｜invoke name="search">\n'
             '<｜DSML｜parameter name="q">more</｜DSML｜parameter>\n'
-            '</｜DSML｜invoke>\n'
-            '</｜DSML｜tool_calls>'
+            "</｜DSML｜invoke>\n"
+            "</｜DSML｜tool_calls>"
         )
 
         class Answer(_BM):
@@ -2922,9 +2995,7 @@ class TestDSMLInStructuredStrategyPath:
                         # raw contains DSML markup, parsing_error populated.
                         raw_msg = AIMessage(content=DSML_MARKUP)
                         try:
-                            err = ValidationError.from_exception_data(
-                                "Answer", []
-                            )
+                            err = ValidationError.from_exception_data("Answer", [])
                         except Exception:
                             err = None
                         if inc:
@@ -2941,9 +3012,8 @@ class TestDSMLInStructuredStrategyPath:
 
         def search_factory(config, tool_config):
             from langchain_core.tools import StructuredTool
-            return StructuredTool.from_function(
-                lambda q: f"found {q}", name="search", description="search"
-            )
+
+            return StructuredTool.from_function(lambda q: f"found {q}", name="search", description="search")
 
         register_tool_factory("search", search_factory)
 
@@ -2995,11 +3065,11 @@ class TestDSMLAfterMaxIterationsGuard:
 
         call_count = [0]
         dsml_payload = (
-            '<｜DSML｜tool_calls>\n'
+            "<｜DSML｜tool_calls>\n"
             '<｜DSML｜invoke name="search">\n'
             '<｜DSML｜parameter name="q">more</｜DSML｜parameter>\n'
-            '</｜DSML｜invoke>\n'
-            '</｜DSML｜tool_calls>'
+            "</｜DSML｜invoke>\n"
+            "</｜DSML｜tool_calls>"
         )
 
         class MaxIterDSMLFake:
@@ -3021,9 +3091,8 @@ class TestDSMLAfterMaxIterationsGuard:
 
         def search_factory(config, tool_config):
             from langchain_core.tools import StructuredTool
-            return StructuredTool.from_function(
-                lambda q: f"found {q}", name="search", description="search"
-            )
+
+            return StructuredTool.from_function(lambda q: f"found {q}", name="search", description="search")
 
         register_tool_factory("search", search_factory)
 
@@ -3097,13 +3166,15 @@ class TestDSMLAfterTokenBudget:
                     msg.usage_metadata = {"input_tokens": 20, "output_tokens": 10, "total_tokens": 30}
                     return msg
                 if call_count[0] == 3:
-                    return AIMessage(content=(
-                        '<｜DSML｜tool_calls>\n'
-                        '<｜DSML｜invoke name="search">\n'
-                        '<｜DSML｜parameter name="q">blocked</｜DSML｜parameter>\n'
-                        '</｜DSML｜invoke>\n'
-                        '</｜DSML｜tool_calls>'
-                    ))
+                    return AIMessage(
+                        content=(
+                            "<｜DSML｜tool_calls>\n"
+                            '<｜DSML｜invoke name="search">\n'
+                            '<｜DSML｜parameter name="q">blocked</｜DSML｜parameter>\n'
+                            "</｜DSML｜invoke>\n"
+                            "</｜DSML｜tool_calls>"
+                        )
+                    )
                 return AIMessage(content='{"answer": "recovered-after-token-budget"}')
 
             def with_structured_output(self, model, **kw):
@@ -3111,9 +3182,8 @@ class TestDSMLAfterTokenBudget:
 
         def search_factory(config, tool_config):
             from langchain_core.tools import StructuredTool
-            return StructuredTool.from_function(
-                lambda q: f"found {q}", name="search", description="search"
-            )
+
+            return StructuredTool.from_function(lambda q: f"found {q}", name="search", description="search")
 
         register_tool_factory("search", search_factory)
 
@@ -3174,11 +3244,11 @@ class TestMultipleIndependentDSMLRecoveries:
             answer: str
 
         dsml_template = (
-            '<｜DSML｜tool_calls>\n'
+            "<｜DSML｜tool_calls>\n"
             '<｜DSML｜invoke name="{tool}">\n'
             '<｜DSML｜parameter name="q">more</｜DSML｜parameter>\n'
-            '</｜DSML｜invoke>\n'
-            '</｜DSML｜tool_calls>'
+            "</｜DSML｜invoke>\n"
+            "</｜DSML｜tool_calls>"
         )
 
         class DSMLThenJsonFake:
@@ -3210,6 +3280,7 @@ class TestMultipleIndependentDSMLRecoveries:
                     name=tool_name,
                     description=tool_name,
                 )
+
             return factory
 
         # --- Call 1: tool "search", answer "first-recovered" ---
@@ -3228,7 +3299,9 @@ class TestMultipleIndependentDSMLRecoveries:
             tools=tools1,
             budget_tracker=budget1,
             llm_config={"output_strategy": "json_mode"},
-         runtime=build_fake_runtime(lambda tier: fake1), tool_factory_lookup=build_fake_tool_lookup())
+            runtime=build_fake_runtime(lambda tier: fake1),
+            tool_factory_lookup=build_fake_tool_lookup(),
+        )
 
         assert parsed1.answer == "first-recovered"
         assert len(interactions1) == 1
@@ -3251,7 +3324,9 @@ class TestMultipleIndependentDSMLRecoveries:
             tools=tools2,
             budget_tracker=budget2,
             llm_config={"output_strategy": "json_mode"},
-         runtime=build_fake_runtime(lambda tier: fake2), tool_factory_lookup=build_fake_tool_lookup())
+            runtime=build_fake_runtime(lambda tier: fake2),
+            tool_factory_lookup=build_fake_tool_lookup(),
+        )
 
         assert parsed2.answer == "second-recovered"
         assert len(interactions2) == 1
@@ -3325,10 +3400,12 @@ class TestBudgetExhaustedMessageFallback:
             def with_structured_output(self, model, **kw):
                 return self
 
-        register_tool_factory("x", lambda c, tc: __import__(
-            "langchain_core.tools", fromlist=["StructuredTool"]
-        ).StructuredTool.from_function(lambda q="": "ok", name="x", description="x"))
-
+        register_tool_factory(
+            "x",
+            lambda c, tc: __import__("langchain_core.tools", fromlist=["StructuredTool"]).StructuredTool.from_function(
+                lambda q="": "ok", name="x", description="x"
+            ),
+        )
 
         class Answer(_BM):
             answer: str
@@ -3394,9 +3471,7 @@ class TestBudgetExhaustedMessageFallbackPostRnjw:
         assert "Answer" in content
 
     def test_empty_string_falls_back_to_default_message(self):
-        parsed, captured = TestBudgetExhaustedMessageFallback._invoke_with_llm_config(
-            {"budget_exhausted_message": ""}
-        )
+        parsed, captured = TestBudgetExhaustedMessageFallback._invoke_with_llm_config({"budget_exhausted_message": ""})
         assert parsed.answer == "ok"
         content = TestBudgetExhaustedMessageFallback._extract_retry_content(captured)
         assert content, (
@@ -3497,9 +3572,12 @@ class TestDefaultBudgetExhaustedMessageRendersModelName:
             def with_structured_output(self, model, **kw):
                 return self
 
-        register_tool_factory("x", lambda c, tc: __import__(
-            "langchain_core.tools", fromlist=["StructuredTool"]
-        ).StructuredTool.from_function(lambda q="": "ok", name="x", description="x"))
+        register_tool_factory(
+            "x",
+            lambda c, tc: __import__("langchain_core.tools", fromlist=["StructuredTool"]).StructuredTool.from_function(
+                lambda q="": "ok", name="x", description="x"
+            ),
+        )
 
         class ExplorationResult(_BM):
             answer: str
@@ -3516,7 +3594,9 @@ class TestDefaultBudgetExhaustedMessageRendersModelName:
             tools=tools,
             budget_tracker=budget,
             llm_config={"output_strategy": "json_mode"},
-         runtime=build_fake_runtime(lambda tier: CaptureFake()), tool_factory_lookup=build_fake_tool_lookup())
+            runtime=build_fake_runtime(lambda tier: CaptureFake()),
+            tool_factory_lookup=build_fake_tool_lookup(),
+        )
 
         assert parsed.answer == "ok"
         retry_msg = captured_messages[-1][-1]
@@ -3582,9 +3662,7 @@ class TestSafetyBreakOnGuardWithRogueToolCalls:
 
         register_tool_factory(
             "search",
-            lambda c, tc: StructuredTool.from_function(
-                _search_impl, name="search", description="search tool"
-            ),
+            lambda c, tc: StructuredTool.from_function(_search_impl, name="search", description="search tool"),
         )
 
         tools = [Tool(name="search", description="search tool")]
@@ -3668,9 +3746,7 @@ class TestToolExceptionPropagates:
 
         register_tool_factory(
             "boom",
-            lambda config, tool_config: StructuredTool.from_function(
-                _boom, name="boom", description="raises"
-            ),
+            lambda config, tool_config: StructuredTool.from_function(_boom, name="boom", description="raises"),
         )
 
         tools = [Tool(name="boom", description="raises")]
@@ -3686,7 +3762,9 @@ class TestToolExceptionPropagates:
                 tools=tools,
                 budget_tracker=budget,
                 llm_config={"output_strategy": "json_mode"},
-             runtime=build_fake_runtime(lambda tier: ToolCallingFake()), tool_factory_lookup=build_fake_tool_lookup())
+                runtime=build_fake_runtime(lambda tier: ToolCallingFake()),
+                tool_factory_lookup=build_fake_tool_lookup(),
+            )
 
 
 class TestToolCallsShapeEdgeCases:
@@ -3737,9 +3815,7 @@ class TestToolCallsShapeEdgeCases:
 
         register_tool_factory(
             "x",
-            lambda c, tc: StructuredTool.from_function(
-                lambda q="": "ok", name="x", description="x"
-            ),
+            lambda c, tc: StructuredTool.from_function(lambda q="": "ok", name="x", description="x"),
         )
 
         tools = [Tool(name="x", description="x")]
@@ -3754,7 +3830,9 @@ class TestToolCallsShapeEdgeCases:
             tools=tools,
             budget_tracker=budget,
             llm_config={"output_strategy": "json_mode"},
-         runtime=build_fake_runtime(lambda tier: EmptyListFake()), tool_factory_lookup=build_fake_tool_lookup())
+            runtime=build_fake_runtime(lambda tier: EmptyListFake()),
+            tool_factory_lookup=build_fake_tool_lookup(),
+        )
 
         assert call_count[0] == 1
         assert parsed.answer == "done"
@@ -3798,9 +3876,7 @@ class TestToolCallsShapeEdgeCases:
 
         register_tool_factory(
             "x",
-            lambda c, tc: StructuredTool.from_function(
-                lambda q="": "ok", name="x", description="x"
-            ),
+            lambda c, tc: StructuredTool.from_function(lambda q="": "ok", name="x", description="x"),
         )
 
         tools = [Tool(name="x", description="x")]
@@ -3816,7 +3892,9 @@ class TestToolCallsShapeEdgeCases:
                 config={"configurable": {}},
                 tools=tools,
                 llm_config={"output_strategy": "json_mode"},
-             runtime=build_fake_runtime(lambda tier: AbsentAttrFake()), tool_factory_lookup=build_fake_tool_lookup())
+                runtime=build_fake_runtime(lambda tier: AbsentAttrFake()),
+                tool_factory_lookup=build_fake_tool_lookup(),
+            )
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -4062,7 +4140,8 @@ class TestLlmConfigAsIRType:
             text=True,
         )
         matches = [
-            line for line in result.stdout.splitlines()
+            line
+            for line in result.stdout.splitlines()
             # Allow the LlmConfig module itself to keep the symbol if needed
             # for backward-compat re-export, but disallow active use elsewhere.
             if line and "_llm_config.py" not in line
@@ -4168,6 +4247,7 @@ class TestCallbackProtocols:
 
         def cb(*, tier, input_tokens, output_tokens, **kw):
             pass
+
         assert isinstance(cb, CostCallback)
 
     def test_oracle_merge_hooks_protocol_field_types(self):
@@ -4322,7 +4402,6 @@ class TestDictCoercionTypoRejection:
                 called[0] = True
                 return None
 
-
         class Out(_BM):
             text: str
 
@@ -4421,11 +4500,11 @@ class TestStructuredCompatShim:
     """
 
     _DSML = (
-        '<｜DSML｜tool_calls>\n'
+        "<｜DSML｜tool_calls>\n"
         '<｜DSML｜invoke name="search">\n'
         '<｜DSML｜parameter name="q">more</｜DSML｜parameter>\n'
-        '</｜DSML｜invoke>\n'
-        '</｜DSML｜tool_calls>'
+        "</｜DSML｜invoke>\n"
+        "</｜DSML｜tool_calls>"
     )
 
     def test_happy_path_classifies_as_parsed_with_usage(self):
@@ -4523,9 +4602,7 @@ class TestStructuredCompatShim:
                 raise AssertionError("compat decorator must not re-invoke the LLM")
 
         trailing = AIMessage(content=TestStructuredCompatShim._DSML)
-        result = build_default_adapter().invoke(
-            DoubleTypeErrorLLM(), Claims, [trailing], {"configurable": {}}
-        )
+        result = build_default_adapter().invoke(DoubleTypeErrorLLM(), Claims, [trailing], {"configurable": {}})
 
         assert isinstance(result, Raw)
         assert result.dsml is True
@@ -4561,7 +4638,11 @@ class TestCallStructuredParsedNoneFailsLoud:
         # cfg defaults to None -> C' path now raises instead of returning None.
         with pytest.raises(ExecutionError) as ei:
             _call_structured(
-                CPrimeLLM(), [], Claims, "structured", {"configurable": {}},
+                CPrimeLLM(),
+                [],
+                Claims,
+                "structured",
+                {"configurable": {}},
             )
         msg = str(ei.value)
         assert "Claims" in msg
@@ -4636,9 +4717,8 @@ class TestToolBudgetPreambleInjection:
 
         def _factory(name):
             def factory(config, tool_config):
-                return StructuredTool.from_function(
-                    lambda q="": "x", name=name, description=name
-                )
+                return StructuredTool.from_function(lambda q="": "x", name=name, description=name)
+
             return factory
 
         register_tool_factory("search", _factory("search"))
@@ -4736,9 +4816,7 @@ class TestToolBudgetPreambleInjection:
         fake = _CapturingReActFake(tool_calls=[[]], final=lambda m: m(answer="done"))
 
         parsed, _ = invoke_with_tools(
-            runtime=build_fake_runtime(
-                lambda tier: fake, prompt_compiler=template_ref_compiler
-            ),
+            runtime=build_fake_runtime(lambda tier: fake, prompt_compiler=template_ref_compiler),
             model_tier="fast",
             prompt_template="agent/diagnose",  # no space -> template-ref path
             input_data={},
@@ -4819,9 +4897,7 @@ class _CountingAgentFake:
         self._react_idx += 1
         if self._react_idx <= self._k:
             msg = _AIMessage(content="")
-            msg.tool_calls = [
-                {"name": self._tool_name, "args": {"q": "x"}, "id": f"c{self._react_idx}"}
-            ]
+            msg.tool_calls = [{"name": self._tool_name, "args": {"q": "x"}, "id": f"c{self._react_idx}"}]
             return msg
         return _AIMessage(content=self._final_json)
 
@@ -4953,9 +5029,7 @@ class _NonJsonFinalAgentFake:
         self._react_idx += 1
         if self._react_idx <= self._k:
             msg = _AIMessage(content="")
-            msg.tool_calls = [
-                {"name": self._tool_name, "args": {"q": "x"}, "id": f"c{self._react_idx}"}
-            ]
+            msg.tool_calls = [{"name": self._tool_name, "args": {"q": "x"}, "id": f"c{self._react_idx}"}]
             return msg
         if self._react_idx == self._k + 1:
             # Final ReAct turn: non-JSON prose -> parse fails -> fallback fires.
@@ -5167,11 +5241,11 @@ class TestAgentStrategyAwareFallback:
 
         Answer = self._answer_model()
         dsml_markup = (
-            '<｜DSML｜tool_calls>\n'
+            "<｜DSML｜tool_calls>\n"
             '<｜DSML｜invoke name="search">\n'
             '<｜DSML｜parameter name="q">more</｜DSML｜parameter>\n'
-            '</｜DSML｜invoke>\n'
-            '</｜DSML｜tool_calls>'
+            "</｜DSML｜invoke>\n"
+            "</｜DSML｜tool_calls>"
         )
         register_tool_factory("search", lambda cfg, tc: FakeTool("search", response="found"))
 
@@ -5203,11 +5277,11 @@ class TestAgentStrategyAwareFallback:
 
         Answer = self._answer_model()
         dsml_markup = (
-            '<｜DSML｜tool_calls>\n'
+            "<｜DSML｜tool_calls>\n"
             '<｜DSML｜invoke name="search">\n'
             '<｜DSML｜parameter name="q">more</｜DSML｜parameter>\n'
-            '</｜DSML｜invoke>\n'
-            '</｜DSML｜tool_calls>'
+            "</｜DSML｜invoke>\n"
+            "</｜DSML｜tool_calls>"
         )
         register_tool_factory("search", lambda cfg, tc: FakeTool("search", response="found"))
 
@@ -5259,17 +5333,12 @@ class TestAgentStrategyAwareFallback:
             warnings.simplefilter("always")
             compile(
                 pipeline,
-                llm_factory=lambda tier: ReActFake(
-                    tool_calls=[[]], final=lambda m: m(items=["x"])
-                ),
+                llm_factory=lambda tier: ReActFake(tool_calls=[[]], final=lambda m: m(items=["x"])),
                 prompt_compiler=lambda t, d, **kw: [{"role": "user", "content": "go"}],
                 **build_test_compile_kwargs(),
             )
 
-        offending = [
-            w for w in rec
-            if issubclass(w.category, UserWarning) and "output_strategy" in str(w.message)
-        ]
+        offending = [w for w in rec if issubclass(w.category, UserWarning) and "output_strategy" in str(w.message)]
         assert not offending, (
             "eoi8: the 'output_strategy inert for agent/act' warning must be "
             f"removed; got: {[str(w.message) for w in offending]}"
@@ -5283,8 +5352,7 @@ class TestAgentStrategyAwareFallback:
         from neograph import _agent_output_schema_preamble as mod
 
         assert hasattr(mod, "render_output_schema_preamble"), (
-            "CON-01: render_output_schema_instruction must be renamed to "
-            "render_output_schema_preamble"
+            "CON-01: render_output_schema_instruction must be renamed to render_output_schema_preamble"
         )
         rendered = mod.render_output_schema_preamble(Claims)
         assert "items" in rendered
@@ -5383,15 +5451,12 @@ class TestAgentSingleGenerationOutput:
         )
 
         first_msgs = fake.seen_messages[0]
-        system_text = "\n".join(
-            _msg_content(m) for m in first_msgs if _msg_role(m) == "system"
-        )
+        system_text = "\n".join(_msg_content(m) for m in first_msgs if _msg_role(m) == "system")
         # describe_type renders the model's fields; the distinctive field name
         # only appears if the schema instruction was injected.
         assert "diagnosis_summary" in describe_type(Diagnosis)
         assert "diagnosis_summary" in system_text, (
-            "agent loop did not inject the output schema into a system message; "
-            f"system messages seen: {system_text!r}"
+            f"agent loop did not inject the output schema into a system message; system messages seen: {system_text!r}"
         )
 
     def test_agent_dsml_final_turn_recovers_via_json_mode_tail(self):
@@ -5408,11 +5473,11 @@ class TestAgentSingleGenerationOutput:
             answer: str
 
         dsml_markup = (
-            '<｜DSML｜tool_calls>\n'
+            "<｜DSML｜tool_calls>\n"
             '<｜DSML｜invoke name="search">\n'
             '<｜DSML｜parameter name="q">more</｜DSML｜parameter>\n'
-            '</｜DSML｜invoke>\n'
-            '</｜DSML｜tool_calls>'
+            "</｜DSML｜invoke>\n"
+            "</｜DSML｜tool_calls>"
         )
 
         register_tool_factory("search", lambda cfg, tc: FakeTool("search", response="found"))

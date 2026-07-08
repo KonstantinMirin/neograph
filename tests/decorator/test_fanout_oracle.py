@@ -35,6 +35,7 @@ class TestNodeDecoratorFanout:
     @staticmethod
     def _fresh_module(name: str):
         import types as _types
+
         return _types.ModuleType(name)
 
     def test_fanout_produces_dict_when_map_over_and_map_key_set(self):
@@ -45,10 +46,12 @@ class TestNodeDecoratorFanout:
 
         @node(mode="scripted", outputs=Clusters)
         def make_clusters() -> Clusters:
-            return Clusters(groups=[
-                ClusterGroup(label="alpha", claim_ids=["c1", "c2"]),
-                ClusterGroup(label="beta", claim_ids=["c3"]),
-            ])
+            return Clusters(
+                groups=[
+                    ClusterGroup(label="alpha", claim_ids=["c1", "c2"]),
+                    ClusterGroup(label="beta", claim_ids=["c3"]),
+                ]
+            )
 
         @node(
             mode="scripted",
@@ -86,18 +89,18 @@ class TestNodeDecoratorFanout:
         from neograph import ConstructError
 
         with pytest.raises(ConstructError, match="map_key"):
+
             @node(mode="scripted", outputs=MatchResult, map_over="make_clusters.groups")
-            def verify(cluster: ClusterGroup) -> MatchResult:
-                ...
+            def verify(cluster: ClusterGroup) -> MatchResult: ...
 
     def test_decoration_raises_when_map_key_without_map_over(self):
         """map_key= without map_over= raises ConstructError at decoration time."""
         from neograph import ConstructError
 
         with pytest.raises(ConstructError, match="map_over"):
+
             @node(mode="scripted", outputs=MatchResult, map_key="label")
-            def verify(cluster: ClusterGroup) -> MatchResult:
-                ...
+            def verify(cluster: ClusterGroup) -> MatchResult: ...
 
     def test_sidecar_survives_when_each_modifier_applied(self):
         """The Each-modified Node copy retains its sidecar entry so
@@ -198,8 +201,6 @@ class TestNodeDecoratorFanout:
 # ═══════════════════════════════════════════════════════════════════════════
 
 
-
-
 # ═══════════════════════════════════════════════════════════════════════════
 # @node decorator: Oracle ensemble kwargs (ensemble_n, merge_fn, merge_prompt)
 #
@@ -214,6 +215,7 @@ class TestNodeDecoratorFanout:
 # Tests that @node(..., ensemble_n=N, merge_fn=...) attaches an Oracle
 # modifier at decoration time, with correct validation.
 # ═══════════════════════════════════════════════════════════════════════════
+
 
 class TestNodeDecoratorOracle:
     """@node decorator: ensemble_n=/merge_fn=/merge_prompt= kwargs for Oracle."""
@@ -221,6 +223,7 @@ class TestNodeDecoratorOracle:
     @staticmethod
     def _fresh_module(name: str):
         import types as _types
+
         return _types.ModuleType(name)
 
     def test_oracle_attaches_when_ensemble_n_and_merge_fn_set(self):
@@ -247,8 +250,7 @@ class TestNodeDecoratorOracle:
 
         mod = self._fresh_module("test_oracle_merge_fn")
 
-        @node(mode="think", outputs=Claims, prompt="rw/decompose", model="reason",
-              ensemble_n=3, merge_fn="combine_dec")
+        @node(mode="think", outputs=Claims, prompt="rw/decompose", model="reason", ensemble_n=3, merge_fn="combine_dec")
         def decompose(topic: RawText) -> Claims: ...
 
         mod.decompose = decompose
@@ -264,8 +266,14 @@ class TestNodeDecoratorOracle:
         """@node with ensemble_n + merge_prompt end-to-end: Oracle modifier
         attached with merge_prompt for LLM judge."""
 
-        @node(mode="think", outputs=Claims, prompt="rw/decompose", model="reason",
-              ensemble_n=2, merge_prompt="rw/decompose-merge")
+        @node(
+            mode="think",
+            outputs=Claims,
+            prompt="rw/decompose",
+            model="reason",
+            ensemble_n=2,
+            merge_prompt="rw/decompose-merge",
+        )
         def decompose(topic: RawText) -> Claims: ...
 
         oracle_mod = decompose.get_modifier(Oracle)
@@ -277,8 +285,7 @@ class TestNodeDecoratorOracle:
     def test_oracle_defaults_n_to_3_when_merge_fn_without_ensemble_n(self):
         """merge_fn without ensemble_n defaults to n=3."""
 
-        @node(mode="think", outputs=Claims, prompt="rw/decompose", model="reason",
-              merge_fn="combine")
+        @node(mode="think", outputs=Claims, prompt="rw/decompose", model="reason", merge_fn="combine")
         def decompose(topic: RawText) -> Claims: ...
 
         oracle_mod = decompose.get_modifier(Oracle)
@@ -290,24 +297,32 @@ class TestNodeDecoratorOracle:
         """ensemble_n without merge_fn or merge_prompt raises ConstructError."""
 
         with pytest.raises(ConstructError, match="requires merge_fn or merge_prompt"):
-            @node(mode="think", outputs=Claims, prompt="rw/decompose", model="reason",
-                  ensemble_n=3)
+
+            @node(mode="think", outputs=Claims, prompt="rw/decompose", model="reason", ensemble_n=3)
             def decompose(topic: RawText) -> Claims: ...
 
     def test_decoration_raises_when_both_merge_fn_and_merge_prompt(self):
         """Both merge_fn and merge_prompt raises ConstructError."""
 
         with pytest.raises(ConstructError, match="both merge_fn and merge_prompt"):
-            @node(mode="think", outputs=Claims, prompt="rw/decompose", model="reason",
-                  ensemble_n=3, merge_fn="combine", merge_prompt="rw/merge")
+
+            @node(
+                mode="think",
+                outputs=Claims,
+                prompt="rw/decompose",
+                model="reason",
+                ensemble_n=3,
+                merge_fn="combine",
+                merge_prompt="rw/merge",
+            )
             def decompose(topic: RawText) -> Claims: ...
 
     def test_decoration_raises_when_ensemble_n_less_than_2(self):
         """ensemble_n=1 raises ConstructError."""
 
         with pytest.raises(ConstructError, match="ensemble_n must be >= 2"):
-            @node(mode="think", outputs=Claims, prompt="rw/decompose", model="reason",
-                  ensemble_n=1, merge_fn="combine")
+
+            @node(mode="think", outputs=Claims, prompt="rw/decompose", model="reason", ensemble_n=1, merge_fn="combine")
             def decompose(topic: RawText) -> Claims: ...
 
 
@@ -331,8 +346,6 @@ class TestNodeDecoratorOracle:
 # ═══════════════════════════════════════════════════════════════════════════
 
 
-
-
 # ═══════════════════════════════════════════════════════════════════════════
 # @node interrupt_when — Operator human-in-loop via @node decorator
 #
@@ -347,25 +360,31 @@ class TestNodeDecoratorOracle:
 # The interrupt_when= kwarg on @node composes the node with Operator(when=...).
 # String form uses a pre-registered condition name; callable form auto-registers.
 # ═══════════════════════════════════════════════════════════════════════════
+
 
 class TestNodeDecoratorOperator:
-
     def test_interrupt_fires_when_string_condition_truthy(self):
         """@node(interrupt_when='name') attaches Operator and interrupt fires end-to-end."""
         from langgraph.checkpoint.memory import MemorySaver
 
         from tests.fakes import register_condition, register_scripted
 
-        register_scripted("scripted_validate", lambda input_data, config: ValidationResult(
-            passed=False,
-            issues=["missing stakeholder coverage"],
-        ))
+        register_scripted(
+            "scripted_validate",
+            lambda input_data, config: ValidationResult(
+                passed=False,
+                issues=["missing stakeholder coverage"],
+            ),
+        )
 
-        register_condition("validation_failed", lambda state: (
-            {"issues": state.check_quality.issues}
-            if state.check_quality and not state.check_quality.passed
-            else None
-        ))
+        register_condition(
+            "validation_failed",
+            lambda state: (
+                {"issues": state.check_quality.issues}
+                if state.check_quality and not state.check_quality.passed
+                else None
+            ),
+        )
 
         validate = node(
             mode="scripted",
@@ -377,7 +396,9 @@ class TestNodeDecoratorOperator:
         # for the factory. Build the node directly via the decorator.
 
         n = Node.scripted(
-            "check-quality", fn="scripted_validate", outputs=ValidationResult,
+            "check-quality",
+            fn="scripted_validate",
+            outputs=ValidationResult,
         ) | Operator(when="validation_failed")
 
         pipeline = Construct("test-node-op-string", nodes=[n])
@@ -422,6 +443,7 @@ class TestNodeDecoratorOperator:
 
         # Verify the callable was actually registered
         from tests.fakes import lookup_condition
+
         resolved = lookup_condition(op.when)
         assert resolved is cond_fn
 
@@ -431,18 +453,27 @@ class TestNodeDecoratorOperator:
 
         from tests.fakes import register_condition, register_scripted
 
-        register_scripted("validate_resume_test", lambda input_data, config: ValidationResult(
-            passed=False, issues=["bad coverage"],
-        ))
+        register_scripted(
+            "validate_resume_test",
+            lambda input_data, config: ValidationResult(
+                passed=False,
+                issues=["bad coverage"],
+            ),
+        )
 
-        register_condition("needs_review_deco", lambda state: (
-            {"issues": state.validate_resume.issues}
-            if state.validate_resume and not state.validate_resume.passed
-            else None
-        ))
+        register_condition(
+            "needs_review_deco",
+            lambda state: (
+                {"issues": state.validate_resume.issues}
+                if state.validate_resume and not state.validate_resume.passed
+                else None
+            ),
+        )
 
         n = Node.scripted(
-            "validate-resume", fn="validate_resume_test", outputs=ValidationResult,
+            "validate-resume",
+            fn="validate_resume_test",
+            outputs=ValidationResult,
         ) | Operator(when="needs_review_deco")
 
         pipeline = Construct("test-node-op-resume", nodes=[n])
@@ -465,14 +496,20 @@ class TestNodeDecoratorOperator:
 
         from tests.fakes import register_condition, register_scripted
 
-        register_scripted("quality_ok", lambda input_data, config: ValidationResult(
-            passed=True, issues=[],
-        ))
+        register_scripted(
+            "quality_ok",
+            lambda input_data, config: ValidationResult(
+                passed=True,
+                issues=[],
+            ),
+        )
 
         register_condition("always_falsy", lambda state: None)
 
         n = Node.scripted(
-            "check-quality", fn="quality_ok", outputs=ValidationResult,
+            "check-quality",
+            fn="quality_ok",
+            outputs=ValidationResult,
         ) | Operator(when="always_falsy")
 
         pipeline = Construct("test-node-op-pass", nodes=[n])
@@ -490,6 +527,7 @@ class TestNodeDecoratorOperator:
         """Passing a non-string, non-callable interrupt_when raises ConstructError."""
 
         with pytest.raises(ConstructError, match="interrupt_when must be a string"):
+
             @node(mode="scripted", outputs=ValidationResult, interrupt_when=42)
             def bad_node() -> ValidationResult:
                 return ValidationResult(passed=True, issues=[])
@@ -517,8 +555,6 @@ class TestNodeDecoratorOperator:
 # ═══════════════════════════════════════════════════════════════════════════
 
 
-
-
 class TestEachOracleFusionDecoratorPath:
     """Each x Oracle fusion (lines 727-736, 745, 755, 759)."""
 
@@ -534,8 +570,8 @@ class TestEachOracleFusionDecoratorPath:
             map_key="label",
             models=["fast", "reason"],
         )
-        def fused(cluster: ClusterGroup) -> MatchResult:
-            ...
+        def fused(cluster: ClusterGroup) -> MatchResult: ...
+
         # Should have Both Each and Oracle
         assert fused.has_modifier(Each)
         assert fused.has_modifier(Oracle)
@@ -544,7 +580,9 @@ class TestEachOracleFusionDecoratorPath:
     def test_each_oracle_fusion_rejects_no_merge(self):
         """Line 736: map_over + ensemble_n without merge_fn/merge_prompt raises."""
         from neograph import ConstructError
+
         with pytest.raises(ConstructError, match="requires merge_fn or merge_prompt"):
+
             @node(
                 outputs=MatchResult,
                 model="fast",
@@ -553,11 +591,11 @@ class TestEachOracleFusionDecoratorPath:
                 map_key="label",
                 ensemble_n=3,
             )
-            def fused(cluster: ClusterGroup) -> MatchResult:
-                ...
+            def fused(cluster: ClusterGroup) -> MatchResult: ...
 
     def test_each_oracle_fusion_with_models_kwarg(self):
         """Line 745: models= is passed to Oracle kwargs."""
+
         @node(
             outputs=MatchResult,
             model="fast",
@@ -567,8 +605,8 @@ class TestEachOracleFusionDecoratorPath:
             models=["fast", "reason"],
             merge_prompt="merge-tpl",
         )
-        def fused(cluster: ClusterGroup) -> MatchResult:
-            ...
+        def fused(cluster: ClusterGroup) -> MatchResult: ...
+
         assert fused.has_modifier(Each)
         assert fused.has_modifier(Oracle)
 
@@ -589,8 +627,8 @@ class TestEachOracleFusionDecoratorPath:
         def fused(
             cluster: ClusterGroup,
             topic: Annotated[str, FromInput],
-        ) -> MatchResult:
-            ...
+        ) -> MatchResult: ...
+
         res = _get_param_res(fused)
         assert "topic" in res
 
@@ -601,6 +639,7 @@ class TestEachOracleFusionDecoratorPath:
 
         def my_merge(variants: list[Claims], config: Any) -> Claims:
             return variants[0]
+
         register_scripted("my_fuse_merge", my_merge)
         # Also visible to decoration-time infer_oracle_gen_type (post-§2 the
         # inference reads the decoration-time _decoration_registry.scripted).
@@ -615,8 +654,8 @@ class TestEachOracleFusionDecoratorPath:
             ensemble_n=3,
             merge_fn="my_fuse_merge",
         )
-        def fused(cluster: ClusterGroup) -> MatchResult:
-            ...
+        def fused(cluster: ClusterGroup) -> MatchResult: ...
+
         # gen_type should be Claims (from list[Claims])
         assert fused.oracle_gen_type is Claims
 
@@ -635,19 +674,16 @@ class TestEachOracleFusionDecoratorPath:
 
         def oo_merge(variants: list[Claims], config: Any) -> MatchResult:
             return MatchResult()  # type: ignore[call-arg]
+
         _f_register_scripted("oo_merge", oo_merge)
         _dec_register_scripted("oo_merge", oo_merge)
 
-        @node(outputs=MatchResult, model="fast", prompt="test",
-              ensemble_n=3, merge_fn="oo_merge")
-        def ensemble(cluster: ClusterGroup) -> MatchResult:
-            ...
+        @node(outputs=MatchResult, model="fast", prompt="test", ensemble_n=3, merge_fn="oo_merge")
+        def ensemble(cluster: ClusterGroup) -> MatchResult: ...
+
         # gen_type should be Claims (from list[Claims]), set eagerly at
         # decoration time on the bare returned Node.
         assert ensemble.oracle_gen_type is Claims
-
-
-
 
 
 class TestOracleBodyMergeAndParamResolutions:
@@ -655,14 +691,15 @@ class TestOracleBodyMergeAndParamResolutions:
 
     def test_oracle_body_merge_without_each(self):
         """Line 795: body-as-merge for Oracle without Each."""
+
         @node(
             outputs=Claims,
             model="fast",
             prompt="test",
             models=["fast", "reason"],
         )
-        def merged(topic: RawText) -> Claims:
-            ...
+        def merged(topic: RawText) -> Claims: ...
+
         assert merged.has_modifier(Oracle)
 
     def test_oracle_param_resolutions_registered(self):
@@ -680,11 +717,10 @@ class TestOracleBodyMergeAndParamResolutions:
         def merged(
             topic: RawText,
             run_id: Annotated[str, FromInput],
-        ) -> Claims:
-            ...
+        ) -> Claims: ...
+
         res = _get_param_res(merged)
         assert "run_id" in res
-
 
 
 class TestBodyMergeRuntimeInvocation:
@@ -695,6 +731,7 @@ class TestBodyMergeRuntimeInvocation:
         from tests.fakes import lookup_scripted
 
         call_log = []
+
         @node(
             outputs=Claims,
             model="fast",
@@ -710,6 +747,7 @@ class TestBodyMergeRuntimeInvocation:
         # The body_merge shim was registered. Find it.
         # The name is _body_merge_{node_label}_{id}
         from neograph._runtime_registry import _decoration_registry as _dr
+
         _scripted_dict = _dr.scripted
         body_merge_keys = [k for k in _scripted_dict if k.startswith("_body_merge_fused")]
         assert body_merge_keys, "Body merge should be registered"
@@ -722,6 +760,7 @@ class TestBodyMergeRuntimeInvocation:
         from tests.fakes import lookup_scripted
 
         call_log = []
+
         @node(
             outputs=Claims,
             model="fast",
@@ -733,6 +772,7 @@ class TestBodyMergeRuntimeInvocation:
             return Claims(items=["merged"])
 
         from neograph._runtime_registry import _decoration_registry as _dr
+
         _scripted_dict = _dr.scripted
         body_merge_keys = [k for k in _scripted_dict if k.startswith("_body_merge_oracle-merged")]
         assert body_merge_keys
@@ -751,22 +791,31 @@ class TestEachOracleFusionValidationParity:
     def test_fusion_rejects_both_merge_fn_and_merge_prompt(self):
         """@node with map_over + merge_fn + merge_prompt should raise."""
         with pytest.raises(ConstructError, match="both merge_fn and merge_prompt"):
+
             @node(
                 outputs=Claims,
-                prompt="test", model="fast",
-                map_over="items", map_key="id",
-                ensemble_n=3, merge_fn="a", merge_prompt="b",
+                prompt="test",
+                model="fast",
+                map_over="items",
+                map_key="id",
+                ensemble_n=3,
+                merge_fn="a",
+                merge_prompt="b",
             )
             def bad(item: RawText) -> Claims: ...
 
     def test_fusion_rejects_ensemble_n_less_than_2(self):
         """@node with map_over + ensemble_n=1 should raise."""
         with pytest.raises(ConstructError, match="ensemble_n must be >= 2"):
+
             @node(
                 outputs=Claims,
-                prompt="test", model="fast",
-                map_over="items", map_key="id",
-                ensemble_n=1, merge_fn="merge_test",
+                prompt="test",
+                model="fast",
+                map_over="items",
+                map_key="id",
+                ensemble_n=1,
+                merge_fn="merge_test",
             )
             def bad(item: RawText) -> Claims: ...
 
@@ -794,6 +843,7 @@ class TestBodyMergeShimNameUniqueness:
         import gc
 
         from neograph._runtime_registry import _decoration_registry as _dr
+
         _scripted_dict = _dr.scripted
 
         shim_names: list[str] = []
@@ -814,8 +864,7 @@ class TestBodyMergeShimNameUniqueness:
                 models=["fast", "reason"],
                 name="oracle-merged",
             )
-            def oracle_merged(topic: RawText) -> Claims:
-                ...
+            def oracle_merged(topic: RawText) -> Claims: ...
 
             # Force gc of the decorated function (the Node spec still holds the
             # sidecar but the *original* function object can be collected if no
@@ -841,8 +890,10 @@ class TestBodyMergeShimNameUniqueness:
         import gc
 
         from neograph._runtime_registry import _decoration_registry as _dr
+
         _condition_dict = _dr.condition
         from neograph._runtime_registry import _decoration_registry as _dr
+
         _scripted_dict = _dr.scripted
 
         prefix = "_node_interrupt_intr-target"
@@ -852,6 +903,7 @@ class TestBodyMergeShimNameUniqueness:
         cond_before = {k for k in _condition_dict if k.startswith(prefix)}
 
         for _ in range(50):
+
             @node(
                 outputs=Claims,
                 interrupt_when=lambda state: False,
@@ -877,6 +929,7 @@ class TestBodyMergeShimNameUniqueness:
         token from secrets.token_hex(8).
         """
         from neograph._runtime_registry import _decoration_registry as _dr
+
         _scripted_dict = _dr.scripted
 
         @node(
@@ -886,8 +939,7 @@ class TestBodyMergeShimNameUniqueness:
             models=["fast", "reason"],
             name="format-check",
         )
-        def format_check(topic: RawText) -> Claims:
-            ...
+        def format_check(topic: RawText) -> Claims: ...
 
         prefix = "_body_merge_format-check_"
         keys = [k for k in _scripted_dict if k.startswith(prefix)]
@@ -895,15 +947,11 @@ class TestBodyMergeShimNameUniqueness:
         # secrets.token_hex(8) → 16 hex chars. id(f):x → varies by platform
         # (usually 12 on 64-bit, but always pointer-derived). Asserting the
         # suffix length is 16 hex chars guards against regressing to id(f).
-        suffix = keys[0][len(prefix):]
+        suffix = keys[0][len(prefix) :]
         assert len(suffix) == 16, (
             f"Expected 16-char hex suffix from secrets.token_hex(8), got "
             f"{len(suffix)}-char {suffix!r}. Did the implementation regress "
             f"to id(f)?"
         )
         # All chars must be lowercase hex.
-        assert all(c in "0123456789abcdef" for c in suffix), (
-            f"Suffix {suffix!r} must be lowercase hex"
-        )
-
-
+        assert all(c in "0123456789abcdef" for c in suffix), f"Suffix {suffix!r} must be lowercase hex"

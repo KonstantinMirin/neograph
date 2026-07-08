@@ -1,21 +1,21 @@
 """Construct — ordered composition of Nodes. The pipeline blueprint.
 
-    # Top-level pipeline
-    rw_pipeline = Construct(
-        "rw-ingestion",
-        nodes=[read_node, decompose, classify, ...],
-    )
+# Top-level pipeline
+rw_pipeline = Construct(
+    "rw-ingestion",
+    nodes=[read_node, decompose, classify, ...],
+)
 
-    # Sub-construct with declared I/O boundary
-    enrich = Construct(
-        "enrich",
-        input=Claims,
-        output=ScoredClaims,
-        nodes=[lookup, verify, score],
-    )
+# Sub-construct with declared I/O boundary
+enrich = Construct(
+    "enrich",
+    input=Claims,
+    output=ScoredClaims,
+    nodes=[lookup, verify, score],
+)
 
-    # Compose: sub-construct in a parent pipeline
-    main = Construct("main", nodes=[decompose, enrich, report])
+# Compose: sub-construct in a parent pipeline
+main = Construct("main", nodes=[decompose, enrich, report])
 """
 
 from __future__ import annotations
@@ -47,10 +47,10 @@ def _validate_node_list(v: Any) -> list[ConstructItem]:
     for i, item in enumerate(v):
         if not (isinstance(item, (BaseModel, Modifiable)) and hasattr(item, "name")):
             raise TypeError(
-                f"nodes[{i}] must be a Node, Construct, or compatible model — "
-                f"got {type(item).__name__}: {item!r}"
+                f"nodes[{i}] must be a Node, Construct, or compatible model — got {type(item).__name__}: {item!r}"
             )
     return v
+
 
 __all__ = ["Construct", "ConstructError", "iter_nodes"]
 
@@ -164,9 +164,7 @@ class Construct(Modifiable, BaseModel):
         # contribute -- either an explicit framework field or any provider
         # knob. Skipping the no-op case preserves `is`-identity for
         # child nodes under a bare Construct (matches pre-pej0 behavior).
-        parent_has_overrides = bool(
-            self.llm_config.model_fields_set or self.llm_config.provider_kwargs
-        )
+        parent_has_overrides = bool(self.llm_config.model_fields_set or self.llm_config.provider_kwargs)
         # iter_item_slots descends into _BranchNode arms so a bare arm LLM node
         # inherits the parent Construct's llm_config / renderer overrides just
         # like a top-level node — otherwise it would run with the wrong

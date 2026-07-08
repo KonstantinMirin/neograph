@@ -21,14 +21,17 @@ from tests.fakes import build_fake_runtime, build_test_compile_kwargs, configure
 
 # ── Schemas ──────────────────────────────────────────────────────────────
 
+
 class ImageData(BaseModel, frozen=True):
     photo: str
+
 
 class Score(BaseModel, frozen=True):
     score: float
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────
+
 
 def _make_temp_image(suffix=".png", size=50):
     """Create a temp file with PNG magic bytes + padding."""
@@ -40,6 +43,7 @@ def _make_temp_image(suffix=".png", size=50):
 
 def _fresh_module(name):
     import types
+
     return types.ModuleType(name)
 
 
@@ -88,6 +92,7 @@ class TestE2ESizeLimit:
 
         tmp = _make_temp_image(size=200)  # 208 bytes > 100 limit
         try:
+
             @node(outputs=ImageData)
             def seed() -> ImageData:
                 return ImageData(photo=tmp)
@@ -130,6 +135,7 @@ class TestE2ESizeLimit:
 
         tmp = _make_temp_image(size=50)  # 58 bytes < 10000 limit
         try:
+
             @node(outputs=ImageData)
             def seed() -> ImageData:
                 return ImageData(photo=tmp)
@@ -260,6 +266,7 @@ class TestConfigPersistence:
 
         tmp = _make_temp_image(size=200)  # exceeds limit
         try:
+
             @node(outputs=ImageData)
             def seed() -> ImageData:
                 return ImageData(photo=tmp)
@@ -294,6 +301,7 @@ class TestConfigReset:
         configure_image()  # reset
 
         from neograph._image import _config as after
+
         assert after.max_size_bytes == 20 * 1024 * 1024
         assert after.allowed_dirs is None
         assert after.validate_format is True
@@ -352,9 +360,7 @@ class TestSymlinkSecurity:
             # The symlink target resolves outside safe_dir (to /tmp/...)
             # so it should be blocked IF the real file's dir != safe_dir
             if str(Path(real).resolve().parent) != str(Path(safe_dir).resolve()):
-                assert result == "data:image/png;base64,", (
-                    "Symlink escaping allowed_dirs should be blocked"
-                )
+                assert result == "data:image/png;base64,", "Symlink escaping allowed_dirs should be blocked"
             else:
                 # Edge case: real file happens to be in the same temp dir
                 # This is fine — just verify it's a valid data URI
@@ -411,6 +417,7 @@ class TestMultimodalOracleMerge:
         b64 = base64.b64encode(b"merge-image").decode()
 
         from tests.fakes import register_scripted
+
         register_scripted("_mm_gen", lambda i, c: Score(score=0.5))
 
         writer = Node.scripted("gen", fn="_mm_gen", outputs=Score) | Oracle(
@@ -449,10 +456,12 @@ class TestConfigIsGlobal:
         configure_image(max_size_bytes=42)
 
         from neograph._image import _config
+
         assert _config.max_size_bytes == 42
 
         # A second import sees the same config
         from neograph._image import _config as same_ref
+
         assert same_ref.max_size_bytes == 42
         assert same_ref is _config
 
@@ -508,9 +517,7 @@ class TestF3FormatValidationRejects:
         try:
             configure_image(validate_format=True)
             result = resolve_image(tmp)
-            assert result == "data:image/png;base64,", (
-                f"Non-image file should be rejected, got: {result[:60]}..."
-            )
+            assert result == "data:image/png;base64,", f"Non-image file should be rejected, got: {result[:60]}..."
         finally:
             Path(tmp).unlink()
 
@@ -534,6 +541,7 @@ class TestF4RIFFNotWebP:
     def test_wav_file_not_classified_as_webp(self):
         """A WAV file (RIFF + WAVE) should not be classified as WebP."""
         from neograph._image import _check_magic_bytes
+
         wav_header = b"RIFF" + b"\x00" * 4 + b"WAVE" + b"\x00" * 20
         result = _check_magic_bytes(wav_header)
         assert result != "image/webp", f"WAV classified as WebP: {result}"
@@ -541,6 +549,7 @@ class TestF4RIFFNotWebP:
     def test_real_webp_classified_correctly(self):
         """A WebP file (RIFF + WEBP) should be classified as image/webp."""
         from neograph._image import _check_magic_bytes
+
         webp_header = b"RIFF" + b"\x00" * 4 + b"WEBP" + b"\x00" * 20
         result = _check_magic_bytes(webp_header)
         assert result == "image/webp"
@@ -548,6 +557,7 @@ class TestF4RIFFNotWebP:
     def test_avi_file_not_classified_as_webp(self):
         """An AVI file (RIFF + AVI) should not be classified as WebP."""
         from neograph._image import _check_magic_bytes
+
         avi_header = b"RIFF" + b"\x00" * 4 + b"AVI " + b"\x00" * 20
         result = _check_magic_bytes(avi_header)
         assert result != "image/webp", f"AVI classified as WebP: {result}"
@@ -558,17 +568,20 @@ class TestF9MaxSizeValidation:
 
     def test_zero_raises(self):
         from neograph.errors import ConfigurationError
+
         with pytest.raises(ConfigurationError, match="must be > 0"):
             configure_image(max_size_bytes=0)
 
     def test_negative_raises(self):
         from neograph.errors import ConfigurationError
+
         with pytest.raises(ConfigurationError, match="must be > 0"):
             configure_image(max_size_bytes=-1)
 
     def test_positive_accepted(self):
         configure_image(max_size_bytes=1)
         from neograph._image import _config
+
         assert _config.max_size_bytes == 1
 
 
@@ -587,9 +600,7 @@ class TestF10BaseModelAsImagePath:
         assert isinstance(content, list)
         # The image block should be SKIPPED (BaseModel is not a valid image ref)
         img_blocks = [b for b in content if b["type"] == "image_url"]
-        assert len(img_blocks) == 0, (
-            f"BaseModel should not produce an image block: {img_blocks}"
-        )
+        assert len(img_blocks) == 0, f"BaseModel should not produce an image block: {img_blocks}"
 
 
 class TestF12MissingFieldSkipsImageBlock:
@@ -603,9 +614,7 @@ class TestF12MissingFieldSkipsImageBlock:
         content = msgs[0]["content"]
         assert isinstance(content, list)
         img_blocks = [b for b in content if b["type"] == "image_url"]
-        assert len(img_blocks) == 0, (
-            f"Missing field should not produce an image block: {img_blocks}"
-        )
+        assert len(img_blocks) == 0, f"Missing field should not produce an image block: {img_blocks}"
 
     def test_none_field_omits_image_block(self):
         from neograph._llm import _compile_prompt
@@ -615,9 +624,7 @@ class TestF12MissingFieldSkipsImageBlock:
         content = msgs[0]["content"]
         assert isinstance(content, list)
         img_blocks = [b for b in content if b["type"] == "image_url"]
-        assert len(img_blocks) == 0, (
-            f"None field should not produce an image block: {img_blocks}"
-        )
+        assert len(img_blocks) == 0, f"None field should not produce an image block: {img_blocks}"
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -679,7 +686,8 @@ class TestF5RetryWithMultimodal:
         _llm_kw = configure_fake_llm(lambda tier: RetryLLM(tier))
 
         b64 = base64.b64encode(b"test-img").decode()
-        result = invoke_structured(runtime=build_fake_runtime(_llm_kw['llm_factory'], _llm_kw['prompt_compiler']),
+        result = invoke_structured(
+            runtime=build_fake_runtime(_llm_kw["llm_factory"], _llm_kw["prompt_compiler"]),
             model_tier="fast",
             prompt_template="Rate: ${image:photo}",
             input_data={"photo": b64},
@@ -720,7 +728,8 @@ class TestF6StructuredOutputMultimodal:
         from neograph._llm import invoke_structured
 
         b64 = base64.b64encode(b"img").decode()
-        invoke_structured(runtime=build_fake_runtime(_llm_kw['llm_factory'], _llm_kw['prompt_compiler']),
+        invoke_structured(
+            runtime=build_fake_runtime(_llm_kw["llm_factory"], _llm_kw["prompt_compiler"]),
             model_tier="fast",
             prompt_template="Rate: ${image:photo}",
             input_data={"photo": b64},
@@ -750,9 +759,7 @@ class TestF7EmptyFieldName:
         msgs = _compile_prompt("${question} ${image:}", data)
         content = msgs[0]["content"]
         # ${image:} doesn't match _IMAGE_RE, so entire prompt is text-only
-        assert isinstance(content, str), (
-            f"${'{image:}'} should fall through to text path: {content}"
-        )
+        assert isinstance(content, str), f"${'{image:}'} should fall through to text path: {content}"
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -772,9 +779,7 @@ class TestF8CaseSensitivity:
         msgs = _compile_prompt("Rate ${IMAGE:photo}", data)
         content = msgs[0]["content"]
         # Should be flat string (no image blocks) — IMAGE: is case-sensitive
-        assert isinstance(content, str), (
-            f"Uppercase IMAGE: should not trigger multimodal: {content}"
-        )
+        assert isinstance(content, str), f"Uppercase IMAGE: should not trigger multimodal: {content}"
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -798,9 +803,7 @@ class TestF11WhitespaceStripping:
         assert isinstance(content, list)
         # Only image blocks — the space between is stripped
         types = [b["type"] for b in content]
-        assert types == ["image_url", "image_url"], (
-            f"Expected two adjacent image blocks: {types}"
-        )
+        assert types == ["image_url", "image_url"], f"Expected two adjacent image blocks: {types}"
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -835,20 +838,20 @@ class TestF14BMPFalsePositives:
     def test_text_starting_with_BM_not_classified_as_bmp(self):
         """A text file starting with 'BM' should not be classified as BMP."""
         from neograph._image import _check_magic_bytes
+
         # Text starting with "BM" but no valid BMP file size header
         data = b"BMI data for patient records, this is not an image"
         result = _check_magic_bytes(data)
         # Should be None (not recognized) or at least not "image/bmp"
         # because the file size field (bytes 2-5) would be garbage
-        assert result != "image/bmp" or result is None, (
-            f"Text starting with 'BM' classified as BMP: {result}"
-        )
+        assert result != "image/bmp" or result is None, f"Text starting with 'BM' classified as BMP: {result}"
 
     def test_real_bmp_header_classified(self):
         """A proper BMP file header is classified correctly."""
         import struct
 
         from neograph._image import _check_magic_bytes
+
         # BM + file_size matching data length + reserved + offset + padding
         data_len = 100
         header = b"BM" + struct.pack("<I", data_len) + b"\x00" * (data_len - 6)
@@ -873,6 +876,4 @@ class TestF15NoEscapeMechanism:
         msgs = _compile_prompt(r"Literal: \${image:photo}", data)
         content = msgs[0]["content"]
         # Known limitation: the backslash does NOT escape the image placeholder
-        assert isinstance(content, list), (
-            "Known limitation: backslash does not escape ${image:...}"
-        )
+        assert isinstance(content, list), "Known limitation: backslash does not escape ${image:...}"

@@ -24,18 +24,14 @@ def _make_async_only_tool(name: str = "mcp_echo") -> StructuredTool:
     async def _run(text: str) -> str:
         return f"echo:{text}"
 
-    return StructuredTool.from_function(
-        coroutine=_run, name=name, description="async-only MCP-style tool"
-    )
+    return StructuredTool.from_function(coroutine=_run, name=name, description="async-only MCP-style tool")
 
 
 def _make_sync_tool(name: str = "sync_search") -> StructuredTool:
     def _run(query: str) -> str:
         return f"result:{query}"
 
-    return StructuredTool.from_function(
-        func=_run, name=name, description="sync search tool"
-    )
+    return StructuredTool.from_function(func=_run, name=name, description="sync search tool")
 
 
 def _agent_construct(tools, name="lint-mcp"):
@@ -104,9 +100,7 @@ class TestAsyncToolFactoryLintRule:
             called.append(True)  # must NEVER run
             return _make_sync_tool("mcp_remote")
 
-        construct = _agent_construct(
-            [Tool("mcp_remote", budget=0)], name="lint-mcp-async-factory"
-        )
+        construct = _agent_construct([Tool("mcp_remote", budget=0)], name="lint-mcp-async-factory")
 
         with warnings.catch_warnings():
             warnings.simplefilter("error", RuntimeWarning)  # 'coroutine never awaited' -> error
@@ -119,9 +113,7 @@ class TestAsyncToolFactoryLintRule:
         assert called == [], "lint must NOT invoke an async tool factory"
 
     def test_no_issue_for_sync_factory_returning_sync_tool(self):
-        construct = _agent_construct(
-            [Tool("sync_search", budget=0)], name="lint-mcp-sync-factory"
-        )
+        construct = _agent_construct([Tool("sync_search", budget=0)], name="lint-mcp-sync-factory")
 
         issues = lint(
             construct,

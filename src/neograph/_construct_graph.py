@@ -203,7 +203,8 @@ def _build_adjacency(
                 raise ConstructError.build(
                     f"parameter '{pname}' does not match any @node or sub-construct in {source_label}",
                     node=n.name,
-                    hint="all parameters must name an upstream @node/Construct, use FromInput/FromConfig annotation, or have a default value\n  available items: " + str(all_names),
+                    hint="all parameters must name an upstream @node/Construct, use FromInput/FromConfig annotation, or have a default value\n  available items: "
+                    + str(all_names),
                     location=_get_node_source(n),
                 )
             if pname == field_name:

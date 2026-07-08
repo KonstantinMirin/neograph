@@ -25,16 +25,20 @@ from tests.fakes import build_test_compile_kwargs, register_scripted
 
 # ── Test models ───────────────────────────────────────────────────────────
 
+
 class Item(BaseModel, frozen=True):
     key: str
     value: int = 0
 
+
 class Collection(BaseModel, frozen=True):
     items: list[Item] = Field(default_factory=list)
+
 
 class Result(BaseModel, frozen=True):
     text: str
     count: int = 0
+
 
 class Draft(BaseModel, frozen=True):
     content: str
@@ -43,6 +47,7 @@ class Draft(BaseModel, frozen=True):
 
 
 # ── Each edge cases ──────────────────────────────────────────────────────
+
 
 class TestEachBoundaryConditions:
     """Each modifier at boundary conditions: 0, 1, many items."""
@@ -62,11 +67,13 @@ class TestEachBoundaryConditions:
             lambda _i, _c: Result(text=f"processed-{getattr(_i, 'key', '?')}"),
         )
 
-        pipeline = Construct("each-boundary", nodes=[
-            Node.scripted("src", fn="each_src", outputs=Collection),
-            Node.scripted("proc", fn="each_proc", inputs=Item, outputs=Result)
-            | Each(over="src.items", key="key"),
-        ])
+        pipeline = Construct(
+            "each-boundary",
+            nodes=[
+                Node.scripted("src", fn="each_src", outputs=Collection),
+                Node.scripted("proc", fn="each_proc", inputs=Item, outputs=Result) | Each(over="src.items", key="key"),
+            ],
+        )
         graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "test"})
 
@@ -89,14 +96,16 @@ class TestEachBoundaryConditions:
         )
         register_scripted(
             "key_proc",
-            lambda _i, _c: Result(text=_i.key if hasattr(_i, 'key') else "?"),
+            lambda _i, _c: Result(text=_i.key if hasattr(_i, "key") else "?"),
         )
 
-        pipeline = Construct("each-keys", nodes=[
-            Node.scripted("src", fn="key_src", outputs=Collection),
-            Node.scripted("proc", fn="key_proc", inputs=Item, outputs=Result)
-            | Each(over="src.items", key="key"),
-        ])
+        pipeline = Construct(
+            "each-keys",
+            nodes=[
+                Node.scripted("src", fn="key_src", outputs=Collection),
+                Node.scripted("proc", fn="key_proc", inputs=Item, outputs=Result) | Each(over="src.items", key="key"),
+            ],
+        )
         graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "test"})
 
@@ -106,6 +115,7 @@ class TestEachBoundaryConditions:
 
 
 # ── Loop edge cases ──────────────────────────────────────────────────────
+
 
 class TestLoopBoundaryConditions:
     """Loop modifier at boundary conditions: immediate exit, max iterations, skip-all."""
@@ -121,11 +131,14 @@ class TestLoopBoundaryConditions:
         register_scripted("imm_seed", lambda _i, _c: Draft(content="seed", score=0.0))
         register_scripted("imm_loop", loop_body)
 
-        pipeline = Construct("loop-imm-exit", nodes=[
-            Node.scripted("seed", fn="imm_seed", outputs=Draft),
-            Node.scripted("loop", fn="imm_loop", inputs=Draft, outputs=Draft)
-            | Loop(when=lambda d: d is None, max_iterations=10),  # False after first run (d is not None)
-        ])
+        pipeline = Construct(
+            "loop-imm-exit",
+            nodes=[
+                Node.scripted("seed", fn="imm_seed", outputs=Draft),
+                Node.scripted("loop", fn="imm_loop", inputs=Draft, outputs=Draft)
+                | Loop(when=lambda d: d is None, max_iterations=10),  # False after first run (d is not None)
+            ],
+        )
         graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "test"})
 
@@ -145,11 +158,14 @@ class TestLoopBoundaryConditions:
         register_scripted("max_loop", counting_body)
 
         call_count[0] = 0
-        pipeline = Construct("loop-max", nodes=[
-            Node.scripted("seed", fn="max_seed", outputs=Draft),
-            Node.scripted("loop", fn="max_loop", inputs=Draft, outputs=Draft)
-            | Loop(when=lambda d: True, max_iterations=max_iter, on_exhaust="last"),
-        ])
+        pipeline = Construct(
+            "loop-max",
+            nodes=[
+                Node.scripted("seed", fn="max_seed", outputs=Draft),
+                Node.scripted("loop", fn="max_loop", inputs=Draft, outputs=Draft)
+                | Loop(when=lambda d: True, max_iterations=max_iter, on_exhaust="last"),
+            ],
+        )
         graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "test"})
         assert call_count[0] == max_iter
@@ -163,11 +179,14 @@ class TestLoopBoundaryConditions:
         register_scripted("err_seed", lambda _i, _c: Draft(content="seed"))
         register_scripted("err_loop", lambda _i, _c: Draft(content="x"))
 
-        pipeline = Construct("loop-err", nodes=[
-            Node.scripted("seed", fn="err_seed", outputs=Draft),
-            Node.scripted("loop", fn="err_loop", inputs=Draft, outputs=Draft)
-            | Loop(when=lambda d: True, max_iterations=max_iter),  # default on_exhaust="error"
-        ])
+        pipeline = Construct(
+            "loop-err",
+            nodes=[
+                Node.scripted("seed", fn="err_seed", outputs=Draft),
+                Node.scripted("loop", fn="err_loop", inputs=Draft, outputs=Draft)
+                | Loop(when=lambda d: True, max_iterations=max_iter),  # default on_exhaust="error"
+            ],
+        )
         graph = compile(pipeline, **build_test_compile_kwargs())
         with pytest.raises(ExecutionError, match="max_iterations"):
             run(graph, input={"node_id": "test"})
@@ -184,22 +203,30 @@ class TestLoopBoundaryConditions:
         register_scripted("skip_seed", lambda _i, _c: Draft(content="seed"))
         register_scripted("skip_loop", always_skipped)
 
-        pipeline = Construct("loop-skip-all", nodes=[
-            Node.scripted("seed", fn="skip_seed", outputs=Draft),
-            Node.scripted("loop", fn="skip_loop", inputs=Draft, outputs=Draft)
-            | Loop(when=lambda d: True, max_iterations=3, on_exhaust="last"),
-        ])
+        pipeline = Construct(
+            "loop-skip-all",
+            nodes=[
+                Node.scripted("seed", fn="skip_seed", outputs=Draft),
+                Node.scripted("loop", fn="skip_loop", inputs=Draft, outputs=Draft)
+                | Loop(when=lambda d: True, max_iterations=3, on_exhaust="last"),
+            ],
+        )
 
         # Add skip_when to the loop node — always skip
         loop_node = pipeline.nodes[1]
-        loop_node_with_skip = loop_node.model_copy(update={
-            "skip_when": lambda _input: True,
-            "skip_value": lambda _input: Draft(content="skipped"),
-        })
-        pipeline_with_skip = Construct("loop-skip-all", nodes=[
-            pipeline.nodes[0],
-            loop_node_with_skip,
-        ])
+        loop_node_with_skip = loop_node.model_copy(
+            update={
+                "skip_when": lambda _input: True,
+                "skip_value": lambda _input: Draft(content="skipped"),
+            }
+        )
+        pipeline_with_skip = Construct(
+            "loop-skip-all",
+            nodes=[
+                pipeline.nodes[0],
+                loop_node_with_skip,
+            ],
+        )
 
         graph = compile(pipeline_with_skip, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "test"})
@@ -212,6 +239,7 @@ class TestLoopBoundaryConditions:
 
 
 # ── Oracle edge cases ────────────────────────────────────────────────────
+
 
 class TestOracleBoundaryConditions:
     """Oracle modifier with type-shifting merge."""
@@ -229,11 +257,20 @@ class TestOracleBoundaryConditions:
 
         register_scripted("shift_merge", type_shift_merge)
 
-        pipeline = Construct("oracle-shift", nodes=[
-            Node("gen", mode="think", outputs=Result, model="fast", prompt="test",
-                 llm_config={"output_strategy": "structured"})
-            | Oracle(n=2, merge_fn="shift_merge"),
-        ])
+        pipeline = Construct(
+            "oracle-shift",
+            nodes=[
+                Node(
+                    "gen",
+                    mode="think",
+                    outputs=Result,
+                    model="fast",
+                    prompt="test",
+                    llm_config={"output_strategy": "structured"},
+                )
+                | Oracle(n=2, merge_fn="shift_merge"),
+            ],
+        )
         graph = compile(pipeline, **build_test_compile_kwargs(), **__llm_kw)
         with pytest.raises(ExecutionError, match="wrong type"):
             run(graph, input={"node_id": "test"})
@@ -249,11 +286,20 @@ class TestOracleBoundaryConditions:
 
         register_scripted("correct_merge", correct_merge)
 
-        pipeline = Construct("oracle-correct", nodes=[
-            Node("gen", mode="think", outputs=Result, model="fast", prompt="test",
-                 llm_config={"output_strategy": "structured"})
-            | Oracle(n=2, merge_fn="correct_merge"),
-        ])
+        pipeline = Construct(
+            "oracle-correct",
+            nodes=[
+                Node(
+                    "gen",
+                    mode="think",
+                    outputs=Result,
+                    model="fast",
+                    prompt="test",
+                    llm_config={"output_strategy": "structured"},
+                )
+                | Oracle(n=2, merge_fn="correct_merge"),
+            ],
+        )
         graph = compile(pipeline, **build_test_compile_kwargs(), **__llm_kw)
         result = run(graph, input={"node_id": "test"})
 

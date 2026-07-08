@@ -50,8 +50,7 @@ class Deal(BaseModel):
     stage: str
 
 
-def _json_fetcher(sink: list[str], payload=b'{"deal_id": "42", "stage": "won"}',
-                  mime="application/json"):
+def _json_fetcher(sink: list[str], payload=b'{"deal_id": "42", "stage": "won"}', mime="application/json"):
     async def _fetch(uri: str):
         await asyncio.sleep(0)
         sink.append(uri)
@@ -65,8 +64,10 @@ class TestResourceReaderShape:
 
     def test_emits_async_only_structured_tool(self):
         t = resource_reader(
-            "read_deal", uri_template="crm://deals/{deal_id}",
-            output_model=Deal, description="Read one CRM deal.",
+            "read_deal",
+            uri_template="crm://deals/{deal_id}",
+            output_model=Deal,
+            description="Read one CRM deal.",
         )
         assert isinstance(t, StructuredTool)
         assert t.name == "read_deal"
@@ -75,8 +76,10 @@ class TestResourceReaderShape:
 
     def test_args_schema_derived_from_uri_template_placeholders(self):
         t = resource_reader(
-            "read_emails", uri_template="crm://deals/{deal_id}/emails?range={range}",
-            output_model=Deal, description="Read a slice of a deal's emails.",
+            "read_emails",
+            uri_template="crm://deals/{deal_id}/emails?range={range}",
+            output_model=Deal,
+            description="Read a slice of a deal's emails.",
         )
         assert set(t.args_schema.model_fields) == {"deal_id", "range"}
 
@@ -87,8 +90,10 @@ class TestResourceReaderInvoke:
     def test_ainvoke_fetches_interpolated_uri_and_parses_json(self):
         sink: list[str] = []
         t = resource_reader(
-            "read_deal", uri_template="crm://deals/{deal_id}",
-            output_model=Deal, description="Read one CRM deal.",
+            "read_deal",
+            uri_template="crm://deals/{deal_id}",
+            output_model=Deal,
+            description="Read one CRM deal.",
         )
         cfg = {"configurable": {"mcp_resource_fetcher": _json_fetcher(sink)}}
 
@@ -99,8 +104,10 @@ class TestResourceReaderInvoke:
 
     def test_explicit_parse_callable_wins(self):
         t = resource_reader(
-            "read_deal", uri_template="crm://deals/{deal_id}",
-            output_model=Deal, description="d",
+            "read_deal",
+            uri_template="crm://deals/{deal_id}",
+            output_model=Deal,
+            description="d",
             parse=lambda content, mime: Deal(deal_id="X", stage="parsed"),
         )
         sink: list[str] = []
@@ -114,8 +121,10 @@ class TestResourceReaderInvoke:
         from neograph.errors import ConfigurationError
 
         t = resource_reader(
-            "read_deal", uri_template="crm://deals/{deal_id}",
-            output_model=Deal, description="d",
+            "read_deal",
+            uri_template="crm://deals/{deal_id}",
+            output_model=Deal,
+            description="d",
         )
         with pytest.raises(ConfigurationError, match="mcp_resource_fetcher"):
             asyncio.run(t.ainvoke({"deal_id": "1"}, config={"configurable": {}}))
@@ -149,11 +158,12 @@ class TestResourceReaderLintCoverage:
 
     def test_lint_flags_resource_reader_as_async_driver_required(self):
         t = resource_reader(
-            "read_deal", uri_template="crm://deals/{deal_id}",
-            output_model=Deal, description="d",
+            "read_deal",
+            uri_template="crm://deals/{deal_id}",
+            output_model=Deal,
+            description="d",
         )
-        pipeline = Node("scan", mode="agent", outputs=Claims, model="fast",
-                        prompt="test/scan", tools=[t])
+        pipeline = Node("scan", mode="agent", outputs=Claims, model="fast", prompt="test/scan", tools=[t])
         from neograph import Construct
 
         issues = lint(Construct("p", nodes=[pipeline]))
@@ -169,14 +179,20 @@ class TestResourceReaderAgentModeEndToEnd:
     def test_typed_result_carries_model_under_arun(self):
         sink: list[str] = []
         t = resource_reader(
-            "read_deal", uri_template="crm://deals/{deal_id}",
-            output_model=Deal, description="Read one CRM deal.",
+            "read_deal",
+            uri_template="crm://deals/{deal_id}",
+            output_model=Deal,
+            description="Read one CRM deal.",
         )
         mod = _types.ModuleType("test_resource_reader_agent_mod")
 
-        @node(mode="agent",
-              outputs={"result": Claims, "tool_log": list[ToolInteraction]},
-              model="fast", prompt="test/scan", tools=[t])
+        @node(
+            mode="agent",
+            outputs={"result": Claims, "tool_log": list[ToolInteraction]},
+            model="fast",
+            prompt="test/scan",
+            tools=[t],
+        )
         def scan() -> Claims: ...
 
         mod.scan = scan
@@ -196,13 +212,16 @@ class TestResourceReaderAgentModeEndToEnd:
         assert sink == ["crm://deals/42"]
         tool_log = result["scan_tool_log"]
         assert tool_log, "expected a ToolInteraction recorded for read_deal"
-        assert any(isinstance(ti.typed_result, Deal) and ti.typed_result.stage == "won"
-                   for ti in tool_log), "typed_result did not carry the parsed Deal model"
+        assert any(isinstance(ti.typed_result, Deal) and ti.typed_result.stage == "won" for ti in tool_log), (
+            "typed_result did not carry the parsed Deal model"
+        )
 
     def test_async_only_reader_under_sync_run_fails_loud(self):
         t = resource_reader(
-            "read_deal", uri_template="crm://deals/{deal_id}",
-            output_model=Deal, description="d",
+            "read_deal",
+            uri_template="crm://deals/{deal_id}",
+            output_model=Deal,
+            description="d",
         )
         mod = _types.ModuleType("test_resource_reader_sync_mod")
 
@@ -252,8 +271,10 @@ class TestToolIdempotencyAnnotation:
 
     def test_resource_reader_marks_tool_idempotent(self):
         t = resource_reader(
-            "read_deal", uri_template="crm://deals/{deal_id}",
-            output_model=Deal, description="d",
+            "read_deal",
+            uri_template="crm://deals/{deal_id}",
+            output_model=Deal,
+            description="d",
         )
         # The reader stashes its idempotency in metadata so from_base_tool lifts it.
         assert (t.metadata or {}).get("ng_idempotent") is True
@@ -262,8 +283,10 @@ class TestToolIdempotencyAnnotation:
         from neograph import Tool
 
         t = resource_reader(
-            "read_deal", uri_template="crm://deals/{deal_id}",
-            output_model=Deal, description="d",
+            "read_deal",
+            uri_template="crm://deals/{deal_id}",
+            output_model=Deal,
+            description="d",
         )
         spec = Tool.from_base_tool(t)
         assert spec.idempotent is True
@@ -275,9 +298,11 @@ class TestToolIdempotencyAnnotation:
         from neograph import Tool
 
         bare = StructuredTool(
-            name="bare", description="d",
+            name="bare",
+            description="d",
             args_schema=create_model("bare_Args", x=(str, ...)),
-            coroutine=None, func=lambda x: x,
+            coroutine=None,
+            func=lambda x: x,
         )
         assert Tool.from_base_tool(bare).idempotent is False
 

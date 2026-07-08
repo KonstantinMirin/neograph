@@ -85,9 +85,7 @@ class TestSidecarSurvivesCopyPaths:
     def test_baseline_both_private_attrs_populated_when_node_decorated(self):
         """@node with a DI param populates both _sidecar and _param_res."""
         n = _decorated_node()
-        _assert_sidecar_intact(
-            n, fn_expected=_get_sidecar(n)[0], param_names_expected=("upstream", "topic")
-        )
+        _assert_sidecar_intact(n, fn_expected=_get_sidecar(n)[0], param_names_expected=("upstream", "topic"))
         # topic is the only DI param; upstream is an upstream edge (not DI).
         _assert_param_res_intact(n, keys_expected={"topic"})
 
@@ -132,9 +130,7 @@ class TestSidecarSurvivesCopyPaths:
         n = _decorated_node()
         fn, names = _get_sidecar(n)
 
-        n2 = n | Oracle(n=3, merge_prompt="pick best: ${variants}") | Operator(
-            when="needs_review"
-        )
+        n2 = n | Oracle(n=3, merge_prompt="pick best: ${variants}") | Operator(when="needs_review")
 
         assert n2.has_modifier(Oracle)
         assert n2.has_modifier(Operator)
@@ -176,21 +172,16 @@ class TestProgrammaticSidecarSurvivesCopyPaths:
 
         n = Node(name="a", mode="scripted", outputs=Claims)
         _register_sidecar(n, fn_a, ("upstream",))
-        n._param_res = {
-            "topic": DIBinding(
-                name="topic", kind=DIKind.FROM_INPUT, inner_type=str, required=True
-            )
-        }
+        n._param_res = {"topic": DIBinding(name="topic", kind=DIKind.FROM_INPUT, inner_type=str, required=True)}
 
-        n2 = n | Oracle(n=2, merge_prompt="pick best: ${variants}") | Operator(
-            when="needs_review"
-        )
+        n2 = n | Oracle(n=2, merge_prompt="pick best: ${variants}") | Operator(when="needs_review")
 
         _assert_sidecar_intact(n2, fn_expected=fn_a, param_names_expected=("upstream",))
         _assert_param_res_intact(n2, keys_expected={"topic"})
 
     def test_scripted_shim_private_attr_survives_model_copy(self):
         """_scripted_shim (third PrivateAttr, same mechanism) survives copy."""
+
         def shim(state, config):  # noqa: ANN001
             return {}
 

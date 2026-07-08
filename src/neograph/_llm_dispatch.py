@@ -69,7 +69,9 @@ def _raise_dispatch_failed(output_model: type[BaseModel], err: Any) -> NoReturn:
 
 
 def _raise_structured_retry_exhausted(
-    output_model: type[BaseModel], err: ValidationError, attempts: int,
+    output_model: type[BaseModel],
+    err: ValidationError,
+    attempts: int,
 ) -> NoReturn:
     """The structured re-prompt loop exhausted ``max_retries`` on a validation
     failure. Single-site so the sync/async twins share the message. neograph-zcxd."""
@@ -144,7 +146,12 @@ def _call_structured(
                 case Raw(dsml=True, raw_text=raw_text, usage=usage):
                     if cfg is not None:
                         recovered = recover_dsml(
-                            raw_text, output_model, llm, messages, config, cfg,
+                            raw_text,
+                            output_model,
+                            llm,
+                            messages,
+                            config,
+                            cfg,
                             strategy="structured",
                         )
                         if recovered is not None:
@@ -157,7 +164,10 @@ def _call_structured(
                         _raise_structured_retry_exhausted(output_model, err, attempts)
                     attempts += 1
                     current_messages = structured_retry_messages(
-                        current_messages, raw_text, err, output_model,
+                        current_messages,
+                        raw_text,
+                        err,
+                        output_model,
                     )
                     continue
                 case Failed(error=err, raw_text=raw_text):
@@ -165,7 +175,12 @@ def _call_structured(
                         text = raw_text or message_text(llm.invoke(messages, config=config))
                         if contains_dsml(text):
                             recovered = recover_dsml(
-                                text, output_model, llm, messages, config, cfg,
+                                text,
+                                output_model,
+                                llm,
+                                messages,
+                                config,
+                                cfg,
                                 strategy="structured",
                             )
                             if recovered is not None:
@@ -209,7 +224,12 @@ async def _acall_structured(
                 case Raw(dsml=True, raw_text=raw_text, usage=usage):
                     if cfg is not None:
                         recovered = await arecover_dsml(
-                            raw_text, output_model, llm, messages, config, cfg,
+                            raw_text,
+                            output_model,
+                            llm,
+                            messages,
+                            config,
+                            cfg,
                             strategy="structured",
                         )
                         if recovered is not None:
@@ -222,7 +242,10 @@ async def _acall_structured(
                         _raise_structured_retry_exhausted(output_model, err, attempts)
                     attempts += 1
                     current_messages = structured_retry_messages(
-                        current_messages, raw_text, err, output_model,
+                        current_messages,
+                        raw_text,
+                        err,
+                        output_model,
                     )
                     continue
                 case Failed(error=err, raw_text=raw_text):
@@ -230,7 +253,12 @@ async def _acall_structured(
                         text = raw_text or message_text(await llm.ainvoke(messages, config=config))
                         if contains_dsml(text):
                             recovered = await arecover_dsml(
-                                text, output_model, llm, messages, config, cfg,
+                                text,
+                                output_model,
+                                llm,
+                                messages,
+                                config,
+                                cfg,
                                 strategy="structured",
                             )
                             if recovered is not None:

@@ -58,21 +58,17 @@ def _inject_di_inputs(node: Node, config: RunnableConfig) -> RunnableConfig:
     # serve it. Fail loud (naming param + node) rather than silently dropping the
     # template var (the R2 silent-no-op hole, neograph-3q6j). arun() routes to
     # `_ainject_di_inputs`, which awaits the fetch.
-    resource_params = sorted(
-        name for name, b in param_res.items() if b.kind is DIKind.FROM_RESOURCE
-    )
+    resource_params = sorted(name for name, b in param_res.items() if b.kind is DIKind.FROM_RESOURCE)
     if resource_params:
         raise ConfigurationError.build(
             f"resource DI parameter(s) {resource_params} cannot resolve on the "
             f"sync run() driver (a FromResource fetch is awaited)",
             node=node.name,
             hint="drive the graph with arun() so the async di_inputs twin can "
-                 "await the fetch and feed the fetched text to the prompt template.",
+            "await the fetch and feed the fetched text to the prompt template.",
         )
     di_inputs = {
-        name: binding.resolve(config)
-        for name, binding in param_res.items()
-        if binding.kind in DI_TEMPLATE_KINDS
+        name: binding.resolve(config) for name, binding in param_res.items() if binding.kind in DI_TEMPLATE_KINDS
     }
     if not di_inputs:
         return config
@@ -115,6 +111,7 @@ async def _ainject_di_inputs(node: Node, config: RunnableConfig) -> RunnableConf
         return config
     return _with_configurable(config, **{StateKeys.DI_INPUTS: di_inputs})
 
+
 # ── Typed dispatch containers (architecture-v2 section 1) ────────────────
 #
 # These replace bare ``Any`` at the factory boundary. Values are NOT
@@ -135,6 +132,7 @@ class NodeInput:
     When both are set, ``fan_in`` takes precedence (the dict form is the
     more specific representation).
     """
+
     single: NodeValue = None
     fan_in: dict[str, NodeValue] | None = None
 
@@ -154,6 +152,7 @@ class NodeOutput:
     ``multi`` holds a dict-form multi-output mapping (key -> value).
     When both are set, ``multi`` takes precedence.
     """
+
     single: NodeValue = None
     multi: dict[str, NodeValue] | None = None
 
@@ -220,7 +219,7 @@ class ScriptedDispatch:
                 "async node body invoked under sync run(); use arun()",
                 node=node.name,
                 hint="An `async def` scripted body requires the async driver. "
-                     "Call arun(graph, ...) / graph.ainvoke instead of run() / graph.invoke.",
+                "Call arun(graph, ...) / graph.ainvoke instead of run() / graph.invoke.",
             )
         return NodeOutput(single=result)
 
@@ -317,7 +316,9 @@ class ThinkDispatch:
 
 
 def _shape_tool_output(
-    result: BaseModel | None, tool_interactions: list, no: NormalizedOutputs,
+    result: BaseModel | None,
+    tool_interactions: list,
+    no: NormalizedOutputs,
     primary_key: str | None,
 ) -> NodeOutput:
     """Pure postamble reused by the agent cycle's parse node: shape the ReAct
@@ -422,7 +423,7 @@ def _dispatch_for_mode(
             expected="compile via the inline agent cycle (_wiring._add_agent_cycle)",
             found=f"_dispatch_for_mode reached with mode='{node.mode}'",
             hint="This is an internal wiring error — agent/act nodes are expanded "
-                 "to an agent/tools/parse cycle, not make_node_fn.",
+            "to an agent/tools/parse cycle, not make_node_fn.",
             node=node.name,
         )
     raise ConfigurationError.build(

@@ -30,9 +30,7 @@ SRC_DIR = TESTS_DIR.parent / "src" / "neograph"
 
 # ``re`` functions whose FIRST argument is the pattern. A literal first arg to
 # any of these is an inline (un-named) regex -- a naming violation.
-_RE_PATTERN_FIRST = frozenset(
-    {"search", "match", "fullmatch", "findall", "finditer", "sub", "subn", "split"}
-)
+_RE_PATTERN_FIRST = frozenset({"search", "match", "fullmatch", "findall", "finditer", "sub", "subn", "split"})
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -142,10 +140,7 @@ class TestRegexGuardsHaveSlipMetaTests:
                 continue
             if fn == "compile":
                 if id(node) not in bound_compile_ids:
-                    naming.append(
-                        f"line {node.lineno}: re.compile(...) not bound to a "
-                        "named constant"
-                    )
+                    naming.append(f"line {node.lineno}: re.compile(...) not bound to a named constant")
             elif fn in _RE_PATTERN_FIRST:
                 pattern_arg = node.args[0] if node.args else None
                 for kw in node.keywords:
@@ -153,16 +148,13 @@ class TestRegexGuardsHaveSlipMetaTests:
                         pattern_arg = kw.value
                 if isinstance(pattern_arg, (ast.Constant, ast.JoinedStr)):
                     naming.append(
-                        f"line {node.lineno}: inline re.{fn}(<literal>) "
-                        "-- assign the pattern to a named constant"
+                        f"line {node.lineno}: inline re.{fn}(<literal>) -- assign the pattern to a named constant"
                     )
 
         # Pass 3: slip-test coverage per binding.
         test_fns: dict[str, bool] = {}
         for node in ast.walk(tree):
-            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith(
-                "test"
-            ):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith("test"):
                 has_assert = any(isinstance(s, ast.Assert) for s in ast.walk(node))
                 test_fns[node.name] = has_assert
 
@@ -193,10 +185,7 @@ class TestRegexGuardsHaveSlipMetaTests:
                     f"slip meta-test (expected a test named like 'test_slip_{binding}')"
                 )
             elif not any(test_fns[n] for n in named_slips):
-                slip.append(
-                    f"slip meta-test(s) for '{binding}' contain no assert "
-                    f"(empty-pass evasion): {named_slips}"
-                )
+                slip.append(f"slip meta-test(s) for '{binding}' contain no assert (empty-pass evasion): {named_slips}")
         return naming, slip
 
     @classmethod
@@ -217,8 +206,7 @@ class TestRegexGuardsHaveSlipMetaTests:
         assert not problems, (
             "Regex-guard discipline violated (PROC-2). Every regex in a guard "
             "module must be a NAMED constant with a per-constant slip meta-test "
-            "(name contains 'slip' + the constant, body has >=1 assert):\n"
-            + "\n".join(problems)
+            "(name contains 'slip' + the constant, body has >=1 assert):\n" + "\n".join(problems)
         )
 
     # ── mutation meta-tests: prove the analyzer actually analyzes ─────────────
@@ -260,13 +248,7 @@ class TestRegexGuardsHaveSlipMetaTests:
         assert slip and "slip meta-test" in slip[0]
 
     def test_meta_detects_empty_pass_slip(self) -> None:
-        src = (
-            "import re\n"
-            "FOO_RE = re.compile(r'^x')\n"
-            "class T:\n"
-            "    def test_slip_foo_re(self):\n"
-            "        pass\n"
-        )
+        src = "import re\nFOO_RE = re.compile(r'^x')\nclass T:\n    def test_slip_foo_re(self):\n        pass\n"
         _, slip = self._analyze(src)
         assert slip and "no assert" in slip[0]
 
@@ -371,9 +353,7 @@ class TestNoNearDuplicateHelperNames:
         frozenset({"_ainvoke_json_with_retry", "_invoke_json_with_retry"}): (
             "lev=1: async twin of the json-retry loop (_llm_retry.py)."
         ),
-        frozenset({"arecover_dsml", "recover_dsml"}): (
-            "lev=1: async twin of DSML recovery (_llm_retry.py)."
-        ),
+        frozenset({"arecover_dsml", "recover_dsml"}): ("lev=1: async twin of DSML recovery (_llm_retry.py)."),
         # neograph-3q6j: the di_inputs injector's async twin awaits FROM_RESOURCE
         # bindings (DIBinding.aresolve) before _compile_prompt — same a-prefix
         # sync/async twin convention; the sync form fails loud on FROM_RESOURCE.
@@ -394,12 +374,8 @@ class TestNoNearDuplicateHelperNames:
         # neograph-q8ec (Phase 2, streaming): a-prefix async twins of the
         # runner's prepare brain and stream verb — same sync/async twin
         # convention (astream/_aprepare run the vertical on the event loop).
-        frozenset({"_aprepare", "_prepare"}): (
-            "lev=1: async twin of the pre-engine prepare brain (runner.py)."
-        ),
-        frozenset({"astream", "stream"}): (
-            "lev=1: async twin of the sync stream verb (runner.py)."
-        ),
+        frozenset({"_aprepare", "_prepare"}): ("lev=1: async twin of the pre-engine prepare brain (runner.py)."),
+        frozenset({"astream", "stream"}): ("lev=1: async twin of the sync stream verb (runner.py)."),
         # neograph-p3c7: a-prefix async twins of the Oracle merge barrier — same
         # deliberate sync/async twin convention (merge runs on the loop under arun).
         # neograph-w74k.3.1: a-prefix async twins of the tool-loop factory
@@ -479,9 +455,7 @@ class TestNoNearDuplicateHelperNames:
                 elif isinstance(node, ast.ImportFrom):
                     for alias in node.names:
                         if alias.asname:  # only aliases introduce a new local name
-                            names.setdefault(alias.asname, []).append(
-                                f"{path.name}:{node.lineno}(alias)"
-                            )
+                            names.setdefault(alias.asname, []).append(f"{path.name}:{node.lineno}(alias)")
         return names
 
     @classmethod
@@ -522,23 +496,15 @@ class TestNoNearDuplicateHelperNames:
     # ── mutation meta-tests ───────────────────────────────────────────────────
 
     def test_meta_positive_flags_near_duplicate(self) -> None:
-        flagged = self._find_near_duplicates(
-            {"_foobar": ["x.py:1(def)"], "_foobaz": ["y.py:1(def)"]}
-        )
+        flagged = self._find_near_duplicates({"_foobar": ["x.py:1(def)"], "_foobaz": ["y.py:1(def)"]})
         assert len(flagged) == 1 and "_foobar" in flagged[0]
 
     def test_meta_negative_ignores_distant_and_short(self) -> None:
         # lev > 2:
-        assert self._find_near_duplicates(
-            {"compile": ["x.py:1(def)"], "validate": ["y.py:1(def)"]}
-        ) == []
+        assert self._find_near_duplicates({"compile": ["x.py:1(def)"], "validate": ["y.py:1(def)"]}) == []
         # both < MIN_LEN even though lev=1:
-        assert self._find_near_duplicates(
-            {"get": ["x.py:1(def)"], "set": ["y.py:1(def)"]}
-        ) == []
+        assert self._find_near_duplicates({"get": ["x.py:1(def)"], "set": ["y.py:1(def)"]}) == []
 
     def test_meta_negative_respects_allowlist(self) -> None:
-        flagged = self._find_near_duplicates(
-            {"_get_param_res": ["a.py:1(def)"], "_set_param_res": ["a.py:2(def)"]}
-        )
+        flagged = self._find_near_duplicates({"_get_param_res": ["a.py:1(def)"], "_set_param_res": ["a.py:2(def)"]})
         assert flagged == []

@@ -97,9 +97,7 @@ class TestErrorParentageByCategory:
         list(PARENTAGE.items()),
         ids=lambda x: getattr(x, "__name__", str(x)),
     )
-    def test_error_is_parented_under_its_category(
-        self, err_type: type, category: type
-    ) -> None:
+    def test_error_is_parented_under_its_category(self, err_type: type, category: type) -> None:
         assert issubclass(err_type, category), (
             f"{err_type.__name__} must subclass {category.__name__} per THE RULE "
             "in errors.py; see neograph-12dc / review PAT-01"
@@ -112,11 +110,7 @@ class TestErrorParentageByCategory:
         asserts it is pinned. This is what stops the next ticket from adding an
         error type with an ad-hoc parent nobody reviewed against the rule.
         """
-        defined = {
-            obj
-            for obj in vars(errmod).values()
-            if isinstance(obj, type) and issubclass(obj, NeographError)
-        }
+        defined = {obj for obj in vars(errmod).values() if isinstance(obj, type) and issubclass(obj, NeographError)}
         missing = defined - set(PARENTAGE)
         assert not missing, (
             "new neograph error types are not pinned in tests/test_error_hierarchy.py "

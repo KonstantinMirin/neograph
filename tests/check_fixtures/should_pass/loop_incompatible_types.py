@@ -11,18 +11,24 @@ from tests.fakes import register_scripted
 class Draft(BaseModel, frozen=True):
     text: str
 
+
 class Review(BaseModel, frozen=True):
     score: float
 
+
 register_scripted("lt_review", lambda i, c: Review(score=0.5))
 
-pipeline = Construct("valid", nodes=[
-    Construct(
-        "refine",
-        input=Draft,
-        output=Review,  # Review != Draft — produce+validate pattern
-        nodes=[
-            Node.scripted("review", fn="lt_review", outputs=Review),
-        ],
-    ) | Loop(when=lambda r: r.score < 0.8, max_iterations=3),
-])
+pipeline = Construct(
+    "valid",
+    nodes=[
+        Construct(
+            "refine",
+            input=Draft,
+            output=Review,  # Review != Draft — produce+validate pattern
+            nodes=[
+                Node.scripted("review", fn="lt_review", outputs=Review),
+            ],
+        )
+        | Loop(when=lambda r: r.score < 0.8, max_iterations=3),
+    ],
+)

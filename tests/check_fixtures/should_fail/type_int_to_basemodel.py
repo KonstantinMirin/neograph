@@ -10,10 +10,14 @@ from tests.fakes import register_scripted
 class SomeModel(BaseModel, frozen=True):
     text: str
 
+
 register_scripted("int_out_2b", lambda i, c: 42)
 register_scripted("model_in_2b", lambda i, c: SomeModel(text="ok"))
 
-pipeline = Construct("broken", nodes=[
-    Node.scripted("first", fn="int_out_2b", outputs=int),
-    Node.scripted("second", fn="model_in_2b", inputs=SomeModel, outputs=SomeModel),
-])
+pipeline = Construct(
+    "broken",
+    nodes=[
+        Node.scripted("first", fn="int_out_2b", outputs=int),
+        Node.scripted("second", fn="model_in_2b", inputs=SomeModel, outputs=SomeModel),
+    ],
+)

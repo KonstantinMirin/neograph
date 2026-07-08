@@ -96,7 +96,9 @@ def _detect_fan_out_params(
             _, pnames = sidecar
             di_params = set(_get_param_res(n))
             _ports = port_params.get(field_name, set())
-            fan_out_params[field_name] = {p for p in pnames if p not in decorated and p not in di_params and p not in _ports}
+            fan_out_params[field_name] = {
+                p for p in pnames if p not in decorated and p not in di_params and p not in _ports
+            }
     return fan_out_params
 
 
@@ -138,8 +140,10 @@ def _classify_constants(
                 p = sig.parameters.get(pname)
                 if p is not None and p.default is not inspect.Parameter.empty:
                     param_res[pname] = DIBinding(
-                        name=pname, kind=DIKind.CONSTANT,
-                        inner_type=type(p.default), required=False,
+                        name=pname,
+                        kind=DIKind.CONSTANT,
+                        inner_type=type(p.default),
+                        required=False,
                         default_value=p.default,
                     )
                     updated = True
@@ -162,7 +166,12 @@ def _check_di_collisions(
             continue
         param_res = _get_param_res(n)
         for pname, binding in param_res.items():
-            if binding.kind in (DIKind.FROM_INPUT, DIKind.FROM_INPUT_MODEL, DIKind.FROM_CONFIG, DIKind.FROM_CONFIG_MODEL):
+            if binding.kind in (
+                DIKind.FROM_INPUT,
+                DIKind.FROM_INPUT_MODEL,
+                DIKind.FROM_CONFIG,
+                DIKind.FROM_CONFIG_MODEL,
+            ):
                 if pname in decorated or pname in sub_by_field:
                     di_label = "FromInput" if "input" in binding.kind.value else "FromConfig"
                     raise ConstructError.build(

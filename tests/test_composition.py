@@ -59,13 +59,9 @@ class TestOutputSchemaShadowWarning:
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
             state_model = create_model("ShadowState", validate=(str, ""))
-            after_state = [
-                w for w in caught if "shadows an attribute" in str(w.message)
-            ]
+            after_state = [w for w in caught if "shadows an attribute" in str(w.message)]
             build_output_schema_model(state_model)
-            after_output = [
-                w for w in caught if "shadows an attribute" in str(w.message)
-            ]
+            after_output = [w for w in caught if "shadows an attribute" in str(w.message)]
 
         # The user's own state model still warns exactly once...
         assert len(after_state) == 1, (
@@ -102,17 +98,26 @@ class TestSubgraph:
         from tests.fakes import register_scripted
 
         # Parent: produces claims
-        register_scripted("decompose", lambda input_data, config: EnrichInput(
-            claims=["claim-1", "claim-2"],
-        ))
+        register_scripted(
+            "decompose",
+            lambda input_data, config: EnrichInput(
+                claims=["claim-1", "claim-2"],
+            ),
+        )
 
         # Sub-construct nodes: enrich the claims
-        register_scripted("lookup", lambda input_data, config: RawText(
-            text=f"context for {len(input_data.claims)} claims",
-        ))
-        register_scripted("score", lambda input_data, config: EnrichOutput(
-            scored=[{"claim": c, "score": "high"} for c in input_data.claims],
-        ))
+        register_scripted(
+            "lookup",
+            lambda input_data, config: RawText(
+                text=f"context for {len(input_data.claims)} claims",
+            ),
+        )
+        register_scripted(
+            "score",
+            lambda input_data, config: EnrichOutput(
+                scored=[{"claim": c, "score": "high"} for c in input_data.claims],
+            ),
+        )
 
         # Sub-construct with declared I/O boundary
         enrich = Construct(
@@ -167,10 +172,13 @@ class TestSubgraph:
                 Node.scripted("second", fn="second", inputs=Claims, outputs=Claims),
             ],
         )
-        parent = Construct("parent", nodes=[
-            Node.scripted("seed", fn="seed", outputs=RawText),
-            sub,
-        ])
+        parent = Construct(
+            "parent",
+            nodes=[
+                Node.scripted("seed", fn="seed", outputs=RawText),
+                sub,
+            ],
+        )
         graph = compile(parent, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "test-001"})
 
@@ -203,10 +211,13 @@ class TestSubgraph:
             ],
         )
 
-        parent = Construct("parent", nodes=[
-            Node.scripted("process", fn="parent_process", outputs=Claims),
-            sub,
-        ])
+        parent = Construct(
+            "parent",
+            nodes=[
+                Node.scripted("process", fn="parent_process", outputs=Claims),
+                sub,
+            ],
+        )
         graph = compile(parent, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "test-001"})
 
@@ -221,9 +232,13 @@ class TestSubgraph:
 
         register_scripted("noop", lambda input_data, config: Claims(items=[]))
 
-        sub = Construct("bad-sub", output=Claims, nodes=[
-            Node.scripted("noop", fn="noop", outputs=Claims),
-        ])
+        sub = Construct(
+            "bad-sub",
+            output=Claims,
+            nodes=[
+                Node.scripted("noop", fn="noop", outputs=Claims),
+            ],
+        )
 
         parent = Construct("parent", nodes=[sub])
 
@@ -236,9 +251,13 @@ class TestSubgraph:
 
         register_scripted("noop", lambda input_data, config: Claims(items=[]))
 
-        sub = Construct("bad-sub", input=Claims, nodes=[
-            Node.scripted("noop", fn="noop", outputs=Claims),
-        ])
+        sub = Construct(
+            "bad-sub",
+            input=Claims,
+            nodes=[
+                Node.scripted("noop", fn="noop", outputs=Claims),
+            ],
+        )
 
         parent = Construct("parent", nodes=[sub])
 
@@ -266,10 +285,13 @@ class TestSubgraph:
             ],
         )
 
-        parent = Construct("parent", nodes=[
-            Node.scripted("prep", fn="parent_prep", outputs=Claims),
-            sub,
-        ])
+        parent = Construct(
+            "parent",
+            nodes=[
+                Node.scripted("prep", fn="parent_prep", outputs=Claims),
+                sub,
+            ],
+        )
         graph = compile(parent, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "test-001"})
 
@@ -284,15 +306,24 @@ class TestSubgraph:
         # Each produces dict[str, MatchResult]. The sub-construct's output
         # must be the dict type, not MatchResult, because that's what Each writes.
         # Use a collector node after Each to convert dict → single output.
-        register_scripted("parent_clusters", lambda input_data, config: Clusters(
-            groups=[ClusterGroup(label="a", claim_ids=["1"]), ClusterGroup(label="b", claim_ids=["2"])]
-        ))
-        register_scripted("sub_verify", lambda input_data, config: MatchResult(
-            cluster_label=input_data.label, matched=["ok"],
-        ))
+        register_scripted(
+            "parent_clusters",
+            lambda input_data, config: Clusters(
+                groups=[ClusterGroup(label="a", claim_ids=["1"]), ClusterGroup(label="b", claim_ids=["2"])]
+            ),
+        )
+        register_scripted(
+            "sub_verify",
+            lambda input_data, config: MatchResult(
+                cluster_label=input_data.label,
+                matched=["ok"],
+            ),
+        )
+
         def _sub_collect(input_data, config):
             assert isinstance(input_data, dict), f"Expected dict[str, MatchResult] from Each, got {type(input_data)}"
             return RawText(text=f"verified {len(input_data)} clusters")
+
         register_scripted("sub_collect", _sub_collect)
 
         sub = Construct(
@@ -306,10 +337,13 @@ class TestSubgraph:
             ],
         )
 
-        parent = Construct("parent", nodes=[
-            Node.scripted("make-clusters", fn="parent_clusters", outputs=Clusters),
-            sub,
-        ])
+        parent = Construct(
+            "parent",
+            nodes=[
+                Node.scripted("make-clusters", fn="parent_clusters", outputs=Clusters),
+                sub,
+            ],
+        )
         graph = compile(parent, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "test-001"})
 
@@ -344,11 +378,14 @@ class TestSubgraph:
             ],
         )
 
-        parent = Construct("root", nodes=[
-            Node.scripted("start", fn="l0_start", outputs=Claims),
-            level1,
-            Node.scripted("finish", fn="l0_finish", inputs=RawText, outputs=RawText),
-        ])
+        parent = Construct(
+            "root",
+            nodes=[
+                Node.scripted("start", fn="l0_start", outputs=Claims),
+                level1,
+                Node.scripted("finish", fn="l0_finish", inputs=RawText, outputs=RawText),
+            ],
+        )
 
         graph = compile(parent, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "test-001"})
@@ -395,8 +432,10 @@ class TestSubgraph:
             output=RawText,
             nodes=[
                 Node.scripted(
-                    "capture", fn="nested_inner_capture",
-                    inputs=Claims, outputs=RawText,
+                    "capture",
+                    fn="nested_inner_capture",
+                    inputs=Claims,
+                    outputs=RawText,
                 ),
             ],
         )
@@ -412,8 +451,10 @@ class TestSubgraph:
             output=RawText,
             nodes=[
                 Node.scripted(
-                    "passthrough", fn="nested_passthrough",
-                    inputs=Claims, outputs=Claims,
+                    "passthrough",
+                    fn="nested_passthrough",
+                    inputs=Claims,
+                    outputs=Claims,
                 ),
                 sub_b,
             ],
@@ -421,23 +462,23 @@ class TestSubgraph:
 
         # Parent pipeline
         register_scripted(
-            "nested_seed", lambda input_data, config: Claims(items=["start"]),
+            "nested_seed",
+            lambda input_data, config: Claims(items=["start"]),
         )
-        parent = Construct("parent", nodes=[
-            Node.scripted("seed", fn="nested_seed", outputs=Claims),
-            sub_a,
-        ])
+        parent = Construct(
+            "parent",
+            nodes=[
+                Node.scripted("seed", fn="nested_seed", outputs=Claims),
+                sub_a,
+            ],
+        )
         graph = compile(parent, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "nested-oracle-test"})
 
         # Each Oracle variant must have forwarded a distinct model to the
         # innermost node through the intermediate sub-construct
-        assert len(seen_models) == 2, (
-            f"Expected 2 inner calls, got {len(seen_models)}"
-        )
-        assert set(seen_models) == {"reason", "fast"}, (
-            f"Expected {{reason, fast}}, got {seen_models}"
-        )
+        assert len(seen_models) == 2, f"Expected 2 inner calls, got {len(seen_models)}"
+        assert set(seen_models) == {"reason", "fast"}, f"Expected {{reason, fast}}, got {seen_models}"
         # Merged output surfaces under sub_a's name
         assert isinstance(result["sub_a"], RawText)
         assert "from-reason" in result["sub_a"].text or "from-fast" in result["sub_a"].text
@@ -473,26 +514,30 @@ class TestSubgraph:
             output=RawText,
             nodes=[
                 Node.scripted(
-                    "capture", fn="inner_capture_gen_id_833d",
-                    inputs=Claims, outputs=RawText,
+                    "capture",
+                    fn="inner_capture_gen_id_833d",
+                    inputs=Claims,
+                    outputs=RawText,
                 ),
             ],
         ) | Oracle(models=["reason", "fast"], merge_fn="merge_gen_id_833d")
 
         register_scripted(
-            "seed_833d", lambda input_data, config: Claims(items=["start"]),
+            "seed_833d",
+            lambda input_data, config: Claims(items=["start"]),
         )
-        parent = Construct("parent-833d", nodes=[
-            Node.scripted("seed", fn="seed_833d", outputs=Claims),
-            sub,
-        ])
+        parent = Construct(
+            "parent-833d",
+            nodes=[
+                Node.scripted("seed", fn="seed_833d", outputs=Claims),
+                sub,
+            ],
+        )
         graph = compile(parent, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "gen-id-test"})
 
         # Each Oracle variant must have forwarded a distinct generator ID
-        assert len(seen_gen_ids) == 2, (
-            f"Expected 2 inner calls, got {len(seen_gen_ids)}"
-        )
+        assert len(seen_gen_ids) == 2, f"Expected 2 inner calls, got {len(seen_gen_ids)}"
         # Generator IDs should not be None — that's the bug
         assert all(isinstance(gid, str) and gid for gid in seen_gen_ids), (
             f"Expected non-empty string generator IDs, got {seen_gen_ids}"
@@ -520,11 +565,14 @@ class TestSubgraph:
             nodes=[Node.scripted("v", fn="validate_fn", inputs=RawText, outputs=ValidationResult)],
         )
 
-        parent = Construct("parent", nodes=[
-            Node.scripted("start", fn="make_input", outputs=Claims),
-            enrich_sub,
-            validate_sub,
-        ])
+        parent = Construct(
+            "parent",
+            nodes=[
+                Node.scripted("start", fn="make_input", outputs=Claims),
+                enrich_sub,
+                validate_sub,
+            ],
+        )
 
         graph = compile(parent, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "test-001"})
@@ -573,7 +621,8 @@ class TestMultiFieldInput:
         step_a = Node.scripted("step-a", fn="make_claims", outputs=Claims)
         step_b = Node.scripted("step-b", fn="make_raw", outputs=RawText)
         step_c = Node.scripted(
-            "step-c", fn="combine",
+            "step-c",
+            fn="combine",
             inputs={"step_a": Claims, "step_b": RawText},
             outputs=RawText,
         )
@@ -651,17 +700,21 @@ class TestStateHygiene:
         """Each item plumbing is not in the result."""
         from tests.fakes import register_scripted
 
-        register_scripted("make", lambda input_data, config: Clusters(
-            groups=[ClusterGroup(label="a", claim_ids=["1"])]
-        ))
-        register_scripted("proc", lambda input_data, config: MatchResult(
-            cluster_label=input_data.label, matched=["done"],
-        ))
+        register_scripted(
+            "make", lambda input_data, config: Clusters(groups=[ClusterGroup(label="a", claim_ids=["1"])])
+        )
+        register_scripted(
+            "proc",
+            lambda input_data, config: MatchResult(
+                cluster_label=input_data.label,
+                matched=["done"],
+            ),
+        )
 
         make = Node.scripted("make", fn="make", outputs=Clusters)
-        proc = Node.scripted(
-            "proc", fn="proc", inputs=ClusterGroup, outputs=MatchResult
-        ) | Each(over="make.groups", key="label")
+        proc = Node.scripted("proc", fn="proc", inputs=ClusterGroup, outputs=MatchResult) | Each(
+            over="make.groups", key="label"
+        )
 
         pipeline = Construct("test-hygiene-each", nodes=[make, proc])
         graph = compile(pipeline, **build_test_compile_kwargs())
@@ -677,20 +730,27 @@ class TestStateHygiene:
         from tests.fakes import register_scripted
 
         # Collection with duplicate labels
-        register_scripted("make_dupes", lambda input_data, config: Clusters(
-            groups=[
-                ClusterGroup(label="same", claim_ids=["1"]),
-                ClusterGroup(label="same", claim_ids=["2"]),
-            ]
-        ))
-        register_scripted("proc_dupe", lambda input_data, config: MatchResult(
-            cluster_label=input_data.label, matched=input_data.claim_ids,
-        ))
+        register_scripted(
+            "make_dupes",
+            lambda input_data, config: Clusters(
+                groups=[
+                    ClusterGroup(label="same", claim_ids=["1"]),
+                    ClusterGroup(label="same", claim_ids=["2"]),
+                ]
+            ),
+        )
+        register_scripted(
+            "proc_dupe",
+            lambda input_data, config: MatchResult(
+                cluster_label=input_data.label,
+                matched=input_data.claim_ids,
+            ),
+        )
 
         make = Node.scripted("make-dupes", fn="make_dupes", outputs=Clusters)
-        proc = Node.scripted(
-            "proc-dupe", fn="proc_dupe", inputs=ClusterGroup, outputs=MatchResult
-        ) | Each(over="make_dupes.groups", key="label")
+        proc = Node.scripted("proc-dupe", fn="proc_dupe", inputs=ClusterGroup, outputs=MatchResult) | Each(
+            over="make_dupes.groups", key="label"
+        )
 
         pipeline = Construct("test-dupe-key", nodes=[make, proc])
         graph = compile(pipeline, **build_test_compile_kwargs())
@@ -771,6 +831,7 @@ class TestDictOutputsStateModel:
     def test_state_has_per_key_fields_when_dict_outputs_declared(self):
         """outputs={'result': X, 'log': Y} → state has node_result + node_log."""
         from neograph.state import compile_state_model
+
         n = Node("explore", outputs={"result": RawText, "tool_log": Claims})
         c = Construct("p", nodes=[n])
         state_model = compile_state_model(c)
@@ -782,6 +843,7 @@ class TestDictOutputsStateModel:
     def test_state_has_node_name_field_when_single_type_outputs(self):
         """Single-type outputs= still emits {node_name} field."""
         from neograph.state import compile_state_model
+
         n = Node.scripted("extract", fn="f", outputs=RawText)
         c = Construct("p", nodes=[n])
         state_model = compile_state_model(c)
@@ -790,8 +852,10 @@ class TestDictOutputsStateModel:
     def test_each_wraps_per_key_when_dict_outputs_with_each(self):
         """Each modifier wraps each dict-output key in dict[str, T]."""
         from neograph.state import compile_state_model
+
         n = Node(
-            "verify", outputs={"result": RawText, "meta": Claims},
+            "verify",
+            outputs={"result": RawText, "meta": Claims},
         ) | Each(over="items", key="label")
         c = Construct("p", nodes=[n])
         state_model = compile_state_model(c)
@@ -851,6 +915,7 @@ class TestDictOutputsFactory:
 #   - Programmatic fan-in via Node + Oracle pipe
 # ═══════════════════════════════════════════════════════════════════════════
 
+
 class TestNodeInputsEpicAcceptance:
     def test_pipeline_compiles_when_llm_spec_with_fan_in(self):
         """An LLM-driven pipeline builder constructs Nodes from a JSON-shaped
@@ -909,8 +974,10 @@ class TestNodeInputsEpicAcceptance:
             elif isinstance(inputs, str):
                 inputs = type_registry[inputs]
             return Node.scripted(
-                entry["name"], fn=entry["fn"],
-                inputs=inputs, outputs=output,
+                entry["name"],
+                fn=entry["fn"],
+                inputs=inputs,
+                outputs=output,
             )
 
         nodes = [build_node(e) for e in spec]
@@ -945,8 +1012,10 @@ class TestNodeInputsEpicAcceptance:
             if isinstance(inputs, dict):
                 inputs = {k: type_registry[v] for k, v in inputs.items()}
             return Node.scripted(
-                entry["name"], fn=entry["fn"],
-                inputs=inputs, outputs=output,
+                entry["name"],
+                fn=entry["fn"],
+                inputs=inputs,
+                outputs=output,
             )
 
         nodes = [build_node(e) for e in spec]
@@ -976,10 +1045,12 @@ class TestNodeInputsEpicAcceptance:
 
         @node(outputs=Clusters)
         def make_clusters() -> Clusters:
-            return Clusters(groups=[
-                ClusterGroup(label="a", claim_ids=["1"]),
-                ClusterGroup(label="b", claim_ids=["2"]),
-            ])
+            return Clusters(
+                groups=[
+                    ClusterGroup(label="a", claim_ids=["1"]),
+                    ClusterGroup(label="b", claim_ids=["2"]),
+                ]
+            )
 
         @node(
             outputs=MatchResult,
@@ -993,7 +1064,8 @@ class TestNodeInputsEpicAcceptance:
             )
 
         pipeline = construct_from_functions(
-            "mixed-e2e", [context_source, make_clusters, verify],
+            "mixed-e2e",
+            [context_source, make_clusters, verify],
         )
         graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "kqd8"})
@@ -1007,9 +1079,8 @@ class TestNodeInputsEpicAcceptance:
         """_attach_scripted_raw_fn no longer exists — all scripted @node
         routes through register_scripted + ScriptedDispatch."""
         import neograph.decorators as dec
-        assert not hasattr(dec, "_attach_scripted_raw_fn"), (
-            "_attach_scripted_raw_fn still exists — kqd.8 is incomplete"
-        )
+
+        assert not hasattr(dec, "_attach_scripted_raw_fn"), "_attach_scripted_raw_fn still exists — kqd.8 is incomplete"
 
     def test_raw_fn_none_when_scripted_node_uses_register_scripted(self):
         """Scripted @node nodes no longer have raw_fn set — they use
@@ -1052,7 +1123,8 @@ class TestNodeInputsEpicAcceptance:
         a = Node.scripted("a", fn="l7_a", outputs=Claims)
         b = Node.scripted("b", fn="l7_b", outputs=RawText)
         merger = Node.scripted(
-            "merger", fn="l7_merge",
+            "merger",
+            fn="l7_merge",
             inputs={"a": Claims, "b": RawText},
             outputs=MergedResult,
         )
@@ -1089,12 +1161,16 @@ class TestNodeSubConstruct:
     def test_scripted_node_reads_port_when_param_type_matches_construct_input(self):
         """A scripted @node inside a sub-construct reads its input from
         neo_subgraph_input when the param type matches construct_input."""
+
         @node(outputs=ClaimResult)
         def score(claim: VerifyClaim) -> ClaimResult:
             return ClaimResult(claim_id=claim.claim_id, disposition="confirmed")
 
         sub = construct_from_functions(
-            "verify", [score], input=VerifyClaim, output=ClaimResult,
+            "verify",
+            [score],
+            input=VerifyClaim,
+            output=ClaimResult,
         )
         # sub should be a valid Construct with input/output ports
         assert sub.input is VerifyClaim
@@ -1106,22 +1182,33 @@ class TestNodeSubConstruct:
 
     def test_sub_construct_runs_when_embedded_in_parent(self):
         """Sub-construct built from @node functions runs inside a parent pipeline."""
+
         @node(outputs=ClaimResult)
         def judge(claim: VerifyClaim) -> ClaimResult:
             return ClaimResult(claim_id=claim.claim_id, disposition="valid")
 
         sub = construct_from_functions(
-            "judge-sub", [judge], input=VerifyClaim, output=ClaimResult,
+            "judge-sub",
+            [judge],
+            input=VerifyClaim,
+            output=ClaimResult,
         )
 
         # Parent pipeline feeds the sub-construct
-        register_scripted("make_claim", lambda _in, _cfg: VerifyClaim(
-            claim_id="c1", text="The sky is blue",
-        ))
-        parent = Construct("parent", nodes=[
-            Node.scripted("make-claim", fn="make_claim", outputs=VerifyClaim),
-            sub,
-        ])
+        register_scripted(
+            "make_claim",
+            lambda _in, _cfg: VerifyClaim(
+                claim_id="c1",
+                text="The sky is blue",
+            ),
+        )
+        parent = Construct(
+            "parent",
+            nodes=[
+                Node.scripted("make-claim", fn="make_claim", outputs=VerifyClaim),
+                sub,
+            ],
+        )
         graph = compile(parent, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "test-port"})
 
@@ -1131,6 +1218,7 @@ class TestNodeSubConstruct:
     def test_two_node_chain_inside_sub_construct_from_functions(self):
         """Two @node functions chained inside a sub-construct: first reads
         from port, second reads from first."""
+
         @node(outputs=RawText)
         def explore(claim: VerifyClaim) -> RawText:
             return RawText(text=f"evidence for {claim.claim_id}")
@@ -1140,8 +1228,10 @@ class TestNodeSubConstruct:
             return ClaimResult(claim_id="c1", disposition=f"based on: {explore.text}")
 
         sub = construct_from_functions(
-            "verify-chain", [explore, decide],
-            input=VerifyClaim, output=ClaimResult,
+            "verify-chain",
+            [explore, decide],
+            input=VerifyClaim,
+            output=ClaimResult,
         )
         assert sub.input is VerifyClaim
         assert sub.output is ClaimResult
@@ -1153,6 +1243,7 @@ class TestNodeSubConstruct:
 
     def test_dict_outputs_flow_when_two_nodes_inside_sub_construct(self):
         """Dict-form outputs work between @nodes inside a @node sub-construct."""
+
         @node(outputs={"evidence": RawText, "confidence": Claims})
         def research(claim: VerifyClaim) -> dict:
             return {
@@ -1168,17 +1259,26 @@ class TestNodeSubConstruct:
             )
 
         sub = construct_from_functions(
-            "eval-sub", [research, evaluate],
-            input=VerifyClaim, output=ClaimResult,
+            "eval-sub",
+            [research, evaluate],
+            input=VerifyClaim,
+            output=ClaimResult,
         )
 
-        register_scripted("seed_claim", lambda _in, _cfg: VerifyClaim(
-            claim_id="c1", text="test claim",
-        ))
-        parent = Construct("parent", nodes=[
-            Node.scripted("seed-claim", fn="seed_claim", outputs=VerifyClaim),
-            sub,
-        ])
+        register_scripted(
+            "seed_claim",
+            lambda _in, _cfg: VerifyClaim(
+                claim_id="c1",
+                text="test claim",
+            ),
+        )
+        parent = Construct(
+            "parent",
+            nodes=[
+                Node.scripted("seed-claim", fn="seed_claim", outputs=VerifyClaim),
+                sub,
+            ],
+        )
         graph = compile(parent, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "dict-out-sub"})
 
@@ -1186,28 +1286,37 @@ class TestNodeSubConstruct:
 
     def test_sub_construct_fans_out_when_each_applied_via_construct_from_functions(self):
         """Sub-construct built from @node functions works with .map() (Each)."""
+
         @node(outputs=ClaimResult)
         def verify_one(claim: VerifyClaim) -> ClaimResult:
             return ClaimResult(claim_id=claim.claim_id, disposition="ok")
 
         sub = construct_from_functions(
-            "verify", [verify_one],
-            input=VerifyClaim, output=ClaimResult,
+            "verify",
+            [verify_one],
+            input=VerifyClaim,
+            output=ClaimResult,
         ).map("make_claims.claims", key="claim_id")
 
         class ClaimBatch(BaseModel, frozen=True):
             claims: list[VerifyClaim]
 
-        register_scripted("make_batch", lambda _in, _cfg: ClaimBatch(
-            claims=[
-                VerifyClaim(claim_id="c1", text="first"),
-                VerifyClaim(claim_id="c2", text="second"),
+        register_scripted(
+            "make_batch",
+            lambda _in, _cfg: ClaimBatch(
+                claims=[
+                    VerifyClaim(claim_id="c1", text="first"),
+                    VerifyClaim(claim_id="c2", text="second"),
+                ],
+            ),
+        )
+        parent = Construct(
+            "parent",
+            nodes=[
+                Node.scripted("make-claims", fn="make_batch", outputs=ClaimBatch),
+                sub,
             ],
-        ))
-        parent = Construct("parent", nodes=[
-            Node.scripted("make-claims", fn="make_batch", outputs=ClaimBatch),
-            sub,
-        ])
+        )
         graph = compile(parent, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "each-sub"})
 
@@ -1217,6 +1326,7 @@ class TestNodeSubConstruct:
 
     def test_sub_construct_merges_when_oracle_applied_via_construct_from_functions(self):
         """Sub-construct built from @node functions works with Oracle."""
+
         @node(outputs=ClaimResult)
         def assess(claim: VerifyClaim) -> ClaimResult:
             return ClaimResult(claim_id=claim.claim_id, disposition="variant")
@@ -1230,18 +1340,27 @@ class TestNodeSubConstruct:
         register_scripted("merge_assess", merge_assessments)
 
         sub = construct_from_functions(
-            "assess-sub", [assess],
-            input=VerifyClaim, output=ClaimResult,
+            "assess-sub",
+            [assess],
+            input=VerifyClaim,
+            output=ClaimResult,
         )
         sub = sub | Oracle(n=3, merge_fn="merge_assess")
 
-        register_scripted("make_one_claim", lambda _in, _cfg: VerifyClaim(
-            claim_id="c1", text="test",
-        ))
-        parent = Construct("parent", nodes=[
-            Node.scripted("make-one-claim", fn="make_one_claim", outputs=VerifyClaim),
-            sub,
-        ])
+        register_scripted(
+            "make_one_claim",
+            lambda _in, _cfg: VerifyClaim(
+                claim_id="c1",
+                text="test",
+            ),
+        )
+        parent = Construct(
+            "parent",
+            nodes=[
+                Node.scripted("make-one-claim", fn="make_one_claim", outputs=VerifyClaim),
+                sub,
+            ],
+        )
         graph = compile(parent, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "oracle-sub"})
 
@@ -1249,6 +1368,7 @@ class TestNodeSubConstruct:
 
     def test_parity_when_declarative_vs_node_sub_construct(self):
         """Same topology produces same result via declarative Node() vs @node."""
+
         # --- Declarative path ---
         # With dict-form inputs, _extract_input returns a dict. The scripted
         # fn must unwrap it.
@@ -1260,19 +1380,29 @@ class TestNodeSubConstruct:
         register_scripted("parity_score", parity_score_fn)
         decl_sub = Construct(
             "decl-sub",
-            input=VerifyClaim, output=ClaimResult,
-            nodes=[Node.scripted("score", fn="parity_score",
-                                 inputs={"neo_subgraph_input": VerifyClaim},
-                                 outputs=ClaimResult)],
+            input=VerifyClaim,
+            output=ClaimResult,
+            nodes=[
+                Node.scripted(
+                    "score", fn="parity_score", inputs={"neo_subgraph_input": VerifyClaim}, outputs=ClaimResult
+                )
+            ],
         )
 
-        register_scripted("parity_seed", lambda _in, _cfg: VerifyClaim(
-            claim_id="p1", text="parity test",
-        ))
-        decl_parent = Construct("decl-parent", nodes=[
-            Node.scripted("seed", fn="parity_seed", outputs=VerifyClaim),
-            decl_sub,
-        ])
+        register_scripted(
+            "parity_seed",
+            lambda _in, _cfg: VerifyClaim(
+                claim_id="p1",
+                text="parity test",
+            ),
+        )
+        decl_parent = Construct(
+            "decl-parent",
+            nodes=[
+                Node.scripted("seed", fn="parity_seed", outputs=VerifyClaim),
+                decl_sub,
+            ],
+        )
         decl_graph = compile(decl_parent, **build_test_compile_kwargs())
         decl_result = run(decl_graph, input={"node_id": "parity"})
 
@@ -1282,13 +1412,18 @@ class TestNodeSubConstruct:
             return ClaimResult(claim_id=claim.claim_id, disposition="scored")
 
         node_sub = construct_from_functions(
-            "node-sub", [score_fn],
-            input=VerifyClaim, output=ClaimResult,
+            "node-sub",
+            [score_fn],
+            input=VerifyClaim,
+            output=ClaimResult,
         )
-        node_parent = Construct("node-parent", nodes=[
-            Node.scripted("seed", fn="parity_seed", outputs=VerifyClaim),
-            node_sub,
-        ])
+        node_parent = Construct(
+            "node-parent",
+            nodes=[
+                Node.scripted("seed", fn="parity_seed", outputs=VerifyClaim),
+                node_sub,
+            ],
+        )
         node_graph = compile(node_parent, **build_test_compile_kwargs())
         node_result = run(node_graph, input={"node_id": "parity"})
 
@@ -1302,13 +1437,17 @@ class TestNodeSubConstruct:
         )
         prog_sub = Construct(
             "prog-sub",
-            input=VerifyClaim, output=ClaimResult,
+            input=VerifyClaim,
+            output=ClaimResult,
             nodes=[prog_score],
         )
-        prog_parent = Construct("prog-parent", nodes=[
-            Node.scripted("seed", fn="parity_seed", outputs=VerifyClaim),
-            prog_sub,
-        ])
+        prog_parent = Construct(
+            "prog-parent",
+            nodes=[
+                Node.scripted("seed", fn="parity_seed", outputs=VerifyClaim),
+                prog_sub,
+            ],
+        )
         prog_graph = compile(prog_parent, **build_test_compile_kwargs())
         prog_result = run(prog_graph, input={"node_id": "parity"})
 
@@ -1340,17 +1479,26 @@ class TestNodeSubConstruct:
         def llm_score(claim: VerifyClaim) -> ClaimResult: ...
 
         sub = construct_from_functions(
-            "llm-sub", [llm_score],
-            input=VerifyClaim, output=ClaimResult,
+            "llm-sub",
+            [llm_score],
+            input=VerifyClaim,
+            output=ClaimResult,
         )
 
-        register_scripted("jc3_seed", lambda _in, _cfg: VerifyClaim(
-            claim_id="jc3", text="LLM mode port test",
-        ))
-        parent = Construct("parent", nodes=[
-            Node.scripted("seed", fn="jc3_seed", outputs=VerifyClaim),
-            sub,
-        ])
+        register_scripted(
+            "jc3_seed",
+            lambda _in, _cfg: VerifyClaim(
+                claim_id="jc3",
+                text="LLM mode port test",
+            ),
+        )
+        parent = Construct(
+            "parent",
+            nodes=[
+                Node.scripted("seed", fn="jc3_seed", outputs=VerifyClaim),
+                sub,
+            ],
+        )
         graph = compile(parent, **build_test_compile_kwargs(), **__llm_kw)
         result = run(graph, input={"node_id": "jc3"})
 
@@ -1364,7 +1512,6 @@ class TestNodeSubConstruct:
         assert isinstance(rendered, str), "Port input must be BAML-rendered"
         assert "jc3" in rendered
         assert "claim_id" in rendered
-
 
     def test_construct_from_module_with_input_output_builds_sub_construct(self):
         """construct_from_module(mod, input=X, output=Y) builds a working sub-construct (neograph-xjt)."""
@@ -1383,13 +1530,20 @@ class TestNodeSubConstruct:
         assert sub.output is ClaimResult
 
         # Run it inside a parent
-        register_scripted("xjt_seed", lambda _in, _cfg: VerifyClaim(
-            claim_id="xjt", text="module test",
-        ))
-        parent = Construct("parent", nodes=[
-            Node.scripted("seed", fn="xjt_seed", outputs=VerifyClaim),
-            sub,
-        ])
+        register_scripted(
+            "xjt_seed",
+            lambda _in, _cfg: VerifyClaim(
+                claim_id="xjt",
+                text="module test",
+            ),
+        )
+        parent = Construct(
+            "parent",
+            nodes=[
+                Node.scripted("seed", fn="xjt_seed", outputs=VerifyClaim),
+                sub,
+            ],
+        )
         graph = compile(parent, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "xjt"})
 
@@ -1415,30 +1569,45 @@ class TestNodeSubConstruct:
         )
 
         # Parent node produces a catalog
-        register_scripted("j66_catalog", lambda _in, _cfg: RawText(
-            text="<catalog>UC-001,UC-002</catalog>",
-        ))
+        register_scripted(
+            "j66_catalog",
+            lambda _in, _cfg: RawText(
+                text="<catalog>UC-001,UC-002</catalog>",
+            ),
+        )
 
         # Sub-construct node uses context= to access the catalog
         @node(
-            mode="think", outputs=ClaimResult, model="fast", prompt="j66/score",
+            mode="think",
+            outputs=ClaimResult,
+            model="fast",
+            prompt="j66/score",
             context=["catalog"],
         )
         def score_with_ctx(claim: VerifyClaim) -> ClaimResult: ...
 
         sub = construct_from_functions(
-            "scorer", [score_with_ctx],
-            input=VerifyClaim, output=ClaimResult,
+            "scorer",
+            [score_with_ctx],
+            input=VerifyClaim,
+            output=ClaimResult,
         )
 
-        register_scripted("j66_seed", lambda _in, _cfg: VerifyClaim(
-            claim_id="c1", text="test claim",
-        ))
-        parent = Construct("parent", nodes=[
-            Node.scripted("catalog", fn="j66_catalog", outputs=RawText),
-            Node.scripted("seed", fn="j66_seed", outputs=VerifyClaim),
-            sub,
-        ])
+        register_scripted(
+            "j66_seed",
+            lambda _in, _cfg: VerifyClaim(
+                claim_id="c1",
+                text="test claim",
+            ),
+        )
+        parent = Construct(
+            "parent",
+            nodes=[
+                Node.scripted("catalog", fn="j66_catalog", outputs=RawText),
+                Node.scripted("seed", fn="j66_seed", outputs=VerifyClaim),
+                sub,
+            ],
+        )
         graph = compile(parent, **build_test_compile_kwargs(), **__llm_kw)
         result = run(graph, input={"node_id": "j66"})
 
@@ -1458,18 +1627,23 @@ class TestPortParamErrors:
     def test_raises_when_multiple_params_match_construct_input(self):
         """Two params of the same type as construct_input should raise ConstructError,
         not silently drop one."""
+
         @node(outputs=ClaimResult)
         def ambiguous(first: VerifyClaim, second: VerifyClaim) -> ClaimResult:
             return ClaimResult(claim_id=first.claim_id, disposition="ok")
 
         with pytest.raises(ConstructError, match="parameters match construct input type"):
             construct_from_functions(
-                "bad", [ambiguous], input=VerifyClaim, output=ClaimResult,
+                "bad",
+                [ambiguous],
+                input=VerifyClaim,
+                output=ClaimResult,
             )
 
     def test_peer_priority_when_param_name_matches_node_and_type_matches_input(self):
         """A param that names a peer @node takes priority over port matching,
         even if its type also matches construct_input."""
+
         @node(outputs=VerifyClaim)
         def upstream() -> VerifyClaim:
             return VerifyClaim(claim_id="u1", text="from upstream")
@@ -1481,8 +1655,10 @@ class TestPortParamErrors:
         # upstream's type matches construct_input, but it's a peer @node name —
         # should wire as peer dependency, not port param.
         sub = construct_from_functions(
-            "peer-priority", [upstream, consumer],
-            input=VerifyClaim, output=ClaimResult,
+            "peer-priority",
+            [upstream, consumer],
+            input=VerifyClaim,
+            output=ClaimResult,
         )
         consumer_node = [n for n in sub.nodes if n.name == "consumer"][0]
         # "upstream" should be a peer dep, NOT rewritten to neo_subgraph_input
@@ -1501,20 +1677,26 @@ class TestMixedNodeAndConstruct:
     def test_construct_from_functions_accepts_construct_items(self):
         """construct_from_functions accepts a Construct alongside @node items."""
         # Sub-construct: explore→score (from previous tests)
-        register_scripted("dqe_explore", lambda _in, _cfg: ExplorationResult(
-            evidence=["e1"], summary="found",
-        ))
+        register_scripted(
+            "dqe_explore",
+            lambda _in, _cfg: ExplorationResult(
+                evidence=["e1"],
+                summary="found",
+            ),
+        )
+
         def _dqe_score(_in, _cfg):
             assert isinstance(_in, ExplorationResult), f"Expected ExplorationResult, got {type(_in)}"
             return ClaimVerdict(claim_id="scored", disposition="confirmed")
+
         register_scripted("dqe_score", _dqe_score)
         verify_sub = Construct(
-            "verify", input=VerifyClaim, output=ClaimVerdict,
+            "verify",
+            input=VerifyClaim,
+            output=ClaimVerdict,
             nodes=[
-                Node.scripted("explore", fn="dqe_explore",
-                              inputs=VerifyClaim, outputs=ExplorationResult),
-                Node.scripted("score", fn="dqe_score",
-                              inputs=ExplorationResult, outputs=ClaimVerdict),
+                Node.scripted("explore", fn="dqe_explore", inputs=VerifyClaim, outputs=ExplorationResult),
+                Node.scripted("score", fn="dqe_score", inputs=ExplorationResult, outputs=ClaimVerdict),
             ],
         )
 
@@ -1528,7 +1710,8 @@ class TestMixedNodeAndConstruct:
             return RawText(text=f"verdict: {verify.disposition}")
 
         pipeline = construct_from_functions(
-            "mixed", [make_claim, verify_sub, summarize],
+            "mixed",
+            [make_claim, verify_sub, summarize],
         )
         graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "dqe"})
@@ -1538,6 +1721,7 @@ class TestMixedNodeAndConstruct:
 
     def test_construct_from_functions_rejects_construct_without_output(self):
         """Construct items must have output declared."""
+
         @node(outputs=VerifyClaim)
         def seed() -> VerifyClaim:
             return VerifyClaim(claim_id="x", text="x")
@@ -1552,10 +1736,11 @@ class TestMixedNodeAndConstruct:
     def test_node_param_resolves_against_sub_construct_name(self):
         """@node param named after a sub-construct resolves as a dependency."""
         verify_sub = Construct(
-            "verify", input=VerifyClaim, output=ClaimVerdict,
+            "verify",
+            input=VerifyClaim,
+            output=ClaimVerdict,
             nodes=[
-                Node.scripted("s", fn="dqe_score",
-                              inputs=VerifyClaim, outputs=ClaimVerdict),
+                Node.scripted("s", fn="dqe_score", inputs=VerifyClaim, outputs=ClaimVerdict),
             ],
         )
 
@@ -1589,21 +1774,25 @@ class TestMixedNodeAndConstruct:
         fake_tool = FakeTool("search", response="found ref")
         register_tool_factory("search", lambda cfg, tc: fake_tool)
 
-        __llm_kw = configure_fake_llm(lambda tier: (
-            ReActFake(
-                tool_calls=[[{"name": "search", "args": {"q": "x"}, "id": "t1"}], []],
-                final=lambda m: m(evidence=["ref1"], summary="ok"),
-            ) if tier == "research" else
-            StructuredFakeWithRaw(
-                lambda m: m(claim_id="scored", disposition="confirmed"),
+        __llm_kw = configure_fake_llm(
+            lambda tier: (
+                ReActFake(
+                    tool_calls=[[{"name": "search", "args": {"q": "x"}, "id": "t1"}], []],
+                    final=lambda m: m(evidence=["ref1"], summary="ok"),
+                )
+                if tier == "research"
+                else StructuredFakeWithRaw(
+                    lambda m: m(claim_id="scored", disposition="confirmed"),
+                )
             )
-        ))
+        )
 
         # -- Sub-construct: explore→score (gather→produce with tool_log)
         @node(
             mode="agent",
             outputs={"result": ExplorationResult, "tool_log": list[ToolInteraction]},
-            model="research", prompt="v/explore",
+            model="research",
+            prompt="v/explore",
             tools=[Tool("search", budget=3)],
         )
         def explore(claim: VerifyClaim) -> ExplorationResult: ...
@@ -1612,8 +1801,10 @@ class TestMixedNodeAndConstruct:
         def score(explore_result: ExplorationResult, explore_tool_log: list[ToolInteraction]) -> ClaimVerdict: ...
 
         verify_claim = construct_from_functions(
-            "verify-claim", [explore, score],
-            input=VerifyClaim, output=ClaimVerdict,
+            "verify-claim",
+            [explore, score],
+            input=VerifyClaim,
+            output=ClaimVerdict,
         ).map("flatten_claims.claims", key="claim_id")
 
         # -- Parent @node functions
@@ -1622,10 +1813,12 @@ class TestMixedNodeAndConstruct:
 
         @node(outputs=ClaimBatch)
         def flatten_claims() -> ClaimBatch:
-            return ClaimBatch(claims=[
-                VerifyClaim(claim_id="c1", text="shall authenticate"),
-                VerifyClaim(claim_id="c2", text="shall encrypt"),
-            ])
+            return ClaimBatch(
+                claims=[
+                    VerifyClaim(claim_id="c1", text="shall authenticate"),
+                    VerifyClaim(claim_id="c2", text="shall encrypt"),
+                ]
+            )
 
         @node(outputs=RawText)
         def deterministic_merge(verify_claim: dict[str, ClaimVerdict]) -> RawText:
@@ -1634,7 +1827,8 @@ class TestMixedNodeAndConstruct:
 
         # -- Assemble parent via construct_from_functions: @node + sub-construct
         pipeline = construct_from_functions(
-            "rw-ingestion", [flatten_claims, verify_claim, deterministic_merge],
+            "rw-ingestion",
+            [flatten_claims, verify_claim, deterministic_merge],
         )
         graph = compile(pipeline, **build_test_compile_kwargs(), **__llm_kw)
         result = run(graph, input={"node_id": "piarch-rw"})
@@ -1651,9 +1845,11 @@ class TestMixedNodeAndConstruct:
         broke Oracle barrier assembly."""
         from tests.fakes import StructuredFakeWithRaw, configure_fake_llm
 
-        __llm_kw = configure_fake_llm(lambda tier: StructuredFakeWithRaw(
-            lambda m: m(items=["variant-item"]),
-        ))
+        __llm_kw = configure_fake_llm(
+            lambda tier: StructuredFakeWithRaw(
+                lambda m: m(items=["variant-item"]),
+            )
+        )
 
         gen_count = [0]
 
@@ -1662,8 +1858,7 @@ class TestMixedNodeAndConstruct:
             all_items = [i for v in variants for i in v.items]
             return Claims(items=[f"merged-{len(variants)}v"] + all_items)
 
-        @node(outputs=Claims, model="fast", prompt="decompose",
-              ensemble_n=3, merge_fn="combine_pq4")
+        @node(outputs=Claims, model="fast", prompt="decompose", ensemble_n=3, merge_fn="combine_pq4")
         def decompose() -> Claims: ...
 
         @node(outputs=RawText)
@@ -1675,17 +1870,23 @@ class TestMixedNodeAndConstruct:
         def make_claim(decompose: Claims) -> VerifyClaim:
             return VerifyClaim(claim_id="c1", text=decompose.items[0])
 
-        register_scripted("pq4_inner", lambda _in, _cfg: ClaimResult(
-            claim_id="x", disposition="ok",
-        ))
+        register_scripted(
+            "pq4_inner",
+            lambda _in, _cfg: ClaimResult(
+                claim_id="x",
+                disposition="ok",
+            ),
+        )
         sub = Construct(
-            "sub", input=VerifyClaim, output=ClaimResult,
-            nodes=[Node.scripted("inner", fn="pq4_inner",
-                                 inputs=VerifyClaim, outputs=ClaimResult)],
+            "sub",
+            input=VerifyClaim,
+            output=ClaimResult,
+            nodes=[Node.scripted("inner", fn="pq4_inner", inputs=VerifyClaim, outputs=ClaimResult)],
         )
 
         pipeline = construct_from_functions(
-            "oracle-sub-test", [decompose, flatten, make_claim, sub],
+            "oracle-sub-test",
+            [decompose, flatten, make_claim, sub],
         )
         graph = compile(pipeline, **build_test_compile_kwargs(), **__llm_kw)
         result = run(graph, input={"node_id": "pq4"})
@@ -1724,11 +1925,11 @@ class TestMixedNodeAndConstruct:
             all_claims = [c for v in variants for c in v.raw_claims]
             return PostMerge(grouped={"all": all_claims})
 
-        @node(outputs=PostMerge, model="fast", prompt="decompose",
-              ensemble_n=2, merge_fn="group_variants")
+        @node(outputs=PostMerge, model="fast", prompt="decompose", ensemble_n=2, merge_fn="group_variants")
         def decompose() -> PostMerge: ...
 
         import types as t
+
         mod = t.ModuleType("test_oracle_type_mod")
         mod.decompose = decompose
         pipeline = construct_from_module(mod)
@@ -1740,8 +1941,7 @@ class TestMixedNodeAndConstruct:
         assert len(requested_types) == 2, f"Expected 2 generator calls, got {len(requested_types)}"
         for rt in requested_types:
             assert rt is PerVariant, (
-                f"Generator was asked to produce {rt.__name__}, "
-                f"expected PerVariant (merge_fn input element type)"
+                f"Generator was asked to produce {rt.__name__}, expected PerVariant (merge_fn input element type)"
             )
         # Merge should have run and produced PostMerge
         assert isinstance(result["decompose"], PostMerge)
@@ -1768,8 +1968,7 @@ class TestMixedNodeAndConstruct:
         __llm_kw = configure_fake_llm(lambda tier: StructuredFakeWithRaw(tracking_factory))
 
         # KEY: @node BEFORE @merge_fn — simulates the file ordering bug
-        @node(outputs=MergedType, model="fast", prompt="gen",
-              ensemble_n=2, merge_fn="late_merge")
+        @node(outputs=MergedType, model="fast", prompt="gen", ensemble_n=2, merge_fn="late_merge")
         def generate() -> MergedType: ...
 
         # This runs AFTER @node — merge_fn wasn't registered at decoration time
@@ -1778,15 +1977,14 @@ class TestMixedNodeAndConstruct:
             return MergedType(combined=",".join(v.raw[0] for v in variants))
 
         import types as t
+
         mod = t.ModuleType("test_late_merge_mod")
         mod.generate = generate
         pipeline = construct_from_module(mod)
 
         # At this point, oracle_gen_type should be set (resolved at assembly time)
         gen_node = pipeline.nodes[0]
-        assert gen_node.oracle_gen_type is GenType, (
-            f"oracle_gen_type should be GenType, got {gen_node.oracle_gen_type}"
-        )
+        assert gen_node.oracle_gen_type is GenType, f"oracle_gen_type should be GenType, got {gen_node.oracle_gen_type}"
 
         graph = compile(pipeline, **build_test_compile_kwargs(), **__llm_kw)
         result = run(graph, input={"node_id": "b9p"})
@@ -1801,9 +1999,11 @@ class TestMixedNodeAndConstruct:
         Tests the second failure mode from the consumer report."""
         from tests.fakes import StructuredFakeWithRaw, configure_fake_llm
 
-        __llm_kw = configure_fake_llm(lambda tier: StructuredFakeWithRaw(
-            lambda m: m(items=["v-item"]),
-        ))
+        __llm_kw = configure_fake_llm(
+            lambda tier: StructuredFakeWithRaw(
+                lambda m: m(items=["v-item"]),
+            )
+        )
 
         @merge_fn
         def combine_pq4b(variants: list[Claims]) -> Claims:
@@ -1811,21 +2011,22 @@ class TestMixedNodeAndConstruct:
 
         register_scripted("pq4b_inner", lambda _in, _cfg: RawText(text="processed"))
         sub = Construct(
-            "preprocess", input=Claims, output=RawText,
-            nodes=[Node.scripted("inner", fn="pq4b_inner",
-                                 inputs=Claims, outputs=RawText)],
+            "preprocess",
+            input=Claims,
+            output=RawText,
+            nodes=[Node.scripted("inner", fn="pq4b_inner", inputs=Claims, outputs=RawText)],
         )
 
         @node(outputs=Claims)
         def seed() -> Claims:
             return Claims(items=["raw"])
 
-        @node(outputs=Claims, model="fast", prompt="gen",
-              ensemble_n=2, merge_fn="combine_pq4b")
+        @node(outputs=Claims, model="fast", prompt="gen", ensemble_n=2, merge_fn="combine_pq4b")
         def generate(preprocess: RawText) -> Claims: ...
 
         pipeline = construct_from_functions(
-            "sub-before-oracle", [seed, sub, generate],
+            "sub-before-oracle",
+            [seed, sub, generate],
         )
         graph = compile(pipeline, **build_test_compile_kwargs(), **__llm_kw)
         result = run(graph, input={"node_id": "pq4b"})
@@ -1907,8 +2108,10 @@ class TestGatherProduceSubConstruct:
         def score(explore_result: ExplorationResult, explore_tool_log: list[ToolInteraction]) -> ClaimVerdict: ...
 
         return construct_from_functions(
-            "verify", [explore, score],
-            input=VerifyClaim, output=ClaimVerdict,
+            "verify",
+            [explore, score],
+            input=VerifyClaim,
+            output=ClaimVerdict,
         )
 
     def test_result_surfaces_when_gather_feeds_produce_inside_sub_construct(self):
@@ -1916,13 +2119,20 @@ class TestGatherProduceSubConstruct:
         _, llm_kw = self._setup_fakes()
         sub = self._build_sub_construct()
 
-        register_scripted("dp5_seed", lambda _in, _cfg: VerifyClaim(
-            claim_id="c1", text="system shall authenticate",
-        ))
-        parent = Construct("parent", nodes=[
-            Node.scripted("seed", fn="dp5_seed", outputs=VerifyClaim),
-            sub,
-        ])
+        register_scripted(
+            "dp5_seed",
+            lambda _in, _cfg: VerifyClaim(
+                claim_id="c1",
+                text="system shall authenticate",
+            ),
+        )
+        parent = Construct(
+            "parent",
+            nodes=[
+                Node.scripted("seed", fn="dp5_seed", outputs=VerifyClaim),
+                sub,
+            ],
+        )
         graph = compile(parent, **build_test_compile_kwargs(), **llm_kw)
         result = run(graph, input={"node_id": "dp5-test"})
 
@@ -1945,13 +2155,20 @@ class TestGatherProduceSubConstruct:
         _, llm_kw = self._setup_fakes(capture_prompt=capturing_compiler)
         sub = self._build_sub_construct()
 
-        register_scripted("dp5_seed2", lambda _in, _cfg: VerifyClaim(
-            claim_id="c1", text="test claim",
-        ))
-        parent = Construct("parent", nodes=[
-            Node.scripted("seed", fn="dp5_seed2", outputs=VerifyClaim),
-            sub,
-        ])
+        register_scripted(
+            "dp5_seed2",
+            lambda _in, _cfg: VerifyClaim(
+                claim_id="c1",
+                text="test claim",
+            ),
+        )
+        parent = Construct(
+            "parent",
+            nodes=[
+                Node.scripted("seed", fn="dp5_seed2", outputs=VerifyClaim),
+                sub,
+            ],
+        )
         graph = compile(parent, **build_test_compile_kwargs(), **llm_kw)
         run(graph, input={"node_id": "dp5-capture"})
 
@@ -1990,24 +2207,36 @@ class TestGatherProduceSubConstruct:
             model="judge",
             prompt="verify/score",
         )
-        def score_each(explore_each_result: ExplorationResult, explore_each_tool_log: list[ToolInteraction]) -> ClaimVerdict: ...
+        def score_each(
+            explore_each_result: ExplorationResult, explore_each_tool_log: list[ToolInteraction]
+        ) -> ClaimVerdict: ...
 
         sub = construct_from_functions(
-            "verify", [explore_each, score_each],
-            input=VerifyClaim, output=ClaimVerdict,
+            "verify",
+            [explore_each, score_each],
+            input=VerifyClaim,
+            output=ClaimVerdict,
         ).map("seed.claims", key="claim_id")
 
         class ClaimBatch(BaseModel, frozen=True):
             claims: list[VerifyClaim]
 
-        register_scripted("dp5_batch", lambda _in, _cfg: ClaimBatch(claims=[
-            VerifyClaim(claim_id="c1", text="first claim"),
-            VerifyClaim(claim_id="c2", text="second claim"),
-        ]))
-        parent = Construct("parent", nodes=[
-            Node.scripted("seed", fn="dp5_batch", outputs=ClaimBatch),
-            sub,
-        ])
+        register_scripted(
+            "dp5_batch",
+            lambda _in, _cfg: ClaimBatch(
+                claims=[
+                    VerifyClaim(claim_id="c1", text="first claim"),
+                    VerifyClaim(claim_id="c2", text="second claim"),
+                ]
+            ),
+        )
+        parent = Construct(
+            "parent",
+            nodes=[
+                Node.scripted("seed", fn="dp5_batch", outputs=ClaimBatch),
+                sub,
+            ],
+        )
         graph = compile(parent, **build_test_compile_kwargs(), **llm_kw)
         result = run(graph, input={"node_id": "dp5-each"})
 
@@ -2031,17 +2260,26 @@ class TestGatherProduceSubConstruct:
         def explore_only(claim: VerifyClaim) -> ExplorationResult: ...
 
         sub = construct_from_functions(
-            "explore-only", [explore_only],
-            input=VerifyClaim, output=ExplorationResult,
+            "explore-only",
+            [explore_only],
+            input=VerifyClaim,
+            output=ExplorationResult,
         )
 
-        register_scripted("dp5_seed_base", lambda _in, _cfg: VerifyClaim(
-            claim_id="c1", text="base case",
-        ))
-        parent = Construct("parent", nodes=[
-            Node.scripted("seed", fn="dp5_seed_base", outputs=VerifyClaim),
-            sub,
-        ])
+        register_scripted(
+            "dp5_seed_base",
+            lambda _in, _cfg: VerifyClaim(
+                claim_id="c1",
+                text="base case",
+            ),
+        )
+        parent = Construct(
+            "parent",
+            nodes=[
+                Node.scripted("seed", fn="dp5_seed_base", outputs=VerifyClaim),
+                sub,
+            ],
+        )
         graph = compile(parent, **build_test_compile_kwargs(), **llm_kw)
         result = run(graph, input={"node_id": "dp5-base"})
 
@@ -2063,6 +2301,7 @@ class TestGatherProduceSubConstruct:
 
         class TypedEvidenceTool:
             name = "find_evidence"
+
             def invoke(self, args, config=None, **kwargs):
                 return EvidenceHit(ref="auth.py:42", confidence=0.9)
 
@@ -2079,8 +2318,9 @@ class TestGatherProduceSubConstruct:
                 ReActFake(
                     tool_calls=[[{"name": "find_evidence", "args": {}, "id": "t1"}], []],
                     final=lambda m: m(evidence=["ref1"], summary="ok"),
-                ) if tier == "research" else
-                StructuredFakeWithRaw(
+                )
+                if tier == "research"
+                else StructuredFakeWithRaw(
                     lambda m: m(claim_id="c1", disposition="confirmed"),
                 )
             ),
@@ -2090,7 +2330,8 @@ class TestGatherProduceSubConstruct:
         @node(
             mode="agent",
             outputs={"result": ExplorationResult, "tool_log": list[ToolInteraction]},
-            model="research", prompt="v/explore",
+            model="research",
+            prompt="v/explore",
             tools=[Tool("find_evidence", budget=3)],
         )
         def explore(claim: VerifyClaim) -> ExplorationResult: ...
@@ -2099,16 +2340,25 @@ class TestGatherProduceSubConstruct:
         def score(explore_result: ExplorationResult, explore_tool_log: list[ToolInteraction]) -> ClaimVerdict: ...
 
         sub = construct_from_functions(
-            "verify", [explore, score],
-            input=VerifyClaim, output=ClaimVerdict,
+            "verify",
+            [explore, score],
+            input=VerifyClaim,
+            output=ClaimVerdict,
         )
-        register_scripted("uihu_seed", lambda _in, _cfg: VerifyClaim(
-            claim_id="c1", text="test claim",
-        ))
-        parent = Construct("parent", nodes=[
-            Node.scripted("seed", fn="uihu_seed", outputs=VerifyClaim),
-            sub,
-        ])
+        register_scripted(
+            "uihu_seed",
+            lambda _in, _cfg: VerifyClaim(
+                claim_id="c1",
+                text="test claim",
+            ),
+        )
+        parent = Construct(
+            "parent",
+            nodes=[
+                Node.scripted("seed", fn="uihu_seed", outputs=VerifyClaim),
+                sub,
+            ],
+        )
         graph = compile(parent, **build_test_compile_kwargs(), **__llm_kw)
         run(graph, input={"node_id": "uihu"})
 
@@ -2124,8 +2374,6 @@ class TestGatherProduceSubConstruct:
 # ═══════════════════════════════════════════════════════════════════════════
 # RENDERERS — XmlRenderer, DelimitedRenderer, JsonRenderer
 # ═══════════════════════════════════════════════════════════════════════════
-
-
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -2145,6 +2393,7 @@ class TestConstructPropagationTypeErrors:
 
         class FrozenChild(BaseModel, frozen=True):
             """Fake node-like object with frozen llm_config."""
+
             name: str = "frozen"
             llm_config: LlmConfig = LlmConfig()
             outputs: type = RawText
@@ -2172,6 +2421,7 @@ class TestConstructPropagationTypeErrors:
 
         class FrozenChild(BaseModel, frozen=True):
             """Fake node-like object with frozen renderer."""
+
             name: str = "frozen"
             renderer: Any = None
             outputs: type = RawText
@@ -2236,49 +2486,72 @@ class TestSubConstructOperatorNotDropped:
         register_scripted("xw75_merge", lambda v, c: v[0])
         register_condition("xw75_always_false", lambda s: None)
 
-        sub = Construct(
-            "xw75-sub", input=Claims, output=Claims,
-            nodes=[Node.scripted("gen", fn="xw75_gen", outputs=Claims)],
-        ) | Oracle(n=2, merge_fn="xw75_merge") | Operator(when="xw75_always_false")
+        sub = (
+            Construct(
+                "xw75-sub",
+                input=Claims,
+                output=Claims,
+                nodes=[Node.scripted("gen", fn="xw75_gen", outputs=Claims)],
+            )
+            | Oracle(n=2, merge_fn="xw75_merge")
+            | Operator(when="xw75_always_false")
+        )
 
-        pipeline = Construct("xw75-outer", nodes=[
-            Node.scripted("seed", fn="xw75_gen", outputs=Claims),
-            sub,
-        ])
+        pipeline = Construct(
+            "xw75-outer",
+            nodes=[
+                Node.scripted("seed", fn="xw75_gen", outputs=Claims),
+                sub,
+            ],
+        )
         graph = compile(pipeline, checkpointer=MemorySaver(), **build_test_compile_kwargs())
         lg_graph = graph.get_graph()
         node_names = [n for n in lg_graph.nodes if "operator" in n.lower()]
-        assert len(node_names) >= 1, (
-            f"Expected operator check node, got nodes: {list(lg_graph.nodes)}"
-        )
+        assert len(node_names) >= 1, f"Expected operator check node, got nodes: {list(lg_graph.nodes)}"
 
     def test_construct_each_operator_has_operator_node(self):
         """Construct | Each | Operator must compile with operator check node."""
         from langgraph.checkpoint.memory import MemorySaver
 
-        register_scripted("xw75e_src", lambda i, c: Clusters(groups=[
-            ClusterGroup(label="a", claim_ids=["1"]),
-        ]))
-        register_scripted("xw75e_proc", lambda i, c: MatchResult(
-            cluster_label="a", matched=["ok"],
-        ))
+        register_scripted(
+            "xw75e_src",
+            lambda i, c: Clusters(
+                groups=[
+                    ClusterGroup(label="a", claim_ids=["1"]),
+                ]
+            ),
+        )
+        register_scripted(
+            "xw75e_proc",
+            lambda i, c: MatchResult(
+                cluster_label="a",
+                matched=["ok"],
+            ),
+        )
         register_condition("xw75e_always_false", lambda s: None)
 
-        sub = Construct(
-            "xw75e-sub", input=ClusterGroup, output=MatchResult,
-            nodes=[Node.scripted("proc", fn="xw75e_proc", outputs=MatchResult)],
-        ) | Each(over="source.groups", key="label") | Operator(when="xw75e_always_false")
+        sub = (
+            Construct(
+                "xw75e-sub",
+                input=ClusterGroup,
+                output=MatchResult,
+                nodes=[Node.scripted("proc", fn="xw75e_proc", outputs=MatchResult)],
+            )
+            | Each(over="source.groups", key="label")
+            | Operator(when="xw75e_always_false")
+        )
 
-        pipeline = Construct("xw75e-outer", nodes=[
-            Node.scripted("source", fn="xw75e_src", outputs=Clusters),
-            sub,
-        ])
+        pipeline = Construct(
+            "xw75e-outer",
+            nodes=[
+                Node.scripted("source", fn="xw75e_src", outputs=Clusters),
+                sub,
+            ],
+        )
         graph = compile(pipeline, checkpointer=MemorySaver(), **build_test_compile_kwargs())
         lg_graph = graph.get_graph()
         node_names = [n for n in lg_graph.nodes if "operator" in n.lower()]
-        assert len(node_names) >= 1, (
-            f"Expected operator check node, got nodes: {list(lg_graph.nodes)}"
-        )
+        assert len(node_names) >= 1, f"Expected operator check node, got nodes: {list(lg_graph.nodes)}"
 
 
 class TestConstructLlmConfigImmutability:
@@ -2316,9 +2589,7 @@ class TestConstructLlmConfigImmutability:
 
         # The node INSIDE the construct has the merged config
         inner_node = pipeline.nodes[0]
-        assert inner_node.llm_config.max_retries == 3, (
-            "Construct child must inherit parent llm_config"
-        )
+        assert inner_node.llm_config.max_retries == 3, "Construct child must inherit parent llm_config"
         assert inner_node.llm_config.provider_kwargs.get("temperature") == 0.5, (
             "Child's own provider_kwargs must survive merge"
         )
@@ -2355,6 +2626,7 @@ class TestConstructLlmConfigImmutability:
         assert node.renderer is None
 
         from neograph import XmlRenderer
+
         parent_renderer = XmlRenderer()
         pipeline = Construct(
             name="bchn-renderer",
@@ -2364,9 +2636,7 @@ class TestConstructLlmConfigImmutability:
 
         # The node inside construct should have the renderer
         inner_node = pipeline.nodes[0]
-        assert inner_node.renderer is parent_renderer, (
-            "Construct child must inherit parent renderer"
-        )
+        assert inner_node.renderer is parent_renderer, "Construct child must inherit parent renderer"
 
         # The original node must be unchanged
         assert node.renderer is None, (
@@ -2402,22 +2672,28 @@ class TestSubconstructContextTypes:
         # Subconstruct has a node that uses context=['build_catalog'] to inject
         # the Catalog into its prompt alongside its typed ClaimResult input.
         verify_node = Node.scripted(
-            "verify", fn="ctx_verify",
-            inputs=ClaimResult, outputs=ClaimResult,
+            "verify",
+            fn="ctx_verify",
+            inputs=ClaimResult,
+            outputs=ClaimResult,
         )
         verify_node = verify_node.model_copy(update={"context": ["build_catalog"]})
 
         sub = Construct(
             "verify-sub",
-            input=ClaimResult, output=ClaimResult,
+            input=ClaimResult,
+            output=ClaimResult,
             nodes=[verify_node],
         )
 
-        parent = Construct("parent", nodes=[
-            Node.scripted("build-catalog", fn="ctx_catalog", outputs=Catalog),
-            Node.scripted("seed", fn="ctx_seed", inputs=Catalog, outputs=ClaimResult),
-            sub,
-        ])
+        parent = Construct(
+            "parent",
+            nodes=[
+                Node.scripted("build-catalog", fn="ctx_catalog", outputs=Catalog),
+                Node.scripted("seed", fn="ctx_seed", inputs=Catalog, outputs=ClaimResult),
+                sub,
+            ],
+        )
 
         # Compile parent — this triggers subconstruct compilation
         graph = compile(parent, **build_test_compile_kwargs())
@@ -2465,9 +2741,7 @@ class TestIterNodes:
 
         inner = Node.scripted("inner", fn="_x_in", inputs=Claims, outputs=Claims)
         sub = Construct("sub2", input=Claims, output=Claims, nodes=[inner])
-        outer = Construct(
-            "outer2", nodes=[Node.scripted("t", fn="_x_t", outputs=Claims), sub]
-        )
+        outer = Construct("outer2", nodes=[Node.scripted("t", fn="_x_t", outputs=Claims), sub])
         assert all(isinstance(n, Node) for n in iter_nodes(outer))
 
 
@@ -2511,8 +2785,6 @@ class TestPrimaryOutputField:
         assert field == "verify_result"
 
 
-
-
 class TestEachOnErrorCollect:
     """Each(on_error='collect') — per-item partial-failure collection.
 
@@ -2527,11 +2799,13 @@ class TestEachOnErrorCollect:
 
         register_scripted(
             "eok4_seed",
-            lambda _i, _c: FanCollection(items=[
-                FanItem(item_id="item1"),
-                FanItem(item_id="item2"),
-                FanItem(item_id="item3"),
-            ]),
+            lambda _i, _c: FanCollection(
+                items=[
+                    FanItem(item_id="item1"),
+                    FanItem(item_id="item2"),
+                    FanItem(item_id="item3"),
+                ]
+            ),
         )
 
         def _inner(input_data: Any, config: Any) -> RawText:
@@ -2553,10 +2827,13 @@ class TestEachOnErrorCollect:
             ],
         )
         sub_each = sub | Each(over="eok4_seed.items", key="item_id", on_error=on_error)
-        return Construct("eok4-parent", nodes=[
-            Node.scripted("eok4-seed", fn="eok4_seed", outputs=FanCollection),
-            sub_each,
-        ])
+        return Construct(
+            "eok4-parent",
+            nodes=[
+                Node.scripted("eok4-seed", fn="eok4_seed", outputs=FanCollection),
+                sub_each,
+            ],
+        )
 
     def test_barrier_collects_typed_failure_when_item_raises_and_on_error_collect(self):
         """3-item .map, item2's sub-construct raises → barrier has 2 successes
@@ -2604,10 +2881,12 @@ class TestEachOnErrorCollect:
 
         register_scripted(
             "eok4_int_seed",
-            lambda _i, _c: FanCollection(items=[
-                FanItem(item_id="item1"),
-                FanItem(item_id="item2"),
-            ]),
+            lambda _i, _c: FanCollection(
+                items=[
+                    FanItem(item_id="item1"),
+                    FanItem(item_id="item2"),
+                ]
+            ),
         )
 
         def _inner(input_data: Any, config: Any) -> RawText:
@@ -2626,10 +2905,13 @@ class TestEachOnErrorCollect:
             ],
         )
         sub_each = sub | Each(over="eok4_int_seed.items", key="item_id", on_error="collect")
-        parent = Construct("eok4-int-parent", nodes=[
-            Node.scripted("eok4-int-seed", fn="eok4_int_seed", outputs=FanCollection),
-            sub_each,
-        ])
+        parent = Construct(
+            "eok4-int-parent",
+            nodes=[
+                Node.scripted("eok4-int-seed", fn="eok4_int_seed", outputs=FanCollection),
+                sub_each,
+            ],
+        )
         graph = compile(parent, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "test-eok4-int"})
 

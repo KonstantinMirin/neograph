@@ -31,9 +31,7 @@ from neograph.naming import field_name_for
 from neograph.node import Node
 
 
-def wrap_fan_over_agents(
-    construct: Construct, scripted_lookup: dict[str, Callable] | None = None
-) -> Construct:
+def wrap_fan_over_agents(construct: Construct, scripted_lookup: dict[str, Callable] | None = None) -> Construct:
     """Rewrite each supported fan-over-agent Node into an isolated single-node
     sub-construct. ``_fan_agent.is_supported_fan_over_agent`` is the single source
     of truth for which shapes qualify (Oracle/Each/Loop over a self-contained
@@ -124,9 +122,7 @@ def _synthesize_port(node: Node) -> tuple[type[BaseModel], Any]:
     """
     ni = normalize_inputs(node.inputs)
     if ni.is_none:
-        empty = create_model(
-            f"_NeoAgentPort_{field_name_for(node.name)}", __base__=BaseModel
-        )
+        empty = create_model(f"_NeoAgentPort_{field_name_for(node.name)}", __base__=BaseModel)
         return empty, node.inputs
     if ni.is_dict_form:
         # Single-key guaranteed by is_supported_fan_over_agent (>1 fails loud).
@@ -161,9 +157,7 @@ def _wrap_agent_node(node: Node) -> Construct:
     # dropped Each) is harmless — it names a key that no longer exists in the
     # rewritten inputs, so _extract_fan_in_dict never matches it — and clearing it
     # here would trip the "normalize_ir is the sole fan_out_param writer" guard.
-    bare = node.model_copy(
-        update={"modifier_set": ModifierSet(), "inputs": inner_inputs}
-    )
+    bare = node.model_copy(update={"modifier_set": ModifierSet(), "inputs": inner_inputs})
     return Construct(
         name=node.name,
         input=port,
@@ -173,9 +167,7 @@ def _wrap_agent_node(node: Node) -> Construct:
     )
 
 
-def _expand_agent_node(
-    node: Node, scripted_lookup: dict[str, Callable] | None
-) -> list[Node | Construct]:
+def _expand_agent_node(node: Node, scripted_lookup: dict[str, Callable] | None) -> list[Node | Construct]:
     """Expand one supported fan-over-agent Node into the parent-node sequence that
     replaces it.
 
@@ -189,9 +181,7 @@ def _expand_agent_node(
     return [_wrap_agent_node(node)]
 
 
-def _synthesize_packer_wrap(
-    node: Node, scripted_lookup: dict[str, Callable] | None
-) -> list[Node | Construct]:
+def _synthesize_packer_wrap(node: Node, scripted_lookup: dict[str, Callable] | None) -> list[Node | Construct]:
     """Oracle over an agent with N distinct dict-form producers (see neograph-qzrv).
 
     The single-value subgraph boundary (``neo_subgraph_input``) carries ONE typed
@@ -230,9 +220,7 @@ def _synthesize_packer_wrap(
         return port_model(**input_data)
 
     lookup[packer_fn] = _pack
-    packer = Node.scripted(
-        f"neo-pack-{node.name}", fn=packer_fn, inputs=node.inputs, outputs=port_model
-    )
+    packer = Node.scripted(f"neo-pack-{node.name}", fn=packer_fn, inputs=node.inputs, outputs=port_model)
 
     # Inner unpackers: one per key, re-exposing the original producer name so the
     # bare agent's fan-in reads them as peers (prompt-var surface preserved).
@@ -245,9 +233,7 @@ def _synthesize_packer_wrap(
             return getattr(input_data, _key)
 
         lookup[unpack_fn] = _unpack
-        unpackers.append(
-            Node.scripted(key, fn=unpack_fn, inputs=port_model, outputs=by_name[key])
-        )
+        unpackers.append(Node.scripted(key, fn=unpack_fn, inputs=port_model, outputs=by_name[key]))
 
     # Bare agent keeps its ORIGINAL dict-form inputs (reads the unpacker peers);
     # only the fan/operator modifiers move to the wrapper. Oracle never sets

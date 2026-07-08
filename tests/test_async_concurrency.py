@@ -98,12 +98,7 @@ async def test_n_arun_interleave_on_one_loop_with_isolated_results():
     fakes = [GatedAsyncFake(lambda m, v=i: m(items=[f"g{v}"])) for i in range(n)]
     graphs = [_think_graph(fakes[i]) for i in range(n)]
 
-    tasks = [
-        asyncio.create_task(
-            neograph.arun(graphs[i], input={"node_id": f"c{i}"})
-        )
-        for i in range(n)
-    ]
+    tasks = [asyncio.create_task(neograph.arun(graphs[i], input={"node_id": f"c{i}"})) for i in range(n)]
 
     # Poll until every run has parked at its gate (all interleaved on the loop).
     for _ in range(300):
@@ -112,12 +107,10 @@ async def test_n_arun_interleave_on_one_loop_with_isolated_results():
         await asyncio.sleep(0.005)
 
     assert all(f.enter_count == 1 for f in fakes), (
-        f"not all runs parked concurrently: enter_counts="
-        f"{[f.enter_count for f in fakes]}"
+        f"not all runs parked concurrently: enter_counts={[f.enter_count for f in fakes]}"
     )
     assert not any(t.done() for t in tasks), (
-        "a run completed before any gate was released — the awaits did not "
-        "actually interleave on the loop"
+        "a run completed before any gate was released — the awaits did not actually interleave on the loop"
     )
 
     for f in fakes:
@@ -126,8 +119,7 @@ async def test_n_arun_interleave_on_one_loop_with_isolated_results():
     results = await asyncio.gather(*tasks)
     for i, r in enumerate(results):
         assert r["gen"] == Claims(items=[f"g{i}"]), (
-            f"run {i} did not return its OWN result — concurrent runs "
-            f"cross-contaminated: {r['gen']}"
+            f"run {i} did not return its OWN result — concurrent runs cross-contaminated: {r['gen']}"
         )
 
 
@@ -206,9 +198,7 @@ async def test_cancel_parked_arun_leaves_saver_reusable(tmp_path):
     async with AsyncSqliteSaver.from_conn_string(db) as saver:
         graph = _think_graph(gated, checkpointer=saver)
 
-        task = asyncio.create_task(
-            neograph.arun(graph, input={"node_id": "cx"}, config=thread)
-        )
+        task = asyncio.create_task(neograph.arun(graph, input={"node_id": "cx"}, config=thread))
 
         # Poll until the run parks at the gate mid-flight.
         for _ in range(300):
@@ -217,8 +207,7 @@ async def test_cancel_parked_arun_leaves_saver_reusable(tmp_path):
             await asyncio.sleep(0.005)
 
         assert gated.enter_count == 1 and not task.done(), (
-            "arun did not park at the LLM gate before cancel — cannot test a "
-            "mid-flight cancellation"
+            "arun did not park at the LLM gate before cancel — cannot test a mid-flight cancellation"
         )
 
         task.cancel()
@@ -227,9 +216,7 @@ async def test_cancel_parked_arun_leaves_saver_reusable(tmp_path):
 
         # The saver is still open in THIS scope: a fresh non-gated fake resumes
         # the SAME thread_id to completion (no re-park hang, no torn connection).
-        resume_graph = _think_graph(
-            StructuredFake(lambda m: m(items=["resumed"])), checkpointer=saver
-        )
+        resume_graph = _think_graph(StructuredFake(lambda m: m(items=["resumed"])), checkpointer=saver)
         completed = await asyncio.wait_for(
             neograph.arun(resume_graph, input={"node_id": "cx"}, config=thread),
             timeout=5.0,
@@ -299,8 +286,7 @@ async def test_parallel_aruns_isolate_the_per_run_cache_across_runs():
         await asyncio.sleep(0.005)
 
     assert all(f.enter_count == 1 for f in fakes), (
-        f"runs did not interleave at their gates: enter_counts="
-        f"{[f.enter_count for f in fakes]}"
+        f"runs did not interleave at their gates: enter_counts={[f.enter_count for f in fakes]}"
     )
     assert not any(t.done() for t in tasks)
     assert fetch_count[0] == 2, (
@@ -312,9 +298,7 @@ async def test_parallel_aruns_isolate_the_per_run_cache_across_runs():
         f.release()
     results = await asyncio.gather(*tasks)
     for i, r in enumerate(results):
-        assert r["gen"] == Claims(items=[f"g{i}"]), (
-            f"run {i} cross-contaminated across the concurrent runs: {r['gen']}"
-        )
+        assert r["gen"] == Claims(items=[f"g{i}"]), f"run {i} cross-contaminated across the concurrent runs: {r['gen']}"
 
 
 async def test_replay_remints_run_id_so_the_cache_refetches():
@@ -329,9 +313,7 @@ async def test_replay_remints_run_id_so_the_cache_refetches():
         fetch_count[0] += 1
         return "HISTORY", "text/plain"
 
-    graph = _resource_think_graph(
-        StructuredFake(lambda m: m(items=["done"])), fetch
-    )
+    graph = _resource_think_graph(StructuredFake(lambda m: m(items=["done"])), fetch)
     config = {"configurable": {"mcp_resource_fetcher": fetch, "node_id": "t"}}
 
     r1 = await neograph.arun(graph, input={"node_id": "t"}, config=config)

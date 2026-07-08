@@ -90,9 +90,7 @@ class TestArunRunParity:
         async_graph = compile(_trivial_pipeline(), **build_test_compile_kwargs())
 
         sync_result = run(sync_graph, input={"node_id": "parity-001"})
-        async_result = asyncio.run(
-            neograph.arun(async_graph, input={"node_id": "parity-001"})
-        )
+        async_result = asyncio.run(neograph.arun(async_graph, input={"node_id": "parity-001"}))
 
         assert async_result["process"] == sync_result["process"] == Claims(items=["HELLO"])
         assert async_result == sync_result
@@ -124,14 +122,10 @@ class TestArunCheckpointResume:
         config = {"configurable": {"thread_id": "arun-resume-x"}}
 
         # First arun: new execution, InMemorySaver persists the state.
-        first = asyncio.run(
-            neograph.arun(graph, input={"node_id": "ckpt-async-001"}, config=config)
-        )
+        first = asyncio.run(neograph.arun(graph, input={"node_id": "ckpt-async-001"}, config=config))
         assert first["process"] == Claims(items=["HELLO"])
 
         # Second arun on the SAME thread_id: hits the checkpoint-EXISTS branch,
         # awaiting checkpointer.aget_tuple inside the async checkpoint twins.
-        second = asyncio.run(
-            neograph.arun(graph, input={"node_id": "ckpt-async-001"}, config=config)
-        )
+        second = asyncio.run(neograph.arun(graph, input={"node_id": "ckpt-async-001"}, config=config))
         assert second["process"] == Claims(items=["HELLO"])

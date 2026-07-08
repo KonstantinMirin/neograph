@@ -12,12 +12,16 @@ from tests.fakes import register_scripted
 class Claims(BaseModel, frozen=True):
     text: str
 
+
 register_scripted("opt_c_a", lambda i, c: Claims(text="ok"))
 register_scripted("opt_c_b", lambda i, c: Claims(text="done"))
 
 # This SHOULD pass (Claims satisfies Claims | None) but currently
 # raises ConstructError because _types_compatible returns False.
-pipeline = Construct("should-work", nodes=[
-    Node.scripted("first", fn="opt_c_a", outputs=Claims),
-    Node.scripted("second", fn="opt_c_b", inputs=Claims | None, outputs=Claims),
-])
+pipeline = Construct(
+    "should-work",
+    nodes=[
+        Node.scripted("first", fn="opt_c_a", outputs=Claims),
+        Node.scripted("second", fn="opt_c_b", inputs=Claims | None, outputs=Claims),
+    ],
+)

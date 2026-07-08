@@ -95,9 +95,8 @@ def run_driver(request):
 
         yield _async_driver
     else:
+
         def _sync_driver(graph, **run_kwargs):
             return neograph.run(graph, **run_kwargs)
 
         yield _sync_driver
-
-

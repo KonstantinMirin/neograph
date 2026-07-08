@@ -1,6 +1,5 @@
 """lint() template-placeholder validation: inline ${var} and template-ref {var}."""
 
-
 from __future__ import annotations
 
 from pydantic import BaseModel, Field
@@ -33,11 +32,15 @@ class TestTemplatePlaceholderLint:
         class Summary(BaseModel):
             text: str
 
-        c = Construct("test", nodes=[
-            Node.scripted("seed", fn="noop", outputs=Claims),
-            Node("summarize", prompt="Summarize: ${seed}",
-                 model="default", outputs=Summary, inputs={"seed": Claims}),
-        ])
+        c = Construct(
+            "test",
+            nodes=[
+                Node.scripted("seed", fn="noop", outputs=Claims),
+                Node(
+                    "summarize", prompt="Summarize: ${seed}", model="default", outputs=Summary, inputs={"seed": Claims}
+                ),
+            ],
+        )
         issues = lint(c)
         template_issues = [i for i in issues if "template" in i.kind]
         assert template_issues == []
@@ -52,11 +55,19 @@ class TestTemplatePlaceholderLint:
         class Summary(BaseModel):
             text: str
 
-        c = Construct("test", nodes=[
-            Node.scripted("seed", fn="noop", outputs=Claims),
-            Node("summarize", prompt="Summarize: ${nonexistent}",
-                 model="default", outputs=Summary, inputs={"seed": Claims}),
-        ])
+        c = Construct(
+            "test",
+            nodes=[
+                Node.scripted("seed", fn="noop", outputs=Claims),
+                Node(
+                    "summarize",
+                    prompt="Summarize: ${nonexistent}",
+                    model="default",
+                    outputs=Summary,
+                    inputs={"seed": Claims},
+                ),
+            ],
+        )
         issues = lint(c)
         template_issues = [i for i in issues if "template" in i.kind]
         assert len(template_issues) == 1
@@ -73,11 +84,15 @@ class TestTemplatePlaceholderLint:
         class B(BaseModel):
             y: str
 
-        c = Construct("test", nodes=[
-            Node.scripted("seed", fn="noop", outputs=A),
-            Node("proc", prompt="A: ${bad1}, B: ${bad2}, OK: ${seed}",
-                 model="default", outputs=B, inputs={"seed": A}),
-        ])
+        c = Construct(
+            "test",
+            nodes=[
+                Node.scripted("seed", fn="noop", outputs=A),
+                Node(
+                    "proc", prompt="A: ${bad1}, B: ${bad2}, OK: ${seed}", model="default", outputs=B, inputs={"seed": A}
+                ),
+            ],
+        )
         issues = lint(c)
         template_issues = [i for i in issues if "template" in i.kind]
         flagged_params = {i.param for i in template_issues}
@@ -96,15 +111,27 @@ class TestTemplatePlaceholderLint:
         class Output(BaseModel):
             result: str
 
-        sub = Construct("sub", input=Input, output=Output, nodes=[
-            Node("proc", prompt="Process: ${original_param}",
-                 model="default", outputs=Output,
-                 inputs={"neo_subgraph_input": Input}),
-        ])
-        parent = Construct("parent", nodes=[
-            Node.scripted("seed", fn="noop", outputs=Input),
-            sub,
-        ])
+        sub = Construct(
+            "sub",
+            input=Input,
+            output=Output,
+            nodes=[
+                Node(
+                    "proc",
+                    prompt="Process: ${original_param}",
+                    model="default",
+                    outputs=Output,
+                    inputs={"neo_subgraph_input": Input},
+                ),
+            ],
+        )
+        parent = Construct(
+            "parent",
+            nodes=[
+                Node.scripted("seed", fn="noop", outputs=Input),
+                sub,
+            ],
+        )
         issues = lint(parent)
         template_issues = [i for i in issues if "template" in i.kind]
         assert len(template_issues) >= 1
@@ -120,15 +147,27 @@ class TestTemplatePlaceholderLint:
         class Output(BaseModel):
             result: str
 
-        sub = Construct("sub", input=Input, output=Output, nodes=[
-            Node("proc", prompt="Process: ${neo_subgraph_input}",
-                 model="default", outputs=Output,
-                 inputs={"neo_subgraph_input": Input}),
-        ])
-        parent = Construct("parent", nodes=[
-            Node.scripted("seed", fn="noop", outputs=Input),
-            sub,
-        ])
+        sub = Construct(
+            "sub",
+            input=Input,
+            output=Output,
+            nodes=[
+                Node(
+                    "proc",
+                    prompt="Process: ${neo_subgraph_input}",
+                    model="default",
+                    outputs=Output,
+                    inputs={"neo_subgraph_input": Input},
+                ),
+            ],
+        )
+        parent = Construct(
+            "parent",
+            nodes=[
+                Node.scripted("seed", fn="noop", outputs=Input),
+                sub,
+            ],
+        )
         issues = lint(parent)
         template_issues = [i for i in issues if "template" in i.kind]
         assert template_issues == []
@@ -144,15 +183,17 @@ class TestTemplatePlaceholderLint:
         class Output(BaseModel):
             result: str
 
-        @node(mode="think", outputs=Output, model="default",
-              prompt="Process: ${text_input}")
+        @node(mode="think", outputs=Output, model="default", prompt="Process: ${text_input}")
         def proc(text_input: Input) -> Output: ...
 
         sub = construct_from_functions("sub", [proc], input=Input, output=Output)
-        parent = Construct("parent", nodes=[
-            Node.scripted("seed", fn="noop", outputs=Input),
-            sub,
-        ])
+        parent = Construct(
+            "parent",
+            nodes=[
+                Node.scripted("seed", fn="noop", outputs=Input),
+                sub,
+            ],
+        )
         issues = lint(parent)
         template_issues = [i for i in issues if "template" in i.kind]
         # After @node assembly, port param 'text_input' is remapped to neo_subgraph_input
@@ -174,13 +215,17 @@ class TestTemplatePlaceholderLint:
         class B(BaseModel):
             y: str
 
-        c = Construct("test", nodes=[
-            Node.scripted("seed", fn="noop", outputs=A),
-            Node("proc", prompt="rw/analyze",
-                 model="default", outputs=B, inputs={"seed": A}),
-        ])
+        c = Construct(
+            "test",
+            nodes=[
+                Node.scripted("seed", fn="noop", outputs=A),
+                Node("proc", prompt="rw/analyze", model="default", outputs=B, inputs={"seed": A}),
+            ],
+        )
+
         def resolver(name):
             return "ID: {node_id}, root: {project_root}, data: {seed}" if name == "rw/analyze" else None
+
         issues = lint(c, template_resolver=resolver)
         template_issues = [i for i in issues if "template" in i.kind]
         errors = [i for i in template_issues if i.required]
@@ -196,11 +241,13 @@ class TestTemplatePlaceholderLint:
         class B(BaseModel):
             y: str
 
-        c = Construct("test", nodes=[
-            Node.scripted("seed", fn="noop", outputs=A),
-            Node("proc", prompt="Topic: ${topic}, data: ${seed}",
-                 model="default", outputs=B, inputs={"seed": A}),
-        ])
+        c = Construct(
+            "test",
+            nodes=[
+                Node.scripted("seed", fn="noop", outputs=A),
+                Node("proc", prompt="Topic: ${topic}, data: ${seed}", model="default", outputs=B, inputs={"seed": A}),
+            ],
+        )
         issues = lint(c, known_template_vars={"topic"})
         template_issues = [i for i in issues if "template" in i.kind]
         # ${topic} is not an ERROR (not unresolvable) but IS a WARN (known_vars only)
@@ -221,11 +268,13 @@ class TestTemplatePlaceholderLint:
         class B(BaseModel):
             y: str
 
-        c = Construct("test", nodes=[
-            Node.scripted("seed", fn="noop", outputs=A),
-            Node("proc", prompt="Topic: ${topic}, data: ${seed}",
-                 model="default", outputs=B, inputs={"seed": A}),
-        ])
+        c = Construct(
+            "test",
+            nodes=[
+                Node.scripted("seed", fn="noop", outputs=A),
+                Node("proc", prompt="Topic: ${topic}, data: ${seed}", model="default", outputs=B, inputs={"seed": A}),
+            ],
+        )
         issues = lint(c)  # no known_template_vars
         template_issues = [i for i in issues if "template" in i.kind]
         assert len(template_issues) == 1
@@ -246,11 +295,19 @@ class TestTemplatePlaceholderLint:
         class B(BaseModel):
             y: str
 
-        c = Construct("test", nodes=[
-            Node.scripted("seed", fn="noop", outputs=A),
-            Node("proc", prompt="Packet: ${research_packet}, data: ${seed}",
-                 model="default", outputs=B, inputs={"seed": A}),
-        ])
+        c = Construct(
+            "test",
+            nodes=[
+                Node.scripted("seed", fn="noop", outputs=A),
+                Node(
+                    "proc",
+                    prompt="Packet: ${research_packet}, data: ${seed}",
+                    model="default",
+                    outputs=B,
+                    inputs={"seed": A},
+                ),
+            ],
+        )
         # ${research_packet} only resolvable via known_vars, not input keys
         issues = lint(c, known_template_vars={"research_packet"})
         template_issues = [i for i in issues if "template" in i.kind]
@@ -269,11 +326,13 @@ class TestTemplatePlaceholderLint:
         class B(BaseModel):
             y: str
 
-        c = Construct("test", nodes=[
-            Node.scripted("seed", fn="noop", outputs=A),
-            Node("proc", prompt="Data: ${seed}",
-                 model="default", outputs=B, inputs={"seed": A}),
-        ])
+        c = Construct(
+            "test",
+            nodes=[
+                Node.scripted("seed", fn="noop", outputs=A),
+                Node("proc", prompt="Data: ${seed}", model="default", outputs=B, inputs={"seed": A}),
+            ],
+        )
         # "seed" is both an input key AND in known_vars — no warning
         issues = lint(c, known_template_vars={"seed"})
         template_issues = [i for i in issues if "template" in i.kind]
@@ -289,13 +348,17 @@ class TestTemplatePlaceholderLint:
         class B(BaseModel):
             y: str
 
-        c = Construct("test", nodes=[
-            Node.scripted("seed", fn="noop", outputs=A),
-            Node("proc", prompt="rw/proc",
-                 model="default", outputs=B, inputs={"seed": A}),
-        ])
+        c = Construct(
+            "test",
+            nodes=[
+                Node.scripted("seed", fn="noop", outputs=A),
+                Node("proc", prompt="rw/proc", model="default", outputs=B, inputs={"seed": A}),
+            ],
+        )
+
         def resolver(name):
             return "ID: {node_id}" if name == "rw/proc" else None
+
         issues = lint(c, known_template_vars={"node_id"}, template_resolver=resolver)
         template_issues = [i for i in issues if "template" in i.kind]
         assert template_issues == []
@@ -312,11 +375,19 @@ class TestTemplatePlaceholderLint:
         class Summary(BaseModel):
             text: str
 
-        c = Construct("test", nodes=[
-            Node.scripted("seed", fn="noop", outputs=Claims),
-            Node("summarize", prompt="Items: ${seed.items}",
-                 model="default", outputs=Summary, inputs={"seed": Claims}),
-        ])
+        c = Construct(
+            "test",
+            nodes=[
+                Node.scripted("seed", fn="noop", outputs=Claims),
+                Node(
+                    "summarize",
+                    prompt="Items: ${seed.items}",
+                    model="default",
+                    outputs=Summary,
+                    inputs={"seed": Claims},
+                ),
+            ],
+        )
         issues = lint(c)
         template_issues = [i for i in issues if "template" in i.kind]
         assert template_issues == []
@@ -331,11 +402,13 @@ class TestTemplatePlaceholderLint:
         class B(BaseModel):
             y: str
 
-        c = Construct("test", nodes=[
-            Node.scripted("seed", fn="noop", outputs=A),
-            Node("proc", prompt="Val: ${bad.field}",
-                 model="default", outputs=B, inputs={"seed": A}),
-        ])
+        c = Construct(
+            "test",
+            nodes=[
+                Node.scripted("seed", fn="noop", outputs=A),
+                Node("proc", prompt="Val: ${bad.field}", model="default", outputs=B, inputs={"seed": A}),
+            ],
+        )
         issues = lint(c)
         template_issues = [i for i in issues if "template" in i.kind]
         assert len(template_issues) == 1
@@ -350,9 +423,12 @@ class TestTemplatePlaceholderLint:
         class A(BaseModel):
             x: str
 
-        c = Construct("test", nodes=[
-            Node.scripted("seed", fn="noop", outputs=A),
-        ])
+        c = Construct(
+            "test",
+            nodes=[
+                Node.scripted("seed", fn="noop", outputs=A),
+            ],
+        )
         issues = lint(c)
         template_issues = [i for i in issues if "template" in i.kind]
         assert template_issues == []
@@ -367,11 +443,13 @@ class TestTemplatePlaceholderLint:
         class B(BaseModel):
             y: str
 
-        c = Construct("test", nodes=[
-            Node.scripted("seed", fn="noop", outputs=A),
-            Node("proc", prompt="rw/summarize",
-                 model="default", outputs=B, inputs={"seed": A}),
-        ])
+        c = Construct(
+            "test",
+            nodes=[
+                Node.scripted("seed", fn="noop", outputs=A),
+                Node("proc", prompt="rw/summarize", model="default", outputs=B, inputs={"seed": A}),
+            ],
+        )
         issues = lint(c)
         template_issues = [i for i in issues if "template" in i.kind]
         assert template_issues == []
@@ -386,10 +464,13 @@ class TestTemplatePlaceholderLint:
         class B(BaseModel):
             y: str
 
-        c = Construct("test", nodes=[
-            Node.scripted("seed", fn="noop", outputs=A),
-            Node("proc", prompt=None, model="default", outputs=B, inputs={"seed": A}),
-        ])
+        c = Construct(
+            "test",
+            nodes=[
+                Node.scripted("seed", fn="noop", outputs=A),
+                Node("proc", prompt=None, model="default", outputs=B, inputs={"seed": A}),
+            ],
+        )
         issues = lint(c)
         template_issues = [i for i in issues if "template" in i.kind]
         assert template_issues == []
@@ -404,11 +485,13 @@ class TestTemplatePlaceholderLint:
         class B(BaseModel):
             y: str
 
-        c = Construct("test", nodes=[
-            Node.scripted("seed", fn="noop", outputs=A),
-            Node("proc", prompt="Just a plain instruction",
-                 model="default", outputs=B, inputs={"seed": A}),
-        ])
+        c = Construct(
+            "test",
+            nodes=[
+                Node.scripted("seed", fn="noop", outputs=A),
+                Node("proc", prompt="Just a plain instruction", model="default", outputs=B, inputs={"seed": A}),
+            ],
+        )
         issues = lint(c)
         template_issues = [i for i in issues if "template" in i.kind]
         assert template_issues == []
@@ -422,10 +505,12 @@ class TestTemplatePlaceholderLint:
         class B(BaseModel):
             y: str
 
-        c = Construct("test", nodes=[
-            Node("gen", prompt="Generate about: ${topic}",
-                 model="default", outputs=B, inputs=None),
-        ])
+        c = Construct(
+            "test",
+            nodes=[
+                Node("gen", prompt="Generate about: ${topic}", model="default", outputs=B, inputs=None),
+            ],
+        )
         # ${topic} not in empty predicted keys and not a known extra
         issues = lint(c)
         template_issues = [i for i in issues if "template" in i.kind]
@@ -440,12 +525,16 @@ class TestTemplatePlaceholderLint:
         class B(BaseModel):
             y: str
 
-        c = Construct("test", nodes=[
-            Node("gen", prompt="rw/gen",
-                 model="default", outputs=B, inputs=None),
-        ])
+        c = Construct(
+            "test",
+            nodes=[
+                Node("gen", prompt="rw/gen", model="default", outputs=B, inputs=None),
+            ],
+        )
+
         def resolver(name):
             return "Generate for: {node_id}" if name == "rw/gen" else None
+
         issues = lint(c, template_resolver=resolver)
         template_issues = [i for i in issues if "template" in i.kind]
         assert template_issues == []
@@ -463,13 +552,20 @@ class TestTemplatePlaceholderLint:
         class C(BaseModel):
             z: str
 
-        c = Construct("test", nodes=[
-            Node.scripted("alpha", fn="noop", outputs=A),
-            Node.scripted("beta", fn="noop", outputs=B),
-            Node("merge", prompt="A: ${alpha}, B: ${beta}",
-                 model="default", outputs=C,
-                 inputs={"alpha": A, "beta": B}),
-        ])
+        c = Construct(
+            "test",
+            nodes=[
+                Node.scripted("alpha", fn="noop", outputs=A),
+                Node.scripted("beta", fn="noop", outputs=B),
+                Node(
+                    "merge",
+                    prompt="A: ${alpha}, B: ${beta}",
+                    model="default",
+                    outputs=C,
+                    inputs={"alpha": A, "beta": B},
+                ),
+            ],
+        )
         issues = lint(c)
         template_issues = [i for i in issues if "template" in i.kind]
         assert template_issues == []
@@ -610,20 +706,21 @@ class TestTemplatePlaceholderLint:
             def render_for_prompt(self) -> ViewModel:
                 return ViewModel(claim_statement=self.raw)
 
-        c = Construct("test", nodes=[
-            Node.scripted("seed", fn="noop", outputs=FullModel),
-            Node("proc", prompt="rw/claim",
-                 model="default", outputs=FullModel,
-                 inputs={"seed": FullModel}),
-        ])
+        c = Construct(
+            "test",
+            nodes=[
+                Node.scripted("seed", fn="noop", outputs=FullModel),
+                Node("proc", prompt="rw/claim", model="default", outputs=FullModel, inputs={"seed": FullModel}),
+            ],
+        )
+
         def resolver(name):
             return "Claim: {claim_statement}" if name == "rw/claim" else None
+
         issues = lint(c, template_resolver=resolver)
         template_issues = [i for i in issues if "template" in i.kind]
         errors = [i for i in template_issues if i.required]
-        assert errors == [], (
-            f"Flattened field in template-ref should be valid: {errors}"
-        )
+        assert errors == [], f"Flattened field in template-ref should be valid: {errors}"
 
     # ── Inline vs template-ref key set distinction ─────────────────────
 
@@ -644,17 +741,17 @@ class TestTemplatePlaceholderLint:
         class Result(BaseModel):
             text: str
 
-        c = Construct("test", nodes=[
-            Node.scripted("seed", fn="noop", outputs=Claims),
-            Node("proc", prompt="Summarize: ${summary}",
-                 model="default", outputs=Result, inputs={"seed": Claims}),
-        ])
+        c = Construct(
+            "test",
+            nodes=[
+                Node.scripted("seed", fn="noop", outputs=Claims),
+                Node("proc", prompt="Summarize: ${summary}", model="default", outputs=Result, inputs={"seed": Claims}),
+            ],
+        )
         issues = lint(c)
         template_issues = [i for i in issues if "template" in i.kind]
         flagged = {i.param for i in template_issues}
-        assert "summary" in flagged, (
-            f"Flattened field in inline prompt should be flagged: {template_issues}"
-        )
+        assert "summary" in flagged, f"Flattened field in inline prompt should be flagged: {template_issues}"
 
     def test_template_ref_still_accepts_flattened_field(self):
         """Template-ref {summary} referencing a flattened field IS valid."""
@@ -672,13 +769,17 @@ class TestTemplatePlaceholderLint:
         class Result(BaseModel):
             text: str
 
-        c = Construct("test", nodes=[
-            Node.scripted("seed", fn="noop", outputs=Claims),
-            Node("proc", prompt="rw/summarize",
-                 model="default", outputs=Result, inputs={"seed": Claims}),
-        ])
+        c = Construct(
+            "test",
+            nodes=[
+                Node.scripted("seed", fn="noop", outputs=Claims),
+                Node("proc", prompt="rw/summarize", model="default", outputs=Result, inputs={"seed": Claims}),
+            ],
+        )
+
         def resolver(name):
             return "Summary: {summary}" if name == "rw/summarize" else None
+
         issues = lint(c, template_resolver=resolver)
         template_issues = [i for i in issues if "template" in i.kind]
         errors = [i for i in template_issues if i.required]
@@ -694,17 +795,17 @@ class TestTemplatePlaceholderLint:
         class B(BaseModel):
             y: str
 
-        c = Construct("test", nodes=[
-            Node.scripted("seed", fn="noop", outputs=A),
-            Node("proc", prompt="ID: ${node_id}, data: ${seed}",
-                 model="default", outputs=B, inputs={"seed": A}),
-        ])
+        c = Construct(
+            "test",
+            nodes=[
+                Node.scripted("seed", fn="noop", outputs=A),
+                Node("proc", prompt="ID: ${node_id}, data: ${seed}", model="default", outputs=B, inputs={"seed": A}),
+            ],
+        )
         issues = lint(c)
         template_issues = [i for i in issues if "template" in i.kind]
         flagged = {i.param for i in template_issues}
-        assert "node_id" in flagged, (
-            f"Known extra in inline prompt should be flagged: {template_issues}"
-        )
+        assert "node_id" in flagged, f"Known extra in inline prompt should be flagged: {template_issues}"
 
     def test_template_ref_still_accepts_known_extras(self):
         """Template-ref {node_id} IS valid -- prompt_compiler has config access."""
@@ -716,13 +817,17 @@ class TestTemplatePlaceholderLint:
         class B(BaseModel):
             y: str
 
-        c = Construct("test", nodes=[
-            Node.scripted("seed", fn="noop", outputs=A),
-            Node("proc", prompt="rw/analyze",
-                 model="default", outputs=B, inputs={"seed": A}),
-        ])
+        c = Construct(
+            "test",
+            nodes=[
+                Node.scripted("seed", fn="noop", outputs=A),
+                Node("proc", prompt="rw/analyze", model="default", outputs=B, inputs={"seed": A}),
+            ],
+        )
+
         def resolver(name):
             return "ID: {node_id}, data: {seed}" if name == "rw/analyze" else None
+
         issues = lint(c, template_resolver=resolver)
         template_issues = [i for i in issues if "template" in i.kind]
         errors = [i for i in template_issues if i.required]
@@ -758,23 +863,21 @@ class TestTemplatePlaceholderLint:
         # → {"draft", "research"}
 
         # Node with matching fan-in inputs
-        good_node = Node("review", prompt="rw/review", model="default",
-                         outputs=Review,
-                         inputs={"draft": Draft, "research": Research})
+        good_node = Node(
+            "review", prompt="rw/review", model="default", outputs=Review, inputs={"draft": Draft, "research": Research}
+        )
         predicted = _predict_input_keys(good_node)
         assert template_placeholders <= predicted, (
             f"Template needs {template_placeholders} but node provides {predicted}"
         )
 
         # Node with MISMATCHED inputs (the piarch bug pattern)
-        bad_node = Node("review", prompt="rw/review", model="default",
-                        outputs=Review,
-                        inputs={"neo_subgraph_input": Draft})
+        bad_node = Node(
+            "review", prompt="rw/review", model="default", outputs=Review, inputs={"neo_subgraph_input": Draft}
+        )
         predicted_bad = _predict_input_keys(bad_node)
         unresolvable = template_placeholders - predicted_bad
-        assert unresolvable == {"draft", "research"}, (
-            f"Expected unresolvable placeholders, got {unresolvable}"
-        )
+        assert unresolvable == {"draft", "research"}, f"Expected unresolvable placeholders, got {unresolvable}"
 
 
 class TestTemplateRefLint:
@@ -798,11 +901,13 @@ class TestTemplateRefLint:
         class B(BaseModel):
             y: str
 
-        c = Construct("test", nodes=[
-            Node.scripted("seed", fn="noop", outputs=A),
-            Node("proc", prompt="rw/summarize", model="default",
-                 outputs=B, inputs={"seed": A}),
-        ])
+        c = Construct(
+            "test",
+            nodes=[
+                Node.scripted("seed", fn="noop", outputs=A),
+                Node("proc", prompt="rw/summarize", model="default", outputs=B, inputs={"seed": A}),
+            ],
+        )
         resolver = self._resolver({"rw/summarize": "Summarize this: {seed}"})
         issues = lint(c, template_resolver=resolver)
         template_issues = [i for i in issues if "template" in i.kind]
@@ -818,11 +923,13 @@ class TestTemplateRefLint:
         class B(BaseModel):
             y: str
 
-        c = Construct("test", nodes=[
-            Node.scripted("seed", fn="noop", outputs=A),
-            Node("proc", prompt="rw/summarize", model="default",
-                 outputs=B, inputs={"seed": A}),
-        ])
+        c = Construct(
+            "test",
+            nodes=[
+                Node.scripted("seed", fn="noop", outputs=A),
+                Node("proc", prompt="rw/summarize", model="default", outputs=B, inputs={"seed": A}),
+            ],
+        )
         resolver = self._resolver({"rw/summarize": "Data: {seed}, Extra: {nonexistent}"})
         issues = lint(c, template_resolver=resolver)
         template_issues = [i for i in issues if "template" in i.kind]
@@ -846,11 +953,13 @@ class TestTemplateRefLint:
         class Output(BaseModel):
             result: str
 
-        c = Construct("test", nodes=[
-            Node.scripted("seed", fn="noop", outputs=UCComposite),
-            Node("writer", prompt="rw/write-si", model="default",
-                 outputs=Output, inputs={"seed": UCComposite}),
-        ])
+        c = Construct(
+            "test",
+            nodes=[
+                Node.scripted("seed", fn="noop", outputs=UCComposite),
+                Node("writer", prompt="rw/write-si", model="default", outputs=Output, inputs={"seed": UCComposite}),
+            ],
+        )
         # Template references {existing_si} — a field inside UCComposite, not the param name "seed"
         resolver = self._resolver({"rw/write-si": "Write SI for: {existing_si}\nTitle: {title}"})
         issues = lint(c, template_resolver=resolver)
@@ -869,11 +978,13 @@ class TestTemplateRefLint:
         class B(BaseModel):
             y: str
 
-        c = Construct("test", nodes=[
-            Node.scripted("seed", fn="noop", outputs=A),
-            Node("proc", prompt="rw/summarize", model="default",
-                 outputs=B, inputs={"seed": A}),
-        ])
+        c = Construct(
+            "test",
+            nodes=[
+                Node.scripted("seed", fn="noop", outputs=A),
+                Node("proc", prompt="rw/summarize", model="default", outputs=B, inputs={"seed": A}),
+            ],
+        )
         # No resolver → no template inspection → no issues
         issues = lint(c)
         template_issues = [i for i in issues if "template" in i.kind]
@@ -889,11 +1000,13 @@ class TestTemplateRefLint:
         class B(BaseModel):
             y: str
 
-        c = Construct("test", nodes=[
-            Node.scripted("seed", fn="noop", outputs=A),
-            Node("proc", prompt="rw/unknown", model="default",
-                 outputs=B, inputs={"seed": A}),
-        ])
+        c = Construct(
+            "test",
+            nodes=[
+                Node.scripted("seed", fn="noop", outputs=A),
+                Node("proc", prompt="rw/unknown", model="default", outputs=B, inputs={"seed": A}),
+            ],
+        )
         resolver = self._resolver({})  # empty — returns None for everything
         issues = lint(c, template_resolver=resolver)
         template_issues = [i for i in issues if "template" in i.kind]
@@ -909,11 +1022,13 @@ class TestTemplateRefLint:
         class B(BaseModel):
             y: str
 
-        c = Construct("test", nodes=[
-            Node.scripted("seed", fn="noop", outputs=A),
-            Node("proc", prompt="rw/summarize", model="default",
-                 outputs=B, inputs={"seed": A}),
-        ])
+        c = Construct(
+            "test",
+            nodes=[
+                Node.scripted("seed", fn="noop", outputs=A),
+                Node("proc", prompt="rw/summarize", model="default", outputs=B, inputs={"seed": A}),
+            ],
+        )
         resolver = self._resolver({"rw/summarize": "Topic: {topic}, Data: {seed}"})
         issues = lint(c, known_template_vars={"topic"}, template_resolver=resolver)
         template_issues = [i for i in issues if "template" in i.kind]
@@ -934,11 +1049,13 @@ class TestTemplateRefLint:
         class B(BaseModel):
             y: str
 
-        c = Construct("test", nodes=[
-            Node.scripted("seed", fn="noop", outputs=A),
-            Node("proc", prompt="rw/summarize", model="default",
-                 outputs=B, inputs={"seed": A}),
-        ])
+        c = Construct(
+            "test",
+            nodes=[
+                Node.scripted("seed", fn="noop", outputs=A),
+                Node("proc", prompt="rw/summarize", model="default", outputs=B, inputs={"seed": A}),
+            ],
+        )
         resolver = self._resolver({"rw/summarize": "ID: {node_id}, Data: {seed}"})
         issues = lint(c, template_resolver=resolver)
         template_issues = [i for i in issues if "template" in i.kind]
@@ -954,11 +1071,13 @@ class TestTemplateRefLint:
         class B(BaseModel):
             y: str
 
-        c = Construct("test", nodes=[
-            Node.scripted("seed", fn="noop", outputs=A),
-            Node("proc", prompt="rw/summarize", model="default",
-                 outputs=B, inputs={"seed": A}),
-        ])
+        c = Construct(
+            "test",
+            nodes=[
+                Node.scripted("seed", fn="noop", outputs=A),
+                Node("proc", prompt="rw/summarize", model="default", outputs=B, inputs={"seed": A}),
+            ],
+        )
         resolver = self._resolver({"rw/summarize": "Items: {seed.items}"})
         issues = lint(c, template_resolver=resolver)
         template_issues = [i for i in issues if "template" in i.kind]
@@ -974,18 +1093,18 @@ class TestTemplateRefLint:
         class B(BaseModel):
             y: str
 
-        c = Construct("test", nodes=[
-            Node.scripted("seed", fn="noop", outputs=A),
-            Node("proc", prompt="rw/proc", model="default",
-                 outputs=B, inputs={"seed": A}),
-        ])
+        c = Construct(
+            "test",
+            nodes=[
+                Node.scripted("seed", fn="noop", outputs=A),
+                Node("proc", prompt="rw/proc", model="default", outputs=B, inputs={"seed": A}),
+            ],
+        )
         resolver = self._resolver({"rw/proc": "A: {bad1}, B: {bad2}, OK: {seed}"})
         issues = lint(c, template_resolver=resolver)
         template_issues = [i for i in issues if "template" in i.kind]
         flagged = {i.param for i in template_issues}
         assert flagged == {"bad1", "bad2"}
-
-
 
 
 class TestDiInputTemplateRefColumn:

@@ -24,8 +24,10 @@ class Result(BaseModel, frozen=True):
 register_scripted("mek_container", lambda i, c: Container(items=[Item(name="a", value=1)]))
 register_scripted("mek_proc", lambda i, c: Result(output="ok"))
 
-pipeline = Construct("broken", nodes=[
-    Node.scripted("container", fn="mek_container", outputs=Container),
-    Node.scripted("proc", fn="mek_proc", inputs=Item, outputs=Result)
-    | Each(over="container.items", key="badkey"),
-])
+pipeline = Construct(
+    "broken",
+    nodes=[
+        Node.scripted("container", fn="mek_container", outputs=Container),
+        Node.scripted("proc", fn="mek_proc", inputs=Item, outputs=Result) | Each(over="container.items", key="badkey"),
+    ],
+)

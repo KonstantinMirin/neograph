@@ -24,16 +24,19 @@ register_scripted("some_merge", lambda variants, config: variants[0])
 register_tool_factory("search", lambda config, tool_config: None)
 
 
-pipeline = Construct("oracle-over-agent-multi-output", nodes=[
-    Node.scripted("seed", fn="seed_fn", outputs=RawText),
-    Node(
-        name="agent-gen",
-        mode="agent",
-        inputs=RawText,
-        outputs={"result": Claims, "tool_log": list[ToolInteraction]},  # dict-form
-        model="fast",
-        prompt="test",
-        tools=[Tool(name="search", budget=3)],
-    )
-    | Oracle(n=2, merge_fn="some_merge"),
-])
+pipeline = Construct(
+    "oracle-over-agent-multi-output",
+    nodes=[
+        Node.scripted("seed", fn="seed_fn", outputs=RawText),
+        Node(
+            name="agent-gen",
+            mode="agent",
+            inputs=RawText,
+            outputs={"result": Claims, "tool_log": list[ToolInteraction]},  # dict-form
+            model="fast",
+            prompt="test",
+            tools=[Tool(name="search", budget=3)],
+        )
+        | Oracle(n=2, merge_fn="some_merge"),
+    ],
+)

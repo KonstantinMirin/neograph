@@ -26,17 +26,20 @@ register_scripted("some_merge", lambda variants, config: variants[0])
 register_tool_factory("search", lambda config, tool_config: None)
 
 
-pipeline = Construct("oracle-over-agent-multi-inputs", nodes=[
-    Node.scripted("alpha", fn="alpha_fn", outputs=Alpha),
-    Node.scripted("beta", fn="beta_fn", outputs=Beta),
-    Node(
-        name="agent-gen",
-        mode="agent",
-        inputs={"alpha": Alpha, "beta": Beta},  # two distinct producers -> packer
-        outputs=Alpha,
-        model="fast",
-        prompt="test",
-        tools=[Tool(name="search", budget=3)],
-    )
-    | Oracle(n=2, merge_fn="some_merge"),
-])
+pipeline = Construct(
+    "oracle-over-agent-multi-inputs",
+    nodes=[
+        Node.scripted("alpha", fn="alpha_fn", outputs=Alpha),
+        Node.scripted("beta", fn="beta_fn", outputs=Beta),
+        Node(
+            name="agent-gen",
+            mode="agent",
+            inputs={"alpha": Alpha, "beta": Beta},  # two distinct producers -> packer
+            outputs=Alpha,
+            model="fast",
+            prompt="test",
+            tools=[Tool(name="search", budget=3)],
+        )
+        | Oracle(n=2, merge_fn="some_merge"),
+    ],
+)

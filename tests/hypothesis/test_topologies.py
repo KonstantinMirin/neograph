@@ -47,15 +47,19 @@ def dict_output_pipeline(draw):
 
     def dict_fn(_i, _c):
         return {"result": DictResult(text="primary"), "log": DictLog(entries=["e1"])}
+
     register_scripted(f"do_proc_{tag}", dict_fn)
 
     proc_name = f"doproc-{tag}"
-    pipeline = Construct(f"dictout-{tag}", nodes=[
-        Node.scripted(f"dosrc-{tag}", fn=f"do_src_{tag}", outputs=src_type),
-        Node.scripted(proc_name, fn=f"do_proc_{tag}",
-                      inputs=src_type,
-                      outputs={"result": DictResult, "log": DictLog}),
-    ])
+    pipeline = Construct(
+        f"dictout-{tag}",
+        nodes=[
+            Node.scripted(f"dosrc-{tag}", fn=f"do_src_{tag}", outputs=src_type),
+            Node.scripted(
+                proc_name, fn=f"do_proc_{tag}", inputs=src_type, outputs={"result": DictResult, "log": DictLog}
+            ),
+        ],
+    )
     field = proc_name.replace("-", "_")
     return pipeline, {
         "result_field": f"{field}_result",
@@ -78,15 +82,17 @@ def sub_construct_pipeline(draw):  # noqa: ARG001
         input=SubInput,
         output=SubOutput,
         nodes=[
-            Node.scripted(inner_name, fn=f"sc_inner_{tag}",
-                          inputs=SubInput, outputs=SubOutput),
+            Node.scripted(inner_name, fn=f"sc_inner_{tag}", inputs=SubInput, outputs=SubOutput),
         ],
     )
 
-    pipeline = Construct(f"sc-parent-{tag}", nodes=[
-        Node.scripted(f"scouter-{tag}", fn=f"sc_outer_{tag}", outputs=SubInput),
-        sub,
-    ])
+    pipeline = Construct(
+        f"sc-parent-{tag}",
+        nodes=[
+            Node.scripted(f"scouter-{tag}", fn=f"sc_outer_{tag}", outputs=SubInput),
+            sub,
+        ],
+    )
     sub_field = f"sub_{tag}".replace("-", "_")
     return pipeline, {"terminal_field": sub_field, "terminal_type": SubOutput}
 
@@ -111,6 +117,7 @@ def mixed_modifier_pipeline(draw):
     def mx_collect(_i, _c):
         assert isinstance(_i, dict), f"Expected dict from Each, got {type(_i)}"
         return Gamma(tags=sorted(_i.keys()))
+
     register_scripted(f"mx_coll_{tag}", mx_collect)
 
     register_scripted(f"mx_ogen_{tag}", _make_fn(Beta))
@@ -118,6 +125,7 @@ def mixed_modifier_pipeline(draw):
     def mx_merge(_i, _c):
         assert isinstance(_i, list), f"merge_fn expects list, got {type(_i)}"
         return Beta(score=float(len(_i)))
+
     register_scripted(f"mx_merge_{tag}", mx_merge)
 
     src_name = f"mxsrc-{tag}"
@@ -125,17 +133,17 @@ def mixed_modifier_pipeline(draw):
     coll_name = f"mxcoll-{tag}"
     oracle_name = f"mxorc-{tag}"
 
-    pipeline = Construct(f"mixed-{tag}", nodes=[
-        Node.scripted(src_name, fn=f"mx_src_{tag}", outputs=FanCollection),
-        Node.scripted(fan_name, fn=f"mx_fan_{tag}",
-                      inputs=FanItem, outputs=Alpha)
-        | Each(over=f"{src_name.replace('-', '_')}.items", key="item_id"),
-        Node.scripted(coll_name, fn=f"mx_coll_{tag}",
-                      inputs={fan_name.replace("-", "_"): dict}, outputs=Gamma),
-        Node.scripted(oracle_name, fn=f"mx_ogen_{tag}",
-                      inputs=Gamma, outputs=Beta)
-        | Oracle(n=oracle_n, merge_fn=f"mx_merge_{tag}"),
-    ])
+    pipeline = Construct(
+        f"mixed-{tag}",
+        nodes=[
+            Node.scripted(src_name, fn=f"mx_src_{tag}", outputs=FanCollection),
+            Node.scripted(fan_name, fn=f"mx_fan_{tag}", inputs=FanItem, outputs=Alpha)
+            | Each(over=f"{src_name.replace('-', '_')}.items", key="item_id"),
+            Node.scripted(coll_name, fn=f"mx_coll_{tag}", inputs={fan_name.replace("-", "_"): dict}, outputs=Gamma),
+            Node.scripted(oracle_name, fn=f"mx_ogen_{tag}", inputs=Gamma, outputs=Beta)
+            | Oracle(n=oracle_n, merge_fn=f"mx_merge_{tag}"),
+        ],
+    )
     return pipeline, {
         "fan_field": fan_name.replace("-", "_"),
         "coll_field": coll_name.replace("-", "_"),
@@ -154,12 +162,14 @@ def each_empty_collection(draw):
 
     src_name = f"eesrc-{tag}"
     proc_name = f"eeproc-{tag}"
-    pipeline = Construct(f"ee-{tag}", nodes=[
-        Node.scripted(src_name, fn=f"ee_src_{tag}", outputs=FanCollection),
-        Node.scripted(proc_name, fn=f"ee_proc_{tag}",
-                      inputs=FanItem, outputs=Alpha)
-        | Each(over=f"{src_name.replace('-', '_')}.items", key="item_id"),
-    ])
+    pipeline = Construct(
+        f"ee-{tag}",
+        nodes=[
+            Node.scripted(src_name, fn=f"ee_src_{tag}", outputs=FanCollection),
+            Node.scripted(proc_name, fn=f"ee_proc_{tag}", inputs=FanItem, outputs=Alpha)
+            | Each(over=f"{src_name.replace('-', '_')}.items", key="item_id"),
+        ],
+    )
     return pipeline, {"terminal_field": proc_name.replace("-", "_")}
 
 
@@ -180,11 +190,13 @@ def di_pipeline(draw):
 
     register_scripted(f"di_proc_{tag}", di_fn)
 
-    pipeline = Construct(f"di-{tag}", nodes=[
-        Node.scripted(f"disrc-{tag}", fn=f"di_src_{tag}", outputs=Alpha),
-        Node.scripted(f"diproc-{tag}", fn=f"di_proc_{tag}",
-                      inputs=Alpha, outputs=Beta),
-    ])
+    pipeline = Construct(
+        f"di-{tag}",
+        nodes=[
+            Node.scripted(f"disrc-{tag}", fn=f"di_src_{tag}", outputs=Alpha),
+            Node.scripted(f"diproc-{tag}", fn=f"di_proc_{tag}", inputs=Alpha, outputs=Beta),
+        ],
+    )
     return pipeline, {
         "terminal_field": f"diproc_{tag}".replace("-", "_"),
         "terminal_type": Beta,
@@ -216,10 +228,13 @@ def skip_when_pipeline(draw):
         skip_value=skip_value_fn,
     )
 
-    pipeline = Construct(f"skip-{tag}", nodes=[
-        Node.scripted(f"swsrc-{tag}", fn=f"sw_src_{tag}", outputs=Alpha),
-        proc_node,
-    ])
+    pipeline = Construct(
+        f"skip-{tag}",
+        nodes=[
+            Node.scripted(f"swsrc-{tag}", fn=f"sw_src_{tag}", outputs=Alpha),
+            proc_node,
+        ],
+    )
     return pipeline, {
         "terminal_field": f"swproc_{tag}".replace("-", "_"),
         "should_skip": should_skip,
@@ -240,9 +255,7 @@ class TestDictFormOutputs:
         assert meta["result_field"] in result, (
             f"Missing result field '{meta['result_field']}'. Keys: {sorted(result.keys())}"
         )
-        assert meta["log_field"] in result, (
-            f"Missing log field '{meta['log_field']}'. Keys: {sorted(result.keys())}"
-        )
+        assert meta["log_field"] in result, f"Missing log field '{meta['log_field']}'. Keys: {sorted(result.keys())}"
         assert isinstance(result[meta["result_field"]], DictResult)
         assert isinstance(result[meta["log_field"]], DictLog)
 
@@ -260,8 +273,7 @@ class TestSubConstructs:
 
         terminal = result.get(meta["terminal_field"])
         assert isinstance(terminal, meta["terminal_type"]), (
-            f"Expected {meta['terminal_type'].__name__}, "
-            f"got {type(terminal).__name__}. Keys: {sorted(result.keys())}"
+            f"Expected {meta['terminal_type'].__name__}, got {type(terminal).__name__}. Keys: {sorted(result.keys())}"
         )
 
     @given(pm=sub_construct_pipeline())
@@ -289,15 +301,12 @@ class TestMixedModifiers:
         result = run(graph, input={"node_id": "mixed-test"})
 
         fan_result = result.get(meta["fan_field"])
-        assert isinstance(fan_result, dict), (
-            f"Each node should produce dict, got {type(fan_result)}"
-        )
+        assert isinstance(fan_result, dict), f"Each node should produce dict, got {type(fan_result)}"
         assert set(fan_result.keys()) == meta["expected_fan_keys"]
 
         oracle_result = result.get(meta["oracle_field"])
         assert isinstance(oracle_result, meta["oracle_type"]), (
-            f"Oracle node should produce {meta['oracle_type'].__name__}, "
-            f"got {type(oracle_result)}"
+            f"Oracle node should produce {meta['oracle_type'].__name__}, got {type(oracle_result)}"
         )
 
 
@@ -420,6 +429,7 @@ def sub_construct_with_each(draw):
         each_dict = input_data.get(_if, input_data)
         assert isinstance(each_dict, dict), f"Expected Each dict under '{_if}', got {type(each_dict)}"
         return Gamma(tags=sorted(each_dict.keys()))
+
     register_scripted(f"sce_coll_{tag}", sce_collect)
 
     sub = Construct(
@@ -427,18 +437,19 @@ def sub_construct_with_each(draw):
         input=FanCollection,
         output=Gamma,
         nodes=[
-            Node.scripted(inner_name, fn=f"sce_inner_{tag}",
-                          inputs=FanItem, outputs=Alpha)
+            Node.scripted(inner_name, fn=f"sce_inner_{tag}", inputs=FanItem, outputs=Alpha)
             | Each(over="neo_subgraph_input.items", key="item_id"),
-            Node.scripted(coll_name, fn=f"sce_coll_{tag}",
-                          inputs={inner_name.replace("-", "_"): dict}, outputs=Gamma),
+            Node.scripted(coll_name, fn=f"sce_coll_{tag}", inputs={inner_name.replace("-", "_"): dict}, outputs=Gamma),
         ],
     )
 
-    pipeline = Construct(f"sce-parent-{tag}", nodes=[
-        Node.scripted(outer_name, fn=f"sce_outer_{tag}", outputs=FanCollection),
-        sub,
-    ])
+    pipeline = Construct(
+        f"sce-parent-{tag}",
+        nodes=[
+            Node.scripted(outer_name, fn=f"sce_outer_{tag}", outputs=FanCollection),
+            sub,
+        ],
+    )
     sub_field = sub_name.replace("-", "_")
     return pipeline, {
         "sub_field": sub_field,
@@ -458,23 +469,25 @@ def nested_sub_construct(draw):  # noqa: ARG001
 
     inner_sub = Construct(
         f"nsdeep-{tag}",
-        input=SubInput, output=Alpha,
-        nodes=[Node.scripted(f"nsinner-{tag}", fn=f"ns_inner_{tag}",
-                              inputs=SubInput, outputs=Alpha)],
+        input=SubInput,
+        output=Alpha,
+        nodes=[Node.scripted(f"nsinner-{tag}", fn=f"ns_inner_{tag}", inputs=SubInput, outputs=Alpha)],
     )
 
     outer_sub = Construct(
         f"nswrap-{tag}",
-        input=SubInput, output=SubOutput,
-        nodes=[inner_sub,
-               Node.scripted(f"nsouter-{tag}", fn=f"ns_outer_{tag}",
-                              inputs=Alpha, outputs=SubOutput)],
+        input=SubInput,
+        output=SubOutput,
+        nodes=[inner_sub, Node.scripted(f"nsouter-{tag}", fn=f"ns_outer_{tag}", inputs=Alpha, outputs=SubOutput)],
     )
 
-    pipeline = Construct(f"ns-root-{tag}", nodes=[
-        Node.scripted(f"nsroot-{tag}", fn=f"ns_root_{tag}", outputs=SubInput),
-        outer_sub,
-    ])
+    pipeline = Construct(
+        f"ns-root-{tag}",
+        nodes=[
+            Node.scripted(f"nsroot-{tag}", fn=f"ns_root_{tag}", outputs=SubInput),
+            outer_sub,
+        ],
+    )
     outer_field = f"nswrap_{tag}".replace("-", "_")
     return pipeline, {"outer_sub_field": outer_field, "terminal_type": SubOutput}
 
@@ -500,15 +513,18 @@ def fan_in_pipeline(draw):
     def fan_in_fn(input_data, _c):
         assert isinstance(input_data, dict), f"Expected dict, got {type(input_data)}"
         return Gamma(tags=sorted(input_data.keys()))
+
     register_scripted(f"fi_merge_{tag}", fan_in_fn)
 
     fan_in_inputs = dict(zip(upstream_names, upstream_types, strict=True))
     merge_name = f"fimerge-{tag}"
-    pipeline = Construct(f"fanin-{tag}", nodes=[
-        *upstream_nodes,
-        Node.scripted(merge_name, fn=f"fi_merge_{tag}",
-                      inputs=fan_in_inputs, outputs=Gamma),
-    ])
+    pipeline = Construct(
+        f"fanin-{tag}",
+        nodes=[
+            *upstream_nodes,
+            Node.scripted(merge_name, fn=f"fi_merge_{tag}", inputs=fan_in_inputs, outputs=Gamma),
+        ],
+    )
     return pipeline, {
         "terminal_field": merge_name.replace("-", "_"),
         "terminal_type": Gamma,
@@ -527,17 +543,21 @@ def each_with_dict_outputs(draw):
 
     def dict_each_fn(_i, _c):
         return {"result": DictResult(text="r"), "log": DictLog(entries=["e"])}
+
     register_scripted(f"edo_proc_{tag}", dict_each_fn)
 
     src_name = f"edosrc-{tag}"
     proc_name = f"edoproc-{tag}"
-    pipeline = Construct(f"edo-{tag}", nodes=[
-        Node.scripted(src_name, fn=f"edo_src_{tag}", outputs=FanCollection),
-        Node.scripted(proc_name, fn=f"edo_proc_{tag}",
-                      inputs=FanItem,
-                      outputs={"result": DictResult, "log": DictLog})
-        | Each(over=f"{src_name.replace('-', '_')}.items", key="item_id"),
-    ])
+    pipeline = Construct(
+        f"edo-{tag}",
+        nodes=[
+            Node.scripted(src_name, fn=f"edo_src_{tag}", outputs=FanCollection),
+            Node.scripted(
+                proc_name, fn=f"edo_proc_{tag}", inputs=FanItem, outputs={"result": DictResult, "log": DictLog}
+            )
+            | Each(over=f"{src_name.replace('-', '_')}.items", key="item_id"),
+        ],
+    )
     proc_field = proc_name.replace("-", "_")
     return pipeline, {
         "result_field": f"{proc_field}_result",
@@ -574,8 +594,7 @@ def _build_node_di_pipeline(injected_value: str):
 @st.composite
 def node_decorator_with_di(draw):
     """@node with FromInput DI."""
-    injected = draw(st.text(min_size=1, max_size=10,
-                            alphabet=st.characters(whitelist_categories=("L",))))
+    injected = draw(st.text(min_size=1, max_size=10, alphabet=st.characters(whitelist_categories=("L",))))
     return _build_node_di_pipeline(injected)
 
 
@@ -590,8 +609,7 @@ class TestNodeDecoratorPath:
         result = run(graph, input={"node_id": "deco-test"})
         terminal = result.get(meta["terminal_field"])
         assert isinstance(terminal, meta["terminal_type"]), (
-            f"Expected {meta['terminal_type'].__name__}, "
-            f"got {type(terminal).__name__}. Keys: {sorted(result.keys())}"
+            f"Expected {meta['terminal_type'].__name__}, got {type(terminal).__name__}. Keys: {sorted(result.keys())}"
         )
 
 
@@ -606,9 +624,7 @@ class TestSubConstructWithEach:
         graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "sce-test"})
         sub_result = result.get(meta["sub_field"])
-        assert isinstance(sub_result, Gamma), (
-            f"Expected Gamma, got {type(sub_result)}. Keys: {sorted(result.keys())}"
-        )
+        assert isinstance(sub_result, Gamma), f"Expected Gamma, got {type(sub_result)}. Keys: {sorted(result.keys())}"
         assert set(sub_result.tags) == meta["expected_keys"], (
             f"Expected keys {meta['expected_keys']}, got {sub_result.tags}"
         )
@@ -625,8 +641,7 @@ class TestNestedSubConstructs:
         result = run(graph, input={"node_id": "nested-test"})
         terminal = result.get(meta["outer_sub_field"])
         assert isinstance(terminal, meta["terminal_type"]), (
-            f"Expected {meta['terminal_type'].__name__}, "
-            f"got {type(terminal).__name__}. Keys: {sorted(result.keys())}"
+            f"Expected {meta['terminal_type'].__name__}, got {type(terminal).__name__}. Keys: {sorted(result.keys())}"
         )
 
 
@@ -641,9 +656,7 @@ class TestFanIn:
         result = run(graph, input={"node_id": "fanin-test"})
         terminal = result.get(meta["terminal_field"])
         assert isinstance(terminal, Gamma), f"Expected Gamma, got {type(terminal)}"
-        assert set(terminal.tags) == meta["upstream_names"], (
-            f"Expected {meta['upstream_names']}, got {terminal.tags}"
-        )
+        assert set(terminal.tags) == meta["upstream_names"], f"Expected {meta['upstream_names']}, got {terminal.tags}"
 
 
 class TestEachWithDictOutputs:
@@ -662,9 +675,7 @@ class TestEachWithDictOutputs:
         assert isinstance(result_field, dict), (
             f"result should be dict, got {type(result_field)}. Keys: {sorted(result.keys())}"
         )
-        assert isinstance(log_field, dict), (
-            f"log should be dict, got {type(log_field)}. Keys: {sorted(result.keys())}"
-        )
+        assert isinstance(log_field, dict), f"log should be dict, got {type(log_field)}. Keys: {sorted(result.keys())}"
         assert set(result_field.keys()) == meta["expected_keys"]
         assert set(log_field.keys()) == meta["expected_keys"]
 
@@ -743,9 +754,7 @@ class TestNodeDecoratorEnsemble:
 
         merged = result.get("ens_gen")
         assert isinstance(merged, Beta), f"Expected Beta, got {type(merged)}"
-        assert merged.score == float(oracle_n), (
-            f"Expected score={oracle_n} (one per variant), got {merged.score}"
-        )
+        assert merged.score == float(oracle_n), f"Expected score={oracle_n} (one per variant), got {merged.score}"
 
 
 class TestListConsumerOfEach:
@@ -763,6 +772,7 @@ class TestListConsumerOfEach:
         def lc_collect(input_data, _c):
             assert isinstance(input_data, list), f"Expected list[Alpha], got {type(input_data)}"
             return Gamma(tags=[a.value for a in input_data])
+
         register_scripted("lc_coll", lc_collect)
 
         tag = _uid()
@@ -770,14 +780,15 @@ class TestListConsumerOfEach:
         fan_name = f"lcfan-{tag}"
         coll_name = f"lccoll-{tag}"
 
-        pipeline = Construct(f"lc-{tag}", nodes=[
-            Node.scripted(src_name, fn="lc_src", outputs=FanCollection),
-            Node.scripted(fan_name, fn="lc_fan",
-                          inputs=FanItem, outputs=Alpha)
-            | Each(over=f"{src_name.replace('-', '_')}.items", key="item_id"),
-            Node.scripted(coll_name, fn="lc_coll",
-                          inputs=list[Alpha], outputs=Gamma),
-        ])
+        pipeline = Construct(
+            f"lc-{tag}",
+            nodes=[
+                Node.scripted(src_name, fn="lc_src", outputs=FanCollection),
+                Node.scripted(fan_name, fn="lc_fan", inputs=FanItem, outputs=Alpha)
+                | Each(over=f"{src_name.replace('-', '_')}.items", key="item_id"),
+                Node.scripted(coll_name, fn="lc_coll", inputs=list[Alpha], outputs=Gamma),
+            ],
+        )
         graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "lc-test"})
 
@@ -802,17 +813,23 @@ class TestMultipleSubConstructs:
             fn_name = f"ms_inner{i}_{tag}"
             register_scripted(fn_name, lambda _i, _c, _idx=i: SubOutput(result=f"sub-{_idx}"))
             sub_name = f"mssub{i}-{tag}"
-            subs.append(Construct(
-                sub_name, input=SubInput, output=SubOutput,
-                nodes=[Node.scripted(f"msin{i}-{tag}", fn=fn_name,
-                                      inputs=SubInput, outputs=SubOutput)],
-            ))
+            subs.append(
+                Construct(
+                    sub_name,
+                    input=SubInput,
+                    output=SubOutput,
+                    nodes=[Node.scripted(f"msin{i}-{tag}", fn=fn_name, inputs=SubInput, outputs=SubOutput)],
+                )
+            )
             sub_fields.append(sub_name.replace("-", "_"))
 
-        pipeline = Construct(f"ms-{tag}", nodes=[
-            Node.scripted(f"mssrc-{tag}", fn=f"ms_src_{tag}", outputs=SubInput),
-            *subs,
-        ])
+        pipeline = Construct(
+            f"ms-{tag}",
+            nodes=[
+                Node.scripted(f"mssrc-{tag}", fn=f"ms_src_{tag}", outputs=SubInput),
+                *subs,
+            ],
+        )
         graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "multi-sub-test"})
 
@@ -821,9 +838,7 @@ class TestMultipleSubConstructs:
             assert isinstance(val, SubOutput), (
                 f"Sub {i} field '{field}' missing or wrong type. Keys: {sorted(result.keys())}"
             )
-            assert val.result == f"sub-{i}", (
-                f"Sub {i} produced '{val.result}', expected 'sub-{i}' — collision?"
-            )
+            assert val.result == f"sub-{i}", f"Sub {i} produced '{val.result}', expected 'sub-{i}' — collision?"
 
 
 class TestSubConstructWithOracle:
@@ -838,23 +853,28 @@ class TestSubConstructWithOracle:
 
         def so_merge(_i, _c):
             return Alpha(value=f"merged-{len(_i)}") if isinstance(_i, list) else Alpha()
+
         register_scripted(f"so_merge_{tag}", so_merge)
 
         inner_name = f"sogen-{tag}"
         sub_name = f"sosub-{tag}"
         sub = Construct(
-            sub_name, input=SubInput, output=Alpha,
+            sub_name,
+            input=SubInput,
+            output=Alpha,
             nodes=[
-                Node.scripted(inner_name, fn=f"so_gen_{tag}",
-                              inputs=SubInput, outputs=Alpha)
+                Node.scripted(inner_name, fn=f"so_gen_{tag}", inputs=SubInput, outputs=Alpha)
                 | Oracle(n=oracle_n, merge_fn=f"so_merge_{tag}"),
             ],
         )
 
-        pipeline = Construct(f"so-{tag}", nodes=[
-            Node.scripted(f"sosrc-{tag}", fn=f"so_outer_{tag}", outputs=SubInput),
-            sub,
-        ])
+        pipeline = Construct(
+            f"so-{tag}",
+            nodes=[
+                Node.scripted(f"sosrc-{tag}", fn=f"so_outer_{tag}", outputs=SubInput),
+                sub,
+            ],
+        )
         graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "so-test"})
 
@@ -871,27 +891,33 @@ class TestSubConstructWithLoop:
         register_scripted(f"sl_src_{tag}", lambda _i, _c: Beta(score=0.0))
 
         _count = [0]
+
         def sl_body(_i, _c):
             _count[0] += 1
             return Beta(score=_count[0] * 0.4, iteration=_count[0])
+
         register_scripted(f"sl_body_{tag}", sl_body)
         register_condition(f"sl_cond_{tag}", lambda v: v is None or v.score < 0.9)
 
         body_name = f"slbody-{tag}"
         sub_name = f"slsub-{tag}"
         sub = Construct(
-            sub_name, input=Beta, output=Beta,
+            sub_name,
+            input=Beta,
+            output=Beta,
             nodes=[
-                Node.scripted(body_name, fn=f"sl_body_{tag}",
-                              inputs=Beta, outputs=Beta)
+                Node.scripted(body_name, fn=f"sl_body_{tag}", inputs=Beta, outputs=Beta)
                 | Loop(when=f"sl_cond_{tag}", max_iterations=10),
             ],
         )
 
-        pipeline = Construct(f"sl-{tag}", nodes=[
-            Node.scripted(f"slsrc-{tag}", fn=f"sl_src_{tag}", outputs=Beta),
-            sub,
-        ])
+        pipeline = Construct(
+            f"sl-{tag}",
+            nodes=[
+                Node.scripted(f"slsrc-{tag}", fn=f"sl_src_{tag}", outputs=Beta),
+                sub,
+            ],
+        )
         graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "sl-test"})
 
@@ -919,11 +945,13 @@ class TestTypeSubclassCompat:
         register_scripted(f"tc_src_{tag}", lambda _i, _c: out_type())
         register_scripted(f"tc_sink_{tag}", lambda _i, _c: Gamma(tags=["ok"]))
 
-        pipeline = Construct(f"tc-{tag}", nodes=[
-            Node.scripted(f"tcsrc-{tag}", fn=f"tc_src_{tag}", outputs=out_type),
-            Node.scripted(f"tcsink-{tag}", fn=f"tc_sink_{tag}",
-                          inputs=Parent, outputs=Gamma),
-        ])
+        pipeline = Construct(
+            f"tc-{tag}",
+            nodes=[
+                Node.scripted(f"tcsrc-{tag}", fn=f"tc_src_{tag}", outputs=out_type),
+                Node.scripted(f"tcsink-{tag}", fn=f"tc_sink_{tag}", inputs=Parent, outputs=Gamma),
+            ],
+        )
         graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "tc-test"})
         assert isinstance(result.get(f"tcsink_{tag}".replace("-", "_")), Gamma)
@@ -952,9 +980,7 @@ class TestOperatorCombo:
         register_condition(
             f"op_cond_{tag}",
             lambda state, _cf=check_field: (
-                {"reason": "needs review"}
-                if getattr(state, _cf, None) is not None
-                else None
+                {"reason": "needs review"} if getattr(state, _cf, None) is not None else None
             ),
         )
 
@@ -974,29 +1000,23 @@ class TestOperatorCombo:
             register_scripted(f"op_fan_{tag}", _make_fn(Alpha))
             fan_name = f"opfan-{tag}"
             nodes.append(
-                Node.scripted(fan_name, fn=f"op_fan_{tag}",
-                              inputs=FanItem, outputs=Alpha)
+                Node.scripted(fan_name, fn=f"op_fan_{tag}", inputs=FanItem, outputs=Alpha)
                 | Each(over=f"{src_name.replace('-', '_')}.items", key="item_id")
             )
             # Collector bridges dict → single type
             coll_name = f"opcoll-{tag}"
             fan_field = fan_name.replace("-", "_")
             register_scripted(f"op_coll_{tag}", lambda _i, _c: Beta(score=0.5))
-            nodes.append(
-                Node.scripted(coll_name, fn=f"op_coll_{tag}",
-                              inputs={fan_field: dict}, outputs=Beta)
-            )
+            nodes.append(Node.scripted(coll_name, fn=f"op_coll_{tag}", inputs={fan_field: dict}, outputs=Beta))
             # Operator after collector
             nodes.append(
-                Node.scripted(check_name, fn=f"op_check_{tag}",
-                              inputs=Beta, outputs=Beta)
+                Node.scripted(check_name, fn=f"op_check_{tag}", inputs=Beta, outputs=Beta)
                 | Operator(when=f"op_cond_{tag}"),
             )
         else:
             # Plain OPERATOR
             nodes.append(
-                Node.scripted(check_name, fn=f"op_check_{tag}",
-                              inputs=Alpha, outputs=Beta)
+                Node.scripted(check_name, fn=f"op_check_{tag}", inputs=Alpha, outputs=Beta)
                 | Operator(when=f"op_cond_{tag}"),
             )
 
@@ -1005,9 +1025,7 @@ class TestOperatorCombo:
         config = {"configurable": {"thread_id": f"op-{tag}"}}
         result = run(graph, input={"node_id": "op-test"}, config=config)
 
-        assert "__interrupt__" in result, (
-            f"Operator should pause pipeline. Keys: {sorted(result.keys())}"
-        )
+        assert "__interrupt__" in result, f"Operator should pause pipeline. Keys: {sorted(result.keys())}"
 
 
 class TestContextParam:
@@ -1028,13 +1046,20 @@ class TestContextParam:
 
         src_name = f"ctxsrc-{tag}"
         cons_name = f"ctxcons-{tag}"
-        pipeline = Construct(f"ctx-{tag}", nodes=[
-            Node.scripted(src_name, fn=f"ctx_src_{tag}", outputs=Alpha),
-            Node(name=cons_name, mode="scripted",
-                 scripted_fn=f"ctx_cons_{tag}",
-                 inputs=Alpha, outputs=Gamma,
-                 context=[src_name.replace("-", "_")]),
-        ])
+        pipeline = Construct(
+            f"ctx-{tag}",
+            nodes=[
+                Node.scripted(src_name, fn=f"ctx_src_{tag}", outputs=Alpha),
+                Node(
+                    name=cons_name,
+                    mode="scripted",
+                    scripted_fn=f"ctx_cons_{tag}",
+                    inputs=Alpha,
+                    outputs=Gamma,
+                    context=[src_name.replace("-", "_")],
+                ),
+            ],
+        )
         graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "ctx-test"})
         assert isinstance(result.get(cons_name.replace("-", "_")), Gamma)
@@ -1053,9 +1078,11 @@ class TestRunIsolated:
 
     def test_scripted_node_run_isolated_with_input(self):
         """Scripted node receives input when provided."""
+
         def ri_with_input(input_data, _c):
             assert isinstance(input_data, Beta), f"Expected Beta, got {type(input_data)}"
             return Alpha(value=f"score={input_data.score}")
+
         register_scripted("ri_input_fn", ri_with_input)
         n = Node.scripted("ri-input", fn="ri_input_fn", inputs=Beta, outputs=Alpha)
         result = n.run_isolated(**build_test_compile_kwargs(), input=Beta(score=42.0))
@@ -1074,33 +1101,40 @@ class TestCreativeHumanErrors:
         """Two nodes with the same name must raise at Construct or compile."""
         register_scripted("dup_fn", _make_fn(Alpha))
         with pytest.raises((ConstructError, CompileError)):
-            pipeline = Construct("dupes", nodes=[
-                Node.scripted("same-name", fn="dup_fn", outputs=Alpha),
-                Node.scripted("same-name", fn="dup_fn", inputs=Alpha, outputs=Beta),
-            ])
+            pipeline = Construct(
+                "dupes",
+                nodes=[
+                    Node.scripted("same-name", fn="dup_fn", outputs=Alpha),
+                    Node.scripted("same-name", fn="dup_fn", inputs=Alpha, outputs=Beta),
+                ],
+            )
             compile(pipeline, **build_test_compile_kwargs())
 
     def test_node_referencing_itself_as_input(self):
         """Node with inputs={own_name: type} — self-reference without Loop should reject."""
         register_scripted("self_fn", _make_fn(Alpha))
         with pytest.raises((ConstructError, CompileError)):
-            pipeline = Construct("self-ref", nodes=[
-                Node.scripted("ouroboros", fn="self_fn",
-                              inputs={"ouroboros": Alpha}, outputs=Alpha),
-            ])
+            pipeline = Construct(
+                "self-ref",
+                nodes=[
+                    Node.scripted("ouroboros", fn="self_fn", inputs={"ouroboros": Alpha}, outputs=Alpha),
+                ],
+            )
             compile(pipeline, **build_test_compile_kwargs())
 
-    @given(name=st.text(min_size=1, max_size=20,
-                        alphabet=st.characters(whitelist_categories=("L", "N", "P"))))
+    @given(name=st.text(min_size=1, max_size=20, alphabet=st.characters(whitelist_categories=("L", "N", "P"))))
     @settings(max_examples=20, deadline=5000)
     def test_weird_node_names_dont_crash(self, name):
         """Random node names (unicode, punctuation) should either work or
         raise ConstructError, never an internal traceback."""
         register_scripted(f"weird_{id(name)}", _make_fn(Alpha))
         try:
-            pipeline = Construct(f"weird-{id(name)}", nodes=[
-                Node.scripted(name, fn=f"weird_{id(name)}", outputs=Alpha),
-            ])
+            pipeline = Construct(
+                f"weird-{id(name)}",
+                nodes=[
+                    Node.scripted(name, fn=f"weird_{id(name)}", outputs=Alpha),
+                ],
+            )
             compile(pipeline, **build_test_compile_kwargs())
         except (ConstructError, CompileError, ValueError):
             pass  # clean error is fine
@@ -1109,11 +1143,14 @@ class TestCreativeHumanErrors:
         """Oracle with merge_fn name that's not registered must raise."""
         register_scripted("om_src", _make_fn(Alpha))
         register_scripted("om_gen", _make_fn(Beta))
-        pipeline = Construct("bad-merge", nodes=[
-            Node.scripted("om-src", fn="om_src", outputs=Alpha),
-            Node.scripted("om-gen", fn="om_gen", inputs=Alpha, outputs=Beta)
-            | Oracle(n=2, merge_fn="nonexistent_merge_fn"),
-        ])
+        pipeline = Construct(
+            "bad-merge",
+            nodes=[
+                Node.scripted("om-src", fn="om_src", outputs=Alpha),
+                Node.scripted("om-gen", fn="om_gen", inputs=Alpha, outputs=Beta)
+                | Oracle(n=2, merge_fn="nonexistent_merge_fn"),
+            ],
+        )
         with pytest.raises((ConstructError, CompileError, Exception)):
             graph = compile(pipeline, **build_test_compile_kwargs())
             run(graph, input={"node_id": "test"})
@@ -1126,11 +1163,14 @@ class TestCreativeHumanErrors:
 
         # Should either reject at construction/compile or exit immediately at run
         try:
-            pipeline = Construct("loop-zero", nodes=[
-                Node.scripted("lz-src", fn="lz_src", outputs=Beta),
-                Node.scripted("lz-body", fn="lz_body", inputs=Beta, outputs=Beta)
-                | Loop(when="lz_cond", max_iterations=0),
-            ])
+            pipeline = Construct(
+                "loop-zero",
+                nodes=[
+                    Node.scripted("lz-src", fn="lz_src", outputs=Beta),
+                    Node.scripted("lz-body", fn="lz_body", inputs=Beta, outputs=Beta)
+                    | Loop(when="lz_cond", max_iterations=0),
+                ],
+            )
             graph = compile(pipeline, **build_test_compile_kwargs())
             result = run(graph, input={"node_id": "lz-test"})
             body_field = result.get("lz_body")
@@ -1141,24 +1181,24 @@ class TestCreativeHumanErrors:
     def test_each_key_missing_from_item(self):
         """Each(key='nonexistent_field') — key doesn't exist on items.
         Must raise a clean error, not AttributeError/KeyError."""
-        register_scripted("ek_src", lambda _i, _c: FanCollection(
-            items=[FanItem(item_id="a"), FanItem(item_id="b")]))
+        register_scripted("ek_src", lambda _i, _c: FanCollection(items=[FanItem(item_id="a"), FanItem(item_id="b")]))
         register_scripted("ek_proc", _make_fn(Alpha))
 
         try:
-            pipeline = Construct("bad-key", nodes=[
-                Node.scripted("ek-src", fn="ek_src", outputs=FanCollection),
-                Node.scripted("ek-proc", fn="ek_proc", inputs=FanItem, outputs=Alpha)
-                | Each(over="ek_src.items", key="nonexistent_field"),
-            ])
+            pipeline = Construct(
+                "bad-key",
+                nodes=[
+                    Node.scripted("ek-src", fn="ek_src", outputs=FanCollection),
+                    Node.scripted("ek-proc", fn="ek_proc", inputs=FanItem, outputs=Alpha)
+                    | Each(over="ek_src.items", key="nonexistent_field"),
+                ],
+            )
             graph = compile(pipeline, **build_test_compile_kwargs())
             run(graph, input={"node_id": "ek-test"})
         except (ConstructError, CompileError, ExecutionError, ConfigurationError):
             pass  # clean error is fine
         except (AttributeError, KeyError) as e:
-            raise AssertionError(
-                f"Got internal error {type(e).__name__}: {e} — should be ConstructError"
-            ) from e
+            raise AssertionError(f"Got internal error {type(e).__name__}: {e} — should be ConstructError") from e
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1190,12 +1230,14 @@ class TestInvalidTopologyErrors:
         register_scripted(f"bogus_proc_{tag}", _make_fn(Beta))
 
         with pytest.raises((ConstructError, CompileError, ValueError)):
-            pipeline = Construct(f"bogus-{tag}", nodes=[
-                Node.scripted(f"bsrc-{tag}", fn=f"bogus_src_{tag}", outputs=Alpha),
-                Node.scripted(f"bproc-{tag}", fn=f"bogus_proc_{tag}",
-                              inputs=Alpha, outputs=Beta)
-                | Each(over=bogus_path, key="x"),
-            ])
+            pipeline = Construct(
+                f"bogus-{tag}",
+                nodes=[
+                    Node.scripted(f"bsrc-{tag}", fn=f"bogus_src_{tag}", outputs=Alpha),
+                    Node.scripted(f"bproc-{tag}", fn=f"bogus_proc_{tag}", inputs=Alpha, outputs=Beta)
+                    | Each(over=bogus_path, key="x"),
+                ],
+            )
             compile(pipeline, **build_test_compile_kwargs())
 
     def test_oracle_n_zero_raises(self):
@@ -1344,5 +1386,3 @@ class TestDIPreFlight:
 
         with pytest.raises(ExecutionError, match="topic.*region|region.*topic"):
             run(g, input={"node_id": "test"})  # both topic and region missing
-
-

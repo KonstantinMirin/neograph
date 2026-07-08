@@ -172,8 +172,9 @@ def _build_turn_prep(
         node, runtime, tool_factory_lookup, state, config
     )
     prep = _prepare_tool_loop(**prepare_kwargs)
-    return _TurnPrep(prep=prep, output_model=gen_type, effective_model=effective_model,
-                     effective_renderer=effective_renderer)
+    return _TurnPrep(
+        prep=prep, output_model=gen_type, effective_model=effective_model, effective_renderer=effective_renderer
+    )
 
 
 async def _abuild_turn_prep(
@@ -193,8 +194,9 @@ async def _abuild_turn_prep(
         node, runtime, tool_factory_lookup, state, config
     )
     prep = await _aprepare_tool_loop(**prepare_kwargs)
-    return _TurnPrep(prep=prep, output_model=gen_type, effective_model=effective_model,
-                     effective_renderer=effective_renderer)
+    return _TurnPrep(
+        prep=prep, output_model=gen_type, effective_model=effective_model, effective_renderer=effective_renderer
+    )
 
 
 def _init_budget(existing: Any) -> dict[str, Any]:
@@ -316,7 +318,11 @@ def _agent_start_log(node: Node) -> None:
 
 
 def _agent_turn_prelude(
-    node: Node, bus: Any, field: str, msgs_key: str, budget_key: str,
+    node: Node,
+    bus: Any,
+    field: str,
+    msgs_key: str,
+    budget_key: str,
 ) -> tuple[dict[str, Any] | None, list, dict[str, Any], bool]:
     """Pure preamble shared by both agent-turn twins: read the channel + budget,
     run the first-turn skip check, emit node_start once. Returns
@@ -335,8 +341,13 @@ def _agent_turn_prelude(
 
 
 def _agent_turn_finalize(
-    tp: _TurnPrep, response: Any, budget: dict[str, Any], was_forced: bool,
-    seed: list, msgs_key: str, budget_key: str,
+    tp: _TurnPrep,
+    response: Any,
+    budget: dict[str, Any],
+    was_forced: bool,
+    seed: list,
+    msgs_key: str,
+    budget_key: str,
 ) -> dict[str, Any]:
     """Pure postamble shared by both agent-turn twins: record usage, emit the
     guard-forced-break warning on rogue dispatch, assemble the state update."""
@@ -367,7 +378,9 @@ def _raise_sync_tool_async(node_name: str, tool_name: str, exc: Exception) -> No
 
 
 def _tool_call_precheck(
-    tc: dict, tracker: ToolBudgetTracker, tool_instances: dict,
+    tc: dict,
+    tracker: ToolBudgetTracker,
+    tool_instances: dict,
 ) -> tuple[str, Any]:
     """Pure pre-invoke check for one tool call. Returns ``("msg", ToolMessage)``
     to short-circuit (budget exhausted / unknown tool) or ``("run", tool_fn)``.
@@ -385,7 +398,11 @@ def _tool_call_precheck(
 
 
 def _record_tool_result(
-    tc: dict, result: Any, elapsed_ms: int, tracker: ToolBudgetTracker, renderer: Any,
+    tc: dict,
+    result: Any,
+    elapsed_ms: int,
+    tracker: ToolBudgetTracker,
+    renderer: Any,
 ) -> tuple[ToolInteraction, ToolMessage]:
     """Pure post-invoke recording for one tool call: advance the tracker, render
     the result, build the ToolInteraction + ToolMessage. Single-sites the
@@ -394,15 +411,16 @@ def _record_tool_result(
     tracker.record_call(name)
     rendered = _render_tool_result_for_llm(result, renderer)
     interaction = ToolInteraction(
-        tool_name=name, args=tc.get("args", {}), result=rendered,
-        typed_result=result, duration_ms=elapsed_ms,
+        tool_name=name,
+        args=tc.get("args", {}),
+        result=rendered,
+        typed_result=result,
+        duration_ms=elapsed_ms,
     )
     return interaction, ToolMessage(content=rendered, tool_call_id=tc["id"])
 
 
-def _lift_resource_refs(
-    result: Any, tc: dict, idempotent: bool = False
-) -> list[ResourceRef]:
+def _lift_resource_refs(result: Any, tc: dict, idempotent: bool = False) -> list[ResourceRef]:
     """Lift typed ``ResourceRef``s from ``resource_link`` blocks in a tool result.
 
     Called from ``tools_body``/``atools_body`` INSIDE the per-tool-call loop —
@@ -438,7 +456,8 @@ def _lift_resource_refs(
                 kind=_block_field(block, "name") or scheme or "resource",
                 server=scheme,
                 producing_call=ProducingCall(
-                    tool_name=tc["name"], args=tc.get("args", {}) or {},
+                    tool_name=tc["name"],
+                    args=tc.get("args", {}) or {},
                     producer_idempotent=idempotent,
                 ),
                 mime=_block_field(block, "mimeType"),
@@ -470,16 +489,12 @@ def make_agent_cycle_bodies(
     # Per-tool idempotency neograph-lhc6 stamped onto each lifted ref's producing
     # call so hydration replay neograph-a5nh can gate on it. A raw BaseTool with
     # no Tool spec is conservatively non-idempotent.
-    idempotent_by_tool = {
-        spec.name: bool(getattr(spec, "idempotent", False))
-        for spec in (node.tools or [])
-    }
+    idempotent_by_tool = {spec.name: bool(getattr(spec, "idempotent", False)) for spec in (node.tools or [])}
 
     # ── {node}__agent ─────────────────────────────────────────────────────
     def agent_body(state: BaseModel, config: RunnableConfig) -> dict[str, Any]:
         bus = adapt_state(state)
-        early, channel_msgs, budget, was_forced = _agent_turn_prelude(
-            node, bus, field, msgs_key, budget_key)
+        early, channel_msgs, budget, was_forced = _agent_turn_prelude(node, bus, field, msgs_key, budget_key)
         if early is not None:
             return early
         tp = _build_turn_prep(node, runtime, tfl, state, config)
@@ -490,8 +505,7 @@ def make_agent_cycle_bodies(
 
     async def aagent_body(state: BaseModel, config: RunnableConfig) -> dict[str, Any]:
         bus = adapt_state(state)
-        early, channel_msgs, budget, was_forced = _agent_turn_prelude(
-            node, bus, field, msgs_key, budget_key)
+        early, channel_msgs, budget, was_forced = _agent_turn_prelude(node, bus, field, msgs_key, budget_key)
         if early is not None:
             return early
         tp = await _abuild_turn_prep(node, runtime, tfl, state, config)
@@ -561,8 +575,7 @@ def make_agent_cycle_bodies(
             elapsed_ms = int((time.monotonic() - t0) * 1000)
             interaction, msg = _record_tool_result(tc, result, elapsed_ms, tracker, tp.effective_renderer)
             interactions.append(interaction)
-            refs.extend(_lift_resource_refs(
-                result, tc, idempotent_by_tool.get(tc["name"], False)))
+            refs.extend(_lift_resource_refs(result, tc, idempotent_by_tool.get(tc["name"], False)))
             new_msgs.append(msg)
 
         budget["calls"] = dict(tracker._counts)
@@ -598,8 +611,7 @@ def make_agent_cycle_bodies(
             elapsed_ms = int((time.monotonic() - t0) * 1000)
             interaction, msg = _record_tool_result(tc, result, elapsed_ms, tracker, tp.effective_renderer)
             interactions.append(interaction)
-            refs.extend(_lift_resource_refs(
-                result, tc, idempotent_by_tool.get(tc["name"], False)))
+            refs.extend(_lift_resource_refs(result, tc, idempotent_by_tool.get(tc["name"], False)))
             new_msgs.append(msg)
 
         budget["calls"] = dict(tracker._counts)
@@ -610,11 +622,18 @@ def make_agent_cycle_bodies(
     # ── {node}__parse ─────────────────────────────────────────────────────
     def _finish_and_shape(state, config, tp, channel_msgs, tool_interactions, budget, parse_result, fallback_usage):
         result, _ = _finish_tool_loop(
-            messages=channel_msgs, fallback_usage=fallback_usage, parse_result=parse_result,
-            tool_interactions=tool_interactions, loop_count=budget.get("iteration", 0),
-            total_tool_calls=len(tool_interactions), t0=budget.get("t0", time.monotonic()),
-            llm_log=tp.prep.llm_log, runtime=runtime, model_tier=tp.effective_model,
-            node_name=node.name, output_model=tp.output_model,
+            messages=channel_msgs,
+            fallback_usage=fallback_usage,
+            parse_result=parse_result,
+            tool_interactions=tool_interactions,
+            loop_count=budget.get("iteration", 0),
+            total_tool_calls=len(tool_interactions),
+            t0=budget.get("t0", time.monotonic()),
+            llm_log=tp.prep.llm_log,
+            runtime=runtime,
+            model_tier=tp.effective_model,
+            node_name=node.name,
+            output_model=tp.output_model,
         )
         no = normalize_outputs(node.outputs)
         _, primary_key = _resolve_primary_output(node)
@@ -622,7 +641,8 @@ def make_agent_cycle_bodies(
         update = _build_state_update(node, field, output.value, adapt_state(state))
         elapsed = time.monotonic() - budget.get("t0", time.monotonic())
         log.bind(node=node.name, mode=node.mode).info(
-            "node_complete", loops=budget.get("iteration", 0), duration_s=round(elapsed, 3))
+            "node_complete", loops=budget.get("iteration", 0), duration_s=round(elapsed, 3)
+        )
         return update
 
     def parse_body(state: BaseModel, config: RunnableConfig) -> dict[str, Any]:
@@ -634,10 +654,15 @@ def make_agent_cycle_bodies(
         tool_interactions = list(bus.get(tlog_key) or [])
         tp = _build_turn_prep(node, runtime, tfl, state, config)
         parse_result, fallback_usage = _parse_final_turn(
-            messages=channel_msgs, output_model=tp.output_model, cfg=tp.prep.cfg,
-            config=config, llm=tp.prep.llm,
+            messages=channel_msgs,
+            output_model=tp.output_model,
+            cfg=tp.prep.cfg,
+            config=config,
+            llm=tp.prep.llm,
         )
-        return _finish_and_shape(state, config, tp, channel_msgs, tool_interactions, budget, parse_result, fallback_usage)
+        return _finish_and_shape(
+            state, config, tp, channel_msgs, tool_interactions, budget, parse_result, fallback_usage
+        )
 
     async def aparse_body(state: BaseModel, config: RunnableConfig) -> dict[str, Any]:
         bus = adapt_state(state)
@@ -648,10 +673,15 @@ def make_agent_cycle_bodies(
         tool_interactions = list(bus.get(tlog_key) or [])
         tp = await _abuild_turn_prep(node, runtime, tfl, state, config)
         parse_result, fallback_usage = await _aparse_final_turn(
-            messages=channel_msgs, output_model=tp.output_model, cfg=tp.prep.cfg,
-            config=config, llm=tp.prep.llm,
+            messages=channel_msgs,
+            output_model=tp.output_model,
+            cfg=tp.prep.cfg,
+            config=config,
+            llm=tp.prep.llm,
         )
-        return _finish_and_shape(state, config, tp, channel_msgs, tool_interactions, budget, parse_result, fallback_usage)
+        return _finish_and_shape(
+            state, config, tp, channel_msgs, tool_interactions, budget, parse_result, fallback_usage
+        )
 
     return {
         "names": names,
@@ -745,5 +775,3 @@ def make_tool_gate_bodies(node: Node, gate_condition: Callable) -> dict[str, Any
         return names.tools
 
     return {"gate": gate_body, "router": gate_router}
-
-

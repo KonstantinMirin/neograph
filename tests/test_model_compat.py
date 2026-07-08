@@ -133,6 +133,7 @@ class TestSchemaRoundTrip:
 # Renderer tests for complex schema
 # ---------------------------------------------------------------------------
 
+
 class TestXmlRendererComplex:
     """XmlRenderer handles nested models, enums, lists, and Optional fields."""
 
@@ -232,6 +233,7 @@ class TestDescribeTypeComplex:
 # ---------------------------------------------------------------------------
 # Edge cases
 # ---------------------------------------------------------------------------
+
 
 class TestEdgeCases:
     """Edge cases for the complex schema across strategies."""

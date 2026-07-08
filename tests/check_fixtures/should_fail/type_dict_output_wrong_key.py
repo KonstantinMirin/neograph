@@ -12,14 +12,16 @@ from tests.fakes import register_scripted
 class Claims(BaseModel, frozen=True):
     text: str
 
+
 register_scripted("dict_out", lambda i, c: {"result": Claims(text="ok"), "log": "done"})
 register_scripted("bad_ref", lambda i, c: "ok")
 
 # The dict-form output creates state fields: source_result (Claims) and source_log (str)
 # Consumer references "source_wrong" which doesn't exist
-pipeline = Construct("broken", nodes=[
-    Node.scripted("source", fn="dict_out", outputs={"result": Claims, "log": str}),
-    Node.scripted("consumer", fn="bad_ref",
-                  inputs={"source_wrong": Claims},
-                  outputs=str),
-])
+pipeline = Construct(
+    "broken",
+    nodes=[
+        Node.scripted("source", fn="dict_out", outputs={"result": Claims, "log": str}),
+        Node.scripted("consumer", fn="bad_ref", inputs={"source_wrong": Claims}, outputs=str),
+    ],
+)

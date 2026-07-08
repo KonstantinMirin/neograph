@@ -173,9 +173,7 @@ class TestEmitDoesNotTouchState:
 
         mod.fetch = fetch
         mod.worker = worker
-        non_emitting = compile(
-            construct_from_module(mod, name="emit-1"), **build_test_compile_kwargs()
-        )
+        non_emitting = compile(construct_from_module(mod, name="emit-1"), **build_test_compile_kwargs())
 
         # emit_progress is a stream-side effect only — the type-based fingerprint
         # (state fields, neo_* excluded) is identical.

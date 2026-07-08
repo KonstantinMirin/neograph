@@ -21,10 +21,14 @@ from tests.fakes import register_scripted
 class Claims(BaseModel, frozen=True):
     text: str
 
+
 register_scripted("opt_crash_a", lambda i, c: None)
 register_scripted("opt_crash_b", lambda i, c: Claims(text="ok"))
 
-pipeline = Construct("broken", nodes=[
-    Node.scripted("first", fn="opt_crash_a", outputs=Claims | None),
-    Node.scripted("second", fn="opt_crash_b", inputs=Claims, outputs=Claims),
-])
+pipeline = Construct(
+    "broken",
+    nodes=[
+        Node.scripted("first", fn="opt_crash_a", outputs=Claims | None),
+        Node.scripted("second", fn="opt_crash_b", inputs=Claims, outputs=Claims),
+    ],
+)

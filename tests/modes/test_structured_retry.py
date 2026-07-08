@@ -181,8 +181,13 @@ class TestStructuredRetryIncludeRawSync:
         messages = [{"role": "user", "content": "extract claims"}]
 
         result, _usage = _call_structured(
-            fake, messages, Claims, "structured",
-            {"configurable": {}}, cfg=_cfg(max_retries=1), max_retries=1,
+            fake,
+            messages,
+            Claims,
+            "structured",
+            {"configurable": {}},
+            cfg=_cfg(max_retries=1),
+            max_retries=1,
         )
 
         assert isinstance(result, Claims)
@@ -194,8 +199,13 @@ class TestStructuredRetryIncludeRawSync:
     def test_first_try_parsed_makes_zero_extra_calls(self):
         fake = WeakIncludeRawFake(lambda m: m(items=["ok"]), fail_times=0)
         result, _usage = _call_structured(
-            fake, [{"role": "user", "content": "x"}], Claims, "structured",
-            {"configurable": {}}, cfg=_cfg(max_retries=2), max_retries=2,
+            fake,
+            [{"role": "user", "content": "x"}],
+            Claims,
+            "structured",
+            {"configurable": {}},
+            cfg=_cfg(max_retries=2),
+            max_retries=2,
         )
         assert isinstance(result, Claims)
         assert fake.call_count == 1, "happy path must not re-prompt"
@@ -205,8 +215,13 @@ class TestStructuredRetryIncludeRawSync:
         fake = WeakIncludeRawFake(lambda m: m(items=["never"]), fail_times=99)
         with pytest.raises(ExecutionError):
             _call_structured(
-                fake, [{"role": "user", "content": "x"}], Claims, "structured",
-                {"configurable": {}}, cfg=_cfg(max_retries=2), max_retries=2,
+                fake,
+                [{"role": "user", "content": "x"}],
+                Claims,
+                "structured",
+                {"configurable": {}},
+                cfg=_cfg(max_retries=2),
+                max_retries=2,
             )
         assert fake.call_count == 3, "max_retries=2 -> 1 initial + 2 re-prompts"
 
@@ -215,8 +230,13 @@ class TestStructuredRetryIncludeRawAsync:
     async def test_reprompts_once_and_returns_valid(self):
         fake = WeakIncludeRawFake(lambda m: m(items=["fixed"]), fail_times=1)
         result, _usage = await _acall_structured(
-            fake, [{"role": "user", "content": "x"}], Claims, "structured",
-            {"configurable": {}}, cfg=_cfg(max_retries=1), max_retries=1,
+            fake,
+            [{"role": "user", "content": "x"}],
+            Claims,
+            "structured",
+            {"configurable": {}},
+            cfg=_cfg(max_retries=1),
+            max_retries=1,
         )
         assert isinstance(result, Claims)
         assert result.items == ["fixed"]
@@ -225,8 +245,13 @@ class TestStructuredRetryIncludeRawAsync:
     async def test_first_try_parsed_makes_zero_extra_calls(self):
         fake = WeakIncludeRawFake(lambda m: m(items=["ok"]), fail_times=0)
         result, _usage = await _acall_structured(
-            fake, [{"role": "user", "content": "x"}], Claims, "structured",
-            {"configurable": {}}, cfg=_cfg(max_retries=2), max_retries=2,
+            fake,
+            [{"role": "user", "content": "x"}],
+            Claims,
+            "structured",
+            {"configurable": {}},
+            cfg=_cfg(max_retries=2),
+            max_retries=2,
         )
         assert isinstance(result, Claims)
         assert fake.call_count == 1
@@ -235,8 +260,13 @@ class TestStructuredRetryIncludeRawAsync:
         fake = WeakIncludeRawFake(lambda m: m(items=["never"]), fail_times=99)
         with pytest.raises(ExecutionError):
             await _acall_structured(
-                fake, [{"role": "user", "content": "x"}], Claims, "structured",
-                {"configurable": {}}, cfg=_cfg(max_retries=2), max_retries=2,
+                fake,
+                [{"role": "user", "content": "x"}],
+                Claims,
+                "structured",
+                {"configurable": {}},
+                cfg=_cfg(max_retries=2),
+                max_retries=2,
             )
         assert fake.call_count == 3
 
@@ -250,8 +280,13 @@ class TestStructuredRetryNoIncludeRaw:
     def test_reprompts_once_sync(self):
         fake = WeakNoIncludeRawFake(lambda m: m(items=["fixed"]), fail_times=1)
         result, _usage = _call_structured(
-            fake, [{"role": "user", "content": "x"}], Claims, "structured",
-            {"configurable": {}}, cfg=_cfg(max_retries=1), max_retries=1,
+            fake,
+            [{"role": "user", "content": "x"}],
+            Claims,
+            "structured",
+            {"configurable": {}},
+            cfg=_cfg(max_retries=1),
+            max_retries=1,
         )
         assert isinstance(result, Claims)
         assert result.items == ["fixed"]
@@ -260,8 +295,13 @@ class TestStructuredRetryNoIncludeRaw:
     async def test_reprompts_once_async(self):
         fake = WeakNoIncludeRawFake(lambda m: m(items=["fixed"]), fail_times=1)
         result, _usage = await _acall_structured(
-            fake, [{"role": "user", "content": "x"}], Claims, "structured",
-            {"configurable": {}}, cfg=_cfg(max_retries=1), max_retries=1,
+            fake,
+            [{"role": "user", "content": "x"}],
+            Claims,
+            "structured",
+            {"configurable": {}},
+            cfg=_cfg(max_retries=1),
+            max_retries=1,
         )
         assert isinstance(result, Claims)
         assert fake.call_count == 2
@@ -277,16 +317,26 @@ class TestProviderRejectionNotRetried:
         fake = RejectingFake()
         with pytest.raises(ExecutionError):
             _call_structured(
-                fake, [{"role": "user", "content": "x"}], Claims, "structured",
-                {"configurable": {}}, cfg=_cfg(max_retries=3), max_retries=3,
+                fake,
+                [{"role": "user", "content": "x"}],
+                Claims,
+                "structured",
+                {"configurable": {}},
+                cfg=_cfg(max_retries=3),
+                max_retries=3,
             )
 
     async def test_typeerror_rejection_raises_dispatch_failed_without_retry_async(self):
         fake = RejectingFake()
         with pytest.raises(ExecutionError):
             await _acall_structured(
-                fake, [{"role": "user", "content": "x"}], Claims, "structured",
-                {"configurable": {}}, cfg=_cfg(max_retries=3), max_retries=3,
+                fake,
+                [{"role": "user", "content": "x"}],
+                Claims,
+                "structured",
+                {"configurable": {}},
+                cfg=_cfg(max_retries=3),
+                max_retries=3,
             )
 
 
@@ -355,8 +405,11 @@ class TestAgentModeStructuredFallbackRetry:
             AIMessage(content="not json at all"),
         ]
         result, _usage = _parse_final_turn(
-            messages=messages, output_model=Claims, cfg=_cfg(max_retries=1),
-            config={"configurable": {}}, llm=fake,
+            messages=messages,
+            output_model=Claims,
+            cfg=_cfg(max_retries=1),
+            config={"configurable": {}},
+            llm=fake,
         )
         assert isinstance(result, Claims)
         assert result.items == ["fixed"]
@@ -371,8 +424,11 @@ class TestAgentModeStructuredFallbackRetry:
             AIMessage(content="not json at all"),
         ]
         result, _usage = await _aparse_final_turn(
-            messages=messages, output_model=Claims, cfg=_cfg(max_retries=1),
-            config={"configurable": {}}, llm=fake,
+            messages=messages,
+            output_model=Claims,
+            cfg=_cfg(max_retries=1),
+            config={"configurable": {}},
+            llm=fake,
         )
         assert isinstance(result, Claims)
         assert result.items == ["fixed"]
@@ -388,7 +444,10 @@ class TestAgentModeStructuredFallbackRetry:
         ]
         with pytest.raises(ExecutionError):
             _parse_final_turn(
-                messages=messages, output_model=Claims, cfg=_cfg(max_retries=2),
-                config={"configurable": {}}, llm=fake,
+                messages=messages,
+                output_model=Claims,
+                cfg=_cfg(max_retries=2),
+                config={"configurable": {}},
+                llm=fake,
             )
         assert fake.call_count == 3

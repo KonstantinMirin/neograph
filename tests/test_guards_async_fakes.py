@@ -27,10 +27,7 @@ import re
 # dyp3: the shared fakes were promoted to the public package. The bare-delegation
 # async-mirror invariant now guards the SOURCE OF TRUTH at its new home; tests/
 # fakes.py only re-exports these (no class bodies to scan there anymore).
-FAKES_PATH = (
-    pathlib.Path(__file__).resolve().parent.parent
-    / "src" / "neograph" / "testing" / "fakes.py"
-)
+FAKES_PATH = pathlib.Path(__file__).resolve().parent.parent / "src" / "neograph" / "testing" / "fakes.py"
 
 # The 8 shared deterministic fakes that MUST each gain an async ``ainvoke``
 # mirror (disease-scan MIGRATE rows 1-8 in neograph-w74k.1 notes).
@@ -86,9 +83,7 @@ def _strip_docstring(body: list[ast.stmt]) -> list[ast.stmt]:
     return body
 
 
-def _is_bare_delegation(
-    fn: ast.FunctionDef | ast.AsyncFunctionDef, target_method: str
-) -> bool:
+def _is_bare_delegation(fn: ast.FunctionDef | ast.AsyncFunctionDef, target_method: str) -> bool:
     """True iff ``fn`` body is exactly ``return self.<target_method>(...)``.
 
     Anything else (extra statements, a different call target, response logic)
@@ -131,8 +126,7 @@ class TestAsyncFakeDelegationGuard:
                 not_delegation.append(f"{name}.ainvoke must be `async def`")
             elif not _is_bare_delegation(fn, "invoke"):
                 not_delegation.append(
-                    f"{name}.ainvoke must be a bare `return self.invoke(*a, **k)` "
-                    "delegation (no response logic)"
+                    f"{name}.ainvoke must be a bare `return self.invoke(*a, **k)` delegation (no response logic)"
                 )
         assert not missing and not not_delegation, (
             "async ainvoke mirror missing or not a bare delegation:\n"
@@ -156,10 +150,7 @@ class TestAsyncFakeDelegationGuard:
                 missing.append(name)
                 continue
             if not _is_bare_delegation(fn, "bind_tools"):
-                not_delegation.append(
-                    f"{name}.abind_tools must be a bare `return self.bind_tools(*a, **k)` "
-                    "delegation"
-                )
+                not_delegation.append(f"{name}.abind_tools must be a bare `return self.bind_tools(*a, **k)` delegation")
         assert not missing and not not_delegation, (
             "abind_tools mirror missing or not a bare delegation:\n"
             + "".join(f"  MISSING abind_tools: {n}\n" for n in missing)
@@ -180,10 +171,7 @@ class TestAsyncFakeDelegationGuard:
             if not isinstance(fn, ast.AsyncFunctionDef):
                 not_delegation.append(f"{name}._agenerate must be `async def`")
             elif not _is_bare_delegation(fn, "_generate"):
-                not_delegation.append(
-                    f"{name}._agenerate must be a bare `return self._generate(*a, **k)` "
-                    "delegation"
-                )
+                not_delegation.append(f"{name}._agenerate must be a bare `return self._generate(*a, **k)` delegation")
         assert not missing and not not_delegation, (
             "_agenerate mirror missing or not a bare delegation:\n"
             + "".join(f"  MISSING _agenerate: {n}\n" for n in missing)
@@ -195,9 +183,7 @@ class TestAsyncFakeDelegationGuard:
         """Slip meta-test: the AST delegation detector accepts a true bare
         delegation and rejects extra logic / a different call target, so the
         guards above cannot pass vacuously."""
-        good = ast.parse(
-            "async def ainvoke(self, *a, **k):\n    return self.invoke(*a, **k)\n"
-        ).body[0]
+        good = ast.parse("async def ainvoke(self, *a, **k):\n    return self.invoke(*a, **k)\n").body[0]
         assert _is_bare_delegation(good, "invoke")
 
         good_with_doc = ast.parse(
@@ -205,16 +191,12 @@ class TestAsyncFakeDelegationGuard:
         ).body[0]
         assert _is_bare_delegation(good_with_doc, "invoke")
 
-        extra_logic = ast.parse(
-            "async def ainvoke(self, *a, **k):\n"
-            "    x = self.invoke(*a, **k)\n"
-            "    return x\n"
-        ).body[0]
+        extra_logic = ast.parse("async def ainvoke(self, *a, **k):\n    x = self.invoke(*a, **k)\n    return x\n").body[
+            0
+        ]
         assert not _is_bare_delegation(extra_logic, "invoke")
 
-        wrong_target = ast.parse(
-            "async def ainvoke(self, *a, **k):\n    return self.respond(*a, **k)\n"
-        ).body[0]
+        wrong_target = ast.parse("async def ainvoke(self, *a, **k):\n    return self.respond(*a, **k)\n").body[0]
         assert not _is_bare_delegation(wrong_target, "invoke")
 
 
@@ -228,11 +210,20 @@ _TESTS_FAKES = _REPO_ROOT / "tests" / "fakes.py"
 
 # The doubles promoted to neograph.testing.fakes (dyp3). tests/fakes.py must
 # RE-EXPORT these, never redefine them (Core Invariant: exactly one impl).
-_MIGRATED = frozenset({
-    "StructuredFake", "StructuredFakeWithRaw", "ReActFake", "StringArgsFake",
-    "TextFake", "FakeTool", "GuardFake", "StubbornFake", "GatedAsyncFake",
-    "_final_json_content",
-})
+_MIGRATED = frozenset(
+    {
+        "StructuredFake",
+        "StructuredFakeWithRaw",
+        "ReActFake",
+        "StringArgsFake",
+        "TextFake",
+        "FakeTool",
+        "GuardFake",
+        "StubbornFake",
+        "GatedAsyncFake",
+        "_final_json_content",
+    }
+)
 
 # Extracts the module a ``monkeypatch.setattr("<module>._get_llm", ...)`` targets.
 # Quote-agnostic (single OR double) so a differently-quoted patch line cannot slip
@@ -244,11 +235,7 @@ def _redefined_migrated(source: str) -> set[str]:
     """Names in *_MIGRATED* that *source* DEFINES (class/def), i.e. duplicates
     of the public implementation rather than re-exports/imports."""
     tree = ast.parse(source)
-    defined = {
-        n.name
-        for n in ast.walk(tree)
-        if isinstance(n, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef))
-    }
+    defined = {n.name for n in ast.walk(tree) if isinstance(n, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef))}
     return _MIGRATED & defined
 
 

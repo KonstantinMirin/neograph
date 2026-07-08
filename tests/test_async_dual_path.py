@@ -349,6 +349,7 @@ class TestAsyncScriptedBody:
         a sync shim; the shim returns an un-awaited coroutine, so aexecute must
         detect+await the awaitable result.
         """
+
         @node(outputs=RawText)
         def raw_src() -> RawText:
             return RawText(text="hi")
@@ -376,6 +377,7 @@ class TestAsyncScriptedBody:
         """Surface 2 — declarative ``Node.scripted()`` with an ``async def``
         ``(input_data, config)`` fn registered via ``register_scripted``.
         """
+
         async def g(input_data, config):
             await asyncio.sleep(0)
             return Claims(items=["G"])
@@ -388,9 +390,7 @@ class TestAsyncScriptedBody:
 
         got = _ainvoke_field(graph, "g")
 
-        assert not inspect.isawaitable(got), (
-            "async declarative scripted fn left un-awaited — result is a coroutine"
-        )
+        assert not inspect.isawaitable(got), "async declarative scripted fn left un-awaited — result is a coroutine"
         assert isinstance(got, Claims)
         assert got == Claims(items=["G"])
 
@@ -398,6 +398,7 @@ class TestAsyncScriptedBody:
         """Surface 3 — programmatic bare ``Node(...)`` constructor with the same
         registered ``async def`` fn.
         """
+
         async def h(input_data, config):
             await asyncio.sleep(0)
             return Claims(items=["H"])
@@ -413,9 +414,7 @@ class TestAsyncScriptedBody:
 
         got = _ainvoke_field(graph, "h")
 
-        assert not inspect.isawaitable(got), (
-            "async programmatic scripted fn left un-awaited — result is a coroutine"
-        )
+        assert not inspect.isawaitable(got), "async programmatic scripted fn left un-awaited — result is a coroutine"
         assert isinstance(got, Claims)
         assert got == Claims(items=["H"])
 
@@ -424,6 +423,7 @@ class TestAsyncScriptedBody:
         path has no ``afunc`` twin today, so the sync raw wrapper returns an
         un-awaited coroutine as the node's state update instead of the dict.
         """
+
         @node(mode="raw", outputs=Claims)
         async def araw(state, config):
             await asyncio.sleep(0)
@@ -437,8 +437,7 @@ class TestAsyncScriptedBody:
         got = _ainvoke_field(graph, "araw")
 
         assert not inspect.isawaitable(got), (
-            "async raw body left un-awaited — state update is a coroutine "
-            "(raw path lacks an async afunc twin)"
+            "async raw body left un-awaited — state update is a coroutine (raw path lacks an async afunc twin)"
         )
         assert isinstance(got, Claims)
         assert got == Claims(items=["R"])
@@ -448,6 +447,7 @@ class TestAsyncScriptedBody:
         must NOT be awaited: ``isawaitable(result)`` is False, so the 1b
         conditional-await must leave it untouched. Locks against over-awaiting.
         """
+
         @node(outputs=Claims)
         def sync_body() -> Claims:
             return Claims(items=["S"])
@@ -485,6 +485,7 @@ class TestAsyncBodyUnderSyncRunFailsLoud:
         """Scripted ``@node`` with an ``async def`` body run via sync ``run()``
         raises ``NeographError`` mentioning ``arun()``.
         """
+
         @node(outputs=RawText)
         def raw_src() -> RawText:
             return RawText(text="hi")
@@ -506,6 +507,7 @@ class TestAsyncBodyUnderSyncRunFailsLoud:
         """``mode='raw'`` node with an ``async def`` body run via sync ``run()``
         raises ``NeographError`` mentioning ``arun()``.
         """
+
         @node(mode="raw", outputs=Claims)
         async def araw(state, config):
             await asyncio.sleep(0)
@@ -524,6 +526,7 @@ class TestAsyncBodyUnderSyncRunFailsLoud:
         awaits correctly and produces the declared model — the fail-loud guard is
         sync-path only and must not touch the async path.
         """
+
         @node(outputs=RawText)
         def raw_src() -> RawText:
             return RawText(text="hi")
@@ -546,6 +549,7 @@ class TestAsyncBodyUnderSyncRunFailsLoud:
         """Positive regression: the SAME async raw body run via ``arun()`` awaits
         correctly and produces the declared model.
         """
+
         @node(mode="raw", outputs=Claims)
         async def araw(state, config):
             await asyncio.sleep(0)

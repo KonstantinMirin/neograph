@@ -10,10 +10,14 @@ from tests.fakes import register_scripted
 class TypeA(BaseModel, frozen=True):
     x: str
 
+
 register_scripted("nc_a", lambda i, c: TypeA(x="hello"))
 register_scripted("nc_b", lambda i, c: TypeA(x="world"))
 
-pipeline = Construct("broken", nodes=[
-    Node.scripted("my-node", fn="nc_a", outputs=TypeA),
-    Node.scripted("my_node", fn="nc_b", outputs=TypeA),
-])
+pipeline = Construct(
+    "broken",
+    nodes=[
+        Node.scripted("my-node", fn="nc_a", outputs=TypeA),
+        Node.scripted("my_node", fn="nc_b", outputs=TypeA),
+    ],
+)

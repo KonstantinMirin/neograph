@@ -10,13 +10,18 @@ from tests.fakes import register_scripted
 class TypeA(BaseModel, frozen=True):
     x: str
 
+
 class TypeB(TypeA, frozen=True):
     y: int = 0
+
 
 register_scripted("sub_b", lambda i, c: TypeB(x="hello", y=1))
 register_scripted("sub_a", lambda i, c: TypeA(x="done"))
 
-pipeline = Construct("valid-subclass", nodes=[
-    Node.scripted("first", fn="sub_b", outputs=TypeB),
-    Node.scripted("second", fn="sub_a", inputs=TypeA, outputs=TypeA),
-])
+pipeline = Construct(
+    "valid-subclass",
+    nodes=[
+        Node.scripted("first", fn="sub_b", outputs=TypeB),
+        Node.scripted("second", fn="sub_a", inputs=TypeA, outputs=TypeA),
+    ],
+)

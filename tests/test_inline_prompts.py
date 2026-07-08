@@ -59,9 +59,7 @@ class TestSubstituteVars:
         assert result == "Hello world"
 
     def test_multiple_vars(self):
-        result = _substitute_vars(
-            "${greeting} ${name}!", {"greeting": "Hi", "name": "there"}
-        )
+        result = _substitute_vars("${greeting} ${name}!", {"greeting": "Hi", "name": "there"})
         assert result == "Hi there!"
 
     def test_no_vars_passthrough(self):
@@ -74,12 +72,14 @@ class TestSubstituteVars:
         BUG neograph-9pcb: silent empty-string fallback caused 2 prod failures.
         """
         import structlog
+
         # Capture structlog output via stdlib logging
         structlog.configure(
             wrapper_class=structlog.stdlib.BoundLogger,
             logger_factory=structlog.stdlib.LoggerFactory(),
         )
         import logging
+
         with caplog.at_level(logging.WARNING):
             result = _substitute_vars("Hello ${missing}", {"name": "world"})
         assert result == "Hello "
@@ -260,11 +260,13 @@ class TestInlinePromptThroughFullDispatch:
 
         class CapturingFake:
             """Fake LLM that records what messages it receives."""
+
             def __init__(self):
                 self.messages = []
 
             def with_structured_output(self, schema, *, include_raw=False, **kw):
                 parent = self
+
                 class Bound:
                     def invoke(self, messages, config=None, **kwargs):
                         parent.messages.extend(messages)
@@ -272,9 +274,13 @@ class TestInlinePromptThroughFullDispatch:
                         instance = schema(disposition="confirmed")
                         if include_raw:
                             from langchain_core.messages import AIMessage
-                            return {"parsed": instance, "raw": AIMessage(
-                                content="fake", response_metadata={"usage": {}})}
+
+                            return {
+                                "parsed": instance,
+                                "raw": AIMessage(content="fake", response_metadata={"usage": {}}),
+                            }
                         return instance
+
                 return Bound()
 
         fake = CapturingFake()
@@ -283,15 +289,27 @@ class TestInlinePromptThroughFullDispatch:
             prompt_compiler=lambda t, d, **kw: [{"role": "user", "content": "ERROR: compiler called for inline"}],
         )
 
-        register_scripted("x3gz_seed", lambda _in, _cfg: Claim(
-            claim_id="c1", text="the sky is blue",
-        ))
+        register_scripted(
+            "x3gz_seed",
+            lambda _in, _cfg: Claim(
+                claim_id="c1",
+                text="the sky is blue",
+            ),
+        )
 
-        parent = Construct("x3gz-test", nodes=[
-            Node.scripted("seed", fn="x3gz_seed", outputs=Claim),
-            Node("judge", prompt="Judge this claim: ${seed.text}",
-                 model="default", outputs=Verdict, inputs={"seed": Claim}),
-        ])
+        parent = Construct(
+            "x3gz-test",
+            nodes=[
+                Node.scripted("seed", fn="x3gz_seed", outputs=Claim),
+                Node(
+                    "judge",
+                    prompt="Judge this claim: ${seed.text}",
+                    model="default",
+                    outputs=Verdict,
+                    inputs={"seed": Claim},
+                ),
+            ],
+        )
         graph = compile(parent, **_llm_kw, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "x3gz"})
 
@@ -300,8 +318,7 @@ class TestInlinePromptThroughFullDispatch:
         assert llm_received, "LLM should have received messages"
         prompt_content = llm_received[0]["content"] if isinstance(llm_received[0], dict) else llm_received[0].content
         assert "the sky is blue" in prompt_content, (
-            f"Dotted var ${{seed.text}} must resolve to field value in the prompt.\n"
-            f"Got: {prompt_content!r}"
+            f"Dotted var ${{seed.text}} must resolve to field value in the prompt.\nGot: {prompt_content!r}"
         )
 
     def test_dotted_var_in_fan_in_dict_resolves(self):
@@ -346,11 +363,13 @@ class TestInlinePromptThroughFullDispatch:
 
         register_scripted("x3gz_seed2", lambda _in, _cfg: Claim(text="test claim"))
 
-        parent = Construct("x3gz-whole", nodes=[
-            Node.scripted("seed", fn="x3gz_seed2", outputs=Claim),
-            Node("judge", prompt="Evaluate: ${seed}",
-                 model="default", outputs=Result, inputs={"seed": Claim}),
-        ])
+        parent = Construct(
+            "x3gz-whole",
+            nodes=[
+                Node.scripted("seed", fn="x3gz_seed2", outputs=Claim),
+                Node("judge", prompt="Evaluate: ${seed}", model="default", outputs=Result, inputs={"seed": Claim}),
+            ],
+        )
         graph = compile(parent, **_llm_kw, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "x3gz-whole"})
         assert result["judge"].answer == "yes"
@@ -547,6 +566,7 @@ class TestResolveImageErrors:
         def score_image(seed: ImageData) -> Score: ...
 
         import types
+
         mod = types.ModuleType("test_e2e_mm")
         mod.seed = seed
         mod.score_image = score_image
@@ -599,8 +619,7 @@ class TestRenderPromptMultimodal:
         )
 
         b64 = base64.b64encode(b"img").decode()
-        n = Node("score", mode="think", outputs=BaseModel,
-                 prompt="Rate: ${image:photo}", model="fast")
+        n = Node("score", mode="think", outputs=BaseModel, prompt="Rate: ${image:photo}", model="fast")
         result = render_prompt(n, {"photo": b64}, runtime=runtime)
         assert "[image]" in result
 
@@ -642,6 +661,7 @@ class TestJsonModeMultimodal:
             def invoke(self, messages, **kw):
                 captured.append(messages)
                 from langchain_core.messages import AIMessage
+
                 return AIMessage(content='{"score": 0.9}')
 
         _llm_kw = configure_fake_llm(lambda tier: CaptureLLM(tier))
@@ -652,7 +672,8 @@ class TestJsonModeMultimodal:
             score: float
 
         b64 = base64.b64encode(b"test-img").decode()
-        result = invoke_structured(runtime=build_fake_runtime(_llm_kw['llm_factory'], _llm_kw['prompt_compiler']),
+        result = invoke_structured(
+            runtime=build_fake_runtime(_llm_kw["llm_factory"], _llm_kw["prompt_compiler"]),
             model_tier="fast",
             prompt_template="Rate: ${image:photo}",
             input_data={"photo": b64},
@@ -727,12 +748,14 @@ class TestResolveImagePublicAPI:
 
     def test_import_from_neograph(self):
         from neograph import resolve_image
+
         b64 = base64.b64encode(b"public-api").decode()
         result = resolve_image(b64)
         assert result == f"data:image/png;base64,{b64}"
 
     def test_same_function(self):
         from neograph import resolve_image
+
         assert resolve_image is _resolve_image
 
 
@@ -788,9 +811,9 @@ class TestImageValidation:
             configure_image(allowed_dirs=["/nonexistent/safe_dir"])
             result = resolve_image(tmp)
             # Should NOT read the file — not in allowed dirs
-            assert "PNGdata" not in base64.b64decode(
-                result.split(",", 1)[1] if "," in result else ""
-            ).decode("latin-1", errors="replace")
+            assert "PNGdata" not in base64.b64decode(result.split(",", 1)[1] if "," in result else "").decode(
+                "latin-1", errors="replace"
+            )
         finally:
             Path(tmp).unlink(missing_ok=True)
             configure_image()
@@ -826,6 +849,7 @@ class TestImageValidation:
     def test_configure_image_imported_from_neograph(self):
         """configure_image is importable from the public API."""
         from neograph import configure_image
+
         assert callable(configure_image)
 
 

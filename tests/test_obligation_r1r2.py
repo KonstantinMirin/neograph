@@ -24,12 +24,15 @@ from tests.fakes import build_test_compile_kwargs, register_condition, register_
 # Shared schemas
 # ═══════════════════════════════════════════════════════════════════════════
 
+
 class Alpha(BaseModel, frozen=True):
     value: str
+
 
 class Beta(BaseModel, frozen=True):
     value: str
     score: float = 0.0
+
 
 class Gamma(BaseModel, frozen=True):
     result: str
@@ -38,6 +41,7 @@ class Gamma(BaseModel, frozen=True):
 # ═══════════════════════════════════════════════════════════════════════════
 # 1. Loop + dict-form multi-key inputs (factory.py:_extract_input)
 # ═══════════════════════════════════════════════════════════════════════════
+
 
 class TestLoopDictFormEdgeCases:
     """Probe edge cases in the Loop + dict-form fix at factory.py:515-544."""
@@ -50,24 +54,23 @@ class TestLoopDictFormEdgeCases:
 
         def refine_fn(input_data, config):
             iteration[0] += 1
-            assert isinstance(input_data, dict), (
-                f"Expected dict input, got {type(input_data).__name__}"
-            )
+            assert isinstance(input_data, dict), f"Expected dict input, got {type(input_data).__name__}"
             ctx = input_data.get("context")
-            assert isinstance(ctx, Alpha), (
-                f"Iter {iteration[0]}: context={type(ctx).__name__}"
-            )
+            assert isinstance(ctx, Alpha), f"Iter {iteration[0]}: context={type(ctx).__name__}"
             return Beta(value=f"v{iteration[0]}", score=0.4 * iteration[0])
 
         register_scripted("hyp_refine", refine_fn)
 
-        pipeline = Construct("hyp-test", nodes=[
-            Node.scripted("context", fn="hyp_ctx", outputs=Alpha),
-            Node.scripted("my-refiner", fn="hyp_refine",
-                          inputs={"context": Alpha, "my_refiner": Beta},
-                          outputs=Beta)
-            | Loop(when=lambda d: d is None or d.score < 0.8, max_iterations=5),
-        ])
+        pipeline = Construct(
+            "hyp-test",
+            nodes=[
+                Node.scripted("context", fn="hyp_ctx", outputs=Alpha),
+                Node.scripted(
+                    "my-refiner", fn="hyp_refine", inputs={"context": Alpha, "my_refiner": Beta}, outputs=Beta
+                )
+                | Loop(when=lambda d: d is None or d.score < 0.8, max_iterations=5),
+            ],
+        )
         graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "hyp"})
         assert iteration[0] >= 2
@@ -80,26 +83,25 @@ class TestLoopDictFormEdgeCases:
 
         def refine_fn(input_data, config):
             iteration[0] += 1
-            assert isinstance(input_data, dict), (
-                f"Expected dict input, got {type(input_data).__name__}"
-            )
+            assert isinstance(input_data, dict), f"Expected dict input, got {type(input_data).__name__}"
             ctx = input_data.get("context")
             # Context must be Alpha, not Beta
-            assert isinstance(ctx, Alpha), (
-                f"Iter {iteration[0]}: context={type(ctx).__name__}, val={ctx}"
-            )
+            assert isinstance(ctx, Alpha), f"Iter {iteration[0]}: context={type(ctx).__name__}, val={ctx}"
             return Beta(value=f"v{iteration[0]}", score=0.5 * iteration[0])
 
         register_scripted("last_refine", refine_fn)
 
         # Deliberately order inputs so self-ref is LAST
-        pipeline = Construct("last-test", nodes=[
-            Node.scripted("context", fn="last_ctx", outputs=Alpha),
-            Node.scripted("refine-last", fn="last_refine",
-                          inputs={"context": Alpha, "refine_last": Beta},
-                          outputs=Beta)
-            | Loop(when=lambda d: d is None or d.score < 0.8, max_iterations=5),
-        ])
+        pipeline = Construct(
+            "last-test",
+            nodes=[
+                Node.scripted("context", fn="last_ctx", outputs=Alpha),
+                Node.scripted(
+                    "refine-last", fn="last_refine", inputs={"context": Alpha, "refine_last": Beta}, outputs=Beta
+                )
+                | Loop(when=lambda d: d is None or d.score < 0.8, max_iterations=5),
+            ],
+        )
         graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "last"})
         assert iteration[0] >= 2
@@ -114,9 +116,7 @@ class TestLoopDictFormEdgeCases:
 
         def refine_fn(input_data, config):
             iteration[0] += 1
-            assert isinstance(input_data, dict), (
-                f"Expected dict input, got {type(input_data).__name__}"
-            )
+            assert isinstance(input_data, dict), f"Expected dict input, got {type(input_data).__name__}"
             source_a = input_data.get("source_a")
             # source_a must come from upstream (state), not be the loop value
             assert isinstance(source_a, Beta), f"source_a={type(source_a).__name__}"
@@ -125,13 +125,16 @@ class TestLoopDictFormEdgeCases:
 
         register_scripted("same_merge", refine_fn)
 
-        pipeline = Construct("same-type-test", nodes=[
-            Node.scripted("source-a", fn="same_a", outputs=Beta),
-            Node.scripted("merge-node", fn="same_merge",
-                          inputs={"source_a": Beta, "merge_node": Beta},
-                          outputs=Beta)
-            | Loop(when=lambda d: d is None or d.score < 0.8, max_iterations=5),
-        ])
+        pipeline = Construct(
+            "same-type-test",
+            nodes=[
+                Node.scripted("source-a", fn="same_a", outputs=Beta),
+                Node.scripted(
+                    "merge-node", fn="same_merge", inputs={"source_a": Beta, "merge_node": Beta}, outputs=Beta
+                )
+                | Loop(when=lambda d: d is None or d.score < 0.8, max_iterations=5),
+            ],
+        )
         graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "same"})
         assert iteration[0] >= 2
@@ -140,6 +143,7 @@ class TestLoopDictFormEdgeCases:
 # ═══════════════════════════════════════════════════════════════════════════
 # 2. _resolve_merge_args Loop unwrap (decorators.py:418)
 # ═══════════════════════════════════════════════════════════════════════════
+
 
 class TestResolveMergeArgsEdgeCases:
     """Probe edge cases in the from_state unwrap fix at decorators.py:418-422."""
@@ -194,6 +198,7 @@ class TestResolveMergeArgsEdgeCases:
 # 3. _merge_dicts guards (state.py)
 # ═══════════════════════════════════════════════════════════════════════════
 
+
 class TestMergeDictsEdgeCases:
     """Probe edge cases in _merge_dicts guards."""
 
@@ -237,6 +242,7 @@ class TestMergeDictsEdgeCases:
 # ═══════════════════════════════════════════════════════════════════════════
 # 5. Each fan-in validation (_construct_validation.py:417-422)
 # ═══════════════════════════════════════════════════════════════════════════
+
 
 class TestEachFanInValidationEdgeCases:
     """Probe: fan_out_param set AND unmatched keys — does skip double-fire?
@@ -318,6 +324,7 @@ class TestEachFanInValidationEdgeCases:
 # 6. _extract_json edge cases (_llm.py:236-270)
 # ═══════════════════════════════════════════════════════════════════════════
 
+
 class TestExtractJsonEdgeCases:
     """Probe edge cases in the prose-brace skip fix."""
 
@@ -367,7 +374,7 @@ class TestExtractJsonEdgeCases:
         """Text with a single { and no closing }."""
         from neograph._llm_retry import _extract_json
 
-        text = 'Unbalanced { but no close'
+        text = "Unbalanced { but no close"
         result = _extract_json(text)
         # Should not infinite loop — should return text.strip()
         assert result == text.strip()
@@ -409,6 +416,7 @@ class TestExtractJsonEdgeCases:
 # 4. Operator + other modifiers on sub-construct (compiler.py)
 # ═══════════════════════════════════════════════════════════════════════════
 
+
 class TestOperatorOnSubConstruct:
     """Probe: Operator chaining with other modifiers on sub-constructs."""
 
@@ -421,6 +429,7 @@ class TestOperatorOnSubConstruct:
         register_scripted("inner_seed", lambda i, c: Beta(value="seed", score=0.0))
 
         iteration = [0]
+
         def inner_refine(i, c):
             iteration[0] += 1
             return Beta(value=f"v{iteration[0]}", score=0.5 * iteration[0])
@@ -443,10 +452,13 @@ class TestOperatorOnSubConstruct:
 
         register_scripted("parent_seed", lambda i, c: Alpha(value="start"))
 
-        parent = Construct("parent", nodes=[
-            Node.scripted("parent-seed", fn="parent_seed", outputs=Alpha),
-            inner_with_op,
-        ])
+        parent = Construct(
+            "parent",
+            nodes=[
+                Node.scripted("parent-seed", fn="parent_seed", outputs=Alpha),
+                inner_with_op,
+            ],
+        )
         checkpointer = MemorySaver()
         graph = compile(parent, checkpointer=checkpointer, **build_test_compile_kwargs())
         result = run(

@@ -83,11 +83,7 @@ def _interrupt_pipeline():
     @node(
         mode="scripted",
         outputs=ValidationResult,
-        interrupt_when=lambda state: (
-            {"issues": state.gate.issues}
-            if state.gate and not state.gate.passed
-            else None
-        ),
+        interrupt_when=lambda state: {"issues": state.gate.issues} if state.gate and not state.gate.passed else None,
     )
     def gate() -> ValidationResult:
         return ValidationResult(passed=False, issues=["needs review"])
@@ -119,16 +115,12 @@ async def test_async_resume_same_driver_file_backed(tmp_path):
             **build_test_compile_kwargs(),
         )
 
-        first = await neograph.arun(
-            graph, input={"node_id": "same-driver-001"}, config=config
-        )
+        first = await neograph.arun(graph, input={"node_id": "same-driver-001"}, config=config)
         assert first["process"] == Claims(items=["HELLO"])
 
         # Second arun on the SAME thread_id + SAME saver: checkpoint-EXISTS
         # branch awaits aget_tuple against the real file, resumes, completes.
-        second = await neograph.arun(
-            graph, input={"node_id": "same-driver-001"}, config=config
-        )
+        second = await neograph.arun(graph, input={"node_id": "same-driver-001"}, config=config)
         assert second["process"] == Claims(items=["HELLO"])
 
 
@@ -189,9 +181,7 @@ async def test_mixed_driver_reverse_async_write_sync_resume(tmp_path):
             checkpointer=async_saver,
             **build_test_compile_kwargs(),
         )
-        wrote = await neograph.arun(
-            async_graph, input={"node_id": "rev-001"}, config=config
-        )
+        wrote = await neograph.arun(async_graph, input={"node_id": "rev-001"}, config=config)
         assert wrote["process"] == Claims(items=["HELLO"])
 
     # Sync driver reads the SAME file + thread_id back to final state.
@@ -241,9 +231,7 @@ async def test_mixed_driver_sync_write_mid_flight_async_resume(tmp_path):
             checkpointer=async_saver,
             **build_test_compile_kwargs(),
         )
-        completed = await neograph.arun(
-            async_graph, resume={"approved": True}, config=config
-        )
+        completed = await neograph.arun(async_graph, resume={"approved": True}, config=config)
 
     assert completed["finalize"] == Claims(items=["done"])
 
@@ -268,9 +256,7 @@ async def test_crash_recovery_async_across_reopened_saver(tmp_path):
             checkpointer=saver_a,
             **build_test_compile_kwargs(),
         )
-        paused = await neograph.arun(
-            graph_a, input={"node_id": "crash-001"}, config=config
-        )
+        paused = await neograph.arun(graph_a, input={"node_id": "crash-001"}, config=config)
         assert "__interrupt__" in paused
         assert paused["gate"].passed is False
 
@@ -282,9 +268,7 @@ async def test_crash_recovery_async_across_reopened_saver(tmp_path):
             checkpointer=saver_b,
             **build_test_compile_kwargs(),
         )
-        completed = await neograph.arun(
-            graph_b, resume={"approved": True}, config=config
-        )
+        completed = await neograph.arun(graph_b, resume={"approved": True}, config=config)
 
     assert completed["finalize"] == Claims(items=["done"])
 

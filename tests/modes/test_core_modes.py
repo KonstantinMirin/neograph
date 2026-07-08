@@ -291,5 +291,3 @@ class TestMiniRWPipeline:
         assert len(result["decompose"].items) == 2
         assert len(result["classify"].classified) == 2
         assert "42 nodes" in result["catalog"].text
-
-

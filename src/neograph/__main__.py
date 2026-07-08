@@ -1,8 +1,8 @@
 """neograph CLI — validate pipelines without executing them.
 
-    neograph check my_pipeline.py
-    neograph check my_package.pipelines --config '{"node_id": "test"}'
-    neograph check my_pipeline.py --setup my_config.py
+neograph check my_pipeline.py
+neograph check my_package.pipelines --config '{"node_id": "test"}'
+neograph check my_pipeline.py --setup my_config.py
 """
 
 from __future__ import annotations
@@ -64,8 +64,7 @@ def _load_config(args: argparse.Namespace) -> dict[str, Any] | None:
         fn = getattr(mod, "get_check_config", None)
         if fn is None:
             print(
-                f"Error: --setup module '{args.setup}' must export "
-                f"a get_check_config() function",
+                f"Error: --setup module '{args.setup}' must export a get_check_config() function",
                 file=sys.stderr,
             )
             sys.exit(2)
@@ -161,6 +160,7 @@ def cmd_check(args: argparse.Namespace) -> int:
         # 1. Compile (auto-supply MemorySaver for Operator constructs)
         checkpointer = None
         from neograph.compiler import classify_modifiers
+
         # iter_with_arms so an Operator living only in a branch arm still
         # triggers the auto-MemorySaver supply — otherwise `neograph check`
         # would fail a valid arm-Operator pipeline. See neograph-vn5f (site 10).
@@ -171,6 +171,7 @@ def cmd_check(args: argparse.Namespace) -> int:
         )
         if has_operator:
             from langgraph.checkpoint.memory import MemorySaver
+
             checkpointer = MemorySaver()
 
         try:
@@ -248,7 +249,9 @@ def main():
         description="neograph CLI — declarative LLM pipeline compiler",
     )
     parser.add_argument(
-        "--version", action="version", version=f"neograph {__version__}",
+        "--version",
+        action="version",
+        version=f"neograph {__version__}",
     )
     sub = parser.add_subparsers(dest="command")
 
@@ -262,7 +265,7 @@ def main():
     )
     check_p.add_argument(
         "--config",
-        help="JSON string with config values for lint (e.g., '{\"node_id\": \"test\"}')",
+        help='JSON string with config values for lint (e.g., \'{"node_id": "test"}\')',
     )
     check_p.add_argument(
         "--setup",
@@ -282,7 +285,8 @@ def main():
         help="Python file or module containing Construct definitions",
     )
     scaffold_p.add_argument(
-        "--output", "-o",
+        "--output",
+        "-o",
         help="Output test file path (default: tests/test_{construct_name}.py)",
     )
     scaffold_p.add_argument(

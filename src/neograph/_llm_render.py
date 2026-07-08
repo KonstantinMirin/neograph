@@ -135,21 +135,25 @@ def _compile_multimodal_prompt(template: str, input_data: Any) -> list[dict[str,
         else:
             raw_val = _resolve_var_raw(part, input_data)
             if isinstance(raw_val, BaseModel):
-                log.warning("image_resolved_to_model", var=part,
-                            model_type=type(raw_val).__name__,
-                            hint="image field resolved to a BaseModel, not a string; "
-                                 "use dotted access like ${image:model.field}")
+                log.warning(
+                    "image_resolved_to_model",
+                    var=part,
+                    model_type=type(raw_val).__name__,
+                    hint="image field resolved to a BaseModel, not a string; "
+                    "use dotted access like ${image:model.field}",
+                )
                 continue
             val_str = str(raw_val) if raw_val is not None else ""
             if not val_str or not val_str.strip():
-                log.warning("image_field_empty", var=part,
-                            hint="image field is empty or None; skipping image block")
+                log.warning("image_field_empty", var=part, hint="image field is empty or None; skipping image block")
                 continue
             uri = resolve_image(val_str)
-            content_blocks.append({
-                "type": "image_url",
-                "image_url": {"url": uri},
-            })
+            content_blocks.append(
+                {
+                    "type": "image_url",
+                    "image_url": {"url": uri},
+                }
+            )
 
     return [{"role": "user", "content": content_blocks}]
 
@@ -217,11 +221,7 @@ def _compile_prompt(
     if runtime.prompt_compiler_params is _ACCEPT_ALL:
         kwargs = all_kwargs
     else:
-        kwargs = {
-            k: v
-            for k, v in all_kwargs.items()
-            if k in runtime.prompt_compiler_params
-        }
+        kwargs = {k: v for k, v in all_kwargs.items() if k in runtime.prompt_compiler_params}
     return runtime.prompt_compiler(template, input_data, **kwargs)
 
 

@@ -87,8 +87,7 @@ def emit_progress(event: BaseModel) -> None:
     """
     if not isinstance(event, BaseModel):
         raise ConfigurationError.build(
-            f"emit_progress() requires a Pydantic BaseModel event, got "
-            f"{type(event).__name__}",
+            f"emit_progress() requires a Pydantic BaseModel event, got {type(event).__name__}",
             hint="Define a typed event model (class MyEvent(BaseModel): ...) and "
             "pass an instance so the event has a stable, documented shape.",
         )

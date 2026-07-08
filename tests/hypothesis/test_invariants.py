@@ -45,9 +45,7 @@ class TestDescribeGraph:
 
         graph = _build_scripted_surface(spec)
         mermaid = describe_graph(graph)
-        assert isinstance(mermaid, str) and len(mermaid) > 10, (
-            f"Expected non-trivial Mermaid string, got: {mermaid!r}"
-        )
+        assert isinstance(mermaid, str) and len(mermaid) > 10, f"Expected non-trivial Mermaid string, got: {mermaid!r}"
 
     @given(spec=each_topology())
     @settings(max_examples=10, deadline=10000)
@@ -60,6 +58,7 @@ class TestDescribeGraph:
 
 
 # -- FRAMEWORK INVARIANT TESTS (properties that break when bugs exist) -----
+
 
 class TestNodeImmutabilityInvariant:
     """For ANY random pipeline, constructing a Construct must not mutate
@@ -77,32 +76,30 @@ class TestNodeImmutabilityInvariant:
             t = _uid()
             fn_name = f"imm_{ns.name}_{t}".replace("-", "_")
             register_scripted(fn_name, ns.fn)
-            node = Node.scripted(ns.name, fn=fn_name,
-                                 inputs=ns.input_type, outputs=ns.output_type)
+            node = Node.scripted(ns.name, fn=fn_name, inputs=ns.input_type, outputs=ns.output_type)
             node = _apply_spec_modifiers(node, ns, f"imm_{t}")
             nodes.append(node)
             # Snapshot mutable fields BEFORE Construct
-            snapshots.append({
-                "inputs": node.inputs,
-                "llm_config": node.llm_config.model_copy(deep=True),
-                "renderer": node.renderer,
-            })
+            snapshots.append(
+                {
+                    "inputs": node.inputs,
+                    "llm_config": node.llm_config.model_copy(deep=True),
+                    "renderer": node.renderer,
+                }
+            )
 
         Construct(spec.name, nodes=nodes)
 
         for i, node in enumerate(nodes):
             snap = snapshots[i]
             assert node.inputs == snap["inputs"], (
-                f"Construct mutated node '{node.name}'.inputs: "
-                f"was {snap['inputs']!r}, now {node.inputs!r}"
+                f"Construct mutated node '{node.name}'.inputs: was {snap['inputs']!r}, now {node.inputs!r}"
             )
             assert node.llm_config == snap["llm_config"], (
-                f"Construct mutated node '{node.name}'.llm_config: "
-                f"was {snap['llm_config']!r}, now {node.llm_config!r}"
+                f"Construct mutated node '{node.name}'.llm_config: was {snap['llm_config']!r}, now {node.llm_config!r}"
             )
             assert node.renderer == snap["renderer"], (
-                f"Construct mutated node '{node.name}'.renderer: "
-                f"was {snap['renderer']!r}, now {node.renderer!r}"
+                f"Construct mutated node '{node.name}'.renderer: was {snap['renderer']!r}, now {node.renderer!r}"
             )
 
     @given(spec=any_topology_spec)
@@ -116,16 +113,21 @@ class TestNodeImmutabilityInvariant:
             t = _uid()
             fn_name = f"cfg_{ns.name}_{t}".replace("-", "_")
             register_scripted(fn_name, ns.fn)
-            node = Node(ns.name, mode="scripted", scripted_fn=fn_name,
-                        inputs=ns.input_type, outputs=ns.output_type,
-                        llm_config={"provider_kwargs": {"temperature": 0.5}})
+            node = Node(
+                ns.name,
+                mode="scripted",
+                scripted_fn=fn_name,
+                inputs=ns.input_type,
+                outputs=ns.output_type,
+                llm_config={"provider_kwargs": {"temperature": 0.5}},
+            )
             node = _apply_spec_modifiers(node, ns, f"cfg_{t}")
             nodes.append(node)
             original_configs.append(node.llm_config.model_copy(deep=True))
 
-        pipeline = Construct(spec.name, nodes=nodes,
-                             llm_config={"max_retries": 3,
-                                         "provider_kwargs": {"model_tier": "pro"}})
+        pipeline = Construct(
+            spec.name, nodes=nodes, llm_config={"max_retries": 3, "provider_kwargs": {"model_tier": "pro"}}
+        )
 
         for i, node in enumerate(nodes):
             assert node.llm_config == original_configs[i], (
@@ -136,9 +138,7 @@ class TestNodeImmutabilityInvariant:
         # Inner nodes SHOULD have merged config
         for inner in pipeline.nodes:
             if hasattr(inner, "llm_config"):
-                assert inner.llm_config.max_retries == 3, (
-                    f"Inner node '{inner.name}' missing parent llm_config"
-                )
+                assert inner.llm_config.max_retries == 3, f"Inner node '{inner.name}' missing parent llm_config"
 
     @given(spec=any_topology_spec)
     @settings(max_examples=50, deadline=10000)
@@ -149,8 +149,7 @@ class TestNodeImmutabilityInvariant:
             t = _uid()
             fn_name = f"rnd_{ns.name}_{t}".replace("-", "_")
             register_scripted(fn_name, ns.fn)
-            node = Node.scripted(ns.name, fn=fn_name,
-                                 inputs=ns.input_type, outputs=ns.output_type)
+            node = Node.scripted(ns.name, fn=fn_name, inputs=ns.input_type, outputs=ns.output_type)
             node = _apply_spec_modifiers(node, ns, f"rnd_{t}")
             nodes.append(node)
 
@@ -163,8 +162,7 @@ class TestNodeImmutabilityInvariant:
 
         for node in nodes:
             assert node.renderer is None, (
-                f"Construct(renderer=...) mutated node '{node.name}'.renderer "
-                f"from None to {node.renderer!r}"
+                f"Construct(renderer=...) mutated node '{node.name}'.renderer from None to {node.renderer!r}"
             )
 
 
@@ -189,20 +187,17 @@ class TestYAMLLoaderImmutabilityInvariant:
         fn_name = f"ld_{ns.name}_{t}".replace("-", "_")
         register_scripted(fn_name, lambda _i, _c: SubOutput(result="x"))
 
-        worker = Node(name=f"w-{t}", outputs=SubOutput,
-                      scripted_fn=fn_name)
+        worker = Node(name=f"w-{t}", outputs=SubOutput, scripted_fn=fn_name)
         all_nodes = {f"w_{t}": worker}
         original_inputs = worker.inputs
 
         _build_sub_construct(
-            ConstructSpec(name=f"sub-{t}", input="SubInput", output="SubOutput",
-                          nodes=[f"w-{t}"]),
+            ConstructSpec(name=f"sub-{t}", input="SubInput", output="SubOutput", nodes=[f"w-{t}"]),
             all_nodes,
         )
 
         assert all_nodes[f"w_{t}"].inputs == original_inputs, (
-            f"_build_sub_construct mutated all_nodes entry. "
-            f"Was {original_inputs!r}, now {all_nodes[f'w_{t}'].inputs!r}"
+            f"_build_sub_construct mutated all_nodes entry. Was {original_inputs!r}, now {all_nodes[f'w_{t}'].inputs!r}"
         )
 
 
@@ -228,8 +223,7 @@ class TestCompileIdempotency:
 
         # Same key sets
         assert set(r1.keys()) == set(r2.keys()), (
-            f"Build idempotency: different keys. "
-            f"1st: {sorted(r1.keys())}, 2nd: {sorted(r2.keys())}"
+            f"Build idempotency: different keys. 1st: {sorted(r1.keys())}, 2nd: {sorted(r2.keys())}"
         )
         # Same values for every key
         for k in r1:
@@ -239,10 +233,8 @@ class TestCompileIdempotency:
                     f"Key '{k}' dict keys differ: {set(v1.keys())} vs {set(v2.keys())}"
                 )
             else:
-                assert type(v1) is type(v2), (
-                    f"Key '{k}' type differs: {type(v1).__name__} vs {type(v2).__name__}"
-                )
-                if hasattr(v1, '__eq__'):
+                assert type(v1) is type(v2), f"Key '{k}' type differs: {type(v1).__name__} vs {type(v2).__name__}"
+                if hasattr(v1, "__eq__"):
                     assert v1 == v2, f"Key '{k}' value differs: {v1!r} vs {v2!r}"
 
 
@@ -265,8 +257,7 @@ class TestNodeReuseAcrossConstructs:
             t = _uid()
             fn_name = f"reuse_{ns.name}_{t}".replace("-", "_")
             register_scripted(fn_name, ns.fn)
-            node = Node.scripted(ns.name, fn=fn_name,
-                                 inputs=ns.input_type, outputs=ns.output_type)
+            node = Node.scripted(ns.name, fn=fn_name, inputs=ns.input_type, outputs=ns.output_type)
             node = _apply_spec_modifiers(node, ns, f"reuse_{t}")
             shared_nodes.append(node)
 
@@ -313,8 +304,7 @@ class TestEveryNodeExecutesExactlyOnce:
                 return _orig(_i, _c)
 
             register_scripted(fn_name, counting_fn)
-            node = Node.scripted(ns.name, fn=fn_name,
-                                 inputs=ns.input_type, outputs=ns.output_type)
+            node = Node.scripted(ns.name, fn=fn_name, inputs=ns.input_type, outputs=ns.output_type)
             node = _apply_spec_modifiers(node, ns, f"cnt_{t}")
             nodes.append(node)
 
@@ -323,8 +313,7 @@ class TestEveryNodeExecutesExactlyOnce:
 
         for name, count in call_counts.items():
             assert count == 1, (
-                f"Node '{name}' executed {count} times (expected 1). "
-                f"Pipeline: {[ns.name for ns in spec.nodes]}"
+                f"Node '{name}' executed {count} times (expected 1). Pipeline: {[ns.name for ns in spec.nodes]}"
             )
 
 
@@ -353,8 +342,7 @@ class TestStateFieldsMatchDeclaredOutputs:
             t = _uid()
             fn_name = f"sf_{ns.name}_{t}".replace("-", "_")
             register_scripted(fn_name, ns.fn)
-            node = Node.scripted(ns.name, fn=fn_name,
-                                 inputs=ns.input_type, outputs=ns.output_type)
+            node = Node.scripted(ns.name, fn=fn_name, inputs=ns.input_type, outputs=ns.output_type)
             node = _apply_spec_modifiers(node, ns, f"sf_{t}")
             nodes.append(node)
 
@@ -363,9 +351,7 @@ class TestStateFieldsMatchDeclaredOutputs:
 
         for _i, ns in enumerate(spec.nodes):
             field_name = ns.name.replace("-", "_")
-            assert field_name in state_model.model_fields, (
-                f"Node '{ns.name}' has no state field '{field_name}'"
-            )
+            assert field_name in state_model.model_fields, f"Node '{ns.name}' has no state field '{field_name}'"
 
             field_info = state_model.model_fields[field_name]
             annotation = field_info.annotation
@@ -387,8 +373,7 @@ class TestStateFieldsMatchDeclaredOutputs:
 
                 real_origin = _unwrap_to_origin(annotation)
                 assert real_origin is dict, (
-                    f"Each node '{ns.name}' state field should be dict type, "
-                    f"got {annotation} (origin={real_origin})"
+                    f"Each node '{ns.name}' state field should be dict type, got {annotation} (origin={real_origin})"
                 )
 
 
@@ -426,6 +411,7 @@ class TestDataFlowIntegrity:
                     if _out is Beta:
                         return Beta(score=42.0, iteration=99)
                     return _out()
+
                 register_scripted(fn_name, src_fn)
             else:
                 # Intermediate/terminal: verify input is not None/default,
@@ -433,10 +419,10 @@ class TestDataFlowIntegrity:
                 def mid_fn(input_data, _c, _name=ns.name, _out=ns.output_type):
                     call_log[_name] = input_data is not None
                     return _out()
+
                 register_scripted(fn_name, mid_fn)
 
-            node = Node.scripted(ns.name, fn=fn_name,
-                                 inputs=ns.input_type, outputs=ns.output_type)
+            node = Node.scripted(ns.name, fn=fn_name, inputs=ns.input_type, outputs=ns.output_type)
             node = _apply_spec_modifiers(node, ns, f"flow_{t}", spec)
             nodes.append(node)
 
@@ -446,8 +432,7 @@ class TestDataFlowIntegrity:
         # Every non-source node must have received non-None input
         for ns in spec.nodes[1:]:
             assert call_log.get(ns.name, False), (
-                f"Node '{ns.name}' received None input — data flow broken. "
-                f"Pipeline: {[n.name for n in spec.nodes]}"
+                f"Node '{ns.name}' received None input — data flow broken. Pipeline: {[n.name for n in spec.nodes]}"
             )
 
     @given(spec=any_topology_spec)
@@ -464,20 +449,16 @@ class TestDataFlowIntegrity:
         assert val is not None
 
         if spec.terminal_type is dict:
-            assert isinstance(val, dict), (
-                f"Terminal '{tf}' expected dict, got {type(val).__name__}"
-            )
+            assert isinstance(val, dict), f"Terminal '{tf}' expected dict, got {type(val).__name__}"
             for ns in spec.nodes:
                 if ns.name.replace("-", "_") == tf and ns.modifier in ("each", "each_oracle"):
                     for k, v in val.items():
                         assert isinstance(v, ns.output_type), (
-                            f"Each value '{k}': expected {ns.output_type.__name__}, "
-                            f"got {type(v).__name__}"
+                            f"Each value '{k}': expected {ns.output_type.__name__}, got {type(v).__name__}"
                         )
         else:
             assert isinstance(val, spec.terminal_type), (
-                f"Terminal '{tf}' expected {spec.terminal_type.__name__}, "
-                f"got {type(val).__name__}"
+                f"Terminal '{tf}' expected {spec.terminal_type.__name__}, got {type(val).__name__}"
             )
 
 
@@ -501,9 +482,7 @@ class TestRunDeterminism:
         r1 = run(g1, input={"node_id": "test"})
         r2 = run(g2, input={"node_id": "test"})
 
-        assert set(r1.keys()) == set(r2.keys()), (
-            f"Key sets differ: {sorted(r1.keys())} vs {sorted(r2.keys())}"
-        )
+        assert set(r1.keys()) == set(r2.keys()), f"Key sets differ: {sorted(r1.keys())} vs {sorted(r2.keys())}"
 
         for k in r1:
             v1, v2 = r1[k], r2[k]
@@ -512,13 +491,9 @@ class TestRunDeterminism:
                     f"Node '{k}' dict keys differ: {set(v1.keys())} vs {set(v2.keys())}"
                 )
                 for dk in v1:
-                    assert v1[dk] == v2[dk], (
-                        f"Node '{k}' dict value '{dk}' differs: {v1[dk]!r} vs {v2[dk]!r}"
-                    )
-            elif hasattr(v1, '__eq__') and v1 is not None:
-                assert v1 == v2, (
-                    f"Node '{k}' value differs: {v1!r} vs {v2!r}"
-                )
+                    assert v1[dk] == v2[dk], f"Node '{k}' dict value '{dk}' differs: {v1[dk]!r} vs {v2[dk]!r}"
+            elif hasattr(v1, "__eq__") and v1 is not None:
+                assert v1 == v2, f"Node '{k}' value differs: {v1!r} vs {v2!r}"
 
 
 class TestNoInternalStateLeaks:
@@ -639,19 +614,19 @@ class TestOracleCallsGeneratorNTimes:
         merge_fn = f"oc_merge_{t}".replace("-", "_")
         register_scripted(merge_fn, gen_ns.merge_fn)
 
-        pipeline = Construct(f"oc-{t}", nodes=[
-            Node.scripted(src_ns.name, fn=src_fn, outputs=src_ns.output_type),
-            Node.scripted(gen_ns.name, fn=gen_fn,
-                          inputs=gen_ns.input_type, outputs=gen_ns.output_type)
-            | Oracle(n=gen_ns.oracle_n, merge_fn=merge_fn),
-        ])
+        pipeline = Construct(
+            f"oc-{t}",
+            nodes=[
+                Node.scripted(src_ns.name, fn=src_fn, outputs=src_ns.output_type),
+                Node.scripted(gen_ns.name, fn=gen_fn, inputs=gen_ns.input_type, outputs=gen_ns.output_type)
+                | Oracle(n=gen_ns.oracle_n, merge_fn=merge_fn),
+            ],
+        )
 
         graph = compile(pipeline, **build_test_compile_kwargs())
         run(graph, input={"node_id": "test"})
 
-        assert call_count[0] == gen_ns.oracle_n, (
-            f"Oracle(n={gen_ns.oracle_n}) called generator {call_count[0]} times"
-        )
+        assert call_count[0] == gen_ns.oracle_n, f"Oracle(n={gen_ns.oracle_n}) called generator {call_count[0]} times"
 
 
 class TestEachFansOutToEveryItem:
@@ -695,8 +670,7 @@ class TestSubConstructIsolation:
             t = _uid()
             fn_name = f"iso_{ns.name}_{t}".replace("-", "_")
             register_scripted(fn_name, ns.fn)
-            node = Node.scripted(ns.name, fn=fn_name,
-                                 inputs=ns.input_type, outputs=ns.output_type)
+            node = Node.scripted(ns.name, fn=fn_name, inputs=ns.input_type, outputs=ns.output_type)
             inner_nodes.append(node)
 
         # Use first node's output as sub-construct input type,
@@ -705,18 +679,23 @@ class TestSubConstructIsolation:
         last_out = spec.nodes[-1].output_type
 
         sub = Construct(
-            "inner-sub", nodes=inner_nodes,
-            input=first_out, output=last_out,
+            "inner-sub",
+            nodes=inner_nodes,
+            input=first_out,
+            output=last_out,
         )
 
         # Outer pipeline: source → sub-construct
         outer_src_fn = f"iso_src_{_uid()}".replace("-", "_")
         register_scripted(outer_src_fn, _make_fn(first_out))
 
-        outer = Construct("outer", nodes=[
-            Node.scripted("outer-src", fn=outer_src_fn, outputs=first_out),
-            sub,
-        ])
+        outer = Construct(
+            "outer",
+            nodes=[
+                Node.scripted("outer-src", fn=outer_src_fn, outputs=first_out),
+                sub,
+            ],
+        )
 
         graph = compile(outer, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "test"})
@@ -725,15 +704,10 @@ class TestSubConstructIsolation:
         inner_field_names = {ns.name.replace("-", "_") for ns in spec.nodes}
         result_keys = set(result.keys())
         leaked = inner_field_names & result_keys
-        assert not leaked, (
-            f"Sub-construct inner fields leaked to outer: {leaked}. "
-            f"Result keys: {sorted(result_keys)}"
-        )
+        assert not leaked, f"Sub-construct inner fields leaked to outer: {leaked}. Result keys: {sorted(result_keys)}"
 
         # The sub-construct's own field MUST appear
-        assert "inner_sub" in result, (
-            f"Sub-construct field 'inner_sub' missing. Keys: {sorted(result_keys)}"
-        )
+        assert "inner_sub" in result, f"Sub-construct field 'inner_sub' missing. Keys: {sorted(result_keys)}"
 
 
 class TestLoopExhaustionRaises:
@@ -770,15 +744,11 @@ class TestLoopTerminatesAndAccumulates:
 
         # Each iteration output must be the declared type
         for i, entry in enumerate(val):
-            assert isinstance(entry, Beta), (
-                f"Loop iteration {i}: expected Beta, got {type(entry).__name__}"
-            )
+            assert isinstance(entry, Beta), f"Loop iteration {i}: expected Beta, got {type(entry).__name__}"
 
         # Final entry should have score >= threshold (convergence)
         threshold = spec.meta["threshold"]
-        assert val[-1].score >= threshold, (
-            f"Loop terminated but final score {val[-1].score} < threshold {threshold}"
-        )
+        assert val[-1].score >= threshold, f"Loop terminated but final score {val[-1].score} < threshold {threshold}"
 
 
 class TestSkipWhenConditionalExecution:
@@ -824,9 +794,7 @@ class TestFanInReceivesAllUpstreams:
         val = result[tf]
         assert isinstance(val, Gamma), f"Expected Gamma, got {type(val).__name__}"
         # Consumer fn encodes the input type names into tags
-        assert len(val.tags) == 2, (
-            f"Fan-in consumer should see 2 upstreams, got {len(val.tags)}: {val.tags}"
-        )
+        assert len(val.tags) == 2, f"Fan-in consumer should see 2 upstreams, got {len(val.tags)}: {val.tags}"
 
 
 class TestDeepChainDataFlowIntegrity:
@@ -860,11 +828,11 @@ class TestDeepChainDataFlowIntegrity:
                         "position": idx,
                     }
                     return out_type()
+
                 return fn
 
             register_scripted(fn_name, make_fn(i, ns.name, ns.output_type))
-            node = Node.scripted(ns.name, fn=fn_name,
-                                 inputs=ns.input_type, outputs=ns.output_type)
+            node = Node.scripted(ns.name, fn=fn_name, inputs=ns.input_type, outputs=ns.output_type)
             node = _apply_spec_modifiers(node, ns, f"deep_{t}", spec)
             nodes.append(node)
 
@@ -892,4 +860,3 @@ class TestDeepChainDataFlowIntegrity:
 
 
 # -- Regression guards (surface-specific P0 detectors) --------------------
-

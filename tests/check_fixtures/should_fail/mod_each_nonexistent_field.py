@@ -19,8 +19,11 @@ class Result(BaseModel, frozen=True):
 register_scripted("me_cluster", lambda i, c: Clusters(groups=["a"]))
 register_scripted("me_proc", lambda i, c: Result(value="ok"))
 
-pipeline = Construct("broken", nodes=[
-    Node.scripted("cluster", fn="me_cluster", outputs=Clusters),
-    Node.scripted("proc", fn="me_proc", inputs=str, outputs=Result)
-    | Each(over="cluster.nonexistent_field", key="x"),
-])
+pipeline = Construct(
+    "broken",
+    nodes=[
+        Node.scripted("cluster", fn="me_cluster", outputs=Clusters),
+        Node.scripted("proc", fn="me_proc", inputs=str, outputs=Result)
+        | Each(over="cluster.nonexistent_field", key="x"),
+    ],
+)

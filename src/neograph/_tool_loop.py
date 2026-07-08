@@ -115,6 +115,7 @@ class _CoercingToolWrapper:
             except Exception as inner:
                 _log_coercion_generate_failed(inner)
             from langchain_core.messages import AIMessage
+
             return AIMessage(content="")
 
     async def ainvoke(self, messages: list, **kwargs: Any) -> Any:
@@ -136,6 +137,7 @@ class _CoercingToolWrapper:
             except Exception as inner:
                 _log_coercion_generate_failed(inner)
             from langchain_core.messages import AIMessage
+
             return AIMessage(content="")
 
     def __getattr__(self, name: str) -> Any:
@@ -149,14 +151,14 @@ def _string_args_tool_errors(exc: Any) -> list:
     the coercion warning and triggers the _generate/_agenerate recovery.
     """
     tool_call_errors = [
-        e for e in exc.errors()
-        if "tool_calls" in str(e.get("loc", "")) and e.get("type") == "dict_type"
+        e for e in exc.errors() if "tool_calls" in str(e.get("loc", "")) and e.get("type") == "dict_type"
     ]
     if tool_call_errors:
-        log.warning("tool_calls_args_coercion",
-                     error_count=len(tool_call_errors),
-                     hint="provider returned tool_calls.args as JSON string; "
-                          "reconstructing via additional_kwargs path")
+        log.warning(
+            "tool_calls_args_coercion",
+            error_count=len(tool_call_errors),
+            hint="provider returned tool_calls.args as JSON string; reconstructing via additional_kwargs path",
+        )
     return tool_call_errors
 
 
@@ -185,8 +187,8 @@ def _coerce_string_args_result(raw_result: Any) -> Any | None:
 
     if raw_result.generations:
         gen = raw_result.generations[0]
-        raw_msg = gen.message if hasattr(gen, 'message') else gen
-        if hasattr(raw_msg, 'tool_calls'):
+        raw_msg = gen.message if hasattr(gen, "message") else gen
+        if hasattr(raw_msg, "tool_calls"):
             for tc in raw_msg.tool_calls:
                 if isinstance(tc.get("args"), str):
                     try:
@@ -198,9 +200,7 @@ def _coerce_string_args_result(raw_result: Any) -> Any | None:
 
 
 def _log_coercion_generate_failed(inner: Exception) -> None:
-    log.warning("tool_calls_coercion_generate_failed",
-                 error=str(inner),
-                 hint="falling back to empty response")
+    log.warning("tool_calls_coercion_generate_failed", error=str(inner), hint="falling back to empty response")
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -240,9 +240,7 @@ def _raise_async_factory_error(tool_name: str, node_name: str) -> NoReturn:
     )
 
 
-def _lookup_factory(
-    tool_name: str, per_compile_tools: dict[str, Any]
-) -> Any:
+def _lookup_factory(tool_name: str, per_compile_tools: dict[str, Any]) -> Any:
     factory = per_compile_tools.get(tool_name)
     if factory is None:
         raise ConfigurationError.build(
@@ -366,7 +364,12 @@ def _build_loop_preamble(
 
 
 def _assemble_tool_loop_prep(
-    *, runtime: LlmRuntime, llm_log: Any, cfg: Any, llm: Any, messages: list,
+    *,
+    runtime: LlmRuntime,
+    llm_log: Any,
+    cfg: Any,
+    llm: Any,
+    messages: list,
     tool_instances: dict[str, Any],
 ) -> _ToolLoopPrep:
     """Bind the instantiated tools and assemble the prep. Shared by both twins."""
@@ -403,9 +406,16 @@ def _prepare_tool_loop(
     instances, and the tool-bound wrapper. No network I/O (bind_tools is local).
     Sync driver path: an async tool factory fails loud (drive with arun())."""
     llm_log, cfg, llm, messages = _build_loop_preamble(
-        runtime=runtime, model_tier=model_tier, prompt_template=prompt_template,
-        input_data=input_data, output_model=output_model, tools=tools,
-        config=config, node_name=node_name, llm_config=llm_config, context=context,
+        runtime=runtime,
+        model_tier=model_tier,
+        prompt_template=prompt_template,
+        input_data=input_data,
+        output_model=output_model,
+        tools=tools,
+        config=config,
+        node_name=node_name,
+        llm_config=llm_config,
+        context=context,
     )
     # Per-run tool-handle reuse: same RUN_ID keying as the LLM
     # handle — build the tool instances once per run, reuse across supersteps.
@@ -415,7 +425,11 @@ def _prepare_tool_loop(
         lambda: _instantiate_tools(tools, tool_factory_lookup, config, node_name),
     )
     return _assemble_tool_loop_prep(
-        runtime=runtime, llm_log=llm_log, cfg=cfg, llm=llm, messages=messages,
+        runtime=runtime,
+        llm_log=llm_log,
+        cfg=cfg,
+        llm=llm,
+        messages=messages,
         tool_instances=tool_instances,
     )
 
@@ -438,9 +452,16 @@ async def _aprepare_tool_loop(
     tool factories so per-run identity (token mint / MCP client build) is native
     on the arun() path. All other preamble work is identical to the sync twin."""
     llm_log, cfg, llm, messages = _build_loop_preamble(
-        runtime=runtime, model_tier=model_tier, prompt_template=prompt_template,
-        input_data=input_data, output_model=output_model, tools=tools,
-        config=config, node_name=node_name, llm_config=llm_config, context=context,
+        runtime=runtime,
+        model_tier=model_tier,
+        prompt_template=prompt_template,
+        input_data=input_data,
+        output_model=output_model,
+        tools=tools,
+        config=config,
+        node_name=node_name,
+        llm_config=llm_config,
+        context=context,
     )
     # Per-run tool-handle reuse, async twin: await the factory
     # once per run (per-run token mint / MCP client build), reuse across supersteps.
@@ -450,7 +471,11 @@ async def _aprepare_tool_loop(
         lambda: _ainstantiate_tools(tools, tool_factory_lookup, config, node_name),
     )
     return _assemble_tool_loop_prep(
-        runtime=runtime, llm_log=llm_log, cfg=cfg, llm=llm, messages=messages,
+        runtime=runtime,
+        llm_log=llm_log,
+        cfg=cfg,
+        llm=llm,
+        messages=messages,
         tool_instances=tool_instances,
     )
 
@@ -496,8 +521,14 @@ def _finish_tool_loop(
         output=output_model.__name__,
         **usage_info,
     )
-    _notify_cost(runtime, model_tier, usage_info if usage_info else None,
-                 node_name=node_name, mode="react", duration_s=round(elapsed, 3))
+    _notify_cost(
+        runtime,
+        model_tier,
+        usage_info if usage_info else None,
+        node_name=node_name,
+        mode="react",
+        duration_s=round(elapsed, 3),
+    )
     return parse_result, tool_interactions
 
 
@@ -510,8 +541,8 @@ def _raise_no_structured_output(output_model: Any) -> NoReturn:
         expected=f"valid {output_model.__name__}",
         found="model returned no structured content and no recoverable markup",
         hint="The ReAct final turn was unparseable and the structured "
-             "fallback returned nothing. Check the model/prompt or set "
-             "output_strategy='json_mode'.",
+        "fallback returned nothing. Check the model/prompt or set "
+        "output_strategy='json_mode'.",
     ) from None
 
 
@@ -548,21 +579,35 @@ def _parse_final_turn(
     except ExecutionError:
         if strategy == "structured":
             parse_result, fallback_usage = _call_structured(
-                llm, messages, output_model, strategy, config,
-                cfg=cfg, max_retries=max_retries,
+                llm,
+                messages,
+                output_model,
+                strategy,
+                config,
+                cfg=cfg,
+                max_retries=max_retries,
             )
             if parse_result is None:
                 _raise_no_structured_output(output_model)
         else:
             recovered = recover_dsml(
-                raw_text, output_model, llm, messages, config, cfg,
+                raw_text,
+                output_model,
+                llm,
+                messages,
+                config,
+                cfg,
                 strategy=strategy,
             )
             if recovered is not None:
                 parse_result = recovered
             else:
                 parse_result, fallback_usage = _invoke_json_with_retry(
-                    llm, messages, output_model, config, max_retries=max_retries,
+                    llm,
+                    messages,
+                    output_model,
+                    config,
+                    max_retries=max_retries,
                 )
     return parse_result, fallback_usage
 
@@ -587,21 +632,34 @@ async def _aparse_final_turn(
     except ExecutionError:
         if strategy == "structured":
             parse_result, fallback_usage = await _acall_structured(
-                llm, messages, output_model, strategy, config,
-                cfg=cfg, max_retries=max_retries,
+                llm,
+                messages,
+                output_model,
+                strategy,
+                config,
+                cfg=cfg,
+                max_retries=max_retries,
             )
             if parse_result is None:
                 _raise_no_structured_output(output_model)
         else:
             recovered = await arecover_dsml(
-                raw_text, output_model, llm, messages, config, cfg,
+                raw_text,
+                output_model,
+                llm,
+                messages,
+                config,
+                cfg,
                 strategy=strategy,
             )
             if recovered is not None:
                 parse_result = recovered
             else:
                 parse_result, fallback_usage = await _ainvoke_json_with_retry(
-                    llm, messages, output_model, config, max_retries=max_retries,
+                    llm,
+                    messages,
+                    output_model,
+                    config,
+                    max_retries=max_retries,
                 )
     return parse_result, fallback_usage
-

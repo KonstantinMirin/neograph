@@ -62,6 +62,7 @@ class Doc(BaseModel):
 
 def _fetcher(mapping: dict[str, tuple], sink: list[str] | None = None):
     """Fetcher over a uri->(content, mime) map; a missing uri raises (expired)."""
+
     async def _fetch(uri: str):
         await asyncio.sleep(0)
         if sink is not None:
@@ -89,25 +90,34 @@ class TestTemplatedUri:
     def test_aresolve_interpolates_uri_from_from_input_values(self):
         sink: list[str] = []
         binding = DIBinding(
-            name="doc", kind=DIKind.FROM_RESOURCE, inner_type=Doc, required=True,
+            name="doc",
+            kind=DIKind.FROM_RESOURCE,
+            inner_type=Doc,
+            required=True,
             uri="crm://deals/{deal_id}/emails{?range}",
         )
-        cfg = _cfg(**{
-            RESOURCE_FETCHER_KEY: _fetcher(
-                {"crm://deals/42/emails?range=1-5": (DOC_JSON, "application/json")}, sink),
-            "deal_id": 42, "range": "1-5",
-        })
+        cfg = _cfg(
+            **{
+                RESOURCE_FETCHER_KEY: _fetcher(
+                    {"crm://deals/42/emails?range=1-5": (DOC_JSON, "application/json")}, sink
+                ),
+                "deal_id": 42,
+                "range": "1-5",
+            }
+        )
         out = asyncio.run(binding.aresolve(cfg))
         assert out == Doc(title="CONTRACT", body="B")
         assert sink == ["crm://deals/42/emails?range=1-5"]
 
     def test_static_uri_unchanged_when_no_vars(self):
         binding = DIBinding(
-            name="doc", kind=DIKind.FROM_RESOURCE, inner_type=Doc, required=True,
+            name="doc",
+            kind=DIKind.FROM_RESOURCE,
+            inner_type=Doc,
+            required=True,
             uri="crm://deals/42/contract",
         )
-        cfg = _cfg(**{RESOURCE_FETCHER_KEY: _fetcher(
-            {"crm://deals/42/contract": (DOC_JSON, "application/json")})})
+        cfg = _cfg(**{RESOURCE_FETCHER_KEY: _fetcher({"crm://deals/42/contract": (DOC_JSON, "application/json")})})
         assert asyncio.run(binding.aresolve(cfg)) == Doc(title="CONTRACT", body="B")
 
 
@@ -120,11 +130,14 @@ class TestMaxBytes:
     def test_oversized_text_resource_fails_loud_before_parse(self):
         big = b"x" * 5000
         binding = DIBinding(
-            name="history", kind=DIKind.FROM_RESOURCE, inner_type=str, required=True,
-            uri="crm://deals/42/emails", max_bytes=1000,
+            name="history",
+            kind=DIKind.FROM_RESOURCE,
+            inner_type=str,
+            required=True,
+            uri="crm://deals/42/emails",
+            max_bytes=1000,
         )
-        cfg = _cfg(**{RESOURCE_FETCHER_KEY: _fetcher(
-            {"crm://deals/42/emails": (big, "text/plain")})})
+        cfg = _cfg(**{RESOURCE_FETCHER_KEY: _fetcher({"crm://deals/42/emails": (big, "text/plain")})})
         with pytest.raises(ConfigurationError) as ei:
             asyncio.run(binding.aresolve(cfg))
         assert "max_bytes" in str(ei.value)
@@ -132,11 +145,14 @@ class TestMaxBytes:
 
     def test_within_limit_passes(self):
         binding = DIBinding(
-            name="history", kind=DIKind.FROM_RESOURCE, inner_type=str, required=True,
-            uri="crm://deals/42/emails", max_bytes=1000,
+            name="history",
+            kind=DIKind.FROM_RESOURCE,
+            inner_type=str,
+            required=True,
+            uri="crm://deals/42/emails",
+            max_bytes=1000,
         )
-        cfg = _cfg(**{RESOURCE_FETCHER_KEY: _fetcher(
-            {"crm://deals/42/emails": (b"short", "text/plain")})})
+        cfg = _cfg(**{RESOURCE_FETCHER_KEY: _fetcher({"crm://deals/42/emails": (b"short", "text/plain")})})
         assert asyncio.run(binding.aresolve(cfg)) == "short"
 
 
@@ -145,24 +161,23 @@ class TestMaxBytes:
 
 def _ref(*, idempotent: bool, uri="crm://deals/42/emails", tool="list_emails"):
     return ResourceRef(
-        uri=uri, kind="email-history", server="crm",
-        producing_call=ProducingCall(
-            tool_name=tool, args={"deal_id": 42}, producer_idempotent=idempotent),
+        uri=uri,
+        kind="email-history",
+        server="crm",
+        producing_call=ProducingCall(tool_name=tool, args={"deal_id": 42}, producer_idempotent=idempotent),
     )
 
 
 def _replay_link_result(fresh_uri: str) -> list:
     return [
         {"type": "text", "text": "re-derived"},
-        {"type": "resource_link", "uri": fresh_uri, "name": "email-history",
-         "mimeType": "application/json"},
+        {"type": "resource_link", "uri": fresh_uri, "name": "email-history", "mimeType": "application/json"},
     ]
 
 
 class TestLayeredExpiry:
     def test_read_success_returns_parsed_model(self):
-        cfg = _cfg(**{RESOURCE_FETCHER_KEY: _fetcher(
-            {"crm://deals/42/emails": (DOC_JSON, "application/json")})})
+        cfg = _cfg(**{RESOURCE_FETCHER_KEY: _fetcher({"crm://deals/42/emails": (DOC_JSON, "application/json")})})
         out = asyncio.run(hydrate_resource_ref(_ref(idempotent=True), cfg, Doc))
         assert out == Doc(title="CONTRACT", body="B")
 
@@ -174,10 +189,12 @@ class TestLayeredExpiry:
             calls.append((tool_name, args))
             return _replay_link_result(fresh)
 
-        cfg = _cfg(**{
-            RESOURCE_FETCHER_KEY: _fetcher({fresh: (DOC_JSON, "application/json")}),
-            RESOURCE_REPLAYER_KEY: replay,
-        })
+        cfg = _cfg(
+            **{
+                RESOURCE_FETCHER_KEY: _fetcher({fresh: (DOC_JSON, "application/json")}),
+                RESOURCE_REPLAYER_KEY: replay,
+            }
+        )
         out = asyncio.run(hydrate_resource_ref(_ref(idempotent=True), cfg, Doc))
         assert out == Doc(title="CONTRACT", body="B")
         assert calls == [("list_emails", {"deal_id": 42})]
@@ -186,21 +203,21 @@ class TestLayeredExpiry:
         async def replay(tool_name, args):  # pragma: no cover - must NOT be called
             raise AssertionError("replay attempted on a non-idempotent producer")
 
-        cfg = _cfg(**{
-            RESOURCE_FETCHER_KEY: _fetcher({}),  # read fails -> would trigger replay
-            RESOURCE_REPLAYER_KEY: replay,
-        })
+        cfg = _cfg(
+            **{
+                RESOURCE_FETCHER_KEY: _fetcher({}),  # read fails -> would trigger replay
+                RESOURCE_REPLAYER_KEY: replay,
+            }
+        )
         with pytest.raises(NonIdempotentReplayError) as ei:
-            asyncio.run(hydrate_resource_ref(
-                _ref(idempotent=False), cfg, Doc, node="assess"))
+            asyncio.run(hydrate_resource_ref(_ref(idempotent=False), cfg, Doc, node="assess"))
         assert ei.value.tool_name == "list_emails"
         assert ei.value.node == "assess"
 
     def test_fail_loud_when_replay_absent(self):
         cfg = _cfg(**{RESOURCE_FETCHER_KEY: _fetcher({})})  # no replayer
         with pytest.raises(ResourceExpiredError) as ei:
-            asyncio.run(hydrate_resource_ref(
-                _ref(idempotent=True), cfg, Doc, node="assess"))
+            asyncio.run(hydrate_resource_ref(_ref(idempotent=True), cfg, Doc, node="assess"))
         assert ei.value.ref.uri == "crm://deals/42/emails"
         assert ei.value.node == "assess"
 
@@ -208,10 +225,12 @@ class TestLayeredExpiry:
         async def replay(tool_name, args):
             raise RuntimeError("producing tool gone")
 
-        cfg = _cfg(**{
-            RESOURCE_FETCHER_KEY: _fetcher({}),
-            RESOURCE_REPLAYER_KEY: replay,
-        })
+        cfg = _cfg(
+            **{
+                RESOURCE_FETCHER_KEY: _fetcher({}),
+                RESOURCE_REPLAYER_KEY: replay,
+            }
+        )
         with pytest.raises(ResourceExpiredError):
             asyncio.run(hydrate_resource_ref(_ref(idempotent=True), cfg, Doc))
 
@@ -221,11 +240,12 @@ class TestLayeredExpiry:
         async def replay(tool_name, args):  # pragma: no cover
             raise AssertionError("replay attempted on a parse failure")
 
-        cfg = _cfg(**{
-            RESOURCE_FETCHER_KEY: _fetcher(
-                {"crm://deals/42/emails": (b"not json", "application/json")}),
-            RESOURCE_REPLAYER_KEY: replay,
-        })
+        cfg = _cfg(
+            **{
+                RESOURCE_FETCHER_KEY: _fetcher({"crm://deals/42/emails": (b"not json", "application/json")}),
+                RESOURCE_REPLAYER_KEY: replay,
+            }
+        )
         with pytest.raises(Exception) as ei:  # pydantic ValidationError
             asyncio.run(hydrate_resource_ref(_ref(idempotent=True), cfg, Doc))
         assert not isinstance(ei.value, (ResourceExpiredError, NonIdempotentReplayError))
@@ -256,25 +276,34 @@ class TestManifestDrivenMarker:
     def test_aresolve_ref_path_looks_up_manifest_and_hydrates(self):
         ref = _ref(idempotent=True)
         binding = DIBinding(
-            name="doc", kind=DIKind.FROM_RESOURCE, inner_type=Doc, required=True,
+            name="doc",
+            kind=DIKind.FROM_RESOURCE,
+            inner_type=Doc,
+            required=True,
             ref_kind="email-history",
         )
-        cfg = _cfg(**{
-            RESOURCE_FETCHER_KEY: _fetcher(
-                {"crm://deals/42/emails": (DOC_JSON, "application/json")}),
-            StateKeys.RESOURCE_MANIFEST_INJECT: [ref],
-        })
+        cfg = _cfg(
+            **{
+                RESOURCE_FETCHER_KEY: _fetcher({"crm://deals/42/emails": (DOC_JSON, "application/json")}),
+                StateKeys.RESOURCE_MANIFEST_INJECT: [ref],
+            }
+        )
         assert asyncio.run(binding.aresolve(cfg)) == Doc(title="CONTRACT", body="B")
 
     def test_aresolve_ref_path_fails_loud_when_kind_absent(self):
         binding = DIBinding(
-            name="doc", kind=DIKind.FROM_RESOURCE, inner_type=Doc, required=True,
+            name="doc",
+            kind=DIKind.FROM_RESOURCE,
+            inner_type=Doc,
+            required=True,
             ref_kind="email-history",
         )
-        cfg = _cfg(**{
-            RESOURCE_FETCHER_KEY: _fetcher({}),
-            StateKeys.RESOURCE_MANIFEST_INJECT: [],
-        })
+        cfg = _cfg(
+            **{
+                RESOURCE_FETCHER_KEY: _fetcher({}),
+                StateKeys.RESOURCE_MANIFEST_INJECT: [],
+            }
+        )
         with pytest.raises(Exception) as ei:
             asyncio.run(binding.aresolve(cfg))
         assert "email-history" in str(ei.value)
@@ -324,8 +353,12 @@ class TestInjectResourceManifest:
 
 class TestLiftStampsProducerMetadata:
     def _result(self, ttl=None):
-        block = {"type": "resource_link", "uri": "crm://deals/42/emails",
-                 "name": "email-history", "mimeType": "application/json"}
+        block = {
+            "type": "resource_link",
+            "uri": "crm://deals/42/emails",
+            "name": "email-history",
+            "mimeType": "application/json",
+        }
         if ttl is not None:
             block["ttlMs"] = ttl
         return [block]

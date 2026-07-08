@@ -206,15 +206,11 @@ class TestAgentSubgraphMidLoopInterruptIdempotency:
         result2 = _drive(graph, input=None, resume=answer.model_dump(), config=config, is_async=is_async)
 
         # The node finalized with its typed output.
-        assert result2.get("research") == KResult(items=["done"]), (
-            f"node did not finalize after resume: {result2!r}"
-        )
+        assert result2.get("research") == KResult(items=["done"]), f"node did not finalize after resume: {result2!r}"
         # The ask_operator tool received the resume value. LangGraph delivers the
         # whole Command(resume=) dict as interrupt()'s return — the typed
         # payload/resume contract mirrors the existing human_feedback dict shape.
-        assert received == [answer.model_dump()], (
-            f"tool did not receive the resume value: {received!r}"
-        )
+        assert received == [answer.model_dump()], f"tool did not receive the resume value: {received!r}"
 
         # KEYSTONE (RED today): the side-effecting tool must NOT re-execute on
         # resume. The monolith re-runs the whole node from the top, so record
@@ -272,10 +268,7 @@ class _GreedyFake:
         if self._structured:
             assert self._model is not None
             return self._model(items=["forced"])
-        hit_limit = any(
-            isinstance(m, ToolMessage) and "limit reached" in str(m.content).lower()
-            for m in messages
-        )
+        hit_limit = any(isinstance(m, ToolMessage) and "limit reached" in str(m.content).lower() for m in messages)
         if hit_limit:
             return AIMessage(content='{"items": ["forced"]}')
         msg = AIMessage(content="")
@@ -317,7 +310,7 @@ def test_iteration_budget_forces_finalize_instead_of_looping_forever(is_async: b
         model="reason",
         prompt="test/explore",
         tools=[Tool(name="loop_tool", budget=0)],  # unlimited per-tool budget
-        llm_config={"max_iterations": 3},           # the iteration guard must bound it
+        llm_config={"max_iterations": 3},  # the iteration guard must bound it
     )
     def greedy() -> KResult: ...
 
@@ -338,8 +331,7 @@ def test_iteration_budget_forces_finalize_instead_of_looping_forever(is_async: b
     # The loop tool ran a bounded number of times (the iteration guard fired) —
     # not zero (it did run) and not unbounded.
     assert 0 < counter[0] <= 3, (
-        f"loop_tool ran {counter[0]}x — the iteration guard did not bound the "
-        f"forced-finalize edge (expected 1..3)"
+        f"loop_tool ran {counter[0]}x — the iteration guard did not bound the forced-finalize edge (expected 1..3)"
     )
 
 
@@ -399,9 +391,7 @@ def test_forced_finalize_reachable_for_nested_agent_at_default_recursion_limit(i
         f"edge (recursion_limit floor missing / not propagated to the child): {result!r}"
     )
     # Bounded by max_iterations=20 — the loop terminated, not ran away.
-    assert 0 < counter[0] <= 20, (
-        f"loop_tool ran {counter[0]}x — expected the default max_iterations=20 to bound it"
-    )
+    assert 0 < counter[0] <= 20, f"loop_tool ran {counter[0]}x — expected the default max_iterations=20 to bound it"
 
 
 # ── Deterministic cross-compile channel isolation (neograph-9o3j) ─────────────
@@ -495,16 +485,10 @@ class TestCrossCompileChannelIsolation:
         rB = _drive(gB, input={"node_id": "1"}, resume=None, config=cB, is_async=is_async)
 
         for name, res in (("A", rA), ("B", rB)):
-            assert res.get("greedy") == KResult(items=["done"]), (
-                f"pipeline {name} did not finalize: {res!r}"
-            )
+            assert res.get("greedy") == KResult(items=["done"]), f"pipeline {name} did not finalize: {res!r}"
             assert not any(k.startswith("neo_") for k in res), (
-                f"pipeline {name} leaked a neo_ framework channel (9o3j scoping "
-                f"regression): {sorted(res)}"
+                f"pipeline {name} leaked a neo_ framework channel (9o3j scoping regression): {sorted(res)}"
             )
-            assert not any(
-                ("messages" in k or "tool_log" in k or "budget" in k) for k in res
-            ), (
-                f"pipeline {name} leaked an agent ReAct internal channel "
-                f"(9o3j): {sorted(res)}"
+            assert not any(("messages" in k or "tool_log" in k or "budget" in k) for k in res), (
+                f"pipeline {name} leaked an agent ReAct internal channel (9o3j): {sorted(res)}"
             )

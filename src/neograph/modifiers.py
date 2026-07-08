@@ -1,8 +1,8 @@
 """Modifiers — composable pipeline behaviors applied via the | operator.
 
-    node | Oracle(n=3, merge_prompt="rw/merge")
-    node | Each(over="clusters.clusters", key="label")
-    node | Operator(when="has_open_questions")
+node | Oracle(n=3, merge_prompt="rw/merge")
+node | Each(over="clusters.clusters", key="label")
+node | Operator(when="has_open_questions")
 """
 
 from __future__ import annotations
@@ -69,15 +69,16 @@ class ModifierCombo(Enum):
     instead of ad-hoc has_modifier() chains. Adding a new combo forces
     handling at every site.
     """
-    BARE = auto()              # no modifiers
-    EACH = auto()              # Each only
-    ORACLE = auto()            # Oracle only
-    LOOP = auto()              # Loop only
-    OPERATOR = auto()          # Operator only
-    EACH_ORACLE = auto()       # Each + Oracle (fusion)
-    EACH_OPERATOR = auto()     # Each + Operator
-    ORACLE_OPERATOR = auto()   # Oracle + Operator
-    LOOP_OPERATOR = auto()     # Loop + Operator
+
+    BARE = auto()  # no modifiers
+    EACH = auto()  # Each only
+    ORACLE = auto()  # Oracle only
+    LOOP = auto()  # Loop only
+    OPERATOR = auto()  # Operator only
+    EACH_ORACLE = auto()  # Each + Oracle (fusion)
+    EACH_OPERATOR = auto()  # Each + Operator
+    ORACLE_OPERATOR = auto()  # Oracle + Operator
+    LOOP_OPERATOR = auto()  # Loop + Operator
     EACH_ORACLE_OPERATOR = auto()  # Each + Oracle + Operator
 
 
@@ -209,7 +210,6 @@ class Modifiable:
     def __or__(self, modifier: Modifier) -> Self:
         """Compose modifiers via pipe: obj | Oracle(n=3) | Operator(when=...)"""
 
-
         # ModifierSet.with_modifier handles duplicate and illegal-combo
         # rejection (Each+Loop, Oracle+Loop). The typed slots make
         # duplicates structurally impossible.
@@ -242,11 +242,12 @@ class Modifiable:
         result = self.model_copy(update={"modifier_set": new_ms})  # type: ignore[attr-defined]
         # Loop validation at | time: check type compatibility immediately.
         if isinstance(modifier, Loop):
-            if hasattr(result, 'outputs'):
+            if hasattr(result, "outputs"):
                 # Node: validate output compat with inputs
                 from neograph._construct_validation import validate_loop_self_edge
+
                 validate_loop_self_edge(result)
-            elif hasattr(result, 'output') and hasattr(result, 'input'):
+            elif hasattr(result, "output") and hasattr(result, "input"):
                 # Construct-level Loop with history=True — not supported yet
                 if modifier.history:
                     raise ConstructError.build(
@@ -255,6 +256,7 @@ class Modifiable:
                     )
                 # Construct: validate output compat with input
                 from neograph._construct_validation import validate_loop_construct
+
                 validate_loop_construct(result)
         return result
 
@@ -409,11 +411,11 @@ class Oracle(Modifier, frozen=True):
     merge_fn: str | None = None  # registered scripted function name
 
     # Optional hooks for merge_prompt path
-    merge_pre_process: MergePreProcess | None = None   # fn(variants) -> input_data
+    merge_pre_process: MergePreProcess | None = None  # fn(variants) -> input_data
     merge_post_process: MergePostProcess | None = None  # fn(result, variants) -> result
-    merge_fallback: MergeFallback | None = None      # fn(variants, error) -> result
+    merge_fallback: MergeFallback | None = None  # fn(variants, error) -> result
 
-    @field_validator('n')
+    @field_validator("n")
     @classmethod
     def _validate_n(cls, v: int) -> int:
         if v < 1:
@@ -450,8 +452,8 @@ class Oracle(Modifier, frozen=True):
             )
         # Infer n from models length when n wasn't explicitly set
         if self.models is not None and len(self.models) > 0:
-            if 'n' not in self.model_fields_set:
-                object.__setattr__(self, 'n', len(self.models))
+            if "n" not in self.model_fields_set:
+                object.__setattr__(self, "n", len(self.models))
 
 
 class EachFailure(BaseModel, frozen=True):
@@ -462,9 +464,9 @@ class EachFailure(BaseModel, frozen=True):
     set-equality over planned keys and branch on ``isinstance(v, EachFailure)``.
     """
 
-    key: str          # the Each dispatch key of the item that failed
-    error_type: str   # exception class name (e.g., "RuntimeError")
-    message: str      # str() of the caught exception
+    key: str  # the Each dispatch key of the item that failed
+    error_type: str  # exception class name (e.g., "RuntimeError")
+    message: str  # str() of the caught exception
 
 
 class Each(Modifier, frozen=True):
@@ -484,11 +486,11 @@ class Each(Modifier, frozen=True):
       typed ``EachFailure`` instead of aborting; the barrier always completes.
     """
 
-    over: str       # dotted path to collection in state (e.g., "clusters.clusters")
-    key: str        # field on each item used as the dispatch key
+    over: str  # dotted path to collection in state (e.g., "clusters.clusters")
+    key: str  # field on each item used as the dispatch key
     on_error: Literal["raise", "collect"] = "raise"
 
-    @field_validator('over')
+    @field_validator("over")
     @classmethod
     def _validate_over(cls, v: str) -> str:
         if not v or not v.strip():
@@ -521,7 +523,7 @@ class Operator(Modifier, frozen=True):
         validate = Node(...) | Operator(when="any_test_failed")
     """
 
-    when: str       # registered condition function name
+    when: str  # registered condition function name
 
 
 class Loop(Modifier, frozen=True):
@@ -553,8 +555,8 @@ class Loop(Modifier, frozen=True):
 
     when: str | Callable[[Any], bool]  # str (registered condition name) or predicate. True = continue looping.
     max_iterations: int = 10
-    on_exhaust: str = "error"           # "error" raises ExecutionError, "last" returns last result
-    history: bool = False               # collect each iteration's output in state
+    on_exhaust: str = "error"  # "error" raises ExecutionError, "last" returns last result
+    history: bool = False  # collect each iteration's output in state
 
     def model_post_init(self, __context: Any) -> None:
         if self.on_exhaust not in ("error", "last"):
@@ -614,14 +616,12 @@ class ModifierSet(BaseModel, frozen=True):
     def model_post_init(self, __context: Any) -> None:
         # Each + Loop mutual exclusion
         if self.each is not None and self.loop is not None:
-
             raise ConstructError.build(
                 "Cannot combine Each and Loop on the same item",
                 hint="Use a sub-construct with Loop inside an Each fan-out instead",
             )
         # Oracle + Loop mutual exclusion
         if self.oracle is not None and self.loop is not None:
-
             raise ConstructError.build(
                 "Cannot combine Oracle and Loop on the same item",
                 hint="Use a sub-construct: nest the Loop body inside an Oracle ensemble, or vice versa",
@@ -633,7 +633,6 @@ class ModifierSet(BaseModel, frozen=True):
         Raises ConstructError for duplicate modifiers (slot already occupied)
         and for illegal combinations (Each+Loop, Oracle+Loop).
         """
-
 
         if isinstance(mod, Each):
             if self.each is not None:

@@ -200,8 +200,7 @@ class TestCompatGuaranteeOracleMergeScenario:
 
         merged = result.get("generate")
         assert merged == Claims(items=["merged-consensus"]), (
-            f"Oracle merge did not resolve through the FakeLLM '' (node_name=='') "
-            f"merge key: {merged!r}"
+            f"Oracle merge did not resolve through the FakeLLM '' (node_name=='') merge key: {merged!r}"
         )
 
 
@@ -216,9 +215,7 @@ class TestInstallFakeLlmBehavioral:
     passes a static set-equality guard but leaves the AGENT path on the real
     factory — which this test catches by driving the agent THROUGH the helper."""
 
-    def test_agent_resolves_fake_via_install_fake_llm_on_tool_loop_path(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_agent_resolves_fake_via_install_fake_llm_on_tool_loop_path(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from neograph.testing import install_fake_llm
 
         register_tool_factory("noop", lambda config, tool_config: FakeTool("noop"))
@@ -241,8 +238,7 @@ class TestInstallFakeLlmBehavioral:
         # is reached; if the second setattr target is wrong, the boom fires.
         def _boom_factory(tier, **kw):
             raise AssertionError(
-                "real llm_factory was called — install_fake_llm did NOT intercept "
-                "_get_llm on this path"
+                "real llm_factory was called — install_fake_llm did NOT intercept _get_llm on this path"
             )
 
         graph = compile(
@@ -331,9 +327,7 @@ class TestAntiDuplicationHybridShim:
         tests/fakes.py. RED now: they are all still ClassDef/FunctionDef there."""
         tree = ast.parse(FAKES_PATH.read_text())
         defined = {
-            n.name
-            for n in ast.walk(tree)
-            if isinstance(n, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef))
+            n.name for n in ast.walk(tree) if isinstance(n, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef))
         }
         redefined = sorted(set(_MIGRATED_FAKE_SYMBOLS) & defined)
         assert not redefined, (

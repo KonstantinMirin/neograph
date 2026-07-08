@@ -111,11 +111,7 @@ def _validate_node_chain(
     because the parent's producer set is unknown; the parent's own validation
     pass will re-walk this sub-construct ``IN_CONTEXT`` with ambient supplied.
     """
-    mode = (
-        ValidationMode.STANDALONE
-        if ambient_producers is None
-        else ValidationMode.IN_CONTEXT
-    )
+    mode = ValidationMode.STANDALONE if ambient_producers is None else ValidationMode.IN_CONTEXT
     producers: ProducerMap = OrderedDict()
 
     # The Construct's own input port is the first producer, if declared —
@@ -157,11 +153,10 @@ def _validate_node_chain(
         if input_type is not None:
             # Warn on single-type inputs (isinstance scan) — dict-form is safer.
             if (
-                isinstance(item, Node)
-                and not isinstance(input_type, dict)
-                and producers  # not the first node
+                isinstance(item, Node) and not isinstance(input_type, dict) and producers  # not the first node
             ):
                 import warnings
+
                 type_name = _fmt_type(input_type)
                 warnings.warn(
                     f"Node '{item.name}': single-type inputs={type_name} "
@@ -177,17 +172,14 @@ def _validate_node_chain(
         # When walked STANDALONE on a sub-construct (ambient is None and
         # construct.input is not None), inner-node context is DEFERRED: the
         # parent's recursive call will re-validate IN_CONTEXT with ambient.
-        context_checkable = (
-            mode is ValidationMode.IN_CONTEXT or construct.input is None
-        )
+        context_checkable = mode is ValidationMode.IN_CONTEXT or construct.input is None
         if isinstance(item, Node) and item.context and context_checkable:
             known_fields = set(ambient_producers or ()) | set(producers)
             for ctx_name in item.context:
                 ctx_field = field_name_for(ctx_name)
                 if ctx_field not in known_fields:
                     raise ConstructError.build(
-                        f"references context='{ctx_name}' but no upstream node "
-                        f"produces a field with that name",
+                        f"references context='{ctx_name}' but no upstream node produces a field with that name",
                         found=f"known upstream fields: {sorted(known_fields) or '(none)'}",
                         node=item.name,
                         location=_source_location(),
@@ -217,20 +209,14 @@ def _validate_node_chain(
                     key_label = f"node '{name}' output '{output_key}'"
                     # Per-key modifier rule via the single source of truth —
                     # the same helper the whole-node producer path uses.
-                    producer_type = effective_producer_type_for(
-                        key_type, item.modifier_set
-                    )
+                    producer_type = effective_producer_type_for(key_type, item.modifier_set)
                     producers[key_field] = Producer(
                         field_name=key_field,
                         effective_type=producer_type,
                         label=key_label,
                     )
             else:
-                label = (
-                    f"node '{name}'"
-                    if isinstance(item, Node)
-                    else f"sub-construct '{name}'"
-                )
+                label = f"node '{name}'" if isinstance(item, Node) else f"sub-construct '{name}'"
                 # Shared helper decides the modifier-adjusted state-bus type.
                 producers[field_name] = Producer(
                     field_name=field_name,
@@ -245,6 +231,7 @@ def _validate_node_chain(
         if isinstance(item, Node) and item.modifier_set.loop is not None:
             if item.skip_when is not None and item.skip_value is None:
                 import structlog
+
                 structlog.get_logger(__name__).error(
                     "loop_skip_when_no_skip_value",
                     node=item.name,
@@ -263,20 +250,18 @@ def _validate_node_chain(
         # known upstream producer and the type is compatible.
         if isinstance(item, Node):
             oracle = item.modifier_set.oracle
-            if oracle is not None and isinstance(getattr(oracle, 'merge_fn', None), str):
+            if oracle is not None and isinstance(getattr(oracle, "merge_fn", None), str):
                 # Function-local + leaf source: get_merge_fn_metadata lives in
                 # _sidecar; a module-level import here cycles via
                 # _sidecar -> _di_classify -> _construct_validation (ConstructError).
                 from neograph._sidecar import get_merge_fn_metadata
+
                 assert oracle.merge_fn is not None
                 meta = get_merge_fn_metadata(oracle.merge_fn)
                 if meta is not None and meta[1]:
                     _, merge_param_res = meta
                     item_field = field_name_for(item.name)
-                    known_producers = {
-                        p.field_name: (p.effective_type, p.label)
-                        for p in producers.values()
-                    }
+                    known_producers = {p.field_name: (p.effective_type, p.label) for p in producers.values()}
                     for pname, binding in merge_param_res.items():
                         if binding.kind != _DIKind.FROM_STATE:
                             continue
@@ -284,11 +269,10 @@ def _validate_node_chain(
                         # Self-reference: merge runs before node output is written
                         if pname == item_field:
                             raise ConstructError.build(
-                                f"merge_fn '{oracle.merge_fn}' param '{pname}' "
-                                f"references the node's own output",
+                                f"merge_fn '{oracle.merge_fn}' param '{pname}' references the node's own output",
                                 found=f"self-reference to '{pname}'",
                                 hint="the merge barrier runs before the node's "
-                                     "output is written — this can never resolve",
+                                "output is written — this can never resolve",
                                 node=item.name,
                                 construct=construct.name,
                                 location=_source_location(),
@@ -296,8 +280,7 @@ def _validate_node_chain(
                         # Unknown producer
                         if pname not in known_producers:
                             raise ConstructError.build(
-                                f"merge_fn '{oracle.merge_fn}' param '{pname}' "
-                                f"does not match any upstream node",
+                                f"merge_fn '{oracle.merge_fn}' param '{pname}' does not match any upstream node",
                                 found=f"known producers: {sorted(known_producers.keys())}",
                                 node=item.name,
                                 construct=construct.name,
@@ -305,12 +288,13 @@ def _validate_node_chain(
                             )
                         # Type mismatch
                         prod_type, prod_label = known_producers[pname]
-                        if (prod_type is not None
-                                and isinstance(expected_type, type)
-                                and not _types_compatible(prod_type, expected_type)):
+                        if (
+                            prod_type is not None
+                            and isinstance(expected_type, type)
+                            and not _types_compatible(prod_type, expected_type)
+                        ):
                             raise ConstructError.build(
-                                f"merge_fn '{oracle.merge_fn}' param '{pname}' "
-                                f"type mismatch with {prod_label}",
+                                f"merge_fn '{oracle.merge_fn}' param '{pname}' type mismatch with {prod_label}",
                                 expected=_fmt_type(expected_type),
                                 found=_fmt_type(prod_type),
                                 node=item.name,
@@ -331,9 +315,7 @@ def _validate_node_chain(
     # for the output contract.
     if construct.output is not None and producers:
         declared_output = construct.output
-        internal_producers = [
-            p for p in producers.values() if p.field_name != StateKeys.SUBGRAPH_INPUT
-        ]
+        internal_producers = [p for p in producers.values() if p.field_name != StateKeys.SUBGRAPH_INPUT]
         for p in internal_producers:
             if p.effective_type is not None and _types_compatible(p.effective_type, declared_output):
                 break
@@ -344,8 +326,7 @@ def _validate_node_chain(
                 if p.effective_type is not None
             )
             raise ConstructError.build(
-                f"declares output={_fmt_type(declared_output)} but no "
-                f"internal node produces a compatible type",
+                f"declares output={_fmt_type(declared_output)} but no internal node produces a compatible type",
                 expected=_fmt_type(declared_output),
                 found=f"internal producers:\n{producer_summary}",
                 construct=construct.name,

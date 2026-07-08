@@ -1,4 +1,5 @@
 """@node with -> T and no outputs= should infer outputs=T."""
+
 from pydantic import BaseModel
 
 from neograph import node

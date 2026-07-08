@@ -39,10 +39,12 @@ class TestDegeneratePatterns:
         register_scripted("deg_gen", lambda i, c: Claims(items=["v1"]))
         register_scripted("deg_merge", lambda v, c: v[0])
 
-        pipeline = Construct("deg-oracle", nodes=[
-            Node.scripted("gen", fn="deg_gen", outputs=Claims)
-            | Oracle(n=1, merge_fn="deg_merge"),
-        ])
+        pipeline = Construct(
+            "deg-oracle",
+            nodes=[
+                Node.scripted("gen", fn="deg_gen", outputs=Claims) | Oracle(n=1, merge_fn="deg_merge"),
+            ],
+        )
         graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "deg-o1"})
         assert result["gen"].items == ["v1"]
@@ -50,7 +52,6 @@ class TestDegeneratePatterns:
     def test_each_single_item_collection(self):
         """Each with exactly 1 item — degenerate fan-out, still produces dict."""
         from pydantic import BaseModel
-
 
         class Item(BaseModel, frozen=True):
             key: str
@@ -64,11 +65,13 @@ class TestDegeneratePatterns:
         register_scripted("deg_batch", lambda i, c: Batch(items=[Item(key="only")]))
         register_scripted("deg_proc", lambda i, c: Result(label="processed"))
 
-        pipeline = Construct("deg-each", nodes=[
-            Node.scripted("batch", fn="deg_batch", outputs=Batch),
-            Node.scripted("proc", fn="deg_proc", inputs=Item, outputs=Result)
-            | Each(over="batch.items", key="key"),
-        ])
+        pipeline = Construct(
+            "deg-each",
+            nodes=[
+                Node.scripted("batch", fn="deg_batch", outputs=Batch),
+                Node.scripted("proc", fn="deg_proc", inputs=Item, outputs=Result) | Each(over="batch.items", key="key"),
+            ],
+        )
         graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "deg-e1"})
         assert isinstance(result["proc"], dict)
@@ -77,7 +80,6 @@ class TestDegeneratePatterns:
     def test_each_empty_collection(self):
         """Each with 0 items — degenerate fan-out, produces empty dict."""
         from pydantic import BaseModel
-
 
         class Item(BaseModel, frozen=True):
             key: str
@@ -91,11 +93,14 @@ class TestDegeneratePatterns:
         register_scripted("deg0_batch", lambda i, c: Batch(items=[]))
         register_scripted("deg0_proc", lambda i, c: Result(label="x"))
 
-        pipeline = Construct("deg-each0", nodes=[
-            Node.scripted("batch", fn="deg0_batch", outputs=Batch),
-            Node.scripted("proc", fn="deg0_proc", inputs=Item, outputs=Result)
-            | Each(over="batch.items", key="key"),
-        ])
+        pipeline = Construct(
+            "deg-each0",
+            nodes=[
+                Node.scripted("batch", fn="deg0_batch", outputs=Batch),
+                Node.scripted("proc", fn="deg0_proc", inputs=Item, outputs=Result)
+                | Each(over="batch.items", key="key"),
+            ],
+        )
         graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "deg-e0"})
         # Empty collection → empty dict (or None depending on reducer)
@@ -105,8 +110,8 @@ class TestDegeneratePatterns:
     def test_oracle_n1_decorator_raises(self):
         """@node(ensemble_n=1) raises ConstructError — must be >= 2."""
         with pytest.raises(ConstructError, match="ensemble_n must be >= 2"):
-            @node(outputs=Claims, prompt="test", model="fast",
-                  ensemble_n=1, merge_fn="dummy")
+
+            @node(outputs=Claims, prompt="test", model="fast", ensemble_n=1, merge_fn="dummy")
             def bad() -> Claims: ...
 
     def test_each_item_failure_crashes_entire_batch(self):
@@ -114,7 +119,6 @@ class TestDegeneratePatterns:
         This test DOCUMENTS the current (broken) behavior. When fixed,
         this test should be updated to expect partial results."""
         from pydantic import BaseModel
-
 
         class Item(BaseModel, frozen=True):
             key: str
@@ -125,9 +129,16 @@ class TestDegeneratePatterns:
         class Result(BaseModel, frozen=True):
             label: str
 
-        register_scripted("spz1_batch", lambda i, c: Batch(items=[
-            Item(key="good1"), Item(key="bad"), Item(key="good2"),
-        ]))
+        register_scripted(
+            "spz1_batch",
+            lambda i, c: Batch(
+                items=[
+                    Item(key="good1"),
+                    Item(key="bad"),
+                    Item(key="good2"),
+                ]
+            ),
+        )
 
         def failing_proc(input_data, config):
             if hasattr(input_data, "key") and input_data.key == "bad":
@@ -136,11 +147,14 @@ class TestDegeneratePatterns:
 
         register_scripted("spz1_proc", failing_proc)
 
-        pipeline = Construct("spz1-test", nodes=[
-            Node.scripted("batch", fn="spz1_batch", outputs=Batch),
-            Node.scripted("proc", fn="spz1_proc", inputs=Item, outputs=Result)
-            | Each(over="batch.items", key="key"),
-        ])
+        pipeline = Construct(
+            "spz1-test",
+            nodes=[
+                Node.scripted("batch", fn="spz1_batch", outputs=Batch),
+                Node.scripted("proc", fn="spz1_proc", inputs=Item, outputs=Result)
+                | Each(over="batch.items", key="key"),
+            ],
+        )
         graph = compile(pipeline, **build_test_compile_kwargs())
 
         # Current behavior: entire graph crashes due to one bad item.
@@ -148,9 +162,6 @@ class TestDegeneratePatterns:
         # with good1 and good2 succeeded, bad marked as failed.
         with pytest.raises(RuntimeError, match="Simulated API error"):
             run(graph, input={"node_id": "spz1"})
-
-
-
 
 
 class TestDevWarnings:
@@ -230,9 +241,6 @@ class TestDevWarnings:
 # =============================================================================
 
 
-
-
-
 # =============================================================================
 # Coverage gap tests for modifiers.py
 # =============================================================================
@@ -252,9 +260,6 @@ class TestEachLoopReverseOrder:
             n_with_loop | Each(over="upstream.items", key="label")
 
 
-
-
-
 class TestLoopMaxIterationsValidation:
     """Lines 366-367: Loop(max_iterations<1) raises ConfigurationError."""
 
@@ -269,15 +274,13 @@ class TestLoopMaxIterationsValidation:
             Loop(when=lambda d: True, max_iterations=-1)
 
 
-
-
-
 class TestModifierSet:
     """ModifierSet typed slots — illegal combos are structurally unrepresentable (neograph-v5c1)."""
 
     def test_bare_modifier_set_has_no_modifiers(self):
         """Empty ModifierSet has BARE combo and empty list."""
         from neograph.modifiers import ModifierCombo, ModifierSet
+
         ms = ModifierSet()
         assert ms.combo == ModifierCombo.BARE
         assert ms.to_list() == []
@@ -285,6 +288,7 @@ class TestModifierSet:
     def test_each_only(self):
         """ModifierSet with Each only has EACH combo."""
         from neograph.modifiers import ModifierCombo, ModifierSet
+
         each = Each(over="x.y", key="k")
         ms = ModifierSet(each=each)
         assert ms.combo == ModifierCombo.EACH
@@ -294,6 +298,7 @@ class TestModifierSet:
     def test_oracle_only(self):
         """ModifierSet with Oracle only has ORACLE combo."""
         from neograph.modifiers import ModifierCombo, ModifierSet
+
         oracle = Oracle(n=3, merge_fn="m")
         ms = ModifierSet(oracle=oracle)
         assert ms.combo == ModifierCombo.ORACLE
@@ -301,6 +306,7 @@ class TestModifierSet:
     def test_each_oracle_fusion(self):
         """Each + Oracle is valid (M x N fusion)."""
         from neograph.modifiers import ModifierCombo, ModifierSet
+
         ms = ModifierSet(
             each=Each(over="x.y", key="k"),
             oracle=Oracle(n=3, merge_fn="m"),
@@ -310,6 +316,7 @@ class TestModifierSet:
     def test_each_loop_rejected_at_construction(self):
         """ModifierSet(each=..., loop=...) is rejected by model_post_init."""
         from neograph.modifiers import ModifierSet
+
         with pytest.raises(Exception, match="Cannot combine Each and Loop"):
             ModifierSet(
                 each=Each(over="x.y", key="k"),
@@ -319,6 +326,7 @@ class TestModifierSet:
     def test_oracle_loop_rejected_at_construction(self):
         """ModifierSet(oracle=..., loop=...) is rejected by model_post_init."""
         from neograph.modifiers import ModifierSet
+
         with pytest.raises(Exception, match="Cannot combine Oracle and Loop"):
             ModifierSet(
                 oracle=Oracle(n=3, merge_fn="m"),
@@ -328,6 +336,7 @@ class TestModifierSet:
     def test_with_modifier_each(self):
         """with_modifier adds Each to an empty set."""
         from neograph.modifiers import ModifierCombo, ModifierSet
+
         ms = ModifierSet()
         ms2 = ms.with_modifier(Each(over="x.y", key="k"))
         assert ms2.combo == ModifierCombo.EACH
@@ -336,6 +345,7 @@ class TestModifierSet:
     def test_with_modifier_duplicate_each_rejected(self):
         """with_modifier rejects duplicate Each."""
         from neograph.modifiers import ModifierSet
+
         ms = ModifierSet(each=Each(over="x.y", key="k"))
         with pytest.raises(ConstructError, match="Duplicate Each"):
             ms.with_modifier(Each(over="a.b", key="c"))
@@ -343,6 +353,7 @@ class TestModifierSet:
     def test_with_modifier_duplicate_oracle_rejected(self):
         """with_modifier rejects duplicate Oracle."""
         from neograph.modifiers import ModifierSet
+
         ms = ModifierSet(oracle=Oracle(n=3, merge_fn="m"))
         with pytest.raises(ConstructError, match="Duplicate Oracle"):
             ms.with_modifier(Oracle(n=2, merge_fn="n"))
@@ -350,6 +361,7 @@ class TestModifierSet:
     def test_with_modifier_duplicate_loop_rejected(self):
         """with_modifier rejects duplicate Loop."""
         from neograph.modifiers import ModifierSet
+
         ms = ModifierSet(loop=Loop(when=lambda d: False, max_iterations=1))
         with pytest.raises(ConstructError, match="Duplicate Loop"):
             ms.with_modifier(Loop(when=lambda d: True, max_iterations=2))
@@ -357,6 +369,7 @@ class TestModifierSet:
     def test_with_modifier_duplicate_operator_rejected(self):
         """with_modifier rejects duplicate Operator."""
         from neograph.modifiers import ModifierSet
+
         ms = ModifierSet(operator=Operator(when="check"))
         with pytest.raises(ConstructError, match="Duplicate Operator"):
             ms.with_modifier(Operator(when="other"))
@@ -364,6 +377,7 @@ class TestModifierSet:
     def test_with_modifier_each_loop_rejected(self):
         """with_modifier rejects Each when Loop is present."""
         from neograph.modifiers import ModifierSet
+
         ms = ModifierSet(loop=Loop(when=lambda d: False, max_iterations=1))
         with pytest.raises(ConstructError, match="Cannot combine Each and Loop"):
             ms.with_modifier(Each(over="x.y", key="k"))
@@ -371,6 +385,7 @@ class TestModifierSet:
     def test_with_modifier_loop_each_rejected(self):
         """with_modifier rejects Loop when Each is present."""
         from neograph.modifiers import ModifierSet
+
         ms = ModifierSet(each=Each(over="x.y", key="k"))
         with pytest.raises(ConstructError, match="Cannot combine Each and Loop"):
             ms.with_modifier(Loop(when=lambda d: False, max_iterations=1))
@@ -378,6 +393,7 @@ class TestModifierSet:
     def test_with_modifier_loop_oracle_rejected(self):
         """with_modifier rejects Loop when Oracle is present."""
         from neograph.modifiers import ModifierSet
+
         ms = ModifierSet(oracle=Oracle(n=3, merge_fn="m"))
         with pytest.raises(ConstructError, match="Cannot combine Oracle and Loop"):
             ms.with_modifier(Loop(when=lambda d: False, max_iterations=1))
@@ -385,6 +401,7 @@ class TestModifierSet:
     def test_with_modifier_oracle_loop_rejected(self):
         """with_modifier rejects Oracle when Loop is present."""
         from neograph.modifiers import ModifierSet
+
         ms = ModifierSet(loop=Loop(when=lambda d: False, max_iterations=1))
         with pytest.raises(ConstructError, match="Cannot combine Oracle and Loop"):
             ms.with_modifier(Oracle(n=3, merge_fn="m"))
@@ -392,6 +409,7 @@ class TestModifierSet:
     def test_pipe_syntax_produces_correct_modifier_set(self):
         """node | Oracle() | Each() produces a ModifierSet with both slots filled."""
         from neograph.modifiers import ModifierCombo
+
         n = Node.scripted("proc", fn="noop", inputs=Claims, outputs=Claims)
         n2 = n | Oracle(n=3, merge_fn="m") | Each(over="x.y", key="k")
         assert n2.modifier_set.combo == ModifierCombo.EACH_ORACLE
@@ -401,6 +419,7 @@ class TestModifierSet:
     def test_map_produces_correct_modifier_set(self):
         """.map() sets modifier_set.each."""
         from neograph.modifiers import ModifierCombo
+
         n = Node.scripted("proc", fn="noop", inputs=Claims, outputs=Claims)
         n2 = n.map("upstream.items", key="label")
         assert n2.modifier_set.combo == ModifierCombo.EACH
@@ -416,6 +435,7 @@ class TestModifierSet:
     def test_to_list_preserves_modifier_instances(self):
         """to_list returns the exact modifier instances from the slots."""
         from neograph.modifiers import ModifierSet
+
         each = Each(over="x.y", key="k")
         oracle = Oracle(n=3, merge_fn="m")
         ms = ModifierSet(each=each, oracle=oracle)

@@ -31,6 +31,7 @@ def project_schema():
 def _validate(instance: dict, schema: dict) -> None:
     """Validate a dict against a JSON Schema. Raises on failure."""
     from jsonschema import validate
+
     validate(instance=instance, schema=schema)
 
 
@@ -46,9 +47,7 @@ class TestPipelineSchema:
         """Simplest valid pipeline: one scripted node."""
         spec = {
             "name": "hello",
-            "nodes": [
-                {"name": "greet", "mode": "scripted", "outputs": "Greeting"}
-            ],
+            "nodes": [{"name": "greet", "mode": "scripted", "outputs": "Greeting"}],
             "pipeline": {"nodes": ["greet"]},
         }
         _validate(spec, pipeline_schema)
@@ -112,6 +111,7 @@ class TestPipelineSchema:
             "pipeline": {"nodes": ["unnamed"]},
         }
         from jsonschema import ValidationError
+
         with pytest.raises(ValidationError):
             _validate(spec, pipeline_schema)
 
@@ -122,6 +122,7 @@ class TestPipelineSchema:
             "pipeline": {"nodes": ["a"]},
         }
         from jsonschema import ValidationError
+
         with pytest.raises(ValidationError):
             _validate(spec, pipeline_schema)
 
@@ -230,23 +231,17 @@ class TestProjectSchema:
 
     def test_rejects_type_without_properties(self, project_schema):
         """Type definitions must have properties."""
-        spec = {
-            "types": {
-                "Bad": {"description": "no properties"}
-            }
-        }
+        spec = {"types": {"Bad": {"description": "no properties"}}}
         from jsonschema import ValidationError
+
         with pytest.raises(ValidationError):
             _validate(spec, project_schema)
 
     def test_rejects_model_without_provider(self, project_schema):
         """Model definitions must have provider."""
-        spec = {
-            "models": {
-                "bad": {"model": "gpt-4"}
-            }
-        }
+        spec = {"models": {"bad": {"model": "gpt-4"}}}
         from jsonschema import ValidationError
+
         with pytest.raises(ValidationError):
             _validate(spec, project_schema)
 
@@ -261,9 +256,7 @@ class TestValidateSpecPydantic:
 
     VALID_SPEC = {
         "name": "hello",
-        "nodes": [
-            {"name": "greet", "mode": "scripted", "outputs": "Greeting"}
-        ],
+        "nodes": [{"name": "greet", "mode": "scripted", "outputs": "Greeting"}],
         "pipeline": {"nodes": ["greet"]},
     }
 

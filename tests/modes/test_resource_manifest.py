@@ -89,9 +89,7 @@ class TestLiftResourceRefs:
 
 
 def _build_agent_pipeline(tool_result):
-    register_tool_factory(
-        "list_emails", lambda cfg, tc: FakeTool("list_emails", response=tool_result)
-    )
+    register_tool_factory("list_emails", lambda cfg, tc: FakeTool("list_emails", response=tool_result))
     _llm_kw = configure_fake_llm(
         lambda tier: ReActFake(
             tool_calls=[
@@ -121,9 +119,7 @@ def test_manifest_checkpointed_and_excluded_from_user_output(is_async: bool):
     from langgraph.checkpoint.memory import MemorySaver
 
     pipeline, _llm_kw = _build_agent_pipeline(_resource_link_result())
-    graph = compile(
-        pipeline, checkpointer=MemorySaver(), **build_test_compile_kwargs(), **_llm_kw
-    )
+    graph = compile(pipeline, checkpointer=MemorySaver(), **build_test_compile_kwargs(), **_llm_kw)
     cfg = {"configurable": {"thread_id": f"manifest-{is_async}"}}
 
     if is_async:

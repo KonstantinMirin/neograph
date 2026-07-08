@@ -218,11 +218,11 @@ class TestTrailingToolCallMarkupEvent:
 
         call_count = [0]
         dsml_payload = (
-            '<｜DSML｜tool_calls>\n'
+            "<｜DSML｜tool_calls>\n"
             '<｜DSML｜invoke name="search">\n'
             '<｜DSML｜parameter name="q">more</｜DSML｜parameter>\n'
-            '</｜DSML｜invoke>\n'
-            '</｜DSML｜tool_calls>'
+            "</｜DSML｜invoke>\n"
+            "</｜DSML｜tool_calls>"
         )
 
         class DSMLFake:
@@ -244,9 +244,8 @@ class TestTrailingToolCallMarkupEvent:
 
         def search_factory(config, tool_config):
             from langchain_core.tools import StructuredTool
-            return StructuredTool.from_function(
-                lambda q: f"found {q}", name="search", description="search"
-            )
+
+            return StructuredTool.from_function(lambda q: f"found {q}", name="search", description="search")
 
         register_tool_factory("search", search_factory)
 
@@ -286,11 +285,11 @@ class TestTrailingToolCallMarkupEvent:
 
         call_count = [0]
         dsml_payload = (
-            '<｜DSML｜tool_calls>\n'
+            "<｜DSML｜tool_calls>\n"
             '<｜DSML｜invoke name="search">\n'
             '<｜DSML｜parameter name="q">more</｜DSML｜parameter>\n'
-            '</｜DSML｜invoke>\n'
-            '</｜DSML｜tool_calls>'
+            "</｜DSML｜invoke>\n"
+            "</｜DSML｜tool_calls>"
         )
 
         class DSMLFake:
@@ -312,9 +311,8 @@ class TestTrailingToolCallMarkupEvent:
 
         def search_factory(config, tool_config):
             from langchain_core.tools import StructuredTool
-            return StructuredTool.from_function(
-                lambda q: f"found {q}", name="search", description="search"
-            )
+
+            return StructuredTool.from_function(lambda q: f"found {q}", name="search", description="search")
 
         register_tool_factory("search", search_factory)
 
@@ -380,9 +378,7 @@ class TestReActGuardForcedBreakEvent:
 
         register_tool_factory(
             "search",
-            lambda c, tc: StructuredTool.from_function(
-                lambda q="": f"r {q}", name="search", description="search tool"
-            ),
+            lambda c, tc: StructuredTool.from_function(lambda q="": f"r {q}", name="search", description="search tool"),
         )
 
         tools = [Tool(name="search", description="search tool")]
@@ -442,9 +438,7 @@ class TestReActGuardForcedBreakEvent:
 
         register_tool_factory(
             "search",
-            lambda c, tc: StructuredTool.from_function(
-                lambda q="": f"r {q}", name="search", description="search tool"
-            ),
+            lambda c, tc: StructuredTool.from_function(lambda q="": f"r {q}", name="search", description="search tool"),
         )
 
         tools = [Tool(name="search", description="search tool")]
@@ -498,15 +492,21 @@ class TestAutoResumeSchemaChangeEvent:
         checkpointer = MemorySaver()
         config = {"configurable": {"thread_id": "obs-contract-schema"}}
 
-        pipe_v1 = Construct("obs-contract-pipe", nodes=[
-            Node.scripted("a", fn="ocs_a1", outputs=TypeAV1),
-        ])
+        pipe_v1 = Construct(
+            "obs-contract-pipe",
+            nodes=[
+                Node.scripted("a", fn="ocs_a1", outputs=TypeAV1),
+            ],
+        )
         graph_v1 = compile(pipe_v1, checkpointer=checkpointer, **build_test_compile_kwargs())
         run(graph_v1, input={"node_id": "test"}, config=config)
 
-        pipe_v2 = Construct("obs-contract-pipe", nodes=[
-            Node.scripted("a", fn="ocs_a2", outputs=TypeAV2),
-        ])
+        pipe_v2 = Construct(
+            "obs-contract-pipe",
+            nodes=[
+                Node.scripted("a", fn="ocs_a2", outputs=TypeAV2),
+            ],
+        )
         graph_v2 = compile(pipe_v2, checkpointer=checkpointer, **build_test_compile_kwargs())
 
         with capture_logs() as logs:
@@ -537,15 +537,21 @@ class TestAutoResumeSchemaChangeEvent:
         checkpointer = MemorySaver()
         config = {"configurable": {"thread_id": "obs-contract-schema-2"}}
 
-        pipe_v1 = Construct("obs-contract-pipe-2", nodes=[
-            Node.scripted("b", fn="ocs_b1", outputs=TypeBV1),
-        ])
+        pipe_v1 = Construct(
+            "obs-contract-pipe-2",
+            nodes=[
+                Node.scripted("b", fn="ocs_b1", outputs=TypeBV1),
+            ],
+        )
         graph_v1 = compile(pipe_v1, checkpointer=checkpointer, **build_test_compile_kwargs())
         run(graph_v1, input={"node_id": "test"}, config=config)
 
-        pipe_v2 = Construct("obs-contract-pipe-2", nodes=[
-            Node.scripted("b", fn="ocs_b2", outputs=TypeBV2),
-        ])
+        pipe_v2 = Construct(
+            "obs-contract-pipe-2",
+            nodes=[
+                Node.scripted("b", fn="ocs_b2", outputs=TypeBV2),
+            ],
+        )
         graph_v2 = compile(pipe_v2, checkpointer=checkpointer, **build_test_compile_kwargs())
 
         with capture_logs() as logs:
@@ -594,9 +600,7 @@ class TestAgentNodeLifecycleEvents:
 
         with capture_logs() as logs:
             invoke_with_tools(
-                runtime=build_fake_runtime(
-                    _llm_kw["llm_factory"], _llm_kw["prompt_compiler"]
-                ),
+                runtime=build_fake_runtime(_llm_kw["llm_factory"], _llm_kw["prompt_compiler"]),
                 model_tier="fast",
                 prompt_template="test",
                 input_data="test",
@@ -613,8 +617,7 @@ class TestAgentNodeLifecycleEvents:
         logs = self._drive_clean_completion()
         starts = [e for e in logs if e.get("event") == "node_start"]
         assert starts, (
-            f"contract: agent node must emit ``node_start``. "
-            f"Events observed: {[e.get('event') for e in logs]}"
+            f"contract: agent node must emit ``node_start``. Events observed: {[e.get('event') for e in logs]}"
         )
         evt = starts[0]
         # PAT-02: dict-form outputs now render a real ``output_type`` string;
@@ -629,14 +632,11 @@ class TestAgentNodeLifecycleEvents:
         logs = self._drive_clean_completion()
         completes = [e for e in logs if e.get("event") == "node_complete"]
         assert completes, (
-            f"contract: agent node must emit ``node_complete``. "
-            f"Events observed: {[e.get('event') for e in logs]}"
+            f"contract: agent node must emit ``node_complete``. Events observed: {[e.get('event') for e in logs]}"
         )
         evt = completes[0]
         # PAT-02: node_complete now carries duration_s (absent pre-PAT-02).
-        assert "duration_s" in evt, (
-            "PAT-02 regression: node_complete dropped duration_s."
-        )
+        assert "duration_s" in evt, "PAT-02 regression: node_complete dropped duration_s."
         assert isinstance(evt["duration_s"], (int, float))
 
 

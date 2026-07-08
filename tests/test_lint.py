@@ -1,6 +1,5 @@
 """lint() validation: DI bindings, obligation gaps, Loop condition checks."""
 
-
 from __future__ import annotations
 
 from typing import Annotated
@@ -29,6 +28,7 @@ class TestLint:
 
     def test_lint_returns_empty_when_all_bindings_present(self):
         """No warnings when every FromInput/FromConfig key exists in config."""
+
         @node(outputs=RawText)
         def my_node(topic: Annotated[str, FromInput]) -> RawText: ...
 
@@ -38,6 +38,7 @@ class TestLint:
 
     def test_lint_reports_missing_from_input_key(self):
         """lint reports when a FromInput param has no matching config key."""
+
         @node(outputs=RawText)
         def my_node(topic: Annotated[str, FromInput]) -> RawText: ...
 
@@ -49,6 +50,7 @@ class TestLint:
 
     def test_lint_reports_missing_from_config_key(self):
         """lint reports when a FromConfig param has no matching config key."""
+
         @node(outputs=RawText)
         def my_node(
             upstream: RawText,
@@ -63,6 +65,7 @@ class TestLint:
 
     def test_lint_reports_missing_bundled_model_fields(self):
         """When a FromInput param is a BaseModel, lint checks each field."""
+
         class Ctx(BaseModel):
             node_id: str
             project_root: str
@@ -78,6 +81,7 @@ class TestLint:
 
     def test_lint_bundled_model_all_fields_present(self):
         """No issues when all bundled model fields are in config."""
+
         class Ctx(BaseModel):
             node_id: str
             project_root: str
@@ -91,6 +95,7 @@ class TestLint:
 
     def test_lint_no_config_still_validates_required(self):
         """Without config, lint reports required=True params as errors."""
+
         @node(outputs=RawText)
         def my_node(
             topic: Annotated[str, FromInput(required=True)],
@@ -104,6 +109,7 @@ class TestLint:
 
     def test_lint_required_false_no_issue_without_config(self):
         """Optional FromInput(required=False) params are NOT flagged without config."""
+
         @node(outputs=RawText)
         def my_node(topic: Annotated[str, FromInput(required=False)]) -> RawText: ...
 
@@ -113,6 +119,7 @@ class TestLint:
 
     def test_lint_walks_sub_constructs(self):
         """lint recurses into sub-constructs."""
+
         @node(outputs=Claims)
         def inner(topic: Annotated[str, FromInput]) -> Claims: ...
 
@@ -125,6 +132,7 @@ class TestLint:
 
     def test_lint_skips_upstream_and_constant_params(self):
         """Upstream and constant params should not be checked against config."""
+
         @node(outputs=RawText)
         def upstream() -> RawText: ...
 
@@ -140,6 +148,7 @@ class TestLint:
 
     def test_lint_multiple_nodes_multiple_issues(self):
         """lint collects issues from all nodes, not just the first."""
+
         @node(outputs=RawText)
         def node_a(x: Annotated[str, FromInput]) -> RawText: ...
 
@@ -157,12 +166,14 @@ class TestLint:
         # Construct.nodes can only hold Node|Construct, but _walk is typed
         # to accept either. Passing something else should just return early.
         from neograph.lint import LintIssue, _walk
+
         issues: list[LintIssue] = []
         _walk("not-a-node", None, issues)  # type: ignore[arg-type]
         assert issues == []
 
     def test_lint_required_bundled_model_no_config(self):
         """Required bundled model params are flagged when config is None."""
+
         class Ctx(BaseModel):
             node_id: str
             project_root: str
@@ -192,8 +203,10 @@ class TestLint:
         # Use @node with ensemble_n to get a node with param_resolutions AND Oracle.
         @node(
             outputs=Claims,
-            prompt="test", model="fast",
-            ensemble_n=2, merge_fn="lint_merge",
+            prompt="test",
+            model="fast",
+            ensemble_n=2,
+            merge_fn="lint_merge",
         )
         def lint_gen(topic: Annotated[str, FromInput]) -> Claims: ...
 
@@ -218,8 +231,10 @@ class TestLint:
 
         @node(
             outputs=Claims,
-            prompt="test", model="fast",
-            ensemble_n=2, merge_fn="lint_merge_req",
+            prompt="test",
+            model="fast",
+            ensemble_n=2,
+            merge_fn="lint_merge_req",
         )
         def lint_gen2(topic: Annotated[str, FromInput(required=True)]) -> Claims: ...
 
@@ -231,7 +246,6 @@ class TestLint:
         assert merge_issues[0].param == "secret"
         assert merge_issues[0].required is True
         assert "has no config" in merge_issues[0].message
-
 
     def test_lint_merge_fn_bundled_model_fields_checked(self):
         """lint() checks from_input_model fields in @merge_fn (neograph-s2h8)."""
@@ -254,8 +268,10 @@ class TestLint:
 
         @node(
             outputs=Claims,
-            prompt="test", model="fast",
-            ensemble_n=2, merge_fn="ctx_merge",
+            prompt="test",
+            model="fast",
+            ensemble_n=2,
+            merge_fn="ctx_merge",
         )
         def gen_s2h8() -> Claims: ...
 
@@ -289,8 +305,10 @@ class TestLint:
 
         @node(
             outputs=Claims,
-            prompt="test", model="fast",
-            ensemble_n=2, merge_fn="ctx_merge2",
+            prompt="test",
+            model="fast",
+            ensemble_n=2,
+            merge_fn="ctx_merge2",
         )
         def gen_s2h8b() -> Claims: ...
 
@@ -316,8 +334,7 @@ class TestLintObligationGaps:
         ) -> Claims:
             return variants[0]
 
-        @node(outputs=Claims, prompt="test", model="fast",
-              ensemble_n=2, merge_fn="simple_merge")
+        @node(outputs=Claims, prompt="test", model="fast", ensemble_n=2, merge_fn="simple_merge")
         def gen_w13() -> Claims: ...
 
         pipeline = construct_from_functions("w13-test", [gen_w13])
@@ -344,8 +361,7 @@ class TestLintObligationGaps:
         ) -> Claims:
             return variants[0]
 
-        @node(outputs=Claims, prompt="test", model="fast",
-              ensemble_n=2, merge_fn="bundled_merge")
+        @node(outputs=Claims, prompt="test", model="fast", ensemble_n=2, merge_fn="bundled_merge")
         def gen_w15() -> Claims: ...
 
         pipeline = construct_from_functions("w15-test", [gen_w15])
@@ -365,10 +381,13 @@ class TestLintObligationGaps:
         def my_callable_merge(variants, config):
             return variants[0]
 
-        pipeline = Construct("w19-test", nodes=[
-            Node.scripted("gen", fn="w19_gen", outputs=Claims)
-            | Oracle(n=2, merge_fn="w19_gen"),  # string merge_fn — lint checks it
-        ])
+        pipeline = Construct(
+            "w19-test",
+            nodes=[
+                Node.scripted("gen", fn="w19_gen", outputs=Claims)
+                | Oracle(n=2, merge_fn="w19_gen"),  # string merge_fn — lint checks it
+            ],
+        )
         # Verify no crash when merge_fn is a registered string
         issues = lint(pipeline, config={"node_id": "test"})
         # This tests the path — no assertion on count, just no crash
@@ -404,8 +423,7 @@ class TestLoopConditionLint:
         from neograph.modifiers import Loop
 
         a = _producer("seed", RawText)
-        b = Node("refine", mode="think", outputs=RawText,
-                 prompt="refine", model="fast")
+        b = Node("refine", mode="think", outputs=RawText, prompt="refine", model="fast")
         b = b | Loop(when="totally_missing", max_iterations=3)
 
         pipeline = Construct("test", nodes=[a, b])
@@ -423,7 +441,9 @@ class TestLoopConditionLint:
 
         register_scripted("_lc_inner", lambda i, c: RawText(text="ok"))
         sub = Construct(
-            "sub", input=RawText, output=RawText,
+            "sub",
+            input=RawText,
+            output=RawText,
             nodes=[Node.scripted("inner", fn="_lc_inner", outputs=RawText)],
         ) | Loop(when="also_missing", max_iterations=3)
 
@@ -441,8 +461,7 @@ class TestLoopConditionLint:
             return d is None or d.text == ""
 
         a = _producer("seed", RawText)
-        b = Node("refine", mode="think", outputs=RawText,
-                 prompt="refine", model="fast")
+        b = Node("refine", mode="think", outputs=RawText, prompt="refine", model="fast")
         b = b | Loop(when="_lint_test_cond", max_iterations=3)
 
         pipeline = Construct("test", nodes=[a, b])
@@ -457,8 +476,7 @@ class TestLoopConditionLint:
         from neograph.modifiers import Loop
 
         a = _producer("seed", RawText)
-        b = Node("refine", mode="think", outputs=RawText,
-                 prompt="refine", model="fast")
+        b = Node("refine", mode="think", outputs=RawText, prompt="refine", model="fast")
         b = b | Loop(when=lambda d: d.score < 0.8, max_iterations=3)
 
         pipeline = Construct("test", nodes=[a, b])
@@ -473,8 +491,7 @@ class TestLoopConditionLint:
         from neograph.modifiers import Loop
 
         a = _producer("seed", RawText)
-        b = Node("refine", mode="think", outputs=RawText,
-                 prompt="refine", model="fast")
+        b = Node("refine", mode="think", outputs=RawText, prompt="refine", model="fast")
         b = b | Loop(when=lambda d: d is None or d.score < 0.8, max_iterations=3)
 
         pipeline = Construct("test", nodes=[a, b])
@@ -489,7 +506,9 @@ class TestLoopConditionLint:
 
         register_scripted("_lc_inner2", lambda i, c: RawText(text="ok"))
         sub = Construct(
-            "sub", input=RawText, output=RawText,
+            "sub",
+            input=RawText,
+            output=RawText,
             nodes=[Node.scripted("inner", fn="_lc_inner2", outputs=RawText)],
         ) | Loop(when=lambda d: d.text == "done", max_iterations=3)
 
@@ -504,8 +523,7 @@ class TestLoopConditionLint:
         from neograph.modifiers import Loop
 
         a = _producer("seed", RawText)
-        b = Node("refine", mode="think", outputs=RawText,
-                 prompt="refine", model="fast")
+        b = Node("refine", mode="think", outputs=RawText, prompt="refine", model="fast")
         b = b | Loop(when=lambda d: len(d.items) > 0, max_iterations=3)
 
         pipeline = Construct("test", nodes=[a, b])
@@ -518,8 +536,7 @@ class TestLoopConditionLint:
         from neograph.modifiers import Loop
 
         a = _producer("seed", RawText)
-        b = Node("refine", mode="think", outputs=RawText,
-                 prompt="refine", model="fast")
+        b = Node("refine", mode="think", outputs=RawText, prompt="refine", model="fast")
         b = b | Loop(when=lambda d: d < 0.8, max_iterations=3)
 
         pipeline = Construct("test", nodes=[a, b])
@@ -535,8 +552,7 @@ class TestLoopConditionLint:
         from neograph.modifiers import Loop
 
         a = _producer("seed", RawText)
-        b = Node("refine", mode="think", outputs=RawText,
-                 prompt="refine", model="fast")
+        b = Node("refine", mode="think", outputs=RawText, prompt="refine", model="fast")
         b = b | Loop(when="_pc_score", max_iterations=3)
 
         pipeline = Construct("test", nodes=[a, b])
@@ -677,5 +693,3 @@ class TestActModeAllIdempotentToolsLint:
         issues = lint(construct)
 
         assert [i for i in issues if i.kind == self._ISSUE_KIND] == []
-
-

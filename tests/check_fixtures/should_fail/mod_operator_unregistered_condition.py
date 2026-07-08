@@ -17,10 +17,13 @@ register_scripted("mouc_proc", lambda i, c: Result(text="ok"))
 
 class FakeCheckpointer:
     """Minimal checkpointer stub to get past the compile guard."""
+
     pass
 
 
-pipeline = Construct("broken", nodes=[
-    Node.scripted("proc", fn="mouc_proc", outputs=Result)
-    | Operator(when="this_condition_does_not_exist"),
-])
+pipeline = Construct(
+    "broken",
+    nodes=[
+        Node.scripted("proc", fn="mouc_proc", outputs=Result) | Operator(when="this_condition_does_not_exist"),
+    ],
+)

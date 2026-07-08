@@ -20,9 +20,11 @@ from neograph.errors import ExecutionError
 
 # ── Fixed test models (varying complexity) ────────────────────────────────
 
+
 class Simple(BaseModel):
     name: str
     score: float
+
 
 class WithDefaults(BaseModel):
     name: str
@@ -30,16 +32,20 @@ class WithDefaults(BaseModel):
     count: int = 0
     active: bool = True
 
+
 class Nested(BaseModel):
     label: str
     inner: Simple
 
+
 class WithList(BaseModel):
     items: list[Simple]
+
 
 class DeepNested(BaseModel):
     title: str = ""
     sections: list[Nested] = Field(default_factory=list)
+
 
 class MixedDefaults(BaseModel):
     required_str: str
@@ -54,30 +60,42 @@ ALL_MODELS = [Simple, WithDefaults, Nested, WithList, DeepNested, MixedDefaults]
 
 # ── Strategies ────────────────────────────────────────────────────────────
 
+
 def st_simple_instance() -> st.SearchStrategy[dict]:
-    return st.fixed_dictionaries({
-        "name": st.text(min_size=1, max_size=20),
-        "score": st.floats(min_value=-100, max_value=100, allow_nan=False),
-    })
+    return st.fixed_dictionaries(
+        {
+            "name": st.text(min_size=1, max_size=20),
+            "score": st.floats(min_value=-100, max_value=100, allow_nan=False),
+        }
+    )
+
 
 def st_with_defaults_instance() -> st.SearchStrategy[dict]:
-    return st.fixed_dictionaries({
-        "name": st.text(min_size=1, max_size=20),
-        "note": st.one_of(st.text(max_size=50), st.just(None)),
-        "count": st.one_of(st.integers(min_value=0, max_value=1000), st.just(None)),
-        "active": st.one_of(st.booleans(), st.just(None)),
-    })
+    return st.fixed_dictionaries(
+        {
+            "name": st.text(min_size=1, max_size=20),
+            "note": st.one_of(st.text(max_size=50), st.just(None)),
+            "count": st.one_of(st.integers(min_value=0, max_value=1000), st.just(None)),
+            "active": st.one_of(st.booleans(), st.just(None)),
+        }
+    )
+
 
 def st_nested_instance() -> st.SearchStrategy[dict]:
-    return st.fixed_dictionaries({
-        "label": st.text(min_size=1, max_size=20),
-        "inner": st_simple_instance(),
-    })
+    return st.fixed_dictionaries(
+        {
+            "label": st.text(min_size=1, max_size=20),
+            "inner": st_simple_instance(),
+        }
+    )
+
 
 def st_with_list_instance() -> st.SearchStrategy[dict]:
-    return st.fixed_dictionaries({
-        "items": st.lists(st_simple_instance(), min_size=0, max_size=5),
-    })
+    return st.fixed_dictionaries(
+        {
+            "items": st.lists(st_simple_instance(), min_size=0, max_size=5),
+        }
+    )
 
 
 @st.composite
@@ -86,14 +104,18 @@ def st_corrupt_json(draw, base_strategy, corruption_type=None):
     data = draw(base_strategy)
     json_str = json.dumps(data)
 
-    corruption = corruption_type or draw(st.sampled_from([
-        "wrap_markdown",
-        "add_trailing_comma",
-        "truncate",
-        "nullify_random_field",
-        "add_preamble",
-        "stringify_number",
-    ]))
+    corruption = corruption_type or draw(
+        st.sampled_from(
+            [
+                "wrap_markdown",
+                "add_trailing_comma",
+                "truncate",
+                "nullify_random_field",
+                "add_preamble",
+                "stringify_number",
+            ]
+        )
+    )
 
     if corruption == "wrap_markdown":
         return f"```json\n{json_str}\n```"
@@ -114,11 +136,15 @@ def st_corrupt_json(draw, base_strategy, corruption_type=None):
             return json.dumps(data)
         return json_str
     elif corruption == "add_preamble":
-        preamble = draw(st.sampled_from([
-            "Here is the JSON:\n",
-            "Sure! Let me help:\n\n",
-            "Based on my analysis:\n",
-        ]))
+        preamble = draw(
+            st.sampled_from(
+                [
+                    "Here is the JSON:\n",
+                    "Sure! Let me help:\n\n",
+                    "Based on my analysis:\n",
+                ]
+            )
+        )
         return preamble + json_str
     elif corruption == "stringify_number":
         if isinstance(data, dict):
@@ -132,6 +158,7 @@ def st_corrupt_json(draw, base_strategy, corruption_type=None):
 
 
 # ── Property tests ────────────────────────────────────────────────────────
+
 
 class TestParseNeverCrashes:
     """_parse_json_response must either return a valid model or raise ExecutionError."""
@@ -199,6 +226,7 @@ class TestApplyNullDefaultsIdempotent:
     def test_idempotent(self, data):
         """Applying null defaults twice is the same as once."""
         import copy
+
         d1 = copy.deepcopy(data)
         _apply_null_defaults(d1, WithDefaults)
         d2 = copy.deepcopy(d1)

@@ -84,8 +84,12 @@ def construct_from_module(
 
     construct_name = name or mod.__name__.split(".")[-1]
     return _build_construct_from_decorated(
-        nodes, construct_name, source_label, llm_config,
-        construct_input=input, construct_output=output,
+        nodes,
+        construct_name,
+        source_label,
+        llm_config,
+        construct_input=input,
+        construct_output=output,
         plain_nodes=plain_nodes,
     )
 
@@ -150,8 +154,12 @@ def construct_from_functions(
             )
 
     return _build_construct_from_decorated(
-        nodes, name, source_label, llm_config,
-        construct_input=input, construct_output=output,
+        nodes,
+        name,
+        source_label,
+        llm_config,
+        construct_input=input,
+        construct_output=output,
         sub_constructs=sub_constructs,
     )
 
@@ -216,7 +224,8 @@ def _cleanup_inputs_and_register(
         # Phase 2: Register scripted shim.
         if n.mode == "scripted" and n.raw_fn is None:
             synthetic_name = _register_node_scripted(
-                n, fan_out_params.get(field, set()),
+                n,
+                fan_out_params.get(field, set()),
                 port_param_map=dict.fromkeys(port_params.get(field, set()), StateKeys.SUBGRAPH_INPUT),
                 loop_renames=loop_param_renames.get(field),
             )
@@ -234,10 +243,7 @@ def _cleanup_inputs_and_register(
             decorated[field] = n.model_copy(update=updates)
 
     # Rebuild ordered list to pick up model_copy replacements.
-    return [
-        decorated.get(field_name_for(item.name), item) if isinstance(item, Node) else item
-        for item in ordered
-    ]
+    return [decorated.get(field_name_for(item.name), item) if isinstance(item, Node) else item for item in ordered]
 
 
 def _build_construct_from_decorated(
@@ -268,29 +274,38 @@ def _build_construct_from_decorated(
         sub_by_field[field_name_for(sc.name)] = sc
 
     decorated, plain_fields = _build_decorated_dict(
-        nodes, _plain_nodes, sub_by_field, construct_name,
+        nodes,
+        _plain_nodes,
+        sub_by_field,
+        construct_name,
     )
     port_params = _identify_port_params(decorated, construct_input, construct_name)
     fan_out_params = _detect_fan_out_params(decorated, plain_fields, port_params)
     _classify_constants(decorated, plain_fields, sub_by_field, fan_out_params, port_params)
     _check_di_collisions(decorated, plain_fields, sub_by_field)
     adjacency, loop_param_renames, all_known = _build_adjacency(
-        decorated, plain_fields, sub_by_field, fan_out_params, port_params, source_label,
+        decorated,
+        plain_fields,
+        sub_by_field,
+        fan_out_params,
+        port_params,
+        source_label,
     )
     ordered = _topo_sort(adjacency, all_known, decorated, sub_by_field, construct_name)
     ordered = _cleanup_inputs_and_register(
-        decorated, plain_fields, sub_by_field,
-        fan_out_params, port_params, loop_param_renames, ordered,
+        decorated,
+        plain_fields,
+        sub_by_field,
+        fan_out_params,
+        port_params,
+        loop_param_renames,
+        ordered,
     )
 
     return Construct(
         name=construct_name,
         nodes=ordered,
-        llm_config=(
-            llm_config
-            if isinstance(llm_config, LlmConfig)
-            else LlmConfig(**(llm_config or {}))
-        ),
+        llm_config=(llm_config if isinstance(llm_config, LlmConfig) else LlmConfig(**(llm_config or {}))),
         input=construct_input,
         output=construct_output,
     )

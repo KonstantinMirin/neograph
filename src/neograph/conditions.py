@@ -50,9 +50,7 @@ def _parse_literal(raw: str) -> int | float | bool | str:
         return False
 
     # quoted string
-    if (raw.startswith('"') and raw.endswith('"')) or (
-        raw.startswith("'") and raw.endswith("'")
-    ):
+    if (raw.startswith('"') and raw.endswith('"')) or (raw.startswith("'") and raw.endswith("'")):
         return raw[1:-1]
 
     # numeric — try int first, then float
@@ -65,10 +63,7 @@ def _parse_literal(raw: str) -> int | float | bool | str:
     except ValueError:
         pass
 
-    raise ValueError(
-        f"Cannot parse literal: {raw!r}. "
-        "Expected a number, boolean (true/false), or quoted string."
-    )
+    raise ValueError(f"Cannot parse literal: {raw!r}. Expected a number, boolean (true/false), or quoted string.")
 
 
 def _resolve_field(obj: Any, dotted: str) -> Any:
@@ -77,24 +72,19 @@ def _resolve_field(obj: Any, dotted: str) -> Any:
     for part in dotted.split("."):
         if part.startswith("_"):
             raise AttributeError(
-                f"Field access to private/dunder attribute {part!r} "
-                f"is not allowed in condition {dotted!r}"
+                f"Field access to private/dunder attribute {part!r} is not allowed in condition {dotted!r}"
             )
         if isinstance(current, dict):
             try:
                 current = current[part]
             except KeyError:
-                raise AttributeError(
-                    f"Field {part!r} not found in dict "
-                    f"while resolving {dotted!r}"
-                ) from None
+                raise AttributeError(f"Field {part!r} not found in dict while resolving {dotted!r}") from None
         else:
             try:
                 current = getattr(current, part)
             except AttributeError:
                 raise AttributeError(
-                    f"Field {part!r} not found on {type(current).__name__} "
-                    f"while resolving {dotted!r}"
+                    f"Field {part!r} not found on {type(current).__name__} while resolving {dotted!r}"
                 ) from None
     return current
 
@@ -128,10 +118,7 @@ def parse_condition(expr: str) -> Callable[[Any], bool]:
     literal_raw = m.group("literal").strip()
 
     if op_str not in _OPS:
-        raise ValueError(
-            f"Unsupported operator {op_str!r} in expression {expr!r}. "
-            f"Allowed: {', '.join(sorted(_OPS))}"
-        )
+        raise ValueError(f"Unsupported operator {op_str!r} in expression {expr!r}. Allowed: {', '.join(sorted(_OPS))}")
 
     op_fn = _OPS[op_str]
     literal = _parse_literal(literal_raw)

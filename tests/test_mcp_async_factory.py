@@ -65,6 +65,7 @@ SENTINEL_TOKEN = "SENTINEL-JWT-8f3c1a9e-never-persist"
 
 # ── tool factories ────────────────────────────────────────────────────────────
 
+
 def _make_recording_async_factory(name: str, calls: list[str]):
     """A COROUTINE-FUNCTION tool factory (``async def``) — the MCP-style shape.
 
@@ -82,9 +83,7 @@ def _make_recording_async_factory(name: str, calls: list[str]):
             calls.append(text)
             return f"echo:{text}"
 
-        return StructuredTool.from_function(
-            func=_run, name=name, description="per-run MCP-style tool"
-        )
+        return StructuredTool.from_function(func=_run, name=name, description="per-run MCP-style tool")
 
     return _factory
 
@@ -127,21 +126,19 @@ def _make_token_reading_async_factory(name: str, observed: list[str]):
             _ = token
             return f"echo:{text}"
 
-        return StructuredTool.from_function(
-            func=_run, name=name, description="per-run MCP-style tool (auth-bound)"
-        )
+        return StructuredTool.from_function(func=_run, name=name, description="per-run MCP-style tool (auth-bound)")
 
     return _factory
 
 
 # ── surface builders (three construction surfaces) ────────────────────────────
 
+
 def _build_node_surface(tool_name: str, outputs=Claims):
     """Surface 1 — ``@node`` decorator (runs through _build_construct_from_decorated)."""
     mod = _types.ModuleType(f"test_async_factory_node_{tool_name}_mod")
 
-    @node(mode="agent", outputs=outputs, model="fast", prompt="test/scan",
-          tools=[Tool(tool_name, budget=0)])
+    @node(mode="agent", outputs=outputs, model="fast", prompt="test/scan", tools=[Tool(tool_name, budget=0)])
     def scan() -> Claims: ...
 
     mod.scan = scan
@@ -150,17 +147,29 @@ def _build_node_surface(tool_name: str, outputs=Claims):
 
 def _build_declarative_surface(tool_name: str, outputs=Claims):
     """Surface 2 — declarative ``Node(...)`` assembled directly into a Construct."""
-    return Construct("p_declarative", nodes=[
-        Node("scan", mode="agent", outputs=outputs, model="fast",
-             prompt="test/scan", tools=[Tool(tool_name, budget=0)]),
-    ])
+    return Construct(
+        "p_declarative",
+        nodes=[
+            Node(
+                "scan",
+                mode="agent",
+                outputs=outputs,
+                model="fast",
+                prompt="test/scan",
+                tools=[Tool(tool_name, budget=0)],
+            ),
+        ],
+    )
 
 
 def _build_programmatic_surface(tool_name: str, outputs=Claims):
     """Surface 3 — programmatic/runtime construction (LLM-driven kwargs splat)."""
     spec = {
-        "mode": "agent", "outputs": outputs, "model": "fast",
-        "prompt": "test/scan", "tools": [Tool(tool_name, budget=0)],
+        "mode": "agent",
+        "outputs": outputs,
+        "model": "fast",
+        "prompt": "test/scan",
+        "tools": [Tool(tool_name, budget=0)],
     }
     n = Node("scan", **spec)
     return Construct("p_programmatic", nodes=[n])
@@ -263,8 +272,7 @@ class TestTokenNeverLeaks:
                 result = run(graph, input={"node_id": "n1"}, config=cfg)
             state_values = graph.get_state(cfg).values
 
-        self._assert_no_leak(observed=observed, result=result,
-                             state_values=state_values, cap_logs=cap_logs)
+        self._assert_no_leak(observed=observed, result=result, state_values=state_values, cap_logs=cap_logs)
 
     def test_token_absent_across_persisted_surfaces_async(self, tmp_path):
         observed: list[str] = []
@@ -283,8 +291,7 @@ class TestTokenNeverLeaks:
             return result, state_values, cap_logs
 
         result, state_values, cap_logs = asyncio.run(_drive())
-        self._assert_no_leak(observed=observed, result=result,
-                             state_values=state_values, cap_logs=cap_logs)
+        self._assert_no_leak(observed=observed, result=result, state_values=state_values, cap_logs=cap_logs)
 
 
 class TestPerRunIdentityBinding:
@@ -304,9 +311,8 @@ class TestPerRunIdentityBinding:
                     per_run.append((token, text))
                     return f"echo:{text}"
 
-                return StructuredTool.from_function(
-                    func=_run, name="mcp_echo", description="auth-bound"
-                )
+                return StructuredTool.from_function(func=_run, name="mcp_echo", description="auth-bound")
+
             return _factory
 
         sink: list[str] = []
@@ -338,7 +344,7 @@ class TestPerRunIdentityBinding:
         # saw A, identity B's all saw B — the two runs never bled tokens.
         assert set(sink) == {token_a, token_b}, f"per-run token binding wrong: {sink!r}"
         assert token_b not in sink[: sink.index(token_b)], "operator B's token appeared during run A"
-        assert token_a not in sink[sink.index(token_b):], "operator A's token appeared during run B"
+        assert token_a not in sink[sink.index(token_b) :], "operator A's token appeared during run B"
 
 
 class TestCancellationDuringAsyncFactory:
@@ -362,9 +368,8 @@ class TestCancellationDuringAsyncFactory:
                 # Park here — models a slow per-run token mint / MCP client build.
                 entered.append(True)
                 await gate.wait()
-                return StructuredTool.from_function(
-                    func=lambda text: f"echo:{text}", name="mcp_echo", description="x"
-                )
+                return StructuredTool.from_function(func=lambda text: f"echo:{text}", name="mcp_echo", description="x")
+
             return _factory
 
         db = str(tmp_path / "cancel-mcp.db")
@@ -377,11 +382,11 @@ class TestCancellationDuringAsyncFactory:
             async with AsyncSqliteSaver.from_conn_string(db) as saver:
                 graph = compile(
                     _build_node_surface("mcp_echo"),
-                    checkpointer=saver, **build_test_compile_kwargs(), **_llm_kw,
+                    checkpointer=saver,
+                    **build_test_compile_kwargs(),
+                    **_llm_kw,
                 )
-                task = asyncio.create_task(
-                    neograph.arun(graph, input={"node_id": "cx"}, config=cfg)
-                )
+                task = asyncio.create_task(neograph.arun(graph, input={"node_id": "cx"}, config=cfg))
 
                 # Poll until arun parks INSIDE the async tool factory's await.
                 for _ in range(300):
@@ -389,8 +394,7 @@ class TestCancellationDuringAsyncFactory:
                         break
                     await asyncio.sleep(0.005)
                 assert entered and not task.done(), (
-                    "arun did not park in the async tool factory — cannot test a "
-                    "mid-factory cancellation"
+                    "arun did not park in the async tool factory — cannot test a mid-factory cancellation"
                 )
 
                 # (a) SSE disconnect == cancel the consuming task: raises cleanly.
@@ -403,13 +407,13 @@ class TestCancellationDuringAsyncFactory:
                 # re-arun-s the SAME thread_id under the SAME open saver to
                 # completion (no corrupt checkpoint, no torn saver connection).
                 calls: list[str] = []
-                register_tool_factory(
-                    "mcp_echo", _make_recording_async_factory("mcp_echo", calls)
-                )
+                register_tool_factory("mcp_echo", _make_recording_async_factory("mcp_echo", calls))
                 resume_kw = configure_fake_llm(lambda tier: _react_fake("mcp_echo"))
                 resume_graph = compile(
                     _build_node_surface("mcp_echo"),
-                    checkpointer=saver, **build_test_compile_kwargs(), **resume_kw,
+                    checkpointer=saver,
+                    **build_test_compile_kwargs(),
+                    **resume_kw,
                 )
                 return await asyncio.wait_for(
                     neograph.arun(resume_graph, input={"node_id": "cx"}, config=cfg),

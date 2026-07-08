@@ -8,6 +8,9 @@ class Result(BaseModel, frozen=True):
     text: str
 
 
-pipeline = Construct("broken", nodes=[
-    Node.scripted("do-stuff", fn="totally_nonexistent_fn", outputs=Result),
-])
+pipeline = Construct(
+    "broken",
+    nodes=[
+        Node.scripted("do-stuff", fn="totally_nonexistent_fn", outputs=Result),
+    ],
+)

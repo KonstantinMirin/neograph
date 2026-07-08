@@ -49,9 +49,8 @@ class TestNoMixedCaseWordmark:
             for lineno, text in self._find_mixed_case_wordmark(path.read_text()):
                 rel = path.relative_to(SRC_DIR.parent.parent)
                 offenders.append(f"{rel}:{lineno}: {text}")
-        assert not offenders, (
-            "Mixed-case 'NeoGraph' wordmark found (canonical is lowercase "
-            "'neograph'):\n" + "\n".join(offenders)
+        assert not offenders, "Mixed-case 'NeoGraph' wordmark found (canonical is lowercase 'neograph'):\n" + "\n".join(
+            offenders
         )
 
     # -- Mutation meta-tests: prove the scanner actually scans ----------------

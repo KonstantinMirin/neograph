@@ -256,8 +256,15 @@ def invoke_structured(
         runtime = EMPTY_RUNTIME
     cfg = _coerce_llm_config(llm_config)
     llm, messages, strategy, llm_log = _prepare_structured_call(
-        runtime, model_tier, prompt_template, input_data,
-        output_model, config, node_name, cfg, context,
+        runtime,
+        model_tier,
+        prompt_template,
+        input_data,
+        output_model,
+        config,
+        node_name,
+        cfg,
+        context,
     )
     max_retries = cfg.max_retries
     t0 = time.monotonic()
@@ -368,8 +375,15 @@ async def ainvoke_structured(
         runtime = EMPTY_RUNTIME
     cfg = _coerce_llm_config(llm_config)
     llm, messages, strategy, llm_log = _prepare_structured_call(
-        runtime, model_tier, prompt_template, input_data,
-        output_model, config, node_name, cfg, context,
+        runtime,
+        model_tier,
+        prompt_template,
+        input_data,
+        output_model,
+        config,
+        node_name,
+        cfg,
+        context,
     )
     max_retries = cfg.max_retries
     t0 = time.monotonic()

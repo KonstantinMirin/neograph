@@ -32,9 +32,7 @@ def type_display_name(t: TypeSpecStatic) -> str:
     if t is None:
         return "None"
     if isinstance(t, dict):
-        parts = ", ".join(
-            f"{k}: {getattr(v, '__name__', str(v))}" for k, v in t.items()
-        )
+        parts = ", ".join(f"{k}: {getattr(v, '__name__', str(v))}" for k, v in t.items())
         return "{" + parts + "}"
     return getattr(t, "__name__", str(t))
 
@@ -51,15 +49,14 @@ class ExcludeFromOutput:
     - Be EXCLUDED from describe_type() output schema (LLM won't try to produce it)
     - Must have a default value (since the LLM won't provide it)
     """
+
     pass
 
 
 def _is_output_excluded(field_info: FieldInfo) -> bool:
     """True if the field carries an ExcludeFromOutput marker in Annotated metadata."""
-    return any(
-        m is ExcludeFromOutput or isinstance(m, ExcludeFromOutput)
-        for m in field_info.metadata
-    )
+    return any(m is ExcludeFromOutput or isinstance(m, ExcludeFromOutput) for m in field_info.metadata)
+
 
 _PRIMITIVE_MAP: dict[type, str] = {
     str: "string",
@@ -138,16 +135,24 @@ def describe_type(
             lines.append(_render_enum_declaration(cls, indent))
         else:
             body = _render_model_body(
-                cls, indent=indent, depth=0, or_splitter=or_splitter,
-                hoisted=hoisted, visited=set(),
+                cls,
+                indent=indent,
+                depth=0,
+                or_splitter=or_splitter,
+                hoisted=hoisted,
+                visited=set(),
             )
             lines.append(f"type {cls.__name__} = {body}")
         lines.append("")
 
     # Render the main model body.
     body = _render_model_body(
-        model, indent=indent, depth=0, or_splitter=or_splitter,
-        hoisted=hoisted, visited=set(),
+        model,
+        indent=indent,
+        depth=0,
+        or_splitter=or_splitter,
+        hoisted=hoisted,
+        visited=set(),
     )
     lines.append(body)
 
@@ -157,6 +162,7 @@ def describe_type(
 # ---------------------------------------------------------------------------
 # Pass 1: count class occurrences
 # ---------------------------------------------------------------------------
+
 
 def _count_classes(
     model: type[BaseModel],
@@ -221,6 +227,7 @@ def _count_annotation(
 # Pass 2: render
 # ---------------------------------------------------------------------------
 
+
 def _render_model_body(
     model: type[BaseModel],
     *,
@@ -244,8 +251,11 @@ def _render_model_body(
             continue
         type_str = _render_type(
             field_info.annotation,
-            indent=indent, depth=depth + 1, or_splitter=or_splitter,
-            hoisted=hoisted, visited=visited,
+            indent=indent,
+            depth=depth + 1,
+            or_splitter=or_splitter,
+            hoisted=hoisted,
+            visited=visited,
         )
         # Check if field is optional (has a default).
         if not field_info.is_required():
@@ -287,8 +297,12 @@ def _render_type(
     if origin is Union or origin is types.UnionType:
         parts = [
             _render_type(
-                arg, indent=indent, depth=depth, or_splitter=or_splitter,
-                hoisted=hoisted, visited=visited,
+                arg,
+                indent=indent,
+                depth=depth,
+                or_splitter=or_splitter,
+                hoisted=hoisted,
+                visited=visited,
             )
             for arg in args
         ]
@@ -303,8 +317,12 @@ def _render_type(
     if origin in (list, tuple, frozenset, set):
         if args:
             inner = _render_type(
-                args[0], indent=indent, depth=depth, or_splitter=or_splitter,
-                hoisted=hoisted, visited=visited,
+                args[0],
+                indent=indent,
+                depth=depth,
+                or_splitter=or_splitter,
+                hoisted=hoisted,
+                visited=visited,
             )
         else:
             inner = "any"
@@ -314,12 +332,20 @@ def _render_type(
     if origin is dict:
         if args and len(args) == 2:
             key = _render_type(
-                args[0], indent=indent, depth=depth, or_splitter=or_splitter,
-                hoisted=hoisted, visited=visited,
+                args[0],
+                indent=indent,
+                depth=depth,
+                or_splitter=or_splitter,
+                hoisted=hoisted,
+                visited=visited,
             )
             val = _render_type(
-                args[1], indent=indent, depth=depth, or_splitter=or_splitter,
-                hoisted=hoisted, visited=visited,
+                args[1],
+                indent=indent,
+                depth=depth,
+                or_splitter=or_splitter,
+                hoisted=hoisted,
+                visited=visited,
             )
             return f"object<{key}, {val}>"
         return "object"
@@ -328,8 +354,7 @@ def _render_type(
     if isinstance(annotation, type) and issubclass(annotation, enum.Enum):
         if annotation in hoisted:
             return annotation.__name__
-        members = [f'"{m.value}"' if isinstance(m.value, str) else str(m.value)
-                    for m in annotation]
+        members = [f'"{m.value}"' if isinstance(m.value, str) else str(m.value) for m in annotation]
         return or_splitter.join(members)
 
     # BaseModel.
@@ -337,8 +362,12 @@ def _render_type(
         if annotation in hoisted:
             return annotation.__name__
         return _render_model_body(
-            annotation, indent=indent, depth=depth, or_splitter=or_splitter,
-            hoisted=hoisted, visited=visited,
+            annotation,
+            indent=indent,
+            depth=depth,
+            or_splitter=or_splitter,
+            hoisted=hoisted,
+            visited=visited,
         )
 
     # Any / unknown.
@@ -352,6 +381,7 @@ def _render_type(
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _field_comment(field_info: FieldInfo) -> str:
     """Extract description from a Pydantic FieldInfo for inline comment."""
     if field_info.description:
@@ -361,8 +391,7 @@ def _field_comment(field_info: FieldInfo) -> str:
 
 def _render_enum_declaration(cls: type, indent: str) -> str:
     """Render an Enum class as ``enum Foo { A, B, C }``."""
-    members = [f'"{m.value}"' if isinstance(m.value, str) else str(m.value)
-               for m in cls]  # type: ignore[attr-defined]
+    members = [f'"{m.value}"' if isinstance(m.value, str) else str(m.value) for m in cls]  # type: ignore[attr-defined]
     return f"enum {cls.__name__} {{ {', '.join(members)} }}"
 
 
@@ -465,10 +494,7 @@ def _render_list_value(lst: list, *, indent: str, depth: int) -> str:
         return "[]"
     pad = indent * depth
     inner_pad = indent * (depth + 1)
-    items = [
-        f"{inner_pad}{_render_value(item, indent=indent, depth=depth + 1)}"
-        for item in lst
-    ]
+    items = [f"{inner_pad}{_render_value(item, indent=indent, depth=depth + 1)}" for item in lst]
     return "[\n" + ",\n".join(items) + "\n" + pad + "]"
 
 

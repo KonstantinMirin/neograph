@@ -50,27 +50,25 @@ def _count_calls(source: str, func_name: str) -> int:
     tree = ast.parse(source)
     count = 0
     for node in ast.walk(tree):
-        if (
-            isinstance(node, ast.Call)
-            and isinstance(node.func, ast.Name)
-            and node.func.id == func_name
-        ):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == func_name:
             count += 1
     return count
 
 
 def _has_def(source: str, func_name: str) -> bool:
     tree = ast.parse(source)
-    return any(
-        isinstance(n, ast.FunctionDef) and n.name == func_name
-        for n in ast.walk(tree)
-    )
+    return any(isinstance(n, ast.FunctionDef) and n.name == func_name for n in ast.walk(tree))
 
 
 def _normalized_idiom_count(source: str, idiom: str) -> int:
-    """Count whitespace-insensitive occurrences of ``idiom`` in source."""
-    squashed = "".join(source.split())
-    needle = "".join(idiom.split())
+    """Count whitespace- and quote-style-insensitive occurrences of ``idiom``.
+
+    Quote normalization added with the m0tv ruff-format pass: the formatter
+    rewrites single-quoted f-strings to double quotes, which whitespace
+    squashing alone does not absorb.
+    """
+    squashed = "".join(source.split()).replace('"', "'")
+    needle = "".join(idiom.split()).replace('"', "'")
     return squashed.count(needle)
 
 
@@ -93,9 +91,7 @@ class TestHelperMonopolyWpzg:
                     f"  UNDER-USED: {helper} called {calls}x in {fname} "
                     f"(monopoly requires >= {min_calls}); did a call site get inlined?"
                 )
-        assert violations == [], (
-            "\nHelper-monopoly call-site violations:\n" + "\n".join(violations)
-        )
+        assert violations == [], "\nHelper-monopoly call-site violations:\n" + "\n".join(violations)
 
     def test_inline_idiom_appears_only_in_its_helper(self):
         violations: list[str] = []
@@ -108,9 +104,7 @@ class TestHelperMonopolyWpzg:
                     f"  BYPASS: idiom for {helper} appears {n}x in {fname} "
                     f"(must be exactly 1 — only inside the helper). Idiom: {idiom!r}"
                 )
-        assert violations == [], (
-            "\nHelper-monopoly inline-bypass violations:\n" + "\n".join(violations)
-        )
+        assert violations == [], "\nHelper-monopoly inline-bypass violations:\n" + "\n".join(violations)
 
     # --- meta-tests: prove the guards catch regressions ---
 
@@ -145,9 +139,7 @@ class TestHelperMonopolyWpzg:
 _OWN_FIELD_READ_ALLOWLIST = frozenset({"subgraph_node"})
 
 
-def _list_latest_bypass_sites(
-    source: str, allowlist: frozenset[str]
-) -> list[tuple[str, str]]:
+def _list_latest_bypass_sites(source: str, allowlist: frozenset[str]) -> list[tuple[str, str]]:
     """Find functions that both ``isinstance(X, list)``-test and ``X[-1]``-subscript
     the SAME name — the hand-rolled loop-append latest-unwrap idiom that must
     delegate to ``di._unwrap_loop_value`` instead (neograph-ovx1).
@@ -225,9 +217,7 @@ class TestUnwrapHelperMonopoly:
         for py in sorted(SRC_DIR.glob("*.py")):
             if py.name == "di.py":
                 continue  # the monopoly home
-            for func, name in _list_latest_bypass_sites(
-                py.read_text(), _OWN_FIELD_READ_ALLOWLIST
-            ):
+            for func, name in _list_latest_bypass_sites(py.read_text(), _OWN_FIELD_READ_ALLOWLIST):
                 violations.append(
                     f"  {py.name}::{func} hand-rolls isinstance({name}, list)+{name}[-1]"
                     f" — delegate to di._unwrap_loop_value."
@@ -244,13 +234,8 @@ class TestUnwrapHelperMonopoly:
             source = (SRC_DIR / fname).read_text()
             for helper in helpers:
                 if _count_calls(source, helper) < 1:
-                    violations.append(
-                        f"  {fname} does not call {helper} — bypass re-introduced?"
-                    )
-        assert violations == [], (
-            "\nMigrated files must delegate to the di unwrap helpers:\n"
-            + "\n".join(violations)
-        )
+                    violations.append(f"  {fname} does not call {helper} — bypass re-introduced?")
+        assert violations == [], "\nMigrated files must delegate to the di unwrap helpers:\n" + "\n".join(violations)
 
     # --- meta-tests ---
 
@@ -267,24 +252,15 @@ class TestUnwrapHelperMonopoly:
 
     def test_meta_bypass_scanner_passes_helper_delegation(self):
         """negative: delegating to the helper is clean."""
-        good = (
-            "def consume(value, expected_type):\n"
-            "    return _unwrap_loop_value(value, expected_type)\n"
-        )
+        good = "def consume(value, expected_type):\n    return _unwrap_loop_value(value, expected_type)\n"
         assert _list_latest_bypass_sites(good, frozenset()) == []
 
     def test_meta_bypass_scanner_allowlists_own_field_reads(self):
         """own-field reads (allowlisted function) are not flagged."""
-        own = (
-            "def subgraph_node(own_val):\n"
-            "    if isinstance(own_val, list) and own_val:\n"
-            "        return own_val[-1]\n"
-        )
+        own = "def subgraph_node(own_val):\n    if isinstance(own_val, list) and own_val:\n        return own_val[-1]\n"
         assert _list_latest_bypass_sites(own, _OWN_FIELD_READ_ALLOWLIST) == []
         # but the same idiom in a non-allowlisted function IS flagged
-        assert _list_latest_bypass_sites(own, frozenset()) == [
-            ("subgraph_node", "own_val")
-        ]
+        assert _list_latest_bypass_sites(own, frozenset()) == [("subgraph_node", "own_val")]
 
 
 _COMPARISON_OP_ATTRS = frozenset({"lt", "le", "gt", "ge", "eq", "ne"})
@@ -303,11 +279,7 @@ def _comparison_op_table_modules(src_dir: pathlib.Path) -> list[str]:
         for node in ast.walk(tree):
             if not isinstance(node, ast.Dict):
                 continue
-            op_values = sum(
-                1
-                for v in node.values
-                if isinstance(v, ast.Attribute) and v.attr in _COMPARISON_OP_ATTRS
-            )
+            op_values = sum(1 for v in node.values if isinstance(v, ast.Attribute) and v.attr in _COMPARISON_OP_ATTRS)
             if op_values >= 4:
                 found.append(py.name)
                 break
@@ -341,17 +313,13 @@ class TestComparisonOperatorTableMonopoly:
     def test_meta_op_table_scanner_catches_duplicate(self, tmp_path):
         """positive: a module re-declaring the table is detected."""
         (tmp_path / "dup.py").write_text(
-            "import operator\n"
-            "_T = {'<': operator.lt, '>': operator.gt, "
-            "'<=': operator.le, '>=': operator.ge}\n"
+            "import operator\n_T = {'<': operator.lt, '>': operator.gt, '<=': operator.le, '>=': operator.ge}\n"
         )
         assert _comparison_op_table_modules(tmp_path) == ["dup.py"]
 
     def test_meta_op_table_scanner_ignores_unrelated_dict(self, tmp_path):
         """negative: a non-operator dict is not flagged."""
-        (tmp_path / "clean.py").write_text(
-            "_M = {'a': 1, 'b': 2, 'c': 3, 'd': 4}\n"
-        )
+        (tmp_path / "clean.py").write_text("_M = {'a': 1, 'b': 2, 'c': 3, 'd': 4}\n")
         assert _comparison_op_table_modules(tmp_path) == []
 
 
@@ -368,11 +336,7 @@ _DECLARED_OUTPUT_IDIOM = 'item.outputs if isinstance(item, Node) else getattr(it
 
 
 def _modules_defining(src_dir: pathlib.Path, func_name: str) -> list[str]:
-    return [
-        py.name
-        for py in sorted(src_dir.glob("*.py"))
-        if _has_def(py.read_text(), func_name)
-    ]
+    return [py.name for py in sorted(src_dir.glob("*.py")) if _has_def(py.read_text(), func_name)]
 
 
 class TestIrWalkHelperMonopoly:
@@ -386,17 +350,12 @@ class TestIrWalkHelperMonopoly:
         for helper, home in _X3F0_HELPER_HOMES.items():
             modules = _modules_defining(SRC_DIR, helper)
             if modules != [home]:
-                violations.append(
-                    f"  {helper} defined in {modules} (expected exactly [{home}])"
-                )
-        assert violations == [], "\nIR-walk helper home violations:\n" + "\n".join(
-            violations
-        )
+                violations.append(f"  {helper} defined in {modules} (expected exactly [{home}])")
+        assert violations == [], "\nIR-walk helper home violations:\n" + "\n".join(violations)
 
     def test_declared_output_ternary_appears_once(self):
         total = sum(
-            _normalized_idiom_count(py.read_text(), _DECLARED_OUTPUT_IDIOM)
-            for py in sorted(SRC_DIR.glob("*.py"))
+            _normalized_idiom_count(py.read_text(), _DECLARED_OUTPUT_IDIOM) for py in sorted(SRC_DIR.glob("*.py"))
         )
         assert total == 1, (
             f"\nDeclared-output ternary appears {total}x across src "
@@ -406,14 +365,8 @@ class TestIrWalkHelperMonopoly:
 
     def test_no_inline_walk_for_llm(self):
         """The hand-rolled nested _walk_for_llm collectors must be gone."""
-        offenders = [
-            py.name
-            for py in sorted(SRC_DIR.glob("*.py"))
-            if "_walk_for_llm" in py.read_text()
-        ]
-        assert offenders == [], (
-            f"\n_walk_for_llm re-inlined in {offenders}; use collect_llm_nodes(construct)."
-        )
+        offenders = [py.name for py in sorted(SRC_DIR.glob("*.py")) if "_walk_for_llm" in py.read_text()]
+        assert offenders == [], f"\n_walk_for_llm re-inlined in {offenders}; use collect_llm_nodes(construct)."
 
     def test_llm_node_collection_callers_delegate(self):
         for fname in ("_llm_runtime.py", "lint.py"):
@@ -424,9 +377,7 @@ class TestIrWalkHelperMonopoly:
 
     def test_compiler_collectors_use_iter_nodes(self):
         source = (SRC_DIR / "compiler.py").read_text()
-        assert _count_calls(source, "iter_nodes") >= 2, (
-            "compiler.py collectors must iterate via iter_nodes(construct)."
-        )
+        assert _count_calls(source, "iter_nodes") >= 2, "compiler.py collectors must iterate via iter_nodes(construct)."
 
     # --- meta-tests ---
 
@@ -485,12 +436,8 @@ class TestTypeDisplayNameMonopoly:
     # --- meta-tests ---
 
     def test_meta_type_display_home_scanner(self, tmp_path):
-        (tmp_path / "describe_type.py").write_text(
-            "def type_display_name(t):\n    return str(t)\n"
-        )
-        (tmp_path / "rogue.py").write_text(
-            "def type_display_name(t):\n    return str(t)\n"
-        )
+        (tmp_path / "describe_type.py").write_text("def type_display_name(t):\n    return str(t)\n")
+        (tmp_path / "rogue.py").write_text("def type_display_name(t):\n    return str(t)\n")
         assert _modules_defining(tmp_path, "type_display_name") == [
             "describe_type.py",
             "rogue.py",
@@ -536,8 +483,7 @@ class TestDeclaredOutputSelectorMonopoly:
         offenders = [
             py.name
             for py in sorted(SRC_DIR.glob("*.py"))
-            if py.name not in self._EXEMPT_FILES
-            and _getattr_output_sites(ast.parse(py.read_text()))
+            if py.name not in self._EXEMPT_FILES and _getattr_output_sites(ast.parse(py.read_text()))
         ]
         assert offenders == [], (
             f"\n{len(offenders)} hand-rolled getattr(_, 'output', ...) declared-output "
@@ -549,9 +495,7 @@ class TestDeclaredOutputSelectorMonopoly:
         assert _getattr_output_sites(tree)
 
     def test_meta_getattr_output_scanner_ignores_other_attrs(self):
-        tree = ast.parse(
-            "def f(x):\n    return getattr(x, 'input', None), getattr(x, 'nodes', None)\n"
-        )
+        tree = ast.parse("def f(x):\n    return getattr(x, 'input', None), getattr(x, 'nodes', None)\n")
         assert not _getattr_output_sites(tree)
 
 
@@ -618,8 +562,7 @@ class TestNoRawOutputsInFanInWiring:
         assert not offenders, (
             "Raw `.outputs` assigned into a mapping (fan-in wiring). Use "
             "primary_output_field(base, outputs) for the key and "
-            "normalize_outputs(outputs).primary for the value (neograph-z3ie).\n"
-            + "\n".join(offenders)
+            "normalize_outputs(outputs).primary for the value (neograph-z3ie).\n" + "\n".join(offenders)
         )
 
     def test_meta_catches_raw_outputs_subscript_assign(self):
@@ -628,9 +571,7 @@ class TestNoRawOutputsInFanInWiring:
 
     def test_meta_passes_normalized_primary(self):
         """Negative: routing through the helper (.primary) is not flagged."""
-        assert not _subscript_assigns_raw_outputs(
-            "d[k] = normalize_outputs(node.outputs).primary\n"
-        )
+        assert not _subscript_assigns_raw_outputs("d[k] = normalize_outputs(node.outputs).primary\n")
 
     def test_meta_passes_plain_assign_and_call_arg(self):
         """Negative: plain `x = node.outputs` and call-arg `f(node.outputs)` are

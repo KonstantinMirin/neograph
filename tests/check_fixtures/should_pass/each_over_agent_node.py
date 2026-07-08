@@ -30,16 +30,19 @@ register_scripted("batch_fn", lambda input_data, config: Batch(items=[Item(text=
 register_tool_factory("search", lambda config, tool_config: None)
 
 
-pipeline = Construct("each-over-agent", nodes=[
-    Node.scripted("make-batch", fn="batch_fn", outputs=Batch),
-    Node(
-        name="agent-gen",
-        mode="agent",
-        inputs=Item,  # single-value input port: receives the fanned Each item
-        outputs=Result,
-        model="fast",
-        prompt="test",
-        tools=[Tool(name="search", budget=3)],
-    )
-    | Each(over="make_batch.items", key="text"),
-])
+pipeline = Construct(
+    "each-over-agent",
+    nodes=[
+        Node.scripted("make-batch", fn="batch_fn", outputs=Batch),
+        Node(
+            name="agent-gen",
+            mode="agent",
+            inputs=Item,  # single-value input port: receives the fanned Each item
+            outputs=Result,
+            model="fast",
+            prompt="test",
+            tools=[Tool(name="search", budget=3)],
+        )
+        | Each(over="make_batch.items", key="text"),
+    ],
+)

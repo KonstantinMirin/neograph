@@ -69,9 +69,12 @@ class TestDescribeGraph:
         from neograph.compiler import describe_graph
 
         register_scripted("dg_a", lambda _in, _cfg: RawText(text="a"))
-        pipeline = Construct("dg-test", nodes=[
-            Node.scripted("a", fn="dg_a", outputs=RawText),
-        ])
+        pipeline = Construct(
+            "dg-test",
+            nodes=[
+                Node.scripted("a", fn="dg_a", outputs=RawText),
+            ],
+        )
         graph = compile(pipeline, **build_test_compile_kwargs())
         result = describe_graph(graph)
         assert isinstance(result, str)
@@ -94,9 +97,12 @@ class TestDescribeGraph:
         from neograph.compiler import _print_dag_summary
 
         register_scripted("dag_a", lambda _in, _cfg: RawText(text="a"))
-        pipeline = Construct("dag-test", nodes=[
-            Node.scripted("a", fn="dag_a", outputs=RawText),
-        ])
+        pipeline = Construct(
+            "dag-test",
+            nodes=[
+                Node.scripted("a", fn="dag_a", outputs=RawText),
+            ],
+        )
         graph = compile(pipeline, **build_test_compile_kwargs())
         _print_dag_summary(graph, pipeline)
         captured = capsys.readouterr()
@@ -112,19 +118,29 @@ class TestDescribeGraph:
                 raise AttributeError("fail")
 
         # Should not raise
-        _print_dag_summary(BadGraph(), Construct("x", nodes=[
-            Node.scripted("n", fn="f", outputs=RawText),
-        ]))
+        _print_dag_summary(
+            BadGraph(),
+            Construct(
+                "x",
+                nodes=[
+                    Node.scripted("n", fn="f", outputs=RawText),
+                ],
+            ),
+        )
 
     def test_compile_calls_print_dag_summary_when_dev_mode(self, monkeypatch):
         """compile() calls _print_dag_summary when NEOGRAPH_DEV=1."""
         register_scripted("dev_a", lambda _in, _cfg: RawText(text="a"))
-        pipeline = Construct("dev-test", nodes=[
-            Node.scripted("a", fn="dev_a", outputs=RawText),
-        ])
+        pipeline = Construct(
+            "dev-test",
+            nodes=[
+                Node.scripted("a", fn="dev_a", outputs=RawText),
+            ],
+        )
 
         import neograph._dev_warnings as dw
         import neograph.compiler as _compiler
+
         monkeypatch.setattr(dw, "DEV_MODE", True)
         monkeypatch.setattr(_compiler, "DEV_MODE", True)
         with patch.dict(os.environ, {"NEOGRAPH_DEV": "1"}):
@@ -149,41 +165,52 @@ class TestOperatorAfterModifiers:
         register_scripted("op_ora_merge", lambda variants, _cfg: RawText(text="merged"))
         register_condition("always_pause", lambda state: False)
 
-        n = Node.scripted("gen", fn="op_ora_gen", outputs=RawText) \
-            | Oracle(n=2, merge_fn="op_ora_merge") \
+        n = (
+            Node.scripted("gen", fn="op_ora_gen", outputs=RawText)
+            | Oracle(n=2, merge_fn="op_ora_merge")
             | Operator(when="always_pause")
+        )
         pipeline = Construct("ora-op", nodes=[n])
 
         from langgraph.checkpoint.memory import MemorySaver
+
         cp = MemorySaver()
         graph = compile(pipeline, checkpointer=cp, **build_test_compile_kwargs())
-        result = run(graph, input={"node_id": "test"},
-                     config={"configurable": {"thread_id": "op-ora-1"}})
+        result = run(graph, input={"node_id": "test"}, config={"configurable": {"thread_id": "op-ora-1"}})
         assert result["gen"].text == "merged"
 
     def test_operator_added_after_each_on_node(self):
         """Operator after Each on a Node compiles without error."""
         from tests.fakes import register_condition
 
-        register_scripted("op_each_make", lambda _in, _cfg: Clusters(
-            groups=[ClusterGroup(label="a", claim_ids=["1"])],
-        ))
-        register_scripted("op_each_proc", lambda _in, _cfg: MatchResult(
-            cluster_label=_in.label, matched=["ok"],
-        ))
+        register_scripted(
+            "op_each_make",
+            lambda _in, _cfg: Clusters(
+                groups=[ClusterGroup(label="a", claim_ids=["1"])],
+            ),
+        )
+        register_scripted(
+            "op_each_proc",
+            lambda _in, _cfg: MatchResult(
+                cluster_label=_in.label,
+                matched=["ok"],
+            ),
+        )
         register_condition("no_pause", lambda state: False)
 
         make = Node.scripted("make", fn="op_each_make", outputs=Clusters)
-        proc = Node.scripted("proc", fn="op_each_proc", inputs=ClusterGroup, outputs=MatchResult) \
-            | Each(over="make.groups", key="label") \
+        proc = (
+            Node.scripted("proc", fn="op_each_proc", inputs=ClusterGroup, outputs=MatchResult)
+            | Each(over="make.groups", key="label")
             | Operator(when="no_pause")
+        )
 
         pipeline = Construct("each-op", nodes=[make, proc])
         from langgraph.checkpoint.memory import MemorySaver
+
         cp = MemorySaver()
         graph = compile(pipeline, checkpointer=cp, **build_test_compile_kwargs())
-        result = run(graph, input={"node_id": "test"},
-                     config={"configurable": {"thread_id": "op-each-1"}})
+        result = run(graph, input={"node_id": "test"}, config={"configurable": {"thread_id": "op-each-1"}})
         assert "a" in result["proc"]
 
     def test_operator_added_after_loop_on_node(self):
@@ -191,51 +218,71 @@ class TestOperatorAfterModifiers:
         from tests.fakes import register_condition
 
         register_scripted("op_loop_seed", lambda _in, _cfg: Draft(content="v0", score=0.0))
-        register_scripted("op_loop_refine", lambda _in, _cfg: Draft(
-            content="v1", iteration=1, score=1.0,
-        ))
+        register_scripted(
+            "op_loop_refine",
+            lambda _in, _cfg: Draft(
+                content="v1",
+                iteration=1,
+                score=1.0,
+            ),
+        )
         register_condition("no_pause_loop", lambda state: False)
 
         seed = Node.scripted("seed", fn="op_loop_seed", outputs=Draft)
-        refine = Node.scripted("refine", fn="op_loop_refine", inputs=Draft, outputs=Draft) \
-            | Loop(when=lambda d: d is None or d.score < 0.5, max_iterations=3) \
+        refine = (
+            Node.scripted("refine", fn="op_loop_refine", inputs=Draft, outputs=Draft)
+            | Loop(when=lambda d: d is None or d.score < 0.5, max_iterations=3)
             | Operator(when="no_pause_loop")
+        )
 
         pipeline = Construct("loop-op", nodes=[seed, refine])
         from langgraph.checkpoint.memory import MemorySaver
+
         cp = MemorySaver()
         graph = compile(pipeline, checkpointer=cp, **build_test_compile_kwargs())
-        result = run(graph, input={"node_id": "test"},
-                     config={"configurable": {"thread_id": "op-loop-1"}})
+        result = run(graph, input={"node_id": "test"}, config={"configurable": {"thread_id": "op-loop-1"}})
         assert result["refine"][-1].score >= 0.5
 
     def test_operator_added_after_each_oracle_on_node(self):
         """Operator after Each+Oracle (fused) on a Node compiles without error."""
         from tests.fakes import register_condition
 
-        register_scripted("eo_make", lambda _in, _cfg: Clusters(
-            groups=[ClusterGroup(label="a", claim_ids=["1"])],
-        ))
-        register_scripted("eo_gen", lambda _in, _cfg: MatchResult(
-            cluster_label="a", matched=["ok"],
-        ))
-        register_scripted("eo_merge", lambda variants, _cfg: MatchResult(
-            cluster_label="a", matched=["merged"],
-        ))
+        register_scripted(
+            "eo_make",
+            lambda _in, _cfg: Clusters(
+                groups=[ClusterGroup(label="a", claim_ids=["1"])],
+            ),
+        )
+        register_scripted(
+            "eo_gen",
+            lambda _in, _cfg: MatchResult(
+                cluster_label="a",
+                matched=["ok"],
+            ),
+        )
+        register_scripted(
+            "eo_merge",
+            lambda variants, _cfg: MatchResult(
+                cluster_label="a",
+                matched=["merged"],
+            ),
+        )
         register_condition("eo_no_pause", lambda state: False)
 
         make = Node.scripted("make", fn="eo_make", outputs=Clusters)
-        proc = Node.scripted("proc", fn="eo_gen", inputs=ClusterGroup, outputs=MatchResult) \
-            | Each(over="make.groups", key="label") \
-            | Oracle(n=2, merge_fn="eo_merge") \
+        proc = (
+            Node.scripted("proc", fn="eo_gen", inputs=ClusterGroup, outputs=MatchResult)
+            | Each(over="make.groups", key="label")
+            | Oracle(n=2, merge_fn="eo_merge")
             | Operator(when="eo_no_pause")
+        )
 
         pipeline = Construct("eo-op", nodes=[make, proc])
         from langgraph.checkpoint.memory import MemorySaver
+
         cp = MemorySaver()
         graph = compile(pipeline, checkpointer=cp, **build_test_compile_kwargs())
-        result = run(graph, input={"node_id": "test"},
-                     config={"configurable": {"thread_id": "eo-op-1"}})
+        result = run(graph, input={"node_id": "test"}, config={"configurable": {"thread_id": "eo-op-1"}})
         assert "a" in result["proc"]
 
     def test_operator_added_after_loop_on_sub_construct(self):
@@ -246,25 +293,31 @@ class TestOperatorAfterModifiers:
         register_scripted("sub_loop_inner", lambda _in, _cfg: Draft(content="done", score=1.0))
         register_condition("sub_no_pause", lambda state: False)
 
-        inner = Construct(
-            "inner",
-            input=Draft,
-            output=Draft,
-            nodes=[Node.scripted("inner-node", fn="sub_loop_inner", inputs=Draft, outputs=Draft)],
-        ) | Loop(when=lambda v: v is None, max_iterations=2) \
-          | Operator(when="sub_no_pause")
+        inner = (
+            Construct(
+                "inner",
+                input=Draft,
+                output=Draft,
+                nodes=[Node.scripted("inner-node", fn="sub_loop_inner", inputs=Draft, outputs=Draft)],
+            )
+            | Loop(when=lambda v: v is None, max_iterations=2)
+            | Operator(when="sub_no_pause")
+        )
 
         register_scripted("op_sub_seed", lambda _in, _cfg: Draft(content="start", score=0.0))
-        parent = Construct("parent", nodes=[
-            Node.scripted("seed", fn="op_sub_seed", outputs=Draft),
-            inner,
-        ])
+        parent = Construct(
+            "parent",
+            nodes=[
+                Node.scripted("seed", fn="op_sub_seed", outputs=Draft),
+                inner,
+            ],
+        )
 
         from langgraph.checkpoint.memory import MemorySaver
+
         cp = MemorySaver()
         graph = compile(parent, checkpointer=cp, **build_test_compile_kwargs())
-        result = run(graph, input={"node_id": "test"},
-                     config={"configurable": {"thread_id": "sub-loop-op-1"}})
+        result = run(graph, input={"node_id": "test"}, config={"configurable": {"thread_id": "sub-loop-op-1"}})
         inner = result["inner"]
         final = inner[-1] if isinstance(inner, list) else inner
         assert isinstance(final, Draft)
@@ -287,23 +340,36 @@ class TestEachOracleFusion:
 
     def test_eachoracle_deduplicates_keys_with_warning(self):
         """Each×Oracle fusion warns on duplicate keys (lines 421-422)."""
-        register_scripted("eo_dupe_make", lambda _in, _cfg: Clusters(
-            groups=[
-                ClusterGroup(label="same", claim_ids=["1"]),
-                ClusterGroup(label="same", claim_ids=["2"]),
-            ],
-        ))
-        register_scripted("eo_dupe_gen", lambda _in, _cfg: MatchResult(
-            cluster_label="same", matched=["ok"],
-        ))
-        register_scripted("eo_dupe_merge", lambda variants, _cfg: MatchResult(
-            cluster_label="same", matched=["merged"],
-        ))
+        register_scripted(
+            "eo_dupe_make",
+            lambda _in, _cfg: Clusters(
+                groups=[
+                    ClusterGroup(label="same", claim_ids=["1"]),
+                    ClusterGroup(label="same", claim_ids=["2"]),
+                ],
+            ),
+        )
+        register_scripted(
+            "eo_dupe_gen",
+            lambda _in, _cfg: MatchResult(
+                cluster_label="same",
+                matched=["ok"],
+            ),
+        )
+        register_scripted(
+            "eo_dupe_merge",
+            lambda variants, _cfg: MatchResult(
+                cluster_label="same",
+                matched=["merged"],
+            ),
+        )
 
         make = Node.scripted("make", fn="eo_dupe_make", outputs=Clusters)
-        proc = Node.scripted("proc", fn="eo_dupe_gen", inputs=ClusterGroup, outputs=MatchResult) \
-            | Each(over="make.groups", key="label") \
+        proc = (
+            Node.scripted("proc", fn="eo_dupe_gen", inputs=ClusterGroup, outputs=MatchResult)
+            | Each(over="make.groups", key="label")
             | Oracle(n=2, merge_fn="eo_dupe_merge")
+        )
 
         pipeline = Construct("eo-dupe", nodes=[make, proc])
         graph = compile(pipeline, **build_test_compile_kwargs())
@@ -331,7 +397,8 @@ class TestMergeOneGroup:
             return MatchResult(cluster_label="x", matched=["merged"])
 
         result = _merge_one_group(
-            oracle, n,
+            oracle,
+            n,
             [MatchResult(cluster_label="a", matched=["1"])],
             {},
             scripted_lookup={"mg_scripted": scripted_merge},
@@ -343,15 +410,18 @@ class TestMergeOneGroup:
         from neograph._wiring import _merge_one_group
         from tests.fakes import StructuredFake, build_fake_runtime
 
-        runtime = build_fake_runtime(lambda tier: StructuredFake(
-            lambda m: m(cluster_label="merged", matched=["combined"]),
-        ))
+        runtime = build_fake_runtime(
+            lambda tier: StructuredFake(
+                lambda m: m(cluster_label="merged", matched=["combined"]),
+            )
+        )
 
         n = Node("test", outputs=MatchResult)
         oracle = Oracle(n=2, merge_prompt="test/merge")
 
         result = _merge_one_group(
-            oracle, n,
+            oracle,
+            n,
             [MatchResult(cluster_label="a", matched=["1"])],
             {"configurable": {}},
             runtime=runtime,
@@ -373,6 +443,7 @@ class TestLoopRouterEdgeCases:
 
     def test_loop_with_dict_form_outputs_reads_primary_key(self):
         """Loop node with dict-form outputs reads primary key state field."""
+
         @node(
             outputs={"result": Draft, "meta": Claims},
             loop_when=lambda d: d is None or d.score < 0.8,
@@ -439,10 +510,13 @@ class TestSubgraphLoopEdges:
         ) | Loop(when="sc_always_false", max_iterations=5)
 
         register_scripted("sc_seed", lambda _in, _cfg: Draft(content="start", score=0.0))
-        parent = Construct("parent", nodes=[
-            Node.scripted("seed", fn="sc_seed", outputs=Draft),
-            inner,
-        ])
+        parent = Construct(
+            "parent",
+            nodes=[
+                Node.scripted("seed", fn="sc_seed", outputs=Draft),
+                inner,
+            ],
+        )
         graph = compile(parent, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "test"})
         # Loop condition is always false → exits after first iteration
@@ -463,10 +537,13 @@ class TestSubgraphLoopEdges:
         ) | Loop(when=lambda v: True, max_iterations=2, on_exhaust="error")
 
         register_scripted("exh_seed", lambda _in, _cfg: Draft(content="start", score=0.0))
-        parent = Construct("parent", nodes=[
-            Node.scripted("seed", fn="exh_seed", outputs=Draft),
-            inner,
-        ])
+        parent = Construct(
+            "parent",
+            nodes=[
+                Node.scripted("seed", fn="exh_seed", outputs=Draft),
+                inner,
+            ],
+        )
         graph = compile(parent, **build_test_compile_kwargs())
         with pytest.raises(ExecutionError, match="max_iterations"):
             run(graph, input={"node_id": "test"})
@@ -486,10 +563,13 @@ class TestSubgraphLoopEdges:
         ) | Loop(when=bad_condition, max_iterations=5)
 
         register_scripted("ce_seed", lambda _in, _cfg: Draft(content="start", score=0.0))
-        parent = Construct("parent", nodes=[
-            Node.scripted("seed", fn="ce_seed", outputs=Draft),
-            inner,
-        ])
+        parent = Construct(
+            "parent",
+            nodes=[
+                Node.scripted("seed", fn="ce_seed", outputs=Draft),
+                inner,
+            ],
+        )
         graph = compile(parent, **build_test_compile_kwargs())
         with pytest.raises(ExecutionError, match="loop condition raised AttributeError"):
             run(graph, input={"node_id": "test"})
@@ -506,7 +586,8 @@ class TestBranchArmsWithConstructs:
 
     def _make_branch_node(
         self,
-        true_nodes, false_nodes,
+        true_nodes,
+        false_nodes,
         source_node=None,
         attr_chain=None,
         op_fn=None,
@@ -738,12 +819,10 @@ class TestSkipWhenErrorWrapping:
         from neograph._state_write import _apply_skip_when
         from neograph.errors import ExecutionError
 
-        n = Node("test-skip", outputs=RawText,
-                 skip_when=lambda x: x.nonexistent_attr)
+        n = Node("test-skip", outputs=RawText, skip_when=lambda x: x.nonexistent_attr)
 
         with pytest.raises(ExecutionError, match="skip_when"):
-            _apply_skip_when(n, RawText(text="hello"), "test_skip", 0.0,
-                             structlog.get_logger())
+            _apply_skip_when(n, RawText(text="hello"), "test_skip", 0.0, structlog.get_logger())
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -780,7 +859,6 @@ class TestRendererFallback:
         result = _render_input(n, {"key": "value"})
 
         assert result == {"key": "value"}
-
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -825,17 +903,18 @@ class TestBuildStateUpdate:
         from neograph._state_bus import adapt_state
         from neograph._state_write import _build_state_update
 
-        n = Node("test", outputs={"result": RawText, "meta": Claims}) \
-            | Each(over="items", key="label")
+        n = Node("test", outputs={"result": RawText, "meta": Claims}) | Each(over="items", key="label")
 
         # Create a fake state with neo_each_item
-        StateModel = create_model("FakeState",
+        StateModel = create_model(
+            "FakeState",
             neo_each_item=(ClusterGroup | None, None),
         )
         state = StateModel(neo_each_item=ClusterGroup(label="a", claim_ids=["1"]))
 
         result = _build_state_update(
-            n, "test",
+            n,
+            "test",
             {"result": RawText(text="ok"), "meta": Claims(items=["x"])},
             adapt_state(state),
         )
@@ -850,10 +929,10 @@ class TestBuildStateUpdate:
         from neograph._state_bus import adapt_state
         from neograph._state_write import _build_state_update
 
-        n = Node("test", outputs=RawText) \
-            | Loop(when=lambda x: True, max_iterations=3, history=True)
+        n = Node("test", outputs=RawText) | Loop(when=lambda x: True, max_iterations=3, history=True)
 
-        StateModel = create_model("FakeState",
+        StateModel = create_model(
+            "FakeState",
             neo_loop_count_test=(int, 0),
         )
         state = StateModel()
@@ -877,17 +956,18 @@ class TestLLMNodeDictForm:
         """Produce node with dict-form outputs wraps LLM result (line 376)."""
         from tests.fakes import StructuredFake, configure_fake_llm
 
-        _llm_kw = configure_fake_llm(lambda tier: StructuredFake(
-            lambda m: m(text="produced") if m is RawText else m(items=["x"]),
-        ))
+        _llm_kw = configure_fake_llm(
+            lambda tier: StructuredFake(
+                lambda m: m(text="produced") if m is RawText else m(items=["x"]),
+            )
+        )
 
         @node(
             outputs={"result": RawText, "meta": Claims},
             prompt="test/produce",
             model="test-model",
         )
-        def produce_dict() -> dict:
-            ...
+        def produce_dict() -> dict: ...
 
         mod = types.ModuleType("test_produce_dict_mod")
         mod.produce_dict = produce_dict
@@ -956,13 +1036,16 @@ class TestExtractInputEdgeCases:
         # Node expects Draft (single type), state has a list from Loop
         n = Node("consumer", inputs=Draft, outputs=RawText)
 
-        StateModel = create_model("FakeState",
+        StateModel = create_model(
+            "FakeState",
             producer=(list[Draft] | None, None),
         )
-        state = StateModel(producer=[
-            Draft(content="v1", score=0.3),
-            Draft(content="v2", score=0.8),
-        ])
+        state = StateModel(
+            producer=[
+                Draft(content="v1", score=0.3),
+                Draft(content="v2", score=0.8),
+            ]
+        )
 
         result = _extract_input(adapt_state(state), n)
         # Should unwrap to latest (v2) since it matches Draft type
@@ -987,7 +1070,9 @@ class TestOracleRedirectDictForm:
         def raw_fn(state, config):
             return {"node_result": RawText(text="ok"), "node_meta": Claims(items=["x"])}
 
-        redirect_fn = make_oracle_redirect_fn(RunnableLambda(raw_fn), "node", "neo_oracle_node", item=types.SimpleNamespace(name="node"))
+        redirect_fn = make_oracle_redirect_fn(
+            RunnableLambda(raw_fn), "node", "neo_oracle_node", item=types.SimpleNamespace(name="node")
+        )
         result = redirect_fn.invoke(None, {})
         # Dict-form: keys start with prefix "node_" → collected as dict
         assert "neo_oracle_node" in result
@@ -1001,7 +1086,9 @@ class TestOracleRedirectDictForm:
         def raw_fn(state, config):
             return {"completely_unrelated": "value"}
 
-        redirect_fn = make_oracle_redirect_fn(RunnableLambda(raw_fn), "node", "neo_oracle_node", item=types.SimpleNamespace(name="node"))
+        redirect_fn = make_oracle_redirect_fn(
+            RunnableLambda(raw_fn), "node", "neo_oracle_node", item=types.SimpleNamespace(name="node")
+        )
         result = redirect_fn.invoke(None, {})
         # Neither field_name ("node") nor prefix ("node_") matches → raw result
         assert result == {"completely_unrelated": "value"}
@@ -1016,9 +1103,12 @@ class TestOracleRedirectDictForm:
         def raw_fn(state, config):
             return {"node": MatchResult(cluster_label="a", matched=["ok"])}
 
-        redirect_fn = make_eachoracle_redirect_fn(RunnableLambda(raw_fn), "node", "neo_eo_node", "label", item=types.SimpleNamespace(name="node"))
+        redirect_fn = make_eachoracle_redirect_fn(
+            RunnableLambda(raw_fn), "node", "neo_eo_node", "label", item=types.SimpleNamespace(name="node")
+        )
 
-        StateModel = create_model("FakeState",
+        StateModel = create_model(
+            "FakeState",
             neo_each_item=(ClusterGroup | None, None),
         )
         state = StateModel(neo_each_item=ClusterGroup(label="test-key", claim_ids=["1"]))
@@ -1037,9 +1127,12 @@ class TestOracleRedirectDictForm:
         def raw_fn(state, config):
             return {"other_field": "something"}
 
-        redirect_fn = make_eachoracle_redirect_fn(RunnableLambda(raw_fn), "node", "neo_eo_node", "label", item=types.SimpleNamespace(name="node"))
+        redirect_fn = make_eachoracle_redirect_fn(
+            RunnableLambda(raw_fn), "node", "neo_eo_node", "label", item=types.SimpleNamespace(name="node")
+        )
 
-        StateModel = create_model("FakeState",
+        StateModel = create_model(
+            "FakeState",
             neo_each_item=(ClusterGroup | None, None),
         )
         state = StateModel(neo_each_item=ClusterGroup(label="key", claim_ids=["1"]))
@@ -1117,7 +1210,9 @@ class TestBuildOracleMergeResult:
         merged = RawText(text="merged")
         # Non-dict output_model with secondaries (unusual but tests line 691)
         result = _build_oracle_merge_result(
-            merged, "node", RawText,
+            merged,
+            "node",
+            RawText,
             secondaries={"node_meta": [Claims(items=["x"])]},
         )
         # When output_model is not a dict, primary_field = field_name
@@ -1144,9 +1239,12 @@ class TestSubgraphFactory:
             return {"test": RawText(text="ok")}
 
         each = Each(over="items", key="label")
-        redirect_fn = make_each_redirect_fn(RunnableLambda(raw_fn), "test", each, item=types.SimpleNamespace(name="test"))
+        redirect_fn = make_each_redirect_fn(
+            RunnableLambda(raw_fn), "test", each, item=types.SimpleNamespace(name="test")
+        )
 
-        StateModel = create_model("FakeState",
+        StateModel = create_model(
+            "FakeState",
             neo_each_item=(ClusterGroup | None, None),
         )
         state = StateModel(neo_each_item=ClusterGroup(label="a", claim_ids=["1"]))
@@ -1164,9 +1262,12 @@ class TestSubgraphFactory:
             return {"other_key": "value"}
 
         each = Each(over="items", key="label")
-        redirect_fn = make_each_redirect_fn(RunnableLambda(raw_fn), "test", each, item=types.SimpleNamespace(name="test"))
+        redirect_fn = make_each_redirect_fn(
+            RunnableLambda(raw_fn), "test", each, item=types.SimpleNamespace(name="test")
+        )
 
-        StateModel = create_model("FakeState",
+        StateModel = create_model(
+            "FakeState",
             neo_each_item=(ClusterGroup | None, None),
         )
         state = StateModel(neo_each_item=ClusterGroup(label="a", claim_ids=["1"]))
@@ -1349,13 +1450,17 @@ class TestLoopHistoryStateField:
         """Loop(history=True) creates neo_loop_history_{name} field (line 170)."""
         from neograph.state import compile_state_model
 
-        n = Node.scripted("refine", fn="f", inputs=Draft, outputs=Draft) \
-            | Loop(when=lambda d: True, max_iterations=3, history=True)
+        n = Node.scripted("refine", fn="f", inputs=Draft, outputs=Draft) | Loop(
+            when=lambda d: True, max_iterations=3, history=True
+        )
 
-        pipeline = Construct("hist-test", nodes=[
-            Node.scripted("seed", fn="f", outputs=Draft),
-            n,
-        ])
+        pipeline = Construct(
+            "hist-test",
+            nodes=[
+                Node.scripted("seed", fn="f", outputs=Draft),
+                n,
+            ],
+        )
         state_model = compile_state_model(pipeline)
 
         assert "neo_loop_history_refine" in state_model.model_fields
@@ -1378,8 +1483,11 @@ class TestBranchArmContextFields:
 
         # Node in branch arm that declares context — use full Node() constructor
         ctx_node = Node(
-            "ctx-node", mode="scripted", outputs=RawText,
-            scripted_fn="f", context=["external-data"],
+            "ctx-node",
+            mode="scripted",
+            outputs=RawText,
+            scripted_fn="f",
+            context=["external-data"],
         )
 
         seed_node = Node.scripted("seed", fn="ctx_seed", outputs=Draft)
@@ -1404,8 +1512,7 @@ class TestBranchArmContextFields:
         # branch-arm nodes validate their context= like top-level and non-arm
         # sub-construct nodes); the deferred-context sub-construct form is the
         # scenario where compile_state_model's arm-context-field path applies.
-        pipeline = Construct("ctx-test", input=Draft, output=RawText,
-                             nodes=[seed_node, branch])
+        pipeline = Construct("ctx-test", input=Draft, output=RawText, nodes=[seed_node, branch])
         state_model = compile_state_model(pipeline)
 
         # Context field should be created
@@ -1423,13 +1530,20 @@ class TestBranchArmContextFields:
             "ccs-sub",
             input=Draft,
             output=SubOutput,
-            nodes=[Node("ccs-inner", mode="scripted", inputs=Draft, outputs=SubOutput,
-                        scripted_fn="ccs_inner", context=["internal-ctx"])],
+            nodes=[
+                Node(
+                    "ccs-inner",
+                    mode="scripted",
+                    inputs=Draft,
+                    outputs=SubOutput,
+                    scripted_fn="ccs_inner",
+                    context=["internal-ctx"],
+                )
+            ],
         )
 
         # Also add a regular node with context in the same arm
-        ctx_node = Node("ctx-n", mode="scripted", outputs=RawText,
-                        scripted_fn="f", context=["arm-ctx"])
+        ctx_node = Node("ctx-n", mode="scripted", outputs=RawText, scripted_fn="f", context=["arm-ctx"])
 
         seed_node = Node.scripted("seed", fn="ccs_seed", outputs=Draft)
 
@@ -1450,8 +1564,7 @@ class TestBranchArmContextFields:
         # Sub-construct (input=) so arm-node context= is forwarded from the parent
         # rather than requiring a local producer — see the companion test above
         # (neograph-vn5f made branch-arm context validate like top-level nodes).
-        pipeline = Construct("ccs-test", input=Draft, output=SubOutput,
-                             nodes=[seed_node, branch])
+        pipeline = Construct("ccs-test", input=Draft, output=SubOutput, nodes=[seed_node, branch])
         state_model = compile_state_model(pipeline)
 
         # Node's context should be present, Construct's internal context should NOT

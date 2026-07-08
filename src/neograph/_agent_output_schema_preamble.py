@@ -26,10 +26,7 @@ from neograph.errors import ConfigurationError
 # Phrased conditionally ("When finished with tools ...") so a well-behaved model
 # still calls its tools first and only emits JSON as its final answer — not
 # prematurely in place of a tool call.
-_PREFIX = (
-    "When finished with tools, respond with ONLY a JSON object matching this "
-    "schema (no prose, no markup):"
-)
+_PREFIX = "When finished with tools, respond with ONLY a JSON object matching this schema (no prose, no markup):"
 
 
 def render_output_schema_preamble(output_model: type[BaseModel]) -> str:
@@ -43,7 +40,6 @@ def render_output_schema_preamble(output_model: type[BaseModel]) -> str:
             "agent/act node has no output model to render a schema preamble",
             expected="a Pydantic BaseModel output type",
             found="None",
-            hint="agent/act nodes must declare outputs= so the final ReAct turn "
-                 "can be parsed as that type.",
+            hint="agent/act nodes must declare outputs= so the final ReAct turn can be parsed as that type.",
         )
     return describe_type(output_model, prefix=_PREFIX)

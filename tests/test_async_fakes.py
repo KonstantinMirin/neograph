@@ -54,6 +54,7 @@ class TestAsyncFakeSmoke:
     def test_structuredfake_ainvoke_matches_invoke(self):
         """StructuredFake.ainvoke (via asyncio.run) projects identically to
         invoke() using two fresh instances."""
+
         def respond(model: type[BaseModel]) -> BaseModel:
             return model(items=["a", "b"])
 

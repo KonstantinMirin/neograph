@@ -14,14 +14,17 @@ class Result(BaseModel, frozen=True):
     text: str
 
 
-pipeline = Construct("each-over-self-contained-agent", nodes=[
-    Node(
-        name="agent-gen",
-        mode="agent",
-        outputs=Result,  # no inputs= — nothing to deliver the fanned item to
-        model="fast",
-        prompt="test",
-        tools=[Tool(name="search", budget=3)],
-    )
-    | Each(over="upstream", key="text"),
-])
+pipeline = Construct(
+    "each-over-self-contained-agent",
+    nodes=[
+        Node(
+            name="agent-gen",
+            mode="agent",
+            outputs=Result,  # no inputs= — nothing to deliver the fanned item to
+            model="fast",
+            prompt="test",
+            tools=[Tool(name="search", budget=3)],
+        )
+        | Each(over="upstream", key="text"),
+    ],
+)

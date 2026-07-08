@@ -105,14 +105,16 @@ class TestCostCallback:
                 return msg
 
         result, usage = _invoke_json_with_retry(
-            RetryFake(), [{"role": "user", "content": "test"}],
-            Result, {}, max_retries=2,
+            RetryFake(),
+            [{"role": "user", "content": "test"}],
+            Result,
+            {},
+            max_retries=2,
         )
         assert result.value == "ok"
         # 2 calls: initial (fails parse) + retry (succeeds). Both should count.
         assert usage["input_tokens"] == 200  # 100 + 100
         assert usage["output_tokens"] == 100  # 50 + 50
-
 
     def test_cost_callback_receives_node_name(self):
         """cost_callback must receive node_name kwarg."""
@@ -120,8 +122,7 @@ class TestCostCallback:
 
         calls = []
         runtime = build_fake_runtime(cost_callback=lambda **kw: calls.append(kw))
-        _notify_cost(runtime, "fast", {"input_tokens": 10, "output_tokens": 5},
-                     node_name="my-node")
+        _notify_cost(runtime, "fast", {"input_tokens": 10, "output_tokens": 5}, node_name="my-node")
         assert len(calls) == 1
         assert calls[0]["node_name"] == "my-node"
 
@@ -131,8 +132,7 @@ class TestCostCallback:
 
         calls = []
         runtime = build_fake_runtime(cost_callback=lambda **kw: calls.append(kw))
-        _notify_cost(runtime, "reason", {"input_tokens": 50, "output_tokens": 20},
-                     node_name="gen", mode="think")
+        _notify_cost(runtime, "reason", {"input_tokens": 50, "output_tokens": 20}, node_name="gen", mode="think")
         assert calls[0]["mode"] == "think"
 
     def test_cost_callback_receives_duration(self):
@@ -141,8 +141,7 @@ class TestCostCallback:
 
         calls = []
         runtime = build_fake_runtime(cost_callback=lambda **kw: calls.append(kw))
-        _notify_cost(runtime, "fast", {"input_tokens": 10, "output_tokens": 5},
-                     node_name="x", duration_s=1.23)
+        _notify_cost(runtime, "fast", {"input_tokens": 10, "output_tokens": 5}, node_name="x", duration_s=1.23)
         assert calls[0]["duration_s"] == 1.23
 
     def test_cost_callback_backward_compat_old_signature(self):
@@ -150,12 +149,14 @@ class TestCostCallback:
         from neograph._llm import _notify_cost
 
         calls = []
+
         def old_style_callback(*, tier, input_tokens, output_tokens):
             calls.append({"tier": tier, "in": input_tokens, "out": output_tokens})
 
         runtime = build_fake_runtime(cost_callback=old_style_callback)
-        _notify_cost(runtime, "fast", {"input_tokens": 10, "output_tokens": 5},
-                     node_name="x", mode="think", duration_s=0.5)
+        _notify_cost(
+            runtime, "fast", {"input_tokens": 10, "output_tokens": 5}, node_name="x", mode="think", duration_s=0.5
+        )
         assert len(calls) == 1
         assert calls[0]["tier"] == "fast"
 
@@ -166,18 +167,21 @@ class TestMergeDictsReducer:
     def test_merge_dicts_non_dict_existing_returns_new(self):
         """Non-dict existing is replaced with empty dict, new is merged in."""
         from neograph.state import _merge_dicts
+
         result = _merge_dicts("corrupted", {"a": 1})
         assert result == {"a": 1}
 
     def test_merge_dicts_non_dict_new_returns_existing(self):
         """Non-dict new is ignored, existing returned unchanged."""
         from neograph.state import _merge_dicts
+
         result = _merge_dicts({"a": 1}, None)
         assert result == {"a": 1}
 
     def test_merge_dicts_empty_new_is_noop(self):
         """Empty dict new is a no-op (obligation M-04)."""
         from neograph.state import _merge_dicts
+
         result = _merge_dicts({"a": 1}, {})
         assert result == {"a": 1}
 
@@ -187,6 +191,7 @@ class TestModifierCombo:
 
     def test_bare_node(self):
         from neograph.modifiers import ModifierCombo, classify_modifiers
+
         n = Node.scripted("bare", fn="xw75_gen", outputs=Claims)
         combo, mods = classify_modifiers(n)
         assert combo == ModifierCombo.BARE
@@ -194,6 +199,7 @@ class TestModifierCombo:
 
     def test_each_only(self):
         from neograph.modifiers import ModifierCombo, classify_modifiers
+
         n = Node.scripted("each", fn="xw75_gen", outputs=Claims) | Each(over="x.y", key="k")
         combo, _ = classify_modifiers(n)
         assert combo == ModifierCombo.EACH
@@ -201,6 +207,7 @@ class TestModifierCombo:
     def test_oracle_only(self):
         from neograph.modifiers import ModifierCombo, classify_modifiers
         from tests.fakes import register_scripted
+
         register_scripted("35c3_m", lambda v, c: v[0])
         n = Node.scripted("orc", fn="xw75_gen", outputs=Claims) | Oracle(n=2, merge_fn="35c3_m")
         combo, _ = classify_modifiers(n)
@@ -208,7 +215,12 @@ class TestModifierCombo:
 
     def test_each_oracle_fusion(self):
         from neograph.modifiers import ModifierCombo, classify_modifiers
-        n = Node.scripted("fused", fn="xw75_gen", outputs=Claims) | Oracle(n=2, merge_fn="35c3_m") | Each(over="x.y", key="k")
+
+        n = (
+            Node.scripted("fused", fn="xw75_gen", outputs=Claims)
+            | Oracle(n=2, merge_fn="35c3_m")
+            | Each(over="x.y", key="k")
+        )
         combo, mods = classify_modifiers(n)
         assert combo == ModifierCombo.EACH_ORACLE
         assert "each" in mods
@@ -217,6 +229,7 @@ class TestModifierCombo:
     def test_invalid_combo_raises(self):
         """ModifierSet rejects illegal combos at construction time."""
         from neograph.modifiers import Loop, ModifierSet
+
         # Each + Loop is structurally rejected by ModifierSet
         with pytest.raises(Exception, match="Cannot combine Each and Loop"):
             ModifierSet(
@@ -237,47 +250,56 @@ class TestUnwrapHelpers:
     def test_unwrap_loop_value_extracts_last(self):
         """Loop append-list [v1, v2, v3] → v3."""
         from neograph.di import _unwrap_loop_value
+
         assert _unwrap_loop_value([1, 2, 3], int) == 3
 
     def test_unwrap_loop_value_empty_list_returns_none(self):
         """Empty Loop append-list [] → None (first iteration)."""
         from neograph.di import _unwrap_loop_value
+
         assert _unwrap_loop_value([], int) is None
 
     def test_unwrap_loop_value_none_passthrough(self):
         """None → None."""
         from neograph.di import _unwrap_loop_value
+
         assert _unwrap_loop_value(None, int) is None
 
     def test_unwrap_loop_value_non_list_passthrough(self):
         """Non-list value passes through unchanged."""
         from neograph.di import _unwrap_loop_value
+
         assert _unwrap_loop_value("hello", str) == "hello"
 
     def test_unwrap_loop_value_list_consumer_passthrough(self):
         """When expected_type IS list, don't unwrap — consumer wants the list."""
         from neograph.di import _unwrap_loop_value
+
         assert _unwrap_loop_value([1, 2, 3], list[int]) == [1, 2, 3]
 
     def test_unwrap_each_dict_to_list(self):
         """dict[str, X] → list[X] when consumer wants list."""
         from neograph.di import _unwrap_each_dict
+
         result = _unwrap_each_dict({"a": 1, "b": 2}, list[int])
         assert result == [1, 2]
 
     def test_unwrap_each_dict_non_list_consumer_passthrough(self):
         """When consumer doesn't want list, dict passes through."""
         from neograph.di import _unwrap_each_dict
+
         assert _unwrap_each_dict({"a": 1}, int) == {"a": 1}
 
     def test_unwrap_each_dict_non_dict_passthrough(self):
         """Non-dict value passes through."""
         from neograph.di import _unwrap_each_dict
+
         assert _unwrap_each_dict("hello", list[str]) == "hello"
 
     def test_unwrap_each_dict_none_passthrough(self):
         """None passes through."""
         from neograph.di import _unwrap_each_dict
+
         assert _unwrap_each_dict(None, list[int]) is None
 
 
@@ -297,13 +319,21 @@ class TestSkipWhenOnScriptedNode:
         register_scripted("ejl2_fn", tracked_fn)
         register_scripted("ejl2_seed", lambda i, c: RawText(text="seed"))
 
-        pipeline = Construct("ejl2-test", nodes=[
-            Node.scripted("seed", fn="ejl2_seed", outputs=RawText),
-            Node("tracked", mode="scripted", scripted_fn="ejl2_fn",
-                 inputs=RawText, outputs=Claims,
-                 skip_when=lambda data: True,  # always skip
-                 skip_value=lambda data: Claims(items=["skipped"])),
-        ])
+        pipeline = Construct(
+            "ejl2-test",
+            nodes=[
+                Node.scripted("seed", fn="ejl2_seed", outputs=RawText),
+                Node(
+                    "tracked",
+                    mode="scripted",
+                    scripted_fn="ejl2_fn",
+                    inputs=RawText,
+                    outputs=Claims,
+                    skip_when=lambda data: True,  # always skip
+                    skip_value=lambda data: Claims(items=["skipped"]),
+                ),
+            ],
+        )
         graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "ejl2"})
 
@@ -364,12 +394,21 @@ class TestSingleTypeListInputFromEach:
         """Downstream with inputs=list[MatchResult] receives list, not dict."""
         from tests.fakes import register_scripted
 
-        register_scripted("df77_src", lambda i, c: Clusters(groups=[
-            ClusterGroup(label="a", claim_ids=["1"]),
-        ]))
-        register_scripted("df77_proc", lambda i, c: MatchResult(
-            cluster_label="a", matched=["ok"],
-        ))
+        register_scripted(
+            "df77_src",
+            lambda i, c: Clusters(
+                groups=[
+                    ClusterGroup(label="a", claim_ids=["1"]),
+                ]
+            ),
+        )
+        register_scripted(
+            "df77_proc",
+            lambda i, c: MatchResult(
+                cluster_label="a",
+                matched=["ok"],
+            ),
+        )
 
         collected_input = [None]
 
@@ -379,15 +418,16 @@ class TestSingleTypeListInputFromEach:
 
         register_scripted("df77_collect", collect_fn)
 
-        pipeline = Construct("df77-test", nodes=[
-            Node.scripted("src", fn="df77_src", outputs=Clusters),
-            Node.scripted("proc", fn="df77_proc",
-                          inputs=ClusterGroup, outputs=MatchResult)
-            | Each(over="src.groups", key="label"),
-            # Single-type list input (NOT dict-form)
-            Node("collect", mode="scripted", scripted_fn="df77_collect",
-                 inputs=list[MatchResult], outputs=RawText),
-        ])
+        pipeline = Construct(
+            "df77-test",
+            nodes=[
+                Node.scripted("src", fn="df77_src", outputs=Clusters),
+                Node.scripted("proc", fn="df77_proc", inputs=ClusterGroup, outputs=MatchResult)
+                | Each(over="src.groups", key="label"),
+                # Single-type list input (NOT dict-form)
+                Node("collect", mode="scripted", scripted_fn="df77_collect", inputs=list[MatchResult], outputs=RawText),
+            ],
+        )
         graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "df77"})
 
@@ -408,6 +448,7 @@ class TestNodeInput:
     def test_single_basemodel_value(self):
         """NodeInput holds a single BaseModel value."""
         from neograph._dispatch import NodeInput
+
         ni = NodeInput(single=RawText(text="hello"))
         assert ni.value == RawText(text="hello")
         assert ni.fan_in is None
@@ -415,18 +456,21 @@ class TestNodeInput:
     def test_single_str_value(self):
         """NodeInput.single accepts non-BaseModel types (str)."""
         from neograph._dispatch import NodeInput
+
         ni = NodeInput(single="plain string")
         assert ni.value == "plain string"
 
     def test_single_int_value(self):
         """NodeInput.single accepts int."""
         from neograph._dispatch import NodeInput
+
         ni = NodeInput(single=42)
         assert ni.value == 42
 
     def test_fan_in_dict_value(self):
         """NodeInput holds a fan-in dict of upstream values."""
         from neograph._dispatch import NodeInput
+
         ni = NodeInput(fan_in={"claims": Claims(items=["a"]), "text": RawText(text="b")})
         assert ni.value == {"claims": Claims(items=["a"]), "text": RawText(text="b")}
         assert ni.single is None
@@ -434,18 +478,21 @@ class TestNodeInput:
     def test_fan_in_with_mixed_types(self):
         """Fan-in dict can hold non-BaseModel values (str, list, int)."""
         from neograph._dispatch import NodeInput
+
         ni = NodeInput(fan_in={"count": 5, "names": ["a", "b"]})
         assert ni.value == {"count": 5, "names": ["a", "b"]}
 
     def test_fan_in_takes_precedence_over_single(self):
         """When both are set, fan_in takes precedence."""
         from neograph._dispatch import NodeInput
+
         ni = NodeInput(single=RawText(text="x"), fan_in={"a": Claims(items=[])})
         assert ni.value == {"a": Claims(items=[])}
 
     def test_empty_input(self):
         """NodeInput with neither single nor fan_in returns None."""
         from neograph._dispatch import NodeInput
+
         ni = NodeInput()
         assert ni.value is None
 
@@ -456,6 +503,7 @@ class TestNodeOutput:
     def test_single_basemodel_value(self):
         """NodeOutput holds a single BaseModel result."""
         from neograph._dispatch import NodeOutput
+
         no = NodeOutput(single=Claims(items=["x"]))
         assert no.value == Claims(items=["x"])
         assert no.multi is None
@@ -463,24 +511,28 @@ class TestNodeOutput:
     def test_single_str_value(self):
         """NodeOutput.single accepts non-BaseModel types."""
         from neograph._dispatch import NodeOutput
+
         no = NodeOutput(single="result string")
         assert no.value == "result string"
 
     def test_multi_dict_value(self):
         """NodeOutput holds dict-form multi-output."""
         from neograph._dispatch import NodeOutput
+
         no = NodeOutput(multi={"summary": RawText(text="s"), "count": Claims(items=[])})
         assert no.value == {"summary": RawText(text="s"), "count": Claims(items=[])}
 
     def test_multi_takes_precedence_over_single(self):
         """When both are set, multi takes precedence."""
         from neograph._dispatch import NodeOutput
+
         no = NodeOutput(single=RawText(text="x"), multi={"a": Claims(items=[])})
         assert no.value == {"a": Claims(items=[])}
 
     def test_empty_output(self):
         """NodeOutput with neither single nor multi returns None."""
         from neograph._dispatch import NodeOutput
+
         no = NodeOutput()
         assert no.value is None
 
@@ -491,14 +543,17 @@ class TestModeDispatch:
     def test_scripted_dispatch_instantiates(self):
         """ScriptedDispatch wraps a callable and instantiates."""
         from neograph._dispatch import ScriptedDispatch
+
         def my_fn(input_data, config):
             return RawText(text="ok")
+
         sd = ScriptedDispatch(fn=my_fn)
         assert sd.fn is my_fn
 
     def test_think_dispatch_instantiates(self):
         """ThinkDispatch instantiates without arguments."""
         from neograph._dispatch import ThinkDispatch
+
         td = ThinkDispatch()
         assert isinstance(td, ThinkDispatch)
 
@@ -508,6 +563,7 @@ class TestModeDispatch:
     def test_scripted_dispatch_execute_calls_fn(self):
         """ScriptedDispatch.execute delegates to the wrapped fn."""
         from neograph._dispatch import NodeInput, NodeOutput, ScriptedDispatch
+
         call_log = []
 
         def my_fn(input_data, config):
@@ -534,6 +590,7 @@ class TestModeDispatch:
         This is documented explicitly: scripted functions don't use LLM context.
         """
         from neograph._dispatch import NodeInput, ScriptedDispatch
+
         received_args = []
 
         def my_fn(input_data, config):
@@ -552,6 +609,7 @@ class TestModeDispatch:
     def test_think_dispatch_has_execute_method(self):
         """ThinkDispatch conforms to ModeDispatch protocol (has execute method)."""
         from neograph._dispatch import ThinkDispatch
+
         td = ThinkDispatch()
         assert callable(getattr(td, "execute", None))
 

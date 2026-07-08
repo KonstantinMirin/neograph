@@ -40,15 +40,12 @@ def _expand_uri(uri_template: str, values: dict[str, Any]) -> str:
     form-query ``{?a,b}`` / ``{&a}`` expansion — enough for the static and
     templated resource URIs the resource layer emits. Missing values are omitted.
     """
+
     def _sub(match: re.Match[str]) -> str:
         op, body = match.group(1), match.group(2)
         varnames = [v.strip().rstrip("*") for v in body.split(",")]
         if op in ("?", "&"):
-            pairs = [
-                f"{vn}={quote(str(values[vn]), safe='')}"
-                for vn in varnames
-                if values.get(vn) is not None
-            ]
+            pairs = [f"{vn}={quote(str(values[vn]), safe='')}" for vn in varnames if values.get(vn) is not None]
             return (op + "&".join(pairs)) if pairs else ""
         out = [
             str(values[vn]) if op == "+" else quote(str(values[vn]), safe="")

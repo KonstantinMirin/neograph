@@ -9,13 +9,18 @@ from tests.fakes import register_scripted
 class Claims(BaseModel, frozen=True):
     text: str
 
+
 class Scores(BaseModel, frozen=True):
     value: float
+
 
 register_scripted("unr_a", lambda i, c: Claims(text="ok"))
 register_scripted("unr_b", lambda i, c: Scores(value=1.0))
 
-pipeline = Construct("broken", nodes=[
-    Node.scripted("first", fn="unr_a", outputs=Claims),
-    Node.scripted("second", fn="unr_b", inputs=Scores, outputs=Scores),
-])
+pipeline = Construct(
+    "broken",
+    nodes=[
+        Node.scripted("first", fn="unr_a", outputs=Claims),
+        Node.scripted("second", fn="unr_b", inputs=Scores, outputs=Scores),
+    ],
+)

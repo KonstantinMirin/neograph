@@ -68,9 +68,7 @@ __all__ = ["ForwardConstruct"]
 _MAX_BRANCHES = 8
 
 
-def _attr_chain_after_prefix(
-    source_node: Node | Construct | None, full_name: str
-) -> list[str]:
+def _attr_chain_after_prefix(source_node: Node | Construct | None, full_name: str) -> list[str]:
     """Strip the ``out_of_<node>`` proxy-name prefix and return the attr chain.
 
     The symbolic tracer names node-output proxies ``out_of_<node_name>`` and
@@ -84,7 +82,7 @@ def _attr_chain_after_prefix(
     prefix = f"out_of_{source_node.name}"
     if not full_name.startswith(prefix):
         return []
-    remainder = full_name[len(prefix):]
+    remainder = full_name[len(prefix) :]
     return [p for p in remainder.split(".") if p]
 
 
@@ -175,9 +173,7 @@ class ForwardConstruct(Construct):
         Call self.<node>(...) for each node in the desired order. The tracer
         records these calls and populates self.nodes.
         """
-        raise NotImplementedError(
-            "ForwardConstruct subclasses must override forward()"
-        )
+        raise NotImplementedError("ForwardConstruct subclasses must override forward()")
 
 
 # ─────────────────────────── Tracing machinery ───────────────────────────
@@ -235,9 +231,7 @@ class _Proxy:
     def __bool__(self) -> bool:
         tracer = self._neo_tracer
         if tracer is None:
-            raise TypeError(
-                "Cannot use proxy in boolean context outside tracing"
-            )
+            raise TypeError("Cannot use proxy in boolean context outside tracing")
         return tracer.record_branch(self)
 
     def __iter__(self):
@@ -270,9 +264,7 @@ class _ConditionProxy:
     def __bool__(self) -> bool:
         tracer = self._neo_tracer
         if tracer is None:
-            raise TypeError(
-                "Cannot use condition in boolean context outside tracing"
-            )
+            raise TypeError("Cannot use condition in boolean context outside tracing")
         return tracer.record_branch(self)
 
     def _build_runtime_condition(self) -> Any:
@@ -311,6 +303,7 @@ class _ConditionProxy:
 @dataclasses.dataclass
 class _BranchPoint:
     """A recorded branch point during tracing."""
+
     branch_id: int
     condition: _ConditionProxy | _Proxy
     decision: bool
@@ -319,6 +312,7 @@ class _BranchPoint:
 @dataclasses.dataclass
 class _BranchTrace:
     """Result of tracing both arms of a branch."""
+
     branch: _BranchPoint
     true_nodes: list[Node | Construct]
     false_nodes: list[Node | Construct]
@@ -427,11 +421,13 @@ class _Tracer:
         else:
             decision = True
 
-        self._branches.append(_BranchPoint(
-            branch_id=branch_id,
-            condition=condition,
-            decision=decision,
-        ))
+        self._branches.append(
+            _BranchPoint(
+                branch_id=branch_id,
+                condition=condition,
+                decision=decision,
+            )
+        )
         return decision
 
     @property
@@ -682,14 +678,17 @@ def _trace_forward(
     branch_traces: list[_BranchTrace] = []
     for branch in branches:
         false_tracer, false_nodes = _run_trace(
-            instance, node_attrs,
+            instance,
+            node_attrs,
             branch_decisions={branch.branch_id: False},
         )
-        branch_traces.append(_BranchTrace(
-            branch=branch,
-            true_nodes=true_nodes,
-            false_nodes=false_nodes,
-        ))
+        branch_traces.append(
+            _BranchTrace(
+                branch=branch,
+                true_nodes=true_nodes,
+                false_nodes=false_nodes,
+            )
+        )
 
     return _merge_branch_traces(true_nodes, branch_traces, branches)
 
@@ -713,7 +712,8 @@ def _merge_branch_traces(
     """
     if len(branch_traces) == 1:
         return _merge_single_branch(
-            branch_traces[0], branches[0],
+            branch_traces[0],
+            branches[0],
         )
 
     # Multiple sequential branches: merge one at a time
@@ -776,10 +776,7 @@ def _merge_single_branch(
 
     # Shared suffix: nodes in both traces that aren't in prefix or branch arms
     branch_arm_names = {n.name for n in true_only} | {n.name for n in false_only}
-    shared_suffix = [
-        n for n in trace.true_nodes
-        if n.name not in prefix_names and n.name not in branch_arm_names
-    ]
+    shared_suffix = [n for n in trace.true_nodes if n.name not in prefix_names and n.name not in branch_arm_names]
 
     # Build the result: prefix + branch sentinel + suffix
     result: list = list(shared_prefix)

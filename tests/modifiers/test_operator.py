@@ -39,13 +39,13 @@ from tests.schemas import (
 # graph pauses and resumes.
 # ═══════════════════════════════════════════════════════════════════════════
 
+
 class TestOperator:
     def test_graph_pauses_when_operator_condition_truthy(self):
         """Graph pauses when Operator condition is met."""
         import types as _types
 
         from langgraph.checkpoint.memory import MemorySaver
-
 
         mod = _types.ModuleType("test_operator_mod")
 
@@ -84,9 +84,6 @@ class TestOperator:
 # ═══════════════════════════════════════════════════════════════════════════
 
 
-
-
-
 # ═══════════════════════════════════════════════════════════════════════════
 # TEST 7: Raw node alongside declarative nodes
 #
@@ -104,7 +101,6 @@ class TestOperatorContinues:
         import types as _types
 
         from langgraph.checkpoint.memory import MemorySaver
-
 
         mod = _types.ModuleType("test_operator_continues_mod")
 
@@ -126,9 +122,6 @@ class TestOperatorContinues:
         assert result.get("human_feedback") is None
 
 
-
-
-
 class TestOperatorResume:
     """Operator interrupt + resume flow."""
 
@@ -137,7 +130,6 @@ class TestOperatorResume:
         import types as _types
 
         from langgraph.checkpoint.memory import MemorySaver
-
 
         mod = _types.ModuleType("test_operator_resume_mod")
 
@@ -172,9 +164,6 @@ class TestOperatorResume:
         assert result["human_feedback"] == {"approved": True}
 
 
-
-
-
 class TestOperatorResumeFromInput:
     """FromInput DI must resolve after Operator resume (neograph-pd8j)."""
 
@@ -192,8 +181,7 @@ class TestOperatorResumeFromInput:
 
         mod = _types.ModuleType("test_pd8j_mod")
 
-        @node(mode="scripted", outputs=Result,
-              interrupt_when=lambda state: {"gate": True} if state.gate_node else None)
+        @node(mode="scripted", outputs=Result, interrupt_when=lambda state: {"gate": True} if state.gate_node else None)
         def gate_node() -> Result:
             return Result(text="gate")
 
@@ -219,9 +207,6 @@ class TestOperatorResumeFromInput:
         assert result["after_gate"].text == "my-run-123:gate"
 
 
-
-
-
 class TestResumeWithFreshConfig:
     """Obligation R-04: resume with fresh config missing _neo_input (neograph-n6nt)."""
 
@@ -240,8 +225,7 @@ class TestResumeWithFreshConfig:
 
         mod = _types.ModuleType("test_r04_mod")
 
-        @node(mode="scripted", outputs=Result,
-              interrupt_when=lambda state: {"gate": True} if state.gate_node else None)
+        @node(mode="scripted", outputs=Result, interrupt_when=lambda state: {"gate": True} if state.gate_node else None)
         def gate_node() -> Result:
             return Result(text="gate")
 
@@ -283,8 +267,7 @@ class TestResumeWithFreshConfig:
 
         mod = _types.ModuleType("test_r04b_mod")
 
-        @node(mode="scripted", outputs=Result,
-              interrupt_when=lambda state: {"gate": True} if state.gate_node else None)
+        @node(mode="scripted", outputs=Result, interrupt_when=lambda state: {"gate": True} if state.gate_node else None)
         def gate_node() -> Result:
             return Result(text="gate")
 
@@ -314,9 +297,12 @@ class TestResumeWithFreshConfig:
 
         register_scripted("se1_fn", lambda i, c: RawText(text="ok"))
 
-        pipeline = Construct("se1-test", nodes=[
-            Node.scripted("a", fn="se1_fn", outputs=RawText),
-        ])
+        pipeline = Construct(
+            "se1-test",
+            nodes=[
+                Node.scripted("a", fn="se1_fn", outputs=RawText),
+            ],
+        )
         graph = compile(pipeline, **build_test_compile_kwargs())
 
         config = {"configurable": {"thread_id": "se1"}}
@@ -328,9 +314,6 @@ class TestResumeWithFreshConfig:
         assert config["configurable"]["_neo_input"]["custom_field"] == "hello"
 
 
-
-
-
 class TestConstructOperator:
     """Construct | Operator — check condition after sub-pipeline completes."""
 
@@ -340,15 +323,22 @@ class TestConstructOperator:
 
         from tests.fakes import register_condition
 
-        register_scripted("sub_validate", lambda input_data, config: ValidationResult(
-            passed=False, issues=["coverage gap"],
-        ))
+        register_scripted(
+            "sub_validate",
+            lambda input_data, config: ValidationResult(
+                passed=False,
+                issues=["coverage gap"],
+            ),
+        )
 
-        register_condition("sub_failed", lambda state: (
-            {"issues": state.enrich.issues}
-            if hasattr(state, 'enrich') and state.enrich and not state.enrich.passed
-            else None
-        ))
+        register_condition(
+            "sub_failed",
+            lambda state: (
+                {"issues": state.enrich.issues}
+                if hasattr(state, "enrich") and state.enrich and not state.enrich.passed
+                else None
+            ),
+        )
 
         sub = Construct(
             "enrich",
@@ -359,10 +349,13 @@ class TestConstructOperator:
 
         register_scripted("seed", lambda input_data, config: Claims(items=["data"]))
 
-        parent = Construct("parent", nodes=[
-            Node.scripted("seed", fn="seed", outputs=Claims),
-            sub,
-        ])
+        parent = Construct(
+            "parent",
+            nodes=[
+                Node.scripted("seed", fn="seed", outputs=Claims),
+                sub,
+            ],
+        )
         graph = compile(parent, checkpointer=MemorySaver(), **build_test_compile_kwargs())
         config = {"configurable": {"thread_id": "construct-op-test"}}
 
@@ -380,9 +373,13 @@ class TestConstructOperator:
 
         from tests.fakes import register_condition
 
-        register_scripted("sub_ok", lambda input_data, config: ValidationResult(
-            passed=True, issues=[],
-        ))
+        register_scripted(
+            "sub_ok",
+            lambda input_data, config: ValidationResult(
+                passed=True,
+                issues=[],
+            ),
+        )
 
         register_condition("sub_check", lambda state: None)  # always passes
 
@@ -396,15 +393,16 @@ class TestConstructOperator:
         register_scripted("seed2", lambda input_data, config: Claims(items=["ok"]))
         register_scripted("done", lambda input_data, config: RawText(text="complete"))
 
-        parent = Construct("parent", nodes=[
-            Node.scripted("seed", fn="seed2", outputs=Claims),
-            sub,
-            Node.scripted("done", fn="done", outputs=RawText),
-        ])
+        parent = Construct(
+            "parent",
+            nodes=[
+                Node.scripted("seed", fn="seed2", outputs=Claims),
+                sub,
+                Node.scripted("done", fn="done", outputs=RawText),
+            ],
+        )
         graph = compile(parent, checkpointer=MemorySaver(), **build_test_compile_kwargs())
         config = {"configurable": {"thread_id": "construct-op-pass"}}
         result = run(graph, input={"node_id": "test-001"}, config=config)
 
         assert result["done"].text == "complete"
-
-

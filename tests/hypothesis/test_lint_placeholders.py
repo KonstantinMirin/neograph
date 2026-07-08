@@ -17,6 +17,7 @@ from .conftest import Alpha, Beta, Gamma, _make_fn, _uid
 
 # ── Strategies ──────────────────────────────────────────────────────────
 
+
 @st.composite
 def inline_prompt_node(draw):
     """Generate a Node with dict-form inputs and an inline prompt that
@@ -45,8 +46,11 @@ def inline_prompt_node(draw):
     prompt = " ".join(f"${{{ref}}}" for ref in all_refs)
 
     node = Node(
-        f"hyp-{tag}", prompt=prompt, model="default",
-        outputs=Alpha, inputs=input_dict,
+        f"hyp-{tag}",
+        prompt=prompt,
+        model="default",
+        outputs=Alpha,
+        inputs=input_dict,
     )
     return node, set(valid_refs), set(invalid_refs)
 
@@ -68,10 +72,14 @@ def pipeline_with_inline_prompts(draw):
     for i in range(n_intermediates):
         mid_name = f"mid{i}-{tag}"
         register_scripted(f"hyp_mid{i}_{tag}", _make_fn(Beta))
-        nodes.append(Node.scripted(
-            mid_name, fn=f"hyp_mid{i}_{tag}",
-            inputs={prev_field: prev_type}, outputs=Beta,
-        ))
+        nodes.append(
+            Node.scripted(
+                mid_name,
+                fn=f"hyp_mid{i}_{tag}",
+                inputs={prev_field: prev_type},
+                outputs=Beta,
+            )
+        )
         prev_type = Beta
         prev_field = mid_name.replace("-", "_")
 
@@ -82,8 +90,11 @@ def pipeline_with_inline_prompts(draw):
     prompt = " ".join(f"${{{ref}}}" for ref in all_refs)
 
     terminal = Node(
-        f"term-{tag}", prompt=prompt, model="default",
-        outputs=Gamma, inputs={prev_field: prev_type},
+        f"term-{tag}",
+        prompt=prompt,
+        model="default",
+        outputs=Gamma,
+        inputs={prev_field: prev_type},
     )
     nodes.append(terminal)
 
@@ -92,6 +103,7 @@ def pipeline_with_inline_prompts(draw):
 
 
 # ── Property tests ──────────────────────────────────────────────────────
+
 
 class TestPredictInputKeysInvariant:
     """_predict_input_keys must match what the runtime would see."""
@@ -180,9 +192,7 @@ class TestLintPipelineProperty:
         template_issues = [i for i in issues if "template" in i.kind]
         flagged = {i.param for i in template_issues}
 
-        assert flagged == expected_invalid, (
-            f"Expected to flag {expected_invalid}, actually flagged {flagged}"
-        )
+        assert flagged == expected_invalid, f"Expected to flag {expected_invalid}, actually flagged {flagged}"
 
     @given(data=pipeline_with_inline_prompts())
     @settings(max_examples=30)
@@ -192,6 +202,4 @@ class TestLintPipelineProperty:
         issues = lint(construct)
         template_issues = [i for i in issues if "template" in i.kind]
         for issue in template_issues:
-            assert issue.required is True, (
-                f"Template issue should be required=True: {issue}"
-            )
+            assert issue.required is True, f"Template issue should be required=True: {issue}"

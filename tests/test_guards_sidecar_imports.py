@@ -10,13 +10,15 @@ import re
 SRC_DIR = pathlib.Path(__file__).resolve().parent.parent / "src" / "neograph"
 
 # Error classes that must use .build() instead of direct construction.
-ERROR_CLASSES = frozenset({
-    "ConstructError",
-    "ExecutionError",
-    "CompileError",
-    "ConfigurationError",
-    "NeographError",
-})
+ERROR_CLASSES = frozenset(
+    {
+        "ConstructError",
+        "ExecutionError",
+        "CompileError",
+        "ConfigurationError",
+        "NeographError",
+    }
+)
 
 
 class TestSidecarModule:
@@ -29,8 +31,7 @@ class TestSidecarModule:
         """_sidecar.py must exist as a standalone module."""
         sidecar_path = SRC_DIR / "_sidecar.py"
         assert sidecar_path.exists(), (
-            "_sidecar.py does not exist — sidecar storage functions "
-            "must be extracted from decorators.py"
+            "_sidecar.py does not exist — sidecar storage functions must be extracted from decorators.py"
         )
 
     def test_construct_builder_does_not_import_from_decorators(self):
@@ -231,9 +232,7 @@ def _scan_function_local_neograph_imports(
                 self._depth -= 1
 
         def visit_ImportFrom(self, imp: ast.ImportFrom) -> None:
-            if self._depth > 0 and imp.module and (
-                imp.module.startswith("neograph.") or imp.module == "neograph"
-            ):
+            if self._depth > 0 and imp.module and (imp.module.startswith("neograph.") or imp.module == "neograph"):
                 self.found.append(
                     (
                         self.filename,
@@ -282,10 +281,7 @@ class TestFunctionLocalImportAllowlist:
             msg_parts.append(
                 f"{len(unauthorized)} NEW function-local `from neograph...` import(s) "
                 "not in the allowlist:\n"
-                + "\n".join(
-                    f"  {f}: from {m} import {', '.join(sorted(n))}"
-                    for (f, m, n) in unauthorized
-                )
+                + "\n".join(f"  {f}: from {m} import {', '.join(sorted(n))}" for (f, m, n) in unauthorized)
                 + "\n\nFunction-local imports are accepted only to break a cycle. "
                 "Either restructure to eliminate the cycle, or add the entry to "
                 "FUNCTION_LOCAL_IMPORT_ALLOWLIST with a justification comment "
@@ -294,17 +290,12 @@ class TestFunctionLocalImportAllowlist:
         if stale:
             msg_parts.append(
                 f"{len(stale)} stale allowlist entry/entries (no matching import in src/):\n"
-                + "\n".join(
-                    f"  {f}: from {m} import {', '.join(sorted(n))}"
-                    for (f, m, n) in stale
-                )
+                + "\n".join(f"  {f}: from {m} import {', '.join(sorted(n))}" for (f, m, n) in stale)
                 + "\n\nRemove from FUNCTION_LOCAL_IMPORT_ALLOWLIST — the cycle is broken."
             )
         assert not msg_parts, "\n\n".join(msg_parts)
 
-    def test_scanner_detects_injected_function_local_neograph_import(
-        self, tmp_path: pathlib.Path
-    ):
+    def test_scanner_detects_injected_function_local_neograph_import(self, tmp_path: pathlib.Path):
         """Mutation: a synthetic module with a function-local import must be flagged."""
         synthetic_dir = tmp_path / "neograph_fake"
         synthetic_dir.mkdir()
@@ -317,13 +308,11 @@ class TestFunctionLocalImportAllowlist:
             "    return invoke_structured\n"
         )
         found = _scan_function_local_neograph_imports(synthetic_dir)
-        assert any(
-            m == "neograph._llm" and "invoke_structured" in n for (_, _, m, n) in found
-        ), f"scanner failed to detect injected function-local import; found={found}"
+        assert any(m == "neograph._llm" and "invoke_structured" in n for (_, _, m, n) in found), (
+            f"scanner failed to detect injected function-local import; found={found}"
+        )
 
-    def test_scanner_ignores_module_level_and_type_checking_imports(
-        self, tmp_path: pathlib.Path
-    ):
+    def test_scanner_ignores_module_level_and_type_checking_imports(self, tmp_path: pathlib.Path):
         """Module-level imports and TYPE_CHECKING-block imports must NOT be flagged."""
         synthetic_dir = tmp_path / "neograph_fake"
         synthetic_dir.mkdir()
@@ -340,9 +329,7 @@ class TestFunctionLocalImportAllowlist:
             "    return invoke_structured\n"
         )
         found = _scan_function_local_neograph_imports(synthetic_dir)
-        assert found == [], (
-            f"scanner false-positive on module-level / TYPE_CHECKING imports; found={found}"
-        )
+        assert found == [], f"scanner false-positive on module-level / TYPE_CHECKING imports; found={found}"
 
 
 def _scan_module_level_langfuse_imports(
@@ -391,11 +378,7 @@ def _scan_module_level_langfuse_imports(
                         self.found.append((self.filename, imp.lineno, alias.name))
 
         def visit_ImportFrom(self, imp: ast.ImportFrom) -> None:
-            if (
-                self._depth == 0
-                and imp.module
-                and (imp.module == "langfuse" or imp.module.startswith("langfuse."))
-            ):
+            if self._depth == 0 and imp.module and (imp.module == "langfuse" or imp.module.startswith("langfuse.")):
                 self.found.append((self.filename, imp.lineno, imp.module))
 
     out: list[tuple[str, int, str]] = []
@@ -473,9 +456,7 @@ class TestNoModuleLevelLangfuseImports:
             "    get_client().flush()\n"
         )
         found = _scan_module_level_langfuse_imports(synthetic_dir)
-        assert found == [], (
-            f"scanner false-positive on function-local langfuse imports; found={found}"
-        )
+        assert found == [], f"scanner false-positive on function-local langfuse imports; found={found}"
 
 
 class TestNoBareExceptException:
@@ -756,8 +737,7 @@ class TestPromptScannerMonopoly:
                         offenders.append(f"line {node.lineno}: import {alias.name}")
 
         assert offenders == [], (
-            "src/neograph/prompt.py must stay engine-free (no langgraph import). "
-            f"Found: {offenders}."
+            f"src/neograph/prompt.py must stay engine-free (no langgraph import). Found: {offenders}."
         )
 
 
@@ -801,9 +781,7 @@ class TestToolConfigOnlyPassedPositionally:
                     continue
                 for pattern in self._TOOL_CONFIG_READ_RES:
                     if pattern.search(line):
-                        violations.append(
-                            f"{py_file.name}:{line_no} -- {line.strip()}"
-                        )
+                        violations.append(f"{py_file.name}:{line_no} -- {line.strip()}")
 
         assert not violations, (
             "Framework code now reads keys from tool_spec.config / tool.config. "
@@ -819,6 +797,7 @@ class TestToolConfigOnlyPassedPositionally:
         boundary must not let a longer attribute name (e.g. `mytool.config[`)
         masquerade or be missed. Prove each form matches and an unrelated
         `.config` access on a different object does not."""
+
         def matched(s: str) -> bool:
             return any(p.search(s) for p in self._TOOL_CONFIG_READ_RES)
 
@@ -854,8 +833,8 @@ class TestNodeIOPolymorphismNormalized:
             f"\n{len(violations)} isinstance(<expr>.outputs, dict) site(s) outside _normalize.py:\n"
             + "\n".join(violations)
             + "\n\nUse `normalize_outputs(node.outputs)` from neograph._normalize "
-              "and consume the NormalizedOutputs view (primary / primary_key / "
-              "secondary / all_keys / is_dict_form / is_none) instead."
+            "and consume the NormalizedOutputs view (primary / primary_key / "
+            "secondary / all_keys / is_dict_form / is_none) instead."
         )
 
     def test_no_inputs_dict_isinstance_outside_normalizer(self):
@@ -864,8 +843,8 @@ class TestNodeIOPolymorphismNormalized:
             f"\n{len(violations)} isinstance(<expr>.inputs, dict) site(s) outside _normalize.py:\n"
             + "\n".join(violations)
             + "\n\nUse `normalize_inputs(node.inputs)` from neograph._normalize "
-              "and consume the NormalizedInputs view (by_name / single_type / "
-              "is_dict_form / is_none) instead."
+            "and consume the NormalizedInputs view (by_name / single_type / "
+            "is_dict_form / is_none) instead."
         )
 
     @staticmethod
@@ -900,8 +879,7 @@ class TestNodeIOPolymorphismNormalized:
                 if not TestNodeIOPolymorphismNormalized._mentions_dict(classinfo):
                     continue
                 violations.append(
-                    f"  {py_file.relative_to(SRC_DIR.parent)}:{node.lineno}: "
-                    f"isinstance(<expr>.{attr}, dict)"
+                    f"  {py_file.relative_to(SRC_DIR.parent)}:{node.lineno}: isinstance(<expr>.{attr}, dict)"
                 )
         return violations
 

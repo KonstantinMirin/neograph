@@ -55,12 +55,9 @@ def validate_loop_self_edge(node: Node) -> None:
             if _types_compatible(output_type, expected):
                 return
         # No compatible input slot found.
-        type_list = ", ".join(
-            f"{k}={_fmt_type(v)}" for k, v in input_type.items()
-        )
+        type_list = ", ".join(f"{k}={_fmt_type(v)}" for k, v in input_type.items())
         raise ConstructError.build(
-            f"loop back-edge: output type {_fmt_type(output_type)} not "
-            f"compatible with any reentry input type",
+            f"loop back-edge: output type {_fmt_type(output_type)} not compatible with any reentry input type",
             expected=f"one of ({type_list})",
             found=_fmt_type(output_type),
             hint="the loop's last node output must match the reentry node's input type",
@@ -99,7 +96,7 @@ def validate_loop_construct(construct: Construct) -> None:
         raise ConstructError.build(
             "Loop requires both input= and output= declared",
             found=f"input={'declared' if construct.input is not None else 'None'}, "
-                  f"output={'declared' if construct.output is not None else 'None'}",
+            f"output={'declared' if construct.output is not None else 'None'}",
             hint="declare both input= and output= on the construct for Loop to wire the back-edge",
             construct=construct.name,
             location=_source_location(),
@@ -115,9 +112,7 @@ def _validate_merge_hooks(oracle: Oracle, node: Node, construct_name: str) -> No
     annotations — only for provably wrong ones.
     """
     # Resolve the variant type (what the hooks receive as list elements)
-    gen_type = normalize_outputs(
-        getattr(node, 'oracle_gen_type', None) or node.outputs
-    ).primary
+    gen_type = normalize_outputs(getattr(node, "oracle_gen_type", None) or node.outputs).primary
 
     # The post-merge output type (what post_process/fallback must return)
     output_type = normalize_outputs(node.outputs).primary
@@ -139,8 +134,10 @@ def _validate_merge_hooks(oracle: Oracle, node: Node, construct_name: str) -> No
             continue  # built-in or unresolvable — skip
 
         positional = [
-            p for p in sig.parameters.values()
-            if p.kind in (
+            p
+            for p in sig.parameters.values()
+            if p.kind
+            in (
                 inspect.Parameter.POSITIONAL_ONLY,
                 inspect.Parameter.POSITIONAL_OR_KEYWORD,
             )
@@ -149,8 +146,7 @@ def _validate_merge_hooks(oracle: Oracle, node: Node, construct_name: str) -> No
 
         if len(required) < expected_arity:
             raise ConstructError.build(
-                f"{hook_name} requires {expected_arity} positional parameter(s), "
-                f"got {len(required)}",
+                f"{hook_name} requires {expected_arity} positional parameter(s), got {len(required)}",
                 expected=f"{expected_arity} params",
                 found=f"{len(required)} required params: {[p.name for p in required]}",
                 node=node.name,
@@ -197,12 +193,14 @@ def _validate_merge_hooks(oracle: Oracle, node: Node, construct_name: str) -> No
         # Check return type (post_process and fallback must return output_type)
         if hook_name in ("merge_post_process", "merge_fallback"):
             return_hint = hints.get("return")
-            if (return_hint is not None
-                    and return_hint is not Any
-                    and isinstance(return_hint, type)
-                    and isinstance(output_type, type)
-                    and not _types_compatible(output_type, return_hint)
-                    and not _types_compatible(return_hint, output_type)):
+            if (
+                return_hint is not None
+                and return_hint is not Any
+                and isinstance(return_hint, type)
+                and isinstance(output_type, type)
+                and not _types_compatible(output_type, return_hint)
+                and not _types_compatible(return_hint, output_type)
+            ):
                 raise ConstructError.build(
                     f"{hook_name} return type mismatch: declared "
                     f"{_fmt_type(return_hint)} but node outputs {_fmt_type(output_type)}",

@@ -53,10 +53,12 @@ from tests.schemas import (
 # all three generators run, results converge.
 # ═══════════════════════════════════════════════════════════════════════════
 
+
 class TestOracle:
     @staticmethod
     def _fresh_module(name: str):
         import types as _types
+
         return _types.ModuleType(name)
 
     def test_merge_combines_variants_when_three_generators_run(self):
@@ -149,8 +151,6 @@ class TestOracle:
 # ═══════════════════════════════════════════════════════════════════════════
 
 
-
-
 # ═══════════════════════════════════════════════════════════════════════════
 # CONSTRUCT + MODIFIER COMPOSITIONS
 #
@@ -166,9 +166,12 @@ class TestConstructOracle:
         from tests.fakes import register_scripted
 
         register_scripted("sub_step_a", lambda input_data, config: Claims(items=["step-a"]))
-        register_scripted("sub_step_b", lambda input_data, config: RawText(
-            text=f"processed: {input_data.items[0]}" if input_data else "processed: none"
-        ))
+        register_scripted(
+            "sub_step_b",
+            lambda input_data, config: RawText(
+                text=f"processed: {input_data.items[0]}" if input_data else "processed: none"
+            ),
+        )
 
         def merge_sub_outputs(variants, config):
             all_texts = [v.text for v in variants]
@@ -188,10 +191,13 @@ class TestConstructOracle:
 
         register_scripted("make_input", lambda input_data, config: Claims(items=["raw"]))
 
-        parent = Construct("parent", nodes=[
-            Node.scripted("start", fn="make_input", outputs=Claims),
-            sub,
-        ])
+        parent = Construct(
+            "parent",
+            nodes=[
+                Node.scripted("start", fn="make_input", outputs=Claims),
+                sub,
+            ],
+        )
         graph = compile(parent, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "test-001"})
 
@@ -216,10 +222,13 @@ class TestConstructOracle:
 
         register_scripted("seed", lambda input_data, config: Claims(items=["seed"]))
 
-        parent = Construct("parent", nodes=[
-            Node.scripted("seed", fn="seed", outputs=Claims),
-            sub,
-        ])
+        parent = Construct(
+            "parent",
+            nodes=[
+                Node.scripted("seed", fn="seed", outputs=Claims),
+                sub,
+            ],
+        )
         graph = compile(parent, **build_test_compile_kwargs(), **__llm_kw)
         result = run(graph, input={"node_id": "test-001"})
 
@@ -257,10 +266,13 @@ class TestConstructOracle:
 
         register_scripted("seed_claims", lambda input_data, config: Claims(items=["x"]))
 
-        parent = Construct("parent", nodes=[
-            Node.scripted("seed", fn="seed_claims", outputs=Claims),
-            sub,
-        ])
+        parent = Construct(
+            "parent",
+            nodes=[
+                Node.scripted("seed", fn="seed_claims", outputs=Claims),
+                sub,
+            ],
+        )
         graph = compile(parent, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "model-fwd-test"})
 
@@ -295,19 +307,19 @@ class TestConstructOracle:
 
         register_scripted("seed_nmo", lambda input_data, config: Claims(items=["x"]))
 
-        parent = Construct("parent", nodes=[
-            Node.scripted("seed", fn="seed_nmo", outputs=Claims),
-            sub,
-        ])
+        parent = Construct(
+            "parent",
+            nodes=[
+                Node.scripted("seed", fn="seed_nmo", outputs=Claims),
+                sub,
+            ],
+        )
         graph = compile(parent, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "no-model-test"})
 
         # All 3 variants should have seen None for _oracle_model
         assert len(seen_models) == 3
         assert all(m is None for m in seen_models), f"Expected all None, got {seen_models}"
-
-
-
 
 
 # =============================================================================
@@ -340,9 +352,8 @@ class TestOracleModels:
 
         register_scripted("models_merge", merge)
 
-        gen_node = (
-            Node.scripted("models-gen", fn="models_gen", outputs=Claims)
-            | Oracle(models=["reason", "fast", "creative"], merge_fn="models_merge")
+        gen_node = Node.scripted("models-gen", fn="models_gen", outputs=Claims) | Oracle(
+            models=["reason", "fast", "creative"], merge_fn="models_merge"
         )
         pipeline = Construct("test-oracle-models", nodes=[gen_node])
         graph = compile(pipeline, **build_test_compile_kwargs())
@@ -374,9 +385,8 @@ class TestOracleModels:
 
         register_scripted("rr_merge", rr_merge)
 
-        gen_node = (
-            Node.scripted("rr-gen", fn="rr_gen", outputs=Claims)
-            | Oracle(n=7, models=["reason", "fast", "creative"], merge_fn="rr_merge")
+        gen_node = Node.scripted("rr-gen", fn="rr_gen", outputs=Claims) | Oracle(
+            n=7, models=["reason", "fast", "creative"], merge_fn="rr_merge"
         )
         pipeline = Construct("test-rr", nodes=[gen_node])
         graph = compile(pipeline, **build_test_compile_kwargs())
@@ -384,8 +394,8 @@ class TestOracleModels:
 
         # 7 generators, round-robin across 3 models
         assert len(seen_models) == 7
-        assert seen_models.count("reason") == 3   # 0,3,6
-        assert seen_models.count("fast") == 2      # 1,4
+        assert seen_models.count("reason") == 3  # 0,3,6
+        assert seen_models.count("fast") == 2  # 1,4
         assert seen_models.count("creative") == 2  # 2,5
 
     def test_oracle_infers_n_from_models_length(self):
@@ -409,9 +419,8 @@ class TestOracleModels:
 
         # Body-as-merge: function body IS the merge function
         # models= triggers Oracle, body receives list[Claims]
-        gen_node = (
-            Node.scripted("bam-gen", fn="bam_gen", outputs=Claims)
-            | Oracle(models=["reason", "fast"], merge_fn="bam_body_merge")
+        gen_node = Node.scripted("bam-gen", fn="bam_gen", outputs=Claims) | Oracle(
+            models=["reason", "fast"], merge_fn="bam_body_merge"
         )
 
         # Register a merge that simulates what the body-as-merge would do
@@ -480,16 +489,13 @@ class TestOracleModels:
 
         register_scripted("think_models_merge", think_merge)
 
-        gen_node = (
-            Node(
-                name="think-gen",
-                mode="think",
-                outputs=Claims,
-                model="default-tier",
-                prompt="test/generate",
-            )
-            | Oracle(models=["reason", "fast", "creative"], merge_fn="think_models_merge")
-        )
+        gen_node = Node(
+            name="think-gen",
+            mode="think",
+            outputs=Claims,
+            model="default-tier",
+            prompt="test/generate",
+        ) | Oracle(models=["reason", "fast", "creative"], merge_fn="think_models_merge")
         pipeline = Construct("test-think-oracle-models", nodes=[gen_node])
         graph = compile(pipeline, **build_test_compile_kwargs(), **__llm_kw)
         result = run(graph, input={"node_id": "think-oracle-models"})
@@ -536,20 +542,16 @@ class TestOracleModels:
             lambda variants, config: Claims(items=[f"merged-{len(variants)}"]),
         )
 
-        gen_node = (
-            Node(
-                name="agent-gen",
-                mode="agent",
-                outputs=Claims,
-                model="default-tier",
-                prompt="test/search",
-                tools=[Tool(name="agent_search", budget=5)],
-            )
-            | Oracle(n=2, merge_fn="agent_merge_count")
-        )
+        gen_node = Node(
+            name="agent-gen",
+            mode="agent",
+            outputs=Claims,
+            model="default-tier",
+            prompt="test/search",
+            tools=[Tool(name="agent_search", budget=5)],
+        ) | Oracle(n=2, merge_fn="agent_merge_count")
         pipeline = Construct("test-agent-oracle", nodes=[gen_node])
-        graph = compile(pipeline, **build_test_compile_kwargs(),
-                        **configure_fake_llm(self._agent_oracle_fake))
+        graph = compile(pipeline, **build_test_compile_kwargs(), **configure_fake_llm(self._agent_oracle_fake))
         result = run(graph, input={"node_id": "agent-oracle"})
         assert result["agent_gen"] == Claims(items=["merged-2"]), result
 
@@ -578,8 +580,7 @@ class TestOracleModels:
 
         gen_node = researcher | Oracle(n=2, merge_fn="agent_merge_count_dec")
         pipeline = Construct("test-agent-oracle-dec", nodes=[gen_node])
-        graph = compile(pipeline, **build_test_compile_kwargs(),
-                        **configure_fake_llm(self._agent_oracle_fake))
+        graph = compile(pipeline, **build_test_compile_kwargs(), **configure_fake_llm(self._agent_oracle_fake))
         result = run(graph, input={"node_id": "agent-oracle-dec"})
         assert result["researcher"] == Claims(items=["merged-2"]), result
 
@@ -604,24 +605,23 @@ class TestOracleModels:
             lambda variants, config: Claims(items=[f"merged-{len(variants)}"]),
         )
 
-        gen_node = (
-            Node(
-                name="agent-gen",
-                mode="agent",
-                inputs=RawText,
-                outputs=Claims,
-                model="default-tier",
-                prompt="test/search",
-                tools=[Tool(name="agent_search", budget=5)],
-            )
-            | Oracle(n=2, merge_fn="agent_merge_in")
+        gen_node = Node(
+            name="agent-gen",
+            mode="agent",
+            inputs=RawText,
+            outputs=Claims,
+            model="default-tier",
+            prompt="test/search",
+            tools=[Tool(name="agent_search", budget=5)],
+        ) | Oracle(n=2, merge_fn="agent_merge_in")
+        pipeline = Construct(
+            "test-agent-oracle-single-in",
+            nodes=[
+                Node.scripted("seed", fn="agent_seed_raw", outputs=RawText),
+                gen_node,
+            ],
         )
-        pipeline = Construct("test-agent-oracle-single-in", nodes=[
-            Node.scripted("seed", fn="agent_seed_raw", outputs=RawText),
-            gen_node,
-        ])
-        graph = compile(pipeline, **build_test_compile_kwargs(),
-                        **configure_fake_llm(self._agent_oracle_fake))
+        graph = compile(pipeline, **build_test_compile_kwargs(), **configure_fake_llm(self._agent_oracle_fake))
         result = run(graph, input={"node_id": "agent-oracle-single-in"})
         assert result["agent_gen"] == Claims(items=["merged-2"]), result
 
@@ -641,24 +641,23 @@ class TestOracleModels:
             lambda variants, config: Claims(items=[f"merged-{len(variants)}"]),
         )
 
-        gen_node = (
-            Node(
-                name="agent-gen",
-                mode="agent",
-                inputs={"seed": RawText},  # dict-form key names the upstream producer
-                outputs=Claims,
-                model="default-tier",
-                prompt="test/search",
-                tools=[Tool(name="agent_search", budget=5)],
-            )
-            | Oracle(n=2, merge_fn="agent_merge_dict")
+        gen_node = Node(
+            name="agent-gen",
+            mode="agent",
+            inputs={"seed": RawText},  # dict-form key names the upstream producer
+            outputs=Claims,
+            model="default-tier",
+            prompt="test/search",
+            tools=[Tool(name="agent_search", budget=5)],
+        ) | Oracle(n=2, merge_fn="agent_merge_dict")
+        pipeline = Construct(
+            "test-agent-oracle-dict-in",
+            nodes=[
+                Node.scripted("seed", fn="agent_seed_raw2", outputs=RawText),
+                gen_node,
+            ],
         )
-        pipeline = Construct("test-agent-oracle-dict-in", nodes=[
-            Node.scripted("seed", fn="agent_seed_raw2", outputs=RawText),
-            gen_node,
-        ])
-        graph = compile(pipeline, **build_test_compile_kwargs(),
-                        **configure_fake_llm(self._agent_oracle_fake))
+        graph = compile(pipeline, **build_test_compile_kwargs(), **configure_fake_llm(self._agent_oracle_fake))
         result = run(graph, input={"node_id": "agent-oracle-dict-in"})
         assert result["agent_gen"] == Claims(items=["merged-2"]), result
 
@@ -685,12 +684,14 @@ class TestOracleModels:
         def researcher(seed: RawText) -> Claims: ...
 
         gen_node = researcher | Oracle(n=2, merge_fn="agent_merge_dec_in")
-        pipeline = Construct("test-agent-oracle-dec-in", nodes=[
-            Node.scripted("seed", fn="agent_seed_dec", outputs=RawText),
-            gen_node,
-        ])
-        graph = compile(pipeline, **build_test_compile_kwargs(),
-                        **configure_fake_llm(self._agent_oracle_fake))
+        pipeline = Construct(
+            "test-agent-oracle-dec-in",
+            nodes=[
+                Node.scripted("seed", fn="agent_seed_dec", outputs=RawText),
+                gen_node,
+            ],
+        )
+        graph = compile(pipeline, **build_test_compile_kwargs(), **configure_fake_llm(self._agent_oracle_fake))
         result = run(graph, input={"node_id": "agent-oracle-dec-in"})
         assert result["researcher"] == Claims(items=["merged-2"]), result
 
@@ -720,12 +721,14 @@ class TestOracleModels:
         def researcher(seed: RawText, topic: Annotated[str, FromInput]) -> Claims: ...
 
         gen_node = researcher | Oracle(n=2, merge_fn="agent_merge_di")
-        pipeline = Construct("test-agent-oracle-di-in", nodes=[
-            Node.scripted("seed", fn="agent_seed_di", outputs=RawText),
-            gen_node,
-        ])
-        graph = compile(pipeline, **build_test_compile_kwargs(),
-                        **configure_fake_llm(self._agent_oracle_fake))
+        pipeline = Construct(
+            "test-agent-oracle-di-in",
+            nodes=[
+                Node.scripted("seed", fn="agent_seed_di", outputs=RawText),
+                gen_node,
+            ],
+        )
+        graph = compile(pipeline, **build_test_compile_kwargs(), **configure_fake_llm(self._agent_oracle_fake))
         result = run(graph, input={"node_id": "agent-oracle-di-in", "topic": "birds"})
         assert result["researcher"] == Claims(items=["merged-2"]), result
 
@@ -753,13 +756,15 @@ class TestOracleModels:
         def researcher(claims: Claims, raw: RawText) -> Claims: ...
 
         gen_node = researcher | Oracle(n=2, merge_fn="agent_merge_multi")
-        pipeline = Construct("agent-oracle-multi-dec", nodes=[
-            Node.scripted("claims", fn="agent_seed_claims", outputs=Claims),
-            Node.scripted("raw", fn="agent_seed_raw_m", outputs=RawText),
-            gen_node,
-        ])
-        graph = compile(pipeline, **build_test_compile_kwargs(),
-                        **configure_fake_llm(self._agent_oracle_fake))
+        pipeline = Construct(
+            "agent-oracle-multi-dec",
+            nodes=[
+                Node.scripted("claims", fn="agent_seed_claims", outputs=Claims),
+                Node.scripted("raw", fn="agent_seed_raw_m", outputs=RawText),
+                gen_node,
+            ],
+        )
+        graph = compile(pipeline, **build_test_compile_kwargs(), **configure_fake_llm(self._agent_oracle_fake))
         result = run(graph, input={"node_id": "agent-oracle-multi-dec"})
         assert result["researcher"] == Claims(items=["merged-2"]), result
 
@@ -769,18 +774,15 @@ class TestOracleModels:
         item, which competes for the single-value boundary the packer occupies)."""
         from neograph import Each
 
-        gen_node = (
-            Node(
-                name="agent-gen",
-                mode="agent",
-                inputs={"claims": Claims, "raw": RawText},
-                outputs=Claims,
-                model="default-tier",
-                prompt="test/search",
-                tools=[Tool(name="agent_search", budget=5)],
-            )
-            | Each(over="upstream", key="text")
-        )
+        gen_node = Node(
+            name="agent-gen",
+            mode="agent",
+            inputs={"claims": Claims, "raw": RawText},
+            outputs=Claims,
+            model="default-tier",
+            prompt="test/search",
+            tools=[Tool(name="agent_search", budget=5)],
+        ) | Each(over="upstream", key="text")
         with pytest.raises(ConstructError, match="multiple upstream inputs"):
             Construct("bad-each-agent-multi", nodes=[gen_node])
 
@@ -801,16 +803,13 @@ class TestOracleModels:
 
         register_scripted("rr_think_merge", rr_think_merge)
 
-        gen_node = (
-            Node(
-                name="rr-think",
-                mode="think",
-                outputs=Claims,
-                model="default-tier",
-                prompt="test/generate",
-            )
-            | Oracle(n=5, models=["alpha", "beta"], merge_fn="rr_think_merge")
-        )
+        gen_node = Node(
+            name="rr-think",
+            mode="think",
+            outputs=Claims,
+            model="default-tier",
+            prompt="test/generate",
+        ) | Oracle(n=5, models=["alpha", "beta"], merge_fn="rr_think_merge")
         pipeline = Construct("test-rr-think", nodes=[gen_node])
         graph = compile(pipeline, **build_test_compile_kwargs(), **__llm_kw)
         result = run(graph, input={"node_id": "rr-think"})
@@ -818,7 +817,7 @@ class TestOracleModels:
         gen_tiers = [t for t in seen_tiers if t in ("alpha", "beta")]
         assert len(gen_tiers) == 5, f"Expected 5 generator calls, got tiers: {seen_tiers}"
         assert gen_tiers.count("alpha") == 3  # 0,2,4
-        assert gen_tiers.count("beta") == 2   # 1,3
+        assert gen_tiers.count("beta") == 2  # 1,3
 
     def test_oracle_model_does_not_leak_to_merge_node(self):
         """Merge node must use merge_model, not a generator's oracle model override."""
@@ -831,19 +830,16 @@ class TestOracleModels:
 
         __llm_kw = configure_fake_llm(tier_capturing_factory)
 
-        gen_node = (
-            Node(
-                name="leak-gen",
-                mode="think",
-                outputs=Claims,
-                model="default-tier",
-                prompt="test/generate",
-            )
-            | Oracle(
-                models=["reason", "fast"],
-                merge_prompt="test/merge",
-                merge_model="judge-tier",
-            )
+        gen_node = Node(
+            name="leak-gen",
+            mode="think",
+            outputs=Claims,
+            model="default-tier",
+            prompt="test/generate",
+        ) | Oracle(
+            models=["reason", "fast"],
+            merge_prompt="test/merge",
+            merge_model="judge-tier",
         )
         pipeline = Construct("test-leak", nodes=[gen_node])
         graph = compile(pipeline, **build_test_compile_kwargs(), **__llm_kw)
@@ -895,9 +891,8 @@ class TestOracleModels:
 
         register_scripted("bam_typed_gen", bam_typed_gen)
 
-        gen_node = (
-            Node.scripted("bam-typed-gen", fn="bam_typed_gen", outputs=Claims)
-            | Oracle(models=["reason", "fast"], merge_fn="bam_typed_merge")
+        gen_node = Node.scripted("bam-typed-gen", fn="bam_typed_gen", outputs=Claims) | Oracle(
+            models=["reason", "fast"], merge_fn="bam_typed_merge"
         )
 
         def bam_typed_merge(variants, config):
@@ -941,9 +936,7 @@ class TestOracleModels:
         assert isinstance(sidecar, tuple), "Sidecar should be a (fn, param_names) tuple"
         original_fn = sidecar[0]
         hints = get_type_hints(original_fn)
-        assert hints["data"] is Claims, (
-            "Parameter annotation should be the upstream type Claims"
-        )
+        assert hints["data"] is Claims, "Parameter annotation should be the upstream type Claims"
 
         # The node has an Oracle modifier attached
         assert merge_check.has_modifier(Oracle)
@@ -952,6 +945,7 @@ class TestOracleModels:
         """@node(models=[]) must raise at decoration time."""
 
         with pytest.raises((ConfigurationError, ConstructError)):
+
             @node(outputs=Claims, models=[])
             def bad_ensemble(data: Claims) -> Claims:
                 return data
@@ -961,9 +955,6 @@ class TestOracleModels:
 # BUG REGRESSION: neograph-bglm
 # merge_fn exceptions must surface, not produce silent garbage
 # =============================================================================
-
-
-
 
 
 # =============================================================================
@@ -988,10 +979,7 @@ class TestOracleMergeFnErrors:
 
         register_scripted("bglm_bad_merge", bad_merge)
 
-        gen_node = (
-            Node.scripted("gen", fn="bglm_gen", outputs=Claims)
-            | Oracle(n=2, merge_fn="bglm_bad_merge")
-        )
+        gen_node = Node.scripted("gen", fn="bglm_gen", outputs=Claims) | Oracle(n=2, merge_fn="bglm_bad_merge")
         pipeline = Construct("test-merge-error", nodes=[gen_node])
         graph = compile(pipeline, **build_test_compile_kwargs())
 
@@ -1011,10 +999,7 @@ class TestOracleMergeFnErrors:
 
         register_scripted("bglm_wrong_merge", wrong_type_merge)
 
-        gen_node = (
-            Node.scripted("gen2", fn="bglm_gen2", outputs=Claims)
-            | Oracle(n=2, merge_fn="bglm_wrong_merge")
-        )
+        gen_node = Node.scripted("gen2", fn="bglm_gen2", outputs=Claims) | Oracle(n=2, merge_fn="bglm_wrong_merge")
         pipeline = Construct("test-merge-type", nodes=[gen_node])
         graph = compile(pipeline, **build_test_compile_kwargs())
 
@@ -1028,9 +1013,6 @@ class TestOracleMergeFnErrors:
 #
 # @merge_fn can auto-wire params from graph state by name.
 # ═══════════════════════════════════════════════════════════════════════════
-
-
-
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1066,11 +1048,13 @@ class TestMergeFnStateParams:
         ) -> Result:
             return Result(text=variants[0].text, topic=context.topic)
 
-        pipeline = Construct("merge-state", nodes=[
-            Node.scripted("context", fn="jg2g_ctx", outputs=Context),
-            Node.scripted("gen", fn="jg2g_gen", outputs=Result)
-            | Oracle(n=2, merge_fn="merge_with_context"),
-        ])
+        pipeline = Construct(
+            "merge-state",
+            nodes=[
+                Node.scripted("context", fn="jg2g_ctx", outputs=Context),
+                Node.scripted("gen", fn="jg2g_gen", outputs=Result) | Oracle(n=2, merge_fn="merge_with_context"),
+            ],
+        )
         graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "jg2g-test"})
 
@@ -1104,11 +1088,13 @@ class TestMergeFnStateParams:
                 label=f"{metadata.source}:{node_id}",
             )
 
-        pipeline = Construct("merge-mixed", nodes=[
-            Node.scripted("metadata", fn="jg2g_meta", outputs=Metadata),
-            Node.scripted("gen2", fn="jg2g_gen2", outputs=Result)
-            | Oracle(n=2, merge_fn="merge_mixed"),
-        ])
+        pipeline = Construct(
+            "merge-mixed",
+            nodes=[
+                Node.scripted("metadata", fn="jg2g_meta", outputs=Metadata),
+                Node.scripted("gen2", fn="jg2g_gen2", outputs=Result) | Oracle(n=2, merge_fn="merge_mixed"),
+            ],
+        )
         graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "mixed-test"})
 
@@ -1133,11 +1119,12 @@ class TestMergeFnStateParams:
             return variants[0]
 
         with pytest.raises(ConstructError, match="does not match any upstream"):
-            Construct("merge-missing", nodes=[
-                Node.scripted("gen3", fn="jg2g_gen3", outputs=Result)
-                | Oracle(n=2, merge_fn="merge_missing"),
-            ])
-
+            Construct(
+                "merge-missing",
+                nodes=[
+                    Node.scripted("gen3", fn="jg2g_gen3", outputs=Result) | Oracle(n=2, merge_fn="merge_missing"),
+                ],
+            )
 
     def test_merge_fn_from_state_unwraps_loop_append_list(self):
         """Regression neograph-8i1g: from_state on a Loop node must unwrap [-1]."""
@@ -1162,19 +1149,19 @@ class TestMergeFnStateParams:
             captured_ctx[0] = ctx
             return variants[0]
 
-        pipeline = Construct("8i1g-test", nodes=[
-            Node.scripted("ctx", fn="8i1g_ctx", outputs=Ctx)
-            | Loop(when=lambda c: c is None or c.topic == "first_only", max_iterations=2),
-            Node.scripted("gen", fn="8i1g_gen", outputs=Result)
-            | Oracle(n=2, merge_fn="ctx_aware_merge"),
-        ])
+        pipeline = Construct(
+            "8i1g-test",
+            nodes=[
+                Node.scripted("ctx", fn="8i1g_ctx", outputs=Ctx)
+                | Loop(when=lambda c: c is None or c.topic == "first_only", max_iterations=2),
+                Node.scripted("gen", fn="8i1g_gen", outputs=Result) | Oracle(n=2, merge_fn="ctx_aware_merge"),
+            ],
+        )
         graph = compile(pipeline, **build_test_compile_kwargs())
         run(graph, input={"node_id": "8i1g"})
 
         # from_state should unwrap the Loop append-list to get Ctx, not list[Ctx]
-        assert isinstance(captured_ctx[0], Ctx), (
-            f"Expected Ctx, got {type(captured_ctx[0])}: {captured_ctx[0]}"
-        )
+        assert isinstance(captured_ctx[0], Ctx), f"Expected Ctx, got {type(captured_ctx[0])}: {captured_ctx[0]}"
         assert captured_ctx[0].topic == "safety"
 
 
@@ -1202,6 +1189,7 @@ class TestMergePromptUpstreamContext:
     @staticmethod
     def _fresh_module(name: str):
         import types as _types
+
         return _types.ModuleType(name)
 
     def test_merge_prompt_receives_upstream_context_as_dict(self):
@@ -1210,6 +1198,7 @@ class TestMergePromptUpstreamContext:
 
         class CaptureMerge:
             """Fake that captures the merge prompt's input."""
+
             def __init__(self, tier):
                 self._tier = tier
 
@@ -1229,9 +1218,13 @@ class TestMergePromptUpstreamContext:
         def enrich() -> UpstreamContext:
             return UpstreamContext(site_name="Acme Corp", tone="professional")
 
-        @node(outputs=Draft, ensemble_n=2,
-              merge_prompt="Pick the best considering ${enrich.site_name}: ${variants}",
-              prompt="draft using ${enrich.site_name}", model="fast")
+        @node(
+            outputs=Draft,
+            ensemble_n=2,
+            merge_prompt="Pick the best considering ${enrich.site_name}: ${variants}",
+            prompt="draft using ${enrich.site_name}",
+            model="fast",
+        )
         def write(enrich: UpstreamContext) -> Draft: ...
 
         mod = self._fresh_module("test_merge_ctx")
@@ -1239,6 +1232,7 @@ class TestMergePromptUpstreamContext:
         mod.write = write
 
         from neograph import construct_from_module
+
         pipeline = construct_from_module(mod, name="merge-ctx")
         graph = compile(pipeline, **build_test_compile_kwargs(), **__llm_kw)
         result = run(graph, input={"node_id": "t1"})
@@ -1247,9 +1241,7 @@ class TestMergePromptUpstreamContext:
         msgs = captured_input.get("messages", [])
         prompt_text = msgs[0]["content"] if msgs else ""
         # The upstream 'enrich' value should appear in the prompt
-        assert "Acme Corp" in prompt_text, (
-            f"Upstream context 'Acme Corp' not found in merge prompt: {prompt_text}"
-        )
+        assert "Acme Corp" in prompt_text, f"Upstream context 'Acme Corp' not found in merge prompt: {prompt_text}"
 
     def test_merge_prompt_variants_key_contains_all_variants(self):
         """The 'variants' key should contain all N generator outputs."""
@@ -1270,14 +1262,14 @@ class TestMergePromptUpstreamContext:
 
         __llm_kw = configure_fake_llm(lambda tier: InspectMerge(tier))
 
-        @node(outputs=Draft, ensemble_n=3, merge_prompt="Judge: ${variants}",
-              prompt="generate a draft", model="fast")
+        @node(outputs=Draft, ensemble_n=3, merge_prompt="Judge: ${variants}", prompt="generate a draft", model="fast")
         def generate() -> Draft: ...
 
         mod = self._fresh_module("test_variants")
         mod.generate = generate
 
         from neograph import construct_from_module
+
         pipeline = construct_from_module(mod, name="variants-test")
         graph = compile(pipeline, **build_test_compile_kwargs(), **__llm_kw)
         result = run(graph, input={"node_id": "t2"})
@@ -1304,6 +1296,7 @@ class TestMergePromptUpstreamContext:
         mod.generate = generate
 
         from neograph import construct_from_module
+
         pipeline = construct_from_module(mod, name="mfn-test")
         graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "t3"})
@@ -1335,9 +1328,12 @@ class TestMergePromptUpstreamContext:
 
         seed = Node.scripted("seed", fn="_mp_seed", outputs=UpstreamContext)
         writer = Node(
-            "writer", mode="think", outputs=Draft,
+            "writer",
+            mode="think",
+            outputs=Draft,
             inputs={"seed": UpstreamContext},
-            prompt="write", model="fast",
+            prompt="write",
+            model="fast",
         ) | Oracle(n=2, merge_prompt="Pick best: ${seed.site_name} ${variants}")
 
         pipeline = Construct("prog-merge", nodes=[seed, writer])
@@ -1345,9 +1341,7 @@ class TestMergePromptUpstreamContext:
         result = run(graph, input={"node_id": "t4"})
 
         prompt = captured_input.get("prompt", "")
-        assert "Test Site" in prompt, (
-            f"Upstream context 'Test Site' missing from programmatic merge prompt: {prompt}"
-        )
+        assert "Test Site" in prompt, f"Upstream context 'Test Site' missing from programmatic merge prompt: {prompt}"
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1363,6 +1357,7 @@ class TestMergeHooks:
     @staticmethod
     def _fresh_module(name: str):
         import types as _types
+
         return _types.ModuleType(name)
 
     def test_pre_process_transforms_variants_before_llm(self):
@@ -1388,10 +1383,14 @@ class TestMergeHooks:
             tagged = [f"[v{i}] {v.text}" for i, v in enumerate(variants)]
             return {"tagged_items": "\n".join(tagged)}
 
-        @node(outputs=Draft, ensemble_n=2,
-              prompt="generate draft", model="fast",
-              merge_prompt="Merge these tagged items: ${tagged_items}",
-              merge_pre_process=tag_variants)
+        @node(
+            outputs=Draft,
+            ensemble_n=2,
+            prompt="generate draft",
+            model="fast",
+            merge_prompt="Merge these tagged items: ${tagged_items}",
+            merge_pre_process=tag_variants,
+        )
         def write() -> Draft: ...
 
         mod = self._fresh_module("test_pre")
@@ -1415,10 +1414,14 @@ class TestMergeHooks:
             post_called.append(True)
             return Draft(text=result.text.upper())
 
-        @node(outputs=Draft, ensemble_n=2,
-              prompt="generate draft", model="fast",
-              merge_prompt="pick best: ${variants}",
-              merge_post_process=uppercase_result)
+        @node(
+            outputs=Draft,
+            ensemble_n=2,
+            prompt="generate draft",
+            model="fast",
+            merge_prompt="pick best: ${variants}",
+            merge_post_process=uppercase_result,
+        )
         def write() -> Draft: ...
 
         mod = self._fresh_module("test_post")
@@ -1433,6 +1436,7 @@ class TestMergeHooks:
 
     def test_fallback_catches_llm_error(self):
         """merge_fallback should catch LLM errors and return a deterministic result."""
+
         class FailOnMerge:
             def __init__(self, tier):
                 self._tier = tier
@@ -1451,10 +1455,14 @@ class TestMergeHooks:
         def fallback_fn(variants, error):
             return Draft(text=f"fallback-{len(variants)}")
 
-        @node(outputs=Draft, ensemble_n=2,
-              prompt="generate draft", model="fast",
-              merge_prompt="merge: ${variants}",
-              merge_fallback=fallback_fn)
+        @node(
+            outputs=Draft,
+            ensemble_n=2,
+            prompt="generate draft",
+            model="fast",
+            merge_prompt="merge: ${variants}",
+            merge_fallback=fallback_fn,
+        )
         def write() -> Draft: ...
 
         mod = self._fresh_module("test_fallback")
@@ -1497,8 +1505,11 @@ class TestMergeHooks:
             return result
 
         writer = Node(
-            "writer", mode="think", outputs=Draft,
-            prompt="write", model="fast",
+            "writer",
+            mode="think",
+            outputs=Draft,
+            prompt="write",
+            model="fast",
         ) | Oracle(
             n=2,
             merge_prompt="merge: ${variants}",
@@ -1514,6 +1525,7 @@ class TestMergeHooks:
 
     def test_no_fallback_error_propagates(self):
         """Without fallback, LLM errors propagate with original type and message."""
+
         class FailMerge:
             def __init__(self, tier):
                 self._tier = tier
@@ -1529,9 +1541,7 @@ class TestMergeHooks:
 
         __llm_kw = configure_fake_llm(lambda tier: FailMerge(tier))
 
-        @node(outputs=Draft, ensemble_n=2,
-              prompt="gen", model="fast",
-              merge_prompt="merge: ${variants}")
+        @node(outputs=Draft, ensemble_n=2, prompt="gen", model="fast", merge_prompt="merge: ${variants}")
         def write() -> Draft: ...
 
         mod = self._fresh_module("test_nofb")
@@ -1554,9 +1564,11 @@ class TestMergeHooks:
             return Draft(text=result.text + "-pp")
 
         writer = Node(
-            "writer", mode="think",
+            "writer",
+            mode="think",
             outputs={"result": Draft, "meta": Draft},
-            prompt="write", model="fast",
+            prompt="write",
+            model="fast",
         ) | Oracle(
             n=2,
             merge_prompt="merge: ${variants}",
@@ -1576,8 +1588,8 @@ class TestMergeHooks:
     def test_body_as_merge_with_hooks_rejected(self):
         """body-as-merge converts to merge_fn; hooks should be rejected."""
         with pytest.raises(ConfigurationError, match="merge hooks"):
-            @node(outputs=Draft, models=["fast", "reason"],
-                  merge_pre_process=lambda v: {"x": v})
+
+            @node(outputs=Draft, models=["fast", "reason"], merge_pre_process=lambda v: {"x": v})
             def write(variants) -> Draft:
                 return variants[0]
 
@@ -1607,10 +1619,14 @@ class TestMergeHooks:
         def enrich() -> UpstreamContext:
             return UpstreamContext(site_name="ShouldNotAppear", tone="x")
 
-        @node(outputs=Draft, ensemble_n=2,
-              prompt="gen", model="fast",
-              merge_prompt="Merge: ${custom_key}",
-              merge_pre_process=custom_pre)
+        @node(
+            outputs=Draft,
+            ensemble_n=2,
+            prompt="gen",
+            model="fast",
+            merge_prompt="Merge: ${custom_key}",
+            merge_pre_process=custom_pre,
+        )
         def write(enrich: UpstreamContext) -> Draft: ...
 
         mod = self._fresh_module("test_displace")
@@ -1623,9 +1639,7 @@ class TestMergeHooks:
 
         prompt = captured.get("prompt", "")
         assert "custom_value" in prompt, f"pre_process key missing: {prompt}"
-        assert "ShouldNotAppear" not in prompt, (
-            f"Upstream context should be displaced by pre_process: {prompt}"
-        )
+        assert "ShouldNotAppear" not in prompt, f"Upstream context should be displaced by pre_process: {prompt}"
 
     def test_upstream_context_preserved_without_pre_process(self):
         """Without pre_process, upstream context still auto-injected into merge prompt."""
@@ -1650,9 +1664,13 @@ class TestMergeHooks:
         def enrich() -> UpstreamContext:
             return UpstreamContext(site_name="AcmeCorp", tone="formal")
 
-        @node(outputs=Draft, ensemble_n=2,
-              prompt="gen", model="fast",
-              merge_prompt="Merge considering ${enrich.site_name}: ${variants}")
+        @node(
+            outputs=Draft,
+            ensemble_n=2,
+            prompt="gen",
+            model="fast",
+            merge_prompt="Merge considering ${enrich.site_name}: ${variants}",
+        )
         def write(enrich: UpstreamContext) -> Draft: ...
 
         mod = self._fresh_module("test_preserve")
@@ -1684,12 +1702,16 @@ class TestMergeHooks:
             call_log.append("fallback")
             return Draft(text="fb")
 
-        @node(outputs=Draft, ensemble_n=2,
-              prompt="gen", model="fast",
-              merge_prompt="Merge ${items}",
-              merge_pre_process=pre,
-              merge_post_process=post,
-              merge_fallback=fb)
+        @node(
+            outputs=Draft,
+            ensemble_n=2,
+            prompt="gen",
+            model="fast",
+            merge_prompt="Merge ${items}",
+            merge_pre_process=pre,
+            merge_post_process=post,
+            merge_fallback=fb,
+        )
         def write() -> Draft: ...
 
         mod = self._fresh_module("test_all3_ok")
@@ -1704,6 +1726,7 @@ class TestMergeHooks:
 
     def test_all_three_hooks_failure_path(self):
         """All hooks set, LLM fails: pre + fallback called, post NOT called."""
+
         class FailMerge:
             def __init__(self, tier):
                 self._tier = tier
@@ -1733,12 +1756,16 @@ class TestMergeHooks:
             call_log.append("fallback")
             return Draft(text="fb")
 
-        @node(outputs=Draft, ensemble_n=2,
-              prompt="gen", model="fast",
-              merge_prompt="Merge ${items}",
-              merge_pre_process=pre,
-              merge_post_process=post,
-              merge_fallback=fb)
+        @node(
+            outputs=Draft,
+            ensemble_n=2,
+            prompt="gen",
+            model="fast",
+            merge_prompt="Merge ${items}",
+            merge_pre_process=pre,
+            merge_post_process=post,
+            merge_fallback=fb,
+        )
         def write() -> Draft: ...
 
         mod = self._fresh_module("test_all3_fail")
@@ -1774,8 +1801,11 @@ class TestMergeHooks:
             return {"count": str(len(variants))}
 
         writer = Node(
-            "writer", mode="think", outputs=Draft,
-            prompt="write", model="fast",
+            "writer",
+            mode="think",
+            outputs=Draft,
+            prompt="write",
+            model="fast",
         ) | Oracle(
             n=2,
             merge_prompt="Merge ${count} variants",
@@ -1790,6 +1820,7 @@ class TestMergeHooks:
 
     def test_programmatic_fallback(self):
         """Programmatic Node | Oracle with merge_fallback."""
+
         class FailMerge:
             def __init__(self, tier):
                 self._tier = tier
@@ -1806,8 +1837,11 @@ class TestMergeHooks:
         __llm_kw = configure_fake_llm(lambda tier: FailMerge(tier))
 
         writer = Node(
-            "writer", mode="think", outputs=Draft,
-            prompt="write", model="fast",
+            "writer",
+            mode="think",
+            outputs=Draft,
+            prompt="write",
+            model="fast",
         ) | Oracle(
             n=2,
             merge_prompt="merge: ${variants}",
@@ -1833,8 +1867,11 @@ class TestMergeHooks:
         register_scripted("_decl_hook_gen", lambda i, c: Draft(text="gen"))
 
         writer = Node(
-            "writer", mode="think", outputs=Draft,
-            prompt="write", model="fast",
+            "writer",
+            mode="think",
+            outputs=Draft,
+            prompt="write",
+            model="fast",
         ) | Oracle(
             n=2,
             merge_prompt="merge: ${variants}",
@@ -1867,9 +1904,7 @@ class TestMergeHooks:
 
         __llm_kw = configure_fake_llm(lambda tier: CaptureMerge(tier))
 
-        @node(outputs=Draft, ensemble_n=2,
-              prompt="generate draft", model="fast",
-              merge_prompt="Judge: ${variants}")
+        @node(outputs=Draft, ensemble_n=2, prompt="generate draft", model="fast", merge_prompt="Judge: ${variants}")
         def write() -> Draft: ...
 
         mod = self._fresh_module("test_nochange")
@@ -1895,11 +1930,15 @@ class TestMergeHooks:
             fallback_called.append(str(error))
             return Draft(text="fallback")
 
-        @node(outputs=Draft, ensemble_n=2,
-              prompt="gen", model="fast",
-              merge_prompt="merge: ${variants}",
-              merge_post_process=bad_post_process,
-              merge_fallback=track_fallback)
+        @node(
+            outputs=Draft,
+            ensemble_n=2,
+            prompt="gen",
+            model="fast",
+            merge_prompt="merge: ${variants}",
+            merge_post_process=bad_post_process,
+            merge_fallback=track_fallback,
+        )
         def write() -> Draft: ...
 
         mod = self._fresh_module("test_pp_err")
@@ -1911,9 +1950,7 @@ class TestMergeHooks:
         with pytest.raises(ValueError, match="post_process bug"):
             run(graph, input={"node_id": "t-pp-err"})
 
-        assert fallback_called == [], (
-            f"fallback should NOT catch post_process errors, but got: {fallback_called}"
-        )
+        assert fallback_called == [], f"fallback should NOT catch post_process errors, but got: {fallback_called}"
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1943,6 +1980,7 @@ class TestEachOracleFusionHooks:
     @staticmethod
     def _fresh_module(name: str):
         import types as _types
+
         return _types.ModuleType(name)
 
     def test_post_process_in_fused_path(self):
@@ -1957,15 +1995,23 @@ class TestEachOracleFusionHooks:
 
         @node(outputs=ChunkList)
         def make_chunks() -> ChunkList:
-            return ChunkList(items=[
-                ChunkItem(idx="A", text="alpha"),
-                ChunkItem(idx="B", text="beta"),
-            ])
+            return ChunkList(
+                items=[
+                    ChunkItem(idx="A", text="alpha"),
+                    ChunkItem(idx="B", text="beta"),
+                ]
+            )
 
-        @node(outputs=ChunkResult, prompt="score", model="fast",
-              map_over="make_chunks.items", map_key="idx",
-              ensemble_n=2, merge_prompt="merge: ${variants}",
-              merge_post_process=upper_post)
+        @node(
+            outputs=ChunkResult,
+            prompt="score",
+            model="fast",
+            map_over="make_chunks.items",
+            map_key="idx",
+            ensemble_n=2,
+            merge_prompt="merge: ${variants}",
+            merge_post_process=upper_post,
+        )
         def score(chunk: ChunkItem) -> ChunkResult: ...
 
         mod = self._fresh_module("test_fused_post")
@@ -1984,6 +2030,7 @@ class TestEachOracleFusionHooks:
 
     def test_fallback_in_fused_path(self):
         """merge_fallback works in EachxOracle fused path."""
+
         class FailOnMerge:
             def __init__(self, tier):
                 self._tier = tier
@@ -2006,10 +2053,16 @@ class TestEachOracleFusionHooks:
         def make_chunks() -> ChunkList:
             return ChunkList(items=[ChunkItem(idx="X", text="x")])
 
-        @node(outputs=ChunkResult, prompt="score", model="fast",
-              map_over="make_chunks.items", map_key="idx",
-              ensemble_n=2, merge_prompt="merge: ${variants}",
-              merge_fallback=fused_fallback)
+        @node(
+            outputs=ChunkResult,
+            prompt="score",
+            model="fast",
+            map_over="make_chunks.items",
+            map_key="idx",
+            ensemble_n=2,
+            merge_prompt="merge: ${variants}",
+            merge_fallback=fused_fallback,
+        )
         def score(chunk: ChunkItem) -> ChunkResult: ...
 
         mod = self._fresh_module("test_fused_fb")
@@ -2037,8 +2090,7 @@ class TestEachOracleFusionHooks:
 
             def invoke(self, messages, **kw):
                 if self._tier == "reason":
-                    captured.setdefault("prompts", []).append(
-                        messages[0]["content"] if messages else "")
+                    captured.setdefault("prompts", []).append(messages[0]["content"] if messages else "")
                 return self._model(summary="merged")
 
         __llm_kw = configure_fake_llm(lambda tier: CaptureMerge(tier))
@@ -2050,10 +2102,16 @@ class TestEachOracleFusionHooks:
         def make_chunks() -> ChunkList:
             return ChunkList(items=[ChunkItem(idx="Z", text="z")])
 
-        @node(outputs=ChunkResult, prompt="score", model="fast",
-              map_over="make_chunks.items", map_key="idx",
-              ensemble_n=2, merge_prompt="Merge tagged: ${tagged}",
-              merge_pre_process=tag_pre)
+        @node(
+            outputs=ChunkResult,
+            prompt="score",
+            model="fast",
+            map_over="make_chunks.items",
+            map_key="idx",
+            ensemble_n=2,
+            merge_prompt="Merge tagged: ${tagged}",
+            merge_pre_process=tag_pre,
+        )
         def score(chunk: ChunkItem) -> ChunkResult: ...
 
         mod = self._fresh_module("test_fused_pre")
@@ -2064,9 +2122,7 @@ class TestEachOracleFusionHooks:
         graph = compile(pipeline, **build_test_compile_kwargs(), **__llm_kw)
         result = run(graph, input={"node_id": "f-pre"})
 
-        assert any("count=2" in p for p in captured.get("prompts", [])), (
-            f"pre_process tag not in prompts: {captured}"
-        )
+        assert any("count=2" in p for p in captured.get("prompts", [])), f"pre_process tag not in prompts: {captured}"
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -2080,6 +2136,7 @@ class TestOracleMergeLlmConfig:
     @staticmethod
     def _fresh_module(name: str):
         import types as _types
+
         return _types.ModuleType(name)
 
     def test_merge_prompt_receives_node_llm_config(self, monkeypatch):
@@ -2090,31 +2147,44 @@ class TestOracleMergeLlmConfig:
 
         # Patch _llm.invoke_structured to capture all calls
         from neograph import _llm
+
         original = _llm.invoke_structured
 
         def capture_invoke(
             *args,
-            model_tier=None, prompt_template=None, input_data=None,
-            output_model=None, config=None,
-            node_name="", llm_config=None, context=None, runtime=None,
+            model_tier=None,
+            prompt_template=None,
+            input_data=None,
+            output_model=None,
+            config=None,
+            node_name="",
+            llm_config=None,
+            context=None,
+            runtime=None,
             **kwargs,
         ):
-            captured_calls.append({
-                "model_tier": model_tier,
-                "prompt_template": prompt_template,
-                "llm_config": llm_config,
-            })
+            captured_calls.append(
+                {
+                    "model_tier": model_tier,
+                    "prompt_template": prompt_template,
+                    "llm_config": llm_config,
+                }
+            )
             return output_model(text="fake")
 
         monkeypatch.setattr(_llm, "invoke_structured", capture_invoke)
 
-        @node(outputs=Draft, ensemble_n=2,
-              prompt="gen", model="fast",
-              merge_prompt="merge: ${variants}",
-              llm_config={
-                  "output_strategy": "json_mode",
-                  "provider_kwargs": {"temperature": 0.5},
-              })
+        @node(
+            outputs=Draft,
+            ensemble_n=2,
+            prompt="gen",
+            model="fast",
+            merge_prompt="merge: ${variants}",
+            llm_config={
+                "output_strategy": "json_mode",
+                "provider_kwargs": {"temperature": 0.5},
+            },
+        )
         def write() -> Draft: ...
 
         mod = self._fresh_module("test_llm_cfg")
@@ -2132,15 +2202,11 @@ class TestOracleMergeLlmConfig:
         assert merge_call["model_tier"] == "reason", f"Last call should be merge: {merge_call}"
 
         merge_llm_config = merge_call["llm_config"]
-        assert merge_llm_config is not None, (
-            "merge invoke_structured did not receive llm_config"
-        )
+        assert merge_llm_config is not None, "merge invoke_structured did not receive llm_config"
         # Post-pej0: llm_config is a typed LlmConfig at this boundary.
         assert merge_llm_config.output_strategy == "json_mode", (
             f"merge should inherit node's output_strategy, got: {merge_llm_config}"
         )
-
-
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -2234,26 +2300,28 @@ class TestOracleOverAgentValueDelivery:
         )
 
     def _register_common(self):
-        register_tool_factory(
-            "agent_search", lambda config, tool_config: FakeTool("agent_search", response="found")
-        )
+        register_tool_factory("agent_search", lambda config, tool_config: FakeTool("agent_search", response="found"))
         register_scripted("echo_merge", _echo_merge_concat)
 
     def test_single_type_input_value_reaches_each_isolated_cycle(self):
         self._register_common()
         register_scripted("seed_raw_vd", lambda input_data, config: RawText(text="SEEDVAL"))
-        gen = (
-            Node(
-                name="agent-gen", mode="agent", inputs=RawText, outputs=Claims,
-                model="default-tier", prompt="test/search",
-                tools=[Tool(name="agent_search", budget=5)],
-            )
-            | Oracle(n=2, merge_fn="echo_merge")
+        gen = Node(
+            name="agent-gen",
+            mode="agent",
+            inputs=RawText,
+            outputs=Claims,
+            model="default-tier",
+            prompt="test/search",
+            tools=[Tool(name="agent_search", budget=5)],
+        ) | Oracle(n=2, merge_fn="echo_merge")
+        pipeline = Construct(
+            "vd-single",
+            nodes=[
+                Node.scripted("seed", fn="seed_raw_vd", outputs=RawText),
+                gen,
+            ],
         )
-        pipeline = Construct("vd-single", nodes=[
-            Node.scripted("seed", fn="seed_raw_vd", outputs=RawText),
-            gen,
-        ])
         result = run(self._compile(pipeline), input={"node_id": "vd-single"})
         items = result["agent_gen"].items
         assert len(items) == 2, items  # merged-2 wiring
@@ -2262,18 +2330,22 @@ class TestOracleOverAgentValueDelivery:
     def test_dict_form_input_value_reaches_each_isolated_cycle(self):
         self._register_common()
         register_scripted("seed_raw_vd2", lambda input_data, config: RawText(text="SEEDVAL"))
-        gen = (
-            Node(
-                name="agent-gen", mode="agent", inputs={"seed": RawText}, outputs=Claims,
-                model="default-tier", prompt="test/search",
-                tools=[Tool(name="agent_search", budget=5)],
-            )
-            | Oracle(n=2, merge_fn="echo_merge")
+        gen = Node(
+            name="agent-gen",
+            mode="agent",
+            inputs={"seed": RawText},
+            outputs=Claims,
+            model="default-tier",
+            prompt="test/search",
+            tools=[Tool(name="agent_search", budget=5)],
+        ) | Oracle(n=2, merge_fn="echo_merge")
+        pipeline = Construct(
+            "vd-dict",
+            nodes=[
+                Node.scripted("seed", fn="seed_raw_vd2", outputs=RawText),
+                gen,
+            ],
         )
-        pipeline = Construct("vd-dict", nodes=[
-            Node.scripted("seed", fn="seed_raw_vd2", outputs=RawText),
-            gen,
-        ])
         result = run(self._compile(pipeline), input={"node_id": "vd-dict"})
         items = result["agent_gen"].items
         assert len(items) == 2, items
@@ -2286,16 +2358,22 @@ class TestOracleOverAgentValueDelivery:
         register_scripted("seed_raw_vd3", lambda input_data, config: RawText(text="SEEDVAL"))
 
         @node(
-            mode="agent", outputs=Claims, model="default-tier", prompt="test/search",
+            mode="agent",
+            outputs=Claims,
+            model="default-tier",
+            prompt="test/search",
             tools=[Tool(name="agent_search", budget=5)],
         )
         def researcher(seed: RawText, topic: Annotated[str, FromInput]) -> Claims: ...
 
         gen = researcher | Oracle(n=2, merge_fn="echo_merge")
-        pipeline = Construct("vd-di", nodes=[
-            Node.scripted("seed", fn="seed_raw_vd3", outputs=RawText),
-            gen,
-        ])
+        pipeline = Construct(
+            "vd-di",
+            nodes=[
+                Node.scripted("seed", fn="seed_raw_vd3", outputs=RawText),
+                gen,
+            ],
+        )
         result = run(self._compile(pipeline), input={"node_id": "vd-di", "topic": "BIRDS"})
         items = result["researcher"].items
         assert len(items) == 2, items
@@ -2311,27 +2389,28 @@ class TestOracleOverAgentMultiInputBundle:
     surface is unchanged. Both bundled values reach each isolated cycle."""
 
     def test_multiple_dict_form_producers_bundle_and_deliver(self):
-        register_tool_factory(
-            "agent_search", lambda config, tool_config: FakeTool("agent_search", response="found")
-        )
+        register_tool_factory("agent_search", lambda config, tool_config: FakeTool("agent_search", response="found"))
         register_scripted("alpha_fn_vd", lambda input_data, config: _Alpha(a="AVAL"))
         register_scripted("beta_fn_vd", lambda input_data, config: _Beta(b="BVAL"))
         register_scripted("echo_merge", _echo_merge_concat)
 
-        gen = (
-            Node(
-                name="agent-gen", mode="agent",
-                inputs={"alpha": _Alpha, "beta": _Beta}, outputs=Claims,
-                model="default-tier", prompt="test/search",
-                tools=[Tool(name="agent_search", budget=5)],
-            )
-            | Oracle(n=2, merge_fn="echo_merge")
+        gen = Node(
+            name="agent-gen",
+            mode="agent",
+            inputs={"alpha": _Alpha, "beta": _Beta},
+            outputs=Claims,
+            model="default-tier",
+            prompt="test/search",
+            tools=[Tool(name="agent_search", budget=5)],
+        ) | Oracle(n=2, merge_fn="echo_merge")
+        pipeline = Construct(
+            "vd-multi",
+            nodes=[
+                Node.scripted("alpha", fn="alpha_fn_vd", outputs=_Alpha),
+                Node.scripted("beta", fn="beta_fn_vd", outputs=_Beta),
+                gen,
+            ],
         )
-        pipeline = Construct("vd-multi", nodes=[
-            Node.scripted("alpha", fn="alpha_fn_vd", outputs=_Alpha),
-            Node.scripted("beta", fn="beta_fn_vd", outputs=_Beta),
-            gen,
-        ])
         graph = compile(
             pipeline,
             **build_test_compile_kwargs(),
@@ -2353,17 +2432,20 @@ class TestOracleOverAgentMultiInputBundle:
         rather than silently drop declared outputs."""
         from neograph import ToolInteraction
 
-        gen = (
-            Node(
-                name="agent-gen", mode="agent", inputs=RawText,
-                outputs={"result": Claims, "tool_log": list[ToolInteraction]},
-                model="default-tier", prompt="test/search",
-                tools=[Tool(name="agent_search", budget=5)],
-            )
-            | Oracle(n=2, merge_fn="echo_merge")
-        )
+        gen = Node(
+            name="agent-gen",
+            mode="agent",
+            inputs=RawText,
+            outputs={"result": Claims, "tool_log": list[ToolInteraction]},
+            model="default-tier",
+            prompt="test/search",
+            tools=[Tool(name="agent_search", budget=5)],
+        ) | Oracle(n=2, merge_fn="echo_merge")
         with pytest.raises(ConstructError, match="multi-output"):
-            Construct("bad-multi-output", nodes=[
-                Node.scripted("seed", fn="seed_raw_vd", outputs=RawText),
-                gen,
-            ])
+            Construct(
+                "bad-multi-output",
+                nodes=[
+                    Node.scripted("seed", fn="seed_raw_vd", outputs=RawText),
+                    gen,
+                ],
+            )

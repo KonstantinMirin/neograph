@@ -163,12 +163,18 @@ def _add_arm_nodes(
             subgraph_fn = make_subgraph_fn(item, sub_graph.graph)
             # `named` so the arm sub-construct's engine span reads as the construct
             # name (not the leaking `subgraph_node` __name__). See neograph-3fm1.
-            graph.add_node(item.name, cast(Any, named(
-                subgraph_fn,
+            graph.add_node(
                 item.name,
-                mode="subgraph",
-                output_type=item.output.__name__ if item.output is not None else None,
-            )))
+                cast(
+                    Any,
+                    named(
+                        subgraph_fn,
+                        item.name,
+                        mode="subgraph",
+                        output_type=item.output.__name__ if item.output is not None else None,
+                    ),
+                ),
+            )
         else:
             # make_node_fn already self-names its wrapper per neograph-3fm1.
             node_fn = make_node_fn(
@@ -220,9 +226,13 @@ def _wire_oracle(
                 send_state[StateKeys.ORACLE_MODEL] = models[i % len(models)]
             sends.append(Send(gen_name, send_state))
         if models and oracle.n % len(models) != 0:
-            log.info("oracle_uneven_distribution",
-                     node=gen_name, n=oracle.n, models=models,
-                     msg=f"Uneven distribution: {oracle.n} generators across {len(models)} models")
+            log.info(
+                "oracle_uneven_distribution",
+                node=gen_name,
+                n=oracle.n,
+                models=models,
+                msg=f"Uneven distribution: {oracle.n} generators across {len(models)} models",
+            )
         return sends
 
     if prev_node:
@@ -269,10 +279,7 @@ def _wire_each(
         if not unique_items:
             return [Send(empty_name, state_dict)]
 
-        return [
-            Send(fan_name, {**state_dict, StateKeys.EACH_ITEM: item})
-            for item in unique_items
-        ]
+        return [Send(fan_name, {**state_dict, StateKeys.EACH_ITEM: item}) for item in unique_items]
 
     if prev_node:
         graph.add_conditional_edges(prev_node, each_router, path_map=[fan_name, empty_name])
@@ -315,9 +322,15 @@ def _add_each_oracle_fused(
     empty_name = f"__each_empty_{node.name}"
 
     # Generator function — tagged redirect for Each x Oracle fusion
-    raw_fn = make_node_fn(node, runtime=runtime, scripted_lookup=scripted_lookup, tool_factory_lookup=tool_factory_lookup)
+    raw_fn = make_node_fn(
+        node, runtime=runtime, scripted_lookup=scripted_lookup, tool_factory_lookup=tool_factory_lookup
+    )
     redirect_fn = make_eachoracle_redirect_fn(
-        raw_fn, field_name, collector_field, each.key, item=node,
+        raw_fn,
+        field_name,
+        collector_field,
+        each.key,
+        item=node,
     )
     graph.add_node(gen_name, cast(Any, named(redirect_fn, gen_name, mode="each_oracle")))
 
@@ -366,6 +379,7 @@ def _add_each_oracle_fused(
     # merge_prompt runs on the loop under graph.ainvoke instead of blocking it.
     def _collect_groups(state: Any) -> tuple[dict[str, list], Any]:
         from collections import defaultdict
+
         bus = adapt_state(state)
         # StateBus.get optional: collector is unbound until the first fused
         # generator writes a tagged result; empty-list default is the zero.
@@ -397,7 +411,10 @@ def _add_each_oracle_fused(
         merged: dict[str, Any] = {}
         for key, variants in groups.items():
             merged[key] = _merge_one_group(
-                oracle, node, variants, config,
+                oracle,
+                node,
+                variants,
+                config,
                 upstream_context=upstream_context,
                 runtime=runtime,
                 scripted_lookup=scripted_lookup,
@@ -410,7 +427,10 @@ def _add_each_oracle_fused(
         merged: dict[str, Any] = {}
         for key, variants in groups.items():
             merged[key] = await _amerge_one_group(
-                oracle, node, variants, config,
+                oracle,
+                node,
+                variants,
+                config,
                 upstream_context=upstream_context,
                 runtime=runtime,
                 scripted_lookup=scripted_lookup,
@@ -420,11 +440,14 @@ def _add_each_oracle_fused(
 
     graph.add_node(
         barrier_name,
-        cast(Any, named(
-            RunnableLambda(group_merge_barrier, afunc=agroup_merge_barrier),
-            barrier_name,
-            mode="each_oracle_merge",
-        )),
+        cast(
+            Any,
+            named(
+                RunnableLambda(group_merge_barrier, afunc=agroup_merge_barrier),
+                barrier_name,
+                mode="each_oracle_merge",
+            ),
+        ),
         defer=True,
     )
     graph.add_edge([gen_name], barrier_name)
@@ -455,7 +478,10 @@ def _merge_one_group(
     output_model = node.outputs
     assert output_model is not None, f"Oracle merge on '{node.name}' requires outputs"
     return _merge_variants(
-        oracle, variants, output_model, config,
+        oracle,
+        variants,
+        output_model,
+        config,
         upstream_context=upstream_context,
         llm_config=node.llm_config,
         runtime=runtime,
@@ -483,7 +509,10 @@ async def _amerge_one_group(
     output_model = node.outputs
     assert output_model is not None, f"Oracle merge on '{node.name}' requires outputs"
     return await _amerge_variants(
-        oracle, variants, output_model, config,
+        oracle,
+        variants,
+        output_model,
+        config,
         upstream_context=upstream_context,
         llm_config=node.llm_config,
         runtime=runtime,
@@ -517,7 +546,7 @@ def _make_loop_router(
         # Counter bootstrap (absent/None -> 0) lives in StateBus.get_counter.
         count = bus.get_counter(count_field)
         if count >= loop.max_iterations:
-            if loop.on_exhaust == 'error':
+            if loop.on_exhaust == "error":
                 raise ExecutionError.build(
                     "loop exceeded max_iterations",
                     expected=f"convergence within {loop.max_iterations} iterations",
@@ -610,7 +639,9 @@ def _add_loop_back_edge(
     and a pass-through exit node so the compile loop can wire forward normally.
     """
     node_name = node.name
-    node_fn = make_node_fn(node, runtime=runtime, scripted_lookup=scripted_lookup, tool_factory_lookup=tool_factory_lookup)
+    node_fn = make_node_fn(
+        node, runtime=runtime, scripted_lookup=scripted_lookup, tool_factory_lookup=tool_factory_lookup
+    )
     field_name = field_name_for(node_name)
     count_field = StateKeys.loop_count(field_name)
 
@@ -643,7 +674,9 @@ def _add_loop_back_edge(
     )
 
     graph.add_conditional_edges(
-        node_name, router, path_map=[reenter_target, exit_name],
+        node_name,
+        router,
+        path_map=[reenter_target, exit_name],
     )
 
     return exit_name
@@ -690,7 +723,9 @@ def _add_subgraph_loop(
     )
 
     graph.add_conditional_edges(
-        sub.name, router, path_map=[sub.name, exit_name],
+        sub.name,
+        router,
+        path_map=[sub.name, exit_name],
     )
 
     return exit_name
@@ -838,12 +873,15 @@ def _add_agent_cycle(
     # `named` so each ReAct-cycle body's engine span reads as {node}__agent /
     # {node}__tools / {node}__parse (not the leaking body __name__). See
     # neograph-3fm1.
-    graph.add_node(names.agent, cast(Any, named(
-        RunnableLambda(agent_sync, afunc=agent_async), names.agent, mode=node.mode)))
-    graph.add_node(names.tools, cast(Any, named(
-        RunnableLambda(tools_sync, afunc=tools_async), names.tools, mode=node.mode)))
-    graph.add_node(names.parse, cast(Any, named(
-        RunnableLambda(parse_sync, afunc=parse_async), names.parse, mode=node.mode)))
+    graph.add_node(
+        names.agent, cast(Any, named(RunnableLambda(agent_sync, afunc=agent_async), names.agent, mode=node.mode))
+    )
+    graph.add_node(
+        names.tools, cast(Any, named(RunnableLambda(tools_sync, afunc=tools_async), names.tools, mode=node.mode))
+    )
+    graph.add_node(
+        names.parse, cast(Any, named(RunnableLambda(parse_sync, afunc=parse_async), names.parse, mode=node.mode))
+    )
 
     if prev_node:
         graph.add_edge(prev_node, names.agent)
@@ -875,15 +913,21 @@ def _add_agent_cycle(
 
         graph.add_node(gate_name, gate_parts["gate"])
         graph.add_conditional_edges(
-            names.agent, gated_router, path_map=[gate_name, names.parse],
+            names.agent,
+            gated_router,
+            path_map=[gate_name, names.parse],
         )
         graph.add_conditional_edges(
-            gate_name, gate_parts["router"], path_map=[names.tools, names.agent],
+            gate_name,
+            gate_parts["router"],
+            path_map=[names.tools, names.agent],
         )
     else:
         # 3-way router after the agent turn: tools (loop) | parse (done/forced-final).
         graph.add_conditional_edges(
-            names.agent, base_router, path_map=[names.tools, names.parse],
+            names.agent,
+            base_router,
+            path_map=[names.tools, names.parse],
         )
 
     # ReAct loopback: after executing tools, take another agent turn.

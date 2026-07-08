@@ -34,7 +34,9 @@ def combine(
 # Use the programmatic API to avoid @node + LLM mode complications.
 register_scripted("di_merge_producer", lambda i, c: Claims(items=["a"]))
 
-pipeline = Construct("merge-di", nodes=[
-    Node.scripted("producer", fn="di_merge_producer", outputs=Claims)
-    | Oracle(n=3, merge_fn="combine"),
-])
+pipeline = Construct(
+    "merge-di",
+    nodes=[
+        Node.scripted("producer", fn="di_merge_producer", outputs=Claims) | Oracle(n=3, merge_fn="combine"),
+    ],
+)

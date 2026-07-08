@@ -12,12 +12,19 @@ from tests.fakes import register_scripted
 class Claims(BaseModel, frozen=True):
     text: str
 
+
 register_scripted("dict_out_4b", lambda i, c: {"result": Claims(text="ok"), "log": "done"})
 register_scripted("bad_type_4b", lambda i, c: "ok")
 
-pipeline = Construct("broken", nodes=[
-    Node.scripted("source", fn="dict_out_4b", outputs={"result": Claims, "log": str}),
-    Node.scripted("consumer", fn="bad_type_4b",
-                  inputs={"source_result": int},  # should be Claims
-                  outputs=str),
-])
+pipeline = Construct(
+    "broken",
+    nodes=[
+        Node.scripted("source", fn="dict_out_4b", outputs={"result": Claims, "log": str}),
+        Node.scripted(
+            "consumer",
+            fn="bad_type_4b",
+            inputs={"source_result": int},  # should be Claims
+            outputs=str,
+        ),
+    ],
+)

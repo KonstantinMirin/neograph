@@ -198,9 +198,7 @@ def test_scripted_node_span_named_and_carries_metadata_when_run_with_callbacks()
 def test_think_node_span_named_when_run_with_callbacks():
     """A think (LLM) node's engine span reads as the node name and is tagged with
     its LLM mode — no ``node_wrapper`` leak from the dead-body wrapper."""
-    llm_kw = configure_fake_llm(
-        lambda tier: StructuredFake(lambda m: m(summary="fake-analysis"))
-    )
+    llm_kw = configure_fake_llm(lambda tier: StructuredFake(lambda m: m(summary="fake-analysis")))
 
     @node(mode="think", outputs=Analysis, model="fast", prompt="test")
     def analyze(text: Annotated[str, FromInput]) -> Analysis: ...

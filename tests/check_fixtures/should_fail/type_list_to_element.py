@@ -10,10 +10,14 @@ from tests.fakes import register_scripted
 class Claims(BaseModel, frozen=True):
     text: str
 
+
 register_scripted("list_out", lambda i, c: [Claims(text="a")])
 register_scripted("elem_in", lambda i, c: Claims(text="ok"))
 
-pipeline = Construct("broken", nodes=[
-    Node.scripted("first", fn="list_out", outputs=list[Claims]),
-    Node.scripted("second", fn="elem_in", inputs=Claims, outputs=Claims),
-])
+pipeline = Construct(
+    "broken",
+    nodes=[
+        Node.scripted("first", fn="list_out", outputs=list[Claims]),
+        Node.scripted("second", fn="elem_in", inputs=Claims, outputs=Claims),
+    ],
+)

@@ -62,10 +62,7 @@ def _chain_pipeline(k: int):
         if prev is None:
             src = f"def {name}() -> RawText:\n    return RawText(text='x')\n"
         else:
-            src = (
-                f"def {name}({prev}: RawText) -> RawText:\n"
-                f"    return RawText(text={prev}.text)\n"
-            )
+            src = f"def {name}({prev}: RawText) -> RawText:\n    return RawText(text={prev}.text)\n"
         ns: dict = {"RawText": RawText}
         exec(src, ns)  # noqa: S102 — test-local codegen for named-param edges
         decorated = node(mode="scripted", outputs=RawText)(ns[name])

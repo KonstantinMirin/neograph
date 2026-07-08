@@ -276,9 +276,7 @@ class NonIdempotentReplayError(ExecutionError):
     replay is genuinely safe) or re-fetched from source instead of replayed.
     """
 
-    def __init__(
-        self, *args: object, tool_name: str | None = None, node: str | None = None
-    ) -> None:
+    def __init__(self, *args: object, tool_name: str | None = None, node: str | None = None) -> None:
         super().__init__(*args)
         self.tool_name = tool_name
         self.node = node
@@ -338,8 +336,7 @@ class ResourceExpiredError(ExecutionError):
         kind = getattr(ref, "kind", "?")
         reason = f" ({detail})" if detail else ""
         msg = NeographError.build(
-            f"resource ref kind='{kind}' uri='{uri}' expired and could not be "
-            f"re-derived{where}{reason}",
+            f"resource ref kind='{kind}' uri='{uri}' expired and could not be re-derived{where}{reason}",
             hint="the producing tool must be replay-eligible (idempotent=True) and "
             "the consumer must supply config['configurable']['mcp_resource_replayer']; "
             "otherwise re-acquire the resource from source",

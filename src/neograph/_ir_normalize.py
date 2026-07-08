@@ -119,9 +119,7 @@ def fan_out_candidates(node: Node, known_field_names: set[str]) -> list[str]:
         return []
     self_field = field_name_for(node.name)
     return [
-        key for key in ni.by_name
-        if field_name_for(key) not in known_field_names
-        and field_name_for(key) != self_field
+        key for key in ni.by_name if field_name_for(key) not in known_field_names and field_name_for(key) != self_field
     ]
 
 

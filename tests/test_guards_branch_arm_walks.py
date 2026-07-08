@@ -74,50 +74,48 @@ def _collect_raw_nodes_walks() -> Counter:
 
 # The walks that legitimately iterate `.nodes` directly. Every entry has a
 # recorded reason; anything NOT here is a suspected arm-blind walk.
-_ALLOWLIST: Counter = Counter({
-    # The arm-descent primitive itself — the single source of truth.
-    ("_ir_branch.py", "for item in construct.nodes:"): 1,
-    # Peer-field set for fan_out inference: intentionally TOP-LEVEL only
-    # (arm-sibling fan-in unsupported; documented in normalize_ir).
-    ("_ir_normalize.py", "for item in construct.nodes:"): 1,
-    # Graph-build dispatch loop — already arm-aware (dispatches _BranchNode to
-    # _add_branch_to_graph).
-    ("compiler.py", "for item in construct.nodes:"): 1,
-    # LangGraph compiled-graph node ids — NOT a Construct node list.
-    ("compiler.py",
-     'nodes = [n for n in lg_graph.nodes if n not in ("__start__", "__end__")]'): 1,
-    # compile_start telemetry — display only, no correctness impact.
-    ("compiler.py", "node_names=[n.name for n in construct.nodes],"): 1,
-    ("compiler.py", "for n in construct.nodes"): 1,
-    # iter_nodes — the leaf-flattening SoT walk, already arm-aware (tdbb).
-    ("construct.py", "for item in construct.nodes:"): 1,
-    # Spec-level walks — YAML spec, pre-IR; _BranchNode never appears in a spec.
-    ("loader.py", "for node_spec in spec.nodes:"): 1,
-    ("loader.py", "for ref in spec.pipeline.nodes:"): 1,
-    ("loader.py", "for prev_ref in construct_spec.nodes[:i]:"): 1,
-    # compute_node_fingerprints — already arm-aware (tdbb, _fingerprint_item).
-    ("state.py", "for item in construct.nodes:"): 1,
-    # compile_state_model — the gold-standard arm-aware walk (handles
-    # branch_nodes explicitly right after these partitions).
-    ("state.py", "nodes_only = [n for n in construct.nodes if isinstance(n, Node)]"): 1,
-    ("state.py",
-     "sub_constructs = [n for n in construct.nodes if isinstance(n, Construct)]"): 1,
-    ("state.py",
-     "branch_nodes = [n for n in construct.nodes if isinstance(n, _BranchNode)]"): 1,
-    # Test-scaffold codegen introspection. The two top-level _collect_items /
-    # _collect_edges walks were migrated to iter_with_arms in neograph-gfoq; the
-    # remaining inner walk descends a sub-construct's own node list one level
-    # down (sub-construct arm-descent is owned by the sub-construct itself).
-    ("scaffold.py",
-     "sub_nodes = [_node_info(n) for n in item.nodes if isinstance(n, Node)]"): 1,
-    # wrap_fan_over_agents — the fan-over-agent auto-wrap pre-pass (neograph-m6d3.6).
-    # Deliberately TOP-LEVEL only: it rewrites supported fan-over-agent nodes into
-    # isolating sub-constructs, but arm nodes CANNOT be wrapped here (they are added
-    # verbatim by _add_arm_nodes). Arm-nested cases are caught fail-loud by the
-    # iter_with_arms scan immediately after this walk, so routing this walk through
-    # iter_with_arms would be wrong (it must NOT descend into arms).
-    ("_fan_agent_wrap.py", "for item in construct.nodes:"): 1,
-})
+_ALLOWLIST: Counter = Counter(
+    {
+        # The arm-descent primitive itself — the single source of truth.
+        ("_ir_branch.py", "for item in construct.nodes:"): 1,
+        # Peer-field set for fan_out inference: intentionally TOP-LEVEL only
+        # (arm-sibling fan-in unsupported; documented in normalize_ir).
+        ("_ir_normalize.py", "for item in construct.nodes:"): 1,
+        # Graph-build dispatch loop — already arm-aware (dispatches _BranchNode to
+        # _add_branch_to_graph).
+        ("compiler.py", "for item in construct.nodes:"): 1,
+        # LangGraph compiled-graph node ids — NOT a Construct node list.
+        ("compiler.py", 'nodes = [n for n in lg_graph.nodes if n not in ("__start__", "__end__")]'): 1,
+        # compile_start telemetry — display only, no correctness impact.
+        ("compiler.py", "node_names=[n.name for n in construct.nodes],"): 1,
+        ("compiler.py", "for n in construct.nodes"): 1,
+        # iter_nodes — the leaf-flattening SoT walk, already arm-aware (tdbb).
+        ("construct.py", "for item in construct.nodes:"): 1,
+        # Spec-level walks — YAML spec, pre-IR; _BranchNode never appears in a spec.
+        ("loader.py", "for node_spec in spec.nodes:"): 1,
+        ("loader.py", "for ref in spec.pipeline.nodes:"): 1,
+        ("loader.py", "for prev_ref in construct_spec.nodes[:i]:"): 1,
+        # compute_node_fingerprints — already arm-aware (tdbb, _fingerprint_item).
+        ("state.py", "for item in construct.nodes:"): 1,
+        # compile_state_model — the gold-standard arm-aware walk (handles
+        # branch_nodes explicitly right after these partitions).
+        ("state.py", "nodes_only = [n for n in construct.nodes if isinstance(n, Node)]"): 1,
+        ("state.py", "sub_constructs = [n for n in construct.nodes if isinstance(n, Construct)]"): 1,
+        ("state.py", "branch_nodes = [n for n in construct.nodes if isinstance(n, _BranchNode)]"): 1,
+        # Test-scaffold codegen introspection. The two top-level _collect_items /
+        # _collect_edges walks were migrated to iter_with_arms in neograph-gfoq; the
+        # remaining inner walk descends a sub-construct's own node list one level
+        # down (sub-construct arm-descent is owned by the sub-construct itself).
+        ("scaffold.py", "sub_nodes = [_node_info(n) for n in item.nodes if isinstance(n, Node)]"): 1,
+        # wrap_fan_over_agents — the fan-over-agent auto-wrap pre-pass (neograph-m6d3.6).
+        # Deliberately TOP-LEVEL only: it rewrites supported fan-over-agent nodes into
+        # isolating sub-constructs, but arm nodes CANNOT be wrapped here (they are added
+        # verbatim by _add_arm_nodes). Arm-nested cases are caught fail-loud by the
+        # iter_with_arms scan immediately after this walk, so routing this walk through
+        # iter_with_arms would be wrong (it must NOT descend into arms).
+        ("_fan_agent_wrap.py", "for item in construct.nodes:"): 1,
+    }
+)
 
 
 class TestNoArmBlindNodesWalks:
@@ -139,8 +137,7 @@ class TestNoArmBlindNodesWalks:
         if stale:
             msg.append(
                 "STALE allowlist entry — the walk moved or was migrated; remove "
-                "it or re-localize by content:\n"
-                + "\n".join(f"    {f}: {line}" for (f, line), _ in stale.items())
+                "it or re-localize by content:\n" + "\n".join(f"    {f}: {line}" for (f, line), _ in stale.items())
             )
         assert not msg, "\n\n".join(msg)
 
@@ -171,31 +168,19 @@ class TestArmBlindDetectorMetaTests:
 
     def test_detector_flags_a_raw_arm_blind_walk(self):
         """A hand-rolled `for x in construct.nodes` IS detected (positive)."""
-        blind = (
-            "def walk(construct):\n"
-            "    for item in construct.nodes:\n"
-            "        handle(item)\n"
-        )
+        blind = "def walk(construct):\n    for item in construct.nodes:\n        handle(item)\n"
         assert self._count(blind) == 1
 
     def test_detector_ignores_primitive_routed_walk(self):
         """A walk routed through the primitive is NOT detected — migration is
         the sanctioned escape from the guard (would-be-missed case)."""
-        routed = (
-            "def walk(construct):\n"
-            "    for item in iter_with_arms(construct):\n"
-            "        handle(item)\n"
-        )
+        routed = "def walk(construct):\n    for item in iter_with_arms(construct):\n        handle(item)\n"
         assert self._count(routed) == 0
 
     def test_detector_ignores_enumerate_wrapped_walk(self):
         """`enumerate(x.nodes)` is a Call, not a raw attribute iteration — the
         write-back primitive iter_item_slots uses exactly this form."""
-        wrapped = (
-            "def walk(construct):\n"
-            "    for i, item in enumerate(construct.nodes):\n"
-            "        handle(i, item)\n"
-        )
+        wrapped = "def walk(construct):\n    for i, item in enumerate(construct.nodes):\n        handle(i, item)\n"
         assert self._count(wrapped) == 0
 
     def test_detector_is_attribute_name_agnostic(self):

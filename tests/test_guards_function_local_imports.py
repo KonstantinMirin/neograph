@@ -13,13 +13,15 @@ import pytest
 SRC_DIR = pathlib.Path(__file__).resolve().parent.parent / "src" / "neograph"
 
 # Error classes that must use .build() instead of direct construction.
-ERROR_CLASSES = frozenset({
-    "ConstructError",
-    "ExecutionError",
-    "CompileError",
-    "ConfigurationError",
-    "NeographError",
-})
+ERROR_CLASSES = frozenset(
+    {
+        "ConstructError",
+        "ExecutionError",
+        "CompileError",
+        "ConfigurationError",
+        "NeographError",
+    }
+)
 
 
 class TestNoFunctionLocalFactoryImportInOracle:
@@ -71,7 +73,7 @@ class TestNoFunctionLocalFactoryImportInOracle:
             f"found in {oracle_path.name}:\n"
             + "\n".join(f"  line {lineno}: from {module} import ..." for lineno, module in offenders)
             + "\n\nFix: extract the shared symbols into a Protocol/registry module "
-              "(e.g. `_runtime_registry.py`) and import from there at module scope."
+            "(e.g. `_runtime_registry.py`) and import from there at module scope."
         )
 
     def test_scanner_detects_injected_function_local_factory_import(self, tmp_path: pathlib.Path):
@@ -103,9 +105,7 @@ class TestNoFunctionLocalFactoryImportInOracle:
             "    return lookup_scripted(name)\n"
         )
         offenders = self._find_function_local_factory_imports(synthetic.read_text())
-        assert offenders == [], (
-            f"scanner false-positive on module-level import; offenders={offenders}"
-        )
+        assert offenders == [], f"scanner false-positive on module-level import; offenders={offenders}"
 
 
 class TestNoFunctionLocalLlmOrFactoryImportInDispatch:
@@ -122,12 +122,14 @@ class TestNoFunctionLocalLlmOrFactoryImportInDispatch:
     `try: ... except ImportError: ...`, makes this test fail naming the offender.
     """
 
-    FORBIDDEN_MODULES = frozenset({
-        "neograph._llm",
-        "neograph.factory",
-        "_llm",
-        "factory",
-    })
+    FORBIDDEN_MODULES = frozenset(
+        {
+            "neograph._llm",
+            "neograph.factory",
+            "_llm",
+            "factory",
+        }
+    )
 
     def _walk_function_bodies(self, tree: ast.AST):
         for fn in ast.walk(tree):
@@ -150,8 +152,7 @@ class TestNoFunctionLocalLlmOrFactoryImportInDispatch:
                 if module in self.FORBIDDEN_MODULES:
                     alias_names = ", ".join(alias.name for alias in child.names)
                     function_local_imports.append(
-                        f"  _dispatch.py:{child.lineno} (in {fn.name}): "
-                        f"from {module} import {alias_names}"
+                        f"  _dispatch.py:{child.lineno} (in {fn.name}): from {module} import {alias_names}"
                     )
             elif isinstance(child, ast.ExceptHandler):
                 # ``except ImportError:`` or ``except (ImportError, ...):``
@@ -160,13 +161,10 @@ class TestNoFunctionLocalLlmOrFactoryImportInDispatch:
                 if isinstance(exc_type, ast.Name):
                     exc_names = [exc_type.id]
                 elif isinstance(exc_type, ast.Tuple):
-                    exc_names = [
-                        n.id for n in exc_type.elts if isinstance(n, ast.Name)
-                    ]
+                    exc_names = [n.id for n in exc_type.elts if isinstance(n, ast.Name)]
                 if "ImportError" in exc_names:
                     importerror_handlers.append(
-                        f"  _dispatch.py:{child.lineno} (in {fn.name}): "
-                        f"except {', '.join(exc_names)}"
+                        f"  _dispatch.py:{child.lineno} (in {fn.name}): except {', '.join(exc_names)}"
                     )
 
         problems = []
@@ -177,8 +175,7 @@ class TestNoFunctionLocalLlmOrFactoryImportInDispatch:
             )
         if importerror_handlers:
             problems.append(
-                f"{len(importerror_handlers)} defensive ImportError handler(s):\n"
-                + "\n".join(importerror_handlers)
+                f"{len(importerror_handlers)} defensive ImportError handler(s):\n" + "\n".join(importerror_handlers)
             )
 
         assert not problems, (
@@ -218,9 +215,7 @@ class TestNoFunctionLocalLlmOrFactoryImportInDispatch:
                 if isinstance(exc_type, ast.Name):
                     exc_names = [exc_type.id]
                 elif isinstance(exc_type, ast.Tuple):
-                    exc_names = [
-                        n.id for n in exc_type.elts if isinstance(n, ast.Name)
-                    ]
+                    exc_names = [n.id for n in exc_type.elts if isinstance(n, ast.Name)]
                 if "ImportError" in exc_names:
                     importerror_handlers.append(child.lineno)
 
@@ -276,12 +271,10 @@ class TestNoFunctionLocalFactoryImportInDecorators:
             f"found in {decorators_path.name}:\n"
             + "\n".join(f"  line {lineno}: from {module} import ..." for lineno, module in offenders)
             + "\n\nFix: extract the shared symbols into a Protocol/registry module "
-              "(e.g. `_runtime_registry.py`) and import from there at module scope."
+            "(e.g. `_runtime_registry.py`) and import from there at module scope."
         )
 
-    def test_scanner_detects_injected_function_local_factory_import_in_decorators(
-        self, tmp_path: pathlib.Path
-    ):
+    def test_scanner_detects_injected_function_local_factory_import_in_decorators(self, tmp_path: pathlib.Path):
         """Mutation: a synthetic module with a function-local factory import must be flagged."""
         synthetic = tmp_path / "decorators.py"
         synthetic.write_text(
@@ -296,9 +289,7 @@ class TestNoFunctionLocalFactoryImportInDecorators:
             f"scanner failed to detect injected function-local factory import; offenders={offenders}"
         )
 
-    def test_scanner_accepts_module_level_factory_import_in_decorators(
-        self, tmp_path: pathlib.Path
-    ):
+    def test_scanner_accepts_module_level_factory_import_in_decorators(self, tmp_path: pathlib.Path):
         """Module-level imports from neograph.factory are not flagged by this scanner.
 
         (The deferred-import budget guard tracks those separately.)
@@ -312,9 +303,7 @@ class TestNoFunctionLocalFactoryImportInDecorators:
             "    register_scripted('x', lambda: None)\n"
         )
         offenders = self._find_function_local_factory_imports(synthetic.read_text())
-        assert offenders == [], (
-            f"scanner false-positive on module-level import; offenders={offenders}"
-        )
+        assert offenders == [], f"scanner false-positive on module-level import; offenders={offenders}"
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -347,11 +336,7 @@ class TestNoRetryPolicyInCompileSignature:
             if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 continue
             args = node.args
-            all_args = (
-                list(args.posonlyargs)
-                + list(args.args)
-                + list(args.kwonlyargs)
-            )
+            all_args = list(args.posonlyargs) + list(args.args) + list(args.kwonlyargs)
             for a in all_args:
                 assert a.arg != "retry_policy", (
                     f"compiler.py:{node.lineno} {node.name}(...) still declares "
@@ -399,11 +384,7 @@ class TestNoRetryPolicyInCompileSignature:
             if node.name != "compile":
                 continue
             args = node.args
-            all_args = (
-                list(args.posonlyargs)
-                + list(args.args)
-                + list(args.kwonlyargs)
-            )
+            all_args = list(args.posonlyargs) + list(args.args) + list(args.kwonlyargs)
             if any(a.arg == "retry_policy" for a in all_args):
                 flagged = True
         assert flagged, "mutation case: injected retry_policy param was not detected"
@@ -430,8 +411,7 @@ class TestRetrySemanticsDocPage:
     def _find_page(self) -> pathlib.Path:
         candidates = list(self.DOC_DIR.rglob("*retry*.mdx"))
         assert candidates, (
-            f"no retry-semantics page found under {self.DOC_DIR}; "
-            "expected a file with 'retry' in its name"
+            f"no retry-semantics page found under {self.DOC_DIR}; expected a file with 'retry' in its name"
         )
         # Prefer concepts/ over reference/ when both exist.
         candidates.sort(key=lambda p: (0 if "concepts" in p.parts else 1, str(p)))
@@ -448,10 +428,7 @@ class TestRetrySemanticsDocPage:
             "scripted": "flaky-external-in-scripted layer reference",
         }
         missing = [k for k in required if k not in text]
-        assert missing == [], (
-            f"\n{page} is missing required mentions: {missing}\n"
-            f"Required terms map: {required}"
-        )
+        assert missing == [], f"\n{page} is missing required mentions: {missing}\nRequired terms map: {required}"
 
     def test_retry_page_states_compile_correctness_rationale(self):
         page = self._find_page()
@@ -460,9 +437,7 @@ class TestRetrySemanticsDocPage:
         # Either phrasing of the correctness argument: act-mode tools, or
         # double-write / replay reasoning.
         ok = (
-            ("act" in text and ("replay" in text or "tool" in text))
-            or "double-write" in text
-            or "double write" in text
+            ("act" in text and ("replay" in text or "tool" in text)) or "double-write" in text or "double write" in text
         )
         assert ok, (
             f"{page.name} does not state the correctness rationale for not "
@@ -586,9 +561,7 @@ class TestNeoStateKeysCentralized:
 
         assert violations == [], (
             f"\n{len(violations)} `neo_*` literal(s) found outside "
-            "_state_keys.py:\n"
-            + "\n".join(violations)
-            + "\n\nReplace each with the named constant or builder from "
+            "_state_keys.py:\n" + "\n".join(violations) + "\n\nReplace each with the named constant or builder from "
             "`neograph._state_keys`."
         )
 
@@ -673,14 +646,16 @@ class TestNoLlmModuleGlobals:
     appear as module-level Assign targets.
     """
 
-    FORBIDDEN_NAMES = frozenset({
-        "_llm_factory",
-        "_llm_factory_params",
-        "_prompt_compiler",
-        "_prompt_compiler_params",
-        "_global_renderer",
-        "_cost_callback",
-    })
+    FORBIDDEN_NAMES = frozenset(
+        {
+            "_llm_factory",
+            "_llm_factory_params",
+            "_prompt_compiler",
+            "_prompt_compiler_params",
+            "_global_renderer",
+            "_cost_callback",
+        }
+    )
 
     def test_no_module_level_llm_globals(self):
         llm_path = SRC_DIR / "_llm.py"
@@ -715,13 +690,10 @@ class TestNoLlmModuleGlobals:
             if isinstance(node, ast.Global):
                 offenders = [n for n in node.names if n in self.FORBIDDEN_NAMES]
                 if offenders:
-                    violations.append(
-                        f"  _llm.py:{node.lineno}: global {', '.join(offenders)}"
-                    )
+                    violations.append(f"  _llm.py:{node.lineno}: global {', '.join(offenders)}")
 
-        assert violations == [], (
-            f"\n{len(violations)} `global` statement(s) target forbidden LLM names:\n"
-            + "\n".join(violations)
+        assert violations == [], f"\n{len(violations)} `global` statement(s) target forbidden LLM names:\n" + "\n".join(
+            violations
         )
 
 
@@ -737,12 +709,14 @@ class TestNoModuleLevelRegistration:
     bearing any of those names AND checks `__init__.py` for re-exports.
     """
 
-    FORBIDDEN_NAMES = frozenset({
-        "configure_llm",
-        "register_scripted",
-        "register_condition",
-        "register_tool_factory",
-    })
+    FORBIDDEN_NAMES = frozenset(
+        {
+            "configure_llm",
+            "register_scripted",
+            "register_condition",
+            "register_tool_factory",
+        }
+    )
 
     def test_no_top_level_function_defs(self):
         """No `src/neograph/*.py` should define `configure_llm` at module level.
@@ -779,9 +753,8 @@ class TestNoModuleLevelRegistration:
                 if name in line and ("import" in line or '"' + name + '"' in line):
                     violations.append(f"  __init__.py:{i}: {stripped[:90]}")
                     break
-        assert violations == [], (
-            f"\n{len(violations)} re-export(s) of removed helpers in __init__.py:\n"
-            + "\n".join(violations)
+        assert violations == [], f"\n{len(violations)} re-export(s) of removed helpers in __init__.py:\n" + "\n".join(
+            violations
         )
 
     def test_configure_llm_no_longer_importable(self):
@@ -822,9 +795,7 @@ class TestNoGlobalRegistry:
                         and isinstance(node.value.func, ast.Name)
                         and node.value.func.id == "Registry"
                     ):
-                        violations.append(
-                            f"  _registry.py:{node.lineno}: registry = Registry()"
-                        )
+                        violations.append(f"  _registry.py:{node.lineno}: registry = Registry()")
 
         assert violations == [], (
             f"\n{len(violations)} module-level Registry singleton(s) remain:\n"
@@ -898,39 +869,32 @@ class TestOutputFieldNameMonopoly:
         assert offenders == [], (
             f"\n{len(offenders)} hand-rolled output-field-name join(s) found:\n"
             + "\n".join(f"  {o}" for o in offenders)
-            + "\n\nReplace f\"{base}_{output_key}\" with "
+            + '\n\nReplace f"{base}_{output_key}" with '
             "output_field_name(base, output_key) from neograph.naming."
         )
 
     def test_mutation_output_key_join_detected(self, tmp_path: pathlib.Path):
-        (tmp_path / "m.py").write_text(
-            'def f(field_name, output_key):\n'
-            '    return f"{field_name}_{output_key}"\n'
-        )
+        (tmp_path / "m.py").write_text('def f(field_name, output_key):\n    return f"{field_name}_{output_key}"\n')
         assert self._scan(tmp_path), "scanner missed an output_key join"
 
     def test_mutation_primary_key_attr_join_detected(self, tmp_path: pathlib.Path):
-        (tmp_path / "m.py").write_text(
-            'def f(own_field, no):\n'
-            '    return f"{own_field}_{no.primary_key}"\n'
-        )
+        (tmp_path / "m.py").write_text('def f(own_field, no):\n    return f"{own_field}_{no.primary_key}"\n')
         assert self._scan(tmp_path), "scanner missed a primary_key attribute join"
 
     def test_mutation_non_output_join_not_flagged(self, tmp_path: pathlib.Path):
         """Near-miss: a join whose trailing name is NOT an output key (e.g. a
         synthesized shim name) must NOT be flagged."""
         (tmp_path / "m.py").write_text(
-            'def f(node_label, token):\n'
+            "def f(node_label, token):\n"
             '    a = f"_body_merge_{node_label}_{token}"\n'
             '    b = f"{prefix}{field_name}"\n'
-            '    return a, b\n'
+            "    return a, b\n"
         )
         assert self._scan(tmp_path) == [], "near-miss join wrongly flagged"
 
     def test_helper_home_exempt(self, tmp_path: pathlib.Path):
         (tmp_path / "naming.py").write_text(
-            'def output_field_name(base, output_key):\n'
-            '    return f"{base}_{output_key}"\n'
+            'def output_field_name(base, output_key):\n    return f"{base}_{output_key}"\n'
         )
         assert self._scan(tmp_path) == [], "naming.py must be exempt"
 
@@ -945,11 +909,7 @@ def _has_len_prefix_slice(tree: ast.AST) -> bool:
         if not isinstance(sl, ast.Slice) or sl.lower is None:
             continue
         low = sl.lower
-        if (
-            isinstance(low, ast.Call)
-            and isinstance(low.func, ast.Name)
-            and low.func.id == "len"
-        ):
+        if isinstance(low, ast.Call) and isinstance(low.func, ast.Name) and low.func.id == "len":
             return True
     return False
 
@@ -978,16 +938,13 @@ class TestSplitOutputFieldMonopoly:
                 for n in ast.walk(ast.parse(py.read_text()))
             )
         ]
-        assert homes == ["naming.py"], (
-            f"split_output_field must be defined once in naming.py; found in {homes}."
-        )
+        assert homes == ["naming.py"], f"split_output_field must be defined once in naming.py; found in {homes}."
 
     def test_no_handrolled_prefix_strip_parse(self):
         offenders = [
             py.name
             for py in sorted(SRC_DIR.glob("*.py"))
-            if py.name not in self._EXEMPT_FILES
-            and _has_len_prefix_slice(ast.parse(py.read_text()))
+            if py.name not in self._EXEMPT_FILES and _has_len_prefix_slice(ast.parse(py.read_text()))
         ]
         assert offenders == [], (
             f"\n{len(offenders)} hand-rolled '<field>[len(prefix):]' output-field "
@@ -1027,9 +984,15 @@ class TestPrimaryOutputMonopoly:
     NOT flagged -- that is a different concern (first/only input value).
     """
 
-    _OUTPUT_CONTAINER_NAMES = frozenset({
-        "output_model", "output_type", "gen_type", "outputs", "node_outputs",
-    })
+    _OUTPUT_CONTAINER_NAMES = frozenset(
+        {
+            "output_model",
+            "output_type",
+            "gen_type",
+            "outputs",
+            "node_outputs",
+        }
+    )
 
     @classmethod
     def _scan(cls, src_dir: pathlib.Path) -> list[str]:
@@ -1073,20 +1036,13 @@ class TestPrimaryOutputMonopoly:
         )
 
     def test_mutation_output_model_primary_detected(self, tmp_path: pathlib.Path):
-        (tmp_path / "m.py").write_text(
-            'def f(output_model):\n'
-            '    return next(iter(output_model.values()))\n'
-        )
+        (tmp_path / "m.py").write_text("def f(output_model):\n    return next(iter(output_model.values()))\n")
         assert self._scan(tmp_path), "scanner missed an output_model primary extraction"
 
     def test_mutation_input_data_unwrap_not_flagged(self, tmp_path: pathlib.Path):
         """The single-upstream INPUT unwrap is a different concern and exempt."""
-        (tmp_path / "m.py").write_text(
-            'def f(input_data):\n'
-            '    return next(iter(input_data.values()))\n'
-        )
+        (tmp_path / "m.py").write_text("def f(input_data):\n    return next(iter(input_data.values()))\n")
         assert self._scan(tmp_path) == [], "input_data unwrap wrongly flagged"
-
 
 
 def _primary_key_field_join_sites(tree: ast.AST) -> bool:
@@ -1125,16 +1081,13 @@ class TestPrimaryOutputFieldMonopoly:
                 for n in ast.walk(ast.parse(py.read_text()))
             )
         ]
-        assert homes == ["_normalize.py"], (
-            f"primary_output_field must be defined once in _normalize.py; found {homes}."
-        )
+        assert homes == ["_normalize.py"], f"primary_output_field must be defined once in _normalize.py; found {homes}."
 
     def test_no_handrolled_primary_key_field_join(self):
         offenders = [
             py.name
             for py in sorted(SRC_DIR.glob("*.py"))
-            if py.name not in self._EXEMPT_FILES
-            and _primary_key_field_join_sites(ast.parse(py.read_text()))
+            if py.name not in self._EXEMPT_FILES and _primary_key_field_join_sites(ast.parse(py.read_text()))
         ]
         assert offenders == [], (
             f"\n{len(offenders)} hand-rolled 'output_field_name(base, no.primary_key)' "
@@ -1144,22 +1097,14 @@ class TestPrimaryOutputFieldMonopoly:
 
     def test_forward_boundary_uses_normalize_outputs(self):
         source = (SRC_DIR / "forward.py").read_text()
-        assert "normalize_outputs" in source, (
-            "forward.py loop boundary must derive primary type via normalize_outputs."
-        )
+        assert "normalize_outputs" in source, "forward.py loop boundary must derive primary type via normalize_outputs."
 
     # --- meta-tests ---
 
     def test_meta_primary_key_join_scanner_catches_idiom(self):
-        tree = ast.parse(
-            "def f(base, no):\n"
-            "    return output_field_name(base, no.primary_key)\n"
-        )
+        tree = ast.parse("def f(base, no):\n    return output_field_name(base, no.primary_key)\n")
         assert _primary_key_field_join_sites(tree)
 
     def test_meta_primary_key_join_scanner_passes_helper(self):
-        tree = ast.parse(
-            "def f(base, outputs):\n"
-            "    return primary_output_field(base, outputs)\n"
-        )
+        tree = ast.parse("def f(base, outputs):\n    return primary_output_field(base, outputs)\n")
         assert not _primary_key_field_join_sites(tree)

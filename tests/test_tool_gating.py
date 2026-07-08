@@ -137,6 +137,7 @@ def _build_gated_graph(counter: list[int], *, surface: str) -> Any:
     register_tool_factory("record", lambda config, tool_config: _RecordTool(counter))
 
     if surface == "node":
+
         @node(
             mode="agent",
             outputs=KResult,
@@ -191,17 +192,13 @@ class TestToolGatingKeystone:
     approves — then runs exactly once. Three-surface parity: @node +
     programmatic ``Node``."""
 
-    def test_side_effecting_tool_gated_until_approval_then_runs_once(
-        self, is_async: bool, surface: str
-    ) -> None:
+    def test_side_effecting_tool_gated_until_approval_then_runs_once(self, is_async: bool, surface: str) -> None:
         counter = [0]
         graph = _build_gated_graph(counter, surface=surface)
         config = {"configurable": {"thread_id": f"gate-{surface}-{is_async}"}}
 
         # First run — the gate must pause BEFORE the tool superstep executes.
-        result1 = _drive(
-            graph, input={"node_id": "REQ-1"}, resume=None, config=config, is_async=is_async
-        )
+        result1 = _drive(graph, input={"node_id": "REQ-1"}, resume=None, config=config, is_async=is_async)
 
         assert "__interrupt__" in result1, (
             "agent node did not pause at the tool gate — gate_tools_when did not "
@@ -220,15 +217,10 @@ class TestToolGatingKeystone:
         )
 
         # Resume with an approval — the gate lets the tool run.
-        result2 = _drive(
-            graph, input=None, resume={"approved": True}, config=config, is_async=is_async
-        )
+        result2 = _drive(graph, input=None, resume={"approved": True}, config=config, is_async=is_async)
 
         # Tool ran exactly once after approval and the node finalized.
-        assert counter[0] == 1, (
-            f"after approval the gated tool 'record' ran {counter[0]}x (expected "
-            f"exactly 1)"
-        )
+        assert counter[0] == 1, f"after approval the gated tool 'record' ran {counter[0]}x (expected exactly 1)"
         assert result2.get("research") == KResult(items=["done"]), (
             f"agent node did not finalize after gate approval: {result2!r}"
         )
@@ -244,6 +236,7 @@ class TestGateToolsWhenValidator:
 
     def test_gate_tools_when_on_scripted_node_raises_construct_error(self) -> None:
         with pytest.raises(ConstructError):
+
             @node(
                 mode="scripted",
                 outputs=KResult,
@@ -302,19 +295,15 @@ class TestAgentTurnStreaming:
         config = {"configurable": {"thread_id": "stream-turns"}}
 
         seen_nodes: set[str] = set()
-        async for chunk in astream(
-            graph, input={"node_id": "REQ-1"}, config=config, stream_mode="updates"
-        ):
+        async for chunk in astream(graph, input={"node_id": "REQ-1"}, config=config, stream_mode="updates"):
             if isinstance(chunk, dict):
                 seen_nodes.update(chunk.keys())
 
         assert "research__agent" in seen_nodes, (
-            f"agent turn superstep 'research__agent' not visible via astream "
-            f"updates; saw {sorted(seen_nodes)}"
+            f"agent turn superstep 'research__agent' not visible via astream updates; saw {sorted(seen_nodes)}"
         )
         assert "research__tools" in seen_nodes, (
-            f"tools turn superstep 'research__tools' not visible via astream "
-            f"updates; saw {sorted(seen_nodes)}"
+            f"tools turn superstep 'research__tools' not visible via astream updates; saw {sorted(seen_nodes)}"
         )
         assert counter[0] == 1, f"record tool ran {counter[0]}x (expected 1)"
 
@@ -342,10 +331,7 @@ class _GreedyGatedFake:
         if self._structured:
             assert self._model is not None
             return self._model(items=["forced"])
-        hit_limit = any(
-            isinstance(m, ToolMessage) and "limit reached" in str(m.content).lower()
-            for m in messages
-        )
+        hit_limit = any(isinstance(m, ToolMessage) and "limit reached" in str(m.content).lower() for m in messages)
         if hit_limit:
             return AIMessage(content='{"items": ["forced"]}')
         n_results = sum(isinstance(m, ToolMessage) for m in messages)
@@ -427,22 +413,15 @@ class TestBudgetAcrossCheckpoint:
         config = {"configurable": {"thread_id": f"budget-ckpt-{is_async}"}}
 
         # Pause mid-cycle at the ask interrupt (checkpoint written).
-        result1 = _drive(
-            graph, input={"node_id": "REQ-1"}, resume=None, config=config, is_async=is_async
-        )
-        assert "__interrupt__" in result1, (
-            f"agent node did not pause at the mid-cycle ask interrupt: {result1!r}"
-        )
+        result1 = _drive(graph, input={"node_id": "REQ-1"}, resume=None, config=config, is_async=is_async)
+        assert "__interrupt__" in result1, f"agent node did not pause at the mid-cycle ask interrupt: {result1!r}"
 
         # Resume — the per-turn budget must continue from where it paused.
-        result2 = _drive(
-            graph, input=None, resume={"approved": True}, config=config, is_async=is_async
-        )
+        result2 = _drive(graph, input=None, resume={"approved": True}, config=config, is_async=is_async)
 
         # Forced-finalize still fires honestly post-resume.
         assert result2.get("greedy") == KResult(items=["forced"]), (
-            f"agent did not force-finalize post-resume — budget likely reset "
-            f"across the checkpoint: {result2!r}"
+            f"agent did not force-finalize post-resume — budget likely reset across the checkpoint: {result2!r}"
         )
         # Budget did not reset: the loop stayed bounded by max_iterations=3
         # across the resume (a reset would re-arm a full iteration allowance).
@@ -456,11 +435,8 @@ class TestBudgetAcrossCheckpoint:
             assert not any(k.startswith("neo_") for k in res), (
                 f"neo_ framework channel leaked into returned state: {sorted(res)}"
             )
-            assert not any(
-                ("messages" in k or "tool_log" in k or "budget" in k) for k in res
-            ), (
-                f"agent ReAct internal channel leaked into returned state "
-                f"(binding condition 2): {sorted(res)}"
+            assert not any(("messages" in k or "tool_log" in k or "budget" in k) for k in res), (
+                f"agent ReAct internal channel leaked into returned state (binding condition 2): {sorted(res)}"
             )
 
 
@@ -483,26 +459,18 @@ class TestToolGatingDenyKeystone:
     produces a final answer. Today the deny is silently ignored — the
     unconditional gate->tools edge runs the tool anyway."""
 
-    def test_deny_does_not_run_tool_and_agent_finalizes(
-        self, is_async: bool, surface: str
-    ) -> None:
+    def test_deny_does_not_run_tool_and_agent_finalizes(self, is_async: bool, surface: str) -> None:
         counter = [0]
         graph = _build_gated_graph(counter, surface=surface)
         config = {"configurable": {"thread_id": f"deny-{surface}-{is_async}"}}
 
         # First run — the gate pauses before the tool superstep.
-        result1 = _drive(
-            graph, input={"node_id": "REQ-1"}, resume=None, config=config, is_async=is_async
-        )
-        assert "__interrupt__" in result1, (
-            "agent node did not pause at the tool gate before deny"
-        )
+        result1 = _drive(graph, input={"node_id": "REQ-1"}, resume=None, config=config, is_async=is_async)
+        assert "__interrupt__" in result1, "agent node did not pause at the tool gate before deny"
         assert counter[0] == 0, "tool ran before the human decided"
 
         # Resume with a DENY — the gate must reject the pending tool call.
-        result2 = _drive(
-            graph, input=None, resume={"approved": False}, config=config, is_async=is_async
-        )
+        result2 = _drive(graph, input=None, resume={"approved": False}, config=config, is_async=is_async)
 
         # THE DENY KEYSTONE: the side-effecting tool MUST NOT have run.
         assert counter[0] == 0, (
@@ -522,14 +490,12 @@ class TestToolGatingDenyKeystone:
         snapshot = graph.get_state(config)
         msgs = snapshot.values.get("neo_agent_messages_research", [])
         denial_tool_msgs = [
-            m for m in msgs
-            if isinstance(m, ToolMessage) and "denied by a human reviewer" in str(m.content)
+            m for m in msgs if isinstance(m, ToolMessage) and "denied by a human reviewer" in str(m.content)
         ]
         assert denial_tool_msgs, (
             f"no denial ToolMessage was fed back to the agent after deny; the LLM "
             f"could not see why the tool was rejected. messages={msgs!r}"
         )
         assert denial_tool_msgs[0].tool_call_id == "r1", (
-            f"denial ToolMessage did not answer the pending tool_call id 'r1': "
-            f"{denial_tool_msgs[0]!r}"
+            f"denial ToolMessage did not answer the pending tool_call id 'r1': {denial_tool_msgs[0]!r}"
         )

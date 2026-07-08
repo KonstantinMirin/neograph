@@ -164,7 +164,4 @@ def _extract_context(state: StateBus, node: Node) -> dict[str, str] | None:
     # REQUIRED: context fields are validator-guaranteed (see
     # _construct_validation.py); missing → wiring bug, fail loud rather than
     # render the literal string "None" into the LLM prompt.
-    return {
-        name: cast(str, state.get_required(field_name_for(name), node_label=node.name))
-        for name in node.context
-    }
+    return {name: cast(str, state.get_required(field_name_for(name), node_label=node.name)) for name in node.context}

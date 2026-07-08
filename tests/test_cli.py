@@ -21,6 +21,7 @@ from neograph.__main__ import _discover_constructs, _import_module, _load_config
 # Schemas / helpers
 # ═══════════════════════════════════════════════════════════════════════════
 
+
 class Out(BaseModel):
     x: str
 
@@ -28,6 +29,7 @@ class Out(BaseModel):
 # ═══════════════════════════════════════════════════════════════════════════
 # _import_module
 # ═══════════════════════════════════════════════════════════════════════════
+
 
 class TestImportModule:
     """_import_module: file paths and dotted module names."""
@@ -64,6 +66,7 @@ class TestImportModule:
 # _discover_constructs
 # ═══════════════════════════════════════════════════════════════════════════
 
+
 class TestDiscoverConstructs:
     """_discover_constructs: finds Construct instances in a module."""
 
@@ -73,6 +76,7 @@ class TestDiscoverConstructs:
 
         from neograph import Node
         from neograph.construct import Construct
+
         mod = types.ModuleType("disc_mod")
         mod.pipe = Construct("test", nodes=[Node.scripted("a", fn="disc_fn", outputs=Out)])
         mod.not_a_construct = 42
@@ -84,6 +88,7 @@ class TestDiscoverConstructs:
     def test_no_constructs_returns_empty(self):
         """Module with no Constructs returns empty list."""
         import types
+
         mod = types.ModuleType("empty_mod")
         mod.x = 42
         assert _discover_constructs(mod) == []
@@ -92,6 +97,7 @@ class TestDiscoverConstructs:
 # ═══════════════════════════════════════════════════════════════════════════
 # _load_config
 # ═══════════════════════════════════════════════════════════════════════════
+
 
 class TestLoadConfig:
     """_load_config: --config JSON and --setup module."""
@@ -117,10 +123,12 @@ class TestLoadConfig:
     def test_load_config_setup_module(self, tmp_path):
         """--setup with valid module calls get_check_config()."""
         setup_file = tmp_path / "my_setup.py"
-        setup_file.write_text(textwrap.dedent("""\
+        setup_file.write_text(
+            textwrap.dedent("""\
             def get_check_config():
                 return {"node_id": "test"}
-        """))
+        """)
+        )
         args = argparse.Namespace(config=None, setup=str(setup_file))
         result = _load_config(args)
         assert result == {"node_id": "test"}
@@ -139,22 +147,26 @@ class TestLoadConfig:
 # cmd_check
 # ═══════════════════════════════════════════════════════════════════════════
 
+
 class TestCmdCheck:
     """cmd_check: the check subcommand handler."""
 
     def test_valid_pipeline_returns_0(self, tmp_path):
         """A file with a valid Construct returns 0."""
         setup = tmp_path / "setup_ok.py"
-        setup.write_text(textwrap.dedent("""\
+        setup.write_text(
+            textwrap.dedent("""\
             def get_check_config():
                 return {}
 
             def get_scripted():
                 return {"cc_ok_fn": lambda i, c: None}
-        """))
+        """)
+        )
 
         pipeline = tmp_path / "ok.py"
-        pipeline.write_text(textwrap.dedent("""\
+        pipeline.write_text(
+            textwrap.dedent("""\
             from pydantic import BaseModel
             from neograph import Node
             from neograph.construct import Construct
@@ -164,7 +176,8 @@ class TestCmdCheck:
 
             a = Node.scripted("a", fn="cc_ok_fn", outputs=Out)
             pipe = Construct("pipe", nodes=[a])
-        """))
+        """)
+        )
         args = argparse.Namespace(target=str(pipeline), config=None, setup=str(setup), known_vars=None)
         assert cmd_check(args) == 0
 
@@ -186,16 +199,19 @@ class TestCmdCheck:
     def test_config_flag_passed_to_lint(self, tmp_path):
         """--config JSON is passed through to lint."""
         setup = tmp_path / "setup_cfg.py"
-        setup.write_text(textwrap.dedent("""\
+        setup.write_text(
+            textwrap.dedent("""\
             def get_check_config():
                 return {}
 
             def get_scripted():
                 return {"cc_cfg_fn": lambda i, c: None}
-        """))
+        """)
+        )
 
         pipeline = tmp_path / "cfg.py"
-        pipeline.write_text(textwrap.dedent("""\
+        pipeline.write_text(
+            textwrap.dedent("""\
             from pydantic import BaseModel
             from neograph import Node
             from neograph.construct import Construct
@@ -205,7 +221,8 @@ class TestCmdCheck:
 
             a = Node.scripted("a", fn="cc_cfg_fn", outputs=Out)
             pipe = Construct("pipe", nodes=[a])
-        """))
+        """)
+        )
         args = argparse.Namespace(
             target=str(pipeline),
             config='{"key": "value"}',
@@ -217,16 +234,19 @@ class TestCmdCheck:
     def test_multiple_constructs_all_checked(self, tmp_path, capsys):
         """Multiple constructs in one file are all checked."""
         setup = tmp_path / "setup_multi.py"
-        setup.write_text(textwrap.dedent("""\
+        setup.write_text(
+            textwrap.dedent("""\
             def get_check_config():
                 return {}
 
             def get_scripted():
                 return {"multi_ok_fn": lambda i, c: None}
-        """))
+        """)
+        )
 
         pipeline = tmp_path / "multi.py"
-        pipeline.write_text(textwrap.dedent("""\
+        pipeline.write_text(
+            textwrap.dedent("""\
             from pydantic import BaseModel
             from neograph import Node
             from neograph.construct import Construct
@@ -238,7 +258,8 @@ class TestCmdCheck:
             b = Node.scripted("b", fn="multi_ok_fn", outputs=Out)
             pipe1 = Construct("pipe1", nodes=[a])
             pipe2 = Construct("pipe2", nodes=[b])
-        """))
+        """)
+        )
         args = argparse.Namespace(target=str(pipeline), config=None, setup=str(setup), known_vars=None)
         result = cmd_check(args)
         captured = capsys.readouterr()
@@ -272,11 +293,10 @@ class TestCmdCheck:
 
         # Test the lint branch
         from neograph.lint import LintIssue
+
         issues = [
-            LintIssue(node_name="a", param="p", kind="from_input",
-                      message="missing param p", required=True),
-            LintIssue(node_name="a", param="q", kind="from_config",
-                      message="missing param q", required=False),
+            LintIssue(node_name="a", param="p", kind="from_input", message="missing param p", required=True),
+            LintIssue(node_name="a", param="q", kind="from_config", message="missing param q", required=False),
         ]
         for issue in issues:
             severity = "ERROR" if issue.required else "WARN"
@@ -297,14 +317,14 @@ class TestCmdCheck:
         from neograph.construct import Construct
         from neograph.errors import CompileError
 
-
         fake_mod = types.ModuleType("fake_compile_err")
         a = Node.scripted("a", fn="cef_fn", outputs=Out)
         fake_mod.pipe = Construct("pipe", nodes=[a])
 
         monkeypatch.setattr(cli_mod, "_import_module", lambda target: fake_mod)
         monkeypatch.setattr(
-            neograph.compiler, "compile",
+            neograph.compiler,
+            "compile",
             lambda construct, **kw: (_ for _ in ()).throw(CompileError("test error")),
         )
 
@@ -328,7 +348,6 @@ class TestCmdCheck:
         lint_module = importlib.import_module("neograph.lint")
         from neograph.lint import LintIssue
 
-
         fake_mod = types.ModuleType("fake_lint")
         a = Node.scripted("a", fn="li_fn", outputs=Out)
         fake_mod.pipe = Construct("pipe", nodes=[a])
@@ -336,12 +355,14 @@ class TestCmdCheck:
         monkeypatch.setattr(cli_mod, "_import_module", lambda target: fake_mod)
         # Supply scripted shim so compile() succeeds; the test is about lint output, not compile.
         monkeypatch.setattr(cli_mod, "_load_compile_kwargs", lambda args: {"scripted": {"li_fn": lambda i, c: None}})
-        monkeypatch.setattr(lint_module, "lint", lambda construct, **kwargs: [
-            LintIssue(node_name="a", param="p", kind="from_input",
-                      message="missing param p", required=True),
-            LintIssue(node_name="a", param="q", kind="from_config",
-                      message="missing param q", required=False),
-        ])
+        monkeypatch.setattr(
+            lint_module,
+            "lint",
+            lambda construct, **kwargs: [
+                LintIssue(node_name="a", param="p", kind="from_input", message="missing param p", required=True),
+                LintIssue(node_name="a", param="q", kind="from_config", message="missing param q", required=False),
+            ],
+        )
 
         args = argparse.Namespace(target="fake.py", config=None, setup=None, known_vars=None)
         result = cmd_check(args)
@@ -357,13 +378,15 @@ class TestCmdCheck:
 # main
 # ═══════════════════════════════════════════════════════════════════════════
 
+
 class TestCmdCheckOperatorAutoCheckpointer:
     """BUG neograph-7uti: cmd_check must auto-supply MemorySaver for Operator constructs."""
 
     def test_operator_construct_does_not_false_fail(self, tmp_path, capsys):
         """Construct with Operator modifier should not fail with 'requires a checkpointer'."""
         setup = tmp_path / "setup_op.py"
-        setup.write_text(textwrap.dedent("""\
+        setup.write_text(
+            textwrap.dedent("""\
             def get_check_config():
                 return {}
 
@@ -375,10 +398,12 @@ class TestCmdCheckOperatorAutoCheckpointer:
 
             def get_conditions():
                 return {"is_approved": lambda d: bool(getattr(d, "approved", False))}
-        """))
+        """)
+        )
 
         pipeline = tmp_path / "operator_pipe.py"
-        pipeline.write_text(textwrap.dedent("""\
+        pipeline.write_text(
+            textwrap.dedent("""\
             from pydantic import BaseModel
             from neograph import Node, Operator
             from neograph.construct import Construct
@@ -393,9 +418,13 @@ class TestCmdCheckOperatorAutoCheckpointer:
             review_op = review | Operator(when="is_approved")
 
             pipe = Construct("op-pipe", nodes=[seed, review_op])
-        """))
+        """)
+        )
         args = argparse.Namespace(
-            target=str(pipeline), config=None, setup=str(setup), known_vars=None,
+            target=str(pipeline),
+            config=None,
+            setup=str(setup),
+            known_vars=None,
         )
         result = cmd_check(args)
         captured = capsys.readouterr()
@@ -408,16 +437,19 @@ class TestCmdCheckOperatorAutoCheckpointer:
     def test_non_operator_construct_unaffected(self, tmp_path):
         """Construct without Operator still compiles without checkpointer."""
         setup = tmp_path / "setup_noop.py"
-        setup.write_text(textwrap.dedent("""\
+        setup.write_text(
+            textwrap.dedent("""\
             def get_check_config():
                 return {}
 
             def get_scripted():
                 return {"noop_fn": lambda i, c: None}
-        """))
+        """)
+        )
 
         pipeline = tmp_path / "no_op.py"
-        pipeline.write_text(textwrap.dedent("""\
+        pipeline.write_text(
+            textwrap.dedent("""\
             from pydantic import BaseModel
             from neograph import Node
             from neograph.construct import Construct
@@ -428,9 +460,13 @@ class TestCmdCheckOperatorAutoCheckpointer:
             pipe = Construct("simple", nodes=[
                 Node.scripted("a", fn="noop_fn", outputs=Out),
             ])
-        """))
+        """)
+        )
         args = argparse.Namespace(
-            target=str(pipeline), config=None, setup=str(setup), known_vars=None,
+            target=str(pipeline),
+            config=None,
+            setup=str(setup),
+            known_vars=None,
         )
         assert cmd_check(args) == 0
 
@@ -447,16 +483,19 @@ class TestKnownTemplateVarsFromSetup:
         "known_vars" DOES (it's a WARN, not an ERROR).
         """
         setup = tmp_path / "setup_vars.py"
-        setup.write_text(textwrap.dedent("""\
+        setup.write_text(
+            textwrap.dedent("""\
             def get_check_config():
                 return {"node_id": "test"}
 
             def get_known_template_vars():
                 return {"domain_briefing", "max_tool_calls"}
-        """))
+        """)
+        )
 
         pipeline = tmp_path / "pipe_vars.py"
-        pipeline.write_text(textwrap.dedent("""\
+        pipeline.write_text(
+            textwrap.dedent("""\
             from pydantic import BaseModel
             from neograph import Node
             from tests.fakes import register_scripted
@@ -472,19 +511,24 @@ class TestKnownTemplateVarsFromSetup:
             proc = Node("proc", prompt="Brief: ${domain_briefing}, data: ${seed}",
                         model="default", outputs=B, inputs={"seed": A})
             pipe = Construct("pipe", nodes=[seed, proc])
-        """))
+        """)
+        )
         # WITH setup vars
         args_with = argparse.Namespace(
-            target=str(pipeline), config=None,
-            setup=str(setup), known_vars=None,
+            target=str(pipeline),
+            config=None,
+            setup=str(setup),
+            known_vars=None,
         )
         cmd_check(args_with)
         out_with = capsys.readouterr().out
 
         # WITHOUT setup vars — domain_briefing is an ERROR (not found in input keys)
         args_without = argparse.Namespace(
-            target=str(pipeline), config=None,
-            setup=None, known_vars=None,
+            target=str(pipeline),
+            config=None,
+            setup=None,
+            known_vars=None,
         )
         cmd_check(args_without)
         out_without = capsys.readouterr().out
@@ -504,16 +548,19 @@ class TestKnownTemplateVarsFromSetup:
         'not found in predicted input keys'.
         """
         setup = tmp_path / "setup_merge.py"
-        setup.write_text(textwrap.dedent("""\
+        setup.write_text(
+            textwrap.dedent("""\
             def get_check_config():
                 return {}
 
             def get_known_template_vars():
                 return {"from_setup"}
-        """))
+        """)
+        )
 
         pipeline = tmp_path / "pipe_merge.py"
-        pipeline.write_text(textwrap.dedent("""\
+        pipeline.write_text(
+            textwrap.dedent("""\
             from pydantic import BaseModel
             from neograph import Node
             from tests.fakes import register_scripted
@@ -530,10 +577,13 @@ class TestKnownTemplateVarsFromSetup:
                         prompt="A: ${from_setup}, B: ${from_cli}, C: ${seed}",
                         model="default", outputs=B, inputs={"seed": A})
             pipe = Construct("pipe", nodes=[seed, proc])
-        """))
+        """)
+        )
         args = argparse.Namespace(
-            target=str(pipeline), config=None,
-            setup=str(setup), known_vars="from_cli",
+            target=str(pipeline),
+            config=None,
+            setup=str(setup),
+            known_vars="from_cli",
         )
         cmd_check(args)
         captured = capsys.readouterr().out
@@ -546,16 +596,19 @@ class TestKnownTemplateVarsFromSetup:
     def test_setup_without_known_vars_still_works(self, tmp_path):
         """Setup module with only get_check_config() + get_scripted() — no regression."""
         setup = tmp_path / "setup_basic.py"
-        setup.write_text(textwrap.dedent("""\
+        setup.write_text(
+            textwrap.dedent("""\
             def get_check_config():
                 return {"node_id": "test"}
 
             def get_scripted():
                 return {"sb_fn": lambda i, c: None}
-        """))
+        """)
+        )
 
         pipeline = tmp_path / "pipe_basic.py"
-        pipeline.write_text(textwrap.dedent("""\
+        pipeline.write_text(
+            textwrap.dedent("""\
             from pydantic import BaseModel
             from neograph import Node
             from neograph.construct import Construct
@@ -566,10 +619,13 @@ class TestKnownTemplateVarsFromSetup:
             pipe = Construct("pipe", nodes=[
                 Node.scripted("a", fn="sb_fn", outputs=Out),
             ])
-        """))
+        """)
+        )
         args = argparse.Namespace(
-            target=str(pipeline), config=None,
-            setup=str(setup), known_vars=None,
+            target=str(pipeline),
+            config=None,
+            setup=str(setup),
+            known_vars=None,
         )
         assert cmd_check(args) == 0
 
@@ -584,7 +640,8 @@ class TestCmdCheckTemplateLint:
         runs independently and adds its own issues.
         """
         pipeline = tmp_path / "bad_tmpl.py"
-        pipeline.write_text(textwrap.dedent("""\
+        pipeline.write_text(
+            textwrap.dedent("""\
             from pydantic import BaseModel
             from neograph import Node
             from tests.fakes import register_scripted
@@ -600,9 +657,13 @@ class TestCmdCheckTemplateLint:
             proc = Node("proc", prompt="Do: ${nonexistent}", model="default",
                         outputs=B, inputs={"seed": A})
             pipe = Construct("pipe", nodes=[seed, proc])
-        """))
+        """)
+        )
         args = argparse.Namespace(
-            target=str(pipeline), config=None, setup=None, known_vars=None,
+            target=str(pipeline),
+            config=None,
+            setup=None,
+            known_vars=None,
         )
         result = cmd_check(args)
         assert result == 1
@@ -618,7 +679,8 @@ class TestCmdCheckTemplateLint:
         WARN because it's only satisfiable via known_vars.
         """
         pipeline = tmp_path / "known_var.py"
-        pipeline.write_text(textwrap.dedent("""\
+        pipeline.write_text(
+            textwrap.dedent("""\
             from pydantic import BaseModel
             from neograph import Node
             from tests.fakes import register_scripted
@@ -634,9 +696,13 @@ class TestCmdCheckTemplateLint:
             proc = Node("proc", prompt="Topic: ${topic}, data: ${seed}",
                         model="default", outputs=B, inputs={"seed": A})
             pipe = Construct("pipe", nodes=[seed, proc])
-        """))
+        """)
+        )
         args = argparse.Namespace(
-            target=str(pipeline), config=None, setup=None, known_vars="topic",
+            target=str(pipeline),
+            config=None,
+            setup=None,
+            known_vars="topic",
         )
         result = cmd_check(args)
         captured = capsys.readouterr()
@@ -649,7 +715,8 @@ class TestCmdCheckTemplateLint:
     def test_check_valid_placeholder_no_template_issue(self, tmp_path, capsys):
         """Valid ${seed} placeholder does not produce a template lint error."""
         pipeline = tmp_path / "valid_tmpl.py"
-        pipeline.write_text(textwrap.dedent("""\
+        pipeline.write_text(
+            textwrap.dedent("""\
             from pydantic import BaseModel
             from neograph import Node
             from tests.fakes import register_scripted
@@ -665,9 +732,13 @@ class TestCmdCheckTemplateLint:
             proc = Node("proc", prompt="Summarize: ${seed}", model="default",
                         outputs=B, inputs={"seed": A})
             pipe = Construct("pipe", nodes=[seed, proc])
-        """))
+        """)
+        )
         args = argparse.Namespace(
-            target=str(pipeline), config=None, setup=None, known_vars=None,
+            target=str(pipeline),
+            config=None,
+            setup=None,
+            known_vars=None,
         )
         result = cmd_check(args)
         captured = capsys.readouterr()

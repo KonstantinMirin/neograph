@@ -19,7 +19,7 @@ import os
 import sys
 from pathlib import Path
 
-EXAMPLE =Path(__file__).resolve().parent.parent / "examples" / "vs_langgraph" / "03_map_reduce.py"
+EXAMPLE = Path(__file__).resolve().parent.parent / "examples" / "vs_langgraph" / "03_map_reduce.py"
 
 
 def _load_example():
@@ -58,6 +58,5 @@ class TestMapReduceExampleNeoGraphPath:
         module.llm = _FakeJokeLLM(module.Jokes)
         result = module.run_neograph()
         assert isinstance(result, str) and result.strip(), (
-            "NeoGraph map-reduce path should return a non-empty best-joke string; "
-            f"got {result!r}"
+            f"NeoGraph map-reduce path should return a non-empty best-joke string; got {result!r}"
         )

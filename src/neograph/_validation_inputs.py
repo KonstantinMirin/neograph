@@ -80,9 +80,7 @@ def _check_item_input(
     # Parameterized generic dict[str, X]: validate against producers if any
     # upstream has a parameterized dict output, otherwise defer to runtime.
     if get_origin(input_type) is dict:
-        has_dict_producer = any(
-            get_origin(p.effective_type) is dict for p in producers.values()
-        )
+        has_dict_producer = any(get_origin(p.effective_type) is dict for p in producers.values())
         if not has_dict_producer:
             return
         # Fall through to plain-input validation below — _types_compatible
@@ -148,7 +146,7 @@ def _check_fan_in_inputs(
     _fan_out_candidates = set(fan_out_candidates(cast(Node, item), set(producers)))
     # Track if the Each fan-out receiver slot was consumed.
     # If fan_out_param is already set (from @node), the slot is pre-consumed.
-    _each_skip_used = (fan_out_key is not None)
+    _each_skip_used = fan_out_key is not None
     for upstream_name, expected_type in inputs_dict.items():
         if upstream_name == fan_out_key:
             continue
@@ -258,8 +256,7 @@ def _check_each_path(
     element_fields = getattr(element_type, "model_fields", None)
     if element_fields is not None and each.key not in element_fields:
         raise ConstructError.build(
-            f"Each(over='{each.over}', key='{each.key}') — "
-            f"{_fmt_type(element_type)} has no field '{each.key}'",
+            f"Each(over='{each.over}', key='{each.key}') — {_fmt_type(element_type)} has no field '{each.key}'",
             found=f"available fields: {sorted(element_fields.keys())}",
             node=item.name,
             construct=construct.name,
@@ -274,10 +271,7 @@ def _build_no_producer_error(
     producers: ProducerMap,
 ) -> NeographError:
     if producers:
-        producer_summary = "\n".join(
-            f"    - {p.label}: {_fmt_type(p.effective_type)}"
-            for p in producers.values()
-        )
+        producer_summary = "\n".join(f"    - {p.label}: {_fmt_type(p.effective_type)}" for p in producers.values())
     else:
         producer_summary = "    (no upstream producers)"
 
@@ -327,8 +321,5 @@ def _suggest_hint(
                 continue
             element = _extract_list_element(resolved)
             if element is not None and _types_compatible(element, input_type):
-                return (
-                    f"did you forget to fan out? try "
-                    f".map(lambda s: s.{p.field_name}.{fname}, key='...')"
-                )
+                return f"did you forget to fan out? try .map(lambda s: s.{p.field_name}.{fname}, key='...')"
     return None

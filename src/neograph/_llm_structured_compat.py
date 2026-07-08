@@ -76,11 +76,19 @@ class StructuredOutputAdapter(Protocol):
     """
 
     def invoke(
-        self, llm: Any, model: type[BaseModel], messages: list, config: Any,
+        self,
+        llm: Any,
+        model: type[BaseModel],
+        messages: list,
+        config: Any,
     ) -> StructuredResult: ...
 
     async def ainvoke(
-        self, llm: Any, model: type[BaseModel], messages: list, config: Any,
+        self,
+        llm: Any,
+        model: type[BaseModel],
+        messages: list,
+        config: Any,
     ) -> StructuredResult: ...
 
 

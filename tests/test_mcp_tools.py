@@ -39,9 +39,7 @@ def _make_async_only_tool(name: str = "mcp_echo") -> StructuredTool:
     async def _run(text: str) -> str:
         return f"echo:{text}"
 
-    return StructuredTool.from_function(
-        coroutine=_run, name=name, description="async-only MCP-style tool"
-    )
+    return StructuredTool.from_function(coroutine=_run, name=name, description="async-only MCP-style tool")
 
 
 def _make_sync_base_tool(name: str = "sync_search") -> StructuredTool:
@@ -50,9 +48,7 @@ def _make_sync_base_tool(name: str = "sync_search") -> StructuredTool:
     def _run(query: str) -> str:
         return f"result:{query}"
 
-    return StructuredTool.from_function(
-        func=_run, name=name, description="sync search tool"
-    )
+    return StructuredTool.from_function(func=_run, name=name, description="sync search tool")
 
 
 class TestSyncDriverRejectsAsyncOnlyTool:
@@ -81,9 +77,7 @@ class TestSyncDriverRejectsAsyncOnlyTool:
 
         with pytest.raises(ConfigurationError) as excinfo:
             invoke_with_tools(
-                runtime=build_fake_runtime(
-                    _llm_kw["llm_factory"], _llm_kw["prompt_compiler"]
-                ),
+                runtime=build_fake_runtime(_llm_kw["llm_factory"], _llm_kw["prompt_compiler"]),
                 model_tier="fast",
                 prompt_template="test",
                 input_data="test",

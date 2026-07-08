@@ -104,6 +104,7 @@ def _arm_meta(parent: Construct) -> _BranchMeta:
 # + type validation)
 # ═══════════════════════════════════════════════════════════════════════════
 
+
 def test_arm_node_input_type_mismatch_is_caught_at_assembly():
     """A bare arm Node whose dict-form ``inputs`` type mismatches its upstream
     producer must raise ``ConstructError`` at parent assembly.
@@ -113,7 +114,10 @@ def test_arm_node_input_type_mismatch_is_caught_at_assembly():
     validator catches for a top-level node but silently skips for an arm node.
     """
     bad_arm = Node.scripted(
-        "gate", fn="f", inputs={"seed": ArmResult}, outputs=ArmResult,
+        "gate",
+        fn="f",
+        inputs={"seed": ArmResult},
+        outputs=ArmResult,
     )
     with pytest.raises(ConstructError):
         _branch_parent(bad_arm)
@@ -122,6 +126,7 @@ def test_arm_node_input_type_mismatch_is_caught_at_assembly():
 # ═══════════════════════════════════════════════════════════════════════════
 # Site 2 — _ir_normalize.normalize_ir (fan_out_param inference)
 # ═══════════════════════════════════════════════════════════════════════════
+
 
 def test_arm_each_node_gets_fan_out_param_normalized():
     """An Each + dict-form arm Node must have ``fan_out_param`` inferred by
@@ -132,7 +137,8 @@ def test_arm_each_node_gets_fan_out_param_normalized():
     ``_BranchNode``, the arm node's ``fan_out_param`` stays ``None``.
     """
     each_arm = Node.scripted(
-        "canonicalize", fn="f",
+        "canonicalize",
+        fn="f",
         inputs={"group": ArmGroup},
         outputs=ArmResult,
     ) | Each(over="seed.items", key="label")
@@ -149,6 +155,7 @@ def test_arm_each_node_gets_fan_out_param_normalized():
 # ═══════════════════════════════════════════════════════════════════════════
 # Site 3 — lint._walk (DI binding checks)
 # ═══════════════════════════════════════════════════════════════════════════
+
 
 def test_arm_node_di_binding_gap_is_linted():
     """A DI binding on a bare arm Node must be inspected by ``lint()``.
@@ -171,14 +178,14 @@ def test_arm_node_di_binding_gap_is_linted():
     issues = lint(parent, config={"node_id": "x", "project_root": "/p"})
     topic_issues = [i for i in issues if i.param == "topic"]
     assert topic_issues, (
-        "branch-arm node's FromInput binding was never linted — the missing "
-        "'topic' config key produced no LintIssue"
+        "branch-arm node's FromInput binding was never linted — the missing 'topic' config key produced no LintIssue"
     )
 
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Site 4 — verify._has_llm_nodes / verify._walk
 # ═══════════════════════════════════════════════════════════════════════════
+
 
 def test_llm_node_in_arm_is_seen_by_has_llm_nodes():
     """``_has_llm_nodes`` must return True when an LLM-mode node lives only in a
@@ -187,19 +194,20 @@ def test_llm_node_in_arm_is_seen_by_has_llm_nodes():
     from neograph.verify import _has_llm_nodes
 
     llm_arm = Node(
-        name="think-arm", mode="think",
-        inputs={"seed": ArmClaim}, outputs=ArmResult,
+        name="think-arm",
+        mode="think",
+        inputs={"seed": ArmClaim},
+        outputs=ArmResult,
     )
     parent = _branch_parent(llm_arm)
 
-    assert _has_llm_nodes(parent) is True, (
-        "LLM-mode node inside a branch arm was invisible to _has_llm_nodes"
-    )
+    assert _has_llm_nodes(parent) is True, "LLM-mode node inside a branch arm was invisible to _has_llm_nodes"
 
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Site 5 — runner._build_producer_consumer_adjacency
 # ═══════════════════════════════════════════════════════════════════════════
+
 
 def test_arm_node_contributes_edge_to_adjacency():
     """A bare arm Node's dict-form ``inputs`` must contribute a producer→consumer
@@ -208,7 +216,10 @@ def test_arm_node_contributes_edge_to_adjacency():
     from neograph.runner import _build_producer_consumer_adjacency
 
     arm_node = Node.scripted(
-        "gate", fn="f", inputs={"seed": ArmClaim}, outputs=ArmResult,
+        "gate",
+        fn="f",
+        inputs={"seed": ArmClaim},
+        outputs=ArmResult,
     )
     parent = _branch_parent(arm_node)
 
@@ -222,6 +233,7 @@ def test_arm_node_contributes_edge_to_adjacency():
 # ═══════════════════════════════════════════════════════════════════════════
 # Primitive properties — iter_with_arms / iter_item_slots
 # ═══════════════════════════════════════════════════════════════════════════
+
 
 def test_iter_with_arms_is_identity_when_no_branch():
     """Zero-regression property: over a construct with no _BranchNode,
@@ -241,8 +253,11 @@ def test_iter_with_arms_yields_both_arms_once_each():
     true_node = Node.scripted("t", fn="f", inputs={"seed": ArmClaim}, outputs=ArmResult)
     false_node = Node.scripted("fa", fn="f", inputs={"seed": ArmClaim}, outputs=ArmResult)
     cond = _ConditionSpec(
-        source_node=seed, attr_chain=["text"],
-        op_fn=lambda v, _t: bool(v), op_str="route", threshold=None,
+        source_node=seed,
+        attr_chain=["text"],
+        op_fn=lambda v, _t: bool(v),
+        op_str="route",
+        threshold=None,
     )
     meta = _BranchMeta(condition_spec=cond, true_arm_nodes=[true_node], false_arm_nodes=[false_node])
     parent = Construct("parent", nodes=[seed, _BranchNode(meta, 0)])
@@ -260,8 +275,11 @@ def test_iter_item_slots_write_back_targets_the_arm_meta_list():
     t = Node.scripted("t", fn="f", inputs={"seed": ArmClaim}, outputs=ArmResult)
     fa = Node.scripted("fa", fn="f", inputs={"seed": ArmClaim}, outputs=ArmResult)
     cond = _ConditionSpec(
-        source_node=seed, attr_chain=["text"],
-        op_fn=lambda v, _t: bool(v), op_str="route", threshold=None,
+        source_node=seed,
+        attr_chain=["text"],
+        op_fn=lambda v, _t: bool(v),
+        op_str="route",
+        threshold=None,
     )
     meta = _BranchMeta(condition_spec=cond, true_arm_nodes=[t], false_arm_nodes=[fa])
     parent = Construct("parent", nodes=[seed, _BranchNode(meta, 0)])
@@ -280,11 +298,15 @@ def test_iter_item_slots_write_back_targets_the_arm_meta_list():
 # False-arm parity — the second iteration site in every migrated walk
 # ═══════════════════════════════════════════════════════════════════════════
 
+
 def test_false_arm_each_node_gets_fan_out_param_normalized():
     """normalize_ir must reach the FALSE arm too (write-back into
     meta.false_arm_nodes)."""
     each_arm = Node.scripted(
-        "canonicalize", fn="f", inputs={"group": ArmGroup}, outputs=ArmResult,
+        "canonicalize",
+        fn="f",
+        inputs={"group": ArmGroup},
+        outputs=ArmResult,
     ) | Each(over="seed.items", key="label")
     parent = _branch_parent(each_arm, arm="false")
 
@@ -306,13 +328,17 @@ def test_false_arm_llm_node_is_seen_by_has_llm_nodes():
 # Sites 6-9 — compile-time validation gaps for bare arm Nodes
 # ═══════════════════════════════════════════════════════════════════════════
 
+
 def test_arm_operator_unregistered_condition_raises_at_compile():
     """Site 6: a bare arm Operator node with a string condition that is not
     registered must raise ConfigurationError at compile()."""
     register_scripted("arm_seed", lambda _in, _cfg: ArmClaim(claim_id="c1", text="x"))
     register_scripted("f", lambda _in, _cfg: ArmResult(claim_id="c1", disposition="d"))
     op_arm = Node.scripted(
-        "gate", fn="f", inputs={"seed": ArmClaim}, outputs=ArmResult,
+        "gate",
+        fn="f",
+        inputs={"seed": ArmClaim},
+        outputs=ArmResult,
     ) | Operator(when="unregistered_cond_9513")
     parent = _branch_parent(op_arm)
 
@@ -327,7 +353,10 @@ def test_arm_operator_without_checkpointer_raises_at_compile():
     register_scripted("arm_seed", lambda _in, _cfg: ArmClaim(claim_id="c1", text="x"))
     register_scripted("f", lambda _in, _cfg: ArmResult(claim_id="c1", disposition="d"))
     op_arm = Node.scripted(
-        "gate", fn="f", inputs={"seed": ArmClaim}, outputs=ArmResult,
+        "gate",
+        fn="f",
+        inputs={"seed": ArmClaim},
+        outputs=ArmResult,
     ) | Operator(when="reg_cond")
     parent = _branch_parent(op_arm)
 
@@ -342,9 +371,12 @@ def test_arm_agent_node_missing_tool_factory_raises_at_compile():
     register_scripted("arm_seed", lambda _in, _cfg: ArmClaim(claim_id="c1", text="x"))
     llm_kw = configure_fake_llm(lambda tier: None)
     agent_arm = Node(
-        name="researcher", mode="agent",
-        inputs={"seed": ArmClaim}, outputs=ArmResult,
-        model="fast", prompt="test",
+        name="researcher",
+        mode="agent",
+        inputs={"seed": ArmClaim},
+        outputs=ArmResult,
+        model="fast",
+        prompt="test",
         tools=[Tool("missing_tool_9513", budget=3)],
     )
     parent = _branch_parent(agent_arm)
@@ -360,13 +392,17 @@ def test_arm_llm_node_inherits_parent_llm_config():
     llm_arm = Node(name="think-arm", mode="think", inputs={"seed": ArmClaim}, outputs=ArmResult)
     seed = _seed()
     cond = _ConditionSpec(
-        source_node=seed, attr_chain=["text"],
-        op_fn=lambda v, _t: bool(v), op_str="route", threshold=None,
+        source_node=seed,
+        attr_chain=["text"],
+        op_fn=lambda v, _t: bool(v),
+        op_str="route",
+        threshold=None,
     )
     meta = _BranchMeta(condition_spec=cond, true_arm_nodes=[llm_arm], false_arm_nodes=[])
     # Parent declares an llm_config override that children must inherit.
     parent = Construct(
-        "parent", nodes=[seed, _BranchNode(meta, 0)],
+        "parent",
+        nodes=[seed, _BranchNode(meta, 0)],
         llm_config={"output_strategy": "json_mode"},
     )
 
@@ -380,6 +416,7 @@ def test_arm_llm_node_inherits_parent_llm_config():
 # Documented limitation — cross-arm producer leakage is NOT caught
 # ═══════════════════════════════════════════════════════════════════════════
 
+
 def test_cross_arm_producer_leakage_is_not_flagged():
     """Pins the documented site-1 limitation: arms are flattened without
     recording which arm each producer belongs to, so a false-arm node reading a
@@ -391,11 +428,17 @@ def test_cross_arm_producer_leakage_is_not_flagged():
     # false-arm node reads the TRUE arm's output field 'tprod' — conditionally
     # unsatisfiable at runtime, but the flattened validator accepts it.
     false_consumer = Node.scripted(
-        "fcons", fn="f", inputs={"tprod": ArmResult}, outputs=ArmResult,
+        "fcons",
+        fn="f",
+        inputs={"tprod": ArmResult},
+        outputs=ArmResult,
     )
     cond = _ConditionSpec(
-        source_node=seed, attr_chain=["text"],
-        op_fn=lambda v, _t: bool(v), op_str="route", threshold=None,
+        source_node=seed,
+        attr_chain=["text"],
+        op_fn=lambda v, _t: bool(v),
+        op_str="route",
+        threshold=None,
     )
     meta = _BranchMeta(
         condition_spec=cond,

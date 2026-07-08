@@ -31,7 +31,7 @@ _BANNED = re.compile(
     r"\bClientSession\b"
     r"|\bMultiServerMCPClient\b"
     r"|\blangchain_mcp_adapters\b"
-    r"|\.session\s*\("                 # `client.session(` context-manager ownership
+    r"|\.session\s*\("  # `client.session(` context-manager ownership
     r"|^\s*from\s+mcp\b"
     r"|^\s*import\s+mcp\b",
     re.MULTILINE,
@@ -74,11 +74,7 @@ class TestNoMcpSessionOwnershipInSrc:
         2026-07-06 found the original lookbehind ``(?<![\\w.])`` could never
         match the idiomatic ``client.session(`` (the char before the dot is a
         word char), so the clause was dead weight carried by the import lines."""
-        bad = (
-            "async def build(config, tc, client):\n"
-            "    async with client.session() as s:\n"
-            "        return s\n"
-        )
+        bad = "async def build(config, tc, client):\n    async with client.session() as s:\n        return s\n"
         assert _scan(bad), "scanner failed to flag bare client.session( ownership"
 
     def test_scanner_accepts_clean_factory_source(self):

@@ -78,12 +78,8 @@ class LlmRuntime:
             prompt_compiler=prompt_compiler,
             renderer=renderer,
             cost_callback=cost_callback,
-            llm_factory_params=(
-                _accepted_params(llm_factory) if llm_factory is not None else frozenset()
-            ),
-            prompt_compiler_params=(
-                _accepted_params(prompt_compiler) if prompt_compiler is not None else frozenset()
-            ),
+            llm_factory_params=(_accepted_params(llm_factory) if llm_factory is not None else frozenset()),
+            prompt_compiler_params=(_accepted_params(prompt_compiler) if prompt_compiler is not None else frozenset()),
         )
 
 

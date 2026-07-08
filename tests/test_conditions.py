@@ -11,6 +11,7 @@ from neograph.conditions import parse_condition
 
 # ---- test models -------------------------------------------------------
 
+
 class Score(BaseModel):
     value: float
     confidence: float
@@ -26,6 +27,7 @@ class Result(BaseModel):
 # ═══════════════════════════════════════════════════════════════════════════
 # Numeric comparisons
 # ═══════════════════════════════════════════════════════════════════════════
+
 
 class TestNumericComparisons:
     """Numeric operators work against model fields."""
@@ -83,6 +85,7 @@ class TestNumericComparisons:
 # Boolean comparisons
 # ═══════════════════════════════════════════════════════════════════════════
 
+
 class TestBooleanComparisons:
     """Boolean literals (true/false) compare correctly."""
 
@@ -107,6 +110,7 @@ class TestBooleanComparisons:
 # String comparisons
 # ═══════════════════════════════════════════════════════════════════════════
 
+
 class TestStringComparisons:
     """Quoted string literals compare correctly."""
 
@@ -126,6 +130,7 @@ class TestStringComparisons:
 # ═══════════════════════════════════════════════════════════════════════════
 # Dotted field access
 # ═══════════════════════════════════════════════════════════════════════════
+
 
 class TestDottedFieldAccess:
     """Dotted paths resolve through nested models."""
@@ -151,6 +156,7 @@ class TestDottedFieldAccess:
 # ═══════════════════════════════════════════════════════════════════════════
 # Error paths
 # ═══════════════════════════════════════════════════════════════════════════
+
 
 class TestErrorPaths:
     """Bad expressions raise ValueError with clear messages."""
@@ -219,7 +225,7 @@ class TestPrivateFieldAccessBlocked:
 
     def test_single_underscore_private_raises(self):
         """'x._private' single-underscore prefix also blocked."""
-        cond = parse_condition('_private == 1')
+        cond = parse_condition("_private == 1")
         with pytest.raises(AttributeError, match="private/dunder"):
             cond(Score(value=0.5, confidence=0.9))
 

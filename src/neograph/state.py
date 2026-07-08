@@ -103,8 +103,9 @@ def _merge_dicts(existing: Any, new: dict) -> dict:
             continue
         merged[key] = val
     if dupes:
-        log.debug("each_duplicate_keys", count=len(dupes), keys=dupes[:5],
-                  action="kept_existing", truncated=len(dupes) > 5)
+        log.debug(
+            "each_duplicate_keys", count=len(dupes), keys=dupes[:5], action="kept_existing", truncated=len(dupes) > 5
+        )
     return merged
 
 
@@ -229,13 +230,17 @@ def compile_state_model(
     for item in all_items:
         item_combo, _ = classify_modifiers(item)
         if item_combo in (
-            ModifierCombo.ORACLE, ModifierCombo.ORACLE_OPERATOR,
-            ModifierCombo.EACH_ORACLE, ModifierCombo.EACH_ORACLE_OPERATOR,
+            ModifierCombo.ORACLE,
+            ModifierCombo.ORACLE_OPERATOR,
+            ModifierCombo.EACH_ORACLE,
+            ModifierCombo.EACH_ORACLE_OPERATOR,
         ):
             has_any_oracle = True
         if item_combo in (
-            ModifierCombo.EACH, ModifierCombo.EACH_OPERATOR,
-            ModifierCombo.EACH_ORACLE, ModifierCombo.EACH_ORACLE_OPERATOR,
+            ModifierCombo.EACH,
+            ModifierCombo.EACH_OPERATOR,
+            ModifierCombo.EACH_ORACLE,
+            ModifierCombo.EACH_ORACLE_OPERATOR,
         ):
             has_any_each = True
     if has_any_oracle:
@@ -252,9 +257,7 @@ def compile_state_model(
             fields[StateKeys.loop_count(field_name)] = (int, 0)
             loop = n_mods["loop"]
             if loop.history:
-                fields[StateKeys.loop_history(field_name)] = (
-                    Annotated[list, _collect_oracle_results], []
-                )
+                fields[StateKeys.loop_history(field_name)] = (Annotated[list, _collect_oracle_results], [])
 
     # Subgraph input port — when this Construct declares an input type
     if construct.input is not None:
@@ -328,7 +331,7 @@ def build_output_schema_model(state_model: type[BaseModel]) -> type[BaseModel]:
     with warnings.catch_warnings():
         warnings.filterwarnings(
             "ignore",
-            message='Field name .* shadows an attribute in parent .*',
+            message="Field name .* shadows an attribute in parent .*",
             category=UserWarning,
         )
         return create_model(f"{state_model.__name__}Output", **fields)
@@ -397,6 +400,7 @@ def compute_schema_fingerprint(state_model: type[BaseModel]) -> str:
     human_feedback) are excluded — they change with modifier config, not schema.
     """
     import hashlib
+
     _FRAMEWORK_PREFIXES = (
         StateKeys.FRAMEWORK_PREFIX,
         StateKeys.NODE_ID,
@@ -485,9 +489,12 @@ def _add_output_field(node: Node, fields: dict[str, Any]) -> None:
                     key_field = output_field_name(field_name, output_key)
                     fields[key_field] = (output_type | None, None)
             case (
-                ModifierCombo.BARE | ModifierCombo.OPERATOR
-                | ModifierCombo.EACH | ModifierCombo.EACH_OPERATOR
-                | ModifierCombo.LOOP | ModifierCombo.LOOP_OPERATOR
+                ModifierCombo.BARE
+                | ModifierCombo.OPERATOR
+                | ModifierCombo.EACH
+                | ModifierCombo.EACH_OPERATOR
+                | ModifierCombo.LOOP
+                | ModifierCombo.LOOP_OPERATOR
             ):
                 for output_key, output_type in no.all_keys.items():
                     key_field = output_field_name(field_name, output_key)

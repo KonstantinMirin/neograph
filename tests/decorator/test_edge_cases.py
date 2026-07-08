@@ -29,12 +29,14 @@ from tests.schemas import (
 # Coverage gap tests — lines missed in decorators.py
 # ═══════════════════════════════════════════════════════════════════════════
 
+
 class TestBuildAnnotationNamespaceEdges:
     """Edge cases in _build_annotation_namespace (lines 216-217, 227-228)."""
 
     def test_fallback_when_getclosurevars_raises_type_error(self):
         """TypeError from inspect.getclosurevars is swallowed."""
         from neograph.decorators import _build_annotation_namespace
+
         # Built-in functions trigger TypeError in getclosurevars
         ns = _build_annotation_namespace(len, caller_ns=None)
         assert "FromInput" in ns  # base keys still present
@@ -47,28 +49,24 @@ class TestBuildAnnotationNamespaceEdges:
         assert "FromInput" in ns
 
 
-
-
-
 class TestGetNodeSourceEdges:
     """Edge cases in _get_node_source (lines 429, 435-436)."""
 
     def test_returns_none_when_sidecar_missing(self):
         """Line 429: no sidecar → None."""
         from neograph.decorators import _get_node_source
+
         n = Node(name="bare", mode="scripted", outputs=RawText)
         assert _get_node_source(n) is None
 
     def test_returns_none_when_code_attr_missing(self):
         """Lines 435-436: function without __code__ → None."""
         from neograph.decorators import _get_node_source, _register_sidecar
+
         n = Node(name="bare2", mode="scripted", outputs=RawText)
         # Register with a built-in that has no __code__
         _register_sidecar(n, len, ("x",))
         assert _get_node_source(n) is None
-
-
-
 
 
 class TestNodeDecoratorVarArgs:
@@ -77,7 +75,9 @@ class TestNodeDecoratorVarArgs:
     def test_rejects_var_positional(self):
         """Lines 616-621: *args raises ConstructError."""
         from neograph import ConstructError
+
         with pytest.raises(ConstructError, match=r"\*args/\*\*kwargs"):
+
             @node(outputs=RawText)
             def bad(*args) -> RawText:
                 return RawText(text="x")
@@ -85,13 +85,12 @@ class TestNodeDecoratorVarArgs:
     def test_rejects_var_keyword(self):
         """Lines 616-621: **kwargs raises ConstructError."""
         from neograph import ConstructError
+
         with pytest.raises(ConstructError, match=r"\*args/\*\*kwargs"):
+
             @node(outputs=RawText)
             def bad(**kwargs) -> RawText:
                 return RawText(text="x")
-
-
-
 
 
 class TestOutputInputInferenceFallbacks:
@@ -103,25 +102,30 @@ class TestOutputInputInferenceFallbacks:
 
         original = typing.get_type_hints
         call_count = [0]
+
         def broken_hints(*a, **kw):
             call_count[0] += 1
             # Only break on the output-inference call (second invocation per decorator)
             if call_count[0] % 3 == 2:
                 raise NameError("broken hints")
             return original(*a, **kw)
+
         monkeypatch.setattr(typing, "get_type_hints", broken_hints)
 
         # Even with broken hints, the return annotation should be picked up
         @node(outputs=RawText)
         def sample() -> RawText:
             return RawText(text="x")
+
         assert sample.outputs == RawText
 
     def test_raw_mode_inferred_inputs_is_none(self):
         """Line 674: raw mode → inferred_inputs = None."""
+
         @node(mode="raw", outputs=RawText)
         def my_raw(state, config):
             return state
+
         assert my_raw.inputs is None
 
     def test_input_inference_fallback_when_hints_fail(self, monkeypatch):
@@ -131,22 +135,22 @@ class TestOutputInputInferenceFallbacks:
 
         original = typing.get_type_hints
         call_count = [0]
+
         def partial_break(*a, **kw):
             call_count[0] += 1
             # Break on the third call (input inference's _build_annotation_namespace)
             if call_count[0] == 3:
                 raise NameError("broken")
             return original(*a, **kw)
+
         monkeypatch.setattr(typing, "get_type_hints", partial_break)
 
         @node(outputs=Claims)
         def sample(seed: RawText) -> Claims:
             return Claims(items=[])
+
         # Should still have inputs (from raw sig annotations)
         assert isinstance(sample.inputs, dict)
-
-
-
 
 
 class TestNodeWithLoopWhen:
@@ -159,6 +163,7 @@ class TestNodeWithLoopWhen:
         @node(outputs=RawText, loop_when=lambda x: False, max_iterations=5)
         def refiner(seed: RawText) -> RawText:
             return seed
+
         assert refiner.has_modifier(Loop)
 
     def test_loop_when_with_param_resolutions(self):
@@ -177,19 +182,19 @@ class TestNodeWithLoopWhen:
             ctx_id: Annotated[str, FromInput],
         ) -> RawText:
             return seed
+
         assert refiner.has_modifier(Loop)
         res = _get_param_res(refiner)
         assert "ctx_id" in res
 
     def test_bare_node_decorator_calls_decorator_directly(self):
         """Line 873: @node (no parens) with fn != None."""
+
         @node
         def simple() -> RawText:
             return RawText(text="x")
+
         assert isinstance(simple, Node)
-
-
-
 
 
 class TestInferOracleGenTypeFallbacks:
@@ -198,6 +203,7 @@ class TestInferOracleGenTypeFallbacks:
     def test_returns_none_when_fn_not_registered(self):
         """Line 920: merge fn not in registry and not in scripted → None."""
         from neograph.decorators import infer_oracle_gen_type
+
         result = infer_oracle_gen_type("nonexistent_fn_xyz_abc")
         assert result is None
 
@@ -208,8 +214,10 @@ class TestInferOracleGenTypeFallbacks:
         # Patch _build_annotation_namespace to raise, forcing the except branch
         def broken_ns(*a, **kw):
             raise NameError("boom")
+
         monkeypatch.setattr(
-            "neograph.decorators._build_annotation_namespace", broken_ns,
+            "neograph.decorators._build_annotation_namespace",
+            broken_ns,
         )
 
         # Use a function WITHOUT from __future__ import annotations so
@@ -229,8 +237,8 @@ class TestInferOracleGenTypeFallbacks:
         """Line 942: function with no params → None."""
         from neograph.decorators import _merge_fn_registry, infer_oracle_gen_type
 
-        def no_params() -> Claims:
-            ...
+        def no_params() -> Claims: ...
+
         _merge_fn_registry["_test_no_params"] = (no_params, {})
         result = infer_oracle_gen_type("_test_no_params")
         assert result is None
@@ -242,6 +250,7 @@ class TestInferOracleGenTypeFallbacks:
 
         def my_merge(variants, config: Any) -> Claims:
             return variants
+
         _merge_fn_registry["_test_no_hint"] = (my_merge, {})
         result = infer_oracle_gen_type("_test_no_hint")
         assert result is None
@@ -253,6 +262,7 @@ class TestInferOracleGenTypeFallbacks:
 
         def my_merge(variants: dict[str, Claims], config: Any) -> Claims:
             return Claims(items=[])
+
         _merge_fn_registry["_test_dict_param"] = (my_merge, {})
         result = infer_oracle_gen_type("_test_dict_param")
         assert result is None
@@ -264,8 +274,10 @@ class TestInferOracleGenTypeFallbacks:
 
         def broken_ns(*a, **kw):
             raise NameError("boom")
+
         monkeypatch.setattr(
-            "neograph.decorators._build_annotation_namespace", broken_ns,
+            "neograph.decorators._build_annotation_namespace",
+            broken_ns,
         )
 
         # Function with no annotation on first param (need raw code to avoid
@@ -282,12 +294,10 @@ class TestInferOracleGenTypeFallbacks:
     def test_scripted_lookup_returns_none(self):
         """Line 920: lookup_scripted returns None for unregistered name."""
         from neograph.decorators import infer_oracle_gen_type
+
         # Uses a name that exists in neither _merge_fn_registry nor scripted
         result = infer_oracle_gen_type("_definitely_not_registered_xyz")
         assert result is None
-
-
-
 
 
 class TestMergeFnDecoratorEdges:
@@ -297,10 +307,11 @@ class TestMergeFnDecoratorEdges:
         """Lines 992-996: @merge_fn with zero params raises."""
         from neograph import ConstructError
         from neograph.decorators import merge_fn as merge_fn_deco
+
         with pytest.raises(ConstructError, match="at least one parameter"):
+
             @merge_fn_deco
-            def bad() -> Claims:
-                ...
+            def bad() -> Claims: ...
 
     def test_hints_failure_falls_back(self, monkeypatch):
         """Lines 1017-1018: get_type_hints failure in merge_fn → empty hints."""
@@ -311,12 +322,14 @@ class TestMergeFnDecoratorEdges:
 
         original = typing.get_type_hints
         call_count = [0]
+
         def partial_break(*a, **kw):
             call_count[0] += 1
             # Third call is the all_hints resolution for state params
             if call_count[0] == 3:
                 raise NameError("boom")
             return original(*a, **kw)
+
         monkeypatch.setattr(typing, "get_type_hints", partial_break)
 
         @merge_fn_deco(name="_test_hints_fail")
@@ -337,6 +350,7 @@ class TestMergeFnDecoratorEdges:
 
         _, param_res = _merge_fn_registry["_test_constant"]
         from neograph.di import DIKind
+
         assert param_res["threshold"].kind == DIKind.CONSTANT
         assert param_res["threshold"].default_value == 0.5
         del _merge_fn_registry["_test_constant"]
@@ -368,6 +382,7 @@ class TestMergeFnDecoratorEdges:
 
         _, param_res = _merge_fn_registry["_test_from_state"]
         from neograph.di import DIKind
+
         assert param_res["context"].kind == DIKind.FROM_STATE
         del _merge_fn_registry["_test_from_state"]
 
@@ -397,34 +412,31 @@ class TestMergeFnDecoratorEdges:
         del _merge_fn_registry["_test_bare_form"]
 
 
-
-
-
 class TestResolveLoopSelfParam:
     """_resolve_loop_self_param branches (lines 1203, 1206, 1230)."""
 
     def test_returns_none_when_inputs_not_dict(self):
         """Line 1203: inputs is not a dict → None."""
         from neograph.decorators import _resolve_loop_self_param
+
         n = Node(name="n", mode="scripted", inputs=RawText, outputs=RawText)
         assert _resolve_loop_self_param(n, "x", {}, {}) is None
 
     def test_returns_none_when_param_not_in_inputs(self):
         """Line 1206: pname not in node.inputs → None."""
         from neograph.decorators import _resolve_loop_self_param
+
         n = Node(name="n", mode="scripted", inputs={"a": RawText}, outputs=RawText)
         assert _resolve_loop_self_param(n, "missing", {}, {}) is None
 
     def test_returns_none_when_no_match(self):
         """Line 1230: no candidate matches → None."""
         from neograph.decorators import _resolve_loop_self_param
+
         n = Node(name="n", mode="scripted", inputs={"x": Claims}, outputs=RawText)
         # upstream produces RawText, but we want Claims → no match
         upstream = Node(name="up", mode="scripted", outputs=RawText)
         assert _resolve_loop_self_param(n, "x", {"up": upstream}, {}) is None
-
-
-
 
 
 class TestBuildConstructFromDecoratedEdges:
@@ -434,6 +446,7 @@ class TestBuildConstructFromDecoratedEdges:
         """Line 1249: empty nodes list → ConstructError."""
         from neograph import ConstructError
         from neograph.decorators import _build_construct_from_decorated
+
         with pytest.raises(ConstructError, match="no nodes"):
             _build_construct_from_decorated([], "empty", "test", None)
 
@@ -452,7 +465,8 @@ class TestBuildConstructFromDecoratedEdges:
         # constant path, not the issubclass check. We need construct_input
         # to trigger 1289-1290.
         pipeline = construct_from_functions(
-            "gen_test", [source, consumer],
+            "gen_test",
+            [source, consumer],
             input=RawText,
         )
         assert isinstance(pipeline, Construct)
@@ -494,9 +508,6 @@ class TestBuildConstructFromDecoratedEdges:
             _build_construct_from_decorated([n, n2], "test", "test", None)
 
 
-
-
-
 class TestSelfDependencyDetection:
     """Self-dependency detection (lines 1434-1441)."""
 
@@ -512,21 +523,16 @@ class TestSelfDependencyDetection:
             construct_from_functions("self-dep", [loopy])
 
 
-
-
-
 class TestRegisterNodeScriptedSidecarMissing:
     """_register_node_scripted with missing sidecar (line 1585)."""
 
     def test_returns_early_when_sidecar_missing(self):
         """Line 1585: missing sidecar → returns without registering."""
         from neograph.decorators import _register_node_scripted
+
         n = Node(name="no-sidecar", mode="scripted", outputs=RawText)
         # Should not raise — just returns early
         _register_node_scripted(n)
-
-
-
 
 
 class TestOperatorWithParamResolutions:
@@ -546,12 +552,10 @@ class TestOperatorWithParamResolutions:
             user_id: Annotated[str, FromInput],
         ) -> RawText:
             return seed
+
         assert guarded.has_modifier(Operator)
         res = _get_param_res(guarded)
         assert "user_id" in res
-
-
-
 
 
 class TestOutputInferenceFallbackHintsFail:
@@ -566,6 +570,7 @@ class TestOutputInferenceFallbackHintsFail:
 
         original_hints = typing.get_type_hints
         call_count = [0]
+
         def selective_break(*a, **kw):
             call_count[0] += 1
             # The output inference call to get_type_hints is the 2nd one
@@ -573,6 +578,7 @@ class TestOutputInferenceFallbackHintsFail:
             if call_count[0] == 2:
                 raise NameError("simulated")
             return original_hints(*a, **kw)
+
         monkeypatch.setattr(typing, "get_type_hints", selective_break)
 
         # Create a function without return annotation via exec to avoid
@@ -588,9 +594,6 @@ class TestOutputInferenceFallbackHintsFail:
 
 
 @pytest.mark.filterwarnings("ignore:@node.*body of mode='think'.*:UserWarning")
-
-
-
 class TestMergeFnHintsFailure:
     """@merge_fn get_type_hints failure (lines 1017-1018)."""
 
@@ -604,6 +607,7 @@ class TestMergeFnHintsFailure:
 
         original = typing.get_type_hints
         call_count = [0]
+
         def selective_break(*a, **kw):
             call_count[0] += 1
             # The merge_fn decorator calls get_type_hints twice:
@@ -612,6 +616,7 @@ class TestMergeFnHintsFailure:
             if call_count[0] == 2:
                 raise NameError("simulated")
             return original(*a, **kw)
+
         monkeypatch.setattr(typing, "get_type_hints", selective_break)
 
         @merge_fn_deco(name="_test_hints_fail_v2")
@@ -622,9 +627,6 @@ class TestMergeFnHintsFailure:
         # context should still be classified (via raw annotation fallback)
         assert "context" in param_res
         del _merge_fn_registry["_test_hints_fail_v2"]
-
-
-
 
 
 class TestIssubclassTypeErrorInPortParams:
@@ -654,13 +656,11 @@ class TestIssubclassTypeErrorInPortParams:
             return MergedResult(final_text="x")
 
         pipeline = construct_from_functions(
-            "generic_test", [source, merger],
+            "generic_test",
+            [source, merger],
             input=MyInput,
         )
         assert isinstance(pipeline, Construct)
-
-
-
 
 
 class TestAdjacencySidecarLost:
@@ -686,9 +686,6 @@ class TestAdjacencySidecarLost:
         assert sidecar[1] == ("topic",)
 
 
-
-
-
 class TestDeadBodyWarning:
     """Dead-body warning for LLM mode nodes (neograph-hn8e).
 
@@ -707,9 +704,11 @@ class TestDeadBodyWarning:
 
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
+
             @node(outputs=RawText, model="fast", prompt="test")
             def trivial(x: RawText) -> RawText:
                 pass
+
             dead_body_warnings = [x for x in w if "body" in str(x.message)]
             assert len(dead_body_warnings) == 0
 
@@ -726,9 +725,7 @@ class TestDeadBodyWarning:
                 ...
 
             dead_body_warnings = [x for x in w if "body" in str(x.message)]
-            assert len(dead_body_warnings) == 0, (
-                f"docstring + '...' should be trivial, got: {dead_body_warnings}"
-            )
+            assert len(dead_body_warnings) == 0, f"docstring + '...' should be trivial, got: {dead_body_warnings}"
 
     def test_docstring_plus_pass_is_trivial(self):
         """Docstring + `pass` — must NOT warn."""
@@ -743,9 +740,7 @@ class TestDeadBodyWarning:
                 pass
 
             dead_body_warnings = [x for x in w if "body" in str(x.message)]
-            assert len(dead_body_warnings) == 0, (
-                f"docstring + 'pass' should be trivial, got: {dead_body_warnings}"
-            )
+            assert len(dead_body_warnings) == 0, f"docstring + 'pass' should be trivial, got: {dead_body_warnings}"
 
     def test_bare_return_is_trivial(self):
         """Bare `return` with no value — must NOT warn."""
@@ -759,9 +754,7 @@ class TestDeadBodyWarning:
                 return
 
             dead_body_warnings = [x for x in w if "body" in str(x.message)]
-            assert len(dead_body_warnings) == 0, (
-                f"bare return should be trivial, got: {dead_body_warnings}"
-            )
+            assert len(dead_body_warnings) == 0, f"bare return should be trivial, got: {dead_body_warnings}"
 
     def test_return_none_is_trivial(self):
         """Explicit `return None` — must NOT warn."""
@@ -775,9 +768,7 @@ class TestDeadBodyWarning:
                 return None
 
             dead_body_warnings = [x for x in w if "body" in str(x.message)]
-            assert len(dead_body_warnings) == 0, (
-                f"return None should be trivial, got: {dead_body_warnings}"
-            )
+            assert len(dead_body_warnings) == 0, f"return None should be trivial, got: {dead_body_warnings}"
 
     def test_docstring_plus_return_none_is_trivial(self):
         """Docstring + `return None` — must NOT warn."""
@@ -792,9 +783,7 @@ class TestDeadBodyWarning:
                 return None
 
             dead_body_warnings = [x for x in w if "body" in str(x.message)]
-            assert len(dead_body_warnings) == 0, (
-                f"docstring + return None should be trivial, got: {dead_body_warnings}"
-            )
+            assert len(dead_body_warnings) == 0, f"docstring + return None should be trivial, got: {dead_body_warnings}"
 
     def test_nontrivial_body_does_warn(self):
         """Real logic in body MUST warn."""
@@ -817,9 +806,6 @@ class TestDeadBodyWarning:
 # ═══════════════════════════════════════════════════════════════════════════
 # OUTPUT INFERENCE FROM RETURN ANNOTATION
 # ═══════════════════════════════════════════════════════════════════════════
-
-
-
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -908,6 +894,7 @@ class TestOutputsInference:
 
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
+
             @node(outputs=Claims, prompt="extract from {topic}", model="fast")
             def extract(topic: str) -> Claims: ...
 
@@ -931,6 +918,7 @@ class TestOutputsInference:
         """outputs=X with -> Y (X != Y) raises ConstructError."""
 
         with pytest.raises(ConstructError, match="outputs=.*differs from return annotation"):
+
             @node(outputs=RawText)
             def extract(topic: str) -> Claims:
                 return Claims(items=["a"])
@@ -939,6 +927,7 @@ class TestOutputsInference:
         """LLM mode: outputs=X with -> Y raises ConstructError."""
 
         with pytest.raises(ConstructError, match="outputs=.*differs from return annotation"):
+
             @node(outputs=RawText, prompt="extract from {topic}", model="fast")
             def extract(topic: str) -> Claims: ...
 
@@ -946,6 +935,7 @@ class TestOutputsInference:
         """-> None with no outputs= raises ConstructError at decoration time."""
 
         with pytest.raises(ConstructError, match="return annotation is None"):
+
             @node
             def extract(topic: str) -> None:
                 pass
@@ -976,6 +966,7 @@ class TestOutputsInference:
             y: str
 
         with pytest.raises(ConstructError, match="outputs=.*differs from return annotation"):
+
             @node(outputs=Parent)
             def transform(topic: str) -> Child:
                 return Child(x=1, y="a")
@@ -984,9 +975,6 @@ class TestOutputsInference:
 # ═══════════════════════════════════════════════════════════════════════════
 # NODE IMMUTABILITY DURING ASSEMBLY (neograph-n573)
 # ═══════════════════════════════════════════════════════════════════════════
-
-
-
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1024,12 +1012,14 @@ class TestNodeImmutabilityDuringAssembly:
 
         # Sub-construct assembly rewrites port params in inputs dict
         _sub = construct_from_functions(
-            "sub", [inner], input=RawText, output=Claims,
+            "sub",
+            [inner],
+            input=RawText,
+            output=Claims,
         )
 
         assert inner.inputs == original_inputs, (
-            f"Node.inputs was mutated during assembly. "
-            f"Before: {original_inputs}, After: {inner.inputs}"
+            f"Node.inputs was mutated during assembly. Before: {original_inputs}, After: {inner.inputs}"
         )
 
     def test_fan_out_param_not_mutated_on_original_node(self):
@@ -1057,6 +1047,5 @@ class TestNodeImmutabilityDuringAssembly:
         _pipeline = construct_from_functions("test", [source, verify])
 
         assert verify.fan_out_param == original_fan_out, (
-            f"Node.fan_out_param was mutated during assembly. "
-            f"Before: {original_fan_out}, After: {verify.fan_out_param}"
+            f"Node.fan_out_param was mutated during assembly. Before: {original_fan_out}, After: {verify.fan_out_param}"
         )

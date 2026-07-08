@@ -1,7 +1,6 @@
 """Fan-in validation: dict-form inputs, Each interop, effective_producer_type,
 list/dict compatibility, dict-form outputs, three-surface parity."""
 
-
 from __future__ import annotations
 
 import pytest
@@ -39,6 +38,7 @@ class TestNodeDecoratorFanInValidation:
     @staticmethod
     def _fresh_module(name: str):
         import types as _types
+
         return _types.ModuleType(name)
 
     def test_mismatch_raises_when_second_param_wrong(self):
@@ -176,6 +176,7 @@ class TestNodeDecoratorFanInValidation:
 # @node fan-in + Each interop
 # ═══════════════════════════════════════════════════════════════════════════
 
+
 class TestNodeDecoratorFanInEachInterop:
     """Regression -- _validate_fan_in_types must unwrap Each output as dict[key, item]."""
 
@@ -206,15 +207,10 @@ class TestNodeDecoratorFanInEachInterop:
         @node(outputs=ClassifiedClaims)
         def fie_summarize(fie_verify: dict[str, MatchResult]) -> ClassifiedClaims:
             return ClassifiedClaims(
-                classified=[
-                    {"claim": label, "category": result.cluster_label}
-                    for label, result in fie_verify.items()
-                ]
+                classified=[{"claim": label, "category": result.cluster_label} for label, result in fie_verify.items()]
             )
 
-        pipeline = construct_from_functions(
-            "fie-pipeline", [fie_source, fie_verify, fie_summarize]
-        )
+        pipeline = construct_from_functions("fie-pipeline", [fie_source, fie_verify, fie_summarize])
         assert [n.name for n in pipeline.nodes] == [
             "fie-source",
             "fie-verify",
@@ -234,9 +230,7 @@ class TestNodeDecoratorFanInEachInterop:
 
         @node(outputs=Clusters)
         def fier_source() -> Clusters:
-            return Clusters(
-                groups=[ClusterGroup(label="alpha", claim_ids=["c1"])]
-            )
+            return Clusters(groups=[ClusterGroup(label="alpha", claim_ids=["c1"])])
 
         @node(
             outputs=MatchResult,
@@ -250,9 +244,7 @@ class TestNodeDecoratorFanInEachInterop:
         def fier_summarize(fier_verify: dict) -> ClassifiedClaims:
             return ClassifiedClaims(classified=[])
 
-        construct_from_functions(
-            "fier-pipeline", [fier_source, fier_verify, fier_summarize]
-        )
+        construct_from_functions("fier-pipeline", [fier_source, fier_verify, fier_summarize])
 
     def test_raw_type_rejected_when_upstream_has_each(self):
         """If a downstream param is annotated as the raw upstream output type
@@ -261,9 +253,7 @@ class TestNodeDecoratorFanInEachInterop:
 
         @node(outputs=Clusters)
         def fieraw_source() -> Clusters:
-            return Clusters(
-                groups=[ClusterGroup(label="alpha", claim_ids=["c1"])]
-            )
+            return Clusters(groups=[ClusterGroup(label="alpha", claim_ids=["c1"])])
 
         @node(
             outputs=MatchResult,
@@ -293,9 +283,7 @@ class TestNodeDecoratorFanInEachInterop:
 
         @node(outputs=Clusters)
         def fiew_source() -> Clusters:
-            return Clusters(
-                groups=[ClusterGroup(label="alpha", claim_ids=["c1"])]
-            )
+            return Clusters(groups=[ClusterGroup(label="alpha", claim_ids=["c1"])])
 
         @node(
             outputs=MatchResult,
@@ -321,6 +309,7 @@ class TestNodeDecoratorFanInEachInterop:
 # effective_producer_type helper
 # ═══════════════════════════════════════════════════════════════════════════
 
+
 class TestEffectiveProducerType:
     """Single source of truth for 'what type does this producer write to
     the state bus, accounting for modifiers'."""
@@ -336,9 +325,9 @@ class TestEffectiveProducerType:
         """A node with an Each modifier writes dict[str, output] to the state bus."""
         from neograph._construct_validation import effective_producer_type
 
-        n = Node.scripted(
-            "each-node", fn="_x_each", inputs=ClusterGroup, outputs=MatchResult
-        ) | Each(over="upstream.items", key="label")
+        n = Node.scripted("each-node", fn="_x_each", inputs=ClusterGroup, outputs=MatchResult) | Each(
+            over="upstream.items", key="label"
+        )
         effective = effective_producer_type(n)
         assert effective == dict[str, MatchResult]
 
@@ -346,30 +335,22 @@ class TestEffectiveProducerType:
         """Oracle merges N variants into ONE output. Effective type is unchanged."""
         from neograph._construct_validation import effective_producer_type
 
-        n = Node.scripted("ens", fn="_x_ens", outputs=Claims) | Oracle(
-            n=3, merge_fn="nonexistent_ok_for_this_test"
-        )
+        n = Node.scripted("ens", fn="_x_ens", outputs=Claims) | Oracle(n=3, merge_fn="nonexistent_ok_for_this_test")
         assert effective_producer_type(n) is Claims
 
     def test_operator_keeps_raw_output(self):
         """Operator is an interrupt modifier -- it doesn't reshape state."""
         from neograph._construct_validation import effective_producer_type
 
-        n = Node.scripted("op", fn="_x_op", outputs=Claims) | Operator(
-            when="_nonexistent_for_helper_test"
-        )
+        n = Node.scripted("op", fn="_x_op", outputs=Claims) | Operator(when="_nonexistent_for_helper_test")
         assert effective_producer_type(n) is Claims
 
     def test_sub_construct_each_wraps_as_dict(self):
         """An Each modifier on a sub-Construct wraps its output the same way."""
         from neograph._construct_validation import effective_producer_type
 
-        inner = Node.scripted(
-            "inner", fn="_x_inner", inputs=Claims, outputs=Claims
-        )
-        sub = Construct(
-            "sub", input=Claims, output=Claims, nodes=[inner]
-        ) | Each(over="upstream.items", key="label")
+        inner = Node.scripted("inner", fn="_x_inner", inputs=Claims, outputs=Claims)
+        sub = Construct("sub", input=Claims, output=Claims, nodes=[inner]) | Each(over="upstream.items", key="label")
         assert effective_producer_type(sub) == dict[str, Claims]
 
     def test_none_output_returns_none(self):
@@ -401,19 +382,15 @@ class TestEffectiveProducerTypeFor:
     def test_each_modifier_wraps_single_type_as_dict(self):
         from neograph._construct_validation import effective_producer_type_for
 
-        n = Node.scripted(
-            "each-node", fn="_x_each2", inputs=ClusterGroup, outputs=MatchResult
-        ) | Each(over="upstream.items", key="label")
-        assert effective_producer_type_for(MatchResult, n.modifier_set) == dict[
-            str, MatchResult
-        ]
+        n = Node.scripted("each-node", fn="_x_each2", inputs=ClusterGroup, outputs=MatchResult) | Each(
+            over="upstream.items", key="label"
+        )
+        assert effective_producer_type_for(MatchResult, n.modifier_set) == dict[str, MatchResult]
 
     def test_non_each_modifier_leaves_type_unchanged(self):
         from neograph._construct_validation import effective_producer_type_for
 
-        n = Node.scripted("op2", fn="_x_op2", outputs=Claims) | Operator(
-            when="_nonexistent_for_helper_test"
-        )
+        n = Node.scripted("op2", fn="_x_op2", outputs=Claims) | Operator(when="_nonexistent_for_helper_test")
         assert effective_producer_type_for(Claims, n.modifier_set) is Claims
 
     def test_dict_form_each_wraps_each_key_independently(self):
@@ -421,18 +398,19 @@ class TestEffectiveProducerTypeFor:
         from neograph._construct_validation import effective_producer_type_for
 
         n = Node.scripted(
-            "multi", fn="_x_multi", inputs=ClusterGroup,
+            "multi",
+            fn="_x_multi",
+            inputs=ClusterGroup,
             outputs={"a": MatchResult, "b": Claims},
         ) | Each(over="upstream.items", key="label")
-        assert effective_producer_type_for(MatchResult, n.modifier_set) == dict[
-            str, MatchResult
-        ]
+        assert effective_producer_type_for(MatchResult, n.modifier_set) == dict[str, MatchResult]
         assert effective_producer_type_for(Claims, n.modifier_set) == dict[str, Claims]
 
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Fan-in validation (dict-form inputs)
 # ═══════════════════════════════════════════════════════════════════════════
+
 
 class TestFanInValidation:
     """Fan-in dict-form inputs validation against upstream producers."""
@@ -444,7 +422,8 @@ class TestFanInValidation:
         b = _producer("b", RawText)
         c = _producer("c", ClusterGroup)
         consumer = Node.scripted(
-            "consumer", fn="f",
+            "consumer",
+            fn="f",
             inputs={"a": Claims, "b": RawText, "c": ClusterGroup},
             outputs=MatchResult,
         )
@@ -458,7 +437,8 @@ class TestFanInValidation:
         """Consumer declaring inputs['nonexistent'] raises ConstructError."""
         a = _producer("a", Claims)
         consumer = Node.scripted(
-            "consumer", fn="f",
+            "consumer",
+            fn="f",
             inputs={"a": Claims, "nonexistent": RawText},
             outputs=MatchResult,
         )
@@ -473,7 +453,8 @@ class TestFanInValidation:
         a = _producer("a", Claims)
         b = _producer("b", RawText)
         consumer = Node.scripted(
-            "consumer", fn="f",
+            "consumer",
+            fn="f",
             inputs={"a": Claims, "b": Claims},  # b produces RawText, not Claims
             outputs=MatchResult,
         )
@@ -489,7 +470,8 @@ class TestFanInValidation:
         fan-out key as an unknown upstream (neograph-ts7)."""
         make = _producer("make", Clusters)
         canonicalize = Node.scripted(
-            "canonicalize", fn="f",
+            "canonicalize",
+            fn="f",
             inputs={"group": ClusterGroup},
             outputs=MatchResult,
         ) | Each(over="make.groups", key="label")
@@ -504,7 +486,8 @@ class TestFanInValidation:
         a = _producer("a", RawText)
         make = _producer("make", Clusters)
         process = Node.scripted(
-            "process", fn="f",
+            "process",
+            fn="f",
             inputs={"a": RawText, "group": ClusterGroup},
             outputs=MatchResult,
         ) | Each(over="make.groups", key="label")
@@ -523,6 +506,7 @@ class TestFanInValidation:
 # ═══════════════════════════════════════════════════════════════════════════
 # list[X] <-> dict[str, X] compatibility rule
 # ═══════════════════════════════════════════════════════════════════════════
+
 
 class TestTypesCompatibleListOverDict:
     """The list[X] / dict[str, X] compatibility rule."""
@@ -555,6 +539,7 @@ class TestTypesCompatibleListOverDict:
 # ═══════════════════════════════════════════════════════════════════════════
 # Dict-form outputs validation
 # ═══════════════════════════════════════════════════════════════════════════
+
 
 class TestDictOutputsValidator:
     """Validator resolves dict-form outputs as per-key producers."""
@@ -619,7 +604,8 @@ def _fan_in_valid_programmatic() -> Construct:
     a = _producer("a", Claims)
     b = _producer("b", RawText)
     consumer = Node.scripted(
-        "consumer", fn="f",
+        "consumer",
+        fn="f",
         inputs={"a": Claims, "b": RawText},
         outputs=MatchResult,
     )
@@ -657,7 +643,8 @@ def _fan_in_mismatch_programmatic():
     a = _producer("a", Claims)
     b = _producer("b", RawText)
     consumer = Node.scripted(
-        "consumer", fn="f",
+        "consumer",
+        fn="f",
         inputs={"a": Claims, "b": Claims},  # b produces RawText, not Claims
         outputs=MatchResult,
     )
@@ -668,21 +655,29 @@ class TestThreeSurfaceFanInParity:
     """Fan-in type validation tested identically across declarative, @node,
     and programmatic API surfaces. Template pattern for future parity tests."""
 
-    @pytest.mark.parametrize("build", [
-        _fan_in_valid_declarative,
-        _fan_in_valid_decorator,
-        _fan_in_valid_programmatic,
-    ], ids=["declarative", "decorator", "programmatic"])
+    @pytest.mark.parametrize(
+        "build",
+        [
+            _fan_in_valid_declarative,
+            _fan_in_valid_decorator,
+            _fan_in_valid_programmatic,
+        ],
+        ids=["declarative", "decorator", "programmatic"],
+    )
     def test_fan_in_assembles_when_types_correct(self, build):
         """Fan-in with matching types assembles without error across surfaces."""
         pipeline = build()
         assert len(pipeline.nodes) == 3
 
-    @pytest.mark.parametrize("build", [
-        _fan_in_mismatch_declarative,
-        _fan_in_mismatch_decorator,
-        _fan_in_mismatch_programmatic,
-    ], ids=["declarative", "decorator", "programmatic"])
+    @pytest.mark.parametrize(
+        "build",
+        [
+            _fan_in_mismatch_declarative,
+            _fan_in_mismatch_decorator,
+            _fan_in_mismatch_programmatic,
+        ],
+        ids=["declarative", "decorator", "programmatic"],
+    )
     def test_fan_in_rejects_when_type_mismatches(self, build):
         """Fan-in with mismatched types raises ConstructError across surfaces."""
         with pytest.raises(ConstructError) as exc_info:
@@ -696,6 +691,7 @@ class TestThreeSurfaceFanInParity:
 # Modifiable.map() error paths
 # ═══════════════════════════════════════════════════════════════════════════
 
+
 class TestFanInErrorsMigratedToBuild:
     """_check_fan_in_inputs errors use the build() pattern but existing
     test regex patterns still match (backward compatibility)."""
@@ -705,7 +701,8 @@ class TestFanInErrorsMigratedToBuild:
         available upstreams in the message."""
         a = _producer("a", Claims)
         consumer = Node.scripted(
-            "consumer", fn="f",
+            "consumer",
+            fn="f",
             inputs={"a": Claims, "nonexistent": RawText},
             outputs=MatchResult,
         )
@@ -722,7 +719,8 @@ class TestFanInErrorsMigratedToBuild:
         a = _producer("a", Claims)
         b = _producer("b", RawText)
         consumer = Node.scripted(
-            "consumer", fn="f",
+            "consumer",
+            fn="f",
             inputs={"a": Claims, "b": Claims},
             outputs=MatchResult,
         )
@@ -733,5 +731,3 @@ class TestFanInErrorsMigratedToBuild:
         assert "'b'" in msg
         assert "Claims" in msg
         assert "RawText" in msg
-
-

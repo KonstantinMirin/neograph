@@ -9,7 +9,10 @@ class Result(BaseModel, frozen=True):
     text: str
 
 
-pipeline = Construct("broken", nodes=[
-    Node(name="gen", mode="think", outputs=Result, model="fast",
-         prompt="test") | Oracle(n=2, merge_fn="nonexistent_merge"),
-])
+pipeline = Construct(
+    "broken",
+    nodes=[
+        Node(name="gen", mode="think", outputs=Result, model="fast", prompt="test")
+        | Oracle(n=2, merge_fn="nonexistent_merge"),
+    ],
+)

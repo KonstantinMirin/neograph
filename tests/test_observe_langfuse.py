@@ -175,9 +175,7 @@ class TestObserveParamAcceptedByAllVerbs:
 
     def test_stream_accepts_observe(self, fake_langfuse, langfuse_env):
         graph = _scripted_pipeline()
-        chunks = list(
-            neograph.stream(graph, input={"node_id": "x"}, observe=True, stream_mode="values")
-        )
+        chunks = list(neograph.stream(graph, input={"node_id": "x"}, observe=True, stream_mode="values"))
         assert chunks  # stream ran to completion with observe=
 
     def test_arun_accepts_observe(self, fake_langfuse, langfuse_env):
@@ -194,9 +192,7 @@ class TestObserveParamAcceptedByAllVerbs:
 
         async def _drive():
             out = []
-            async for chunk in neograph.astream(
-                graph, input={"node_id": "x"}, observe=True, stream_mode="values"
-            ):
+            async for chunk in neograph.astream(graph, input={"node_id": "x"}, observe=True, stream_mode="values"):
                 out.append(chunk)
             return out
 
@@ -340,9 +336,7 @@ class TestObserveFlush:
 
     def test_stream_flushes_after_exhaustion(self, fake_langfuse, langfuse_env):
         graph = _scripted_pipeline()
-        gen = neograph.stream(
-            graph, input={"node_id": "x"}, observe=True, stream_mode="values"
-        )
+        gen = neograph.stream(graph, input={"node_id": "x"}, observe=True, stream_mode="values")
         # Not flushed before the generator is driven / exhausted.
         assert fake_langfuse.client.flush_calls == 0
         list(gen)  # exhaust
@@ -352,9 +346,7 @@ class TestObserveFlush:
         graph = _scripted_pipeline()
 
         async def _drive():
-            async for _ in neograph.astream(
-                graph, input={"node_id": "x"}, observe=True, stream_mode="values"
-            ):
+            async for _ in neograph.astream(graph, input={"node_id": "x"}, observe=True, stream_mode="values"):
                 pass
 
         asyncio.run(_drive())
@@ -364,9 +356,7 @@ class TestObserveFlush:
         """Consumer closes the generator mid-stream (GeneratorExit) -> flush still
         fires from the verb's finally, so no trace batch is stranded."""
         graph = _scripted_pipeline()
-        gen = neograph.stream(
-            graph, input={"node_id": "x"}, observe=True, stream_mode="values"
-        )
+        gen = neograph.stream(graph, input={"node_id": "x"}, observe=True, stream_mode="values")
         next(gen)  # consume one chunk, then abandon
         gen.close()
         assert fake_langfuse.client.flush_calls == 1

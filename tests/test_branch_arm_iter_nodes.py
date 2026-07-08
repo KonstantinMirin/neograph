@@ -60,7 +60,10 @@ def _node_subconstruct() -> Construct:
         return ArmResult(claim_id=claim.claim_id, disposition="confirmed")
 
     return construct_from_functions(
-        "gate-sub", [gate], input=ArmClaim, output=ArmResult,
+        "gate-sub",
+        [gate],
+        input=ArmClaim,
+        output=ArmResult,
     )
 
 
@@ -71,7 +74,8 @@ def _branch_parent_with_arm_sub(sub: Construct, *, arm: str) -> tuple[Construct,
     Returns (parent, compile_kwargs).
     """
     register_scripted(
-        "arm_seed", lambda _in, _cfg: ArmClaim(claim_id="c1", text="evidence"),
+        "arm_seed",
+        lambda _in, _cfg: ArmClaim(claim_id="c1", text="evidence"),
     )
     seed = Node.scripted("seed", fn="arm_seed", outputs=ArmClaim)
 
@@ -142,12 +146,16 @@ def test_iter_nodes_yields_arm_nodes_exactly_once():
     register_scripted("seed2", lambda _in, _cfg: ArmClaim(claim_id="c", text="x"))
     seed = Node.scripted("seed", fn="seed2", outputs=ArmClaim)
     cond = _ConditionSpec(
-        source_node=seed, attr_chain=["text"],
-        op_fn=lambda value, _t: bool(value), op_str="route", threshold=None,
+        source_node=seed,
+        attr_chain=["text"],
+        op_fn=lambda value, _t: bool(value),
+        op_str="route",
+        threshold=None,
     )
     meta = _BranchMeta(
         condition_spec=cond,
-        true_arm_nodes=[true_sub], false_arm_nodes=[false_sub],
+        true_arm_nodes=[true_sub],
+        false_arm_nodes=[false_sub],
     )
     parent = Construct("parent", nodes=[seed, _BranchNode(meta, 0)])
 

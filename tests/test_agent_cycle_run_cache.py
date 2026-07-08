@@ -191,9 +191,7 @@ class TestWithinRunLlmHandleReuse:
             **build_test_compile_kwargs(),
             **build_fake_llm_kwargs(_counting_factory(factory_calls, _MultiTurnFake)),
         )
-        result = run(
-            graph, input={"node_id": "X"}, config={"configurable": {"thread_id": "rc-within"}}
-        )
+        result = run(graph, input={"node_id": "X"}, config={"configurable": {"thread_id": "rc-within"}})
 
         assert result.get("research") == KResult(items=["done"])
         assert counter[0] == 2, "the two record turns must have executed"
@@ -230,9 +228,7 @@ class TestWithinRunLlmHandleReuse:
             paused = run(graph, input={"node_id": "REQ"}, config=config)
             assert "__interrupt__" in paused
             # Reused across life-1's supersteps (agent/tools/agent/tools).
-            assert len(factory_calls) == 1, (
-                f"life-1 must build the handle once, got {factory_calls}"
-            )
+            assert len(factory_calls) == 1, f"life-1 must build the handle once, got {factory_calls}"
 
             resumed = run(graph, resume={"decision": "go"}, config=config)
             assert "__interrupt__" not in resumed
@@ -240,8 +236,7 @@ class TestWithinRunLlmHandleReuse:
         # Fresh RUN_ID on resume -> cache miss -> exactly one MORE build in life-2
         # (never a stale life-1 handle: the two-lifetime rule).
         assert len(factory_calls) == 2, (
-            f"resume must re-mint RUN_ID and rebuild the handle (life-2), got "
-            f"{factory_calls}"
+            f"resume must re-mint RUN_ID and rebuild the handle (life-2), got {factory_calls}"
         )
 
 
@@ -288,8 +283,7 @@ class TestPerRunResourceFetchCache:
         assert result.get("research") == KResult(items=["done"])
         assert counter[0] == 2, "the two record turns must have executed"
         assert fetch_count[0] == 1, (
-            f"FROM_RESOURCE must be fetched ONCE per run (reused across the cycle's "
-            f"supersteps), got {fetch_count[0]}"
+            f"FROM_RESOURCE must be fetched ONCE per run (reused across the cycle's supersteps), got {fetch_count[0]}"
         )
 
     async def test_resource_refetched_on_resume(self, tmp_path):
@@ -329,16 +323,13 @@ class TestPerRunResourceFetchCache:
             )
             paused = await arun(graph, input={"node_id": "t"}, config=config)
             assert "__interrupt__" in paused
-            assert fetch_count[0] == 1, (
-                f"life-1 must fetch the resource once, got {fetch_count[0]}"
-            )
+            assert fetch_count[0] == 1, f"life-1 must fetch the resource once, got {fetch_count[0]}"
 
             resumed = await arun(graph, resume={"decision": "go"}, config=config)
             assert "__interrupt__" not in resumed
 
         assert fetch_count[0] == 2, (
-            f"resume must re-mint RUN_ID and refetch the resource (life-2), got "
-            f"{fetch_count[0]}"
+            f"resume must re-mint RUN_ID and refetch the resource (life-2), got {fetch_count[0]}"
         )
 
 
@@ -384,8 +375,7 @@ class TestPerKeySingleFlight:
         t2.join(2.0)
 
         assert build_count[0] == 1, (
-            f"concurrent misses on one key double-built (no single-flight): "
-            f"build_count={build_count[0]}"
+            f"concurrent misses on one key double-built (no single-flight): build_count={build_count[0]}"
         )
         assert results[0] is results[1], "loser did not reuse the winner's value"
 
@@ -411,8 +401,7 @@ class TestPerKeySingleFlight:
         r1, r2 = await asyncio.gather(t1, t2)
 
         assert build_count[0] == 1, (
-            f"concurrent misses on one key double-built (no single-flight): "
-            f"build_count={build_count[0]}"
+            f"concurrent misses on one key double-built (no single-flight): build_count={build_count[0]}"
         )
         assert r1 is r2, "loser did not reuse the winner's value"
 
@@ -490,12 +479,9 @@ class TestRunEndEviction:
             **build_fake_llm_kwargs(lambda tier: _MultiTurnFake()),
         )
         _run_cache.clear()
-        result = run(
-            graph, input={"node_id": "X"}, config={"configurable": {"thread_id": "rc-evict"}}
-        )
+        result = run(graph, input={"node_id": "X"}, config={"configurable": {"thread_id": "rc-evict"}})
 
         assert result.get("research") == KResult(items=["done"])
         assert len(_run_cache._cache) == 0, (
-            f"run() must evict its run's cache entries in finally; leftover: "
-            f"{list(_run_cache._cache)}"
+            f"run() must evict its run's cache entries in finally; leftover: {list(_run_cache._cache)}"
         )

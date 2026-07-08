@@ -37,6 +37,7 @@ class FanCollection(BaseModel, frozen=True):
 class DictResult(BaseModel, frozen=True):
     text: str = "primary"
 
+
 class DictLog(BaseModel, frozen=True):
     entries: list[str] = []
 
@@ -44,6 +45,7 @@ class DictLog(BaseModel, frozen=True):
 # Sub-construct boundary schemas
 class SubInput(BaseModel, frozen=True):
     payload: str = "in"
+
 
 class SubOutput(BaseModel, frozen=True):
     result: str = "out"
@@ -71,16 +73,20 @@ def _uid() -> str:
 
 def _make_fn(output_type: type[BaseModel]):
     """Create a scripted function that returns a default instance of output_type."""
+
     def fn(_input_data, _config):
         return output_type()
+
     return fn
 
 
 def _make_transform_fn(input_type: type[BaseModel], output_type: type[BaseModel]):
     """Create a scripted function that asserts input type and returns output."""
+
     def fn(input_data, _config):
         assert isinstance(input_data, (input_type, dict, type(None))), (
             f"Expected {input_type.__name__} or dict, got {type(input_data).__name__}"
         )
         return output_type()
+
     return fn

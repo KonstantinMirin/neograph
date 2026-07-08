@@ -25,8 +25,10 @@ from tests.fakes import (
 
 # ── Test models ───────────────────────────────────────────────────────────
 
+
 class Input(BaseModel, frozen=True):
     text: str
+
 
 class Output(BaseModel, frozen=True):
     result: str
@@ -36,11 +38,13 @@ class Output(BaseModel, frozen=True):
 
 st_fn_name = st.text(
     alphabet=st.sampled_from("abcdefghijklmnopqrstuvwxyz_"),
-    min_size=3, max_size=15,
+    min_size=3,
+    max_size=15,
 ).filter(lambda s: s[0] != "_")  # no leading underscore
 
 
 # ── Property tests ────────────────────────────────────────────────────────
+
 
 class TestRegistryWriteReadContract:
     """register_scripted → lookup_scripted must round-trip."""
@@ -49,8 +53,10 @@ class TestRegistryWriteReadContract:
     @settings(max_examples=50)
     def test_register_then_lookup_returns_same_function(self, name):
         """Registered function is retrievable by name."""
+
         def sentinel(_i, _c):
             return Output(result="x")
+
         register_scripted(name, sentinel)
         assert lookup_scripted(name) is sentinel
 
@@ -66,10 +72,13 @@ class TestRegistryWriteReadContract:
     @settings(max_examples=30)
     def test_overwrite_replaces_previous(self, name):
         """Re-registering the same name replaces the function."""
+
         def fn1(_i, _c):
             return Output(result="first")
+
         def fn2(_i, _c):
             return Output(result="second")
+
         register_scripted(name, fn1)
         register_scripted(name, fn2)
         assert lookup_scripted(name) is fn2
@@ -88,13 +97,17 @@ class TestCompileRunContract:
         fn_name = "ephemeral_fn"
         register_scripted(fn_name, lambda _i, _c: Output(result="ok"))
 
-        pipeline = Construct("ephemeral", nodes=[
-            Node.scripted("a", fn=fn_name, outputs=Output),
-        ])
+        pipeline = Construct(
+            "ephemeral",
+            nodes=[
+                Node.scripted("a", fn=fn_name, outputs=Output),
+            ],
+        )
         graph = compile(pipeline, **build_test_compile_kwargs())
 
         # Even after we deregister, the graph still works.
         from tests.fakes import _TEST_SCRIPTED
+
         _TEST_SCRIPTED.pop(fn_name, None)
 
         result = run(graph, input={"node_id": "test"})
@@ -102,9 +115,12 @@ class TestCompileRunContract:
 
     def test_compile_fails_when_scripted_fn_not_registered(self):
         """compile() validates that scripted_fn names resolve to a callable."""
-        pipeline = Construct("missing-fn", nodes=[
-            Node.scripted("a", fn="nonexistent_fn_xyz", outputs=Output),
-        ])
+        pipeline = Construct(
+            "missing-fn",
+            nodes=[
+                Node.scripted("a", fn="nonexistent_fn_xyz", outputs=Output),
+            ],
+        )
         with pytest.raises(ConfigurationError, match="not registered"):
             compile(pipeline, **build_test_compile_kwargs())
 
@@ -123,12 +139,18 @@ class TestMultiplePipelineNameCollision:
         register_scripted(fn_a, lambda _i, _c: Output(result="from-a"))
         register_scripted(fn_b, lambda _i, _c: Output(result="from-b"))
 
-        pipe_a = Construct("pipe-a", nodes=[
-            Node.scripted("a", fn=fn_a, outputs=Output),
-        ])
-        pipe_b = Construct("pipe-b", nodes=[
-            Node.scripted("b", fn=fn_b, outputs=Output),
-        ])
+        pipe_a = Construct(
+            "pipe-a",
+            nodes=[
+                Node.scripted("a", fn=fn_a, outputs=Output),
+            ],
+        )
+        pipe_b = Construct(
+            "pipe-b",
+            nodes=[
+                Node.scripted("b", fn=fn_b, outputs=Output),
+            ],
+        )
 
         graph_a = compile(pipe_a, **build_test_compile_kwargs())
         graph_b = compile(pipe_b, **build_test_compile_kwargs())

@@ -51,7 +51,9 @@ def _inject_oracle_config(state: StateBus, config: RunnableConfig) -> RunnableCo
 
 
 def make_oracle_redirect_fn(
-    raw_fn: Runnable, field_name: str, collector_field: str,
+    raw_fn: Runnable,
+    field_name: str,
+    collector_field: str,
     item: HasName,
 ) -> Runnable:
     """Wrap a node function to redirect output from field_name to collector_field.
@@ -69,6 +71,7 @@ def make_oracle_redirect_fn(
     the other two redirect factories (a future get_required here asks
     ``item.name`` directly, never a threaded string nor ``raw_fn.__name__``).
     """
+
     def _project(result: dict) -> dict:
         val = result.get(field_name)
         if val is not None:
@@ -92,7 +95,10 @@ def make_oracle_redirect_fn(
 
 
 def make_eachoracle_redirect_fn(
-    raw_fn: Runnable, field_name: str, collector_field: str, each_key: str,
+    raw_fn: Runnable,
+    field_name: str,
+    collector_field: str,
+    each_key: str,
     item: HasName,
 ) -> Runnable:
     """Wrap a node function for Each x Oracle fusion.
@@ -105,11 +111,13 @@ def make_eachoracle_redirect_fn(
     asks the IR object directly (Information Expert) rather than receiving a
     pre-extracted string.
     """
+
     def _project(state: Any, result: dict) -> dict:
         # REQUIRED: flat Each×Oracle router always populates EACH_ITEM in the
         # Send payload. Absence = wiring bug.
         each_item = adapt_state(state).get_required(
-            StateKeys.EACH_ITEM, node_label=item.name,
+            StateKeys.EACH_ITEM,
+            node_label=item.name,
         )
         key = getattr(each_item, each_key, str(each_item))
         # Single-type outputs: result has {field_name: val}
@@ -118,11 +126,7 @@ def make_eachoracle_redirect_fn(
             return {collector_field: [(key, val)]}
         # Dict-form outputs: result has per-key fields.
         # Collect the full per-key dict as the tagged value.
-        per_key = {
-            ok: v
-            for k, v in result.items()
-            if (ok := split_output_field(k, field_name)) is not None
-        }
+        per_key = {ok: v for k, v in result.items() if (ok := split_output_field(k, field_name)) is not None}
         if per_key:
             return {collector_field: [(key, per_key)]}
         return result
@@ -216,9 +220,7 @@ def _build_oracle_merge_result(
     return update
 
 
-def _build_upstream_context(
-    bus: StateBus, node_inputs: dict[str, TypeSpecStatic] | None
-) -> dict[str, Any]:
+def _build_upstream_context(bus: StateBus, node_inputs: dict[str, TypeSpecStatic] | None) -> dict[str, Any]:
     """Extract upstream node-input values from state for merge-prompt injection.
 
     Returns ``{key: value}`` for each ``node_inputs`` key whose state field
@@ -266,7 +268,10 @@ def _run_merge_prompt(
     from neograph._llm import invoke_structured
 
     input_data, primary_output_model = _merge_prompt_input(
-        oracle, variants, output_model, upstream_context,
+        oracle,
+        variants,
+        output_model,
+        upstream_context,
     )
     used_fallback = False
     try:
@@ -311,9 +316,7 @@ def _merge_prompt_input(
     return input_data, primary_output_model
 
 
-def _merge_prompt_post(
-    oracle: Oracle, variants: list, merged: Any, used_fallback: bool
-) -> Any:
+def _merge_prompt_post(oracle: Oracle, variants: list, merged: Any, used_fallback: bool) -> Any:
     """Pure post-seam: apply merge_post_process on success. Shared by the twins."""
     if oracle.merge_post_process is not None and not used_fallback:
         merged = oracle.merge_post_process(merged, variants)
@@ -339,7 +342,10 @@ async def _arun_merge_prompt(
     from neograph._llm import ainvoke_structured
 
     input_data, primary_output_model = _merge_prompt_input(
-        oracle, variants, output_model, upstream_context,
+        oracle,
+        variants,
+        output_model,
+        upstream_context,
     )
     used_fallback = False
     try:
@@ -392,9 +398,7 @@ def _run_merge_fn(
     return scripted_merge(variants, config)
 
 
-def _assert_merge_fn_registered(
-    oracle: Oracle, scripted_lookup: dict[str, Callable] | None
-) -> None:
+def _assert_merge_fn_registered(oracle: Oracle, scripted_lookup: dict[str, Callable] | None) -> None:
     """Compile-time validation: a scripted merge_fn must be resolvable.
 
     Raises ConfigurationError if ``oracle.merge_fn`` is set but is neither a
@@ -437,12 +441,20 @@ def _merge_variants(
     """
     if oracle.merge_prompt:
         return _run_merge_prompt(
-            oracle, variants, output_model, config,
-            upstream_context=upstream_context, llm_config=llm_config, runtime=runtime,
+            oracle,
+            variants,
+            output_model,
+            config,
+            upstream_context=upstream_context,
+            llm_config=llm_config,
+            runtime=runtime,
         )
     return _run_merge_fn(
-        oracle, variants, config,
-        scripted_lookup=scripted_lookup, state_for_di=state_for_di,
+        oracle,
+        variants,
+        config,
+        scripted_lookup=scripted_lookup,
+        state_for_di=state_for_di,
     )
 
 
@@ -467,12 +479,20 @@ async def _amerge_variants(
     """
     if oracle.merge_prompt:
         return await _arun_merge_prompt(
-            oracle, variants, output_model, config,
-            upstream_context=upstream_context, llm_config=llm_config, runtime=runtime,
+            oracle,
+            variants,
+            output_model,
+            config,
+            upstream_context=upstream_context,
+            llm_config=llm_config,
+            runtime=runtime,
         )
     return _run_merge_fn(
-        oracle, variants, config,
-        scripted_lookup=scripted_lookup, state_for_di=state_for_di,
+        oracle,
+        variants,
+        config,
+        scripted_lookup=scripted_lookup,
+        state_for_di=state_for_di,
     )
 
 
@@ -517,7 +537,10 @@ def make_oracle_merge_fn(
     def merge_fn(state: Any, config: RunnableConfig) -> dict:
         primary, secondaries, upstream_context = _prep(state)
         merged = _merge_variants(
-            oracle, primary, output_model, config,
+            oracle,
+            primary,
+            output_model,
+            config,
             upstream_context=upstream_context,
             llm_config=llm_config,
             runtime=runtime,
@@ -531,7 +554,10 @@ def make_oracle_merge_fn(
         # Async twin: await the merge so an LLM-judge merge_prompt runs on the
         # loop instead of blocking it under graph.ainvoke per neograph-p3c7.
         merged = await _amerge_variants(
-            oracle, primary, output_model, config,
+            oracle,
+            primary,
+            output_model,
+            config,
             upstream_context=upstream_context,
             llm_config=llm_config,
             runtime=runtime,
@@ -546,7 +572,9 @@ def make_oracle_merge_fn(
 
 
 def make_each_redirect_fn(
-    raw_fn: Runnable, field_name: str, each: Each,
+    raw_fn: Runnable,
+    field_name: str,
+    each: Each,
     item: HasName,
 ) -> Runnable:
     """Wrap a node function to key the result by the Each item's key field.
@@ -560,7 +588,8 @@ def make_each_redirect_fn(
     def _key_val(state: Any) -> Any:
         # REQUIRED: Each router always populates EACH_ITEM in the Send payload.
         each_item = adapt_state(state).get_required(
-            StateKeys.EACH_ITEM, node_label=item.name,
+            StateKeys.EACH_ITEM,
+            node_label=item.name,
         )
         return getattr(each_item, each.key, str(each_item))
 

@@ -57,6 +57,7 @@ from tests.schemas import (
 # chains to dotted paths, the resulting graph runs identically to | Each(...).
 # ═══════════════════════════════════════════════════════════════════════════
 
+
 class TestNodeMap:
     """Node.map() — lambda- and string-path fan-out sugar over `| Each(...)`."""
 
@@ -94,21 +95,26 @@ class TestNodeMap:
         """.map() drives the same fan-out/collect behavior as | Each(...)."""
         from tests.fakes import register_scripted
 
-        register_scripted("make_clusters", lambda input_data, config: Clusters(
-            groups=[
-                ClusterGroup(label="alpha", claim_ids=["c1", "c2"]),
-                ClusterGroup(label="beta", claim_ids=["c3"]),
-            ]
-        ))
+        register_scripted(
+            "make_clusters",
+            lambda input_data, config: Clusters(
+                groups=[
+                    ClusterGroup(label="alpha", claim_ids=["c1", "c2"]),
+                    ClusterGroup(label="beta", claim_ids=["c3"]),
+                ]
+            ),
+        )
+
         def _verify_cluster(input_data, config):
             assert isinstance(input_data, ClusterGroup), f"Expected ClusterGroup, got {type(input_data)}"
             return MatchResult(cluster_label=input_data.label, matched=["match-1"])
+
         register_scripted("verify_cluster", _verify_cluster)
 
         make = Node.scripted("make-clusters", fn="make_clusters", outputs=Clusters)
-        verify = Node.scripted(
-            "verify", fn="verify_cluster", inputs=ClusterGroup, outputs=MatchResult
-        ).map(lambda s: s.make_clusters.groups, key="label")
+        verify = Node.scripted("verify", fn="verify_cluster", inputs=ClusterGroup, outputs=MatchResult).map(
+            lambda s: s.make_clusters.groups, key="label"
+        )
 
         pipeline = Construct("test-map", nodes=[make, verify])
         graph = compile(pipeline, **build_test_compile_kwargs())
@@ -194,8 +200,6 @@ class TestNodeMap:
 # ═══════════════════════════════════════════════════════════════════════════
 
 
-
-
 class TestModifierAsFirstNode:
     """Modifiers on the first node wire from START, not from a previous node."""
 
@@ -213,9 +217,7 @@ class TestModifierAsFirstNode:
 
         register_scripted("merge_start", merge_start)
 
-        node = Node.scripted(
-            "gen", fn="gen_start", outputs=Claims
-        ) | Oracle(n=2, merge_fn="merge_start")
+        node = Node.scripted("gen", fn="gen_start", outputs=Claims) | Oracle(n=2, merge_fn="merge_start")
 
         pipeline = Construct("test-oracle-start", nodes=[node])
         graph = compile(pipeline, **build_test_compile_kwargs())
@@ -235,15 +237,17 @@ class TestModifierAsFirstNode:
         def process_item(input_data, config):
             return MatchResult(cluster_label=input_data.label, matched=["done"])
 
-        process = Node.scripted(
-            "process", fn="process_item", inputs=ClusterGroup, outputs=MatchResult
-        ) | Each(over="make_items.groups", key="label")
+        process = Node.scripted("process", fn="process_item", inputs=ClusterGroup, outputs=MatchResult) | Each(
+            over="make_items.groups", key="label"
+        )
 
         pipeline = Construct("test-each-start", nodes=[process])
         state_model = compile_state_model(pipeline)
         graph = StateGraph(state_model)
         prev = _add_node_to_graph(
-            graph, process, None,
+            graph,
+            process,
+            None,
             scripted_lookup={"process_item": process_item},
         )
         graph.add_edge(prev, END)
@@ -258,9 +262,6 @@ class TestModifierAsFirstNode:
 # ═══════════════════════════════════════════════════════════════════════════
 
 
-
-
-
 class TestDeepCompositions:
     """Complex nesting: modifiers inside modifiers, tool exhaustion, etc."""
 
@@ -268,9 +269,12 @@ class TestDeepCompositions:
         """Each item gets Oracle ensemble — fan-out inside fan-out."""
         from tests.fakes import register_scripted
 
-        register_scripted("make_items", lambda input_data, config: Clusters(
-            groups=[ClusterGroup(label="x", claim_ids=["1"]), ClusterGroup(label="y", claim_ids=["2"])]
-        ))
+        register_scripted(
+            "make_items",
+            lambda input_data, config: Clusters(
+                groups=[ClusterGroup(label="x", claim_ids=["1"]), ClusterGroup(label="y", claim_ids=["2"])]
+            ),
+        )
 
         gen_count = {"n": 0}
 
@@ -291,17 +295,19 @@ class TestDeepCompositions:
             input=ClusterGroup,
             output=RawText,
             nodes=[
-                Node.scripted("gen", fn="gen_v", outputs=RawText)
-                | Oracle(n=2, merge_fn="merge_v"),
+                Node.scripted("gen", fn="gen_v", outputs=RawText) | Oracle(n=2, merge_fn="merge_v"),
             ],
         )
 
         # Outer: Each over clusters, each runs the Oracle sub-pipeline
         # This means: 2 clusters × 2 Oracle variants = 4 generator calls + 2 merges
-        parent = Construct("parent", nodes=[
-            Node.scripted("make", fn="make_items", outputs=Clusters),
-            inner | Each(over="make.groups", key="label"),
-        ])
+        parent = Construct(
+            "parent",
+            nodes=[
+                Node.scripted("make", fn="make_items", outputs=Clusters),
+                inner | Each(over="make.groups", key="label"),
+            ],
+        )
 
         graph = compile(parent, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "test-001"})
@@ -350,10 +356,13 @@ class TestDeepCompositions:
             ],
         )
 
-        parent = Construct("parent", nodes=[
-            Node.scripted("prep", fn="prep_search", outputs=Claims),
-            sub,
-        ])
+        parent = Construct(
+            "parent",
+            nodes=[
+                Node.scripted("prep", fn="prep_search", outputs=Claims),
+                sub,
+            ],
+        )
         graph = compile(parent, **build_test_compile_kwargs(), **__llm_kw)
         result = run(graph, input={"node_id": "test-001"})
 
@@ -368,34 +377,43 @@ class TestDeepCompositions:
 
         from tests.fakes import register_condition, register_scripted
 
-        register_scripted("sub_check", lambda input_data, config: ValidationResult(
-            passed=False, issues=["needs human"],
-        ))
+        register_scripted(
+            "sub_check",
+            lambda input_data, config: ValidationResult(
+                passed=False,
+                issues=["needs human"],
+            ),
+        )
 
-        register_condition("inner_failed", lambda state: (
-            {"reason": "inner check failed"}
-            if hasattr(state, 'check') and state.check and not state.check.passed
-            else None
-        ))
+        register_condition(
+            "inner_failed",
+            lambda state: (
+                {"reason": "inner check failed"}
+                if hasattr(state, "check") and state.check and not state.check.passed
+                else None
+            ),
+        )
 
         sub = Construct(
             "inner",
             input=Claims,
             output=ValidationResult,
             nodes=[
-                Node.scripted("check", fn="sub_check", outputs=ValidationResult)
-                | Operator(when="inner_failed"),
+                Node.scripted("check", fn="sub_check", outputs=ValidationResult) | Operator(when="inner_failed"),
             ],
         )
 
         register_scripted("start_fn", lambda input_data, config: Claims(items=["go"]))
         register_scripted("after_fn", lambda input_data, config: RawText(text="should not reach"))
 
-        parent = Construct("parent", nodes=[
-            Node.scripted("start", fn="start_fn", outputs=Claims),
-            sub,
-            Node.scripted("after", fn="after_fn", outputs=RawText),
-        ])
+        parent = Construct(
+            "parent",
+            nodes=[
+                Node.scripted("start", fn="start_fn", outputs=Claims),
+                sub,
+                Node.scripted("after", fn="after_fn", outputs=RawText),
+            ],
+        )
 
         # Operator lives inside sub-construct — parent needs checkpointer
         # so the recursive compile of the sub-construct gets it
@@ -424,8 +442,6 @@ class TestDeepCompositions:
 # ═══════════════════════════════════════════════════════════════════════════
 
 
-
-
 # ═══════════════════════════════════════════════════════════════════════════
 # TestNodeInputsEpicAcceptance (neograph-kqd.7)
 #
@@ -452,35 +468,39 @@ def _each_via_declarative() -> Construct:
     """Declarative surface: Node.scripted + .map()."""
     register_scripted(
         "tsp_make",
-        lambda _in, _cfg: Clusters(groups=[
-            ClusterGroup(label="alpha", claim_ids=["c1"]),
-            ClusterGroup(label="beta", claim_ids=["c2"]),
-        ]),
+        lambda _in, _cfg: Clusters(
+            groups=[
+                ClusterGroup(label="alpha", claim_ids=["c1"]),
+                ClusterGroup(label="beta", claim_ids=["c2"]),
+            ]
+        ),
     )
+
     def _tsp_verify(input_data, _cfg):
         assert isinstance(input_data, ClusterGroup), f"Expected ClusterGroup, got {type(input_data)}"
         return MatchResult(cluster_label=input_data.label, matched=[f"m-{input_data.label}"])
+
     register_scripted("tsp_verify", _tsp_verify)
 
     make = Node.scripted("make", fn="tsp_make", outputs=Clusters)
-    verify = Node.scripted(
-        "verify", fn="tsp_verify", inputs=ClusterGroup, outputs=MatchResult
-    ).map(lambda s: s.make.groups, key="label")
+    verify = Node.scripted("verify", fn="tsp_verify", inputs=ClusterGroup, outputs=MatchResult).map(
+        lambda s: s.make.groups, key="label"
+    )
 
     return Construct("tsp-decl", nodes=[make, verify])
 
 
-
-
-
 def _each_via_decorator() -> Construct:
     """@node decorator surface: construct_from_functions."""
+
     @node(mode="scripted", outputs=Clusters)
     def tsp_dec_make() -> Clusters:
-        return Clusters(groups=[
-            ClusterGroup(label="alpha", claim_ids=["c1"]),
-            ClusterGroup(label="beta", claim_ids=["c2"]),
-        ])
+        return Clusters(
+            groups=[
+                ClusterGroup(label="alpha", claim_ids=["c1"]),
+                ClusterGroup(label="beta", claim_ids=["c2"]),
+            ]
+        )
 
     @node(
         mode="scripted",
@@ -497,17 +517,16 @@ def _each_via_decorator() -> Construct:
     return construct_from_functions("tsp-dec", [tsp_dec_make, tsp_dec_verify])
 
 
-
-
-
 def _each_via_programmatic() -> Construct:
     """Programmatic surface: Node() | Each() with single-type inputs."""
     register_scripted(
         "tsp_make",
-        lambda _in, _cfg: Clusters(groups=[
-            ClusterGroup(label="alpha", claim_ids=["c1"]),
-            ClusterGroup(label="beta", claim_ids=["c2"]),
-        ]),
+        lambda _in, _cfg: Clusters(
+            groups=[
+                ClusterGroup(label="alpha", claim_ids=["c1"]),
+                ClusterGroup(label="beta", claim_ids=["c2"]),
+            ]
+        ),
     )
     register_scripted(
         "tsp_verify",
@@ -519,7 +538,8 @@ def _each_via_programmatic() -> Construct:
 
     make = Node.scripted("make", fn="tsp_make", outputs=Clusters)
     verify = Node.scripted(
-        "verify", fn="tsp_verify",
+        "verify",
+        fn="tsp_verify",
         inputs=ClusterGroup,
         outputs=MatchResult,
     ) | Each(over="make.groups", key="label")
@@ -527,18 +547,19 @@ def _each_via_programmatic() -> Construct:
     return Construct("tsp-prog", nodes=[make, verify])
 
 
-
-
-
 class TestThreeSurfaceParity:
     """Each fan-out tested identically across declarative, @node, and
     programmatic API surfaces. Template pattern for future parity tests."""
 
-    @pytest.mark.parametrize("build", [
-        _each_via_declarative,
-        _each_via_decorator,
-        _each_via_programmatic,
-    ], ids=["declarative", "decorator", "programmatic"])
+    @pytest.mark.parametrize(
+        "build",
+        [
+            _each_via_declarative,
+            _each_via_decorator,
+            _each_via_programmatic,
+        ],
+        ids=["declarative", "decorator", "programmatic"],
+    )
     def test_each_produces_dict_when_any_surface_used(self, build):
         """Each fan-out produces dict[str, MatchResult] keyed by label."""
         pipeline = build()
@@ -549,11 +570,15 @@ class TestThreeSurfaceParity:
         assert isinstance(verify_results, dict)
         assert set(verify_results.keys()) == {"alpha", "beta"}
 
-    @pytest.mark.parametrize("build", [
-        _each_via_declarative,
-        _each_via_decorator,
-        _each_via_programmatic,
-    ], ids=["declarative", "decorator", "programmatic"])
+    @pytest.mark.parametrize(
+        "build",
+        [
+            _each_via_declarative,
+            _each_via_decorator,
+            _each_via_programmatic,
+        ],
+        ids=["declarative", "decorator", "programmatic"],
+    )
     def test_each_items_match_source_when_any_surface_used(self, build):
         """Each fan-out item has the correct cluster_label from the source."""
         pipeline = build()
@@ -573,14 +598,13 @@ class TestThreeSurfaceParity:
 # ═══════════════════════════════════════════════════════════════════════════
 
 
-
-
 # ═══════════════════════════════════════════════════════════════════════════
 # TestModifierCombinations (neograph-rdu.1, rdu.4, rdu.6, rdu.7)
 #
 # Integration tests for modifier combinations that were previously only
 # covered via one API surface or not at all.
 # ═══════════════════════════════════════════════════════════════════════════
+
 
 class TestModifierCombinations:
     """Cross-modifier integration tests: Each+Oracle, Each+Operator,
@@ -622,16 +646,21 @@ class TestModifierCombinations:
 
         register_scripted(
             "mc_make_clusters_rdu1",
-            lambda _in, _cfg: Clusters(groups=[
-                ClusterGroup(label="alpha", claim_ids=["c1", "c2"]),
-                ClusterGroup(label="beta", claim_ids=["c3"]),
-            ]),
+            lambda _in, _cfg: Clusters(
+                groups=[
+                    ClusterGroup(label="alpha", claim_ids=["c1", "c2"]),
+                    ClusterGroup(label="beta", claim_ids=["c3"]),
+                ]
+            ),
         )
 
-        parent = Construct("test-each-oracle", nodes=[
-            Node.scripted("mc-make", fn="mc_make_clusters_rdu1", outputs=Clusters),
-            inner | Each(over="mc_make.groups", key="label"),
-        ])
+        parent = Construct(
+            "test-each-oracle",
+            nodes=[
+                Node.scripted("mc-make", fn="mc_make_clusters_rdu1", outputs=Clusters),
+                inner | Each(over="mc_make.groups", key="label"),
+            ],
+        )
         graph = compile(parent, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "rdu1"})
 
@@ -650,14 +679,18 @@ class TestModifierCombinations:
 
         register_scripted(
             "mc_make_clusters_rdu4",
-            lambda _in, _cfg: Clusters(groups=[
-                ClusterGroup(label="x", claim_ids=["1"]),
-                ClusterGroup(label="y", claim_ids=["2"]),
-            ]),
+            lambda _in, _cfg: Clusters(
+                groups=[
+                    ClusterGroup(label="x", claim_ids=["1"]),
+                    ClusterGroup(label="y", claim_ids=["2"]),
+                ]
+            ),
         )
+
         def _mc_review_item(input_data, _cfg):
             assert isinstance(input_data, ClusterGroup), f"Expected ClusterGroup, got {type(input_data)}"
             return MatchResult(cluster_label=input_data.label, matched=["reviewed"])
+
         register_scripted("mc_review_item", _mc_review_item)
 
         def mc_check_fn(input_data, _cfg):
@@ -675,17 +708,13 @@ class TestModifierCombinations:
         )
 
         make = Node.scripted("mc-make", fn="mc_make_clusters_rdu4", outputs=Clusters)
-        review = (
-            Node.scripted(
-                "mc-review", fn="mc_review_item",
-                inputs=ClusterGroup, outputs=MatchResult,
-            )
-            | Each(over="mc_make.groups", key="label")
-        )
-        check = (
-            Node.scripted("mc-check", fn="mc_check_fn", outputs=ValidationResult)
-            | Operator(when="mc_check_failed")
-        )
+        review = Node.scripted(
+            "mc-review",
+            fn="mc_review_item",
+            inputs=ClusterGroup,
+            outputs=MatchResult,
+        ) | Each(over="mc_make.groups", key="label")
+        check = Node.scripted("mc-check", fn="mc_check_fn", outputs=ValidationResult) | Operator(when="mc_check_failed")
         pipeline = Construct("test-each-operator", nodes=[make, review, check])
         graph = compile(pipeline, checkpointer=MemorySaver(), **build_test_compile_kwargs())
         config = {"configurable": {"thread_id": "rdu4-test"}}
@@ -720,10 +749,7 @@ class TestModifierCombinations:
 
         register_scripted("mc_oracle_merge", mc_merge)
 
-        gen_node = (
-            Node.scripted("mc-gen", fn="mc_oracle_gen", outputs=Claims)
-            | Oracle(n=2, merge_fn="mc_oracle_merge")
-        )
+        gen_node = Node.scripted("mc-gen", fn="mc_oracle_gen", outputs=Claims) | Oracle(n=2, merge_fn="mc_oracle_merge")
         pipeline = Construct("test-oracle-merge", nodes=[gen_node])
         graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "rdu6"})
@@ -765,13 +791,11 @@ class TestModifierCombinations:
 
         register_scripted("dict_oracle_merge", dict_oracle_merge)
 
-        gen_node = (
-            Node.scripted(
-                "dogen", fn="dict_oracle_gen",
-                outputs={"result": Claims, "meta": RawText},
-            )
-            | Oracle(n=2, merge_fn="dict_oracle_merge")
-        )
+        gen_node = Node.scripted(
+            "dogen",
+            fn="dict_oracle_gen",
+            outputs={"result": Claims, "meta": RawText},
+        ) | Oracle(n=2, merge_fn="dict_oracle_merge")
         pipeline = Construct("test-dict-oracle", nodes=[gen_node])
         graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "7ft"})
@@ -790,10 +814,12 @@ class TestModifierCombinations:
 
         register_scripted(
             "mc_each_make",
-            lambda _in, _cfg: Clusters(groups=[
-                ClusterGroup(label="a", claim_ids=["1"]),
-                ClusterGroup(label="b", claim_ids=["2"]),
-            ]),
+            lambda _in, _cfg: Clusters(
+                groups=[
+                    ClusterGroup(label="a", claim_ids=["1"]),
+                    ClusterGroup(label="b", claim_ids=["2"]),
+                ]
+            ),
         )
 
         def mc_each_process(input_data, config):
@@ -806,14 +832,12 @@ class TestModifierCombinations:
         register_scripted("mc_each_process", mc_each_process)
 
         make = Node.scripted("mc-each-make", fn="mc_each_make", outputs=Clusters)
-        process = (
-            Node.scripted(
-                "mc-each-proc", fn="mc_each_process",
-                inputs=ClusterGroup,
-                outputs={"result": MatchResult, "score": RawText},
-            )
-            | Each(over="mc_each_make.groups", key="label")
-        )
+        process = Node.scripted(
+            "mc-each-proc",
+            fn="mc_each_process",
+            inputs=ClusterGroup,
+            outputs={"result": MatchResult, "score": RawText},
+        ) | Each(over="mc_each_make.groups", key="label")
         pipeline = Construct("test-dict-each", nodes=[make, process])
         graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "rdu7"})
@@ -840,9 +864,6 @@ class TestModifierCombinations:
 # the each_router should raise a clear ValueError before dispatching
 # Send() calls — not let it bubble up from the LangGraph reducer.
 # ═══════════════════════════════════════════════════════════════════════════
-
-
-
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -883,11 +904,7 @@ class TestOracleOperatorCombo:
 
         register_condition(
             "oo_always_review",
-            lambda state: (
-                {"needs_review": True}
-                if hasattr(state, "oo_gen") and state.oo_gen is not None
-                else None
-            ),
+            lambda state: {"needs_review": True} if hasattr(state, "oo_gen") and state.oo_gen is not None else None,
         )
 
         gen_node = (
@@ -937,11 +954,7 @@ class TestOracleOperatorCombo:
 
         register_condition(
             "oo_always_review2",
-            lambda state: (
-                {"needs_review": True}
-                if hasattr(state, "oo_gen2") and state.oo_gen2 is not None
-                else None
-            ),
+            lambda state: {"needs_review": True} if hasattr(state, "oo_gen2") and state.oo_gen2 is not None else None,
         )
 
         gen_node = (
@@ -1006,20 +1019,22 @@ class TestOracleOperatorCombo:
             "oo_val_failed",
             lambda state: (
                 {"issues": state.oo_validate.issues}
-                if hasattr(state, "oo_validate") and state.oo_validate
-                and not state.oo_validate.passed
+                if hasattr(state, "oo_validate") and state.oo_validate and not state.oo_validate.passed
                 else None
             ),
         )
 
         register_scripted("oo_seed", lambda _in, _cfg: Claims(items=["seed"]))
 
-        parent = Construct("test-oracle-sub-operator", nodes=[
-            Node.scripted("seed", fn="oo_seed", outputs=Claims),
-            sub,
-            Node.scripted("oo-validate", fn="oo_validate", outputs=ValidationResult)
-            | Operator(when="oo_val_failed"),
-        ])
+        parent = Construct(
+            "test-oracle-sub-operator",
+            nodes=[
+                Node.scripted("seed", fn="oo_seed", outputs=Claims),
+                sub,
+                Node.scripted("oo-validate", fn="oo_validate", outputs=ValidationResult)
+                | Operator(when="oo_val_failed"),
+            ],
+        )
         graph = compile(parent, checkpointer=MemorySaver(), **build_test_compile_kwargs())
         config = {"configurable": {"thread_id": "oracle-sub-op-test"}}
 
@@ -1038,9 +1053,6 @@ class TestOracleOperatorCombo:
 # =============================================================================
 # Oracle models= — multi-model ensemble (neograph-beyr)
 # =============================================================================
-
-
-
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1072,28 +1084,41 @@ class TestEachOracleFusion:
 
         call_log = []
 
-        register_scripted("tpgi_chunks", lambda i, c: ChunkList(items=[
-            Chunk(chunk_idx="A", text="auth section"),
-            Chunk(chunk_idx="B", text="billing section"),
-        ]))
+        register_scripted(
+            "tpgi_chunks",
+            lambda i, c: ChunkList(
+                items=[
+                    Chunk(chunk_idx="A", text="auth section"),
+                    Chunk(chunk_idx="B", text="billing section"),
+                ]
+            ),
+        )
 
-        register_scripted("tpgi_gen", lambda i, c: Result(
-            text="processed",
-            model=c.get("configurable", {}).get("_oracle_model", "default"),
-        ))
+        register_scripted(
+            "tpgi_gen",
+            lambda i, c: Result(
+                text="processed",
+                model=c.get("configurable", {}).get("_oracle_model", "default"),
+            ),
+        )
 
-        register_scripted("tpgi_merge", lambda variants, c: Result(
-            text=f"merged({len(variants)})",
-            model="merged",
-        ))
+        register_scripted(
+            "tpgi_merge",
+            lambda variants, c: Result(
+                text=f"merged({len(variants)})",
+                model="merged",
+            ),
+        )
 
-        pipeline = Construct("fusion-test", nodes=[
-            Node.scripted("chunks", fn="tpgi_chunks", outputs=ChunkList),
-            Node.scripted("decompose", fn="tpgi_gen",
-                          inputs=Chunk, outputs=Result)
-            | Oracle(n=3, merge_fn="tpgi_merge")
-            | Each(over="chunks.items", key="chunk_idx"),
-        ])
+        pipeline = Construct(
+            "fusion-test",
+            nodes=[
+                Node.scripted("chunks", fn="tpgi_chunks", outputs=ChunkList),
+                Node.scripted("decompose", fn="tpgi_gen", inputs=Chunk, outputs=Result)
+                | Oracle(n=3, merge_fn="tpgi_merge")
+                | Each(over="chunks.items", key="chunk_idx"),
+            ],
+        )
         graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "fusion-1"})
 
@@ -1121,10 +1146,12 @@ class TestEachOracleFusion:
 
         @node(outputs=ItemBatch)
         def make_items() -> ItemBatch:
-            return ItemBatch(items=[
-                Item(item_id="x", value=10),
-                Item(item_id="y", value=20),
-            ])
+            return ItemBatch(
+                items=[
+                    Item(item_id="x", value=10),
+                    Item(item_id="y", value=20),
+                ]
+            )
 
         @merge_fn
         def pick_best(variants: list[Scored]) -> Scored:
@@ -1165,23 +1192,34 @@ class TestEachOracleFusion:
         class Result(BaseModel, frozen=True):
             label: str
 
-        register_scripted("tpgi_c", lambda i, c: ChunkList(items=[
-            Chunk(chunk_idx="A"), Chunk(chunk_idx="B"),
-        ]))
+        register_scripted(
+            "tpgi_c",
+            lambda i, c: ChunkList(
+                items=[
+                    Chunk(chunk_idx="A"),
+                    Chunk(chunk_idx="B"),
+                ]
+            ),
+        )
         register_scripted("tpgi_g", lambda i, c: Result(label="gen"))
         register_scripted("tpgi_m", lambda v, c: Result(label=f"m({len(v)})"))
-        register_scripted("tpgi_collect", lambda i, c: RawText(
-            text=f"collected {len(i['decompose'])} items",
-        ))
+        register_scripted(
+            "tpgi_collect",
+            lambda i, c: RawText(
+                text=f"collected {len(i['decompose'])} items",
+            ),
+        )
 
-        pipeline = Construct("fusion-list", nodes=[
-            Node.scripted("chunks", fn="tpgi_c", outputs=ChunkList),
-            Node.scripted("decompose", fn="tpgi_g", inputs=Chunk, outputs=Result)
-            | Oracle(n=2, merge_fn="tpgi_m")
-            | Each(over="chunks.items", key="chunk_idx"),
-            Node.scripted("collect", fn="tpgi_collect",
-                          inputs={"decompose": list[Result]}, outputs=RawText),
-        ])
+        pipeline = Construct(
+            "fusion-list",
+            nodes=[
+                Node.scripted("chunks", fn="tpgi_c", outputs=ChunkList),
+                Node.scripted("decompose", fn="tpgi_g", inputs=Chunk, outputs=Result)
+                | Oracle(n=2, merge_fn="tpgi_m")
+                | Each(over="chunks.items", key="chunk_idx"),
+                Node.scripted("collect", fn="tpgi_collect", inputs={"decompose": list[Result]}, outputs=RawText),
+            ],
+        )
         graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "fusion-list"})
 
@@ -1202,31 +1240,46 @@ class TestEachOracleFusion:
         class Tpgi2Result(BaseModel, frozen=True):
             label: str
 
-        register_scripted("tpgi2_src", lambda i, c: Tpgi2ChunkList(items=[
-            Tpgi2Chunk(chunk_idx="P"), Tpgi2Chunk(chunk_idx="Q"),
-        ]))
+        register_scripted(
+            "tpgi2_src",
+            lambda i, c: Tpgi2ChunkList(
+                items=[
+                    Tpgi2Chunk(chunk_idx="P"),
+                    Tpgi2Chunk(chunk_idx="Q"),
+                ]
+            ),
+        )
         register_scripted("tpgi2_gen", lambda i, c: Tpgi2Result(label="gen"))
-        register_scripted("tpgi2_mrg", lambda v, c: Tpgi2Result(
-            label=f"merged({len(v)})",
-        ))
+        register_scripted(
+            "tpgi2_mrg",
+            lambda v, c: Tpgi2Result(
+                label=f"merged({len(v)})",
+            ),
+        )
 
         # Order 1: Oracle first, then Each
-        p1 = Construct("order-oe", nodes=[
-            Node.scripted("chunks", fn="tpgi2_src", outputs=Tpgi2ChunkList),
-            Node.scripted("proc", fn="tpgi2_gen", inputs=Tpgi2Chunk, outputs=Tpgi2Result)
-            | Oracle(n=2, merge_fn="tpgi2_mrg")
-            | Each(over="chunks.items", key="chunk_idx"),
-        ])
+        p1 = Construct(
+            "order-oe",
+            nodes=[
+                Node.scripted("chunks", fn="tpgi2_src", outputs=Tpgi2ChunkList),
+                Node.scripted("proc", fn="tpgi2_gen", inputs=Tpgi2Chunk, outputs=Tpgi2Result)
+                | Oracle(n=2, merge_fn="tpgi2_mrg")
+                | Each(over="chunks.items", key="chunk_idx"),
+            ],
+        )
         g1 = compile(p1, **build_test_compile_kwargs())
         r1 = run(g1, input={"node_id": "order-1"})
 
         # Order 2: Each first, then Oracle
-        p2 = Construct("order-eo", nodes=[
-            Node.scripted("chunks", fn="tpgi2_src", outputs=Tpgi2ChunkList),
-            Node.scripted("proc", fn="tpgi2_gen", inputs=Tpgi2Chunk, outputs=Tpgi2Result)
-            | Each(over="chunks.items", key="chunk_idx")
-            | Oracle(n=2, merge_fn="tpgi2_mrg"),
-        ])
+        p2 = Construct(
+            "order-eo",
+            nodes=[
+                Node.scripted("chunks", fn="tpgi2_src", outputs=Tpgi2ChunkList),
+                Node.scripted("proc", fn="tpgi2_gen", inputs=Tpgi2Chunk, outputs=Tpgi2Result)
+                | Each(over="chunks.items", key="chunk_idx")
+                | Oracle(n=2, merge_fn="tpgi2_mrg"),
+            ],
+        )
         g2 = compile(p2, **build_test_compile_kwargs())
         r2 = run(g2, input={"node_id": "order-2"})
 
@@ -1253,14 +1306,23 @@ class TestEachOracleFusion:
         class Tpgi2ModelResult(BaseModel, frozen=True):
             model_used: str
 
-        register_scripted("tpgi2_items", lambda i, c: Tpgi2Items(items=[
-            Tpgi2Item(item_id="a"), Tpgi2Item(item_id="b"),
-        ]))
+        register_scripted(
+            "tpgi2_items",
+            lambda i, c: Tpgi2Items(
+                items=[
+                    Tpgi2Item(item_id="a"),
+                    Tpgi2Item(item_id="b"),
+                ]
+            ),
+        )
 
         # Generator captures the oracle model from config
-        register_scripted("tpgi2_model_gen", lambda i, c: Tpgi2ModelResult(
-            model_used=c.get("configurable", {}).get("_oracle_model", "none"),
-        ))
+        register_scripted(
+            "tpgi2_model_gen",
+            lambda i, c: Tpgi2ModelResult(
+                model_used=c.get("configurable", {}).get("_oracle_model", "none"),
+            ),
+        )
 
         # Merge collects which models were used
         def tpgi2_model_merge(variants, c):
@@ -1269,14 +1331,15 @@ class TestEachOracleFusion:
 
         register_scripted("tpgi2_model_merge", tpgi2_model_merge)
 
-        pipeline = Construct("models-test", nodes=[
-            Node.scripted("items", fn="tpgi2_items", outputs=Tpgi2Items),
-            Node.scripted("proc", fn="tpgi2_model_gen",
-                          inputs=Tpgi2Item, outputs=Tpgi2ModelResult)
-            | Oracle(n=3, models=["reason", "fast", "creative"],
-                     merge_fn="tpgi2_model_merge")
-            | Each(over="items.items", key="item_id"),
-        ])
+        pipeline = Construct(
+            "models-test",
+            nodes=[
+                Node.scripted("items", fn="tpgi2_items", outputs=Tpgi2Items),
+                Node.scripted("proc", fn="tpgi2_model_gen", inputs=Tpgi2Item, outputs=Tpgi2ModelResult)
+                | Oracle(n=3, models=["reason", "fast", "creative"], merge_fn="tpgi2_model_merge")
+                | Each(over="items.items", key="item_id"),
+            ],
+        )
         graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "models-1"})
 
@@ -1304,26 +1367,34 @@ class TestEachOracleFusion:
 
         gen_counter = [0]
 
-        register_scripted("tpgi2_solo_src", lambda i, c: Tpgi2SoloList(
-            items=[Tpgi2Solo(solo_id="only")],
-        ))
+        register_scripted(
+            "tpgi2_solo_src",
+            lambda i, c: Tpgi2SoloList(
+                items=[Tpgi2Solo(solo_id="only")],
+            ),
+        )
 
         def tpgi2_solo_gen(i, c):
             gen_counter[0] += 1
             return Tpgi2SoloResult(count=1)
 
         register_scripted("tpgi2_solo_gen", tpgi2_solo_gen)
-        register_scripted("tpgi2_solo_merge", lambda v, c: Tpgi2SoloResult(
-            count=len(v),
-        ))
+        register_scripted(
+            "tpgi2_solo_merge",
+            lambda v, c: Tpgi2SoloResult(
+                count=len(v),
+            ),
+        )
 
-        pipeline = Construct("solo-fusion", nodes=[
-            Node.scripted("source", fn="tpgi2_solo_src", outputs=Tpgi2SoloList),
-            Node.scripted("proc", fn="tpgi2_solo_gen",
-                          inputs=Tpgi2Solo, outputs=Tpgi2SoloResult)
-            | Oracle(n=3, merge_fn="tpgi2_solo_merge")
-            | Each(over="source.items", key="solo_id"),
-        ])
+        pipeline = Construct(
+            "solo-fusion",
+            nodes=[
+                Node.scripted("source", fn="tpgi2_solo_src", outputs=Tpgi2SoloList),
+                Node.scripted("proc", fn="tpgi2_solo_gen", inputs=Tpgi2Solo, outputs=Tpgi2SoloResult)
+                | Oracle(n=3, merge_fn="tpgi2_solo_merge")
+                | Each(over="source.items", key="solo_id"),
+            ],
+        )
         graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "solo-1"})
 
@@ -1352,12 +1423,22 @@ class TestEachOracleFusion:
             text: str
             tag: str
 
-        register_scripted("tpgi2_di_src", lambda i, c: Tpgi2DIChunks(items=[
-            Tpgi2DIChunk(chunk_idx="X"), Tpgi2DIChunk(chunk_idx="Y"),
-        ]))
-        register_scripted("tpgi2_di_gen", lambda i, c: Tpgi2DIResult(
-            text="draft", tag="",
-        ))
+        register_scripted(
+            "tpgi2_di_src",
+            lambda i, c: Tpgi2DIChunks(
+                items=[
+                    Tpgi2DIChunk(chunk_idx="X"),
+                    Tpgi2DIChunk(chunk_idx="Y"),
+                ]
+            ),
+        )
+        register_scripted(
+            "tpgi2_di_gen",
+            lambda i, c: Tpgi2DIResult(
+                text="draft",
+                tag="",
+            ),
+        )
 
         captured_node_ids: list[str] = []
 
@@ -1372,13 +1453,15 @@ class TestEachOracleFusion:
                 tag=f"id={node_id}",
             )
 
-        pipeline = Construct("di-fusion", nodes=[
-            Node.scripted("chunks", fn="tpgi2_di_src", outputs=Tpgi2DIChunks),
-            Node.scripted("proc", fn="tpgi2_di_gen",
-                          inputs=Tpgi2DIChunk, outputs=Tpgi2DIResult)
-            | Oracle(n=2, merge_fn="tpgi2_di_merge")
-            | Each(over="chunks.items", key="chunk_idx"),
-        ])
+        pipeline = Construct(
+            "di-fusion",
+            nodes=[
+                Node.scripted("chunks", fn="tpgi2_di_src", outputs=Tpgi2DIChunks),
+                Node.scripted("proc", fn="tpgi2_di_gen", inputs=Tpgi2DIChunk, outputs=Tpgi2DIResult)
+                | Oracle(n=2, merge_fn="tpgi2_di_merge")
+                | Each(over="chunks.items", key="chunk_idx"),
+            ],
+        )
         graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "di-test-42"})
 
@@ -1421,9 +1504,15 @@ class TestEachOracleFusion:
         class BundledResult(BaseModel, frozen=True):
             text: str
 
-        register_scripted("bundled_src", lambda i, c: BundledChunks(items=[
-            BundledChunk(idx="a"), BundledChunk(idx="b"),
-        ]))
+        register_scripted(
+            "bundled_src",
+            lambda i, c: BundledChunks(
+                items=[
+                    BundledChunk(idx="a"),
+                    BundledChunk(idx="b"),
+                ]
+            ),
+        )
         register_scripted("bundled_gen", lambda i, c: BundledResult(text="draft"))
 
         captured_ctx: list[RunCtx] = []
@@ -1436,13 +1525,15 @@ class TestEachOracleFusion:
             captured_ctx.append(ctx)
             return BundledResult(text=f"merged({len(variants)}) root={ctx.project_root}")
 
-        pipeline = Construct("bundled-di-fusion", nodes=[
-            Node.scripted("src", fn="bundled_src", outputs=BundledChunks),
-            Node.scripted("proc", fn="bundled_gen",
-                          inputs=BundledChunk, outputs=BundledResult)
-            | Oracle(n=2, merge_fn="bundled_merge")
-            | Each(over="src.items", key="idx"),
-        ])
+        pipeline = Construct(
+            "bundled-di-fusion",
+            nodes=[
+                Node.scripted("src", fn="bundled_src", outputs=BundledChunks),
+                Node.scripted("proc", fn="bundled_gen", inputs=BundledChunk, outputs=BundledResult)
+                | Oracle(n=2, merge_fn="bundled_merge")
+                | Each(over="src.items", key="idx"),
+            ],
+        )
         graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "ctx-test", "project_root": "/proj"})
 
@@ -1475,41 +1566,57 @@ class TestEachOracleFusion:
         class Tpgi2ProgResult(BaseModel, frozen=True):
             value: str
 
-        register_scripted("tpgi2_prog_src", lambda i, c: Tpgi2ProgList(items=[
-            Tpgi2ProgItem(prog_id="r"), Tpgi2ProgItem(prog_id="s"),
-        ]))
-        register_scripted("tpgi2_prog_gen", lambda i, c: Tpgi2ProgResult(
-            value="generated",
-        ))
-        register_scripted("tpgi2_prog_merge", lambda v, c: Tpgi2ProgResult(
-            value=f"merged({len(v)})",
-        ))
+        register_scripted(
+            "tpgi2_prog_src",
+            lambda i, c: Tpgi2ProgList(
+                items=[
+                    Tpgi2ProgItem(prog_id="r"),
+                    Tpgi2ProgItem(prog_id="s"),
+                ]
+            ),
+        )
+        register_scripted(
+            "tpgi2_prog_gen",
+            lambda i, c: Tpgi2ProgResult(
+                value="generated",
+            ),
+        )
+        register_scripted(
+            "tpgi2_prog_merge",
+            lambda v, c: Tpgi2ProgResult(
+                value=f"merged({len(v)})",
+            ),
+        )
 
         # Order 1: Oracle | Each
         node_oe = (
-            Node.scripted("proc", fn="tpgi2_prog_gen",
-                          inputs=Tpgi2ProgItem, outputs=Tpgi2ProgResult)
+            Node.scripted("proc", fn="tpgi2_prog_gen", inputs=Tpgi2ProgItem, outputs=Tpgi2ProgResult)
             | Oracle(n=2, merge_fn="tpgi2_prog_merge")
             | Each(over="source.items", key="prog_id")
         )
-        p1 = Construct("prog-oe", nodes=[
-            Node.scripted("source", fn="tpgi2_prog_src", outputs=Tpgi2ProgList),
-            node_oe,
-        ])
+        p1 = Construct(
+            "prog-oe",
+            nodes=[
+                Node.scripted("source", fn="tpgi2_prog_src", outputs=Tpgi2ProgList),
+                node_oe,
+            ],
+        )
         g1 = compile(p1, **build_test_compile_kwargs())
         r1 = run(g1, input={"node_id": "prog-oe"})
 
         # Order 2: Each | Oracle
         node_eo = (
-            Node.scripted("proc", fn="tpgi2_prog_gen",
-                          inputs=Tpgi2ProgItem, outputs=Tpgi2ProgResult)
+            Node.scripted("proc", fn="tpgi2_prog_gen", inputs=Tpgi2ProgItem, outputs=Tpgi2ProgResult)
             | Each(over="source.items", key="prog_id")
             | Oracle(n=2, merge_fn="tpgi2_prog_merge")
         )
-        p2 = Construct("prog-eo", nodes=[
-            Node.scripted("source", fn="tpgi2_prog_src", outputs=Tpgi2ProgList),
-            node_eo,
-        ])
+        p2 = Construct(
+            "prog-eo",
+            nodes=[
+                Node.scripted("source", fn="tpgi2_prog_src", outputs=Tpgi2ProgList),
+                node_eo,
+            ],
+        )
         g2 = compile(p2, **build_test_compile_kwargs())
         r2 = run(g2, input={"node_id": "prog-eo"})
 
@@ -1527,7 +1634,6 @@ class TestEachOracleFusion:
 #
 # NEOGRAPH_DEV=1 emits warnings for ambiguous-but-valid patterns.
 # ═══════════════════════════════════════════════════════════════════════════
-
 
 
 class TestArch1OracleMergeConsolidation:
@@ -1582,8 +1688,14 @@ class TestArch1OracleMergeConsolidation:
         def ctx() -> A1Ctx:
             return A1Ctx(tag="CTXVAL")
 
-        @node(mode="scripted", outputs=A1Res, map_over="chunks.items", map_key="cid",
-              ensemble_n=2, merge_prompt="context=${ctx.tag} variants=${variants}")
+        @node(
+            mode="scripted",
+            outputs=A1Res,
+            map_over="chunks.items",
+            map_key="cid",
+            ensemble_n=2,
+            merge_prompt="context=${ctx.tag} variants=${variants}",
+        )
         def gen(chunk: A1Chunk, ctx: A1Ctx) -> A1Res:
             return A1Res(label=f"g-{chunk.cid}")
 
@@ -1632,8 +1744,7 @@ class TestArch1OracleMergeConsolidation:
         def ctx() -> B1Ctx:
             return B1Ctx(tag="T")
 
-        @node(mode="scripted", outputs=B1Res, map_over="chunks.items", map_key="cid",
-              ensemble_n=2, merge_fn="b1_merge")
+        @node(mode="scripted", outputs=B1Res, map_over="chunks.items", map_key="cid", ensemble_n=2, merge_fn="b1_merge")
         def gen(chunk: B1Chunk, ctx: B1Ctx) -> B1Res:
             return B1Res(label="g")
 

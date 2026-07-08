@@ -64,7 +64,6 @@ if TYPE_CHECKING:
     pass
 
 
-
 from neograph._construct_validation import ConstructError
 from neograph._di_classify import (  # noqa: F401 — re-exported for backward compat
     FromConfig,
@@ -186,6 +185,7 @@ def _build_oracle_kwargs(
         def _make_body_merge(user_fn: Callable) -> Callable:
             def body_merge(variants: list, config: Any) -> Any:
                 return user_fn(variants)
+
             return body_merge
 
         register_scripted(body_merge_name, _make_body_merge(f))
@@ -456,9 +456,12 @@ def node(
         # is exempt (multi-output can't be expressed as an annotation).
         try:
             import typing as _typing
+
             extra_ns = _build_annotation_namespace(f, caller_ns=caller_ns)
             all_hints = _typing.get_type_hints(
-                f, localns=extra_ns, include_extras=False,
+                f,
+                localns=extra_ns,
+                include_extras=False,
             )
             ret_hint = all_hints.get("return")
         except (NameError, AttributeError, TypeError):
@@ -518,9 +521,12 @@ def node(
             resolved_hints: dict[str, Any] = {}
             try:
                 import typing as _typing
+
                 extra_ns = _build_annotation_namespace(f, caller_ns=caller_ns)
                 resolved_hints = _typing.get_type_hints(
-                    f, localns=extra_ns, include_extras=False,
+                    f,
+                    localns=extra_ns,
+                    include_extras=False,
                 )
             except (NameError, AttributeError, TypeError):
                 resolved_hints = {}
@@ -543,11 +549,7 @@ def node(
             outputs=inferred_output,
             model=model,
             prompt=prompt,
-            llm_config=(
-                llm_config
-                if isinstance(llm_config, LlmConfig)
-                else LlmConfig(**(llm_config or {}))
-            ),
+            llm_config=(llm_config if isinstance(llm_config, LlmConfig) else LlmConfig(**(llm_config or {}))),
             tools=tools or [],
             raw_fn=f if effective_mode == "raw" else None,
             renderer=renderer,
@@ -559,15 +561,18 @@ def node(
 
         # -- Oracle kwargs detection (needed for combined check) ----------------
         has_oracle_kwarg = (
-            ensemble_n is not None or models is not None
-            or merge_fn is not None or merge_prompt is not None
+            ensemble_n is not None or models is not None or merge_fn is not None or merge_prompt is not None
         )
 
         # -- Each×Oracle fusion: map_over + ensemble -----------
         if map_over is not None and has_oracle_kwarg:
             oracle_kw = _build_oracle_kwargs(
-                node_label=node_label, f=f, merge_fn=merge_fn,
-                merge_prompt=merge_prompt, models=models, ensemble_n=ensemble_n,
+                node_label=node_label,
+                f=f,
+                merge_fn=merge_fn,
+                merge_prompt=merge_prompt,
+                models=models,
+                ensemble_n=ensemble_n,
                 merge_pre_process=merge_pre_process,
                 merge_post_process=merge_post_process,
                 merge_fallback=merge_fallback,
@@ -597,8 +602,12 @@ def node(
         # -- Oracle ensemble when any ensemble kwarg is set (no Each) ----------
         if has_oracle_kwarg:
             oracle_kw = _build_oracle_kwargs(
-                node_label=node_label, f=f, merge_fn=merge_fn,
-                merge_prompt=merge_prompt, models=models, ensemble_n=ensemble_n,
+                node_label=node_label,
+                f=f,
+                merge_fn=merge_fn,
+                merge_prompt=merge_prompt,
+                models=models,
+                ensemble_n=ensemble_n,
                 merge_pre_process=merge_pre_process,
                 merge_post_process=merge_post_process,
                 merge_fallback=merge_fallback,
@@ -715,9 +724,12 @@ def merge_fn(
         # args match the function's parameter order.
         try:
             import typing as _typing
+
             extra_ns = _build_annotation_namespace(f, caller_ns=caller_ns)
             all_hints = _typing.get_type_hints(
-                f, localns=extra_ns, include_extras=False,
+                f,
+                localns=extra_ns,
+                include_extras=False,
             )
         except (NameError, AttributeError, TypeError):
             all_hints = {}
@@ -732,13 +744,16 @@ def merge_fn(
                     continue
                 if p.default is not inspect.Parameter.empty:
                     ordered_res[p.name] = DIBinding(
-                        name=p.name, kind=DIKind.CONSTANT,
-                        inner_type=type(p.default), required=False,
+                        name=p.name,
+                        kind=DIKind.CONSTANT,
+                        inner_type=type(p.default),
+                        required=False,
                         default_value=p.default,
                     )
                 else:
                     ordered_res[p.name] = DIBinding(
-                        name=p.name, kind=DIKind.FROM_STATE,
+                        name=p.name,
+                        kind=DIKind.FROM_STATE,
                         inner_type=hint if hint is not None else type(None),
                         required=False,
                     )

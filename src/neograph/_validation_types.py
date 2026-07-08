@@ -42,6 +42,7 @@ class Producer:
     perspective — see docs/design/architecture-decisions.md §5 for the
     boundary rationale. label is rendered verbatim in error messages.
     """
+
     field_name: str
     effective_type: TypeSpecStatic
     label: str
@@ -100,9 +101,7 @@ def effective_producer_type(item: NodeItem) -> TypeSpecStatic:
     return effective_producer_type_for(output, getattr(item, "modifier_set", None))
 
 
-def effective_producer_type_for(
-    declared_type: TypeSpecStatic, modifier_set: object | None
-) -> TypeSpecStatic:
+def effective_producer_type_for(declared_type: TypeSpecStatic, modifier_set: object | None) -> TypeSpecStatic:
     """Apply the modifier-to-bus rule to a SINGLE declared output type.
 
     This is the per-key core extracted from :func:`effective_producer_type`.
@@ -195,8 +194,8 @@ def _types_compatible(producer: TypeSpecStatic, target: TypeSpecStatic) -> bool:
         # step 5 (factory._extract_input). Element-type compatibility is
         # checked recursively so subclass rules apply consistently.
         if producer_origin is dict and target_origin is list:
-            dict_args = get_args(producer)     # (str, X)
-            list_args = get_args(target)       # (Y,)
+            dict_args = get_args(producer)  # (str, X)
+            list_args = get_args(target)  # (Y,)
             if len(dict_args) == 2 and len(list_args) == 1:
                 return _types_compatible(dict_args[1], list_args[0])
         return False
@@ -248,9 +247,7 @@ def _source_location() -> str | None:
         while frame is not None:
             module_name = frame.f_globals.get("__name__", "")
             if not (
-                module_name == "neograph"
-                or module_name.startswith("neograph.")
-                or module_name.startswith("pydantic")
+                module_name == "neograph" or module_name.startswith("neograph.") or module_name.startswith("pydantic")
             ):
                 fname = frame.f_code.co_filename
                 if fname and not fname.startswith("<"):

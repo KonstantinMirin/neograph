@@ -41,9 +41,8 @@ def _module_level_dict_assigns(tree: ast.AST) -> list[tuple[int, str]]:
         if isinstance(stmt, ast.AnnAssign) and isinstance(stmt.target, ast.Name):
             ann = stmt.annotation
             is_dict_ann = (
-                (isinstance(ann, ast.Subscript) and isinstance(ann.value, ast.Name) and ann.value.id == "dict")
-                or (isinstance(ann, ast.Name) and ann.id == "dict")
-            )
+                isinstance(ann, ast.Subscript) and isinstance(ann.value, ast.Name) and ann.value.id == "dict"
+            ) or (isinstance(ann, ast.Name) and ann.id == "dict")
             if is_dict_ann:
                 hits.append((stmt.lineno, stmt.target.id))
         elif isinstance(stmt, ast.Assign) and isinstance(stmt.value, ast.Dict):
@@ -100,16 +99,18 @@ class TestNoNeoMonkeyPatch:
 
     # The framework-metadata fields that used to be monkey-patched onto the
     # compiled LangGraph graph and now live as CompiledNeograph fields.
-    MONKEY_PATCHED_NAMES = frozenset({
-        "_neo_required_di",
-        "_neo_schema_fingerprint",
-        "_neo_node_fingerprints",
-        "_neo_construct",
-        "_neo_runtime",
-        "_neo_scripted",
-        "_neo_conditions",
-        "_neo_tool_factories",
-    })
+    MONKEY_PATCHED_NAMES = frozenset(
+        {
+            "_neo_required_di",
+            "_neo_schema_fingerprint",
+            "_neo_node_fingerprints",
+            "_neo_construct",
+            "_neo_runtime",
+            "_neo_scripted",
+            "_neo_conditions",
+            "_neo_tool_factories",
+        }
+    )
 
     @classmethod
     def _neo_attr_assigns(cls, tree: ast.AST) -> list[int]:
@@ -146,7 +147,8 @@ class TestNoNeoMonkeyPatch:
             for ln in self._neo_attr_assigns(tree):
                 violations.append(f"  {py_file.name}:{ln}: <obj>._neo_* = ...")
         assert violations == [], (
-            "\n_neo_* monkey-patch assignment(s) found:\n" + "\n".join(violations)
+            "\n_neo_* monkey-patch assignment(s) found:\n"
+            + "\n".join(violations)
             + "\n\nUse the typed CompiledNeograph facade fields instead."
         )
 
@@ -157,7 +159,8 @@ class TestNoNeoMonkeyPatch:
             for ln in self._neo_getattr_reads(tree):
                 violations.append(f"  {py_file.name}:{ln}: getattr(_, '_neo_...')")
         assert violations == [], (
-            "\ngetattr(_, '_neo_*') read(s) found:\n" + "\n".join(violations)
+            "\ngetattr(_, '_neo_*') read(s) found:\n"
+            + "\n".join(violations)
             + "\n\nRead the typed CompiledNeograph field instead."
         )
 
@@ -167,14 +170,15 @@ class TestNoNeoMonkeyPatch:
             if isinstance(node, ast.FunctionDef) and node.name == "compile":
                 ret = node.returns
                 name = (
-                    ret.id if isinstance(ret, ast.Name)
-                    else ret.attr if isinstance(ret, ast.Attribute)
-                    else ast.dump(ret) if ret is not None
+                    ret.id
+                    if isinstance(ret, ast.Name)
+                    else ret.attr
+                    if isinstance(ret, ast.Attribute)
+                    else ast.dump(ret)
+                    if ret is not None
                     else None
                 )
-                assert name == "CompiledNeograph", (
-                    f"compile() returns {name!r}, expected 'CompiledNeograph'"
-                )
+                assert name == "CompiledNeograph", f"compile() returns {name!r}, expected 'CompiledNeograph'"
                 return
         raise AssertionError("compile() not found in compiler.py")
 
@@ -265,7 +269,8 @@ class TestNoLeafSymbolReexportedViaDecorators:
                         f"but '{name}' is not defined there (re-exported from a leaf)."
                     )
         assert violations == [], (
-            "\nIllusory-cycle allowlist entry(ies) found:\n" + "\n".join(violations)
+            "\nIllusory-cycle allowlist entry(ies) found:\n"
+            + "\n".join(violations)
             + "\n\nRepoint the import to the leaf module where the symbol lives "
             "(_sidecar / _di_classify) and fix the allowlist entry."
         )
@@ -275,6 +280,5 @@ class TestNoLeafSymbolReexportedViaDecorators:
         # get_merge_fn_metadata lives in _sidecar.py and is re-exported by
         # decorators.py — it must NOT count as defined-in-decorators.
         assert "get_merge_fn_metadata" not in defined, (
-            "guard premise broken: get_merge_fn_metadata must not be DEFINED in "
-            "decorators.py (it lives in _sidecar.py)"
+            "guard premise broken: get_merge_fn_metadata must not be DEFINED in decorators.py (it lives in _sidecar.py)"
         )

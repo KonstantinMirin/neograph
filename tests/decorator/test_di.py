@@ -106,9 +106,6 @@ class TestFromInputPydanticModel:
         assert result["fcb_read"].text == "acme:7"
 
 
-
-
-
 class TestOracleMergeFnDI:
     """neograph-9zj — @merge_fn decorator with FromInput/FromConfig DI."""
 
@@ -140,11 +137,10 @@ class TestOracleMergeFnDI:
         # Register a scripted generator that produces a Claims variant.
         def gen_fn(input_data, config):
             return Claims(items=["alpha", "beta"])
+
         register_scripted("omfd_gen_fn", gen_fn)
 
-        gen = Node.scripted("omfd-gen", fn="omfd_gen_fn", outputs=Claims) | Oracle(
-            n=2, merge_fn="combine_with_prefix"
-        )
+        gen = Node.scripted("omfd-gen", fn="omfd_gen_fn", outputs=Claims) | Oracle(n=2, merge_fn="combine_with_prefix")
 
         pipeline = Construct("omfd-test", nodes=[gen])
         graph = compile(pipeline, **build_test_compile_kwargs())
@@ -179,11 +175,10 @@ class TestOracleMergeFnDI:
 
         def gen_fn2(input_data, config):
             return Claims(items=["x"])
+
         register_scripted("omfdi_gen_fn", gen_fn2)
 
-        gen = Node.scripted("omfdi-gen", fn="omfdi_gen_fn", outputs=Claims) | Oracle(
-            n=2, merge_fn="tagged_merge"
-        )
+        gen = Node.scripted("omfdi-gen", fn="omfdi_gen_fn", outputs=Claims) | Oracle(n=2, merge_fn="tagged_merge")
 
         pipeline = Construct("omfdi-test", nodes=[gen])
         graph = compile(pipeline, **build_test_compile_kwargs())
@@ -201,15 +196,15 @@ class TestOracleMergeFnDI:
             for v in variants:
                 all_items.extend(v.items)
             return Claims(items=list(dict.fromkeys(all_items)))
+
         register_scripted("plain_merge_backcompat", plain_merge)
 
         def pmg_gen(input_data, config):
             return Claims(items=["one", "two"])
+
         register_scripted("pmg_gen_fn", pmg_gen)
 
-        gen = Node.scripted("pmg-gen", fn="pmg_gen_fn", outputs=Claims) | Oracle(
-            n=2, merge_fn="plain_merge_backcompat"
-        )
+        gen = Node.scripted("pmg-gen", fn="pmg_gen_fn", outputs=Claims) | Oracle(n=2, merge_fn="plain_merge_backcompat")
 
         pipeline = Construct("pmg-test", nodes=[gen])
         graph = compile(pipeline, **build_test_compile_kwargs())
@@ -237,8 +232,6 @@ class TestOracleMergeFnDI:
 # ═══════════════════════════════════════════════════════════════════════════
 
 
-
-
 class TestClassifyDiParamsEdges:
     """Edge cases in _classify_di_params (lines 263-264, 275, 306)."""
 
@@ -251,10 +244,12 @@ class TestClassifyDiParamsEdges:
 
         def bad_hints(*a, **kw):
             raise NameError("unresolvable annotation")
+
         monkeypatch.setattr(typing, "get_type_hints", bad_hints)
 
         def sample(x: int) -> int:
             return x
+
         sig = inspect.signature(sample)
         result = _classify_di_params(sample, sig, caller_ns=None)
         assert result == {}
@@ -270,6 +265,7 @@ class TestClassifyDiParamsEdges:
         # args, but we can test with a non-DI marker.
         def sample(x: Annotated[str, "just_a_string"]) -> str:
             return x
+
         sig = inspect.signature(sample)
         result = _classify_di_params(sample, sig, caller_ns=None)
         # "just_a_string" is not FromInput/FromConfig, so kind_base is None → skip
@@ -286,12 +282,10 @@ class TestClassifyDiParamsEdges:
 
         def sample(x: Annotated[str, CustomMarker()]) -> str:
             return x
+
         sig = inspect.signature(sample)
         result = _classify_di_params(sample, sig, caller_ns=None)
         assert result == {}
-
-
-
 
 
 class TestResolveDiValueEdges:
@@ -311,6 +305,7 @@ class TestResolveDiValueEdges:
     def test_from_config_scalar_resolves_from_dict(self):
         """from_config reads from dict config."""
         from neograph.di import DIBinding, DIKind
+
         config = {"configurable": {"rate_limit": 42}}
         binding = DIBinding(name="rate_limit", kind=DIKind.FROM_CONFIG, inner_type=int, required=False)
         result = binding.resolve(config)
@@ -326,7 +321,9 @@ class TestResolveDiValueEdges:
             b: int
 
         config = {"configurable": {}}  # no fields provided
-        binding = DIBinding(name="ctx", kind=DIKind.FROM_INPUT_MODEL, inner_type=MyModel, required=True, model_cls=MyModel)
+        binding = DIBinding(
+            name="ctx", kind=DIKind.FROM_INPUT_MODEL, inner_type=MyModel, required=True, model_cls=MyModel
+        )
         with pytest.raises(ExecutionError, match="missing fields"):
             binding.resolve(config)
 
@@ -339,7 +336,9 @@ class TestResolveDiValueEdges:
             x: int  # requires int, will fail with string
 
         config = {"configurable": {"x": "not_an_int_and_model_rejects"}}
-        binding = DIBinding(name="ctx", kind=DIKind.FROM_INPUT_MODEL, inner_type=StrictModel, required=True, model_cls=StrictModel)
+        binding = DIBinding(
+            name="ctx", kind=DIKind.FROM_INPUT_MODEL, inner_type=StrictModel, required=True, model_cls=StrictModel
+        )
         # Pydantic will coerce "not_an_int_and_model_rejects" and fail
         with pytest.raises(ExecutionError, match="construction failed"):
             binding.resolve(config)
@@ -352,18 +351,18 @@ class TestResolveDiValueEdges:
             x: int
 
         config = {"configurable": {"x": "not_an_int_fail"}}
-        binding = DIBinding(name="ctx", kind=DIKind.FROM_INPUT_MODEL, inner_type=StrictModel, required=False, model_cls=StrictModel)
+        binding = DIBinding(
+            name="ctx", kind=DIKind.FROM_INPUT_MODEL, inner_type=StrictModel, required=False, model_cls=StrictModel
+        )
         result = binding.resolve(config)
         assert result is None
 
     def test_constant_kind_returns_payload(self):
         """Constant kind returns the payload directly."""
         from neograph.di import DIBinding, DIKind
+
         binding = DIBinding(name="ignored", kind=DIKind.CONSTANT, inner_type=int, required=False, default_value=42)
         assert binding.resolve(None) == 42
-
-
-
 
 
 class TestResolveDiArgsFiltering:
@@ -373,6 +372,7 @@ class TestResolveDiArgsFiltering:
         """Line 398: from_state params are filtered out."""
         from neograph.decorators import _resolve_di_args
         from neograph.di import DIBinding, DIKind
+
         param_res = {
             "topic": DIBinding(name="topic", kind=DIKind.FROM_INPUT, inner_type=str, required=False),
             "state_val": DIBinding(name="state_val", kind=DIKind.FROM_STATE, inner_type=str, required=False),
@@ -380,5 +380,3 @@ class TestResolveDiArgsFiltering:
         config = {"configurable": {"topic": "hello"}}
         result = _resolve_di_args(param_res, config)
         assert result == ["hello"]
-
-

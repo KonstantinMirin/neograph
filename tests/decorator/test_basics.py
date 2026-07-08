@@ -59,11 +59,13 @@ class TestToolDecorator:
                 counter["n"] += 1
                 if counter["n"] <= 2:
                     msg = AIMessage(content="")
-                    msg.tool_calls = [{
-                        "name": "search_codebase",
-                        "args": {"query": f"q{counter['n']}"},
-                        "id": f"c{counter['n']}",
-                    }]
+                    msg.tool_calls = [
+                        {
+                            "name": "search_codebase",
+                            "args": {"query": f"q{counter['n']}"},
+                            "id": f"c{counter['n']}",
+                        }
+                    ]
                     return msg
                 return AIMessage(content='{"items": ["searched"]}')
 
@@ -92,6 +94,7 @@ class TestToolDecorator:
 
     def test_tool_returns_spec_when_decorated_without_parens(self):
         """@tool (no parens) also works."""
+
         @tool
         def noop(x: str) -> str:
             """A no-op tool."""
@@ -112,8 +115,6 @@ class TestToolDecorator:
 # ═══════════════════════════════════════════════════════════════════════════
 
 
-
-
 # ═══════════════════════════════════════════════════════════════════════════
 # TestNodeDecorator — @node + construct_from_module (Dagster-style signatures)
 #
@@ -123,6 +124,7 @@ class TestToolDecorator:
 # IR path — compile()/run() handle the result unchanged.
 # ═══════════════════════════════════════════════════════════════════════════
 
+
 class TestNodeDecorator:
     """@node decorator: parameter-name-based dependency inference."""
 
@@ -130,6 +132,7 @@ class TestNodeDecorator:
     def _fresh_module(name: str):
         """Create a throwaway module object for construct_from_module to walk."""
         import types as _types
+
         return _types.ModuleType(name)
 
     def test_chain_compiles_and_runs_when_two_nodes_wired_by_param_name(self):
@@ -222,6 +225,7 @@ class TestNodeDecorator:
             nope: str
 
         with pytest.raises(ConstructError, match="outputs=.*differs from return annotation"):
+
             @node(mode="scripted", outputs=Claims)
             def producer() -> Bogus:
                 return Claims(items=["overridden"])
@@ -303,11 +307,7 @@ class TestNodeDecorator:
         @node(mode="scripted", outputs=ClassifiedClaims)
         def summarize(make_clusters: Clusters) -> ClassifiedClaims:
             return ClassifiedClaims(
-                classified=[
-                    {"claim": cid, "category": g.label}
-                    for g in make_clusters.groups
-                    for cid in g.claim_ids
-                ],
+                classified=[{"claim": cid, "category": g.label} for g in make_clusters.groups for cid in g.claim_ids],
             )
 
         mod.seed_text = seed_text
@@ -331,9 +331,6 @@ class TestNodeDecorator:
         classified = result["summarize"].classified
         assert len(classified) == 2
         assert classified[0]["category"] == "g"
-
-
-
 
 
 class TestNodeDecoratorModeInference:
@@ -377,7 +374,6 @@ class TestNodeDecoratorModeInference:
     def test_warning_emitted_when_produce_mode_has_nontrivial_body(self):
         """@node(mode='produce', ...) with a real function body emits UserWarning."""
 
-
         with pytest.warns(UserWarning, match="body.*not executed"):
 
             @node(mode="think", outputs=Claims, prompt="rw/decompose", model="reason")
@@ -388,7 +384,6 @@ class TestNodeDecoratorModeInference:
         """@node(mode='produce', ...) with `...` body does NOT warn."""
         import warnings as _warnings
 
-
         with _warnings.catch_warnings():
             _warnings.simplefilter("error")
 
@@ -396,9 +391,6 @@ class TestNodeDecoratorModeInference:
             def decompose(topic: RawText) -> Claims: ...
 
 
-
-
-
 # ═══════════════════════════════════════════════════════════════════════════
 # TEST: @node scalar parameters — FromInput, FromConfig, default constants
 #
@@ -419,6 +411,7 @@ class TestNodeDecoratorModeInference:
 #   2. Annotated[T, FromConfig] — value from config["configurable"][param]
 #   3. default value  — compile-time constant, no upstream needed
 # ═══════════════════════════════════════════════════════════════════════════
+
 
 class TestNodeDecoratorParams:
     """Scalar parameter support: FromInput, FromConfig, default constants."""
@@ -567,15 +560,13 @@ class TestNodeDecoratorParams:
         assert result["greet"] == RawText(text="no topic")
 
 
-
-
-
 class TestNodeDecoratorErrorLocation:
     """@node errors include the decorated function's source file:line."""
 
     @staticmethod
     def _fresh_module(name: str):
         import types as _types
+
         return _types.ModuleType(name)
 
     def test_error_message_includes_source_location_when_param_unknown(self):
@@ -638,9 +629,6 @@ class TestNodeDecoratorErrorLocation:
         assert "/tests/test_basics.py:" not in msg
 
 
-
-
-
 # ═══════════════════════════════════════════════════════════════════════════
 # @node(mode='raw') — LangGraph escape hatch via unified @node decorator
 #
@@ -659,11 +647,13 @@ class TestNodeDecoratorErrorLocation:
 # observability. No parameter-name topology — the function body manages
 # its own state access.
 # ═══════════════════════════════════════════════════════════════════════════
+
 
 class TestNodeDecoratorRawMode:
     @staticmethod
     def _fresh_module(name: str):
         import types as _types
+
         return _types.ModuleType(name)
 
     def test_raw_mode_filters_state_when_reading_and_writing(self):
@@ -707,18 +697,21 @@ class TestNodeDecoratorRawMode:
 
         # Three parameters — too many
         with pytest.raises(ConstructError, match="exactly two parameters"):
+
             @node(mode="raw", inputs=Claims, outputs=Claims)
             def bad_three(state, config, extra):
                 pass
 
         # Wrong parameter names
         with pytest.raises(ConstructError, match="named 'state' and 'config'"):
+
             @node(mode="raw", inputs=Claims, outputs=Claims)
             def bad_names(s, c):
                 pass
 
         # One parameter — too few
         with pytest.raises(ConstructError, match="exactly two parameters"):
+
             @node(mode="raw", inputs=Claims, outputs=Claims)
             def bad_one(state):
                 pass
@@ -764,9 +757,7 @@ class TestNodeDecoratorRawMode:
 
         @node(mode="scripted", outputs=ClassifiedClaims)
         def classify(process: Claims) -> ClassifiedClaims:
-            return ClassifiedClaims(
-                classified=[{"claim": c, "category": "raw"} for c in process.items]
-            )
+            return ClassifiedClaims(classified=[{"claim": c, "category": "raw"} for c in process.items])
 
         mod.extract = extract
         mod.process = process
@@ -796,4 +787,3 @@ class TestNodeDecoratorRawMode:
 # The interrupt_when= kwarg on @node composes the node with Operator(when=...).
 # String form uses a pre-registered condition name; callable form auto-registers.
 # ═══════════════════════════════════════════════════════════════════════════
-

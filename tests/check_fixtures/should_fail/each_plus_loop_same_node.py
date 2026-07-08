@@ -10,6 +10,7 @@ from tests.fakes import register_scripted
 class Item(BaseModel, frozen=True):
     x: str
 
+
 register_scripted("el_proc", lambda i, c: Item(x="done"))
 
 pipeline_node = (

@@ -32,4 +32,4 @@ def split_output_field(state_field: str, base_field: str) -> str | None:
     prefix = f"{base_field}{_UNDERSCORE}"
     if not state_field.startswith(prefix):
         return None
-    return state_field[len(prefix):]
+    return state_field[len(prefix) :]

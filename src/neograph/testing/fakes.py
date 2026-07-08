@@ -72,6 +72,7 @@ def _final_json_content(
 
     return json.dumps(data, default=_default)
 
+
 class StructuredFake:
     """Fake LLM that returns a Pydantic model via with_structured_output.
 
@@ -112,6 +113,7 @@ class StructuredFake:
 
     async def ainvoke(self, *a, **k) -> Any:
         return self.invoke(*a, **k)
+
 
 class StructuredFakeWithRaw:
     """Fake LLM that honors include_raw=True in with_structured_output.
@@ -162,6 +164,7 @@ class StructuredFakeWithRaw:
 
     async def ainvoke(self, *a, **k) -> Any:
         return self.invoke(*a, **k)
+
 
 class ReActFake:
     """Fake LLM that scripts a ReAct tool loop.
@@ -223,10 +226,7 @@ class ReActFake:
         # reused across turns) OR as a cycle of supersteps (the instance is rebuilt
         # each turn and replays the accumulated history) — a real stateless LLM
         # works both ways.
-        idx = sum(
-            1 for m in messages
-            if getattr(m, "tool_calls", None) and not isinstance(m, dict)
-        )
+        idx = sum(1 for m in messages if getattr(m, "tool_calls", None) and not isinstance(m, dict))
         self._call_idx = idx  # kept in sync for with_structured_output clones
 
         if idx >= len(self._tool_calls):
@@ -249,6 +249,7 @@ class ReActFake:
         clone._model = model
         clone._in_structured_mode = True
         return clone
+
 
 class StringArgsFake:
     """Fake LLM that simulates providers emitting tool_calls.args as JSON strings.
@@ -306,12 +307,15 @@ class StringArgsFake:
         if should_fail:
             self._fail_count += 1
             from pydantic import ValidationError
+
             # Raise the exact ValidationError that real providers produce
             try:
                 AIMessage(
                     content="",
-                    tool_calls=[{**tc, "args": _json.dumps(tc["args"]) if isinstance(tc["args"], dict) else tc["args"]}
-                                for tc in calls],
+                    tool_calls=[
+                        {**tc, "args": _json.dumps(tc["args"]) if isinstance(tc["args"], dict) else tc["args"]}
+                        for tc in calls
+                    ],
                 )
             except ValidationError:
                 raise
@@ -367,6 +371,7 @@ class StringArgsFake:
         clone._in_structured_mode = True
         return clone
 
+
 class TextFake:
     """Fake LLM that returns plain text via invoke(). No with_structured_output.
 
@@ -404,13 +409,12 @@ class TextFake:
         self.messages_seen.append(messages)
         if self._bound_response_format and self._reject_response_format:
             # Mirror a provider whose API rejects the forwarded response_format.
-            raise TypeError(
-                "Completions.create() got an unexpected keyword argument 'response_format'"
-            )
+            raise TypeError("Completions.create() got an unexpected keyword argument 'response_format'")
         return AIMessage(content=self._text)
 
     async def ainvoke(self, *a, **k) -> AIMessage:
         return self.invoke(*a, **k)
+
 
 class FakeTool:
     """Fake tool that records invocations. Set .name at construction."""
@@ -428,6 +432,7 @@ class FakeTool:
 
     async def ainvoke(self, *a, **k) -> Any:
         return self.invoke(*a, **k)
+
 
 class GuardFake:
     """Fake LLM that returns tool calls when tools are bound, plain response otherwise.
@@ -497,6 +502,7 @@ class GuardFake:
     def call_count(self):
         return self._call_counter[0]
 
+
 class StubbornFake:
     """Fake LLM that ALWAYS returns tool calls, ignoring bind_tools / unbinding.
 
@@ -535,6 +541,7 @@ class StubbornFake:
         clone._model = model
         clone._structured = True
         return clone
+
 
 class GatedAsyncFake:
     """Async-native fake whose ``ainvoke`` parks on a gate until released.
@@ -595,6 +602,7 @@ class GatedAsyncFake:
         if self._model is not None and self._respond is not None:
             return self._respond(self._model)
         return AIMessage(content="done")
+
 
 @contextlib.asynccontextmanager
 async def event_loop_lag_watchdog(threshold_s: float = 0.5, interval_s: float = 0.02):
@@ -689,10 +697,7 @@ class FakeLLM:
 
     def __call__(self, tier: str, *, node_name: str = "", **_kwargs: Any) -> Any:
         if node_name not in self._outputs:
-            raise KeyError(
-                f"FakeLLM has no output for node_name={node_name!r}; "
-                f"known keys: {sorted(self._outputs)}"
-            )
+            raise KeyError(f"FakeLLM has no output for node_name={node_name!r}; known keys: {sorted(self._outputs)}")
         return self._double_for(self._outputs[node_name])
 
 

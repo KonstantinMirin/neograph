@@ -20,8 +20,10 @@ class Result(BaseModel, frozen=True):
 register_scripted("menl_info", lambda i, c: Info(title="test", count=5))
 register_scripted("menl_proc", lambda i, c: Result(value="ok"))
 
-pipeline = Construct("broken", nodes=[
-    Node.scripted("info_node", fn="menl_info", outputs=Info),
-    Node.scripted("proc", fn="menl_proc", inputs=str, outputs=Result)
-    | Each(over="info_node.title", key="x"),
-])
+pipeline = Construct(
+    "broken",
+    nodes=[
+        Node.scripted("info_node", fn="menl_info", outputs=Info),
+        Node.scripted("proc", fn="menl_proc", inputs=str, outputs=Result) | Each(over="info_node.title", key="x"),
+    ],
+)

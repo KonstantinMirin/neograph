@@ -248,9 +248,7 @@ class TestDefaultPromptCompilerEndToEnd:
         prompt_dir.mkdir(parents=True, exist_ok=True)
         # {json_schema}'s VALUE (describe_type output) contains literal braces —
         # if the compiler used str.format this template would crash at run time.
-        (prompt_dir / "greet.md").write_text(
-            "Analyze the text: {seed}\n\nRespond per schema:\n{json_schema}\n"
-        )
+        (prompt_dir / "greet.md").write_text("Analyze the text: {seed}\n\nRespond per schema:\n{json_schema}\n")
 
     def test_renders_file_ref_template_end_to_end_when_default_compiler(self, tmp_path):
         """compile(construct, prompt_compiler=DefaultPromptCompiler(prompts_dir))
@@ -301,9 +299,7 @@ class TestDefaultPromptCompilerEndToEnd:
         prompts = tmp_path / "prompts"
         prompts.mkdir(parents=True, exist_ok=True)
         # No upstream var to reference — the only var is the injected schema.
-        (prompts / "leaf.md").write_text(
-            "Analyze the domain.\n\nRespond per schema:\n{json_schema}\n"
-        )
+        (prompts / "leaf.md").write_text("Analyze the domain.\n\nRespond per schema:\n{json_schema}\n")
 
         import types
 
@@ -339,9 +335,7 @@ class TestDefaultPromptCompilerEndToEnd:
         messages = compiler("greet", {"seed": RawText(text="hello world")}, output_model=Claims)
 
         assert isinstance(messages, list) and messages
-        content = " ".join(
-            m["content"] for m in messages if isinstance(m, dict) and m.get("role") == "user"
-        )
+        content = " ".join(m["content"] for m in messages if isinstance(m, dict) and m.get("role") == "user")
         # placeholders resolved, none left verbatim
         assert "{seed}" not in content
         assert "{json_schema}" not in content
@@ -359,10 +353,7 @@ class TestDefaultPromptCompilerEndToEnd:
 
 def _user_content(messages: list) -> str:
     """Join the user-role message content(s) into one string."""
-    return " ".join(
-        m["content"] for m in messages
-        if isinstance(m, dict) and m.get("role") == "user"
-    )
+    return " ".join(m["content"] for m in messages if isinstance(m, dict) and m.get("role") == "user")
 
 
 class TestDefaultPromptCompilerDiInputs:
@@ -393,9 +384,7 @@ class TestDefaultPromptCompilerDiInputs:
         compiler = DefaultPromptCompiler(lambda name: "value={domain}")
         # 'domain' is present BOTH as an upstream output (input_data) and a
         # di_input. The output must win.
-        messages = compiler(
-            "t", {"domain": "FROM_OUTPUT"}, di_inputs={"domain": "FROM_DI"}
-        )
+        messages = compiler("t", {"domain": "FROM_OUTPUT"}, di_inputs={"domain": "FROM_DI"})
 
         content = _user_content(messages)
         assert "value=FROM_OUTPUT" in content
@@ -407,11 +396,9 @@ class TestDefaultPromptCompilerDiInputs:
         from neograph import DefaultPromptCompiler
 
         compiler = DefaultPromptCompiler(lambda name: "x")
-        vars = compiler.build_vars(
-            {"topic": "sky"}, di_inputs={"domain": "finance", "topic": "SHADOWED"}
-        )
-        assert vars["domain"] == "finance"      # di_input survives (no collision)
-        assert vars["topic"] == "sky"           # rendered output shadows di_input
+        vars = compiler.build_vars({"topic": "sky"}, di_inputs={"domain": "finance", "topic": "SHADOWED"})
+        assert vars["domain"] == "finance"  # di_input survives (no collision)
+        assert vars["topic"] == "sky"  # rendered output shadows di_input
 
     def test_di_inputs_none_preserves_total_dict_contract(self):
         """di_inputs=None collapses to {} — no crash, mirrors render_inputs(None)."""
@@ -426,9 +413,7 @@ class TestDiInputReachesModelEndToEnd:
     """The production incident, fixed: a think node references a FromInput param
     in its template and the RESOLVED value reaches the model — no seed node."""
 
-    def test_from_input_value_reaches_model_via_template_when_compiler_opts_in(
-        self, tmp_path
-    ):
+    def test_from_input_value_reaches_model_via_template_when_compiler_opts_in(self, tmp_path):
         """agent-stark shape end-to-end: ``domain: Annotated[str, FromInput]`` on a
         think node whose ``{domain}`` template placeholder is filled with the value
         from ``run(input={'domain': ...})`` — with NO scripted seed node copying
@@ -439,9 +424,7 @@ class TestDiInputReachesModelEndToEnd:
 
         prompts = tmp_path / "prompts"
         prompts.mkdir(parents=True, exist_ok=True)
-        (prompts / "leaf.md").write_text(
-            "Analyze the {domain} domain.\n\nRespond per schema:\n{json_schema}\n"
-        )
+        (prompts / "leaf.md").write_text("Analyze the {domain} domain.\n\nRespond per schema:\n{json_schema}\n")
 
         # Wrap DefaultPromptCompiler to capture the messages handed to the LLM.
         base = DefaultPromptCompiler(prompts)
@@ -491,9 +474,9 @@ class TestDiInputReachesModelEndToEnd:
 
         # Explicit params only — no **kwargs, no di_inputs. The gate must not
         # pass di_inputs to this compiler.
-        def strict_compiler(template, input_data, *, output_model=None,
-                            output_schema=None, config=None, node_name="",
-                            llm_config=None):
+        def strict_compiler(
+            template, input_data, *, output_model=None, output_schema=None, config=None, node_name="", llm_config=None
+        ):
             received["saw_di_inputs"] = False
             return [{"role": "user", "content": "static"}]
 
@@ -540,9 +523,7 @@ class TestDiInputReachesAgentModelEndToEnd:
     Hence this E2E is ``@node``-built only.
     """
 
-    def test_from_input_value_reaches_agent_model_via_template_when_no_seed_node(
-        self, tmp_path
-    ):
+    def test_from_input_value_reaches_agent_model_via_template_when_no_seed_node(self, tmp_path):
         """agent-stark shape end-to-end on an ``@node(mode='agent')`` node: the
         resolved ``FromInput`` value reaches the agent cycle's prompt compiler as
         ``di_inputs`` and is rendered into the user message the model receives —

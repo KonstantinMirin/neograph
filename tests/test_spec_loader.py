@@ -16,6 +16,7 @@ from tests.fakes import build_test_compile_kwargs, register_scripted
 
 # -- Schemas for loader tests ------------------------------------------------
 
+
 class Draft(BaseModel, frozen=True):
     content: str
     score: float = 0.0
@@ -85,9 +86,7 @@ class TestLoadSpecBasic:
 
         spec = {
             "name": "simple",
-            "nodes": [
-                {"name": "draft", "mode": "scripted", "scripted_fn": "make_draft", "outputs": "Draft"}
-            ],
+            "nodes": [{"name": "draft", "mode": "scripted", "scripted_fn": "make_draft", "outputs": "Draft"}],
             "pipeline": {"nodes": ["draft"]},
         }
 
@@ -137,6 +136,7 @@ class TestLoadSpecBasic:
         def gen_fn(input_data, config):
             # Import dynamically — the type is auto-generated
             from neograph.spec_types import lookup_type
+
             DraftType = lookup_type("Draft")
             return DraftType(content="generated", score=0.9, iteration=0)
 
@@ -144,9 +144,7 @@ class TestLoadSpecBasic:
 
         spec = {
             "name": "auto-types",
-            "nodes": [
-                {"name": "gen", "mode": "scripted", "scripted_fn": "gen_fn", "outputs": "Draft"}
-            ],
+            "nodes": [{"name": "gen", "mode": "scripted", "scripted_fn": "gen_fn", "outputs": "Draft"}],
             "pipeline": {"nodes": ["gen"]},
         }
 
@@ -338,13 +336,13 @@ class TestLoadSpecYamlString:
 
         register_scripted("yaml_fn", yaml_fn)
 
-        yaml_str = _yaml.dump({
-            "name": "yaml-pipeline",
-            "nodes": [
-                {"name": "gen", "mode": "scripted", "scripted_fn": "yaml_fn", "outputs": "Draft"}
-            ],
-            "pipeline": {"nodes": ["gen"]},
-        })
+        yaml_str = _yaml.dump(
+            {
+                "name": "yaml-pipeline",
+                "nodes": [{"name": "gen", "mode": "scripted", "scripted_fn": "yaml_fn", "outputs": "Draft"}],
+                "pipeline": {"nodes": ["gen"]},
+            }
+        )
 
         construct = load_spec(yaml_str)
         graph = compile(construct, **build_test_compile_kwargs())
@@ -752,9 +750,7 @@ class TestLoadSpecErrors:
 
         spec = {
             "name": "bad",
-            "nodes": [
-                {"name": "x", "mode": "scripted", "scripted_fn": "whatever", "outputs": "NonExistentType"}
-            ],
+            "nodes": [{"name": "x", "mode": "scripted", "scripted_fn": "whatever", "outputs": "NonExistentType"}],
             "pipeline": {"nodes": ["x"]},
         }
 
@@ -770,9 +766,7 @@ class TestLoadSpecErrors:
 
         spec = {
             "name": "bad-ref",
-            "nodes": [
-                {"name": "seed", "mode": "scripted", "scripted_fn": "x", "outputs": "Draft"}
-            ],
+            "nodes": [{"name": "seed", "mode": "scripted", "scripted_fn": "x", "outputs": "Draft"}],
             "pipeline": {"nodes": ["seed", "ghost"]},
         }
 
@@ -812,12 +806,8 @@ class TestLoadSpecErrors:
 
         spec = {
             "name": "bad-construct",
-            "nodes": [
-                {"name": "seed", "mode": "scripted", "scripted_fn": "x", "outputs": "Draft"}
-            ],
-            "constructs": [
-                {"name": "sub", "input": "Draft", "output": "Draft", "nodes": ["nonexistent"]}
-            ],
+            "nodes": [{"name": "seed", "mode": "scripted", "scripted_fn": "x", "outputs": "Draft"}],
+            "constructs": [{"name": "sub", "input": "Draft", "output": "Draft", "nodes": ["nonexistent"]}],
             "pipeline": {"nodes": ["seed", "sub"]},
         }
 
@@ -844,9 +834,7 @@ class TestLoadSpecJsonString:
 
         spec_dict = {
             "name": "json-pipeline",
-            "nodes": [
-                {"name": "gen", "mode": "scripted", "scripted_fn": "json_fn", "outputs": "Draft"}
-            ],
+            "nodes": [{"name": "gen", "mode": "scripted", "scripted_fn": "json_fn", "outputs": "Draft"}],
             "pipeline": {"nodes": ["gen"]},
         }
 
@@ -1315,14 +1303,12 @@ class TestSpecPydanticSchema:
         from neograph._spec_schema import Spec
 
         schema_path = (
-            Path(__file__).resolve().parents[1]
-            / "src" / "neograph" / "schemas" / "neograph-pipeline.schema.json"
+            Path(__file__).resolve().parents[1] / "src" / "neograph" / "schemas" / "neograph-pipeline.schema.json"
         )
         on_disk = json.loads(schema_path.read_text())
         generated = Spec.model_json_schema()
         assert on_disk == generated, (
-            "Pipeline JSON schema drifted from Spec.model_json_schema(). "
-            "Run scripts/regen_schema.py to regenerate."
+            "Pipeline JSON schema drifted from Spec.model_json_schema(). Run scripts/regen_schema.py to regenerate."
         )
 
     @staticmethod
@@ -1365,6 +1351,7 @@ class TestSpecPydanticSchema:
 # =============================================================================
 # neograph-z3ie — _build_sub_construct auto-fan-in: dict-form upstream
 # =============================================================================
+
 
 class TestSubConstructAutoFanInDictForm:
     """neograph-z3ie: auto-fan-in in a sub-construct must wire each prior node

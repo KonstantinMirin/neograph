@@ -7,7 +7,17 @@ from neograph import Construct, Node
 class Result(BaseModel, frozen=True):
     text: str
 
-pipeline = Construct("broken", nodes=[
-    Node(name="gen", mode="think", outputs=Result, model="fast",
-         prompt="test", llm_config={"output_strategy": "yolo"}),
-])
+
+pipeline = Construct(
+    "broken",
+    nodes=[
+        Node(
+            name="gen",
+            mode="think",
+            outputs=Result,
+            model="fast",
+            prompt="test",
+            llm_config={"output_strategy": "yolo"},
+        ),
+    ],
+)

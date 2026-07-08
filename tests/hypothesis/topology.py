@@ -33,11 +33,12 @@ from .conftest import (
 @dataclass(frozen=True)
 class NodeSpec:
     """Surface-neutral description of one pipeline node."""
+
     name: str
     output_type: type
-    fn: CallableType                                   # scripted behavior
+    fn: CallableType  # scripted behavior
     input_type: type | dict[str, type] | None = None  # None = source node
-    modifier: str | None = None                       # 'each', 'oracle', 'each_oracle', 'loop'
+    modifier: str | None = None  # 'each', 'oracle', 'each_oracle', 'loop'
     each_over: str | None = None
     each_key: str | None = None
     oracle_n: int | None = None
@@ -47,6 +48,7 @@ class NodeSpec:
 @dataclass(frozen=True)
 class TopologySpec:
     """Surface-neutral description of a complete pipeline."""
+
     name: str
     nodes: tuple[NodeSpec, ...]
     terminal_field: str
@@ -55,6 +57,7 @@ class TopologySpec:
 
 
 # -- Topology strategies (produce TopologySpecs, not Constructs) -----------
+
 
 @st.composite
 def bare_topology(draw):
@@ -75,28 +78,41 @@ def bare_topology(draw):
         in_t, out_t = chain_types[i], chain_types[i + 1]
         name = f"n{i}-{tag}"
         if i == 0:
-            node_specs.append(NodeSpec(
-                name=name, output_type=out_t, fn=_make_fn(out_t),
-            ))
+            node_specs.append(
+                NodeSpec(
+                    name=name,
+                    output_type=out_t,
+                    fn=_make_fn(out_t),
+                )
+            )
         else:
             prev_field = node_specs[-1].name.replace("-", "_")
             use_dict = draw(st.booleans())
             if use_dict:
-                node_specs.append(NodeSpec(
-                    name=name, output_type=out_t,
-                    input_type={prev_field: in_t},
-                    fn=lambda _i, _c, _ot=out_t: _ot(),
-                ))
+                node_specs.append(
+                    NodeSpec(
+                        name=name,
+                        output_type=out_t,
+                        input_type={prev_field: in_t},
+                        fn=lambda _i, _c, _ot=out_t: _ot(),
+                    )
+                )
             else:
-                node_specs.append(NodeSpec(
-                    name=name, output_type=out_t, input_type=in_t,
-                    fn=_make_transform_fn(in_t, out_t),
-                ))
+                node_specs.append(
+                    NodeSpec(
+                        name=name,
+                        output_type=out_t,
+                        input_type=in_t,
+                        fn=_make_transform_fn(in_t, out_t),
+                    )
+                )
 
     terminal_field = node_specs[-1].name.replace("-", "_")
     return TopologySpec(
-        name=f"bare-{tag}", nodes=tuple(node_specs),
-        terminal_field=terminal_field, terminal_type=terminal_type,
+        name=f"bare-{tag}",
+        nodes=tuple(node_specs),
+        terminal_field=terminal_field,
+        terminal_type=terminal_type,
     )
 
 
@@ -112,13 +128,16 @@ def each_topology(draw):
     return TopologySpec(
         name=f"each-{tag}",
         nodes=(
-            NodeSpec(name=src_name, output_type=FanCollection,
-                     fn=lambda _i, _c, _it=items: FanCollection(items=_it)),
-            NodeSpec(name=proc_name, output_type=Beta, input_type=FanItem,
-                     fn=lambda _i, _c: Beta(score=0.5),
-                     modifier="each",
-                     each_over=f"{src_name.replace('-', '_')}.items",
-                     each_key="item_id"),
+            NodeSpec(name=src_name, output_type=FanCollection, fn=lambda _i, _c, _it=items: FanCollection(items=_it)),
+            NodeSpec(
+                name=proc_name,
+                output_type=Beta,
+                input_type=FanItem,
+                fn=lambda _i, _c: Beta(score=0.5),
+                modifier="each",
+                each_over=f"{src_name.replace('-', '_')}.items",
+                each_key="item_id",
+            ),
         ),
         terminal_field=proc_name.replace("-", "_"),
         terminal_type=dict,
@@ -140,11 +159,16 @@ def oracle_topology(draw):
     return TopologySpec(
         name=f"oracle-{tag}",
         nodes=(
-            NodeSpec(name=f"osrc-{tag}", output_type=src_type,
-                     fn=_make_fn(src_type)),
-            NodeSpec(name=f"ogen-{tag}", output_type=out_type,
-                     input_type=src_type, fn=_make_fn(out_type),
-                     modifier="oracle", oracle_n=oracle_n, merge_fn=merge),
+            NodeSpec(name=f"osrc-{tag}", output_type=src_type, fn=_make_fn(src_type)),
+            NodeSpec(
+                name=f"ogen-{tag}",
+                output_type=out_type,
+                input_type=src_type,
+                fn=_make_fn(out_type),
+                modifier="oracle",
+                oracle_n=oracle_n,
+                merge_fn=merge,
+            ),
         ),
         terminal_field=f"ogen_{tag}".replace("-", "_"),
         terminal_type=out_type,
@@ -171,19 +195,22 @@ def each_oracle_topology(draw):
     return TopologySpec(
         name=f"eo-{tag}",
         nodes=(
-            NodeSpec(name=src_name, output_type=FanCollection,
-                     fn=lambda _i, _c, _it=items: FanCollection(items=_it)),
-            NodeSpec(name=proc_name, output_type=Gamma, input_type=FanItem,
-                     fn=_make_fn(Gamma),
-                     modifier="each_oracle",
-                     each_over=f"{src_name.replace('-', '_')}.items",
-                     each_key="item_id",
-                     oracle_n=oracle_n, merge_fn=merge),
+            NodeSpec(name=src_name, output_type=FanCollection, fn=lambda _i, _c, _it=items: FanCollection(items=_it)),
+            NodeSpec(
+                name=proc_name,
+                output_type=Gamma,
+                input_type=FanItem,
+                fn=_make_fn(Gamma),
+                modifier="each_oracle",
+                each_over=f"{src_name.replace('-', '_')}.items",
+                each_key="item_id",
+                oracle_n=oracle_n,
+                merge_fn=merge,
+            ),
         ),
         terminal_field=proc_name.replace("-", "_"),
         terminal_type=dict,
-        meta={"expected_keys": {f"k{i}" for i in range(n_items)},
-              "oracle_n": oracle_n},
+        meta={"expected_keys": {f"k{i}" for i in range(n_items)}, "oracle_n": oracle_n},
     )
 
 
@@ -210,9 +237,12 @@ def fan_in_topology(draw):
         nodes=(
             NodeSpec(name=src_a, output_type=src_a_type, fn=_make_fn(src_a_type)),
             NodeSpec(name=src_b, output_type=src_b_type, fn=_make_fn(src_b_type)),
-            NodeSpec(name=consumer, output_type=terminal_type,
-                     input_type={src_a_field: src_a_type, src_b_field: src_b_type},
-                     fn=consumer_fn),
+            NodeSpec(
+                name=consumer,
+                output_type=terminal_type,
+                input_type={src_a_field: src_a_type, src_b_field: src_b_type},
+                fn=consumer_fn,
+            ),
         ),
         terminal_field=consumer.replace("-", "_"),
         terminal_type=terminal_type,
@@ -235,15 +265,22 @@ def sub_construct_topology(draw):
         name=f"subcon-{tag}",
         nodes=(
             NodeSpec(name=src_name, output_type=src_type, fn=_make_fn(src_type)),
-            NodeSpec(name=inner_name, output_type=inner_out_type,
-                     input_type=src_type,
-                     fn=_make_transform_fn(src_type, inner_out_type)),
+            NodeSpec(
+                name=inner_name,
+                output_type=inner_out_type,
+                input_type=src_type,
+                fn=_make_transform_fn(src_type, inner_out_type),
+            ),
         ),
         terminal_field=sub_name.replace("-", "_"),
         terminal_type=inner_out_type,
-        meta={"is_sub_construct": True, "sub_name": sub_name,
-              "sub_input": src_type, "sub_output": inner_out_type,
-              "inner_names": [inner_name]},
+        meta={
+            "is_sub_construct": True,
+            "sub_name": sub_name,
+            "sub_input": src_type,
+            "sub_output": inner_out_type,
+            "inner_names": [inner_name],
+        },
     )
 
 
@@ -268,19 +305,27 @@ def deep_chain_topology(draw):
             use_dict = draw(st.booleans())
             if use_dict:
                 prev_field = node_specs[-1].name.replace("-", "_")
-                node_specs.append(NodeSpec(
-                    name=name, output_type=out_t,
-                    input_type={prev_field: in_t},
-                    fn=lambda _i, _c, _ot=out_t: _ot(),
-                ))
+                node_specs.append(
+                    NodeSpec(
+                        name=name,
+                        output_type=out_t,
+                        input_type={prev_field: in_t},
+                        fn=lambda _i, _c, _ot=out_t: _ot(),
+                    )
+                )
             else:
-                node_specs.append(NodeSpec(
-                    name=name, output_type=out_t, input_type=in_t,
-                    fn=_make_transform_fn(in_t, out_t),
-                ))
+                node_specs.append(
+                    NodeSpec(
+                        name=name,
+                        output_type=out_t,
+                        input_type=in_t,
+                        fn=_make_transform_fn(in_t, out_t),
+                    )
+                )
 
     return TopologySpec(
-        name=f"deep-{tag}", nodes=tuple(node_specs),
+        name=f"deep-{tag}",
+        nodes=tuple(node_specs),
         terminal_field=node_specs[-1].name.replace("-", "_"),
         terminal_type=chain_types[-1],
         meta={"depth": depth},
@@ -316,16 +361,12 @@ def loop_topology(draw):
     return TopologySpec(
         name=f"loop-{tag}",
         nodes=(
-            NodeSpec(name=src_name, output_type=Beta,
-                     fn=lambda _i, _c: Beta(score=0.0)),
-            NodeSpec(name=body_name, output_type=Beta, input_type=Beta,
-                     fn=loop_fn,
-                     modifier="loop"),
+            NodeSpec(name=src_name, output_type=Beta, fn=lambda _i, _c: Beta(score=0.0)),
+            NodeSpec(name=body_name, output_type=Beta, input_type=Beta, fn=loop_fn, modifier="loop"),
         ),
         terminal_field=body_name.replace("-", "_"),
         terminal_type=list,
-        meta={"threshold": threshold, "step_size": step_size,
-              "max_iters": max_iters, "loop_cond": cond_name},
+        meta={"threshold": threshold, "step_size": step_size, "max_iters": max_iters, "loop_cond": cond_name},
     )
 
 
@@ -344,16 +385,14 @@ def loop_exhaustion_topology(draw):
     return TopologySpec(
         name=f"loopex-{tag}",
         nodes=(
-            NodeSpec(name=src_name, output_type=Beta,
-                     fn=lambda _i, _c: Beta(score=0.0)),
-            NodeSpec(name=body_name, output_type=Beta, input_type=Beta,
-                     fn=lambda _i, _c: Beta(score=0.0),
-                     modifier="loop"),
+            NodeSpec(name=src_name, output_type=Beta, fn=lambda _i, _c: Beta(score=0.0)),
+            NodeSpec(
+                name=body_name, output_type=Beta, input_type=Beta, fn=lambda _i, _c: Beta(score=0.0), modifier="loop"
+            ),
         ),
         terminal_field=body_name.replace("-", "_"),
         terminal_type=list,
-        meta={"max_iters": max_iters, "loop_cond": cond_name,
-              "must_exhaust": True},
+        meta={"max_iters": max_iters, "loop_cond": cond_name, "must_exhaust": True},
     )
 
 
@@ -372,15 +411,12 @@ def skip_when_topology(draw):
     return TopologySpec(
         name=f"skip-{tag}",
         nodes=(
-            NodeSpec(name=src_name, output_type=Beta,
-                     fn=lambda _i, _c, _s=input_score: Beta(score=_s)),
-            NodeSpec(name=skip_name, output_type=Alpha, input_type=Beta,
-                     fn=lambda _i, _c: Alpha(value="executed")),
+            NodeSpec(name=src_name, output_type=Beta, fn=lambda _i, _c, _s=input_score: Beta(score=_s)),
+            NodeSpec(name=skip_name, output_type=Alpha, input_type=Beta, fn=lambda _i, _c: Alpha(value="executed")),
         ),
         terminal_field=skip_name.replace("-", "_"),
         terminal_type=Alpha,
-        meta={"skip_threshold": threshold, "input_score": input_score,
-              "should_skip": should_skip},
+        meta={"skip_threshold": threshold, "input_score": input_score, "should_skip": should_skip},
     )
 
 
@@ -398,6 +434,7 @@ any_topology_spec = st.one_of(
 
 # -- Surface adapters (TopologySpec -> compiled graph) ---------------------
 
+
 def _build_scripted_surface(spec: TopologySpec):
     """Build via Node.scripted + Construct (programmatic API)."""
     if spec.meta.get("is_sub_construct"):
@@ -407,20 +444,19 @@ def _build_scripted_surface(spec: TopologySpec):
         t = _uid()
         fn_name = f"scr_{src_ns.name}_{t}".replace("-", "_")
         register_scripted(fn_name, src_ns.fn)
-        outer_nodes.append(Node.scripted(src_ns.name, fn=fn_name,
-                                         outputs=src_ns.output_type))
+        outer_nodes.append(Node.scripted(src_ns.name, fn=fn_name, outputs=src_ns.output_type))
 
         for ns in spec.nodes[1:]:
             t2 = _uid()
             fn_name2 = f"scr_{ns.name}_{t2}".replace("-", "_")
             register_scripted(fn_name2, ns.fn)
-            inner_nodes.append(Node.scripted(ns.name, fn=fn_name2,
-                                             inputs=ns.input_type,
-                                             outputs=ns.output_type))
+            inner_nodes.append(Node.scripted(ns.name, fn=fn_name2, inputs=ns.input_type, outputs=ns.output_type))
 
         sub = Construct(
-            spec.meta["sub_name"], nodes=inner_nodes,
-            input=spec.meta["sub_input"], output=spec.meta["sub_output"],
+            spec.meta["sub_name"],
+            nodes=inner_nodes,
+            input=spec.meta["sub_input"],
+            output=spec.meta["sub_output"],
         )
         outer_nodes.append(sub)
         return compile(Construct(spec.name, nodes=outer_nodes), **build_test_compile_kwargs())
@@ -432,19 +468,21 @@ def _build_scripted_surface(spec: TopologySpec):
             t = _uid()
             fn_name = f"scr_{ns.name}_{t}".replace("-", "_")
             register_scripted(fn_name, ns.fn)
-            node = Node.scripted(ns.name, fn=fn_name,
-                                 inputs=ns.input_type, outputs=ns.output_type)
+            node = Node.scripted(ns.name, fn=fn_name, inputs=ns.input_type, outputs=ns.output_type)
             if ns.input_type is not None:
+
                 def skip_pred(val, _t=threshold):
                     return isinstance(val, Beta) and val.score > _t
 
                 def skip_val(_val):
                     return Alpha(value="skipped")
 
-                node = node.model_copy(update={
-                    "skip_when": skip_pred,
-                    "skip_value": skip_val,
-                })
+                node = node.model_copy(
+                    update={
+                        "skip_when": skip_pred,
+                        "skip_value": skip_val,
+                    }
+                )
             nodes.append(node)
         return compile(Construct(spec.name, nodes=nodes), **build_test_compile_kwargs())
 
@@ -453,8 +491,7 @@ def _build_scripted_surface(spec: TopologySpec):
         t = _uid()
         fn_name = f"scr_{ns.name}_{t}".replace("-", "_")
         register_scripted(fn_name, ns.fn)
-        node = Node.scripted(ns.name, fn=fn_name,
-                             inputs=ns.input_type, outputs=ns.output_type)
+        node = Node.scripted(ns.name, fn=fn_name, inputs=ns.input_type, outputs=ns.output_type)
         node = _apply_spec_modifiers(node, ns, f"scr_{t}", spec)
         nodes.append(node)
     return compile(Construct(spec.name, nodes=nodes), **build_test_compile_kwargs())
@@ -485,6 +522,7 @@ def _apply_spec_modifiers(node, ns: NodeSpec, prefix: str, spec: TopologySpec | 
 def _register_type_safe(t: type):
     """Register a type for the loader, ignoring duplicates."""
     from neograph.spec_types import register_type
+
     try:
         register_type(t.__name__, t)
     except Exception:

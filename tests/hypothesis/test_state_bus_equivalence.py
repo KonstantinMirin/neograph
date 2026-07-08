@@ -69,17 +69,25 @@ def dict_states(draw):
 
 class _DynamicModel(BaseModel):
     """Open-ended BaseModel for hypothesis-driven attribute composition."""
+
     model_config = {"extra": "allow", "arbitrary_types_allowed": True}
 
 
 @st.composite
 def model_states(draw):
     """Random BaseModel states constructed with extra='allow'."""
-    keys = draw(st.lists(st.text(
-        alphabet=st.characters(min_codepoint=ord("a"), max_codepoint=ord("z")),
-        min_size=1,
-        max_size=10,
-    ), min_size=0, max_size=6, unique=True))
+    keys = draw(
+        st.lists(
+            st.text(
+                alphabet=st.characters(min_codepoint=ord("a"), max_codepoint=ord("z")),
+                min_size=1,
+                max_size=10,
+            ),
+            min_size=0,
+            max_size=6,
+            unique=True,
+        )
+    )
     items = {k: draw(VALUES) for k in keys}
     return _DynamicModel(**items)
 

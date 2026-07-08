@@ -67,21 +67,26 @@ def _operator_subconstruct(name: str, probe_calls: list[str]) -> Construct:
     )
     register_condition(
         cond_name,
-        lambda state: (
-            {"issues": state.gate.issues}
-            if getattr(state, "gate", None) and not state.gate.passed
-            else None
-        ),
+        lambda state: {"issues": state.gate.issues} if getattr(state, "gate", None) and not state.gate.passed else None,
     )
 
     probe_node = Node.scripted(
-        "probe", fn=probe_fn_name, inputs=Claims, outputs=Claims,
+        "probe",
+        fn=probe_fn_name,
+        inputs=Claims,
+        outputs=Claims,
     )
     gate_node = Node.scripted(
-        "gate", fn=gate_fn_name, inputs=Claims, outputs=ValidationResult,
+        "gate",
+        fn=gate_fn_name,
+        inputs=Claims,
+        outputs=ValidationResult,
     ) | Operator(when=cond_name)
     return Construct(
-        name, input=Claims, output=ValidationResult, nodes=[probe_node, gate_node],
+        name,
+        input=Claims,
+        output=ValidationResult,
+        nodes=[probe_node, gate_node],
     )
 
 
@@ -168,7 +173,8 @@ def test_arm_operator_subconstruct_compiles_like_main_path(tmp_path):
         main_sub = _operator_subconstruct("main_sub", main_probe)
         register_scripted("seed_main", lambda _in, _cfg: Claims(items=["data"]))
         main_parent = Construct(
-            "parent", nodes=[Node.scripted("seed", fn="seed_main", outputs=Claims), main_sub],
+            "parent",
+            nodes=[Node.scripted("seed", fn="seed_main", outputs=Claims), main_sub],
         )
         compile(main_parent, checkpointer=saver, **build_test_compile_kwargs())
 

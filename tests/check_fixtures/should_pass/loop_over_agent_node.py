@@ -22,17 +22,20 @@ register_scripted("seed_fn", lambda input_data, config: Draft(text="seed"))
 register_tool_factory("search", lambda config, tool_config: None)
 
 
-pipeline = Construct("loop-over-agent", nodes=[
-    Node.scripted("seed", fn="seed_fn", outputs=Draft),
-    Node(
-        name="agent-gen",
-        mode="agent",
-        inputs=Draft,  # refine port: fed the prior typed output on re-entry
-        outputs=Draft,
-        model="fast",
-        prompt="test",
-        tools=[Tool(name="search", budget=3)],
-    )
-    # callable condition reads the agent's typed subgraph output (Draft.score)
-    | Loop(when=lambda d: d is None or d.score < 0.8, max_iterations=3),
-])
+pipeline = Construct(
+    "loop-over-agent",
+    nodes=[
+        Node.scripted("seed", fn="seed_fn", outputs=Draft),
+        Node(
+            name="agent-gen",
+            mode="agent",
+            inputs=Draft,  # refine port: fed the prior typed output on re-entry
+            outputs=Draft,
+            model="fast",
+            prompt="test",
+            tools=[Tool(name="search", budget=3)],
+        )
+        # callable condition reads the agent's typed subgraph output (Draft.score)
+        | Loop(when=lambda d: d is None or d.score < 0.8, max_iterations=3),
+    ],
+)

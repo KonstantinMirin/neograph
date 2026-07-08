@@ -59,8 +59,6 @@ _TEST_CONDITIONS: dict[str, _Callable] = {}
 _TEST_TOOL_FACTORIES: dict[str, _Callable] = {}
 
 
-
-
 def register_scripted(name: str, fn: _Callable) -> None:
     """Test-side scripted-shim registration (post-§2).
 
@@ -114,6 +112,7 @@ def lookup_scripted(name: str) -> _Callable:
     """
     from neograph._runtime_registry import _decoration_registry
     from neograph.errors import ConfigurationError
+
     fn = _TEST_SCRIPTED.get(name) or _decoration_registry.scripted.get(name)
     if fn is None:
         raise ConfigurationError.build(
@@ -127,6 +126,7 @@ def lookup_condition(name: str) -> _Callable:
     """Test-only mirror of the removed src/ helper."""
     from neograph._runtime_registry import _decoration_registry
     from neograph.errors import ConfigurationError
+
     fn = _TEST_CONDITIONS.get(name) or _decoration_registry.condition.get(name)
     if fn is None:
         raise ConfigurationError.build(
@@ -134,8 +134,6 @@ def lookup_condition(name: str) -> _Callable:
             hint="Use tests.fakes.register_condition() or pass conditions= to compile().",
         )
     return fn
-
-
 
 
 # The fake DOUBLES (StructuredFake, StructuredFakeWithRaw, ReActFake,

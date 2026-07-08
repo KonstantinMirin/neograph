@@ -20,8 +20,10 @@ register_scripted("mei_outer", lambda i, c: Outer(label="test"))
 register_scripted("mei_proc", lambda i, c: Result(value="ok"))
 
 # over="outer.label.chars" — label is a str, not a model, so "chars" can't resolve
-pipeline = Construct("broken", nodes=[
-    Node.scripted("outer", fn="mei_outer", outputs=Outer),
-    Node.scripted("proc", fn="mei_proc", inputs=str, outputs=Result)
-    | Each(over="outer.label.chars", key="x"),
-])
+pipeline = Construct(
+    "broken",
+    nodes=[
+        Node.scripted("outer", fn="mei_outer", outputs=Outer),
+        Node.scripted("proc", fn="mei_proc", inputs=str, outputs=Result) | Each(over="outer.label.chars", key="x"),
+    ],
+)

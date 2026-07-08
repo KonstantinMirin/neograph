@@ -13,13 +13,15 @@ import pytest
 SRC_DIR = pathlib.Path(__file__).resolve().parent.parent / "src" / "neograph"
 
 # Error classes that must use .build() instead of direct construction.
-ERROR_CLASSES = frozenset({
-    "ConstructError",
-    "ExecutionError",
-    "CompileError",
-    "ConfigurationError",
-    "NeographError",
-})
+ERROR_CLASSES = frozenset(
+    {
+        "ConstructError",
+        "ExecutionError",
+        "CompileError",
+        "ConfigurationError",
+        "NeographError",
+    }
+)
 
 
 class TestFactoryFunctionsTakeKwargs:
@@ -32,19 +34,28 @@ class TestFactoryFunctionsTakeKwargs:
     and `_oracle.py` for any import of the six forbidden names.
     """
 
-    FORBIDDEN_NAMES = frozenset({
-        "_llm_factory",
-        "_llm_factory_params",
-        "_prompt_compiler",
-        "_prompt_compiler_params",
-        "_global_renderer",
-        "_cost_callback",
-        "_get_global_renderer",
-    })
+    FORBIDDEN_NAMES = frozenset(
+        {
+            "_llm_factory",
+            "_llm_factory_params",
+            "_prompt_compiler",
+            "_prompt_compiler_params",
+            "_global_renderer",
+            "_cost_callback",
+            "_get_global_renderer",
+        }
+    )
 
-    FACTORY_FILES = ("factory.py", "_oracle.py", "_dispatch.py", "_execute.py",
-                     "_state_write.py", "_input_shape.py", "_subconstruct.py",
-                     "_wiring.py")
+    FACTORY_FILES = (
+        "factory.py",
+        "_oracle.py",
+        "_dispatch.py",
+        "_execute.py",
+        "_state_write.py",
+        "_input_shape.py",
+        "_subconstruct.py",
+        "_wiring.py",
+    )
 
     def test_factory_files_do_not_import_forbidden_names(self):
         violations: list[str] = []
@@ -58,10 +69,7 @@ class TestFactoryFunctionsTakeKwargs:
                     if node.module and "neograph._llm" in node.module:
                         for alias in node.names:
                             if alias.name in self.FORBIDDEN_NAMES:
-                                violations.append(
-                                    f"  {fname}:{node.lineno}: "
-                                    f"from {node.module} import {alias.name}"
-                                )
+                                violations.append(f"  {fname}:{node.lineno}: from {node.module} import {alias.name}")
 
         assert violations == [], (
             f"\n{len(violations)} factory file(s) still import removed LLM globals:\n"
@@ -137,9 +145,8 @@ class TestFactoryFunctionsTakeKwargs:
 
         assert violations == [], (
             f"\n{len(violations)} factory file(s) reach into the compat runtime "
-            "slot:\n" + "\n".join(violations)
-            + "\n\nThread the runtime as a parameter instead — the compat slot "
-              "is reserved for the deprecated `configure_llm()` bridge."
+            "slot:\n" + "\n".join(violations) + "\n\nThread the runtime as a parameter instead — the compat slot "
+            "is reserved for the deprecated `configure_llm()` bridge."
         )
 
 
@@ -171,99 +178,111 @@ class TestLlmResponsibilityDiscipline:
     # MUST be defined at module top-level in the named file; names that don't
     # appear MUST NOT be top-level definitions there.
     ALLOWED_NAMES = {
-        "_llm.py": frozenset({
-            # produce-mode orchestrator + runtime adapters it owns
-            "invoke_structured",
-            "_get_llm",
-            "_notify_cost",
-            # neograph-w74k.2.3 (Phase 1c): async twin + the pure preamble/
-            # postamble helpers both orchestrators share (anti-drift extraction).
-            "ainvoke_structured",
-            "_prepare_structured_call",
-            "_finish_structured_call",
-            # neograph-15s2: native json_mode call staging bound at the shared
-            # preamble (both twins inherit). Binding the provider-native
-            # response_format is part of "how a produce-mode call is staged
-            # (resolve LLM -> ...)" — the orchestrator's own change axis.
-            "_NativeJsonModeLLM",
-            "_is_response_format_rejection",
-            "_ensure_json_instruction",
-        }),
-        "_llm_dispatch.py": frozenset({
-            "_call_structured",
-            # neograph-w74k.2.3: async twin of the strategy dispatch.
-            "_acall_structured",
-            # neograph-7wya: shared fail-loud for the structured path's
-            # parsed=None silent variant (sync + async arms).
-            "_raise_decoded_none",
-            # neograph-ykun: the four dispatch fail-loud helpers, single-sited so
-            # a message edit lands once across the sync/async twins.
-            "_raise_markup_unrecoverable",
-            "_raise_dispatch_failed",
-            "_raise_unknown_strategy",
-            "_raise_unexpected_variant",
-            # neograph-zcxd: shared fail-loud for the structured re-prompt loop's
-            # max_retries exhaustion on a validation failure (sync + async twins).
-            "_raise_structured_retry_exhausted",
-        }),
+        "_llm.py": frozenset(
+            {
+                # produce-mode orchestrator + runtime adapters it owns
+                "invoke_structured",
+                "_get_llm",
+                "_notify_cost",
+                # neograph-w74k.2.3 (Phase 1c): async twin + the pure preamble/
+                # postamble helpers both orchestrators share (anti-drift extraction).
+                "ainvoke_structured",
+                "_prepare_structured_call",
+                "_finish_structured_call",
+                # neograph-15s2: native json_mode call staging bound at the shared
+                # preamble (both twins inherit). Binding the provider-native
+                # response_format is part of "how a produce-mode call is staged
+                # (resolve LLM -> ...)" — the orchestrator's own change axis.
+                "_NativeJsonModeLLM",
+                "_is_response_format_rejection",
+                "_ensure_json_instruction",
+            }
+        ),
+        "_llm_dispatch.py": frozenset(
+            {
+                "_call_structured",
+                # neograph-w74k.2.3: async twin of the strategy dispatch.
+                "_acall_structured",
+                # neograph-7wya: shared fail-loud for the structured path's
+                # parsed=None silent variant (sync + async arms).
+                "_raise_decoded_none",
+                # neograph-ykun: the four dispatch fail-loud helpers, single-sited so
+                # a message edit lands once across the sync/async twins.
+                "_raise_markup_unrecoverable",
+                "_raise_dispatch_failed",
+                "_raise_unknown_strategy",
+                "_raise_unexpected_variant",
+                # neograph-zcxd: shared fail-loud for the structured re-prompt loop's
+                # max_retries exhaustion on a validation failure (sync + async twins).
+                "_raise_structured_retry_exhausted",
+            }
+        ),
         # neograph-ble3: DSML detection extracted to its own pure leaf module.
-        "_dsml.py": frozenset({
-            "contains_dsml",
-            "message_text",
-        }),
+        "_dsml.py": frozenset(
+            {
+                "contains_dsml",
+                "message_text",
+            }
+        ),
         # neograph-ble3: provider-quirk compat shim — StructuredResult tagged
         # union + Protocol-based adapter chain. New provider quirks are new
         # decorator classes HERE, never new branches in _call_structured.
-        "_llm_structured_compat.py": frozenset({
-            "Parsed",
-            "Raw",
-            "Failed",
-            "StructuredOutputAdapter",
-            "LangChainStructuredAdapter",
-            "IncludeRawCompatDecorator",
-            "DsmlClassifierDecorator",
-            "build_default_adapter",
-            # neograph-w74k.2.3: pure classifiers shared by the sync/async adapters.
-            "_classify_lc_result",
-            "_reclassify_dsml",
-        }),
-        "_llm_retry.py": frozenset({
-            "_extract_json",
-            "_extract_balanced",
-            "_is_list_annotation",
-            "_apply_null_defaults",
-            "_parse_json_response",
-            "_build_retry_msg",
-            "_invoke_json_with_retry",
-            # neograph-ble3: DSML recovery (re-prompt + re-parse) is the RETRY
-            # side of the DSML story; detection moved to _dsml. Renamed from
-            # _attempt_dsml_recovery to recover_dsml.
-            "recover_dsml",
-            # neograph-w74k.2.3: async twins of the retry + DSML-recovery seams.
-            "_ainvoke_json_with_retry",
-            "arecover_dsml",
-            # neograph-ykun: shared DSML re-prompt prep (detection + warning log +
-            # targeted-retry message assembly) single-sited across the twins.
-            "_dsml_recovery_messages",
-            # neograph-zcxd: structured-strategy validation-retry helpers. The
-            # pure repair-hint body (_repair_hint) + one-line detail digest
-            # (_validation_error_details) are shared with the json_mode retry
-            # builder; build_structured_repair_message / structured_retry_messages
-            # are the structured-flavored re-prompt assembly the dispatch twins call.
-            "_validation_error_details",
-            "_repair_hint",
-            "build_structured_repair_message",
-            "structured_retry_messages",
-        }),
-        "_llm_render.py": frozenset({
-            "_is_inline_prompt",
-            "_compile_multimodal_prompt",
-            "_resolve_var",
-            "_resolve_var_raw",
-            "_substitute_vars",
-            "_compile_prompt",
-            "render_prompt",
-        }),
+        "_llm_structured_compat.py": frozenset(
+            {
+                "Parsed",
+                "Raw",
+                "Failed",
+                "StructuredOutputAdapter",
+                "LangChainStructuredAdapter",
+                "IncludeRawCompatDecorator",
+                "DsmlClassifierDecorator",
+                "build_default_adapter",
+                # neograph-w74k.2.3: pure classifiers shared by the sync/async adapters.
+                "_classify_lc_result",
+                "_reclassify_dsml",
+            }
+        ),
+        "_llm_retry.py": frozenset(
+            {
+                "_extract_json",
+                "_extract_balanced",
+                "_is_list_annotation",
+                "_apply_null_defaults",
+                "_parse_json_response",
+                "_build_retry_msg",
+                "_invoke_json_with_retry",
+                # neograph-ble3: DSML recovery (re-prompt + re-parse) is the RETRY
+                # side of the DSML story; detection moved to _dsml. Renamed from
+                # _attempt_dsml_recovery to recover_dsml.
+                "recover_dsml",
+                # neograph-w74k.2.3: async twins of the retry + DSML-recovery seams.
+                "_ainvoke_json_with_retry",
+                "arecover_dsml",
+                # neograph-ykun: shared DSML re-prompt prep (detection + warning log +
+                # targeted-retry message assembly) single-sited across the twins.
+                "_dsml_recovery_messages",
+                # neograph-zcxd: structured-strategy validation-retry helpers. The
+                # pure repair-hint body (_repair_hint) + one-line detail digest
+                # (_validation_error_details) are shared with the json_mode retry
+                # builder; build_structured_repair_message / structured_retry_messages
+                # are the structured-flavored re-prompt assembly the dispatch twins call.
+                "_validation_error_details",
+                "_repair_hint",
+                "build_structured_repair_message",
+                "structured_retry_messages",
+            }
+        ),
+        "_llm_render.py": frozenset(
+            {
+                "_is_inline_prompt",
+                "_compile_multimodal_prompt",
+                "_resolve_var",
+                "_resolve_var_raw",
+                "_substitute_vars",
+                "_compile_prompt",
+                "render_prompt",
+            }
+        ),
     }
 
     # Coarse line-count budget. Not the load-bearing assertion (the name set
@@ -281,7 +300,7 @@ class TestLlmResponsibilityDiscipline:
         # entrypoints + json-word guard + response_format rejection predicate).
         # The load-bearing assertion is the name allowlist above; this coarse
         # proxy is widened for the new, reviewed names.
-        "_llm.py": 385,
+        "_llm.py": 400,  # m0tv format rewrap (392 actual)
         # neograph-ble3: tightened 130 -> 115. The 5-path include_raw try/except
         # ladder collapsed to a match on the StructuredResult variant; the
         # provider-quirk wiring moved to the compat shim. Locks the deletion.
@@ -291,7 +310,7 @@ class TestLlmResponsibilityDiscipline:
         # bounded validation re-prompt loop (parity with json_mode) plus a shared
         # exhaustion-raise helper. Reviewed increase; the re-prompt message
         # assembly is single-sited in _llm_retry.structured_retry_messages.
-        "_llm_dispatch.py": 250,
+        "_llm_dispatch.py": 285,  # m0tv format rewrap (273 actual)
         # neograph-ble3: tightened 365 -> 360. _DSML_PATTERN regex moved to
         # _dsml.py; recover_dsml is detection-free. Locks the deletion.
         # neograph-s1u4: 360 -> 375. _apply_null_defaults gained a guarded
@@ -347,8 +366,7 @@ class TestLlmResponsibilityDiscipline:
                 "Move them to their change-axis cluster module."
             )
             assert not missing, (
-                f"{fname} is missing required top-level names: {sorted(missing)}. "
-                f"Required: {sorted(allowed)}."
+                f"{fname} is missing required top-level names: {sorted(missing)}. Required: {sorted(allowed)}."
             )
 
     def test_line_count_budgets(self):
@@ -361,10 +379,7 @@ class TestLlmResponsibilityDiscipline:
             n = len(path.read_text().splitlines())
             if n > budget:
                 violations.append(f"  {fname}: {n} lines (budget {budget})")
-        assert not violations, (
-            "Line-count budgets exceeded — coarse proxy for accretion:\n"
-            + "\n".join(violations)
-        )
+        assert not violations, "Line-count budgets exceeded — coarse proxy for accretion:\n" + "\n".join(violations)
 
     def test_no_cycles_among_split_modules(self):
         """The five _llm* modules must form a DAG.
@@ -394,18 +409,15 @@ class TestLlmResponsibilityDiscipline:
             "_llm_runtime.py",
             "_llm_config.py",
         ]
+
         def _collect_runtime_imports(tree: ast.AST) -> set[str]:
             """Walk imports, skipping anything inside an `if TYPE_CHECKING:` block."""
             tc_blocks: list[ast.If] = []
             for n in ast.walk(tree):
                 if isinstance(n, ast.If):
                     test = n.test
-                    is_tc = (
-                        (isinstance(test, ast.Name) and test.id == "TYPE_CHECKING")
-                        or (
-                            isinstance(test, ast.Attribute)
-                            and test.attr == "TYPE_CHECKING"
-                        )
+                    is_tc = (isinstance(test, ast.Name) and test.id == "TYPE_CHECKING") or (
+                        isinstance(test, ast.Attribute) and test.attr == "TYPE_CHECKING"
                     )
                     if is_tc:
                         tc_blocks.append(n)
@@ -470,7 +482,9 @@ class TestLlmResponsibilityDiscipline:
         """
         violations: list[str] = []
         for fname in (
-            "_llm_dispatch.py", "_llm_retry.py", "_llm_render.py",
+            "_llm_dispatch.py",
+            "_llm_retry.py",
+            "_llm_render.py",
             "_llm_structured_compat.py",  # neograph-ble3
         ):
             path = SRC_DIR / fname
@@ -487,14 +501,12 @@ class TestLlmResponsibilityDiscipline:
                             # imports; filter to ones inside the body specifically.
                             if sub in func.body:
                                 continue  # toplevel of function body (rare)
-                            violations.append(
-                                f"  {fname}:{sub.lineno}: from {sub.module} import ..."
-                            )
+                            violations.append(f"  {fname}:{sub.lineno}: from {sub.module} import ...")
         assert not violations, (
             "Function-local `from neograph._llm*` import detected in spin-off module:\n"
             + "\n".join(violations)
             + "\n\nResolve the underlying cycle by reshaping the layout, "
-              "not by hiding the import inside a function body."
+            "not by hiding the import inside a function body."
         )
 
 
@@ -556,7 +568,7 @@ class TestLlmScenarioTouchpoints:
     def test_all_must_touch_files_exist(self):
         missing: list[str] = []
         for scenario, spec in self.SCENARIO_TOUCHPOINTS.items():
-            for fname in (spec["must_touch"] | spec["may_touch"]):
+            for fname in spec["must_touch"] | spec["may_touch"]:
                 if not (SRC_DIR / fname).exists():
                     missing.append(f"  {scenario}: {fname} does not exist")
         assert not missing, "\n".join(missing)
@@ -564,9 +576,7 @@ class TestLlmScenarioTouchpoints:
     def test_max_touch_bounded(self):
         for scenario, spec in self.SCENARIO_TOUCHPOINTS.items():
             total = len(spec["must_touch"]) + len(spec["may_touch"])
-            assert total <= spec["max_touch"], (
-                f"Scenario '{scenario}' touches {total} files; max {spec['max_touch']}."
-            )
+            assert total <= spec["max_touch"], f"Scenario '{scenario}' touches {total} files; max {spec['max_touch']}."
 
     def test_mutation_excess_scenario_touchpoints(self):
         """Mutation case — synthesize an oversized scenario, scanner detects."""
@@ -614,11 +624,7 @@ class TestLlmCohesionFanOut:
             if py.name == target_module_basename:
                 continue
             text = py.read_text()
-            if (
-                f"from {target} " in text
-                or f"from {target}\n" in text
-                or f"import {target}\n" in text
-            ):
+            if f"from {target} " in text or f"from {target}\n" in text or f"import {target}\n" in text:
                 importers.append(py.name)
         return importers
 
@@ -629,23 +635,14 @@ class TestLlmCohesionFanOut:
                 continue
             importers = self._count_importers(mod)
             if len(importers) > ceiling:
-                violations.append(
-                    f"  {mod}: {len(importers)} importers (ceiling {ceiling}): "
-                    f"{importers}"
-                )
-        assert not violations, (
-            "Spin-off module fan-out exceeded ceiling:\n" + "\n".join(violations)
-        )
+                violations.append(f"  {mod}: {len(importers)} importers (ceiling {ceiling}): {importers}")
+        assert not violations, "Spin-off module fan-out exceeded ceiling:\n" + "\n".join(violations)
 
     def test_mutation_excess_importers_detected(self, tmp_path):
         for i in range(4):
             (tmp_path / f"client_{i}.py").write_text("from neograph.leaf import x\n")
-        count = sum(
-            1 for p in tmp_path.glob("client_*.py")
-            if "from neograph.leaf " in p.read_text()
-        )
+        count = sum(1 for p in tmp_path.glob("client_*.py") if "from neograph.leaf " in p.read_text())
         assert count > 2
-
 
 
 class TestStateBusGetDiscipline:
@@ -660,14 +657,16 @@ class TestStateBusGetDiscipline:
     # Filenames whose StateBus.get sites have been audited (izo1-B). The
     # scanner only enforces discipline on these files; new modules can be
     # added once their sites are classified per the audit doc.
-    IN_SCOPE = frozenset({
-        "_input_shape.py",
-        "_execute.py",
-        "_oracle.py",
-        "_subconstruct.py",
-        "_wiring.py",
-        "_state_write.py",
-    })
+    IN_SCOPE = frozenset(
+        {
+            "_input_shape.py",
+            "_execute.py",
+            "_oracle.py",
+            "_subconstruct.py",
+            "_wiring.py",
+            "_state_write.py",
+        }
+    )
 
     # Variable names that we treat as "this expression is a StateBus".
     BUS_NAMES = frozenset({"bus", "state", "_state"})
@@ -722,48 +721,36 @@ class TestStateBusGetDiscipline:
             f"\n{len(offenders)} unannotated StateBus.get site(s) found:\n"
             + "\n".join(f"  {o}" for o in offenders)
             + "\n\nEither switch to .get_required(...) (§7 required-getter) "
-              "or add a `# StateBus.get optional: <reason>` comment on the "
-              "call site or the immediately-preceding line."
+            "or add a `# StateBus.get optional: <reason>` comment on the "
+            "call site or the immediately-preceding line."
         )
 
     def test_mutation_unannotated_get_detected(self, tmp_path: pathlib.Path):
         """Inject an unannotated `bus.get(k)` into a scoped temp file;
         scanner must flag it."""
         target = tmp_path / "_input_shape.py"
-        target.write_text(
-            "def f(bus):\n"
-            "    return bus.get('k')\n"
-        )
+        target.write_text("def f(bus):\n    return bus.get('k')\n")
         offenders = self._scan(tmp_path)
         assert any(o.endswith(":2") for o in offenders), offenders
 
     def test_mutation_annotated_get_passes(self, tmp_path: pathlib.Path):
         """`bus.get(k, None)  # StateBus.get optional: test` → scanner skips."""
         target = tmp_path / "_input_shape.py"
-        target.write_text(
-            "def f(bus):\n"
-            "    return bus.get('k', None)  # StateBus.get optional: test reason\n"
-        )
+        target.write_text("def f(bus):\n    return bus.get('k', None)  # StateBus.get optional: test reason\n")
         offenders = self._scan(tmp_path)
         assert offenders == [], offenders
 
     def test_mutation_get_required_passes(self, tmp_path: pathlib.Path):
         """`bus.get_required(k)` (not `.get`) is never flagged."""
         target = tmp_path / "_input_shape.py"
-        target.write_text(
-            "def f(bus):\n"
-            "    return bus.get_required('k')\n"
-        )
+        target.write_text("def f(bus):\n    return bus.get_required('k')\n")
         offenders = self._scan(tmp_path)
         assert offenders == [], offenders
 
     def test_mutation_out_of_scope_file_skipped(self, tmp_path: pathlib.Path):
         """A file outside IN_SCOPE is not scanned."""
         target = tmp_path / "not_audited.py"
-        target.write_text(
-            "def f(bus):\n"
-            "    return bus.get('k')\n"
-        )
+        target.write_text("def f(bus):\n    return bus.get('k')\n")
         offenders = self._scan(tmp_path)
         assert offenders == [], offenders
 
@@ -791,12 +778,14 @@ class TestNoRawStateAccessInRoutingModules:
     excluded because the scanner keys on ``Name(id='state')`` only.
     """
 
-    IN_SCOPE = frozenset({
-        "_wiring.py",
-        "_oracle.py",
-        "_subconstruct.py",
-        "_state_write.py",
-    })
+    IN_SCOPE = frozenset(
+        {
+            "_wiring.py",
+            "_oracle.py",
+            "_subconstruct.py",
+            "_state_write.py",
+        }
+    )
 
     @classmethod
     def _scan(cls, src_dir: pathlib.Path) -> list[str]:
@@ -843,35 +832,26 @@ class TestNoRawStateAccessInRoutingModules:
             f"\n{len(offenders)} raw-state-access site(s) found in routing modules:\n"
             + "\n".join(f"  {o}" for o in offenders)
             + "\n\nRoute reads through StateBus: adapt_state(state) then bus.get / "
-              "get_required / get_counter / keys. Use snapshot_state(bus) for the "
-              "full snapshot and _collect_each_items(bus, each, fan_out=...) for "
-              "Each-router navigation+dedup."
+            "get_required / get_counter / keys. Use snapshot_state(bus) for the "
+            "full snapshot and _collect_each_items(bus, each, fan_out=...) for "
+            "Each-router navigation+dedup."
         )
 
     def test_mutation_getattr_state_detected(self, tmp_path: pathlib.Path):
         """A probe ``getattr(state, 'x')`` in a scoped temp file is flagged."""
-        (tmp_path / "_wiring.py").write_text(
-            "def f(state):\n"
-            "    return getattr(state, 'x')\n"
-        )
+        (tmp_path / "_wiring.py").write_text("def f(state):\n    return getattr(state, 'x')\n")
         offenders = self._scan(tmp_path)
         assert any("getattr(state,...)" in o for o in offenders), offenders
 
     def test_mutation_model_fields_enumeration_detected(self, tmp_path: pathlib.Path):
         """The regex-slip case: ``state.__class__.model_fields`` enumeration."""
-        (tmp_path / "_oracle.py").write_text(
-            "def f(state):\n"
-            "    return {k: 1 for k in state.__class__.model_fields}\n"
-        )
+        (tmp_path / "_oracle.py").write_text("def f(state):\n    return {k: 1 for k in state.__class__.model_fields}\n")
         offenders = self._scan(tmp_path)
         assert any("state.__class__" in o for o in offenders), offenders
 
     def test_mutation_subscript_detected(self, tmp_path: pathlib.Path):
         """A raw ``state[root]`` subscript is flagged."""
-        (tmp_path / "_state_write.py").write_text(
-            "def f(state):\n"
-            "    return state['root']\n"
-        )
+        (tmp_path / "_state_write.py").write_text("def f(state):\n    return state['root']\n")
         offenders = self._scan(tmp_path)
         assert any("state[...]" in o for o in offenders), offenders
 
@@ -890,10 +870,7 @@ class TestNoRawStateAccessInRoutingModules:
 
     def test_mutation_out_of_scope_file_skipped(self, tmp_path: pathlib.Path):
         """``_state_bus.py`` (the StateBus impl) is out of scope and skipped."""
-        (tmp_path / "_state_bus.py").write_text(
-            "def f(state):\n"
-            "    return getattr(state, 'x')\n"
-        )
+        (tmp_path / "_state_bus.py").write_text("def f(state):\n    return getattr(state, 'x')\n")
         offenders = self._scan(tmp_path)
         assert offenders == [], offenders
 
@@ -1041,9 +1018,8 @@ class TestNormalizeIrIsSoleIrFieldWriter:
                             written.add(key)
             elif isinstance(node, ast.Call):
                 # setattr(x, "field", ...) / object.__setattr__(x, "field", ...)
-                if (
-                    (isinstance(node.func, ast.Attribute) and node.func.attr == "__setattr__")
-                    or (isinstance(node.func, ast.Name) and node.func.id == "setattr")
+                if (isinstance(node.func, ast.Attribute) and node.func.attr == "__setattr__") or (
+                    isinstance(node.func, ast.Name) and node.func.id == "setattr"
                 ):
                     for arg in node.args:
                         key = _str_const(arg)
@@ -1092,9 +1068,9 @@ class TestNormalizeIrIsSoleIrFieldWriter:
         construct_src = (SRC_DIR / "construct.py").read_text()
         tree = ast.parse(construct_src)
         offenders = [
-            n.name for n in ast.walk(tree)
-            if isinstance(n, ast.FunctionDef)
-            and self._NORMALIZE_FIELD_RE.fullmatch(n.name)
+            n.name
+            for n in ast.walk(tree)
+            if isinstance(n, ast.FunctionDef) and self._NORMALIZE_FIELD_RE.fullmatch(n.name)
         ]
         assert offenders == [], (
             f"construct.py defines {offenders}; IR-field inference belongs in "
@@ -1134,8 +1110,8 @@ class TestNormalizeIrIsSoleIrFieldWriter:
             "aug-assign-subscript": 'd["fan_out_param"] += "x"',
             "ann-assign-attr": 'node.fan_out_param: str = "x"',
             "ann-assign-subscript": 'd["fan_out_param"]: str = "x"',
-            "tuple-unpack": 'node.fan_out_param, y = a, b',
-            "list-unpack": '[node.fan_out_param, y] = a, b',
+            "tuple-unpack": "node.fan_out_param, y = a, b",
+            "list-unpack": "[node.fan_out_param, y] = a, b",
             "dict-literal": 'node.model_copy(update={"fan_out_param": "y"})',
             "dict-kwarg": 'node.model_copy(update=dict(fan_out_param="y"))',
             "setattr": 'setattr(node, "fan_out_param", "x")',
@@ -1171,15 +1147,13 @@ class TestNormalizeIrIsSoleIrFieldWriter:
         be flagged (the validator legitimately reads fan_out_param via
         getattr)."""
         synthetic = (
-            'def f(node):\n'
+            "def f(node):\n"
             '    a = getattr(node, "fan_out_param", None)\n'
-            '    b = node.oracle_gen_type\n'
-            '    return a, b\n'
+            "    b = node.oracle_gen_type\n"
+            "    return a, b\n"
         )
         written = self._scan_ir_field_writes(ast.parse(synthetic))
-        assert written == set(), (
-            f"scanner flagged a read as a write: {sorted(written)}"
-        )
+        assert written == set(), f"scanner flagged a read as a write: {sorted(written)}"
 
 
 class TestRoutingKeyNotLabelInvariant:
@@ -1214,9 +1188,7 @@ class TestRoutingKeyNotLabelInvariant:
             val = node.value
             is_field_name = isinstance(val, ast.Name) and val.id == "field_name"
             is_field_name_for = (
-                isinstance(val, ast.Call)
-                and isinstance(val.func, ast.Name)
-                and val.func.id == "field_name_for"
+                isinstance(val, ast.Call) and isinstance(val.func, ast.Name) and val.func.id == "field_name_for"
             )
             if is_field_name or is_field_name_for:
                 offenders.append(node.lineno)
@@ -1233,9 +1205,9 @@ class TestRoutingKeyNotLabelInvariant:
             f"identity into a state field_name:\n"
             + "\n".join(f"  {o}" for o in offenders)
             + "\n\nRouting identity is the graph.add_node(name, fn) argument; "
-              "do NOT override the closure __name__ to field_name/field_name_for(). "
-              "Source display labels from node.name/sub.name via the captured IR "
-              "object (see neograph-y20i)."
+            "do NOT override the closure __name__ to field_name/field_name_for(). "
+            "Source display labels from node.name/sub.name via the captured IR "
+            "object (see neograph-y20i)."
         )
 
     def test_scanner_detects_field_name_override(self):
@@ -1291,8 +1263,7 @@ class TestNoOrZeroCounterIdiom:
         offenders = self._scan(SRC_DIR)
         assert offenders == [], (
             f"\n{len(offenders)} counter 'or 0' / get(count,0) idiom(s) — "
-            f"use StateBus.get_counter(key) instead:\n"
-            + "\n".join(f"  {o}" for o in offenders)
+            f"use StateBus.get_counter(key) instead:\n" + "\n".join(f"  {o}" for o in offenders)
         )
 
     def test_scanner_detects_or_zero_form(self):
@@ -1379,9 +1350,7 @@ class TestToolBudgetPreambleSingleSource:
             "_tool_budget_preamble.py": "... you need not use every call ...",
             "other.py": "unrelated",
         }
-        assert self._modules_with_marker(corpus, self._DIRECTIVE_MARKER) == [
-            self._PRODUCER_MODULE
-        ]
+        assert self._modules_with_marker(corpus, self._DIRECTIVE_MARKER) == [self._PRODUCER_MODULE]
 
     def test_scanner_flags_second_producer(self):
         """Negative meta-test: a rogue second producer diverges from the
@@ -1419,19 +1388,16 @@ class TestAgentModeNoStructuredRegeneration:
         for handler in ast.walk(tree):
             if isinstance(handler, ast.ExceptHandler):
                 for node in ast.walk(handler):
-                    if (isinstance(node, ast.Call)
-                            and isinstance(node.func, ast.Name)
-                            and node.func.id == func_name):
+                    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == func_name:
                         ids.add(id(node))
         return ids
 
     @staticmethod
     def _all_call_ids(func_name: str, tree: ast.AST) -> set[int]:
         return {
-            id(node) for node in ast.walk(tree)
-            if isinstance(node, ast.Call)
-            and isinstance(node.func, ast.Name)
-            and node.func.id == func_name
+            id(node)
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == func_name
         }
 
     @classmethod
@@ -1451,9 +1417,7 @@ class TestAgentModeNoStructuredRegeneration:
         """Live tree: _call_structured appears in _tool_loop.py (the fallback)
         but every call is inside an except block — none on the happy path."""
         src = self._tool_loop_src()
-        assert self._total_calls("_call_structured", src) >= 1, (
-            "expected a _call_structured fallback in _tool_loop.py"
-        )
+        assert self._total_calls("_call_structured", src) >= 1, "expected a _call_structured fallback in _tool_loop.py"
         assert self._unconditional_calls("_call_structured", src) == 0, (
             "_call_structured is called OUTSIDE an except block in _tool_loop.py; "
             "agent mode must parse messages[-1] first and only fall back to "
@@ -1504,27 +1468,20 @@ class TestDefaultFactoryCoercionIsGuarded:
     def _func_default_factory_is_typeerror_guarded(src: str, func_name: str) -> bool:
         tree = ast.parse(src)
         target = next(
-            (n for n in ast.walk(tree)
-             if isinstance(n, ast.FunctionDef) and n.name == func_name),
+            (n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == func_name),
             None,
         )
         if target is None:
             return False
-        references_factory = any(
-            isinstance(n, ast.Attribute) and n.attr == "default_factory"
-            for n in ast.walk(target)
-        )
+        references_factory = any(isinstance(n, ast.Attribute) and n.attr == "default_factory" for n in ast.walk(target))
         if not references_factory:
             return False
         for node in ast.walk(target):
             if isinstance(node, ast.Try) and any(
-                isinstance(h.type, ast.Name) and h.type.id == "TypeError"
-                for h in node.handlers
+                isinstance(h.type, ast.Name) and h.type.id == "TypeError" for h in node.handlers
             ):
                 body_has_call = any(isinstance(n, ast.Call) for b in node.body for n in ast.walk(b))
-                handler_has_call = any(
-                    isinstance(n, ast.Call) for h in node.handlers for n in ast.walk(h)
-                )
+                handler_has_call = any(isinstance(n, ast.Call) for h in node.handlers for n in ast.walk(h))
                 if body_has_call and handler_has_call:
                     return True
         return False
@@ -1536,11 +1493,7 @@ class TestDefaultFactoryCoercionIsGuarded:
 
     def test_scanner_flags_bare_factory_call(self):
         """Negative meta-test: a bare default_factory() call is NOT guarded."""
-        src = (
-            "def _apply_null_defaults(data, model):\n"
-            "    fi = model\n"
-            "    data['x'] = fi.default_factory()\n"
-        )
+        src = "def _apply_null_defaults(data, model):\n    fi = model\n    data['x'] = fi.default_factory()\n"
         assert not self._func_default_factory_is_typeerror_guarded(src, "_apply_null_defaults")
 
     def test_scanner_accepts_guarded_call(self):
@@ -1582,11 +1535,7 @@ class TestNoHandRolledExitStrip:
         for func in ast.walk(tree):
             if isinstance(func, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 for node in ast.walk(func):
-                    if (
-                        isinstance(node, ast.Call)
-                        and isinstance(node.func, ast.Name)
-                        and node.func.id == callee
-                    ):
+                    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == callee:
                         hits.add(func.name)
         return hits
 
@@ -1649,10 +1598,7 @@ class TestNoHandRolledExitStrip:
 
     def test_meta_positive_stray_call_is_caught(self):
         """A _strip_internals call in a non-sanctioned function is flagged."""
-        src = (
-            "def run(graph, x):\n"
-            "    return _strip_internals(graph.invoke(x))\n"
-        )
+        src = "def run(graph, x):\n    return _strip_internals(graph.invoke(x))\n"
         stray = self._functions_calling(src, "_strip_internals") - self._ALLOWED_CALLERS
         assert stray == {"run"}
 
@@ -1849,9 +1795,7 @@ class TestTwinThinness:
 
     @classmethod
     def _first_arg_is_str(cls, call: ast.Call) -> bool:
-        return bool(call.args) and isinstance(call.args[0], ast.Constant) and isinstance(
-            call.args[0].value, str
-        )
+        return bool(call.args) and isinstance(call.args[0], ast.Constant) and isinstance(call.args[0].value, str)
 
     @classmethod
     def _builder_blocks(cls, fn: ast.AST) -> list[str]:
@@ -1887,11 +1831,7 @@ class TestTwinThinness:
                 elif isinstance(func, ast.Name) and func.id in cls._CONSTRUCTOR_BUILDERS:
                     emit(node)
                 # logger event: <x>.info("event", ...) with a string event
-                elif (
-                    isinstance(func, ast.Attribute)
-                    and func.attr in cls._LOG_METHODS
-                    and cls._first_arg_is_str(node)
-                ):
+                elif isinstance(func, ast.Attribute) and func.attr in cls._LOG_METHODS and cls._first_arg_is_str(node):
                     emit(node)
             elif isinstance(node, ast.Dict):
                 keys = [k.value for k in node.keys if isinstance(k, ast.Constant)]
@@ -1908,14 +1848,9 @@ class TestTwinThinness:
                 async_fn = self._find_func(source, async_name)
                 assert sync_fn is not None, f"{filename}: twin `{sync_name}` not found"
                 assert async_fn is not None, f"{filename}: twin `{async_name}` not found"
-                shared = set(self._builder_blocks(sync_fn)) & set(
-                    self._builder_blocks(async_fn)
-                )
+                shared = set(self._builder_blocks(sync_fn)) & set(self._builder_blocks(async_fn))
                 for block in sorted(shared):
-                    violations.append(
-                        f"  {filename}: {sync_name}/{async_name} both build:\n"
-                        f"      {block[:140]}"
-                    )
+                    violations.append(f"  {filename}: {sync_name}/{async_name} both build:\n      {block[:140]}")
         assert not violations, (
             f"\n{len(violations)} value-builder block(s) duplicated across sync/async "
             "twins — extract each into ONE shared pure helper (error/log/result "
@@ -1941,12 +1876,7 @@ class TestTwinThinness:
         assert shared, "a byte-identical error builder in both twins must be flagged"
 
     def test_meta_negative_helper_routed_builder_is_not_flagged(self):
-        src = (
-            "def f():\n"
-            "    raise _boom_error()\n"
-            "async def af():\n"
-            "    raise _boom_error()\n"
-        )
+        src = "def f():\n    raise _boom_error()\nasync def af():\n    raise _boom_error()\n"
         sync_fn = self._find_func(src, "f")
         async_fn = self._find_func(src, "af")
         shared = set(self._builder_blocks(sync_fn)) & set(self._builder_blocks(async_fn))
@@ -2121,25 +2051,21 @@ class TestDiInputsInjectedAtLlmDispatchSeams:
     def test_mutation_seam_without_injection_detected(self, tmp_path: pathlib.Path):
         """A seam module that stops calling _inject_di_inputs is flagged."""
         (tmp_path / "_agent_cycle.py").write_text(
-            "def _turn_prep_kwargs(node, config):\n"
-            "    return {'config': config}\n"
+            "def _turn_prep_kwargs(node, config):\n    return {'config': config}\n"
         )
         assert "_agent_cycle.py" in self._seams_missing_injection(tmp_path)
 
     def test_mutation_seam_with_injection_passes(self, tmp_path: pathlib.Path):
         """A seam that keeps the injection call is NOT flagged."""
         (tmp_path / "_dispatch.py").write_text(
-            "def execute(node, config):\n"
-            "    config = _inject_di_inputs(node, config)\n"
-            "    return config\n"
+            "def execute(node, config):\n    config = _inject_di_inputs(node, config)\n    return config\n"
         )
         assert self._seams_missing_injection(tmp_path) == []
 
     def test_mutation_new_compile_site_detected(self, tmp_path: pathlib.Path):
         """A _compile_prompt call in a NEW (non-allowlisted) module is flagged."""
         (tmp_path / "_newmode.py").write_text(
-            "def dispatch(runtime, node, config):\n"
-            "    return _compile_prompt(runtime, node.prompt, config=config)\n"
+            "def dispatch(runtime, node, config):\n    return _compile_prompt(runtime, node.prompt, config=config)\n"
         )
         offenders = self._unreviewed_compile_sites(tmp_path)
         assert any(o.startswith("_newmode.py:") for o in offenders), offenders

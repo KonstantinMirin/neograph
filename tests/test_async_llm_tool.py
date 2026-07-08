@@ -86,9 +86,7 @@ class TestThinkModeAsyncSeam:
         graph = compile(
             construct_from_functions("p", [gen]),
             **build_test_compile_kwargs(),
-            **build_fake_llm_kwargs(
-                lambda tier: StructuredFake(lambda m: m(items=["a", "b"]))
-            ),
+            **build_fake_llm_kwargs(lambda tier: StructuredFake(lambda m: m(items=["a", "b"]))),
         )
 
         # Sync parity: the sync think path already works today (green pre/post).
@@ -334,9 +332,7 @@ class TestAsyncThinkConfigThreading:
         graph = compile(
             construct_from_functions("p", [gen]),
             **build_test_compile_kwargs(),
-            **build_fake_llm_kwargs(
-                lambda tier: _ConfigCapturingFake(lambda m: m(items=["x"]), captured)
-            ),
+            **build_fake_llm_kwargs(lambda tier: _ConfigCapturingFake(lambda m: m(items=["x"]), captured)),
         )
 
         cfg = {"configurable": {"_async_marker": "thread-42"}}
@@ -394,8 +390,7 @@ class TestOracleMergeAsyncSeam:
         pipeline = Construct(
             "p",
             nodes=[
-                Node.scripted("mg_gen", fn="mg_gen", outputs=Claims)
-                | Oracle(n=2, merge_prompt="test/merge"),
+                Node.scripted("mg_gen", fn="mg_gen", outputs=Claims) | Oracle(n=2, merge_prompt="test/merge"),
             ],
         )
         graph = compile(

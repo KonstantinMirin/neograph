@@ -260,9 +260,7 @@ class TestAskHumanTypedContract:
             is_async=is_async,
         )
 
-        assert result2.get("research") == HResult(items=["done"]), (
-            f"node did not finalize after resume: {result2!r}"
-        )
+        assert result2.get("research") == HResult(items=["done"]), f"node did not finalize after resume: {result2!r}"
         # The tool received a VALIDATED ResumeDecision INSTANCE — not the raw dict.
         assert len(received) == 1, f"tool did not receive exactly one resume value: {received!r}"
         answer = received[0]
@@ -358,20 +356,15 @@ class TestAskHumanMidLoopIdempotency:
         # __interrupt__ surface identical to the raw keystone path.
         assert "__interrupt__" in result1, "ask_human did not pause mid-loop"
         assert result1["__interrupt__"][0].value == {"question": _KEYSTONE_QUESTION}, (
-            f"ask_human's __interrupt__ surface diverged from the raw path: "
-            f"{result1['__interrupt__'][0].value!r}"
+            f"ask_human's __interrupt__ surface diverged from the raw path: {result1['__interrupt__'][0].value!r}"
         )
         assert counter[0] == 1, f"record should have run once before the interrupt, ran {counter[0]}x"
 
         resume_dict = {"decision": "add-and-research"}
         result2 = _drive(graph, input=None, resume=resume_dict, config=config, is_async=is_async)
 
-        assert result2.get("research") == HResult(items=["done"]), (
-            f"node did not finalize after resume: {result2!r}"
-        )
-        assert received == [resume_dict], (
-            f"ask_human did not deliver the raw resume value to the tool: {received!r}"
-        )
+        assert result2.get("research") == HResult(items=["done"]), f"node did not finalize after resume: {result2!r}"
+        assert received == [resume_dict], f"ask_human did not deliver the raw resume value to the tool: {received!r}"
         # KEYSTONE PARITY: the pre-interrupt side-effecting tool must NOT re-run on
         # resume — exactly-once must hold THROUGH ask_human, not just raw interrupt().
         assert counter[0] == 1, (

@@ -21,7 +21,8 @@ from typing import Any
 # _llm_retry (parse + recovery), _llm_structured_compat (classification), and
 # _tool_loop (json_mode/text final response). See neograph-0tid / neograph-ble3.
 DSML_PATTERN = re.compile(
-    r"<[^>]*(?:function_call|invoke|DSML)[^>]*>", re.IGNORECASE,
+    r"<[^>]*(?:function_call|invoke|DSML)[^>]*>",
+    re.IGNORECASE,
 )
 
 

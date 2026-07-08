@@ -12,7 +12,10 @@ class Draft(BaseModel, frozen=True):
 
 register_scripted("ref_loop_draft", lambda i, c: Draft(text="v1"))
 
-pipeline = Construct("broken", nodes=[
-    Node.scripted("refine", fn="ref_loop_draft", inputs=Draft,
-                  outputs=Draft) | Loop(when="ghost_loop_condition", max_iterations=3),
-])
+pipeline = Construct(
+    "broken",
+    nodes=[
+        Node.scripted("refine", fn="ref_loop_draft", inputs=Draft, outputs=Draft)
+        | Loop(when="ghost_loop_condition", max_iterations=3),
+    ],
+)

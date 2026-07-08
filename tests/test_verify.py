@@ -22,6 +22,7 @@ from tests.fakes import build_test_compile_kwargs, register_scripted
 class RawText(BaseModel, frozen=True):
     text: str
 
+
 class Claims(BaseModel, frozen=True):
     items: list[str]
 
@@ -37,8 +38,7 @@ class TestVerifyCompiled:
         register_scripted("_vc_b", lambda i, c: Claims(items=["x"]))
 
         a = Node.scripted("seed", fn="_vc_a", outputs=RawText)
-        b = Node.scripted("classify", fn="_vc_b",
-                          inputs={"seed": RawText}, outputs=Claims)
+        b = Node.scripted("classify", fn="_vc_b", inputs={"seed": RawText}, outputs=Claims)
         pipeline = Construct("valid", nodes=[a, b])
         graph = compile(pipeline, **build_test_compile_kwargs())
 
@@ -101,8 +101,7 @@ class TestVerifyCompiled:
         from neograph.verify import verify_compiled
 
         # Node with mode=think requires LLM factory
-        think_node = Node("llm-node", mode="think", outputs=Claims,
-                          prompt="test/prompt", model="fast")
+        think_node = Node("llm-node", mode="think", outputs=Claims, prompt="test/prompt", model="fast")
         pipeline = Construct("llm-test", nodes=[think_node])
 
         from tests.fakes import StructuredFake, configure_fake_llm

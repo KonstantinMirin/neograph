@@ -1,4 +1,5 @@
 """@node(outputs=X) with -> X (matching) should not raise."""
+
 from pydantic import BaseModel
 
 from neograph import node

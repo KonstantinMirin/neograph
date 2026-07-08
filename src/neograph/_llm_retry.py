@@ -102,6 +102,7 @@ def _extract_json(text: str) -> str:
 def _is_list_annotation(annotation: Any) -> bool:
     """Check if a type annotation is a list type (list[X], List[X], etc.)."""
     import typing
+
     origin = getattr(annotation, "__origin__", None)
     if origin is list:
         return True
@@ -150,6 +151,7 @@ def _apply_null_defaults(data: dict, model: type[BaseModel]) -> None:
 
         if isinstance(val, list):
             from typing import get_args, get_origin
+
             origin = get_origin(annotation)
             if origin is list:
                 args = get_args(annotation)
@@ -175,10 +177,7 @@ def _parse_json_response(text: str, output_model: type[BaseModel]) -> BaseModel:
     # Detect non-JSON content: empty result or XML-like tool-call markup.
     # DeepSeek R1 emits <｜DSML｜function_calls>... after budget exhaustion.
     stripped = extracted.strip()
-    if not stripped or (
-        not stripped.startswith(("{", "["))
-        and contains_dsml(text)
-    ):
+    if not stripped or (not stripped.startswith(("{", "[")) and contains_dsml(text)):
         raise ExecutionError.build(
             "LLM returned non-JSON content instead of structured output",
             expected=f"JSON object for {output_model.__name__}",
@@ -196,8 +195,7 @@ def _parse_json_response(text: str, output_model: type[BaseModel]) -> BaseModel:
             repaired = _json.dumps(parsed)
         elif isinstance(parsed, list) and hasattr(output_model, "model_fields"):
             list_fields = [
-                fname for fname, finfo in output_model.model_fields.items()
-                if _is_list_annotation(finfo.annotation)
+                fname for fname, finfo in output_model.model_fields.items() if _is_list_annotation(finfo.annotation)
             ]
             if len(list_fields) == 1:
                 wrapped = {list_fields[0]: parsed}
@@ -242,9 +240,7 @@ def _validation_error_details(exc: ValidationError) -> str:
     Single site so the json-parse path (_parse_json_response) and the structured
     re-prompt path (build_structured_repair_message) format validation failures
     identically."""
-    return "; ".join(
-        f"{'.'.join(str(loc) for loc in e['loc'])}: {e['msg']}" for e in exc.errors()
-    )
+    return "; ".join(f"{'.'.join(str(loc) for loc in e['loc'])}: {e['msg']}" for e in exc.errors())
 
 
 def _repair_hint(details: str | None, output_model: type[BaseModel] | None) -> str:
@@ -256,9 +252,7 @@ def _repair_hint(details: str | None, output_model: type[BaseModel] | None) -> s
     message covers the unparseable-response case."""
     schema_block = ""
     if output_model is not None:
-        schema_block = (
-            f"\n\nExpected output schema:\n{describe_type(output_model, prefix='')}\n"
-        )
+        schema_block = f"\n\nExpected output schema:\n{describe_type(output_model, prefix='')}\n"
 
     if details:
         return (
@@ -312,9 +306,7 @@ def structured_retry_messages(
     retry = list(messages)
     if raw_text:
         retry.append({"role": "assistant", "content": raw_text})
-    retry.append(
-        {"role": "user", "content": build_structured_repair_message(error, output_model)}
-    )
+    retry.append({"role": "user", "content": build_structured_repair_message(error, output_model)})
     return retry
 
 
@@ -374,6 +366,7 @@ def _dsml_recovery_messages(
         return None
 
     import structlog
+
     structlog.get_logger("neograph").warning(
         "trailing_tool_call_markup",
         strategy=strategy,
@@ -412,23 +405,22 @@ def recover_dsml(
         ExecutionError if DSML detected but the targeted retry also failed
         AND the generic retry path also failed.
     """
-    retry_messages = _dsml_recovery_messages(
-        raw_text, output_model, messages, cfg, strategy=strategy
-    )
+    retry_messages = _dsml_recovery_messages(raw_text, output_model, messages, cfg, strategy=strategy)
     if retry_messages is None:
         return None
     try:
         retry_response = llm.invoke(retry_messages, config=config)
-        retry_text = (
-            retry_response.content if hasattr(retry_response, "content")
-            else str(retry_response)
-        )
+        retry_text = retry_response.content if hasattr(retry_response, "content") else str(retry_response)
         return _parse_json_response(retry_text, output_model)
     except ExecutionError:
         # Targeted retry also failed — try generic retry path
         max_retries = getattr(cfg, "max_retries", 1)
         parse_result, _ = _invoke_json_with_retry(
-            llm, retry_messages, output_model, config, max_retries=max_retries,
+            llm,
+            retry_messages,
+            output_model,
+            config,
+            max_retries=max_retries,
         )
         return parse_result
 
@@ -486,21 +478,20 @@ async def arecover_dsml(
     generic fallback to :func:`_ainvoke_json_with_retry`. Detection/parse helpers
     reused verbatim.
     """
-    retry_messages = _dsml_recovery_messages(
-        raw_text, output_model, messages, cfg, strategy=strategy
-    )
+    retry_messages = _dsml_recovery_messages(raw_text, output_model, messages, cfg, strategy=strategy)
     if retry_messages is None:
         return None
     try:
         retry_response = await llm.ainvoke(retry_messages, config=config)
-        retry_text = (
-            retry_response.content if hasattr(retry_response, "content")
-            else str(retry_response)
-        )
+        retry_text = retry_response.content if hasattr(retry_response, "content") else str(retry_response)
         return _parse_json_response(retry_text, output_model)
     except ExecutionError:
         max_retries = getattr(cfg, "max_retries", 1)
         parse_result, _ = await _ainvoke_json_with_retry(
-            llm, retry_messages, output_model, config, max_retries=max_retries,
+            llm,
+            retry_messages,
+            output_model,
+            config,
+            max_retries=max_retries,
         )
         return parse_result

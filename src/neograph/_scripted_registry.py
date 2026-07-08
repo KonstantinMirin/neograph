@@ -72,9 +72,7 @@ def _register_node_scripted(
     # per neograph-khff, so run() surfaces the "use arun()" error and arun()
     # resolves. No new dispatch class — the exact one-line-twin property async
     # tool factories have in w74k.3.1.
-    has_resource = any(
-        b.kind == DIKind.FROM_RESOURCE for b in param_res.values()
-    )
+    has_resource = any(b.kind == DIKind.FROM_RESOURCE for b in param_res.values())
 
     async def ascripted_shim(input_data: Any, config: Any) -> Any:
         """Async adapter: awaits FROM_RESOURCE bindings before calling fn."""

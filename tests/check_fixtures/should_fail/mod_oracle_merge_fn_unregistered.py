@@ -14,7 +14,9 @@ class Draft(BaseModel, frozen=True):
 
 register_scripted("omfu_gen", lambda i, c: Draft(text="hello"))
 
-pipeline = Construct("broken", nodes=[
-    Node.scripted("generate", fn="omfu_gen", outputs=Draft)
-    | Oracle(n=3, merge_fn="this_merge_fn_does_not_exist"),
-])
+pipeline = Construct(
+    "broken",
+    nodes=[
+        Node.scripted("generate", fn="omfu_gen", outputs=Draft) | Oracle(n=3, merge_fn="this_merge_fn_does_not_exist"),
+    ],
+)

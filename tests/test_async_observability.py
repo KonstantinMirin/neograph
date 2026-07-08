@@ -121,9 +121,7 @@ def test_node_level_callbacks_fire_the_same_under_run_and_arun():
     # The node-level callback events fired on BOTH surfaces for BOTH nodes —
     # config[callbacks] survived arun's node fan-out.
     node_names = {"fetch", "gen"}
-    assert node_names <= set(h_sync.chain_names), (
-        f"sync run missing node callbacks: saw {h_sync.chain_names}"
-    )
+    assert node_names <= set(h_sync.chain_names), f"sync run missing node callbacks: saw {h_sync.chain_names}"
     assert node_names <= set(h_async.chain_names), (
         "arun DROPPED config[callbacks] on its node fan-out — node-level "
         f"on_chain_start did not fire under arun: saw {h_async.chain_names}"

@@ -276,6 +276,7 @@ class TestRenderInput:
 
     def test_exclude_true_fields_omitted_from_xml_renderer(self):
         """XmlRenderer must skip exclude=True fields."""
+
         class Item(BaseModel):
             name: str
             internal_id: str = PydanticField(exclude=True, default="set-by-pipeline")
@@ -287,6 +288,7 @@ class TestRenderInput:
 
     def test_exclude_true_fields_omitted_from_delimited_renderer(self):
         """DelimitedRenderer must skip exclude=True fields."""
+
         class Item(BaseModel):
             name: str
             internal_id: str = PydanticField(exclude=True, default="set-by-pipeline")
@@ -341,6 +343,7 @@ class TestRenderInput:
 # ═══════════════════════════════════════════════════════════════════════════
 # TestDescribeType — TypeScript-style schema emitter
 # ═══════════════════════════════════════════════════════════════════════════
+
 
 class TestDescribeType:
     """Tests for describe_type() — two-pass Pydantic model walker that emits
@@ -516,7 +519,9 @@ class TestDescribeType:
             color: Color
 
         result = describe_type(
-            WithEnum, prefix="", always_hoist_enums=False,
+            WithEnum,
+            prefix="",
+            always_hoist_enums=False,
         )
         assert '"red"' in result
         assert '"green"' in result
@@ -611,12 +616,7 @@ class TestDescribeValue:
         hit = SearchHit(node_id="UC-042", score=0.9)
         result = describe_value(hit)
 
-        expected = (
-            '{\n'
-            '  node_id: "UC-042"  // Graph node identifier\n'
-            '  score: 0.9  // Relevance score 0-1\n'
-            '}'
-        )
+        expected = '{\n  node_id: "UC-042"  // Graph node identifier\n  score: 0.9  // Relevance score 0-1\n}'
         assert result == expected
 
     def test_flat_model_no_descriptions(self):
@@ -628,7 +628,7 @@ class TestDescribeValue:
             y: int
 
         result = describe_value(Point(x=10, y=20))
-        expected = '{\n  x: 10\n  y: 20\n}'
+        expected = "{\n  x: 10\n  y: 20\n}"
         assert result == expected
 
     def test_nested_model_exact_output(self):
@@ -643,14 +643,7 @@ class TestDescribeValue:
             detail: Inner
 
         result = describe_value(Outer(name="test", detail=Inner(x=42)))
-        expected = (
-            '{\n'
-            '  name: "test"\n'
-            '  detail: {\n'
-            '    x: 42\n'
-            '  }\n'
-            '}'
-        )
+        expected = '{\n  name: "test"\n  detail: {\n    x: 42\n  }\n}'
         assert result == expected
 
     def test_list_of_models_exact_output(self):
@@ -661,16 +654,7 @@ class TestDescribeValue:
             label: str
 
         result = describe_value([Item(label="a"), Item(label="b")])
-        expected = (
-            '[\n'
-            '  {\n'
-            '    label: "a"\n'
-            '  },\n'
-            '  {\n'
-            '    label: "b"\n'
-            '  }\n'
-            ']'
-        )
+        expected = '[\n  {\n    label: "a"\n  },\n  {\n    label: "b"\n  }\n]'
         assert result == expected
 
     def test_primitive_values_protocol(self):
@@ -685,15 +669,22 @@ class TestDescribeValue:
             b_false: bool
             n: str | None = None
 
-        result = describe_value(AllTypes(
-            s="hello", i=42, f=3.14, b_true=True, b_false=False, n=None,
-        ))
+        result = describe_value(
+            AllTypes(
+                s="hello",
+                i=42,
+                f=3.14,
+                b_true=True,
+                b_false=False,
+                n=None,
+            )
+        )
         assert '  s: "hello"' in result
-        assert '  i: 42' in result
-        assert '  f: 3.14' in result
-        assert '  b_true: true' in result
-        assert '  b_false: false' in result
-        assert '  n: null' in result
+        assert "  i: 42" in result
+        assert "  f: 3.14" in result
+        assert "  b_true: true" in result
+        assert "  b_false: false" in result
+        assert "  n: null" in result
 
     def test_prefix_prepended(self):
         """Custom prefix on first line, body follows."""
@@ -703,7 +694,7 @@ class TestDescribeValue:
             x: int
 
         result = describe_value(Simple(x=1), prefix="Tool result:")
-        assert result == 'Tool result:\n{\n  x: 1\n}'
+        assert result == "Tool result:\n{\n  x: 1\n}"
 
     def test_empty_list_renders_brackets(self):
         """Empty list renders as []."""
@@ -723,6 +714,7 @@ class TestDescribeValue:
 #   4. Global renderer (mocked — actual configure_llm integration is Phase 3)
 #   5. No renderer = raw passthrough
 # ═══════════════════════════════════════════════════════════════════════════
+
 
 class TestRendererDispatch:
     """Renderer dispatch hierarchy: model method > node > construct > global > None."""
@@ -952,6 +944,7 @@ class TestJsonModeOutputSchema:
 
     def test_old_compiler_without_output_schema_param_still_works(self):
         """Old compilers that don't accept output_schema= still work (param filtering)."""
+
         def old_compiler(template, data, *, node_name=None, config=None):
             return [{"role": "user", "content": "test"}]
 
@@ -997,7 +990,8 @@ class TestRenderPromptInspector:
 
         n = Node(name="test-node", mode="think", outputs=Claims, model="fast", prompt="my/template")
         result = render_prompt(
-            n, "hello world",
+            n,
+            "hello world",
             runtime=build_fake_runtime(prompt_compiler=echo_compiler),
         )
 
@@ -1017,7 +1011,6 @@ class TestRenderPromptInspector:
         def capturing_compiler(template, data, **kw):
             compiled_data.append(data)
             return [{"role": "user", "content": str(data)}]
-
 
         class MyInput(BaseModel):
             name: str
@@ -1054,7 +1047,6 @@ class TestRenderPromptInspector:
         def tracking_compiler(template, data, **kw):
             compiler_kwargs.append(kw)
             return [{"role": "user", "content": "test"}]
-
 
         n = Node(
             name="json-node",
@@ -1329,6 +1321,7 @@ class TestJsonRendererCoverageGaps:
         r = JsonRenderer()
         result = r.render({"key": "value", "num": 42})
         import json as _json
+
         parsed = _json.loads(result)
         assert parsed == {"key": "value", "num": 42}
 
@@ -1337,6 +1330,7 @@ class TestJsonRendererCoverageGaps:
         r = JsonRenderer()
         result = r.render([1, 2, 3])
         import json as _json
+
         assert _json.loads(result) == [1, 2, 3]
 
 
@@ -1350,25 +1344,33 @@ class TestDescribeTypeCoverageGaps:
 
     def test_bare_list_no_args_renders_as_any_array(self):
         """typing.List (no subscription) has get_origin=list, get_args=()."""
-        from typing import List  # noqa: UP006, UP035
+        from typing import List  # noqa: UP035
 
         from neograph.describe_type import _render_type
 
         result = _render_type(
-            List, indent="  ", depth=0, or_splitter=" or ",  # noqa: UP006
-            hoisted=set(), visited=set(),
+            List,  # noqa: UP006
+            indent="  ",
+            depth=0,
+            or_splitter=" or ",  # noqa: UP006
+            hoisted=set(),
+            visited=set(),
         )
         assert result == "[any]"
 
     def test_bare_dict_no_args_renders_as_object(self):
         """typing.Dict (no subscription) has get_origin=dict, get_args=()."""
-        from typing import Dict  # noqa: UP006, UP035
+        from typing import Dict  # noqa: UP035
 
         from neograph.describe_type import _render_type
 
         result = _render_type(
-            Dict, indent="  ", depth=0, or_splitter=" or ",  # noqa: UP006
-            hoisted=set(), visited=set(),
+            Dict,  # noqa: UP006
+            indent="  ",
+            depth=0,
+            or_splitter=" or ",  # noqa: UP006
+            hoisted=set(),
+            visited=set(),
         )
         assert result == "object"
 
@@ -1470,6 +1472,7 @@ class TestRenderInputBAMLDefault:
 
     def test_baml_default_for_pydantic_model(self):
         """render_input(model, renderer=None) returns BAML string, not raw model."""
+
         class Draft(BaseModel):
             content: str
             score: float
@@ -1488,20 +1491,20 @@ class TestRenderInputBAMLDefault:
 
     def test_baml_default_for_list_of_models(self):
         """render_input([model, ...], renderer=None) returns BAML string for lists."""
+
         class Item(BaseModel):
             name: str
 
         items = [Item(name="a"), Item(name="b")]
         result = render_input(items, renderer=None)
 
-        assert isinstance(result, str), (
-            f"Expected BAML string for list of models, got {type(result).__name__}."
-        )
+        assert isinstance(result, str), f"Expected BAML string for list of models, got {type(result).__name__}."
         assert "a" in result
         assert "b" in result
 
     def test_baml_default_for_fan_in_dict(self):
         """render_input({k: model}, renderer=None) BAML-renders each value."""
+
         class A(BaseModel):
             x: str
 
@@ -1522,6 +1525,7 @@ class TestRenderInputBAMLDefault:
 
     def test_exclude_true_honored_in_baml_default(self):
         """Fields with exclude=True are omitted from BAML default rendering."""
+
         class Secret(BaseModel):
             visible: str
             hidden: str = PydanticField(exclude=True, default="secret")
@@ -1543,6 +1547,7 @@ class TestRenderForPromptUnconditional:
 
     def test_render_for_prompt_fires_without_renderer(self):
         """render_for_prompt() must be called even when renderer=None."""
+
         class Projected(BaseModel):
             summary: str
 
@@ -1554,12 +1559,11 @@ class TestRenderForPromptUnconditional:
                 return f"PROJECTED: {self.raw}"
 
         result = render_input(Full(raw="data", internal_id=99), renderer=None)
-        assert result == "PROJECTED: data", (
-            "render_for_prompt() must run without a renderer configured"
-        )
+        assert result == "PROJECTED: data", "render_for_prompt() must run without a renderer configured"
 
     def test_render_for_prompt_returning_model_baml_rendered_without_renderer(self):
         """render_for_prompt() returning BaseModel gets BAML-rendered even without renderer."""
+
         class Presentation(BaseModel):
             summary: str
             score: float
@@ -1572,15 +1576,14 @@ class TestRenderForPromptUnconditional:
                 return Presentation(summary=self.raw.upper(), score=0.95)
 
         result = render_input(Full(raw="hello", internal_id=42), renderer=None)
-        assert isinstance(result, str), (
-            f"Expected BAML string, got {type(result).__name__}"
-        )
+        assert isinstance(result, str), f"Expected BAML string, got {type(result).__name__}"
         assert "HELLO" in result
         assert "summary" in result
         assert "internal_id" not in result  # projection strips internal fields
 
     def test_render_for_prompt_wins_over_baml_default(self):
         """render_for_prompt() takes precedence over automatic BAML rendering."""
+
         class Custom(BaseModel):
             name: str
 
@@ -1592,6 +1595,7 @@ class TestRenderForPromptUnconditional:
 
     def test_render_for_prompt_in_fan_in_dict_without_renderer(self):
         """render_for_prompt() fires per-value in fan-in dict without renderer."""
+
         class A(BaseModel):
             x: str
 
@@ -1619,6 +1623,7 @@ class TestRenderedInputContract:
     def test_build_rendered_input_exists(self):
         """build_rendered_input is importable from renderers."""
         from neograph.renderers import build_rendered_input
+
         assert callable(build_rendered_input)
 
     def test_rendered_input_has_raw_and_rendered(self):
@@ -1715,6 +1720,7 @@ class TestRenderForPromptFieldFlattening:
 
     def test_fields_flattened_into_dict(self):
         """render_for_prompt() returning BaseModel → fields become separate dict entries."""
+
         class Presentation(BaseModel):
             summary: str
             score: float
@@ -1743,6 +1749,7 @@ class TestRenderForPromptFieldFlattening:
 
     def test_no_render_for_prompt_no_flattening(self):
         """Without render_for_prompt(), no field flattening occurs."""
+
         class Plain(BaseModel):
             x: str
             y: int
@@ -1756,6 +1763,7 @@ class TestRenderForPromptFieldFlattening:
 
     def test_str_return_no_flattening(self):
         """render_for_prompt() returning str → no flattening (str is verbatim)."""
+
         class Custom(BaseModel):
             name: str
 
@@ -1768,6 +1776,7 @@ class TestRenderForPromptFieldFlattening:
 
     def test_exclude_fields_not_flattened(self):
         """Fields with exclude=True on the returned model are not flattened."""
+
         class Projected(BaseModel):
             visible: str
             hidden: str = PydanticField(exclude=True, default="secret")
@@ -1784,6 +1793,7 @@ class TestRenderForPromptFieldFlattening:
 
     def test_no_overwrite_existing_keys(self):
         """Flattened field names must not overwrite existing fan-in keys."""
+
         class Projected(BaseModel):
             value: str
 
@@ -1806,6 +1816,7 @@ class TestRenderForPromptFieldFlattening:
 
     def test_single_input_no_flattening(self):
         """Single-input (non-dict) nodes: no flattening even with render_for_prompt."""
+
         class Projected(BaseModel):
             summary: str
 
@@ -1822,6 +1833,7 @@ class TestRenderForPromptFieldFlattening:
 
     def test_multiple_fan_in_only_render_for_prompt_flattened(self):
         """In a fan-in dict, only values with render_for_prompt get flattened."""
+
         class Projected(BaseModel):
             title: str
 
@@ -1858,6 +1870,7 @@ class TestFieldFlatteningPreservesBaseModelChildren:
 
     def test_basemodel_child_preserved_as_object(self):
         """Flattened BaseModel child field is preserved as model instance, not string."""
+
         class Inner(BaseModel):
             statement: str
             context_quote: str
@@ -1886,6 +1899,7 @@ class TestFieldFlatteningPreservesBaseModelChildren:
 
     def test_dotted_template_access_works(self):
         """str.format with {rep.statement} against flattened output succeeds."""
+
         class Inner(BaseModel):
             statement: str
             context_quote: str
@@ -1904,11 +1918,13 @@ class TestFieldFlatteningPreservesBaseModelChildren:
                 return View(rep_a=self.rep_a, rep_b=self.rep_b, similarity=self.similarity)
 
         result = render_input(
-            {"pair": Source(
-                rep_a=Inner(statement="claim A", context_quote="ctx A"),
-                rep_b=Inner(statement="claim B", context_quote="ctx B"),
-                similarity=0.85,
-            )},
+            {
+                "pair": Source(
+                    rep_a=Inner(statement="claim A", context_quote="ctx A"),
+                    rep_b=Inner(statement="claim B", context_quote="ctx B"),
+                    similarity=0.85,
+                )
+            },
             renderer=None,
         )
         # Simulate what a consumer's prompt_compiler does
@@ -1920,6 +1936,7 @@ class TestFieldFlatteningPreservesBaseModelChildren:
 
     def test_primitive_fields_still_rendered(self):
         """Primitive fields (str, int, float) are still rendered, not preserved as-is."""
+
         class View(BaseModel):
             title: str
             count: int
@@ -1969,11 +1986,13 @@ class TestRenderingModeDispatch:
         )
 
         register_scripted("mode_test_seed", lambda _in, _cfg: Input(text="hello", score=0.5))
-        parent = Construct("mode-test", nodes=[
-            Node.scripted("seed", fn="mode_test_seed", outputs=Input),
-            Node("think-node", prompt="analyze/input", model="default",
-                 outputs=Output, inputs={"seed": Input}),
-        ])
+        parent = Construct(
+            "mode-test",
+            nodes=[
+                Node.scripted("seed", fn="mode_test_seed", outputs=Input),
+                Node("think-node", prompt="analyze/input", model="default", outputs=Output, inputs={"seed": Input}),
+            ],
+        )
         graph = compile(parent, **_llm_kw, **build_test_compile_kwargs())
         run(graph, input={"node_id": "mode-test"})
 
@@ -2010,14 +2029,23 @@ class TestRenderingModeDispatch:
             prompt_compiler=capturing_compiler,
         )
 
-        register_tool_factory("search", lambda config, tool_config: (lambda **kw: "result"))
+        register_tool_factory("search", lambda config, tool_config: lambda **kw: "result")
         register_scripted("agent_test_seed", lambda _in, _cfg: Input(query="test query"))
-        parent = Construct("agent-test", nodes=[
-            Node.scripted("seed", fn="agent_test_seed", outputs=Input),
-            Node("agent-node", prompt="search/query", model="default",
-                 mode="agent", outputs=Output, inputs={"seed": Input},
-                 tools=[Tool("search", budget=3)]),
-        ])
+        parent = Construct(
+            "agent-test",
+            nodes=[
+                Node.scripted("seed", fn="agent_test_seed", outputs=Input),
+                Node(
+                    "agent-node",
+                    prompt="search/query",
+                    model="default",
+                    mode="agent",
+                    outputs=Output,
+                    inputs={"seed": Input},
+                    tools=[Tool("search", budget=3)],
+                ),
+            ],
+        )
         graph = compile(parent, **_llm_kw, **build_test_compile_kwargs())
         run(graph, input={"node_id": "agent-test"})
 
@@ -2061,11 +2089,13 @@ class TestRenderingThreeSurfaceParity:
         )
 
         register_scripted("surf_seed", lambda _in, _cfg: Data(value="test-val"))
-        parent = Construct("surface-test", nodes=[
-            Node.scripted("seed", fn="surf_seed", outputs=Data),
-            Node("proc", prompt="process/data", model="default",
-                 outputs=Result, inputs={"seed": Data}),
-        ])
+        parent = Construct(
+            "surface-test",
+            nodes=[
+                Node.scripted("seed", fn="surf_seed", outputs=Data),
+                Node("proc", prompt="process/data", model="default", outputs=Result, inputs={"seed": Data}),
+            ],
+        )
         graph = compile(parent, **_llm_kw, **build_test_compile_kwargs())
         run(graph, input={"node_id": "surface-test"})
 
@@ -2126,9 +2156,7 @@ class TestRenderingThreeSurfaceParity:
         direct_baml = describe_value(instance)
         via_render = render_input(instance, renderer=None)
 
-        assert direct_baml == via_render, (
-            "render_input(model, renderer=None) must equal describe_value(model)"
-        )
+        assert direct_baml == via_render, "render_input(model, renderer=None) must equal describe_value(model)"
 
 
 class TestToolInputRenderingParity:
@@ -2157,9 +2185,7 @@ class TestToolInputRenderingParity:
         expected_baml = describe_value(instance)
         assert isinstance(input_result, str)
         assert expected_baml == input_result, (
-            f"Input BAML must match describe_value output.\n"
-            f"Got: {input_result!r}\n"
-            f"Expected: {expected_baml!r}"
+            f"Input BAML must match describe_value output.\nGot: {input_result!r}\nExpected: {expected_baml!r}"
         )
 
     def test_parity_with_exclude_fields(self):
@@ -2298,7 +2324,6 @@ class TestRendererAsIRType:
             renderer=r,
         )
         assert n.renderer is r
-
 
 
 class TestTypeDisplayName:

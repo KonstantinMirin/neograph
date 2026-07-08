@@ -11,6 +11,7 @@ from neograph import Construct, Node, Oracle
 class ModelA(BaseModel, frozen=True):
     value: str
 
+
 class ModelB(BaseModel, frozen=True):
     score: float
 
@@ -19,7 +20,10 @@ def bad_post(result: ModelA, variants: list[ModelA]) -> ModelB:
     return ModelB(score=0.5)
 
 
-pipeline = Construct("test", nodes=[
-    Node("gen", mode="think", outputs=ModelA, prompt="gen", model="fast")
-    | Oracle(n=2, merge_prompt="merge: ${variants}", merge_post_process=bad_post),
-])
+pipeline = Construct(
+    "test",
+    nodes=[
+        Node("gen", mode="think", outputs=ModelA, prompt="gen", model="fast")
+        | Oracle(n=2, merge_prompt="merge: ${variants}", merge_post_process=bad_post),
+    ],
+)

@@ -10,13 +10,15 @@ import re
 SRC_DIR = pathlib.Path(__file__).resolve().parent.parent / "src" / "neograph"
 
 # Error classes that must use .build() instead of direct construction.
-ERROR_CLASSES = frozenset({
-    "ConstructError",
-    "ExecutionError",
-    "CompileError",
-    "ConfigurationError",
-    "NeographError",
-})
+ERROR_CLASSES = frozenset(
+    {
+        "ConstructError",
+        "ExecutionError",
+        "CompileError",
+        "ConfigurationError",
+        "NeographError",
+    }
+)
 
 
 ANY_AUDIT_MODULES = (
@@ -167,7 +169,7 @@ class TestNoAnyInIRPublicAPIs:
             "outside the allowlist:\n"
             + "\n".join(f"  {o}" for o in offenders)
             + "\n\nReplace Any with a precise type, or add an allowlist entry "
-              "with a one-line reason naming the user-data boundary."
+            "with a one-line reason naming the user-data boundary."
         )
 
     def test_scanner_detects_injected_any(self, tmp_path: pathlib.Path):
@@ -176,26 +178,14 @@ class TestNoAnyInIRPublicAPIs:
         Verifies the scanner is not silently passing because of a bug.
         """
         synthetic = tmp_path / "node.py"  # mimic an in-scope filename
-        synthetic.write_text(
-            "from typing import Any\n"
-            "def public_fn(x: Any) -> Any:\n"
-            "    return x\n"
-        )
-        offenders = self._scan_public_any_uses(
-            tmp_path, ("node.py",), allowlist={}
-        )
-        assert any("public_fn" in o for o in offenders), (
-            f"scanner failed to detect injected Any; offenders={offenders}"
-        )
+        synthetic.write_text("from typing import Any\ndef public_fn(x: Any) -> Any:\n    return x\n")
+        offenders = self._scan_public_any_uses(tmp_path, ("node.py",), allowlist={})
+        assert any("public_fn" in o for o in offenders), f"scanner failed to detect injected Any; offenders={offenders}"
 
     def test_scanner_respects_allowlist(self, tmp_path: pathlib.Path):
         """Mutation: an allowlisted Any must pass the scanner."""
         synthetic = tmp_path / "node.py"
-        synthetic.write_text(
-            "from typing import Any\n"
-            "def public_fn(x: Any) -> Any:\n"
-            "    return x\n"
-        )
+        synthetic.write_text("from typing import Any\ndef public_fn(x: Any) -> Any:\n    return x\n")
         offenders = self._scan_public_any_uses(
             tmp_path,
             ("node.py",),
@@ -321,9 +311,8 @@ def _annotation_uses_any(ann: ast.expr) -> bool:
     for node in ast.walk(ann):
         if isinstance(node, ast.Subscript):
             value = node.value
-            is_callable = (
-                (isinstance(value, ast.Name) and value.id == "Callable")
-                or (isinstance(value, ast.Attribute) and value.attr == "Callable")
+            is_callable = (isinstance(value, ast.Name) and value.id == "Callable") or (
+                isinstance(value, ast.Attribute) and value.attr == "Callable"
             )
             if is_callable:
                 for inner in ast.walk(node.slice):
@@ -342,12 +331,14 @@ def _annotation_uses_any(ann: ast.expr) -> bool:
 # adjacent justification comment naming the field(s) that require it.
 # Add a new entry only with sign-off — non-Pydantic-friendly types should
 # usually live in a PrivateAttr sidecar (see Node._sidecar pattern).
-ARBITRARY_TYPES_ALLOWLIST: frozenset[str] = frozenset({
-    "construct.py",
-    "node.py",
-    "forward.py",
-    "modifiers.py",
-})
+ARBITRARY_TYPES_ALLOWLIST: frozenset[str] = frozenset(
+    {
+        "construct.py",
+        "node.py",
+        "forward.py",
+        "modifiers.py",
+    }
+)
 
 
 class TestArbitraryTypesJustified:
@@ -372,14 +363,11 @@ class TestArbitraryTypesJustified:
             fname, lineno, raw_line = hit
             if fname not in ARBITRARY_TYPES_ALLOWLIST:
                 offenders.append(
-                    f"{fname}:{lineno} uses arbitrary_types_allowed=True but file "
-                    f"is not in ARBITRARY_TYPES_ALLOWLIST"
+                    f"{fname}:{lineno} uses arbitrary_types_allowed=True but file is not in ARBITRARY_TYPES_ALLOWLIST"
                 )
                 continue
             path = SRC_DIR / fname
-            if not _has_arbitrary_types_justification(
-                path, lineno, self.JUSTIFICATION_PREFIX
-            ):
+            if not _has_arbitrary_types_justification(path, lineno, self.JUSTIFICATION_PREFIX):
                 offenders.append(
                     f"{fname}:{lineno} has no '{self.JUSTIFICATION_PREFIX}' comment "
                     f"within 3 lines above (or trailing on the same line). Add a "
@@ -401,9 +389,9 @@ class TestArbitraryTypesJustified:
         hits = list(_find_arbitrary_types_hits(tmp_path))
         assert hits, "scanner failed to detect arbitrary_types_allowed=True"
         fname, lineno, _ = hits[0]
-        assert not _has_arbitrary_types_justification(
-            tmp_path / fname, lineno, "# arbitrary_types_allowed:"
-        ), "scanner incorrectly accepted a missing justification"
+        assert not _has_arbitrary_types_justification(tmp_path / fname, lineno, "# arbitrary_types_allowed:"), (
+            "scanner incorrectly accepted a missing justification"
+        )
 
     def test_scanner_accepts_justified_use(self, tmp_path: pathlib.Path):
         """Mutation: file with a justification comment must pass."""
@@ -417,9 +405,9 @@ class TestArbitraryTypesJustified:
         hits = list(_find_arbitrary_types_hits(tmp_path))
         assert hits, "scanner failed to detect arbitrary_types_allowed=True"
         fname, lineno, _ = hits[0]
-        assert _has_arbitrary_types_justification(
-            tmp_path / fname, lineno, "# arbitrary_types_allowed:"
-        ), "scanner failed to honor a present justification"
+        assert _has_arbitrary_types_justification(tmp_path / fname, lineno, "# arbitrary_types_allowed:"), (
+            "scanner failed to honor a present justification"
+        )
 
     def test_slip_arbitrary_types_re(self):
         """Regex-slip: the BOTH-forms support is load-bearing. A naive
@@ -436,9 +424,7 @@ class TestArbitraryTypesJustified:
 # Matches both ConfigDict(arbitrary_types_allowed=True) and
 # {"arbitrary_types_allowed": True} forms. The optional trailing quote handles
 # the dict-literal form where the key is quoted.
-_ARBITRARY_TYPES_RE = re.compile(
-    r'arbitrary_types_allowed["\']?\s*(?:=|:)\s*True'
-)
+_ARBITRARY_TYPES_RE = re.compile(r'arbitrary_types_allowed["\']?\s*(?:=|:)\s*True')
 
 
 def _find_arbitrary_types_hits(src_dir: pathlib.Path) -> list[tuple[str, int, str]]:
@@ -451,9 +437,7 @@ def _find_arbitrary_types_hits(src_dir: pathlib.Path) -> list[tuple[str, int, st
     return hits
 
 
-def _has_arbitrary_types_justification(
-    path: pathlib.Path, lineno: int, prefix: str
-) -> bool:
+def _has_arbitrary_types_justification(path: pathlib.Path, lineno: int, prefix: str) -> bool:
     """Look for `prefix` in the contiguous comment block immediately above.
 
     A justification comment may span multiple lines as long as those lines
@@ -492,44 +476,40 @@ NEOGRAPH_ERROR_ALLOWLIST: dict[str, str] = {
     # the documented contract and tests depend on it. AttributeError raises
     # inside _resolve_field implement the Python attribute-protocol contract
     # for dotted-path lookup (caller may catch AttributeError to fall back).
-    "conditions.py:68": "ValueError is the documented contract for parse_condition grammar errors; tests assert it",
-    "conditions.py:79": "AttributeError is the Python attribute-protocol contract for dotted-path lookup",
-    "conditions.py:87": "AttributeError is the Python attribute-protocol contract for dotted-path lookup",
-    "conditions.py:95": "AttributeError is the Python attribute-protocol contract for dotted-path lookup",
-    "conditions.py:120": "ValueError is the documented contract for parse_condition grammar errors; tests assert it",
-    "conditions.py:131": "ValueError is the documented contract for parse_condition grammar errors; tests assert it",
-
+    "conditions.py:66": "ValueError is the documented contract for parse_condition grammar errors; tests assert it",
+    "conditions.py:81": "AttributeError is the Python attribute-protocol contract for dotted-path lookup",
+    "conditions.py:86": "AttributeError is the Python attribute-protocol contract for dotted-path lookup",
+    "conditions.py:74": "AttributeError is the Python attribute-protocol contract for dotted-path lookup",
+    "conditions.py:121": "ValueError is the documented contract for parse_condition grammar errors; tests assert it",
+    "conditions.py:110": "ValueError is the documented contract for parse_condition grammar errors; tests assert it",
     # ── construct.py — Pydantic BeforeValidator boundary ──
     # _validate_node_list runs inside Pydantic field validation; Pydantic
     # catches TypeError/ValueError and rolls them into ValidationError.
     "construct.py:46": "Pydantic BeforeValidator boundary; TypeError is rolled into ValidationError",
     "construct.py:49": "Pydantic BeforeValidator boundary; TypeError is rolled into ValidationError",
-
     # ── forward.py — proxy / tracer / abstract-method contracts ──
     # _Proxy.__getattr__ raises AttributeError per the Python attribute
     # protocol (hasattr depends on it). __bool__/__iter__ raise TypeError per
     # the Python protocol contract (a non-iterable used in `for` raises
     # TypeError, not NeographError). forward() raises NotImplementedError as
     # a Python abstract-method idiom.
-    "forward.py:178": "NotImplementedError is the Python abstract-method idiom",
-    "forward.py:209": "AttributeError is the Python attribute-protocol contract (hasattr depends on it)",
-    "forward.py:238": "TypeError is the Python protocol contract for __bool__ misuse",
-    "forward.py:246": "TypeError is the Python protocol contract for __iter__ misuse",
-    "forward.py:273": "TypeError is the Python protocol contract for __bool__ misuse on _ConditionProxy",
-
+    "forward.py:176": "NotImplementedError is the Python abstract-method idiom",
+    "forward.py:205": "AttributeError is the Python attribute-protocol contract (hasattr depends on it)",
+    "forward.py:240": "TypeError is the Python protocol contract for __bool__ misuse",
+    "forward.py:234": "TypeError is the Python protocol contract for __iter__ misuse",
+    "forward.py:267": "TypeError is the Python protocol contract for __bool__ misuse on _ConditionProxy",
     # ── modifiers.py — Pydantic field_validator + proxy attribute protocol ──
     # _PathRecorder.__getattr__ implements the attribute protocol. Pydantic
     # @field_validator boundaries catch ValueError into ValidationError.
-    "modifiers.py:186": "AttributeError is the Python attribute-protocol contract (private-attr guard)",
-    "modifiers.py:420": "Pydantic @field_validator boundary; ValueError is rolled into ValidationError",
-    "modifiers.py:495": "Pydantic @field_validator boundary; ValueError is rolled into ValidationError",
-
+    "modifiers.py:187": "AttributeError is the Python attribute-protocol contract (private-attr guard)",
+    "modifiers.py:422": "Pydantic @field_validator boundary; ValueError is rolled into ValidationError",
+    "modifiers.py:497": "Pydantic @field_validator boundary; ValueError is rolled into ValidationError",
     # ── node.py — Pydantic BeforeValidator boundary ──
     # _validate_type_spec runs inside Pydantic field validation; Pydantic
     # catches TypeError and rolls it into ValidationError.
     "node.py:109": "Pydantic BeforeValidator boundary; TypeError is rolled into ValidationError",
     "node.py:111": "Pydantic BeforeValidator boundary; TypeError is rolled into ValidationError",
-    "node.py:115": "Pydantic BeforeValidator boundary; TypeError is rolled into ValidationError",
+    "node.py:117": "Pydantic BeforeValidator boundary; TypeError is rolled into ValidationError",
 }
 
 
@@ -552,19 +532,21 @@ class TestPublicFunctionsRaiseNeographError:
     runtime failures, ``CompileError`` for graph-build failures).
     """
 
-    NEOGRAPH_ERROR_NAMES = frozenset({
-        "NeographError",
-        "ConstructError",
-        "ExecutionError",
-        "CompileError",
-        "ConfigurationError",
-        "CheckpointSchemaError",
-        "StateMissingError",
-        "NodeOutputError",
-        "PromptVarMissing",
-        "NonIdempotentReplayError",
-        "ResourceExpiredError",
-    })
+    NEOGRAPH_ERROR_NAMES = frozenset(
+        {
+            "NeographError",
+            "ConstructError",
+            "ExecutionError",
+            "CompileError",
+            "ConfigurationError",
+            "CheckpointSchemaError",
+            "StateMissingError",
+            "NodeOutputError",
+            "PromptVarMissing",
+            "NonIdempotentReplayError",
+            "ResourceExpiredError",
+        }
+    )
 
     def test_no_bare_stdlib_raises(self):
         offenders = self._scan_bare_raises(SRC_DIR, NEOGRAPH_ERROR_ALLOWLIST)
@@ -572,17 +554,14 @@ class TestPublicFunctionsRaiseNeographError:
             f"\n{len(offenders)} raise(s) use a stdlib exception class instead of NeographError:\n"
             + "\n".join(f"  {o}" for o in offenders)
             + "\n\nConvert each to NeographError.build(...) using the appropriate subclass "
-              "(ConfigurationError, ConstructError, ExecutionError, CompileError), or add an "
-              "allowlist entry with a one-line reason naming the stdlib-contract boundary."
+            "(ConfigurationError, ConstructError, ExecutionError, CompileError), or add an "
+            "allowlist entry with a one-line reason naming the stdlib-contract boundary."
         )
 
     def test_scanner_detects_injected_stdlib_raise(self, tmp_path: pathlib.Path):
         """Mutation: a file with `raise ValueError(...)` must be flagged."""
         synthetic = tmp_path / "fake_module.py"
-        synthetic.write_text(
-            "def fn():\n"
-            "    raise ValueError('boom')\n"
-        )
+        synthetic.write_text("def fn():\n    raise ValueError('boom')\n")
         offenders = self._scan_bare_raises(tmp_path, {})
         assert any("ValueError" in o for o in offenders), (
             f"scanner failed to detect injected ValueError; offenders={offenders}"
@@ -592,9 +571,7 @@ class TestPublicFunctionsRaiseNeographError:
         """Mutation: a file with `raise ConstructError.build(...)` must pass."""
         synthetic = tmp_path / "fake_module.py"
         synthetic.write_text(
-            "from neograph.errors import ConstructError\n"
-            "def fn():\n"
-            "    raise ConstructError.build('boom')\n"
+            "from neograph.errors import ConstructError\ndef fn():\n    raise ConstructError.build('boom')\n"
         )
         offenders = self._scan_bare_raises(tmp_path, {})
         assert offenders == [], f"scanner rejected a valid NeographError raise: {offenders}"
@@ -602,13 +579,8 @@ class TestPublicFunctionsRaiseNeographError:
     def test_scanner_respects_allowlist(self, tmp_path: pathlib.Path):
         """Mutation: an allowlisted stdlib raise must pass."""
         synthetic = tmp_path / "fake_module.py"
-        synthetic.write_text(
-            "def fn():\n"
-            "    raise ValueError('boom')\n"
-        )
-        offenders = self._scan_bare_raises(
-            tmp_path, {"fake_module.py:2": "test boundary"}
-        )
+        synthetic.write_text("def fn():\n    raise ValueError('boom')\n")
+        offenders = self._scan_bare_raises(tmp_path, {"fake_module.py:2": "test boundary"})
         assert offenders == [], f"allowlist not honored: {offenders}"
 
     @classmethod
@@ -675,5 +647,3 @@ def _raised_exception_name(exc_node: ast.expr) -> str | None:
             return exc_node.id
         return None  # ``raise exc`` — runtime-bound variable
     return None
-
-

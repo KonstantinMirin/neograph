@@ -43,6 +43,5 @@ class TestRunIdMintTwinSymmetry:
         sync = "_mint_run_id" in _calls_in_function("_prepare")
         asyncf = "_mint_run_id" in _calls_in_function("_aprepare")
         assert sync == asyncf is True, (
-            "_mint_run_id must be called in BOTH _prepare and _aprepare — "
-            f"_prepare={sync}, _aprepare={asyncf}"
+            f"_mint_run_id must be called in BOTH _prepare and _aprepare — _prepare={sync}, _aprepare={asyncf}"
         )

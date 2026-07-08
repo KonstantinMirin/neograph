@@ -159,8 +159,10 @@ class TestOracleEachLabelInError:
 
         user_node_fn.__name__ = "eachoracle_redirect_fn"
         redirect = make_eachoracle_redirect_fn(
-            RunnableLambda(user_node_fn), field_name="score_claim",
-            collector_field="score_claim_collector", each_key="claim_id",
+            RunnableLambda(user_node_fn),
+            field_name="score_claim",
+            collector_field="score_claim_collector",
+            each_key="claim_id",
             item=SimpleNamespace(name="score-claim"),
         )
         # Empty dict state lacks EACH_ITEM — closure's get_required must raise.
@@ -183,7 +185,8 @@ class TestOracleEachLabelInError:
 
         user_node_fn.__name__ = "each_redirect_fn"
         redirect = make_each_redirect_fn(
-            RunnableLambda(user_node_fn), field_name="score_claim",
+            RunnableLambda(user_node_fn),
+            field_name="score_claim",
             each=Each(over="src.items", key="claim_id"),
             item=SimpleNamespace(name="score-claim"),
         )
@@ -228,12 +231,15 @@ class TestOracleClosureNodeNameRequiredAndComplete:
         register_scripted("kg8l_inner", lambda _i, _c: RawText(text="processed"))
 
         sub = Construct(
-            "my-sub-hyphen", input=FanItem, output=RawText,
+            "my-sub-hyphen",
+            input=FanItem,
+            output=RawText,
             nodes=[Node.scripted("kg8l-inner", fn="kg8l_inner", outputs=RawText)],
         )
         sub_each = sub | Each(over="kg8l_seed.items", key="item_id")
         parent = Construct(
-            "kg8l-parent", nodes=[
+            "kg8l-parent",
+            nodes=[
                 Node.scripted("kg8l-seed", fn="kg8l_seed", outputs=FanCollection),
                 sub_each,
             ],
@@ -245,9 +251,7 @@ class TestOracleClosureNodeNameRequiredAndComplete:
         # (with its pregel `.nodes`) lives on the `.graph` field.
         lg_graph = graph.graph
         nodes_dict = lg_graph.get_graph().nodes
-        target_key = next(
-            k for k in nodes_dict if "my-sub-hyphen" in k or k == "my-sub-hyphen"
-        )
+        target_key = next(k for k in nodes_dict if "my-sub-hyphen" in k or k == "my-sub-hyphen")
         # Pull the runnable for that node and invoke its bound function with
         # an empty dict to force the get_required call inside the closure.
         runnable = nodes_dict[target_key]
@@ -280,10 +284,13 @@ class TestEndToEndRequiredStateMiss:
         from tests.schemas import MatchResult, RawText
 
         consumer = Node(
-            name="stb-consumer", mode="think", outputs=MatchResult,
+            name="stb-consumer",
+            mode="think",
+            outputs=MatchResult,
             inputs={"upstream": RawText},
             context=["never_produced"],
-            prompt="dummy", model="fast",
+            prompt="dummy",
+            model="fast",
         )
         # Dict state with the input bound but the context field absent —
         # the exact shape sub-construct dispatch produces when parent state

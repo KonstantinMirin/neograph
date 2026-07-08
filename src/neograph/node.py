@@ -1,22 +1,22 @@
 """Node — typed processing block that compiles to a LangGraph node.
 
-    # Declarative: framework generates the LangGraph node function
-    classify = Node(
-        "classify",
-        mode="think",
-        inputs=DecompositionResult,
-        outputs=ClassificationResult,
-        model="reason",
-        prompt="rw/classify",
-    )
+# Declarative: framework generates the LangGraph node function
+classify = Node(
+    "classify",
+    mode="think",
+    inputs=DecompositionResult,
+    outputs=ClassificationResult,
+    model="reason",
+    prompt="rw/classify",
+)
 
-    # Scripted: deterministic Python, no LLM
-    build_catalog = Node.scripted("build-catalog", fn="build_catalog", outputs=str)
+# Scripted: deterministic Python, no LLM
+build_catalog = Node.scripted("build-catalog", fn="build_catalog", outputs=str)
 
-    # Raw: classic LangGraph escape hatch
-    @node(mode='raw', inputs=SomeInput, outputs=SomeOutput)
-    def custom_logic(state, config):
-        ...
+# Raw: classic LangGraph escape hatch
+@node(mode='raw', inputs=SomeInput, outputs=SomeOutput)
+def custom_logic(state, config):
+    ...
 """
 
 from __future__ import annotations
@@ -108,7 +108,9 @@ def _validate_type_spec(v: Any) -> Any:
             if not isinstance(key, str):
                 raise TypeError(f"dict-form type spec keys must be strings, got {type(key).__name__}")
             if not (isinstance(val, (type, str)) or _is_type_like(val)):
-                raise TypeError(f"dict-form type spec value for '{key}' must be a type or type name, got {type(val).__name__}: {val!r}")
+                raise TypeError(
+                    f"dict-form type spec value for '{key}' must be a type or type name, got {type(val).__name__}: {val!r}"
+                )
         return v
     if isinstance(v, type) or _is_type_like(v):
         return v
@@ -119,6 +121,7 @@ def _is_type_like(v: Any) -> bool:
     """Check if v is a generic alias (list[X], dict[str, X], Optional[X], X | None)."""
     import types as _types
     import typing
+
     return (
         hasattr(v, "__origin__")
         or isinstance(v, (typing._GenericAlias, typing._SpecialForm))  # type: ignore[attr-defined]
@@ -165,8 +168,8 @@ class Node(Modifiable, BaseModel):
     outputs: TypeSpec = None
 
     # LLM configuration
-    model: str | None = None        # "fast", "reason", "large"
-    prompt: str | None = None       # template name in prompt registry
+    model: str | None = None  # "fast", "reason", "large"
+    prompt: str | None = None  # template name in prompt registry
     llm_config: LlmConfig = Field(default_factory=LlmConfig)  # framework knobs + provider_kwargs (typed)
 
     # Tools with per-tool budgets. A raw LangChain BaseTool may be passed
@@ -186,10 +189,7 @@ class Node(Modifiable, BaseModel):
         """
         if not isinstance(value, list):
             return value
-        return [
-            Tool.from_base_tool(item) if isinstance(item, BaseTool) else item
-            for item in value
-        ]
+        return [Tool.from_base_tool(item) if isinstance(item, BaseTool) else item for item in value]
 
     # Deterministic implementation (scripted mode only)
     scripted_fn: str | None = None
@@ -261,7 +261,6 @@ class Node(Modifiable, BaseModel):
         # modifier_set: ModifierSet replaces the old list field. Passing
         # modifiers= would be silently ignored — fail loudly instead.
         if "modifiers" in kwargs:
-
             raise ConstructError.build(
                 "Node(modifiers=[...]) is no longer supported",
                 hint="Use the pipe syntax instead: node | Oracle(...) | Each(...). "
@@ -288,14 +287,17 @@ class Node(Modifiable, BaseModel):
     def _validate_skip_callables(self) -> None:
         """Check skip_when/skip_value accept at least 1 positional arg."""
         from neograph.errors import ConstructError
+
         for attr_name in ("skip_when", "skip_value"):
             fn = getattr(self, attr_name, None)
             if fn is None:
                 continue
             sig = inspect.signature(fn)
             positional = [
-                p for p in sig.parameters.values()
-                if p.kind in (
+                p
+                for p in sig.parameters.values()
+                if p.kind
+                in (
                     inspect.Parameter.POSITIONAL_ONLY,
                     inspect.Parameter.POSITIONAL_OR_KEYWORD,
                     inspect.Parameter.VAR_POSITIONAL,
@@ -385,7 +387,8 @@ class Node(Modifiable, BaseModel):
         # None from an unpopulated state field downstream.
         ms = self.modifier_set
         active = [
-            kind for kind, mod in (
+            kind
+            for kind, mod in (
                 ("Each", ms.each),
                 ("Oracle", ms.oracle),
                 ("Loop", ms.loop),
@@ -395,8 +398,7 @@ class Node(Modifiable, BaseModel):
         if active:
             kinds = "/".join(active)
             raise NeographError.build(
-                f"Node '{self.name}' carries modifiers ({kinds}); "
-                "run_isolated does not support modifier-bearing nodes",
+                f"Node '{self.name}' carries modifiers ({kinds}); run_isolated does not support modifier-bearing nodes",
                 hint="use compile(construct, ...) + run(graph, ...) instead",
                 node=self.name,
             )
@@ -445,6 +447,7 @@ class Node(Modifiable, BaseModel):
         # interrupt_when shims registered at decoration time in the
         # _runtime_registry leaf).
         from neograph._runtime_registry import _decoration_registry
+
         scripted_lookup: dict[str, Callable] = {}
         own_shim = getattr(self, "_scripted_shim", None)
         if own_shim is not None and self.scripted_fn:

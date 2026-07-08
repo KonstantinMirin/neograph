@@ -168,9 +168,7 @@ class XmlRenderer:
             lines.append(f"</{tag}>")
         return "\n".join(lines)
 
-    def _get_description(
-        self, field_name: str, field_info: Any, seen: set[str]
-    ) -> str | None:
+    def _get_description(self, field_name: str, field_info: Any, seen: set[str]) -> str | None:
         if self.include_field_info == "never":
             return None
         desc = field_info.description
@@ -318,7 +316,8 @@ def build_rendered_input(
 
 
 def _render_with_flattening(
-    value: Any, renderer: Renderer | None,
+    value: Any,
+    renderer: Renderer | None,
 ) -> tuple[Any, dict[str, Any]]:
     """Render a value and extract flattened fields if render_for_prompt returns a model.
 

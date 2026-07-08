@@ -7,6 +7,7 @@ from neograph import node
 class Claims(BaseModel, frozen=True):
     items: list[str]
 
+
 class Scores(BaseModel, frozen=True):
     values: list[float]
 

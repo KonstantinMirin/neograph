@@ -166,9 +166,7 @@ class TestSyncStreamVerb:
         for ch in chunks:
             for delta in ch.values():
                 if isinstance(delta, dict):
-                    assert not any(
-                        k.startswith(StateKeys.FRAMEWORK_PREFIX) for k in delta
-                    )
+                    assert not any(k.startswith(StateKeys.FRAMEWORK_PREFIX) for k in delta)
 
 
 class TestAsyncStreamVerb:
@@ -176,10 +174,7 @@ class TestAsyncStreamVerb:
         from neograph import astream
 
         graph = compile(_trivial_pipeline(), **build_test_compile_kwargs())
-        chunks = [
-            ch
-            async for ch in astream(graph, input={"node_id": "as-001"}, stream_mode="values")
-        ]
+        chunks = [ch async for ch in astream(graph, input={"node_id": "as-001"}, stream_mode="values")]
 
         assert chunks, "astream produced no chunks"
         final = chunks[-1]
@@ -194,10 +189,7 @@ class TestAsyncStreamVerb:
         graph_b = compile(_trivial_pipeline(), **build_test_compile_kwargs())
 
         batch = run(graph_a, input={"node_id": "parity"})
-        chunks = [
-            ch
-            async for ch in astream(graph_b, input={"node_id": "parity"}, stream_mode="values")
-        ]
+        chunks = [ch async for ch in astream(graph_b, input={"node_id": "parity"}, stream_mode="values")]
         assert chunks[-1]["process"] == batch["process"]
 
 
@@ -284,9 +276,7 @@ class TestDiInputsNeverLeaks:
         assert StateKeys.DI_INPUTS not in result
 
         graph2 = compile(self._think_pipeline(), **llm_kw, **build_test_compile_kwargs())
-        chunks = list(
-            stream(graph2, input={"node_id": "d-002"}, config=dict(cfg), stream_mode="values")
-        )
+        chunks = list(stream(graph2, input={"node_id": "d-002"}, config=dict(cfg), stream_mode="values"))
         assert chunks, "stream produced no chunks"
         for ch in chunks:
             assert StateKeys.DI_INPUTS not in ch
@@ -314,18 +304,13 @@ class TestFacadeDelegations:
 
     async def test_facade_astream_events_delegates(self):
         graph = compile(_trivial_pipeline(), **build_test_compile_kwargs())
-        events = [
-            ev
-            async for ev in graph.astream_events({"node_id": "f-002"}, version="v2")
-        ]
+        events = [ev async for ev in graph.astream_events({"node_id": "f-002"}, version="v2")]
         assert any(ev.get("event") == "on_chain_start" for ev in events)
 
     def test_facade_update_state_delegates(self):
         from langgraph.checkpoint.memory import InMemorySaver
 
-        graph = compile(
-            _trivial_pipeline(), checkpointer=InMemorySaver(), **build_test_compile_kwargs()
-        )
+        graph = compile(_trivial_pipeline(), checkpointer=InMemorySaver(), **build_test_compile_kwargs())
         config = {"configurable": {"thread_id": "f-003"}}
         run(graph, input={"node_id": "f-003"}, config=config)
         # update_state through the facade returns a config referencing a new checkpoint.
@@ -335,9 +320,7 @@ class TestFacadeDelegations:
     async def test_facade_aupdate_state_delegates(self):
         from langgraph.checkpoint.memory import InMemorySaver
 
-        graph = compile(
-            _trivial_pipeline(), checkpointer=InMemorySaver(), **build_test_compile_kwargs()
-        )
+        graph = compile(_trivial_pipeline(), checkpointer=InMemorySaver(), **build_test_compile_kwargs())
         config = {"configurable": {"thread_id": "f-004"}}
         run(graph, input={"node_id": "f-004"}, config=config)
         new_config = await graph.aupdate_state(config, {"fetch": RawText(text="patched")})

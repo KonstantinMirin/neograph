@@ -35,6 +35,7 @@ class TestNodeDecoratorCrossModule:
     @staticmethod
     def _fresh_module(name: str):
         import types as _types
+
         return _types.ModuleType(name)
 
     def test_pipeline_assembles_when_node_imported_from_another_module(self):
@@ -80,9 +81,7 @@ class TestNodeDecoratorCrossModule:
             return RawText(text="first")
 
         # Second node: different lambda but explicit name='compute' → same field_name
-        second_compute = node(mode="scripted", outputs=Claims, name="compute")(
-            lambda: Claims(items=["second"])
-        )
+        second_compute = node(mode="scripted", outputs=Claims, name="compute")(lambda: Claims(items=["second"]))
 
         mod.metrics_compute = compute
         mod.stats_compute = second_compute
@@ -101,9 +100,7 @@ class TestNodeDecoratorCrossModule:
             return RawText(text="first")
 
         # Second node: explicit name= avoids collision
-        resolved = node(mode="scripted", outputs=Claims, name="stats_compute")(
-            lambda: Claims(items=["second"])
-        )
+        resolved = node(mode="scripted", outputs=Claims, name="stats_compute")(lambda: Claims(items=["second"]))
 
         mod.metrics_compute = compute
         mod.stats_compute = resolved
@@ -122,9 +119,6 @@ class TestNodeDecoratorCrossModule:
 # ═══════════════════════════════════════════════════════════════════════════
 # ForwardConstruct — Task 1: base class + node discovery
 # ═══════════════════════════════════════════════════════════════════════════
-
-
-
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -173,14 +167,10 @@ class TestConstructFromFunctions:
 
         @node(outputs=ClassifiedClaims)
         def cff_topo_report(cff_topo_split: Claims) -> ClassifiedClaims:
-            return ClassifiedClaims(
-                classified=[{"claim": c, "category": "x"} for c in cff_topo_split.items]
-            )
+            return ClassifiedClaims(classified=[{"claim": c, "category": "x"} for c in cff_topo_split.items])
 
         # Pass in SHUFFLED order — report first, then seed, then split
-        pipeline = construct_from_functions(
-            "topo", [cff_topo_report, cff_topo_seed, cff_topo_split]
-        )
+        pipeline = construct_from_functions("topo", [cff_topo_report, cff_topo_seed, cff_topo_split])
         names = [n.name for n in pipeline.nodes]
         assert names == ["cff-topo-seed", "cff-topo-split", "cff-topo-report"]
 
@@ -257,9 +247,6 @@ class TestConstructFromFunctions:
             construct_from_functions("collision", [first, second])
 
 
-
-
-
 class TestConstructLlmConfigDefault:
     """Construct-level default llm_config inherited by produce/gather/execute nodes."""
 
@@ -291,8 +278,14 @@ class TestConstructLlmConfigDefault:
         """Per-node llm_config merges with Construct default; node wins on conflicts."""
         from neograph import Construct, Node
 
-        a = Node("a", mode="think", outputs=Claims, model="fast", prompt="p",
-                 llm_config={"provider_kwargs": {"temperature": 0.9, "max_tokens": 1000}})
+        a = Node(
+            "a",
+            mode="think",
+            outputs=Claims,
+            model="fast",
+            prompt="p",
+            llm_config={"provider_kwargs": {"temperature": 0.9, "max_tokens": 1000}},
+        )
 
         pipeline = Construct(
             "merged",
@@ -330,8 +323,14 @@ class TestConstructLlmConfigDefault:
         """When Construct has no llm_config, nodes keep their original config unchanged."""
         from neograph import Construct, Node
 
-        a = Node("a", mode="think", outputs=Claims, model="fast", prompt="p",
-                 llm_config={"provider_kwargs": {"temperature": 0.7}})
+        a = Node(
+            "a",
+            mode="think",
+            outputs=Claims,
+            model="fast",
+            prompt="p",
+            llm_config={"provider_kwargs": {"temperature": 0.7}},
+        )
 
         pipeline = Construct("no-default", nodes=[a])
 
@@ -347,8 +346,7 @@ class TestConstructLlmConfigDefault:
         @node(outputs=Claims, prompt="p", model="fast")
         def cff_default_a() -> Claims: ...
 
-        @node(outputs=Claims, prompt="p", model="fast",
-              llm_config={"provider_kwargs": {"temperature": 0.9}})
+        @node(outputs=Claims, prompt="p", model="fast", llm_config={"provider_kwargs": {"temperature": 0.9}})
         def cff_default_b(cff_default_a: Claims) -> Claims: ...
 
         pipeline = construct_from_functions(
@@ -371,9 +369,6 @@ class TestConstructLlmConfigDefault:
         assert b_node.llm_config.provider_kwargs == {"temperature": 0.9}
 
 
-
-
-
 # ═══════════════════════════════════════════════════════════════════════════
 # TestNodeInputsFieldRename (neograph-kqd.1)
 #
@@ -392,6 +387,7 @@ class TestConstructLlmConfigDefault:
 # step-2's validator catch fan-in mismatches via _check_fan_in_inputs.
 # Fan-out params (Each) are stripped from inputs at construct-assembly time.
 # ═══════════════════════════════════════════════════════════════════════════
+
 
 class TestNodeDecoratorDictInputs:
     def test_dict_inputs_emitted_when_single_upstream_typed(self):
@@ -509,6 +505,7 @@ class TestNodeDecoratorDictInputs:
         graph = compile(pipeline, **build_test_compile_kwargs())
 
         import structlog
+
         captured: list[dict] = []
 
         def capture_processor(logger, method_name, event_dict):
@@ -547,8 +544,6 @@ class TestNodeDecoratorDictInputs:
 # ═══════════════════════════════════════════════════════════════════════════
 
 
-
-
 # ═══════════════════════════════════════════════════════════════════════════
 # NODE.OUTPUTS RENAME (neograph-1bp.1)
 # ═══════════════════════════════════════════════════════════════════════════
@@ -560,7 +555,6 @@ class TestDecoratorDictOutputs:
     def test_per_key_fields_written_when_dict_outputs_declared(self):
         """@node(outputs={'a': X, 'b': Y}) scripted → writes per-key fields."""
         import types
-
 
         mod = types.ModuleType("test_dec_dict_out_mod")
 
@@ -601,9 +595,6 @@ class TestDecoratorDictOutputs:
 # ═══════════════════════════════════════════════════════════════════════════
 # INTEROP: @node decorator integration with Operator and Each+DI
 # ═══════════════════════════════════════════════════════════════════════════
-
-
-
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -654,10 +645,12 @@ class TestNodeDecoratorInterop:
 
         @node(mode="scripted", outputs=Clusters)
         def producer() -> Clusters:
-            return Clusters(groups=[
-                ClusterGroup(label="alpha", claim_ids=["c1"]),
-                ClusterGroup(label="beta", claim_ids=["c2", "c3"]),
-            ])
+            return Clusters(
+                groups=[
+                    ClusterGroup(label="alpha", claim_ids=["c1"]),
+                    ClusterGroup(label="beta", claim_ids=["c2", "c3"]),
+                ]
+            )
 
         @node(
             mode="scripted",
@@ -687,9 +680,11 @@ class TestNodeDecoratorInterop:
 
         @node(mode="scripted", outputs=Clusters)
         def producer() -> Clusters:
-            return Clusters(groups=[
-                ClusterGroup(label="alpha", claim_ids=["c1"]),
-            ])
+            return Clusters(
+                groups=[
+                    ClusterGroup(label="alpha", claim_ids=["c1"]),
+                ]
+            )
 
         @node(
             mode="scripted",
@@ -723,9 +718,11 @@ class TestNodeDecoratorInterop:
 
         @node(mode="scripted", outputs=Clusters)
         def producer() -> Clusters:
-            return Clusters(groups=[
-                ClusterGroup(label="alpha", claim_ids=["c1"]),
-            ])
+            return Clusters(
+                groups=[
+                    ClusterGroup(label="alpha", claim_ids=["c1"]),
+                ]
+            )
 
         @node(
             mode="scripted",
@@ -755,8 +752,6 @@ class TestNodeDecoratorInterop:
 # ═══════════════════════════════════════════════════════════════════════════
 
 
-
-
 # ═══════════════════════════════════════════════════════════════════════════
 # TestListOverEachEndToEnd (neograph-kqd.5)
 #
@@ -773,6 +768,7 @@ class TestNodeDecoratorInterop:
 # skip_when= predicate bypasses LLM call. skip_value= provides the output.
 # Zero LLM tokens consumed when skip fires.
 # ═══════════════════════════════════════════════════════════════════════════
+
 
 class TestConditionalProduce:
     def test_skip_value_returned_when_skip_when_true(self):
@@ -832,23 +828,29 @@ class TestConditionalProduce:
 
     def test_skip_fields_stored_when_set_on_node(self):
         """skip_when and skip_value are proper Node fields."""
+
         def pred(x):
             return True
 
         def val(x):
             return x
+
         n = Node(
-            "t", mode="think", inputs=Claims, outputs=MergedResult,
-            model="fast", prompt="p",
-            skip_when=pred, skip_value=val,
+            "t",
+            mode="think",
+            inputs=Claims,
+            outputs=MergedResult,
+            model="fast",
+            prompt="p",
+            skip_when=pred,
+            skip_value=val,
         )
         assert n.skip_when is pred
         assert n.skip_value is val
 
     def test_skip_fields_none_when_not_set(self):
         """Nodes without skip_when have it as None (backward compat)."""
-        n = Node("t", mode="think", inputs=Claims, outputs=MergedResult,
-                 model="fast", prompt="p")
+        n = Node("t", mode="think", inputs=Claims, outputs=MergedResult, model="fast", prompt="p")
         assert n.skip_when is None
         assert n.skip_value is None
 
@@ -856,7 +858,10 @@ class TestConditionalProduce:
         """@node(skip_when=...) passes through to Node."""
 
         @node(
-            outputs=MergedResult, mode="think", model="fast", prompt="p",
+            outputs=MergedResult,
+            mode="think",
+            model="fast",
+            prompt="p",
             skip_when=lambda x: True,
             skip_value=lambda x: MergedResult(final_text="skipped"),
         )
@@ -869,5 +874,3 @@ class TestConditionalProduce:
 # ═══════════════════════════════════════════════════════════════════════════
 # NODE.OUTPUTS RENAME (neograph-1bp.1)
 # ═══════════════════════════════════════════════════════════════════════════
-
-

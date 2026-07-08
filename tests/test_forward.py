@@ -776,7 +776,9 @@ class TestForwardConstructExceptions:
 
         class FallbackPipeline(ForwardConstruct):
             fallback = Node.scripted(
-                "te-fallback", fn="te_fallback", outputs=ErrorResult,
+                "te-fallback",
+                fn="te_fallback",
+                outputs=ErrorResult,
             )
 
             def forward(self, topic):
@@ -864,9 +866,7 @@ class TestForwardConstructExceptions:
 
         # v1 limitation: only try-body nodes are traced
         assert "te-main" in node_names, "try-body node must be traced"
-        assert "te-rescue" not in node_names, (
-            "v1 limitation: except-body nodes are dead code during tracing"
-        )
+        assert "te-rescue" not in node_names, "v1 limitation: except-body nodes are dead code during tracing"
         assert "te-final" in node_names, "post-try/except nodes must be traced"
 
         # The pipeline should still compile despite dead except-body nodes
@@ -1014,12 +1014,8 @@ class TestLoopCallDoesNotMutateClassNodes:
         Writer()
 
         # Class-level nodes must not have been mutated
-        assert Writer.review.inputs is None, (
-            "Class-level Node.inputs was mutated by _LoopCall"
-        )
-        assert Writer.revise.inputs is None, (
-            "Class-level Node.inputs was mutated by _LoopCall"
-        )
+        assert Writer.review.inputs is None, "Class-level Node.inputs was mutated by _LoopCall"
+        assert Writer.revise.inputs is None, "Class-level Node.inputs was mutated by _LoopCall"
 
     def test_second_instance_works_when_same_class_instantiated_twice(self):
         """Two instances of the same ForwardConstruct subclass must both
@@ -1269,6 +1265,7 @@ class TestForwardNotOverridden:
 
     def test_forward_not_overridden_raises(self):
         """Subclass without forward() override raises ConstructError at init."""
+
         class NoForward(ForwardConstruct):
             a = Node.scripted("a", fn="f", outputs=RawText)
 
@@ -1376,6 +1373,7 @@ class TestTracingProxyGetSetAttr:
         shim = _ForwardSelf({"a": node_a}, tracer, real_self=dummy)
         # Node access returns _NodeCall
         from neograph.forward import _NodeCall
+
         assert isinstance(shim.a, _NodeCall)
         # Non-node access falls through to real_self
         assert shim.custom_value == 99
@@ -1401,6 +1399,7 @@ class TestLoopIterationInputInference:
     def test_loop_empty_body_raises(self):
         """self.loop() with empty body raises ConstructError (line 544-545)."""
         from neograph.forward import _LoopCall
+
         tracer = _Tracer()
         lc = _LoopCall(
             body=[],
@@ -1416,6 +1415,7 @@ class TestLoopIterationInputInference:
     def test_loop_non_node_call_in_body_raises(self):
         """self.loop() with non-_NodeCall items raises ConstructError."""
         from neograph.forward import _LoopCall
+
         tracer = _Tracer()
         lc = _LoopCall(
             body=["not_a_node_call"],
@@ -1451,6 +1451,7 @@ class TestLoopIterationInputInference:
     def test_loop_input_type_none_raises(self):
         """When loop can't infer input type, raises ConstructError (line 560)."""
         from neograph.forward import _LoopCall, _NodeCall
+
         tracer = _Tracer()
 
         # A node with outputs=None
@@ -1508,6 +1509,7 @@ class TestBranchLoweringEdgeCases:
         pipe = TruthyBranch()
         # Should have a _BranchNode in the node list
         from neograph.forward import _BranchNode
+
         has_branch = any(isinstance(n, _BranchNode) for n in pipe.nodes)
         assert has_branch
 

@@ -28,29 +28,19 @@ EXAMPLES_ROOT = REPO_ROOT / "examples"
 # Files where the bypass-data lambda is INTENTIONAL (see scan disposition).
 # Each entry MUST have a one-line reason; opaque entries fail review.
 ALLOWLIST = {
-    "examples/03_oracle_ensemble.py":
-        "only prompt is inline ${tagged_claims}; neograph auto-substitutes; lambda never reached",
-    "examples/20_oracle_merge_hooks.py":
-        "only prompts are inline ${...}; same as above",
-    "examples/02_produce_and_gather.py":
-        "intentional minimal demo with hardcoded 'analyze' string",
-    "examples/08_structured_output_coercion.py":
-        "intentional minimal demo",
-    "examples/10_full_pipeline.py":
-        "intentional minimal demo",
-    "examples/18_typed_projections.py":
-        "no LLM call — pure type-projection demo, lambda returns []",
-    "examples/vs_langgraph/02_tool_agent.py":
-        "tool-agent demo: model gets seed instruction, then iterates via tools",
+    "examples/03_oracle_ensemble.py": "only prompt is inline ${tagged_claims}; neograph auto-substitutes; lambda never reached",
+    "examples/20_oracle_merge_hooks.py": "only prompts are inline ${...}; same as above",
+    "examples/02_produce_and_gather.py": "intentional minimal demo with hardcoded 'analyze' string",
+    "examples/08_structured_output_coercion.py": "intentional minimal demo",
+    "examples/10_full_pipeline.py": "intentional minimal demo",
+    "examples/18_typed_projections.py": "no LLM call — pure type-projection demo, lambda returns []",
+    "examples/vs_langgraph/02_tool_agent.py": "tool-agent demo: model gets seed instruction, then iterates via tools",
 }
 
 
 def _iter_example_pipelines() -> list[pathlib.Path]:
     """All .py files in examples/ that could call compile(prompt_compiler=...)."""
-    return [
-        p for p in EXAMPLES_ROOT.rglob("*.py")
-        if "__pycache__" not in p.parts
-    ]
+    return [p for p in EXAMPLES_ROOT.rglob("*.py") if "__pycache__" not in p.parts]
 
 
 def _is_bypass_data_lambda(call: ast.Call) -> tuple[bool, str | None]:
@@ -130,10 +120,7 @@ class TestExampleCanonicalPromptCompiler:
                 continue
             if rel in ALLOWLIST:
                 # Verify the allowlist reason is non-empty
-                assert ALLOWLIST[rel], (
-                    f"ALLOWLIST entry for {rel} has empty reason — "
-                    f"add a one-line justification"
-                )
+                assert ALLOWLIST[rel], f"ALLOWLIST entry for {rel} has empty reason — add a one-line justification"
                 continue
             for lineno, snippet in findings:
                 offenders.append(f"{rel}:{lineno} — {snippet}")
@@ -141,8 +128,7 @@ class TestExampleCanonicalPromptCompiler:
             "Bypass-data prompt_compiler lambda found in examples that are NOT "
             "in ALLOWLIST. Rewrite to canonical pattern "
             "(template.format(**data) for dict-input, template.format(input=data) "
-            "for single-input) — see piarch's neograph_bridge.py:62-210.\n"
-            + "\n".join(offenders)
+            "for single-input) — see piarch's neograph_bridge.py:62-210.\n" + "\n".join(offenders)
         )
 
     def test_meta_scanner_catches_bypass_pattern(self, tmp_path):
@@ -158,10 +144,7 @@ class TestExampleCanonicalPromptCompiler:
             ")\n"
         )
         findings = _scan_file(synthetic)
-        assert findings, (
-            "Scanner must catch synthetic `lambda template, data: [..., template]` "
-            "pattern; got nothing"
-        )
+        assert findings, "Scanner must catch synthetic `lambda template, data: [..., template]` pattern; got nothing"
 
     def test_meta_scanner_passes_canonical_format(self, tmp_path):
         """Negative meta-test: canonical .format(**data) shape must not be flagged."""
@@ -176,10 +159,7 @@ class TestExampleCanonicalPromptCompiler:
             ")\n"
         )
         findings = _scan_file(synthetic)
-        assert not findings, (
-            "Scanner must NOT flag canonical .format(**data) shape; "
-            f"got false positives: {findings}"
-        )
+        assert not findings, f"Scanner must NOT flag canonical .format(**data) shape; got false positives: {findings}"
 
     def test_meta_scanner_passes_hardcoded_string(self, tmp_path):
         """Negative meta-test: hardcoded-string demos must not be flagged
@@ -195,10 +175,7 @@ class TestExampleCanonicalPromptCompiler:
             ")\n"
         )
         findings = _scan_file(synthetic)
-        assert not findings, (
-            "Scanner must NOT flag hardcoded-string demos; "
-            f"got false positives: {findings}"
-        )
+        assert not findings, f"Scanner must NOT flag hardcoded-string demos; got false positives: {findings}"
 
     def test_meta_scanner_resists_tmpl_alias_slip(self, tmp_path):
         """Regex-slip meta-test: the disease shape uses ``tmpl`` instead of
@@ -279,9 +256,7 @@ def _annotation_has_open_mapping(annotation: str) -> bool:
     return False
 
 
-def _model_has_open_mapping(
-    name: str, fields_map: dict[str, list[str]], _seen: set[str] | None = None
-) -> bool:
+def _model_has_open_mapping(name: str, fields_map: dict[str, list[str]], _seen: set[str] | None = None) -> bool:
     """True if `name` or any model it transitively references declares a dict[...] field."""
     if _seen is None:
         _seen = set()
@@ -345,9 +320,7 @@ def _scan_open_mapping_outputs(source: str) -> list[tuple[int, str]]:
     tree = ast.parse(source)
     fields_map = _class_field_annotations(tree)
     return [
-        (lineno, name)
-        for lineno, name in _llm_output_model_refs(tree)
-        if _model_has_open_mapping(name, fields_map)
+        (lineno, name) for lineno, name in _llm_output_model_refs(tree) if _model_has_open_mapping(name, fields_map)
     ]
 
 
@@ -490,8 +463,7 @@ class TestExampleMergeCompilerReadsVariants:
                 )
         assert not offenders, (
             "Example prompt_compiler iterates its bare data param (neograph-iu05). "
-            "Oracle merge_prompt input_data is a dict — read data['variants'].\n"
-            + "\n".join(offenders)
+            "Oracle merge_prompt input_data is a dict — read data['variants'].\n" + "\n".join(offenders)
         )
 
     def test_meta_catches_bare_iteration_comprehension(self):
@@ -524,11 +496,7 @@ class TestExampleMergeCompilerReadsVariants:
     def test_meta_passes_scripted_node_body(self):
         """Negative: a scripted @node body (no `template` param) iterating its
         typed input is exempt (examples 05/10)."""
-        source = (
-            "def format_report(input_data):\n"
-            "    for claim in input_data.items:\n"
-            "        print(claim)\n"
-        )
+        source = "def format_report(input_data):\n    for claim in input_data.items:\n        print(claim)\n"
         assert not _scan_bare_data_iteration(source), "scripted node body must not be flagged"
 
 
@@ -565,9 +533,7 @@ def _third_party_import_roots(source: str, local_names: set[str]) -> set[str]:
     return {
         root
         for root in _example_import_roots(source)
-        if root not in _sys.stdlib_module_names
-        and root != "__future__"
-        and root not in local_names
+        if root not in _sys.stdlib_module_names and root != "__future__" and root not in local_names
     }
 
 
@@ -592,9 +558,7 @@ class TestExampleImportsAreDeclared:
 
     def test_meta_detects_third_party_import(self):
         """Positive: a non-stdlib, non-local import root is detected."""
-        roots = _third_party_import_roots(
-            "import langfuse\nfrom langfuse.langchain import CallbackHandler\n", set()
-        )
+        roots = _third_party_import_roots("import langfuse\nfrom langfuse.langchain import CallbackHandler\n", set())
         assert "langfuse" in roots
 
     def test_meta_excludes_stdlib(self):

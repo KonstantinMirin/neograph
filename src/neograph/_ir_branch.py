@@ -29,6 +29,7 @@ if TYPE_CHECKING:
 @dataclasses.dataclass(frozen=True)
 class _ConditionSpec:
     """Parsed condition specification for compiler lowering."""
+
     source_node: Node | Construct | None
     attr_chain: list[str]
     op_fn: Any  # operator callable
@@ -43,6 +44,7 @@ class _BranchMeta:
     This is stored on a sentinel _BranchNode that the compiler recognizes
     and lowers to add_conditional_edges.
     """
+
     condition_spec: _ConditionSpec
     # Nodes that only appear in the true arm
     true_arm_nodes: list[Node | Construct]

@@ -108,10 +108,7 @@ class TestScaffoldSeesBranchArmNodes:
 
         nodes, _subs = _collect_items(parent)
         names = [n["name"] for n in nodes]
-        assert "gate" in names, (
-            "true-arm node 'gate' was invisible to _collect_items — the scaffold "
-            "omits it entirely"
-        )
+        assert "gate" in names, "true-arm node 'gate' was invisible to _collect_items — the scaffold omits it entirely"
 
     def test_collect_items_includes_false_arm_node(self):
         """A bare Node in the false arm must appear in _collect_items' node list."""
@@ -141,6 +138,4 @@ class TestScaffoldSeesBranchArmNodes:
         scaffold_tests(parent, output_dir=str(tmp_path), overwrite=True)
 
         meta_src = (tmp_path / "test_metadata.py").read_text()
-        assert "test_gate" in meta_src, (
-            "generated metadata scaffold has no test for the branch-arm node"
-        )
+        assert "test_gate" in meta_src, "generated metadata scaffold has no test for the branch-arm node"

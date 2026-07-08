@@ -42,11 +42,7 @@ def _interrupt_stream_pipeline():
     @node(
         mode="scripted",
         outputs=ValidationResult,
-        interrupt_when=lambda state: (
-            {"issues": state.gate.issues}
-            if state.gate and not state.gate.passed
-            else None
-        ),
+        interrupt_when=lambda state: {"issues": state.gate.issues} if state.gate and not state.gate.passed else None,
     )
     def gate() -> ValidationResult:
         emit_progress(Milestone(stage="gating"))
@@ -82,26 +78,20 @@ async def test_astream_pauses_at_interrupt_then_resumes_same_stream():
     # ── Leg 1: stream until the node-boundary interrupt ──
     first_customs: list = []
     interrupt_payload = None
-    async for chunk in astream(
-        graph, input={"node_id": "rs-001"}, config=config, stream_mode=["custom", "updates"]
-    ):
+    async for chunk in astream(graph, input={"node_id": "rs-001"}, config=config, stream_mode=["custom", "updates"]):
         if isinstance(chunk, tuple) and chunk[0] == "custom":
             first_customs.append(chunk[1])
         if _is_interrupt_chunk(chunk):
             interrupt_payload = chunk[1]["__interrupt__"][0].value
 
     # Progress surfaced before the pause...
-    assert first_customs == [
-        {"neograph_event": "progress", "event_type": "Milestone", "data": {"stage": "gating"}}
-    ]
+    assert first_customs == [{"neograph_event": "progress", "event_type": "Milestone", "data": {"stage": "gating"}}]
     # ...and the interrupt payload reached the consumer with its typed shape.
     assert interrupt_payload == {"issues": ["needs review"]}
 
     # ── Leg 2: resume the SAME logical stream with the human's answer ──
     resumed_updates: list = []
-    async for chunk in astream(
-        graph, resume={"approved": True}, config=config, stream_mode=["custom", "updates"]
-    ):
+    async for chunk in astream(graph, resume={"approved": True}, config=config, stream_mode=["custom", "updates"]):
         if isinstance(chunk, tuple) and chunk[0] == "updates":
             resumed_updates.append(chunk[1])
 

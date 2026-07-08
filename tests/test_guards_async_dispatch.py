@@ -62,9 +62,7 @@ DISPATCH_PATH = SRC / "_dispatch.py"
 # ToolDispatch was removed in neograph-m6d3.3: agent/act nodes no longer
 # dispatch through a single _execute_node ModeDispatch — they compile to a
 # multi-node inline ReAct cycle (_agent_cycle via _wiring._add_agent_cycle).
-EXPECTED_DISPATCH_CLASSES = frozenset(
-    {"ModeDispatch", "ScriptedDispatch", "ThinkDispatch"}
-)
+EXPECTED_DISPATCH_CLASSES = frozenset({"ModeDispatch", "ScriptedDispatch", "ThinkDispatch"})
 
 FuncDef = ast.FunctionDef | ast.AsyncFunctionDef
 
@@ -86,21 +84,13 @@ def _class_methods(source: str) -> dict[str, dict[str, FuncDef]]:
 def _dispatch_classes(source: str) -> dict[str, dict[str, FuncDef]]:
     """Detect dispatch classes structurally: any top-level ClassDef whose body
     defines an ``execute`` method. Excludes NodeInput/NodeOutput (value only)."""
-    return {
-        name: methods
-        for name, methods in _class_methods(source).items()
-        if "execute" in methods
-    }
+    return {name: methods for name, methods in _class_methods(source).items() if "execute" in methods}
 
 
 def _top_level_defs(source: str) -> dict[str, FuncDef]:
     """Map every top-level (module-scope) def -> def_node."""
     tree = ast.parse(source)
-    return {
-        node.name: node
-        for node in tree.body
-        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
-    }
+    return {node.name: node for node in tree.body if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)}
 
 
 def _func_named(source: str, name: str) -> FuncDef | None:
@@ -132,11 +122,7 @@ def _calls_attr(fn: FuncDef, attr: str) -> bool:
     e.g. ``sub_graph.ainvoke(...)``. Proves the async twin actually drives the
     child async instead of a band-aid afunc that re-calls the sync path."""
     for node in ast.walk(fn):
-        if (
-            isinstance(node, ast.Call)
-            and isinstance(node.func, ast.Attribute)
-            and node.func.attr == attr
-        ):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == attr:
             return True
     return False
 
@@ -146,11 +132,7 @@ def _calls_func(fn: FuncDef, name: str) -> bool:
     e.g. ``ainvoke_structured(...)``. Distinguishes an async twin that awaits the
     async LLM seam from a band-aid that re-calls the sync ``invoke_structured``."""
     for node in ast.walk(fn):
-        if (
-            isinstance(node, ast.Call)
-            and isinstance(node.func, ast.Name)
-            and node.func.id == name
-        ):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == name:
             return True
     return False
 
@@ -214,8 +196,7 @@ class TestDualPathDispatchCompleteness:
 
             if execute is not None and not isinstance(execute, ast.FunctionDef):
                 problems.append(
-                    f"{name}.execute must be a plain `def` (found `async def` — "
-                    "the sync path must stay sync)"
+                    f"{name}.execute must be a plain `def` (found `async def` — the sync path must stay sync)"
                 )
 
         assert not problems, (
@@ -233,11 +214,7 @@ class TestDualPathDispatchCompleteness:
     # must be flagged; EXCLUSION must not enroll.
 
     def test_meta_positive_class_with_execute_and_async_aexecute_passes(self):
-        src = (
-            "class X:\n"
-            "    def execute(self): ...\n"
-            "    async def aexecute(self): ...\n"
-        )
+        src = "class X:\n    def execute(self): ...\n    async def aexecute(self): ...\n"
         classes = _dispatch_classes(src)
         assert "X" in classes  # enrolled by execute presence
         methods = classes["X"]
@@ -251,33 +228,21 @@ class TestDualPathDispatchCompleteness:
         assert "aexecute" not in classes["X"]  # ...but the async twin is absent
 
     def test_meta_negative_sync_aexecute_stub_is_flagged(self):
-        src = (
-            "class X:\n"
-            "    def execute(self): ...\n"
-            "    def aexecute(self): ...\n"
-        )
+        src = "class X:\n    def execute(self): ...\n    def aexecute(self): ...\n"
         classes = _dispatch_classes(src)
         aexecute = classes["X"]["aexecute"]
         # present, but NOT AsyncFunctionDef -> guard's async-ness check flags it
         assert not isinstance(aexecute, ast.AsyncFunctionDef)
 
     def test_meta_negative_async_execute_is_flagged(self):
-        src = (
-            "class X:\n"
-            "    async def execute(self): ...\n"
-            "    async def aexecute(self): ...\n"
-        )
+        src = "class X:\n    async def execute(self): ...\n    async def aexecute(self): ...\n"
         classes = _dispatch_classes(src)
         execute = classes["X"]["execute"]
         # `execute` must be a plain def; an async execute is flagged
         assert not isinstance(execute, ast.FunctionDef)
 
     def test_meta_exclusion_value_property_class_not_enrolled(self):
-        src = (
-            "class X:\n"
-            "    @property\n"
-            "    def value(self): ...\n"
-        )
+        src = "class X:\n    @property\n    def value(self): ...\n"
         classes = _dispatch_classes(src)
         assert "X" not in classes  # no execute -> not a dispatch class
 
@@ -328,8 +293,7 @@ class TestAsyncTwinCoLocation:
                     problems.append(f"{filename}: missing sync def `{sync_name}`")
                 if async_name not in defs:
                     problems.append(
-                        f"{filename}: missing async twin `{async_name}` "
-                        "(moved out of its sync counterpart's module?)"
+                        f"{filename}: missing async twin `{async_name}` (moved out of its sync counterpart's module?)"
                     )
         assert not problems, (
             "async-twin co-location violated:\n"
@@ -342,10 +306,7 @@ class TestAsyncTwinCoLocation:
     # ── slip meta-tests: synthetic modules prove co-location is enforced ──
 
     def test_meta_positive_both_defs_in_one_module_pass(self):
-        src = (
-            "def _work(): ...\n"
-            "async def _awork(): ...\n"
-        )
+        src = "def _work(): ...\nasync def _awork(): ...\n"
         defs = _top_level_defs(src)
         assert "_work" in defs and "_awork" in defs
 

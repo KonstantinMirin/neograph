@@ -11,12 +11,14 @@ from tests.fakes import register_scripted
 class Claims(BaseModel, frozen=True):
     text: str
 
+
 register_scripted("dict_out_4c", lambda i, c: {"result": Claims(text="ok"), "log": "done"})
 register_scripted("good_ref_4c", lambda i, c: "ok")
 
-pipeline = Construct("valid-dict-ref", nodes=[
-    Node.scripted("source", fn="dict_out_4c", outputs={"result": Claims, "log": str}),
-    Node.scripted("consumer", fn="good_ref_4c",
-                  inputs={"source_result": Claims},
-                  outputs=str),
-])
+pipeline = Construct(
+    "valid-dict-ref",
+    nodes=[
+        Node.scripted("source", fn="dict_out_4c", outputs={"result": Claims, "log": str}),
+        Node.scripted("consumer", fn="good_ref_4c", inputs={"source_result": Claims}, outputs=str),
+    ],
+)

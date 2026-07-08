@@ -360,10 +360,9 @@ class TestJsonModeNativeResponseFormat:
         invoke_structured(_json_runtime(fake), **_json_call_kwargs())
 
         seen = fake.messages_seen[0]
-        assert any(
-            isinstance(m, dict) and "json" in str(m.get("content", "")).lower()
-            for m in seen
-        ), f"json-word guard did not inject 'json' into messages: {seen}"
+        assert any(isinstance(m, dict) and "json" in str(m.get("content", "")).lower() for m in seen), (
+            f"json-word guard did not inject 'json' into messages: {seen}"
+        )
 
     def test_json_word_not_duplicated_when_already_present(self):
         from neograph._llm import invoke_structured
@@ -463,7 +462,6 @@ class TestOutputStrategyOnGather:
         """Gather node with json_mode parses the final structured output from raw JSON."""
         from langchain_core.messages import AIMessage
 
-
         lookup_tool = FakeTool("lookup", response="found")
         register_tool_factory("lookup", lambda cfg, tc: lookup_tool)
 
@@ -483,7 +481,6 @@ class TestOutputStrategyOnGather:
                     return msg
                 return AIMessage(content='{"items": ["gathered-json"]}')
 
-
         node = Node(
             name="research",
             mode="agent",
@@ -494,7 +491,12 @@ class TestOutputStrategyOnGather:
             llm_config={"output_strategy": "json_mode"},
         )
         pipeline = Construct("test-gather-json", nodes=[node])
-        graph = compile(pipeline, llm_factory=lambda tier: FakeGatherLLM(), prompt_compiler=lambda template, data, **kw: [{"role": "user", "content": "go"}], **build_test_compile_kwargs())
+        graph = compile(
+            pipeline,
+            llm_factory=lambda tier: FakeGatherLLM(),
+            prompt_compiler=lambda template, data, **kw: [{"role": "user", "content": "go"}],
+            **build_test_compile_kwargs(),
+        )
         result = run(graph, input={"node_id": "test"})
 
         assert result["research"].items == ["gathered-json"]
@@ -791,8 +793,6 @@ class TestGatherToolCollection:
                         tool_messages_seen.append(m.content)
                 return super().invoke(messages, **kwargs)
 
-
-
         mod = types.ModuleType("test_schema_render_mod")
 
         @node(
@@ -807,10 +807,15 @@ class TestGatherToolCollection:
 
         mod.explore = explore
         pipeline = construct_from_module(mod)
-        graph = compile(pipeline, llm_factory=lambda tier: CapturingReActFake(
+        graph = compile(
+            pipeline,
+            llm_factory=lambda tier: CapturingReActFake(
                 tool_calls=[[{"name": "schema_search", "args": {}, "id": "t1"}], []],
                 final=lambda m: Claims(items=["done"]),
-            ), prompt_compiler=lambda t, d, **kw: [{"role": "user", "content": "test"}], **build_test_compile_kwargs())
+            ),
+            prompt_compiler=lambda t, d, **kw: [{"role": "user", "content": "test"}],
+            **build_test_compile_kwargs(),
+        )
         run(graph, input={})
 
         # The ToolMessage content should have describe_type schema + rendered instance
@@ -825,8 +830,6 @@ class TestGatherToolCollection:
         )
         # Rendered instance (not raw JSON dump)
         assert "UC-042" in content
-
-
 
 
 class TestStructuredSilentNoneSource:

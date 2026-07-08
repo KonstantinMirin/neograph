@@ -18,7 +18,10 @@ def pre(variants: list[Any]) -> dict:
 
 register_scripted("_chk_hook_any", lambda i, c: Claims(items=["a"]))
 
-pipeline = Construct("hook-any-ok", nodes=[
-    Node.scripted("gen", fn="_chk_hook_any", outputs=Claims)
-    | Oracle(n=2, merge_prompt="merge: ${variants}", merge_pre_process=pre),
-])
+pipeline = Construct(
+    "hook-any-ok",
+    nodes=[
+        Node.scripted("gen", fn="_chk_hook_any", outputs=Claims)
+        | Oracle(n=2, merge_prompt="merge: ${variants}", merge_pre_process=pre),
+    ],
+)

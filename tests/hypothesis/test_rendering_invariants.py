@@ -18,15 +18,19 @@ from neograph.renderers import _render_single, render_input
 
 # ── Strategies ──────────────────────────────────────────────────────────
 
+
 class Alpha(BaseModel):
     value: str = "default"
+
 
 class Beta(BaseModel):
     score: float = 0.5
 
+
 class Nested(BaseModel):
     inner: Alpha = Field(default_factory=Alpha)
     count: int = 0
+
 
 class WithProjection(BaseModel):
     raw: str = "data"
@@ -34,11 +38,13 @@ class WithProjection(BaseModel):
     def render_for_prompt(self) -> Alpha:
         return Alpha(value=self.raw.upper())
 
+
 class WithStrProjection(BaseModel):
     raw: str = "data"
 
     def render_for_prompt(self) -> str:
         return f"CUSTOM: {self.raw}"
+
 
 class WithNestedProjection(BaseModel):
     raw: str = "data"
@@ -47,17 +53,21 @@ class WithNestedProjection(BaseModel):
         return Nested(inner=Alpha(value=self.raw), count=len(self.raw))
 
 
-simple_models = st.sampled_from([
-    Alpha(value="test"),
-    Beta(score=0.7),
-    Nested(inner=Alpha(value="deep"), count=3),
-])
+simple_models = st.sampled_from(
+    [
+        Alpha(value="test"),
+        Beta(score=0.7),
+        Nested(inner=Alpha(value="deep"), count=3),
+    ]
+)
 
-projection_models = st.sampled_from([
-    WithProjection(raw="hello"),
-    WithStrProjection(raw="world"),
-    WithNestedProjection(raw="nested"),
-])
+projection_models = st.sampled_from(
+    [
+        WithProjection(raw="hello"),
+        WithStrProjection(raw="world"),
+        WithNestedProjection(raw="nested"),
+    ]
+)
 
 any_model = st.one_of(simple_models, projection_models)
 
@@ -75,6 +85,7 @@ def fan_in_dict(draw):
 
 
 # ── Invariant: render_input never raises ────────────────────────────────
+
 
 class TestRenderInputNeverRaises:
     """render_input must never raise for any valid Pydantic model input."""
@@ -103,6 +114,7 @@ class TestRenderInputNeverRaises:
 
 # ── Invariant: dict keys preserved ──────────────────────────────────────
 
+
 class TestDictKeysPreserved:
     """Original dict keys must always be present in the rendered output."""
 
@@ -120,6 +132,7 @@ class TestDictKeysPreserved:
 
 
 # ── Invariant: render_for_prompt always wins ────────────────────────────
+
 
 class TestRenderForPromptPrecedence:
     """render_for_prompt() must always take precedence over BAML default."""
@@ -140,6 +153,7 @@ class TestRenderForPromptPrecedence:
 
 # ── Invariant: BAML parity (tool result == input rendering) ─────────────
 
+
 class TestBAMLParity:
     """Tool-result and input rendering must produce identical BAML body."""
 
@@ -158,6 +172,7 @@ class TestBAMLParity:
 
 # ── Invariant: flattened fields are a superset of input keys ────────────
 
+
 class TestFlatteningInvariants:
     """Field flattening must produce a superset of the original dict keys."""
 
@@ -167,8 +182,7 @@ class TestFlatteningInvariants:
         """Rendered dict keys are always >= input dict keys."""
         result = render_input(data, renderer=None)
         assert set(data.keys()) <= set(result.keys()), (
-            f"Input keys {sorted(data.keys())} not subset of "
-            f"output keys {sorted(result.keys())}"
+            f"Input keys {sorted(data.keys())} not subset of output keys {sorted(result.keys())}"
         )
 
     def test_basemodel_child_preserved_not_stringified(self):
@@ -184,6 +198,7 @@ class TestFlatteningInvariants:
 
 
 # ── Invariant: _resolve_var handles all value types ─────────────────────
+
 
 class TestResolveVarRobustness:
     """_resolve_var must handle any value type without crashing."""

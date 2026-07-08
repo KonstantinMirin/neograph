@@ -45,8 +45,7 @@ def render_tool_budget_preamble(tools: list[Tool], max_iterations: int) -> str:
         lines.append(f"  - {tool.name}: {tool.budget} {noun}")
 
     lines.append(
-        f"Overall step cap: {max_iterations} reasoning steps (turns); "
-        "a single step may batch several tool calls."
+        f"Overall step cap: {max_iterations} reasoning steps (turns); a single step may batch several tool calls."
     )
     lines.append(_DIRECTIVE)
     return "\n".join(lines)

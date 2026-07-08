@@ -8,11 +8,14 @@ from tests.fakes import register_scripted
 class TypeA(BaseModel, frozen=True):
     x: str
 
+
 class TypeB(BaseModel, frozen=True):
     y: int
 
+
 class TypeC(BaseModel, frozen=True):
     z: float
+
 
 register_scripted("n3_a", lambda i, c: TypeA(x="hello"))
 register_scripted("n3_b", lambda i, c: TypeB(y=1))
@@ -39,7 +42,10 @@ mid = Construct(
 )
 
 # Level 1 (top): wraps mid
-pipeline = Construct("top", nodes=[
-    Node.scripted("seed", fn="n3_a", outputs=TypeA),
-    mid,
-])
+pipeline = Construct(
+    "top",
+    nodes=[
+        Node.scripted("seed", fn="n3_a", outputs=TypeA),
+        mid,
+    ],
+)

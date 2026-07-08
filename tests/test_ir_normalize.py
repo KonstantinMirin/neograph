@@ -119,11 +119,13 @@ class TestFanOutMultiOutputRuntime:
         register_scripted("bcct_cons_rt", lambda input_data, _c: _Summary(s=input_data["item"].v))
 
         gen = Node.scripted(
-            "gen", fn="bcct_gen_rt",
+            "gen",
+            fn="bcct_gen_rt",
             outputs={"result": list[_Item], "log": _Log},
         )
         consumer = Node.scripted(
-            "consumer", fn="bcct_cons_rt",
+            "consumer",
+            fn="bcct_cons_rt",
             inputs={"gen_result": list[_Item], "item": _Item},
             outputs=_Summary,
         ) | Each(over="gen_result", key="v")
@@ -137,9 +139,7 @@ class TestFanOutMultiOutputRuntime:
         # Each produces a dict keyed by `key`; both items were processed.
         produced = result["consumer"]
         summaries = list(produced.values()) if isinstance(produced, dict) else produced
-        assert {s.s for s in summaries} == {"a", "b"}, (
-            f"both fanned items must be processed; got {produced!r}"
-        )
+        assert {s.s for s in summaries} == {"a", "b"}, f"both fanned items must be processed; got {produced!r}"
 
 
 class TestFanOutCandidates:
@@ -161,9 +161,7 @@ class TestFanOutCandidates:
 
         consumer = self._each_consumer("consumer", {"claims": Alpha, "item": Beta}, "claims")
         cands = fan_out_candidates(consumer, {"claims", "consumer"})
-        assert cands == ["item"], (
-            f"the one input key naming no known field is the fan-out candidate; got {cands}"
-        )
+        assert cands == ["item"], f"the one input key naming no known field is the fan-out candidate; got {cands}"
 
     def test_excludes_the_nodes_own_field(self):
         from neograph._ir_normalize import fan_out_candidates
@@ -217,24 +215,18 @@ class TestNormalizeIrOwnsFanOutParam:
 
         # Existing behavior: the single unknown input key ("item") is the
         # fan-out receiver.
-        idx = next(
-            i for i, n in enumerate(pipeline.nodes)
-            if getattr(n, "name", None) == "consumer"
-        )
+        idx = next(i for i, n in enumerate(pipeline.nodes) if getattr(n, "name", None) == "consumer")
         assert pipeline.nodes[idx].fan_out_param == "item"
 
         # Clear it to simulate the pre-normalization IR a non-@node surface
         # produces, then prove normalize_ir restores it.
-        pipeline.nodes[idx] = pipeline.nodes[idx].model_copy(
-            update={"fan_out_param": None}
-        )
+        pipeline.nodes[idx] = pipeline.nodes[idx].model_copy(update={"fan_out_param": None})
         assert pipeline.nodes[idx].fan_out_param is None
 
         normalize_ir(pipeline)
 
         assert pipeline.nodes[idx].fan_out_param == "item", (
-            "normalize_ir must re-derive fan_out_param for an Each + dict-form "
-            "node with a single unknown input key"
+            "normalize_ir must re-derive fan_out_param for an Each + dict-form node with a single unknown input key"
         )
 
     def test_fan_out_param_set_when_each_consumes_multi_output_upstream(self):
@@ -248,6 +240,7 @@ class TestNormalizeIrOwnsFanOutParam:
         candidates) and declined -> fan_out_param=None, while the validator
         (using the full producer field set) correctly tolerated it. The
         assembled IR was wrong: fan_out_param must be 'item'."""
+
         class _Item(BaseModel, frozen=True):
             v: str
 
@@ -258,11 +251,13 @@ class TestNormalizeIrOwnsFanOutParam:
             s: str
 
         gen = Node.scripted(
-            "gen", fn="bcct_gen",
+            "gen",
+            fn="bcct_gen",
             outputs={"result": list[_Item], "log": _Log},
         )
         consumer = Node.scripted(
-            "consumer", fn="bcct_cons",
+            "consumer",
+            fn="bcct_cons",
             inputs={"gen_result": list[_Item], "item": _Item},
             outputs=_Summary,
         ) | Each(over="gen_result", key="v")
@@ -295,16 +290,13 @@ class TestNormalizeIrOwnsFanOutParam:
         producer = Node.scripted("claims", fn="ir_norm_producer2", outputs=Alpha)
         pipeline = Construct("ir-norm-idem", nodes=[producer, consumer])
 
-        idx = next(
-            i for i, n in enumerate(pipeline.nodes)
-            if getattr(n, "name", None) == "consumer"
-        )
+        idx = next(i for i, n in enumerate(pipeline.nodes) if getattr(n, "name", None) == "consumer")
         # Clear so the FIRST normalize_ir actually runs apply (not short-circuit).
         pipeline.nodes[idx] = pipeline.nodes[idx].model_copy(update={"fan_out_param": None})
 
-        normalize_ir(pipeline)            # pass 1: apply runs, sets "item"
+        normalize_ir(pipeline)  # pass 1: apply runs, sets "item"
         after_first = pipeline.nodes[idx].fan_out_param
-        normalize_ir(pipeline)            # pass 2: must be a no-op
+        normalize_ir(pipeline)  # pass 2: must be a no-op
         after_second = pipeline.nodes[idx].fan_out_param
 
         assert after_first == "item", "first normalize_ir (post-clear) must re-derive via apply"
@@ -335,6 +327,7 @@ class TestNormalizeIrOwnsFanOutParam:
         def summarize(produce: Alpha, item: Beta) -> Gamma: ...
 
         import types as t
+
         mod = t.ModuleType("test_agree_fanout_mod")
         mod.produce = produce
         mod.summarize = summarize
@@ -345,10 +338,7 @@ class TestNormalizeIrOwnsFanOutParam:
         assert builder_value == "item", "sanity: @node builder resolves the fan-out receiver"
 
         # Independent re-derivation by the normalizer, given the same peers.
-        peers = {
-            field_name_for(n.name) for n in construct.nodes
-            if getattr(n, "name", None) is not None
-        }
+        peers = {field_name_for(n.name) for n in construct.nodes if getattr(n, "name", None) is not None}
         cleared = node_ir.model_copy(update={"fan_out_param": None})
         normalizer_update = _FanOutParamNormalizer().apply(cleared, peers)
 
@@ -374,8 +364,7 @@ class TestNormalizeIrOwnsOracleGenType:
         class MergedType(BaseModel, frozen=True):
             combined: str
 
-        @node(outputs=MergedType, model="fast", prompt="gen",
-              ensemble_n=2, merge_fn="ir_norm_merge")
+        @node(outputs=MergedType, model="fast", prompt="gen", ensemble_n=2, merge_fn="ir_norm_merge")
         def generate() -> MergedType: ...
 
         @merge_fn
@@ -383,6 +372,7 @@ class TestNormalizeIrOwnsOracleGenType:
             return MergedType(combined=",".join(v.raw for v in variants))
 
         import types as t
+
         mod = t.ModuleType("test_ir_norm_oracle_mod")
         mod.generate = generate
         pipeline = construct_from_module(mod)
@@ -390,20 +380,14 @@ class TestNormalizeIrOwnsOracleGenType:
         gen_node = pipeline.nodes[0]
         assert gen_node.oracle_gen_type is GenType
 
-        idx = next(
-            i for i, n in enumerate(pipeline.nodes)
-            if getattr(n, "name", None) == gen_node.name
-        )
-        pipeline.nodes[idx] = pipeline.nodes[idx].model_copy(
-            update={"oracle_gen_type": None}
-        )
+        idx = next(i for i, n in enumerate(pipeline.nodes) if getattr(n, "name", None) == gen_node.name)
+        pipeline.nodes[idx] = pipeline.nodes[idx].model_copy(update={"oracle_gen_type": None})
         assert pipeline.nodes[idx].oracle_gen_type is None
 
         normalize_ir(pipeline)
 
         assert pipeline.nodes[idx].oracle_gen_type is GenType, (
-            "normalize_ir must re-infer oracle_gen_type from the merge_fn "
-            "first-parameter list element type"
+            "normalize_ir must re-infer oracle_gen_type from the merge_fn first-parameter list element type"
         )
 
 
@@ -433,6 +417,7 @@ class TestThreeSurfaceIrParity:
         def summarize(produce: Alpha, item: Beta) -> Gamma: ...
 
         import types as t
+
         mod = t.ModuleType("test_parity_fanout_mod")
         mod.produce = produce
         mod.summarize = summarize
@@ -440,6 +425,5 @@ class TestThreeSurfaceIrParity:
         deco_fop = _node_by_name(deco, "summarize").fan_out_param
 
         assert prog_fop == deco_fop == "item", (
-            f"fan_out_param diverged across surfaces: "
-            f"programmatic={prog_fop!r}, @node={deco_fop!r}"
+            f"fan_out_param diverged across surfaces: programmatic={prog_fop!r}, @node={deco_fop!r}"
         )

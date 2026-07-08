@@ -42,9 +42,7 @@ class TestRunIdPresence:
     def test_run_id_present_in_node_when_run(self):
         """(1) A node sees a non-empty ``_neo_run_id`` in config['configurable']."""
         seen: list = []
-        node = Node.scripted(
-            "probe", fn=_recorder("probe_fn", seen, Claims(items=["x"])), outputs=Claims
-        )
+        node = Node.scripted("probe", fn=_recorder("probe_fn", seen, Claims(items=["x"])), outputs=Claims)
         graph = compile(Construct("p", nodes=[node]), **build_test_compile_kwargs())
         run(graph, input={})
         assert len(seen) == 1
@@ -53,9 +51,7 @@ class TestRunIdPresence:
     def test_run_id_stable_across_supersteps_when_multi_node(self):
         """(2) Every superstep of ONE run observes the SAME id."""
         seen: list = []
-        n1 = Node.scripted(
-            "n1", fn=_recorder("n1_fn", seen, Claims(items=["a"])), outputs=Claims
-        )
+        n1 = Node.scripted("n1", fn=_recorder("n1_fn", seen, Claims(items=["a"])), outputs=Claims)
         n2 = Node.scripted(
             "n2",
             fn=_recorder("n2_fn", seen, ValidationResult(passed=True, issues=[])),
@@ -71,9 +67,7 @@ class TestRunIdPresence:
     def test_run_id_differs_across_two_run_calls(self):
         """(3) Two independent run() calls mint DIFFERENT ids."""
         seen: list = []
-        node = Node.scripted(
-            "probe", fn=_recorder("probe_fn", seen, Claims(items=["x"])), outputs=Claims
-        )
+        node = Node.scripted("probe", fn=_recorder("probe_fn", seen, Claims(items=["x"])), outputs=Claims)
         graph = compile(Construct("p", nodes=[node]), **build_test_compile_kwargs())
         run(graph, input={})
         run(graph, input={})
@@ -95,11 +89,8 @@ class TestRunIdTwoLifetime:
             "puip_gate",
             lambda state: {"needs": "review"} if getattr(state, "n1", None) else None,
         )
-        n1 = (
-            Node.scripted(
-                "n1", fn=_recorder("n1_fn", seen, Claims(items=["a"])), outputs=Claims
-            )
-            | Operator(when="puip_gate")
+        n1 = Node.scripted("n1", fn=_recorder("n1_fn", seen, Claims(items=["a"])), outputs=Claims) | Operator(
+            when="puip_gate"
         )
         n2 = Node.scripted(
             "n2",
@@ -154,9 +145,7 @@ class TestMintRunIdHelper:
         """(5c) Two arun() calls sharing ONE config dict each mint their own id;
         the shared caller dict is never mutated."""
         seen: list = []
-        node = Node.scripted(
-            "probe", fn=_recorder("probe_fn", seen, Claims(items=["x"])), outputs=Claims
-        )
+        node = Node.scripted("probe", fn=_recorder("probe_fn", seen, Claims(items=["x"])), outputs=Claims)
         graph = compile(Construct("p", nodes=[node]), **build_test_compile_kwargs())
         shared = {"configurable": {}}
 
@@ -175,9 +164,7 @@ class TestMintRunIdHelper:
 class TestRunIdNeverPersists:
     def test_run_id_absent_from_returned_state(self):
         """(6a) The id never surfaces in the returned state dict."""
-        node = Node.scripted(
-            "probe", fn=_recorder("probe_fn", [], Claims(items=["x"])), outputs=Claims
-        )
+        node = Node.scripted("probe", fn=_recorder("probe_fn", [], Claims(items=["x"])), outputs=Claims)
         graph = compile(Construct("p", nodes=[node]), **build_test_compile_kwargs())
         result = run(graph, input={})
         assert StateKeys.RUN_ID not in result
@@ -185,24 +172,18 @@ class TestRunIdNeverPersists:
 
     def test_run_id_absent_from_stream_chunks(self):
         """(6b) The id never leaks into stream_mode='values' chunks."""
-        node = Node.scripted(
-            "probe", fn=_recorder("probe_fn", [], Claims(items=["x"])), outputs=Claims
-        )
+        node = Node.scripted("probe", fn=_recorder("probe_fn", [], Claims(items=["x"])), outputs=Claims)
         graph = compile(Construct("p", nodes=[node]), **build_test_compile_kwargs())
         for chunk in stream(graph, input={}, stream_mode="values"):
             assert StateKeys.RUN_ID not in chunk
 
     def test_run_id_absent_from_checkpoint(self, tmp_path):
         """(6c) The id never persists in the checkpoint channel_values."""
-        node = Node.scripted(
-            "probe", fn=_recorder("probe_fn", [], Claims(items=["x"])), outputs=Claims
-        )
+        node = Node.scripted("probe", fn=_recorder("probe_fn", [], Claims(items=["x"])), outputs=Claims)
         db = str(tmp_path / "puip-checkpoint.db")
         config = {"configurable": {"thread_id": "puip-cp"}}
         with SqliteSaver.from_conn_string(db) as saver:
-            graph = compile(
-                Construct("p", nodes=[node]), checkpointer=saver, **build_test_compile_kwargs()
-            )
+            graph = compile(Construct("p", nodes=[node]), checkpointer=saver, **build_test_compile_kwargs())
             run(graph, input={}, config=config)
             saved = saver.get_tuple(config)
         channel_values = saved.checkpoint.get("channel_values", {})

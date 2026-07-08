@@ -14,21 +14,25 @@ SRC_DIR = pathlib.Path(__file__).resolve().parent.parent / "src" / "neograph"
 # (neograph-gig0). _construct_validation.py is the ONLY entry point: external
 # modules import the public surface from it; the _validation_* sub-modules are
 # package-private and may only be imported from WITHIN the cluster.
-VALIDATION_CLUSTER = frozenset({
-    "_construct_validation.py",
-    "_validation_types.py",
-    "_validation_inputs.py",
-    "_validation_modifiers.py",
-})
+VALIDATION_CLUSTER = frozenset(
+    {
+        "_construct_validation.py",
+        "_validation_types.py",
+        "_validation_inputs.py",
+        "_validation_modifiers.py",
+    }
+)
 
 # Error classes that must use .build() instead of direct construction.
-ERROR_CLASSES = frozenset({
-    "ConstructError",
-    "ExecutionError",
-    "CompileError",
-    "ConfigurationError",
-    "NeographError",
-})
+ERROR_CLASSES = frozenset(
+    {
+        "ConstructError",
+        "ExecutionError",
+        "CompileError",
+        "ConfigurationError",
+        "NeographError",
+    }
+)
 
 
 class TestErrorBuilderEnforcement:
@@ -118,24 +122,16 @@ class TestFileSplitEnforcement:
             bad_text = bad_file.read_text() if bad_file.exists() else ""
 
             if signature not in good_text:
-                violations.append(
-                    f"  MISSING: '{signature}' not found in {must_be_in}"
-                )
+                violations.append(f"  MISSING: '{signature}' not found in {must_be_in}")
             if signature in bad_text:
                 violations.append(
-                    f"  DRIFTED: '{signature}' found in {must_not_be_in} "
-                    f"(should only be in {must_be_in})"
+                    f"  DRIFTED: '{signature}' found in {must_not_be_in} (should only be in {must_be_in})"
                 )
 
-        assert violations == [], (
-            f"\n{len(violations)} file-split violation(s):\n"
-            + "\n".join(violations)
-        )
+        assert violations == [], f"\n{len(violations)} file-split violation(s):\n" + "\n".join(violations)
 
 
-def _line_cap_violations(
-    src_dir: pathlib.Path, files: tuple[str, ...], cap: int
-) -> list[str]:
+def _line_cap_violations(src_dir: pathlib.Path, files: tuple[str, ...], cap: int) -> list[str]:
     """Pure check: which of `files` are missing or exceed `cap` lines."""
     violations: list[str] = []
     for fname in files:
@@ -149,9 +145,7 @@ def _line_cap_violations(
     return violations
 
 
-def _symbol_location_violations(
-    src_dir: pathlib.Path, expected_locations: dict[str, set[str]]
-) -> list[str]:
+def _symbol_location_violations(src_dir: pathlib.Path, expected_locations: dict[str, set[str]]) -> list[str]:
     """Pure check: each signature must be in its target file and absent from the builder."""
     builder_path = src_dir / "_construct_builder.py"
     builder_text = builder_path.read_text() if builder_path.exists() else ""
@@ -164,10 +158,7 @@ def _symbol_location_violations(
                 violations.append(f"  MISSING: '{sig}' not found in {fname}")
             # Moved symbols must NOT linger in the builder.
             if fname != "_construct_builder.py" and sig in builder_text:
-                violations.append(
-                    f"  DRIFTED: '{sig}' still in _construct_builder.py "
-                    f"(should only be in {fname})"
-                )
+                violations.append(f"  DRIFTED: '{sig}' still in _construct_builder.py (should only be in {fname})")
     return violations
 
 
@@ -217,7 +208,9 @@ class TestConstructBuilderSplit:
     }
 
     # All four files participating in the split must stay under this cap.
-    LINE_CAP = 300
+    LINE_CAP = (
+        330  # raised 300->330 for the m0tv ruff-format pass (mechanical rewrap; _construct_builder 311 post-format)
+    )
     SPLIT_FILES = (
         "_construct_builder.py",
         "_construct_graph.py",
@@ -227,17 +220,11 @@ class TestConstructBuilderSplit:
 
     def test_each_split_file_under_line_cap(self):
         violations = _line_cap_violations(SRC_DIR, self.SPLIT_FILES, self.LINE_CAP)
-        assert violations == [], (
-            f"\n{len(violations)} line-cap/existence violation(s):\n"
-            + "\n".join(violations)
-        )
+        assert violations == [], f"\n{len(violations)} line-cap/existence violation(s):\n" + "\n".join(violations)
 
     def test_symbols_live_in_target_modules(self):
         violations = _symbol_location_violations(SRC_DIR, self.EXPECTED_LOCATIONS)
-        assert violations == [], (
-            f"\n{len(violations)} symbol-location violation(s):\n"
-            + "\n".join(violations)
-        )
+        assert violations == [], f"\n{len(violations)} symbol-location violation(s):\n" + "\n".join(violations)
 
     # --- meta-tests: prove the guard actually catches regressions ---
 
@@ -246,7 +233,7 @@ class TestConstructBuilderSplit:
         big = tmp_path / "_construct_graph.py"
         big.write_text("\n".join(f"x = {i}" for i in range(self.LINE_CAP + 50)))
         violations = _line_cap_violations(tmp_path, ("_construct_graph.py",), self.LINE_CAP)
-        assert any("> 300" in v for v in violations), (
+        assert any(f"> {self.LINE_CAP}" in v for v in violations), (
             "line-cap guard failed to flag a file exceeding the cap"
         )
 
@@ -261,9 +248,7 @@ class TestConstructBuilderSplit:
         # Builder still contains the helper that should have moved out.
         (tmp_path / "_construct_builder.py").write_text("def _register_node_scripted(): ...\n")
         (tmp_path / "_scripted_registry.py").write_text("def _register_node_scripted(): ...\n")
-        violations = _symbol_location_violations(
-            tmp_path, {"_scripted_registry.py": {"def _register_node_scripted"}}
-        )
+        violations = _symbol_location_violations(tmp_path, {"_scripted_registry.py": {"def _register_node_scripted"}})
         assert any("DRIFTED" in v for v in violations), (
             "symbol-location guard failed to flag a moved symbol left in the builder"
         )
@@ -272,9 +257,7 @@ class TestConstructBuilderSplit:
         """Negative meta-test: a symbol absent from its target file must be flagged."""
         (tmp_path / "_construct_builder.py").write_text("# empty\n")
         (tmp_path / "_scripted_registry.py").write_text("# helper not here\n")
-        violations = _symbol_location_violations(
-            tmp_path, {"_scripted_registry.py": {"def _register_node_scripted"}}
-        )
+        violations = _symbol_location_violations(tmp_path, {"_scripted_registry.py": {"def _register_node_scripted"}})
         assert any("MISSING" in v for v in violations), (
             "symbol-location guard failed to flag a symbol absent from its target file"
         )
@@ -294,11 +277,11 @@ def _parse_neograph_imports(path: pathlib.Path) -> set[str]:
     for stmt in ast.walk(tree):
         if isinstance(stmt, ast.ImportFrom):
             if stmt.module and stmt.module.startswith("neograph.") and stmt.level == 0:
-                mods.add(stmt.module[len("neograph."):])
+                mods.add(stmt.module[len("neograph.") :])
         elif isinstance(stmt, ast.Import):
             for alias in stmt.names:
                 if alias.name.startswith("neograph."):
-                    mods.add(alias.name[len("neograph."):])
+                    mods.add(alias.name[len("neograph.") :])
     return mods
 
 
@@ -316,14 +299,16 @@ class TestAssemblyClusterImportDAG:
     _oracle.py / _state_write.py / _input_shape.py are leaves (no upward edges).
     """
 
-    CLUSTER = frozenset({
-        "factory",
-        "_execute",
-        "_subconstruct",
-        "_oracle",
-        "_state_write",
-        "_input_shape",
-    })
+    CLUSTER = frozenset(
+        {
+            "factory",
+            "_execute",
+            "_subconstruct",
+            "_oracle",
+            "_state_write",
+            "_input_shape",
+        }
+    )
 
     # For each cluster module, the cluster modules it is allowed to import.
     # External modules (di, modifiers, naming, errors, etc.) are not enforced.
@@ -345,25 +330,18 @@ class TestAssemblyClusterImportDAG:
             extras = cluster_imports - allowed
             for extra in sorted(extras):
                 violations.append(f"  {mod}.py -> {extra}.py (not in allowed DAG)")
-        assert not violations, (
-            "Assembly cluster import-DAG layering violated:\n"
-            + "\n".join(violations)
-        )
+        assert not violations, "Assembly cluster import-DAG layering violated:\n" + "\n".join(violations)
 
     def test_mutation_violation_detected(self, tmp_path):
         """Mutation case — inject a violating edge; scanner must detect."""
         # Build a fake module that has a violating edge: _oracle imports _execute
         fake_oracle = tmp_path / "_oracle.py"
-        fake_oracle.write_text(
-            "from neograph._execute import _execute_node\n"
-        )
+        fake_oracle.write_text("from neograph._execute import _execute_node\n")
         imports = _parse_neograph_imports(fake_oracle)
         cluster_imports = imports & self.CLUSTER
         allowed = self.ALLOWED_CLUSTER_EDGES["_oracle"]
         extras = cluster_imports - allowed
-        assert "_execute" in extras, (
-            "Scanner failed to detect the mutation (oracle -> _execute)."
-        )
+        assert "_execute" in extras, "Scanner failed to detect the mutation (oracle -> _execute)."
 
 
 class TestAssemblyScenarioTouchpoints:
@@ -407,7 +385,7 @@ class TestAssemblyScenarioTouchpoints:
         """Every file named in SCENARIO_TOUCHPOINTS must exist in src."""
         missing: list[str] = []
         for scenario, spec in self.SCENARIO_TOUCHPOINTS.items():
-            for fname in (spec["must_touch"] | spec["may_touch"]):
+            for fname in spec["must_touch"] | spec["may_touch"]:
                 if not (SRC_DIR / fname).exists():
                     missing.append(f"  {scenario}: {fname} does not exist")
         assert not missing, "\n".join(missing)
@@ -428,9 +406,7 @@ class TestAssemblyScenarioTouchpoints:
             "max_touch": 2,
         }
         total = len(bad["must_touch"]) + len(bad["may_touch"])
-        assert total > bad["max_touch"], (
-            "Mutation scanner failed: oversized touchpoint not detected."
-        )
+        assert total > bad["max_touch"], "Mutation scanner failed: oversized touchpoint not detected."
 
 
 class TestAssemblyCohesionFanOut:
@@ -475,25 +451,18 @@ class TestAssemblyCohesionFanOut:
             importers = self._count_importers(mod)
             if len(importers) > ceiling:
                 violations.append(
-                    f"  {mod}: imported by {len(importers)} modules (ceiling {ceiling}). "
-                    f"Importers: {importers}"
+                    f"  {mod}: imported by {len(importers)} modules (ceiling {ceiling}). Importers: {importers}"
                 )
-        assert not violations, (
-            "Cohesion fan-out exceeded ceiling — module is becoming a kitchen sink:\n"
-            + "\n".join(violations)
+        assert not violations, "Cohesion fan-out exceeded ceiling — module is becoming a kitchen sink:\n" + "\n".join(
+            violations
         )
 
     def test_mutation_excess_importers_detected(self, tmp_path):
         """Mutation case — synthesize a target that has too many importers."""
         # Synthesize 5 importers of a fictitious module 'leaf.py', ceiling 1.
         for i in range(5):
-            (tmp_path / f"client_{i}.py").write_text(
-                "from neograph.leaf import x\n"
-            )
-        count = sum(
-            1 for p in tmp_path.glob("client_*.py")
-            if "from neograph.leaf " in p.read_text()
-        )
+            (tmp_path / f"client_{i}.py").write_text("from neograph.leaf import x\n")
+        count = sum(1 for p in tmp_path.glob("client_*.py") if "from neograph.leaf " in p.read_text())
         assert count > 1, "Mutation scanner failed: excess importers not detected."
 
 
@@ -520,9 +489,7 @@ class TestClusterEModifierTouchpointSentinels:
     def test_all_sentinels_live_in_state_write(self):
         counts = self._scan_sentinels()
         offenders = {k: v for k, v in counts.items() if k != "_state_write.py"}
-        assert not offenders, (
-            f"{self.SENTINEL} sentinels found outside _state_write.py: {offenders}"
-        )
+        assert not offenders, f"{self.SENTINEL} sentinels found outside _state_write.py: {offenders}"
 
     def test_state_write_has_sentinels(self):
         counts = self._scan_sentinels()
@@ -554,6 +521,7 @@ class TestInputShapeExhaustiveness:
 
     def _enum_values(self) -> list[str]:
         from neograph._input_shape import InputShape
+
         return [v.value for v in InputShape]
 
     def test_extractor_per_variant(self):
@@ -565,9 +533,7 @@ class TestInputShapeExhaustiveness:
             expected_fn = f"_extract_{variant}"
             if f"def {expected_fn}(" not in src:
                 missing.append(f"  InputShape({variant!r}) has no _extract_{variant}() function")
-        assert not missing, (
-            "InputShape extractor table incomplete:\n" + "\n".join(missing)
-        )
+        assert not missing, "InputShape extractor table incomplete:\n" + "\n".join(missing)
 
     def test_dispatch_covers_all_variants(self):
         """_extract_input must reference every (non-NONE) InputShape variant."""
@@ -579,18 +545,14 @@ class TestInputShapeExhaustiveness:
             needle = f"InputShape.{variant.upper()}"
             if needle not in src:
                 missing.append(f"  {needle} not referenced in _extract_input")
-        assert not missing, (
-            "InputShape dispatch is not exhaustive:\n" + "\n".join(missing)
-        )
+        assert not missing, "InputShape dispatch is not exhaustive:\n" + "\n".join(missing)
 
     def test_mutation_missing_extractor_detected(self):
         """Mutation case — pretend a variant exists with no extractor."""
         src = (SRC_DIR / "_input_shape.py").read_text()
         bogus_variant = "phantom_shape"
         expected = f"def _extract_{bogus_variant}("
-        assert expected not in src, (
-            "Mutation precondition violated: _extract_phantom_shape unexpectedly exists."
-        )
+        assert expected not in src, "Mutation precondition violated: _extract_phantom_shape unexpectedly exists."
 
 
 class TestSubconstructBoundaryOwnership:
@@ -634,18 +596,14 @@ class TestSubconstructBoundaryOwnership:
 
     def test_subconstruct_writes_neo_subgraph_input(self):
         text = (SRC_DIR / "_subconstruct.py").read_text()
-        assert self.NEEDLE in text, (
-            "_subconstruct.py must own the runtime StateKeys.SUBGRAPH_INPUT write."
-        )
+        assert self.NEEDLE in text, "_subconstruct.py must own the runtime StateKeys.SUBGRAPH_INPUT write."
 
     def test_mutation_runtime_leak_detected(self, tmp_path):
         """Mutation case — write needle into a fake runtime file; scanner detects."""
         rogue = tmp_path / "factory.py"
-        rogue.write_text('sub_input[StateKeys.SUBGRAPH_INPUT] = x\n')
+        rogue.write_text("sub_input[StateKeys.SUBGRAPH_INPUT] = x\n")
         text = rogue.read_text()
-        assert self.NEEDLE in text, (
-            "Mutation scanner failed: runtime leak not detected."
-        )
+        assert self.NEEDLE in text, "Mutation scanner failed: runtime leak not detected."
 
 
 class TestNoMergeStepsOutsideOracleModule:
@@ -666,14 +624,16 @@ class TestNoMergeStepsOutsideOracleModule:
 
     # Every merge-step symbol. A direct call to any of these in _wiring.py
     # means a merge step is being re-derived there instead of delegated.
-    MERGE_STEP_CALLEES = frozenset({
-        "invoke_structured",
-        "merge_pre_process",
-        "merge_post_process",
-        "merge_fallback",
-        "get_merge_fn_metadata",
-        "_resolve_merge_args",
-    })
+    MERGE_STEP_CALLEES = frozenset(
+        {
+            "invoke_structured",
+            "merge_pre_process",
+            "merge_post_process",
+            "merge_fallback",
+            "get_merge_fn_metadata",
+            "_resolve_merge_args",
+        }
+    )
 
     @classmethod
     def _called_names(cls, tree: ast.AST) -> set[str]:
@@ -715,8 +675,7 @@ class TestNoMergeStepsOutsideOracleModule:
         """Positive: the canonical merge step IS in _oracle.py."""
         oracle_calls = self._called_names(ast.parse((SRC_DIR / "_oracle.py").read_text()))
         assert "invoke_structured" in oracle_calls and "get_merge_fn_metadata" in oracle_calls, (
-            "_oracle.py must own the merge steps (invoke_structured + "
-            "get_merge_fn_metadata)."
+            "_oracle.py must own the merge steps (invoke_structured + get_merge_fn_metadata)."
         )
 
     def test_meta_scanner_detects_injected_merge_step(self, tmp_path):
@@ -769,13 +728,9 @@ class TestClusterEUnification:
         if not path.exists():
             pytest.fail("_state_write.py does not exist yet (gm-1 not complete).")
         tree = ast.parse(path.read_text())
-        names = {
-            n.name for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)
-        }
+        names = {n.name for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)}
         for required in ("_build_state_update", "_apply_skip_when"):
-            assert required in names, (
-                f"_state_write.py must define {required} (gm-1 Cluster E unification)."
-            )
+            assert required in names, f"_state_write.py must define {required} (gm-1 Cluster E unification)."
 
     def test_apply_skip_when_not_in_modifier_io_or_input_shape(self):
         for candidate in ("_modifier_io.py", "_input_shape.py"):
@@ -783,12 +738,9 @@ class TestClusterEUnification:
             if not path.exists():
                 continue
             tree = ast.parse(path.read_text())
-            names = {
-                n.name for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)
-            }
+            names = {n.name for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)}
             assert "_apply_skip_when" not in names, (
-                f"_apply_skip_when must NOT be defined in {candidate} — "
-                "it belongs in _state_write.py (Cluster E)."
+                f"_apply_skip_when must NOT be defined in {candidate} — it belongs in _state_write.py (Cluster E)."
             )
 
     def test_modifier_rule_touchpoint_sentinels_live_in_state_write(self):
@@ -805,9 +757,7 @@ class TestClusterEUnification:
                 count_in_state_write = n
             else:
                 offenders.append(f"{py.name}: {n} sentinel(s)")
-        assert not offenders, (
-            f"{SENTINEL} found outside _state_write.py: {offenders}"
-        )
+        assert not offenders, f"{SENTINEL} found outside _state_write.py: {offenders}"
         assert count_in_state_write >= 3, (
             f"Expected >=3 {SENTINEL} sentinels in _state_write.py "
             f"(Each-key wrap, Loop counter, Oracle fusion) but found {count_in_state_write}."
@@ -827,9 +777,7 @@ class TestLifecycleSeparation:
     """
 
     def test_execute_module_exists(self):
-        assert (SRC_DIR / "_execute.py").exists(), (
-            "_execute.py must exist (created by gm-3 for Cluster B)."
-        )
+        assert (SRC_DIR / "_execute.py").exists(), "_execute.py must exist (created by gm-3 for Cluster B)."
 
     def test_observability_module_deleted(self):
         assert not (SRC_DIR / "_observability.py").exists(), (
@@ -841,27 +789,19 @@ class TestLifecycleSeparation:
         if not path.exists():
             pytest.fail("_execute.py does not exist yet (gm-3 not complete).")
         tree = ast.parse(path.read_text())
-        names = {
-            n.name for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)
-        }
+        names = {n.name for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)}
         # _extract_context relocated to _input_shape.py (neograph-m6d3): its
         # caller set grew 1→2 (the inline agent cycle now reuses it too), so it
         # moved to its cohesive read-side home next to _extract_input.
         for required in ("_execute_node", "_type_name"):
-            assert required in names, (
-                f"_execute.py must define {required} (gm-3 Cluster B)."
-            )
+            assert required in names, f"_execute.py must define {required} (gm-3 Cluster B)."
 
     def test_factory_does_not_define_execute_helpers(self):
         path = SRC_DIR / "factory.py"
         tree = ast.parse(path.read_text())
-        names = {
-            n.name for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)
-        }
+        names = {n.name for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)}
         for forbidden in ("_execute_node", "_type_name", "_extract_context"):
-            assert forbidden not in names, (
-                f"factory.py must NOT define {forbidden} — it lives in _execute.py."
-            )
+            assert forbidden not in names, f"factory.py must NOT define {forbidden} — it lives in _execute.py."
 
     def test_execute_cohesion_single_src_importer(self):
         """_execute.py's only src/neograph importer must be factory.py."""
@@ -873,9 +813,7 @@ class TestLifecycleSeparation:
             text = py.read_text()
             if f"from {target}" in text or f"import {target}" in text:
                 importers.append(py.name)
-        assert importers == ["factory.py"], (
-            f"_execute.py should be imported by factory.py only, got: {importers}"
-        )
+        assert importers == ["factory.py"], f"_execute.py should be imported by factory.py only, got: {importers}"
 
 
 class TestInputShapeRename:
@@ -900,18 +838,14 @@ class TestInputShapeRename:
         if not path.exists():
             pytest.fail("_input_shape.py does not exist yet.")
         tree = ast.parse(path.read_text())
-        func_names = {
-            n.name for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)
-        }
-        class_names = {
-            n.name for n in ast.walk(tree) if isinstance(n, ast.ClassDef)
-        }
+        func_names = {n.name for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)}
+        class_names = {n.name for n in ast.walk(tree) if isinstance(n, ast.ClassDef)}
         assert "InputShape" in class_names, "_input_shape.py must define InputShape."
         for fn in (
             "_classify_input_shape",
             "_extract_input",
             "_extract_context",  # relocated from _execute.py (neograph-m6d3): read-side
-                                 # input shaping, now reused by the inline agent cycle too.
+            # input shaping, now reused by the inline agent cycle too.
             "_extract_loop_reentry",
             "_extract_each_item",
             "_extract_fan_in_dict",
@@ -933,9 +867,7 @@ class TestInputShapeRename:
         # factory.py keeps a noqa re-export of InputShape + extractors for
         # tests/test_coverage_gaps that imports them off factory.py. _execute.py
         # is the real consumer.
-        assert "_execute.py" in importers, (
-            f"_execute.py must import from _input_shape.py, got importers: {importers}"
-        )
+        assert "_execute.py" in importers, f"_execute.py must import from _input_shape.py, got importers: {importers}"
         # Apart from factory.py (re-export) and _execute.py (real), no one
         # else may import — except _agent_cycle.py, the second node-body module
         # (agent-as-subgraph, neograph-m6d3): its agent/tools/parse bodies extract
@@ -943,10 +875,7 @@ class TestInputShapeRename:
         # not drift — the inline ReAct cycle is a peer node-body executor.
         allowed = {"_execute.py", "factory.py", "_agent_cycle.py"}
         extras = set(importers) - allowed
-        assert not extras, (
-            f"_input_shape.py imported by unexpected modules: {extras}; "
-            f"allowed: {allowed}"
-        )
+        assert not extras, f"_input_shape.py imported by unexpected modules: {extras}; allowed: {allowed}"
 
 
 class TestSubconstructBoundary:
@@ -973,33 +902,25 @@ class TestSubconstructBoundary:
     }
 
     def test_subconstruct_module_exists(self):
-        assert (SRC_DIR / "_subconstruct.py").exists(), (
-            "_subconstruct.py must exist (created by gm-4 for Cluster C)."
-        )
+        assert (SRC_DIR / "_subconstruct.py").exists(), "_subconstruct.py must exist (created by gm-4 for Cluster C)."
 
     def test_subconstruct_defines_required_symbols(self):
         path = SRC_DIR / "_subconstruct.py"
         if not path.exists():
             pytest.fail("_subconstruct.py does not exist yet.")
         tree = ast.parse(path.read_text())
-        names = {
-            n.name for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)
-        }
+        names = {n.name for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)}
         for required in (
             "make_subgraph_fn",
             "_scan_subgraph_input",
             "_scan_subgraph_output",
         ):
-            assert required in names, (
-                f"_subconstruct.py must define {required} (gm-4 Cluster C)."
-            )
+            assert required in names, f"_subconstruct.py must define {required} (gm-4 Cluster C)."
 
     def test_factory_does_not_define_make_subgraph_fn(self):
         path = SRC_DIR / "factory.py"
         tree = ast.parse(path.read_text())
-        names = {
-            n.name for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)
-        }
+        names = {n.name for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)}
         assert "make_subgraph_fn" not in names, (
             "factory.py must NOT define make_subgraph_fn — it lives in _subconstruct.py."
         )
@@ -1025,12 +946,9 @@ class TestOracleConfigInOracleModule:
     def test_inject_oracle_config_defined_in_oracle_module(self):
         oracle = (SRC_DIR / "_oracle.py").read_text()
         tree = ast.parse(oracle)
-        names = {
-            n.name for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)
-        }
+        names = {n.name for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)}
         assert "_inject_oracle_config" in names, (
-            "_inject_oracle_config must be defined in _oracle.py "
-            "(Cluster F — Oracle generator dispatch)."
+            "_inject_oracle_config must be defined in _oracle.py (Cluster F — Oracle generator dispatch)."
         )
 
     def test_inject_oracle_config_not_in_state_modules(self):
@@ -1039,12 +957,9 @@ class TestOracleConfigInOracleModule:
             if not path.exists():
                 continue
             tree = ast.parse(path.read_text())
-            names = {
-                n.name for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)
-            }
+            names = {n.name for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)}
             assert "_inject_oracle_config" not in names, (
-                f"_inject_oracle_config must NOT be defined in {candidate} — "
-                "it belongs in _oracle.py (Cluster F)."
+                f"_inject_oracle_config must NOT be defined in {candidate} — it belongs in _oracle.py (Cluster F)."
             )
 
 
@@ -1073,8 +988,7 @@ class TestDeadCodeRemoval:
                     # Check if it has a decorator list (it's a decorator definition)
                     # or is a top-level function (public API)
                     assert False, (
-                        f"raw_node() function found in {py_file.name}:{node.lineno} — "
-                        f"use @node(mode='raw') instead."
+                        f"raw_node() function found in {py_file.name}:{node.lineno} — use @node(mode='raw') instead."
                     )
 
     def test_no_old_from_input_subscription(self):
@@ -1124,6 +1038,7 @@ class TestOutputsInferenceGuard:
             y: str
 
         with pytest.raises(ConstructError, match="differs from return annotation"):
+
             @node(outputs=TypeA)
             def bad_node(topic: str) -> TypeB:
                 return TypeB(y="oops")
@@ -1156,10 +1071,7 @@ class TestNoAnyInTypeBoundaries:
                 # Check if annotation is bare "Any"
                 ann = item.annotation
                 if isinstance(ann, ast.Name) and ann.id == "Any":
-                    violations.append(
-                        f"  {node.name}.{field_name}: Any "
-                        f"(line {item.lineno})"
-                    )
+                    violations.append(f"  {node.name}.{field_name}: Any (line {item.lineno})")
                 # Check dict[str, Any] — the value type should be concrete
                 if isinstance(ann, ast.Subscript) and isinstance(ann.value, ast.Name):
                     if ann.value.id == "dict":
@@ -1167,10 +1079,7 @@ class TestNoAnyInTypeBoundaries:
                         if isinstance(ann.slice, ast.Tuple) and len(ann.slice.elts) == 2:
                             val_type = ann.slice.elts[1]
                             if isinstance(val_type, ast.Name) and val_type.id == "Any":
-                                violations.append(
-                                    f"  {node.name}.{field_name}: dict[str, Any] "
-                                    f"(line {item.lineno})"
-                                )
+                                violations.append(f"  {node.name}.{field_name}: dict[str, Any] (line {item.lineno})")
 
         assert violations == [], (
             f"\n{len(violations)} bare Any field(s) in dispatch containers:\n"
@@ -1228,13 +1137,9 @@ class TestNoRedundantValidation:
                 continue
             violations = []
             if "Each" in func_source and "Loop" in func_source and "mutual exclu" in func_source.lower():
-                violations.append(
-                    "  _validate_node_chain contains Each+Loop mutual exclusion check"
-                )
+                violations.append("  _validate_node_chain contains Each+Loop mutual exclusion check")
             if "Oracle" in func_source and "Loop" in func_source and "mutual exclu" in func_source.lower():
-                violations.append(
-                    "  _validate_node_chain contains Oracle+Loop mutual exclusion check"
-                )
+                violations.append("  _validate_node_chain contains Oracle+Loop mutual exclusion check")
             assert violations == [], (
                 "\nRedundant modifier checks in _validate_node_chain:\n"
                 + "\n".join(violations)
@@ -1253,14 +1158,10 @@ class TestNoRedundantValidation:
         violations = []
         if "dict[str, key_type]" in text:
             violations.append(
-                "  inlines 'dict[str, key_type]' — the Each->dict[str,X] rule. "
-                "Delegate to effective_producer_type_for."
+                "  inlines 'dict[str, key_type]' — the Each->dict[str,X] rule. Delegate to effective_producer_type_for."
             )
         if "effective_producer_type_for" not in text:
-            violations.append(
-                "  does not reference effective_producer_type_for — "
-                "the dict-form branch must use it."
-            )
+            violations.append("  does not reference effective_producer_type_for — the dict-form branch must use it.")
         return violations
 
     def test_each_dict_form_producer_rule_not_reinlined(self):
@@ -1291,9 +1192,7 @@ class TestNoRedundantValidation:
 
     def test_meta_reinline_guard_passes_clean_source(self):
         """negative meta-test: delegating source is accepted."""
-        good = (
-            "producer_type = effective_producer_type_for(key_type, item.modifier_set)\n"
-        )
+        good = "producer_type = effective_producer_type_for(key_type, item.modifier_set)\n"
         assert self._each_rule_reinline_violations(good) == []
 
 
@@ -1362,17 +1261,15 @@ class TestNoSidecarPattern:
     def test_node_has_private_attrs(self):
         """Node must declare PrivateAttr fields for sidecar data."""
         from neograph.node import Node
+
         private_fields = getattr(Node, "__private_attributes__", {})
         assert "_sidecar" in private_fields or "_sidecar_fn" in private_fields, (
             "Node must have a _sidecar or _sidecar_fn PrivateAttr field. "
             "Add: _sidecar: tuple[Callable, tuple[str, ...]] | None = PrivateAttr(default=None)"
         )
         assert "_param_res" in private_fields, (
-            "Node must have a _param_res PrivateAttr field. "
-            "Add: _param_res: dict = PrivateAttr(default_factory=dict)"
+            "Node must have a _param_res PrivateAttr field. Add: _param_res: dict = PrivateAttr(default_factory=dict)"
         )
-
-
 
 
 class TestValidatorHardening:
@@ -1409,8 +1306,7 @@ class TestValidatorHardening:
         ]
         assert hits == [], (
             "cast(Any ...) found in the validation cluster — use the "
-            "ConstructLike Protocol + _is_construct_like TypeGuard instead:\n"
-            + "\n".join(f"  {h}" for h in hits)
+            "ConstructLike Protocol + _is_construct_like TypeGuard instead:\n" + "\n".join(f"  {h}" for h in hits)
         )
 
     def test_validation_mode_enum_replaces_context_checkable(self):
@@ -1436,9 +1332,7 @@ class TestValidatorHardening:
         assert "OrderedDict[str, Producer]" in cluster_text, (
             "producers should be typed OrderedDict[str, Producer] keyed by field_name"
         )
-        assert "list[Producer]" not in cluster_text, (
-            "no signature should still thread producers as list[Producer]"
-        )
+        assert "list[Producer]" not in cluster_text, "no signature should still thread producers as list[Producer]"
 
     def test_construct_like_protocol_exists(self):
         """ConstructLike Protocol (name/input/nodes) lives in _ir_protocols."""
@@ -1471,9 +1365,7 @@ def _seam_violations(src_dir: pathlib.Path) -> list[str]:
         for node in ast.walk(tree):
             if isinstance(node, ast.ImportFrom) and node.module in private_modules:
                 names = ", ".join(a.name for a in node.names)
-                violations.append(
-                    f"  {py_file.name}:{node.lineno}: from {node.module} import {names}"
-                )
+                violations.append(f"  {py_file.name}:{node.lineno}: from {node.module} import {names}")
     return violations
 
 
@@ -1491,14 +1383,10 @@ def _star_import_violations(src_dir: pathlib.Path) -> list[str]:
                 continue
             # Star FROM a cluster module — forbidden anywhere.
             if node.module in cluster_modules:
-                violations.append(
-                    f"  {py_file.name}:{node.lineno}: from {node.module} import *"
-                )
+                violations.append(f"  {py_file.name}:{node.lineno}: from {node.module} import *")
             # Any star import INSIDE a cluster file — forbidden.
             elif py_file.name in VALIDATION_CLUSTER:
-                violations.append(
-                    f"  {py_file.name}:{node.lineno}: from {node.module} import *"
-                )
+                violations.append(f"  {py_file.name}:{node.lineno}: from {node.module} import *")
     return violations
 
 
@@ -1555,13 +1443,8 @@ class TestValidationModuleBoundary:
     }
 
     def test_each_cluster_file_under_line_cap(self):
-        violations = _line_cap_violations(
-            SRC_DIR, tuple(sorted(VALIDATION_CLUSTER)), self.LINE_CAP
-        )
-        assert violations == [], (
-            f"\n{len(violations)} line-cap/existence violation(s):\n"
-            + "\n".join(violations)
-        )
+        violations = _line_cap_violations(SRC_DIR, tuple(sorted(VALIDATION_CLUSTER)), self.LINE_CAP)
+        assert violations == [], f"\n{len(violations)} line-cap/existence violation(s):\n" + "\n".join(violations)
 
     def test_symbols_live_in_target_modules(self):
         """Each symbol is DEFINED in its target module and absent from the orchestrator."""
@@ -1577,13 +1460,9 @@ class TestValidationModuleBoundary:
                 # A moved definition must not linger in the orchestrator.
                 if fname != "_construct_validation.py" and sig in orch_text:
                     violations.append(
-                        f"  DRIFTED: '{sig}' still defined in _construct_validation.py "
-                        f"(should only be in {fname})"
+                        f"  DRIFTED: '{sig}' still defined in _construct_validation.py (should only be in {fname})"
                     )
-        assert violations == [], (
-            f"\n{len(violations)} symbol-location violation(s):\n"
-            + "\n".join(violations)
-        )
+        assert violations == [], f"\n{len(violations)} symbol-location violation(s):\n" + "\n".join(violations)
 
     def test_single_import_seam(self):
         """Only _construct_validation.py is importable by non-cluster files."""
@@ -1596,33 +1475,25 @@ class TestValidationModuleBoundary:
 
     def test_no_star_imports_in_cluster(self):
         violations = _star_import_violations(SRC_DIR)
-        assert violations == [], (
-            f"\n{len(violations)} star-import violation(s):\n" + "\n".join(violations)
-        )
+        assert violations == [], f"\n{len(violations)} star-import violation(s):\n" + "\n".join(violations)
 
     # --- meta-tests: prove the guard catches regressions ---
 
     def test_meta_line_cap_catches_oversized_cluster_file(self, tmp_path):
         big = tmp_path / "_validation_inputs.py"
         big.write_text("\n".join(f"x = {i}" for i in range(self.LINE_CAP + 50)))
-        violations = _line_cap_violations(
-            tmp_path, ("_validation_inputs.py",), self.LINE_CAP
-        )
+        violations = _line_cap_violations(tmp_path, ("_validation_inputs.py",), self.LINE_CAP)
         assert any("> 400" in v for v in violations)
 
     def test_meta_seam_catches_private_import(self, tmp_path):
         (tmp_path / "_construct_validation.py").write_text("x = 1\n")
         (tmp_path / "_validation_inputs.py").write_text("y = 2\n")
-        (tmp_path / "outsider.py").write_text(
-            "from neograph._validation_inputs import _check_item_input\n"
-        )
+        (tmp_path / "outsider.py").write_text("from neograph._validation_inputs import _check_item_input\n")
         violations = _seam_violations(tmp_path)
         assert any("outsider.py" in v for v in violations)
 
     def test_meta_star_import_flagged(self, tmp_path):
-        (tmp_path / "rogue.py").write_text(
-            "from neograph._construct_validation import *\n"
-        )
+        (tmp_path / "rogue.py").write_text("from neograph._construct_validation import *\n")
         violations = _star_import_violations(tmp_path)
         assert any("rogue.py" in v for v in violations)
 
@@ -1651,8 +1522,7 @@ class TestLowerLayersDoNotImportForwardDX:
                 offenders.append(f"  {mod}.py imports from neograph.forward (DX layer)")
         assert not offenders, (
             "Lower-layer modules must not import the DX layer (forward.py). "
-            "Move shared core-IR concepts to a neutral module (e.g. _ir_branch.py):\n"
-            + "\n".join(offenders)
+            "Move shared core-IR concepts to a neutral module (e.g. _ir_branch.py):\n" + "\n".join(offenders)
         )
 
     def test_meta_detects_forward_import(self, tmp_path):

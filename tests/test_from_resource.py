@@ -41,8 +41,7 @@ class Doc(BaseModel):
     body: str
 
 
-def _make_fetcher(sink: list[str], content=b'{"title": "CONTRACT", "body": "B"}',
-                  mime="application/json"):
+def _make_fetcher(sink: list[str], content=b'{"title": "CONTRACT", "body": "B"}', mime="application/json"):
     async def _fetch(uri: str):
         await asyncio.sleep(0)
         sink.append(uri)
@@ -106,8 +105,7 @@ class TestThreeSurfaceExemption:
     def test_declarative_surface_has_no_resource_binding(self):
         n = Node("plain", mode="scripted", scripted_fn="x", inputs=RawText, outputs=Claims)
         assert _get_param_res(n) == {}, (
-            "declarative Node cannot carry a FromResource binding — marker is "
-            "an Annotated decorator-layer concept"
+            "declarative Node cannot carry a FromResource binding — marker is an Annotated decorator-layer concept"
         )
 
     def test_programmatic_surface_has_no_resource_binding(self):

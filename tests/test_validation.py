@@ -3,7 +3,6 @@ Each path resolution, effective_producer_type, list/dict compatibility,
 dict-form outputs validation, Oracle error paths, and lint() DI validation.
 """
 
-
 from __future__ import annotations
 
 from typing import Annotated
@@ -45,6 +44,7 @@ from tests.schemas import (
 # ═══════════════════════════════════════════════════════════════════════════
 # Construct assembly-time validation
 # ═══════════════════════════════════════════════════════════════════════════
+
 
 class TestConstructValidation:
     """Input/output compatibility is checked at Construct assembly time."""
@@ -89,9 +89,7 @@ class TestConstructValidation:
     def test_each_assembles_when_path_resolves_to_list(self):
         """Each whose path resolves to list[input_type] assembles AND attaches the modifier."""
         a = _producer("a", Clusters)
-        b = _consumer("b", ClusterGroup, MatchResult).map(
-            lambda s: s.a.groups, key="label"
-        )
+        b = _consumer("b", ClusterGroup, MatchResult).map(lambda s: s.a.groups, key="label")
         pipeline = Construct("good-each", nodes=[a, b])
         assert len(pipeline.nodes) == 2
         each = pipeline.nodes[1].get_modifier(Each)
@@ -102,27 +100,21 @@ class TestConstructValidation:
     def test_each_raises_when_field_missing(self):
         """Each path that walks to a non-existent field raises."""
         a = _producer("a", Clusters)
-        b = _consumer("b", ClusterGroup, MatchResult) | Each(
-            over="a.nonexistent", key="label"
-        )
+        b = _consumer("b", ClusterGroup, MatchResult) | Each(over="a.nonexistent", key="label")
         with pytest.raises(ConstructError, match="has no field 'nonexistent'"):
             Construct("bad-each-field", nodes=[a, b])
 
     def test_each_raises_when_terminal_not_list(self):
         """Each whose terminal field isn't a list is flagged."""
         a = _producer("a", RawText)
-        b = _consumer("b", ClusterGroup, MatchResult) | Each(
-            over="a.text", key="label"
-        )
+        b = _consumer("b", ClusterGroup, MatchResult) | Each(over="a.text", key="label")
         with pytest.raises(ConstructError, match="not a list"):
             Construct("bad-each-terminal", nodes=[a, b])
 
     def test_each_raises_when_list_element_type_wrong(self):
         """Each whose list element type doesn't match input raises."""
         a = _producer("a", Claims)
-        b = _consumer("b", ClusterGroup, MatchResult) | Each(
-            over="a.items", key="label"
-        )
+        b = _consumer("b", ClusterGroup, MatchResult) | Each(over="a.items", key="label")
         with pytest.raises(ConstructError, match=r"list\[str\]"):
             Construct("bad-each-element", nodes=[a, b])
 
@@ -135,9 +127,7 @@ class TestConstructValidation:
 
     def test_top_level_each_deferred_when_root_unknown(self):
         """Each at position 0 whose root isn't a known producer defers cleanly."""
-        process = _consumer("process", ClusterGroup, MatchResult) | Each(
-            over="seeded_from_runtime.groups", key="label"
-        )
+        process = _consumer("process", ClusterGroup, MatchResult) | Each(over="seeded_from_runtime.groups", key="label")
         pipeline = Construct("top-each", nodes=[process])
         assert len(pipeline.nodes) == 1
         each = pipeline.nodes[0].get_modifier(Each)
@@ -156,7 +146,9 @@ class TestConstructValidation:
         """Parent producing sub.input satisfies the sub-construct's input check."""
         upstream = _producer("upstream", Claims)
         sub = Construct(
-            "sub", input=Claims, output=ClassifiedClaims,
+            "sub",
+            input=Claims,
+            output=ClassifiedClaims,
             nodes=[_consumer("inner", Claims, ClassifiedClaims)],
         )
         parent = Construct("parent", nodes=[upstream, sub])
@@ -168,7 +160,9 @@ class TestConstructValidation:
         a tight error pinning BOTH the construct name and the clause."""
         upstream = _producer("upstream", RawText)
         sub = Construct(
-            "sub", input=Claims, output=ClassifiedClaims,
+            "sub",
+            input=Claims,
+            output=ClassifiedClaims,
             nodes=[_consumer("inner", Claims, ClassifiedClaims)],
         )
         with pytest.raises(ConstructError) as exc_info:
@@ -189,7 +183,8 @@ class TestConstructValidation:
         step_a = _producer("step-a", Claims)
         step_b = _producer("step-b", RawText)
         step_c = Node.scripted(
-            "step-c", fn="f",
+            "step-c",
+            fn="f",
             inputs={"step_a": Claims, "step_b": RawText},
             outputs=RawText,
         )
@@ -217,9 +212,7 @@ class TestConstructValidation:
         """Consumer declaring raw input=X after an Each-modified producer
         that emits dict[str, X] must be rejected at assembly time."""
         make = _producer("make", Clusters)
-        verify = _consumer("verify", ClusterGroup, MatchResult).map(
-            lambda s: s.make.groups, key="label"
-        )
+        verify = _consumer("verify", ClusterGroup, MatchResult).map(lambda s: s.make.groups, key="label")
         summarize = _consumer("summarize", MatchResult, MergedResult)
         with pytest.raises(ConstructError, match=r"dict\[str, MatchResult\]"):
             Construct("bad", nodes=[make, verify, summarize])
@@ -227,9 +220,7 @@ class TestConstructValidation:
     def test_each_downstream_accepted_when_dict_input(self):
         """Consumer with input=dict (raw class) after Each-modified producer passes."""
         make = _producer("make", Clusters)
-        verify = _consumer("verify", ClusterGroup, MatchResult).map(
-            lambda s: s.make.groups, key="label"
-        )
+        verify = _consumer("verify", ClusterGroup, MatchResult).map(lambda s: s.make.groups, key="label")
         summarize = Node.scripted("summarize", fn="f", inputs=dict, outputs=MergedResult)
         pipeline = Construct("good-dict", nodes=[make, verify, summarize])
         assert len(pipeline.nodes) == 3
@@ -237,12 +228,12 @@ class TestConstructValidation:
     def test_each_downstream_accepted_when_typed_dict_input(self):
         """Consumer with input=dict[str, X] matching Each output passes."""
         make = _producer("make", Clusters)
-        verify = _consumer("verify", ClusterGroup, MatchResult).map(
-            lambda s: s.make.groups, key="label"
-        )
+        verify = _consumer("verify", ClusterGroup, MatchResult).map(lambda s: s.make.groups, key="label")
         summarize = Node.scripted(
-            "summarize", fn="f",
-            inputs=dict[str, MatchResult], outputs=MergedResult,
+            "summarize",
+            fn="f",
+            inputs=dict[str, MatchResult],
+            outputs=MergedResult,
         )
         pipeline = Construct("good-typed-dict", nodes=[make, verify, summarize])
         assert len(pipeline.nodes) == 3
@@ -250,12 +241,12 @@ class TestConstructValidation:
     def test_each_downstream_rejected_when_wrong_element_type(self):
         """Consumer with input=dict[str, WrongType] after Each is rejected."""
         make = _producer("make", Clusters)
-        verify = _consumer("verify", ClusterGroup, MatchResult).map(
-            lambda s: s.make.groups, key="label"
-        )
+        verify = _consumer("verify", ClusterGroup, MatchResult).map(lambda s: s.make.groups, key="label")
         summarize = Node.scripted(
-            "summarize", fn="f",
-            inputs=dict[str, ValidationResult], outputs=MergedResult,
+            "summarize",
+            fn="f",
+            inputs=dict[str, ValidationResult],
+            outputs=MergedResult,
         )
         with pytest.raises(ConstructError):
             Construct("bad-element", nodes=[make, verify, summarize])
@@ -264,9 +255,7 @@ class TestConstructValidation:
         """Error for raw-type consumer after Each mentions 'via Each'
         and suggests using dict input."""
         make = _producer("make", Clusters)
-        verify = _consumer("verify", ClusterGroup, MatchResult).map(
-            lambda s: s.make.groups, key="label"
-        )
+        verify = _consumer("verify", ClusterGroup, MatchResult).map(lambda s: s.make.groups, key="label")
         summarize = _consumer("summarize", MatchResult, MergedResult)
         with pytest.raises(ConstructError) as exc_info:
             Construct("bad-hint", nodes=[make, verify, summarize])
@@ -278,6 +267,7 @@ class TestConstructValidation:
 # ═══════════════════════════════════════════════════════════════════════════
 # Construct | Oracle error paths
 # ═══════════════════════════════════════════════════════════════════════════
+
 
 class TestConstructOracleErrors:
     """Error paths for Construct | Oracle."""
@@ -304,6 +294,7 @@ class TestConstructOracleErrors:
 # ═══════════════════════════════════════════════════════════════════════════
 # @node fan-in validation
 # ═══════════════════════════════════════════════════════════════════════════
+
 
 class TestModifiableMapErrors:
     """Error paths for Modifiable.map() — string/lambda introspection."""
@@ -367,6 +358,7 @@ class TestModifiableMapErrors:
 # _check_each_path edge cases
 # ═══════════════════════════════════════════════════════════════════════════
 
+
 class TestCheckEachPathErrors:
     """Edge cases for _check_each_path beyond the standard 3 error paths."""
 
@@ -376,18 +368,14 @@ class TestCheckEachPathErrors:
         raw upstream type, which must be a list for validation to pass. Since
         Clusters is NOT a list, this should raise 'not a list'."""
         a = _producer("a", Clusters)
-        b = _consumer("b", ClusterGroup, MatchResult) | Each(
-            over="a", key="label"
-        )
+        b = _consumer("b", ClusterGroup, MatchResult) | Each(over="a", key="label")
         with pytest.raises(ConstructError, match="not a list"):
             Construct("single-seg", nodes=[a, b])
 
     def test_single_segment_path_raises_when_root_unknown(self):
         """Each(over="unknown") with no matching upstream raises ConstructError."""
         a = _producer("a", Clusters)
-        b = _consumer("b", ClusterGroup, MatchResult) | Each(
-            over="unknown", key="label"
-        )
+        b = _consumer("b", ClusterGroup, MatchResult) | Each(over="unknown", key="label")
         with pytest.raises(ConstructError, match="root 'unknown' does not match"):
             Construct("single-seg-reject", nodes=[a, b])
 
@@ -411,7 +399,10 @@ class TestCheckEachPathErrors:
         a = _producer("a", Outer)
         # Path: a.middle.inner.claim_ids → list[str], element str
         b = Node.scripted(
-            "b", fn="f", inputs=str, outputs=MatchResult,
+            "b",
+            fn="f",
+            inputs=str,
+            outputs=MatchResult,
         ) | Each(over="a.middle.inner.claim_ids", key="id")
         pipeline = Construct("deep-path", nodes=[a, b])
         assert len(pipeline.nodes) == 2
@@ -423,9 +414,7 @@ class TestCheckEachPathErrors:
             name: str
 
         a = _producer("a", Shallow)
-        b = _consumer("b", ClusterGroup, MatchResult) | Each(
-            over="a.name.nonexistent.deep", key="label"
-        )
+        b = _consumer("b", ClusterGroup, MatchResult) | Each(over="a.name.nonexistent.deep", key="label")
         with pytest.raises(ConstructError, match="has no field 'nonexistent'"):
             Construct("deep-missing", nodes=[a, b])
 
@@ -436,9 +425,7 @@ class TestCheckEachPathErrors:
             count: int
 
         a = _producer("a", WithInt)
-        b = _consumer("b", ClusterGroup, MatchResult) | Each(
-            over="a.count", key="label"
-        )
+        b = _consumer("b", ClusterGroup, MatchResult) | Each(over="a.count", key="label")
         with pytest.raises(ConstructError, match="not a list"):
             Construct("prim-terminal", nodes=[a, b])
 
@@ -446,9 +433,7 @@ class TestCheckEachPathErrors:
         """Each.key must name a valid field on the list element type.
         each.key='nonexistent' on list[ClusterGroup] should raise (neograph-mn41)."""
         a = _producer("a", Clusters)
-        b = _consumer("b", ClusterGroup, MatchResult) | Each(
-            over="a.groups", key="nonexistent"
-        )
+        b = _consumer("b", ClusterGroup, MatchResult) | Each(over="a.groups", key="nonexistent")
         with pytest.raises(ConstructError, match="has no field 'nonexistent'"):
             Construct("bad-each-key", nodes=[a, b])
 
@@ -456,9 +441,7 @@ class TestCheckEachPathErrors:
         """Each.key='label' on list[ClusterGroup] (which has a 'label' field)
         should assemble without error."""
         a = _producer("a", Clusters)
-        b = _consumer("b", ClusterGroup, MatchResult) | Each(
-            over="a.groups", key="label"
-        )
+        b = _consumer("b", ClusterGroup, MatchResult) | Each(over="a.groups", key="label")
         pipeline = Construct("ok-each-key", nodes=[a, b])
         assert len(pipeline.nodes) == 2
 
@@ -470,7 +453,10 @@ class TestCheckEachPathErrors:
 
         a = _producer("a", HasStrings)
         b = Node.scripted(
-            "b", fn="f", inputs=str, outputs=MatchResult,
+            "b",
+            fn="f",
+            inputs=str,
+            outputs=MatchResult,
         ) | Each(over="a.tags", key="value")
         # str has no model_fields — should defer to runtime, not raise.
         pipeline = Construct("prim-key", nodes=[a, b])
@@ -480,6 +466,7 @@ class TestCheckEachPathErrors:
 # ═══════════════════════════════════════════════════════════════════════════
 # Node name collision detection (neograph-x820)
 # ═══════════════════════════════════════════════════════════════════════════
+
 
 class TestNodeNameCollision:
     """Nodes whose names differ only by hyphens vs underscores must be
@@ -496,6 +483,7 @@ class TestNodeNameCollision:
     def test_no_collision_when_names_differ(self):
         """Two nodes with genuinely different names compile fine."""
         from tests.fakes import register_scripted
+
         register_scripted("f_node_a", lambda input_data, config: RawText(text="a"))
         register_scripted("f_node_b", lambda input_data, config: Claims(items=["b"]))
 
@@ -530,6 +518,7 @@ class TestNodeNameCollision:
 # Compile-time: tool factory registration check (neograph-9513)
 # ═══════════════════════════════════════════════════════════════════════════
 
+
 class TestToolFactoryRegistrationCheck:
     """compile() must verify that every tool referenced by agent/act nodes
     is registered in _tool_factory_registry."""
@@ -537,6 +526,7 @@ class TestToolFactoryRegistrationCheck:
     def test_unregistered_tool_raises_at_compile_when_agent_mode(self):
         """Agent node with unregistered tool raises CompileError at compile()."""
         from tests.fakes import StructuredFake, configure_fake_llm
+
         __llm_kw = configure_fake_llm(lambda tier: StructuredFake(lambda m: m()))
         n = Node(
             "research",
@@ -554,6 +544,7 @@ class TestToolFactoryRegistrationCheck:
     def test_unregistered_tool_raises_at_compile_when_act_mode(self):
         """Act node with unregistered tool raises CompileError at compile()."""
         from tests.fakes import StructuredFake, configure_fake_llm
+
         __llm_kw = configure_fake_llm(lambda tier: StructuredFake(lambda m: m()))
         n = Node(
             "actor",
@@ -591,6 +582,7 @@ class TestToolFactoryRegistrationCheck:
 # ═══════════════════════════════════════════════════════════════════════════
 # Compile-time: LLM + prompt compiler configured (neograph-fn5x)
 # ═══════════════════════════════════════════════════════════════════════════
+
 
 class TestLlmConfiguredCheck:
     """compile() must verify _llm_factory and _prompt_compiler are set
@@ -631,6 +623,7 @@ class TestLlmConfiguredCheck:
     def test_scripted_only_compiles_without_llm_configured(self):
         """Pipeline with only scripted nodes compiles even without LLM kwargs."""
         from tests.fakes import register_scripted
+
         register_scripted("fn_no_llm_test", lambda input_data, config: RawText(text="ok"))
         n = Node.scripted("scripted-only", fn="fn_no_llm_test", outputs=RawText)
         pipeline = Construct("scripted-ok", nodes=[n])
@@ -640,6 +633,7 @@ class TestLlmConfiguredCheck:
 # ═══════════════════════════════════════════════════════════════════════════
 # Compile-time: output_strategy validation (neograph-0b2m)
 # ═══════════════════════════════════════════════════════════════════════════
+
 
 class TestOutputStrategyValidation:
     """output_strategy must be one of the allowed literals.
@@ -653,6 +647,7 @@ class TestOutputStrategyValidation:
         from pydantic import ValidationError
 
         from tests.fakes import StructuredFake, configure_fake_llm
+
         __llm_kw = configure_fake_llm(lambda tier: StructuredFake(lambda m: m()))
         with pytest.raises(ValidationError, match="output_strategy"):
             Node(
@@ -668,6 +663,7 @@ class TestOutputStrategyValidation:
     def test_valid_output_strategies_pass_compile(self, **__llm_kw):
         """Nodes with valid output_strategy values compile without error."""
         from tests.fakes import StructuredFake, configure_fake_llm
+
         __llm_kw = configure_fake_llm(lambda tier: StructuredFake(lambda m: m()))
         for strategy in ("structured", "json_mode", "text"):
             n = Node(
@@ -685,6 +681,7 @@ class TestOutputStrategyValidation:
     def test_no_output_strategy_defaults_without_error(self):
         """Node with no output_strategy (default) compiles fine."""
         from tests.fakes import StructuredFake, configure_fake_llm
+
         __llm_kw = configure_fake_llm(lambda tier: StructuredFake(lambda m: m()))
         n = Node(
             "no-strat",
@@ -702,11 +699,13 @@ class TestOutputStrategyValidation:
 # Sub-construct output boundary contract (neograph-c4se)
 # ═══════════════════════════════════════════════════════════════════════════
 
+
 class TestFromInputRequired:
     """FromInput(required=True) raises ExecutionError at runtime when missing."""
 
     def test_required_from_input_raises_when_missing(self):
         """Runtime: required=True param not in config raises ExecutionError."""
+
         @node(outputs=RawText)
         def my_node(
             topic: Annotated[str, FromInput(required=True)],
@@ -720,6 +719,7 @@ class TestFromInputRequired:
 
     def test_required_from_input_works_when_present(self):
         """Runtime: required=True param that IS in config works normally."""
+
         @node(outputs=RawText)
         def my_node(
             topic: Annotated[str, FromInput(required=True)],
@@ -733,6 +733,7 @@ class TestFromInputRequired:
 
     def test_required_from_config_raises_when_missing(self):
         """Runtime: required=True FromConfig param not in config raises."""
+
         @node(outputs=RawText)
         def my_node(
             key: Annotated[str, FromConfig(required=True)],
@@ -749,6 +750,7 @@ class TestFromInputRequired:
 # NeographError.build() error builder pattern
 # ═══════════════════════════════════════════════════════════════════════════
 
+
 class TestErrorBuilder:
     """NeographError.build() classmethod produces consistently structured
     error messages with what/expected/found/hint/location/node/construct."""
@@ -756,6 +758,7 @@ class TestErrorBuilder:
     def test_build_minimal_message_when_only_what(self):
         """build() with just `what` produces a plain message."""
         from neograph.errors import NeographError
+
         err = NeographError.build("something broke")
         assert isinstance(err, NeographError)
         assert str(err) == "something broke"
@@ -763,6 +766,7 @@ class TestErrorBuilder:
     def test_build_full_message_when_all_fields(self):
         """build() with all fields produces the structured format."""
         from neograph.errors import NeographError
+
         err = NeographError.build(
             "type mismatch",
             expected="Claims",
@@ -783,12 +787,14 @@ class TestErrorBuilder:
     def test_build_node_only_prefix_when_no_construct(self):
         """build() with node= but no construct= uses [Node 'X'] prefix."""
         from neograph.errors import NeographError
+
         err = NeographError.build("failed", node="verify")
         assert str(err).startswith("[Node 'verify'] failed")
 
     def test_build_construct_only_prefix_when_no_node(self):
         """build() with construct= but no node= uses [Construct 'X'] prefix."""
         from neograph.errors import NeographError
+
         err = NeographError.build("failed", construct="pipeline")
         assert str(err).startswith("[Construct 'pipeline'] failed")
 
@@ -801,6 +807,7 @@ class TestErrorBuilder:
     def test_build_returns_compile_error_when_called_on_compile_error(self):
         """CompileError.build() returns a CompileError."""
         from neograph.errors import CompileError
+
         err = CompileError.build("missing checkpointer")
         assert isinstance(err, CompileError)
 
@@ -835,6 +842,7 @@ class TestErrorBuilder:
     def test_build_omits_absent_fields_when_partial(self):
         """build() with only expected= and hint= omits found= and location=."""
         from neograph.errors import NeographError
+
         err = NeographError.build(
             "wrong type",
             expected="int",
@@ -914,6 +922,7 @@ class TestSingleTypeInputsDeprecation:
 # ═══════════════════════════════════════════════════════════════════════════
 # Example output models must be OpenAI-structured-compatible (neograph-yi0n)
 # ═══════════════════════════════════════════════════════════════════════════
+
 
 def _open_mapping_paths(schema: object, path: str = "$") -> list[str]:
     """Return paths to open-mapping objects in a JSON schema.
@@ -1007,5 +1016,3 @@ class TestExampleOutputModelsAreStructuredCompatible:
 # ═══════════════════════════════════════════════════════════════════════════
 # Loop condition lint checks
 # ═══════════════════════════════════════════════════════════════════════════
-
-

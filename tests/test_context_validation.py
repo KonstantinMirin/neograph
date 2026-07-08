@@ -1,6 +1,5 @@
 """Sub-construct context-field validation and output-boundary checks."""
 
-
 from __future__ import annotations
 
 import pytest
@@ -60,6 +59,7 @@ class TestSubConstructOutputBoundary:
 # lint() — DI binding validation (neograph-no0q)
 # ═══════════════════════════════════════════════════════════════════════════
 
+
 class TestContextFieldProducerValidation:
     """§7 / izo1-C — node.context fields must have an upstream producer.
 
@@ -70,7 +70,9 @@ class TestContextFieldProducerValidation:
 
     def _make_consumer(self, name: str, in_type: type, ctx: list[str]) -> Node:
         return Node(
-            name=name, mode="scripted", scripted_fn="f",
+            name=name,
+            mode="scripted",
+            scripted_fn="f",
             inputs={in_type.__name__.lower(): in_type},
             outputs=MatchResult,
             context=ctx,
@@ -80,7 +82,9 @@ class TestContextFieldProducerValidation:
         """consumer.context=['nonexistent'] with no upstream producer raises."""
         producer = _producer("topic", RawText)
         consumer = Node(
-            name="summarize", mode="scripted", scripted_fn="f",
+            name="summarize",
+            mode="scripted",
+            scripted_fn="f",
             inputs={"topic": RawText},
             outputs=MatchResult,
             context=["nonexistent_field"],
@@ -95,7 +99,9 @@ class TestContextFieldProducerValidation:
         """Error message includes node name and the offending context field."""
         producer = _producer("topic", RawText)
         consumer = Node(
-            name="summarize", mode="scripted", scripted_fn="f",
+            name="summarize",
+            mode="scripted",
+            scripted_fn="f",
             inputs={"topic": RawText},
             outputs=MatchResult,
             context=["typoed"],
@@ -111,7 +117,9 @@ class TestContextFieldProducerValidation:
         compiles cleanly (regression guard — no false positive)."""
         catalog = _producer("catalog", RawText)
         consumer = Node(
-            name="summarize", mode="scripted", scripted_fn="f",
+            name="summarize",
+            mode="scripted",
+            scripted_fn="f",
             inputs={"catalog": RawText},
             outputs=MatchResult,
             context=["catalog"],
@@ -125,7 +133,9 @@ class TestContextFieldProducerValidation:
         producers. Regression for hyphen handling."""
         producer = _producer("topic-source", RawText)
         consumer = Node(
-            name="summarize", mode="scripted", scripted_fn="f",
+            name="summarize",
+            mode="scripted",
+            scripted_fn="f",
             inputs={"topic_source": RawText},
             outputs=MatchResult,
             context=["topic-source"],
@@ -146,8 +156,11 @@ class TestSubConstructContextFieldValidation:
         """Build a sub-construct whose inner node declares context=[ctx_field].
         The inner node consumes the sub-construct's port input."""
         from neograph._state_keys import StateKeys
+
         inner = Node(
-            name="inner", mode="scripted", scripted_fn="f",
+            name="inner",
+            mode="scripted",
+            scripted_fn="f",
             inputs={StateKeys.SUBGRAPH_INPUT: RawText},
             outputs=MatchResult,
             context=[ctx_field],
@@ -193,20 +206,28 @@ class TestSubConstructContextFieldValidation:
         """Build a sub-construct with `depth` levels of nesting. The deepest
         inner node declares context=[ctx_field]."""
         from neograph._state_keys import StateKeys
+
         # Deepest inner node — declares the suspect context.
         leaf = Node(
-            name=f"leaf-d{depth}", mode="scripted", scripted_fn="f",
+            name=f"leaf-d{depth}",
+            mode="scripted",
+            scripted_fn="f",
             inputs={StateKeys.SUBGRAPH_INPUT: RawText},
             outputs=MatchResult,
             context=[ctx_field],
         )
         current: Construct = Construct(
-            f"sub-d{depth}", input=RawText, output=MatchResult, nodes=[leaf],
+            f"sub-d{depth}",
+            input=RawText,
+            output=MatchResult,
+            nodes=[leaf],
         )
         # Wrap in additional layers up to the target depth.
         for level in range(depth - 1, 0, -1):
             current = Construct(
-                f"sub-d{level}", input=RawText, output=MatchResult,
+                f"sub-d{level}",
+                input=RawText,
+                output=MatchResult,
                 nodes=[current],
             )
         return current

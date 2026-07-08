@@ -116,22 +116,19 @@ def test_should_fail(fixture_path: Path):
         # Error during import (e.g., ConstructError at assembly time)
         if pattern:
             assert re.search(pattern, str(import_error), re.IGNORECASE), (
-                f"Import raised {type(import_error).__name__}: {import_error}\n"
-                f"but didn't match pattern: {pattern}"
+                f"Import raised {type(import_error).__name__}: {import_error}\nbut didn't match pattern: {pattern}"
             )
         return  # error caught, test passes
 
     # Module imported OK — try compiling
     compile_error = _try_compile(mod)
     assert compile_error is not None, (
-        f"Fixture {fixture_path.name} should have raised an error "
-        f"during import or compile, but didn't."
+        f"Fixture {fixture_path.name} should have raised an error during import or compile, but didn't."
     )
 
     if pattern:
         assert re.search(pattern, str(compile_error), re.IGNORECASE), (
-            f"Compile raised {type(compile_error).__name__}: {compile_error}\n"
-            f"but didn't match pattern: {pattern}"
+            f"Compile raised {type(compile_error).__name__}: {compile_error}\nbut didn't match pattern: {pattern}"
         )
 
 
@@ -143,14 +140,10 @@ def test_should_fail(fixture_path: Path):
 def test_should_pass(fixture_path: Path):
     """Fixture must import and compile without errors."""
     mod, import_error = _load_fixture(fixture_path)
-    assert import_error is None, (
-        f"Fixture {fixture_path.name} should import cleanly but raised: {import_error}"
-    )
+    assert import_error is None, f"Fixture {fixture_path.name} should import cleanly but raised: {import_error}"
 
     # should_pass fixtures compile once, WITH the placeholder LLM — an LLM-mode
     # node (agent/act/think) legitimately requires runtime config, so the
     # no-LLM second compile (a should_fail probe) must not gate should_pass.
     compile_error = _try_compile(mod, try_without_llm=False)
-    assert compile_error is None, (
-        f"Fixture {fixture_path.name} should compile cleanly but raised: {compile_error}"
-    )
+    assert compile_error is None, f"Fixture {fixture_path.name} should compile cleanly but raised: {compile_error}"

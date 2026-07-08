@@ -35,6 +35,7 @@ from tests.fakes import build_test_compile_kwargs, register_scripted
 
 # -- Schemas for loop tests ---------------------------------------------------
 
+
 class Draft(BaseModel, frozen=True):
     content: str
     iteration: int = 0
@@ -108,6 +109,7 @@ class TestSelfLoop:
 
     def test_self_loop_respects_max_iterations(self):
         """Loop exits after max_iterations even if condition still true."""
+
         @node(outputs=Draft)
         def seed() -> Draft:
             return Draft(content="v0", score=0.0)
@@ -187,7 +189,10 @@ class TestMultiNodeLoop:
 
         # Loop body as sub-construct: Draft in, Draft out
         refine = construct_from_functions(
-            "refine", [review, revise], input=Draft, output=Draft,
+            "refine",
+            [review, revise],
+            input=Draft,
+            output=Draft,
         ) | Loop(when=lambda d: d is None or d.score < 0.8, max_iterations=10)
 
         pipeline = construct_from_functions("multi-loop", [draft, refine])
@@ -211,6 +216,7 @@ class TestLoopInSubConstruct:
 
     def test_sub_construct_with_internal_loop(self):
         """Sub-construct loops internally, parent sees clean I/O."""
+
         @node(outputs=Draft)
         def write(topic: Draft) -> Draft:
             return Draft(content="draft", score=0.5)
@@ -228,8 +234,10 @@ class TestLoopInSubConstruct:
             )
 
         refine_sub = construct_from_functions(
-            "refine", [write, improve],
-            input=Draft, output=Draft,
+            "refine",
+            [write, improve],
+            input=Draft,
+            output=Draft,
         )
 
         # Parent pipeline
@@ -267,10 +275,12 @@ class TestEachPlusLoop:
 
         @node(outputs=ClaimBatch)
         def make_claims() -> ClaimBatch:
-            return ClaimBatch(items=[
-                ClaimItem(claim_id="c1", text="easy claim", confidence=0.7),
-                ClaimItem(claim_id="c2", text="hard claim", confidence=0.3),
-            ])
+            return ClaimBatch(
+                items=[
+                    ClaimItem(claim_id="c1", text="easy claim", confidence=0.7),
+                    ClaimItem(claim_id="c2", text="hard claim", confidence=0.3),
+                ]
+            )
 
         # Loop is on the NODE inside the sub-construct, not on the Construct
         @node(
@@ -287,7 +297,10 @@ class TestEachPlusLoop:
 
         # Sub-construct with internal loop, wrapped by Each
         verify_sub = construct_from_functions(
-            "verify", [verify], input=ClaimItem, output=ClaimItem,
+            "verify",
+            [verify],
+            input=ClaimItem,
+            output=ClaimItem,
         )
         verify_each = verify_sub | Each(over="make_claims.items", key="claim_id")
 
@@ -351,6 +364,7 @@ class TestLoopValidation:
     def test_raises_when_each_and_loop_combined(self):
         """Each + Loop on the same node is restricted."""
         with pytest.raises(ConstructError, match="Each.*Loop.*cannot be combined"):
+
             @node(
                 outputs=ClaimItem,
                 map_over="claims.items",
@@ -450,17 +464,20 @@ class TestLoopValidation:
     def test_on_exhaust_error_accepted(self):
         """Loop(on_exhaust='error') is valid — no error raised."""
         from neograph.modifiers import Loop
+
         Loop(when=lambda x: True, on_exhaust="error")
 
     def test_on_exhaust_last_accepted(self):
         """Loop(on_exhaust='last') is valid — no error raised."""
         from neograph.modifiers import Loop
+
         Loop(when=lambda x: True, on_exhaust="last")
 
     def test_on_exhaust_invalid_raises_configuration_error(self):
         """Loop(on_exhaust='explode') must raise ConfigurationError."""
         from neograph.errors import ConfigurationError
         from neograph.modifiers import Loop
+
         with pytest.raises(ConfigurationError, match="on_exhaust"):
             Loop(when=lambda x: True, on_exhaust="explode")
 
@@ -468,13 +485,16 @@ class TestLoopValidation:
         """Loop(on_exhaust='') must raise ConfigurationError."""
         from neograph.errors import ConfigurationError
         from neograph.modifiers import Loop
+
         with pytest.raises(ConfigurationError, match="on_exhaust"):
             Loop(when=lambda x: True, on_exhaust="")
 
     def test_node_decorator_on_exhaust_invalid_raises(self):
         """@node(on_exhaust='bad') goes through Loop() — must raise."""
         from neograph.errors import ConfigurationError
+
         with pytest.raises(ConfigurationError, match="on_exhaust"):
+
             @node(
                 outputs=Draft,
                 loop_when=lambda d: d.score < 0.8,
@@ -487,6 +507,7 @@ class TestLoopValidation:
     def test_on_exhaust_default_works(self):
         """Loop with no on_exhaust kwarg defaults to 'error' — no error raised."""
         from neograph.modifiers import Loop
+
         loop = Loop(when=lambda x: True)
         assert loop.on_exhaust == "error"
 
@@ -591,9 +612,7 @@ class TestForwardConstructLoop:
         result = run(graph, input={"node_id": "fc-loop-prim"})
 
         # Loop cycled: review ran 3 times (0.3, 0.6, 0.9)
-        assert _review_count[0] == 3, (
-            f"Expected review to run 3 times, ran {_review_count[0]}"
-        )
+        assert _review_count[0] == 3, f"Expected review to run 3 times, ran {_review_count[0]}"
 
     def test_single_node_loop_body_via_explicit_loop_primitive(self):
         """self.loop(body=[self.refine], ...) compiles a single-node self-loop
@@ -636,9 +655,7 @@ class TestForwardConstructLoop:
         result = run(graph, input={"node_id": "fc-single-loop"})
 
         # 0.1 seed → refine1=0.35, refine2=0.60, refine3=0.85 → exits
-        assert _refine_count[0] == 3, (
-            f"Expected refine to run 3 times, ran {_refine_count[0]}"
-        )
+        assert _refine_count[0] == 3, f"Expected refine to run 3 times, ran {_refine_count[0]}"
 
     def test_on_exhaust_last_exits_with_last_result(self):
         """self.loop() with on_exhaust='last': loop never meets condition,
@@ -682,9 +699,7 @@ class TestForwardConstructLoop:
         result = run(graph, input={"node_id": "fc-exhaust-last"})
 
         # Loop ran exactly max_iterations=3 times (never reached score 0.99)
-        assert _tweak_count[0] == 3, (
-            f"Expected tweak to run 3 times, ran {_tweak_count[0]}"
-        )
+        assert _tweak_count[0] == 3, f"Expected tweak to run 3 times, ran {_tweak_count[0]}"
 
     def test_on_exhaust_error_raises_execution_error(self):
         """self.loop() with on_exhaust='error': loop exceeds max_iterations
@@ -794,9 +809,7 @@ class TestForwardConstructLoop:
         result = run(graph, input={"node_id": "fc-loop-branch"})
 
         # refine: 0.0 → 0.3 → 0.6 → exits (score >= 0.5)
-        assert _refine_lb_count[0] == 2, (
-            f"Expected refine to run 2 times, ran {_refine_lb_count[0]}"
-        )
+        assert _refine_lb_count[0] == 2, f"Expected refine to run 2 times, ran {_refine_lb_count[0]}"
         # check returns 0.9 > 0.7, so high path runs
         assert "high" in result
         assert result["high"].label == "high-after-loop"
@@ -843,9 +856,7 @@ class TestForwardConstructLoop:
 
         # Branch should have taken the boost path (0.6 > 0.5)
         # Loop: 0.6 → 0.75 → 0.90 → exits (2 iterations)
-        assert _refine_bl_count[0] >= 2, (
-            f"Expected refine to run >= 2 times, ran {_refine_bl_count[0]}"
-        )
+        assert _refine_bl_count[0] >= 2, f"Expected refine to run >= 2 times, ran {_refine_bl_count[0]}"
 
     def test_two_sequential_loops(self):
         """Two self.loop() calls in sequence — both should cycle independently."""
@@ -873,6 +884,7 @@ class TestForwardConstructLoop:
         register_scripted("fc_seed_2l", lambda _in, _cfg: Draft(content="2l-seed", score=0.0))
 
         _rough_count = [0]
+
         def fc_rough_2l(_in, _cfg):
             _rough_count[0] += 1
             assert isinstance(_in, Draft), f"Expected Draft, got {type(_in)}"
@@ -880,6 +892,7 @@ class TestForwardConstructLoop:
             return Draft(content=f"rough-{_rough_count[0]}", score=d.score + 0.2, iteration=_rough_count[0])
 
         _polish_count = [0]
+
         def fc_polish_2l(_in, _cfg):
             _polish_count[0] += 1
             assert isinstance(_in, Draft), f"Expected Draft, got {type(_in)}"
@@ -911,6 +924,7 @@ class TestForwardConstructLoop:
 
 class ToolLog(BaseModel, frozen=True):
     """Per-iteration metadata (secondary output key)."""
+
     tool_name: str
     iteration: int
 
@@ -1081,8 +1095,7 @@ class TestLoopDictFormMultipleInputs:
             draft = input_data.get("refine") if isinstance(input_data, dict) else input_data
             # context must be a Context, not a Draft
             assert isinstance(ctx, Context), (
-                f"Iteration {iteration[0]}: context should be Context, "
-                f"got {type(ctx).__name__}: {ctx}"
+                f"Iteration {iteration[0]}: context should be Context, got {type(ctx).__name__}: {ctx}"
             )
             return Draft(
                 content=f"v{iteration[0]}:{ctx.topic}",
@@ -1094,13 +1107,14 @@ class TestLoopDictFormMultipleInputs:
         from neograph.modifiers import Loop
 
         # inputs: "context" = upstream node, "refine" = self-reference (Loop)
-        pipeline = Construct("o5gd-test", nodes=[
-            Node.scripted("context", fn="o5gd_ctx", outputs=Context),
-            Node.scripted("refine", fn="o5gd_refine",
-                          inputs={"context": Context, "refine": Draft},
-                          outputs=Draft)
-            | Loop(when=lambda d: d is None or d.score < 0.8, max_iterations=5),
-        ])
+        pipeline = Construct(
+            "o5gd-test",
+            nodes=[
+                Node.scripted("context", fn="o5gd_ctx", outputs=Context),
+                Node.scripted("refine", fn="o5gd_refine", inputs={"context": Context, "refine": Draft}, outputs=Draft)
+                | Loop(when=lambda d: d is None or d.score < 0.8, max_iterations=5),
+            ],
+        )
         graph = compile(pipeline, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "o5gd"})
 
@@ -1111,7 +1125,6 @@ class TestLoopDictFormMultipleInputs:
             final = final[-1]
         assert final.score >= 0.8
         assert "AI safety" in final.content
-
 
     def test_loop_first_iteration_gets_none_not_empty_list(self):
         """Regression neograph-pnzs: first iteration self-ref key must be None, not []."""
@@ -1139,13 +1152,14 @@ class TestLoopDictFormMultipleInputs:
 
         from neograph.modifiers import Loop
 
-        pipeline = Construct("pnzs-test", nodes=[
-            Node.scripted("ctx", fn="pnzs_ctx", outputs=Ctx),
-            Node.scripted("refine", fn="pnzs_refine",
-                          inputs={"ctx": Ctx, "refine": Draft},
-                          outputs=Draft)
-            | Loop(when=lambda d: d is None or d.score < 0.8, max_iterations=3),
-        ])
+        pipeline = Construct(
+            "pnzs-test",
+            nodes=[
+                Node.scripted("ctx", fn="pnzs_ctx", outputs=Ctx),
+                Node.scripted("refine", fn="pnzs_refine", inputs={"ctx": Ctx, "refine": Draft}, outputs=Draft)
+                | Loop(when=lambda d: d is None or d.score < 0.8, max_iterations=3),
+            ],
+        )
         graph = compile(pipeline, **build_test_compile_kwargs())
         run(graph, input={"node_id": "pnzs"})
 
@@ -1186,8 +1200,8 @@ class TestLoopSkipWhenCounterIncrement:
             mode="think",
             model="fast",
             prompt="refine the draft",
-            skip_when=lambda d: True,   # always skip
-            loop_when=lambda d: True,   # always wants to continue
+            skip_when=lambda d: True,  # always skip
+            loop_when=lambda d: True,  # always wants to continue
             max_iterations=3,
             on_exhaust="last",
         )
@@ -1198,11 +1212,8 @@ class TestLoopSkipWhenCounterIncrement:
         with capture_logs() as logs:
             pipeline = construct_from_functions("skip-loop", [seed, refine])
 
-        error_logs = [l for l in logs if l.get("log_level") == "error"
-                      and "skip_value" in l.get("msg", "")]
-        assert error_logs, (
-            f"Expected error log about skip_value, got: {logs}"
-        )
+        error_logs = [l for l in logs if l.get("log_level") == "error" and "skip_value" in l.get("msg", "")]
+        assert error_logs, f"Expected error log about skip_value, got: {logs}"
 
         graph = compile(pipeline, **build_test_compile_kwargs(), **__llm_kw)
 
@@ -1250,9 +1261,7 @@ class TestLoopSkipWhenCounterIncrement:
         # Iteration 1: skip fires (score=0.0), skip_value → score=0.5, counter→1
         # Iteration 2: skip does NOT fire (0.5 != 0.0), LLM → score=0.9, counter→2
         # loop_when: 0.9 >= 0.8 → exit
-        assert llm_call_count[0] == 1, (
-            f"Expected 1 LLM call, got {llm_call_count[0]}"
-        )
+        assert llm_call_count[0] == 1, f"Expected 1 LLM call, got {llm_call_count[0]}"
         history = result["refine"]
         assert isinstance(history, list)
         assert len(history) == 2
@@ -1265,9 +1274,7 @@ class TestLoopSkipWhenCounterIncrement:
         increment AND skip_value result must appear in the loop history."""
         from tests.fakes import StructuredFake, configure_fake_llm
 
-        __llm_kw = configure_fake_llm(lambda tier: StructuredFake(
-            lambda m: m(content="llm-produced", score=0.9)
-        ))
+        __llm_kw = configure_fake_llm(lambda tier: StructuredFake(lambda m: m(content="llm-produced", score=0.9)))
 
         @node(outputs=Draft)
         def seed() -> Draft:
@@ -1306,9 +1313,7 @@ class TestLoopSkipWhenCounterIncrement:
         max_iterations with no error."""
         from tests.fakes import StructuredFake, configure_fake_llm
 
-        __llm_kw = configure_fake_llm(lambda tier: StructuredFake(
-            lambda m: m(content="unreachable", score=0.0)
-        ))
+        __llm_kw = configure_fake_llm(lambda tier: StructuredFake(lambda m: m(content="unreachable", score=0.0)))
 
         @node(outputs=Draft)
         def seed() -> Draft:
@@ -1339,9 +1344,7 @@ class TestLoopSkipWhenCounterIncrement:
         from neograph import ExecutionError
         from tests.fakes import StructuredFake, configure_fake_llm
 
-        __llm_kw = configure_fake_llm(lambda tier: StructuredFake(
-            lambda m: m(content="unreachable", score=0.0)
-        ))
+        __llm_kw = configure_fake_llm(lambda tier: StructuredFake(lambda m: m(content="unreachable", score=0.0)))
 
         @node(outputs=Draft)
         def seed() -> Draft:
@@ -1371,18 +1374,21 @@ class TestLoopSkipWhenCounterIncrement:
 
 class ProduceInput(BaseModel, frozen=True):
     """Input to the producer node."""
+
     topic: str
     context: str
 
 
 class ProduceOutput(BaseModel, frozen=True):
     """Raw producer output — pre-validation."""
+
     text: str
     iteration: int = 0
 
 
 class Validated(BaseModel, frozen=True):
     """Validator output — wraps producer output + error list."""
+
     output: ProduceOutput
     errors: list[str]
 
@@ -1415,8 +1421,10 @@ class TestLoopInputNotEqualOutput:
             return Validated(output=produce, errors=errors)
 
         sub = construct_from_functions(
-            "produce-and-validate", [produce, validate],
-            input=ProduceInput, output=Validated,
+            "produce-and-validate",
+            [produce, validate],
+            input=ProduceInput,
+            output=Validated,
         ) | Loop(
             when=lambda v: v is None or bool(v.errors),
             max_iterations=5,
@@ -1424,10 +1432,13 @@ class TestLoopInputNotEqualOutput:
 
         pipeline = Construct("outer", nodes=[sub])
         graph = compile(pipeline, **build_test_compile_kwargs())
-        result = run(graph, input={
-            "node_id": "test-1",
-            "neo_subgraph_input": ProduceInput(topic="AI", context="safety"),
-        })
+        result = run(
+            graph,
+            input={
+                "node_id": "test-1",
+                "neo_subgraph_input": ProduceInput(topic="AI", context="safety"),
+            },
+        )
 
         # Producer ran twice (bad draft → retry → good draft)
         assert call_count["produce"] == 2
@@ -1452,8 +1463,10 @@ class TestLoopInputNotEqualOutput:
             return Validated(output=produce_bad, errors=["always fails"])
 
         sub = construct_from_functions(
-            "always-fail", [produce_bad, validate_strict],
-            input=ProduceInput, output=Validated,
+            "always-fail",
+            [produce_bad, validate_strict],
+            input=ProduceInput,
+            output=Validated,
         ) | Loop(
             when=lambda v: v is None or bool(v.errors),
             max_iterations=3,
@@ -1464,10 +1477,13 @@ class TestLoopInputNotEqualOutput:
         graph = compile(pipeline, **build_test_compile_kwargs())
 
         with pytest.raises(ExecutionError, match="max_iterations"):
-            run(graph, input={
-                "node_id": "test-2",
-                "neo_subgraph_input": ProduceInput(topic="X", context="Y"),
-            })
+            run(
+                graph,
+                input={
+                    "node_id": "test-2",
+                    "neo_subgraph_input": ProduceInput(topic="X", context="Y"),
+                },
+            )
 
     def test_construct_loop_input_neq_output_on_exhaust_last(self):
         """on_exhaust='last' returns the last result even with errors."""
@@ -1481,8 +1497,10 @@ class TestLoopInputNotEqualOutput:
             return Validated(output=produce_always, errors=["not great"])
 
         sub = construct_from_functions(
-            "exhaust-last", [produce_always, validate_always],
-            input=ProduceInput, output=Validated,
+            "exhaust-last",
+            [produce_always, validate_always],
+            input=ProduceInput,
+            output=Validated,
         ) | Loop(
             when=lambda v: v is None or bool(v.errors),
             max_iterations=2,
@@ -1491,10 +1509,13 @@ class TestLoopInputNotEqualOutput:
 
         pipeline = Construct("outer", nodes=[sub])
         graph = compile(pipeline, **build_test_compile_kwargs())
-        result = run(graph, input={
-            "node_id": "test-3",
-            "neo_subgraph_input": ProduceInput(topic="X", context="Y"),
-        })
+        result = run(
+            graph,
+            input={
+                "node_id": "test-3",
+                "neo_subgraph_input": ProduceInput(topic="X", context="Y"),
+            },
+        )
 
         final = result["exhaust_last"][-1]
         assert isinstance(final, Validated)
@@ -1527,17 +1548,19 @@ class TestLoopInputNotEqualOutput:
             output=Validated,
             nodes=[
                 Node.scripted("produce", fn="_pv_produce", outputs=ProduceOutput),
-                Node.scripted("validate", fn="_pv_validate",
-                              inputs={"produce": ProduceOutput}, outputs=Validated),
+                Node.scripted("validate", fn="_pv_validate", inputs={"produce": ProduceOutput}, outputs=Validated),
             ],
         ) | Loop(when=lambda v: v is None or bool(v.errors), max_iterations=5)
 
         pipeline = Construct("pv-outer", nodes=[sub])
         graph = compile(pipeline, **build_test_compile_kwargs())
-        result = run(graph, input={
-            "node_id": "prog-1",
-            "neo_subgraph_input": ProduceInput(topic="T", context="C"),
-        })
+        result = run(
+            graph,
+            input={
+                "node_id": "prog-1",
+                "neo_subgraph_input": ProduceInput(topic="T", context="C"),
+            },
+        )
 
         assert call_count["produce"] == 2
         final = result["pv_sub"][-1]
@@ -1557,8 +1580,7 @@ class TestLoopInputNotEqualOutput:
         class ProduceValidateFlow(ForwardConstruct):
             seed = Node.scripted("seed", fn="_fc_seed", outputs=ProduceInput)
             produce = Node.scripted("produce", fn="_fc_produce", outputs=ProduceOutput)
-            check = Node.scripted("check", fn="_fc_check",
-                                  inputs={"produce": ProduceOutput}, outputs=Validated)
+            check = Node.scripted("check", fn="_fc_check", inputs={"produce": ProduceOutput}, outputs=Validated)
 
             def forward(self, topic):
                 s = self.seed(topic)
@@ -1645,9 +1667,7 @@ class _RefineReActFake:
             return msg
         seen = self._seen_score(messages)
         nxt = round(seen + 0.3, 2)
-        return AIMessage(
-            content=json.dumps({"content": f"refined@{nxt}", "iteration": 0, "score": nxt})
-        )
+        return AIMessage(content=json.dumps({"content": f"refined@{nxt}", "iteration": 0, "score": nxt}))
 
     async def ainvoke(self, *a, **k):
         return self.invoke(*a, **k)
@@ -1676,27 +1696,25 @@ class TestLoopOverAgent:
         from neograph import Loop, Tool
         from tests.fakes import FakeTool, configure_fake_llm, register_tool_factory
 
-        register_tool_factory(
-            "agent_search", lambda config, tool_config: FakeTool("agent_search", response="found")
-        )
+        register_tool_factory("agent_search", lambda config, tool_config: FakeTool("agent_search", response="found"))
         register_scripted("draft_seed", lambda input_data, config: Draft(content="seed", score=0.0))
 
-        agent = (
-            Node(
-                name="agent-refine",
-                mode="agent",
-                inputs=Draft,
-                outputs=Draft,
-                model="default-tier",
-                prompt="test/refine",
-                tools=[Tool(name="agent_search", budget=5)],
-            )
-            | Loop(when=lambda d: d is None or d.score < 0.8, max_iterations=10)
+        agent = Node(
+            name="agent-refine",
+            mode="agent",
+            inputs=Draft,
+            outputs=Draft,
+            model="default-tier",
+            prompt="test/refine",
+            tools=[Tool(name="agent_search", budget=5)],
+        ) | Loop(when=lambda d: d is None or d.score < 0.8, max_iterations=10)
+        pipeline = Construct(
+            "loop-over-agent",
+            nodes=[
+                Node.scripted("seed", fn="draft_seed", outputs=Draft),
+                agent,
+            ],
         )
-        pipeline = Construct("loop-over-agent", nodes=[
-            Node.scripted("seed", fn="draft_seed", outputs=Draft),
-            agent,
-        ])
         return compile(
             pipeline,
             **build_test_compile_kwargs(),
@@ -1726,9 +1744,7 @@ class TestLoopOverAgent:
         from neograph import Tool
         from tests.fakes import FakeTool, configure_fake_llm, register_tool_factory
 
-        register_tool_factory(
-            "agent_search", lambda config, tool_config: FakeTool("agent_search", response="found")
-        )
+        register_tool_factory("agent_search", lambda config, tool_config: FakeTool("agent_search", response="found"))
         register_scripted("draft_seed_dec", lambda input_data, config: Draft(content="seed", score=0.0))
 
         @node(
@@ -1742,10 +1758,13 @@ class TestLoopOverAgent:
         )
         def refiner(seed: Draft) -> Draft: ...
 
-        pipeline = Construct("loop-over-agent-dec", nodes=[
-            Node.scripted("seed", fn="draft_seed_dec", outputs=Draft),
-            refiner,
-        ])
+        pipeline = Construct(
+            "loop-over-agent-dec",
+            nodes=[
+                Node.scripted("seed", fn="draft_seed_dec", outputs=Draft),
+                refiner,
+            ],
+        )
         graph = compile(
             pipeline,
             **build_test_compile_kwargs(),

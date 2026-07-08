@@ -16,8 +16,11 @@ register_scripted("mdo_proc", lambda i, c: Draft(text="ok"))
 register_scripted("mdo_merge1", lambda variants, c: variants[0])
 register_scripted("mdo_merge2", lambda variants, c: variants[0])
 
-pipeline = Construct("broken", nodes=[
-    Node.scripted("proc", fn="mdo_proc", outputs=Draft)
-    | Oracle(n=3, merge_fn="mdo_merge1")
-    | Oracle(n=2, merge_fn="mdo_merge2"),
-])
+pipeline = Construct(
+    "broken",
+    nodes=[
+        Node.scripted("proc", fn="mdo_proc", outputs=Draft)
+        | Oracle(n=3, merge_fn="mdo_merge1")
+        | Oracle(n=2, merge_fn="mdo_merge2"),
+    ],
+)

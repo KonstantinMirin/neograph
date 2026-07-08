@@ -45,7 +45,7 @@ _IMAGE_MIME_PREFIXES = frozenset(["image/"])
 def _check_magic_bytes(data: bytes) -> str | None:
     """Return MIME type from magic bytes, or None if unrecognized."""
     for magic, mime in _IMAGE_MAGIC.items():
-        if data[:len(magic)] == magic:
+        if data[: len(magic)] == magic:
             return mime
     # WebP: RIFF header + "WEBP" at bytes 8-12 (distinguishes from WAV/AVI)
     if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
@@ -53,6 +53,7 @@ def _check_magic_bytes(data: bytes) -> str | None:
     # BMP: "BM" + file size field (bytes 2-5) must roughly match actual data length
     if data[:2] == b"BM" and len(data) >= 14:
         import struct
+
         file_size = struct.unpack_from("<I", data, 2)[0]
         if 14 <= file_size <= len(data) * 2:
             return "image/bmp"
@@ -64,6 +65,7 @@ def _check_magic_bytes(data: bytes) -> str | None:
 
 
 # ── Configuration ────────────────────────────────────────────────────────
+
 
 @dataclasses.dataclass
 class ImageConfig:
@@ -109,6 +111,7 @@ def configure_image(
 
 # ── Public API ───────────────────────────────────────────────────────────
 
+
 def resolve_image(path_or_b64: str) -> str:
     """Convert a file path, raw base64, or data URI to a data-URI string.
 
@@ -134,8 +137,11 @@ def resolve_image(path_or_b64: str) -> str:
 
     # Warn if the value looks like a file path but doesn't exist
     if "/" in path_or_b64 or "\\" in path_or_b64:
-        log.warning("image_path_not_found", path=path_or_b64,
-                     hint="value looks like a file path but file not found; treating as raw base64")
+        log.warning(
+            "image_path_not_found",
+            path=path_or_b64,
+            hint="value looks like a file path but file not found; treating as raw base64",
+        )
 
     # Assume raw base64
     return f"data:image/png;base64,{path_or_b64}"
@@ -147,14 +153,14 @@ def _read_and_encode_file(p: Path) -> str:
     # Directory restriction
     if _config.allowed_dirs is not None:
         resolved = p.resolve()
-        allowed = any(
-            resolved.is_relative_to(Path(d).resolve())
-            for d in _config.allowed_dirs
-        )
+        allowed = any(resolved.is_relative_to(Path(d).resolve()) for d in _config.allowed_dirs)
         if not allowed:
-            log.warning("image_dir_blocked", path=str(p),
-                        allowed_dirs=_config.allowed_dirs,
-                        hint="file is outside allowed directories; skipping")
+            log.warning(
+                "image_dir_blocked",
+                path=str(p),
+                allowed_dirs=_config.allowed_dirs,
+                hint="file is outside allowed directories; skipping",
+            )
             return "data:image/png;base64,"
 
     # TOCTOU-safe read
@@ -166,10 +172,13 @@ def _read_and_encode_file(p: Path) -> str:
 
     # Size check
     if len(data) > _config.max_size_bytes:
-        log.warning("image_too_large", path=str(p),
-                     size_bytes=len(data),
-                     max_bytes=_config.max_size_bytes,
-                     hint="file exceeds max_size_bytes; skipping")
+        log.warning(
+            "image_too_large",
+            path=str(p),
+            size_bytes=len(data),
+            max_bytes=_config.max_size_bytes,
+            hint="file exceeds max_size_bytes; skipping",
+        )
         return "data:image/png;base64,"
 
     # Format validation + MIME detection
@@ -178,9 +187,12 @@ def _read_and_encode_file(p: Path) -> str:
 
     if _config.validate_format and detected_mime is None:
         if not any(extension_mime.startswith(pre) for pre in _IMAGE_MIME_PREFIXES):
-            log.warning("image_format_rejected", path=str(p),
-                        mime_guess=extension_mime,
-                        hint="file does not look like a known image format; skipping")
+            log.warning(
+                "image_format_rejected",
+                path=str(p),
+                mime_guess=extension_mime,
+                hint="file does not look like a known image format; skipping",
+            )
             return "data:image/png;base64,"
 
     # Prefer magic-bytes MIME (accurate) over extension MIME (guesswork)

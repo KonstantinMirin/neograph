@@ -28,8 +28,11 @@ ParamResolution = dict[str, DIBinding]
 
 # ─── Node sidecar accessors ──────────────────────────────────────────
 
+
 def _register_sidecar(
-    n: Node, fn: Callable, param_names: tuple[str, ...],
+    n: Node,
+    fn: Callable,
+    param_names: tuple[str, ...],
 ) -> None:
     n._sidecar = (fn, param_names)
 

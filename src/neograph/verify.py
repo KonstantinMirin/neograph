@@ -23,9 +23,9 @@ from neograph.node import Node
 class VerifyIssue:
     """A single post-compile verification finding."""
 
-    node_name: str   # which node has the problem
-    kind: str        # issue category
-    message: str     # human-readable description
+    node_name: str  # which node has the problem
+    kind: str  # issue category
+    message: str  # human-readable description
 
 
 def verify_compiled(graph: Any) -> list[VerifyIssue]:
@@ -39,11 +39,13 @@ def verify_compiled(graph: Any) -> list[VerifyIssue]:
     """
     construct = getattr(graph, "construct", None)
     if construct is None:
-        return [VerifyIssue(
-            node_name="<graph>",
-            kind="no_construct",
-            message="Compiled graph has no construct — was it compiled with neograph.compile()?",
-        )]
+        return [
+            VerifyIssue(
+                node_name="<graph>",
+                kind="no_construct",
+                message="Compiled graph has no construct — was it compiled with neograph.compile()?",
+            )
+        ]
 
     issues: list[VerifyIssue] = []
 
@@ -57,7 +59,9 @@ def verify_compiled(graph: Any) -> list[VerifyIssue]:
     condition_lookup: dict = getattr(graph, "conditions", {}) or {}
 
     _walk(
-        construct, issues, state_fields,
+        construct,
+        issues,
+        state_fields,
         has_llm_ref=has_llm_node,
         scripted_lookup=scripted_lookup,
         condition_lookup=condition_lookup,
@@ -68,12 +72,14 @@ def verify_compiled(graph: Any) -> list[VerifyIssue]:
     if _has_llm_nodes(construct):
         runtime = getattr(graph, "runtime", None)
         if runtime is None or runtime.llm_factory is None:
-            issues.append(VerifyIssue(
-                node_name="<graph>",
-                kind="llm_factory_missing",
-                message="Graph contains LLM nodes but no LLM factory is configured. "
-                        "Pass llm_factory= to compile().",
-            ))
+            issues.append(
+                VerifyIssue(
+                    node_name="<graph>",
+                    kind="llm_factory_missing",
+                    message="Graph contains LLM nodes but no LLM factory is configured. "
+                    "Pass llm_factory= to compile().",
+                )
+            )
 
     return issues
 
@@ -94,7 +100,9 @@ def _walk(
         # neograph-vn5f (site 4).
         for child in iter_with_arms(item):
             _walk(
-                child, issues, state_fields,
+                child,
+                issues,
+                state_fields,
                 has_llm_ref=has_llm_ref,
                 scripted_lookup=scripted_lookup,
                 condition_lookup=condition_lookup,
@@ -110,22 +118,25 @@ def _walk(
     if item.scripted_fn:
         per_compile = scripted_lookup or {}
         if item.scripted_fn not in per_compile:
-            issues.append(VerifyIssue(
-                node_name=label,
-                kind="scripted_fn_missing",
-                message=f"Scripted function '{item.scripted_fn}' not found in registry. "
-                        f"Was register_scripted() called, or was the registry cleared?",
-            ))
+            issues.append(
+                VerifyIssue(
+                    node_name=label,
+                    kind="scripted_fn_missing",
+                    message=f"Scripted function '{item.scripted_fn}' not found in registry. "
+                    f"Was register_scripted() called, or was the registry cleared?",
+                )
+            )
 
     # 2. State field existence check
     field_name = field_name_for(item.name)
     if state_fields and field_name not in state_fields:
-        issues.append(VerifyIssue(
-            node_name=label,
-            kind="state_field_missing",
-            message=f"No state field '{field_name}' in compiled state model. "
-                    f"Node output may not be stored.",
-        ))
+        issues.append(
+            VerifyIssue(
+                node_name=label,
+                kind="state_field_missing",
+                message=f"No state field '{field_name}' in compiled state model. Node output may not be stored.",
+            )
+        )
 
     # 3. Loop/Operator condition registration check
     ms = getattr(item, "modifier_set", None)
@@ -146,20 +157,24 @@ def _check_condition_registrations(
     loop = ms.loop
     if loop and isinstance(loop.when, str):
         if loop.when not in conditions:
-            issues.append(VerifyIssue(
-                node_name=label,
-                kind="condition_missing",
-                message=f"Loop condition '{loop.when}' not found in condition registry.",
-            ))
+            issues.append(
+                VerifyIssue(
+                    node_name=label,
+                    kind="condition_missing",
+                    message=f"Loop condition '{loop.when}' not found in condition registry.",
+                )
+            )
 
     operator = ms.operator
     if operator and isinstance(operator.when, str):
         if operator.when not in conditions:
-            issues.append(VerifyIssue(
-                node_name=label,
-                kind="condition_missing",
-                message=f"Operator condition '{operator.when}' not found in condition registry.",
-            ))
+            issues.append(
+                VerifyIssue(
+                    node_name=label,
+                    kind="condition_missing",
+                    message=f"Operator condition '{operator.when}' not found in condition registry.",
+                )
+            )
 
 
 def _has_llm_nodes(construct: Construct) -> bool:

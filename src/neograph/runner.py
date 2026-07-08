@@ -1,14 +1,14 @@
 """Runner — execute compiled graphs with checkpointing.
 
-    result = run(graph, input={"node_id": "BR-RW-042", "project_root": "/path"})
+result = run(graph, input={"node_id": "BR-RW-042", "project_root": "/path"})
 
-    # With shared resources in config:
-    result = run(graph,
-        input={"node_id": "BR-RW-042"},
-        config={"configurable": {"project_root": "/path", "rate_limiter": my_limiter}})
+# With shared resources in config:
+result = run(graph,
+    input={"node_id": "BR-RW-042"},
+    config={"configurable": {"project_root": "/path", "rate_limiter": my_limiter}})
 
-    # Resume after Operator interrupt:
-    result = run(graph, resume={"approved": True}, config=config)
+# Resume after Operator interrupt:
+result = run(graph, resume={"approved": True}, config=config)
 """
 
 from __future__ import annotations
@@ -48,7 +48,8 @@ _AGENT_CYCLE_OVERHEAD = 3
 
 
 def _ensure_agent_recursion_limit(
-    graph: CompiledNeograph, config: RunnableConfig | None,
+    graph: CompiledNeograph,
+    config: RunnableConfig | None,
 ) -> RunnableConfig | None:
     """Raise ``recursion_limit`` so an agent/act cycle can reach its graceful
     budget-exhaust → forced-final edge instead of hitting LangGraph's default
@@ -130,7 +131,10 @@ def _inject_input_to_config(
 
 
 def _decide_checkpoint_schema(
-    graph: CompiledNeograph, saved: Any, *, auto_resume: bool,
+    graph: CompiledNeograph,
+    saved: Any,
+    *,
+    auto_resume: bool,
 ) -> set[str] | None:
     """Pure checkpoint-schema decision shared by both verify twins.
 
@@ -203,7 +207,9 @@ def _verify_checkpoint_schema(graph: CompiledNeograph, config: RunnableConfig, *
 
 
 def _auto_resume_from_divergence(
-    graph: CompiledNeograph, config: RunnableConfig, invalidated: set[str],
+    graph: CompiledNeograph,
+    config: RunnableConfig,
+    invalidated: set[str],
 ) -> None:
     """Rewind checkpoint to before the earliest invalidated node.
 
@@ -368,7 +374,9 @@ def _required_checkpointer_driver(checkpointer: object) -> str | None:
 
 
 def _assert_checkpointer_matches_driver(
-    graph: CompiledNeograph, *, is_async: bool,
+    graph: CompiledNeograph,
+    *,
+    is_async: bool,
 ) -> None:
     """Fail loud at run/arun ENTRY when the checkpointer's sync/async capability
     does not match the driver.
@@ -440,7 +448,9 @@ def _prepare_resume_config(config: RunnableConfig | None) -> RunnableConfig | No
 
 
 def _prepare_new_input(
-    graph: CompiledNeograph, input: dict[str, Any], config: RunnableConfig | None,
+    graph: CompiledNeograph,
+    input: dict[str, Any],
+    config: RunnableConfig | None,
 ) -> tuple[dict[str, Any], RunnableConfig]:
     """Prep for a new execution: stash CONFIG_INPUT in the caller's config,
     inject input into config for DI, defensively copy input, and inject the
@@ -532,14 +542,10 @@ def _langfuse_keys_present() -> bool:
     boundary: a half-configured handler warns and silently drops traces, and
     ``get_client().flush()`` would flush a mis-configured client. Absent/partial
     keys -> observe is a no-op, so offline/CI stays green."""
-    return bool(os.environ.get("LANGFUSE_SECRET_KEY")) and bool(
-        os.environ.get("LANGFUSE_PUBLIC_KEY")
-    )
+    return bool(os.environ.get("LANGFUSE_SECRET_KEY")) and bool(os.environ.get("LANGFUSE_PUBLIC_KEY"))
 
 
-def _merge_observe_callbacks(
-    config: RunnableConfig | None, observe: bool | str | None
-) -> RunnableConfig | None:
+def _merge_observe_callbacks(config: RunnableConfig | None, observe: bool | str | None) -> RunnableConfig | None:
     """Return a config with a Langfuse ``CallbackHandler`` MERGED into
     ``callbacks`` — fresh dict, fresh list, never mutating the caller's, never
     clobbering a user-supplied handler.
@@ -679,8 +685,7 @@ def _finalize_by_mode(payload: Any, mode: str) -> Any:
     if mode == "updates":
         if isinstance(payload, dict):
             return {
-                node: (_strip_internals(delta) if isinstance(delta, dict) else delta)
-                for node, delta in payload.items()
+                node: (_strip_internals(delta) if isinstance(delta, dict) else delta) for node, delta in payload.items()
             }
         return payload
     return payload
@@ -740,7 +745,11 @@ def run(
             run(graph, config={"configurable": {"thread_id": "same-id"}})
     """
     engine_input, config = _prepare(
-        graph, input=input, resume=resume, config=config, auto_resume=auto_resume,
+        graph,
+        input=input,
+        resume=resume,
+        config=config,
+        auto_resume=auto_resume,
         observe=observe,
     )
     # No strip: compile declares output_schema=non-neo_ fields, so the engine
@@ -801,7 +810,9 @@ async def _ahas_existing_checkpoint(graph: CompiledNeograph, config: RunnableCon
         return False
 
 
-async def _averify_checkpoint_schema(graph: CompiledNeograph, config: RunnableConfig, *, auto_resume: bool = True) -> None:
+async def _averify_checkpoint_schema(
+    graph: CompiledNeograph, config: RunnableConfig, *, auto_resume: bool = True
+) -> None:
     """Async twin of :func:`_verify_checkpoint_schema`.
 
     Identical fingerprint-compare/invalidation logic; awaits ``aget_tuple`` and,
@@ -819,7 +830,9 @@ async def _averify_checkpoint_schema(graph: CompiledNeograph, config: RunnableCo
 
 
 async def _aauto_resume_from_divergence(
-    graph: CompiledNeograph, config: RunnableConfig, invalidated: set[str],
+    graph: CompiledNeograph,
+    config: RunnableConfig,
+    invalidated: set[str],
 ) -> None:
     """Async twin of :func:`_auto_resume_from_divergence`.
 
@@ -903,7 +916,11 @@ async def arun(
     ``_aprepare`` and diverges ONLY at the engine I/O — ``await graph.ainvoke``.
     """
     engine_input, config = await _aprepare(
-        graph, input=input, resume=resume, config=config, auto_resume=auto_resume,
+        graph,
+        input=input,
+        resume=resume,
+        config=config,
+        auto_resume=auto_resume,
         observe=observe,
     )
     # No strip: output_schema (declared at compile) filters ainvoke() results too.

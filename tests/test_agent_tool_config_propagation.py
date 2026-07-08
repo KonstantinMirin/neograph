@@ -107,9 +107,7 @@ class TestAgentToolConfigPropagation:
         assert tool.sync_configs, "tool was never invoked on the sync path"
         # RED without the fix: tools_body calls tool.invoke(args) with no config=,
         # so the captured config is None.
-        assert tool.sync_configs[0] is not None, (
-            "sync tool call did not receive the node RunnableConfig"
-        )
+        assert tool.sync_configs[0] is not None, "sync tool call did not receive the node RunnableConfig"
 
     def test_async_tool_call_receives_node_config(self):
         tool = _ConfigCapturingTool("search")
@@ -122,9 +120,7 @@ class TestAgentToolConfigPropagation:
         assert tool.async_configs, "tool was never invoked on the async path"
         # RED without the fix: atools_body awaits tool.ainvoke(args) with no
         # config=, so the captured config is None.
-        assert tool.async_configs[0] is not None, (
-            "async tool call did not receive the node RunnableConfig"
-        )
+        assert tool.async_configs[0] is not None, "async tool call did not receive the node RunnableConfig"
 
 
 class TestAgentToolEventsVisible:
@@ -141,16 +137,11 @@ class TestAgentToolEventsVisible:
         graph = _compile_agent(_react_fake())
 
         async def _collect():
-            return [
-                ev
-                async for ev in graph.astream_events(dict(_INPUT), dict(_CFG), version="v2")
-            ]
+            return [ev async for ev in graph.astream_events(dict(_INPUT), dict(_CFG), version="v2")]
 
         events = asyncio.run(_collect())
         starts = [e for e in events if e.get("event") == "on_tool_start"]
         ends = [e for e in events if e.get("event") == "on_tool_end"]
 
-        assert any(e.get("name") == "search" for e in starts), [
-            e.get("name") for e in starts
-        ]
+        assert any(e.get("name") == "search" for e in starts), [e.get("name") for e in starts]
         assert ends, "on_tool_end did not fire for the tool call"

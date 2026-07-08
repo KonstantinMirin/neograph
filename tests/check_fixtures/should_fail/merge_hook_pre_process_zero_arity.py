@@ -14,7 +14,10 @@ def bad() -> dict:
     return {}
 
 
-pipeline = Construct("test", nodes=[
-    Node("gen", mode="think", outputs=ModelA, prompt="gen", model="fast")
-    | Oracle(n=2, merge_prompt="merge: ${variants}", merge_pre_process=bad),
-])
+pipeline = Construct(
+    "test",
+    nodes=[
+        Node("gen", mode="think", outputs=ModelA, prompt="gen", model="fast")
+        | Oracle(n=2, merge_prompt="merge: ${variants}", merge_pre_process=bad),
+    ],
+)

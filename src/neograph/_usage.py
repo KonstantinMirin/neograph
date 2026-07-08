@@ -13,9 +13,7 @@ from __future__ import annotations
 from typing import Any
 
 
-def _usage_dict(
-    input_tokens: int, output_tokens: int, *, empty: Any = None
-) -> Any:
+def _usage_dict(input_tokens: int, output_tokens: int, *, empty: Any = None) -> Any:
     """Build the token-usage dict, or ``empty`` when both counts are zero.
 
     ``total_tokens`` is always ``input_tokens + output_tokens`` (the sum rule).

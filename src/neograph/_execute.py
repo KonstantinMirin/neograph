@@ -50,9 +50,7 @@ def _run_id_binds(config: RunnableConfig) -> dict[str, str]:
     return {"run_id": run_id} if run_id else {}
 
 
-def _inject_resource_manifest(
-    state: BaseModel, node: Node, config: RunnableConfig
-) -> RunnableConfig:
+def _inject_resource_manifest(state: BaseModel, node: Node, config: RunnableConfig) -> RunnableConfig:
     """Stash the checkpointed resource manifest onto config for a ref-hydrating node.
 
     A ``FromResource(ref=<kind>)`` binding hydrates a ``ResourceRef`` looked up
@@ -69,10 +67,7 @@ def _inject_resource_manifest(
     param_res = _get_param_res(node)
     if not param_res:
         return config
-    if not any(
-        b.kind is DIKind.FROM_RESOURCE and b.ref_kind is not None
-        for b in param_res.values()
-    ):
+    if not any(b.kind is DIKind.FROM_RESOURCE and b.ref_kind is not None for b in param_res.values()):
         return config
     refs: list[Any] = []
     for fname in type(state).model_fields:

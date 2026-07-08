@@ -55,6 +55,7 @@ from tests.schemas import (
 # barrier collects, dict reducer merges results.
 # ═══════════════════════════════════════════════════════════════════════════
 
+
 def _echo_prompt_compiler(template, input_data, **kwargs):
     """A prompt compiler that renders the per-branch upstream value into the user
     message, so the fake LLM's echo proves that value CROSSED the subgraph
@@ -125,34 +126,34 @@ class TestEachOverAgent:
 
     @staticmethod
     def _agent_over_groups(inputs):
-        return (
-            Node(
-                name="agent-gen",
-                mode="agent",
-                inputs=inputs,
-                outputs=MatchResult,
-                model="default-tier",
-                prompt="test/search",
-                tools=[Tool(name="agent_search", budget=5)],
-            )
-            | Each(over="make_clusters.groups", key="label")
-        )
+        return Node(
+            name="agent-gen",
+            mode="agent",
+            inputs=inputs,
+            outputs=MatchResult,
+            model="default-tier",
+            prompt="test/search",
+            tools=[Tool(name="agent_search", budget=5)],
+        ) | Each(over="make_clusters.groups", key="label")
 
     def _run(self, agent):
-        register_tool_factory(
-            "agent_search", lambda config, tool_config: FakeTool("agent_search", response="found")
-        )
+        register_tool_factory("agent_search", lambda config, tool_config: FakeTool("agent_search", response="found"))
         register_scripted(
             "clusters_fn",
-            lambda input_data, config: Clusters(groups=[
-                ClusterGroup(label="alpha", claim_ids=["c1"]),
-                ClusterGroup(label="beta", claim_ids=["c2"]),
-            ]),
+            lambda input_data, config: Clusters(
+                groups=[
+                    ClusterGroup(label="alpha", claim_ids=["c1"]),
+                    ClusterGroup(label="beta", claim_ids=["c2"]),
+                ]
+            ),
         )
-        pipeline = Construct("each-over-agent", nodes=[
-            Node.scripted("make-clusters", fn="clusters_fn", outputs=Clusters),
-            agent,
-        ])
+        pipeline = Construct(
+            "each-over-agent",
+            nodes=[
+                Node.scripted("make-clusters", fn="clusters_fn", outputs=Clusters),
+                agent,
+            ],
+        )
         graph = compile(
             pipeline,
             **build_test_compile_kwargs(),
@@ -182,22 +183,20 @@ class TestEachOverAgent:
         """Declarative single-key dict-form ``inputs={'group': ClusterGroup}``:
         the fan-out receiver key is rewritten to ``neo_subgraph_input`` (the qot6
         convention) and reads the delivered Each item."""
-        self._assert_per_branch_isolation(
-            self._run(self._agent_over_groups({"group": ClusterGroup}))
-        )
+        self._assert_per_branch_isolation(self._run(self._agent_over_groups({"group": ClusterGroup})))
 
     def test_each_over_agent_via_node_decorator_delivers_per_branch_item(self):
         """@node surface (three-surface parity): ``map_over`` composes the same
         Each; the fanned item reaches the isolated cycle's typed param."""
-        register_tool_factory(
-            "agent_search", lambda config, tool_config: FakeTool("agent_search", response="found")
-        )
+        register_tool_factory("agent_search", lambda config, tool_config: FakeTool("agent_search", response="found"))
         register_scripted(
             "clusters_dec_fn",
-            lambda input_data, config: Clusters(groups=[
-                ClusterGroup(label="alpha", claim_ids=["c1"]),
-                ClusterGroup(label="beta", claim_ids=["c2"]),
-            ]),
+            lambda input_data, config: Clusters(
+                groups=[
+                    ClusterGroup(label="alpha", claim_ids=["c1"]),
+                    ClusterGroup(label="beta", claim_ids=["c2"]),
+                ]
+            ),
         )
 
         @node(
@@ -211,10 +210,13 @@ class TestEachOverAgent:
         )
         def researcher(group: ClusterGroup) -> MatchResult: ...
 
-        pipeline = Construct("each-over-agent-dec", nodes=[
-            Node.scripted("make-clusters", fn="clusters_dec_fn", outputs=Clusters),
-            researcher,
-        ])
+        pipeline = Construct(
+            "each-over-agent-dec",
+            nodes=[
+                Node.scripted("make-clusters", fn="clusters_dec_fn", outputs=Clusters),
+                researcher,
+            ],
+        )
         graph = compile(
             pipeline,
             **build_test_compile_kwargs(),
@@ -233,20 +235,15 @@ class TestEachOverAgent:
         """A self-contained agent (inputs=None) has no port for the fanned item —
         every isolated cycle would run on empty input. Fail loud at assembly rather
         than ship a silent broken fan (neograph-1h8c)."""
-        agent = (
-            Node(
-                name="agent-gen",
-                mode="agent",
-                outputs=MatchResult,
-                model="default-tier",
-                prompt="test/search",
-                tools=[Tool(name="agent_search", budget=5)],
-            )
-            | Each(over="upstream", key="text")
-        )
-        with pytest.raises(
-            ConstructError, match="Each over a self-contained agent/act node is not supported"
-        ):
+        agent = Node(
+            name="agent-gen",
+            mode="agent",
+            outputs=MatchResult,
+            model="default-tier",
+            prompt="test/search",
+            tools=[Tool(name="agent_search", budget=5)],
+        ) | Each(over="upstream", key="text")
+        with pytest.raises(ConstructError, match="Each over a self-contained agent/act node is not supported"):
             Construct("bad-each-over-self-contained", nodes=[agent])
 
 
@@ -261,10 +258,12 @@ class TestEach:
 
         @node(mode="scripted", outputs=Clusters)
         def make_clusters() -> Clusters:
-            return Clusters(groups=[
-                ClusterGroup(label="alpha", claim_ids=["c1", "c2"]),
-                ClusterGroup(label="beta", claim_ids=["c3"]),
-            ])
+            return Clusters(
+                groups=[
+                    ClusterGroup(label="alpha", claim_ids=["c1", "c2"]),
+                    ClusterGroup(label="beta", claim_ids=["c3"]),
+                ]
+            )
 
         @node(
             mode="scripted",
@@ -346,8 +345,6 @@ class TestEach:
 # ═══════════════════════════════════════════════════════════════════════════
 
 
-
-
 class TestConstructEach:
     """Construct | Each — run entire sub-pipeline per collection item."""
 
@@ -355,19 +352,22 @@ class TestConstructEach:
         """Sub-pipeline runs once per cluster, results collected as dict."""
         from tests.fakes import register_scripted
 
-        register_scripted("make_clusters", lambda input_data, config: Clusters(
-            groups=[
-                ClusterGroup(label="alpha", claim_ids=["c1"]),
-                ClusterGroup(label="beta", claim_ids=["c2", "c3"]),
-            ]
-        ))
+        register_scripted(
+            "make_clusters",
+            lambda input_data, config: Clusters(
+                groups=[
+                    ClusterGroup(label="alpha", claim_ids=["c1"]),
+                    ClusterGroup(label="beta", claim_ids=["c2", "c3"]),
+                ]
+            ),
+        )
 
-        register_scripted("sub_analyze", lambda input_data, config: RawText(
-            text=f"analyzed: {input_data.label}"
-        ))
+        register_scripted("sub_analyze", lambda input_data, config: RawText(text=f"analyzed: {input_data.label}"))
+
         def _sub_score(input_data, config):
             assert isinstance(input_data, RawText), f"Expected RawText from sub_analyze, got {type(input_data)}"
             return MatchResult(cluster_label="scored", matched=[f"scored-{input_data.text}"])
+
         register_scripted("sub_score", _sub_score)
 
         sub = Construct(
@@ -380,10 +380,13 @@ class TestConstructEach:
             ],
         ) | Each(over="make_clusters.groups", key="label")
 
-        parent = Construct("parent", nodes=[
-            Node.scripted("make-clusters", fn="make_clusters", outputs=Clusters),
-            sub,
-        ])
+        parent = Construct(
+            "parent",
+            nodes=[
+                Node.scripted("make-clusters", fn="make_clusters", outputs=Clusters),
+                sub,
+            ],
+        )
         graph = compile(parent, **build_test_compile_kwargs())
         result = run(graph, input={"node_id": "test-001"})
 
@@ -391,9 +394,6 @@ class TestConstructEach:
         verify_results = result["verify_cluster"]
         assert "alpha" in verify_results
         assert "beta" in verify_results
-
-
-
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -410,6 +410,7 @@ class TestConstructEach:
 # Fan-out params (Each) are stripped from inputs at construct-assembly time.
 # ═══════════════════════════════════════════════════════════════════════════
 
+
 class TestListOverEachEndToEnd:
     def test_list_consumer_receives_values_when_declarative_each_producer(self):
         """Declarative: Each producer + Node.scripted consumer that
@@ -419,15 +420,19 @@ class TestListOverEachEndToEnd:
 
         register_scripted(
             "make_clusters_l5",
-            lambda _in, _cfg: Clusters(groups=[
-                ClusterGroup(label="a", claim_ids=["1"]),
-                ClusterGroup(label="b", claim_ids=["2"]),
-                ClusterGroup(label="c", claim_ids=["3"]),
-            ]),
+            lambda _in, _cfg: Clusters(
+                groups=[
+                    ClusterGroup(label="a", claim_ids=["1"]),
+                    ClusterGroup(label="b", claim_ids=["2"]),
+                    ClusterGroup(label="c", claim_ids=["3"]),
+                ]
+            ),
         )
+
         def _verify_cluster_l5(input_data, _cfg):
             assert isinstance(input_data, ClusterGroup), f"Expected ClusterGroup, got {type(input_data)}"
             return MatchResult(cluster_label=input_data.label, matched=[f"m-{input_data.label}"])
+
         register_scripted("verify_cluster_l5", _verify_cluster_l5)
 
         def summarize_fn(input_data, _cfg):
@@ -440,12 +445,12 @@ class TestListOverEachEndToEnd:
         register_scripted("summarize_l5", summarize_fn)
 
         make = Node.scripted("make-clusters", fn="make_clusters_l5", outputs=Clusters)
-        verify = (
-            Node.scripted("verify", fn="verify_cluster_l5", inputs=ClusterGroup, outputs=MatchResult)
-            .map(lambda s: s.make_clusters.groups, key="label")
+        verify = Node.scripted("verify", fn="verify_cluster_l5", inputs=ClusterGroup, outputs=MatchResult).map(
+            lambda s: s.make_clusters.groups, key="label"
         )
         summarize = Node.scripted(
-            "summarize", fn="summarize_l5",
+            "summarize",
+            fn="summarize_l5",
             inputs={"verify": list[MatchResult]},
             outputs=MergedResult,
         )
@@ -461,10 +466,12 @@ class TestListOverEachEndToEnd:
 
         @node(mode="scripted", outputs=Clusters)
         def gen_clusters() -> Clusters:
-            return Clusters(groups=[
-                ClusterGroup(label="alpha", claim_ids=["1"]),
-                ClusterGroup(label="beta", claim_ids=["2"]),
-            ])
+            return Clusters(
+                groups=[
+                    ClusterGroup(label="alpha", claim_ids=["1"]),
+                    ClusterGroup(label="beta", claim_ids=["2"]),
+                ]
+            )
 
         @node(
             mode="scripted",
@@ -490,11 +497,10 @@ class TestListOverEachEndToEnd:
     def test_construct_raises_when_list_element_type_wrong(self):
         """list[WrongType] consumer + Each producer raises ConstructError."""
         make = _producer("make", Clusters)
-        verify = _consumer("verify", ClusterGroup, MatchResult).map(
-            lambda s: s.make.groups, key="label"
-        )
+        verify = _consumer("verify", ClusterGroup, MatchResult).map(lambda s: s.make.groups, key="label")
         summarize = Node.scripted(
-            "summarize", fn="f",
+            "summarize",
+            fn="f",
             inputs={"verify": list[Claims]},  # WRONG: Each emits MatchResult
             outputs=MergedResult,
         )
@@ -512,9 +518,11 @@ class TestListOverEachEndToEnd:
             "make_clusters_l5b",
             lambda _in, _cfg: Clusters(groups=[ClusterGroup(label="x", claim_ids=["1"])]),
         )
+
         def _verify_cluster_l5b(input_data, _cfg):
             assert isinstance(input_data, ClusterGroup), f"Expected ClusterGroup, got {type(input_data)}"
             return MatchResult(cluster_label=input_data.label, matched=["ok"])
+
         register_scripted("verify_cluster_l5b", _verify_cluster_l5b)
 
         def summarize_dict_fn(input_data, _cfg):
@@ -525,12 +533,12 @@ class TestListOverEachEndToEnd:
         register_scripted("summarize_l5b", summarize_dict_fn)
 
         make = Node.scripted("make-clusters", fn="make_clusters_l5b", outputs=Clusters)
-        verify = (
-            Node.scripted("verify", fn="verify_cluster_l5b", inputs=ClusterGroup, outputs=MatchResult)
-            .map(lambda s: s.make_clusters.groups, key="label")
+        verify = Node.scripted("verify", fn="verify_cluster_l5b", inputs=ClusterGroup, outputs=MatchResult).map(
+            lambda s: s.make_clusters.groups, key="label"
         )
         summarize = Node.scripted(
-            "summarize", fn="summarize_l5b",
+            "summarize",
+            fn="summarize_l5b",
             inputs={"verify": dict[str, MatchResult]},
             outputs=MergedResult,
         )
@@ -562,9 +570,6 @@ class TestListOverEachEndToEnd:
 # ═══════════════════════════════════════════════════════════════════════════
 
 
-
-
-
 # ═══════════════════════════════════════════════════════════════════════════
 # TEST: Each duplicate key guard
 #
@@ -575,7 +580,6 @@ class TestListOverEachEndToEnd:
 
 
 class TestEachDuplicateKeyGuard:
-
     def test_dedup_with_warning_when_each_collection_has_duplicate_keys_node_api(self):
         """@node API: duplicate key in Each collection deduped (keep first), no crash."""
         import types as _types
@@ -586,10 +590,12 @@ class TestEachDuplicateKeyGuard:
 
         @node(mode="scripted", outputs=Clusters)
         def make_clusters() -> Clusters:
-            return Clusters(groups=[
-                ClusterGroup(label="dup", claim_ids=["c1"]),
-                ClusterGroup(label="dup", claim_ids=["c2"]),
-            ])
+            return Clusters(
+                groups=[
+                    ClusterGroup(label="dup", claim_ids=["c1"]),
+                    ClusterGroup(label="dup", claim_ids=["c2"]),
+                ]
+            )
 
         @node(
             mode="scripted",
@@ -616,10 +622,12 @@ class TestEachDuplicateKeyGuard:
         from neograph import compile, run
 
         def make_fn(input_data, config):
-            return Clusters(groups=[
-                ClusterGroup(label="same", claim_ids=["c1"]),
-                ClusterGroup(label="same", claim_ids=["c2"]),
-            ])
+            return Clusters(
+                groups=[
+                    ClusterGroup(label="same", claim_ids=["c1"]),
+                    ClusterGroup(label="same", claim_ids=["c2"]),
+                ]
+            )
 
         def proc_fn(input_data, config):
             return MatchResult(cluster_label=input_data.label, matched=input_data.claim_ids)
@@ -628,13 +636,12 @@ class TestEachDuplicateKeyGuard:
         register_scripted("dup_each_proc", proc_fn)
 
         make = Node.scripted("dup-each-make", fn="dup_each_make", outputs=Clusters)
-        proc = (
-            Node.scripted(
-                "dup-each-proc", fn="dup_each_proc",
-                inputs=ClusterGroup, outputs=MatchResult,
-            )
-            | Each(over="dup_each_make.groups", key="label")
-        )
+        proc = Node.scripted(
+            "dup-each-proc",
+            fn="dup_each_proc",
+            inputs=ClusterGroup,
+            outputs=MatchResult,
+        ) | Each(over="dup_each_make.groups", key="label")
         pipeline = Construct("test-dup-each", nodes=[make, proc])
         graph = compile(pipeline, **build_test_compile_kwargs())
 
@@ -642,9 +649,6 @@ class TestEachDuplicateKeyGuard:
         # First occurrence kept
         assert "same" in result["dup_each_proc"]
         assert result["dup_each_proc"]["same"].matched == ["c1"]
-
-
-
 
 
 class TestEachDuplicateKeyDedup:
@@ -661,11 +665,13 @@ class TestEachDuplicateKeyDedup:
 
         @node(mode="scripted", outputs=Clusters)
         def make_clusters() -> Clusters:
-            return Clusters(groups=[
-                ClusterGroup(label="dup", claim_ids=["c1"]),
-                ClusterGroup(label="dup", claim_ids=["c2"]),
-                ClusterGroup(label="unique", claim_ids=["c3"]),
-            ])
+            return Clusters(
+                groups=[
+                    ClusterGroup(label="dup", claim_ids=["c1"]),
+                    ClusterGroup(label="dup", claim_ids=["c2"]),
+                    ClusterGroup(label="unique", claim_ids=["c3"]),
+                ]
+            )
 
         @node(
             mode="scripted",
@@ -694,10 +700,12 @@ class TestEachDuplicateKeyDedup:
         from neograph import compile, run
 
         def make_fn(input_data, config):
-            return Clusters(groups=[
-                ClusterGroup(label="same", claim_ids=["c1"]),
-                ClusterGroup(label="same", claim_ids=["c2"]),
-            ])
+            return Clusters(
+                groups=[
+                    ClusterGroup(label="same", claim_ids=["c1"]),
+                    ClusterGroup(label="same", claim_ids=["c2"]),
+                ]
+            )
 
         def proc_fn(input_data, config):
             return MatchResult(cluster_label=input_data.label, matched=input_data.claim_ids)
@@ -706,13 +714,12 @@ class TestEachDuplicateKeyDedup:
         register_scripted("dedup_each_proc", proc_fn)
 
         make = Node.scripted("dedup-each-make", fn="dedup_each_make", outputs=Clusters)
-        proc = (
-            Node.scripted(
-                "dedup-each-proc", fn="dedup_each_proc",
-                inputs=ClusterGroup, outputs=MatchResult,
-            )
-            | Each(over="dedup_each_make.groups", key="label")
-        )
+        proc = Node.scripted(
+            "dedup-each-proc",
+            fn="dedup_each_proc",
+            inputs=ClusterGroup,
+            outputs=MatchResult,
+        ) | Each(over="dedup_each_make.groups", key="label")
         pipeline = Construct("test-dedup-each", nodes=[make, proc])
         graph = compile(pipeline, **build_test_compile_kwargs())
 
@@ -721,9 +728,6 @@ class TestEachDuplicateKeyDedup:
         # First occurrence kept
         assert "same" in result["dedup_each_proc"]
         assert result["dedup_each_proc"]["same"].matched == ["c1"]
-
-
-
 
 
 class TestSkipWhenWithEach:
@@ -737,17 +741,21 @@ class TestSkipWhenWithEach:
 
         # LLM-mode node with skip_when + Each. Skip fires for single-claim
         # groups. Non-skipped groups go through the LLM (StructuredFake).
-        __llm_kw = configure_fake_llm(lambda tier: StructuredFake(
-            lambda m: m(cluster_label="processed", matched=["llm-result"]),
-        ))
+        __llm_kw = configure_fake_llm(
+            lambda tier: StructuredFake(
+                lambda m: m(cluster_label="processed", matched=["llm-result"]),
+            )
+        )
 
         @node(outputs=Clusters)
         def make() -> Clusters:
-            return Clusters(groups=[
-                ClusterGroup(label="a", claim_ids=["c1"]),          # skip: len==1
-                ClusterGroup(label="b", claim_ids=["c2", "c3"]),    # LLM processes
-                ClusterGroup(label="c", claim_ids=["c4"]),          # skip: len==1
-            ])
+            return Clusters(
+                groups=[
+                    ClusterGroup(label="a", claim_ids=["c1"]),  # skip: len==1
+                    ClusterGroup(label="b", claim_ids=["c2", "c3"]),  # LLM processes
+                    ClusterGroup(label="c", claim_ids=["c4"]),  # skip: len==1
+                ]
+            )
 
         @node(
             outputs=MatchResult,
@@ -780,8 +788,6 @@ class TestSkipWhenWithEach:
 # This proves: the two modifiers compose on a single node, interrupt
 # fires after Oracle merge, and resume delivers the merged result.
 # ═══════════════════════════════════════════════════════════════════════════
-
-
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -857,10 +863,12 @@ class TestCollectEachItemsAbsentSource:
         from neograph._state_bus import adapt_state
         from neograph._wiring import _collect_each_items
 
-        clusters = Clusters(groups=[
-            ClusterGroup(label="a", claim_ids=["c1"]),
-            ClusterGroup(label="b", claim_ids=["c2"]),
-        ])
+        clusters = Clusters(
+            groups=[
+                ClusterGroup(label="a", claim_ids=["c1"]),
+                ClusterGroup(label="b", claim_ids=["c2"]),
+            ]
+        )
         bus = adapt_state({"make_clusters": clusters})
         each = Each(over="make_clusters.groups", key="label")
 
@@ -898,23 +906,28 @@ class TestEachRouterEmptyBypassWhenSourceAbsent:
 
         seed = Node.scripted("seed", fn="bali_seed", outputs=RawText)
         make_clusters = Node(
-            "make_clusters", mode="scripted", scripted_fn="bali_mk",
-            inputs=RawText, outputs=Clusters,
+            "make_clusters",
+            mode="scripted",
+            scripted_fn="bali_mk",
+            inputs=RawText,
+            outputs=Clusters,
             skip_when=lambda data: True,  # always skip -> field absent
         )
-        verify = (
-            Node.scripted(
-                "verify", fn="bali_verify",
-                inputs=ClusterGroup, outputs=MatchResult,
-            )
-            | Each(over="make_clusters.groups", key="label")
-        )
+        verify = Node.scripted(
+            "verify",
+            fn="bali_verify",
+            inputs=ClusterGroup,
+            outputs=MatchResult,
+        ) | Each(over="make_clusters.groups", key="label")
         summarize = Node.scripted(
-            "summarize", fn="bali_summarize",
-            inputs=list[MatchResult], outputs=MergedResult,
+            "summarize",
+            fn="bali_summarize",
+            inputs=list[MatchResult],
+            outputs=MergedResult,
         )
         pipeline = Construct(
-            "bali-absent-prog", nodes=[seed, make_clusters, verify, summarize],
+            "bali-absent-prog",
+            nodes=[seed, make_clusters, verify, summarize],
         )
         graph = compile(pipeline, **build_test_compile_kwargs())
 
@@ -938,15 +951,18 @@ class TestEachRouterEmptyBypassWhenSourceAbsent:
             return RawText(text="seed")
 
         @node(
-            mode="scripted", outputs=Clusters,
+            mode="scripted",
+            outputs=Clusters,
             skip_when=lambda data: True,  # always skip -> field absent
         )
         def make_clusters(seed: RawText) -> Clusters:
             return Clusters(groups=[])
 
         @node(
-            mode="scripted", outputs=MatchResult,
-            map_over="make_clusters.groups", map_key="label",
+            mode="scripted",
+            outputs=MatchResult,
+            map_over="make_clusters.groups",
+            map_key="label",
         )
         def verify(cluster: ClusterGroup) -> MatchResult:
             return MatchResult(cluster_label=cluster.label, matched=cluster.claim_ids)
@@ -1002,24 +1018,32 @@ class TestFlatRouterEmptyBypassWhenSourceAbsent:
 
         seed = Node.scripted("seed", fn="bali_f_seed", outputs=RawText)
         make_clusters = Node(
-            "make_clusters", mode="scripted", scripted_fn="bali_f_mk",
-            inputs=RawText, outputs=Clusters,
+            "make_clusters",
+            mode="scripted",
+            scripted_fn="bali_f_mk",
+            inputs=RawText,
+            outputs=Clusters,
             skip_when=lambda data: True,  # always skip -> field absent
         )
         fused = (
             Node.scripted(
-                "fused", fn="bali_f_gen",
-                inputs=ClusterGroup, outputs=MatchResult,
+                "fused",
+                fn="bali_f_gen",
+                inputs=ClusterGroup,
+                outputs=MatchResult,
             )
             | Oracle(n=2, merge_fn="bali_f_merge")
             | Each(over="make_clusters.groups", key="label")
         )
         summarize = Node.scripted(
-            "summarize", fn="bali_f_summarize",
-            inputs=list[MatchResult], outputs=MergedResult,
+            "summarize",
+            fn="bali_f_summarize",
+            inputs=list[MatchResult],
+            outputs=MergedResult,
         )
         pipeline = Construct(
-            "bali-absent-fused", nodes=[seed, make_clusters, fused, summarize],
+            "bali-absent-fused",
+            nodes=[seed, make_clusters, fused, summarize],
         )
         graph = compile(pipeline, **build_test_compile_kwargs())
 
