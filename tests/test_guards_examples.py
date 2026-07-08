@@ -537,9 +537,27 @@ def _third_party_import_roots(source: str, local_names: set[str]) -> set[str]:
     }
 
 
+# neograph-g4q9 — import roots provided ONLY by an optional extra, NOT the light
+# dev env. The MCP examples (and the shared demo server) import these; they are
+# declared in a pyproject optional extra and installed on demand with
+# `uv run --extra mcp-examples`, so the core suite must NOT flag them as missing.
+# Backed by a real pyproject extra (see test_optional_extra_roots_are_declared).
+# Maps import-root -> (extra name, distribution name).
+_OPTIONAL_EXTRA_IMPORT_ROOTS = {
+    "mcp": ("mcp-examples", "mcp"),
+    "langchain_mcp_adapters": ("mcp-examples", "langchain-mcp-adapters"),
+}
+
+
 class TestExampleImportsAreDeclared:
     """neograph-b6hm — example third-party imports must be importable (declared
-    in pyproject [dependency-groups].dev or a runtime dependency)."""
+    in pyproject [dependency-groups].dev or a runtime dependency).
+
+    Exception (neograph-g4q9): roots in ``_OPTIONAL_EXTRA_IMPORT_ROOTS`` are
+    declared in an optional extra, not the light dev env — the core suite runs
+    without them (the E2E that uses them is ``pytest.importorskip``-gated), so
+    they are exempt from the installed check but MUST be declared in pyproject.
+    """
 
     def test_example_third_party_imports_are_importable(self):
         import importlib.util
@@ -548,6 +566,8 @@ class TestExampleImportsAreDeclared:
         missing: dict[str, list[str]] = {}
         for path in _iter_example_pipelines():
             for root in _third_party_import_roots(path.read_text(), local):
+                if root in _OPTIONAL_EXTRA_IMPORT_ROOTS:
+                    continue  # optional-extra provided; installed on demand
                 if importlib.util.find_spec(root) is None:
                     missing.setdefault(root, []).append(path.relative_to(REPO_ROOT).as_posix())
         assert not missing, (
@@ -555,6 +575,20 @@ class TestExampleImportsAreDeclared:
             "(add them to pyproject [dependency-groups].dev): "
             + ", ".join(f"{mod} <- {files}" for mod, files in sorted(missing.items()))
         )
+
+    def test_optional_extra_roots_are_declared(self):
+        """Non-vacuity: every exempt import root MUST be declared in the named
+        pyproject optional extra — the exemption cannot outlive the declaration."""
+        import tomllib
+
+        pyproject = tomllib.loads((REPO_ROOT / "pyproject.toml").read_text())
+        extras = pyproject["project"]["optional-dependencies"]
+        for root, (extra_name, dist) in _OPTIONAL_EXTRA_IMPORT_ROOTS.items():
+            assert extra_name in extras, f"exempt root {root!r} names missing extra {extra_name!r}"
+            declared = {
+                spec.split(">")[0].split("<")[0].split("=")[0].split("[")[0].strip() for spec in extras[extra_name]
+            }
+            assert dist in declared, f"exempt root {root!r} -> dist {dist!r} not in extra {extra_name!r}: {declared}"
 
     def test_meta_detects_third_party_import(self):
         """Positive: a non-stdlib, non-local import root is detected."""

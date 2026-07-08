@@ -33,6 +33,17 @@ dependencies = [
 
 [project.optional-dependencies]
 langfuse = ["langfuse>=3.0"]
+# neograph-g4q9: MCP examples (23/24) exercise the REAL Model Context Protocol
+# over stdio against examples/_mcp_demo_server.py. NOT core deps — src/neograph
+# stays MCP-free (the no-session-ownership guard scans src/ only; consumer-side
+# client stitching is itself the demo's thesis). Run with:
+#   uv run --extra mcp-examples pytest tests/test_mcp_examples_e2e.py
+mcp-examples = [
+    "langchain-mcp-adapters>=0.3",
+    # <2 pin: mcp 2.0 renames FastMCP -> MCPServer; the demo server and
+    # langchain-mcp-adapters 0.3.x both target the mcp 1.x FastMCP import.
+    "mcp>=1.28,<2",
+]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",

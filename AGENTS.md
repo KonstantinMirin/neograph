@@ -451,6 +451,32 @@ Supporting files: `conftest.py` (registry cleanup fixture), `schemas.py` (shared
 
 **Examples must run end-to-end.** Breaking one is a regression. When you change an API surface, run every example that doesn't require real API keys (01, 01c, 02, 03, 04, 05, 06, 08, 09, 10). Examples 07 and 11 hit real OpenRouter/OpenAI — example 11 still needs a manual run; example 07 now passes end-to-end (neograph-yi0n fixed both its structured-output schema 400 and a too-tight classify max_tokens). Document any new failures separately.
 
+### MCP examples (23/24) — no-key but need the `mcp-examples` extra (neograph-g4q9)
+
+The MCP-featuring examples exercise the **real** Model Context Protocol against a
+shared stdio demo server (`examples/_mcp_demo_server.py`) — no fakes at the
+protocol layer, no network, no API keys. They are **keyless but NOT
+dependency-light**: they need `mcp` + `langchain-mcp-adapters`, which live in the
+`mcp-examples` optional extra (`[project.optional-dependencies].mcp-examples`),
+**not** core deps and **not** the default dev group. This keeps `src/neograph`
+MCP-free (the no-session-ownership guard scans `src/` only) and the core
+`uv run --extra dev pytest` suite light.
+
+- **Run the MCP E2E harness**: `uv run --extra dev --extra mcp-examples pytest tests/test_mcp_examples_e2e.py`
+- The harness (`tests/test_mcp_examples_e2e.py`) is `pytest.importorskip`-gated, so
+  the core suite **skips** it cleanly without the extra. It proves the demo server
+  end-to-end (tool discovery, `get_deal` resource_link manifest, RFC-6570 email
+  fraction read, per-operator auth echo, real `-32002` expiry + self-heal) and
+  auto-discovers `examples/2?_mcp_*.py` to run each example as a subprocess (23/24
+  plug in via neograph-qb7q / neograph-3m6g).
+- **The distinction to remember**: "no-key" ≠ "no extra". Examples 23/24 are on the
+  no-key list but you must pass `--extra mcp-examples` to run them or their tests.
+- **Two verified `mcp` 1.28.x SDK gaps the demo server works around** (documented
+  in the server's module docstring): FastMCP's `@mcp.resource` can't express
+  RFC-6570 query templates, and its `@tool`/`@resource` wrappers swallow JSON-RPC
+  error codes (a real `-32002` needs a custom low-level `read_resource` handler on
+  `mcp._mcp_server`). Pin is `mcp>=1.28,<2` (mcp 2.0 renames `FastMCP`→`MCPServer`).
+
 ---
 
 ## Website
