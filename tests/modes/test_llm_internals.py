@@ -2678,7 +2678,14 @@ class TestCoercingToolWrapperMixedDictAndStringArgs:
         assert tcs[1]["args"] == {"query": "second-json"}
         assert isinstance(tcs[1]["args"], dict)
 
-        assert tcs[2]["args"] == {}
+        # c3's "unparseable" string is not valid JSON: rather than blank to {}
+        # (which silently ran the tool with empty args), the coercion path now
+        # stamps the unparseable marker with the raw string preserved so the
+        # tool-execution seam surfaces a retriable error (neograph-arus). Still a
+        # dict, so AIMessage validation holds.
+        from neograph._tool_loop import UNPARSEABLE_ARGS_MARKER
+
+        assert tcs[2]["args"] == {UNPARSEABLE_ARGS_MARKER: "unparseable"}
         assert isinstance(tcs[2]["args"], dict)
 
         assert tcs[3]["args"] == {"query": "fourth"}

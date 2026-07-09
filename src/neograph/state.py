@@ -38,43 +38,21 @@ def _append_loop_result(existing: Any, new: Any) -> list:
     return [*existing, new]
 
 
-def _collect_oracle_results(existing: Any, new: Any) -> list:
-    """Reducer: collect oracle fan-out results into a list."""
-    if existing is None:
-        existing = []
-    if isinstance(new, list):
-        return existing + new
-    return [*existing, new]
+def _concat_reducer(existing: Any, new: Any) -> list:
+    """Reducer: concatenate list-valued writes onto an accumulator.
 
+    The single list-append reducer shared by every additive channel:
+      - oracle fan-out results (``list[sub.output]``)
+      - Each×Oracle tagged (key, result) tuples
+      - agent-cycle ToolInteraction records (``tool_log``, per-turn concat)
+      - agent-cycle ResourceRef records (``resource_manifest``, per-turn concat)
 
-def _append_tagged(existing: Any, new: Any) -> list:
-    """Reducer: append tagged (key, result) tuples for Each×Oracle fusion."""
-    if existing is None:
-        existing = []
-    if isinstance(new, list):
-        return existing + new
-    return [*existing, new]
-
-
-def _append_tool_log(existing: Any, new: Any) -> list:
-    """Reducer: accumulate ToolInteraction records across agent-cycle turns.
-
-    The tool node emits a list of the interactions from one turn; the reducer
-    concatenates them so the full tool_log survives per-turn checkpoints.
-    """
-    if existing is None:
-        existing = []
-    if isinstance(new, list):
-        return existing + new
-    return [*existing, new]
-
-
-def _append_resource_manifest(existing: Any, new: Any) -> list:
-    """Reducer: accumulate ResourceRef records across agent-cycle turns.
-
-    The tool node emits a list of the refs lifted from one turn's resource_link
-    blocks; the reducer concatenates them so the full manifest survives per-turn
-    checkpoints (HITL-surviving tier). Mirrors ``_append_tool_log``.
+    A per-turn write is a ``list`` (extend); a single value is appended. These
+    four channels were byte-identical functions (neograph-yrph item 4). LangGraph
+    keys channels by FIELD NAME, not reducer identity, so one shared operator is
+    safe — the same pattern ``_last_write_wins``/``_merge_dicts`` already use
+    across many distinct channels. A structural guard bans re-planting a
+    byte-identical concat twin.
     """
     if existing is None:
         existing = []
@@ -188,7 +166,7 @@ def compile_state_model(
                 # Oracle on Construct: collector + consumer field
                 collector_field = StateKeys.oracle_collector(field_name)
                 fields[collector_field] = (
-                    Annotated[list[sub.output], _collect_oracle_results],  # type: ignore[name-defined]
+                    Annotated[list[sub.output], _concat_reducer],  # type: ignore[name-defined]
                     [],
                 )
                 fields[field_name] = (sub.output | None, None)  # type: ignore[name-defined]
@@ -257,7 +235,7 @@ def compile_state_model(
             fields[StateKeys.loop_count(field_name)] = (int, 0)
             loop = n_mods["loop"]
             if loop.history:
-                fields[StateKeys.loop_history(field_name)] = (Annotated[list, _collect_oracle_results], [])
+                fields[StateKeys.loop_history(field_name)] = (Annotated[list, _concat_reducer], [])
 
     # Subgraph input port — when this Construct declares an input type
     if construct.input is not None:
@@ -462,8 +440,8 @@ def _add_agent_channels(node: Node, fields: dict[str, Any]) -> None:
 
     field_name = field_name_for(node.name)
     fields[StateKeys.agent_messages(field_name)] = (Annotated[list, add_messages], [])
-    fields[StateKeys.agent_tool_log(field_name)] = (Annotated[list, _append_tool_log], [])
-    fields[StateKeys.resource_manifest(field_name)] = (Annotated[list, _append_resource_manifest], [])
+    fields[StateKeys.agent_tool_log(field_name)] = (Annotated[list, _concat_reducer], [])
+    fields[StateKeys.resource_manifest(field_name)] = (Annotated[list, _concat_reducer], [])
     fields[StateKeys.agent_budget(field_name)] = (dict | None, None)
 
 
@@ -493,7 +471,7 @@ def _add_output_field(node: Node, fields: dict[str, Any]) -> None:
                 # per key. Same as single-type fusion but per-key.
                 collector_field = StateKeys.eachoracle_collector(field_name)
                 fields[collector_field] = (
-                    Annotated[list, _append_tagged],
+                    Annotated[list, _concat_reducer],
                     [],
                 )
                 for output_key, output_type in no.all_keys.items():
@@ -508,7 +486,7 @@ def _add_output_field(node: Node, fields: dict[str, Any]) -> None:
                 # per-key consumer fields without per-key collectors.
                 collector_field = StateKeys.oracle_collector(field_name)
                 fields[collector_field] = (
-                    Annotated[list[dict], _collect_oracle_results],
+                    Annotated[list[dict], _concat_reducer],
                     [],
                 )
                 for output_key, output_type in no.all_keys.items():
@@ -546,7 +524,7 @@ def _add_single_output_field(
             # Each×Oracle fusion: tagged collector + dict output
             collector_field = StateKeys.eachoracle_collector(field_name)
             fields[collector_field] = (
-                Annotated[list, _append_tagged],
+                Annotated[list, _concat_reducer],
                 [],
             )
             # Final output: same shape as Each alone (dict[str, merged_type])
@@ -568,7 +546,7 @@ def _add_single_output_field(
             # keeps node.outputs (the post-merge type).
             collector_type = node.oracle_gen_type if node.oracle_gen_type is not None else output_type
             fields[collector_field] = (
-                Annotated[list[collector_type], _collect_oracle_results],  # type: ignore[valid-type]
+                Annotated[list[collector_type], _concat_reducer],  # type: ignore[valid-type]
                 [],
             )
             fields[field_name] = (output_type | None, None)

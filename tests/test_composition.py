@@ -641,18 +641,18 @@ class TestReducerEdgeCases:
 
     def test_oracle_reducer_builds_list_when_initial_none(self):
         """Oracle reducer builds list from None initial state."""
-        from neograph.state import _collect_oracle_results
+        from neograph.state import _concat_reducer
 
         # First write: existing is None
-        result = _collect_oracle_results(None, "first")
+        result = _concat_reducer(None, "first")
         assert result == ["first"]
 
         # Second write: existing is a list
-        result = _collect_oracle_results(["first"], "second")
+        result = _concat_reducer(["first"], "second")
         assert result == ["first", "second"]
 
         # List input (batch)
-        result = _collect_oracle_results(["a"], ["b", "c"])
+        result = _concat_reducer(["a"], ["b", "c"])
         assert result == ["a", "b", "c"]
 
     def test_dict_reducer_starts_when_initial_none(self):

@@ -31,6 +31,7 @@ def structlog_to_stdlib():
     yield
     structlog.reset_defaults()
 
+
 # ═══════════════════════════════════════════════════════════════════════════
 # Site 1 — runner._has_existing_checkpoint / _ahas_existing_checkpoint
 # ═══════════════════════════════════════════════════════════════════════════
@@ -187,6 +188,63 @@ def test_malformed_tool_args_warns_not_silently_blanked(caplog, structlog_to_std
     assert "search" in joined or "malformed" in joined.lower() or "args" in joined.lower(), (
         f"expected a warning naming the tool / malformed args; got {caplog.records}"
     )
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Site 5a follow-up (neograph-arus) — unparseable tool args become a RETRIABLE
+# ToolMessage error to the LLM instead of silently running the tool with {}.
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def test_unparseable_args_stamped_with_marker_not_blanked_to_empty(caplog, structlog_to_stdlib):
+    """RED before arus: the coercion path blanked an unparseable args string to
+    ``{}`` (tool ran with empty args). Now it stamps the marker + preserves the
+    raw string so the tool-execution seam can surface a retriable error."""
+    from neograph._tool_loop import UNPARSEABLE_ARGS_MARKER, _coerce_string_args_result
+
+    tc = {"name": "search", "args": "this is not json", "id": "call_1"}
+    msg = SimpleNamespace(tool_calls=[tc])
+    gen = SimpleNamespace(message=msg)
+    raw = SimpleNamespace(generations=[gen])
+
+    with caplog.at_level("WARNING"):
+        _coerce_string_args_result(raw)
+
+    # Not blanked to {} — instead marker-stamped with the raw string preserved.
+    assert tc["args"] != {}
+    assert isinstance(tc["args"], dict)
+    assert tc["args"].get(UNPARSEABLE_ARGS_MARKER) == "this is not json"
+
+
+def test_unparseable_args_precheck_emits_retriable_error_without_running_tool():
+    """RED before arus: an unparseable-args tool_call must short-circuit at the
+    tool-execution seam with a ToolMessage ERROR (so the LLM can re-emit valid
+    args), NOT invoke the tool. Budget must not be consumed."""
+    from langchain_core.messages import ToolMessage
+
+    from neograph._agent_cycle import _tool_call_precheck
+    from neograph._tool_loop import UNPARSEABLE_ARGS_MARKER
+    from neograph.tool import Tool, ToolBudgetTracker
+
+    ran: list = []
+
+    class _RecordingTool:
+        def invoke(self, args, config=None):
+            ran.append(args)
+            return "ok"
+
+    tracker = ToolBudgetTracker([Tool(name="search", budget=3)])
+    tc = {"name": "search", "args": {UNPARSEABLE_ARGS_MARKER: "not json"}, "id": "call_9"}
+
+    kind, payload = _tool_call_precheck(tc, tracker, {"search": _RecordingTool()})
+
+    assert kind == "msg", "unparseable args must short-circuit, not run the tool"
+    assert isinstance(payload, ToolMessage)
+    assert payload.content.startswith("error: could not parse tool args")
+    assert payload.tool_call_id == "call_9"
+    assert ran == [], "the tool must NOT be invoked for unparseable args"
+    # No budget consumed — precheck's 'msg' kind never records a call.
+    assert tracker.can_call("search")
 
 
 def test_empty_recovery_message_warns_when_coercion_yields_nothing(caplog, structlog_to_stdlib):

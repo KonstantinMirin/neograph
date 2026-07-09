@@ -80,7 +80,7 @@ This is the most important architectural fact. All three produce the same intern
 
 **One validator walker, not two.** `_validate_node_chain` in `_construct_validation.py` handles every surface. When `item.inputs` is a dict instance, `_check_fan_in_inputs` walks each `(upstream_name, expected_type)` pair and looks up the producer by `field_name`. Mismatches raise `ConstructError` with the specific key that failed and the type it saw vs expected.
 
-**The producer side is shared.** `effective_producer_type(item)` in `_construct_validation.py` computes "what type does this node write to the state bus, accounting for modifiers". It's the single source of truth for modifier-aware type effects.
+**The producer side is shared.** `effective_producer_type(item)` — defined in `_validation_types.py` and re-exported through `_construct_validation.py` (its `__all__`) — computes "what type does this node write to the state bus, accounting for modifiers". It's the single source of truth for modifier-aware type effects.
 
 **Rule for new modifiers that reshape state**: teach `effective_producer_type` about the new rule. The validator picks it up automatically. Do NOT re-inline modifier checks elsewhere — prior drift caused `neograph-8k3` and `neograph-ayq` before this helper existed.
 
@@ -176,6 +176,10 @@ Concrete rules derived from this:
 The leading-underscore on a *module* name (e.g. `_llm.py`, `_dispatch.py`) is a weak, advisory hint — it does NOT reliably signal public vs internal in either direction. Some unprefixed modules are internal-only (`factory.py`, `state.py`, `di.py`, `naming.py`), and some underscore-prefixed modules export public API through `__all__` (`_llm.py`, `_image.py`). **The single source of truth for what is public is the package facade: a symbol is public iff it is re-exported from `neograph/__init__.py` and listed in its `__all__`.** Do NOT infer a module's or symbol's visibility from its underscore prefix, and do NOT mass-rename to "fix" the mismatch pre-release — the churn is not worth it for one downstream consumer. When adding a new public symbol, wire it through `__init__.__all__`; when adding an internal one, no rename ceremony is required.
 
 **Review checklist item**: when reviewing a change that adds or moves a symbol, confirm its public/internal status is expressed through `neograph/__init__.py`'s `__all__` (the contract), not inferred from the module-name `_` prefix (advisory only).
+
+### Logging convention: module-level bare `get_logger()`
+
+Every module that logs binds a module-level logger with the **bare** call: `log = structlog.get_logger()` (no `__name__` or explicit name argument). structlog resolves the calling module for you, so passing `__name__` is redundant and just invites drift across modules. Do NOT write `get_logger(__name__)` or `get_logger("neograph")` for a new module-level `log`; copy the bare form the other ~12 modules use.
 
 ---
 
@@ -366,7 +370,7 @@ An LLM-mode node (`think`/`agent`/`act`) never runs its body, so — unlike scri
 ## Git workflow
 
 - **`main`** — stable. Only tagged releases and critical hotfix PRs.
-- **`develop`** — active development. All new work lands here. Currently at 0.3.0. Piarch and other downstream consumers pull from this branch via `uv add "neograph @ git+https://github.com/KonstantinMirin/neograph.git@develop"`.
+- **`develop`** — active development. All new work lands here. The authoritative version is `__version__` in `src/neograph/__init__.py` (do not hard-code it here — it drifts). Piarch and other downstream consumers pull from this branch via `uv add "neograph @ git+https://github.com/KonstantinMirin/neograph.git@develop"`.
 - **Release path**: when `develop` is ready, merge to `main`, tag `vX.Y.Z`, push the tag. `.github/workflows/publish.yml` triggers on `v*` tags and publishes to PyPI via Trusted Publishing (no tokens, OIDC-scoped).
 - **Version bumps**: on `develop` we increment normally. On `main` at the release tag we tag `vX.Y.Z`.
 

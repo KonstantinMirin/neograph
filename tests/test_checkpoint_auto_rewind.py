@@ -165,9 +165,10 @@ def _make_mid_model(score_type: type) -> type:
     rewind walks ``get_state_history``, which materializes every historical
     snapshot into the CURRENT state schema, so the pre-change checkpoint's
     ``score=int`` must still validate against ``score: float`` (pydantic widens
-    ``1 -> 1.0``). An incompatible change (e.g. ``int -> str``) would raise a raw
-    pydantic ``ValidationError`` inside the history walk BEFORE the rewind — a
-    separate latent robustness gap, out of scope for this proof."""
+    ``1 -> 1.0``). An incompatible change (e.g. ``int -> str``) raises a raw
+    pydantic ``ValidationError`` inside the history walk BEFORE the rewind; that
+    is now translated into a clean ``CheckpointSchemaError(invalidated_nodes=...)``
+    (neograph-1gdw) and pinned by the non-coercible cells below."""
 
     class _Enriched(BaseModel):
         score: score_type  # type: ignore[valid-type]
@@ -280,6 +281,76 @@ class TestAutoRewindEndToEnd:
         assert counters["report"] == 2, "downstream of the changed node must re-execute"
         assert counters["ingest"] == 1, "upstream of the change must NOT re-execute (over-rewind)"
         assert second["report"].summary == "score=2.0"
+
+    def test_sync_non_coercible_change_raises_clean_checkpoint_error(self, tmp_path):
+        """Non-coercible field-type change (int -> str) with ``auto_resume=True``:
+        the resume must raise a CLEAN ``CheckpointSchemaError(invalidated_nodes=...)``
+        surfaced BEFORE any node re-executes — NOT a raw pydantic ``ValidationError``
+        bubbling from inside the ``get_state_history`` walk.
+
+        ``get_state_history`` re-materializes every historical snapshot into the
+        CURRENT state schema. A coercible widening (int -> float, the TQ-01 cell)
+        validates cleanly and rewinds; a non-coercible change (int -> str) makes
+        pydantic reject the stored ``score=1`` and the raw ``ValidationError`` used
+        to bubble before the rewind decision ever ran. See neograph-1gdw.
+        """
+        db = str(tmp_path / "rewind_incompat.db")
+        thread = {"configurable": {"thread_id": "e2e-rewind-incompat-sync"}}
+        counters = {"ingest": 0, "enrich": 0, "report": 0}
+
+        with SqliteSaver.from_conn_string(db) as saver:
+            # v1: score is an int. Run the whole chain to completion.
+            graph_v1 = compile(
+                _counting_pipeline(counters, _make_mid_model(int), 1),
+                checkpointer=saver,
+                **build_test_compile_kwargs(),
+            )
+            run(graph_v1, input={"kick": "off"}, config=thread)
+            assert counters == {"ingest": 1, "enrich": 1, "report": 1}
+
+            # v2: SAME qualname, score is now a str — a NON-coercible change.
+            mid_v2 = _make_mid_model(str)
+            graph_v2 = compile(
+                _counting_pipeline(counters, mid_v2, "high"),
+                checkpointer=saver,
+                **build_test_compile_kwargs(),
+            )
+            with pytest.raises(CheckpointSchemaError) as exc_info:
+                run(graph_v2, input={"kick": "off"}, config=thread, auto_resume=True)
+
+        # The clean error carries the invalidated node set (changed node + downstream).
+        assert exc_info.value.invalidated_nodes == {"enrich", "report"}
+        # Surfaced BEFORE any re-execution: no counter ticked twice.
+        assert counters == {"ingest": 1, "enrich": 1, "report": 1}
+
+    async def test_async_non_coercible_change_raises_clean_checkpoint_error(self, tmp_path):
+        """Async twin of the non-coercible cell: the raw ``ValidationError`` used to
+        bubble from inside the ``aget_state_history`` walk; the resume must raise a
+        clean ``CheckpointSchemaError(invalidated_nodes=...)`` instead. neograph-1gdw."""
+        db = str(tmp_path / "rewind_incompat_async.db")
+        thread = {"configurable": {"thread_id": "e2e-rewind-incompat-async"}}
+        counters = {"ingest": 0, "enrich": 0, "report": 0}
+
+        async with AsyncSqliteSaver.from_conn_string(db) as saver:
+            graph_v1 = compile(
+                _counting_pipeline(counters, _make_mid_model(int), 1),
+                checkpointer=saver,
+                **build_test_compile_kwargs(),
+            )
+            await neograph.arun(graph_v1, input={"kick": "off"}, config=thread)
+            assert counters == {"ingest": 1, "enrich": 1, "report": 1}
+
+            mid_v2 = _make_mid_model(str)
+            graph_v2 = compile(
+                _counting_pipeline(counters, mid_v2, "high"),
+                checkpointer=saver,
+                **build_test_compile_kwargs(),
+            )
+            with pytest.raises(CheckpointSchemaError) as exc_info:
+                await neograph.arun(graph_v2, input={"kick": "off"}, config=thread, auto_resume=True)
+
+        assert exc_info.value.invalidated_nodes == {"enrich", "report"}
+        assert counters == {"ingest": 1, "enrich": 1, "report": 1}
 
     def test_auto_resume_false_raises_with_exact_invalidated_nodes(self, tmp_path):
         """Negative cell: with ``auto_resume=False`` the schema mismatch is a hard

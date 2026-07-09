@@ -16,8 +16,9 @@ from __future__ import annotations
 
 import inspect
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Any, get_args, get_origin, get_type_hints
+from typing import TYPE_CHECKING, Any, get_args, get_origin
 
+from neograph._hints import resolve_hints
 from neograph._normalize import normalize_outputs
 from neograph._validation_types import _fmt_type, _source_location, _types_compatible
 from neograph.errors import ConstructError
@@ -153,11 +154,12 @@ def _validate_merge_hooks(oracle: Oracle, node: Node, construct_name: str) -> No
                 construct=construct_name,
             )
 
-        # Type annotation check (best-effort — lambdas have no annotations)
-        try:
-            hints = get_type_hints(hook_fn, include_extras=False)
-        except (NameError, AttributeError, TypeError):
-            continue  # unresolvable annotations (lambdas, closures) — skip type check
+        # Type annotation check (best-effort — lambdas have no annotations).
+        # resolve_hints degrades PER-ANNOTATION: one unresolvable hint (a
+        # closure-scoped forward ref) no longer disables the whole check for the
+        # hook's other params — the offender is dropped + debug-logged, the rest
+        # survive. See _hints.resolve_hints / PAT-02.
+        hints = resolve_hints(hook_fn, include_extras=False, owner=hook_name)
 
         if not hints:
             continue

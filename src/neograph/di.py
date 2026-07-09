@@ -28,7 +28,7 @@ from neograph.errors import ExecutionError as _ExecutionError
 from neograph.errors import NonIdempotentReplayError as _NonIdempotentReplayError
 from neograph.errors import ResourceExpiredError as _ResourceExpiredError
 
-log = structlog.get_logger(__name__)
+log = structlog.get_logger()
 
 # Config['configurable'] key holding the consumer-supplied resource fetcher —
 # an ``async def fetch(uri) -> (content, mime)`` callable. Consumer-owned, exactly

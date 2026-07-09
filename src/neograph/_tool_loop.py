@@ -178,6 +178,27 @@ def _to_lc_messages(messages: list) -> list:
     return lc_messages
 
 
+# Sentinel key stamped onto a tool_call's ``args`` when the provider returned a
+# non-JSON args string we could not parse. The AIMessage schema requires ``args``
+# to be a dict, so we cannot leave the raw string in place — instead we stamp this
+# marker (preserving the raw string under it) so the tool-execution seam
+# (``_agent_cycle._tool_call_precheck``) can surface a RETRIABLE ToolMessage error
+# to the LLM INSTEAD of running the tool with empty args neograph-arus. Blanking
+# to ``{}`` used to silently run the tool with wrong (empty) arguments.
+UNPARSEABLE_ARGS_MARKER = "__neo_unparseable_tool_args__"
+
+
+def _unparseable_args_raw(tc: dict) -> str | None:
+    """Pure read: the raw un-parseable args string if ``tc``'s args carry the
+    marker, else None. The tool-execution seam consults this to decide whether to
+    emit a retriable error instead of invoking the tool. See neograph-arus."""
+    args = tc.get("args")
+    if isinstance(args, dict) and UNPARSEABLE_ARGS_MARKER in args:
+        raw = args[UNPARSEABLE_ARGS_MARKER]
+        return raw if isinstance(raw, str) else str(raw)
+    return None
+
+
 def _coerce_string_args_result(raw_result: Any) -> Any | None:
     """Pure: extract the message from a _generate/_agenerate result and json-load
     any string tool_call args. Returns the coerced message, or None if empty."""
@@ -189,27 +210,26 @@ def _coerce_string_args_result(raw_result: Any) -> Any | None:
         if hasattr(raw_msg, "tool_calls"):
             for tc in raw_msg.tool_calls:
                 if isinstance(tc.get("args"), str):
+                    raw = tc["args"]
                     try:
-                        tc["args"] = _json.loads(tc["args"])
+                        tc["args"] = _json.loads(raw)
                     except (_json.JSONDecodeError, TypeError):
                         # The provider returned tool_calls.args as a string that
                         # is ALSO not valid JSON — we cannot reconstruct the
-                        # intended arguments. Blanking to {} silently runs the
-                        # tool with empty args (wrong result for optional-arg
-                        # tools). Warn so the degradation is visible; the tool
-                        # still receives {} because the tool schema requires a
-                        # dict. NOTE: surfacing a retriable ToolMessage ERROR to
-                        # the LLM would be strictly better but requires the
-                        # ToolMessage-building path in _agent_cycle.py (out of
-                        # this task's file scope) — filed as follow-up (7ymj).
+                        # intended arguments. Rather than blank to {} (which
+                        # silently runs the tool with empty args), stamp the
+                        # unparseable marker with the raw string preserved: the
+                        # tool-execution seam (_agent_cycle._tool_call_precheck)
+                        # detects it and emits a retriable ToolMessage ERROR back
+                        # to the LLM so it can re-emit valid args. See neograph-arus.
                         log.warning(
                             "tool_calls_args_unparseable",
                             tool=tc.get("name"),
-                            raw_args=tc["args"],
+                            raw_args=raw,
                             hint="provider returned tool_calls.args as a non-JSON string; "
-                            "the tool will run with empty args",
+                            "surfacing a retriable error to the model instead of running with empty args",
                         )
-                        tc["args"] = {}
+                        tc["args"] = {UNPARSEABLE_ARGS_MARKER: raw}
         return raw_msg
     return None
 

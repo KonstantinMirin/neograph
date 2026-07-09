@@ -562,6 +562,5 @@ class TestDXImportGuardCoversDecorators:
         imported = _parse_neograph_imports(fake)
         offenders = sorted(guard.DX_MODULES & imported)
         assert offenders == ["decorators"], (
-            "The DX-import guard must flag an IR module that imports "
-            f"neograph.decorators; got offenders={offenders}"
+            f"The DX-import guard must flag an IR module that imports neograph.decorators; got offenders={offenders}"
         )

@@ -13,6 +13,7 @@ The test harness discovers it automatically.
 
 from __future__ import annotations
 
+import contextlib
 import importlib
 import re
 import sys
@@ -25,6 +26,56 @@ from tests.fakes import build_test_compile_kwargs
 FIXTURES = Path(__file__).parent / "check_fixtures"
 SHOULD_FAIL = sorted(FIXTURES.glob("should_fail/*.py"))
 SHOULD_PASS = sorted(FIXTURES.glob("should_pass/*.py"))
+
+
+@contextlib.contextmanager
+def _isolated_registries():
+    """Execute a fixture's import+compile against a private registry snapshot.
+
+    Fixture modules register into GLOBAL registries at *exec* time — scripted
+    fns via ``register_scripted`` and, critically, ``@merge_fn`` shims into the
+    process-wide ``_merge_fn_registry``. Two fixtures each defining a
+    ``@merge_fn def combine`` at DIFFERENT def sites trip that registry's
+    fail-loud different-site collision guard the moment both are present at once.
+
+    The autouse ``_clean_registries`` conftest fixture clears these dicts only at
+    each test's SETUP, so it does NOT prevent a leaked ``combine`` from a
+    neighbor (registrations persist past a test — there is no teardown clear)
+    from being live when this fixture execs. Under pytest-randomly ordering (and
+    per-process hash-seed variation) that leak-forward intermittently ERRORs a
+    check_fixture that is itself perfectly valid (neograph-cfp7).
+
+    This wraps each fixture's load+compile in a snapshot: every touched registry
+    is saved and CLEARED before exec (so the fixture never sees a neighbor's
+    residue) and RESTORED on exit (so the fixture's own registrations never leak
+    forward to poison a neighbor). Order-independent by construction — no
+    ``-p no:randomly`` pin.
+    """
+    from neograph._runtime_registry import _decoration_registry
+    from neograph._sidecar import _merge_fn_caller_ns, _merge_fn_registry
+    from neograph.spec_types import _type_registry
+    from tests.fakes import _TEST_CONDITIONS, _TEST_SCRIPTED, _TEST_TOOL_FACTORIES
+
+    plain_dicts = (
+        _merge_fn_registry,
+        _merge_fn_caller_ns,
+        _type_registry,
+        _TEST_SCRIPTED,
+        _TEST_CONDITIONS,
+        _TEST_TOOL_FACTORIES,
+    )
+    saved = [dict(d) for d in plain_dicts]
+    for d in plain_dicts:
+        d.clear()
+    # _decoration_registry holds the @merge_fn auto-registered scripted shim +
+    # conditions/tool_factories; its own session() snapshots/clears/restores.
+    with _decoration_registry.session():
+        try:
+            yield
+        finally:
+            for d, snap in zip(plain_dicts, saved, strict=True):
+                d.clear()
+                d.update(snap)
 
 
 def _load_fixture(path: Path) -> tuple[object | None, Exception | None]:
@@ -110,18 +161,19 @@ def test_should_fail(fixture_path: Path):
     """Fixture must raise during import or compile, matching CHECK_ERROR pattern."""
     pattern = _extract_error_pattern(fixture_path)
 
-    mod, import_error = _load_fixture(fixture_path)
+    with _isolated_registries():
+        mod, import_error = _load_fixture(fixture_path)
 
-    if import_error is not None:
-        # Error during import (e.g., ConstructError at assembly time)
-        if pattern:
-            assert re.search(pattern, str(import_error), re.IGNORECASE), (
-                f"Import raised {type(import_error).__name__}: {import_error}\nbut didn't match pattern: {pattern}"
-            )
-        return  # error caught, test passes
+        if import_error is not None:
+            # Error during import (e.g., ConstructError at assembly time)
+            if pattern:
+                assert re.search(pattern, str(import_error), re.IGNORECASE), (
+                    f"Import raised {type(import_error).__name__}: {import_error}\nbut didn't match pattern: {pattern}"
+                )
+            return  # error caught, test passes
 
-    # Module imported OK — try compiling
-    compile_error = _try_compile(mod)
+        # Module imported OK — try compiling
+        compile_error = _try_compile(mod)
     assert compile_error is not None, (
         f"Fixture {fixture_path.name} should have raised an error during import or compile, but didn't."
     )
@@ -139,11 +191,13 @@ def test_should_fail(fixture_path: Path):
 )
 def test_should_pass(fixture_path: Path):
     """Fixture must import and compile without errors."""
-    mod, import_error = _load_fixture(fixture_path)
-    assert import_error is None, f"Fixture {fixture_path.name} should import cleanly but raised: {import_error}"
+    with _isolated_registries():
+        mod, import_error = _load_fixture(fixture_path)
+        assert import_error is None, f"Fixture {fixture_path.name} should import cleanly but raised: {import_error}"
 
-    # should_pass fixtures compile once, WITH the placeholder LLM — an LLM-mode
-    # node (agent/act/think) legitimately requires runtime config, so the
-    # no-LLM second compile (a should_fail probe) must not gate should_pass.
-    compile_error = _try_compile(mod, try_without_llm=False)
+        # should_pass fixtures compile once, WITH the placeholder LLM — an
+        # LLM-mode node (agent/act/think) legitimately requires runtime config,
+        # so the no-LLM second compile (a should_fail probe) must not gate
+        # should_pass.
+        compile_error = _try_compile(mod, try_without_llm=False)
     assert compile_error is None, f"Fixture {fixture_path.name} should compile cleanly but raised: {compile_error}"

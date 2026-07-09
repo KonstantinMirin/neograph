@@ -65,6 +65,7 @@ from neograph._tool_loop import (
     _parse_final_turn,
     _prepare_tool_loop,
     _render_tool_result_for_llm,
+    _unparseable_args_raw,
 )
 from neograph.describe_type import type_display_name
 from neograph.errors import ConfigurationError
@@ -384,9 +385,24 @@ def _tool_call_precheck(
     tool_instances: dict,
 ) -> tuple[str, Any]:
     """Pure pre-invoke check for one tool call. Returns ``("msg", ToolMessage)``
-    to short-circuit (budget exhausted / unknown tool) or ``("run", tool_fn)``.
-    Single-sites the two short-circuit ToolMessage builders across the twins."""
+    to short-circuit (unparseable args / budget exhausted / unknown tool) or
+    ``("run", tool_fn)``. Single-sites the short-circuit ToolMessage builders
+    across the twins."""
     name = tc["name"]
+    # Unparseable args neograph-arus: the coercion path could not JSON-parse the
+    # provider's args string, so it stamped the marker rather than blanking to {}.
+    # Emit a RETRIABLE error to the LLM (so it can re-emit valid args) instead of
+    # running the tool with empty args. Checked first + no budget consumed: a
+    # malformed call is a re-emit, not a spent turn.
+    raw_args = _unparseable_args_raw(tc)
+    if raw_args is not None:
+        return "msg", ToolMessage(
+            content=(
+                f"error: could not parse tool args for '{name}': {raw_args!r}. "
+                "Re-emit the tool call with valid JSON arguments."
+            ),
+            tool_call_id=tc["id"],
+        )
     if not tracker.can_call(name):
         return "msg", ToolMessage(
             content=f"Tool '{name}' budget exhausted. Use remaining tools or respond.",
@@ -569,21 +585,45 @@ def make_agent_cycle_bodies(
             for tc in tool_calls
         ]
 
-    def tools_body(state: BaseModel, config: RunnableConfig) -> dict[str, Any]:
-        bus = adapt_state(state)
+    # ── extract-then-thin: the tools superstep's shared skeleton ──
+    # Both twins share the SAME preamble (read pending tool_calls + run the two
+    # loop guards) and the SAME postamble (persist call counts, set forced-final
+    # on exhaustion, assemble the update). Divergence is confined to the tp-build
+    # seam (sync ``_build_turn_prep`` vs async ``_abuild_turn_prep``) and the
+    # execution seam (``_run_tool_calls`` vs ``_arun_tool_calls``) — the sync path
+    # runs sequentially, the async path pre-reserves budget then gathers.
+    def _tools_prelude(bus: Any, tp: _TurnPrep, budget: dict[str, Any]) -> tuple[dict[str, Any] | None, list, Any]:
+        """Read the pending tool_calls and run the two loop guards. Returns
+        ``(early_return, tool_calls, tracker)``; a non-None ``early_return`` means
+        a guard fired (forced-final) and the caller returns it verbatim, in which
+        case ``tracker`` is None."""
         channel_msgs = bus.get(msgs_key) or []
-        budget = _init_budget(bus.get(budget_key))
-        tp = _build_turn_prep(node, runtime, tfl, state, config)
         last = channel_msgs[-1] if channel_msgs else None
         tool_calls = list(getattr(last, "tool_calls", None) or [])
-
         max_iter_hit, budget_hit = _tools_guards(tp, budget)
         if max_iter_hit or budget_hit:
             _emit_limit_event(tp, budget, max_iter_hit, budget_hit)
             budget["forced_final"] = True
-            return {msgs_key: _limit_messages(tool_calls, max_iter_hit), budget_key: budget}
+            return {msgs_key: _limit_messages(tool_calls, max_iter_hit), budget_key: budget}, tool_calls, None
+        return None, tool_calls, _tracker_from_budget(node, budget)
 
-        tracker = _tracker_from_budget(node, budget)
+    def _tools_result(
+        new_msgs: list, interactions: list, refs: list, tracker: Any, budget: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Persist per-tool call counts, force-final on full exhaustion, assemble
+        the state update. Shared postamble for both twins."""
+        budget["calls"] = dict(tracker._counts)
+        if tracker.all_exhausted():
+            budget["forced_final"] = True
+        return {msgs_key: new_msgs, tlog_key: interactions, manifest_key: refs, budget_key: budget}
+
+    def _run_tool_calls(
+        tool_calls: list, tracker: Any, tp: _TurnPrep, config: RunnableConfig
+    ) -> tuple[list, list, list]:
+        """Sync execution seam: precheck → invoke → advance-then-record, one call
+        at a time in tool_call order. Divergent twin of ``_arun_tool_calls``
+        (which pre-reserves budget before a concurrent gather); the sync path has
+        no gather, so it advances the tracker inline per successful call."""
         new_msgs: list = []
         interactions: list = []
         refs: list = []
@@ -602,37 +642,22 @@ def make_agent_cycle_bodies(
             interactions.append(interaction)
             refs.extend(_lift_resource_refs(result, tc, idempotent_by_tool.get(tc["name"], False)))
             new_msgs.append(msg)
+        return new_msgs, interactions, refs
 
-        budget["calls"] = dict(tracker._counts)
-        if tracker.all_exhausted():
-            budget["forced_final"] = True
-        return {msgs_key: new_msgs, tlog_key: interactions, manifest_key: refs, budget_key: budget}
-
-    async def atools_body(state: BaseModel, config: RunnableConfig) -> dict[str, Any]:
-        bus = adapt_state(state)
-        channel_msgs = bus.get(msgs_key) or []
-        budget = _init_budget(bus.get(budget_key))
-        tp = await _abuild_turn_prep(node, runtime, tfl, state, config)
-        last = channel_msgs[-1] if channel_msgs else None
-        tool_calls = list(getattr(last, "tool_calls", None) or [])
-
-        max_iter_hit, budget_hit = _tools_guards(tp, budget)
-        if max_iter_hit or budget_hit:
-            _emit_limit_event(tp, budget, max_iter_hit, budget_hit)
-            budget["forced_final"] = True
-            return {msgs_key: _limit_messages(tool_calls, max_iter_hit), budget_key: budget}
-
-        tracker = _tracker_from_budget(node, budget)
-
+    async def _arun_tool_calls(
+        tool_calls: list, tracker: Any, tp: _TurnPrep, config: RunnableConfig
+    ) -> tuple[list, list, list]:
+        """Async execution seam — the ONLY divergence from ``_run_tool_calls`` is
+        concurrency neograph-dyy7. CRITICAL: Phase 1 pre-reserves each runnable
+        call's budget SEQUENTIALLY, in tool_call order, BEFORE the gather — do NOT
+        move ``record_call`` inside the gather. Reserving up front keeps per-tool
+        budget enforcement identical to the sync twin: two parallel calls to a
+        budget=1 tool see the first's reservation, so the second short-circuits. A
+        plain gather-then-record would let both through because their can_call
+        checks would race ahead of any record_call. ``plan`` preserves the
+        original tool_call order so the ToolMessage / ToolInteraction message
+        history holds regardless of which coroutine finishes first."""
         # Phase 1 (sequential, in tool_call order): precheck + PRE-RESERVE budget.
-        # Reserving each runnable call's budget BEFORE the concurrent gather keeps
-        # per-tool budget enforcement identical to the sync twin: two parallel
-        # calls to a budget=1 tool see the first's reservation, so the second
-        # short-circuits. A plain gather-then-record would let both through
-        # because their can_call checks would race ahead of any record_call.
-        # ``plan`` preserves the original tool_call order — the ToolMessage /
-        # ToolInteraction message-history contract holds regardless of which
-        # coroutine finishes first.
         plan: list[tuple[str, Any]] = []  # ("msg", ToolMessage) | ("run", tc)
         coros = []
         for tc in tool_calls:
@@ -662,11 +687,27 @@ def make_agent_cycle_bodies(
             interactions.append(interaction)
             refs.extend(_lift_resource_refs(result, tc, idempotent_by_tool.get(tc["name"], False)))
             new_msgs.append(msg)
+        return new_msgs, interactions, refs
 
-        budget["calls"] = dict(tracker._counts)
-        if tracker.all_exhausted():
-            budget["forced_final"] = True
-        return {msgs_key: new_msgs, tlog_key: interactions, manifest_key: refs, budget_key: budget}
+    def tools_body(state: BaseModel, config: RunnableConfig) -> dict[str, Any]:
+        bus = adapt_state(state)
+        budget = _init_budget(bus.get(budget_key))
+        tp = _build_turn_prep(node, runtime, tfl, state, config)
+        early, tool_calls, tracker = _tools_prelude(bus, tp, budget)
+        if early is not None:
+            return early
+        new_msgs, interactions, refs = _run_tool_calls(tool_calls, tracker, tp, config)
+        return _tools_result(new_msgs, interactions, refs, tracker, budget)
+
+    async def atools_body(state: BaseModel, config: RunnableConfig) -> dict[str, Any]:
+        bus = adapt_state(state)
+        budget = _init_budget(bus.get(budget_key))
+        tp = await _abuild_turn_prep(node, runtime, tfl, state, config)
+        early, tool_calls, tracker = _tools_prelude(bus, tp, budget)
+        if early is not None:
+            return early
+        new_msgs, interactions, refs = await _arun_tool_calls(tool_calls, tracker, tp, config)
+        return _tools_result(new_msgs, interactions, refs, tracker, budget)
 
     # ── {node}__parse ─────────────────────────────────────────────────────
     def _finish_and_shape(state, config, tp, channel_msgs, tool_interactions, budget, parse_result, fallback_usage):

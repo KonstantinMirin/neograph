@@ -133,9 +133,19 @@ async def _aexecute_node(
     Structurally identical to the sync path: every pure preamble/postamble
     helper (adapt_state, _inject_oracle_config, _extract_input, _apply_skip_when,
     _extract_context, NodeInput shaping, _build_state_update, logging, timing) is
-    reused VERBATIM. The ONLY divergence is the terminal call —
-    ``await dispatch.aexecute(...)`` instead of ``dispatch.execute(...)`` — so the
-    sync and async node paths cannot silently drift (Core Invariant).
+    reused VERBATIM. There are exactly TWO sanctioned divergences from the sync
+    body, both enumerated (and count-pinned) by
+    ``tests/test_guards_async_dispatch.py::TestSyncAsyncNodeBodyDivergence``:
+
+    1. Resource-manifest injection — the async path adds
+       ``config = _inject_resource_manifest(state, node, config)`` after the
+       Oracle-config injection; the sync path does NOT (agent/act resource
+       lifting is driven only on the async runner path).
+    2. The terminal dispatch call — ``await dispatch.aexecute(...)`` here vs
+       ``dispatch.execute(...)`` in the sync twin.
+
+    Any THIRD divergence fails the guard, so the two node paths cannot silently
+    drift beyond these two lines (Core Invariant).
     """
     field_name = field_name_for(node.name)
     node_log = log.bind(node=node.name, mode=node.mode, **_run_id_binds(config))

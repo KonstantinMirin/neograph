@@ -626,3 +626,66 @@ class TestNoRawOutputsInFanInWiring:
         fan-in disease."""
         assert not _subscript_assigns_raw_outputs("output_model = node.outputs\n")
         assert not _subscript_assigns_raw_outputs("f(node.outputs)\n")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# neograph-yrph item 3 — the modifier-combo mapping (frozenset -> ModifierCombo)
+# lives once as a module-level `_COMBO_MAP`. It was previously duplicated
+# BYTE-FOR-BYTE across classify_modifiers() and ModifierSet.combo, so a new combo
+# had to be added twice or classification silently diverged. A second inline copy
+# is a dict literal whose values are `ModifierCombo.*` members — banned here.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _combo_map_dict_literals(source: str) -> int:
+    """Count dict literals mapping (mostly) to ``ModifierCombo.<member>`` values.
+
+    A combo map has >=4 values that are ``ModifierCombo`` attribute accesses
+    (matches on the ``ModifierCombo`` prefix, alias-tolerant). The module-level
+    `_COMBO_MAP` is the single sanctioned instance."""
+    tree = ast.parse(source)
+    count = 0
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Dict):
+            continue
+        combo_values = sum(
+            1
+            for v in node.values
+            if isinstance(v, ast.Attribute) and isinstance(v.value, ast.Name) and v.value.id == "ModifierCombo"
+        )
+        if combo_values >= 4:
+            count += 1
+    return count
+
+
+class TestComboMapMonopoly:
+    """neograph-yrph item 3: the frozenset->ModifierCombo mapping is defined ONCE
+    (module-level `_COMBO_MAP` in modifiers.py). classify_modifiers() and
+    ModifierSet.combo both read it; neither re-inlines a second copy. AST guard +
+    positive/negative meta-tests (AST — no regex-slip case)."""
+
+    def test_combo_map_dict_literal_appears_exactly_once(self):
+        source = (SRC_DIR / "modifiers.py").read_text()
+        n = _combo_map_dict_literals(source)
+        assert n == 1, (
+            f"\nThe frozenset->ModifierCombo mapping appears as {n} dict literal(s) "
+            "in modifiers.py (must be exactly 1 — the module-level _COMBO_MAP). "
+            "classify_modifiers() and ModifierSet.combo must both read _COMBO_MAP, "
+            "not re-inline the mapping (a second copy silently diverges classification)."
+        )
+
+    # --- meta-tests ---
+
+    def test_meta_scanner_catches_duplicate_combo_map(self):
+        dup = (
+            "def a():\n"
+            "    m = {frozenset(): ModifierCombo.BARE, frozenset({'each'}): ModifierCombo.EACH,"
+            " frozenset({'oracle'}): ModifierCombo.ORACLE, frozenset({'loop'}): ModifierCombo.LOOP}\n"
+            "def b():\n"
+            "    m = {frozenset(): ModifierCombo.BARE, frozenset({'each'}): ModifierCombo.EACH,"
+            " frozenset({'oracle'}): ModifierCombo.ORACLE, frozenset({'loop'}): ModifierCombo.LOOP}\n"
+        )
+        assert _combo_map_dict_literals(dup) == 2
+
+    def test_meta_scanner_ignores_unrelated_dict(self):
+        assert _combo_map_dict_literals("m = {'a': 1, 'b': 2, 'c': 3, 'd': 4}\n") == 0

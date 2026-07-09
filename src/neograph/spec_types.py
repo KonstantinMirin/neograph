@@ -20,7 +20,7 @@ from pydantic import BaseModel, create_model
 
 from neograph.errors import ConfigurationError
 
-log = structlog.get_logger(__name__)
+log = structlog.get_logger()
 
 _type_registry: dict[str, type[BaseModel]] = {}
 

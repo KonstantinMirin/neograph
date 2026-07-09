@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from enum import Enum, auto
-from typing import TYPE_CHECKING, Any, Literal, Protocol, Self, runtime_checkable
+from typing import TYPE_CHECKING, Any, Literal, NamedTuple, Protocol, Self, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, field_validator
 from typing_extensions import TypeVar
@@ -82,6 +82,24 @@ class ModifierCombo(Enum):
     EACH_ORACLE_OPERATOR = auto()  # Each + Oracle + Operator
 
 
+# Single source of truth: modifier-name frozenset -> ModifierCombo. Both
+# classify_modifiers() and ModifierSet.combo read this ONE map so a new combo
+# is added exactly once. A structural guard (test_guards_*) bans a re-planted
+# inline copy — prior byte-for-byte duplication silently diverged classification.
+_COMBO_MAP: dict[frozenset[str], ModifierCombo] = {
+    frozenset(): ModifierCombo.BARE,
+    frozenset({"each"}): ModifierCombo.EACH,
+    frozenset({"oracle"}): ModifierCombo.ORACLE,
+    frozenset({"loop"}): ModifierCombo.LOOP,
+    frozenset({"operator"}): ModifierCombo.OPERATOR,
+    frozenset({"each", "oracle"}): ModifierCombo.EACH_ORACLE,
+    frozenset({"each", "operator"}): ModifierCombo.EACH_OPERATOR,
+    frozenset({"oracle", "operator"}): ModifierCombo.ORACLE_OPERATOR,
+    frozenset({"loop", "operator"}): ModifierCombo.LOOP_OPERATOR,
+    frozenset({"each", "oracle", "operator"}): ModifierCombo.EACH_ORACLE_OPERATOR,
+}
+
+
 def classify_modifiers(item: ConstructItem) -> tuple[ModifierCombo, dict]:
     """Classify an item's modifiers into a ModifierCombo enum value.
 
@@ -127,20 +145,7 @@ def classify_modifiers(item: ConstructItem) -> tuple[ModifierCombo, dict]:
 
     # Map to enum
     has = frozenset(mods.keys())
-    combo_map = {
-        frozenset(): ModifierCombo.BARE,
-        frozenset({"each"}): ModifierCombo.EACH,
-        frozenset({"oracle"}): ModifierCombo.ORACLE,
-        frozenset({"loop"}): ModifierCombo.LOOP,
-        frozenset({"operator"}): ModifierCombo.OPERATOR,
-        frozenset({"each", "oracle"}): ModifierCombo.EACH_ORACLE,
-        frozenset({"each", "operator"}): ModifierCombo.EACH_OPERATOR,
-        frozenset({"oracle", "operator"}): ModifierCombo.ORACLE_OPERATOR,
-        frozenset({"loop", "operator"}): ModifierCombo.LOOP_OPERATOR,
-        frozenset({"each", "oracle", "operator"}): ModifierCombo.EACH_ORACLE_OPERATOR,
-    }
-
-    combo = combo_map.get(has)
+    combo = _COMBO_MAP.get(has)
     if combo is None:
         raise ConstructError.build(
             "Invalid modifier combination",
@@ -579,6 +584,43 @@ class Loop(Modifier, frozen=True):
             )
 
 
+class _SlotRule(NamedTuple):
+    """One row of the modifier -> ModifierSet-slot mapping.
+
+    ``excludes`` lists mutual-exclusion conflicts as (conflicting_slot,
+    error_message, hint) triples, checked when the incoming modifier lands.
+    """
+
+    mod_type: type[Modifier]
+    slot: str  # ModifierSet field name to populate
+    label: str  # human-facing modifier name for duplicate errors
+    excludes: tuple[tuple[str, str, str], ...]
+
+
+# Single source of truth for ModifierSet.with_modifier: which slot each
+# modifier occupies and which sibling slots it may not coexist with. Adding a
+# new modifier means adding ONE row here, not a fifth isinstance branch.
+_EACH_LOOP_CONFLICT = (
+    "Cannot combine Each and Loop on the same item",
+    "Use a sub-construct with Loop inside an Each fan-out instead",
+)
+_ORACLE_LOOP_CONFLICT = (
+    "Cannot combine Oracle and Loop on the same item",
+    "Use a sub-construct: nest the Loop body inside an Oracle ensemble, or vice versa",
+)
+_SLOT_RULES: tuple[_SlotRule, ...] = (
+    _SlotRule(Each, "each", "Each", (("loop", *_EACH_LOOP_CONFLICT),)),
+    _SlotRule(Oracle, "oracle", "Oracle", (("loop", *_ORACLE_LOOP_CONFLICT),)),
+    _SlotRule(
+        Loop,
+        "loop",
+        "Loop",
+        (("each", *_EACH_LOOP_CONFLICT), ("oracle", *_ORACLE_LOOP_CONFLICT)),
+    ),
+    _SlotRule(Operator, "operator", "Operator", ()),
+)
+
+
 class ModifierSet(BaseModel, frozen=True):
     """Validated, typed modifier configuration.
 
@@ -606,19 +648,7 @@ class ModifierSet(BaseModel, frozen=True):
             has.add("loop")
         if self.operator is not None:
             has.add("operator")
-        combo_map = {
-            frozenset(): ModifierCombo.BARE,
-            frozenset({"each"}): ModifierCombo.EACH,
-            frozenset({"oracle"}): ModifierCombo.ORACLE,
-            frozenset({"loop"}): ModifierCombo.LOOP,
-            frozenset({"operator"}): ModifierCombo.OPERATOR,
-            frozenset({"each", "oracle"}): ModifierCombo.EACH_ORACLE,
-            frozenset({"each", "operator"}): ModifierCombo.EACH_OPERATOR,
-            frozenset({"oracle", "operator"}): ModifierCombo.ORACLE_OPERATOR,
-            frozenset({"loop", "operator"}): ModifierCombo.LOOP_OPERATOR,
-            frozenset({"each", "oracle", "operator"}): ModifierCombo.EACH_ORACLE_OPERATOR,
-        }
-        return combo_map[frozenset(has)]
+        return _COMBO_MAP[frozenset(has)]
 
     def model_post_init(self, __context: Any) -> None:
         # Each + Loop mutual exclusion
@@ -639,70 +669,34 @@ class ModifierSet(BaseModel, frozen=True):
 
         Raises ConstructError for duplicate modifiers (slot already occupied)
         and for illegal combinations (Each+Loop, Oracle+Loop).
+
+        The modifier-type -> slot mapping and its mutual-exclusion rules are
+        driven from the single ``_SLOT_RULES`` table so a new modifier is
+        described once, not open-coded across four isinstance branches.
         """
 
-        if isinstance(mod, Each):
-            if self.each is not None:
-                raise ConstructError.build(
-                    "Duplicate Each modifier",
-                    found="An Each is already applied to this item",
-                    hint="Use a sub-construct if you need nested composition",
-                )
-            # Each + Loop mutual exclusion
-            if self.loop is not None:
-                raise ConstructError.build(
-                    "Cannot combine Each and Loop on the same item",
-                    hint="Use a sub-construct with Loop inside an Each fan-out instead",
-                )
-            return self.model_copy(update={"each": mod})
-        elif isinstance(mod, Oracle):
-            if self.oracle is not None:
-                raise ConstructError.build(
-                    "Duplicate Oracle modifier",
-                    found="An Oracle is already applied to this item",
-                    hint="Use a sub-construct if you need nested composition",
-                )
-            # Oracle + Loop mutual exclusion
-            if self.loop is not None:
-                raise ConstructError.build(
-                    "Cannot combine Oracle and Loop on the same item",
-                    hint="Use a sub-construct: nest the Loop body inside an Oracle ensemble, or vice versa",
-                )
-            return self.model_copy(update={"oracle": mod})
-        elif isinstance(mod, Loop):
-            if self.loop is not None:
-                raise ConstructError.build(
-                    "Duplicate Loop modifier",
-                    found="A Loop is already applied to this item",
-                    hint="Use a sub-construct if you need nested composition",
-                )
-            # Loop + Each mutual exclusion
-            if self.each is not None:
-                raise ConstructError.build(
-                    "Cannot combine Each and Loop on the same item",
-                    hint="Use a sub-construct with Loop inside an Each fan-out instead",
-                )
-            # Loop + Oracle mutual exclusion
-            if self.oracle is not None:
-                raise ConstructError.build(
-                    "Cannot combine Oracle and Loop on the same item",
-                    hint="Use a sub-construct: nest the Loop body inside an Oracle ensemble, or vice versa",
-                )
-            return self.model_copy(update={"loop": mod})
-        elif isinstance(mod, Operator):
-            if self.operator is not None:
-                raise ConstructError.build(
-                    "Duplicate Operator modifier",
-                    found="An Operator is already applied to this item",
-                    hint="Use a sub-construct if you need nested composition",
-                )
-            return self.model_copy(update={"operator": mod})
-        else:
+        rule = next((r for r in _SLOT_RULES if isinstance(mod, r.mod_type)), None)
+        if rule is None:
             raise ConstructError.build(
                 "Unknown modifier type",
                 expected="Each, Oracle, Loop, or Operator",
                 found=type(mod).__name__,
             )
+
+        # Duplicate: this slot is already occupied.
+        if getattr(self, rule.slot) is not None:
+            raise ConstructError.build(
+                f"Duplicate {rule.label} modifier",
+                found=f"A{'n' if rule.label[0] in 'AEIOU' else ''} {rule.label} is already applied to this item",
+                hint="Use a sub-construct if you need nested composition",
+            )
+
+        # Mutual-exclusion: any conflicting slot already occupied.
+        for conflict_slot, message, hint in rule.excludes:
+            if getattr(self, conflict_slot) is not None:
+                raise ConstructError.build(message, hint=hint)
+
+        return self.model_copy(update={rule.slot: mod})
 
     def to_list(self) -> list[Modifier]:
         """Return modifiers as a list (backward compat bridge)."""

@@ -20,6 +20,7 @@ from uuid import uuid4
 import structlog
 from langchain_core.runnables import RunnableConfig
 from langgraph.types import Command
+from pydantic import ValidationError
 
 from neograph._compiled import CompiledNeograph
 from neograph._ir_branch import iter_with_arms
@@ -222,6 +223,16 @@ def _auto_resume_from_divergence(
     invalidated node pending in ``.next``, raises ``CheckpointSchemaError``
     (via ``_raise_no_rewind_point``) rather than silently resuming from the
     tip with stale results. See neograph-v63o.
+
+    Fail-clean on a NON-COERCIBLE change: ``get_state_history`` re-materializes
+    every historical snapshot into the CURRENT state schema (to compute each
+    ``.next``). A coercible widening (int -> float) validates and the walk
+    proceeds; a non-coercible change (int -> str) makes pydantic reject the
+    stored value and raises a raw ``ValidationError`` from INSIDE the walk. We
+    translate that into the same schema-divergence signal the rest of the seam
+    speaks — ``CheckpointSchemaError(invalidated_nodes=...)`` via
+    ``_raise_incompatible_schema`` — surfaced BEFORE any node re-executes. See
+    neograph-1gdw.
     """
     if not invalidated:
         return
@@ -230,12 +241,15 @@ def _auto_resume_from_divergence(
     # whose ``next`` intersects the invalidated set — that's the rewind point
     # that re-executes every invalidated node, not just the latest one.
     rewind_checkpoint_id = None
-    for state_snapshot in graph.get_state_history(config):
-        next_nodes = set(state_snapshot.next)
-        if next_nodes & invalidated:
-            candidate = state_snapshot.config.get("configurable", {}).get("checkpoint_id")
-            if candidate is not None:
-                rewind_checkpoint_id = candidate
+    try:
+        for state_snapshot in graph.get_state_history(config):
+            next_nodes = set(state_snapshot.next)
+            if next_nodes & invalidated:
+                candidate = state_snapshot.config.get("configurable", {}).get("checkpoint_id")
+                if candidate is not None:
+                    rewind_checkpoint_id = candidate
+    except ValidationError as exc:
+        _raise_incompatible_schema(invalidated, exc)
     if rewind_checkpoint_id is None:
         _raise_no_rewind_point(invalidated)
     config.setdefault("configurable", {})["checkpoint_id"] = rewind_checkpoint_id
@@ -262,6 +276,34 @@ def _raise_no_rewind_point(invalidated: set[str]) -> NoReturn:
         "new thread_id, or invalidate this checkpoint to re-run from scratch.",
         invalidated_nodes=invalidated,
     )
+
+
+def _raise_incompatible_schema(invalidated: set[str], exc: ValidationError) -> NoReturn:
+    """Fail clean when a NON-COERCIBLE schema change makes the checkpoint history
+    un-materializable into the current state schema.
+
+    Single-sited between the sync and async rewind twins. LangGraph's
+    ``get_state_history`` re-validates every historical snapshot against the
+    CURRENT state model to compute its ``.next``. A coercible widening (int ->
+    float) validates cleanly, so the walk succeeds and the rewind proceeds. A
+    non-coercible change (int -> str) makes pydantic reject the stored value, and
+    the raw ``ValidationError`` bubbles from INSIDE the walk before any rewind
+    decision runs. We translate it into the same schema-divergence signal the
+    rest of the seam speaks — ``CheckpointSchemaError`` carrying
+    ``invalidated_nodes`` — surfaced BEFORE any node re-executes, the same
+    contract as ``auto_resume=False`` and ``_raise_no_rewind_point``. See
+    neograph-1gdw.
+    """
+    raise CheckpointSchemaError(
+        "auto_resume cannot rewind across an INCOMPATIBLE schema change. The "
+        f"checkpoint schema changed and these nodes are invalidated: {sorted(invalidated)}, "
+        "but the stored checkpoint's values cannot be coerced into the new state "
+        f"schema ({type(exc).__name__} while re-materializing the thread's history). "
+        "A coercible widening (e.g. int -> float) resumes cleanly; a non-coercible "
+        "change (e.g. int -> str) cannot. Start a new thread_id, or invalidate this "
+        "checkpoint to re-run from scratch.",
+        invalidated_nodes=invalidated,
+    ) from exc
 
 
 def _compute_invalidated_nodes(graph: CompiledNeograph, channel_values: Any) -> set[str]:
@@ -664,6 +706,29 @@ def _evict_run_cache(config: RunnableConfig | None) -> None:
         evict_run(run_id)
 
 
+def _finalize_prepare_config(
+    graph: CompiledNeograph,
+    config: RunnableConfig | None,
+    *,
+    stream_custom: bool,
+    observe: bool | str | None,
+) -> RunnableConfig | None:
+    """The shared pre-engine config TAIL, run verbatim by both ``_prepare`` and
+    ``_aprepare`` after their (awaited-vs-not) mode dispatch and run-id mint.
+
+    Applies the last, driver-agnostic config normalizations — stream-custom flag,
+    Langfuse callback merge, agent recursion-limit floor. Extracted per the
+    extract-then-thin convention so the sync/async divergence stays confined to
+    the awaited checkpoint-I/O seam. See neograph-yrph. Nothing here awaits, so
+    one function serves both twins; the run-id mint stays inline in each twin so
+    the mint-symmetry guard pins it per-driver."""
+    if stream_custom:
+        config = _mark_stream_custom(config)
+    config = _merge_observe_callbacks(config, observe)
+    config = _ensure_agent_recursion_limit(graph, config)
+    return config
+
+
 def _prepare(
     graph: CompiledNeograph,
     *,
@@ -719,10 +784,7 @@ def _prepare(
     # execution attempt (re-minted on resume because _prepare re-runs), stable
     # across every superstep of this run. Config-only, so it never enters state.
     config = _mint_run_id(config)
-    if stream_custom:
-        config = _mark_stream_custom(config)
-    config = _merge_observe_callbacks(config, observe)
-    config = _ensure_agent_recursion_limit(graph, config)
+    config = _finalize_prepare_config(graph, config, stream_custom=stream_custom, observe=observe)
     return engine_input, config
 
 
@@ -911,18 +973,24 @@ async def _aauto_resume_from_divergence(
     ``aget_state_history`` is an async generator — consumed via ``async for``,
     never awaited. Identical rewind-checkpoint-id selection + config mutation,
     including the fail-loud ``_raise_no_rewind_point`` raise when no snapshot has
-    an invalidated node pending in ``.next``. See neograph-v63o.
+    an invalidated node pending in ``.next`` and the fail-clean
+    ``_raise_incompatible_schema`` translation of a non-coercible-change
+    ``ValidationError`` bubbling from the history re-materialization. See
+    neograph-v63o and neograph-1gdw.
     """
     if not invalidated:
         return
 
     rewind_checkpoint_id = None
-    async for state_snapshot in graph.aget_state_history(config):
-        next_nodes = set(state_snapshot.next)
-        if next_nodes & invalidated:
-            candidate = state_snapshot.config.get("configurable", {}).get("checkpoint_id")
-            if candidate is not None:
-                rewind_checkpoint_id = candidate
+    try:
+        async for state_snapshot in graph.aget_state_history(config):
+            next_nodes = set(state_snapshot.next)
+            if next_nodes & invalidated:
+                candidate = state_snapshot.config.get("configurable", {}).get("checkpoint_id")
+                if candidate is not None:
+                    rewind_checkpoint_id = candidate
+    except ValidationError as exc:
+        _raise_incompatible_schema(invalidated, exc)
     if rewind_checkpoint_id is None:
         _raise_no_rewind_point(invalidated)
     config.setdefault("configurable", {})["checkpoint_id"] = rewind_checkpoint_id
@@ -944,8 +1012,9 @@ async def _aprepare(
     the sync helpers touch the checkpointer I/O — ``await
     _ahas_existing_checkpoint`` / ``await _averify_checkpoint_schema`` (which
     ``async for`` the async state history). The pure helpers
-    (_prepare_resume_config / _prepare_new_input / _preflight_di_check /
-    _mark_stream_custom) are shared verbatim with the sync path.
+    (_prepare_resume_config / _prepare_new_input / _preflight_di_check) and the
+    ``_finalize_prepare_config`` tail are shared verbatim with the sync path, so
+    divergence is confined to the awaited checkpoint-I/O seam. See neograph-yrph.
     """
     _assert_checkpointer_matches_driver(graph, is_async=True)
     if resume is not None:
@@ -967,13 +1036,10 @@ async def _aprepare(
         engine_input = None
 
     # Mint the per-run id LAST, after all config normalization — a fresh id per
-    # execution attempt (re-minted on resume because _prepare re-runs), stable
+    # execution attempt (re-minted on resume because _aprepare re-runs), stable
     # across every superstep of this run. Config-only, so it never enters state.
     config = _mint_run_id(config)
-    if stream_custom:
-        config = _mark_stream_custom(config)
-    config = _merge_observe_callbacks(config, observe)
-    config = _ensure_agent_recursion_limit(graph, config)
+    config = _finalize_prepare_config(graph, config, stream_custom=stream_custom, observe=observe)
     return engine_input, config
 
 

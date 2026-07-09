@@ -1282,7 +1282,7 @@ class TestSubgraphFactory:
 
 
 class TestReducerEdgeCasesNew:
-    """Reducer edge cases: _append_loop_result with None, _append_tagged."""
+    """Reducer edge cases: _append_loop_result with None, _concat_reducer."""
 
     def test_append_loop_result_starts_from_none(self):
         """_append_loop_result with None existing creates list (line 33)."""
@@ -1294,25 +1294,25 @@ class TestReducerEdgeCasesNew:
         result = _append_loop_result(["first"], "second")
         assert result == ["first", "second"]
 
-    def test_append_tagged_starts_from_none(self):
-        """_append_tagged with None existing creates list (line 49)."""
-        from neograph.state import _append_tagged
+    def test_concat_reducer_starts_from_none(self):
+        """_concat_reducer with None existing creates list."""
+        from neograph.state import _concat_reducer
 
-        result = _append_tagged(None, [("key", "val")])
+        result = _concat_reducer(None, [("key", "val")])
         assert result == [("key", "val")]
 
-    def test_append_tagged_non_list_new(self):
-        """_append_tagged with non-list new value appends it (line 52)."""
-        from neograph.state import _append_tagged
+    def test_concat_reducer_non_list_new(self):
+        """_concat_reducer with non-list new value appends it."""
+        from neograph.state import _concat_reducer
 
-        result = _append_tagged([], ("key", "val"))
+        result = _concat_reducer([], ("key", "val"))
         assert result == [("key", "val")]
 
-    def test_append_tagged_extends_existing(self):
-        """_append_tagged extends existing list with new list."""
-        from neograph.state import _append_tagged
+    def test_concat_reducer_extends_existing(self):
+        """_concat_reducer extends existing list with new list."""
+        from neograph.state import _concat_reducer
 
-        result = _append_tagged([("a", 1)], [("b", 2)])
+        result = _concat_reducer([("a", 1)], [("b", 2)])
         assert result == [("a", 1), ("b", 2)]
 
 

@@ -92,9 +92,7 @@ class TestWrongVariantType:
         with pytest.raises(ConstructError) as excinfo:
             Construct("test", nodes=[n])
         msg = str(excinfo.value)
-        assert "variants param 'variants'" in msg, (
-            f"message should name the VARIANTS param ('variants'), got: {msg}"
-        )
+        assert "variants param 'variants'" in msg, f"message should name the VARIANTS param ('variants'), got: {msg}"
         assert "'result'" not in msg, f"message wrongly names the RESULT param: {msg}"
 
 

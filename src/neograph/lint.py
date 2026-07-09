@@ -926,8 +926,17 @@ def _resolve_return_type(fn: Any, owner_cls: Any) -> Any:
     try:
         hints = typing.get_type_hints(fn)
         return hints.get("return")
-    except (NameError, AttributeError, TypeError):
-        pass
+    except (NameError, AttributeError, TypeError) as exc:
+        # A real frame-walking fallback follows, so this is not fatal — but the
+        # primary-path failure is otherwise invisible, turning a lint
+        # false-negative into an undiagnosable one. Leave a breadcrumb naming
+        # the function whose return hint failed to resolve.
+        log.debug(
+            "return_hint_resolution_failed",
+            fn=getattr(fn, "__qualname__", None) or repr(fn),
+            owner=getattr(owner_cls, "__qualname__", None) or repr(owner_cls),
+            error=str(exc),
+        )
 
     # Fallback: resolve string annotation from frame locals
     raw = getattr(fn, "__annotations__", {}).get("return")

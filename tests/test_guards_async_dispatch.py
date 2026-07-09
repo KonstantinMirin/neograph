@@ -326,6 +326,110 @@ class TestAsyncTwinCoLocation:
         assert "_awork" in defs_b  # it exists, but in the wrong module
 
 
+def _body_statements(fn: FuncDef) -> list[str]:
+    """Return ``fn``'s body as canonical ``ast.unparse`` statement strings,
+    dropping a leading docstring. Canonical unparse normalizes whitespace so
+    the comparison is structural, not textual."""
+    body = list(fn.body)
+    if (
+        body
+        and isinstance(body[0], ast.Expr)
+        and isinstance(body[0].value, ast.Constant)
+        and isinstance(body[0].value.value, str)
+    ):
+        body = body[1:]
+    return [ast.unparse(stmt) for stmt in body]
+
+
+class TestSyncAsyncNodeBodyDivergence:
+    """GUARD B2 (neograph-yrph item 1): the ``_execute_node`` /
+    ``_aexecute_node`` bodies may diverge by EXACTLY the two sanctioned lines —
+    no more.
+
+    GUARD B co-locates the twins but is blind to their bodies: it never noticed
+    that the async path grew a SECOND divergence (``_inject_resource_manifest``)
+    beyond the terminal dispatch call, and the sync docstring kept asserting
+    "the ONLY divergence is the terminal call". A lying invariant comment is
+    worse than none. This guard enumerates and COUNTS the sanctioned
+    divergences by diffing the two function bodies statement-by-statement, so a
+    THIRD divergence (a line added to one path but not the other) fails loud.
+
+    Non-vacuity: the synthetic meta-tests below feed a third divergence through
+    the same differ and confirm it is flagged.
+    """
+
+    # The two sanctioned divergences, as canonical ast.unparse strings.
+    SANCTIONED_ASYNC_ONLY = frozenset(
+        {
+            "config = _inject_resource_manifest(state, node, config)",
+            "output = await dispatch.aexecute(node, node_input, config, context_data)",
+        }
+    )
+    SANCTIONED_SYNC_ONLY = frozenset({"output = dispatch.execute(node, node_input, config, context_data)"})
+
+    def _diff(self, source: str) -> tuple[set[str], set[str]]:
+        defs = _top_level_defs(source)
+        sync = _body_statements(defs["_execute_node"])
+        async_ = _body_statements(defs["_aexecute_node"])
+        sync_only = set(sync) - set(async_)
+        async_only = set(async_) - set(sync)
+        return sync_only, async_only
+
+    def test_node_body_divergence_is_exactly_the_two_sanctioned_lines(self):
+        sync_only, async_only = self._diff((SRC / "_execute.py").read_text())
+        assert async_only == self.SANCTIONED_ASYNC_ONLY, (
+            "async-only statements in _aexecute_node diverged from the sanctioned "
+            f"set.\n  expected: {sorted(self.SANCTIONED_ASYNC_ONLY)}\n  found:    "
+            f"{sorted(async_only)}\nGUARD B2 (neograph-yrph): a new async-only line "
+            "is a THIRD divergence — extract the shared body or update the "
+            "sanctioned set AND the _aexecute_node docstring together."
+        )
+        assert sync_only == self.SANCTIONED_SYNC_ONLY, (
+            "sync-only statements in _execute_node diverged from the sanctioned "
+            f"set.\n  expected: {sorted(self.SANCTIONED_SYNC_ONLY)}\n  found:    "
+            f"{sorted(sync_only)}\nGUARD B2 (neograph-yrph): the sync path grew a "
+            "line the async path lacks — reconcile the twins."
+        )
+
+    # ── slip meta-tests: a third divergence is flagged ──
+
+    def test_meta_third_divergence_is_flagged(self):
+        src = (
+            "def _execute_node():\n"
+            "    a = 1\n"
+            "    output = dispatch.execute(node, node_input, config, context_data)\n"
+            "    return output\n"
+            "async def _aexecute_node():\n"
+            "    a = 1\n"
+            "    config = _inject_resource_manifest(state, node, config)\n"
+            "    sneaky = extra_async_only_line()\n"
+            "    output = await dispatch.aexecute(node, node_input, config, context_data)\n"
+            "    return output\n"
+        )
+        sync_only, async_only = self._diff(src)
+        # the sneaky line is an UNsanctioned async-only divergence
+        assert "sneaky = extra_async_only_line()" in async_only
+        assert async_only != self.SANCTIONED_ASYNC_ONLY
+
+    def test_meta_only_sanctioned_divergences_pass(self):
+        src = (
+            "def _execute_node():\n"
+            "    a = 1\n"
+            "    config = _inject_oracle_config(bus, config)\n"
+            "    output = dispatch.execute(node, node_input, config, context_data)\n"
+            "    return output\n"
+            "async def _aexecute_node():\n"
+            "    a = 1\n"
+            "    config = _inject_oracle_config(bus, config)\n"
+            "    config = _inject_resource_manifest(state, node, config)\n"
+            "    output = await dispatch.aexecute(node, node_input, config, context_data)\n"
+            "    return output\n"
+        )
+        sync_only, async_only = self._diff(src)
+        assert async_only == self.SANCTIONED_ASYNC_ONLY
+        assert sync_only == self.SANCTIONED_SYNC_ONLY
+
+
 class TestSubgraphFnDualPath:
     """GUARD C (neograph-expi): ``make_subgraph_fn`` must be dual-path.
 

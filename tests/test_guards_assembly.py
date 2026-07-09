@@ -160,11 +160,7 @@ class TestErrorBuildBodyMonopoly:
 
     def test_detector_passes_a_delegating_build(self):
         """Slip check: a build() that delegates to _format_message is clean."""
-        src = (
-            "def build(cls, what):\n"
-            "    msg = _format_message(what)\n"
-            "    return cls(msg)\n"
-        )
+        src = "def build(cls, what):\n    msg = _format_message(what)\n    return cls(msg)\n"
         fn = ast.parse(src).body[0]
         assert isinstance(fn, ast.FunctionDef)
         assert self._reinlines_format_body(fn) is False
