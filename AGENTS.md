@@ -474,11 +474,11 @@ it (xfail-style) before documenting it here.
 
 ## Examples
 
-19 runnable examples in `examples/`, each narrated as a walkthrough on neograph.pro. Most use `@node` except two that stay declarative (example 10 mixed, example 11 config injection). Sub-constructs (example 05) can now use either `@node` with `construct_from_functions(input=, output=)` or declarative `Construct(input=, output=, nodes=[...])`.
+20 runnable examples in `examples/`, each narrated as a walkthrough on neograph.pro. Most use `@node` except two that stay declarative (example 10 mixed, example 11 config injection). Sub-constructs (example 05) can now use either `@node` with `construct_from_functions(input=, output=)` or declarative `Construct(input=, output=, nodes=[...])`.
 
 **Examples must run end-to-end.** Breaking one is a regression. When you change an API surface, run every example that doesn't require real API keys (01, 01c, 02, 03, 04, 05, 06, 08, 09, 10). The keyed examples are 07 and observable_pipeline.py — both hit real OpenRouter (observable_pipeline additionally pushes to Langfuse; run it with `--extra langfuse`), and both were verified passing end-to-end on 2026-07-09. Example 11 was converted to a FakeLLM and is keyless. Document any new failures separately.
 
-### MCP examples (23/24) — no-key but need the `mcp-examples` extra (neograph-g4q9)
+### MCP examples (23/24/25) — no-key but need the `mcp-examples` extra (neograph-g4q9)
 
 The MCP-featuring examples exercise the **real** Model Context Protocol against a
 shared stdio demo server (`examples/_mcp_demo_server.py`) — no fakes at the
@@ -495,8 +495,9 @@ MCP-free (the no-session-ownership guard scans `src/` only) and the core
   end-to-end (tool discovery, `get_deal` resource_link manifest, RFC-6570 email
   fraction read, per-operator auth echo, real `-32002` expiry + self-heal) and
   auto-discovers `examples/2?_mcp_*.py` to run each example as a subprocess (23/24
-  plug in via neograph-qb7q / neograph-3m6g).
-- **The distinction to remember**: "no-key" ≠ "no extra". Examples 23/24 are on the
+  plug in via neograph-qb7q / neograph-3m6g; 25 illustrates the singular
+  `mcp_tool_factory` — offline build + gateway rename, neograph-sfdz1).
+- **The distinction to remember**: "no-key" ≠ "no extra". Examples 23/24/25 are on the
   no-key list but you must pass `--extra mcp-examples` to run them or their tests.
 - **Two verified `mcp` 1.28.x SDK gaps the demo server works around** (documented
   in the server's module docstring): FastMCP's `@mcp.resource` can't express

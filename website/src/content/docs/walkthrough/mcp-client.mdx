@@ -188,16 +188,45 @@ compile(pipeline, tool_factories={"crm_search": crm_search_factory})
 
 Same shape as `DefaultPromptCompiler`: a productized 90%-case battery over a seam you can always fill by hand.
 
+## One known tool, offline build: the singular factory
+
+`mcp_tool_factories(...)` connects at build time — discovery *is* a connect. When you already know the tool's name and the build path must stay offline (a `compile()` call in a test suite, a deployment step with no gateway access), declare it with the singular `mcp_tool_factory(...)` instead: it returns one factory with **zero network I/O at construction** — the connect is deferred into the factory body and fires on the agent's first tool call.
+
+Its second job is gateway federation. A gateway like IBM ContextForge re-exposes a peer's tool namespaced as `<peer>-<tool>`, but your node binds a fixed bare name:
+
+```python
+from neograph_mcp import mcp_tool_factory
+
+factory = mcp_tool_factory(
+    "crm", CRM,
+    tool_name="crm-perplexity_research",  # the name the gateway exposes
+    rename_to="perplexity_research",      # the bare name the node's Tool() binds
+    token_provider=token_provider,        # identity: same path as the plural
+)
+
+@node(mode="agent", outputs=ResearchNote, model="research", prompt="research/note",
+      tools=[Tool("perplexity_research", budget=1, idempotent=True)])
+def research() -> ResearchNote: ...
+
+graph = compile(pipeline, llm_factory=llm_factory, prompt_compiler=prompt_compiler,
+                tool_factories={"perplexity_research": factory})
+# Still no MCP connect. The first tool call inside arun() is where it happens —
+# and a wrong tool_name fails loud there, listing what the server actually exposes.
+```
+
+The trade against the plural is deliberate: discovery fails fast at build; declaration fails loud at first call. Pick by what you know — **the plural asks the server, the singular tells the server.**
+
 ## Key takeaways
 
 - `mcp_tool_factories(...)` returns a **dict** — slice it per node for least-privilege binding
+- `mcp_tool_factory(...)` binds **one declared tool** with zero network at build — use it for offline compile/test paths and the gateway-federated `<peer>-<tool>` → bare `Tool(name)` rename
 - Each node's `tools=` (and `tool_factories=`) is its privilege boundary; a research agent with no `update_deal` cannot mutate
 - MCP tools are async-only — drive with `arun()`; `lint()` flags `tool_requires_async_driver` for a sync `run()`
 - `token_provider` reads `config['configurable']['mcp_auth']` for per-run identity — a tool argument over stdio, a bearer header (`httpx.Auth`) over streamable-http
 - `gate_tools_when` pauses before a mutation fires; approve runs it exactly once, deny never runs it and the agent is told why
 - `ToolInteraction.typed_result` carries the structured MCP payload; mark read-only readers `idempotent=True`
 
-See `examples/23_mcp_client_selective_binding.py` for the full runnable example (`uv run --extra dev --extra mcp-examples python examples/23_mcp_client_selective_binding.py`).
+See `examples/23_mcp_client_selective_binding.py` for the full runnable example (`uv run --extra dev --extra mcp-examples python examples/23_mcp_client_selective_binding.py`), and `examples/25_mcp_single_tool_gateway.py` for the singular-factory story (offline build, gateway rename, per-run identity) against the same demo server.
 
 ---
 

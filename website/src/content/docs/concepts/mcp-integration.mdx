@@ -39,6 +39,35 @@ FACTORIES = mcp_tool_factories(
 
 The dict shape is the point. "One agent holds every tool" is the anti-pattern MCP clients drift into; here you slice the dict per node, so each node's `tools=` (and its `compile(tool_factories=...)`) is a **least-privilege boundary**. A research agent whose slice lacks `update_deal` structurally cannot mutate — not "is prompted not to."
 
+### Discovery or declaration: which builder?
+
+The battery has two entry points, and the difference is not one-vs-many — it is *who supplies the tool names* and *when the network fires*. The mnemonic: **the plural asks the server, the singular tells the server.**
+
+| | `mcp_tool_factories(servers)` | `mcp_tool_factory(key, spec, tool_name=...)` |
+|---|---|---|
+| You know | which servers you have | the exact tool name |
+| Names come from | the server (discovery) | your declaration |
+| Connects | at build — discovery *is* a connect | never at build; first tool call |
+| Returns | `dict[str, factory]` — the whole catalog | one factory |
+| Wrong config fails | fast, at build time | loud, at first invocation, listing the available tools |
+
+Reach for the singular when the factory-build path must stay **offline** — at `compile()` time, in a deterministic test suite, or anywhere a live connect to the server is unwanted. Its second job is the **gateway-federated rename**: a gateway (e.g. IBM ContextForge) re-exposes a peer's tool namespaced as `<peer>-<tool>`, while your node binds a fixed bare `Tool(name)`. `rename_to` bridges the two:
+
+```python
+from neograph_mcp import HttpServer, mcp_tool_factory
+
+research = mcp_tool_factory(
+    "gateway", HttpServer(url=GATEWAY_URL),
+    tool_name="crm-perplexity_research",   # the name the gateway exposes
+    rename_to="perplexity_research",       # the bare name the node's Tool() binds
+    token_provider=lambda c: c["mcp_auth"],  # same identity path as the plural
+)
+
+compile(pipeline, tool_factories={"perplexity_research": research})
+```
+
+Nothing connects here — not at the factory build, not at `compile()`. The `MultiServerMCPClient` is created inside the returned factory on the agent's first tool call, and identity injection happens before the rename so it introspects the server's real declared arguments. Everything below (per-run identity, gates, typed results) applies to both builders identically.
+
 Three things ride along for free once MCP tools are node tools:
 
 - **Per-run identity.** The `token_provider` reads the operator from `config["configurable"]` on every run, so two runs of the same compiled graph act as two different principals. Over stdio the token rides as a framework-injected tool argument (stdio has no headers); over streamable-http it rides as a bearer header minted per request by an `httpx.Auth`. The token never enters state, the checkpoint, or the schema fingerprint.
