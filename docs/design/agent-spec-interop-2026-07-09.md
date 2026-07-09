@@ -163,6 +163,42 @@ it — it's the clearest demo of why neograph sits above the flat node library.
 - **Checkpoint metadata** (schema/node fingerprints) is neograph-only; not
   represented in Agent Spec. Out of scope for the wire format.
 
+### 6a. Lossless round-trip via `metadata` markers (source maps)
+
+Every Agent Spec `Component` (Flow, all nodes, edges) carries an optional
+`metadata: dict[str, Any]` — arbitrary JSON-serializable key/values, **preserved
+through a full serialize→deserialize round-trip** (Agent Spec has tests asserting
+custom metadata survives), and ignored by other runtimes (WayFlow/AutoGen/LangGraph
+run the lowered primitive nodes regardless). This lets us make the round-trip
+**lossless for neograph while staying fully portable**. Comments are NOT usable —
+YAML `#` comments die on parse; `metadata` is the structured, preserved channel.
+There is no `description`-based alternative (it's human prose); use `metadata`.
+
+**Namespace:** reserve a `neograph/` prefix (the OpenAPI `x-` pattern) to avoid
+collisions.
+
+**Layer A — per-group markers (granular).** On export, stamp each lowered group:
+- Oracle → merge node `metadata["neograph/modifier"]="oracle"` + full `OracleSpec`
+  + a `group_id` linking the N variant `LlmNode`s and the merge node.
+- Each → `MapNode` metadata `"each"` + `EachSpec` (over/key/on_error).
+- Loop → `BranchingNode` metadata `"loop"` + `LoopSpec`
+  (when/max_iterations/on_exhaust/history).
+
+**Layer B — whole-pipeline embed (guaranteed).** Also stash the original neograph
+`Spec` verbatim in `Flow.metadata["neograph/source"]`. Re-import is then trivially
+lossless: deserialize the embedded Spec.
+
+**Import discipline — VERIFY, don't trust (fail-loud):**
+1. If `neograph/source` present → deserialize it, re-run the lowering, and **diff
+   against the actual flattened Flow.**
+2. Match → use the rich source (lossless).
+3. Diverged (Flow was hand-edited) → the edit wins: fall back to primitive-level
+   import, reconstruct only the groups whose per-group markers still match their
+   primitives, and **warn** about the modifiers whose groups were touched.
+
+A stale marker must never silently reconstruct a modifier that no longer matches
+the primitives — that would re-hand the caller a pipeline different from the file.
+
 ---
 
 ## 7. Ownership and layering
