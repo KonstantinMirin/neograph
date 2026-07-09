@@ -259,6 +259,49 @@ def mcp_tool_factories(
     return factories
 
 
+def mcp_tool_factory(
+    server_key: str,
+    spec: StdioServer | HttpServer,
+    *,
+    tool_name: str,
+    rename_to: str | None = None,
+    token_provider: TokenProvider | None = None,
+    stdio_token_arg: str = "token",
+) -> ToolFactory:
+    """Build ONE lazy async factory for a SINGLE known tool — no build-time connect.
+
+    Use this (over the plural ``mcp_tool_factories``) when you already know the
+    ``tool_name`` and want to bind exactly one tool with ZERO network I/O at
+    construction: the ``MultiServerMCPClient`` connect is deferred into the returned
+    factory body and fires only on the first ``await`` (per superstep). This suits a
+    consumer whose factory-build path runs offline — e.g. at ``compile()`` time or in
+    a deterministic test suite — where the plural builder's per-server enumeration
+    connect (``get_tools`` at build) would be an unwanted live call.
+
+    ``rename_to`` maps the discovered name back to a fixed bare ``Tool(name)``
+    binding. A gateway (e.g. IBM ContextForge) re-exposes a federated tool NAMESPACED
+    as ``<peer>-<tool>``; passing ``tool_name="<peer>-<tool>", rename_to="<tool>"``
+    makes both the factory and the bound ``tool.name`` the bare name the node's
+    ``Tool`` spec references.
+
+    ``token_provider`` mints per-run identity from ``config['configurable']``;
+    ``stdio_token_arg`` is the tool-argument name identity rides on for stdio servers
+    (streamable-http uses a bearer header instead). Identity injection happens BEFORE
+    the rename, so it introspects the server's real declared arguments.
+
+    A thin public alias over the same builder the plural form delegates to — the
+    client stays owned strictly inside the returned factory (the nmb2 invariant).
+    """
+    return _make_tool_factory(
+        server_key,
+        spec,
+        tool_name,
+        rename_to,
+        token_provider,
+        stdio_token_arg,
+    )
+
+
 # ── resource fetcher / replayer ───────────────────────────────────────────────
 
 

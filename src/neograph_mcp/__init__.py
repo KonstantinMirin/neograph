@@ -38,6 +38,7 @@ from neograph_mcp._client import (  # noqa: E402 — after the fail-loud extra c
     ToolFactory,
     mcp_resource_fetcher,
     mcp_tool_factories,
+    mcp_tool_factory,
 )
 
 __all__ = [
@@ -45,5 +46,6 @@ __all__ = [
     "HttpServer",
     "ToolFactory",
     "mcp_tool_factories",
+    "mcp_tool_factory",
     "mcp_resource_fetcher",
 ]

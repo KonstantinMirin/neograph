@@ -294,6 +294,81 @@ class TestOneConsumerSmoke:
 
 
 @requires_mcp
+class TestLazySingleToolFactory:
+    """The public singular ``mcp_tool_factory`` helper (neograph-g2jg).
+
+    A thin lazy wrapper over the private ``_make_tool_factory``: a consumer binding
+    ONE gateway-federated tool into a node with a fixed bare ``Tool(name)`` binding
+    gets a single async ToolFactory that (a) connects NOWHERE at construction and
+    (b) renames the discovered (gateway-namespaced ``<peer>-<tool>``) name back to
+    the bare Tool binding. Mirrors ``TestOneConsumerSmoke`` — ``@requires_mcp``,
+    the real ``_demo_stdio_server()``, real ``await``.
+    """
+
+    def test_construction_is_zero_network_and_returns_a_coroutine_function(self):
+        """PRIMARY nmb2/deferred-connect proof: building the factory performs ZERO
+        network I/O — the connect is deferred into the async factory body. Building
+        against an UNREACHABLE/bogus spec must still return without raising, and the
+        result must be a coroutine-function (the deferred ``_factory`` closure)."""
+        from neograph_mcp import StdioServer, mcp_tool_factory
+
+        bogus = StdioServer(command="/nonexistent/definitely-not-a-real-mcp-server", args=["--nope"])
+        factory = mcp_tool_factory(
+            "crm",
+            bogus,
+            tool_name="crm-perplexity_research",
+            rename_to="perplexity_research",
+        )
+        # No subprocess spawned, no get_tools called: construction returned a plain
+        # coroutine-function against a spec that would fail if it had connected.
+        assert asyncio.iscoroutinefunction(factory)
+
+    async def test_awaited_tool_renames_namespaced_to_bare_and_invokes(self):
+        """Awaiting the factory connects, renames the gateway-namespaced
+        ``crm-perplexity_research`` back to the bare ``perplexity_research`` Tool
+        binding, and the tool invokes correctly against the real demo server."""
+        import json
+
+        from neograph_mcp import mcp_tool_factory
+
+        factory = mcp_tool_factory(
+            "crm",
+            _demo_stdio_server(),
+            tool_name="crm-perplexity_research",
+            rename_to="perplexity_research",
+        )
+        tool = await factory({"configurable": {}}, None)
+        assert tool.name == "perplexity_research"
+
+        result = json.loads((await tool.ainvoke({"query": "acme"}))[0]["text"])
+        assert result["query"] == "acme"
+
+    async def test_stdio_token_provider_injects_through_the_singular_path(self):
+        """Value regression pin: a stdio ``token_provider`` still injects
+        ``stdio_token_arg`` through the singular helper (echoed under ``acting_as``)
+        AND the tool carries the ``rename_to`` name. (A value pin only — it does not
+        prove inject-introspects-pre-rename ordering, since rename touches only
+        ``.name``, never ``.args``.)"""
+        import json
+
+        from neograph_mcp import mcp_tool_factory
+
+        factory = mcp_tool_factory(
+            "crm",
+            _demo_stdio_server(),
+            tool_name="crm-perplexity_research",
+            rename_to="perplexity_research",
+            token_provider=lambda configurable: configurable.get("op", "anon"),
+            stdio_token_arg="token",
+        )
+        tool = await factory({"configurable": {"op": "operator-A"}}, None)
+        assert tool.name == "perplexity_research"
+
+        result = json.loads((await tool.ainvoke({"query": "acme"}))[0]["text"])
+        assert result["acting_as"] == "operator-A"
+
+
+@requires_mcp
 def test_resource_fetcher_builder_returns_fetcher_and_replayer():
     """``mcp_resource_fetcher`` returns the (fetcher, replayer) callables a consumer
     drops into config so FromResource hydration + layered-expiry replay work out of

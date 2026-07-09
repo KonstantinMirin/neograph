@@ -201,6 +201,14 @@ def crm_search(query: str, token: str = "anon") -> dict:
     return {"query": query, "hits": hits, "acting_as": token, "bearer_identity": _bearer_identity()}
 
 
+@mcp.tool(name="crm-perplexity_research")
+def crm_perplexity_research(query: str, token: str = "anon") -> dict:
+    """Read-only echo. A GATEWAY-NAMESPACED tool name (`<peer>-<tool>`) mirroring
+    how IBM ContextForge re-exposes a federated tool — used by the g2jg battery to
+    prove the namespaced->bare rename. `token` echoes under `acting_as`."""
+    return {"query": query, "acting_as": token, "bearer_identity": _bearer_identity()}
+
+
 @mcp.tool()
 def kb_lookup(topic: str, token: str = "anon") -> dict:
     """Read-only, idempotent. Returns a knowledge-base article for `topic`."""
