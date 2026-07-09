@@ -29,6 +29,42 @@ piarch + maintainer).
 
 ---
 
+## 1a. Motivating use case: runtime-mutable graphs, validated, durable
+
+The payoff that justifies the whole feature: **emit Agent Spec → neograph
+validates + compiles → execute on LangGraph → change the path at runtime, reusing
+the LangGraph runtime + ecosystem.** The loop: *Agent Spec = mutable serializable
+source · neograph = validating compiler · LangGraph = durable runtime.*
+
+Two tiers of "runtime path change" (build both; they use different mechanisms):
+
+- **Tier 1 — data-driven routing in one compiled graph (no recompile).** LangGraph
+  topology is fixed at compile; dynamism comes from `Command(goto)`, `Send()`,
+  conditional edges, interrupts. If the path SET is known, compile one superset
+  graph; the LLM/router picks the path per run. Fully durable, streaming intact.
+  Agent Spec serializes the superset + routing. (This is what Swarm/ManagerWorkers
+  are.)
+- **Tier 2 — topology hot-swap (recompile + resume).** A genuinely new shape (e.g.
+  an LLM emits a novel pipeline) can't mutate a running LangGraph in place. Path:
+  emit new Agent Spec → validate + recompile → resume on the SAME `thread_id`.
+  **neograph's checkpoint auto-rewind already implements the durable half**:
+  changed schema fingerprint → `_auto_resume_from_divergence` re-runs only
+  invalidated nodes, reusing checkpointed state. The hot-swap engine already
+  exists; this use case is its payoff.
+
+**The crux — validation as a safety rail for MACHINE-authored graphs.** When the
+author is an LLM / router / config system / a foreign framework's exported Agent
+Spec, no human eyeballs the topology before it runs. neograph's compile-time
+type-channel validation makes an emitted graph fail BEFORE execution, not deep in
+a superstep with a half-mutated checkpoint. WayFlow (no assembly-time validation)
+and raw LangGraph (no spec, no validation) cannot offer this. Inference +
+type-channels matter MOST in the runtime-emitted case — the validating compiler is
+what stands between "self-modifying agent" and "corrupted checkpoint." This closes
+the loop with the LLM-driven runtime-construction use case (Agent Spec is the wire
+format it was missing).
+
+---
+
 ## 2. Landscape: three layers, and where neograph sits
 
 | Layer | Oracle piece | Analogy | neograph counterpart |
