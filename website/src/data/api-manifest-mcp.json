@@ -1,0 +1,83 @@
+{
+  "generated_from": "neograph_mcp.__all__",
+  "symbols": [
+    {
+      "anchor": "stdioserver",
+      "bases": [],
+      "doc": "A stdio MCP server spawned as a subprocess (no ports, no network).",
+      "fields": [
+        {
+          "annotation": "str",
+          "default": null,
+          "name": "command",
+          "required": true
+        },
+        {
+          "annotation": "list[str]",
+          "default": null,
+          "name": "args",
+          "required": true
+        },
+        {
+          "annotation": "dict[str, str] | None",
+          "default": "None",
+          "name": "env",
+          "required": false
+        }
+      ],
+      "kind": "dataclass",
+      "name": "StdioServer",
+      "signature": "(command: 'str', args: 'list[str]', env: 'dict[str, str] | None' = None) -> None"
+    },
+    {
+      "anchor": "httpserver",
+      "bases": [],
+      "doc": "A streamable-http MCP server. Per-run identity rides as a bearer",
+      "fields": [
+        {
+          "annotation": "str",
+          "default": null,
+          "name": "url",
+          "required": true
+        },
+        {
+          "annotation": "dict[str, str] | None",
+          "default": "None",
+          "name": "headers",
+          "required": false
+        }
+      ],
+      "kind": "dataclass",
+      "name": "HttpServer",
+      "signature": "(url: 'str', headers: 'dict[str, str] | None' = None) -> None"
+    },
+    {
+      "anchor": "toolfactory",
+      "doc": "",
+      "kind": "function",
+      "name": "ToolFactory",
+      "signature": "(*args, **kwargs)"
+    },
+    {
+      "anchor": "mcp_tool_factories",
+      "doc": "Build the ``{name: async factory}`` dict for ``compile(tool_factories=...)``.",
+      "kind": "function",
+      "name": "mcp_tool_factories",
+      "signature": "(servers: 'dict[str, StdioServer | HttpServer]', *, token_provider: 'TokenProvider | None' = None, namespace: 'bool' = True, stdio_token_arg: 'str' = 'token') -> 'dict[str, ToolFactory]'"
+    },
+    {
+      "anchor": "mcp_tool_factory",
+      "doc": "Build ONE lazy async factory for a SINGLE known tool \u2014 no build-time connect.",
+      "kind": "function",
+      "name": "mcp_tool_factory",
+      "signature": "(server_key: 'str', spec: 'StdioServer | HttpServer', *, tool_name: 'str', rename_to: 'str | None' = None, token_provider: 'TokenProvider | None' = None, stdio_token_arg: 'str' = 'token') -> 'ToolFactory'"
+    },
+    {
+      "anchor": "mcp_resource_fetcher",
+      "doc": "Return ``(fetcher, replayer)`` for ``config['configurable']`` so FromResource",
+      "kind": "function",
+      "name": "mcp_resource_fetcher",
+      "signature": "(servers: 'dict[str, StdioServer | HttpServer]', *, token_provider: 'TokenProvider | None' = None) -> 'tuple[Callable[[str], Awaitable[tuple[Any, str | None]]], Callable[[str, dict], Awaitable[Any]]]'"
+    }
+  ]
+}

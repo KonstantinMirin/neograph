@@ -1,0 +1,1161 @@
+{
+  "exception_hierarchy": [
+    {
+      "anchor": "checkpointschemaerror",
+      "doc": "Checkpoint state schema does not match the current graph.",
+      "name": "CheckpointSchemaError",
+      "parent": "ConfigurationError"
+    },
+    {
+      "anchor": "compileerror",
+      "doc": "Errors during ``compile()`` -- graph construction from a Construct.",
+      "name": "CompileError",
+      "parent": "NeographError"
+    },
+    {
+      "anchor": "configurationerror",
+      "doc": "Bad or missing configuration -- unregistered functions, missing LLM factory.",
+      "name": "ConfigurationError",
+      "parent": "NeographError"
+    },
+    {
+      "anchor": "constructerror",
+      "doc": "Assembly-time validation errors during Construct creation.",
+      "name": "ConstructError",
+      "parent": "NeographError"
+    },
+    {
+      "anchor": "executionerror",
+      "doc": "Runtime errors during graph execution.",
+      "name": "ExecutionError",
+      "parent": "NeographError"
+    },
+    {
+      "anchor": "neographerror",
+      "doc": "Base for all neograph-originated errors.",
+      "name": "NeographError",
+      "parent": null
+    },
+    {
+      "anchor": "nodeoutputerror",
+      "doc": "A node RAN and produced None against its declared ``outputs=`` type.",
+      "name": "NodeOutputError",
+      "parent": "ExecutionError"
+    },
+    {
+      "anchor": "nonidempotentreplayerror",
+      "doc": "Refused to replay a non-idempotent producing tool call. See neograph-lhc6.",
+      "name": "NonIdempotentReplayError",
+      "parent": "ExecutionError"
+    },
+    {
+      "anchor": "promptvarmissing",
+      "doc": "A ``strict`` ``substitute()`` found a placeholder with no matching variable.",
+      "name": "PromptVarMissing",
+      "parent": "ExecutionError"
+    },
+    {
+      "anchor": "resourceexpirederror",
+      "doc": "A manifest-driven ``ResourceRef`` could not be hydrated. See neograph-a5nh.",
+      "name": "ResourceExpiredError",
+      "parent": "ExecutionError"
+    },
+    {
+      "anchor": "statemissingerror",
+      "doc": "Raised when ``StateBus.get_required()`` finds a missing key.",
+      "name": "StateMissingError",
+      "parent": "ExecutionError"
+    }
+  ],
+  "generated_from": "neograph.__all__",
+  "lint_issue_kinds": [
+    "act_mode_all_idempotent_tools",
+    "ask_human_in_mutating_node",
+    "llm_kwargs_missing",
+    "loop_condition_none_unsafe",
+    "loop_condition_unregistered",
+    "resource_hydration_kind_unmatched",
+    "template_placeholder_known_vars_only",
+    "template_placeholder_unresolvable",
+    "template_var_requires_async_driver",
+    "tool_requires_async_driver"
+  ],
+  "symbols": [
+    {
+      "anchor": "node",
+      "doc": "Decorator that turns a function into a Node spec with signature-inferred",
+      "kind": "function",
+      "name": "node",
+      "signature": "(fn: 'Callable | None' = None, *, mode: \"Literal['think', 'agent', 'act', 'scripted', 'raw'] | None\" = None, inputs: 'Any' = None, outputs: 'Any' = None, model: 'str | None' = None, prompt: 'str | None' = None, llm_config: 'dict[str, Any] | LlmConfig | None' = None, tools: 'list[Tool] | None' = None, name: 'str | None' = None, map_over: 'str | None' = None, map_key: 'str | None' = None, ensemble_n: 'int | None' = None, models: 'list[str] | None' = None, merge_fn: 'str | None' = None, merge_prompt: 'str | None' = None, merge_pre_process: 'Callable | None' = None, merge_post_process: 'Callable | None' = None, merge_fallback: 'Callable | None' = None, interrupt_when: 'str | Callable | None' = None, renderer: 'Renderer | None' = None, context: 'list[str] | None' = None, skip_when: 'Callable | None' = None, skip_value: 'Callable | None' = None, gate_tools_when: 'Callable | str | None' = None, loop_when: 'str | Callable | None' = None, max_iterations: 'int | None' = None, on_exhaust: \"Literal['error', 'last'] | None\" = None) -> 'Any'"
+    },
+    {
+      "anchor": "construct_from_module",
+      "doc": "Walk a module's Node instances, sort topologically, return a Construct.",
+      "kind": "function",
+      "name": "construct_from_module",
+      "signature": "(mod: 'Any', name: 'str | None' = None, *, llm_config: 'dict[str, Any] | LlmConfig | None' = None, input: 'type[BaseModel] | None' = None, output: 'type[BaseModel] | None' = None) -> 'Construct'"
+    },
+    {
+      "anchor": "construct_from_functions",
+      "doc": "Build a Construct from an explicit list of @node-decorated functions.",
+      "kind": "function",
+      "name": "construct_from_functions",
+      "signature": "(name: 'str', functions: 'list[Any]', *, llm_config: 'dict[str, Any] | LlmConfig | None' = None, input: 'type[BaseModel] | None' = None, output: 'type[BaseModel] | None' = None) -> 'Construct'"
+    },
+    {
+      "anchor": "frominput",
+      "bases": [],
+      "doc": "Dependency-injection marker: parameter value comes from ``run(input=...)``.",
+      "kind": "class",
+      "name": "FromInput",
+      "signature": "(*, required: 'bool' = True) -> 'None'"
+    },
+    {
+      "anchor": "fromconfig",
+      "bases": [],
+      "doc": "Dependency-injection marker: parameter value comes from ``config['configurable']``.",
+      "kind": "class",
+      "name": "FromConfig",
+      "signature": "(*, required: 'bool' = True) -> 'None'"
+    },
+    {
+      "anchor": "fromresource",
+      "bases": [],
+      "doc": "Dependency-injection marker: parameter value is FETCHED from an MCP-style",
+      "kind": "class",
+      "name": "FromResource",
+      "signature": "(uri: 'str | None' = None, *, ref: 'str | None' = None, mime: 'str | None' = None, parse: 'Callable[[Any, str | None], Any] | None' = None, required: 'bool' = True, max_bytes: 'int | None' = None) -> 'None'"
+    },
+    {
+      "anchor": "compile",
+      "doc": "Compile a Construct into an executable LangGraph StateGraph.",
+      "kind": "function",
+      "name": "compile",
+      "signature": "(construct: 'Construct', checkpointer: 'Any' = None, _context_types: 'dict[str, type] | None' = None, *, llm_factory: 'Any' = None, prompt_compiler: 'Any' = None, renderer: 'Any' = None, cost_callback: 'Any' = None, scripted: 'dict[str, Callable] | None' = None, conditions: 'dict[str, Callable] | None' = None, tool_factories: 'dict[str, Callable] | None' = None, _runtime: 'LlmRuntime | None' = None, _scripted_lookup: 'dict[str, Callable] | None' = None) -> 'CompiledNeograph'"
+    },
+    {
+      "anchor": "run",
+      "doc": "Execute a compiled neograph graph (batch). Thin verb over ``_prepare``.",
+      "kind": "function",
+      "name": "run",
+      "signature": "(graph: 'CompiledNeograph', input: 'dict[str, Any] | None' = None, resume: 'dict[str, Any] | None' = None, config: 'RunnableConfig | None' = None, auto_resume: 'bool' = True, observe: 'bool | str | None' = None) -> 'Any'"
+    },
+    {
+      "anchor": "arun",
+      "doc": "Async twin of :func:`run` (batch). Thin verb over ``_aprepare``.",
+      "kind": "function",
+      "name": "arun",
+      "signature": "(graph: 'CompiledNeograph', input: 'dict[str, Any] | None' = None, resume: 'dict[str, Any] | None' = None, config: 'RunnableConfig | None' = None, auto_resume: 'bool' = True, observe: 'bool | str | None' = None) -> 'Any'"
+    },
+    {
+      "anchor": "stream",
+      "doc": "Stream a compiled neograph graph (sync). Thin verb over ``_prepare`` +",
+      "kind": "function",
+      "name": "stream",
+      "signature": "(graph: 'CompiledNeograph', input: 'dict[str, Any] | None' = None, resume: 'dict[str, Any] | None' = None, config: 'RunnableConfig | None' = None, auto_resume: 'bool' = True, stream_mode: 'str | list[str]' = 'values', observe: 'bool | str | None' = None) -> 'Any'"
+    },
+    {
+      "anchor": "astream",
+      "doc": "Async twin of :func:`stream`. Thin verb over ``_aprepare`` +",
+      "kind": "function",
+      "name": "astream",
+      "signature": "(graph: 'CompiledNeograph', input: 'dict[str, Any] | None' = None, resume: 'dict[str, Any] | None' = None, config: 'RunnableConfig | None' = None, auto_resume: 'bool' = True, stream_mode: 'str | list[str]' = 'values', observe: 'bool | str | None' = None) -> 'Any'"
+    },
+    {
+      "anchor": "emit_progress",
+      "doc": "Emit a typed progress/domain event from inside a node body or tool.",
+      "kind": "function",
+      "name": "emit_progress",
+      "signature": "(event: 'BaseModel') -> 'None'"
+    },
+    {
+      "anchor": "tool",
+      "doc": "Decorator that turns a function into a Tool and auto-registers its factory.",
+      "kind": "function",
+      "name": "tool",
+      "signature": "(fn: 'Callable | None' = None, *, name: 'str | None' = None, budget: 'int' = 0, config: 'dict[str, Any] | None' = None) -> 'Any'"
+    },
+    {
+      "anchor": "resource_reader",
+      "doc": "Emit a typed, async LangChain BaseTool that reads ONE known resource KIND.",
+      "kind": "function",
+      "name": "resource_reader",
+      "signature": "(name: 'str', *, uri_template: 'str', output_model: 'type[BaseModel]', description: 'str', parse: 'Callable[[Any, str | None], BaseModel] | None' = None, budget: 'int' = 0, idempotent: 'bool' = True) -> 'Any'"
+    },
+    {
+      "anchor": "read_blob",
+      "doc": "Tool that can operate on any number of inputs.",
+      "kind": "other",
+      "name": "read_blob"
+    },
+    {
+      "anchor": "blobresult",
+      "bases": [],
+      "doc": "Typed escape hatch for genuinely opaque resource content \u2014 the exception,",
+      "fields": [
+        {
+          "annotation": "str",
+          "default": null,
+          "name": "uri",
+          "required": true
+        },
+        {
+          "annotation": "str | None",
+          "default": "None",
+          "name": "mime",
+          "required": false
+        },
+        {
+          "annotation": "str | None",
+          "default": "None",
+          "name": "text",
+          "required": false
+        },
+        {
+          "annotation": "str | None",
+          "default": "None",
+          "name": "bytes_b64",
+          "required": false
+        },
+        {
+          "annotation": "int | None",
+          "default": "None",
+          "name": "size",
+          "required": false
+        }
+      ],
+      "kind": "pydantic_model",
+      "name": "BlobResult",
+      "signature": "(uri: str, mime: str | None = None, text: str | None = None, bytes_b64: str | None = None, size: int | None = None)"
+    },
+    {
+      "anchor": "merge_fn",
+      "doc": "Decorator for Oracle merge functions with FromInput/FromConfig DI.",
+      "kind": "function",
+      "name": "merge_fn",
+      "signature": "(fn: 'Callable | None' = None, *, name: 'str | None' = None) -> 'Any'"
+    },
+    {
+      "anchor": "ask_human",
+      "doc": "Pause an agent/act tool mid-loop to ask a human, and return their answer.",
+      "kind": "function",
+      "name": "ask_human",
+      "signature": "(payload: 'BaseModel', resume_model: 'type[T] | None' = None) -> 'T | dict'"
+    },
+    {
+      "anchor": "oracle",
+      "bases": [],
+      "doc": "Ensemble modifier: N parallel generators + judge-merge.",
+      "fields": [
+        {
+          "annotation": "int",
+          "default": "3",
+          "name": "n",
+          "required": false
+        },
+        {
+          "annotation": "list[str] | None",
+          "default": "None",
+          "name": "models",
+          "required": false
+        },
+        {
+          "annotation": "str | None",
+          "default": "None",
+          "name": "merge_prompt",
+          "required": false
+        },
+        {
+          "annotation": "str",
+          "default": "'reason'",
+          "name": "merge_model",
+          "required": false
+        },
+        {
+          "annotation": "str | None",
+          "default": "None",
+          "name": "merge_fn",
+          "required": false
+        },
+        {
+          "annotation": "neograph.modifiers.MergePreProcess | None",
+          "default": "None",
+          "name": "merge_pre_process",
+          "required": false
+        },
+        {
+          "annotation": "neograph.modifiers.MergePostProcess | None",
+          "default": "None",
+          "name": "merge_post_process",
+          "required": false
+        },
+        {
+          "annotation": "neograph.modifiers.MergeFallback | None",
+          "default": "None",
+          "name": "merge_fallback",
+          "required": false
+        }
+      ],
+      "kind": "pydantic_model",
+      "name": "Oracle",
+      "signature": "(n: int = 3, models: list[str] | None = None, merge_prompt: str | None = None, merge_model: str = 'reason', merge_fn: str | None = None, merge_pre_process: neograph.modifiers.MergePreProcess | None = None, merge_post_process: neograph.modifiers.MergePostProcess | None = None, merge_fallback: neograph.modifiers.MergeFallback | None = None)"
+    },
+    {
+      "anchor": "each",
+      "bases": [],
+      "doc": "Fan-out modifier: dispatch parallel instances over a collection.",
+      "fields": [
+        {
+          "annotation": "str",
+          "default": null,
+          "name": "over",
+          "required": true
+        },
+        {
+          "annotation": "str",
+          "default": null,
+          "name": "key",
+          "required": true
+        },
+        {
+          "annotation": "Literal['raise', 'collect']",
+          "default": "'raise'",
+          "name": "on_error",
+          "required": false
+        }
+      ],
+      "kind": "pydantic_model",
+      "name": "Each",
+      "signature": "(over: str, key: str, on_error: Literal['raise', 'collect'] = 'raise')"
+    },
+    {
+      "anchor": "eachfailure",
+      "bases": [],
+      "doc": "Typed per-item failure written into an Each barrier under ``on_error='collect'``.",
+      "fields": [
+        {
+          "annotation": "str",
+          "default": null,
+          "name": "key",
+          "required": true
+        },
+        {
+          "annotation": "str",
+          "default": null,
+          "name": "error_type",
+          "required": true
+        },
+        {
+          "annotation": "str",
+          "default": null,
+          "name": "message",
+          "required": true
+        }
+      ],
+      "kind": "pydantic_model",
+      "name": "EachFailure",
+      "signature": "(key: str, error_type: str, message: str)"
+    },
+    {
+      "anchor": "loop",
+      "bases": [],
+      "doc": "Cycle modifier: repeat a node or sub-construct until a condition is met.",
+      "fields": [
+        {
+          "annotation": "str | collections.abc.Callable[[Any], bool]",
+          "default": null,
+          "name": "when",
+          "required": true
+        },
+        {
+          "annotation": "int",
+          "default": "10",
+          "name": "max_iterations",
+          "required": false
+        },
+        {
+          "annotation": "str",
+          "default": "'error'",
+          "name": "on_exhaust",
+          "required": false
+        },
+        {
+          "annotation": "bool",
+          "default": "False",
+          "name": "history",
+          "required": false
+        }
+      ],
+      "kind": "pydantic_model",
+      "name": "Loop",
+      "signature": "(when: str | collections.abc.Callable[[Any], bool], max_iterations: int = 10, on_exhaust: str = 'error', history: bool = False)"
+    },
+    {
+      "anchor": "operator",
+      "bases": [],
+      "doc": "Human-in-the-loop modifier: pause graph for human review.",
+      "fields": [
+        {
+          "annotation": "str",
+          "default": null,
+          "name": "when",
+          "required": true
+        }
+      ],
+      "kind": "pydantic_model",
+      "name": "Operator",
+      "signature": "(when: str)"
+    },
+    {
+      "anchor": "node",
+      "bases": [],
+      "doc": "A typed processing block. The unit of graph specification.",
+      "fields": [
+        {
+          "annotation": "str",
+          "default": null,
+          "name": "name",
+          "required": true
+        },
+        {
+          "annotation": "ModifierSet",
+          "default": "<factory:ModifierSet>",
+          "name": "modifier_set",
+          "required": false
+        },
+        {
+          "annotation": "Literal['think', 'agent', 'act', 'scripted']",
+          "default": "'think'",
+          "name": "mode",
+          "required": false
+        },
+        {
+          "annotation": "Any",
+          "default": "None",
+          "name": "inputs",
+          "required": false
+        },
+        {
+          "annotation": "Any",
+          "default": "None",
+          "name": "outputs",
+          "required": false
+        },
+        {
+          "annotation": "str | None",
+          "default": "None",
+          "name": "model",
+          "required": false
+        },
+        {
+          "annotation": "str | None",
+          "default": "None",
+          "name": "prompt",
+          "required": false
+        },
+        {
+          "annotation": "LlmConfig",
+          "default": "<factory:LlmConfig>",
+          "name": "llm_config",
+          "required": false
+        },
+        {
+          "annotation": "list[neograph.tool.Tool | langchain_core.tools.base.BaseTool]",
+          "default": "[]",
+          "name": "tools",
+          "required": false
+        },
+        {
+          "annotation": "str | None",
+          "default": "None",
+          "name": "scripted_fn",
+          "required": false
+        },
+        {
+          "annotation": "neograph.node.RawNodeFn | None",
+          "default": "None",
+          "name": "raw_fn",
+          "required": false
+        },
+        {
+          "annotation": "str | None",
+          "default": "None",
+          "name": "fan_out_param",
+          "required": false
+        },
+        {
+          "annotation": "neograph.renderers.Renderer | None",
+          "default": "None",
+          "name": "renderer",
+          "required": false
+        },
+        {
+          "annotation": "list[str] | None",
+          "default": "None",
+          "name": "context",
+          "required": false
+        },
+        {
+          "annotation": "neograph.node.SkipPredicate | None",
+          "default": "None",
+          "name": "skip_when",
+          "required": false
+        },
+        {
+          "annotation": "neograph.node.SkipValueFactory | None",
+          "default": "None",
+          "name": "skip_value",
+          "required": false
+        },
+        {
+          "annotation": "collections.abc.Callable | str | None",
+          "default": "None",
+          "name": "gate_tools_when",
+          "required": false
+        },
+        {
+          "annotation": "type[pydantic.main.BaseModel] | None",
+          "default": "None",
+          "name": "oracle_gen_type",
+          "required": false
+        }
+      ],
+      "kind": "pydantic_model",
+      "name": "Node",
+      "signature": "(name: str, modifier_set: ModifierSet = <factory:ModifierSet>, mode: Literal['think', 'agent', 'act', 'scripted'] = 'think', inputs: Any = None, outputs: Any = None, model: str | None = None, prompt: str | None = None, llm_config: LlmConfig = <factory:LlmConfig>, tools: list[neograph.tool.Tool | langchain_core.tools.base.BaseTool] = [], scripted_fn: str | None = None, raw_fn: neograph.node.RawNodeFn | None = None, fan_out_param: str | None = None, renderer: neograph.renderers.Renderer | None = None, context: list[str] | None = None, skip_when: neograph.node.SkipPredicate | None = None, skip_value: neograph.node.SkipValueFactory | None = None, gate_tools_when: collections.abc.Callable | str | None = None, oracle_gen_type: type[pydantic.main.BaseModel] | None = None)"
+    },
+    {
+      "anchor": "tool",
+      "bases": [],
+      "doc": "A tool the LLM can call, with a per-tool call budget.",
+      "fields": [
+        {
+          "annotation": "str",
+          "default": null,
+          "name": "name",
+          "required": true
+        },
+        {
+          "annotation": "int",
+          "default": "0",
+          "name": "budget",
+          "required": false
+        },
+        {
+          "annotation": "dict[str, Any]",
+          "default": "<factory:dict>",
+          "name": "config",
+          "required": false
+        },
+        {
+          "annotation": "bool",
+          "default": "False",
+          "name": "idempotent",
+          "required": false
+        }
+      ],
+      "kind": "pydantic_model",
+      "name": "Tool",
+      "signature": "(name: str, budget: int = 0, config: dict[str, Any] = <factory:dict>, idempotent: bool = False)"
+    },
+    {
+      "anchor": "toolinteraction",
+      "bases": [],
+      "doc": "Record of a single tool call during a ReAct loop.",
+      "fields": [
+        {
+          "annotation": "str",
+          "default": null,
+          "name": "tool_name",
+          "required": true
+        },
+        {
+          "annotation": "dict[str, Any]",
+          "default": "<factory:dict>",
+          "name": "args",
+          "required": false
+        },
+        {
+          "annotation": "str",
+          "default": "''",
+          "name": "result",
+          "required": false
+        },
+        {
+          "annotation": "Any",
+          "default": "None",
+          "name": "typed_result",
+          "required": false
+        },
+        {
+          "annotation": "int",
+          "default": "0",
+          "name": "duration_ms",
+          "required": false
+        }
+      ],
+      "kind": "pydantic_model",
+      "name": "ToolInteraction",
+      "signature": "(tool_name: str, args: dict[str, Any] = <factory:dict>, result: str = '', typed_result: Any = None, duration_ms: int = 0)"
+    },
+    {
+      "anchor": "resourceref",
+      "bases": [],
+      "doc": "A typed, self-healing reference to an MCP resource \u2014 the OPPOSITE of a",
+      "fields": [
+        {
+          "annotation": "str",
+          "default": null,
+          "name": "uri",
+          "required": true
+        },
+        {
+          "annotation": "str",
+          "default": null,
+          "name": "kind",
+          "required": true
+        },
+        {
+          "annotation": "str",
+          "default": null,
+          "name": "server",
+          "required": true
+        },
+        {
+          "annotation": "ProducingCall",
+          "default": null,
+          "name": "producing_call",
+          "required": true
+        },
+        {
+          "annotation": "str | None",
+          "default": "None",
+          "name": "mime",
+          "required": false
+        },
+        {
+          "annotation": "int | None",
+          "default": "None",
+          "name": "size",
+          "required": false
+        },
+        {
+          "annotation": "str | None",
+          "default": "None",
+          "name": "fetched_at",
+          "required": false
+        },
+        {
+          "annotation": "int | None",
+          "default": "None",
+          "name": "ttl_ms",
+          "required": false
+        }
+      ],
+      "kind": "pydantic_model",
+      "name": "ResourceRef",
+      "signature": "(uri: str, kind: str, server: str, producing_call: ProducingCall, mime: str | None = None, size: int | None = None, fetched_at: str | None = None, ttl_ms: int | None = None)"
+    },
+    {
+      "anchor": "producingcall",
+      "bases": [],
+      "doc": "The tool call that emitted a resource_link \u2014 the replay path for a ref.",
+      "fields": [
+        {
+          "annotation": "str",
+          "default": null,
+          "name": "tool_name",
+          "required": true
+        },
+        {
+          "annotation": "dict[str, Any]",
+          "default": "<factory:dict>",
+          "name": "args",
+          "required": false
+        },
+        {
+          "annotation": "bool",
+          "default": "False",
+          "name": "producer_idempotent",
+          "required": false
+        }
+      ],
+      "kind": "pydantic_model",
+      "name": "ProducingCall",
+      "signature": "(tool_name: str, args: dict[str, Any] = <factory:dict>, producer_idempotent: bool = False)"
+    },
+    {
+      "anchor": "construct",
+      "bases": [],
+      "doc": "An ordered composition of Nodes that compiles to a LangGraph StateGraph.",
+      "fields": [
+        {
+          "annotation": "str",
+          "default": null,
+          "name": "name",
+          "required": true
+        },
+        {
+          "annotation": "ModifierSet",
+          "default": "<factory:ModifierSet>",
+          "name": "modifier_set",
+          "required": false
+        },
+        {
+          "annotation": "str",
+          "default": "''",
+          "name": "description",
+          "required": false
+        },
+        {
+          "annotation": "list[neograph._ir_protocols.ConstructItem]",
+          "default": "<factory:list>",
+          "name": "nodes",
+          "required": false
+        },
+        {
+          "annotation": "type[pydantic.main.BaseModel] | None",
+          "default": "None",
+          "name": "input",
+          "required": false
+        },
+        {
+          "annotation": "type[pydantic.main.BaseModel] | None",
+          "default": "None",
+          "name": "output",
+          "required": false
+        },
+        {
+          "annotation": "LlmConfig",
+          "default": "<factory:LlmConfig>",
+          "name": "llm_config",
+          "required": false
+        },
+        {
+          "annotation": "neograph.renderers.Renderer | None",
+          "default": "None",
+          "name": "renderer",
+          "required": false
+        }
+      ],
+      "kind": "pydantic_model",
+      "name": "Construct",
+      "signature": "(name: str, modifier_set: ModifierSet = <factory:ModifierSet>, description: str = '', nodes: list[neograph._ir_protocols.ConstructItem] = <factory:list>, input: type[pydantic.main.BaseModel] | None = None, output: type[pydantic.main.BaseModel] | None = None, llm_config: LlmConfig = <factory:LlmConfig>, renderer: neograph.renderers.Renderer | None = None)"
+    },
+    {
+      "anchor": "forwardconstruct",
+      "bases": [
+        "Construct"
+      ],
+      "doc": "A Construct whose node list is discovered from class attributes.",
+      "fields": [],
+      "kind": "pydantic_model",
+      "name": "ForwardConstruct",
+      "signature": "(name: str, modifier_set: ModifierSet = <factory:ModifierSet>, description: str = '', nodes: list[neograph._ir_protocols.ConstructItem] = <factory:list>, input: type[pydantic.main.BaseModel] | None = None, output: type[pydantic.main.BaseModel] | None = None, llm_config: LlmConfig = <factory:LlmConfig>, renderer: neograph.renderers.Renderer | None = None)"
+    },
+    {
+      "anchor": "typespecstatic",
+      "doc": "Represent a PEP 604 union type",
+      "kind": "other",
+      "name": "TypeSpecStatic"
+    },
+    {
+      "anchor": "neographerror",
+      "bases": [],
+      "doc": "Base for all neograph-originated errors.",
+      "kind": "exception",
+      "name": "NeographError",
+      "signature": ""
+    },
+    {
+      "anchor": "constructerror",
+      "bases": [
+        "NeographError"
+      ],
+      "doc": "Assembly-time validation errors during Construct creation.",
+      "kind": "exception",
+      "name": "ConstructError",
+      "signature": ""
+    },
+    {
+      "anchor": "compileerror",
+      "bases": [
+        "NeographError"
+      ],
+      "doc": "Errors during ``compile()`` -- graph construction from a Construct.",
+      "kind": "exception",
+      "name": "CompileError",
+      "signature": ""
+    },
+    {
+      "anchor": "configurationerror",
+      "bases": [
+        "NeographError"
+      ],
+      "doc": "Bad or missing configuration -- unregistered functions, missing LLM factory.",
+      "kind": "exception",
+      "name": "ConfigurationError",
+      "signature": ""
+    },
+    {
+      "anchor": "executionerror",
+      "bases": [
+        "NeographError"
+      ],
+      "doc": "Runtime errors during graph execution.",
+      "kind": "exception",
+      "name": "ExecutionError",
+      "signature": "(*args: 'object', validation_errors: 'str | None' = None) -> 'None'"
+    },
+    {
+      "anchor": "nodeoutputerror",
+      "bases": [
+        "ExecutionError"
+      ],
+      "doc": "A node RAN and produced None against its declared ``outputs=`` type.",
+      "kind": "exception",
+      "name": "NodeOutputError",
+      "signature": "(*args: 'object', validation_errors: 'str | None' = None) -> 'None'"
+    },
+    {
+      "anchor": "nonidempotentreplayerror",
+      "bases": [
+        "ExecutionError"
+      ],
+      "doc": "Refused to replay a non-idempotent producing tool call. See neograph-lhc6.",
+      "kind": "exception",
+      "name": "NonIdempotentReplayError",
+      "signature": "(*args: 'object', tool_name: 'str | None' = None, node: 'str | None' = None) -> 'None'"
+    },
+    {
+      "anchor": "promptvarmissing",
+      "bases": [
+        "ExecutionError"
+      ],
+      "doc": "A ``strict`` ``substitute()`` found a placeholder with no matching variable.",
+      "kind": "exception",
+      "name": "PromptVarMissing",
+      "signature": "(*args: 'object', var: 'str' = '', available: 'list[str] | None' = None) -> 'None'"
+    },
+    {
+      "anchor": "resourceexpirederror",
+      "bases": [
+        "ExecutionError"
+      ],
+      "doc": "A manifest-driven ``ResourceRef`` could not be hydrated. See neograph-a5nh.",
+      "kind": "exception",
+      "name": "ResourceExpiredError",
+      "signature": "(*args: 'object', ref: 'object | None' = None, node: 'str | None' = None, cause: 'BaseException | None' = None) -> 'None'"
+    },
+    {
+      "anchor": "checkpointschemaerror",
+      "bases": [
+        "ConfigurationError"
+      ],
+      "doc": "Checkpoint state schema does not match the current graph.",
+      "kind": "exception",
+      "name": "CheckpointSchemaError",
+      "signature": "(*args: 'object', invalidated_nodes: 'set[str] | None' = None) -> 'None'"
+    },
+    {
+      "anchor": "substitute",
+      "doc": "Fill ``template`` placeholders from ``vars`` in a single brace-safe pass.",
+      "kind": "function",
+      "name": "substitute",
+      "signature": "(template: 'str', vars: 'dict[str, Any]', *, strict: 'bool' = True, syntax: 'SyntaxSpec' = 'brace') -> 'str'"
+    },
+    {
+      "anchor": "render_inputs",
+      "doc": "The template-ref view of ``input_data``: BAML-rendered values + flattened",
+      "kind": "function",
+      "name": "render_inputs",
+      "signature": "(input_data: 'Any', *, renderer: 'Renderer | None' = None) -> 'dict[str, Any]'"
+    },
+    {
+      "anchor": "inject_schema",
+      "doc": "Return ``vars`` with ``vars[key]`` set to the output schema string.",
+      "kind": "function",
+      "name": "inject_schema",
+      "signature": "(vars: 'dict[str, Any]', output_model: 'type[BaseModel] | None' = None, *, output_schema: 'str | None' = None, key: 'str' = 'json_schema') -> 'dict[str, Any]'"
+    },
+    {
+      "anchor": "defaultpromptcompiler",
+      "bases": [],
+      "doc": "The 90%-case file-ref prompt_compiler \u2014 no app compiler code required.",
+      "kind": "class",
+      "name": "DefaultPromptCompiler",
+      "signature": "(loader: 'TemplateLoader', *, strict: 'bool' = True, syntax: 'SyntaxSpec' = 'brace', system: 'str | None' = None, schema_var: 'str' = 'json_schema', suffix: 'str' = '.md') -> 'None'"
+    },
+    {
+      "anchor": "describe_type",
+      "doc": "Render a Pydantic model as TypeScript-style schema notation.",
+      "kind": "function",
+      "name": "describe_type",
+      "signature": "(model: 'type[BaseModel]', *, prefix: 'str' = 'Answer in JSON matching this schema:', hoist_classes: \"Literal['auto', 'all'] | list[str]\" = 'auto', always_hoist_enums: 'bool' = True, or_splitter: 'str' = ' or ', indent: 'str' = '  ') -> 'str'"
+    },
+    {
+      "anchor": "describe_value",
+      "doc": "Render a Pydantic model instance in TypeScript-style notation with values.",
+      "kind": "function",
+      "name": "describe_value",
+      "signature": "(value: 'Any', *, prefix: 'str' = '', indent: 'str' = '  ') -> 'str'"
+    },
+    {
+      "anchor": "type_display_name",
+      "doc": "Render a ``TypeSpec`` to a short, human-readable display string.",
+      "kind": "function",
+      "name": "type_display_name",
+      "signature": "(t: 'TypeSpecStatic') -> 'str'"
+    },
+    {
+      "anchor": "excludefromoutput",
+      "bases": [],
+      "doc": "Marker: field is visible in input rendering but excluded from output schema.",
+      "kind": "class",
+      "name": "ExcludeFromOutput",
+      "signature": "()"
+    },
+    {
+      "anchor": "render_prompt",
+      "doc": "Render the exact prompt a node would send to the LLM, without calling it.",
+      "kind": "function",
+      "name": "render_prompt",
+      "signature": "(node: 'Any', input_data: 'Any', *, config: 'RunnableConfig | None' = None, runtime: 'LlmRuntime | None' = None) -> 'str'"
+    },
+    {
+      "anchor": "compile_prompt",
+      "doc": "Compile a prompt to a message list \u2014 standalone, no compiled graph, no run.",
+      "kind": "function",
+      "name": "compile_prompt",
+      "signature": "(template: 'str', input_data: 'Any', *, output_model: 'type[BaseModel] | None' = None, output_schema: 'str | None' = None, di_inputs: 'dict[str, Any] | None' = None, prompt_compiler: 'Any | None' = None, renderer: 'Any | None' = None, node_name: 'str' = '', template_text: 'str | None' = None, loader: 'Any | None' = None) -> 'list[dict]'"
+    },
+    {
+      "anchor": "configure_image",
+      "doc": "Configure image resolution settings.",
+      "kind": "function",
+      "name": "configure_image",
+      "signature": "(*, max_size_bytes: 'int' = 20971520, allowed_dirs: 'list[str] | None' = None, validate_format: 'bool' = True) -> 'None'"
+    },
+    {
+      "anchor": "resolve_image",
+      "doc": "Convert a file path, raw base64, or data URI to a data-URI string.",
+      "kind": "function",
+      "name": "resolve_image",
+      "signature": "(path_or_b64: 'str') -> 'str'"
+    },
+    {
+      "anchor": "renderer",
+      "bases": [],
+      "doc": "Protocol for prompt-input renderers.",
+      "kind": "class",
+      "name": "Renderer",
+      "signature": "(*args, **kwargs)"
+    },
+    {
+      "anchor": "xmlrenderer",
+      "bases": [],
+      "doc": "Render Pydantic models as XML elements.",
+      "kind": "class",
+      "name": "XmlRenderer",
+      "signature": "(*, include_field_info: \"Literal['once', 'always', 'never']\" = 'once') -> 'None'"
+    },
+    {
+      "anchor": "delimitedrenderer",
+      "bases": [],
+      "doc": "Render Pydantic models with DSPy-style delimited field headers.",
+      "kind": "class",
+      "name": "DelimitedRenderer",
+      "signature": "()"
+    },
+    {
+      "anchor": "jsonrenderer",
+      "bases": [],
+      "doc": "Render values as JSON \u2014 explicit backward-compat opt-in.",
+      "kind": "class",
+      "name": "JsonRenderer",
+      "signature": "(*, indent: 'int' = 2) -> 'None'"
+    },
+    {
+      "anchor": "render_input",
+      "doc": "Dispatch helper: render input data for prompt insertion.",
+      "kind": "function",
+      "name": "render_input",
+      "signature": "(input_data: 'Any', *, renderer: 'Renderer | None') -> 'Any'"
+    },
+    {
+      "anchor": "register_type",
+      "doc": "Register a Pydantic model under *name* for spec-based lookup.",
+      "kind": "function",
+      "name": "register_type",
+      "signature": "(name: 'str', cls: 'type[BaseModel]') -> 'None'"
+    },
+    {
+      "anchor": "lookup_type",
+      "doc": "Return the model registered under *name*.",
+      "kind": "function",
+      "name": "lookup_type",
+      "signature": "(name: 'str') -> 'type[BaseModel]'"
+    },
+    {
+      "anchor": "load_spec",
+      "doc": "Load a pipeline spec and return a compilable Construct.",
+      "kind": "function",
+      "name": "load_spec",
+      "signature": "(spec: 'str | dict[str, Any]', project: 'str | dict[str, Any] | None' = None) -> 'Construct'"
+    },
+    {
+      "anchor": "lint",
+      "doc": "Validate DI bindings and template placeholders in *construct*.",
+      "kind": "function",
+      "name": "lint",
+      "signature": "(construct: 'Construct', *, config: 'dict[str, Any] | None' = None, known_template_vars: 'set[str] | None' = None, template_resolver: 'Callable[[str], str | None] | None' = None, llm_factory: 'Any' = None, prompt_compiler: 'Any' = None, conditions: 'dict[str, Callable] | None' = None, tool_factories: 'dict[str, Callable] | None' = None) -> 'list[LintIssue]'"
+    },
+    {
+      "anchor": "lintissue",
+      "bases": [],
+      "doc": "A single lint problem \u2014 DI binding or template placeholder.",
+      "fields": [
+        {
+          "annotation": "str",
+          "default": null,
+          "name": "node_name",
+          "required": true
+        },
+        {
+          "annotation": "str",
+          "default": null,
+          "name": "param",
+          "required": true
+        },
+        {
+          "annotation": "str",
+          "default": null,
+          "name": "kind",
+          "required": true
+        },
+        {
+          "annotation": "str",
+          "default": null,
+          "name": "message",
+          "required": true
+        },
+        {
+          "annotation": "bool",
+          "default": "False",
+          "name": "required",
+          "required": false
+        }
+      ],
+      "kind": "dataclass",
+      "name": "LintIssue",
+      "signature": "(node_name: 'str', param: 'str', kind: 'str', message: 'str', required: 'bool' = False) -> None"
+    },
+    {
+      "anchor": "verify_compiled",
+      "doc": "Validate structural integrity of a compiled graph.",
+      "kind": "function",
+      "name": "verify_compiled",
+      "signature": "(graph: 'Any') -> 'list[VerifyIssue]'"
+    },
+    {
+      "anchor": "verifyissue",
+      "bases": [],
+      "doc": "A single post-compile verification finding.",
+      "fields": [
+        {
+          "annotation": "str",
+          "default": null,
+          "name": "node_name",
+          "required": true
+        },
+        {
+          "annotation": "str",
+          "default": null,
+          "name": "kind",
+          "required": true
+        },
+        {
+          "annotation": "str",
+          "default": null,
+          "name": "message",
+          "required": true
+        }
+      ],
+      "kind": "dataclass",
+      "name": "VerifyIssue",
+      "signature": "(node_name: 'str', kind: 'str', message: 'str') -> None"
+    },
+    {
+      "anchor": "llmfactory",
+      "bases": [],
+      "doc": "Factory callback for creating LLM client instances per node tier.",
+      "kind": "class",
+      "name": "LlmFactory",
+      "signature": "(*args, **kwargs)"
+    },
+    {
+      "anchor": "promptcompiler",
+      "bases": [],
+      "doc": "Builds message lists for LLM calls.",
+      "kind": "class",
+      "name": "PromptCompiler",
+      "signature": "(*args, **kwargs)"
+    },
+    {
+      "anchor": "costcallback",
+      "bases": [],
+      "doc": "Cost telemetry hook called after each LLM invocation.",
+      "kind": "class",
+      "name": "CostCallback",
+      "signature": "(*args, **kwargs)"
+    },
+    {
+      "anchor": "mergepreprocess",
+      "bases": [],
+      "doc": "Replaces the default ``{variants: ..., **upstream}`` input_data",
+      "kind": "class",
+      "name": "MergePreProcess",
+      "signature": "(*args, **kwargs)"
+    },
+    {
+      "anchor": "mergepostprocess",
+      "bases": [],
+      "doc": "Transforms the parsed LLM merge result before it is written to state.",
+      "kind": "class",
+      "name": "MergePostProcess",
+      "signature": "(*args, **kwargs)"
+    },
+    {
+      "anchor": "mergefallback",
+      "bases": [],
+      "doc": "Catches errors from ``invoke_structured`` during merge. Returns a",
+      "kind": "class",
+      "name": "MergeFallback",
+      "signature": "(*args, **kwargs)"
+    },
+    {
+      "anchor": "skippredicate",
+      "bases": [],
+      "doc": "Returns True to bypass the LLM call. Receives extracted ``input_data``",
+      "kind": "class",
+      "name": "SkipPredicate",
+      "signature": "(*args, **kwargs)"
+    },
+    {
+      "anchor": "skipvaluefactory",
+      "bases": [],
+      "doc": "Produces the output value when ``skip_when`` fires. Receives the same",
+      "kind": "class",
+      "name": "SkipValueFactory",
+      "signature": "(*args, **kwargs)"
+    },
+    {
+      "anchor": "rawnodefn",
+      "bases": [],
+      "doc": "Raw escape hatch for ``mode='raw'``. Direct LangGraph node signature.",
+      "kind": "class",
+      "name": "RawNodeFn",
+      "signature": "(*args, **kwargs)"
+    }
+  ]
+}
