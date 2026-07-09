@@ -18,6 +18,9 @@ These comparisons use the same task in both approaches. Focus on the contrast be
 | Fan-out scaffolding with `Send` | Compiles `@node(map_over=...)` to the same IR |
 | Oracle ensemble plumbing | Compiles `@node(ensemble_n=3, merge_fn=...)` to fan-out + barrier + merge |
 | Condition registries for interrupts | Accepts inline lambdas via `interrupt_when=` |
+| A second async codebase | The same compiled graph runs under `run()` or `arun()` — the framework carries the sync/async twins |
+| MCP client plumbing per node | `neograph[mcp]` turns a server config into per-tool factories you slice per node, with per-run identity |
+| Resource fetch-and-parse glue | `FromResource` hydrates typed models at node entry, with size caps and self-healing expiry |
 
 ## Pattern 1: Sequential pipeline
 

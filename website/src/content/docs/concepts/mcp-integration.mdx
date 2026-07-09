@@ -1,0 +1,78 @@
+---
+title: MCP Integration
+description: How neograph consumes Model Context Protocol servers — typed tools with least-privilege binding, per-run identity, and resources as typed node inputs. neograph never owns the session.
+---
+
+neograph is an MCP *client*, and its design stance fits in one sentence: **neograph never owns an MCP session — the adapters own connection lifecycle; neograph owns typing, wiring, and replay-safety.** Every MCP touchpoint is a consumer-supplied callable passed through config (a tool factory, a resource fetcher, a replayer), so routing, auth, and connection lifetime stay in your hands while the framework guarantees what it is actually good at: that the right node gets the right capability, under the right identity, with typed data on both sides.
+
+MCP has two halves, and neograph maps each onto a surface you already know:
+
+| MCP concept | What it is | neograph surface |
+|---|---|---|
+| **Tools** | Capabilities the *model* decides to call | `tools=` on `agent`/`act` nodes, filled per node from `mcp_tool_factories()` |
+| **Resources** | Data the *framework* fetches deterministically | `FromResource` DI marker, the resource manifest, `resource_reader` |
+
+The split matters: a tool call is a model decision inside a ReAct loop; a resource read is dependency injection at node entry. neograph keeps them separate so a deterministic fetch never rides on an LLM's whim, and a model-driven read never bypasses budgets and gates.
+
+## Install
+
+The battery ships as a separate import package inside the same distribution, so neograph core stays MCP-free:
+
+```bash
+pip install 'neograph[mcp]'   # or: uv add 'neograph[mcp]'
+```
+
+Importing `neograph_mcp` without the extra fails loud with the install hint. Core users pull zero MCP dependencies.
+
+## Tools: a dict of factories, sliced per node
+
+`mcp_tool_factories()` connects to your servers once, enumerates their tools, and returns a **dict** — one async factory per tool:
+
+```python
+from neograph_mcp import StdioServer, mcp_tool_factories
+
+FACTORIES = mcp_tool_factories(
+    {"crm": StdioServer(command=sys.executable, args=[SERVER])},
+    token_provider=lambda configurable: configurable.get("mcp_auth", "anon"),
+)
+```
+
+The dict shape is the point. "One agent holds every tool" is the anti-pattern MCP clients drift into; here you slice the dict per node, so each node's `tools=` (and its `compile(tool_factories=...)`) is a **least-privilege boundary**. A research agent whose slice lacks `update_deal` structurally cannot mutate — not "is prompted not to."
+
+Three things ride along for free once MCP tools are node tools:
+
+- **Per-run identity.** The `token_provider` reads the operator from `config["configurable"]` on every run, so two runs of the same compiled graph act as two different principals. Over stdio the token rides as a framework-injected tool argument (stdio has no headers); over streamable-http it rides as a bearer header minted per request by an `httpx.Auth`. The token never enters state, the checkpoint, or the schema fingerprint.
+- **Gated mutations.** `gate_tools_when=` pauses a checkpointed run *before* a mutating tool fires; approve runs it exactly once, deny feeds the agent a denial message and the tool never executes. An MCP mutation cannot fire before a human approves.
+- **Typed results.** `ToolInteraction.typed_result` preserves the structured MCP payload — parse it into a declared model, not out of a repr string.
+
+The battery is an overridable default: the seam is `compile(tool_factories=...)`, and a factory is just an async `(config, tool_config) -> tool` callable that owns its client. See the [MCP Client walkthrough](/walkthrough/mcp-client/) for the full runnable story, including the hand-rolled escape hatch.
+
+## Resources: typed inputs, not blobs
+
+A resource in neograph is a **typed node input**. The URI is wiring; the Pydantic model is the contract; the fetch happens at node entry, before your function runs:
+
+```python
+@node(outputs=Assessment)
+async def assess(
+    doc: Annotated[ContractDoc, FromResource("crm://deals/{deal_id}/contract")],
+    claims: Claims,
+) -> Assessment: ...
+```
+
+When an upstream agent *discovers* resources at runtime (a tool returns `resource_link`s), neograph lifts them into a checkpointed manifest and a downstream node hydrates by domain kind — `FromResource(ref="email-history")` — with a layered expiry story: read, replay the producing tool call if it was idempotent, otherwise fail loud with `ResourceExpiredError`. When the *model* should decide what to read, `resource_reader` wraps a URI template + output model into a typed tool instead.
+
+That is the whole surface at concept level — [Resource Hydration](/concepts/resource-hydration/) covers the mechanics (templated URIs, the manifest, `max_bytes`, the idempotency gate), and the [MCP Resources walkthrough](/walkthrough/mcp-resources/) runs it end-to-end against a real server, including a link that expires mid-pause and self-heals.
+
+## Async-only, checked statically
+
+MCP tools and resource hydration are async-only — drive these pipelines with `arun()`/`astream()`. This is not a caveat to memorize: `lint()` flags `tool_requires_async_driver` before you run, and a sync `run()` fails loud with a `ConfigurationError` pointing at `arun()` rather than half-executing. See [Sync & Async Execution](/concepts/async-execution/) for the full boundary.
+
+## What neograph deliberately does not do
+
+- **Hold sessions.** No connection pool, no client registry, no reconnect logic in core. Your fetcher/factory owns the client; serverless and long-lived deployments make different choices and neograph should not pick for them.
+- **Guess at parsing.** A resource typed `application/json` validates into your model; anything else needs a `str` parameter or an explicit `parse=` callable. There is no silent LLM-parse inside dependency injection.
+- **Trust the model with identity.** The run's token is framework-carried into the tool call, overriding any model-supplied value.
+
+---
+
+Documentation &copy; 2025-2026 Constantine Mirin, [mirin.pro](https://mirin.pro). Licensed under [CC BY-ND 4.0](https://creativecommons.org/licenses/by-nd/4.0/).

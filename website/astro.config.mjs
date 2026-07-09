@@ -45,12 +45,15 @@ export default defineConfig({
 					items: [
 						{ label: 'Node Modes', slug: 'concepts/node-modes' },
 						{ label: 'Subgraphs', slug: 'concepts/subgraphs' },
+						{ label: 'Sync & Async Execution', slug: 'concepts/async-execution' },
+						{ label: 'Checkpoint Resume', slug: 'concepts/checkpoint-resume' },
 						{ label: 'Observability', slug: 'concepts/observability' },
 						{ label: 'LLM Configuration', slug: 'concepts/llm-configuration' },
-						{ label: 'Resource Hydration', slug: 'concepts/resource-hydration' },
+						{ label: 'Each x Oracle Fusion', slug: 'concepts/each-oracle-fusion' },
 						{ label: 'Prompt Compiler', slug: 'concepts/prompt-compiler' },
 						{ label: 'Migrating your prompt compiler', slug: 'concepts/migrating-prompt-compilers' },
 						{ label: 'Evaluating Prompts', slug: 'concepts/evaluating-prompts' },
+						{ label: 'Input Renderers', slug: 'concepts/renderers' },
 						{ label: 'Retry Semantics', slug: 'concepts/retry-semantics' },
 						{ label: 'Pipeline Spec Format', slug: 'concepts/spec-format' },
 					{ label: 'Testing', slug: 'concepts/testing' },
@@ -58,6 +61,13 @@ export default defineConfig({
 					{ label: 'Static Linting (lint)', slug: 'concepts/lint' },
 					{ label: 'Graph Visualization', slug: 'concepts/visualize' },
 					{ label: 'Developer Mode', slug: 'concepts/dev-mode' },
+					],
+				},
+				{
+					label: 'MCP',
+					items: [
+						{ label: 'MCP Integration', slug: 'concepts/mcp-integration' },
+						{ label: 'Resource Hydration', slug: 'concepts/resource-hydration' },
 					],
 				},
 				{

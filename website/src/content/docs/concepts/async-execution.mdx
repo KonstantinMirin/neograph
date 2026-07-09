@@ -1,0 +1,64 @@
+---
+title: Sync & Async Execution
+description: Async is a verb, not an architecture — one pipeline definition runs under run(), arun(), stream(), or astream(), and the framework carries the sync/async duality for you.
+---
+
+In most agent stacks, "going async" is an architectural decision you make early and live with. In neograph it is a verb you call. You define one pipeline; the same compiled graph runs under any of the four verbs:
+
+```python
+result  = run(graph, input={...})                 # sync
+result  = await arun(graph, input={...})          # async
+chunks  = stream(graph, input={...})              # sync streaming
+chunks  = astream(graph, input={...})             # async streaming
+```
+
+All four share the same signature surface — `input=` / `resume=` for new-input vs human-in-the-loop resume, `auto_resume=` for [schema-aware checkpoint resume](/concepts/checkpoint-resume/), `observe=` for tracing. The streaming verbs add `stream_mode=` (LangGraph's `values`, `updates`, `custom`, `messages`, `debug`). There is no second pipeline definition, no async flag at compile time, and no wrapper class: internally every runtime seam has a sync and an async twin, and the verb you call selects the path.
+
+## The driver must match the checkpointer — checked loud
+
+The one thing you cannot mix is a sync verb with an async-only checkpointer (or the reverse). This is where naive setups fail *badly* — a sync `run()` against an async-only saver would otherwise raise a bare `NotImplementedError` deep inside the engine, or worse, silently skip persistence. neograph classifies the checkpointer at run start and fails with a `ConfigurationError` naming the fix:
+
+```python
+graph = compile(pipeline, checkpointer=AsyncSqliteSaver.from_conn_string(db))
+
+run(graph, input={...})
+# ConfigurationError: Async-only checkpointer passed to a synchronous
+# driver (run/stream). Drive with arun()/astream().
+```
+
+`SqliteSaver` pairs with `run()`/`stream()`, `AsyncSqliteSaver` with `arun()`/`astream()`; `MemorySaver` works under both. Everything downstream of the verb — checkpointing, crash recovery, and the schema-aware auto-rewind — behaves identically on either path; the auto-rewind contract is pinned by end-to-end tests on real file-backed Sqlite savers in both drivers.
+
+## What requires `arun()`
+
+Most pipelines are free to choose. A few surfaces are async-only by nature, and they pull the whole run onto the async driver:
+
+| Surface | Why async-only |
+|---|---|
+| MCP tools (battery or raw `BaseTool` from langchain-mcp-adapters) | The adapter produces coroutine-backed tools with no sync `func` |
+| [`FromResource` hydration](/concepts/resource-hydration/) | The fetch is awaited at node entry; `run()` fails loud rather than passing `None` |
+| `resource_reader` tools | Same — an awaited read wrapped as a tool |
+| An async-only checkpointer (`AsyncSqliteSaver`, async Postgres) | The saver has no sync interface |
+
+You do not discover this at runtime by surprise: `lint()` reports `tool_requires_async_driver` statically when a node carries an async-only tool, and every runtime mismatch is a `ConfigurationError` naming the verb to use. Scripted nodes declared `async def` (for example a `FromResource` consumer) likewise belong to the async driver.
+
+## Async agent turns run tool calls concurrently
+
+Under `arun()`, when the model emits several tool calls in one turn, neograph executes them **concurrently** and preserves the semantics you would get sequentially:
+
+- **Order** — results are fed back to the model in the model's original tool-call order, regardless of completion order.
+- **Budgets** — per-tool budgets are reserved in call order *before* the concurrent batch starts, so a budget of 2 means 2, even when both calls are in flight at once.
+- **Observability** — each call records its own latency, not the batch wall-clock.
+
+A turn that fans out three reads costs one round of the slowest read instead of the sum. The sync driver runs the same turn sequentially with identical semantics — another instance of the twin rule: the two paths may differ in concurrency, never in behavior.
+
+## Mixing sync and async nodes
+
+Node bodies and drivers are independent: a sync `def` scripted node runs fine under `arun()` (the async driver dispatches it without blocking the loop in spirit — it is a plain call inside the node's superstep). The reverse is the constrained direction: an `async def` body or an awaited DI binding needs the async driver. In practice the decision procedure is one line: **if anything in the pipeline touches MCP, resources, or an async saver, drive with `arun()`; otherwise either verb works.**
+
+## Why there is no "async mode"
+
+The alternative designs both fail someone. A sync-only framework locks out MCP and concurrent tool execution. An async-only framework makes every notebook, script, and test carry an event loop for pipelines that never await anything. Carrying the duality inside the framework — twin execution paths behind one graph and four verbs — costs neograph internal discipline (each seam's twins share their logic and diverge only at the await boundary, an invariant our test suite enforces structurally) and costs you nothing.
+
+---
+
+Documentation &copy; 2025-2026 Constantine Mirin, [mirin.pro](https://mirin.pro). Licensed under [CC BY-ND 4.0](https://creativecommons.org/licenses/by-nd/4.0/).

@@ -9,6 +9,16 @@ Like `FromInput` and `FromConfig`, it is a marker inside `typing.Annotated`. Unl
 
 neograph owns no MCP session. Every fetch goes through a consumer-supplied async callable you pass in config, so routing, auth, and connection lifetime stay in your hands.
 
+## The mental model: a resource is a typed input
+
+Everything on this page is one idea applied consistently: **a resource is a typed node input, not a blob your code goes and gets.** The URI is wiring — it says *where*, the same way a parameter name says *which upstream node*. The Pydantic model is the contract — the node body receives a validated `ContractDoc`, never bytes to parse. And because the wiring is declared rather than executed imperatively, the framework can do things hand-rolled fetch code cannot:
+
+- **check it statically** — `lint()` proves a manifest ref has a possible producer before you run;
+- **cap it early** — `max_bytes` fails at node entry with the parameter name, not as a provider 400 three calls later;
+- **heal it across time** — a link that expired during a human pause is re-derived by replaying its producing tool call, gated on that producer's idempotency.
+
+If you keep one sentence: *URI = wiring, model = contract, expiry = the framework's problem.* The rest of the page is mechanics.
+
 :::tip[See it end to end]
 The [MCP Resources walkthrough](/walkthrough/mcp-resources/) runs this whole surface against a real MCP server — typed fraction reads, the lifted manifest, hydration across a human pause, and a link that expires mid-pause and self-heals. It names the pattern: **Typed Resource Manifest with Ephemeral Hydration**.
 :::
