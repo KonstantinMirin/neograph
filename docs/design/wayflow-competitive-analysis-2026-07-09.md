@@ -102,12 +102,37 @@ not a weekend project.
 ### Where WayFlow wins (broad, and on distribution)
 - **Distribution / credibility** — Oracle Labs, arxiv paper, ecosystem adapters
   (LangGraph/AutoGen/CrewAI), AG-UI / A2A / CopilotKit integrations. neograph:
-  solo, private, ~0 external users.
-- **Breadth** — eval, RAG/datastores/embeddings, tracing, guardrails/sensitive
-  fields, Flow Builder UI.
-- **Multi-agent** — first-class Swarm / ManagerWorkers / hierarchical / A2A.
-- **MCP transport breadth** — Stdio/SSE/StreamableHTTP + mTLS.
+  solo, private, ~0 external users. **This is the only durable WayFlow advantage.**
 - **Reference runtime** — native Agent Spec, guaranteed fidelity. neograph is an adapter.
+- **Breadth** — mostly ILLUSORY once itemized; see §4a. Collapses to two addable
+  primitives + one 50-line enterprise convenience.
+
+---
+
+### 4a. Breadth, itemized: real gap vs inherited plumbing (grounded in their source)
+
+| WayFlow "feature" | Verdict | Evidence |
+|---|---|---|
+| ManagerWorkers | **not a gap** | their docs: "can be expressed as a Flow using a BranchingNode and AgentNodes … sufficient." A named recipe, not a primitive. neograph: router node + worker sub-constructs + loop. |
+| MCP transports (Stdio/SSE/StreamableHTTP) | **not a gap** | from the `mcp` SDK; WayFlow depends on it as neograph depends on `langchain-mcp-adapters`. |
+| MCP **mTLS** transports | **tiny real add, trivially matchable** | WayFlow's OWN code (`SSEmTLSTransport`/`StreamableHTTPmTLSTransport`): httpx client w/ cert_file/key_file/ssl_ca_cert for client-cert auth. ~50 lines; base SDK lacks it. |
+| Datastores / RAG / embeddings | **not a structural gap** | NOT even in Agent Spec (spec calls it a "future consideration"). WayFlow ships `InMemoryDatastore`/`OracleDatabaseDatastore` + own EmbeddingModels — plumbing neograph composes as `@node`s over the (broader) LangChain ecosystem. |
+| Eval (AssistantEvaluator, TaskScorer, LLM-judge scorers) | **not a structural gap** | separable harness; Langfuse/LangSmith/Promptfoo/DeepEval cover it; WayFlow's own tracer exports to Langfuse. A graph compiler doesn't need a bundled evaluator. |
+| Observability / tracing | **not a gap** | OTel-inspired spans → external exporters; neograph reaches the same backends via Langfuse. |
+| **Swarm** (dynamic decentralized handoff) | **REAL, but addable** | `first_agent` + `relationships` (caller→recipient pairs); agents choose next at runtime. Distinct from BranchingNode's predefined conditions. BUT LangGraph's `Command(goto)`/`Send` already support runtime handoff (cf. `langgraph-swarm`) — a combinator neograph would EXPOSE, not a substrate limitation. |
+| **RemoteAgent / A2AAgent** (cross-runtime/network agents) | **REAL gap, nascent value** | agent executed in another runtime via REST/RPC/A2A. neograph is single-runtime. Fakeable as a scripted HTTP node; not first-class. A2A is young — file, don't chase. |
+
+**Conclusion:** WayFlow's breadth advantage collapses to TWO addable primitives
+(Swarm-as-combinator via LangGraph Command; remote/A2A agents) + one 50-line
+enterprise convenience (mTLS MCP). Everything else is plumbing neograph inherits
+from a BROADER substrate (LangGraph + LangChain + `mcp` SDK + Langfuse) than
+WayFlow's hand-rolled versions. "We could be at least as broad" is essentially
+TRUE today.
+
+**Interop consequence:** round-trip fidelity risk is localized to exactly two
+Agent Spec component types — `Swarm` and `RemoteAgent`/`A2AAgent`. Everything else
+maps to an existing neograph concept. The epic gate task (neograph-swcy1) should
+treat these two as the only genuine mapping unknowns.
 
 ---
 
