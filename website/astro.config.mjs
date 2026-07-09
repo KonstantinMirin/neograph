@@ -2,8 +2,15 @@
 import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
 import starlightClientMermaid from '@pasqal-io/starlight-client-mermaid';
+import remarkApi from './plugins/remark-api.mjs';
 
 export default defineConfig({
+	// remarkApi validates + autolinks backticked API-symbol references against the
+	// introspection-generated manifest (verifiable-docs Stage B). A dotted `Type.member`
+	// ref to a fielded type with a missing member FAILS the build.
+	markdown: {
+		remarkPlugins: [remarkApi],
+	},
 	integrations: [
 		starlight({
 			plugins: [starlightClientMermaid()],

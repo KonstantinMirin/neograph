@@ -1,0 +1,4 @@
+{
+  "_comment": "Symbols the remark-api plugin should NOT build-fail on, even though they would. Use ONLY for genuine historical-contrast references to removed/renamed fields. Self-cleaning: an entry that now resolves in the manifest fails the build (remove it). Keep empty by default.",
+  "ignore": []
+}
