@@ -95,6 +95,7 @@ Mode is inferred: `prompt=` + `model=` means LLM call (`think` mode). Neither me
 
 ## 5. Compile and Run
 
+{/* test-skip: runs a live-model/observability pipeline (needs OPENAI_API_KEY or a real backend); Stage D does not execute live snippets */}
 ```python
 from neograph import compile, run
 
@@ -118,6 +119,7 @@ The result is a dict keyed by node name. Each value is the typed Pydantic model 
 
 Here is the full script, copy-paste-runnable:
 
+{/* test-skip: runs a live-model/observability pipeline (needs OPENAI_API_KEY or a real backend); Stage D does not execute live snippets */}
 ```python
 import os
 import sys
@@ -189,6 +191,7 @@ You got a compiled graph wrapping a standard LangGraph graph. You can stream it 
 
 `run()` has an async twin, `arun()`, with the identical signature. Use it when your nodes, tools, or `llm_factory` are async, or to run the pipeline under an existing event loop:
 
+{/* test-skip: top-level await/async snippet (not runnable as a plain module) */}
 ```python
 from neograph import arun
 
@@ -202,6 +205,7 @@ The compiled graph also delegates async facade verbs -- `aget_state` / `aget_sta
 
 Instead of waiting for the final state, stream the graph as it runs. NeoGraph exposes top-level `stream()` (sync) and `astream()` (async) verbs that mirror `run()`/`arun()` -- same new-input / resume / crash-recovery modes -- and add a `stream_mode` argument (a str or a list, passed straight to LangGraph):
 
+{/* test-skip: illustrative fragment: references `graph` defined in the page narrative, not in a runnable block */}
 ```python
 from neograph import stream
 
@@ -212,6 +216,7 @@ for chunk in stream(graph, input={"topic": "microservice authentication"},
 
 The async twin drives the same graph on the event loop -- the production surface for SSE / AG-UI consumers:
 
+{/* test-skip: top-level await/async snippet (not runnable as a plain module) */}
 ```python
 from neograph import astream
 
@@ -225,6 +230,7 @@ async for chunk in astream(graph, input={"topic": "..."}, stream_mode="values"):
 
 A node body can push a typed domain event onto the stream with `emit_progress`. Pass a Pydantic model; it is wrapped in a stable envelope (`{"neograph_event": "progress", "event_type": "<ClassName>", "data": {...}}`) and delivered on the `custom` stream:
 
+{/* test-skip: illustrative fragment: references `RawText` defined in the page narrative, not in a runnable block */}
 ```python
 from pydantic import BaseModel
 from neograph import node, emit_progress

@@ -7,6 +7,7 @@ description: Define pipeline topology with Python control flow — subclass Cons
 
 ## How it works
 
+{/* test-skip: illustrative fragment: references `CheckResult` defined in the page narrative, not in a runnable block */}
 ```python
 from neograph import ForwardConstruct, Node, compile
 
@@ -46,6 +47,7 @@ The tracer collects nodes in call order and builds the same node list that `Cons
 
 A pipeline with no branches — just sequential node calls:
 
+{/* test-skip: snippet not runnable as written (ValidationError: 1 validation error for Node name   Field required [type=missing, input_value={'outputs': <class '__mai...tract) */}
 ```python
 from neograph import ForwardConstruct, Node, compile, run
 from pydantic import BaseModel

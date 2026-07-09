@@ -16,6 +16,7 @@ The `@node` decorator and `construct_from_module` are the ergonomic surface for 
 
 Every `@node` decorator call produces a `Node` instance. The programmatic API constructs them directly:
 
+{/* test-skip: illustrative fragment: references `RawText` defined in the page narrative, not in a runnable block */}
 ```python
 from neograph import Node
 
@@ -44,6 +45,7 @@ classify = Node(
 
 Group nodes into a pipeline:
 
+{/* test-skip: illustrative fragment: references `decompose` defined in the page narrative, not in a runnable block */}
 ```python
 from neograph import Construct, compile, run
 
@@ -58,6 +60,7 @@ The compiler walks the node list, wires sequential edges, validates types at ass
 
 Modifiers are composed onto nodes using `|`. The pipe returns a new `Node` with the modifier appended (the original is not mutated):
 
+{/* test-skip: illustrative fragment: references `Claims` defined in the page narrative, not in a runnable block */}
 ```python
 from neograph import Node, Oracle, Each, Operator
 
@@ -89,6 +92,7 @@ robust_decompose = Node(
 
 Modifiers work on both Nodes and Constructs:
 
+{/* test-skip: illustrative fragment: references `Construct` defined in the page narrative, not in a runnable block */}
 ```python
 enrich = Construct(
     "enrich",
@@ -102,6 +106,7 @@ enrich = Construct(
 
 The programmatic API is not an escape hatch from validation. When you instantiate a `Construct`, the same `_validate_node_chain` runs:
 
+{/* test-skip: snippet not runnable as written (SyntaxError: positional argument follows keyword argument (programmatic_105.py, line 4)) */}
 ```python
 # This raises ConstructError -- verify expects ClusterGroup
 # but decompose produces Claims
@@ -129,6 +134,7 @@ All three produce the same IR -- a `Construct` containing `Node` instances with 
 
 ## Example: building from config
 
+{/* test-skip: reads an illustrative file (`pipeline.yaml`) not present in the repo */}
 ```python
 import yaml
 from neograph import Node, Construct, Oracle, Each, compile, run

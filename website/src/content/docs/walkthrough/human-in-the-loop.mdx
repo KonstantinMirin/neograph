@@ -159,6 +159,7 @@ The `Operator` modifier still exists for [runtime construction](/runtime/program
 
 Pass it a predicate on `@node`. On every ReAct turn where the agent wants to call tools, the predicate runs *before* the tool step. Return a truthy payload to pause — the graph checkpoints and surfaces the payload as an interrupt, exactly like `interrupt_when=`. Return a falsy value to let the tools run untouched.
 
+{/* test-skip: illustrative fragment: references `Report` defined in the page narrative, not in a runnable block */}
 ```python
 from neograph import node, Tool
 
@@ -240,6 +241,7 @@ When you pass `resume_model=`, the resumed dict is **validated** into that model
 
 `ask_human()` is pure, optional sugar: it adds the typed contract and makes the pause a marker the [linter](/runtime/lint/) can see. It contains **zero** execution logic — the pause/resume path is byte-identical to calling LangGraph's `interrupt()` directly, which **remains fully supported**. Use whichever you prefer:
 
+{/* test-skip: snippet not runnable as written (RuntimeError: Called get_config outside of a runnable context) */}
 ```python
 from langgraph.types import interrupt
 

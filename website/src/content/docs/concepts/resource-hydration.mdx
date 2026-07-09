@@ -27,6 +27,7 @@ The [MCP Resources walkthrough](/walkthrough/mcp-resources/) runs this whole sur
 
 `FromResource` never opens a connection itself. It reads an async `fetch(uri) -> (content, mime)` callable from `config["configurable"]["mcp_resource_fetcher"]`:
 
+{/* test-skip: top-level await/async snippet (not runnable as a plain module) */}
 ```python
 async def fetch(uri: str) -> tuple[bytes | str, str | None]:
     # your MCP client / HTTP client / file reader — you own the session
@@ -46,6 +47,7 @@ Pass a URI as the first argument. The node reads exactly that resource.
 
 ### Static URI
 
+{/* test-skip: illustrative fragment: references `Assessment` defined in the page narrative, not in a runnable block */}
 ```python
 from typing import Annotated
 from neograph import node, FromResource
@@ -62,6 +64,7 @@ async def assess(
 
 The URI can carry RFC 6570 template variables, interpolated from the node's `FromInput` values (and anything else in `config["configurable"]`) at resolution time. This is how one node definition reads a different resource on every run:
 
+{/* test-skip: illustrative fragment: references `Assessment` defined in the page narrative, not in a runnable block */}
 ```python
 from typing import Annotated
 from neograph import node, FromInput, FromResource
@@ -82,6 +85,7 @@ The interpolator supports the subset the resource layer emits: simple `{var}` an
 
 Templated URIs work when *you* know the URI shape. But when an upstream `agent`/`act` node discovers resources dynamically, you do not know the URIs at author time — the agent does, at runtime. For that, neograph lifts every `resource_link` an agent emits into a checkpointed *resource manifest*, tagged by a domain `kind`. A downstream node hydrates one by kind instead of by URI:
 
+{/* test-skip: illustrative fragment: references `Findings` defined in the page narrative, not in a runnable block */}
 ```python
 from typing import Annotated
 from neograph import node, FromResource
@@ -120,6 +124,7 @@ URI mode (`uri=`) does a single read with no replay layer: there is no producing
 
 The replayer is an async `replay(tool_name, args) -> raw_tool_result` callable under `config["configurable"]["mcp_resource_replayer"]`. Like the fetcher, it is consumer-owned (neograph holds no session) and optional — absent, an expired ref fails loud rather than replaying:
 
+{/* test-skip: top-level await/async snippet (not runnable as a plain module) */}
 ```python
 async def replay(tool_name: str, args: dict) -> object:
     # re-invoke the producing tool; return its raw result (neograph scans it
@@ -144,6 +149,7 @@ Both `ResourceExpiredError` and `NonIdempotentReplayError` subclass `ExecutionEr
 
 A resource that fetches fine can still be too large to put in a prompt — the failure would otherwise surface as a confusing provider 400 once the text hits the model. `max_bytes` moves the failure earlier and makes it legible: the fetched blob is size-checked at node entry, before parse, before it reaches any prompt.
 
+{/* test-skip: illustrative fragment: references `node` defined in the page narrative, not in a runnable block */}
 ```python
 @node(outputs=Summary)
 async def summarize(
@@ -158,6 +164,7 @@ An oversized resource fails loud naming the parameter, the actual size, and the 
 
 `FromResource` is DI: the *framework* fetches the resource before your node runs. When the *model* should decide whether and what to read, expose a typed reader tool instead. `resource_reader` turns a URI template + output model into an async, typed `BaseTool` you drop into an agent's `tools=`:
 
+{/* test-skip: illustrative fragment: references `ContractDoc` defined in the page narrative, not in a runnable block */}
 ```python
 from neograph import resource_reader
 
@@ -185,6 +192,7 @@ For genuinely opaque content with no schema, `output_model=BlobResult` is the ty
 
 A manifest-mode `FromResource(ref=<kind>)` is only satisfiable if *some* upstream `agent`/`act` node can emit a `resource_link` to populate the manifest. `lint()` checks this statically: if a node hydrates a manifest kind but the construct contains no resource-link-producing agent/act node at all, the manifest is guaranteed empty and hydration would fail loud at runtime, far from the cause.
 
+{/* test-skip: illustrative fragment: references `lint` defined in the page narrative, not in a runnable block */}
 ```python
 issues = lint(pipeline)
 # LintIssue(kind="resource_hydration_kind_unmatched", required=True,

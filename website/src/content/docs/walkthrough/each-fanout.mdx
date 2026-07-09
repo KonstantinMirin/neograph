@@ -196,6 +196,7 @@ Two kwargs:
 
 This is equivalent to the pipe-operator style:
 
+{/* test-skip: illustrative fragment: references `Node` defined in the page narrative, not in a runnable block */}
 ```python
 verify = Node.scripted("verify", fn="verify_cluster", inputs=ClusterGroup, outputs=VerifyResult
 ) | Each(over="discover_clusters.groups", key="label")

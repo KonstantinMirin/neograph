@@ -11,6 +11,7 @@ The moment you evaluate a prompt, you face a trap: the eval harness runs *outsid
 
 ## Byte-identical, by construction
 
+{/* test-skip: illustrative fragment: references `my_claims` defined in the page narrative, not in a runnable block */}
 ```python
 from neograph import compile_prompt, DefaultPromptCompiler
 from pathlib import Path
@@ -43,6 +44,7 @@ This parity is pinned by a test in neograph's own suite: it captures the message
 
 Prompt evaluation usually means comparing **variants** — `classify-v7` vs `classify-v8`, a filename-versioned convention. `compile_prompt` gives you two hooks so the harness can swap the template source **without** rebuilding the rendering pipeline:
 
+{/* test-skip: illustrative fragment: references `compile_prompt` defined in the page narrative, not in a runnable block */}
 ```python
 # 1. A raw variant string (an experiment not yet committed to a file):
 compile_prompt("x", {"claims": my_claims}, output_model=Classified,
@@ -64,6 +66,7 @@ neograph blesses the **filename-versioned variant convention** and gives evals t
 
 [promptfoo](https://promptfoo.dev/) drives a matrix of prompts × test cases × assertions. Point its Python provider at `compile_prompt` so every eval scores the REAL prompt:
 
+{/* test-skip: references an illustrative external module `my_project` (not part of neograph) */}
 ```python
 # neograph_provider.py
 from pathlib import Path

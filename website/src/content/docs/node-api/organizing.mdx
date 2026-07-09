@@ -18,6 +18,7 @@ src/
     report.py          # @node functions for reporting
 ```
 
+{/* test-skip: illustrative fragment: references `Claims` defined in the page narrative, not in a runnable block */}
 ```python
 # pipelines/decompose.py
 import sys
@@ -38,6 +39,7 @@ Each module is self-contained. `construct_from_module` only sees `@node` functio
 
 Import `@node` functions from other modules to build larger pipelines. Since `@node` returns a `Node` instance, you can import it and include it in a `Construct` directly.
 
+{/* test-skip: references an illustrative external module `pipelines` (not part of neograph) */}
 ```python
 # pipelines/full.py
 from neograph import Construct, compile
@@ -61,6 +63,7 @@ When composing across modules, you assemble the `Construct` manually rather than
 
 When part of your pipeline has internal state that shouldn't leak into the parent, wrap it in a `Construct` with declared I/O boundaries.
 
+{/* test-skip: illustrative fragment: references `Claims` defined in the page narrative, not in a runnable block */}
 ```python
 from neograph import Construct, Node
 
@@ -85,6 +88,7 @@ enrich = Construct(
 
 The parent pipeline sees `enrich` as a single unit with type `Claims -> ScoredClaims`. The intermediate `Context` node is invisible:
 
+{/* test-skip: illustrative fragment: references `Construct` defined in the page narrative, not in a runnable block */}
 ```python
 pipeline = Construct("analysis", nodes=[
     decompose,
@@ -104,6 +108,7 @@ result = run(graph, input={"node_id": "REQ-001"})
 
 Sub-constructs also compose with modifiers. You can ensemble an entire sub-pipeline:
 
+{/* test-skip: illustrative fragment: references `enrich` defined in the page narrative, not in a runnable block */}
 ```python
 from neograph import Oracle
 

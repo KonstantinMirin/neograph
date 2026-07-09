@@ -9,6 +9,7 @@ NeoGraph does not own the LLM client. You supply a factory that creates LLM inst
 
 There is no global configuration step. You pass the LLM factory and prompt compiler as keyword arguments to `compile()`:
 
+{/* test-skip: illustrative fragment: references `pipeline` defined in the page narrative, not in a runnable block */}
 ```python
 from neograph import compile
 
@@ -29,6 +30,7 @@ The factory creates a LangChain `BaseChatModel` instance for a given tier. NeoGr
 
 The minimal factory takes a tier string and returns a model:
 
+{/* test-skip: runs a live-model/observability pipeline (needs OPENAI_API_KEY or a real backend); Stage D does not execute live snippets */}
 ```python
 from langchain_openai import ChatOpenAI
 
@@ -49,6 +51,7 @@ graph = compile(
 
 The advanced signature receives the node name and per-node LLM config:
 
+{/* test-skip: runs a live-model/observability pipeline (needs OPENAI_API_KEY or a real backend); Stage D does not execute live snippets */}
 ```python
 def my_factory(tier, node_name=None, llm_config=None):
     config = llm_config or {}
@@ -68,6 +71,7 @@ The framework inspects your factory with `inspect.signature` when `compile()` bu
 
 Each node can carry an `llm_config` dict that is passed to the factory. With `@node`, pass it as a keyword:
 
+{/* test-skip: illustrative fragment: references `ClassifiedClaims` defined in the page narrative, not in a runnable block */}
 ```python
 from neograph import node
 
@@ -88,6 +92,7 @@ The compiler builds the message list that the LLM receives. NeoGraph calls it fo
 
 The minimal compiler takes a template name and the input data:
 
+{/* test-skip: illustrative fragment: references `pipeline` defined in the page narrative, not in a runnable block */}
 ```python
 from langchain_core.messages import HumanMessage
 
@@ -104,6 +109,7 @@ graph = compile(
 
 The full signature receives `node_name`, `config`, `output_model`, and `llm_config`:
 
+{/* test-skip: illustrative fragment: references `pipeline` defined in the page narrative, not in a runnable block */}
 ```python
 def my_compiler(template, data, *, node_name=None, config=None,
                 output_model=None, llm_config=None):
@@ -147,6 +153,7 @@ No try/except at runtime. You can upgrade incrementally without breaking existin
 
 When you call `run()`, all fields from the `input` dict are automatically injected into `config["configurable"]`:
 
+{/* test-skip: illustrative fragment: references `graph` defined in the page narrative, not in a runnable block */}
 ```python
 from neograph import run
 
@@ -159,6 +166,7 @@ result = run(
 
 Inside every node, `config["configurable"]` contains:
 
+{/* test-skip: illustrative fragment: references `my_limiter` defined in the page narrative, not in a runnable block */}
 ```python
 {
     "node_id": "BR-042",
@@ -173,6 +181,7 @@ Input fields take precedence over existing configurable values if there is a key
 
 Put expensive-to-create resources in `config["configurable"]` and access them from your factory, compiler, or `@node` functions via `Annotated[T, FromConfig]`:
 
+{/* test-skip: illustrative fragment: references `create_connection_pool` defined in the page narrative, not in a runnable block */}
 ```python
 from neograph import node, FromConfig
 
@@ -223,6 +232,7 @@ For a **single-shot (`think`) node**, `output_strategy` governs how the typed ou
 
 The framework calls `llm.with_structured_output(output_model)`. Works with any LangChain model that supports native structured output. The framework tries `include_raw=True` to capture token counts, falling back without it.
 
+{/* test-skip: illustrative fragment: references `node` defined in the page narrative, not in a runnable block */}
 ```python
 @node(outputs=Claims, prompt='rw/classify', model='fast')
 def classify(topic: RawText) -> Claims: ...
@@ -233,6 +243,7 @@ def classify(topic: RawText) -> Claims: ...
 
 The framework calls `llm.invoke()` directly (no `with_structured_output`), then strips markdown code fences and parses the JSON into the Pydantic model. Works with any model that returns JSON in its text response.
 
+{/* test-skip: illustrative fragment: references `node` defined in the page narrative, not in a runnable block */}
 ```python
 @node(outputs=Claims, prompt='rw/decompose', model='reason',
       llm_config={"output_strategy": "json_mode"})
@@ -248,6 +259,7 @@ The framework handles:
 
 Same as `json_mode` -- the framework extracts JSON from the LLM's plain text response. Use this name to signal intent when the model returns prose with embedded JSON rather than fenced code blocks.
 
+{/* test-skip: illustrative fragment: references `node` defined in the page narrative, not in a runnable block */}
 ```python
 @node(outputs=Analysis, prompt='rw/analyze', model='reason',
       llm_config={"output_strategy": "text"})
@@ -258,6 +270,7 @@ def analyze(topic: RawText) -> Analysis: ...
 
 Different nodes can use different strategies. This is the production pattern for pipelines that use multiple model providers:
 
+{/* test-skip: illustrative fragment: references `Claims` defined in the page narrative, not in a runnable block */}
 ```python
 from neograph import node
 
@@ -283,6 +296,7 @@ For ReAct modes, the output strategy applies to the final parsing step after the
 - `"structured"`: a separate `with_structured_output` call parses the final answer
 - `"json_mode"` / `"text"`: the last message in the tool loop is parsed directly as JSON
 
+{/* test-skip: illustrative fragment: references `node` defined in the page narrative, not in a runnable block */}
 ```python
 @node(mode='agent', outputs=ResearchResult, prompt='rw/research', model='reason',
       tools=[Tool(name="search", budget=5)],

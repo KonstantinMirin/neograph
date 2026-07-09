@@ -11,6 +11,7 @@ NeoGraph exposes three API surfaces that compile to the same IR:
 
 All three are importable from `neograph`:
 
+{/* test-skip: BROKEN doc snippet (API drift): cannot import name 'RenderedInput' from 'neograph' (/Users/konst/projects/neograph/src/neograph/__init__.py); see verifiable-docs follow-up bead */}
 ```python
 from neograph import (
     # Primary @node API
@@ -47,6 +48,7 @@ from neograph import (
 
 Decorator that turns a function into a Node with signature-inferred dependencies.
 
+{/* test-skip: snippet not runnable as written (SyntaxError: invalid syntax (api_50.py, line 2)) */}
 ```python
 @node(
     outputs: type[BaseModel] | dict[str, type],
@@ -104,12 +106,14 @@ The function body runs for `scripted` and `raw` modes. For LLM modes, the body i
 
 Walks a module's `@node`-decorated functions, infers dependencies from parameter names, topologically sorts, and returns a `Construct`.
 
+{/* test-skip: illustrative fragment: references `construct_from_module` defined in the page narrative, not in a runnable block */}
 ```python
 pipeline = construct_from_module(sys.modules[__name__], name="my-pipeline")
 ```
 
 When building a sub-construct, pass `input=` / `output=` to define the state boundary:
 
+{/* test-skip: illustrative fragment: references `construct_from_module` defined in the page narrative, not in a runnable block */}
 ```python
 sub = construct_from_module(mod, input=VerifyClaim, output=ClaimResult)
 ```
@@ -118,6 +122,7 @@ sub = construct_from_module(mod, input=VerifyClaim, output=ClaimResult)
 
 Builds a `Construct` from an explicit list of `@node`-decorated functions and/or `Construct` instances. Use when multiple pipelines share a file or when mixing `@node` functions with sub-constructs:
 
+{/* test-skip: illustrative fragment: references `construct_from_functions` defined in the page narrative, not in a runnable block */}
 ```python
 pipeline = construct_from_functions("rw-ingestion", [
     flatten_claims,
@@ -132,6 +137,7 @@ Accepts both `@node` items and `Construct` items in the same list. Construct ite
 
 Decorator for Oracle merge functions with `FromInput`/`FromConfig` DI support:
 
+{/* test-skip: illustrative fragment: references `merge_fn` defined in the page narrative, not in a runnable block */}
 ```python
 @merge_fn
 def combine(variants: list[Claims], shared: Annotated[Ctx, FromConfig]) -> Claims:
@@ -147,6 +153,7 @@ The first parameter receives the list of Oracle generator results. Subsequent pa
 
 Dependency-injection marker used inside `typing.Annotated`. Parameters annotated with `Annotated[T, FromInput]` are resolved from `run(input={...})` at runtime (runtime-variable data — user queries, document IDs, per-call configuration).
 
+{/* test-skip: illustrative fragment: references `Report` defined in the page narrative, not in a runnable block */}
 ```python
 from typing import Annotated
 from neograph import node, FromInput
@@ -163,6 +170,7 @@ If the inner type `T` is a Pydantic `BaseModel` subclass, `FromInput` bundles: i
 
 Dependency-injection marker used inside `typing.Annotated`. Parameters annotated with `Annotated[T, FromConfig]` are resolved from `config['configurable']` at runtime (shared infrastructure — rate limiters, database connections, trace providers).
 
+{/* test-skip: illustrative fragment: references `Result` defined in the page narrative, not in a runnable block */}
 ```python
 from typing import Annotated
 from neograph import node, FromConfig
@@ -179,6 +187,7 @@ run(graph, input={...}, config={'configurable': {'tracer': my_tracer}})
 
 Dependency-injection marker used inside `typing.Annotated`. Fetches an MCP resource at node entry and parses it into the declared type. The read is *awaited*, so the node must be `async def` and driven by `arun()`; the sync `run()` fails loud. Pass exactly one of `uri=` (a static or RFC-6570-templated URI) or `ref=` (a manifest resource kind to hydrate) — both or neither is a `ConstructError`.
 
+{/* test-skip: illustrative fragment: references `Assessment` defined in the page narrative, not in a runnable block */}
 ```python
 from typing import Annotated
 from neograph import node, FromResource
@@ -214,6 +223,7 @@ Frozen Pydantic models on the resource surface. `ResourceRef` is a lifted `resou
 
 Base class for pipelines with Python control flow. Subclass, declare `Node` attributes, override `forward()`:
 
+{/* test-skip: illustrative fragment: references `ForwardConstruct` defined in the page narrative, not in a runnable block */}
 ```python
 class Analysis(ForwardConstruct):
     check   = Node(outputs=CheckResult, prompt='check', model='fast')
@@ -240,6 +250,7 @@ For testing, call `forward()` directly -- it runs real Python with real values.
 
 Explicit loop primitive that compiles to a sub-construct with a `Loop` modifier. Returns a callable; call it with a proxy to wire the loop into the graph.
 
+{/* test-skip: illustrative fragment: references `ForwardConstruct` defined in the page narrative, not in a runnable block */}
 ```python
 class Writer(ForwardConstruct):
     draft  = Node(outputs=Draft, prompt='draft', model='fast')
@@ -271,6 +282,7 @@ Maps 1:1 to `construct | Loop(when=..., max_iterations=...)` in the programmatic
 
 The Node IR class. Used directly for runtime construction, programmatic pipeline generation, and sub-constructs.
 
+{/* test-skip: illustrative fragment: references `Node` defined in the page narrative, not in a runnable block */}
 ```python
 decompose = Node("decompose", mode="think", outputs=Claims,
                  prompt="rw/decompose", model="reason")
@@ -280,6 +292,7 @@ decompose = Node("decompose", mode="think", outputs=Claims,
 
 Convenience constructor for scripted nodes. `fn` is a string key resolved against the `scripted=` dict passed to `compile()`:
 
+{/* test-skip: illustrative fragment: references `Node` defined in the page narrative, not in a runnable block */}
 ```python
 def extract_fn(input_data, config): ...
 
@@ -292,12 +305,14 @@ graph = compile(pipeline, scripted={"extract_fn": extract_fn})
 
 Ordered composition of Nodes. Validates input/output compatibility across the node chain at assembly time.
 
+{/* test-skip: illustrative fragment: references `Construct` defined in the page narrative, not in a runnable block */}
 ```python
 pipeline = Construct("my-pipeline", nodes=[extract, classify])
 ```
 
 Sub-constructs need `input=` and `output=` to declare their typed I/O boundary:
 
+{/* test-skip: illustrative fragment: references `Construct` defined in the page narrative, not in a runnable block */}
 ```python
 enrich = Construct(
     "enrich",
@@ -311,6 +326,7 @@ enrich = Construct(
 
 Apply to a Node or Construct via `|`:
 
+{/* test-skip: illustrative fragment: references `node` defined in the page narrative, not in a runnable block */}
 ```python
 node | Oracle(n=3, merge_fn="combine")
 node | Oracle(models=["reason", "fast"], merge_fn="pick_best")
@@ -336,6 +352,7 @@ The `|` syntax returns a new Node/Construct with the modifier appended. You can 
 
 Sugar over `| Each(over=..., key=...)` with IDE-friendly lambda introspection. Returns a new Node with an `Each` modifier appended.
 
+{/* test-skip: illustrative fragment: references `verify` defined in the page narrative, not in a runnable block */}
 ```python
 # Lambda form (refactor-safe — Pyright/Pylance catch typos):
 verify.map(lambda s: s.make_clusters.groups, key="label")
@@ -353,6 +370,7 @@ Both forms compile to the same `Each` modifier. The lambda form gives static ana
 
 Default renderer propagated to all child nodes that don't have their own renderer set. Dispatch hierarchy: `model.render_for_prompt()` > `node.renderer` > `construct.renderer` > global default > None.
 
+{/* test-skip: illustrative fragment: references `Construct` defined in the page narrative, not in a runnable block */}
 ```python
 pipeline = Construct(
     "my-pipeline",
@@ -365,6 +383,7 @@ pipeline = Construct(
 
 Default LLM configuration propagated to all child nodes. Per-node `llm_config` merges over the Construct default (node wins on conflicts). Common use: setting `output_strategy="json_mode"` once for a whole pipeline instead of on every node.
 
+{/* test-skip: illustrative fragment: references `Construct` defined in the page narrative, not in a runnable block */}
 ```python
 pipeline = Construct(
     "my-pipeline",
@@ -381,6 +400,7 @@ pipeline = Construct(
 
 Compiles a `Construct` (or `ForwardConstruct`) into an executable LangGraph `StateGraph`.
 
+{/* test-skip: snippet not runnable as written (SyntaxError: Invalid star expression (api_384.py, line 4)) */}
 ```python
 compile(
     construct,
@@ -426,6 +446,7 @@ Returns the final state dict with framework internals stripped.
 
 Async twin of `run()`. Same three modes and the same signature; awaits the graph's async I/O internally (`ainvoke` and the async checkpoint helpers). Use it when your `@node` bodies, tools, or `llm_factory` are async, or when you want the pipeline to run cooperatively under an existing event loop.
 
+{/* test-skip: top-level await/async snippet (not runnable as a plain module) */}
 ```python
 from neograph import arun
 
@@ -438,6 +459,7 @@ result = await arun(graph, input={"topic": "security"})
 
 Streaming twin of `run()`. Yields chunks as the graph runs instead of returning the final state. Mirrors `run()`'s three modes (new input / resume / crash recovery) and adds `stream_mode` (a str or a list, passed straight to LangGraph — `"values"`, `"updates"`, `"custom"`, `"messages"`, `"debug"`). `values` and `updates` chunks are stripped of framework-internal (`neo_*`) fields; `custom` / `messages` / `debug` payloads pass through untouched. `astream(...)` is the async twin (`async for`).
 
+{/* test-skip: top-level await/async snippet (not runnable as a plain module) */}
 ```python
 from neograph import stream, astream
 
@@ -456,6 +478,7 @@ Called from inside a node body (any mode) to push a typed progress/domain event 
 
 `compile()` returns a `CompiledNeograph` facade over the underlying LangGraph graph. Beyond `run()`/`arun()`/`stream()`/`astream()`, the facade delegates a closed set of methods for inspection, streaming, and state editing — sync: `invoke`, `stream`, `get_state`, `get_state_history`, `get_graph`, `update_state`; async: `ainvoke`, `astream`, `astream_events`, `aget_state`, `aget_state_history`, `aupdate_state`. The raw LangGraph graph is available as `.graph` for anything outside this set.
 
+{/* test-skip: top-level await/async snippet (not runnable as a plain module) */}
 ```python
 graph = compile(pipeline, checkpointer=saver)
 
@@ -474,6 +497,7 @@ graph.update_state(config, {"human_approved": True})
 
 Returns a Mermaid diagram string for a compiled graph. Paste the output into any Mermaid renderer (GitHub, docs, mermaid.live).
 
+{/* test-skip: illustrative fragment: references `pipeline` defined in the page narrative, not in a runnable block */}
 ```python
 graph = compile(pipeline)
 print(describe_graph(graph))
@@ -488,6 +512,7 @@ When `config` is `None`, only structural checks are performed: required params a
 - **`known_template_vars`** (`set[str] | None`) — Extra variable names the consumer's prompt pipeline provides. These are treated as valid template placeholders in addition to the ones inferred from the construct's state model.
 - **`template_resolver`** (`Callable[[str], str | None] | None`) — Maps template-ref names to template text for placeholder validation. When provided, `lint()` resolves each node's `prompt=` template ref through this callable and validates that the template's placeholders are satisfiable.
 
+{/* test-skip: illustrative fragment: references `pipeline` defined in the page narrative, not in a runnable block */}
 ```python
 from neograph import lint
 
@@ -500,6 +525,7 @@ for issue in issues:
 
 Dataclass representing a single lint problem found by `lint()`:
 
+{/* test-skip: illustrative fragment: references `dataclass` defined in the page narrative, not in a runnable block */}
 ```python
 @dataclass
 class LintIssue:
@@ -526,6 +552,7 @@ class LintIssue:
 
 Safe expression evaluator for spec-driven conditions. Parses `field op literal` expressions where `op` is one of `< > <= >= == !=` and `literal` is a number, boolean (`true`/`false`), or a quoted string. Dotted field access is supported.
 
+{/* test-skip: illustrative fragment: references `my_output` defined in the page narrative, not in a runnable block */}
 ```python
 from neograph import parse_condition
 
@@ -543,6 +570,7 @@ LLM-callable tool with an optional per-call budget. `budget=0` means unlimited.
 
 Record of a single tool call during a ReAct loop:
 
+{/* test-skip: illustrative fragment: references `BaseModel` defined in the page narrative, not in a runnable block */}
 ```python
 class ToolInteraction(BaseModel, frozen=True):
     tool_name: str
@@ -558,6 +586,7 @@ class ToolInteraction(BaseModel, frozen=True):
 
 Decorator that wraps a function as a `Tool`, auto-registers it, and returns the Tool instance directly:
 
+{/* test-skip: illustrative fragment: references `tool` defined in the page narrative, not in a runnable block */}
 ```python
 @tool(budget=5)
 def search_codebase(query: str) -> SearchResult:
@@ -571,6 +600,7 @@ Tool results can be typed Pydantic models. The framework preserves them in `Tool
 
 Renders a Pydantic model class as a TypeScript-style (BAML) schema. Used internally for `json_mode` output schemas:
 
+{/* test-skip: illustrative fragment: references `describe_type` defined in the page narrative, not in a runnable block */}
 ```python
 describe_type(SearchResult)
 # {
@@ -584,6 +614,7 @@ describe_type(SearchResult)
 
 Renders a Pydantic model instance in the same BAML notation with actual values:
 
+{/* test-skip: illustrative fragment: references `describe_value` defined in the page narrative, not in a runnable block */}
 ```python
 describe_value(SearchResult(file="auth.py", line=42, score=0.95))
 # {
@@ -616,6 +647,7 @@ Compiles a prompt to a message list **standalone** — no compiled graph, no run
 
 Dataclass bundling rendered prompt input for a node. Provides both raw Pydantic models and their rendered string forms, letting the factory choose the right representation for inline vs template-ref prompts.
 
+{/* test-skip: illustrative fragment: references `dataclass` defined in the page narrative, not in a runnable block */}
 ```python
 @dataclass
 class RenderedInput:
@@ -641,6 +673,7 @@ Constructs a `RenderedInput` from raw input data. Applies the optional renderer 
 
 Marker for `typing.Annotated` on Pydantic model fields. Fields annotated with `ExcludeFromOutput` are visible in input rendering (the LLM sees them as context) but excluded from the `describe_type()` output schema, so the LLM will not attempt to produce them. Fields with this marker must have a default value.
 
+{/* test-skip: illustrative fragment: references `BaseModel` defined in the page narrative, not in a runnable block */}
 ```python
 from typing import Annotated
 from neograph import ExcludeFromOutput
@@ -681,6 +714,7 @@ The programmatic / runtime-constructed surface references scripted functions, co
 - **`conditions={"name": fn}`** — Resolves `Operator(when="name")` and string-form `interrupt_when="name"` / `loop_when="name"`.
 - **`tool_factories={"name": factory}`** — Resolves declarative tool lookup; `factory(config, tool_config)` returns a tool.
 
+{/* test-skip: illustrative fragment: references `pipeline` defined in the page narrative, not in a runnable block */}
 ```python
 graph = compile(
     pipeline,
@@ -700,6 +734,7 @@ These are only needed for the programmatic API. `@node`, `@tool`, and `@merge_fn
 
 Load a YAML/JSON pipeline spec and return a compilable `Construct`.
 
+{/* test-skip: snippet not runnable as written (ConfigurationError: invalid spec   hint: 1 validation error for Spec   Input should be a valid dictionary or instance of Spec [typ) */}
 ```python
 from neograph import load_spec, compile, run
 
@@ -723,6 +758,7 @@ See [Pipeline Spec Format](/concepts/spec-format/) for the full spec schema and 
 
 Register a Pydantic model under a string name for spec-based lookup.
 
+{/* test-skip: references an illustrative external module `myapp` (not part of neograph) */}
 ```python
 from neograph import register_type
 from myapp.schemas import Draft

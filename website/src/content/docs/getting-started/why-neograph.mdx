@@ -23,6 +23,7 @@ Three LLM steps in order: decompose a topic into claims, classify them, summariz
 
 ### LangGraph
 
+{/* test-skip: illustrative fragment: references `Claims` defined in the page narrative, not in a runnable block */}
 ```python
 from typing import TypedDict
 from langgraph.graph import END, START, StateGraph
@@ -63,6 +64,7 @@ The `TypedDict` must list every field. Every node is added individually. Every e
 
 ### NeoGraph
 
+{/* test-skip: illustrative fragment: references `Claims` defined in the page narrative, not in a runnable block */}
 ```python
 import sys
 from neograph import node, construct_from_module, compile, run
@@ -89,6 +91,7 @@ An LLM that decides which tools to call, with a budget limit on tool usage.
 
 ### LangGraph
 
+{/* test-skip: illustrative fragment: references `search_web` defined in the page narrative, not in a runnable block */}
 ```python
 from typing import Annotated, TypedDict
 from langgraph.graph import END, START, StateGraph
@@ -127,6 +130,7 @@ LangGraph also has no built-in concept of tool budgets. If you want to limit how
 
 ### NeoGraph
 
+{/* test-skip: illustrative fragment: references `ResearchResult` defined in the page narrative, not in a runnable block */}
 ```python
 import sys
 from neograph import node, construct_from_module, compile, run
@@ -198,6 +202,7 @@ This requires two state schemas (parent and per-worker), an `Annotated` reducer 
 
 ### NeoGraph
 
+{/* test-skip: illustrative fragment: references `Jokes` defined in the page narrative, not in a runnable block */}
 ```python
 import sys
 from neograph import node, construct_from_module, compile, run
@@ -215,6 +220,7 @@ result = run(graph, input={'topic': 'programming'})
 
 For scripted merging instead of LLM judging, use `merge_fn` instead of `merge_prompt`:
 
+{/* test-skip: illustrative fragment: references `node` defined in the page narrative, not in a runnable block */}
 ```python
 @node(outputs=Claims, prompt='decompose', model='reason',
       ensemble_n=3, merge_fn='combine_variants')
@@ -227,6 +233,7 @@ Pause the graph for human approval, then resume.
 
 ### LangGraph
 
+{/* test-skip: illustrative fragment: references `Analysis` defined in the page narrative, not in a runnable block */}
 ```python
 from typing import TypedDict
 from langgraph.checkpoint.memory import MemorySaver
@@ -280,6 +287,7 @@ You need a dedicated `review_gate` node just for the interrupt, a separate `rout
 
 ### NeoGraph
 
+{/* test-skip: illustrative fragment: references `Analysis` defined in the page narrative, not in a runnable block */}
 ```python
 import sys
 from neograph import node, construct_from_module, compile, run
@@ -312,6 +320,7 @@ A parent pipeline with a nested sub-pipeline that has isolated state.
 
 ### LangGraph
 
+{/* test-skip: illustrative fragment: references `Claims` defined in the page narrative, not in a runnable block */}
 ```python
 from typing import TypedDict
 from langgraph.graph import END, START, StateGraph
@@ -369,6 +378,7 @@ Two `TypedDict` schemas, two `StateGraph` builds, two `compile()` calls, and a m
 
 ### NeoGraph
 
+{/* test-skip: illustrative fragment: references `Claims` defined in the page narrative, not in a runnable block */}
 ```python
 import sys
 from neograph import node, construct_from_module, compile, run

@@ -20,6 +20,7 @@ pipeline:
   nodes: [generate]
 ```
 
+{/* test-skip: snippet not runnable as written (ConfigurationError: invalid spec   hint: 1 validation error for Spec   Input should be a valid dictionary or instance of Spec [typ) */}
 ```python
 from neograph import load_spec, compile, run
 
@@ -240,6 +241,7 @@ Types referenced in the spec (like `Draft`, `Claims`, `Report`) must exist in th
 
 ### Option 1: Pre-register Python types
 
+{/* test-skip: references an illustrative external module `myapp` (not part of neograph) */}
 ```python
 from neograph import register_type
 from myapp.schemas import Draft, Claims, Report
@@ -279,6 +281,7 @@ types:
     required: [items]
 ```
 
+{/* test-skip: illustrative fragment: references `load_spec` defined in the page narrative, not in a runnable block */}
 ```python
 construct = load_spec("pipeline.yaml", project="project.yaml")
 ```

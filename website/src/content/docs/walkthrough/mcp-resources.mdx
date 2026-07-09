@@ -28,6 +28,7 @@ graph LR
 
 The naive MCP read is `read_resource(uri) -> bytes`: the model gets an opaque blob and has to hope it can parse it. `resource_reader` replaces that with a typed tool — a URI template plus an output model:
 
+{/* test-skip: illustrative fragment: references `EmailPage` defined in the page narrative, not in a runnable block */}
 ```python
 from neograph import resource_reader
 
@@ -46,6 +47,7 @@ The tool's argument schema is derived from the template's RFC 6570 variables, so
 
 The research agent also calls `get_deal`, whose result carries two `resource_link` blocks (activity history, email history). neograph lifts each one into a typed `ResourceRef` and parks it in a **checkpointed** state channel — the manifest. You can read it straight off the bus:
 
+{/* test-skip: top-level await/async snippet (not runnable as a plain module) */}
 ```python
 state = await graph.aget_state(config)
 manifest = state.values["neo_resource_manifest_research"]
@@ -67,6 +69,7 @@ langchain-mcp-adapters rewrites `resource_link` blocks to `type: "file"`, which 
 
 **A deterministic node, by templated URI.** When the URI shape is known at author time, hydrate it directly. The template variables interpolate from the node's `FromInput` values:
 
+{/* test-skip: illustrative fragment: references `node` defined in the page narrative, not in a runnable block */}
 ```python
 @node(outputs=ActivityHistory)
 async def parse_activity(
@@ -79,6 +82,7 @@ async def parse_activity(
 
 **A think node, from the manifest.** When an upstream agent discovered the resource at runtime, you do not know the URI at author time — the manifest does. Hydrate by `kind`, and the fetched history flows straight into the prompt:
 
+{/* test-skip: illustrative fragment: references `node` defined in the page narrative, not in a runnable block */}
 ```python
 @node(mode="think", outputs=Brief, model="consume", prompt="consume/brief")
 async def consume(
@@ -95,6 +99,7 @@ The think node's body never runs — but `history` still reaches the prompt, bec
 
 A `resource_link` carries no lifetime contract: the URI a tool returned before a human pause may already be dead when the pause ends. The example makes that concrete — it arms a one-shot expiry on the email-history resource **during** the gate pause, then resumes:
 
+{/* test-skip: top-level await/async snippet (not runnable as a plain module) */}
 ```python
 # during the pause:
 await arm_email_expiry()          # the link the resume needs now dies once
@@ -113,6 +118,7 @@ The heal fires on **any** read failure, not a specific error code. Plain FastMCP
 
 The fetcher and replayer come from the `neograph[mcp]` battery — one call, dropped into config:
 
+{/* test-skip: illustrative fragment: references `sys` defined in the page narrative, not in a runnable block */}
 ```python
 from neograph_mcp import StdioServer, mcp_resource_fetcher
 

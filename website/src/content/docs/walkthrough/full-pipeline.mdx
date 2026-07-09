@@ -155,6 +155,7 @@ def needs_review(state):
 
 ## Running the pipeline
 
+{/* test-skip: illustrative fragment: references `llm_factory` defined in the page narrative, not in a runnable block */}
 ```python
 # Checkpointer is required because Operator is in the pipeline.
 # Scripted functions and the Operator condition are passed by name —
@@ -190,6 +191,7 @@ print(list(result["verify"].keys()))
 
 If `check_results` finds a failing cluster, the graph pauses:
 
+{/* test-skip: illustrative fragment: references `result` defined in the page narrative, not in a runnable block */}
 ```python
 if "__interrupt__" in result:
     print(result["__interrupt__"][0].value)

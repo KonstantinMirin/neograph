@@ -157,6 +157,13 @@ dev = [
     # optional extra — so the async checkpoint test file collects. Dev-only:
     # neograph core stays sqlite-free.
     "langgraph-checkpoint-sqlite>=3.1",
+    # neograph-3my4x (verifiable-docs Stage D): docs-snippet execution harness.
+    # tests/test_docs_snippets.py couples to the PRIVATE pre-1.0
+    # pytest_examples.find_examples._extract_code_chunks; the upper bound guards
+    # against a 0.1.x minor renaming that symbol (mirrors the mcp>=1.28,<2 pin).
+    # In [dependency-groups].dev (auto-installed by `uv run pytest`), NOT the
+    # --extra dev group, so the file collects under the bare test command.
+    "pytest-examples>=0.0.18,<0.1",
     "pytest-cov>=7.1.0",
     "python-dotenv>=1.2.2",
 ]

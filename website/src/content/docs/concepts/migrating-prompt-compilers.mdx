@@ -15,6 +15,7 @@ This is the shape of a compiler with one call site, a regex-based fail-loud subs
 
 **Before** — roughly 90 lines: a template loader, a hand-written placeholder scanner, a `RuntimeError` on an unfilled `{var}`, message wrapping, and — because there was no way for a `think`/`agent` node's `FromInput` params to reach its own template — a scripted **seed node** whose only job was to copy `run(input=...)` values onto the state bus so a downstream template could reference them as if they were an upstream output:
 
+{/* test-skip: illustrative fragment: references `node` defined in the page narrative, not in a runnable block */}
 ```python
 # bridge.py (before) — hand-rolled compiler + a seed node working around it
 import re
@@ -43,6 +44,7 @@ def classify(claims: Claims, domain_echo: DomainEcho) -> Classified: ...
 
 **After** — the compiler is one line, and the seed node is deleted because `di_inputs` (see [LLM Configuration](/concepts/llm-configuration/)) layers a `think`/`agent`/`act` node's own `FromInput`/`FromConfig` values into its template namespace directly:
 
+{/* test-skip: illustrative fragment: references `pipeline` defined in the page narrative, not in a runnable block */}
 ```python
 from pathlib import Path
 from neograph import DefaultPromptCompiler, compile
@@ -67,6 +69,7 @@ This is the shape of a project with several near-identical compilers — one per
 
 **Before** — four compilers, differing mainly in a hand-rolled renderer for whichever container shape that node family consumes:
 
+{/* test-skip: illustrative fragment: references `MatchResult` defined in the page narrative, not in a runnable block */}
 ```python
 def _render_verifications(verify: dict[str, MatchResult]) -> str:
     # hand-rolled: describe_value each result, join with blank lines
@@ -93,6 +96,7 @@ def compiler_for_research(template, data, **kw):
 
 **After** — one `DefaultPromptCompiler` for every node family. `render_inputs` (which `build_vars` calls internally) already folds `dict[str, BaseModel]` fan-in and `list[ToolInteraction]` tool logs, so there is nothing left for a per-family compiler to special-case:
 
+{/* test-skip: illustrative fragment: references `pipeline` defined in the page narrative, not in a runnable block */}
 ```python
 from pathlib import Path
 from neograph import DefaultPromptCompiler, compile
@@ -135,6 +139,7 @@ def neograph_bridge_compiler(template, data, *, node_name=None, output_schema=No
 
 **After** — subclass `DefaultPromptCompiler` and override only `render_messages`, the one hook that actually carries project-specific logic. `node_name` reaches the override exactly as it did the hand-rolled version, threaded from the graph at runtime:
 
+{/* test-skip: illustrative fragment: references `pipeline` defined in the page narrative, not in a runnable block */}
 ```python
 from pathlib import Path
 from neograph import DefaultPromptCompiler
@@ -169,6 +174,7 @@ All three recipes above are about rendering — turning input + template into me
 1. **Filename-versioned templates.** Keep every variant as its own file: `classify-v7.txt`, `classify-v8.txt`. Never overwrite a template in place — a new variant is a new filename, so old evals stay reproducible against the exact template they scored.
 2. **A flip constant selects production.** One constant in your bridge module names which variant is live:
 
+{/* test-skip: illustrative fragment: references `node` defined in the page narrative, not in a runnable block */}
    ```python
    # bridge.py
    ACTIVE_CLASSIFY_VARIANT = "classify-v8"
@@ -180,6 +186,7 @@ All three recipes above are about rendering — turning input + template into me
    Promoting a variant to production is a one-line change (flip the constant), not a template rewrite or a registry migration.
 3. **`compile_prompt`'s template-source override lets evals reach non-active variants** without touching the flip constant or rebuilding the rendering pipeline — see [Evaluating your prompts](/concepts/evaluating-prompts/) for the full recipe:
 
+{/* test-skip: illustrative fragment: references `Path` defined in the page narrative, not in a runnable block */}
    ```python
    from neograph import compile_prompt, DefaultPromptCompiler
 

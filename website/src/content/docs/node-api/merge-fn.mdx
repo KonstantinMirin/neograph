@@ -11,6 +11,7 @@ The `@merge_fn` decorator defines merge functions for Oracle ensembles. It provi
 
 A merge function's first parameter always receives the list of variants produced by the Oracle generators. The return type matches the node's output type.
 
+{/* test-skip: illustrative fragment: references `Claims` defined in the page narrative, not in a runnable block */}
 ```python
 from neograph import merge_fn
 
@@ -74,6 +75,7 @@ The `context` parameter reads from the state field written by the upstream `cont
 
 A merge function can combine state params with DI params:
 
+{/* test-skip: illustrative fragment: references `Metadata` defined in the page narrative, not in a runnable block */}
 ```python
 from typing import Annotated
 from neograph import merge_fn, FromInput
@@ -126,6 +128,7 @@ Result but 'context' produces Context.
 
 By default, the merge function is registered under its Python name. Pass `name=` to override:
 
+{/* test-skip: illustrative fragment: references `Claims` defined in the page narrative, not in a runnable block */}
 ```python
 @merge_fn(name="custom_merge")
 def my_internal_merge(variants: list[Claims]) -> Claims:

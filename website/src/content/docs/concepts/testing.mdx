@@ -33,6 +33,7 @@ This shifts most structural bugs from runtime failures to import-time errors.
 
 Test individual nodes in isolation by calling the underlying function directly. For `scripted` nodes, the `@node` decorator returns a `Node` instance, but the original function is accessible through the sidecar:
 
+{/* test-skip: illustrative fragment: references `Report` defined in the page narrative, not in a runnable block */}
 ```python
 from neograph import node
 
@@ -103,6 +104,7 @@ The key pattern: pass the fake factory to `compile()` via the `llm_factory` and 
 
 `ForwardConstruct` subclasses support direct `forward()` calls for debugging. Because `forward()` defines execution order with plain Python control flow, you can call individual node methods with real data:
 
+{/* test-skip: illustrative fragment: references `CheckResult` defined in the page narrative, not in a runnable block */}
 ```python
 from neograph import ForwardConstruct, Node, compile
 

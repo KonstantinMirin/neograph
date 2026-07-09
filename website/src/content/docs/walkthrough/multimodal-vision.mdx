@@ -7,6 +7,7 @@ NeoGraph supports multimodal prompts — send images alongside text to vision-la
 
 ## Basic usage
 
+{/* test-skip: illustrative fragment: references `node` defined in the page narrative, not in a runnable block */}
 ```python
 @node(outputs=ProductMetadata,
       prompt="Classify this product: ${image:photo.image_data}",
@@ -35,6 +36,7 @@ The image field value can be any of:
 
 ## Multiple images
 
+{/* test-skip: illustrative fragment: references `node` defined in the page narrative, not in a runnable block */}
 ```python
 @node(outputs=Comparison,
       prompt="Compare before ${image:before} and after ${image:after}",
@@ -46,6 +48,7 @@ Each `${image:...}` becomes a separate `image_url` content block. Text between i
 
 ## Mixed text and images
 
+{/* test-skip: illustrative fragment: references `node` defined in the page narrative, not in a runnable block */}
 ```python
 @node(outputs=Analysis,
       prompt="Product: ${product.name}\n${image:product.photo}\nRate quality and relevance.",

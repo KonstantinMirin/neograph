@@ -26,6 +26,7 @@ import { Card, CardGrid, LinkCard } from '@astrojs/starlight/components';
 
 ## A code review agent. 8 lines.
 
+{/* test-skip: illustrative fragment: references `node` defined in the page narrative, not in a runnable block */}
 ```python
 @node(outputs=ChangedFiles)
 def parse_diff(raw_diff: Annotated[str, FromInput]) -> ChangedFiles:
@@ -58,6 +59,7 @@ The same thing in raw LangGraph? **130 lines.** Two state models, two graphs, a 
 
 A function is a node. A parameter name is an edge. The graph assembles itself.
 
+{/* test-skip: illustrative fragment: references `node` defined in the page narrative, not in a runnable block */}
 ```python
 @node(outputs=Claims, prompt='decompose', model='reason')
 def decompose(topic: Annotated[str, FromInput]) -> Claims: ...
@@ -137,6 +139,7 @@ ConstructError: Node 'verify' declares inputs=ClusterGroup but no upstream
 uv add neograph
 ```
 
+{/* test-skip: illustrative fragment: references `Result` defined in the page narrative, not in a runnable block */}
 ```python
 from neograph import node, construct_from_module, compile, run
 

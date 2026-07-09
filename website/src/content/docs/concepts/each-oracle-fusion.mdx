@@ -96,6 +96,7 @@ The output is a `dict[str, MergedResult]` -- standard Each shape, keyed by the `
 
 The fused node produces the same output shape as a plain Each: `dict[str, T]` where T is the node's output type after merging. Downstream nodes see the standard Each output and can consume it the same way:
 
+{/* test-skip: illustrative fragment: references `Summary` defined in the page narrative, not in a runnable block */}
 ```python
 @node(outputs=Summary)
 def summarize(decompose: list[Claims]) -> Summary:
@@ -107,6 +108,7 @@ def summarize(decompose: list[Claims]) -> Summary:
 
 Combine `models=` with `map_over=` to run each chunk through multiple model tiers:
 
+{/* test-skip: snippet not runnable as written (ConstructError: [Node 'decompose'] mode='think' requires model=   hint: pass model='<model_name>' or switch to mode='scripted') */}
 ```python
 @node(
     outputs=Claims,

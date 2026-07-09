@@ -58,6 +58,7 @@ llm_output = {
 
 Your runtime turns it into a pipeline:
 
+{/* test-skip: illustrative fragment: references `Claims` defined in the page narrative, not in a runnable block */}
 ```python
 from neograph import (
     Node, Tool, Construct, Oracle, Each, Operator, compile, run,
@@ -99,6 +100,7 @@ def build_pipeline(llm_output):
 
 And runs it:
 
+{/* test-skip: illustrative fragment: references `build_pipeline` defined in the page narrative, not in a runnable block */}
 ```python
 pipeline = build_pipeline(llm_output)
 graph = compile(pipeline)
@@ -109,6 +111,7 @@ result = run(graph, input={"node_id": "user-request-42"})
 
 The pipe operator composes modifiers at runtime without modules, function signatures, or class definitions. The LLM emits a list of modifier dicts, and your runtime chains them with a simple `for` loop:
 
+{/* test-skip: illustrative fragment: references `spec` defined in the page narrative, not in a runnable block */}
 ```python
 for mod_spec in spec.get("modifiers", []):
     n = n | build_modifier(mod_spec)
@@ -188,6 +191,7 @@ pipeline:
   nodes: [decompose, verify, report]
 ```
 
+{/* test-skip: illustrative fragment: references `yaml_string` defined in the page narrative, not in a runnable block */}
 ```python
 from neograph import load_spec, compile, run
 
@@ -215,6 +219,7 @@ Use tool calling when the LLM needs full flexibility (dynamic modifier logic, cu
 
 The same pattern works when pipelines come from YAML, JSON config files, or a database. With `load_spec`, there's no custom `build_pipeline` function needed:
 
+{/* test-skip: snippet not runnable as written (ConfigurationError: invalid spec   hint: 1 validation error for Spec   Input should be a valid dictionary or instance of Spec [typ) */}
 ```python
 from neograph import load_spec, compile, run
 
@@ -225,6 +230,7 @@ run(graph, input={"node_id": "daily-001"})
 
 For the tool-calling approach, the runtime logic is identical to the LLM case — only the source of the spec changes:
 
+{/* test-skip: reads an illustrative file (`pipelines/daily-ingestion.yaml`) not present in the repo */}
 ```python
 import yaml
 

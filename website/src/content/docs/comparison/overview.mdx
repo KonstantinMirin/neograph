@@ -26,6 +26,7 @@ These comparisons use the same task in both approaches. Focus on the contrast be
 
 ### LangGraph
 
+{/* test-skip: illustrative fragment: references `Claims` defined in the page narrative, not in a runnable block */}
 ```python
 from typing import TypedDict
 from langgraph.graph import END, START, StateGraph
@@ -56,6 +57,7 @@ app = graph.compile()
 
 ### NeoGraph
 
+{/* test-skip: illustrative fragment: references `Claims` defined in the page narrative, not in a runnable block */}
 ```python
 import sys
 from neograph import node, construct_from_module, compile
@@ -75,6 +77,7 @@ The parameter `decompose` in `classify(decompose: Claims)` IS the edge. No state
 
 ### LangGraph
 
+{/* test-skip: illustrative fragment: references `tools` defined in the page narrative, not in a runnable block */}
 ```python
 from langgraph.prebuilt import ToolNode
 from langgraph.graph import END, START, StateGraph, MessagesState
@@ -97,6 +100,7 @@ app = graph.compile()
 
 ### NeoGraph
 
+{/* test-skip: illustrative fragment: references `node` defined in the page narrative, not in a runnable block */}
 ```python
 @node(outputs=Answer, mode='agent', prompt='research', model='reason',
       tools=[Tool('search_web', budget=5)])
@@ -111,6 +115,7 @@ graph = compile(construct_from_module(sys.modules[__name__]))
 
 ### LangGraph
 
+{/* test-skip: illustrative fragment: references `StateGraph` defined in the page narrative, not in a runnable block */}
 ```python
 from langgraph.constants import Send
 
@@ -135,6 +140,7 @@ app = graph.compile()
 
 ### NeoGraph
 
+{/* test-skip: illustrative fragment: references `node` defined in the page narrative, not in a runnable block */}
 ```python
 @node(outputs=Items)
 def source() -> Items: ...
@@ -154,6 +160,7 @@ graph = compile(construct_from_module(sys.modules[__name__]))
 
 ### LangGraph
 
+{/* test-skip: illustrative fragment: references `StateGraph` defined in the page narrative, not in a runnable block */}
 ```python
 from langgraph.types import interrupt
 
@@ -172,6 +179,7 @@ app = graph.compile(checkpointer=MemorySaver())
 
 ### NeoGraph
 
+{/* test-skip: illustrative fragment: references `node` defined in the page narrative, not in a runnable block */}
 ```python
 @node(outputs=ValidationResult,
       interrupt_when=lambda s: {'issues': s.validate.issues}
@@ -187,6 +195,7 @@ The interrupt condition lives co-located with the node it guards. No manual `int
 
 ### LangGraph
 
+{/* test-skip: illustrative fragment: references `StateGraph` defined in the page narrative, not in a runnable block */}
 ```python
 # Build the inner graph
 inner = StateGraph(InnerState)
@@ -213,6 +222,7 @@ app = outer.compile()
 
 ### NeoGraph
 
+{/* test-skip: illustrative fragment: references `Construct` defined in the page narrative, not in a runnable block */}
 ```python
 # The sub-construct gets its own typed boundary
 enrich = Construct(

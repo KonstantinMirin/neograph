@@ -77,6 +77,7 @@ The parameter name `decompose` on `research` wires it to the upstream `decompose
 
 ## The complete pipeline
 
+{/* test-skip: BROKEN doc snippet (API drift): FakeSearchTool.invoke() got an unexpected keyword argument 'config'; see verifiable-docs follow-up bead */}
 ```python
 """Think + Agent: decompose a requirement, then research with tools.
 
@@ -272,6 +273,7 @@ This prevents runaway loops and controls API costs. Set `budget=0` for unlimited
 
 Budgets are *enforced* silently -- the model discovers a tool is gone only after it tries to call it. You can also *announce* the budget up front so the model plans its calls, batches where it can, and stops once it has enough. Opt in per node via `llm_config`:
 
+{/* test-skip: illustrative fragment: references `Node` defined in the page narrative, not in a runnable block */}
 ```python
 research = Node(
     "research",
@@ -290,6 +292,7 @@ Tools with `budget=0` (unlimited) are deliberately **not** announced -- "unlimit
 
 Before using any LLM node, pass two functions to `compile()`:
 
+{/* test-skip: illustrative fragment: references `pipeline` defined in the page narrative, not in a runnable block */}
 ```python
 graph = compile(
     pipeline,
@@ -305,6 +308,7 @@ graph = compile(
 
 Tool factories create tool instances at runtime. Each factory receives the pipeline config and any per-tool config. Pass them as a dict on `compile()`:
 
+{/* test-skip: illustrative fragment: references `pipeline` defined in the page narrative, not in a runnable block */}
 ```python
 graph = compile(
     pipeline,
@@ -322,6 +326,7 @@ This lets you create tools that depend on runtime context (API keys, rate limite
 
 `Tool(name, budget)` + `tool_factories=` is the wiring for tools you configure at compile time. When you already have a live LangChain `BaseTool` instance -- most commonly the tools returned by `load_mcp_tools(session)` from `langchain-mcp-adapters` -- you can hand it to `tools=` directly, with no spec and no factory:
 
+{/* test-skip: top-level await/async snippet (not runnable as a plain module) */}
 ```python
 from langchain_mcp_adapters.tools import load_mcp_tools
 

@@ -13,6 +13,7 @@ When you run a pipeline with a checkpointer (MemorySaver, SqliteSaver, PostgresS
 
 If a pipeline crashes mid-execution, re-run with the same `thread_id`. Completed nodes are skipped; execution resumes from the failure point.
 
+{/* test-skip: illustrative fragment: references `pipeline` defined in the page narrative, not in a runnable block */}
 ```python
 from langgraph.checkpoint.memory import MemorySaver
 
@@ -31,6 +32,7 @@ run(graph, input={"node_id": "BR-001"}, config=config)
 
 This is the key feature. If you change a node's output model between runs, neograph detects the change and re-executes only the affected nodes. Expensive upstream work is preserved.
 
+{/* test-skip: illustrative fragment: references `pipeline_v1` defined in the page narrative, not in a runnable block */}
 ```python
 # Run 1: full pipeline (A -> B -> C -> D)
 graph_v1 = compile(pipeline_v1, checkpointer=checkpointer)
@@ -73,6 +75,7 @@ This follows the Prefect cache-miss model: when the schema fingerprint changes, 
 
 If you want explicit control instead of automatic rewind, use `auto_resume=False`:
 
+{/* test-skip: illustrative fragment: references `run` defined in the page narrative, not in a runnable block */}
 ```python
 from neograph import CheckpointSchemaError
 

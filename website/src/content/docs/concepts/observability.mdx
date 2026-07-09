@@ -117,6 +117,7 @@ If you do not configure structlog, it uses its defaults (which are reasonable fo
 
 Use `Annotated[T, FromConfig]` to inject trace providers, span managers, or any shared observability resource into scripted nodes without threading them through state:
 
+{/* test-skip: runs a live-model/observability pipeline (needs OPENAI_API_KEY or a real backend); Stage D does not execute live snippets */}
 ```python
 from typing import Annotated
 from neograph import node, FromConfig
@@ -133,6 +134,7 @@ def summarize(
 
 At runtime, `tracer` is resolved from `config["configurable"]["tracer"]`. Pass it when calling `run()`:
 
+{/* test-skip: runs a live-model/observability pipeline (needs OPENAI_API_KEY or a real backend); Stage D does not execute live snippets */}
 ```python
 from langfuse import Langfuse
 
@@ -152,6 +154,7 @@ This pattern works for any shared resource -- rate limiters, database pools, met
 
 All shared resources and runtime metadata flow through `config["configurable"]`. When you call `run()`, input fields are automatically injected there too:
 
+{/* test-skip: runs a live-model/observability pipeline (needs OPENAI_API_KEY or a real backend); Stage D does not execute live snippets */}
 ```python
 result = run(
     graph,
@@ -180,6 +183,7 @@ This means your prompt compiler, LLM factory, and scripted functions can all acc
 
 ### One-line setup: `observe=True`
 
+{/* test-skip: runs a live-model/observability pipeline (needs OPENAI_API_KEY or a real backend); Stage D does not execute live snippets */}
 ```python
 from neograph import compile, run
 
@@ -203,6 +207,7 @@ Every LLM call inside every node -- think, agent, act, and even Oracle merge cal
 
 `observe=` covers the 90% case. When you need full control -- a custom handler, extra Langfuse config, your own flush timing -- attach the handler through the standard `config["callbacks"]` mechanism and flush manually:
 
+{/* test-skip: runs a live-model/observability pipeline (needs OPENAI_API_KEY or a real backend); Stage D does not execute live snippets */}
 ```python
 from langfuse.langchain import CallbackHandler
 from langfuse import get_client
@@ -230,6 +235,7 @@ NeoGraph does not integrate with Langfuse directly. The mechanism is LangGraph's
 
 This means any LangChain-compatible callback works. If you use LangSmith, Weights & Biases, or a custom handler, pass it the same way:
 
+{/* test-skip: illustrative fragment: references `my_langsmith_handler` defined in the page narrative, not in a runnable block */}
 ```python
 config = {"callbacks": [my_langsmith_handler, my_custom_handler]}
 result = run(graph, input={...}, config=config)

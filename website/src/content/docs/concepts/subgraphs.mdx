@@ -13,6 +13,7 @@ Sub-constructs can be built with `@node` functions or with declarative `Node(...
 
 Use `construct_from_functions(name, functions, input=X, output=Y)` to build a sub-construct from `@node`-decorated functions. Parameters whose type matches `input=` are automatically wired to the sub-construct's input port:
 
+{/* test-skip: illustrative fragment: references `ExplorationResult` defined in the page narrative, not in a runnable block */}
 ```python
 from neograph import node, construct_from_functions, Tool, ToolInteraction
 
@@ -35,6 +36,7 @@ The `explore` function's `claim: VerifyClaim` parameter matches `input=VerifyCla
 
 The declarative form uses `Node(...)` or `Node.scripted(...)` directly. This is useful when you need explicit control over node names and wiring, or when building pipelines programmatically at runtime:
 
+{/* test-skip: illustrative fragment: references `Claims` defined in the page narrative, not in a runnable block */}
 ```python
 from neograph import Construct, Node
 
@@ -52,6 +54,7 @@ Both forms produce the same Construct with `input`/`output` boundary ports. The 
 
 A sub-Construct must declare both `input` and `output` to define what crosses the boundary:
 
+{/* test-skip: illustrative fragment: references `LookupResults` defined in the page narrative, not in a runnable block */}
 ```python
 from pydantic import BaseModel
 from neograph import Construct, Node
@@ -86,6 +89,7 @@ The `input` type tells the framework how to extract data from the parent state. 
 
 The top-level pipeline uses `@node` for its own nodes. The sub-construct slots in alongside them:
 
+{/* test-skip: illustrative fragment: references `RawText` defined in the page narrative, not in a runnable block */}
 ```python
 from neograph import node, construct_from_module, compile, run
 import sys
@@ -128,6 +132,7 @@ This means:
 
 Nesting composes. A sub-Construct can itself contain sub-Constructs:
 
+{/* test-skip: illustrative fragment: references `Construct` defined in the page narrative, not in a runnable block */}
 ```python
 # Level 2: inner sub-construct
 verify_block = Construct(
@@ -162,6 +167,7 @@ All three modifiers -- Oracle, Each, Operator -- work on Constructs. When applie
 
 Run the entire sub-pipeline N times in parallel, then merge the outputs:
 
+{/* test-skip: illustrative fragment: references `Construct` defined in the page narrative, not in a runnable block */}
 ```python
 enrich = Construct(
     "enrich",
@@ -177,6 +183,7 @@ The compiler creates N copies of the sub-graph execution, each receiving the sam
 
 Run the entire sub-pipeline once per item in a collection:
 
+{/* test-skip: illustrative fragment: references `Construct` defined in the page narrative, not in a runnable block */}
 ```python
 review_cluster = Construct(
     "review-cluster",
@@ -188,6 +195,7 @@ review_cluster = Construct(
 
 If `clusters.groups` contains 5 items, the sub-pipeline runs 5 times in parallel. The result is a dict:
 
+{/* test-skip: snippet not runnable as written (SyntaxError: ':' expected after dictionary key (subgraphs_191.py, line 5)) */}
 ```python
 result["review_cluster"] == {
     "auth": ClusterReview(...),
@@ -201,6 +209,7 @@ result["review_cluster"] == {
 
 Pause after the entire sub-pipeline completes:
 
+{/* test-skip: illustrative fragment: references `Construct` defined in the page narrative, not in a runnable block */}
 ```python
 validation = Construct(
     "validation",

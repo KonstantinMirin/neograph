@@ -13,6 +13,7 @@ This page documents the contract. The [example sub-projects](https://github.com/
 
 A prompt compiler is any callable with this shape:
 
+{/* test-skip: illustrative fragment: references `Any` defined in the page narrative, not in a runnable block */}
 ```python
 def prompt_compiler(
     template: str,
@@ -85,6 +86,7 @@ def make_template_prompt_compiler(prompt_dir):
 
 Usage:
 
+{/* test-skip: illustrative fragment: references `pipeline` defined in the page narrative, not in a runnable block */}
 ```python
 graph = compile(
     pipeline,
@@ -101,6 +103,7 @@ graph = compile(
 
 If your needs are the common ones — load `prompts/{name}` from disk, BAML-render the input, inject the output schema, fail loud on a missing placeholder — neograph ships `DefaultPromptCompiler` so you write **zero** compiler code:
 
+{/* test-skip: illustrative fragment: references `pipeline` defined in the page narrative, not in a runnable block */}
 ```python
 from pathlib import Path
 from neograph import DefaultPromptCompiler, compile
@@ -118,12 +121,14 @@ It loads `prompts/{template}.md`, calls `render_inputs()` (the same BAML pipelin
 
 The dir loader defaults to `{name}.md`. If your templates are `.txt` (or any other extension), pass `suffix=`:
 
+{/* test-skip: illustrative fragment: references `DefaultPromptCompiler` defined in the page narrative, not in a runnable block */}
 ```python
 DefaultPromptCompiler(Path("prompts"), suffix=".txt")   # loads prompts/{name}.txt
 ```
 
 For a non-directory source (a registry, a database, an in-memory dict), pass any `name -> text` callable as the loader instead:
 
+{/* test-skip: illustrative fragment: references `DefaultPromptCompiler` defined in the page narrative, not in a runnable block */}
 ```python
 DefaultPromptCompiler(lambda name: my_registry.get(name))
 ```
@@ -143,6 +148,7 @@ DefaultPromptCompiler(lambda name: my_registry.get(name))
 
 For most projects a constant `system=` message plus the file-loaded user message is enough. When you need **per-node** message shaping — e.g. an `explore` node that sends a single user message while every other node gets a system line naming the node — override `render_messages`. It receives the node's `node_name` (threaded from the graph at runtime), so a ~10-line subclass covers the whole policy while keeping the rest of the pipeline (loading, rendering, schema injection) untouched:
 
+{/* test-skip: illustrative fragment: references `pipeline` defined in the page narrative, not in a runnable block */}
 ```python
 from neograph import DefaultPromptCompiler
 from neograph.prompt import substitute
@@ -169,6 +175,7 @@ When neither the default nor a small subclass fits, write a compiler from scratc
 
 When you need more — system/user splits, JSON schema injection for structured-output prompts, multi-template lookup chains, alias forwarding for legacy templates — write your own compiler. A production-shaped pattern looks like this:
 
+{/* test-skip: illustrative fragment: references `Any` defined in the page narrative, not in a runnable block */}
 ```python
 def prompt_compiler(
     template_name: str,
@@ -232,6 +239,7 @@ The `prompt_compiler` lives in `neograph_bridge.py`, takes neograph's `(template
 
 When your prompt is a short literal with `${var}` placeholders, neograph handles substitution directly — your compiler is never called:
 
+{/* test-skip: illustrative fragment: references `node` defined in the page narrative, not in a runnable block */}
 ```python
 @node(
     mode="think",

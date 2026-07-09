@@ -11,6 +11,7 @@ This walkthrough follows `examples/23_mcp_client_selective_binding.py`, a CRM de
 
 The shipped `neograph[mcp]` battery turns a typed server config into the `{name: async factory}` dict that `compile(tool_factories=...)` already accepts:
 
+{/* test-skip: illustrative fragment: references `sys` defined in the page narrative, not in a runnable block */}
 ```python
 from neograph_mcp import StdioServer, mcp_tool_factories
 
@@ -38,6 +39,7 @@ The battery ships in a separate wheel so neograph core stays MCP-free. Install i
 
 The point of an MCP client over "one agent holds every tool" is **least privilege per node**. Slice the battery's dict so each node binds only the tools it needs:
 
+{/* test-skip: illustrative fragment: references `node` defined in the page narrative, not in a runnable block */}
 ```python
 READER_TOOLS = ["crm_search", "kb_lookup"]  # read-only slice
 MUTATOR_TOOLS = ["update_deal"]             # the mutating slice
@@ -69,6 +71,7 @@ def apply_action() -> ActionOutcome: ...
 
 Each node's `compile()` gets only its slice, so the least-privilege boundary is enforced at two levels:
 
+{/* test-skip: illustrative fragment: references `research_pipeline` defined in the page narrative, not in a runnable block */}
 ```python
 research_graph = compile(
     research_pipeline, llm_factory=llm_factory, prompt_compiler=prompt_compiler,
@@ -87,6 +90,7 @@ The research agent literally cannot mutate — `update_deal` is neither in its `
 
 A battery factory yields a real LangChain `BaseTool`; you can hand one straight to a node in `tools=[raw_tool]` with zero ceremony:
 
+{/* test-skip: top-level await/async snippet (not runnable as a plain module) */}
 ```python
 raw_search = await FACTORIES["crm_search"]({"configurable": {"mcp_auth": "svc"}}, None)
 
@@ -97,6 +101,7 @@ def raw_research() -> ResearchBrief: ...
 
 MCP tools are **async-only** — langchain-mcp-adapters produces a `StructuredTool` backed by a coroutine with no sync `func`, so `.invoke()` raises. `lint()` catches this before you run:
 
+{/* test-skip: illustrative fragment: references `lint` defined in the page narrative, not in a runnable block */}
 ```python
 issues = [i for i in lint(raw_pipeline) if i.kind == "tool_requires_async_driver"]
 # [Issue(kind="tool_requires_async_driver",
@@ -109,6 +114,7 @@ So a sync `run()` fails loud with a `ConfigurationError` pointing you to `arun()
 
 Each run carries its own identity. The `token_provider` reads `config['configurable']['mcp_auth']` and mints the token; neograph never inspects it — it only carries it from config to the tool.
 
+{/* test-skip: top-level await/async snippet (not runnable as a plain module) */}
 ```python
 for operator in ("operator-A", "operator-B"):
     result = await arun(
@@ -134,6 +140,7 @@ In **production against a streamable-http server**, identity rides as a bearer `
 
 `gate_tools_when` on the action node pauses the run **before** `update_deal` fires. Because an `act` node's tool step is a real checkpointed superstep, nothing has happened yet when the human is asked:
 
+{/* test-skip: top-level await/async snippet (not runnable as a plain module) */}
 ```python
 config = {"configurable": {"thread_id": "deal-1", "mcp_auth": "operator-A"}}
 
@@ -147,6 +154,7 @@ result = await arun(action_graph, resume={"approved": True}, config=config)
 
 Resume with a **deny** and the tool never runs — the agent is told why (a denial `ToolMessage` is fed back answering the pending call) and finalizes anyway:
 
+{/* test-skip: top-level await/async snippet (not runnable as a plain module) */}
 ```python
 result = await arun(action_graph, resume={"approved": False}, config=config)
 # result["apply_action"].status == "blocked"  — update_deal never executed
@@ -158,6 +166,7 @@ This is the structural version of "approve before side effects": you never touch
 
 `ToolInteraction.typed_result` preserves the structured MCP payload — not a repr string — so you get typed data back:
 
+{/* test-skip: illustrative fragment: references `tool_log` defined in the page narrative, not in a runnable block */}
 ```python
 search = next(i for i in tool_log if i.tool_name == "crm_search")
 hit = _parse_mcp_json(search.typed_result)["hits"][0]
@@ -170,6 +179,7 @@ langchain-mcp-adapters surfaces a structured result as a list of content blocks 
 
 The battery is an overridable default. A tool factory is just an async callable `(config, tool_config) -> tool` that **owns its client** — neograph core never holds an MCP session:
 
+{/* test-skip: illustrative fragment: references `pipeline` defined in the page narrative, not in a runnable block */}
 ```python
 from langchain_mcp_adapters.client import MultiServerMCPClient
 
@@ -194,6 +204,7 @@ Same shape as `DefaultPromptCompiler`: a productized 90%-case battery over a sea
 
 Its second job is gateway federation. A gateway like IBM ContextForge re-exposes a peer's tool namespaced as `<peer>-<tool>`, but your node binds a fixed bare name:
 
+{/* test-skip: illustrative fragment: references `CRM` defined in the page narrative, not in a runnable block */}
 ```python
 from neograph_mcp import mcp_tool_factory
 

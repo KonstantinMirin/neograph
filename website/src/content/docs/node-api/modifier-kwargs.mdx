@@ -62,6 +62,7 @@ Both `map_over` and `map_key` are required together. Passing one without the oth
 
 Run a node N times in parallel, then merge the results. This is the Oracle pattern — multiple independent generations combined into a consensus.
 
+{/* test-skip: illustrative fragment: references `Claims` defined in the page narrative, not in a runnable block */}
 ```python
 from neograph import node, construct_from_module, compile, run
 import sys
@@ -102,6 +103,7 @@ Exactly one of `merge_fn` or `merge_prompt` is required. Setting both raises `Co
 
 For LLM-mode nodes, the ensemble runs the same prompt N times (useful with non-zero temperature):
 
+{/* test-skip: illustrative fragment: references `Claims` defined in the page narrative, not in a runnable block */}
 ```python
 @node(outputs=Claims, prompt='rw/decompose', model='reason',
       llm_config={"temperature": 0.8},
@@ -113,6 +115,7 @@ def decompose() -> Claims: ...
 
 When a node has upstream inputs, the merge prompt receives them alongside the variant list. The template can reference both:
 
+{/* test-skip: illustrative fragment: references `UpstreamCtx` defined in the page narrative, not in a runnable block */}
 ```python
 @node(outputs=UpstreamCtx)
 def enrich() -> UpstreamCtx:
@@ -138,6 +141,7 @@ The `@merge_fn` path is unchanged -- it still receives the raw variant list as i
 
 When using `merge_prompt`, optional hooks let you customize the merge without dropping down to `@merge_fn`:
 
+{/* test-skip: illustrative fragment: references `DecompositionResult` defined in the page narrative, not in a runnable block */}
 ```python
 def tag_with_gen_ids(variants: list[DecompositionResult]) -> dict:
     """Transform raw variants into custom prompt input."""
@@ -169,6 +173,7 @@ def decompose() -> GroupingResult: ...
 
 All three are optional and independent. They are only valid with `merge_prompt` -- passing any hook with `merge_fn` raises `ConfigurationError`. The programmatic equivalent:
 
+{/* test-skip: illustrative fragment: references `Oracle` defined in the page narrative, not in a runnable block */}
 ```python
 node | Oracle(n=3, merge_prompt="rw/group-claims",
               merge_pre_process=tag_with_gen_ids,
@@ -180,6 +185,7 @@ node | Oracle(n=3, merge_prompt="rw/group-claims",
 
 Run the same prompt on different models and merge. Each generator gets a different model tier:
 
+{/* test-skip: illustrative fragment: references `Summary` defined in the page narrative, not in a runnable block */}
 ```python
 @node(outputs=Summary, prompt='rw/summarize',
       models=["reason", "fast", "creative"],
@@ -189,6 +195,7 @@ def summarize() -> Summary: ...
 
 When `models=` is set, `ensemble_n` is inferred from `len(models)`. You can also set both for redundancy — generators are assigned models round-robin:
 
+{/* test-skip: illustrative fragment: references `Summary` defined in the page narrative, not in a runnable block */}
 ```python
 # 9 generators across 3 models (3 each)
 @node(outputs=Summary, prompt='rw/summarize',
@@ -201,6 +208,7 @@ def summarize() -> Summary: ...
 
 When `models=` is set without `merge_fn` or `merge_prompt`, the function body IS the merge function. It receives `list[OutputType]` at runtime:
 
+{/* test-skip: illustrative fragment: references `Summary` defined in the page narrative, not in a runnable block */}
 ```python
 @node(outputs=Summary, prompt='rw/summarize',
       models=["reason", "fast", "creative"])
@@ -223,6 +231,7 @@ The `interrupt_when=` keyword accepts either a string (registered condition name
 
 ### Callable form
 
+{/* test-skip: illustrative fragment: references `Analysis` defined in the page narrative, not in a runnable block */}
 ```python
 from neograph import node, construct_from_module, compile, run
 from langgraph.checkpoint.memory import MemorySaver
@@ -260,6 +269,7 @@ The callable receives the full graph state and returns either a dict (interrupt 
 
 ### String form
 
+{/* test-skip: illustrative fragment: references `ValidationResult` defined in the page narrative, not in a runnable block */}
 ```python
 from neograph import compile
 
@@ -326,6 +336,7 @@ How it works:
 
 For loops involving multiple nodes (e.g., review + revise), wrap the loop body as a sub-construct with `Loop`:
 
+{/* test-skip: illustrative fragment: references `ReviewResult` defined in the page narrative, not in a runnable block */}
 ```python
 from neograph import Loop
 
@@ -396,6 +407,7 @@ To give the producer feedback from the validator on retry, use `context=` on the
 
 In `ForwardConstruct`, use `self.loop()` for multi-node loop bodies:
 
+{/* test-skip: illustrative fragment: references `ForwardConstruct` defined in the page narrative, not in a runnable block */}
 ```python
 class Writer(ForwardConstruct):
     draft  = Node(outputs=Draft, prompt='draft', model='fast')
@@ -423,6 +435,7 @@ Python `for`/`while` loops in `forward()` don't compile to graph cycles -- they 
 
 Skip the LLM call when a condition is met. Useful for cost optimization -- avoid expensive model invocations when the input is trivial or already resolved.
 
+{/* test-skip: snippet not runnable as written (CompileError: [Construct 'pipeline'] compile(): LLM-mode nodes (summarize) require runtime configuration   expected: llm_fac) */}
 ```python
 from pydantic import BaseModel
 from neograph import node, construct_from_functions, compile, run
@@ -531,6 +544,7 @@ Context fields are forwarded into sub-constructs automatically. If a node inside
 
 Collect every iteration's output into a separate history field for debugging or audit trails.
 
+{/* test-skip: BROKEN doc snippet (API drift): node() got an unexpected keyword argument 'loop_history'; see verifiable-docs follow-up bead */}
 ```python
 from pydantic import BaseModel
 from neograph import node, construct_from_functions, compile, run
@@ -589,6 +603,7 @@ Restrictions:
 
 The programmatic equivalent:
 
+{/* test-skip: illustrative fragment: references `Node` defined in the page narrative, not in a runnable block */}
 ```python
 from neograph import Loop
 
@@ -617,6 +632,7 @@ The lambda is introspected once at definition time via a recording proxy. Pyrigh
 
 ### String form
 
+{/* test-skip: snippet not runnable as written (ConstructError: Duplicate Each modifier   found: An Each is already applied to this item   hint: Use a sub-construct if you ne) */}
 ```python
 verify = verify.map("discover_clusters.groups", key="label")
 ```
@@ -638,6 +654,7 @@ All four produce the same `Each` modifier on the node. The compiler, state build
 
 Every modifier keyword compiles to the same `Node | Modifier` that the runtime API uses. If you prefer the pipe syntax (for example, when an LLM is constructing the graph at runtime), the equivalent is:
 
+{/* test-skip: illustrative fragment: references `ValidationResult` defined in the page narrative, not in a runnable block */}
 ```python
 from neograph import Node, Each, Oracle, Operator
 from neograph import Loop

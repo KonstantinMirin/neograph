@@ -138,6 +138,7 @@ print(renderer.render(claims))
 
 Pass `renderer=` when creating a node:
 
+{/* test-skip: illustrative fragment: references `Summary` defined in the page narrative, not in a runnable block */}
 ```python
 from neograph import node
 from neograph import XmlRenderer
@@ -151,6 +152,7 @@ def summarize(claims: Claims) -> Summary: ...
 
 Set `renderer=` on a Construct. It propagates to every child node that does not have its own renderer set:
 
+{/* test-skip: illustrative fragment: references `discover` defined in the page narrative, not in a runnable block */}
 ```python
 from neograph import Construct
 from neograph import DelimitedRenderer
@@ -346,6 +348,7 @@ Answer in JSON matching this schema:
 
 When a nested type appears two or more times in the schema, `describe_type` automatically hoists it into a top-level `type` declaration to avoid duplication:
 
+{/* test-skip: illustrative fragment: references `Report` defined in the page narrative, not in a runnable block */}
 ```python
 describe_type(Report, hoist_classes='auto')  # default
 ```

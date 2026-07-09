@@ -28,6 +28,7 @@ Importing `neograph_mcp` without the extra fails loud with the install hint. Cor
 
 `mcp_tool_factories()` connects to your servers once, enumerates their tools, and returns a **dict** — one async factory per tool:
 
+{/* test-skip: illustrative fragment: references `sys` defined in the page narrative, not in a runnable block */}
 ```python
 from neograph_mcp import StdioServer, mcp_tool_factories
 
@@ -53,6 +54,7 @@ The battery has two entry points, and the difference is not one-vs-many — it i
 
 Reach for the singular when the factory-build path must stay **offline** — at `compile()` time, in a deterministic test suite, or anywhere a live connect to the server is unwanted. Its second job is the **gateway-federated rename**: a gateway (e.g. IBM ContextForge) re-exposes a peer's tool namespaced as `<peer>-<tool>`, while your node binds a fixed bare `Tool(name)`. `rename_to` bridges the two:
 
+{/* test-skip: illustrative fragment: references `GATEWAY_URL` defined in the page narrative, not in a runnable block */}
 ```python
 from neograph_mcp import HttpServer, mcp_tool_factory
 
@@ -80,6 +82,7 @@ The battery is an overridable default: the seam is `compile(tool_factories=...)`
 
 A resource in neograph is a **typed node input**. The URI is wiring; the Pydantic model is the contract; the fetch happens at node entry, before your function runs:
 
+{/* test-skip: illustrative fragment: references `node` defined in the page narrative, not in a runnable block */}
 ```python
 @node(outputs=Assessment)
 async def assess(

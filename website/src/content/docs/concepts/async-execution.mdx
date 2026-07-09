@@ -5,6 +5,7 @@ description: Async is a verb, not an architecture — one pipeline definition ru
 
 In most agent stacks, "going async" is an architectural decision you make early and live with. In neograph it is a verb you call. You define one pipeline; the same compiled graph runs under any of the four verbs:
 
+{/* test-skip: top-level await/async snippet (not runnable as a plain module) */}
 ```python
 result  = run(graph, input={...})                 # sync
 result  = await arun(graph, input={...})          # async
@@ -18,6 +19,7 @@ All four share the same signature surface — `input=` / `resume=` for new-input
 
 The one thing you cannot mix is a sync verb with an async-only checkpointer (or the reverse). This is where naive setups fail *badly* — a sync `run()` against an async-only saver would otherwise raise a bare `NotImplementedError` deep inside the engine, or worse, silently skip persistence. neograph classifies the checkpointer at run start and fails with a `ConfigurationError` naming the fix:
 
+{/* test-skip: illustrative fragment: references `pipeline` defined in the page narrative, not in a runnable block */}
 ```python
 graph = compile(pipeline, checkpointer=AsyncSqliteSaver.from_conn_string(db))
 

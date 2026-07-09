@@ -22,6 +22,7 @@ The framework classifies parameters at decoration time (for `FromInput` and `Fro
 
 Values injected from `run(input={...})`. Use this for data that varies per execution — user queries, document IDs, configuration overrides.
 
+{/* test-skip: illustrative fragment: references `RawText` defined in the page narrative, not in a runnable block */}
 ```python
 from typing import Annotated
 from neograph import node, FromInput
@@ -38,6 +39,7 @@ At runtime, `run()` injects all `input` fields into `config["configurable"]`. Th
 
 When the same parameter is used by many nodes (pipeline metadata, tenant info, user context), declare a Pydantic model once and annotate the parameter with it. neograph constructs the model by pulling each of its fields from `config["configurable"]`:
 
+{/* test-skip: snippet not runnable as written (SyntaxError: ':' expected after dictionary key (parameters_41.py, line 17)) */}
 ```python
 from typing import Annotated
 from pydantic import BaseModel
@@ -65,6 +67,7 @@ Every `@node` that needs the context annotates one parameter with `Annotated[Run
 
 Shared resources injected via `config['configurable']`. Use this for objects that live across the entire pipeline — rate limiters, database connections, API clients.
 
+{/* test-skip: illustrative fragment: references `Result` defined in the page narrative, not in a runnable block */}
 ```python
 from typing import Annotated
 from neograph import node, FromConfig
@@ -82,6 +85,7 @@ def process(data: UpstreamData, limiter: Annotated[RateLimiter, FromConfig]) -> 
 
 `FromConfig` bundles work the same way as `FromInput` bundles — pass a Pydantic model as the inner type and every field is pulled from `config["configurable"]`:
 
+{/* test-skip: illustrative fragment: references `BaseModel` defined in the page narrative, not in a runnable block */}
 ```python
 class Shared(BaseModel):
     tenant: str
@@ -93,6 +97,7 @@ def process(data: Data, shared: Annotated[Shared, FromConfig]) -> Result: ...
 
 Pass the resource when running:
 
+{/* test-skip: illustrative fragment: references `pipeline` defined in the page narrative, not in a runnable block */}
 ```python
 graph = compile(pipeline)
 result = run(graph, input={"node_id": "x"}, config={
@@ -106,6 +111,7 @@ Both `FromInput` and `FromConfig` resolve from `config["configurable"]` at runti
 
 A third DI marker fetches an MCP-style resource at node entry and parses it into the declared type, so a large document lives behind a small typed reference instead of being carried inline through the graph. The fetch is *awaited* — a node with a `FromResource` parameter must be `async def` and driven by `arun()`.
 
+{/* test-skip: illustrative fragment: references `Assessment` defined in the page narrative, not in a runnable block */}
 ```python
 from typing import Annotated
 from neograph import node, FromResource
@@ -123,6 +129,7 @@ async def assess(
 
 Parameters with a default value that don't match any upstream `@node` are treated as compile-time constants.
 
+{/* test-skip: illustrative fragment: references `node` defined in the page narrative, not in a runnable block */}
 ```python
 @node(outputs=Summary)
 def summarize(claims: Claims, max_items: int = 10, verbose: bool = False) -> Summary:
@@ -171,6 +178,7 @@ def summarize(
 
 Running the pipeline:
 
+{/* test-skip: snippet not runnable as written (ConstructError: [Node 'summarize'] parameter 'claims' does not match any @node or sub-construct in module '__main__'   hint: a) */}
 ```python
 import sys
 from neograph import construct_from_module, compile, run

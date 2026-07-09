@@ -21,6 +21,7 @@ NeoGraph offers three ways to define pipelines. All three compile to the same La
 
 Decorate Python functions. Parameter names are dependencies. The compiler infers the full topology from function signatures.
 
+{/* test-skip: illustrative fragment: references `Claims` defined in the page narrative, not in a runnable block */}
 ```python
 from neograph import node, construct_from_module, compile, run
 import sys
@@ -48,6 +49,7 @@ Mode is inferred: `prompt=` + `model=` means LLM call. Neither means the functio
 
 A class-based surface for pipelines with `if`/`else` branches. Python control flow compiles to conditional edges.
 
+{/* test-skip: illustrative fragment: references `CheckResult` defined in the page narrative, not in a runnable block */}
 ```python
 from neograph import ForwardConstruct, Node, compile
 
@@ -72,6 +74,7 @@ The `if` compiles to a conditional edge. `for` compiles to fan-out. Your type ch
 
 For runtime construction -- an LLM emitting a pipeline via tool calls, a config system defining workflows -- use the programmatic API with the `|` pipe syntax.
 
+{/* test-skip: illustrative fragment: references `Claims` defined in the page narrative, not in a runnable block */}
 ```python
 from neograph import Node, Construct, Oracle, Each, compile, run
 
@@ -107,6 +110,7 @@ All three surfaces produce the same internal representation. `compile()` infers 
 
 A typed processing block. Declared with `@node` (decorator style) or `Node(...)` (programmatic style).
 
+{/* test-skip: illustrative fragment: references `node` defined in the page narrative, not in a runnable block */}
 ```python
 # Decorator style — mode inferred from kwargs
 @node(outputs=Claims, prompt='decompose', model='fast')
@@ -126,6 +130,7 @@ Modes:
 
 An LLM-callable tool with a per-tool call budget. Used in `agent` and `act` mode Nodes.
 
+{/* test-skip: illustrative fragment: references `Tool` defined in the page narrative, not in a runnable block */}
 ```python
 search = Tool("search_web", budget=5)
 read   = Tool("read_artifact", budget=10, config={"max_chars": 6000})
@@ -135,12 +140,14 @@ read   = Tool("read_artifact", budget=10, config={"max_chars": 6000})
 
 An ordered composition of Nodes. The pipeline blueprint.
 
+{/* test-skip: illustrative fragment: references `Construct` defined in the page narrative, not in a runnable block */}
 ```python
 pipeline = Construct("analysis", nodes=[decompose, classify, summarize])
 ```
 
 With `@node`, use `construct_from_module` instead of listing nodes manually:
 
+{/* test-skip: illustrative fragment: references `construct_from_module` defined in the page narrative, not in a runnable block */}
 ```python
 pipeline = construct_from_module(sys.modules[__name__])
 ```
@@ -149,6 +156,7 @@ pipeline = construct_from_module(sys.modules[__name__])
 
 A modifier that runs a Node N times in parallel and merges the results. Ensemble pattern.
 
+{/* test-skip: illustrative fragment: references `node` defined in the page narrative, not in a runnable block */}
 ```python
 # @node style — keyword argument
 @node(outputs=Claims, prompt='decompose', model='reason',
@@ -163,6 +171,7 @@ Node(...) | Oracle(n=3, merge_prompt="pick-best")
 
 A modifier that fans out a Node over a collection. Map-reduce pattern.
 
+{/* test-skip: illustrative fragment: references `node` defined in the page narrative, not in a runnable block */}
 ```python
 # @node style — keyword arguments
 @node(outputs=MatchResult, map_over='clusters.groups', map_key='label')
@@ -176,6 +185,7 @@ Node(...) | Each(over="discover.groups", key="label")
 
 A modifier that pauses the graph for human review. Human-in-the-loop.
 
+{/* test-skip: illustrative fragment: references `node` defined in the page narrative, not in a runnable block */}
 ```python
 # @node style — keyword argument
 @node(outputs=ValidationResult,

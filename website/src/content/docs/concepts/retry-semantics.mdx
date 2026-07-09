@@ -25,6 +25,7 @@ Network blips, rate limits (HTTP 429), 5xx, timeouts, dropped connections — th
 
 Handle them where the model client is created: your `llm_factory`.
 
+{/* test-skip: runs a live-model/observability pipeline (needs OPENAI_API_KEY or a real backend); Stage D does not execute live snippets */}
 ```python
 from langchain_openai import ChatOpenAI
 from langchain_core.runnables import Runnable
@@ -53,6 +54,7 @@ The transport succeeded but the LLM returned something neograph cannot parse: ma
 
 What neograph does instead is re-prompt the LLM with structured feedback about *what it produced* and *what was expected*, rendered in BAML notation. The LLM sees its own answer alongside the type it should have produced, and is asked to re-issue conforming output.
 
+{/* test-skip: illustrative fragment: references `ClaimSet` defined in the page narrative, not in a runnable block */}
 ```python
 from neograph import node
 
@@ -86,6 +88,7 @@ Output-quality retry sidesteps this: by the time we know the answer is unparseab
 
 A `mode="scripted"` node that calls a flaky internal service, hits a rate-limited webhook, or polls a queue is the user's concern, not the framework's. Retry it where the call lives:
 
+{/* test-skip: illustrative fragment: references `EnrichedRecord` defined in the page narrative, not in a runnable block */}
 ```python
 import time
 from neograph import node
@@ -129,6 +132,7 @@ If you were previously passing `retry_policy=RetryPolicy(max_attempts=N)` to `co
 
 `LlmConfig.max_retries` is a `LlmConfig` framework field, so it propagates the usual way:
 
+{/* test-skip: illustrative fragment: references `Claims` defined in the page narrative, not in a runnable block */}
 ```python
 from neograph import Construct, node
 

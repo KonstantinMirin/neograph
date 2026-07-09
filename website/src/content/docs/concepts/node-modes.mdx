@@ -25,6 +25,7 @@ You rarely need to set `mode` explicitly. The `@node` decorator infers it from t
 | Neither `prompt=` nor `model=` | `scripted` |
 | `mode='raw'` | `raw` (must be explicit) |
 
+{/* test-skip: illustrative fragment: references `Claims` defined in the page narrative, not in a runnable block */}
 ```python
 from neograph import node
 
@@ -40,6 +41,7 @@ def report(classify: Classified) -> Report:
 
 If you need `agent` or `act`, set mode explicitly — the presence of `tools=` alone does not trigger inference:
 
+{/* test-skip: illustrative fragment: references `node` defined in the page narrative, not in a runnable block */}
 ```python
 @node(mode='agent', outputs=ResearchFindings, prompt='rw/explore', model='reason',
       tools=[Tool("search_nodes", budget=5)])
@@ -52,6 +54,7 @@ A single LLM call with structured output. The LLM receives a compiled prompt and
 
 **When to use:** Classification, extraction, summarization, generation -- any task where the LLM has all the context it needs in the prompt and should produce a single structured answer.
 
+{/* test-skip: illustrative fragment: references `node` defined in the page narrative, not in a runnable block */}
 ```python
 @node(outputs=ClassifiedClaims, prompt='rw/classify', model='reason')
 def classify(raw_claims: RawClaims) -> ClassifiedClaims: ...
@@ -61,6 +64,7 @@ Under the hood, the framework calls `llm.with_structured_output(output_model)` a
 
 The function body is not executed for `think` nodes -- the LLM call provides the output. If you write a non-trivial body, the framework emits a warning:
 
+{/* test-skip: illustrative fragment: references `node` defined in the page narrative, not in a runnable block */}
 ```python
 # WARNING: body is dead code for think nodes
 @node(outputs=Claims, prompt='rw/decompose', model='reason')
@@ -76,6 +80,7 @@ A ReAct tool loop with read-only tools. The LLM can call tools repeatedly (subje
 
 **When to use:** Research tasks where the LLM needs to explore -- searching a codebase, reading documents, querying databases -- before synthesizing a result. The tools should be read-only; agent nodes do not modify external state.
 
+{/* test-skip: illustrative fragment: references `ResearchFindings` defined in the page narrative, not in a runnable block */}
 ```python
 from neograph import node, Tool
 
@@ -95,6 +100,7 @@ A ReAct tool loop with mutation tools. Mechanically identical to `agent`, but th
 
 **When to use:** Tasks that change the world. Applying code fixes, updating records, sending notifications. Separating `act` from `agent` makes it clear during review which nodes are write-capable.
 
+{/* test-skip: illustrative fragment: references `node` defined in the page narrative, not in a runnable block */}
 ```python
 @node(mode='act', outputs=ApplyResult, prompt='rw/apply-fix', model='reason',
       tools=[
@@ -110,6 +116,7 @@ Pure Python. No LLM, no tools. The function body is executed directly. Parameter
 
 **When to use:** Deterministic transforms that do not need an LLM. Parsing, filtering, formatting, aggregation, or any logic where the output is a known function of the input.
 
+{/* test-skip: illustrative fragment: references `Catalog` defined in the page narrative, not in a runnable block */}
 ```python
 from neograph import node
 
@@ -125,6 +132,7 @@ def build_catalog(classify: ClassifiedClaims) -> Catalog:
 
 Scripted nodes support fan-in naturally -- just add more parameters. Each parameter name must match an upstream `@node` function name:
 
+{/* test-skip: illustrative fragment: references `node` defined in the page narrative, not in a runnable block */}
 ```python
 @node(outputs=Report)
 def report(claims: Claims, scores: ScoredClaims, verified: VerifiedClaims) -> Report:
@@ -139,6 +147,7 @@ def report(claims: Claims, scores: ScoredClaims, verified: VerifiedClaims) -> Re
 
 Not every parameter needs to be an upstream node. Use type annotations to declare where each value comes from:
 
+{/* test-skip: illustrative fragment: references `Report` defined in the page narrative, not in a runnable block */}
 ```python
 from typing import Annotated
 from neograph import node, FromInput, FromConfig
@@ -161,6 +170,7 @@ The LangGraph escape hatch. When you need direct access to the full LangGraph st
 
 **When to use:** Sparingly. The declarative modes exist to eliminate exactly this kind of boilerplate. Use `raw` when you genuinely need access to the full state dict or config that the framework's extraction layer cannot provide.
 
+{/* test-skip: illustrative fragment: references `Disposition` defined in the page narrative, not in a runnable block */}
 ```python
 from neograph import node
 
@@ -182,6 +192,7 @@ The function must return a dict of state field updates. The framework handles wi
 
 A raw node is still a Node. It goes into a `Construct` or `construct_from_module` like any other, and modifiers work on it:
 
+{/* test-skip: illustrative fragment: references `construct_from_module` defined in the page narrative, not in a runnable block */}
 ```python
 pipeline = construct_from_module(sys.modules[__name__])
 # custom_resolution is discovered alongside other @node functions
