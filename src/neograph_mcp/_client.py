@@ -157,6 +157,21 @@ def _run_sync(coro: Coroutine[Any, Any, Any]) -> Any:
 # ── tool factories ────────────────────────────────────────────────────────────
 
 
+def _declares_arg(declared_names: Any, arg_name: str) -> bool:
+    """Pure membership: is ``arg_name`` among a tool's declared argument names?
+
+    The CALLER supplies the name-set so this one check serves both surfaces: the
+    factory path passes langchain ``tool.args`` (a name->schema dict); the raw
+    session path passes ``mcp.types.Tool.inputSchema['properties']`` (langchain's
+    ``tool.args`` does not exist on a raw MCP tool). Defensive against a
+    non-container ``declared_names`` (a tool without an introspectable schema →
+    ``False``)."""
+    try:
+        return arg_name in (declared_names or {})
+    except Exception:  # noqa: BLE001 - a tool without an introspectable schema
+        return False
+
+
 def _inject_stdio_token(tool: Any, token: str, arg_name: str) -> Any:
     """Wrap a stdio tool so every call carries per-run identity as ``arg_name``.
 
@@ -164,11 +179,13 @@ def _inject_stdio_token(tool: Any, token: str, arg_name: str) -> Any:
     when the tool actually declares ``arg_name`` (else the server would reject an
     unknown kwarg); our value overrides any model-supplied one so identity is
     framework-carried, never LLM-chosen."""
+    # Access tool.args inside the guard: a tool without an introspectable schema
+    # may raise here (the factory-path fallback must stay declares=False).
     try:
-        declares = arg_name in (tool.args or {})
+        declared = tool.args
     except Exception:  # noqa: BLE001 - a tool without an introspectable schema
-        declares = False
-    if not declares:
+        declared = None
+    if not _declares_arg(declared, arg_name):
         return tool
 
     original = tool.coroutine

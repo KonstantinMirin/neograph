@@ -40,6 +40,12 @@ from neograph_mcp._client import (  # noqa: E402 — after the fail-loud extra c
     mcp_tool_factories,
     mcp_tool_factory,
 )
+from neograph_mcp._session import (  # noqa: E402 — after the fail-loud extra check by design
+    McpCallResult,
+    McpSession,
+    McpToolCallError,
+    mcp_session,
+)
 
 __all__ = [
     "StdioServer",
@@ -48,4 +54,8 @@ __all__ = [
     "mcp_tool_factories",
     "mcp_tool_factory",
     "mcp_resource_fetcher",
+    "mcp_session",
+    "McpSession",
+    "McpCallResult",
+    "McpToolCallError",
 ]

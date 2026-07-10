@@ -78,6 +78,51 @@
       "kind": "function",
       "name": "mcp_resource_fetcher",
       "signature": "(servers: 'dict[str, StdioServer | HttpServer]', *, token_provider: 'TokenProvider | None' = None) -> 'tuple[Callable[[str], Awaitable[tuple[Any, str | None]]], Callable[[str, dict], Awaitable[Any]]]'"
+    },
+    {
+      "anchor": "mcp_session",
+      "doc": "Build an :class:`McpSession` for calling N federated tools over ONE connection.",
+      "kind": "function",
+      "name": "mcp_session",
+      "signature": "(server_key: 'str', spec: 'StdioServer | HttpServer', *, token_provider: 'TokenProvider | None' = None, config: 'Any | None' = None, stdio_token_arg: 'str' = 'token', timeout: 'float | None' = 30.0) -> 'McpSession'"
+    },
+    {
+      "anchor": "mcpsession",
+      "bases": [],
+      "doc": "One MCP connection, N tool calls. Async context manager; consumer-owned.",
+      "kind": "class",
+      "name": "McpSession",
+      "signature": "(server_key: 'str', spec: 'StdioServer | HttpServer', *, token_provider: 'TokenProvider | None', config: 'Any | None', stdio_token_arg: 'str', timeout: 'float | None') -> 'None'"
+    },
+    {
+      "anchor": "mcpcallresult",
+      "bases": [],
+      "doc": "One ``tools/call`` result, converted once, no lossy post-processing.",
+      "fields": [
+        {
+          "annotation": "list[dict[str, Any]]",
+          "default": null,
+          "name": "content",
+          "required": true
+        },
+        {
+          "annotation": "dict[str, Any] | None",
+          "default": null,
+          "name": "structured",
+          "required": true
+        }
+      ],
+      "kind": "dataclass",
+      "name": "McpCallResult",
+      "signature": "(content: 'list[dict[str, Any]]', structured: 'dict[str, Any] | None') -> None"
+    },
+    {
+      "anchor": "mcptoolcallerror",
+      "bases": [],
+      "doc": "A federated ``tools/call`` returned ``isError=True``.",
+      "kind": "exception",
+      "name": "McpToolCallError",
+      "signature": "(server_key: 'str', tool_name: 'str', content: 'list[dict[str, Any]]', structured: 'dict[str, Any] | None' = None) -> 'None'"
     }
   ]
 }

@@ -237,17 +237,42 @@ graph = compile(pipeline, llm_factory=llm_factory, prompt_compiler=prompt_compil
 
 The trade against the plural is deliberate: discovery fails fast at build; declaration fails loud at first call. Pick by what you know — **the plural asks the server, the singular tells the server.**
 
+## Bind vs compose: `mcp_session` for N calls over one connection
+
+The factories **bind** one federated tool 1:1 — the agent decides when to call it. But some work is a **composite**: a scripted step that must *issue* several primitive calls itself and assemble the result deterministically (resolve a company by domain, then fetch its notes/emails/calls/meetings, then flatten). Teaching an agent to orchestrate that is non-deterministic and burns tool-calls; you want plain Python control flow. And binding-then-materializing each factory opens a fresh MCP session *per call*.
+
+`mcp_session` is the seam for that: connect **once**, call N tools by name over the single connection, get typed/structured results, close. It reuses the same transport + token machinery as the factories, and — like `mcp_tool_factory` — is consumer-owned and offline-at-build (the connect defers to `async with` entry). Open it inside the node/tool body that uses it, in the same task; never store it.
+
+{/* test-skip: illustrative fragment: references models defined in the page narrative, not in a runnable block */}
+```python
+from neograph_mcp import mcp_session
+
+@node(mode="raw", outputs=DealReview)
+async def deal_review(state, config):
+    async with mcp_session("crm", CRM, token_provider=token_provider, config=config) as s:
+        # Two primitives over ONE connection; identity minted once at entry.
+        search = await s.call("crm_search", {"query": "Acme"}, output_model=CrmSearchResult)
+        deal   = await s.call("get_deal", {"deal_id": search.hits[0].id})
+    detail = json.loads(deal.text or "{}")          # McpCallResult: .text / .content / .structured
+    return {"deal_review": DealReview(deal_id=search.hits[0].id, stage=detail["stage"], ...)}
+```
+
+`call(name, args, output_model=Model)` rehydrates the server's `structuredContent` into your model (the same typed channel as the factory's `output_model=`); without `output_model` it returns an `McpCallResult` with converted content blocks (`.content`), the raw structured dict (`.structured`), and a `.text` convenience. A server error raises `McpToolCallError`; a bare `-> dict`/`-> list` tool with `output_model=` raises the typed missing-`structuredContent` error. Construction does no I/O; `timeout=` (default 30s) bounds the connect and each call so a hung server surfaces a `TimeoutError` instead of stalling. Discover names with `await s.tool_names()`.
+
+**Bind when the agent chooses the call; compose when your code makes the calls.** A gateway re-exposes federated tools namespaced (`<peer>-<tool>`) — a composite calls them by that name directly (no rename; there is no `Tool()` binding to reconcile).
+
 ## Key takeaways
 
 - `mcp_tool_factories(...)` returns a **dict** — slice it per node for least-privilege binding
 - `mcp_tool_factory(...)` binds **one declared tool** with zero network at build — use it for offline compile/test paths and the gateway-federated `<peer>-<tool>` → bare `Tool(name)` rename
+- `mcp_session(...)` **composes**: one connection, N calls by name, typed/structured results (`McpCallResult` / `output_model=`), a `timeout` guard — use it for a scripted composite that issues the primitive calls itself
 - Each node's `tools=` (and `tool_factories=`) is its privilege boundary; a research agent with no `update_deal` cannot mutate
 - MCP tools are async-only — drive with `arun()`; `lint()` flags `tool_requires_async_driver` for a sync `run()`
 - `token_provider` reads `config['configurable']['mcp_auth']` for per-run identity — a tool argument over stdio, a bearer header (`httpx.Auth`) over streamable-http
 - `gate_tools_when` pauses before a mutation fires; approve runs it exactly once, deny never runs it and the agent is told why
 - `ToolInteraction.typed_result` carries the structured MCP payload; mark read-only readers `idempotent=True`
 
-See `examples/23_mcp_client_selective_binding.py` for the full runnable example (`uv run --extra dev --extra mcp-examples python examples/23_mcp_client_selective_binding.py`), and `examples/25_mcp_single_tool_gateway.py` for the singular-factory story (offline build, gateway rename, per-run identity) against the same demo server.
+See `examples/23_mcp_client_selective_binding.py` for the full runnable example (`uv run --extra dev --extra mcp-examples python examples/23_mcp_client_selective_binding.py`), `examples/25_mcp_single_tool_gateway.py` for the singular-factory story (offline build, gateway rename, per-run identity), and `examples/26_mcp_composite_session.py` for the composite story (`mcp_session`: one connection, two federated primitives, a typed assembled result) — all against the same demo server.
 
 ---
 

@@ -670,3 +670,360 @@ class TestHttpServerSmoke:
         assert payload["deal_id"] == "D1"
         assert payload["events"], "expected the real activity history, not a shape-only stub"
         assert mime == "application/json"
+
+
+# ── Public session API: mcp_session / McpSession / McpCallResult (neograph-2plcl) ─
+#
+# TDD RED (neograph-5hwbb.6). The public `mcp_session` session API does NOT exist
+# yet — `neograph_mcp.__all__` exports only StdioServer/HttpServer/ToolFactory/
+# mcp_tool_factory(ies)/mcp_resource_fetcher. Every test below imports one of
+# `mcp_session`/`McpSession`/`McpCallResult`/`McpToolCallError` INSIDE its body, so
+# collection still succeeds (the file's other classes stay green) and each session
+# test fails at runtime with an ImportError from `neograph_mcp` — the correct red
+# for a not-yet-implemented public surface (task neograph-5hwbb.6). No MCP mocking:
+# these mirror TestLazySingleToolFactory / TestHttpServerSmoke / TestTypedOutputModel
+# against the real `_demo_stdio_server()` / `_demo_http_server()` with real `await`.
+#
+# The API under test (design docs/design/mcp-session-api-2plcl-2026-07-10.md §4/§4bis/§7):
+#   mcp_session(server_key, spec, *, token_provider=None, config=None,
+#               stdio_token_arg="token", timeout=30.0) -> McpSession   # async CM
+#   await s.call(name, args, *, output_model=None, parse=None) -> McpCallResult | BaseModel
+#   await s.tool_names() -> list[str]
+#   McpCallResult(content: list[dict], structured: dict | None), frozen, with .text
+#   McpToolCallError(Exception) raised when CallToolResult.isError is True.
+
+
+def _hung_stdio_server():
+    """A StdioServer whose subprocess NEVER answers `initialize` — it just sleeps.
+
+    Exercises the connect-time hang class (§4.2): `ClientSession` has no default
+    request timeout, so without `mcp_session`'s `asyncio.timeout(timeout)` on
+    `__aenter__` this would block indefinitely. The one-line sleep command is the
+    §7.4(ii) fixture the design and the architect review both prescribe.
+    """
+    from neograph_mcp import StdioServer
+
+    return StdioServer(command=sys.executable, args=["-c", "import time; time.sleep(60)"])
+
+
+def _refused_http_spec():
+    """An HttpServer pointed at a free/unbound localhost port — connection REFUSED.
+
+    `_free_port()` binds-then-closes, so nothing is listening: `__aenter__` gets an
+    immediate ECONNREFUSED. Pins the §7.4(i) prompt-typed-error path (the natural
+    fast failure, recursively unwrapped out of its single-leaf ExceptionGroup).
+    """
+    from neograph_mcp import HttpServer
+
+    return HttpServer(url=f"http://127.0.0.1:{_free_port()}/mcp")
+
+
+@requires_mcp
+class TestMcpSession:
+    """The public `mcp_session` session API (neograph-2plcl): one MCP connection,
+    N tool calls, consumer-owned, offline-at-build.
+
+    Mirrors TestLazySingleToolFactory (offline-at-build), TestHttpServerSmoke
+    (bearer leg), and TestTypedOutputModel (typed rehydration / fail-loud) — real
+    demo server, real `await`, NO MCP mocking. Every method fails RED today with an
+    ImportError because `mcp_session` is not yet in `neograph_mcp.__all__`.
+    """
+
+    def test_construction_is_zero_network(self):
+        """(a) OFFLINE-AT-BUILD: `mcp_session(...)` against a BOGUS/unreachable spec
+        constructs with ZERO network — no subprocess spawn, no connect, no raise.
+        The connect is deferred to `async with` entry. Mirrors
+        TestLazySingleToolFactory.test_construction_is_zero_network..."""
+        from neograph_mcp import McpSession, StdioServer, mcp_session
+
+        bogus = StdioServer(command="/nonexistent/definitely-not-a-real-mcp-server", args=["--nope"])
+        # Construction must not connect: building against a spec that would fail if
+        # it had spawned/connected returns cleanly.
+        session = mcp_session(
+            "crm",
+            bogus,
+            token_provider=lambda configurable: configurable.get("op", "anon"),
+        )
+        assert isinstance(session, McpSession)
+        # It is an async context manager (the connect fires at __aenter__, not now).
+        assert hasattr(session, "__aenter__") and hasattr(session, "__aexit__")
+
+    async def test_two_primitives_over_one_session_echo_same_minted_token(self):
+        """(b) TWO PRIMITIVES over ONE session: inside a single `async with`,
+        call `crm_search` then `get_deal`; both return `McpCallResult`, and the
+        demo server echoes the SAME `acting_as` token on BOTH — proving the stdio
+        token-arg was injected through the session and identity was minted ONCE.
+        `get_deal` returns ResourceLink blocks, so this also pins the content
+        table's file-block arm (§7.2)."""
+        import json
+
+        from neograph_mcp import McpCallResult, mcp_session
+
+        config = {"configurable": {"op": "operator-A"}}
+        async with mcp_session(
+            "crm",
+            _demo_stdio_server(),
+            token_provider=lambda configurable: configurable.get("op", "anon"),
+            config=config,
+        ) as s:
+            crm_result = await s.call("crm_search", {"query": "acme"})
+            deal_result = await s.call("get_deal", {"deal_id": "D1"})
+
+        assert isinstance(crm_result, McpCallResult)
+        assert isinstance(deal_result, McpCallResult)
+
+        # crm_search returns structuredContent (CrmSearchResult) — acting_as rides there.
+        assert crm_result.structured is not None
+        assert crm_result.structured["acting_as"] == "operator-A"
+
+        # get_deal is content-only (a text mirror + 2 resource_link blocks): no
+        # structuredContent, acting_as rides in the text block's JSON.
+        assert deal_result.structured is None
+        assert json.loads(deal_result.text)["acting_as"] == "operator-A"
+        # The resource_link blocks convert to file blocks (adapter-parity table).
+        assert any(block.get("type") == "file" for block in deal_result.content), (
+            f"expected a file block from get_deal's resource_links: {deal_result.content!r}"
+        )
+
+    async def test_http_bearer_identity_rides_and_stdio_token_arg_not_injected(self, tmp_path):
+        """(c) HttpServer bearer leg: over `_demo_http_server()` identity rides as
+        the bearer Authorization header on `call()` (echoed under `bearer_identity`),
+        and `stdio_token_arg` is NOT injected over http (so `acting_as` stays the
+        server default `anon`). The http counterpart of (b); mirrors
+        TestHttpServerSmoke.test_stdio_token_arg_not_applied_over_http."""
+        from neograph_mcp import mcp_session
+
+        config = {"configurable": {"op": "operator-A"}}
+        with _demo_http_server(tmp_path / "state.marker") as url:
+            async with mcp_session(
+                "crm",
+                _demo_http_server_spec(url),
+                token_provider=lambda configurable: configurable.get("op", "anon"),
+                stdio_token_arg="token",
+                config=config,
+            ) as s:
+                result = await s.call("crm_search", {"query": "acme"})
+
+        assert result.structured is not None
+        # Identity arrived on the bearer header...
+        assert result.structured["bearer_identity"] == "operator-A"
+        # ...and the stdio token arg was NOT injected over http (server default).
+        assert result.structured["acting_as"] == "anon"
+
+    async def test_call_with_output_model_returns_rehydrated_client_model(self):
+        """(d.1) TYPED RESULT: `call(..., output_model=ClientModel)` validates the
+        server's structuredContent into the consumer's OWN independently-defined
+        model and returns the INSTANCE (not `McpCallResult`). Mirrors
+        TestTypedOutputModel with a client-side `_client_crm_models()` model."""
+        from neograph_mcp import mcp_session
+
+        ClientCrmResult, _ = _client_crm_models()
+
+        async with mcp_session("crm", _demo_stdio_server()) as s:
+            result = await s.call("crm_search", {"query": "acme"}, output_model=ClientCrmResult)
+
+        assert isinstance(result, ClientCrmResult), (
+            f"expected the rehydrated client model, got {type(result).__name__}: {result!r}"
+        )
+        assert result.acting_as == "anon"
+        assert result.hits and result.hits[0].name == "Acme renewal"
+
+    async def test_call_output_model_on_content_only_tool_raises_typed_value_error(self):
+        """(d.2) `get_deal` is annotated `-> list` and emits NO structuredContent.
+        With `output_model=` declared, `call()` raises a TYPED `ValueError` naming
+        the tool AND pointing at the server-annotation fix — NOT a bare
+        AttributeError/KeyError, and NOT `McpToolCallError` (the call succeeds; it
+        just has no structured payload)."""
+        from neograph_mcp import mcp_session
+
+        ClientCrmResult, _ = _client_crm_models()
+
+        async with mcp_session("crm", _demo_stdio_server()) as s:
+            with pytest.raises(ValueError) as excinfo:
+                await s.call("get_deal", {"deal_id": "D1"}, output_model=ClientCrmResult)
+
+        msg = str(excinfo.value)
+        assert "get_deal" in msg, f"typed error must name the tool: {msg!r}"
+        assert "structuredContent" in msg, f"typed error must mention structuredContent: {msg!r}"
+        assert "annotation" in msg.lower() or "-> dict" in msg or "Pydantic" in msg, (
+            f"typed error must point at the server-annotation fix: {msg!r}"
+        )
+
+    async def test_call_wrong_shape_output_model_propagates_validation_error(self):
+        """(d.3) A client `output_model` requiring a key the server payload lacks
+        lets Pydantic's `ValidationError` PROPAGATE untouched — it IS the
+        type-mismatch signal, not something `call()` swallows into content."""
+        from pydantic import BaseModel, ValidationError
+
+        from neograph_mcp import mcp_session
+
+        class WrongShape(BaseModel):
+            query: str
+            missing_required: str  # crm_search never emits this key
+
+        async with mcp_session("crm", _demo_stdio_server()) as s:
+            with pytest.raises(ValidationError):
+                await s.call("crm_search", {"query": "acme"}, output_model=WrongShape)
+
+    async def test_server_side_iserror_raises_mcp_tool_call_error_not_value_error(self):
+        """(e) isError -> `McpToolCallError`: a call the server errors on (crm_search
+        with the required `query` arg omitted -> FastMCP CallToolResult.isError=True)
+        raises `McpToolCallError`, NOT the missing-structuredContent `ValueError`
+        and NOT a hang. `output_model=` is set to prove isError BEATS the
+        output-model branch (§4.2 'isError beats output')."""
+        from neograph_mcp import McpToolCallError, mcp_session
+
+        ClientCrmResult, _ = _client_crm_models()
+
+        async with mcp_session("crm", _demo_stdio_server()) as s:
+            with pytest.raises(McpToolCallError) as excinfo:
+                await s.call("crm_search", {}, output_model=ClientCrmResult)  # missing required 'query'
+
+        # It must be the typed tool-call error, not the missing-structuredContent ValueError.
+        assert not isinstance(excinfo.value, ValueError), (
+            f"isError must surface as McpToolCallError, not a masked ValueError: {excinfo.value!r}"
+        )
+
+    async def test_refused_port_surfaces_typed_error_not_exceptiongroup(self):
+        """(f) TYPED-ERROR / no-hang: connecting to a REFUSED localhost port surfaces
+        a typed transport exception (`httpx.ConnectError`) PROMPTLY from `__aenter__`
+        — recursively unwrapped out of its single-leaf ExceptionGroup, so NOT a
+        `BaseExceptionGroup`, and NOT a hang (§4.2 / §7.4(i))."""
+        import httpx
+
+        from neograph_mcp import mcp_session
+
+        start = time.monotonic()
+        with pytest.raises(BaseException) as excinfo:  # noqa: PT011 — narrowed by asserts below
+            async with mcp_session("crm", _refused_http_spec(), timeout=10.0) as s:
+                await s.tool_names()
+        elapsed = time.monotonic() - start
+
+        exc = excinfo.value
+        assert not isinstance(exc, BaseExceptionGroup), (
+            f"connect error leaked as an ExceptionGroup instead of a single typed error: {exc!r}"
+        )
+        assert isinstance(exc, httpx.ConnectError), (
+            f"expected a typed httpx.ConnectError from __aenter__, got {type(exc).__name__}: {exc!r}"
+        )
+        # Prompt, not a stalled read (the 300s HTTP read-stall class must not apply here).
+        assert elapsed < 8.0, f"refused-port connect did not fail promptly: {elapsed:.1f}s"
+
+    async def test_hung_stdio_server_raises_timeout_error_within_generous_ceiling(self):
+        """(g) HUNG-SERVER TIMEOUT: a stdio subprocess that never answers `initialize`
+        (a sleeping process) with a SHORT `timeout` raises `TimeoutError` at
+        `__aenter__`. Asserted DEFENSIVELY per the architect review: the EXCEPTION
+        TYPE plus a GENEROUS wall-clock ceiling (< 3x timeout) — never a tight
+        `elapsed ~= timeout` bound (stdio subprocess teardown overshoots ~2x)."""
+        from neograph_mcp import mcp_session
+
+        timeout = 2.0
+        start = time.monotonic()
+        with pytest.raises(TimeoutError):
+            async with mcp_session("crm", _hung_stdio_server(), timeout=timeout) as s:
+                await s.tool_names()
+        elapsed = time.monotonic() - start
+
+        # Generous ceiling only — subprocess-teardown overshoot is expected, an
+        # equality-ish bound would be flaky.
+        assert elapsed < 3 * timeout, (
+            f"timeout overshot the generous ceiling: {elapsed:.1f}s for timeout={timeout}s"
+        )
+
+    async def test_tool_names_lists_the_demo_server_tools(self):
+        """(h) `await s.tool_names()` returns the demo server's tool names (the
+        paginated tools/list over the same session)."""
+        from neograph_mcp import mcp_session
+
+        async with mcp_session("crm", _demo_stdio_server()) as s:
+            names = await s.tool_names()
+
+        assert "crm_search" in names
+        assert "get_deal" in names
+        assert "update_deal" in names
+
+    def test_session_content_table_matches_adapter(self):
+        """PARITY GUARD: the session's local content-block conversion must match
+        langchain-mcp-adapters' `_convert_mcp_content_to_lc_block` block-for-block.
+        The session replicates that table (against public constructors) rather than
+        importing the private symbol; this asserts parity so a future adapter bump
+        that changes the table fails HERE and prompts a re-diff. No network."""
+        from langchain_mcp_adapters.tools import _convert_mcp_content_to_lc_block
+        from mcp.types import (
+            BlobResourceContents,
+            EmbeddedResource,
+            ImageContent,
+            ResourceLink,
+            TextContent,
+            TextResourceContents,
+        )
+        from pydantic import AnyUrl
+
+        from neograph_mcp._session import _convert_content_block
+
+        blocks = [
+            TextContent(type="text", text="hello"),
+            ImageContent(type="image", data="Zm9v", mimeType="image/png"),
+            ResourceLink(type="resource_link", uri=AnyUrl("mcp://crm/deals/D1"), name="d1", mimeType="application/json"),
+            ResourceLink(type="resource_link", uri=AnyUrl("mcp://crm/img/1"), name="img", mimeType="image/png"),
+            EmbeddedResource(
+                type="resource",
+                resource=TextResourceContents(uri=AnyUrl("mcp://crm/note/1"), text="note", mimeType="text/plain"),
+            ),
+            EmbeddedResource(
+                type="resource",
+                resource=BlobResourceContents(uri=AnyUrl("mcp://crm/blob/1"), blob="Zm9v", mimeType="application/pdf"),
+            ),
+        ]
+        def _no_id(d: dict) -> dict:
+            # The langchain constructors stamp a random per-call `id` uuid; compare
+            # the meaningful payload (type/text/url/base64/mime_type), not the id.
+            return {k: v for k, v in dict(d).items() if k != "id"}
+
+        for block in blocks:
+            assert _no_id(_convert_content_block(block)) == _no_id(_convert_mcp_content_to_lc_block(block)), (
+                f"session content conversion drifted from the adapter for {type(block).__name__}"
+            )
+
+    def test_e2e_composite_session_assembles_typed_output_through_arun(self):
+        """(i) E2E COMPOSITE (§8): a raw-mode node opens ONE session, calls two
+        primitives (crm_search + get_deal), and assembles a typed output — driven
+        through `compile()` + `arun()`, asserting the ASSEMBLED OUTPUT (not
+        internals). The blessed 'scripted composite over federated primitives'
+        pattern stark-8ok asked for."""
+        from pydantic import BaseModel
+
+        import neograph
+        from neograph import compile, construct_from_functions, node
+        from neograph_mcp import mcp_session
+        from tests.fakes import build_test_compile_kwargs
+
+        class DealSummary(BaseModel, frozen=True):
+            query: str
+            deal_count: int
+            acting_as: str
+
+        @node(mode="raw", outputs=DealSummary)
+        async def compose(state, config):
+            async with mcp_session(
+                "crm",
+                _demo_stdio_server(),
+                token_provider=lambda configurable: configurable.get("op", "anon"),
+                config=config,
+            ) as s:
+                found = await s.call("crm_search", {"query": "acme"})
+                await s.call("get_deal", {"deal_id": "D1"})  # 2nd primitive over the same session
+            payload = found.structured
+            return {
+                "compose": DealSummary(
+                    query=payload["query"],
+                    deal_count=len(payload["hits"]),
+                    acting_as=payload["acting_as"],
+                )
+            }
+
+        graph = compile(construct_from_functions("crm_compose", [compose]), **build_test_compile_kwargs())
+        cfg = {"configurable": {"op": "operator-A"}}
+        result = asyncio.run(neograph.arun(graph, input={}, config=cfg))
+
+        assert result["compose"] == DealSummary(query="acme", deal_count=1, acting_as="operator-A")

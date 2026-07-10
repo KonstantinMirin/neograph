@@ -9,10 +9,11 @@ MCP has two halves, and neograph maps each onto a surface you already know:
 
 | MCP concept | What it is | neograph surface |
 |---|---|---|
-| **Tools** | Capabilities the *model* decides to call | `tools=` on `agent`/`act` nodes, filled per node from `mcp_tool_factories()` |
+| **Tools** (bind) | Capabilities the *model* decides to call | `tools=` on `agent`/`act` nodes, filled per node from `mcp_tool_factories()` |
+| **Tools** (compose) | Primitives *your code* calls in sequence | `mcp_session()` — one connection, N calls, typed/structured results |
 | **Resources** | Data the *framework* fetches deterministically | `FromResource` DI marker, the resource manifest, `resource_reader` |
 
-The split matters: a tool call is a model decision inside a ReAct loop; a resource read is dependency injection at node entry. neograph keeps them separate so a deterministic fetch never rides on an LLM's whim, and a model-driven read never bypasses budgets and gates.
+The split matters: a tool call is a model decision inside a ReAct loop; a resource read is dependency injection at node entry. neograph keeps them separate so a deterministic fetch never rides on an LLM's whim, and a model-driven read never bypasses budgets and gates. When *your code* (not the model) must issue several primitive calls and assemble the result — a composite — reach for `mcp_session` instead of binding: connect once, call by name, close.
 
 ## Install
 
