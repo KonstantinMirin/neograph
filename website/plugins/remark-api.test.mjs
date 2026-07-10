@@ -13,9 +13,10 @@
 // Cases (a)-(f) pin the plan step-9 required behavior. (g)+(h) pin the self-cleaning
 // ignore file with the M1 predicate-based wouldResolve stale check (NOT RAMP's verbatim
 // symbols[k] lookup — neograph's symbol map is NAME-keyed, so a dotted ignore entry's
-// stale state must be re-derived, not looked up). (i) pins the duplicate-anchor quirk
-// (bare Node shares anchor `node` with the lowercase `node` fn); (j) pins the visitor
-// guard that prevents nested <a> tags when inlineCode sits inside an existing link.
+// stale state must be re-derived, not looked up). (i) pins the kind-namespaced anchor
+// scheme (node/Node and tool/Tool bare-slug collisions are disambiguated to
+// node-function/node-model etc., so a bare Node never mis-links to the `node` fn); (j)
+// pins the visitor guard that prevents nested <a> tags when inlineCode sits inside a link.
 //
 // All assertions run against the REAL manifest (api-manifest.json + api-manifest-mcp.json)
 // and the REAL reference-page headings (reference/api.mdx) — no mocks. The only file the
@@ -24,7 +25,7 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { visit } from 'unist-util-visit';
-import { writeFileSync, unlinkSync, existsSync, copyFileSync } from 'node:fs';
+import { writeFileSync, unlinkSync, existsSync, copyFileSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import remarkApi from './remark-api.mjs';
 
@@ -166,18 +167,28 @@ test('stale ignore entry that now resolves FAILS the build', async () => {
   );
 });
 
-// (i) L1 duplicate-anchor: bare Node links to whichever `node` heading exists.
-test('bare Node (duplicate anchor with lowercase node fn) links to the live node heading', () => {
-  // Both `node` (function) and `Node` (pydantic model) share manifest anchor `node`. The
-  // manifest's slug is dedup-free (unique names), but github-slugger dedups the real
-  // reference-page headings: `@node(...)` -> `node`, `Node(...)` -> `node-1`. A bare
-  // `Node` resolves via NAME-keyed lookup and links to whichever `node` heading is live
-  // (currently the @node decorator section, not the model section). Precision quirk, not
-  // a bug — pinned here so a future change is a conscious decision.
+// (i) Kind-namespaced anchors (Stage C / neograph-rfl7b DECISION 1): the former
+// node/Node (and tool/Tool) bare-slug COLLISION is gone. The Python generator
+// kind-namespaces every colliding symbol's anchor: `node` (fn) -> `node-function`,
+// `Node` (model) -> `node-model` (likewise tool/Tool). A bare `Node` now resolves
+// via NAME-keyed lookup to its OWN `node-model` anchor and must NEVER mis-link to
+// the decorator's `node-function` section. Until Stage C renders a `node-model`
+// heading it stays inert (SOFT tier: no live heading -> no autolink) — but the
+// cross-symbol mis-link the old shared `node` anchor caused is now impossible.
+test('bare Node no longer mis-links to the node-function anchor (disambiguated)', () => {
+  const manifest = JSON.parse(
+    readFileSync(fileURLToPath(new URL('../src/data/api-manifest.json', import.meta.url)), 'utf8'),
+  );
+  const byName = Object.fromEntries(manifest.symbols.map((s) => [s.name, s]));
+  // The collision the old scheme had is resolved: distinct, kind-namespaced anchors.
+  assert.equal(byName.node.anchor, 'node-function', 'node fn anchor must be kind-namespaced');
+  assert.equal(byName.Node.anchor, 'node-model', 'Node model anchor must be kind-namespaced');
+  assert.notEqual(byName.node.anchor, byName.Node.anchor, 'node/Node anchors must be distinct');
+  // A bare `Node` must not cross-link to the decorator's `node-function` anchor.
   const tree = run(para('Node'));
   assert.ok(
-    has(tree, (n) => n.type === 'link' && n.url.includes('#node')),
-    'bare Node should autolink to the live node heading',
+    !has(tree, (n) => n.type === 'link' && n.url.includes('#node-function')),
+    'bare Node must not autolink to the @node decorator (node-function) anchor',
   );
 });
 

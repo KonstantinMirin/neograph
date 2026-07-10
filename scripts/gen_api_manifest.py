@@ -282,6 +282,49 @@ def _symbol_entry(name: str, obj: Any, all_names: set[str]) -> dict[str, Any]:
     return entry
 
 
+# Kind -> anchor-disambiguation tag (Stage C / neograph-rfl7b, DECISION 1).
+#
+# Two DISTINCT public symbols can share one bare ``slug(name)`` -- VERIFIED:
+# ``node`` (the @node decorator function) / ``Node`` (the pydantic model) and
+# ``tool`` / ``Tool`` each slug to a single value. On one rendered reference
+# page github-slugger would dedup the second heading to ``<anchor>-1``, a value
+# the manifest does not contain -- breaking the Core Invariant that the manifest
+# owns both ends of every cross-link. For each symbol in a colliding group the
+# anchor is kind-namespaced: ``f"{slug(name)}-{tag}"``. The tag is chosen so the
+# result is (a) slug-stable -- ``slug(anchor) == anchor`` -- and (b) reproducible
+# as the slug of a real heading, e.g. heading ``node (function)`` -> github-
+# slugger -> ``node-function``. Non-colliding symbols keep the bare ``slug(name)``.
+_KIND_ANCHOR_TAG: dict[str, str] = {
+    "function": "function",
+    "pydantic_model": "model",
+    "dataclass": "dataclass",
+    "exception": "exception",
+    "class": "class",
+    "other": "other",
+    "missing": "missing",
+}
+
+
+def _disambiguate_anchors(entries: list[dict[str, Any]]) -> None:
+    """Kind-namespace anchors for symbols whose bare ``slug(name)`` collides.
+
+    Two-pass, in place: pass 1 counts how many symbols share each base slug;
+    pass 2 rewrites the anchor of every symbol in a colliding group to
+    ``f"{base}-{tag}"`` where ``tag`` derives from the symbol's kind
+    (``_KIND_ANCHOR_TAG``). Non-colliding symbols are left untouched (their
+    anchor stays ``slug(name)`` as set by ``_symbol_entry``). Every rewritten
+    anchor is slug-stable and reproducible as ``slug("<name> (<tag>)")``.
+    """
+    from collections import Counter
+
+    base_counts = Counter(slug(entry["name"]) for entry in entries)
+    for entry in entries:
+        base = slug(entry["name"])
+        if base_counts[base] > 1:
+            tag = _KIND_ANCHOR_TAG.get(entry["kind"], entry["kind"])
+            entry["anchor"] = f"{base}-{tag}"
+
+
 def _build_symbols(module: Any, names: list[str]) -> list[dict[str, Any]]:
     """Walk an ``__all__`` against a module into manifest symbol entries."""
     all_names = set(names)
@@ -295,6 +338,11 @@ def _build_symbols(module: Any, names: list[str]) -> list[dict[str, Any]]:
             )
             continue
         entries.append(_symbol_entry(name, obj, all_names))
+    # Two-pass anchor disambiguation: kind-namespace any colliding base slugs so
+    # every symbol has a distinct, deterministic, slug-stable anchor. Applied
+    # here (not in build_manifest) so BOTH the core and mcp manifests inherit the
+    # same scheme wherever anchors are emitted (neograph-rfl7b DECISION 1).
+    _disambiguate_anchors(entries)
     return entries
 
 

@@ -61,8 +61,14 @@ function setup() {
   }
 
   // Live reference-page heading slugs gate autolinking (no dead anchors). A fresh
-  // GithubSlugger dedups repeats (Node(...) after @node(...) -> node-1); the manifest's
-  // Python slug is dedup-free (unique names), so anchors are stable either way.
+  // GithubSlugger dedups repeats (a second heading slugging to X becomes X-1). The
+  // manifest anchors are now COLLISION-FREE: names are unique but a few bare slugs
+  // collided (node/Node, tool/Tool -> one slug each), so the Python generator
+  // kind-namespaces every colliding symbol's anchor to `${slug(name)}-${kindTag}`
+  // (e.g. node-function / node-model). Stage C renders each symbol under a heading
+  // whose text reproduces that exact anchor via github-slugger, so slugger dedup
+  // never fires and the heading slug == the manifest anchor. This plugin keys
+  // autolinks by symbol NAME -> anchor, so it needs no logic change.
   const slugger = new GithubSlugger();
   const headings = new Set();
   let fence = false;

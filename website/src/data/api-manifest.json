@@ -82,7 +82,7 @@
   ],
   "symbols": [
     {
-      "anchor": "node",
+      "anchor": "node-function",
       "doc": "Decorator that turns a function into a Node spec with signature-inferred",
       "kind": "function",
       "name": "node",
@@ -169,7 +169,7 @@
       "signature": "(event: 'BaseModel') -> 'None'"
     },
     {
-      "anchor": "tool",
+      "anchor": "tool-function",
       "doc": "Decorator that turns a function into a Tool and auto-registers its factory.",
       "kind": "function",
       "name": "tool",
@@ -407,7 +407,7 @@
       "signature": "(when: str)"
     },
     {
-      "anchor": "node",
+      "anchor": "node-model",
       "bases": [],
       "doc": "A typed processing block. The unit of graph specification.",
       "fields": [
@@ -525,7 +525,7 @@
       "signature": "(name: str, modifier_set: ModifierSet = <factory:ModifierSet>, mode: Literal['think', 'agent', 'act', 'scripted'] = 'think', inputs: Any = None, outputs: Any = None, model: str | None = None, prompt: str | None = None, llm_config: LlmConfig = <factory:LlmConfig>, tools: list[neograph.tool.Tool | langchain_core.tools.base.BaseTool] = [], scripted_fn: str | None = None, raw_fn: neograph.node.RawNodeFn | None = None, fan_out_param: str | None = None, renderer: neograph.renderers.Renderer | None = None, context: list[str] | None = None, skip_when: neograph.node.SkipPredicate | None = None, skip_value: neograph.node.SkipValueFactory | None = None, gate_tools_when: collections.abc.Callable | str | None = None, oracle_gen_type: type[pydantic.main.BaseModel] | None = None)"
     },
     {
-      "anchor": "tool",
+      "anchor": "tool-model",
       "bases": [],
       "doc": "A tool the LLM can call, with a per-tool call budget.",
       "fields": [

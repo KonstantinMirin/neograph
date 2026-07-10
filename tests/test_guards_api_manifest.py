@@ -225,30 +225,63 @@ class TestApiManifestFreshness:
         )
 
     def test_every_symbol_anchor_is_slug_of_its_name(self):
-        """M3 -- per-symbol anchor is ``slug(symbol_name)``, NOT slug(signature).
+        """M3 (Stage C kind-namespace refinement, neograph-rfl7b DECISION 1).
 
-        Signature-based anchors are unstable (adding a kwarg to ``compile()``
-        would change its anchor and break every existing doc link that targets
-        it). Anchoring on the NAME keeps links stable across signature changes.
-        The CROSS-STAGE CONTRACT defined here: Stage C renders each symbol
-        section with ``id = slug(name)`` (decoupled from the heading text); the
-        manifest owns the anchor end-to-end, Stage B validates refs against it.
+        The anchor is NAME-based, never signature-based (adding a kwarg to
+        ``compile()`` must not change its anchor). The refinement Stage C adds:
+        when two distinct public symbols share one bare ``slug(name)`` (VERIFIED:
+        node/Node and tool/Tool), each colliding symbol's anchor is
+        kind-namespaced to ``f"{slug(name)}-{tag}"`` so the manifest owns a
+        DISTINCT anchor per symbol. The tightened contract:
+
+          - non-colliding symbol:  ``anchor == slug(name)`` (unchanged from M3).
+          - colliding symbol:      ``anchor == f"{slug(name)}-{tag}"`` where
+            ``tag`` derives from the symbol's kind (``gen._KIND_ANCHOR_TAG``).
+          - every anchor is slug-stable (``slug(anchor) == anchor``) and UNIQUE.
+
+        This is the deliberate Stage-A contract change Stage B/C consume; the L1
+        JS-authoritative slug snapshot is untouched (a suffix built from the same
+        ``slug()`` is appended -- ``slug()`` itself is unchanged).
         """
+        from collections import Counter
+
         gen = _load_gen_api_manifest()
         manifest = gen.build_manifest()
         symbols = manifest.get("symbols") or manifest.get("api_symbols") or []
         assert symbols, "manifest symbols list is empty -- __all__ walk is broken"
+        base_counts = Counter(gen.slug(s["name"]) for s in symbols)
+        seen_anchors: set[str] = set()
         for symbol in symbols:
             name = symbol.get("name")
             anchor = symbol.get("anchor")
             assert name is not None and anchor is not None, (
                 f"symbol entry missing name/anchor keys: {symbol!r}"
             )
-            expected = gen.slug(name)
-            assert anchor == expected, (
-                f"symbol {name!r} anchor is {anchor!r} but should be slug(name)="
-                f"{expected!r} -- anchor must be NAME-based, not signature-based (M3)."
+            base = gen.slug(name)
+            if base_counts[base] == 1:
+                assert anchor == base, (
+                    f"symbol {name!r} anchor is {anchor!r} but its bare slug does "
+                    f"not collide, so it must equal slug(name)={base!r} (M3)."
+                )
+            else:
+                tag = gen._KIND_ANCHOR_TAG.get(symbol["kind"], symbol["kind"])
+                expected = f"{base}-{tag}"
+                assert anchor == expected, (
+                    f"symbol {name!r} (kind={symbol['kind']}) bare slug {base!r} "
+                    f"collides, so its anchor must be kind-namespaced to "
+                    f"{expected!r}, got {anchor!r} (Stage C DECISION 1)."
+                )
+            # Every anchor must be slug-stable so Starlight reproduces it exactly.
+            assert gen.slug(anchor) == anchor, (
+                f"symbol {name!r} anchor {anchor!r} is not slug-stable "
+                f"(slug({anchor!r}) == {gen.slug(anchor)!r})."
             )
+            # And distinct across the whole surface (the Stage C crux).
+            assert anchor not in seen_anchors, (
+                f"symbol {name!r} anchor {anchor!r} is shared by >1 symbol -- "
+                f"disambiguation failed to make anchors unique."
+            )
+            seen_anchors.add(anchor)
 
 
 # ════════════════════════════════════════════════════════════════════════════
