@@ -562,6 +562,30 @@ def render_reference_sections() -> str:
     return "\n" + "\n\n".join(sections) + "\n"
 
 
+def render_lint_kind_table() -> str:
+    """Render the lint-kind Kind/Severity/Meaning table for api.mdx (Stage C, cvjfm).
+
+    Emits a single markdown table from the enriched ``lint_issue_kinds`` (14
+    ``{kind, severity, meaning}`` objects, sorted by kind), so the reference lint
+    table is manifest-owned instead of hand-authored. Meanings are pipe-escaped so
+    a ``|`` (e.g. a type union) cannot break the table; a multi-line meaning fails
+    loud (the table is one row per kind). The return value is the exact text
+    between the ``{/* GEN:lint-kinds START */}`` / ``END`` sentinels in api.mdx;
+    the freshness guard asserts committed-region == this, byte-for-byte.
+    """
+    rows = ["| Kind | Severity | Meaning |", "|------|----------|---------|"]
+    for entry in extract_lint_issue_kinds():
+        meaning = entry["meaning"]
+        if "\n" in meaning:
+            raise ValueError(
+                f"lint kind {entry['kind']!r} has a multi-line meaning; "
+                "render_lint_kind_table() emits one row per kind."
+            )
+        safe_meaning = meaning.replace("|", "\\|")  # pipe-escape so unions don't break the table
+        rows.append(f"| `{entry['kind']}` | {entry['severity']} | {safe_meaning} |")
+    return "\n" + "\n".join(rows) + "\n"
+
+
 def build_mcp_manifest() -> dict[str, Any]:
     """MCP manifest: neograph_mcp.__all__ (raises ImportError w/o the extra)."""
     import neograph_mcp  # noqa: F401  -- _require_mcp() gates at import time

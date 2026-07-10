@@ -612,6 +612,31 @@ XmlRenderer(*, include_field_info: "Literal['once', 'always', 'never']" = 'once'
 
 ---
 
+## Lint kinds
+
+`lint()` reports these issue kinds. Severity and meaning are manifest-owned (generated from `LINT_KIND_META` in `lint.py`), so this table never drifts from what `lint()` actually emits.
+
+{/* GEN:lint-kinds START */}
+| Kind | Severity | Meaning |
+|------|----------|---------|
+| `act_mode_all_idempotent_tools` | WARN | `mode='act'` (mutations) but all tools are `idempotent=True` (read-only) -- probably a misclassification; use `mode='agent'` unless a tool is a genuinely idempotent mutation. |
+| `ask_human_in_mutating_node` | WARN | An `act`-mode (mutating) tool calls `ask_human()`; a non-idempotent side effect before the mid-loop pause can double-fire on resume. Make any pre-pause mutation idempotent, or move it after the pause. |
+| `from_config` | varies | `Annotated[T, FromConfig]` -- resolved from `config['configurable']`, passed directly in `config=`. |
+| `from_config_model` | varies | Bundled `BaseModel` via `FromConfig` -- each model field must exist in config. |
+| `from_input` | varies | `Annotated[T, FromInput]` -- resolved from `config['configurable']`, originally from `run(input={...})`. |
+| `from_input_model` | varies | Bundled `BaseModel` via `FromInput` -- each model field must exist in config. |
+| `llm_kwargs_missing` | WARN | LLM-mode nodes require `llm_factory` and `prompt_compiler` at `compile()` time. Pass these kwargs to `compile()` (or configure via `configure_llm()`, legacy). |
+| `loop_condition_none_unsafe` | WARN/ERROR | Loop `when` callable raises when called with `None`. ERROR for registered string conditions (always crash), WARN for user-supplied callables (may handle None via other means). |
+| `loop_condition_unregistered` | ERROR | Loop `when` is a string that is not registered in the condition registry. |
+| `resource_hydration_kind_unmatched` | ERROR | A node hydrates a manifest kind via `FromResource(ref=...)` but the construct has no upstream `agent`/`act` node that can emit a `resource_link`, so the manifest is guaranteed empty at runtime. |
+| `template_placeholder_known_vars_only` | WARN | Placeholder only resolvable via `known_template_vars`, not from actual `@node` parameter names. Advisory: verify the consumer bridge supplies it at runtime. |
+| `template_placeholder_unresolvable` | ERROR | Prompt placeholder not found in predicted input keys or known extras. |
+| `template_var_requires_async_driver` | WARN | A template var is a `FromResource` DI param whose fetch is awaited, so it resolves only under the async `arun()` driver (sync `run()` fails loud). Drive the graph with `arun()`. |
+| `tool_requires_async_driver` | WARN | An `agent`/`act` node is bound to an async-only tool (e.g. an MCP tool) that cannot run under the sync `run()` driver. Drive the graph with `arun()`. |
+{/* GEN:lint-kinds END */}
+
+---
+
 ## Guides
 
 ### Modifiers (pipe syntax)

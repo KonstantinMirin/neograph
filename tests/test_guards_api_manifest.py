@@ -59,6 +59,16 @@ API_MDX_PATH = REPO_ROOT / "website" / "src" / "content" / "docs" / "reference" 
 GEN_REGION_START = "{/* GEN:reference-sections START */}"
 GEN_REGION_END = "{/* GEN:reference-sections END */}"
 
+# Sentinel comment pair delimiting the SEPARATE generated lint-kind table region
+# inside api.mdx (Stage C, neograph-cvjfm). DISTINCT from the reference-sections
+# pair above so the two find()-based region extractors never overlap: the
+# lint-kinds region lives entirely AFTER GEN:reference-sections END. Its body is
+# the VERBATIM output of gen.render_lint_kind_table() (the manifest-owned
+# Kind/Severity/Meaning table); the freshness guard diffs the committed bytes
+# against a fresh render.
+LINT_KINDS_REGION_START = "{/* GEN:lint-kinds START */}"
+LINT_KINDS_REGION_END = "{/* GEN:lint-kinds END */}"
+
 # Fence-aware markdown heading matcher -- mirrors website/plugins/remark-api.mjs
 # lines 78-79 byte-for-byte (`/^#{1,6}\s+(.+?)\s*$/`) so the guard slugs the SAME
 # heading text github-slugger sees at build time. Levels 1-6, trailing whitespace
@@ -1005,3 +1015,103 @@ class TestErrorHierarchyTreeConsistency:
         # Rejects a heading with trailing prose and non-heading lines.
         assert _ERROR_SECTION_HEADING_RE.match("## Error Hierarchy and wiring") is None
         assert _ERROR_SECTION_HEADING_RE.match("Error Hierarchy") is None
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# Class 6 -- Stage C: the generated lint-kind table region (neograph-cvjfm)
+#
+# cvjfm renders the api.mdx Kind/Severity/Meaning lint-kind table from the
+# manifest's 14 enriched `lint_issue_kinds` objects (severity/meaning owned by
+# neograph.lint.LINT_KIND_META) via a NEW gen.render_lint_kind_table(), pasted
+# VERBATIM into a dedicated `## Lint kinds` section delimited by its OWN sentinel
+# pair (GEN:lint-kinds START/END) -- distinct from and entirely after the
+# GEN:reference-sections region so the two find()-based extractors never overlap.
+#
+# Two guards pin it:
+#   1. FRESHNESS -- the committed lint-kinds region == render_lint_kind_table()
+#      byte-for-byte (the manifest-owned table can't drift from LINT_KIND_META).
+#   2. COMPLETENESS -- every manifest lint kind (all 14) appears as a table row,
+#      so a kind silently dropped from the renderer fails loud.
+#
+# Both FAIL today: neither render_lint_kind_table() nor the GEN:lint-kinds region
+# exists yet. That is the TDD red.
+# ════════════════════════════════════════════════════════════════════════════
+
+
+def _extract_lint_kind_region(mdx_text: str) -> str:
+    """Return the bytes strictly between the two GEN:lint-kinds sentinel markers.
+
+    Copies the shape of ``_extract_reference_region`` (str.find() slicing, NO
+    regex -> no PROC-2 slip meta-test required). Everything after the START
+    marker literal and before the END marker literal is owned verbatim by
+    ``render_lint_kind_table()``. Asserts BOTH markers are present and in order
+    so a missing region fails loudly rather than returning ``""``.
+    """
+    start = mdx_text.find(LINT_KINDS_REGION_START)
+    end = mdx_text.find(LINT_KINDS_REGION_END)
+    assert start != -1 and end != -1, (
+        f"api.mdx is missing the generated lint-kind sentinel markers "
+        f"{LINT_KINDS_REGION_START!r} / {LINT_KINDS_REGION_END!r}. Stage C "
+        f"(neograph-cvjfm) must add a '## Lint kinds' section with a region "
+        f"delimited by them, holding render_lint_kind_table() output verbatim. "
+        f"Expected in {API_MDX_PATH}."
+    )
+    assert start < end, (
+        f"api.mdx lint-kind sentinel markers are out of order: START at {start}, "
+        f"END at {end}. The generated region must be START ... END."
+    )
+    return mdx_text[start + len(LINT_KINDS_REGION_START):end]
+
+
+class TestLintKindTableRendering:
+    """Stage C: the generated lint-kind Kind/Severity/Meaning table (cvjfm)."""
+
+    # ── Guard 1: freshness (committed region == regenerated, byte-for-byte) ──
+    def test_generated_lint_kind_region_matches_render_lint_kind_table(self):
+        """The committed GEN:lint-kinds region in api.mdx equals a fresh
+        ``render_lint_kind_table()`` byte-for-byte.
+
+        FAILS today: neither ``render_lint_kind_table()`` (the renderer) nor the
+        sentinel-delimited region exists yet -- the TDD red. Once green, any drift
+        between the committed lint-kind table and the manifest-driven render (a
+        kind added, a severity changed, a meaning reworded in LINT_KIND_META)
+        fails the default pytest suite.
+        """
+        gen = _load_gen_api_manifest()
+        assert hasattr(gen, "render_lint_kind_table"), (
+            "scripts/gen_api_manifest.py must expose render_lint_kind_table() "
+            "-> str (Stage C, neograph-cvjfm): the manifest-driven renderer that "
+            "emits the Kind/Severity/Meaning markdown table from the 14 enriched "
+            "lint_issue_kinds objects. Not implemented yet."
+        )
+        assert API_MDX_PATH.exists(), f"reference page missing at {API_MDX_PATH}"
+        rendered = gen.render_lint_kind_table()
+        region = _extract_lint_kind_region(API_MDX_PATH.read_text())
+        assert region == rendered, (
+            "api.mdx generated lint-kind region drifted from "
+            "render_lint_kind_table(). Regenerate the region with the Stage C "
+            "renderer (the region between the GEN:lint-kinds sentinels must equal "
+            "render_lint_kind_table() byte-for-byte)."
+        )
+
+    # ── Guard 2: completeness (every manifest kind appears as a table row) ──
+    def test_rendered_lint_kind_table_covers_every_manifest_kind(self):
+        """Every manifest ``lint_issue_kinds`` kind (all 14) appears as a row in
+        the rendered table, so a kind silently dropped from the renderer fails.
+
+        FAILS today: render_lint_kind_table() does not exist yet -- the TDD red.
+        """
+        gen = _load_gen_api_manifest()
+        assert hasattr(gen, "render_lint_kind_table"), (
+            "scripts/gen_api_manifest.py must expose render_lint_kind_table() "
+            "(Stage C, neograph-cvjfm). Not implemented yet."
+        )
+        rendered = gen.render_lint_kind_table()
+        manifest_kinds = {e["kind"] for e in gen.extract_lint_issue_kinds()}
+        assert manifest_kinds, "manifest lint_issue_kinds is empty -- data source broken"
+        missing = sorted(k for k in manifest_kinds if f"`{k}`" not in rendered)
+        assert not missing, (
+            f"render_lint_kind_table() dropped lint kind(s) {missing}; every one "
+            f"of the {len(manifest_kinds)} manifest lint_issue_kinds must appear "
+            f"as a `{{kind}}` row so the table can't silently lose a kind."
+        )
