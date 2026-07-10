@@ -33,9 +33,10 @@ Design notes
   (think / agent / act) use `ThinkDispatch` / `ToolDispatch`; their
   parameter annotations only drive topology + type inference.
 
-* `construct_from_module` walks `vars(mod)` once, keeps only Node instances
-  that appear in the sidecar (so plain `Node(...)` at module scope is
-  ignored), builds adjacency from each node's parameter-name tuple, DFS
+* `construct_from_module` walks `vars(mod)` once, keeping every pipeline
+  member per the single `_classify_member` predicate (@node Nodes, plain
+  `Node(...)` instances, and sub-`Construct`s with an `output=` boundary),
+  builds adjacency from each node's parameter-name tuple, DFS
   topological-sorts with a visiting set for cycle detection, and hands the
   sorted list to `Construct(name=..., nodes=...)`. No new validation path:
   the existing `_validate_node_chain` runs via `Construct.__init__`.

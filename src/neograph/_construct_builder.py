@@ -8,6 +8,7 @@ The per-phase helpers live in cohesive sibling modules. See neograph-3zai:
   - graph construction      -> neograph._construct_graph
   - parameter classification -> neograph._param_classify
   - scripted-shim wiring     -> neograph._scripted_registry
+  - member selection        -> neograph._member_select
 
 These functions depend on sidecar / DI helpers that remain in decorators.py
 and are imported back from there (one-way; _construct_builder never imports
@@ -16,7 +17,7 @@ decorators.py).
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 if TYPE_CHECKING:
     from pydantic import BaseModel
@@ -29,6 +30,7 @@ from neograph._construct_graph import (
 )
 from neograph._construct_validation import ConstructError
 from neograph._llm_config import LlmConfig
+from neograph._member_select import _bucket_members
 from neograph._normalize import normalize_inputs
 from neograph._param_classify import (
     _check_di_collisions,
@@ -37,7 +39,6 @@ from neograph._param_classify import (
     _identify_port_params,
 )
 from neograph._scripted_registry import _register_node_scripted
-from neograph._sidecar import _get_sidecar
 from neograph._state_keys import StateKeys
 from neograph.construct import Construct
 from neograph.naming import field_name_for
@@ -52,13 +53,19 @@ def construct_from_module(
     input: type[BaseModel] | None = None,
     output: type[BaseModel] | None = None,
 ) -> Construct:
-    """Walk a module's Node instances, sort topologically, return a Construct.
+    """Walk a module's pipeline members, sort topologically, return a Construct.
 
-    Walks `vars(mod)`, collecting both @node-decorated functions (Node instances
-    with sidecars) and plain `Node(...)` instances. Builds adjacency from each
-    decorated node's parameter-name tuple and each plain node's dict-form inputs
-    keys. Unknown parameter names raise `ConstructError`; cycles raise
-    `ConstructError`.
+    Walks `vars(mod)`, collecting every pipeline member: @node-decorated
+    functions (Node instances with sidecars), plain `Node(...)` instances, and
+    sub-`Construct`s (wired via their `output=` boundary). A module-level
+    Construct WITHOUT `output=` is treated as a stored top-level pipeline
+    artifact and skipped with a `ConstructArtifactSkipped` warning — never
+    silently. Non-member attributes (helpers, constants, imports) are skipped.
+    Membership is decided by the module-level binding — an imported member is
+    collected the same as one defined in the module. Builds adjacency from
+    each decorated node's
+    parameter-name tuple and each plain node's dict-form inputs keys. Unknown
+    parameter names raise `ConstructError`; cycles raise `ConstructError`.
 
     The returned Construct is a regular Construct — compile/run operate on it
     unchanged. The existing `_validate_node_chain` walker runs via
@@ -72,25 +79,15 @@ def construct_from_module(
         input: Input type for sub-construct boundary.
         output: Output type for sub-construct boundary.
     """
-    nodes: list[Node] = []
-    plain_nodes: list[Node] = []
-    source_label = f"module '{mod.__name__}'"
-    for attr in vars(mod).values():
-        if isinstance(attr, Node):
-            if _get_sidecar(attr) is not None:
-                nodes.append(attr)
-            else:
-                plain_nodes.append(attr)
-
     construct_name = name or mod.__name__.split(".")[-1]
     return _build_construct_from_decorated(
-        nodes,
+        list(vars(mod).values()),
         construct_name,
-        source_label,
+        f"module '{mod.__name__}'",
         llm_config,
         construct_input=input,
         construct_output=output,
-        plain_nodes=plain_nodes,
+        source="module",
     )
 
 
@@ -102,7 +99,7 @@ def construct_from_functions(
     input: type[BaseModel] | None = None,
     output: type[BaseModel] | None = None,
 ) -> Construct:
-    """Build a Construct from an explicit list of @node-decorated functions.
+    """Build a Construct from an explicit list of pipeline members.
 
     Use this when multiple pipelines share a file — `construct_from_module()`
     walks the whole module and cannot partition @nodes into separate
@@ -122,45 +119,23 @@ def construct_from_functions(
 
     Args:
         name: Construct name.
-        functions: List of @node-decorated functions (in any order —
-            topological sort handles ordering). Each element must be a Node
-            instance returned by @node; plain callables raise ConstructError.
+        functions: List of pipeline members (in any order — topological sort
+            handles ordering). Each element must be an @node-decorated
+            function, a plain ``Node`` instance, or a Construct with declared
+            output; anything else raises ConstructError.
         llm_config: Default LLM config inherited by every node. Per-node
             llm_config merges over this (node wins on conflicts).
         input: Input type for sub-construct boundary. When set, the Construct
             receives an isolated state with this type at ``neo_subgraph_input``.
         output: Output type for sub-construct boundary.
     """
-    source_label = f"construct '{name}'"
-    nodes: list[Node] = []
-    sub_constructs: list[Construct] = []
-    for item in functions:
-        if isinstance(item, Construct):
-            if item.output is None:
-                raise ConstructError.build(
-                    f"Construct '{item.name}' has no output type",
-                    construct=name,
-                    hint="sub-constructs must declare output= so downstream @nodes can resolve dependencies",
-                )
-            sub_constructs.append(item)
-        elif isinstance(item, Node) and _get_sidecar(item) is not None:
-            nodes.append(item)
-        else:
-            raise ConstructError.build(
-                "argument is not decorated with @node or a Construct",
-                construct=name,
-                found=type(item).__name__,
-                hint="every list element must be a function decorated with @node or a Construct with declared output",
-            )
-
     return _build_construct_from_decorated(
-        nodes,
+        functions,
         name,
-        source_label,
+        f"construct '{name}'",
         llm_config,
         construct_input=input,
         construct_output=output,
-        sub_constructs=sub_constructs,
     )
 
 
@@ -242,26 +217,29 @@ def _cleanup_inputs_and_register(
         if updates:
             decorated[field] = n.model_copy(update=updates)
 
-    # Rebuild ordered list to pick up model_copy replacements.
-    return [decorated.get(field_name_for(item.name), item) if isinstance(item, Node) else item for item in ordered]
+    # Rebuild ordered list to pick up model_copy replacements. Sub-construct
+    # names are keyed in sub_by_field, never in decorated, so .get() passes
+    # them through unchanged — no isinstance dispatch needed.
+    return [decorated.get(field_name_for(item.name), item) for item in ordered]
 
 
 def _build_construct_from_decorated(
-    nodes: list[Node],
+    members: list[Any],
     construct_name: str,
     source_label: str,
     llm_config: dict[str, Any] | LlmConfig | None,
     construct_input: type[BaseModel] | None = None,
     construct_output: type[BaseModel] | None = None,
-    sub_constructs: list[Construct] | None = None,
-    plain_nodes: list[Node] | None = None,
+    source: Literal["module", "list"] = "list",
 ) -> Construct:
     """Core pipeline builder shared by construct_from_module and
-    construct_from_functions. Delegates to named step helpers for each
-    phase of the build pipeline.
+    construct_from_functions. Takes ONE heterogeneous member list and buckets
+    it exactly once via `_bucket_members` (per-call-site bucketing is where
+    the neograph-xv9ay drift lived); `source` declares the input kind and ALL
+    skip/warn/raise policy lives inside `_bucket_members`. Delegates to named
+    step helpers for each phase of the build pipeline.
     """
-    _sub_constructs = sub_constructs or []
-    _plain_nodes = plain_nodes or []
+    nodes, _plain_nodes, _sub_constructs = _bucket_members(members, construct_name, source)
     if not nodes and not _sub_constructs and not _plain_nodes:
         raise ConstructError.build(
             "Construct has no nodes",

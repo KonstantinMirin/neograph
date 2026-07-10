@@ -129,6 +129,21 @@ class ConstructError(NeographError, ValueError):
     """
 
 
+class ConstructArtifactSkipped(UserWarning):
+    """`construct_from_module` skipped a module-level Construct with no
+    ``output=`` boundary.
+
+    A Construct without an output boundary in a walked namespace is treated
+    as a stored top-level pipeline artifact (the canonical
+    ``pipeline = construct_from_module(sys.modules[__name__])`` pattern
+    re-walked in a persistent namespace), not a wireable sub-construct. The
+    same object in an explicit `construct_from_functions` list raises
+    instead — an explicit list is a promise of intent.
+
+    Promote to an error with ``-W error::neograph.ConstructArtifactSkipped``.
+    """
+
+
 class CompileError(NeographError):
     """Errors during ``compile()`` -- graph construction from a Construct.
 

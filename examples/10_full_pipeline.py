@@ -14,9 +14,11 @@ per-node LLM config, tool budgets, checkpointer, and observability.
 
 The decompose node uses the @node decorator with Oracle kwargs for a
 concise LLM-mode declaration. Scripted nodes are registered via the
-scripted= kwarg on compile() + Node.scripted because the pipeline includes
-a Construct subgraph that requires manual assembly (construct_from_module
-cannot inline subgraphs).
+scripted= kwarg on compile() + Node.scripted. The pipeline is assembled
+manually here to show the declarative Construct form — but since
+neograph-xv9ay, construct_from_module also collects module-level
+sub-Constructs (wired via their output= boundary), so a module walk
+handles this shape too.
 
 Run (with fakes):
     python examples/10_full_pipeline.py

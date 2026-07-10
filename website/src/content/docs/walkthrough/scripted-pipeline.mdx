@@ -78,7 +78,7 @@ def classify(split: Claims) -> ClassifiedClaims:
 
 ## Building the pipeline
 
-No `nodes=[...]` list, no ordering, no edge wiring. `construct_from_module` walks the current module, finds all `@node`-decorated functions, and topologically sorts them into a `Construct`:
+No `nodes=[...]` list, no ordering, no edge wiring. `construct_from_module` walks the current module, finds every pipeline member — `@node`-decorated functions, plain `Node(...)` instances, and sub-`Construct`s with an `output=` boundary — and topologically sorts them into a `Construct`:
 
 ```python
 import sys

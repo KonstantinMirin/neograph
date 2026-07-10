@@ -21,6 +21,7 @@ from neograph import (
 from tests.fakes import build_test_compile_kwargs
 from tests.schemas import (
     Claims,
+    Clusters,
     MergedResult,
     RawText,
 )
@@ -471,26 +472,38 @@ class TestBuildConstructFromDecoratedEdges:
         )
         assert isinstance(pipeline, Construct)
 
-    def test_lost_sidecar_on_each_node_raises(self):
-        """Each node with no sidecar (not from @node) raises ConstructError."""
+    # Contract change (neograph-xv9ay, pinned decision #1: UNION member set):
+    # a sidecar-less Node reaching the core builder is a legitimate PLAIN
+    # member, not a "lost sidecar" — the pre-union tests that expected
+    # "lost sidecar metadata" here pinned the old asymmetric contract and
+    # were rewritten to pin the union.
+
+    def test_sidecarless_node_accepted_as_plain_member(self):
+        """A bare programmatic Node is a plain member of the core builder."""
         from neograph.decorators import _build_construct_from_decorated
 
-        n = Node(name="broken", mode="scripted", outputs=RawText) | Each(over="x.y", key="k")
-        # _sidecar is None — Node was created programmatically, not via @node
-        with pytest.raises(ConstructError, match="lost sidecar metadata"):
-            _build_construct_from_decorated([n], "test", "test", None)
+        n = Node(name="no-sidecar", mode="scripted", scripted_fn="noop", outputs=RawText)
+        pipeline = _build_construct_from_decorated([n], "test", "test", None)
+        assert [m.name for m in pipeline.nodes] == ["no-sidecar"]
 
-    def test_lost_sidecar_on_constant_classification_raises(self):
-        """Line 1326: constant-classification phase with missing sidecar raises."""
+    def test_sidecarless_each_node_accepted_as_plain_member(self):
+        """A programmatic Node | Each with no sidecar is a plain member."""
         from neograph.decorators import _build_construct_from_decorated
 
-        n = Node(name="no-sidecar", mode="scripted", outputs=RawText)
-        # No sidecar registered, no Each — hits the constant classification phase
-        with pytest.raises(ConstructError, match="lost sidecar metadata"):
-            _build_construct_from_decorated([n], "test", "test", None)
+        seed = Node(name="seed", mode="scripted", scripted_fn="noop", outputs=Clusters)
+        n = Node(
+            name="prog-each",
+            mode="scripted",
+            scripted_fn="noop",
+            inputs={"seed": Clusters},
+            outputs=RawText,
+        ) | Each(over="seed.groups", key="label")
+        pipeline = _build_construct_from_decorated([seed, n], "test", "test", None)
+        assert {m.name for m in pipeline.nodes} == {"seed", "prog-each"}
 
-    def test_lost_sidecar_on_adjacency_phase_raises(self):
-        """Adjacency phase with missing sidecar raises."""
+    def test_sidecarless_node_wired_from_decorated_upstream(self):
+        """A plain Node with dict-form inputs wires to an @node upstream —
+        the mixed decorated+plain case the module walk always allowed."""
         from neograph.decorators import (
             _build_construct_from_decorated,
             _register_sidecar,
@@ -500,12 +513,17 @@ class TestBuildConstructFromDecoratedEdges:
             return RawText(text="x")
 
         n = Node(name="adj-test", mode="scripted", outputs=RawText)
-        _register_sidecar(n, dummy, ("x",))
+        _register_sidecar(n, dummy, ())
 
-        # n2 has no sidecar — adjacency phase fails
-        n2 = Node(name="adj-broken", mode="scripted", inputs={"adj_test": RawText}, outputs=Claims)
-        with pytest.raises(ConstructError, match="lost sidecar metadata"):
-            _build_construct_from_decorated([n, n2], "test", "test", None)
+        n2 = Node(
+            name="adj-plain",
+            mode="scripted",
+            scripted_fn="noop",
+            inputs={"adj_test": RawText},
+            outputs=Claims,
+        )
+        pipeline = _build_construct_from_decorated([n, n2], "test", "test", None)
+        assert [m.name for m in pipeline.nodes] == ["adj-test", "adj-plain"]
 
 
 class TestSelfDependencyDetection:

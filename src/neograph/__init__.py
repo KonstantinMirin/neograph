@@ -48,6 +48,7 @@ from neograph.errors import (
     CheckpointSchemaError,
     CompileError,
     ConfigurationError,
+    ConstructArtifactSkipped,
     ConstructError,
     ExecutionError,
     NeographError,
@@ -137,6 +138,7 @@ __all__ = [
     "TypeSpecStatic",
     # Error hierarchy
     "NeographError",
+    "ConstructArtifactSkipped",
     "ConstructError",
     "CompileError",
     "ConfigurationError",

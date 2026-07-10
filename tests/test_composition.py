@@ -1755,6 +1755,265 @@ class TestNodeSubConstruct:
         assert result["scorer"].disposition == "ctx-confirmed"
 
 
+class TestConstructFromModuleSubConstruct:
+    """construct_from_module collects module-level Constructs (neograph-xv9ay).
+
+    Repro for the silent sub-construct drop: a module containing @node
+    functions AND a Construct must include the Construct, wired via its
+    output port — runtime-equivalent to construct_from_functions over the
+    same members. Builder-layer behavior; the declarative and programmatic
+    surfaces build Constructs directly and never pass through this walk.
+    """
+
+    @staticmethod
+    def _members():
+        @node(outputs=ClaimResult)
+        def judge(claim: VerifyClaim) -> ClaimResult:
+            return ClaimResult(claim_id=claim.claim_id, disposition="valid")
+
+        sub = construct_from_functions(
+            "judge-sub",
+            [judge],
+            input=VerifyClaim,
+            output=ClaimResult,
+        )
+
+        @node(outputs=VerifyClaim)
+        def seed() -> VerifyClaim:
+            return VerifyClaim(claim_id="c1", text="the sky is blue")
+
+        return seed, sub
+
+    def test_module_level_sub_construct_collected_and_runs_when_module_walked(self):
+        """A Construct attached at module level is a pipeline member: it must
+        appear in the built Construct and its output port must surface at run."""
+        import types
+
+        seed, sub = self._members()
+        mod = types.ModuleType("test_mod_sub_construct_mod")
+        mod.seed = seed
+        mod.judge_sub = sub
+
+        pipeline = construct_from_module(mod)
+        member_names = {m.name for m in pipeline.nodes}
+        assert "judge-sub" in member_names, f"sub-construct silently dropped; members: {member_names}"
+
+        graph = compile(pipeline, **build_test_compile_kwargs())
+        result = run(graph, input={"node_id": "mod-sub"})
+        assert result["judge_sub"].disposition == "valid"
+        assert result["judge_sub"].claim_id == "c1"
+
+    def test_module_walk_equivalent_when_same_members_passed_explicitly(self):
+        """construct_from_module over {seed, sub} runs to the same result as
+        construct_from_functions over the same members."""
+        import types
+
+        seed, sub = self._members()
+        mod = types.ModuleType("test_mod_sub_construct_parity_mod")
+        mod.seed = seed
+        mod.judge_sub = sub
+
+        from_module = run(
+            compile(construct_from_module(mod), **build_test_compile_kwargs()),
+            input={"node_id": "parity-mod"},
+        )
+        from_functions = run(
+            compile(
+                construct_from_functions("parity", [seed, sub]),
+                **build_test_compile_kwargs(),
+            ),
+            input={"node_id": "parity-fns"},
+        )
+        assert from_module["judge_sub"] == from_functions["judge_sub"]
+        assert from_module["seed"] == from_functions["seed"]
+
+    # ── Pinned member-set decisions (neograph-xv9ay) ────────────────────────
+    # One selection predicate, ONE policy site (_bucket_members). The pins
+    # below record the three architectural decisions from the xv9ay review
+    # (decision #3 revised on empirical evidence — see bead notes):
+    #   #1 UNION member set — plain declarative Node accepted by BOTH paths
+    #   #2 uniform namespace semantics — any module-level binding that
+    #      classifies as a member is collected (no provenance filter)
+    #   #3 a Construct with output=None is source-dependent: in a walked
+    #      NAMESPACE it is a stored top-level pipeline artifact — skipped
+    #      with a ConstructArtifactSkipped warning (never silently, never
+    #      wired); in an explicit LIST it raises (a list is a promise).
+    #      Covers ForwardConstruct instances too.
+
+    def test_plain_declarative_node_accepted_when_passed_to_construct_from_functions(self):
+        """Decision #1: a plain Node(...) is a first-class member of the
+        explicit list, same as the module walk already accepted it."""
+        seed, _ = self._members()
+        register_scripted(
+            "xv9ay_plain_judge",
+            lambda _in, _cfg: ClaimResult(claim_id=_in["seed"].claim_id, disposition="plain"),
+        )
+        plain = Node.scripted(
+            "plain-judge",
+            fn="xv9ay_plain_judge",
+            inputs={"seed": VerifyClaim},
+            outputs=ClaimResult,
+        )
+        pipeline = construct_from_functions("union", [seed, plain])
+        graph = compile(pipeline, **build_test_compile_kwargs())
+        result = run(graph, input={"node_id": "union"})
+        assert result["plain_judge"].disposition == "plain"
+
+    def test_module_binding_collected_when_member_defined_elsewhere(self):
+        """Decision #2: membership is decided by the module-level binding, not
+        provenance — a member constructed outside the module (an import) is
+        collected. Pinned so namespace semantics are a contract, not an accident."""
+        import types
+
+        seed, sub = self._members()  # both built outside the module, like imports
+        mod = types.ModuleType("test_mod_imported_member_mod")
+        mod.seed = seed
+        mod.imported_sub = sub
+
+        pipeline = construct_from_module(mod)
+        assert {m.name for m in pipeline.nodes} == {"seed", "judge-sub"}
+
+    def test_output_none_construct_skipped_with_warning_when_module_walked(self):
+        """Decision #3 (module side): a namespace Construct without output= is
+        a stored-pipeline artifact — skipped with ConstructArtifactSkipped
+        naming it; real members still collected. Never silent, and never a
+        raise blaming the canonical
+        pipeline = construct_from_module(sys.modules[__name__]) pattern
+        re-walked in a persistent namespace (notebook cell re-run)."""
+        import types
+
+        from neograph import ConstructArtifactSkipped
+
+        seed, _ = self._members()
+
+        @node(outputs=ClaimResult)
+        def stale_judge(claim: VerifyClaim) -> ClaimResult:
+            return ClaimResult(claim_id=claim.claim_id, disposition="x")
+
+        artifact = construct_from_functions("stale-pipeline", [stale_judge], input=VerifyClaim)
+        mod = types.ModuleType("test_mod_output_none_mod")
+        mod.seed = seed
+        mod.artifact = artifact
+
+        with pytest.warns(ConstructArtifactSkipped, match="stale-pipeline"):
+            pipeline = construct_from_module(mod)
+        assert {m.name for m in pipeline.nodes} == {"seed"}
+
+    def test_artifact_skip_promotable_to_error_when_warning_filtered(self):
+        """The artifact skip is loud-by-configuration:
+        -W error::ConstructArtifactSkipped turns it into a hard failure."""
+        import types
+        import warnings
+
+        from neograph import ConstructArtifactSkipped
+
+        seed, _ = self._members()
+
+        @node(outputs=ClaimResult)
+        def stale_judge2(claim: VerifyClaim) -> ClaimResult:
+            return ClaimResult(claim_id=claim.claim_id, disposition="x")
+
+        artifact = construct_from_functions("stale-two", [stale_judge2], input=VerifyClaim)
+        mod = types.ModuleType("test_mod_artifact_promote_mod")
+        mod.seed = seed
+        mod.artifact = artifact
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", ConstructArtifactSkipped)
+            with pytest.raises(ConstructArtifactSkipped):
+                construct_from_module(mod)
+
+    def test_output_none_construct_raises_when_passed_explicitly(self):
+        """Decision #3 (list side): an explicitly listed Construct without
+        output= raises — the list is a promise that every element is a
+        wireable member."""
+
+        @node(outputs=ClaimResult)
+        def broken_judge2(claim: VerifyClaim) -> ClaimResult:
+            return ClaimResult(claim_id=claim.claim_id, disposition="x")
+
+        broken = construct_from_functions("broken-sub2", [broken_judge2], input=VerifyClaim)
+        with pytest.raises(ConstructError, match="has no output type"):
+            construct_from_functions("parent", [broken])
+
+    def test_forward_construct_instance_skipped_with_warning_when_module_walked(self):
+        """Decision #3: a module-level ForwardConstruct instance IS a Construct
+        with output=None — same artifact rule: skip + warn, never wire a
+        standalone pipeline as a sub-graph."""
+        import types
+
+        from neograph import ConstructArtifactSkipped, ForwardConstruct
+
+        register_scripted("xv9ay_fc_step", lambda _in, _cfg: RawText(text="fc"))
+
+        class StandalonePipeline(ForwardConstruct):
+            step = Node.scripted("step", fn="xv9ay_fc_step", outputs=RawText)
+
+            def forward(self, topic):
+                return self.step(topic)
+
+        seed, _ = self._members()
+        mod = types.ModuleType("test_mod_forward_construct_mod")
+        mod.seed = seed
+        mod.pipeline = StandalonePipeline()
+
+        with pytest.warns(ConstructArtifactSkipped, match="StandalonePipeline"):
+            pipeline = construct_from_module(mod)
+        assert {m.name for m in pipeline.nodes} == {"seed"}
+
+    def test_forward_construct_with_output_collected_when_module_walked(self):
+        """A ForwardConstruct WITH an output= boundary is a legitimate
+        sub-construct — the classifier keys on output, not on type."""
+        import types
+
+        from neograph import ForwardConstruct
+
+        register_scripted(
+            "xv9ay_fc_judge",
+            lambda _in, _cfg: ClaimResult(
+                claim_id=_in["neo_subgraph_input"].claim_id,
+                disposition="fc-valid",
+            ),
+        )
+
+        class JudgeSub(ForwardConstruct):
+            judge = Node.scripted(
+                "judge",
+                fn="xv9ay_fc_judge",
+                inputs={"neo_subgraph_input": VerifyClaim},
+                outputs=ClaimResult,
+            )
+
+            def forward(self, claim):
+                return self.judge(claim)
+
+        seed, _ = self._members()
+        mod = types.ModuleType("test_mod_forward_output_mod")
+        mod.seed = seed
+        mod.judge_sub = JudgeSub("judge-sub", input=VerifyClaim, output=ClaimResult)
+
+        pipeline = construct_from_module(mod)
+        graph = compile(pipeline, **build_test_compile_kwargs())
+        result = run(graph, input={"node_id": "fc-sub"})
+        assert result["judge_sub"].disposition == "fc-valid"
+
+    def test_non_members_skipped_when_module_walked(self):
+        """The module filter's skip applies ONLY to non-members: helper
+        functions, constants, and imports stay invisible, silently."""
+        import types
+
+        seed, sub = self._members()
+        mod = types.ModuleType("test_mod_non_members_mod")
+        mod.seed = seed
+        mod.judge_sub = sub
+        mod.helper = lambda x: x
+        mod.LIMIT = 42
+        mod.types = types  # an imported module
+
+        pipeline = construct_from_module(mod)
+        assert {m.name for m in pipeline.nodes} == {"seed", "judge-sub"}
+
+
 class TestPortParamErrors:
     """Error cases for port param resolution (neograph-vih)."""
 

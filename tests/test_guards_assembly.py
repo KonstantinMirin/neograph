@@ -285,6 +285,10 @@ class TestConstructBuilderSplit:
         "_scripted_registry.py": {
             "def _register_node_scripted",
         },
+        "_member_select.py": {
+            "def _classify_member",
+            "def _bucket_members",
+        },
         "_construct_builder.py": {
             "def construct_from_module",
             "def construct_from_functions",
@@ -300,6 +304,7 @@ class TestConstructBuilderSplit:
     SPLIT_FILES = (
         "_construct_builder.py",
         "_construct_graph.py",
+        "_member_select.py",
         "_param_classify.py",
         "_scripted_registry.py",
     )
@@ -1705,3 +1710,136 @@ class TestLowerLayersDoNotImportForwardDX:
         fake = tmp_path / "_fake_ok.py"
         fake.write_text("from neograph._ir_branch import _BranchNode\n")
         assert not (self.DX_MODULES & _parse_neograph_imports(fake))
+
+
+class TestMemberSelectionPredicateMonopoly:
+    """Pipeline-member selection has exactly ONE predicate (neograph-xv9ay).
+
+    The silent sub-construct drop happened because construct_from_module and
+    construct_from_functions each carried their own isinstance-classification
+    ladder, which drifted on two axes (plain Node: collect vs reject;
+    Construct: silent-skip vs collect). The fix monopolizes classification in
+    `_classify_member` inside _member_select.py; the builder's entry points
+    and core must delegate to it and never re-derive membership inline.
+    """
+
+    BUILDER = SRC_DIR / "_construct_builder.py"
+    SELECT = SRC_DIR / "_member_select.py"
+    PREDICATE = "_classify_member"
+    POLICY = "_bucket_members"
+    MEMBER_TYPES = frozenset({"Node", "Construct"})
+
+    def _function_defs(self) -> dict[str, ast.FunctionDef]:
+        defs: dict[str, ast.FunctionDef] = {}
+        for path in (self.BUILDER, self.SELECT):
+            tree = ast.parse(path.read_text())
+            defs.update({n.name: n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)})
+        return defs
+
+    @staticmethod
+    def _member_isinstance_calls(fn: ast.FunctionDef, member_types: frozenset[str]) -> list[int]:
+        """Line numbers of isinstance(x, Node|Construct) calls inside fn."""
+        hits = []
+        for call in ast.walk(fn):
+            if not (isinstance(call, ast.Call) and isinstance(call.func, ast.Name)):
+                continue
+            if call.func.id != "isinstance" or len(call.args) != 2:
+                continue
+            names = {n.id for n in ast.walk(call.args[1]) if isinstance(n, ast.Name)}
+            if names & member_types:
+                hits.append(call.lineno)
+        return hits
+
+    def test_classify_member_exists(self):
+        """The single predicate must exist in _member_select.py."""
+        assert self.PREDICATE in self._function_defs(), (
+            f"{self.PREDICATE} not found in {self.SELECT.name} — the member-selection "
+            "predicate monopoly (neograph-xv9ay) requires it"
+        )
+
+    def test_no_member_isinstance_outside_the_predicate(self):
+        """isinstance(x, Node/Construct) classification is allowed ONLY inside
+        _classify_member. A second ladder in an entry point or the core builder
+        is the exact drift that caused the silent sub-construct drop."""
+        fns = self._function_defs()
+        offenders: dict[str, list[int]] = {}
+        for name, fn in fns.items():
+            if name == self.PREDICATE:
+                continue
+            # skip nested reporting: ast.walk(fn) sees nested defs too; only
+            # attribute top-level hits to the outermost function that owns them
+            nested = {
+                inner.name
+                for inner in ast.walk(fn)
+                if isinstance(inner, ast.FunctionDef) and inner is not fn
+            }
+            if self.PREDICATE in nested:
+                continue
+            hits = self._member_isinstance_calls(fn, self.MEMBER_TYPES)
+            if hits:
+                offenders[name] = hits
+        assert not offenders, (
+            f"member-type isinstance classification outside {self.PREDICATE} in "
+            f"{self.BUILDER.name}/{self.SELECT.name}: {offenders}. Route membership "
+            f"decisions through {self.PREDICATE} (neograph-xv9ay)."
+        )
+
+    def test_sidecar_check_only_inside_the_predicate(self):
+        """_get_sidecar-based @node-vs-plain classification must live only in
+        _classify_member within the builder/select modules (its other
+        legitimate users live in _construct_graph/_param_classify/
+        _scripted_registry, not here)."""
+        fns = self._function_defs()
+        offenders = []
+        for name, fn in fns.items():
+            if name == self.PREDICATE:
+                continue
+            for call in ast.walk(fn):
+                if isinstance(call, ast.Call) and isinstance(call.func, ast.Name) and call.func.id == "_get_sidecar":
+                    offenders.append(f"{name}:{call.lineno}")
+        assert not offenders, (
+            f"_get_sidecar classification outside {self.PREDICATE} in "
+            f"{self.BUILDER.name}/{self.SELECT.name}: {offenders}"
+        )
+
+    def test_classification_called_only_from_the_policy_site(self):
+        """`_classify_member` may be CALLED only from `_bucket_members` — the
+        entry points pass raw members + a source kind and never classify
+        locally. A local pre-filter in an entry point is a second policy
+        site, the exact drift class this guard exists to ban."""
+        fns = self._function_defs()
+        offenders = []
+        for name, fn in fns.items():
+            if name == self.POLICY:
+                continue
+            for c in ast.walk(fn):
+                if isinstance(c, ast.Call) and isinstance(c.func, ast.Name) and c.func.id == self.PREDICATE:
+                    offenders.append(f"{name}:{c.lineno}")
+        assert not offenders, (
+            f"{self.PREDICATE} called outside {self.POLICY}: {offenders}. "
+            f"Entry points must delegate raw members to the core builder; "
+            f"all classification and skip/warn/raise policy lives in {self.POLICY}."
+        )
+
+    def test_skip_warn_policy_only_inside_the_policy_site(self):
+        """The warn half of the skip/warn/raise policy must be single-sited:
+        `warnings.warn` in the builder/select modules only inside
+        `_bucket_members`."""
+        fns = self._function_defs()
+        offenders = []
+        for name, fn in fns.items():
+            if name == self.POLICY:
+                continue
+            for c in ast.walk(fn):
+                if (
+                    isinstance(c, ast.Call)
+                    and isinstance(c.func, ast.Attribute)
+                    and c.func.attr == "warn"
+                    and isinstance(c.func.value, ast.Name)
+                    and c.func.value.id == "warnings"
+                ):
+                    offenders.append(f"{name}:{c.lineno}")
+        assert not offenders, (
+            f"warnings.warn outside {self.POLICY} in "
+            f"{self.BUILDER.name}/{self.SELECT.name}: {offenders}"
+        )

@@ -150,14 +150,14 @@
     },
     {
       "anchor": "construct_from_module",
-      "doc": "Walk a module's Node instances, sort topologically, return a Construct.",
+      "doc": "Walk a module's pipeline members, sort topologically, return a Construct.",
       "kind": "function",
       "name": "construct_from_module",
       "signature": "(mod: 'Any', name: 'str | None' = None, *, llm_config: 'dict[str, Any] | LlmConfig | None' = None, input: 'type[BaseModel] | None' = None, output: 'type[BaseModel] | None' = None) -> 'Construct'"
     },
     {
       "anchor": "construct_from_functions",
-      "doc": "Build a Construct from an explicit list of @node-decorated functions.",
+      "doc": "Build a Construct from an explicit list of pipeline members.",
       "kind": "function",
       "name": "construct_from_functions",
       "signature": "(name: 'str', functions: 'list[Any]', *, llm_config: 'dict[str, Any] | LlmConfig | None' = None, input: 'type[BaseModel] | None' = None, output: 'type[BaseModel] | None' = None) -> 'Construct'"
@@ -825,6 +825,14 @@
       "doc": "Base for all neograph-originated errors.",
       "kind": "exception",
       "name": "NeographError",
+      "signature": ""
+    },
+    {
+      "anchor": "constructartifactskipped",
+      "bases": [],
+      "doc": "`construct_from_module` skipped a module-level Construct with no",
+      "kind": "exception",
+      "name": "ConstructArtifactSkipped",
       "signature": ""
     },
     {
