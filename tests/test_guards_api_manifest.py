@@ -50,6 +50,7 @@ WEBSITE_DATA = REPO_ROOT / "website" / "src" / "data"
 CORE_MANIFEST_PATH = WEBSITE_DATA / "api-manifest.json"
 MCP_MANIFEST_PATH = WEBSITE_DATA / "api-manifest-mcp.json"
 API_MDX_PATH = REPO_ROOT / "website" / "src" / "content" / "docs" / "reference" / "api.mdx"
+LINT_MDX_PATH = REPO_ROOT / "website" / "src" / "content" / "docs" / "concepts" / "lint.mdx"
 
 # Sentinel comment pair delimiting the ONE contiguous generated reference region
 # inside api.mdx (design "ONE GENERATED REFERENCE BLOCK", refine atom uqy66.54).
@@ -1467,3 +1468,114 @@ class TestCrossLinkCoverageCapstone:
         assert m.group("body") == "^[A-Z][A-Za-z0-9]+$"
         assert _MJS_BARE_REGEX_LITERAL_RE.search("const RE_DOTTED = /^x$/;") is None
         assert _MJS_BARE_REGEX_LITERAL_RE.search("just prose") is None
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# Class 9 -- 7mr02: consolidate the SECOND hand-authored lint Kind/Severity/
+#            Meaning table (concepts/lint.mdx) into a prose pointer + link to
+#            the ONE canonical, manifest-generated table at /reference/api/#lint-kinds
+#
+# CORE INVARIANT: there is ONE authoritative, manifest-generated Kind/Severity/
+# Meaning table (render_lint_kind_table() -> api.mdx#lint-kinds, owned by
+# neograph.lint.LINT_KIND_META); no page may carry a second hand-authored copy
+# of it that can drift. concepts/lint.mdx:67 today holds a DIVERGENT 10-kind
+# hand copy (the canonical set is 14) -- 7mr02 replaces lines 67-79 with a
+# one-line prose pointer + a markdown link to /reference/api/#lint-kinds.
+#
+# Guard style: str.find / `in` substring checks ONLY -- NO new regex (PROC-2 N/A;
+# mirrors the deliberate no-regex choice of _extract_lint_kind_region).
+#
+# RED status (before 7mr02's implementation, on committed state):
+#   - Assertion 1 (no stale hand table) FAILS: '| Kind | Severity | Meaning |'
+#     is still present at concepts/lint.mdx:67.
+#   - Assertion 2 (link present) FAILS: '/reference/api/#lint-kinds' does not
+#     yet appear in concepts/lint.mdx.
+#   - Assertion 3 (link-target heading exists in api.mdx) PASSES today -- it
+#     guards the EXISTING '## Lint kinds' heading (cvjfm) that produces the
+#     lint-kinds slug, so a heading rename can't silently break the new link
+#     with zero test failure (refine MEDIUM, neograph-41t30.28). Flagged as
+#     guarding existing behavior, NOT a naturally-failing test.
+# ════════════════════════════════════════════════════════════════════════════
+
+# The exact literal table header of a Kind/Severity/Meaning markdown table -- the
+# realistic regression vector is a verbatim copy-paste of the old/canonical table
+# which uses precisely this header (leading pipe, single-spaced cells). A
+# reformatted header (e.g. '|Kind|Severity|Meaning|') would be missed, which is
+# acceptable given the disease vector is copy-paste of a table using this header.
+_LINT_KIND_TABLE_HEADER = "| Kind | Severity | Meaning |"
+
+# The canonical cross-page anchor the consolidated concepts/lint.mdx must link
+# to. Its slug (lint-kinds) is produced by the '## Lint kinds' heading in
+# api.mdx (github-slugger).
+_CANONICAL_LINT_KINDS_LINK = "/reference/api/#lint-kinds"
+
+# The literal heading in api.mdx whose github-slugger slug is 'lint-kinds' -- the
+# TARGET of the link above. Guarding its existence keeps the consolidation
+# self-defending (a heading rename that changes the slug would otherwise silently
+# rot the new link with zero test failure).
+_CANONICAL_LINT_KINDS_HEADING = "## Lint kinds"
+
+
+class TestLintMdxTableConsolidation:
+    """7mr02: concepts/lint.mdx must NOT carry a second hand-authored lint
+    Kind/Severity/Meaning table; it must instead link to the ONE canonical,
+    manifest-generated table at /reference/api/#lint-kinds.
+
+    Substring / str.find checks only -- NO regex (PROC-2 N/A)."""
+
+    def test_concepts_lint_mdx_has_no_hand_authored_kind_severity_meaning_table(self):
+        """concepts/lint.mdx contains NO hand-authored Kind/Severity/Meaning
+        table header.
+
+        FAILS today: the divergent 10-kind hand table header
+        '| Kind | Severity | Meaning |' is present at concepts/lint.mdx:67. This
+        is the second hand-authored copy the invariant forbids -- the only
+        authoritative table is manifest-generated at api.mdx#lint-kinds.
+        """
+        assert LINT_MDX_PATH.exists(), f"concepts/lint.mdx missing at {LINT_MDX_PATH}"
+        text = LINT_MDX_PATH.read_text()
+        assert _LINT_KIND_TABLE_HEADER not in text, (
+            f"concepts/lint.mdx still carries a hand-authored lint table header "
+            f"{_LINT_KIND_TABLE_HEADER!r} -- a SECOND copy of the Kind/Severity/"
+            f"Meaning table that drifts from the canonical manifest-generated one. "
+            f"Replace it with a one-line prose pointer + a link to "
+            f"{_CANONICAL_LINT_KINDS_LINK} (7mr02)."
+        )
+
+    def test_concepts_lint_mdx_links_to_canonical_lint_kinds_table(self):
+        """concepts/lint.mdx contains a link to the canonical table at
+        /reference/api/#lint-kinds.
+
+        FAILS today: no such link exists yet -- the consolidation replaces the
+        hand table with a prose pointer + this link so the reference stays
+        single-sourced and always current.
+        """
+        assert LINT_MDX_PATH.exists(), f"concepts/lint.mdx missing at {LINT_MDX_PATH}"
+        text = LINT_MDX_PATH.read_text()
+        assert _CANONICAL_LINT_KINDS_LINK in text, (
+            f"concepts/lint.mdx does not link to the canonical lint-kind table "
+            f"{_CANONICAL_LINT_KINDS_LINK!r}. After removing its hand-authored "
+            f"table, it must point readers at the one manifest-generated table "
+            f"(7mr02)."
+        )
+
+    def test_api_mdx_still_carries_the_lint_kinds_link_target_heading(self):
+        """api.mdx contains the literal '## Lint kinds' heading -- the TARGET the
+        /reference/api/#lint-kinds link resolves to.
+
+        Guards EXISTING behavior (the heading was added by cvjfm), so this PASSES
+        today. It is NOT a naturally-failing TDD-red assertion -- it is the
+        self-defending link-target guard (refine MEDIUM, neograph-41t30.28): a
+        rename of '## Lint kinds' (e.g. to 'Lint issue kinds' -> slug
+        'lint-issue-kinds') would otherwise silently rot the consolidated link
+        with ZERO test failure, since neither remark-api nor Starlight fails the
+        build on a broken hash anchor.
+        """
+        assert API_MDX_PATH.exists(), f"reference page missing at {API_MDX_PATH}"
+        text = API_MDX_PATH.read_text()
+        assert _CANONICAL_LINT_KINDS_HEADING in text, (
+            f"api.mdx no longer contains the {_CANONICAL_LINT_KINDS_HEADING!r} "
+            f"heading -- the target of {_CANONICAL_LINT_KINDS_LINK!r}. Renaming it "
+            f"changes the github-slugger slug and silently breaks the "
+            f"concepts/lint.mdx link (7mr02 consolidation depends on this anchor)."
+        )

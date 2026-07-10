@@ -62,20 +62,7 @@ class LintIssue:
     required: bool   # True if the parameter has no default
 ```
 
-The `kind` field tells you where the parameter expected to be resolved from:
-
-| Kind | Severity | Meaning |
-|------|----------|---------|
-| `from_input` | ERROR | `Annotated[T, FromInput]` -- resolved from `config["configurable"]`, originally from `run(input={...})` |
-| `from_config` | ERROR | `Annotated[T, FromConfig]` -- resolved from `config["configurable"]`, passed directly in `config=` |
-| `from_input_model` | ERROR | Bundled `BaseModel` via `FromInput` -- each model field must exist in config |
-| `from_config_model` | ERROR | Bundled `BaseModel` via `FromConfig` -- each model field must exist in config |
-| `template_placeholder_unresolvable` | ERROR | Prompt placeholder not found in predicted input keys or known extras |
-| `template_placeholder_known_vars_only` | WARN | Placeholder only resolvable via `known_template_vars`, not from actual `@node` parameter names. Advisory: verify the consumer bridge supplies it at runtime. |
-| `loop_condition_unregistered` | ERROR | Loop `when` is a string that is not registered in the condition registry |
-| `loop_condition_none_unsafe` | ERROR/WARN | Loop `when` callable raises when called with `None`. ERROR for registered string conditions (always crash), WARN for user-supplied callables (may handle None via other means). |
-| `tool_requires_async_driver` | WARN | An `agent`/`act` node is bound to an async-only tool (e.g. an MCP tool) that cannot run under the sync `run()` driver. Drive the graph with `arun()`. |
-| `resource_hydration_kind_unmatched` | ERROR | A node hydrates a manifest kind via `FromResource(ref=...)` but the construct has no upstream `agent`/`act` node that can emit a `resource_link`, so the manifest is guaranteed empty at runtime. |
+The `kind` field tells you where the parameter was expected to resolve from. Every lint issue kind, its severity, and its meaning are listed in the [Kind / Severity / Meaning reference](/reference/api/#lint-kinds) — that table is generated from the library itself (`LINT_KIND_META`), so it is always complete and never drifts from what `lint()` actually emits.
 
 ## What it checks
 
