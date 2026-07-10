@@ -5,6 +5,95 @@ All notable changes to NeoGraph will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] - 2026-07-10
+
+0.6.0 is a large, backward-compatible release over 0.5.0. It adds a full MCP client battery, first-class async execution, typed resource hydration, an agent/act subgraph rework, and a compile-time-verified documentation pipeline. No public 0.5.0 API was removed or changed incompatibly.
+
+### Added
+
+#### MCP client battery — new optional `neograph[mcp]` package
+
+A second top-level import package, `neograph_mcp`, ships in the same distribution. `neograph` core stays MCP-free (importing `neograph_mcp` without the extra fails loud with an install hint). neograph never owns an MCP session — the adapters own connection lifecycle; neograph owns typing, wiring, per-run identity, and replay-safety.
+
+- **`mcp_tool_factories(servers)`** — connect once, discover a server's tools, and get a `{name: factory}` dict you slice per node for least-privilege binding.
+- **`mcp_tool_factory(server, spec, tool_name=...)`** — lazy single-tool factory with **zero network at construction** (offline compile/test paths) and a gateway-federated `<peer>-<tool>` → bare `Tool(name)` rename.
+- **`mcp_session`** — call N federated tools over **one** connection from a scripted composite (`async with mcp_session(...) as s: await s.call(tool, args, output_model=...)`).
+- **`mcp_run_context`** — run-scoped connection reuse across an agent's ReAct supersteps (1 connect, not N), reconnect-safe across interrupt/resume (the held session is a config-only key that never enters the checkpoint).
+- **Typed tool results** via `output_model=` / `output_models=` — rehydrate a tool's `structuredContent` into your Pydantic model; `ToolInteraction.typed_result` *is* the model.
+- **Per-run identity** via `token_provider` — rides as a tool argument over stdio, a bearer header over streamable-http; framework-carried (never LLM-chosen), never enters state, the checkpoint, or the schema fingerprint.
+- **Production auth** — `HttpServer.auth` + `client_credentials_auth` wrapping the MCP SDK's OAuth 2.1 / client-credentials / JWT `httpx.Auth` providers (token refresh without reconnect).
+- **`mcp_prompt_source`** — consume server-provided prompt templates (`prompts/get`), closing the third MCP primitive (tools + resources + prompts).
+- **Progress notifications** from long-running tools surfaced into `stream()` / `astream()` as `McpProgress` events (never enter state/checkpoint).
+- **Transport resilience** — per-call timeout + bounded retry on transport errors only; an `isError` result is never retried; non-idempotent tools are never replayed after an ambiguous failure; a retry counts against tool budget once.
+- **Gated mutations** — `gate_tools_when=` pauses a checkpointed run before a mutating tool fires; approve runs it exactly once, deny never runs it.
+- **Keyless test fakes** — `neograph_mcp.testing`: `FakeMcpSession` + fake tool factory / resource fetcher, structurally parity-pinned to the real session's `output_model` contract.
+
+#### Async execution — one pipeline, four verbs
+
+- **`run` / `arun` / `stream` / `astream`** — the same compiled graph runs under any verb; the framework carries the sync/async duality (no async flag at compile time, no second pipeline).
+- Async scripted/raw node bodies, async LLM + tool seams, async checkpoint helpers.
+- **Driver ↔ checkpointer matching fails loud both directions** — a sync `run()` against an async-only saver (or the reverse) raises a `ConfigurationError` naming the fix, never half-persists.
+- Fail-loud on an `async def` body under sync `run()`.
+- Async agent turns execute concurrent tool calls **concurrently** while preserving sequential order + per-tool budget semantics.
+
+#### Resource hydration — MCP resources as typed inputs
+
+- **`Annotated[Model, FromResource(uri)]`** — fetch + validate a resource at node entry, before your function runs (async DI twin; fails loud under `run()`).
+- **`resource_reader()`** typed domain reader + `read_blob` escape hatch.
+- **ResourceRef manifest** — runtime-discovered `resource_link`s lifted into a checkpointed manifest; downstream nodes hydrate by domain kind with layered, self-healing expiry (read → replay idempotent producer → `ResourceExpiredError`), templated URIs, `max_bytes` caps, and a per-run fetch cache.
+
+#### Agent / act subgraph rework
+
+- Agent/act nodes compile to an **inline agent-subgraph** (the ReAct monolith is gone), parsing the final ReAct turn as output to eliminate double-generation, with opportunistic parse-first structured output.
+- **Fan-over-agent auto-wrap** — `Oracle` / `Each` / `Loop` over an agent/act node, with input-port synthesis for upstream inputs.
+- **`ask_human()`** typed mid-loop HITL sugar + a safety lint; opt-in framework-generated tool-budget preamble.
+
+#### di_inputs — resolved DI values reach prompt templates
+
+- `FromInput` / `FromConfig` params are usable as `{var}` in `think`/`agent`/`act` prompt templates (opt-in via a `di_inputs`-aware compiler); on a name collision the upstream output shadows the di_input. Lint gains a matching third column.
+
+#### Prompt compiler
+
+- **`DefaultPromptCompiler`** + exported fail-loud prompt primitives.
+- **Public `compile_prompt()`** for eval harnesses — byte-identical prompts inside and outside the graph.
+- Container rendering deltas (fan-in dicts, `ToolInteraction` lists).
+
+#### Verifiable docs (neograph.pro)
+
+- **API manifest generator + pytest freshness guard** — any public-surface delta fails the test suite.
+- **remark-api plugin** — validates and autolinks backticked symbol references against the manifest at build time; a dotted `Type.member` ref to a missing member fails the Astro build.
+- **Manifest-generated reference sections** with kind-namespaced anchors, dotted `Type.member` refs linking to field-row anchors, and a cross-link **coverage-guard capstone**.
+- **Docs-snippet execution testing** — the Python snippets embedded in the docs are executed and drift-checked.
+
+#### Other
+
+- **`json_mode`** sends the provider-native `response_format={"type": "json_object"}`.
+- **Per-run id primitive** — `StateKeys.RUN_ID` (`_neo_run_id`), fresh per attempt, stable within a run, config-only.
+- **`observe=`** opt-in Langfuse auto-attach + finalize flush.
+- **`Each(on_error='collect')`** — partial-failure collection for `.map` fan-outs.
+- **Public `neograph.testing` fakes** — `FakeLLM` / `install_fake_llm`.
+- Trace span hygiene — named node runnables, node metadata on the engine's own spans.
+
+### Fixed
+
+- **Checkpoint auto-rewind hardened.** Schema fingerprints are now structural (a same-`__qualname__` model with a changed field type invalidates); a pruned history fails loud instead of silently resuming from the tip; a non-coercible field-type change rewinds rather than raising a raw `ValidationError` first. (Detection + targeted re-execution — not arbitrary state migration.)
+- Parent checkpointer + conditions threaded into branch-arm sub-constructs; branch-arm descent fixed across the IR tree walks.
+- Fail-loud on a scripted node that ran and returned `None`; fail-closed on an absent `Each` over-root.
+- Error hierarchy: `ResourceExpiredError` / `NonIdempotentReplayError` re-parented under `ExecutionError`.
+- `_run_cache` single-flight hardening; structured-output retry parity with `json_mode`; `DefaultPromptCompiler` all-DI think-node crash; null coerced to `default_factory()` for list/dict fields.
+- 5 API-drifted documentation snippets repaired (caught by the new docs-snippet testing).
+
+### Packaging
+
+- **Two top-level packages in one distribution** (`neograph` + `neograph_mcp`); one version, one tag, one Trusted-Publishing release.
+- New extras: **`mcp`**, **`mcp-examples`** (alongside `langfuse`, `dev`). `pip install neograph` pulls zero MCP dependencies; `pip install neograph[mcp]` adds the battery.
+- **`py.typed` shipped for both packages** — `neograph_mcp`'s public API is typed.
+
+### Examples + Docs
+
+- New runnable examples: MCP client selective binding, MCP resources via `FromResource`, gateway single-tool binding, and a composite `mcp_session` walkthrough — all keyless against a real stdio FastMCP demo server.
+- New concept pages: **MCP Integration**, **Sync & Async Execution**, **Resource Hydration**, plus the verifiable-docs API reference and cross-linked symbol pages.
+
 ## [0.5.0] - 2026-06-04
 
 ### Breaking
