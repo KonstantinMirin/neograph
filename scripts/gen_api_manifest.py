@@ -58,6 +58,8 @@ from pydantic_core import PydanticUndefined  # noqa: E402
 import neograph  # noqa: E402
 import neograph.errors as _errors_module  # noqa: E402
 from neograph import NeographError  # noqa: E402
+from neograph.di import DI_TEMPLATE_KINDS  # noqa: E402
+from neograph.lint import LINT_KIND_META  # noqa: E402
 
 try:  # pydantic v2 lives under pydantic.fields
     from pydantic import BaseModel  # noqa: E402
@@ -371,29 +373,118 @@ def _exception_hierarchy() -> list[dict[str, Any]]:
     return hierarchy
 
 
-def extract_lint_issue_kinds() -> list[str]:
-    """AST-extract the ``kind='...'`` string literals from src/neograph/lint.py.
+_DI_KIND_NAMES: frozenset[str] = frozenset(k.value for k in DI_TEMPLATE_KINDS)
 
-    The zero-drift approach (mirrors tests/test_guards_meta.py's AST walk): the
-    manifest stays in sync with the actual kinds lint() emits without a central
-    registry refactor. The guard test asserts the result is a superset of a
-    hardcoded floor, catching any future ``kind=variable``/``kind=f-string``
-    drift the AST walk cannot see.
+
+def _literal_kind_required_sites() -> dict[str, set[bool]]:
+    """Co-derive ``{kind: {required_bool, ...}}`` from lint.py's LintIssue sites.
+
+    Walks every ``ast.Call`` that carries a LITERAL ``kind=<str>`` and records the
+    LITERAL ``required=`` at that same Call (defaulting to ``False`` — the
+    LintIssue.required default). A set because a kind may be emitted at multiple
+    sites with conflicting ``required`` (the sanctioned dual case). DI kinds use
+    ``kind=binding.kind.value`` (a variable) and are invisible to this walk.
     """
     lint_path = REPO_ROOT / "src" / "neograph" / "lint.py"
     tree = ast.parse(lint_path.read_text())
-    kinds: set[str] = set()
+    out: dict[str, set[bool]] = {}
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
+        kind_val: str | None = None
+        required_val = False
         for kw in node.keywords:
             if (
                 kw.arg == "kind"
                 and isinstance(kw.value, ast.Constant)
                 and isinstance(kw.value.value, str)
             ):
-                kinds.add(kw.value.value)
-    return sorted(kinds)
+                kind_val = kw.value.value
+            elif (
+                kw.arg == "required"
+                and isinstance(kw.value, ast.Constant)
+                and isinstance(kw.value.value, bool)
+            ):
+                required_val = kw.value.value
+        if kind_val is not None:
+            out.setdefault(kind_val, set()).add(required_val)
+    return out
+
+
+def extract_lint_issue_kinds() -> list[dict[str, str]]:
+    """Build the enriched ``lint_issue_kinds`` manifest section (neograph-uw54v).
+
+    Emits one ``{kind, severity, meaning}`` object per kind lint() can emit,
+    sorted by ``kind``. Severity + meaning are MANIFEST-OWNED, sourced from the
+    authoritative ``neograph.lint.LINT_KIND_META`` registry so the reference doc
+    table (neograph-cvjfm) renders from here instead of hand-authoring it.
+
+    Zero-drift is enforced two ways, both FAIL LOUD at regen time:
+      * COMPLETENESS — the kind set discovered from the code (literal ``kind=``
+        sites AST-walked from lint.py, UNIONed with the 4 DI kinds from
+        ``DI_TEMPLATE_KINDS`` that the walk structurally cannot see) must equal
+        ``LINT_KIND_META.keys()``; a kind added without a registry entry (or vice
+        versa) breaks regen.
+      * SEVERITY BINDING (refinement neograph-uqy66.52) — for every single-site
+        literal kind the registry severity must equal ``'ERROR' if required else
+        'WARN'`` co-derived from the ``required=`` at its emission site. Sanctioned
+        exceptions: ``loop_condition_none_unsafe`` is dual (``WARN/ERROR``); the 4
+        DI kinds are ``varies``. So a future ``required=`` flip cannot silently
+        drift the severity column.
+    """
+    literal_sites = _literal_kind_required_sites()
+    code_kinds = set(literal_sites) | _DI_KIND_NAMES
+
+    if code_kinds != set(LINT_KIND_META):
+        missing = sorted(code_kinds - set(LINT_KIND_META))
+        extra = sorted(set(LINT_KIND_META) - code_kinds)
+        raise ValueError(
+            "LINT_KIND_META is out of sync with the kinds lint() emits. "
+            f"missing registry entries for {missing}; "
+            f"registry has entries with no emission site {extra}. "
+            "Add/remove entries in neograph.lint.LINT_KIND_META."
+        )
+
+    for kind, required_values in literal_sites.items():
+        stored = LINT_KIND_META[kind].severity
+        if kind in _DI_KIND_NAMES:  # unreachable (DI kinds are not literal), defensive
+            continue
+        if kind == "loop_condition_none_unsafe":
+            if required_values != {True, False}:
+                raise ValueError(
+                    f"{kind!r} is the sanctioned dual-severity exception but is no "
+                    f"longer emitted at both required=True and required=False "
+                    f"(saw {required_values}); re-check LINT_KIND_META."
+                )
+            if stored != "WARN/ERROR":
+                raise ValueError(
+                    f"dual-severity kind {kind!r} must be 'WARN/ERROR', got {stored!r}."
+                )
+            continue
+        if len(required_values) != 1:
+            raise ValueError(
+                f"literal kind {kind!r} emitted with conflicting required= "
+                f"{required_values}; only loop_condition_none_unsafe may be dual."
+            )
+        expected = "ERROR" if next(iter(required_values)) else "WARN"
+        if stored != expected:
+            raise ValueError(
+                f"LINT_KIND_META[{kind!r}].severity={stored!r} DRIFTED from the "
+                f"code-derived {expected!r} ('ERROR' if required else 'WARN'). "
+                "Fix the registry severity to match the required= at the site."
+            )
+
+    for kind in _DI_KIND_NAMES:
+        if LINT_KIND_META[kind].severity != "varies":
+            raise ValueError(
+                f"DI kind {kind!r} severity must be 'varies' (runtime "
+                f"binding.required-dependent), got {LINT_KIND_META[kind].severity!r}."
+            )
+
+    return [
+        {"kind": kind, "severity": meta.severity, "meaning": meta.meaning}
+        for kind, meta in sorted(LINT_KIND_META.items())
+    ]
 
 
 def build_manifest() -> dict[str, Any]:

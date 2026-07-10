@@ -14,7 +14,8 @@ The generator lives in ``scripts/gen_api_manifest.py`` and is expected to expose
 
   - ``build_manifest()``          -> dict   (core: neograph.__all__ + errors + lint kinds)
   - ``build_mcp_manifest()``      -> dict   (neograph_mcp.__all__; raises ImportError w/o extra)
-  - ``extract_lint_issue_kinds()`` -> list[str]  (AST-extracted from lint.py kind= literals)
+  - ``extract_lint_issue_kinds()`` -> list[{kind, severity, meaning}]  (enriched from
+    lint.py kind= literals + DI kinds, severity/meaning owned by LINT_KIND_META)
   - ``slug(name: str)``           -> str    (github-slugger 2.0.0-compatible; the anchor contract)
   - ``main()``                    -> int    (writes both files to website/src/data/)
 
@@ -34,6 +35,7 @@ Cross-stage contracts pinned by this module (from the ryn4h Refinements):
 
 from __future__ import annotations
 
+import ast
 import importlib.util
 import json
 from pathlib import Path
@@ -367,14 +369,17 @@ class TestLintIssueKindExtraction:
     """
 
     def test_extracted_kinds_are_superset_of_known_floor(self):
-        """AST extraction must yield every one of the 10 known kind= literals.
+        """Enriched extraction must yield every one of the 10 known kind= literals.
 
-        Pin against the floor set, not the exact set: future kinds may be added
-        (the extractor should pick them up automatically), but none of the
-        current 10 may silently disappear.
+        Pin against the floor set, not the exact set, so none of the current 10
+        literal kinds may silently disappear. NOTE (neograph-uw54v): extraction
+        now returns ``{kind, severity, meaning}`` OBJECTS, and a NEW literal kind
+        is no longer picked up with zero other action -- it must ALSO get a
+        ``neograph.lint.LINT_KIND_META`` entry, or ``extract_lint_issue_kinds()``
+        raises at regen (the completeness + severity-binding cross-checks).
         """
         gen = _load_gen_api_manifest()
-        extracted = set(gen.extract_lint_issue_kinds())
+        extracted = {e["kind"] for e in gen.extract_lint_issue_kinds()}
         missing = _KNOWN_LINT_KIND_FLOOR - extracted
         assert not missing, (
             f"lint.py AST extraction missed {len(missing)} known kind(s): "
@@ -382,3 +387,220 @@ class TestLintIssueKindExtraction:
             f"f-string (AST walk for ast.Constant kwargs cannot see it), or the "
             f"extractor's AST walk is malformed."
         )
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# Class 4 -- enriched lint_issue_kinds: {kind, severity, meaning} objects,
+#            COMPLETE 14-kind set incl. the 4 DI kinds, code-derived severity
+#            (neograph-uw54v; refinement neograph-uqy66.52)
+# ════════════════════════════════════════════════════════════════════════════
+
+# The 4 dynamically-constructed DI kinds the literal AST walk STRUCTURALLY
+# cannot see (emitted as ``kind=binding.kind.value`` -- a variable, lint.py:86).
+# Sourced from the authoritative frozenset, not hardcoded here.
+from neograph.di import DI_TEMPLATE_KINDS  # noqa: E402
+
+_DI_KIND_NAMES = frozenset(k.value for k in DI_TEMPLATE_KINDS)
+
+# The COMPLETE kind set = 10 literal (the floor) + 4 DI. This is the manifest's
+# zero-drift target vs what lint() actually emits.
+_COMPLETE_LINT_KIND_SET = _KNOWN_LINT_KIND_FLOOR | _DI_KIND_NAMES
+
+_ALLOWED_SEVERITIES = frozenset({"ERROR", "WARN", "WARN/ERROR", "varies"})
+
+# Sanctioned non-derivable severities (refinement neograph-uqy66.52):
+#  - loop_condition_none_unsafe is emitted at TWO sites with conflicting
+#    required (True@lint.py:579, False@:599) -> merged to the dual value.
+#  - the 4 DI kinds are emitted with kind=variable, so the literal walk cannot
+#    see their Call -> severity is a runtime binding.required -> 'varies'.
+_DUAL_SEVERITY_KIND = "loop_condition_none_unsafe"
+
+
+def _derive_literal_kind_severities() -> dict[str, set[bool]]:
+    """Co-derive per-kind ``required`` booleans from lint.py's LintIssue sites.
+
+    Walks the same ``ast.Call`` nodes the extractor visits. For every Call that
+    carries a LITERAL ``kind=<str>`` keyword, records the LITERAL ``required=``
+    value at that same Call (defaulting to ``False`` when no ``required=`` keyword
+    is present -- LintIssue.required defaults False, e.g. llm_kwargs_missing).
+
+    Returns ``{kind: {required_bool, ...}}`` -- a set because a kind may be
+    emitted at multiple sites with conflicting ``required`` (the dual case).
+    DI kinds use ``kind=variable`` and are invisible to this literal walk.
+    """
+    lint_path = REPO_ROOT / "src" / "neograph" / "lint.py"
+    tree = ast.parse(lint_path.read_text())
+    out: dict[str, set[bool]] = {}
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        kind_val: str | None = None
+        required_val: bool = False  # LintIssue.required default
+        for kw in node.keywords:
+            if (
+                kw.arg == "kind"
+                and isinstance(kw.value, ast.Constant)
+                and isinstance(kw.value.value, str)
+            ):
+                kind_val = kw.value.value
+            elif (
+                kw.arg == "required"
+                and isinstance(kw.value, ast.Constant)
+                and isinstance(kw.value.value, bool)
+            ):
+                required_val = kw.value.value
+        if kind_val is not None:
+            out.setdefault(kind_val, set()).add(required_val)
+    return out
+
+
+class TestLintIssueKindEnrichment:
+    """The manifest's ``lint_issue_kinds`` must be enriched from bare name
+    strings to ``{kind, severity, meaning}`` objects (neograph-uw54v), covering
+    the COMPLETE 14-kind set (10 literal + 4 DI) with a severity that STAYS
+    code-derived from the ``required=`` at each emission site.
+
+    This is the Stage-A precursor that makes Severity/Meaning manifest-owned so
+    Stage C (neograph-cvjfm) can render the reference lint table from the
+    manifest instead of a hand-authored, drift-prone doc table.
+    """
+
+    def _entries(self) -> list:
+        assert CORE_MANIFEST_PATH.exists(), (
+            f"core manifest not committed at {CORE_MANIFEST_PATH}. "
+            f"Run: python scripts/gen_api_manifest.py"
+        )
+        manifest = json.loads(CORE_MANIFEST_PATH.read_text())
+        assert "lint_issue_kinds" in manifest, "manifest missing lint_issue_kinds"
+        return manifest["lint_issue_kinds"]
+
+    def test_entries_are_objects_with_kind_severity_meaning(self):
+        """Each lint_issue_kinds entry is a ``{kind, severity, meaning}`` object.
+
+        FAILS today: the committed manifest is a bare sorted list of name
+        strings, so the entries are ``str`` not ``dict``.
+        """
+        entries = self._entries()
+        assert entries, "lint_issue_kinds is empty -- generator walk is broken"
+        for entry in entries:
+            assert isinstance(entry, dict), (
+                f"lint_issue_kinds entry is {type(entry).__name__} {entry!r}, "
+                f"expected a {{kind, severity, meaning}} object -- the manifest "
+                f"is still a bare list of name strings (not enriched)."
+            )
+            assert {"kind", "severity", "meaning"} <= set(entry), (
+                f"lint_issue_kinds entry {entry!r} missing one of "
+                f"kind/severity/meaning keys."
+            )
+
+    def test_kind_set_is_complete_including_the_four_di_kinds(self):
+        """The manifest kind-set == the COMPLETE 14 kinds (10 literal + 4 DI).
+
+        FAILS today: the AST walk misses the 4 dynamically-constructed DI kinds
+        (from_input/from_config/from_input_model/from_config_model), so the
+        committed set has only 10.
+        """
+        entries = self._entries()
+        # Object shape required first; guard against bare-string entries so the
+        # failure names the enrichment gap, not a TypeError.
+        assert all(isinstance(e, dict) for e in entries), (
+            "lint_issue_kinds entries are not objects yet -- enrichment missing."
+        )
+        kinds = {e["kind"] for e in entries}
+        missing = _COMPLETE_LINT_KIND_SET - kinds
+        assert not missing, (
+            f"manifest lint_issue_kinds is INCOMPLETE, missing {sorted(missing)} "
+            f"(expected all 14 = 10 literal + 4 DI kinds "
+            f"{sorted(_DI_KIND_NAMES)}). The AST walk cannot see kind=variable DI "
+            f"emissions; they must be unioned in from neograph.di.DI_TEMPLATE_KINDS."
+        )
+        extra = kinds - _COMPLETE_LINT_KIND_SET
+        assert not extra, (
+            f"manifest lint_issue_kinds has unexpected kinds {sorted(extra)} not "
+            f"in the known 14-kind set."
+        )
+
+    def test_every_entry_has_nonempty_meaning_and_allowed_severity(self):
+        """Each entry carries a non-empty ``meaning`` and a ``severity`` in the
+        allowed set {ERROR, WARN, WARN/ERROR, varies}.
+
+        FAILS today: entries are bare strings with no meaning/severity at all.
+        """
+        for entry in self._entries():
+            assert isinstance(entry, dict), (
+                f"entry {entry!r} is not an object -- enrichment missing."
+            )
+            meaning = entry.get("meaning")
+            assert isinstance(meaning, str) and meaning.strip(), (
+                f"lint kind {entry.get('kind')!r} has empty/missing meaning "
+                f"{meaning!r}; meaning must be manifest-owned (moved out of "
+                f"api.mdx into the lint.py LINT_KIND_META registry)."
+            )
+            severity = entry.get("severity")
+            assert severity in _ALLOWED_SEVERITIES, (
+                f"lint kind {entry.get('kind')!r} severity {severity!r} not in "
+                f"the allowed set {sorted(_ALLOWED_SEVERITIES)}."
+            )
+
+    def test_severity_is_code_derived_from_required_at_emission_site(self):
+        """Anti-drift binding (refinement neograph-uqy66.52): the stored severity
+        for every SINGLE-SITE literal kind must equal ``'ERROR' if required else
+        'WARN'`` co-derived from the ``required=`` at its LintIssue ast.Call, so a
+        future ``required=`` flip breaks regen instead of silently drifting.
+
+        Sanctioned exceptions (asserted as constants, not derived):
+          - loop_condition_none_unsafe -> 'WARN/ERROR' (dual: True@579 + False@599)
+          - the 4 DI kinds             -> 'varies' (kind=variable, runtime-bound)
+
+        FAILS today: no severity is stored at all (bare-string entries).
+        """
+        derived = _derive_literal_kind_severities()
+        by_kind = {}
+        for entry in self._entries():
+            assert isinstance(entry, dict), (
+                f"entry {entry!r} is not an object -- enrichment missing."
+            )
+            by_kind[entry["kind"]] = entry["severity"]
+
+        for kind in _COMPLETE_LINT_KIND_SET:
+            assert kind in by_kind, f"kind {kind!r} missing from manifest"
+            stored = by_kind[kind]
+
+            if kind in _DI_KIND_NAMES:
+                assert stored == "varies", (
+                    f"DI kind {kind!r} is emitted with kind=variable so its "
+                    f"severity is runtime binding.required-dependent; the "
+                    f"registry must store 'varies', got {stored!r}."
+                )
+                continue
+
+            if kind == _DUAL_SEVERITY_KIND:
+                # Must genuinely be dual in the code for the exception to hold.
+                assert derived.get(kind) == {True, False}, (
+                    f"{kind!r} is the sanctioned dual-severity exception but the "
+                    f"code no longer emits it at both required=True and "
+                    f"required=False sites (saw {derived.get(kind)}). Re-derive."
+                )
+                assert stored == "WARN/ERROR", (
+                    f"dual-severity kind {kind!r} must store 'WARN/ERROR', "
+                    f"got {stored!r}."
+                )
+                continue
+
+            required_values = derived.get(kind)
+            assert required_values is not None, (
+                f"literal kind {kind!r} not found at any LintIssue site in "
+                f"lint.py -- the co-derivation walk cannot bind its severity."
+            )
+            assert len(required_values) == 1, (
+                f"literal kind {kind!r} unexpectedly emitted with conflicting "
+                f"required= values {required_values}; only "
+                f"{_DUAL_SEVERITY_KIND!r} may be dual."
+            )
+            expected = "ERROR" if next(iter(required_values)) else "WARN"
+            assert stored == expected, (
+                f"lint kind {kind!r} stored severity {stored!r} DRIFTED from the "
+                f"code-derived value {expected!r} ('ERROR' if required else "
+                f"'WARN', __main__.py:199). The registry severity is not bound to "
+                f"the required= at the emission site."
+            )
