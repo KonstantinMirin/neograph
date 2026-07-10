@@ -30,7 +30,7 @@ The factory creates a LangChain `BaseChatModel` instance for a given tier. NeoGr
 
 The minimal factory takes a tier string and returns a model:
 
-{/* test-skip: runs a live-model/observability pipeline (needs OPENAI_API_KEY or a real backend); Stage D does not execute live snippets */}
+{/* test-skip: illustrative fragment: references `pipeline`/`my_compiler` defined in the page narrative, not in a runnable block */}
 ```python
 from langchain_openai import ChatOpenAI
 
@@ -51,7 +51,7 @@ graph = compile(
 
 The advanced signature receives the node name and per-node LLM config:
 
-{/* test-skip: runs a live-model/observability pipeline (needs OPENAI_API_KEY or a real backend); Stage D does not execute live snippets */}
+{/* test-skip: illustrative fragment: references `pipeline`/`my_compiler` defined in the page narrative, not in a runnable block */}
 ```python
 def my_factory(tier, node_name=None, llm_config=None):
     config = llm_config or {}

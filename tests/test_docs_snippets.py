@@ -69,6 +69,11 @@ _PROVIDER_KEY_ENV_VARS = (
     "OPENROUTER_API_KEY",
     "GOOGLE_API_KEY",
     "COHERE_API_KEY",
+    # Langfuse: observe=True live-attaches + flushes traces to the Langfuse API
+    # only when BOTH keys are present (runner._langfuse_keys_present). Delete them
+    # so an observability snippet stays a verified offline no-op (neograph-x51j3).
+    "LANGFUSE_SECRET_KEY",
+    "LANGFUSE_PUBLIC_KEY",
 )
 
 
