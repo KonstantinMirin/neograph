@@ -32,7 +32,7 @@ import pytest
 from pydantic import BaseModel
 
 from neograph import Construct, Each, ForwardConstruct, Node, compile, run
-from neograph.modifiers import Loop
+from neograph.modifiers import Loop, Oracle
 from tests.fakes import build_test_compile_kwargs, register_scripted
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -102,6 +102,7 @@ def _register_corpus_fns():
     )
     register_scripted("par_refine", lambda t, _c: PText(text="refined"))
     register_scripted("par_grade", lambda data, _c: PVerdict(summary="graded"))
+    register_scripted("par_merge", lambda variants, _c: variants[0])
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -117,10 +118,44 @@ def _modifier_each_params(item):
     return None
 
 
+def _modifier_oracle_params(item):
+    """(n, models, merge_prompt, merge_model, merge_fn) of an Oracle modifier
+    on a Node or Construct — the verbatim-compared fields. Merge hooks are
+    compared by IDENTITY in ``_assert_oracle_hooks_identical`` (they are
+    Callables shared between the twins), not in this tuple."""
+    if item.has_modifier(Oracle):
+        oracle = item.get_modifier(Oracle)
+        return (
+            oracle.n,
+            oracle.models,
+            oracle.merge_prompt,
+            oracle.merge_model,
+            oracle.merge_fn,
+        )
+    return None
+
+
+def _assert_oracle_hooks_identical(traced, decl, path):
+    """merge_pre_process / merge_post_process / merge_fallback by identity."""
+    if not decl.has_modifier(Oracle):
+        return
+    t_oracle, d_oracle = traced.get_modifier(Oracle), decl.get_modifier(Oracle)
+    assert t_oracle.merge_pre_process is d_oracle.merge_pre_process, (
+        f"{path}: Oracle.merge_pre_process identity differs on {decl.name!r}"
+    )
+    assert t_oracle.merge_post_process is d_oracle.merge_post_process, (
+        f"{path}: Oracle.merge_post_process identity differs on {decl.name!r}"
+    )
+    assert t_oracle.merge_fallback is d_oracle.merge_fallback, (
+        f"{path}: Oracle.merge_fallback identity differs on {decl.name!r}"
+    )
+
+
 def assert_ir_identical(traced, decl, path="root"):
     """Recursive structural IR equality between a traced item and its
     declarative twin: names, boundary ports, modifier params (Each verbatim,
-    Loop with when-identity), node fields, and member recursion."""
+    Loop with when-identity, Oracle verbatim with hook-identity), node
+    fields, and member recursion."""
     if isinstance(decl, Construct):
         assert isinstance(traced, Construct), (
             f"{path}: expected Construct {decl.name!r}, got {type(traced).__name__}"
@@ -130,6 +165,10 @@ def assert_ir_identical(traced, decl, path="root"):
         assert _modifier_each_params(traced) == _modifier_each_params(decl), (
             f"{path}: Each modifier params differ on {decl.name!r}"
         )
+        assert _modifier_oracle_params(traced) == _modifier_oracle_params(decl), (
+            f"{path}: Oracle modifier params differ on {decl.name!r}"
+        )
+        _assert_oracle_hooks_identical(traced, decl, path)
         assert traced.has_modifier(Loop) == decl.has_modifier(Loop), (
             f"{path}: Loop modifier presence differs on {decl.name!r}"
         )
@@ -163,6 +202,10 @@ def assert_ir_identical(traced, decl, path="root"):
         assert _modifier_each_params(traced) == _modifier_each_params(decl), (
             f"{path}: per-node Each params differ on {decl.name!r}"
         )
+        assert _modifier_oracle_params(traced) == _modifier_oracle_params(decl), (
+            f"{path}: per-node Oracle params differ on {decl.name!r}"
+        )
+        _assert_oracle_hooks_identical(traced, decl, path)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -538,6 +581,67 @@ def _fwd_skip_marks():
     return Twin().nodes
 
 
+def _decl_oracle_ensemble():
+    """Node-form ensemble: a bare ``Node | Oracle`` member (NOT a Construct
+    wrap — wrapping a single node in a Construct is a different IR shape)."""
+    return Construct(
+        "twin",
+        nodes=[
+            Node.scripted("seed", fn="par_text", outputs=PText),
+            Node.scripted("gen", fn="par_refine", inputs=PText, outputs=PText)
+            | Oracle(n=3, merge_fn="par_merge"),
+        ],
+    ).nodes
+
+
+def _fwd_oracle_ensemble():
+    class Twin(ForwardConstruct):
+        seed = Node.scripted("seed", fn="par_text", outputs=PText)
+        gen = Node.scripted("gen", fn="par_refine", inputs=PText, outputs=PText)
+
+        def forward(self, topic):
+            t = self.seed(topic)
+            return self.ensemble(self.gen, n=3, merge_fn="par_merge")(t)
+
+    return Twin().nodes
+
+
+def _decl_oracle_ensemble_sub_construct():
+    """Body-form ensemble: ``Construct(input=,output=,nodes=[...]) | Oracle``
+    with the deterministic 'ensemble-{slug}' name (slug = member names)."""
+    return Construct(
+        "twin",
+        nodes=[
+            Node.scripted("seed", fn="par_text", outputs=PText),
+            Construct(
+                "ensemble-draft-polish",
+                input=PText,
+                output=PText,
+                nodes=[
+                    Node.scripted("draft", fn="par_refine", inputs=PText, outputs=PText),
+                    Node.scripted(
+                        "polish", fn="par_refine", inputs={"draft": PText}, outputs=PText
+                    ),
+                ],
+            )
+            | Oracle(n=3, merge_fn="par_merge"),
+        ],
+    ).nodes
+
+
+def _fwd_oracle_ensemble_sub_construct():
+    class Twin(ForwardConstruct):
+        seed = Node.scripted("seed", fn="par_text", outputs=PText)
+        draft = Node.scripted("draft", fn="par_refine", inputs=PText, outputs=PText)
+        polish = Node.scripted("polish", fn="par_refine", inputs={"draft": PText}, outputs=PText)
+
+        def forward(self, topic):
+            t = self.seed(topic)
+            return self.ensemble([self.draft, self.polish], n=3, merge_fn="par_merge")(t)
+
+    return Twin().nodes
+
+
 PARITY_CORPUS = [
     ParityRow("straight_line", _decl_straight_line, _fwd_straight_line),
     ParityRow("fan_in", _decl_fan_in, _fwd_fan_in),
@@ -549,6 +653,12 @@ PARITY_CORPUS = [
     ParityRow("loop_in_loop", _decl_loop_in_loop, _fwd_loop_in_loop),
     ParityRow("multi_output_dict", _decl_multi_output, _fwd_multi_output),
     ParityRow("skip_marks", _decl_skip_marks, _fwd_skip_marks),
+    ParityRow("oracle_ensemble", _decl_oracle_ensemble, _fwd_oracle_ensemble),
+    ParityRow(
+        "oracle_ensemble_sub_construct",
+        _decl_oracle_ensemble_sub_construct,
+        _fwd_oracle_ensemble_sub_construct,
+    ),
 ]
 
 # The ratchet: a NEW declarative capability is added here FIRST; the coverage
@@ -557,9 +667,10 @@ REQUIRED_CAPABILITIES = frozenset(row.capability for row in PARITY_CORPUS)
 
 # Phase-2 tracing surfaces (epic neograph-e9zse): move each key from here
 # into REQUIRED_CAPABILITIES (with its corpus row) when the surface ships.
-#   - "oracle_ensemble"    -> neograph-e9zse.5 (self.ensemble())
+#   - "oracle_ensemble" / "oracle_ensemble_sub_construct" shipped with
+#     neograph-e9zse.5 (self.ensemble()) — their corpus rows carry coverage.
 #   - "operator_interrupt" -> neograph-e9zse.6 (HITL exposure)
-PHASE2_PENDING = frozenset({"oracle_ensemble", "operator_interrupt"})
+PHASE2_PENDING = frozenset({"operator_interrupt"})
 
 
 class TestParityMatrix:
@@ -601,6 +712,86 @@ class TestParityRatchet:
             f"{sorted(overlap)} shipped: remove from PHASE2_PENDING (its corpus row "
             "now carries the coverage)"
         )
+
+
+class TestNestedEnsembleFormAware:
+    """Form-aware nesting (neograph-e9zse.5 refinement): a NODE-form ensemble
+    placed inside a self.loop() body must materialize as a BARE ``Node |
+    Oracle`` member of the loop sub-construct — a Construct wrap would be
+    non-twin IR (the review MEDIUM). Pinned by isinstance(Node) plus full
+    IR equality against the declarative loop twin."""
+
+    @staticmethod
+    def _decl_loop_with_node_form_ensemble():
+        return Construct(
+            "twin",
+            nodes=[
+                Node.scripted("seed", fn="par_text", outputs=PText),
+                Construct(
+                    "loop-review-gen",
+                    input=PText,
+                    output=PText,
+                    nodes=[
+                        Node.scripted("review", fn="par_refine", inputs=PText, outputs=PText),
+                        Node.scripted(
+                            "gen", fn="par_refine", inputs={"review": PText}, outputs=PText
+                        )
+                        | Oracle(n=3, merge_fn="par_merge"),
+                    ],
+                )
+                | Loop(when=_run_once_when, max_iterations=3, on_exhaust="last"),
+            ],
+        ).nodes
+
+    @staticmethod
+    def _fwd_loop_with_node_form_ensemble():
+        class Twin(ForwardConstruct):
+            seed = Node.scripted("seed", fn="par_text", outputs=PText)
+            review = Node.scripted("review", fn="par_refine", inputs=PText, outputs=PText)
+            gen = Node.scripted("gen", fn="par_refine", inputs={"review": PText}, outputs=PText)
+
+            def forward(self, topic):
+                t = self.seed(topic)
+                return self.loop(
+                    body=[
+                        self.review,
+                        self.ensemble(self.gen, n=3, merge_fn="par_merge"),
+                    ],
+                    when=_run_once_when,
+                    max_iterations=3,
+                    on_exhaust="last",
+                )(t)
+
+        return Twin().nodes
+
+    def test_node_form_ensemble_in_loop_body_stays_a_bare_node_member(self):
+        """The ensemble member of the traced loop body is a Node (NOT wrapped
+        in a Construct) carrying the Oracle modifier — form-aware nesting."""
+        _register_corpus_fns()
+        traced_nodes = self._fwd_loop_with_node_form_ensemble()
+
+        loop_sub = traced_nodes[1]
+        assert isinstance(loop_sub, Construct), (
+            f"expected the loop sub-construct at index 1, got {type(loop_sub).__name__}"
+        )
+        ensemble_member = loop_sub.nodes[1]
+        assert isinstance(ensemble_member, Node), (
+            f"node-form ensemble in a loop body must be a bare Node | Oracle "
+            f"member, got {type(ensemble_member).__name__}"
+        )
+        assert not isinstance(ensemble_member, Construct), (
+            "node-form ensemble was wrapped in a Construct — non-twin IR "
+            "(form-aware nesting violated)"
+        )
+        assert _modifier_oracle_params(ensemble_member) == (3, None, None, "reason", "par_merge")
+
+    def test_loop_with_node_form_ensemble_traces_ir_identical_to_declarative(self):
+        _register_corpus_fns()
+        decl_nodes = self._decl_loop_with_node_form_ensemble()
+        traced_nodes = self._fwd_loop_with_node_form_ensemble()
+        assert len(traced_nodes) == len(decl_nodes)
+        for i, (traced, decl) in enumerate(zip(traced_nodes, decl_nodes, strict=True)):
+            assert_ir_identical(traced, decl, path=f"nested_ensemble[{i}]")
 
 
 class TestCascadeReferenceIntegration:

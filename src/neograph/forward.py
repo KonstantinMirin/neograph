@@ -69,7 +69,7 @@ from neograph._state_keys import StateKeys
 from neograph.conditions import OPERATORS
 from neograph.construct import Construct
 from neograph.errors import ConstructError
-from neograph.modifiers import Each, Loop
+from neograph.modifiers import Each, Loop, Oracle
 from neograph.naming import field_name_for
 from neograph.node import Node, TypeSpecStatic
 
@@ -488,6 +488,11 @@ def _declared_primary_of_body_item(item: Any) -> TypeSpecStatic:
         return normalize_outputs(_declared_output(item._node)).primary
     if isinstance(item, (_EachCall, _LoopCall)):
         return _declared_primary_of_body_item(item._body[-1]) if item._body else None
+    if isinstance(item, _EnsembleCall):
+        target = item._target
+        if isinstance(target, _NodeCall):
+            return normalize_outputs(_declared_output(target._node)).primary
+        return _declared_primary_of_body_item(target[-1]) if target else None
     return None
 
 
@@ -583,11 +588,11 @@ class _LoopCall:
                 hint="pass at least one node reference: self.loop(body=[self.some_node], ...)",
             )
         for nc in self._body:
-            if not isinstance(nc, (_NodeCall, _EachCall, _LoopCall)):
+            if not isinstance(nc, (_NodeCall, _EachCall, _LoopCall, _EnsembleCall)):
                 raise ConstructError.build(
                     "self.loop() body must contain node references (self.node_name)",
                     expected="node reference (self.node_name) or a deferred "
-                    "self.each()/self.loop() builder",
+                    "self.each()/self.loop()/self.ensemble() builder",
                     found=type(nc).__name__,
                 )
 
@@ -625,10 +630,14 @@ class _LoopCall:
                     bn = bn.model_copy(update={"inputs": input_type})
                 members.append(bn)
             else:
-                # Deferred self.each()/self.loop() builder — kinds are
-                # guaranteed by _validate_body_kinds above.
-                members.append(nc._materialize_nested(members, input_type))
-                seen_construct = True
+                # Deferred self.each()/self.loop()/self.ensemble() builder —
+                # kinds are guaranteed by _validate_body_kinds above. A
+                # node-form ensemble materializes as a bare Node | Oracle
+                # member (form-aware nesting), so gate the inputs-fill rule
+                # on what actually materialized, not on the builder kind.
+                materialized = nc._materialize_nested(members, input_type)
+                members.append(materialized)
+                seen_construct = seen_construct or isinstance(materialized, Construct)
 
         # Boundary ports are single types; a dict-form declared output collapses
         # to its primary key (secondary outputs are not the loop value).
@@ -918,6 +927,140 @@ class _EachCall:
         return item_type
 
 
+class _EnsembleCall:
+    """Returned by _ForwardSelf.ensemble(). When called with a proxy, builds
+    the Oracle-modified member and records it in the tracer — IR-identical
+    to the declarative twin, form-aware:
+
+    - node form (target is a node reference) → a bare ``Node | Oracle``
+      member, exactly as declarative ``node | Oracle(...)``;
+    - body form (target is a list of node references) → a
+      ``Construct(input=, output=, nodes=body) | Oracle`` sub-construct
+      with the deterministic ``ensemble-{slug}`` name.
+
+    Usage in forward()::
+
+        best = self.ensemble(self.gen, n=3, merge_fn="combine")(draft)
+        best = self.ensemble([self.draft, self.polish], n=3, merge_fn="combine")(t)
+    """
+
+    def __init__(
+        self,
+        target: _NodeCall | list[_NodeCall],
+        oracle: Oracle,
+        tracer: _Tracer,
+    ) -> None:
+        self._target = target
+        self._oracle = oracle
+        self._tracer = tracer
+
+    def __call__(self, input_proxy: _Proxy) -> _Proxy:
+        if isinstance(self._target, _NodeCall):
+            member = self._target._node | self._oracle
+            self._tracer.record(member)
+            return _Proxy(
+                source_node=member,
+                name=f"out_of_{member.name}",
+                tracer=self._tracer,
+            )
+
+        body_nodes = self._validated_body_nodes()
+
+        source_node = input_proxy._neo_source
+        if source_node is not None:
+            input_type = normalize_outputs(_declared_output(source_node)).primary
+        else:
+            input_type = normalize_outputs(_declared_output(body_nodes[-1])).primary
+        if input_type is None:
+            raise ConstructError.build(
+                "self.ensemble() input type could not be inferred",
+                hint="call self.ensemble(...)(proxy) where proxy is a node output",
+            )
+
+        sub = self._materialize(body_nodes, input_type)
+        self._tracer.record_construct(sub)
+        return _Proxy(
+            source_node=sub,
+            name=f"out_of_{sub.name}",
+            tracer=self._tracer,
+        )
+
+    def _materialize_nested(
+        self,
+        preceding: list[Node | Construct],
+        outer_input_type: TypeSpecStatic,
+    ) -> Node | Construct:
+        """Build this ensemble as a NESTED body member of an enclosing loop —
+        form-aware: a node-form target stays a bare ``Node | Oracle`` member
+        (a Construct wrap would be non-twin IR); a body-form target becomes
+        the ``Construct | Oracle`` sub-construct. Never records into the
+        tracer — the enclosing construct owns the placement.
+        """
+        if isinstance(self._target, _NodeCall):
+            return self._target._node | self._oracle
+
+        body_nodes = self._validated_body_nodes()
+        if preceding:
+            input_type = normalize_outputs(_declared_output(preceding[-1])).primary
+        else:
+            input_type = outer_input_type
+        if input_type is None:
+            raise ConstructError.build(
+                "nested self.ensemble() input type could not be inferred",
+                hint="ensure the preceding loop-body member declares an output type",
+            )
+        return self._materialize(body_nodes, input_type)
+
+    def _validated_body_nodes(self) -> list[Node]:
+        if not isinstance(self._target, list):
+            raise ConstructError.build(
+                "self.ensemble() target must be a node reference or a list of them",
+                expected="self.node_name or [self.a, self.b]",
+                found=type(self._target).__name__,
+            )
+        for nc in self._target:
+            if not isinstance(nc, _NodeCall):
+                raise ConstructError.build(
+                    "self.ensemble() body must contain node references (self.node_name)",
+                    expected="node reference (self.node_name)",
+                    found=type(nc).__name__,
+                )
+        if not self._target:
+            raise ConstructError.build(
+                "self.ensemble() body must contain at least one node",
+                hint="pass at least one node reference: self.ensemble([self.some_node], ...)",
+            )
+        return [nc._node for nc in self._target]
+
+    def _materialize(self, body_nodes: list[Node], input_type: TypeSpecStatic) -> Construct:
+        """Build the body-form ``Construct | Oracle`` WITHOUT recording it."""
+        # Copy-not-mutate: never write inputs onto class-level Nodes
+        # (same rule as _LoopCall/_EachCall, neograph-2o9n).
+        body_nodes_copy = []
+        for bn in body_nodes:
+            if bn.inputs is None:
+                bn = bn.model_copy(update={"inputs": input_type})
+            body_nodes_copy.append(bn)
+
+        output_type = normalize_outputs(_declared_output(body_nodes[-1])).primary
+
+        body_slug = "-".join(n.name for n in body_nodes)
+        occurrence = self._tracer.next_occurrence("ensemble", body_slug)
+        name = (
+            f"ensemble-{body_slug}" if occurrence == 0 else f"ensemble-{body_slug}-{occurrence}"
+        )
+
+        return (
+            Construct(
+                name=name,
+                input=input_type,
+                output=output_type,
+                nodes=body_nodes_copy,
+            )
+            | self._oracle
+        )
+
+
 class _ForwardSelf:
     """Replacement self used during tracing.
 
@@ -1009,6 +1152,55 @@ class _ForwardSelf:
         """
         tracer: _Tracer = object.__getattribute__(self, "_neo_tracer")
         return _EachCall(body, key, on_error, tracer, over=over)
+
+    def ensemble(
+        self,
+        target: Any,
+        *,
+        n: int | None = None,
+        models: list[str] | None = None,
+        merge_prompt: str | None = None,
+        merge_model: str = "reason",
+        merge_fn: str | None = None,
+        merge_pre_process: Any = None,
+        merge_post_process: Any = None,
+        merge_fallback: Any = None,
+    ) -> _EnsembleCall:
+        """Define an Oracle ensemble (N parallel generators + judge-merge).
+
+        Kwargs mirror the ``Oracle`` modifier fields 1:1 (``n=None`` defers
+        to Oracle's default of 3, or ``len(models)`` when ``models=`` is
+        given). Returns a callable that, when called with a proxy, emits the
+        declarative twin IR — form-aware:
+
+        - ``self.ensemble(self.gen, ...)`` → bare ``Node | Oracle(...)``
+        - ``self.ensemble([self.a, self.b], ...)`` →
+          ``Construct(input=, output=, nodes=[...]) | Oracle(...)``
+
+        Usage::
+
+            best = self.ensemble(self.gen, n=3, merge_fn="combine")(draft)
+
+        Oracle's own validation (merge strategy required, hooks only with
+        merge_prompt) fires here at construction time — fail loud early.
+        """
+        oracle_kwargs: dict[str, Any] = {
+            "merge_prompt": merge_prompt,
+            "merge_model": merge_model,
+            "merge_fn": merge_fn,
+            "merge_pre_process": merge_pre_process,
+            "merge_post_process": merge_post_process,
+            "merge_fallback": merge_fallback,
+        }
+        # Pass n/models only when supplied — Oracle infers n from
+        # len(models) ONLY when 'n' is absent from model_fields_set.
+        if n is not None:
+            oracle_kwargs["n"] = n
+        if models is not None:
+            oracle_kwargs["models"] = models
+
+        tracer: _Tracer = object.__getattribute__(self, "_neo_tracer")
+        return _EnsembleCall(target, Oracle(**oracle_kwargs), tracer)
 
 
 def _run_trace(

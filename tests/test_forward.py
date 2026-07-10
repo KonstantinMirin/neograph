@@ -1580,6 +1580,118 @@ class TestSelfEachEdgeCases:
         assert [n.name for n in LoopAndEach().nodes] == names
 
 
+class TestSelfEnsembleEdgeCases:
+    """self.ensemble() error paths + end-to-end run (neograph-e9zse.5).
+    IR-equality twins live in tests/test_forward_parity.py (corpus rows
+    oracle_ensemble / oracle_ensemble_sub_construct + form-aware nesting)."""
+
+    def test_no_merge_strategy_fails_loud_at_construction(self):
+        """Oracle's own validation fires when self.ensemble() is built —
+        before the proxy call, so the trace fails at the definition site."""
+        from neograph.errors import ConfigurationError
+
+        register_scripted("ens_seed_a", lambda _i, _c: RawText(text="s"))
+        register_scripted("ens_gen_a", lambda _i, _c: RawText(text="g"))
+
+        class NoMerge(ForwardConstruct):
+            seed = Node.scripted("seed", fn="ens_seed_a", outputs=RawText)
+            gen = Node.scripted("gen", fn="ens_gen_a", inputs=RawText, outputs=RawText)
+
+            def forward(self, topic):
+                t = self.seed(topic)
+                return self.ensemble(self.gen, n=3)(t)
+
+        with pytest.raises(ConfigurationError, match="merge strategy"):
+            NoMerge()
+
+    def test_empty_body_list_raises_construct_error(self):
+        register_scripted("ens_seed_b", lambda _i, _c: RawText(text="s"))
+        register_scripted("ens_merge_b", lambda variants, _c: variants[0])
+
+        class EmptyBody(ForwardConstruct):
+            seed = Node.scripted("seed", fn="ens_seed_b", outputs=RawText)
+
+            def forward(self, topic):
+                t = self.seed(topic)
+                return self.ensemble([], n=2, merge_fn="ens_merge_b")(t)
+
+        with pytest.raises(ConstructError, match="at least one node"):
+            EmptyBody()
+
+    def test_non_node_body_item_raises_construct_error(self):
+        register_scripted("ens_seed_c", lambda _i, _c: RawText(text="s"))
+        register_scripted("ens_merge_c", lambda variants, _c: variants[0])
+
+        class BadBody(ForwardConstruct):
+            seed = Node.scripted("seed", fn="ens_seed_c", outputs=RawText)
+
+            def forward(self, topic):
+                t = self.seed(topic)
+                return self.ensemble(["not-a-node"], n=2, merge_fn="ens_merge_c")(t)
+
+        with pytest.raises(ConstructError, match="node references"):
+            BadBody()
+
+    def test_invalid_target_type_raises_construct_error(self):
+        register_scripted("ens_seed_d", lambda _i, _c: RawText(text="s"))
+        register_scripted("ens_merge_d", lambda variants, _c: variants[0])
+
+        class BadTarget(ForwardConstruct):
+            seed = Node.scripted("seed", fn="ens_seed_d", outputs=RawText)
+
+            def forward(self, topic):
+                t = self.seed(topic)
+                return self.ensemble("gen", n=2, merge_fn="ens_merge_d")(t)
+
+        with pytest.raises(ConstructError, match="node reference or a list"):
+            BadTarget()
+
+    def test_models_list_infers_n_when_n_omitted(self):
+        """models= without n= infers n from len(models) — Oracle's own
+        inference must survive the kwarg pass-through."""
+        from neograph.modifiers import Oracle
+
+        register_scripted("ens_seed_e", lambda _i, _c: RawText(text="s"))
+        register_scripted("ens_gen_e", lambda _i, _c: RawText(text="g"))
+        register_scripted("ens_merge_e", lambda variants, _c: variants[0])
+
+        class ModelsOnly(ForwardConstruct):
+            seed = Node.scripted("seed", fn="ens_seed_e", outputs=RawText)
+            gen = Node.scripted("gen", fn="ens_gen_e", inputs=RawText, outputs=RawText)
+
+            def forward(self, topic):
+                t = self.seed(topic)
+                return self.ensemble(
+                    self.gen, models=["reason", "fast"], merge_fn="ens_merge_e"
+                )(t)
+
+        pipeline = ModelsOnly()
+        gen_member = pipeline.nodes[1]
+        oracle = gen_member.get_modifier(Oracle)
+        assert oracle.n == 2
+        assert oracle.models == ["reason", "fast"]
+
+    def test_node_form_ensemble_compiles_and_runs_end_to_end(self):
+        """Traced node-form ensemble runs: N variants generated, scripted
+        merge_fn collapses them, downstream sees the merged value."""
+        register_scripted("ens_seed_f", lambda _i, _c: RawText(text="seed"))
+        register_scripted("ens_gen_f", lambda t, _c: RawText(text=f"var-of-{t.text}"))
+        register_scripted("ens_merge_f", lambda variants, _c: variants[0])
+
+        class Ensembled(ForwardConstruct):
+            seed = Node.scripted("seed", fn="ens_seed_f", outputs=RawText)
+            gen = Node.scripted("gen", fn="ens_gen_f", inputs=RawText, outputs=RawText)
+
+            def forward(self, topic):
+                t = self.seed(topic)
+                return self.ensemble(self.gen, n=3, merge_fn="ens_merge_f")(t)
+
+        pipeline = Ensembled()
+        graph = compile(pipeline, **build_test_compile_kwargs())
+        result = run(graph, input={"node_id": "ens-e2e"})
+        assert result["gen"] == RawText(text="var-of-seed")
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # Part 10: _LoopCall must not mutate class-level Node.inputs (neograph-2o9n)
 # ═══════════════════════════════════════════════════════════════════════════
