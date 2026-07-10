@@ -24,6 +24,8 @@ FACTORIES = mcp_tool_factories(
     {"crm": CRM},
     token_provider=token_provider,
     namespace=False,  # single server → bare tool names
+    # Opt each reader into typed results — see Beat 5.
+    output_models={"crm_search": CrmSearchResult, "kb_lookup": KbResult},
 )
 # FACTORIES == {"crm_search": <factory>, "kb_lookup": <factory>,
 #               "get_deal": <factory>, "update_deal": <factory>, ...}
@@ -123,7 +125,7 @@ for operator in ("operator-A", "operator-B"):
         config={"configurable": {"mcp_auth": operator}},
     )
     tool_log = result["research_tool_log"]
-    who = {i.tool_name: _parse_mcp_json(i.typed_result).get("acting_as") for i in tool_log}
+    who = {i.tool_name: i.typed_result.acting_as for i in tool_log}
     # operator-A → {'crm_search': 'operator-A', 'kb_lookup': 'operator-A'}
     # operator-B → {'crm_search': 'operator-B', 'kb_lookup': 'operator-B'}
 ```
@@ -164,16 +166,24 @@ This is the structural version of "approve before side effects": you never touch
 
 ## Beat 5 — typed results
 
-`ToolInteraction.typed_result` preserves the structured MCP payload — not a repr string — so you get typed data back:
+An MCP tool that returns a schema-serializable value (a Pydantic model, or `dict[str, Any]`) sends its payload as **`structuredContent`** — plus a functionally-equivalent text block that the spec mandates purely for backwards compatibility. neograph is a structured-aware client: declare `output_model=` and it treats `structuredContent` as the single source of truth, rehydrating it into **your** model. `ToolInteraction.typed_result` then *is* that model:
 
 {/* test-skip: illustrative fragment: references `tool_log` defined in the page narrative, not in a runnable block */}
 ```python
+class CrmSearchResult(BaseModel, frozen=True):
+    hits: list[Deal]     # Deal(id, name, stage) — validated element-wise
+    acting_as: str       # the echoed per-run identity
+
+# declared once on the factory (see the top of the page):
+#   output_models={"crm_search": CrmSearchResult, "kb_lookup": KbResult}
+
 search = next(i for i in tool_log if i.tool_name == "crm_search")
-hit = _parse_mcp_json(search.typed_result)["hits"][0]
-deal = Deal(**hit)   # Deal(id='D1', name='Acme renewal', stage='negotiation')
+deal = search.typed_result.hits[0]   # Deal(id='D1', name='Acme renewal', stage='negotiation')
 ```
 
-langchain-mcp-adapters surfaces a structured result as a list of content blocks (`[{"type": "text", "text": "<json>"}]`); `typed_result` holds that structure verbatim, ready to parse into a declared model. Read-only readers are marked `idempotent=True`, which flags them replay-safe: a read may be re-invoked to re-derive an expired resource, but a mutation may not (the default is the conservative non-idempotent).
+No hand-parsing a JSON text block, and no shipping that block to the model either: because `typed_result` is a Pydantic model, the next ReAct turn's `ToolMessage` is neograph's BAML-style rendering of it (via `describe_value`), not a repr of raw content blocks. A tool with a bare `-> dict`/`-> list` server annotation emits **no** `structuredContent`; declaring `output_model=` on it raises a typed error naming the annotation fix. A server `isError` follows the adapter-native self-correcting path unchanged. Omit `output_model=` and the tool keeps its raw content-block result — the type channel is opt-in by declaration.
+
+Read-only readers are marked `idempotent=True`, which flags them replay-safe: a read may be re-invoked to re-derive an expired resource, but a mutation may not (the default is the conservative non-idempotent).
 
 ## The escape hatch: hand-rolled factories
 

@@ -74,7 +74,7 @@ Three things ride along for free once MCP tools are node tools:
 
 - **Per-run identity.** The `token_provider` reads the operator from `config["configurable"]` on every run, so two runs of the same compiled graph act as two different principals. Over stdio the token rides as a framework-injected tool argument (stdio has no headers); over streamable-http it rides as a bearer header minted per request by an `httpx.Auth`. The token never enters state, the checkpoint, or the schema fingerprint.
 - **Gated mutations.** `gate_tools_when=` pauses a checkpointed run *before* a mutating tool fires; approve runs it exactly once, deny feeds the agent a denial message and the tool never executes. An MCP mutation cannot fire before a human approves.
-- **Typed results.** `ToolInteraction.typed_result` preserves the structured MCP payload — parse it into a declared model, not out of a repr string.
+- **Typed results.** Declare `output_model=` (singular factory) or `output_models={tool: Model}` (plural) and neograph rehydrates the tool's `structuredContent` into your model, treating it — not the spec-mandated backwards-compat text block — as the source of truth. `ToolInteraction.typed_result` *is* the model, and the next ReAct turn's `ToolMessage` is its BAML rendering, not a repr of raw content blocks.
 
 The battery is an overridable default: the seam is `compile(tool_factories=...)`, and a factory is just an async `(config, tool_config) -> tool` callable that owns its client. See the [MCP Client walkthrough](/walkthrough/mcp-client/) for the full runnable story, including the hand-rolled escape hatch.
 

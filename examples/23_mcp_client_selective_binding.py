@@ -36,9 +36,10 @@ Five beats, in narrative order:
      once; resume with ``{"approved": False}`` and the tool never runs — the
      agent is told why and finalizes anyway. MCP mutations meet the HITL story.
 
-  5. TYPED RESULTS — ``ToolInteraction.typed_result`` carries the structured MCP
-     payload (not a repr string), which we parse straight into a declared ``Deal``
-     model. Read-only readers are marked ``idempotent=True``.
+  5. TYPED RESULTS — each reader factory declares ``output_model=``, so neograph
+     rehydrates the server's ``structuredContent`` into a client model and
+     ``ToolInteraction.typed_result`` IS that model (``search.typed_result.hits[0]``
+     is a ``Deal``, no JSON unpacking). Read-only readers are marked ``idempotent=True``.
 
 Run (needs the mcp-examples extra; no API keys, no network beyond the local
 subprocess):
@@ -48,7 +49,6 @@ subprocess):
 from __future__ import annotations
 
 import asyncio
-import json
 import sys
 from pathlib import Path
 from typing import Any
@@ -93,11 +93,31 @@ def token_provider(configurable: dict[str, Any]) -> str:
 
 
 class Deal(BaseModel, frozen=True):
-    """A CRM deal — the typed shape we parse a structured MCP result back into."""
+    """A CRM deal — the typed shape a structured MCP result rehydrates into."""
 
     id: str
     name: str
     stage: str
+
+
+# ── Client-side result models (beat 5) ───────────────────────────────────────
+# The typed channel: declare output_model= on a reader factory and neograph
+# rehydrates the server's structuredContent into OUR model (fields we care about;
+# Pydantic ignores the rest). ToolInteraction.typed_result then IS the model, and
+# the next ReAct turn's ToolMessage is its BAML rendering — no hand-parsing.
+
+
+class CrmSearchResult(BaseModel, frozen=True):
+    """What crm_search returns — hits rehydrate straight into Deal models."""
+
+    hits: list[Deal]
+    acting_as: str  # the per-run identity the server echoed
+
+
+class KbResult(BaseModel, frozen=True):
+    """What kb_lookup returns — we only need the echoed identity here."""
+
+    acting_as: str
 
 
 class ResearchBrief(BaseModel, frozen=True):
@@ -225,6 +245,10 @@ FACTORIES = mcp_tool_factories(
     {"crm": CRM},
     token_provider=token_provider,
     namespace=False,  # single server, bare tool names (no "crm::" prefix)
+    # TYPED RESULTS (beat 5): each reader's structuredContent rehydrates into a
+    # client model, so typed_result carries the model and the ToolMessage is its
+    # BAML render — read attributes, never hand-parse content blocks.
+    output_models={"crm_search": CrmSearchResult, "kb_lookup": KbResult},
 )
 
 READER_TOOLS = ["crm_search", "kb_lookup"]  # read-only slice for the research node
@@ -273,26 +297,6 @@ def apply_action() -> ActionOutcome:  # body unused — the LLM drives
 action_pipeline = construct_from_functions("crm-action", [apply_action])
 
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
-
-
-def _parse_mcp_json(typed_result: Any) -> dict[str, Any]:
-    """Unpack a structured MCP tool result into its JSON payload.
-
-    langchain-mcp-adapters surfaces a structured result as a list of content
-    blocks: ``[{"type": "text", "text": "<json>"}]``. ``ToolInteraction.typed_result``
-    preserves that structure verbatim (not a repr string), so we parse the text
-    block straight back into typed data."""
-    if isinstance(typed_result, list) and typed_result:
-        block = typed_result[0]
-        text = block.get("text") if isinstance(block, dict) else None
-        if text:
-            return json.loads(text)
-    if isinstance(typed_result, dict):
-        return typed_result
-    return {}
-
-
 # ── Demos ─────────────────────────────────────────────────────────────────────
 
 
@@ -321,16 +325,17 @@ async def demo_research_identity_and_typed_results() -> None:
         tool_log: list[ToolInteraction] = result["research_tool_log"]
 
         # Read which identity each run's tools carried, straight from the tool log.
-        who = {i.tool_name: _parse_mcp_json(i.typed_result).get("acting_as") for i in tool_log}
+        # typed_result IS a client model (CrmSearchResult / KbResult), so .acting_as
+        # is a plain attribute — no JSON unpacking.
+        who = {i.tool_name: i.typed_result.acting_as for i in tool_log}
         print(f"\nRun as {operator}:")
         print(f"  brief.summary : {brief.summary}")
         print(f"  tools carried : {who}")
         assert all(v == operator for v in who.values()), f"identity mismatch: {who}"
 
-        # TYPED RESULT: the crm_search hit parses straight into a Deal model.
+        # TYPED RESULT: crm_search's hits are already Deal models on the typed channel.
         search = next(i for i in tool_log if i.tool_name == "crm_search")
-        hit = _parse_mcp_json(search.typed_result)["hits"][0]
-        deal = Deal(**hit)
+        deal = search.typed_result.hits[0]
         print(f"  typed Deal    : {deal!r}")
         assert deal.id == "D1"
 

@@ -63,14 +63,14 @@
       "doc": "Build the ``{name: async factory}`` dict for ``compile(tool_factories=...)``.",
       "kind": "function",
       "name": "mcp_tool_factories",
-      "signature": "(servers: 'dict[str, StdioServer | HttpServer]', *, token_provider: 'TokenProvider | None' = None, namespace: 'bool' = True, stdio_token_arg: 'str' = 'token') -> 'dict[str, ToolFactory]'"
+      "signature": "(servers: 'dict[str, StdioServer | HttpServer]', *, token_provider: 'TokenProvider | None' = None, namespace: 'bool' = True, stdio_token_arg: 'str' = 'token', output_models: 'dict[str, type[BaseModel]] | None' = None, parses: 'dict[str, ParseFn] | None' = None) -> 'dict[str, ToolFactory]'"
     },
     {
       "anchor": "mcp_tool_factory",
       "doc": "Build ONE lazy async factory for a SINGLE known tool \u2014 no build-time connect.",
       "kind": "function",
       "name": "mcp_tool_factory",
-      "signature": "(server_key: 'str', spec: 'StdioServer | HttpServer', *, tool_name: 'str', rename_to: 'str | None' = None, token_provider: 'TokenProvider | None' = None, stdio_token_arg: 'str' = 'token') -> 'ToolFactory'"
+      "signature": "(server_key: 'str', spec: 'StdioServer | HttpServer', *, tool_name: 'str', rename_to: 'str | None' = None, token_provider: 'TokenProvider | None' = None, stdio_token_arg: 'str' = 'token', output_model: 'type[BaseModel] | None' = None, parse: 'ParseFn | None' = None) -> 'ToolFactory'"
     },
     {
       "anchor": "mcp_resource_fetcher",

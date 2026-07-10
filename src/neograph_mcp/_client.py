@@ -43,6 +43,8 @@ from dataclasses import dataclass
 from typing import Any, cast
 from urllib.parse import urlparse
 
+from pydantic import BaseModel
+
 # A consumer-owned tool factory: (config, tool_config) -> tool (or awaitable of one).
 # The MCP-style factories this module builds are async (they await a token
 # provider / build an MCP client), so they must be driven by arun().
@@ -51,6 +53,11 @@ ToolFactory = Callable[[Any, Any], Any]
 # token_provider: mints per-run identity from config['configurable'] (tool path) or
 # with no arguments (resource path — the fetch seam carries no config). Sync or async.
 TokenProvider = Callable[..., Awaitable[str] | str]
+
+# parse: rehydrate the tool's structuredContent dict into the declared output model.
+# No mime argument (unlike resource_reader's parse) — the structured payload is
+# already a JSON object, not opaque bytes.
+ParseFn = Callable[[dict[str, Any]], BaseModel]
 
 
 @dataclass(frozen=True)
@@ -180,6 +187,51 @@ async def _discover_tool_names(server_key: str, spec: StdioServer | HttpServer) 
     return [t.name for t in tools]
 
 
+def _wrap_output_model(
+    tool: Any,
+    tool_name: str,
+    output_model: type[BaseModel],
+    parse: ParseFn | None,
+) -> Any:
+    """Wrap ``tool`` so its RESULT is the rehydrated ``output_model`` instance.
+
+    The discovered adapter tool has ``response_format="content_and_artifact"``: its
+    coroutine returns ``(content, artifact)`` where ``artifact`` is an
+    ``MCPToolArtifact`` TypedDict carrying ``structured_content`` (a plain dict at
+    runtime — read it with ``.get``, not ``getattr``). We take that dict and
+    validate it into the consumer's declared model, so the typed channel
+    (``ToolInteraction.typed_result`` + the BAML ToolMessage render) carries a model
+    instead of raw content blocks. Reset to ``response_format="content"`` so the
+    tool interface returns the bare model.
+
+    isError invariant (do NOT reopen): a server ``isError=True`` RAISES
+    ``_MCPToolExecutionError`` from inside ``orig`` (adapter ``tools.py`` — the
+    conversion raises before returning), so it propagates through this wrapper
+    UNTOUCHED. We must NOT try/except-convert it: ``model_copy`` preserves the
+    tool's ``handle_tool_errors`` (True), and langchain's ``arun`` catches the
+    ToolException there and surfaces it as a self-correcting error ToolMessage — the
+    adapter-native path. Consequently the ONLY ``None`` artifact this wrapper ever
+    sees is a genuine missing ``structuredContent`` (a bare ``-> dict``/``-> list``
+    server annotation); the adapter's ``(ToolMessage|Command, None)`` return is
+    interceptor-only and the battery wires no interceptors."""
+    orig = tool.coroutine
+
+    async def _typed(**kwargs: Any) -> BaseModel:
+        _content, artifact = await orig(**kwargs)  # isError raises here → propagates
+        structured = artifact.get("structured_content") if artifact else None
+        if structured is None:
+            raise ValueError(
+                f"MCP tool '{tool_name}' was declared with output_model="
+                f"{output_model.__name__} but the server returned no structuredContent. "
+                f"The server tool likely has a bare '-> dict' / '-> list' return "
+                f"annotation; use '-> dict[str, Any]' or a Pydantic return type so "
+                f"FastMCP emits structuredContent."
+            )
+        return parse(structured) if parse is not None else output_model.model_validate(structured)
+
+    return tool.model_copy(update={"coroutine": _typed, "response_format": "content"})
+
+
 def _make_tool_factory(
     server_key: str,
     spec: StdioServer | HttpServer,
@@ -187,13 +239,20 @@ def _make_tool_factory(
     rename_to: str | None,
     token_provider: TokenProvider | None,
     stdio_token_arg: str,
+    output_model: type[BaseModel] | None = None,
+    parse: ParseFn | None = None,
 ) -> ToolFactory:
     """Build ONE consumer-owned async factory for ``tool_name`` on ``server_key``.
 
     Per superstep: mint identity from config, build a fresh client (owned here,
     disposed by the adapter's stateless-per-call session model), fetch the tool,
-    bind per-run identity, and (when namespaced) rename it so the LLM-facing name
-    matches the ``Tool`` spec / factory key."""
+    bind per-run identity, (when namespaced) rename it so the LLM-facing name
+    matches the ``Tool`` spec / factory key, and (when ``output_model`` is declared)
+    wrap it so the result is the rehydrated model.
+
+    The ``output_model`` wrap happens LAST — after identity injection and rename —
+    so it wraps the already-injected coroutine (token injection preserved) and the
+    renamed tool."""
 
     async def _factory(config: Any, tool_config: Any) -> Any:
         token = await _resolve_token(token_provider, config)
@@ -209,6 +268,8 @@ def _make_tool_factory(
             tool = _inject_stdio_token(tool, token, stdio_token_arg)
         if rename_to is not None:
             tool = tool.model_copy(update={"name": rename_to})
+        if output_model is not None:
+            tool = _wrap_output_model(tool, tool_name, output_model, parse)
         return tool
 
     return _factory
@@ -220,6 +281,8 @@ def mcp_tool_factories(
     token_provider: TokenProvider | None = None,
     namespace: bool = True,
     stdio_token_arg: str = "token",
+    output_models: dict[str, type[BaseModel]] | None = None,
+    parses: dict[str, ParseFn] | None = None,
 ) -> dict[str, ToolFactory]:
     """Build the ``{name: async factory}`` dict for ``compile(tool_factories=...)``.
 
@@ -232,6 +295,14 @@ def mcp_tool_factories(
     ``arun()`` path; ``namespace=True`` keys ``"{server}::{tool}"`` and renames the
     tool to match; ``stdio_token_arg`` is the tool-argument name identity rides on
     for stdio servers (streamable-http uses a bearer header instead).
+
+    ``output_models`` / ``parses`` opt each named tool into TYPED results: when a
+    tool's returned-dict key is present in ``output_models``, the factory wraps that
+    tool so its result is the rehydrated model (validated from the server's
+    ``structuredContent``, via the matching ``parses`` entry if given). The keys
+    match the returned factory-dict keys (``"{server}::{tool}"`` when namespaced,
+    the bare tool name otherwise). Tools not listed keep the raw content-block
+    result — the type channel is opt-in by declaration.
 
     Note (deviation from the pinned sketch): ``stdio_token_arg`` is an added
     keyword — stdio has no headers, so the transport-aware token path needs to know
@@ -255,6 +326,8 @@ def mcp_tool_factories(
                 key if namespace else None,
                 token_provider,
                 stdio_token_arg,
+                output_model=(output_models or {}).get(key),
+                parse=(parses or {}).get(key),
             )
     return factories
 
@@ -267,6 +340,8 @@ def mcp_tool_factory(
     rename_to: str | None = None,
     token_provider: TokenProvider | None = None,
     stdio_token_arg: str = "token",
+    output_model: type[BaseModel] | None = None,
+    parse: ParseFn | None = None,
 ) -> ToolFactory:
     """Build ONE lazy async factory for a SINGLE known tool — no build-time connect.
 
@@ -289,6 +364,16 @@ def mcp_tool_factory(
     (streamable-http uses a bearer header instead). Identity injection happens BEFORE
     the rename, so it introspects the server's real declared arguments.
 
+    ``output_model`` opts into TYPED results: when declared, the factory wraps the
+    tool so its result is the rehydrated model — validated from the server's
+    ``structuredContent`` (via ``parse`` if given, else ``model_validate``) — so the
+    typed channel (``ToolInteraction.typed_result`` + the BAML ToolMessage render)
+    carries a model, not raw content blocks. Mirrors ``resource_reader(output_model=,
+    parse=)``. Omit it to keep the raw content-block result (opt-in by declaration).
+    A tool returning no ``structuredContent`` (a bare ``-> dict``/``-> list`` server
+    annotation) raises a typed ``ValueError``; a server ``isError`` follows the
+    adapter-native error path unchanged.
+
     A thin public alias over the same builder the plural form delegates to — the
     client stays owned strictly inside the returned factory (the nmb2 invariant).
     """
@@ -299,6 +384,8 @@ def mcp_tool_factory(
         rename_to,
         token_provider,
         stdio_token_arg,
+        output_model=output_model,
+        parse=parse,
     )
 
 

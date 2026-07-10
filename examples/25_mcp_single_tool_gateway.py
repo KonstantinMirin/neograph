@@ -47,7 +47,6 @@ subprocess):
 from __future__ import annotations
 
 import asyncio
-import json
 import sys
 from pathlib import Path
 from typing import Any
@@ -69,6 +68,14 @@ CRM_GATEWAY = StdioServer(command=sys.executable, args=[DEMO_SERVER])
 class ResearchNote(BaseModel, frozen=True):
     query: str
     finding: str
+
+
+class PerplexityResult(BaseModel, frozen=True):
+    """Client-side model for the gateway tool's structuredContent — declaring it as
+    output_model= makes typed_result the model, not a raw content-block list."""
+
+    query: str
+    acting_as: str  # the per-run identity the server echoed
 
 
 # ── Fake LLM (the ONLY fake — the MCP layer is real) ─────────────────────────
@@ -168,6 +175,9 @@ async def demo_rename_and_identity() -> None:
         tool_name="crm-perplexity_research",  # the name the GATEWAY exposes
         rename_to="perplexity_research",  # the name the NODE binds
         token_provider=lambda configurable: configurable.get("mcp_auth", "anon"),
+        # TYPED RESULT: rehydrate the server's structuredContent into our model, so
+        # typed_result IS a PerplexityResult — no hand-parsing of content blocks.
+        output_model=PerplexityResult,
     )
 
     # Still offline: compiling binds the factory under the bare name; nothing has
@@ -190,13 +200,13 @@ async def demo_rename_and_identity() -> None:
     tool_log: list[ToolInteraction] = result["research_tool_log"]
 
     call = tool_log[0]
-    payload = json.loads(call.typed_result[0]["text"])
+    payload = call.typed_result  # a PerplexityResult model, not raw content blocks
     print(f"\nLLM-facing tool name : {call.tool_name}")
-    print(f"server-side identity : acting_as={payload['acting_as']!r}")
+    print(f"server-side identity : acting_as={payload.acting_as!r}")
     print(f"final result         : {note.finding}")
     assert call.tool_name == "perplexity_research"  # the bare binding, not <peer>-<tool>
-    assert payload["acting_as"] == "operator-A"  # same token path as the plural
-    assert payload["query"] == "acme"
+    assert payload.acting_as == "operator-A"  # same token path as the plural
+    assert payload.query == "acme"
 
 
 async def main() -> None:

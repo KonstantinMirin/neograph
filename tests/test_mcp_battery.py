@@ -368,6 +368,215 @@ class TestLazySingleToolFactory:
         assert result["acting_as"] == "operator-A"
 
 
+# ── Typed MCP tool results: output_model= on the battery factories (wmmhc) ─────
+#
+# Client-side Pydantic models, defined INDEPENDENTLY of the demo server's classes
+# (CrmSearchResult/DealHit). The whole point of the typed channel is that a
+# consumer rehydrates the server's structuredContent into ITS OWN model — not that
+# the two share a class. Fields use snake_case matching the JSON keys; Pydantic's
+# default extra='ignore' drops bearer_identity, proving a narrower client model
+# validates the server payload.
+
+
+def _client_crm_models():
+    from pydantic import BaseModel
+
+    class ClientDealHit(BaseModel):
+        id: str
+        name: str
+        stage: str
+
+    class ClientCrmResult(BaseModel):
+        query: str
+        hits: list[ClientDealHit]
+        acting_as: str
+
+    return ClientCrmResult, ClientDealHit
+
+
+@requires_mcp
+class TestTypedOutputModel:
+    """``output_model=`` on ``mcp_tool_factory`` / ``mcp_tool_factories`` (neograph-wmmhc).
+
+    Declaring ``output_model=`` makes the wrapped adapter tool return the rehydrated
+    CLIENT Pydantic model as the tool result (instead of the raw content-block list),
+    so the typed channel — ``ToolInteraction.typed_result`` + the BAML ToolMessage
+    render — carries a model with zero core changes. Mirrors ``TestLazySingleToolFactory``:
+    ``@requires_mcp``, the real ``_demo_stdio_server()``, real ``await``, no MCP mocking.
+    """
+
+    async def test_awaited_tool_with_output_model_returns_model_instance(self):
+        """(a) A factory built with ``output_model=`` produces a tool whose
+        ``ainvoke`` returns the rehydrated CLIENT model INSTANCE — not the raw
+        content-block list. crm_search emits structuredContent (CrmSearchResult
+        server-side); the wrapper validates it into the client's own model."""
+        from neograph_mcp import mcp_tool_factory
+
+        ClientCrmResult, _ = _client_crm_models()
+
+        factory = mcp_tool_factory(
+            "crm",
+            _demo_stdio_server(),
+            tool_name="crm_search",
+            output_model=ClientCrmResult,
+        )
+        tool = await factory({"configurable": {}}, None)
+        result = await tool.ainvoke({"query": "acme"})
+
+        assert isinstance(result, ClientCrmResult), (
+            f"expected the rehydrated client model, got {type(result).__name__}: {result!r}"
+        )
+        assert result.acting_as == "anon"
+        assert result.hits and result.hits[0].name == "Acme renewal"
+
+    async def test_missing_structured_content_with_output_model_raises_typed_error(self):
+        """(b) ``get_deal`` is annotated ``-> list`` and emits NO structuredContent
+        (artifact is None). With ``output_model=`` declared, the wrapper raises a
+        TYPED ValueError naming the tool AND pointing at the server-annotation fix —
+        not a generic AttributeError/KeyError on a None artifact."""
+        from neograph_mcp import mcp_tool_factory
+
+        ClientCrmResult, _ = _client_crm_models()
+
+        factory = mcp_tool_factory(
+            "crm",
+            _demo_stdio_server(),
+            tool_name="get_deal",
+            output_model=ClientCrmResult,
+        )
+        tool = await factory({"configurable": {}}, None)
+
+        with pytest.raises(ValueError) as excinfo:
+            await tool.ainvoke({"deal_id": "D1"})
+
+        msg = str(excinfo.value)
+        assert "get_deal" in msg, f"typed error must name the tool: {msg!r}"
+        assert "structuredContent" in msg, f"typed error must mention structuredContent: {msg!r}"
+        # points the consumer at the server-side annotation fix, not a bare failure.
+        assert "annotation" in msg.lower() or "-> dict" in msg or "Pydantic" in msg, (
+            f"typed error must point at the server-annotation fix: {msg!r}"
+        )
+
+    async def test_wrong_shape_output_model_propagates_validation_error(self):
+        """(c) A client ``output_model`` requiring a field the server payload lacks
+        must let Pydantic's ``ValidationError`` PROPAGATE untouched — it IS the
+        type-mismatch signal, not something the wrapper swallows into content."""
+        from pydantic import BaseModel, ValidationError
+
+        from neograph_mcp import mcp_tool_factory
+
+        class WrongShape(BaseModel):
+            query: str
+            missing_required: str  # crm_search never emits this key
+
+        factory = mcp_tool_factory(
+            "crm",
+            _demo_stdio_server(),
+            tool_name="crm_search",
+            output_model=WrongShape,
+        )
+        tool = await factory({"configurable": {}}, None)
+
+        with pytest.raises(ValidationError):
+            await tool.ainvoke({"query": "acme"})
+
+    async def test_iserror_with_output_model_surfaces_native_error_not_missing_sc(self):
+        """(d) isError native path: a call the server/adapter errors on (crm_search
+        with the required ``query`` arg omitted) on a tool WITH ``output_model=`` set
+        must surface the adapter-native error path (handle_tool_error, preserved
+        across the ``model_copy``, returns an error content block) — NOT the
+        missing-structuredContent ValueError. Proves the wrapper lets the raise
+        PROPAGATE rather than masking it as a schema-annotation miss."""
+        from neograph_mcp import mcp_tool_factory
+
+        ClientCrmResult, _ = _client_crm_models()
+
+        factory = mcp_tool_factory(
+            "crm",
+            _demo_stdio_server(),
+            tool_name="crm_search",
+            output_model=ClientCrmResult,
+        )
+        tool = await factory({"configurable": {}}, None)
+
+        # handle_tool_error catches the _MCPToolExecutionError raised inside the
+        # wrapped coroutine and returns the native error content — no raise here.
+        out = await tool.ainvoke({})  # missing required 'query'
+
+        assert not isinstance(out, ClientCrmResult), (
+            "a server error must NOT be rehydrated into the output model"
+        )
+        text = str(out)
+        assert "Error executing tool crm_search" in text, (
+            f"expected the adapter-native error, got: {text!r}"
+        )
+        # our missing-structuredContent ValueError must NOT have masked the native error.
+        assert "output_model" not in text and "structuredContent" not in text, (
+            f"wrapper masked the native isError as a missing-structuredContent error: {text!r}"
+        )
+
+    async def test_factories_output_models_dict_returns_typed_model(self):
+        """(e) The plural ``mcp_tool_factories(..., output_models={...})`` dict form:
+        a factory sliced from the returned dict returns the typed client model,
+        keyed like the factory dict (bare key under ``namespace=False``)."""
+        from neograph_mcp import mcp_tool_factories
+
+        ClientCrmResult, _ = _client_crm_models()
+
+        factories = mcp_tool_factories(
+            {"crm": _demo_stdio_server()},
+            output_models={"crm_search": ClientCrmResult},
+            namespace=False,
+        )
+        tool = await factories["crm_search"]({"configurable": {}}, None)
+        result = await tool.ainvoke({"query": "acme"})
+
+        assert isinstance(result, ClientCrmResult), (
+            f"expected the rehydrated client model via the plural factory, got {type(result).__name__}"
+        )
+        assert result.hits and result.hits[0].name == "Acme renewal"
+
+    def test_e2e_typed_result_is_model_and_toolmessage_is_baml_render(self):
+        """(E2E) Full agent run through ``compile()`` + ``arun()``: the tool bound
+        with ``output_model=`` makes ``ToolInteraction.typed_result`` the CLIENT
+        model instance, AND the ToolMessage content in message history is the
+        ``describe_value`` (BAML) rendering — NOT ``str([{'type': 'text', ...}])``."""
+        import neograph
+        from neograph import compile
+        from neograph_mcp import mcp_tool_factories
+        from tests.fakes import build_test_compile_kwargs, configure_fake_llm
+        from tests.schemas import Claims
+
+        ClientCrmResult, _ = _client_crm_models()
+
+        factories = mcp_tool_factories(
+            {"crm": _demo_stdio_server()},
+            output_models={"crm_search": ClientCrmResult},
+            namespace=False,
+        )
+        only_search = {"crm_search": factories["crm_search"]}
+
+        construct = _build_agent_construct("crm_search")
+        llm_kw = configure_fake_llm(lambda tier: _react_fake("crm_search"))
+        graph = compile(construct, tool_factories=only_search, **build_test_compile_kwargs(), **llm_kw)
+
+        result = asyncio.run(neograph.arun(graph, input={"query": "acme"}))
+        assert result["scan_result"] == Claims(items=["done"])
+
+        tool_log = result["scan_tool_log"]
+        assert tool_log, "expected the real MCP tool to have been called"
+        ti = tool_log[0]
+        assert isinstance(ti.typed_result, ClientCrmResult), (
+            f"typed_result must be the client model, got {type(ti.typed_result).__name__}"
+        )
+        # The ToolMessage content fed to the next ReAct turn is the BAML render,
+        # not a repr of raw content blocks.
+        assert "'type': 'text'" not in ti.result, (
+            f"ToolMessage carried raw content blocks instead of the BAML render: {ti.result!r}"
+        )
+        assert "Tool result:" in ti.result or "acme" in ti.result
+
+
 @requires_mcp
 def test_resource_fetcher_builder_returns_fetcher_and_replayer():
     """``mcp_resource_fetcher`` returns the (fetcher, replayer) callables a consumer
