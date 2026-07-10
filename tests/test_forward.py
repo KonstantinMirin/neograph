@@ -1191,6 +1191,195 @@ class TestSelfEachTracing:
         assert barrier["beta"].text == "ok-beta"
 
 
+class TestForwardTracingVerifiedCapabilities:
+    """neograph-e9zse.3: pins the three capabilities the parity table marked
+    'verify' — believed to pass through ForwardConstruct tracing but
+    previously untested. Each is asserted against the declarative twin
+    (the epic's acceptance principle), not just 'doesn't crash'.
+
+    1. Fan-in: a traced node with dict-form inputs consuming TWO upstreams.
+    2. Multi-output dict nodes: outputs={...} and {node}_{key} downstream wiring.
+    3. skip_when / skip_value surviving tracing (incl. the loop-copy path).
+    """
+
+    def test_fan_in_node_traces_ir_identical_to_declarative_twin(self):
+        """A forward() node consuming two upstream producers via dict-form
+        inputs traces to the same node list as the declarative Construct."""
+        register_scripted("vcap_left_a", lambda _i, _c: RawText(text="L"))
+        register_scripted("vcap_right_a", lambda _i, _c: Claims(items=["R"]))
+        register_scripted(
+            "vcap_fuse_a",
+            lambda data, _c: FinalResult(summary=f"{data['left'].text}+{len(data['right'].items)}"),
+        )
+
+        fan_in_inputs = {"left": RawText, "right": Claims}
+
+        class FanIn(ForwardConstruct):
+            left = Node.scripted("left", fn="vcap_left_a", outputs=RawText)
+            right = Node.scripted("right", fn="vcap_right_a", outputs=Claims)
+            fuse = Node.scripted(
+                "fuse", fn="vcap_fuse_a", inputs=fan_in_inputs, outputs=FinalResult
+            )
+
+            def forward(self, topic):
+                left_out = self.left(topic)
+                right_out = self.right(topic)
+                return self.fuse(left_out, right_out)
+
+        pipeline = FanIn()
+
+        declarative = Construct(
+            "FanIn",
+            nodes=[
+                Node.scripted("left", fn="vcap_left_a", outputs=RawText),
+                Node.scripted("right", fn="vcap_right_a", outputs=Claims),
+                Node.scripted(
+                    "fuse", fn="vcap_fuse_a", inputs=fan_in_inputs, outputs=FinalResult
+                ),
+            ],
+        )
+
+        assert len(pipeline.nodes) == len(declarative.nodes)
+        for traced, decl in zip(pipeline.nodes, declarative.nodes, strict=True):
+            assert isinstance(traced, Node)
+            assert traced.name == decl.name
+            assert traced.inputs == decl.inputs
+            assert traced.outputs == decl.outputs
+            assert traced.scripted_fn == decl.scripted_fn
+
+        # Runtime round-trip: the fan-in consumer sees BOTH upstream values.
+        graph = compile(pipeline, **build_test_compile_kwargs())
+        result = run(graph, input={"node_id": "vcap-fanin"})
+        assert result["fuse"] == FinalResult(summary="L+1")
+
+    def test_multi_output_dict_node_traces_ir_identical_and_runs(self):
+        """A traced node with dict-form outputs keeps the outputs dict
+        verbatim, and a downstream node wired via the {node}_{key} field
+        name receives that key's value at runtime."""
+        multi_outputs = {"summary": RawText, "count": Claims}
+
+        register_scripted(
+            "vcap_analyze_b",
+            lambda _i, _c: {"summary": RawText(text="S"), "count": Claims(items=["x", "y"])},
+        )
+        register_scripted(
+            "vcap_report_b",
+            lambda data, _c: FinalResult(summary=data["analyze_summary"].text + "!"),
+        )
+
+        class MultiOut(ForwardConstruct):
+            analyze = Node.scripted("analyze", fn="vcap_analyze_b", outputs=multi_outputs)
+            report = Node.scripted(
+                "report",
+                fn="vcap_report_b",
+                inputs={"analyze_summary": RawText},
+                outputs=FinalResult,
+            )
+
+            def forward(self, topic):
+                analyzed = self.analyze(topic)
+                return self.report(analyzed.summary)
+
+        pipeline = MultiOut()
+
+        declarative = Construct(
+            "MultiOut",
+            nodes=[
+                Node.scripted("analyze", fn="vcap_analyze_b", outputs=multi_outputs),
+                Node.scripted(
+                    "report",
+                    fn="vcap_report_b",
+                    inputs={"analyze_summary": RawText},
+                    outputs=FinalResult,
+                ),
+            ],
+        )
+
+        assert len(pipeline.nodes) == len(declarative.nodes)
+        for traced, decl in zip(pipeline.nodes, declarative.nodes, strict=True):
+            assert isinstance(traced, Node)
+            assert traced.name == decl.name
+            assert traced.inputs == decl.inputs
+            assert traced.outputs == decl.outputs
+
+        graph = compile(pipeline, **build_test_compile_kwargs())
+        result = run(graph, input={"node_id": "vcap-multiout"})
+        assert result["analyze_summary"] == RawText(text="S")
+        assert result["analyze_count"] == Claims(items=["x", "y"])
+        assert result["report"] == FinalResult(summary="S!")
+
+    def test_skip_when_and_skip_value_survive_tracing(self):
+        """Node-level skip_when/skip_value callables pass through tracing
+        unchanged — both on the straight-line path (identity: the traced
+        node IS the class attribute) and through the loop-body model_copy
+        path (copies carry the same callables)."""
+
+        def _skip_pred(data):
+            return False
+
+        def _skip_val(data):
+            return RawText(text="skipped")
+
+        register_scripted("vcap_seed_c", lambda _i, _c: Draft(content="seed"))
+        register_scripted("vcap_guarded_c", lambda _i, _c: RawText(text="ran"))
+
+        class Guarded(ForwardConstruct):
+            seed = Node.scripted("seed", fn="vcap_seed_c", outputs=Draft)
+            guarded = Node(
+                "guarded",
+                mode="scripted",
+                scripted_fn="vcap_guarded_c",
+                inputs=Draft,
+                outputs=RawText,
+                skip_when=_skip_pred,
+                skip_value=_skip_val,
+            )
+
+            def forward(self, topic):
+                d = self.seed(topic)
+                return self.guarded(d)
+
+        pipeline = Guarded()
+        traced_guarded = pipeline.nodes[1]
+        assert isinstance(traced_guarded, Node)
+        assert traced_guarded.skip_when is _skip_pred
+        assert traced_guarded.skip_value is _skip_val
+
+        # Loop-copy path: the body copy created by _LoopCall._materialize
+        # (model_copy) must preserve the skip callables too.
+        register_scripted("vcap_loop_seed_c", lambda _i, _c: Draft(content="seed"))
+        register_scripted("vcap_loop_body_c", lambda _i, _c: Draft(content="looped"))
+
+        class GuardedLoop(ForwardConstruct):
+            seed = Node.scripted("seed", fn="vcap_loop_seed_c", outputs=Draft)
+            body = Node(
+                "body",
+                mode="scripted",
+                scripted_fn="vcap_loop_body_c",
+                outputs=Draft,
+                skip_when=_skip_pred,
+                skip_value=_skip_val,
+            )
+
+            def forward(self, topic):
+                d = self.seed(topic)
+                return self.loop(
+                    body=[self.body],
+                    when=lambda r: r is None,
+                    max_iterations=2,
+                    on_exhaust="last",
+                )(d)
+
+        loop_pipeline = GuardedLoop()
+        loop_sub = loop_pipeline.nodes[1]
+        assert isinstance(loop_sub, Construct)
+        body_copy = loop_sub.nodes[0]
+        assert isinstance(body_copy, Node)
+        assert body_copy is not GuardedLoop.body  # a copy, not the class attr
+        assert body_copy.skip_when is _skip_pred
+        assert body_copy.skip_value is _skip_val
+
+
 class TestSelfEachEdgeCases:
     """self.each() error paths, multi-node bodies, non-mutation, and
     deterministic naming (neograph-e9zse.1 plan step 6)."""
