@@ -498,6 +498,70 @@ def build_manifest() -> dict[str, Any]:
     }
 
 
+def _reference_heading(entry: dict[str, Any]) -> str:
+    """The '### ' heading whose github-slugger slug == the symbol's manifest anchor.
+
+    Non-colliding symbols use the bare name ('### compile' -> #compile). Symbols
+    whose bare ``slug(name)`` collided (anchor was kind-namespaced to
+    ``f"{base}-{tag}"`` by ``_disambiguate_anchors``) use ``'### {name} ({tag})'``
+    so github-slugger reproduces the anchor: '### node (function)' -> #node-function.
+    """
+    name = entry["name"]
+    anchor = entry["anchor"]
+    base = slug(name)
+    if anchor != base and anchor.startswith(f"{base}-"):
+        tag = anchor[len(base) + 1:]
+        return f"### {name} ({tag})"
+    return f"### {name}"
+
+
+def _reference_field_table(fields: list[dict[str, Any]]) -> list[str]:
+    """A markdown field table (Field/Type/Required/Default) for a fielded symbol."""
+    rows = ["| Field | Type | Required | Default |", "|-------|------|----------|---------|"]
+    for f in fields:
+        default = "" if f.get("default") is None else f"`{f['default']}`"
+        required = "yes" if f.get("required") else "no"
+        rows.append(f"| `{f['name']}` | `{f['annotation']}` | {required} | {default} |")
+    return rows
+
+
+def render_reference_sections() -> str:
+    """Render the per-symbol reference region for api.mdx (Stage C, neograph-kec0k).
+
+    Emits ONE contiguous block: for every NON-exception manifest symbol (exceptions
+    are owned by uorb4's fenced error tree), in a stable order sorted by anchor, a
+    section with a heading whose slug == the manifest anchor, the signature in a
+    fenced ``python`` code block (fenced so the remark harvester emits no anchor
+    from it), and a Pydantic/dataclass field table when the symbol has fields.
+
+    The return value is the exact text that lives between the
+    ``{/* GEN:reference-sections START */}`` / ``END`` sentinels in api.mdx; the
+    freshness guard asserts committed-region == this, byte-for-byte.
+    """
+    symbols = [s for s in _build_symbols(neograph, list(neograph.__all__)) if s.get("kind") != "exception"]
+    symbols.sort(key=lambda s: s["anchor"])
+    sections: list[str] = []
+    for entry in symbols:
+        block = [_reference_heading(entry), ""]
+        signature = entry.get("signature")
+        if signature:
+            # Skip-mark the fence: a signature is a declaration, not a runnable
+            # statement, so Stage D (test_docs_snippets.py) must not execute it.
+            block += [
+                "{/* test-skip: generated API signature (declaration, not runnable) */}",
+                "```python",
+                f"{entry['name']}{signature}",
+                "```",
+                "",
+            ]
+        fields = entry.get("fields")
+        if fields:
+            block += _reference_field_table(fields) + [""]
+        sections.append("\n".join(block).rstrip())
+    # Leading + trailing newline so the sentinel markers sit on their own lines.
+    return "\n" + "\n\n".join(sections) + "\n"
+
+
 def build_mcp_manifest() -> dict[str, Any]:
     """MCP manifest: neograph_mcp.__all__ (raises ImportError w/o the extra)."""
     import neograph_mcp  # noqa: F401  -- _require_mcp() gates at import time

@@ -38,6 +38,8 @@ from __future__ import annotations
 import ast
 import importlib.util
 import json
+import re
+from collections import Counter
 from pathlib import Path
 
 import pytest
@@ -47,6 +49,21 @@ SCRIPT_PATH = REPO_ROOT / "scripts" / "gen_api_manifest.py"
 WEBSITE_DATA = REPO_ROOT / "website" / "src" / "data"
 CORE_MANIFEST_PATH = WEBSITE_DATA / "api-manifest.json"
 MCP_MANIFEST_PATH = WEBSITE_DATA / "api-manifest-mcp.json"
+API_MDX_PATH = REPO_ROOT / "website" / "src" / "content" / "docs" / "reference" / "api.mdx"
+
+# Sentinel comment pair delimiting the ONE contiguous generated reference region
+# inside api.mdx (design "ONE GENERATED REFERENCE BLOCK", refine atom uqy66.54).
+# render_reference_sections() output goes VERBATIM between them; the freshness
+# guard extracts exactly the bytes between the two markers and diffs against a
+# fresh render. MDX comment syntax so Starlight ignores it.
+GEN_REGION_START = "{/* GEN:reference-sections START */}"
+GEN_REGION_END = "{/* GEN:reference-sections END */}"
+
+# Fence-aware markdown heading matcher -- mirrors website/plugins/remark-api.mjs
+# lines 78-79 byte-for-byte (`/^#{1,6}\s+(.+?)\s*$/`) so the guard slugs the SAME
+# heading text github-slugger sees at build time. Levels 1-6, trailing whitespace
+# trimmed, capture group 1 is the heading TEXT (which slug() maps to the anchor).
+_HEADING_RE = re.compile(r"^#{1,6}\s+(.+?)\s*$")
 
 # Mirror tests/test_mcp_battery.py:43 -- re-defined locally per L3 (RE-DEFINE local).
 _HAS_MCP = bool(importlib.util.find_spec("mcp")) and bool(importlib.util.find_spec("langchain_mcp_adapters"))
@@ -604,3 +621,225 @@ class TestLintIssueKindEnrichment:
                 f"'WARN', __main__.py:199). The registry severity is not bound to "
                 f"the required= at the emission site."
             )
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# Class 5 -- Stage C: ONE generated per-symbol reference region (neograph-kec0k)
+#
+# kec0k renders, for every NON-exception manifest symbol, a reference section
+# (heading whose slug == the manifest anchor + fenced signature + field table for
+# the 14 fielded symbols) into a SINGLE contiguous sentinel-delimited region of
+# api.mdx via a NEW gen.render_reference_sections(). Two guards pin it:
+#
+#   1. FRESHNESS -- the committed region == render_reference_sections() byte-for-
+#      byte (the rustdoc "docs build from the code" contract, one region).
+#   2. SINGLE-HEADING-PER-ANCHOR -- every non-exception anchor is emitted by
+#      EXACTLY ONE heading whose slug == the anchor (turns the silently-inert
+#      node/Node/tool/Tool collision refs into a loud fail). Exception anchors are
+#      excluded (uorb4 owns the fenced error tree, whose headings are unharvested).
+#
+# Both FAIL today: render_reference_sections() + the sentinel region do not yet
+# exist, and the current signature-in-heading sections slug to garbage so the 4
+# collision anchors (and 50+ others) have NO matching heading. That is the TDD red.
+# ════════════════════════════════════════════════════════════════════════════
+
+
+def _extract_reference_region(mdx_text: str) -> str:
+    """Return the bytes strictly between the two GEN sentinel markers.
+
+    The freshness contract is a single contiguous region: everything after the
+    START marker literal and before the END marker literal is owned verbatim by
+    ``render_reference_sections()``. Asserts BOTH markers are present (and in
+    order) so a missing region fails loudly rather than returning ``""``.
+    """
+    start = mdx_text.find(GEN_REGION_START)
+    end = mdx_text.find(GEN_REGION_END)
+    assert start != -1 and end != -1, (
+        f"api.mdx is missing the generated-reference sentinel markers "
+        f"{GEN_REGION_START!r} / {GEN_REGION_END!r}. Stage C (neograph-kec0k) must "
+        f"add ONE contiguous generated region delimited by them. Expected in "
+        f"{API_MDX_PATH}."
+    )
+    assert start < end, (
+        f"api.mdx sentinel markers are out of order: START at {start}, END at "
+        f"{end}. The generated region must be START ... END."
+    )
+    return mdx_text[start + len(GEN_REGION_START):end]
+
+
+def _reference_heading_slugs(mdx_text: str, gen) -> list[str]:
+    """Fence-aware slugs of every markdown heading in api.mdx.
+
+    Mirrors the remark harvester (website/plugins/remark-api.mjs:74-80): track
+    a ``` fence toggle, skip lines inside fenced code (so signatures rendered as
+    code blocks emit no anchor), match ``#{1,6} <text>`` on the remaining lines,
+    and slug the captured TEXT via the generator's slug() -- the exact anchor
+    contract Starlight reproduces. Returns a list (not a set) so duplicate
+    headings are countable by the single-heading guard.
+    """
+    slugs: list[str] = []
+    fence = False
+    for line in mdx_text.split("\n"):
+        if line.lstrip().startswith("```"):
+            fence = not fence
+            continue
+        if fence:
+            continue
+        match = _HEADING_RE.match(line)
+        if match:
+            slugs.append(gen.slug(match.group(1)))
+    return slugs
+
+
+class TestReferenceSectionRendering:
+    """Stage C: the generated per-symbol reference region (neograph-kec0k)."""
+
+    def _non_exception_symbols(self, gen) -> list[dict]:
+        manifest = gen.build_manifest()
+        symbols = manifest.get("symbols") or manifest.get("api_symbols") or []
+        assert symbols, "manifest symbols list is empty -- __all__ walk is broken"
+        return [s for s in symbols if s.get("kind") != "exception"]
+
+    # ── Guard 1: freshness (committed region == regenerated, byte-for-byte) ──
+    def test_generated_reference_region_matches_render_reference_sections(self):
+        """The committed sentinel region in api.mdx equals a fresh
+        ``render_reference_sections()`` byte-for-byte.
+
+        FAILS today: neither ``render_reference_sections()`` (the renderer) nor
+        the sentinel-delimited region exists yet -- the TDD red. Once green, any
+        drift between the committed reference sections and the manifest-driven
+        render (a new symbol, a changed signature, an added field) fails the
+        default pytest suite, the rustdoc "docs build from the code" contract.
+        """
+        gen = _load_gen_api_manifest()
+        assert hasattr(gen, "render_reference_sections"), (
+            "scripts/gen_api_manifest.py must expose render_reference_sections() "
+            "-> str (Stage C, neograph-kec0k): the manifest-driven renderer that "
+            "emits one section per NON-exception symbol (heading + fenced "
+            "signature + field table). Not implemented yet."
+        )
+        assert API_MDX_PATH.exists(), f"reference page missing at {API_MDX_PATH}"
+        rendered = gen.render_reference_sections()
+        region = _extract_reference_region(API_MDX_PATH.read_text())
+        assert region == rendered, (
+            "api.mdx generated-reference region drifted from "
+            "render_reference_sections(). Regenerate the region with the Stage C "
+            "renderer (the region between the GEN:reference-sections sentinels "
+            "must equal render_reference_sections() byte-for-byte)."
+        )
+
+    def test_render_reference_sections_excludes_exception_symbols(self):
+        """The renderer must NOT emit a heading for any exception-kind symbol.
+
+        Exceptions live in the FENCED error tree (uorb4); double-emitting a
+        heading for them would break single-heading-per-anchor. Assert no
+        exception anchor's heading appears in the rendered region.
+
+        FAILS today: render_reference_sections() does not exist.
+        """
+        gen = _load_gen_api_manifest()
+        assert hasattr(gen, "render_reference_sections"), (
+            "render_reference_sections() not implemented yet (neograph-kec0k)."
+        )
+        rendered = gen.render_reference_sections()
+        rendered_slugs = set(_reference_heading_slugs(rendered, gen))
+        manifest = gen.build_manifest()
+        symbols = manifest.get("symbols") or manifest.get("api_symbols") or []
+        exception_anchors = {s["anchor"] for s in symbols if s.get("kind") == "exception"}
+        leaked = exception_anchors & rendered_slugs
+        assert not leaked, (
+            f"render_reference_sections() emitted heading(s) for exception "
+            f"symbol anchor(s) {sorted(leaked)}; exceptions are owned by the "
+            f"fenced error tree (uorb4) and must be excluded from per-symbol "
+            f"heading generation."
+        )
+
+    # ── Guard 2: single heading per anchor (fence-aware, manifest-scoped) ──
+    def test_every_non_exception_anchor_has_exactly_one_matching_heading(self):
+        """Each NON-exception manifest anchor is emitted by EXACTLY ONE heading
+        in api.mdx whose slug == the anchor.
+
+        Parse ALL headings (levels 1-6, fence-aware -- mirroring remark-api.mjs)
+        and slug each heading TEXT via the generator's slug(). Organizer headings
+        that map to no manifest anchor are IGNORED (the guard is scoped to the
+        intersection with manifest anchors, per refine MEDIUM-2). Exception
+        anchors are excluded (uorb4's fenced tree).
+
+        FAILS today: the current headings embed full signatures (e.g.
+        '### `Node(name, *, mode, ...)`') which slug to garbage, so the 4
+        collision anchors (node-function/node-model/tool-function/tool-model) and
+        50+ other symbols have ZERO matching headings.
+        """
+        gen = _load_gen_api_manifest()
+        assert API_MDX_PATH.exists(), f"reference page missing at {API_MDX_PATH}"
+        heading_slugs = _reference_heading_slugs(API_MDX_PATH.read_text(), gen)
+        counts = Counter(heading_slugs)
+
+        problems: list[str] = []
+        for symbol in self._non_exception_symbols(gen):
+            anchor = symbol["anchor"]
+            seen = counts.get(anchor, 0)
+            if seen != 1:
+                problems.append(
+                    f"symbol {symbol['name']!r} (kind={symbol['kind']}, "
+                    f"anchor={anchor!r}) is emitted by {seen} heading(s), "
+                    f"expected EXACTLY 1 heading whose slug == the anchor"
+                )
+        assert not problems, (
+            "single-heading-per-anchor violated -- every NON-exception manifest "
+            "anchor must have exactly one api.mdx heading slugging to it "
+            "(Stage C, neograph-kec0k). Signature-in-heading sections slug to "
+            "garbage; replace them with the manifest-generated headings:\n"
+            + "\n".join(problems)
+        )
+
+    def test_collision_anchors_each_have_exactly_one_kind_namespaced_heading(self):
+        """The 4 disambiguated collision anchors (node-function/node-model/
+        tool-function/tool-model) each have exactly one matching heading.
+
+        This is the motivating defect (the addendum): today the collision-pair
+        prose refs stay INERT (0 autolinks) because no heading slugs to these
+        anchors. Kind-namespaced heading TEXT ('node (function)' etc.) fixes it.
+
+        FAILS today: 0 headings slug to any of the 4 collision anchors.
+        """
+        gen = _load_gen_api_manifest()
+        heading_slugs = Counter(_reference_heading_slugs(API_MDX_PATH.read_text(), gen))
+        manifest = gen.build_manifest()
+        symbols = manifest.get("symbols") or manifest.get("api_symbols") or []
+        collision_anchors = sorted(
+            s["anchor"]
+            for s in symbols
+            if s.get("kind") != "exception" and "-" in s["anchor"]
+            and s["anchor"].rsplit("-", 1)[1] in gen._KIND_ANCHOR_TAG.values()
+        )
+        assert collision_anchors, (
+            "expected disambiguated collision anchors in the manifest (e.g. "
+            "node-function/node-model) -- anchor scheme regressed."
+        )
+        bad = {a: heading_slugs.get(a, 0) for a in collision_anchors if heading_slugs.get(a, 0) != 1}
+        assert not bad, (
+            f"collision anchors without exactly one matching heading: {bad}. "
+            f"Each must have a kind-namespaced heading ('node (function)' -> "
+            f"#node-function, 'Node (model)' -> #node-model, etc.) so the prose "
+            f"refs resolve instead of staying silently inert."
+        )
+
+    # ── PROC-2 slip meta-test for the sole regex constant introduced here ──
+    def test_slip_heading_re(self):
+        """Slip meta-test for _HEADING_RE (PROC-2): prove it matches real
+        markdown headings across levels 1-6 and REJECTS non-headings, so it
+        cannot silently harvest the wrong lines (or miss real headings).
+        """
+        # Matches all levels 1-6, capturing the TEXT with trailing ws trimmed.
+        assert _HEADING_RE.match("# Top").group(1) == "Top"
+        assert _HEADING_RE.match("### node (function)  ").group(1) == "node (function)"
+        assert _HEADING_RE.match("###### Deep").group(1) == "Deep"
+        # Rejects a 7th-level "heading" (github markdown caps at 6).
+        assert _HEADING_RE.match("####### too deep") is None
+        # Rejects a hash with no following whitespace (a code comment like
+        # '#nospace', not a heading) and ordinary prose.
+        assert _HEADING_RE.match("#nospace") is None
+        assert _HEADING_RE.match("not a heading") is None
+        # Rejects an empty-text heading marker (needs \s+ then >=1 char).
+        assert _HEADING_RE.match("### ") is None
