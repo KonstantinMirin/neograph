@@ -304,6 +304,114 @@ Adding rename here would be a second naming layer with no consumer.
 
 No changes to `src/neograph` (core). No changes to compile()/factory seams.
 
+## 4bis. Typed results on the BOUND-TOOL (agent) path — `output_model=` on the battery factories
+
+**Status: PRIMARY deliverable (user direction 2026-07-10 — "not an optional
+follow-up; the most important thing"). Filed as its own bead, sibling to the
+session API.**
+
+### The problem, precisely
+
+An agent-bound MCP tool (`mcp_tool_factory` → `tools=`) structurally drops
+`structuredContent` today: neograph's tool loop invokes with plain args
+(`_agent_cycle.py:459`), and langchain attaches the adapter's artifact — where
+`structured_content` rides — only on the ToolCall→ToolMessage path. So
+`ToolInteraction.typed_result` is a raw content-block list, the next ReAct
+turn's ToolMessage gets `str(list-of-dicts)` via `_render_tool_result_for_llm`'s
+fallback, and the demos compensate with hand-rolled shortcuts
+(example 23's `_parse_mcp_json`). Meanwhile the framework ALREADY has the right
+mechanism: `_render_tool_result_for_llm` (`_tool_loop.py:50`) renders a
+Pydantic-model tool result through the renderer / `describe_value` (BAML-style)
+into the ToolMessage — it just never receives a model on the MCP path.
+
+### Why servers send BOTH text and structuredContent — and what a client should do
+
+Per the MCP spec (2025-06-18), a tool returning structured content SHOULD also
+return functionally-equivalent unstructured text **for backwards compatibility**
+with clients that don't understand `structuredContent`. The text block is a
+compat MIRROR, not a second payload. Serving both is correct server behavior;
+*consuming* both is wrong client behavior. A structured-aware client treats
+`structuredContent` as the single source of truth and ignores the mirror text.
+neograph is a structured-aware client — so on a declared-type channel it must
+not ship the JSON mirror to the LLM, it must render the typed value.
+
+### Design
+
+Mirror `resource_reader` (neograph-2dtk) — the existing typed-tool precedent,
+same layer, same parameter names:
+
+```python
+mcp_tool_factory(server_key, spec, *, tool_name, rename_to=None,
+                 token_provider=None, stdio_token_arg="token",
+                 output_model: type[BaseModel] | None = None,
+                 parse: Callable[[dict], BaseModel] | None = None) -> ToolFactory
+```
+
+When `output_model` is declared, the factory wraps the discovered adapter tool
+(whose coroutine returns `(content, artifact)` under
+`response_format="content_and_artifact"`; artifact is the `MCPToolArtifact`
+TypedDict): it takes `artifact["structured_content"]`, validates it into
+`output_model` (via `parse` if given), and returns the MODEL as the tool
+result, with `response_format` reset to `"content"` on the copied tool.
+*(Probed end-to-end 2026-07-10: wrapped `crm_search` → `ainvoke` returns the
+model → `_render_tool_result_for_llm` emits the BAML-style typed block.)*
+
+Everything downstream is EXISTING framework machinery — zero core changes:
+- `ToolInteraction.typed_result` = the model instance (downstream nodes get
+  typed data; example 23's `_parse_mcp_json` dies);
+- the next ReAct turn's ToolMessage content = the renderer/`describe_value`
+  rendering of the model — the LLM reads a typed value literal, not a JSON
+  repr;
+- `Tool.from_base_tool` / lint / budgets / gating all unchanged (the wrapped
+  tool is just an async StructuredTool, the example-13b shape).
+
+Fail-loud semantics (aligned with the session's `call`): `isError=True` follows
+the adapter's existing error path; `output_model` declared but no
+`structuredContent` → typed error naming the tool and the server-annotation fix;
+Pydantic `ValidationError` propagates untouched. Without `output_model` the
+behavior is unchanged (content blocks) — the type channel is opt-in by
+declaration, like every other neograph type channel.
+
+The plural `mcp_tool_factories` grows the dict form
+`output_models: dict[str, type[BaseModel]] | None` (keyed like the returned
+factory dict).
+
+### Naming alignment (supersedes §4.1's `output=`)
+
+One convention across the battery, matching `resource_reader`: the parameter is
+**`output_model=`** on `mcp_tool_factory`, `mcp_tool_factories`, AND the
+session's `McpSession.call(...)`. §4.1/§4.2's `output=` reads as
+`output_model=` from here on.
+
+### Rejected variants
+
+- **`output=` on the core `Tool` spec** (core rehydrates any dict result):
+  the unwrap is adapter/MCP plumbing (a langchain artifact TypedDict); core
+  stays MCP-free (nmb2 discipline), and core's rendering already handles
+  models generically — there is nothing for core to add.
+- **Auto-deriving the model from the server's `outputSchema`**: the schema is
+  server-owned and arrives at runtime — it would break offline-at-build and
+  invert the type-channel philosophy (the CONSUMER declares what it expects;
+  the declaration is the contract that validation enforces).
+- **Returning the raw structured dict when no `output_model` is declared**:
+  `str(dict)` into the prompt is no better than the JSON mirror, and it would
+  silently change every existing consumer's `typed_result` shape. Explicit
+  declaration or status quo.
+
+### Demos de-shortcut (part of the same bead)
+
+- Example 23 beat 5: declare `output_model=` on the reader factories, delete
+  `_parse_mcp_json`, assert on model attributes — the beat becomes a true
+  "typed results" demo (server model → structuredContent → client model →
+  BAML rendering in the tool log).
+- Example 25: the gateway-renamed tool declares its `output_model` too.
+- Verification: bound-path integration test — an agent run through
+  `compile()`/`arun()` where the tool declares `output_model=`; assert
+  `typed_result` IS the model instance AND the ToolMessage content in the
+  message history is the `describe_value` rendering (not `[{'type': 'text'...`);
+  plus the missing-structuredContent fail-loud case (`get_deal` with an
+  `output_model` → typed error).
+
 ## 5. Alternatives considered
 
 - **(a) Status quo (do nothing).** Capability exists (materialize factory +
