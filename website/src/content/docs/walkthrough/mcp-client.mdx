@@ -135,7 +135,24 @@ The server echoes the identity it saw under `acting_as`, so each run's tools obs
 :::caution[stdio carries identity as a tool argument, not a header]
 stdio has **no HTTP headers**. Over stdio the token rides as a tool *argument* (the demo server declares a `token` arg and echoes it); the battery injects the run's token into that argument, overriding any model-supplied value so identity is framework-carried, never LLM-chosen.
 
-In **production against a streamable-http server**, identity rides as a bearer `Authorization` header minted **per request** by an `httpx.Auth` — swap `StdioServer` for `HttpServer` and supply the auth; nothing else changes. The MCP SDK ships `OAuthClientProvider` / `ClientCredentialsOAuthProvider` / `PrivateKeyJWTOAuthProvider` (all `httpx.Auth`) for the OAuth 2.1 / on-behalf-of cases. The token lives in the adapter's httpx client — never in neograph state, the checkpoint, or the schema fingerprint. Do not assume header auth works over stdio; it does not.
+In **production against a streamable-http server**, OAuth identity attaches to the TRANSPORT: pass an `httpx.Auth` as `HttpServer(auth=...)` and the adapter's persistent httpx client handles token exchange, expiry, and 401-triggered refresh — **without a reconnect**. The battery ships the machine-to-machine default:
+
+{/* test-skip: illustrative fragment: credentials/URL are deployment-specific */}
+```python
+from neograph_mcp import HttpServer, client_credentials_auth
+
+crm = HttpServer(
+    url="https://mcp.example.com/mcp",
+    auth=client_credentials_auth(
+        server_url="https://mcp.example.com/mcp",
+        client_id="my-service",
+        client_secret=SECRET,        # from your secret manager, not source
+        scopes="crm.read crm.write",
+    ),
+)
+```
+
+`client_credentials_auth` wraps the MCP SDK's `ClientCredentialsOAuthProvider` (RFC 8414 discovery + token exchange + refresh — nothing re-implemented). For key-based client auth (private-key JWT / RFC 7523, on-behalf-of), wrap the SDK's `PrivateKeyJWTOAuthProvider` / `RFC7523OAuthClientProvider` from `mcp.client.auth.extensions.client_credentials` the same way; for the interactive authorization-code flow, use the SDK's `OAuthClientProvider` directly (it needs a redirect handler). When both `auth` and a bearer `token_provider` are set, `auth` wins — an Auth manages its own `Authorization` header. `token_provider` remains the right tool for stdio and static-bearer setups. Either way the token lives in the adapter's httpx client — never in neograph state, the checkpoint, or the schema fingerprint. Do not assume header auth works over stdio; it does not.
 :::
 
 ## Beat 4 — gated mutation

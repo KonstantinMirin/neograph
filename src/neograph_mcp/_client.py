@@ -220,27 +220,50 @@ class StdioServer:
 
 @dataclass(frozen=True)
 class HttpServer:
-    """A streamable-http MCP server. Per-run identity rides as a bearer
-    ``Authorization`` header minted by the ``token_provider``."""
+    """A streamable-http MCP server.
+
+    Two identity paths, by production shape:
+
+    - ``token_provider`` (static bearer): per-run identity minted from config
+      rides as a bearer ``Authorization`` header set at connect.
+    - ``auth`` (OAuth): an ``httpx.Auth`` — e.g. the battery's
+      ``client_credentials_auth(...)`` wrapping the SDK provider — attached to
+      the transport's persistent httpx client, handling token exchange, expiry,
+      and 401-triggered refresh WITHOUT a reconnect. When both are set, ``auth``
+      WINS: an Auth manages its own ``Authorization`` header, so the bearer
+      token is not also stamped (no conflicting header).
+
+    neograph only CARRIES ``auth`` to the adapter connection; the token itself
+    never enters state, a checkpoint, or the schema fingerprint."""
 
     url: str
     headers: dict[str, str] | None = None
+    auth: Any | None = None  # httpx.Auth; typed Any to keep module import light
 
 
 # ── transport wiring ──────────────────────────────────────────────────────────
 
 
 def _connection(spec: StdioServer | HttpServer, token: str | None) -> dict[str, Any]:
-    """Build the langchain-mcp-adapters connection dict for one server + identity."""
+    """Build the langchain-mcp-adapters connection dict for one server + identity.
+
+    The SINGLE choke point for transport identity — a change here lights all
+    three surfaces (tool factories, resource fetcher, ``mcp_session``) at once.
+    ``HttpServer.auth`` (an httpx.Auth) rides the adapter's ``auth`` key and
+    WINS over a minted bearer token: an Auth manages its own ``Authorization``
+    header, so stamping the static bearer alongside it would send conflicting
+    credentials."""
     if isinstance(spec, StdioServer):
         conn: dict[str, Any] = {"transport": "stdio", "command": spec.command, "args": list(spec.args)}
         if spec.env is not None:
             conn["env"] = dict(spec.env)
         return conn
     headers = dict(spec.headers or {})
-    if token is not None:
+    if token is not None and spec.auth is None:
         headers["Authorization"] = f"Bearer {token}"
     conn = {"transport": "streamable_http", "url": spec.url}
+    if spec.auth is not None:
+        conn["auth"] = spec.auth
     if headers:
         conn["headers"] = headers
     return conn

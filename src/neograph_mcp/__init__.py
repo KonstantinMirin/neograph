@@ -32,6 +32,9 @@ def _require_mcp() -> None:
 
 _require_mcp()
 
+from neograph_mcp._auth import (  # noqa: E402 — after the fail-loud extra check by design
+    client_credentials_auth,
+)
 from neograph_mcp._client import (  # noqa: E402 — after the fail-loud extra check by design
     HttpServer,
     StdioServer,
@@ -68,4 +71,5 @@ __all__ = [
     "mcp_run_context",
     "McpRunContext",
     "McpProgress",
+    "client_credentials_auth",
 ]

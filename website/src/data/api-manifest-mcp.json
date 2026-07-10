@@ -32,7 +32,7 @@
     {
       "anchor": "httpserver",
       "bases": [],
-      "doc": "A streamable-http MCP server. Per-run identity rides as a bearer",
+      "doc": "A streamable-http MCP server.",
       "fields": [
         {
           "annotation": "str",
@@ -45,11 +45,17 @@
           "default": "None",
           "name": "headers",
           "required": false
+        },
+        {
+          "annotation": "Any | None",
+          "default": "None",
+          "name": "auth",
+          "required": false
         }
       ],
       "kind": "dataclass",
       "name": "HttpServer",
-      "signature": "(url: 'str', headers: 'dict[str, str] | None' = None) -> None"
+      "signature": "(url: 'str', headers: 'dict[str, str] | None' = None, auth: 'Any | None' = None) -> None"
     },
     {
       "anchor": "toolfactory",
@@ -178,6 +184,13 @@
       "kind": "pydantic_model",
       "name": "McpProgress",
       "signature": "(server: str, tool: str, progress: float, total: float | None = None, message: str | None = None)"
+    },
+    {
+      "anchor": "client_credentials_auth",
+      "doc": "An ``httpx.Auth`` doing the OAuth 2.1 client-credentials flow for",
+      "kind": "function",
+      "name": "client_credentials_auth",
+      "signature": "(server_url: 'str', client_id: 'str', client_secret: 'str', *, scopes: 'str | None' = None, auth_method: \"Literal['client_secret_basic', 'client_secret_post']\" = 'client_secret_basic') -> 'httpx.Auth'"
     }
   ]
 }
