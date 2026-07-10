@@ -56,6 +56,11 @@ from typing import Any
 
 from pydantic import ConfigDict
 
+from neograph._construct_validation import (
+    _MISSING,
+    _extract_list_element,
+    _resolve_field_annotation,
+)
 from neograph._ir_branch import _BranchMeta, _BranchNode, _ConditionSpec
 from neograph._normalize import _declared_output, normalize_outputs
 from neograph.conditions import OPERATORS
@@ -63,7 +68,7 @@ from neograph.construct import Construct
 from neograph.errors import ConstructError
 from neograph.modifiers import Each, Loop
 from neograph.naming import field_name_for
-from neograph.node import Node
+from neograph.node import Node, TypeSpecStatic
 
 __all__ = ["ForwardConstruct"]
 
@@ -86,6 +91,20 @@ def _attr_chain_after_prefix(source_node: Node | Construct | None, full_name: st
         return []
     remainder = full_name[len(prefix) :]
     return [p for p in remainder.split(".") if p]
+
+
+def _over_path_for_proxy(source_node: Node | Construct | None, full_name: str) -> str:
+    """Build a dotted ``Each.over`` state path from a traced proxy.
+
+    ``out_of_seed.items`` with source ``seed`` becomes ``seed.items`` — the
+    producer's state field name followed by the attribute chain. Shared by
+    ``_Tracer.record_iteration`` (bare-``for`` sugar) and ``_EachCall``.
+    """
+    if source_node is None:
+        return full_name
+    field_name = field_name_for(source_node.name)
+    attr_parts = _attr_chain_after_prefix(source_node, full_name)
+    return ".".join([field_name, *attr_parts]) if attr_parts else field_name
 
 
 class ForwardConstruct(Construct):
@@ -337,8 +356,10 @@ class _Tracer:
         # Loop-mode tracking: maps node id → Each over-path for nodes in loop body
         self._loop_stack: list[str] = []  # stack of over-paths (for nested detection)
         self._loop_body_nodes: dict[int, str] = {}  # id(node) → over-path
-        # Deterministic loop naming: per-slug occurrence counter
-        self._loop_occurrences: dict[str, int] = {}
+        # Deterministic sub-construct naming: per-(kind, slug) occurrence
+        # counter — a loop and an each over the same body slug must not
+        # share a counter.
+        self._occurrences: dict[tuple[str, str], int] = {}
 
     def record(self, node: Node) -> None:
         key = id(node)
@@ -354,15 +375,18 @@ class _Tracer:
         """Record a sub-construct (e.g., from self.loop()) in the node list."""
         self._ordered.append(construct)
 
-    def next_loop_occurrence(self, body_slug: str) -> int:
-        """Return the next occurrence index for a loop with the given body slug.
+    def next_occurrence(self, kind: str, body_slug: str) -> int:
+        """Return the next occurrence index for a sub-construct of ``kind``
+        ('loop' or 'each') with the given body slug.
 
         Deterministic within a single trace pass: the first loop with body
         'review-revise' gets 0, the second gets 1. Re-trace passes produce
-        the same sequence because forward() is called the same way.
+        the same sequence because forward() is called the same way. Keyed
+        per (kind, slug) so a loop and an each over the same body do not
+        collide.
         """
-        count = self._loop_occurrences.get(body_slug, 0)
-        self._loop_occurrences[body_slug] = count + 1
+        count = self._occurrences.get((kind, body_slug), 0)
+        self._occurrences[(kind, body_slug)] = count + 1
         return count
 
     def record_iteration(self, proxy: _Proxy) -> Iterator[_Proxy]:
@@ -376,13 +400,7 @@ class _Tracer:
         # e.g., _Proxy(source=make, name="out_of_make.groups") → "make.groups"
         source_node = proxy._neo_source
         full_name = proxy._neo_name
-
-        if source_node is None:
-            over_path = full_name
-        else:
-            field_name = field_name_for(source_node.name)
-            attr_parts = _attr_chain_after_prefix(source_node, full_name)
-            over_path = ".".join([field_name, *attr_parts]) if attr_parts else field_name
+        over_path = _over_path_for_proxy(source_node, full_name)
 
         self._loop_stack.append(over_path)
         # Yield a single proxy item — enough for tracing the loop body once
@@ -535,7 +553,7 @@ class _LoopCall:
         # discovery) produces identical names across passes. A per-tracer
         # occurrence counter disambiguates duplicate body compositions.
         body_slug = "-".join(n.name for n in body_nodes)
-        occurrence = self._tracer.next_loop_occurrence(body_slug)
+        occurrence = self._tracer.next_occurrence("loop", body_slug)
         name = f"loop-{body_slug}" if occurrence == 0 else f"loop-{body_slug}-{occurrence}"
 
         body_nodes_copy = []
@@ -565,6 +583,156 @@ class _LoopCall:
             name=f"out_of_{name}",
             tracer=self._tracer,
         )
+
+
+class _EachCall:
+    """Returned by _ForwardSelf.each(). When called with a proxy attribute
+    (or a raw dotted state path), builds a sub-construct with an Each
+    modifier and records it in the tracer — IR-identical to the declarative
+    ``Construct(input=item, output=..., nodes=body) | Each(over, key)`` twin.
+
+    Usage in forward()::
+
+        each_verify = self.each(body=[self.verify], key="item_id")
+        results = each_verify(items.claims)      # proxy form
+        results = each_verify("seed.claims")     # raw-string form
+    """
+
+    def __init__(
+        self,
+        body: list[_NodeCall],
+        key: str,
+        on_error: str,
+        tracer: _Tracer,
+    ) -> None:
+        self._body = body
+        self._key = key
+        self._on_error = on_error
+        self._tracer = tracer
+
+    def __call__(self, over: _Proxy | str) -> _Proxy:
+        for nc in self._body:
+            if not isinstance(nc, _NodeCall):
+                raise ConstructError.build(
+                    "self.each() body must contain node references (self.node_name)",
+                    expected="node reference (self.node_name)",
+                    found=type(nc).__name__,
+                )
+
+        body_nodes = [nc._node for nc in self._body]
+
+        if not body_nodes:
+            raise ConstructError.build(
+                "self.each() body must contain at least one node",
+                hint="pass at least one node reference: self.each(body=[self.some_node], ...)",
+            )
+
+        source_node, attr_parts, over_path = self._resolve_over(over)
+        item_type = self._infer_item_type(source_node, attr_parts, over_path)
+        output_type = normalize_outputs(body_nodes[-1].outputs).primary
+
+        # Copy-not-mutate: never write inputs onto class-level Nodes
+        # (same rule as _LoopCall, neograph-2o9n).
+        body_nodes_copy = []
+        for bn in body_nodes:
+            if bn.inputs is None:
+                bn = bn.model_copy(update={"inputs": item_type})
+            body_nodes_copy.append(bn)
+
+        body_slug = "-".join(n.name for n in body_nodes)
+        occurrence = self._tracer.next_occurrence("each", body_slug)
+        name = f"each-{body_slug}" if occurrence == 0 else f"each-{body_slug}-{occurrence}"
+
+        sub = Construct(
+            name=name,
+            input=item_type,
+            output=output_type,
+            nodes=body_nodes_copy,
+        ) | Each(
+            over=over_path,
+            key=self._key,
+            on_error=self._on_error,  # type: ignore[arg-type]
+        )
+
+        self._tracer.record_construct(sub)
+
+        return _Proxy(
+            source_node=sub,
+            name=f"out_of_{name}",
+            tracer=self._tracer,
+        )
+
+    def _resolve_over(
+        self, over: _Proxy | str
+    ) -> tuple[Node | Construct, list[str], str]:
+        """Resolve ``over`` to (producer, attr chain, dotted over path).
+
+        Proxy form: producer and attr chain come from the traced proxy.
+        Raw-string form: the root segment is reverse-resolved to the traced
+        node whose state field name matches — failing loud at trace time
+        when no traced producer matches.
+        """
+        if isinstance(over, _Proxy):
+            source_node = over._neo_source
+            if source_node is None:
+                raise ConstructError.build(
+                    "self.each() over must be a node output attribute",
+                    found="the forward() input proxy",
+                    hint="fan out over a traced node's collection field, "
+                    "e.g. each_x(items.claims)",
+                )
+            attr_parts = _attr_chain_after_prefix(source_node, over._neo_name)
+            return source_node, attr_parts, _over_path_for_proxy(source_node, over._neo_name)
+
+        if isinstance(over, str):
+            parts = [p for p in over.split(".") if p]
+            if not parts:
+                raise ConstructError.build(
+                    "self.each() over path must not be empty",
+                    hint="pass a dotted state path like 'seed.claims'",
+                )
+            root, attr_parts = parts[0], parts[1:]
+            for item in self._tracer._ordered:
+                if field_name_for(item.name) == root:
+                    return item, attr_parts, over
+            raise ConstructError.build(
+                f"self.each() over root '{root}' does not match any traced node",
+                expected="the state field name of a node already called in forward()",
+                found=f"'{over}'",
+                hint="call the producer node before self.each(...), or pass its output proxy",
+            )
+
+        raise ConstructError.build(
+            "self.each() over must be a proxy attribute or a dotted string path",
+            found=type(over).__name__,
+        )
+
+    def _infer_item_type(
+        self,
+        source_node: Node | Construct,
+        attr_parts: list[str],
+        over_path: str,
+    ) -> TypeSpecStatic:
+        """Walk the producer's declared output along the attr chain and
+        extract the fanned item type (the sub-construct's input port)."""
+        typ = normalize_outputs(_declared_output(source_node)).primary
+        for attr in attr_parts:
+            resolved = _resolve_field_annotation(typ, attr) if typ is not None else _MISSING
+            if resolved is _MISSING:
+                raise ConstructError.build(
+                    f"self.each() over path '{over_path}' does not resolve",
+                    expected=f"a field '{attr}' on {getattr(typ, '__name__', typ)}",
+                    hint="check the collection path against the producer's output model",
+                )
+            typ = resolved
+        item_type = _extract_list_element(typ) if typ is not None else None
+        if item_type is None:
+            raise ConstructError.build(
+                f"self.each() over path '{over_path}' is not a list field",
+                expected="a list[...] collection field to fan out over",
+                found=str(typ),
+            )
+        return item_type
 
 
 class _ForwardSelf:
@@ -619,6 +787,31 @@ class _ForwardSelf:
         """
         tracer: _Tracer = object.__getattribute__(self, "_neo_tracer")
         return _LoopCall(body, when, max_iterations, on_exhaust, tracer)
+
+    def each(
+        self,
+        body: list,
+        key: str,
+        on_error: str = "raise",
+    ) -> _EachCall:
+        """Define a fan-out body applied once per item of a collection.
+
+        Returns a callable that, when called with a proxy attribute (or a
+        raw dotted state path), builds a sub-construct with an Each modifier
+        — the same IR as the declarative
+        ``Construct(input=, output=, nodes=body) | Each(over, key, on_error)``.
+
+        Usage::
+
+            each_verify = self.each(body=[self.verify], key="item_id")
+            results = each_verify(items.claims)
+
+        The bare ``for x in proxy`` form remains as sugar for the trivial
+        single-node, ``key="label"`` case; ``self.each()`` is the general
+        form (custom key, multi-node body, ``on_error='collect'``).
+        """
+        tracer: _Tracer = object.__getattribute__(self, "_neo_tracer")
+        return _EachCall(body, key, on_error, tracer)
 
 
 def _run_trace(

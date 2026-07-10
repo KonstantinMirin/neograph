@@ -41,11 +41,14 @@ from neograph._validation_modifiers import (
     validate_loop_self_edge,
 )
 from neograph._validation_types import (
+    _MISSING,
     NodeItem,
     Producer,
     ProducerMap,
+    _extract_list_element,
     _fmt_type,
     _is_construct_like,
+    _resolve_field_annotation,
     _source_location,
     _types_compatible,
     effective_producer_type,
@@ -60,14 +63,19 @@ from neograph.node import Node
 # public surface. construct.py imports _validate_node_chain + ConstructError;
 # _construct_graph imports _types_compatible + effective_producer_type;
 # modifiers.py imports validate_loop_self_edge + validate_loop_construct;
-# tests import _types_compatible + effective_producer_type. Listed in __all__
-# so the re-export is explicit (no star-import) and ruff treats it as used.
+# forward.py imports _MISSING + _extract_list_element + _resolve_field_annotation
+# (self.each() item-type inference); tests import _types_compatible +
+# effective_producer_type. Listed in __all__ so the re-export is explicit
+# (no star-import) and ruff treats it as used.
 __all__ = [
     "ConstructError",
     "NodeItem",
     "Producer",
     "ProducerMap",
     "ValidationMode",
+    "_MISSING",
+    "_extract_list_element",
+    "_resolve_field_annotation",
     "_types_compatible",
     "_validate_node_chain",
     "effective_producer_type",

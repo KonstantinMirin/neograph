@@ -973,6 +973,425 @@ class TestSelfLoopTracing:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# Part 9b: self.each() primitive — fan-out over a sub-construct (neograph-e9zse.1)
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TestSelfEachTracing:
+    """self.each() two-step tracing surface (neograph-e9zse.1).
+
+    Contract: ``each_x = self.each(body=[...], key=..., on_error=...)`` returns
+    a deferred callable; calling it with a proxy attribute (or a raw dotted
+    string) builds ``Construct(input=item_type, output=..., nodes=body) |
+    Each(over=..., key=..., on_error=...)``, records it into the tracer, and
+    returns the output proxy.
+
+    Core Invariant pinned here: the traced IR must be IDENTICAL to the
+    declarative ``Construct(input=, output=, nodes=) | Each(over, key)`` twin
+    (see tests/test_composition.py TestEachOnErrorCollect._build_parent) —
+    no ForwardConstruct-only IR, zero compiler/validator changes.
+    """
+
+    @staticmethod
+    def _assert_ir_identical(traced_sub, declarative_sub):
+        """Structural IR equality between the traced Each'd sub-construct and
+        its declarative twin: name, boundary ports, node list, Each params."""
+        assert isinstance(traced_sub, Construct), (
+            f"self.each() must emit a Construct sub-construct, got {type(traced_sub).__name__}"
+        )
+        assert traced_sub.has_modifier(Each), "self.each() sub-construct must carry an Each modifier"
+
+        # Each modifier params pass through verbatim
+        traced_each = traced_sub.get_modifier(Each)
+        decl_each = declarative_sub.get_modifier(Each)
+        assert traced_each.over == decl_each.over
+        assert traced_each.key == decl_each.key
+        assert traced_each.on_error == decl_each.on_error
+
+        # Boundary ports (Construct.input / Construct.output — singular)
+        assert traced_sub.input is declarative_sub.input
+        assert traced_sub.output is declarative_sub.output
+
+        # Node list: same length, names, inputs, outputs, scripted fns
+        assert len(traced_sub.nodes) == len(declarative_sub.nodes)
+        for traced_node, decl_node in zip(traced_sub.nodes, declarative_sub.nodes, strict=True):
+            assert isinstance(traced_node, Node)
+            assert traced_node.name == decl_node.name
+            assert traced_node.inputs == decl_node.inputs
+            assert traced_node.outputs == decl_node.outputs
+            assert traced_node.scripted_fn == decl_node.scripted_fn
+
+    def test_proxy_form_traces_ir_identical_to_declarative_twin(self):
+        """(a) Two-step self.each() with a proxy attr — the traced node list is
+        IR-identical to the declarative Construct|Each twin."""
+        from tests.hypothesis.conftest import FanCollection, FanItem
+
+        register_scripted(
+            "fc_each_seed_a",
+            lambda _in, _cfg: FanCollection(items=[FanItem(item_id="i1"), FanItem(item_id="i2")]),
+        )
+        register_scripted(
+            "fc_each_verify_a",
+            lambda item, _cfg: RawText(text=f"ok-{item.item_id}"),
+        )
+
+        class FanPipeline(ForwardConstruct):
+            seed = Node.scripted("seed", fn="fc_each_seed_a", outputs=FanCollection)
+            verify = Node.scripted("verify", fn="fc_each_verify_a", outputs=RawText)
+
+            def forward(self, topic):
+                items = self.seed(topic)
+                each_verify = self.each(body=[self.verify], key="item_id")
+                return each_verify(items.items)
+
+        pipeline = FanPipeline()
+
+        # Two entries: the seed Node and the Each'd sub-construct
+        assert len(pipeline.nodes) == 2
+        assert isinstance(pipeline.nodes[0], Node)
+        assert pipeline.nodes[0].name == "seed"
+        traced_sub = pipeline.nodes[1]
+
+        # The declarative twin — the exact shape self.each() must emit
+        # (deterministic name each-{body_slug}, input=item type inferred from
+        # seed.items -> list[FanItem], output=last body node's output).
+        declarative_sub = Construct(
+            "each-verify",
+            input=FanItem,
+            output=RawText,
+            nodes=[
+                Node.scripted("verify", fn="fc_each_verify_a", inputs=FanItem, outputs=RawText),
+            ],
+        ) | Each(over="seed.items", key="item_id", on_error="raise")
+
+        assert traced_sub.name == declarative_sub.name
+        self._assert_ir_identical(traced_sub, declarative_sub)
+
+    def test_raw_string_over_infers_item_type_from_traced_root(self):
+        """(b) Raw-string over ('rawseed.items') — the tracer reverse-resolves
+        the root segment to the traced producer and infers the item type,
+        emitting the same IR as the proxy form (Option C)."""
+        from tests.hypothesis.conftest import FanCollection, FanItem
+
+        register_scripted(
+            "fc_each_seed_b",
+            lambda _in, _cfg: FanCollection(items=[FanItem(item_id="i1")]),
+        )
+        register_scripted(
+            "fc_each_verify_b",
+            lambda item, _cfg: RawText(text=f"ok-{item.item_id}"),
+        )
+
+        class RawStringFan(ForwardConstruct):
+            rawseed = Node.scripted("rawseed", fn="fc_each_seed_b", outputs=FanCollection)
+            verify = Node.scripted("verify", fn="fc_each_verify_b", outputs=RawText)
+
+            def forward(self, topic):
+                self.rawseed(topic)
+                each_verify = self.each(body=[self.verify], key="item_id")
+                return each_verify("rawseed.items")
+
+        pipeline = RawStringFan()
+
+        assert len(pipeline.nodes) == 2
+        traced_sub = pipeline.nodes[1]
+
+        declarative_sub = Construct(
+            "each-verify",
+            input=FanItem,
+            output=RawText,
+            nodes=[
+                Node.scripted("verify", fn="fc_each_verify_b", inputs=FanItem, outputs=RawText),
+            ],
+        ) | Each(over="rawseed.items", key="item_id", on_error="raise")
+
+        assert traced_sub.name == declarative_sub.name
+        self._assert_ir_identical(traced_sub, declarative_sub)
+
+    def test_on_error_collect_passes_through_to_each_modifier(self):
+        """(c) on_error='collect' passes through verbatim to the Each modifier."""
+        from tests.hypothesis.conftest import FanCollection, FanItem
+
+        register_scripted(
+            "fc_each_seed_c",
+            lambda _in, _cfg: FanCollection(items=[FanItem(item_id="i1")]),
+        )
+        register_scripted(
+            "fc_each_verify_c",
+            lambda item, _cfg: RawText(text=f"ok-{item.item_id}"),
+        )
+
+        class CollectFan(ForwardConstruct):
+            seed = Node.scripted("seed", fn="fc_each_seed_c", outputs=FanCollection)
+            verify = Node.scripted("verify", fn="fc_each_verify_c", outputs=RawText)
+
+            def forward(self, topic):
+                items = self.seed(topic)
+                each_verify = self.each(body=[self.verify], key="item_id", on_error="collect")
+                return each_verify(items.items)
+
+        pipeline = CollectFan()
+
+        traced_sub = pipeline.nodes[1]
+        assert isinstance(traced_sub, Construct)
+        assert traced_sub.has_modifier(Each)
+        each_mod = traced_sub.get_modifier(Each)
+        assert each_mod.on_error == "collect"
+        assert each_mod.over == "seed.items"
+        assert each_mod.key == "item_id"
+
+        # The declarative on_error='collect' twin (test_composition.py
+        # TestEachOnErrorCollect shape) must be IR-identical too.
+        declarative_sub = Construct(
+            "each-verify",
+            input=FanItem,
+            output=RawText,
+            nodes=[
+                Node.scripted("verify", fn="fc_each_verify_c", inputs=FanItem, outputs=RawText),
+            ],
+        ) | Each(over="seed.items", key="item_id", on_error="collect")
+        self._assert_ir_identical(traced_sub, declarative_sub)
+
+    def test_each_pipeline_compiles_and_fans_out_end_to_end(self):
+        """Round-trip: the self.each() pipeline compiles through the real
+        compiler and runs on the real LangGraph runtime — the barrier field
+        is a dict keyed by the CUSTOM key (item_id), one entry per item,
+        observed through run()'s public result surface."""
+        from tests.hypothesis.conftest import FanCollection, FanItem
+
+        register_scripted(
+            "fc_each_seed_e2e",
+            lambda _in, _cfg: FanCollection(
+                items=[FanItem(item_id="alpha"), FanItem(item_id="beta")]
+            ),
+        )
+        register_scripted(
+            "fc_each_verify_e2e",
+            lambda item, _cfg: RawText(text=f"ok-{item.item_id}"),
+        )
+
+        class E2EFan(ForwardConstruct):
+            seed = Node.scripted("seed", fn="fc_each_seed_e2e", outputs=FanCollection)
+            verify = Node.scripted("verify", fn="fc_each_verify_e2e", outputs=RawText)
+
+            def forward(self, topic):
+                items = self.seed(topic)
+                each_verify = self.each(body=[self.verify], key="item_id")
+                return each_verify(items.items)
+
+        pipeline = E2EFan()
+        graph = compile(pipeline, **build_test_compile_kwargs())
+        result = run(graph, input={"node_id": "test-self-each-e2e"})
+
+        barrier = result["each_verify"]
+        assert isinstance(barrier, dict)
+        assert set(barrier.keys()) == {"alpha", "beta"}
+        assert isinstance(barrier["alpha"], RawText)
+        assert barrier["alpha"].text == "ok-alpha"
+        assert barrier["beta"].text == "ok-beta"
+
+
+class TestSelfEachEdgeCases:
+    """self.each() error paths, multi-node bodies, non-mutation, and
+    deterministic naming (neograph-e9zse.1 plan step 6)."""
+
+    @staticmethod
+    def _register_fan_fns(suffix):
+        from tests.hypothesis.conftest import FanCollection, FanItem
+
+        register_scripted(
+            f"fc_eachedge_seed_{suffix}",
+            lambda _in, _cfg: FanCollection(items=[FanItem(item_id="i1")]),
+        )
+        register_scripted(
+            f"fc_eachedge_verify_{suffix}",
+            lambda item, _cfg: RawText(text=f"ok-{item.item_id}"),
+        )
+
+    def test_empty_body_raises_construct_error(self):
+        from tests.hypothesis.conftest import FanCollection
+
+        self._register_fan_fns("empty")
+
+        class EmptyBody(ForwardConstruct):
+            seed = Node.scripted("seed", fn="fc_eachedge_seed_empty", outputs=FanCollection)
+
+            def forward(self, topic):
+                items = self.seed(topic)
+                return self.each(body=[], key="item_id")(items.items)
+
+        with pytest.raises(ConstructError, match="at least one node"):
+            EmptyBody()
+
+    def test_non_node_body_item_raises_construct_error(self):
+        from tests.hypothesis.conftest import FanCollection
+
+        self._register_fan_fns("nonnode")
+
+        class NonNodeBody(ForwardConstruct):
+            seed = Node.scripted("seed", fn="fc_eachedge_seed_nonnode", outputs=FanCollection)
+
+            def forward(self, topic):
+                items = self.seed(topic)
+                return self.each(body=["not-a-node"], key="item_id")(items.items)
+
+        with pytest.raises(ConstructError, match="node reference"):
+            NonNodeBody()
+
+    def test_non_list_over_path_raises_construct_error(self):
+        """Fanning out over a scalar field fails loud at trace time."""
+        from tests.hypothesis.conftest import FanCollection
+
+        self._register_fan_fns("scalar")
+
+        class ScalarOver(ForwardConstruct):
+            seed = Node.scripted("seed", fn="fc_eachedge_seed_scalar", outputs=FanCollection)
+            verify = Node.scripted("verify", fn="fc_eachedge_verify_scalar", outputs=RawText)
+
+            def forward(self, topic):
+                items = self.seed(topic)
+                # FanCollection has no scalar 'items.item_id' list — walk a
+                # non-list terminal: 'label' on FanItem is str
+                each_verify = self.each(body=[self.verify], key="item_id")
+                return each_verify(items)  # the collection root itself, not a list field
+
+        with pytest.raises(ConstructError, match="not a list field"):
+            ScalarOver()
+
+    def test_unresolvable_over_attr_raises_construct_error(self):
+        from tests.hypothesis.conftest import FanCollection
+
+        self._register_fan_fns("badattr")
+
+        class BadAttr(ForwardConstruct):
+            seed = Node.scripted("seed", fn="fc_eachedge_seed_badattr", outputs=FanCollection)
+            verify = Node.scripted("verify", fn="fc_eachedge_verify_badattr", outputs=RawText)
+
+            def forward(self, topic):
+                items = self.seed(topic)
+                each_verify = self.each(body=[self.verify], key="item_id")
+                return each_verify(items.nonexistent_field)
+
+        with pytest.raises(ConstructError, match="does not resolve"):
+            BadAttr()
+
+    def test_raw_string_unmatched_root_raises_construct_error(self):
+        from tests.hypothesis.conftest import FanCollection
+
+        self._register_fan_fns("badroot")
+
+        class BadRoot(ForwardConstruct):
+            seed = Node.scripted("seed", fn="fc_eachedge_seed_badroot", outputs=FanCollection)
+            verify = Node.scripted("verify", fn="fc_eachedge_verify_badroot", outputs=RawText)
+
+            def forward(self, topic):
+                self.seed(topic)
+                each_verify = self.each(body=[self.verify], key="item_id")
+                return each_verify("nosuchnode.items")
+
+        with pytest.raises(ConstructError, match="does not match any traced node"):
+            BadRoot()
+
+    def test_forward_input_proxy_as_over_raises_construct_error(self):
+        """The raw forward() input seed has no traced producer to infer from."""
+        from tests.hypothesis.conftest import FanCollection
+
+        self._register_fan_fns("seedproxy")
+
+        class SeedProxyOver(ForwardConstruct):
+            seed = Node.scripted("seed", fn="fc_eachedge_seed_seedproxy", outputs=FanCollection)
+            verify = Node.scripted("verify", fn="fc_eachedge_verify_seedproxy", outputs=RawText)
+
+            def forward(self, topic):
+                self.seed(topic)
+                each_verify = self.each(body=[self.verify], key="item_id")
+                return each_verify(topic)
+
+        with pytest.raises(ConstructError, match="node output attribute"):
+            SeedProxyOver()
+
+    def test_multi_node_body_wraps_all_nodes_in_one_sub_construct(self):
+        from tests.hypothesis.conftest import FanCollection, FanItem
+
+        self._register_fan_fns("multi")
+        register_scripted(
+            "fc_eachedge_score_multi",
+            lambda raw, _cfg: MatchResult(label="scored", matched=True),
+        )
+
+        class MultiBody(ForwardConstruct):
+            seed = Node.scripted("seed", fn="fc_eachedge_seed_multi", outputs=FanCollection)
+            verify = Node.scripted("verify", fn="fc_eachedge_verify_multi", outputs=RawText)
+            score = Node.scripted("score", fn="fc_eachedge_score_multi", outputs=MatchResult)
+
+            def forward(self, topic):
+                items = self.seed(topic)
+                each_vs = self.each(body=[self.verify, self.score], key="item_id")
+                return each_vs(items.items)
+
+        pipeline = MultiBody()
+
+        assert len(pipeline.nodes) == 2
+        sub = pipeline.nodes[1]
+        assert isinstance(sub, Construct)
+        assert sub.name == "each-verify-score"
+        assert [n.name for n in sub.nodes] == ["verify", "score"]
+        # First body node gets the item port; the second keeps its own wiring
+        assert sub.nodes[0].inputs is FanItem
+        assert sub.input is FanItem
+        assert sub.output is MatchResult
+
+    def test_each_call_does_not_mutate_class_level_nodes(self):
+        """Same copy-not-mutate rule as _LoopCall (neograph-2o9n)."""
+        from tests.hypothesis.conftest import FanCollection
+
+        self._register_fan_fns("nomut")
+
+        class NoMutate(ForwardConstruct):
+            seed = Node.scripted("seed", fn="fc_eachedge_seed_nomut", outputs=FanCollection)
+            verify = Node.scripted("verify", fn="fc_eachedge_verify_nomut", outputs=RawText)
+
+            def forward(self, topic):
+                items = self.seed(topic)
+                return self.each(body=[self.verify], key="item_id")(items.items)
+
+        NoMutate()
+        assert NoMutate.verify.inputs is None, "Class-level Node.inputs was mutated by _EachCall"
+        # A second instantiation must produce the same IR
+        second = NoMutate()
+        assert second.nodes[1].name == "each-verify"
+
+    def test_loop_and_each_over_same_body_slug_get_distinct_names(self):
+        """The occurrence counter is keyed per (kind, slug): a loop and an
+        each over the same body do not share a counter, and re-trace passes
+        produce identical deterministic names."""
+        from tests.hypothesis.conftest import FanCollection
+
+        self._register_fan_fns("kinds")
+
+        class LoopAndEach(ForwardConstruct):
+            seed = Node.scripted("seed", fn="fc_eachedge_seed_kinds", outputs=FanCollection)
+            verify = Node.scripted("verify", fn="fc_eachedge_verify_kinds", outputs=RawText)
+
+            def forward(self, topic):
+                items = self.seed(topic)
+                looped = self.loop(
+                    body=[self.verify],
+                    when=lambda r: r is None,
+                    max_iterations=2,
+                )(items)
+                fanned = self.each(body=[self.verify], key="item_id")(items.items)
+                return fanned
+
+        pipeline = LoopAndEach()
+
+        names = [n.name for n in pipeline.nodes]
+        assert names == ["seed", "loop-verify", "each-verify"]
+        # Determinism across a fresh trace of the same class
+        assert [n.name for n in LoopAndEach().nodes] == names
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # Part 10: _LoopCall must not mutate class-level Node.inputs (neograph-2o9n)
 # ═══════════════════════════════════════════════════════════════════════════
 
