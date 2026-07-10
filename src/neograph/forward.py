@@ -52,7 +52,7 @@ from __future__ import annotations
 import dataclasses
 import operator as op_module
 from collections.abc import Iterator
-from typing import Any
+from typing import Any, cast
 
 from pydantic import ConfigDict
 
@@ -60,9 +60,12 @@ from neograph._construct_validation import (
     _MISSING,
     _extract_list_element,
     _resolve_field_annotation,
+    effective_producer_type,
+    effective_producer_type_for,
 )
 from neograph._ir_branch import _BranchMeta, _BranchNode, _ConditionSpec
 from neograph._normalize import _declared_output, normalize_outputs
+from neograph._state_keys import StateKeys
 from neograph.conditions import OPERATORS
 from neograph.construct import Construct
 from neograph.errors import ConstructError
@@ -477,6 +480,17 @@ class _NodeCall:
         )
 
 
+def _declared_primary_of_body_item(item: Any) -> TypeSpecStatic:
+    """Declared primary output of a deferred body item, for fallback type
+    inference — a node ref's declared primary, or (recursively) the last
+    body item's primary for deferred self.each()/self.loop() builders."""
+    if isinstance(item, _NodeCall):
+        return normalize_outputs(_declared_output(item._node)).primary
+    if isinstance(item, (_EachCall, _LoopCall)):
+        return _declared_primary_of_body_item(item._body[-1]) if item._body else None
+    return None
+
+
 class _LoopCall:
     """Returned by _ForwardSelf.loop(). When called with a proxy, builds a
     sub-construct with Loop modifier and records it in the tracer.
@@ -505,39 +519,18 @@ class _LoopCall:
         self._tracer = tracer
 
     def __call__(self, input_proxy: _Proxy) -> _Proxy:
-        # Validate body items before extracting nodes
-        for nc in self._body:
-            if not isinstance(nc, _NodeCall):
-                raise ConstructError.build(
-                    "self.loop() body must contain node references (self.node_name)",
-                    expected="node reference (self.node_name)",
-                    found=type(nc).__name__,
-                    hint="nested self.loop() is not supported",
-                )
+        self._validate_body_kinds()
 
-        body_nodes = [nc._node for nc in self._body]
-
-        if not body_nodes:
-            raise ConstructError.build(
-                "self.loop() body must contain at least one node",
-                hint="pass at least one node reference: self.loop(body=[self.some_node], ...)",
-            )
-
-        # Infer input/output types from the proxy source and last body node.
-        # source_node can be None when the proxy comes from a previous
-        # self.loop() or a branch — fall back to the last body node's
-        # output type so the construct compiles.  Input and output can
-        # differ (produce+validate pattern, neograph-vt4y).
+        # Infer the loop's input port from the proxy source. source_node can
+        # be None when the proxy comes from a previous self.loop() or a
+        # branch — fall back to the last body member's declared output so
+        # the construct compiles. Input and output can differ
+        # (produce+validate pattern, neograph-vt4y).
         source_node = input_proxy._neo_source
-        # Boundary ports are single types; a dict-form declared output collapses
-        # to its primary key (secondary outputs are not the loop value).
-        # _declared_output abstracts the Node.outputs / Construct.output split.
-        output_type = normalize_outputs(body_nodes[-1].outputs).primary
         if source_node is not None:
             input_type = normalize_outputs(_declared_output(source_node)).primary
         else:
-            # Fallback: use output_type (no source node to infer from)
-            input_type = output_type
+            input_type = _declared_primary_of_body_item(self._body[-1]) if self._body else None
 
         if input_type is None:
             raise ConstructError.build(
@@ -545,33 +538,7 @@ class _LoopCall:
                 hint="call self.loop()(proxy) where proxy is a node output",
             )
 
-        # Build sub-construct with Loop modifier.
-        # Set inputs on body nodes so _extract_input can resolve from
-        # neo_subgraph_input (same fix as spec loader for sub-construct nodes).
-        #
-        # Name is deterministic from body node names so re-trace (branch
-        # discovery) produces identical names across passes. A per-tracer
-        # occurrence counter disambiguates duplicate body compositions.
-        body_slug = "-".join(n.name for n in body_nodes)
-        occurrence = self._tracer.next_occurrence("loop", body_slug)
-        name = f"loop-{body_slug}" if occurrence == 0 else f"loop-{body_slug}-{occurrence}"
-
-        body_nodes_copy = []
-        for bn in body_nodes:
-            if bn.inputs is None:
-                bn = bn.model_copy(update={"inputs": input_type})
-            body_nodes_copy.append(bn)
-
-        sub = Construct(
-            name=name,
-            input=input_type,
-            output=output_type,
-            nodes=body_nodes_copy,
-        ) | Loop(
-            when=self._when,
-            max_iterations=self._max_iterations,
-            on_exhaust=self._on_exhaust,
-        )
+        sub = self._materialize(input_type)
 
         # Record the sub-construct in the tracer (it appears in the node list)
         self._tracer.record_construct(sub)
@@ -580,8 +547,127 @@ class _LoopCall:
         # loops/branches can infer input types from it.
         return _Proxy(
             source_node=sub,
-            name=f"out_of_{name}",
+            name=f"out_of_{sub.name}",
             tracer=self._tracer,
+        )
+
+    def _materialize_nested(
+        self,
+        preceding: list[Node | Construct],
+        outer_input_type: TypeSpecStatic,
+    ) -> Construct:
+        """Build this loop as a NESTED body member of an enclosing loop.
+
+        The nested loop's input port is the previous materialized member's
+        declared output (or the outer loop's port when first). Never records
+        into the tracer — the enclosing construct owns the placement.
+        """
+        if preceding:
+            input_type = normalize_outputs(_declared_output(preceding[-1])).primary
+        else:
+            input_type = outer_input_type
+        if input_type is None:
+            raise ConstructError.build(
+                "nested self.loop() input type could not be inferred",
+                hint="ensure the preceding loop-body member declares an output type",
+            )
+        return self._materialize(input_type)
+
+    def _validate_body_kinds(self) -> None:
+        """Fail loud on an empty body or a member that is neither a node
+        reference nor a deferred self.each()/self.loop() builder — BEFORE
+        any type inference, so the author sees the body error first."""
+        if not self._body:
+            raise ConstructError.build(
+                "self.loop() body must contain at least one node",
+                hint="pass at least one node reference: self.loop(body=[self.some_node], ...)",
+            )
+        for nc in self._body:
+            if not isinstance(nc, (_NodeCall, _EachCall, _LoopCall)):
+                raise ConstructError.build(
+                    "self.loop() body must contain node references (self.node_name)",
+                    expected="node reference (self.node_name) or a deferred "
+                    "self.each()/self.loop() builder",
+                    found=type(nc).__name__,
+                )
+
+    def _materialize(self, input_type: TypeSpecStatic) -> Construct:
+        """Build the ``Construct | Loop`` sub-construct WITHOUT recording it.
+
+        Body members may be node references or deferred ``self.each()`` /
+        ``self.loop()`` builders — ``Construct(nodes=...)`` already accepts
+        ``list[Node | Construct]``, so the tracer must not be stricter than
+        the IR it targets (neograph-e9zse.2).
+        """
+        self._validate_body_kinds()
+
+        # Materialize members in order. Node members that PRECEDE the first
+        # sub-construct member consume the loop port and get inputs filled
+        # when None (copy-not-mutate, neograph-2o9n). A None-inputs node
+        # AFTER a sub-construct member consumes that construct's state field,
+        # not the port — a blanket fill would silently mis-wire, so fail loud.
+        members: list[Node | Construct] = []
+        seen_construct = False
+        for nc in self._body:
+            if isinstance(nc, _NodeCall):
+                bn = nc._node
+                if bn.inputs is None:
+                    if seen_construct:
+                        raise ConstructError.build(
+                            f"self.loop() body node '{bn.name}' follows a "
+                            "sub-construct member and must declare inputs",
+                            expected="an explicit inputs= declaration",
+                            found="inputs=None",
+                            hint="declare inputs= on the node (e.g. "
+                            "inputs={'each_verify': dict[str, X]}) or name its "
+                            "@node parameter after the sub-construct's state field",
+                        )
+                    bn = bn.model_copy(update={"inputs": input_type})
+                members.append(bn)
+            else:
+                # Deferred self.each()/self.loop() builder — kinds are
+                # guaranteed by _validate_body_kinds above.
+                members.append(nc._materialize_nested(members, input_type))
+                seen_construct = True
+
+        # Boundary ports are single types; a dict-form declared output collapses
+        # to its primary key (secondary outputs are not the loop value).
+        # _declared_output abstracts the Node.outputs / Construct.output split.
+        output_type = normalize_outputs(_declared_output(members[-1])).primary
+
+        # A fanned-out terminal member writes dict[str, X] to the bus, which
+        # can never satisfy the output-boundary contract (X). The assembly
+        # validator would also reject it; failing here gives the actionable
+        # hint. effective_producer_type_for is the single source of truth
+        # for modifier-aware type effects — never inline modifier checks.
+        effective_last = effective_producer_type_for(
+            output_type, getattr(members[-1], "modifier_set", None)
+        )
+        if effective_last is not output_type:
+            raise ConstructError.build(
+                "self.loop() body cannot end with a fanned-out member",
+                expected="a terminal member producing the loop's output type",
+                found=f"'{members[-1].name}' writes {effective_last} to the state bus",
+                hint="add a collector node consuming the fan-out dict "
+                "(e.g. inputs={'each_x': dict[str, X]}) after self.each(...)",
+            )
+
+        # Name is deterministic from member names so re-trace (branch
+        # discovery) produces identical names across passes. A per-tracer
+        # (kind, slug) occurrence counter disambiguates duplicates.
+        body_slug = "-".join(m.name for m in members)
+        occurrence = self._tracer.next_occurrence("loop", body_slug)
+        name = f"loop-{body_slug}" if occurrence == 0 else f"loop-{body_slug}-{occurrence}"
+
+        return Construct(
+            name=name,
+            input=input_type,
+            output=output_type,
+            nodes=members,
+        ) | Loop(
+            when=self._when,
+            max_iterations=self._max_iterations,
+            on_exhaust=self._on_exhaust,
         )
 
 
@@ -604,13 +690,97 @@ class _EachCall:
         key: str,
         on_error: str,
         tracer: _Tracer,
+        over: str | None = None,
     ) -> None:
         self._body = body
         self._key = key
         self._on_error = on_error
         self._tracer = tracer
+        self._over = over
 
-    def __call__(self, over: _Proxy | str) -> _Proxy:
+    def __call__(self, over: _Proxy | str | None = None) -> _Proxy:
+        if self._over is not None and over is not None:
+            raise ConstructError.build(
+                "self.each() over is bound twice",
+                expected="over= at construction OR a call argument, not both",
+                found=f"construction over='{self._over}' and a call argument",
+            )
+        effective_over = over if over is not None else self._over
+        if effective_over is None:
+            raise ConstructError.build(
+                "self.each() requires an over binding",
+                hint="call each_x(proxy.attr) or construct with "
+                "self.each(..., over='seed.items')",
+            )
+
+        body_nodes = self._validated_body_nodes()
+        source_node, attr_parts, over_path = self._resolve_over(effective_over)
+        item_type = self._infer_item_type(source_node, attr_parts, over_path)
+        sub = self._build(body_nodes, item_type, over_path)
+
+        self._tracer.record_construct(sub)
+
+        return _Proxy(
+            source_node=sub,
+            name=f"out_of_{sub.name}",
+            tracer=self._tracer,
+        )
+
+    def _materialize_nested(
+        self,
+        preceding: list[Node | Construct],
+        outer_input_type: TypeSpecStatic,
+    ) -> Construct:
+        """Build this each as a NESTED body member of an enclosing loop.
+
+        A nested deferred each is never __call__'d, so its over path must be
+        the construction-time raw string. The root resolves against the two
+        forms the assembly validator accepts inside a sub-construct: a
+        preceding body member's state field name (root type =
+        effective_producer_type, the modifier-aware single source of truth)
+        or ``neo_subgraph_input`` (the enclosing loop's input port). Never
+        records into the tracer — the enclosing construct owns the placement.
+        """
+        if self._over is None:
+            raise ConstructError.build(
+                "self.each() nested in a loop body requires over=",
+                expected="a construction-time over path",
+                hint="construct it as self.each(body=[...], key=..., "
+                "over='peer.field' or 'neo_subgraph_input.<field>')",
+            )
+
+        body_nodes = self._validated_body_nodes()
+
+        parts = [p for p in self._over.split(".") if p]
+        if not parts:
+            raise ConstructError.build(
+                "self.each() over path must not be empty",
+                hint="pass a dotted state path like 'seed.claims'",
+            )
+        root, attr_parts = parts[0], parts[1:]
+
+        if root == StateKeys.SUBGRAPH_INPUT:
+            start_type: TypeSpecStatic = outer_input_type
+        else:
+            start_type = None
+            for peer in preceding:
+                if field_name_for(peer.name) == root:
+                    start_type = effective_producer_type(peer)
+                    break
+            if start_type is None:
+                raise ConstructError.build(
+                    f"self.each() over root '{root}' does not match any "
+                    "preceding loop-body member",
+                    expected="a preceding body member's state field name or "
+                    f"'{StateKeys.SUBGRAPH_INPUT}.<field>'",
+                    found=f"'{self._over}'",
+                    hint="place the producer before self.each(...) in the loop body",
+                )
+
+        item_type = self._walk_item_type(start_type, attr_parts, self._over)
+        return self._build(body_nodes, item_type, self._over)
+
+    def _validated_body_nodes(self) -> list[Node]:
         for nc in self._body:
             if not isinstance(nc, _NodeCall):
                 raise ConstructError.build(
@@ -626,11 +796,15 @@ class _EachCall:
                 "self.each() body must contain at least one node",
                 hint="pass at least one node reference: self.each(body=[self.some_node], ...)",
             )
+        return body_nodes
 
-        source_node, attr_parts, over_path = self._resolve_over(over)
-        item_type = self._infer_item_type(source_node, attr_parts, over_path)
-        output_type = normalize_outputs(body_nodes[-1].outputs).primary
-
+    def _build(
+        self,
+        body_nodes: list[Node],
+        item_type: TypeSpecStatic,
+        over_path: str,
+    ) -> Construct:
+        """Build the ``Construct | Each`` sub-construct WITHOUT recording it."""
         # Copy-not-mutate: never write inputs onto class-level Nodes
         # (same rule as _LoopCall, neograph-2o9n).
         body_nodes_copy = []
@@ -639,11 +813,13 @@ class _EachCall:
                 bn = bn.model_copy(update={"inputs": item_type})
             body_nodes_copy.append(bn)
 
+        output_type = normalize_outputs(_declared_output(body_nodes[-1])).primary
+
         body_slug = "-".join(n.name for n in body_nodes)
         occurrence = self._tracer.next_occurrence("each", body_slug)
         name = f"each-{body_slug}" if occurrence == 0 else f"each-{body_slug}-{occurrence}"
 
-        sub = Construct(
+        return Construct(
             name=name,
             input=item_type,
             output=output_type,
@@ -652,14 +828,6 @@ class _EachCall:
             over=over_path,
             key=self._key,
             on_error=self._on_error,  # type: ignore[arg-type]
-        )
-
-        self._tracer.record_construct(sub)
-
-        return _Proxy(
-            source_node=sub,
-            name=f"out_of_{name}",
-            tracer=self._tracer,
         )
 
     def _resolve_over(
@@ -716,8 +884,23 @@ class _EachCall:
         """Walk the producer's declared output along the attr chain and
         extract the fanned item type (the sub-construct's input port)."""
         typ = normalize_outputs(_declared_output(source_node)).primary
+        return self._walk_item_type(typ, attr_parts, over_path)
+
+    def _walk_item_type(
+        self,
+        typ: TypeSpecStatic,
+        attr_parts: list[str],
+        over_path: str,
+    ) -> TypeSpecStatic:
+        """Walk a start type along the attr chain and extract the fanned
+        item type — failing loud on unresolvable segments or non-list
+        terminals."""
         for attr in attr_parts:
-            resolved = _resolve_field_annotation(typ, attr) if typ is not None else _MISSING
+            resolved = (
+                _resolve_field_annotation(typ, attr)
+                if typ is not None
+                else cast("TypeSpecStatic", _MISSING)
+            )
             if resolved is _MISSING:
                 raise ConstructError.build(
                     f"self.each() over path '{over_path}' does not resolve",
@@ -793,6 +976,7 @@ class _ForwardSelf:
         body: list,
         key: str,
         on_error: str = "raise",
+        over: str | None = None,
     ) -> _EachCall:
         """Define a fan-out body applied once per item of a collection.
 
@@ -806,12 +990,25 @@ class _ForwardSelf:
             each_verify = self.each(body=[self.verify], key="item_id")
             results = each_verify(items.claims)
 
+        ``over=`` (raw dotted string) is the construction-time binding for a
+        deferred each placed inside a ``self.loop(body=[...])`` — it is never
+        __call__'d there, so the over path must be supplied up front::
+
+            self.loop(
+                body=[
+                    self.get_claims,
+                    self.each(body=[self.verify], key="cid", over="get_claims.claims"),
+                    self.collect,
+                ],
+                when=..., max_iterations=3,
+            )(batch)
+
         The bare ``for x in proxy`` form remains as sugar for the trivial
         single-node, ``key="label"`` case; ``self.each()`` is the general
         form (custom key, multi-node body, ``on_error='collect'``).
         """
         tracer: _Tracer = object.__getattribute__(self, "_neo_tracer")
-        return _EachCall(body, key, on_error, tracer)
+        return _EachCall(body, key, on_error, tracer, over=over)
 
 
 def _run_trace(

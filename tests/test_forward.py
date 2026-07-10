@@ -1525,9 +1525,12 @@ class TestLoopCallDoesNotMutateClassNodes:
 
 
 class TestLoopBodyValidation:
-    """neograph-ndm1: self.loop() body must contain only node references.
-    Passing proxies, nested loops, or non-node objects should raise
-    ConstructError with a clear message instead of cryptic AttributeError."""
+    """neograph-ndm1: self.loop() body members must be node references or
+    deferred self.each()/self.loop() builders (nesting legal since
+    neograph-e9zse.2). Passing proxies (CALL results) or non-node objects
+    still raises ConstructError with a clear message instead of a cryptic
+    AttributeError — see TestLoopOverSubConstructBody for the legal
+    nested forms."""
 
     def test_proxy_in_body_raises_construct_error(self):
         """Passing a _Proxy (result of self.some_node(x)) as body item
@@ -2002,3 +2005,340 @@ class TestBranchLoweringEdgeCases:
         pipe = TruthySequential()
         branch_nodes = [n for n in pipe.nodes if isinstance(n, _BranchNode)]
         assert len(branch_nodes) == 2
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Part 12: self.loop() with sub-construct body members (neograph-e9zse.2)
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class CascadeClaim(BaseModel, frozen=True):
+    cid: str
+    text: str = ""
+
+
+class CascadeClaimBatch(BaseModel, frozen=True):
+    claims: list[CascadeClaim]
+
+
+class CascadeDiagnosis(BaseModel, frozen=True):
+    summary: str
+    score: float = 0.0
+
+
+class NestedVerdict(BaseModel, frozen=True):
+    score: float
+
+
+# Module-level exit conditions shared between the forward() twin and its
+# declarative companion so `Loop.when` can be asserted by IDENTITY.
+def _cascade_when(d):
+    return d is None or d.score < 0.5
+
+
+def _outer_loop_when(v):
+    return v is None or v.score < 0.5
+
+
+def _inner_loop_when(d):
+    return d is None or d.score < 0.8
+
+
+class TestLoopOverSubConstructBody:
+    """neograph-e9zse.2: self.loop() body accepts sub-construct-producing
+    members — deferred ``self.each(...)`` / ``self.loop(...)`` objects placed
+    alongside node references — and traces to IR IDENTICAL to the declarative
+    ``Construct(input=, output=, nodes=[Node, Construct|Each, Node]) | Loop``
+    twin. ``Construct(nodes=...)`` already accepts ``list[Node | Construct]``;
+    the tracer must not be stricter than the IR it targets.
+
+    A nested ``self.each(...)`` is never __call__'d, so its ``over`` path is
+    supplied at construction as a RAW dotted string whose root is either a
+    loop-body peer's state field name (e.g. ``'get_claims.claims'``) or
+    ``'neo_subgraph_input.<field>'`` — the exact two root forms the assembly
+    validator accepts inside a sub-construct.
+
+    Collector param-naming coupling (documented DX edge): inside the loop,
+    the each construct's state field is ``field_name_for('each-verify') ==
+    'each_verify'``, so a post-each consumer must declare
+    ``inputs={'each_verify': dict[str, X]}`` (or name its @node param
+    ``each_verify``).
+
+    Mixed-body inputs-fill scope (refinement, 2026-07-11): the blanket
+    "fill inputs=input_type when inputs is None" rule applies only to node
+    members that PRECEDE the first construct member; a None-inputs node
+    member AFTER a construct member fails loud at trace time.
+    """
+
+    @staticmethod
+    def _register_cascade_fns(suffix):
+        register_scripted(
+            f"lsc_intake_{suffix}",
+            lambda _i, _c: CascadeClaimBatch(claims=[CascadeClaim(cid="c1"), CascadeClaim(cid="c2")]),
+        )
+        register_scripted(f"lsc_get_claims_{suffix}", lambda batch, _c: batch)
+        register_scripted(
+            f"lsc_verify_{suffix}",
+            lambda claim, _c: MatchResult(cluster_label=claim.cid, matched=[]),
+        )
+        register_scripted(
+            f"lsc_collect_{suffix}",
+            lambda _d, _c: CascadeDiagnosis(summary="done", score=1.0),
+        )
+
+    @staticmethod
+    def _declarative_cascade_loop(suffix):
+        """The exact declarative shape the traced cascade must emit
+        (verified compiling end-to-end — see test_composition.py
+        TestEachOnErrorCollect._build_parent for the Each'd-sub pattern)."""
+        from neograph.modifiers import Loop
+
+        each_sub = Construct(
+            "each-verify",
+            input=CascadeClaim,
+            output=MatchResult,
+            nodes=[
+                Node.scripted(
+                    "verify",
+                    fn=f"lsc_verify_{suffix}",
+                    inputs=CascadeClaim,
+                    outputs=MatchResult,
+                ),
+            ],
+        ) | Each(over="get_claims.claims", key="cid", on_error="raise")
+        return Construct(
+            "loop-get_claims-each-verify-collect",
+            input=CascadeClaimBatch,
+            output=CascadeDiagnosis,
+            nodes=[
+                Node.scripted(
+                    "get_claims",
+                    fn=f"lsc_get_claims_{suffix}",
+                    inputs=CascadeClaimBatch,
+                    outputs=CascadeClaimBatch,
+                ),
+                each_sub,
+                Node.scripted(
+                    "collect",
+                    fn=f"lsc_collect_{suffix}",
+                    inputs={"each_verify": dict[str, MatchResult]},
+                    outputs=CascadeDiagnosis,
+                ),
+            ],
+        ) | Loop(when=_cascade_when, max_iterations=3, on_exhaust="last")
+
+    @classmethod
+    def _assert_ir_identical(cls, traced, decl):
+        """Structural IR equality, RECURSING into nested Construct members
+        (extends TestSelfEachTracing._assert_ir_identical for mixed bodies)."""
+        from neograph.modifiers import Loop
+
+        if isinstance(decl, Construct):
+            assert isinstance(traced, Construct), (
+                f"expected a Construct member named {decl.name!r}, "
+                f"got {type(traced).__name__}"
+            )
+            assert traced.name == decl.name
+
+            # Modifier presence must match exactly
+            assert traced.has_modifier(Each) == decl.has_modifier(Each)
+            assert traced.has_modifier(Loop) == decl.has_modifier(Loop)
+
+            if decl.has_modifier(Each):
+                traced_each = traced.get_modifier(Each)
+                decl_each = decl.get_modifier(Each)
+                assert traced_each.over == decl_each.over
+                assert traced_each.key == decl_each.key
+                assert traced_each.on_error == decl_each.on_error
+
+            if decl.has_modifier(Loop):
+                traced_loop = traced.get_modifier(Loop)
+                decl_loop = decl.get_modifier(Loop)
+                assert traced_loop.when is decl_loop.when
+                assert traced_loop.max_iterations == decl_loop.max_iterations
+                assert traced_loop.on_exhaust == decl_loop.on_exhaust
+
+            # Boundary ports (Construct.input / Construct.output — singular)
+            assert traced.input is decl.input
+            assert traced.output is decl.output
+
+            # Recurse into members in order
+            assert len(traced.nodes) == len(decl.nodes)
+            for traced_member, decl_member in zip(traced.nodes, decl.nodes, strict=True):
+                cls._assert_ir_identical(traced_member, decl_member)
+        else:
+            assert isinstance(traced, Node)
+            assert not isinstance(traced, Construct)
+            assert traced.name == decl.name
+            assert traced.inputs == decl.inputs
+            assert traced.outputs == decl.outputs
+            assert traced.scripted_fn == decl.scripted_fn
+
+    def test_cascade_loop_body_with_each_traces_ir_identical_to_declarative_twin(self):
+        """(a) The cascade twin: self.loop(body=[node, deferred self.each(...),
+        collector]) traces IR-identical to the declarative Construct|Loop
+        containing an Each'd sub-construct."""
+        self._register_cascade_fns("a")
+
+        # Parity oracle: the declarative twin is legal IR (assembles+compiles).
+        declarative_loop = self._declarative_cascade_loop("a")
+        declarative_parent = Construct(
+            "cascade-parent",
+            nodes=[
+                Node.scripted("intake", fn="lsc_intake_a", outputs=CascadeClaimBatch),
+                declarative_loop,
+            ],
+        )
+        compile(declarative_parent, **build_test_compile_kwargs())
+
+        class Cascade(ForwardConstruct):
+            intake = Node.scripted("intake", fn="lsc_intake_a", outputs=CascadeClaimBatch)
+            get_claims = Node.scripted(
+                "get_claims", fn="lsc_get_claims_a", outputs=CascadeClaimBatch
+            )
+            verify = Node.scripted("verify", fn="lsc_verify_a", outputs=MatchResult)
+            collect = Node.scripted(
+                "collect",
+                fn="lsc_collect_a",
+                inputs={"each_verify": dict[str, MatchResult]},
+                outputs=CascadeDiagnosis,
+            )
+
+            def forward(self, topic):
+                batch = self.intake(topic)
+                return self.loop(
+                    body=[
+                        self.get_claims,
+                        self.each(body=[self.verify], key="cid", over="get_claims.claims"),
+                        self.collect,
+                    ],
+                    when=_cascade_when,
+                    max_iterations=3,
+                    on_exhaust="last",
+                )(batch)
+
+        pipeline = Cascade()
+
+        # Two top-level entries: intake Node + the loop Construct. The nested
+        # each construct lands INSIDE the loop's nodes, never at top level.
+        assert len(pipeline.nodes) == 2
+        assert isinstance(pipeline.nodes[0], Node)
+        assert pipeline.nodes[0].name == "intake"
+
+        self._assert_ir_identical(pipeline.nodes[1], declarative_loop)
+
+    def test_loop_in_loop_traces_ir_identical_to_declarative_twin(self):
+        """(b) Loop-in-loop: a deferred self.loop(...) as a body member traces
+        IR-identical to the declarative nested Construct|Loop twin. The
+        declarative companion is compiled FIRST so the parity target is
+        proven in-suite, not assumed (refinement item 2)."""
+        from neograph.modifiers import Loop
+
+        register_scripted("lsc_seed_b", lambda _i, _c: Draft(content="seed"))
+        register_scripted("lsc_refine_b", lambda d, _c: Draft(content=d.content + "+"))
+        register_scripted(
+            "lsc_polish_b", lambda d, _c: Draft(content=d.content + "*", score=0.9)
+        )
+        register_scripted("lsc_grade_b", lambda _d, _c: NestedVerdict(score=1.0))
+
+        inner_loop = Construct(
+            "loop-polish",
+            input=Draft,
+            output=Draft,
+            nodes=[Node.scripted("polish", fn="lsc_polish_b", inputs=Draft, outputs=Draft)],
+        ) | Loop(when=_inner_loop_when, max_iterations=2, on_exhaust="last")
+
+        outer_loop = Construct(
+            "loop-refine-loop-polish-grade",
+            input=Draft,
+            output=NestedVerdict,
+            nodes=[
+                Node.scripted("refine", fn="lsc_refine_b", inputs=Draft, outputs=Draft),
+                inner_loop,
+                Node.scripted(
+                    "grade",
+                    fn="lsc_grade_b",
+                    inputs={"loop_polish": Draft},
+                    outputs=NestedVerdict,
+                ),
+            ],
+        ) | Loop(when=_outer_loop_when, max_iterations=3, on_exhaust="last")
+
+        # Declarative loop-in-loop legality: compile+assemble companion.
+        declarative_parent = Construct(
+            "loopinloop-parent",
+            nodes=[Node.scripted("seed", fn="lsc_seed_b", outputs=Draft), outer_loop],
+        )
+        compile(declarative_parent, **build_test_compile_kwargs())
+
+        class LoopInLoop(ForwardConstruct):
+            seed = Node.scripted("seed", fn="lsc_seed_b", outputs=Draft)
+            refine = Node.scripted("refine", fn="lsc_refine_b", outputs=Draft)
+            polish = Node.scripted("polish", fn="lsc_polish_b", outputs=Draft)
+            grade = Node.scripted(
+                "grade",
+                fn="lsc_grade_b",
+                inputs={"loop_polish": Draft},
+                outputs=NestedVerdict,
+            )
+
+            def forward(self, topic):
+                d = self.seed(topic)
+                return self.loop(
+                    body=[
+                        self.refine,
+                        self.loop(
+                            body=[self.polish],
+                            when=_inner_loop_when,
+                            max_iterations=2,
+                            on_exhaust="last",
+                        ),
+                        self.grade,
+                    ],
+                    when=_outer_loop_when,
+                    max_iterations=3,
+                    on_exhaust="last",
+                )(d)
+
+        pipeline = LoopInLoop()
+
+        assert len(pipeline.nodes) == 2
+        assert isinstance(pipeline.nodes[0], Node)
+        assert pipeline.nodes[0].name == "seed"
+
+        self._assert_ir_identical(pipeline.nodes[1], outer_loop)
+
+    def test_none_inputs_node_after_construct_member_fails_loud(self):
+        """(c) Fail-loud: a None-inputs node member AFTER a construct member
+        cannot receive the blanket inputs=input_type fill (it consumes the
+        construct's state field, not the loop port) — trace-time
+        ConstructError telling the author to declare inputs= explicitly."""
+        self._register_cascade_fns("c")
+
+        class BadCollector(ForwardConstruct):
+            intake = Node.scripted("intake", fn="lsc_intake_c", outputs=CascadeClaimBatch)
+            get_claims = Node.scripted(
+                "get_claims", fn="lsc_get_claims_c", outputs=CascadeClaimBatch
+            )
+            verify = Node.scripted("verify", fn="lsc_verify_c", outputs=MatchResult)
+            # inputs=None AND placed after the each member: the loop port type
+            # (CascadeClaimBatch) would be a silent misfill — must fail loud.
+            collect = Node.scripted(
+                "collect", fn="lsc_collect_c", outputs=CascadeDiagnosis
+            )
+
+            def forward(self, topic):
+                batch = self.intake(topic)
+                return self.loop(
+                    body=[
+                        self.get_claims,
+                        self.each(body=[self.verify], key="cid", over="get_claims.claims"),
+                        self.collect,
+                    ],
+                    when=_cascade_when,
+                    max_iterations=3,
+                    on_exhaust="last",
+                )(batch)
+
+        with pytest.raises(ConstructError, match="declare inputs"):
+            BadCollector()
