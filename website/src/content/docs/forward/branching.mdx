@@ -62,12 +62,17 @@ if checked.confidence > 0.8:
 if checked.status == "approved":
     ...
 
-# Not yet supported — comparison between two proxy values
+# Not supported — comparison between two proxy values raises
+# ConstructError at trace time
 if checked.score_a > checked.score_b:
     ...
 ```
 
-Maximum 8 branches per `forward()`. Beyond that, `ConstructError` is raised — extract sub-pipelines to reduce branch count.
+A proxy-vs-proxy comparison fails loud at trace time with a `ConstructError`; compute the comparison inside a node, or use the declarative `Construct` form with a registered condition.
+
+Maximum 8 branches per `forward()`. Beyond that, `ConstructError` is raised — extract sub-pipelines to reduce branch count, or switch to the declarative form for richer branching.
+
+These are deliberate v1 caps, not roadmap gaps: branch discovery re-traces `forward()` per branch (2^N cost), and symbolic tracing cannot observe an `except` arm. The declarative `Construct` form expresses everything richer.
 
 ## for compiles to Each fan-out
 

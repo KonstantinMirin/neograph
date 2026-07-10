@@ -30,10 +30,12 @@ Branching support:
     - Avoids AST walking complexity
     - Each trace is a normal Python execution — no special IR needed
 
-    Limitations (v1):
-    - Only comparisons against constants are supported (proxy.attr < 0.7)
+    Limitations (v1 — CAPPED, neograph-e9zse.7; the declarative Construct
+    form is the escape for anything richer):
+    - Only comparisons against constants are supported (proxy.attr < 0.7).
+      A proxy right-hand side raises ConstructError at trace time.
     - Arbitrary expressions in conditions are deferred
-    - Max 8 branches per forward() (raises ValueError beyond that)
+    - Max 8 branches per forward() (raises ConstructError beyond that)
 
 try/except support (neograph-xi0, v1):
     try/except in forward() does NOT compile to a fallback graph. During
@@ -289,6 +291,19 @@ class _ConditionProxy:
         tracer = self._neo_tracer
         if tracer is None:
             raise TypeError("Cannot use condition in boolean context outside tracing")
+        # v1 limit (neograph-e9zse.7): branch conditions must compare a proxy
+        # attribute against a CONSTANT. A proxy right-hand side previously
+        # traced silently and misbehaved at runtime (the threshold would be
+        # the _Proxy object itself) — fail loud with the declarative escape.
+        if isinstance(self._right, (_Proxy, _ConditionProxy)):
+            raise ConstructError.build(
+                "forward() branch conditions must compare against constants",
+                expected="a constant right-hand side (e.g. proxy.score < 0.7)",
+                found="a traced proxy on the right-hand side",
+                hint="richer conditions are a v1 limitation of forward() tracing — "
+                "compute the comparison inside a node, or use the declarative "
+                "Construct form with a registered condition",
+            )
         return tracer.record_branch(self)
 
     def _build_runtime_condition(self) -> Any:
@@ -435,7 +450,9 @@ class _Tracer:
                 "too many branches in forward()",
                 expected=f"at most {_MAX_BRANCHES} branches",
                 found=f"{branch_id + 1} branches",
-                hint="simplify your forward() or extract sub-pipelines",
+                hint="branch discovery re-traces forward() per branch (2^N cost) — "
+                "simplify your forward(), extract sub-pipelines, or use the "
+                "declarative Construct form for richer branching",
             )
         self._next_branch_id += 1
 

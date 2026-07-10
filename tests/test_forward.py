@@ -1692,6 +1692,56 @@ class TestSelfEnsembleEdgeCases:
         assert result["gen"] == RawText(text="var-of-seed")
 
 
+class TestV1LimitsFailLoud:
+    """neograph-e9zse.7 (Phase 3 CAP decision): branch richness and
+    try/except stay documented v1 limits with a LOUD escape to the
+    declarative form. These tests pin the loud trace-time errors."""
+
+    def test_non_constant_comparison_raises_construct_error_naming_the_escape(self):
+        """proxy-vs-proxy comparison in an if condition fails loud at trace
+        time (previously it traced silently and misbehaved at runtime —
+        the threshold would be a _Proxy object)."""
+        register_scripted("v1lim_a", lambda _i, _c: Confidence(score=0.1))
+        register_scripted("v1lim_b", lambda _i, _c: Confidence(score=0.2))
+        register_scripted("v1lim_c", lambda _i, _c: Confidence(score=0.3))
+
+        class NonConstant(ForwardConstruct):
+            a = Node.scripted("a", fn="v1lim_a", outputs=Confidence)
+            b = Node.scripted("b", fn="v1lim_b", outputs=Confidence)
+            c = Node.scripted("c", fn="v1lim_c", outputs=Confidence)
+
+            def forward(self, topic):
+                x = self.a(topic)
+                y = self.b(topic)
+                if x.score < y.score:  # non-constant right-hand side
+                    return self.c(x)
+                return y
+
+        with pytest.raises(ConstructError, match="constant") as exc_info:
+            NonConstant()
+        assert "declarative" in str(exc_info.value)
+
+    def test_too_many_branches_error_names_the_declarative_escape(self):
+        """Exceeding _MAX_BRANCHES points the author to the declarative form."""
+        register_scripted("v1lim_seed", lambda _i, _c: Confidence(score=0.5))
+        register_scripted("v1lim_n", lambda _i, _c: Confidence(score=0.5))
+
+        class ManyBranches(ForwardConstruct):
+            seed = Node.scripted("seed", fn="v1lim_seed", outputs=Confidence)
+            n0 = Node.scripted("n0", fn="v1lim_n", outputs=Confidence)
+
+            def forward(self, topic):
+                x = self.seed(topic)
+                for _ in range(9):  # 9 > _MAX_BRANCHES (8)
+                    if x.score > 0.5:
+                        x = self.n0(x)
+                return x
+
+        with pytest.raises(ConstructError, match="too many branches") as exc_info:
+            ManyBranches()
+        assert "declarative" in str(exc_info.value)
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # Part 10: _LoopCall must not mutate class-level Node.inputs (neograph-2o9n)
 # ═══════════════════════════════════════════════════════════════════════════
