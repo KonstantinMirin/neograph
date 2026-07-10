@@ -515,13 +515,26 @@ def _reference_heading(entry: dict[str, Any]) -> str:
     return f"### {name}"
 
 
-def _reference_field_table(fields: list[dict[str, Any]]) -> list[str]:
-    """A markdown field table (Field/Type/Required/Default) for a fielded symbol."""
+def _reference_field_table(fields: list[dict[str, Any]], anchor: str) -> list[str]:
+    """A markdown field table (Field/Type/Required/Default) for a fielded symbol.
+
+    Each field row carries a per-field anchor ``id="{anchor}-{field_name}"`` (an
+    inline ``<span>`` in the Field cell) so a dotted ``Type.member`` prose ref can
+    link to the exact field row, not just the type section (neograph-0rwuh). The
+    anchor is manifest-derived (``{symbol_anchor}-{field_name}``) and slug-stable:
+    field names are lowercase snake_case identifiers, so ``slug(name) == name`` and
+    the plugin recomputes the SAME id from the same manifest field name — they
+    cannot drift. Collision-safe: symbol anchors have no hyphen after slug (slug
+    preserves ``_``), field anchors always add one, so the two id-spaces are disjoint.
+    """
     rows = ["| Field | Type | Required | Default |", "|-------|------|----------|---------|"]
     for f in fields:
         default = "" if f.get("default") is None else f"`{f['default']}`"
         required = "yes" if f.get("required") else "no"
-        rows.append(f"| `{f['name']}` | `{f['annotation']}` | {required} | {default} |")
+        field_id = f"{anchor}-{f['name']}"
+        rows.append(
+            f'| <span id="{field_id}"></span>`{f["name"]}` | `{f["annotation"]}` | {required} | {default} |'
+        )
     return rows
 
 
@@ -556,7 +569,7 @@ def render_reference_sections() -> str:
             ]
         fields = entry.get("fields")
         if fields:
-            block += _reference_field_table(fields) + [""]
+            block += _reference_field_table(fields, entry["anchor"]) + [""]
         sections.append("\n".join(block).rstrip())
     # Leading + trailing newline so the sentinel markers sit on their own lines.
     return "\n" + "\n\n".join(sections) + "\n"

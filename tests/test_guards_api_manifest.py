@@ -825,6 +825,134 @@ class TestReferenceSectionRendering:
 
 
 # ════════════════════════════════════════════════════════════════════════════
+# Class 5b -- per-field anchors in the rendered reference region (neograph-0rwuh)
+# ════════════════════════════════════════════════════════════════════════════
+class TestFieldAnchorRendering:
+    """Stage C cross-linking depth: render_reference_sections() must emit a
+    stable, manifest-DERIVED per-field anchor id for every field of every
+    fielded symbol (neograph-0rwuh).
+
+    The anchor scheme is ``{symbol_anchor}-{field_name}`` (e.g. the Node model
+    anchor ``node-model`` + field ``outputs`` -> ``node-model-outputs``). Field
+    names are lowercase snake_case identifiers, so slug(field_name)==field_name
+    and the id is github-slugger-stable with no member slugging. This id is the
+    scroll target the remark plugin's dotted ``Type.member`` resolution links to
+    (website/plugins/remark-api.test.mjs).
+
+    FAILS today: _reference_field_table() emits PLAIN markdown cells with no id,
+    so ``id="node-model-outputs"`` (and every other derived field anchor) is
+    absent from the rendered region. This is the TDD red for the GENERATION half.
+    """
+
+    def test_render_emits_derived_field_anchor_for_node_outputs(self):
+        """The concrete acceptance example: the rendered region contains the
+        DERIVED field-anchor id ``node-model-outputs`` for the Node model's
+        ``outputs`` field (anchor ``node-model`` + field ``outputs``).
+
+        FAILS today: field rows are plain cells with no id attribute.
+        """
+        gen = _load_gen_api_manifest()
+        assert hasattr(gen, "render_reference_sections"), (
+            "render_reference_sections() not implemented yet (neograph-kec0k)."
+        )
+        # Confirm the anchor/field pair is real in the manifest before asserting.
+        manifest = gen.build_manifest()
+        symbols = manifest.get("symbols") or manifest.get("api_symbols") or []
+        by_name = {s["name"]: s for s in symbols}
+        node = by_name.get("Node")
+        assert node is not None and node.get("fields"), (
+            "Node model symbol with fields expected in the manifest."
+        )
+        assert node["anchor"] == "node-model", (
+            f"Node model anchor drifted to {node['anchor']!r}; the field-anchor "
+            f"scheme derives node-model-outputs from it."
+        )
+        assert any(f["name"] == "outputs" for f in node["fields"]), (
+            "`outputs` must be a declared field of the Node model."
+        )
+        rendered = gen.render_reference_sections()
+        assert 'id="node-model-outputs"' in rendered, (
+            "render_reference_sections() must emit a per-field anchor "
+            '`id="node-model-outputs"` for the Node model `outputs` field. Field '
+            "rows are plain cells today (no id) -- emit a manifest-derived "
+            "`{symbol_anchor}-{field_name}` id per row (neograph-0rwuh)."
+        )
+
+    def test_render_emits_derived_field_anchor_for_every_fielded_symbol(self):
+        """For a sample of real fielded symbols (Node/Tool/ToolInteraction/
+        BlobResult/LintIssue), EVERY field of EVERY fielded symbol's field
+        table appears in the rendered region as the DERIVED id
+        ``{symbol_anchor}-{field_name}``.
+
+        Substring assertion (no regex, PROC-2 N/A): the derived id string must
+        be present verbatim. FAILS today: no field row carries an id.
+        """
+        gen = _load_gen_api_manifest()
+        assert hasattr(gen, "render_reference_sections"), (
+            "render_reference_sections() not implemented yet (neograph-kec0k)."
+        )
+        rendered = gen.render_reference_sections()
+        manifest = gen.build_manifest()
+        symbols = manifest.get("symbols") or manifest.get("api_symbols") or []
+        fielded = [
+            s for s in symbols
+            if s.get("kind") != "exception" and s.get("fields")
+        ]
+        assert fielded, "expected fielded symbols in the manifest -- walk broke."
+        # A concrete sample must be present so the guard is not vacuously green if
+        # the manifest ever loses its fielded symbols.
+        sample_names = {"Node", "Tool", "ToolInteraction", "BlobResult", "LintIssue"}
+        present_sample = {s["name"] for s in fielded} & sample_names
+        assert present_sample, (
+            f"none of the sample fielded symbols {sorted(sample_names)} are in "
+            f"the manifest -- the guard would be vacuous."
+        )
+        missing: list[str] = []
+        for sym in fielded:
+            anchor = sym["anchor"]
+            for field in sym["fields"]:
+                field_anchor = f'{anchor}-{field["name"]}'
+                if f'id="{field_anchor}"' not in rendered:
+                    missing.append(f'{sym["name"]}.{field["name"]} -> {field_anchor}')
+        assert not missing, (
+            "render_reference_sections() is missing per-field anchor id(s) for "
+            f"{len(missing)} field(s); first few: {missing[:8]}. Each field row "
+            'must carry a DERIVED id="{symbol_anchor}-{field_name}" so a dotted '
+            "`Type.member` prose ref links to the field row, not the type "
+            "heading (neograph-0rwuh)."
+        )
+
+    def test_field_anchors_are_lowercase_snake_and_collision_free(self):
+        """The scheme rests on slug(field_name)==field_name (lowercase snake
+        identifier) and on field anchors NEVER colliding with symbol anchors.
+        Assert both across the core manifest so a future PascalCase/hyphenated
+        field or a collision fails loud.
+
+        This PASSES today (a pure manifest-property guard, no rendered id
+        required) -- it pins the collision-safety invariant the DERIVED scheme
+        depends on, flagged as guarding an existing manifest property.
+        """
+        gen = _load_gen_api_manifest()
+        manifest = gen.build_manifest()
+        symbols = manifest.get("symbols") or manifest.get("api_symbols") or []
+        symbol_anchors = {s["anchor"] for s in symbols}
+        field_anchors: set[str] = set()
+        for sym in symbols:
+            for field in sym.get("fields") or []:
+                name = field["name"]
+                assert name == name.lower() and name.replace("_", "a").isalnum(), (
+                    f"field {sym['name']}.{name!r} is not a lowercase snake "
+                    f"identifier; slug(name)==name (and the derived anchor) breaks."
+                )
+                field_anchors.add(f'{sym["anchor"]}-{name}')
+        collisions = field_anchors & symbol_anchors
+        assert not collisions, (
+            f"field anchors collide with symbol anchors: {sorted(collisions)}. "
+            f"The {{symbol_anchor}}-{{field}} scheme must be collision-free."
+        )
+
+
+# ════════════════════════════════════════════════════════════════════════════
 # Class 6 -- error-hierarchy tree <-> manifest consistency (neograph-uorb4)
 # ════════════════════════════════════════════════════════════════════════════
 

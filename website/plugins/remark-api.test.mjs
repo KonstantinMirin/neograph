@@ -86,6 +86,49 @@ test('resolved fielded-member reference is autolinked to its anchor', () => {
   );
 });
 
+// (a2) HARD tier depth (neograph-0rwuh): a dotted field ref autolinks to the
+// FIELD anchor `#{typeAnchor}-{member}`, NOT merely the type-section anchor.
+// `outputs` is a declared field of the `Node` model (anchor node-model), and
+// node-model is a live reference-page heading -> the ref must land on the field
+// row (#node-model-outputs), not the top of the section (#node-model).
+// FAILS today: the plugin emits `#node-model` (the type anchor) for every dotted
+// field ref, dropping the reader at the section heading instead of the field.
+test('dotted field ref autolinks to the field anchor, not the type anchor', () => {
+  const manifest = JSON.parse(
+    readFileSync(fileURLToPath(new URL('../src/data/api-manifest.json', import.meta.url)), 'utf8'),
+  );
+  const node = manifest.symbols.find((s) => s.name === 'Node');
+  assert.ok(node && node.fields, 'Node model with fields expected in the manifest');
+  assert.equal(node.anchor, 'node-model', 'Node model anchor must be node-model');
+  assert.ok(
+    node.fields.some((f) => f.name === 'outputs'),
+    '`outputs` must be a declared field of the Node model',
+  );
+  const tree = run(para('Node.outputs'));
+  // POSITIVE: lands on the exact field anchor.
+  assert.ok(
+    has(tree, (n) => n.type === 'link' && n.url.includes('#node-model-outputs')),
+    'a dotted Type.field ref must autolink to the per-field anchor #node-model-outputs',
+  );
+  // NEGATIVE: must NOT stop at the bare type-section anchor.
+  assert.ok(
+    !has(tree, (n) => n.type === 'link' && /#node-model(?!-)/.test(n.url)),
+    'must not drop the reader at the type-section anchor #node-model when the member is a field',
+  );
+});
+
+// (a3) HARD tier preserved (neograph-0rwuh): a NON-field member of a fielded owner
+// still FAILS the build -- there is NO type-anchor fallback for a bad member (the
+// docs-lie gate). GUARDS EXISTING BEHAVIOR: this PASSES today and must keep passing
+// after the field-anchor change lands (the refine note: no type-anchor fallback).
+test('non-field member of a fielded owner still HARD-fails the build (no fallback)', () => {
+  assert.throws(
+    () => run(para('Node.bogus_not_a_field_zzz')),
+    /unknown api reference|api-symbols-ignore|unresolved/i,
+    'a dotted ref to a non-existent member must still build-fail; no type-anchor fallback',
+  );
+});
+
 // (b) HARD tier negative: unknown member of a fielded type FAILS the build.
 test('unknown member of a fielded type FAILS the build', () => {
   // Node is a fielded owner (18 declared fields); bogus_zzz is not among them. This is the

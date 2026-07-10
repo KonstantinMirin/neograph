@@ -143,7 +143,12 @@ export default function remarkApi() {
         if (fields.some((f) => f.name === member)) {
           const anchor = symbols.get(owner).anchor;
           if (headings.has(anchor)) {
-            parent.children[index] = { type: 'link', url: `${REF_PAGE}#${anchor}`, children: [node] };
+            // Link to the per-field row anchor (`{typeAnchor}-{field}`, neograph-0rwuh),
+            // not just the type section — the field-name is a snake_case identifier so
+            // the id matches the rendered `<span id>` byte-for-byte. The heading gate
+            // above keeps it dead-anchor-proof: only a rendered type section carries the
+            // field rows, so a resolved-but-undocumented type still stays inert (below).
+            parent.children[index] = { type: 'link', url: `${REF_PAGE}#${anchor}-${member}`, children: [node] };
             return [SKIP, index + 1];
           }
           return; // resolved but undocumented on the reference page -> not linked (no dead anchor)

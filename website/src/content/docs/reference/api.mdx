@@ -81,11 +81,11 @@ BlobResult(uri: str, mime: str | None = None, text: str | None = None, bytes_b64
 
 | Field | Type | Required | Default |
 |-------|------|----------|---------|
-| `uri` | `str` | yes |  |
-| `mime` | `str | None` | no | `None` |
-| `text` | `str | None` | no | `None` |
-| `bytes_b64` | `str | None` | no | `None` |
-| `size` | `int | None` | no | `None` |
+| <span id="blobresult-uri"></span>`uri` | `str` | yes |  |
+| <span id="blobresult-mime"></span>`mime` | `str | None` | no | `None` |
+| <span id="blobresult-text"></span>`text` | `str | None` | no | `None` |
+| <span id="blobresult-bytes_b64"></span>`bytes_b64` | `str | None` | no | `None` |
+| <span id="blobresult-size"></span>`size` | `int | None` | no | `None` |
 
 ### compile
 
@@ -117,14 +117,14 @@ Construct(name: str, modifier_set: ModifierSet = <factory:ModifierSet>, descript
 
 | Field | Type | Required | Default |
 |-------|------|----------|---------|
-| `name` | `str` | yes |  |
-| `modifier_set` | `ModifierSet` | no | `<factory:ModifierSet>` |
-| `description` | `str` | no | `''` |
-| `nodes` | `list[neograph._ir_protocols.ConstructItem]` | no | `<factory:list>` |
-| `input` | `type[pydantic.main.BaseModel] | None` | no | `None` |
-| `output` | `type[pydantic.main.BaseModel] | None` | no | `None` |
-| `llm_config` | `LlmConfig` | no | `<factory:LlmConfig>` |
-| `renderer` | `neograph.renderers.Renderer | None` | no | `None` |
+| <span id="construct-name"></span>`name` | `str` | yes |  |
+| <span id="construct-modifier_set"></span>`modifier_set` | `ModifierSet` | no | `<factory:ModifierSet>` |
+| <span id="construct-description"></span>`description` | `str` | no | `''` |
+| <span id="construct-nodes"></span>`nodes` | `list[neograph._ir_protocols.ConstructItem]` | no | `<factory:list>` |
+| <span id="construct-input"></span>`input` | `type[pydantic.main.BaseModel] | None` | no | `None` |
+| <span id="construct-output"></span>`output` | `type[pydantic.main.BaseModel] | None` | no | `None` |
+| <span id="construct-llm_config"></span>`llm_config` | `LlmConfig` | no | `<factory:LlmConfig>` |
+| <span id="construct-renderer"></span>`renderer` | `neograph.renderers.Renderer | None` | no | `None` |
 
 ### construct_from_functions
 
@@ -184,9 +184,9 @@ Each(over: str, key: str, on_error: Literal['raise', 'collect'] = 'raise')
 
 | Field | Type | Required | Default |
 |-------|------|----------|---------|
-| `over` | `str` | yes |  |
-| `key` | `str` | yes |  |
-| `on_error` | `Literal['raise', 'collect']` | no | `'raise'` |
+| <span id="each-over"></span>`over` | `str` | yes |  |
+| <span id="each-key"></span>`key` | `str` | yes |  |
+| <span id="each-on_error"></span>`on_error` | `Literal['raise', 'collect']` | no | `'raise'` |
 
 ### EachFailure
 
@@ -197,9 +197,9 @@ EachFailure(key: str, error_type: str, message: str)
 
 | Field | Type | Required | Default |
 |-------|------|----------|---------|
-| `key` | `str` | yes |  |
-| `error_type` | `str` | yes |  |
-| `message` | `str` | yes |  |
+| <span id="eachfailure-key"></span>`key` | `str` | yes |  |
+| <span id="eachfailure-error_type"></span>`error_type` | `str` | yes |  |
+| <span id="eachfailure-message"></span>`message` | `str` | yes |  |
 
 ### emit_progress
 
@@ -273,11 +273,11 @@ LintIssue(node_name: 'str', param: 'str', kind: 'str', message: 'str', required:
 
 | Field | Type | Required | Default |
 |-------|------|----------|---------|
-| `node_name` | `str` | yes |  |
-| `param` | `str` | yes |  |
-| `kind` | `str` | yes |  |
-| `message` | `str` | yes |  |
-| `required` | `bool` | no | `False` |
+| <span id="lintissue-node_name"></span>`node_name` | `str` | yes |  |
+| <span id="lintissue-param"></span>`param` | `str` | yes |  |
+| <span id="lintissue-kind"></span>`kind` | `str` | yes |  |
+| <span id="lintissue-message"></span>`message` | `str` | yes |  |
+| <span id="lintissue-required"></span>`required` | `bool` | no | `False` |
 
 ### LlmFactory
 
@@ -309,10 +309,10 @@ Loop(when: str | collections.abc.Callable[[Any], bool], max_iterations: int = 10
 
 | Field | Type | Required | Default |
 |-------|------|----------|---------|
-| `when` | `str | collections.abc.Callable[[Any], bool]` | yes |  |
-| `max_iterations` | `int` | no | `10` |
-| `on_exhaust` | `str` | no | `'error'` |
-| `history` | `bool` | no | `False` |
+| <span id="loop-when"></span>`when` | `str | collections.abc.Callable[[Any], bool]` | yes |  |
+| <span id="loop-max_iterations"></span>`max_iterations` | `int` | no | `10` |
+| <span id="loop-on_exhaust"></span>`on_exhaust` | `str` | no | `'error'` |
+| <span id="loop-history"></span>`history` | `bool` | no | `False` |
 
 ### merge_fn
 
@@ -358,24 +358,24 @@ Node(name: str, modifier_set: ModifierSet = <factory:ModifierSet>, mode: Literal
 
 | Field | Type | Required | Default |
 |-------|------|----------|---------|
-| `name` | `str` | yes |  |
-| `modifier_set` | `ModifierSet` | no | `<factory:ModifierSet>` |
-| `mode` | `Literal['think', 'agent', 'act', 'scripted']` | no | `'think'` |
-| `inputs` | `Any` | no | `None` |
-| `outputs` | `Any` | no | `None` |
-| `model` | `str | None` | no | `None` |
-| `prompt` | `str | None` | no | `None` |
-| `llm_config` | `LlmConfig` | no | `<factory:LlmConfig>` |
-| `tools` | `list[neograph.tool.Tool | langchain_core.tools.base.BaseTool]` | no | `[]` |
-| `scripted_fn` | `str | None` | no | `None` |
-| `raw_fn` | `neograph.node.RawNodeFn | None` | no | `None` |
-| `fan_out_param` | `str | None` | no | `None` |
-| `renderer` | `neograph.renderers.Renderer | None` | no | `None` |
-| `context` | `list[str] | None` | no | `None` |
-| `skip_when` | `neograph.node.SkipPredicate | None` | no | `None` |
-| `skip_value` | `neograph.node.SkipValueFactory | None` | no | `None` |
-| `gate_tools_when` | `collections.abc.Callable | str | None` | no | `None` |
-| `oracle_gen_type` | `type[pydantic.main.BaseModel] | None` | no | `None` |
+| <span id="node-model-name"></span>`name` | `str` | yes |  |
+| <span id="node-model-modifier_set"></span>`modifier_set` | `ModifierSet` | no | `<factory:ModifierSet>` |
+| <span id="node-model-mode"></span>`mode` | `Literal['think', 'agent', 'act', 'scripted']` | no | `'think'` |
+| <span id="node-model-inputs"></span>`inputs` | `Any` | no | `None` |
+| <span id="node-model-outputs"></span>`outputs` | `Any` | no | `None` |
+| <span id="node-model-model"></span>`model` | `str | None` | no | `None` |
+| <span id="node-model-prompt"></span>`prompt` | `str | None` | no | `None` |
+| <span id="node-model-llm_config"></span>`llm_config` | `LlmConfig` | no | `<factory:LlmConfig>` |
+| <span id="node-model-tools"></span>`tools` | `list[neograph.tool.Tool | langchain_core.tools.base.BaseTool]` | no | `[]` |
+| <span id="node-model-scripted_fn"></span>`scripted_fn` | `str | None` | no | `None` |
+| <span id="node-model-raw_fn"></span>`raw_fn` | `neograph.node.RawNodeFn | None` | no | `None` |
+| <span id="node-model-fan_out_param"></span>`fan_out_param` | `str | None` | no | `None` |
+| <span id="node-model-renderer"></span>`renderer` | `neograph.renderers.Renderer | None` | no | `None` |
+| <span id="node-model-context"></span>`context` | `list[str] | None` | no | `None` |
+| <span id="node-model-skip_when"></span>`skip_when` | `neograph.node.SkipPredicate | None` | no | `None` |
+| <span id="node-model-skip_value"></span>`skip_value` | `neograph.node.SkipValueFactory | None` | no | `None` |
+| <span id="node-model-gate_tools_when"></span>`gate_tools_when` | `collections.abc.Callable | str | None` | no | `None` |
+| <span id="node-model-oracle_gen_type"></span>`oracle_gen_type` | `type[pydantic.main.BaseModel] | None` | no | `None` |
 
 ### Operator
 
@@ -386,7 +386,7 @@ Operator(when: str)
 
 | Field | Type | Required | Default |
 |-------|------|----------|---------|
-| `when` | `str` | yes |  |
+| <span id="operator-when"></span>`when` | `str` | yes |  |
 
 ### Oracle
 
@@ -397,14 +397,14 @@ Oracle(n: int = 3, models: list[str] | None = None, merge_prompt: str | None = N
 
 | Field | Type | Required | Default |
 |-------|------|----------|---------|
-| `n` | `int` | no | `3` |
-| `models` | `list[str] | None` | no | `None` |
-| `merge_prompt` | `str | None` | no | `None` |
-| `merge_model` | `str` | no | `'reason'` |
-| `merge_fn` | `str | None` | no | `None` |
-| `merge_pre_process` | `neograph.modifiers.MergePreProcess | None` | no | `None` |
-| `merge_post_process` | `neograph.modifiers.MergePostProcess | None` | no | `None` |
-| `merge_fallback` | `neograph.modifiers.MergeFallback | None` | no | `None` |
+| <span id="oracle-n"></span>`n` | `int` | no | `3` |
+| <span id="oracle-models"></span>`models` | `list[str] | None` | no | `None` |
+| <span id="oracle-merge_prompt"></span>`merge_prompt` | `str | None` | no | `None` |
+| <span id="oracle-merge_model"></span>`merge_model` | `str` | no | `'reason'` |
+| <span id="oracle-merge_fn"></span>`merge_fn` | `str | None` | no | `None` |
+| <span id="oracle-merge_pre_process"></span>`merge_pre_process` | `neograph.modifiers.MergePreProcess | None` | no | `None` |
+| <span id="oracle-merge_post_process"></span>`merge_post_process` | `neograph.modifiers.MergePostProcess | None` | no | `None` |
+| <span id="oracle-merge_fallback"></span>`merge_fallback` | `neograph.modifiers.MergeFallback | None` | no | `None` |
 
 ### ProducingCall
 
@@ -415,9 +415,9 @@ ProducingCall(tool_name: str, args: dict[str, Any] = <factory:dict>, producer_id
 
 | Field | Type | Required | Default |
 |-------|------|----------|---------|
-| `tool_name` | `str` | yes |  |
-| `args` | `dict[str, Any]` | no | `<factory:dict>` |
-| `producer_idempotent` | `bool` | no | `False` |
+| <span id="producingcall-tool_name"></span>`tool_name` | `str` | yes |  |
+| <span id="producingcall-args"></span>`args` | `dict[str, Any]` | no | `<factory:dict>` |
+| <span id="producingcall-producer_idempotent"></span>`producer_idempotent` | `bool` | no | `False` |
 
 ### PromptCompiler
 
@@ -493,14 +493,14 @@ ResourceRef(uri: str, kind: str, server: str, producing_call: ProducingCall, mim
 
 | Field | Type | Required | Default |
 |-------|------|----------|---------|
-| `uri` | `str` | yes |  |
-| `kind` | `str` | yes |  |
-| `server` | `str` | yes |  |
-| `producing_call` | `ProducingCall` | yes |  |
-| `mime` | `str | None` | no | `None` |
-| `size` | `int | None` | no | `None` |
-| `fetched_at` | `str | None` | no | `None` |
-| `ttl_ms` | `int | None` | no | `None` |
+| <span id="resourceref-uri"></span>`uri` | `str` | yes |  |
+| <span id="resourceref-kind"></span>`kind` | `str` | yes |  |
+| <span id="resourceref-server"></span>`server` | `str` | yes |  |
+| <span id="resourceref-producing_call"></span>`producing_call` | `ProducingCall` | yes |  |
+| <span id="resourceref-mime"></span>`mime` | `str | None` | no | `None` |
+| <span id="resourceref-size"></span>`size` | `int | None` | no | `None` |
+| <span id="resourceref-fetched_at"></span>`fetched_at` | `str | None` | no | `None` |
+| <span id="resourceref-ttl_ms"></span>`ttl_ms` | `int | None` | no | `None` |
 
 ### run
 
@@ -553,10 +553,10 @@ Tool(name: str, budget: int = 0, config: dict[str, Any] = <factory:dict>, idempo
 
 | Field | Type | Required | Default |
 |-------|------|----------|---------|
-| `name` | `str` | yes |  |
-| `budget` | `int` | no | `0` |
-| `config` | `dict[str, Any]` | no | `<factory:dict>` |
-| `idempotent` | `bool` | no | `False` |
+| <span id="tool-model-name"></span>`name` | `str` | yes |  |
+| <span id="tool-model-budget"></span>`budget` | `int` | no | `0` |
+| <span id="tool-model-config"></span>`config` | `dict[str, Any]` | no | `<factory:dict>` |
+| <span id="tool-model-idempotent"></span>`idempotent` | `bool` | no | `False` |
 
 ### ToolInteraction
 
@@ -567,11 +567,11 @@ ToolInteraction(tool_name: str, args: dict[str, Any] = <factory:dict>, result: s
 
 | Field | Type | Required | Default |
 |-------|------|----------|---------|
-| `tool_name` | `str` | yes |  |
-| `args` | `dict[str, Any]` | no | `<factory:dict>` |
-| `result` | `str` | no | `''` |
-| `typed_result` | `Any` | no | `None` |
-| `duration_ms` | `int` | no | `0` |
+| <span id="toolinteraction-tool_name"></span>`tool_name` | `str` | yes |  |
+| <span id="toolinteraction-args"></span>`args` | `dict[str, Any]` | no | `<factory:dict>` |
+| <span id="toolinteraction-result"></span>`result` | `str` | no | `''` |
+| <span id="toolinteraction-typed_result"></span>`typed_result` | `Any` | no | `None` |
+| <span id="toolinteraction-duration_ms"></span>`duration_ms` | `int` | no | `0` |
 
 ### type_display_name
 
@@ -598,9 +598,9 @@ VerifyIssue(node_name: 'str', kind: 'str', message: 'str') -> None
 
 | Field | Type | Required | Default |
 |-------|------|----------|---------|
-| `node_name` | `str` | yes |  |
-| `kind` | `str` | yes |  |
-| `message` | `str` | yes |  |
+| <span id="verifyissue-node_name"></span>`node_name` | `str` | yes |  |
+| <span id="verifyissue-kind"></span>`kind` | `str` | yes |  |
+| <span id="verifyissue-message"></span>`message` | `str` | yes |  |
 
 ### XmlRenderer
 
