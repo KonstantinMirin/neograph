@@ -64,9 +64,32 @@ Collect `isinstance(attr, Construct)` in the module walk exactly as `construct_f
 - **Pro:** removes the divergence that caused the bug; matches author expectation (a module with a sub-construct just works); no new builder machinery needed.
 - **Con — the one real design question:** `vars(mod)` includes **imported** names. A shared sub-construct imported for use elsewhere (`from shared import verify_sub`) would be auto-collected and wired — possibly unintended. Note this risk *already exists latently for imported @node Nodes*, so Option B is consistent with current namespace semantics — but Constructs are shared/imported far more often than individual nodes, so the practical exposure is higher. Construct **instances** carry no reliable "defined in this module" provenance (unlike a function's `__module__`), so a clean imported-vs-defined filter is not obviously available.
 
+## The selection logic diverged on TWO axes (why "one builder" is the right frame)
+
+The two builders already share the wiring engine (`_build_construct_from_decorated`). Only the *selection* logic is duplicated — and it has drifted into near-contradiction:
+
+| source member | `construct_from_module` | `construct_from_functions` |
+|---|---|---|
+| `@node` Node (sidecar) | collect | collect |
+| plain `Node(...)` (no sidecar) | **collect** (`plain_nodes`) | **reject** (`:163`) |
+| `Construct` | **silently skip** (the bug) | **collect** (`:138`) |
+| import / helper / constant | silently skip | reject (loud) |
+
+They are opposite on plain-Node and on Construct. This is the smell: the collection contract was copied, not shared, so it drifted.
+
+## Option B′ — one core builder + a namespace-filter adapter (PREFERRED)
+
+There is exactly one *legitimate* difference between the two entry points: the bottom row. A **module namespace always contains non-pipeline members** (imports, helpers, constants), so the module walk **must skip** unrecognized members. An **explicit list is a promise** that every element is a pipeline member, so it **must reject** unrecognized members (else a bare-function typo silently vanishes). That skip-vs-reject difference is load-bearing and cannot be collapsed to a single else-branch.
+
+But that argues for two thin *entry points*, not two collection *contracts*. Factor it as:
+- **one core builder** (today's `construct_from_functions` body): explicit list → collect/validate/wire, reject junk loudly. Single source of truth for "what is a pipeline member" (`Node` with-or-without sidecar? `Construct`? decide once) and how each is wired.
+- **`construct_from_module` = a thin adapter**: filter `vars(mod)` to the pipeline-member types, then delegate to the core builder. The filter is the *only* place "skip unrecognized namespace member" lives; the core builder is the *only* place "collect + wire + reject" lives.
+
+Consequences: the plain-Node/Construct drift becomes **structurally impossible** (one predicate), skip-vs-reject falls out for free (the filter drops non-members before the rejecting builder sees them), and Option B's imported-Construct question becomes a single, well-located decision in the filter (accept namespace semantics + document, or add a provenance guard). Resolve the plain-Node inconsistency here too: the unified member set should be decided deliberately (recommend: `@node` Nodes + plain Nodes + Constructs — the union — so neither entry point silently rejects a declarative Node the other accepts).
+
 ## Recommendation
 
-**Target Option B; fall back to Option A if the imported-construct ambiguity cannot be cleanly resolved. Never ship the silent drop under either.** The invariant ("no silent omission") is satisfied by either; B is preferred because it also closes the capability gap and de-duplicates the two builders' contracts. The imported-collection behavior must be **explicitly decided and pinned by a test** during implementation (either: accept namespace semantics + document, or add a provenance filter). This A/B choice is an architectural decision and should be confirmed by an independent reviewer before implementation.
+**Target Option B′ (one core builder + namespace-filter adapter).** It satisfies the invariant, closes the capability gap, and — critically — de-duplicates the selection contract so this class of drift cannot recur (directly serving the ticket's "converge the contracts" clause). Option B (add a Construct branch to the second copy) is the minimum that fixes the symptom but leaves the duplication alive; Option A (fail-loud only) is the floor if the refactor is deferred. Never ship the silent drop under any. The imported-Construct behavior must be **explicitly decided and pinned by a test**; the plain-Node member-set inconsistency must be resolved as part of the unification. This is an architectural decision — confirm with an independent reviewer before implementation.
 
 ## Docs impact (either option)
 - `examples/10_full_pipeline.py:18-19` — the "cannot inline subgraphs" comment becomes false under B; under A it stays true but the behavior is now loud. Update accordingly.
