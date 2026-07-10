@@ -540,14 +540,14 @@ Difference from inputs:
 
 Context fields are forwarded into sub-constructs automatically. If a node inside a sub-construct declares `context=["build_catalog"]`, the parent state value is copied into the sub-graph's state at invocation time. See example 14 (`examples/14_context_injection.py`) for the full pattern with sub-constructs and Each fan-out.
 
-## Loop history with loop_history
+## Loop history with Loop(history=True)
 
-Collect every iteration's output into a separate history field for debugging or audit trails.
+Collect every iteration's output into a separate history field for debugging or audit trails. History is an option on the `Loop` **modifier** (`Loop(history=True)`), not a `@node` kwarg -- apply it programmatically to the decorated node.
 
-{/* test-skip: BROKEN doc snippet (API drift): node() got an unexpected keyword argument 'loop_history'; see verifiable-docs follow-up bead */}
 ```python
 from pydantic import BaseModel
-from neograph import node, construct_from_functions, compile, run
+from neograph import node, construct_from_functions, Loop, compile, run
+from langgraph.checkpoint.memory import InMemorySaver
 
 class Draft(BaseModel, frozen=True):
     content: str
@@ -558,38 +558,43 @@ class Draft(BaseModel, frozen=True):
 def seed() -> Draft:
     return Draft(content="initial", score=0.0)
 
-@node(
-    outputs=Draft,
-    loop_when=lambda d: d is None or d.score < 0.8,
-    max_iterations=5,
-    loop_history=True,
-)
-def refine(draft: Draft) -> Draft:
+@node(outputs=Draft)
+def refine(seed: Draft) -> Draft:
     return Draft(
-        content=f"v{draft.iteration + 1}",
-        iteration=draft.iteration + 1,
-        score=draft.score + 0.3,
+        content=f"v{seed.iteration + 1}",
+        iteration=seed.iteration + 1,
+        score=seed.score + 0.3,
     )
 
-pipeline = construct_from_functions("writer", [seed, refine])
-graph = compile(pipeline)
-result = run(graph, input={"node_id": "history-demo"})
+# history= is a Loop-modifier option, not a @node kwarg. Apply it programmatically
+# to the decorated node, then assemble the pipeline as usual.
+refine = refine | Loop(
+    when=lambda d: d is None or d.score < 0.8,
+    max_iterations=5,
+    history=True,
+)
 
-# The main output is the append-list of all iterations
+pipeline = construct_from_functions("writer", [seed, refine])
+graph = compile(pipeline, checkpointer=InMemorySaver())
+config = {"configurable": {"thread_id": "history-demo"}}
+result = run(graph, input={"node_id": "history-demo"}, config=config)
+
+# The main output is the append-list of every iteration.
 final = result["refine"][-1]
 print(f"Final: score={final.score}")
 
-# The history field collects each iteration independently
-history = result.get("neo_loop_history_refine", [])
+# The history lives in a framework field (neo_ prefix). run() strips neo_* fields
+# from its result, so read it from the checkpointed state instead.
+history = graph.get_state(config).values["neo_loop_history_refine"]
 for i, draft in enumerate(history):
     print(f"  Iteration {i}: score={draft.score}")
 ```
 
 How it works:
 
-- **`loop_history=True`** (or `Loop(history=True)` in the programmatic API) creates an additional state field `neo_loop_history_{node_name}` that collects each iteration's output into a list.
+- **`Loop(history=True)`** creates an additional state field `neo_loop_history_{node_name}` that collects each iteration's output into a list.
 - The history field uses a list reducer -- each iteration appends to it independently. This is separate from the node's main output field (which is also an append-list for Loop nodes).
-- The history field is written by `_build_state_update` in the factory layer alongside the main output and loop counter increment.
+- Because the field is framework-internal (`neo_` prefix), `run()` strips it from the returned result. Read it from the checkpointed state via `graph.get_state(config).values["neo_loop_history_{node}"]`, which requires compiling with a `checkpointer=`.
 
 When to use:
 
@@ -601,7 +606,7 @@ Restrictions:
 
 - Only supported on Node-level Loops. Applying `Loop(history=True)` to a Construct raises `ConstructError` at pipe-composition time. For Construct-level loops, collect history inside the sub-construct's internal nodes instead.
 
-The programmatic equivalent:
+Fully programmatic form (runtime-constructed `Node`, no decorator):
 
 {/* test-skip: illustrative fragment: references `Node` defined in the page narrative, not in a runnable block */}
 ```python

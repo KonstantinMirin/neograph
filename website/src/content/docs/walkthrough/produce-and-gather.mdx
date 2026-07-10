@@ -77,7 +77,6 @@ The parameter name `decompose` on `research` wires it to the upstream `decompose
 
 ## The complete pipeline
 
-{/* test-skip: BROKEN doc snippet (API drift): FakeSearchTool.invoke() got an unexpected keyword argument 'config'; see verifiable-docs follow-up bead */}
 ```python
 """Think + Agent: decompose a requirement, then research with tools.
 
@@ -158,7 +157,7 @@ search_count = {"n": 0}
 class FakeSearchTool:
     name = "search_codebase"
 
-    def invoke(self, args):
+    def invoke(self, args, config=None):
         search_count["n"] += 1
         return f"Found 3 references for: {args.get('query', '?')}"
 

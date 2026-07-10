@@ -85,7 +85,7 @@ For every node with `FromInput` or `FromConfig` parameters, `lint()` checks that
 
 {/* test-skip: illustrative fragment: references `node` defined in the page narrative, not in a runnable block */}
 ```python
-@node(output=Result)
+@node(outputs=Result)
 def process(
     upstream: Claims,
     topic: Annotated[str, FromInput],           # lint checks: "topic" in config
@@ -103,7 +103,7 @@ class RunCtx(BaseModel):
     node_id: str
     project_root: str
 
-@node(output=Result)
+@node(outputs=Result)
 def process(
     upstream: Claims,
     ctx: Annotated[RunCtx, FromInput],  # lint checks: "node_id" AND "project_root" in config
@@ -224,11 +224,10 @@ This is an ERROR. Per-kind matching is not statically knowable -- kinds are lift
 
 ## Example: full lint workflow
 
-{/* test-skip: BROKEN doc snippet (API drift): node() got an unexpected keyword argument 'output'; see verifiable-docs follow-up bead */}
 ```python
 from typing import Annotated
 from pydantic import BaseModel
-from neograph import node, compile, lint, FromInput, FromConfig
+from neograph import node, construct_from_functions, lint, FromInput, FromConfig
 
 class Claims(BaseModel):
     items: list[str]
@@ -236,13 +235,19 @@ class Claims(BaseModel):
 class Result(BaseModel):
     summary: str
 
-@node(output=Result)
+@node(outputs=Claims)
+def claims() -> Claims:
+    return Claims(items=["a", "b"])
+
+@node(outputs=Result)
 def summarize(
     claims: Claims,
     topic: Annotated[str, FromInput],
     max_len: Annotated[int, FromConfig],
 ) -> Result:
     return Result(summary=f"{topic}: {len(claims.items)} claims (max {max_len})")
+
+pipeline = construct_from_functions("lint-demo", [claims, summarize])
 
 # Check with a complete config -- no issues
 issues = lint(pipeline, config={"topic": "AI safety", "max_len": 500})

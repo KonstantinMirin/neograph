@@ -11,7 +11,6 @@ NeoGraph exposes three API surfaces that compile to the same IR:
 
 All three are importable from `neograph`:
 
-{/* test-skip: BROKEN doc snippet (API drift): cannot import name 'RenderedInput' from 'neograph' (/Users/konst/projects/neograph/src/neograph/__init__.py); see verifiable-docs follow-up bead */}
 ```python
 from neograph import (
     # Primary @node API
@@ -31,7 +30,7 @@ from neograph import (
     Renderer, XmlRenderer, DelimitedRenderer, JsonRenderer,
     # Shared
     compile, run,
-    RenderedInput, build_rendered_input, ExcludeFromOutput,
+    ExcludeFromOutput,
     # Errors
     NeographError, ConstructError, CompileError, ConfigurationError,
     CheckpointSchemaError, ExecutionError,
@@ -646,6 +645,8 @@ Compiles a prompt to a message list **standalone** — no compiled graph, no run
 ### `RenderedInput`
 
 Dataclass bundling rendered prompt input for a node. Provides both raw Pydantic models and their rendered string forms, letting the factory choose the right representation for inline vs template-ref prompts.
+
+`RenderedInput` and `build_rendered_input` are not part of the top-level `neograph` namespace; import them from `neograph.renderers` (`from neograph.renderers import RenderedInput, build_rendered_input`).
 
 {/* test-skip: illustrative fragment: references `dataclass` defined in the page narrative, not in a runnable block */}
 ```python
