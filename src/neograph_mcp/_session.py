@@ -60,6 +60,7 @@ from neograph_mcp._client import (
     _declares_arg,
     _resolve_token,
     _resolve_token_no_config,
+    _unwrap_single,
 )
 from neograph_mcp._typed import rehydrate
 
@@ -167,25 +168,6 @@ def _convert_content_block(block: Any) -> dict[str, Any]:
 
 def _convert_content(blocks: Any) -> list[dict[str, Any]]:
     return [_convert_content_block(b) for b in (blocks or [])]
-
-
-# ── ExceptionGroup unwrap ─────────────────────────────────────────────────────
-
-
-def _unwrap_single(exc: BaseException) -> BaseException:
-    """Recursively descend a single-leaf ``BaseExceptionGroup`` to the bare error.
-
-    The anyio task groups inside the stdio / streamable-http transports wrap
-    failures in ``ExceptionGroup``s — including at CONNECT time, sometimes nested
-    two deep (a refused port surfaced as ``ExceptionGroup(ConnectError)``; a dead
-    stdio server as ``ExceptionGroup(ExceptionGroup(McpError))``). Descend while the
-    group has exactly one leaf so a transport failure reaches the consumer as its
-    own type. A genuine multi-leaf group (a real double failure) is returned as-is —
-    no information is discarded. ``asyncio.TimeoutError`` is raised OUTSIDE the anyio
-    stack, so a connect timeout is a bare ``TimeoutError`` this never touches."""
-    while isinstance(exc, BaseExceptionGroup) and len(exc.exceptions) == 1:
-        exc = exc.exceptions[0]
-    return exc
 
 
 # ── the session ───────────────────────────────────────────────────────────────

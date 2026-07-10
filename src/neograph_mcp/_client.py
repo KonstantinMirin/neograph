@@ -38,6 +38,7 @@ from __future__ import annotations
 import asyncio
 import concurrent.futures
 import inspect
+import socket
 from collections.abc import Awaitable, Callable, Coroutine
 from dataclasses import dataclass
 from typing import Any, cast
@@ -79,6 +80,129 @@ def _held_sessions(config: Any) -> dict[str, Any]:
     else:
         configurable = getattr(config, "configurable", {}) or {}
     return configurable.get(RUN_SESSIONS_KEY) or {}
+
+
+# ── ExceptionGroup unwrap ─────────────────────────────────────────────────────
+
+
+def _unwrap_single(exc: BaseException) -> BaseException:
+    """Recursively descend a single-leaf ``BaseExceptionGroup`` to the bare error.
+
+    The anyio task groups inside the stdio / streamable-http transports wrap
+    failures in ``ExceptionGroup``s — including at CONNECT time, sometimes nested
+    two deep (a refused port surfaced as ``ExceptionGroup(ConnectError)``; a dead
+    stdio server as ``ExceptionGroup(ExceptionGroup(McpError))``). Descend while the
+    group has exactly one leaf so a transport failure reaches the consumer as its
+    own type. A genuine multi-leaf group (a real double failure) is returned as-is —
+    no information is discarded. ``asyncio.TimeoutError`` is raised OUTSIDE the anyio
+    stack, so a connect timeout is a bare ``TimeoutError`` this never touches."""
+    while isinstance(exc, BaseExceptionGroup) and len(exc.exceptions) == 1:
+        exc = exc.exceptions[0]
+    return exc
+
+
+# ── transport resilience (per-call timeout + bounded retry) ──────────────────
+
+
+def _is_transport_error(leaf: BaseException) -> bool:
+    """NARROW transport allowlist: only failures of the WIRE, never of the result.
+
+    ``ConnectionError`` (refused/reset/aborted), ``TimeoutError`` (per-call bound
+    or read timeout), DNS resolution (``socket.gaierror``), the SDK's ``McpError``
+    (protocol-level transport failures), and httpx's ``TransportError`` family
+    (streamable-http connect/read/write). Everything else — ``ToolException``
+    (isError is a RESULT), ``ValidationError`` (a schema mismatch), arbitrary tool
+    bugs — surfaces immediately."""
+    if isinstance(leaf, (ConnectionError, TimeoutError, socket.gaierror)):
+        return True
+    # Deferred protocol imports (match _client_for's function-local adapter import).
+    from mcp.shared.exceptions import McpError
+
+    if isinstance(leaf, McpError):
+        return True
+    try:
+        import httpx
+    except ImportError:  # pragma: no cover - httpx rides in with the mcp extra
+        return False
+    return isinstance(leaf, httpx.TransportError)
+
+
+def _is_pre_send_safe(leaf: BaseException) -> bool:
+    """True for CONNECT-phase failures where the request never reached the server —
+    always safe to retry, regardless of idempotency: the call cannot have executed.
+    A refused connection or failed DNS lookup happens before anything is sent.
+    Everything else transport-shaped (read timeout, reset mid-flight, protocol
+    error) is AMBIGUOUS — the tool may have partially executed."""
+    if isinstance(leaf, (ConnectionRefusedError, socket.gaierror)):
+        return True
+    try:
+        import httpx
+    except ImportError:  # pragma: no cover - httpx rides in with the mcp extra
+        return False
+    return isinstance(leaf, httpx.ConnectError)
+
+
+def _with_transport_resilience(
+    tool: Any,
+    *,
+    timeout: float | None = 30.0,
+    max_attempts: int = 3,
+    backoff: float = 0.25,
+    tool_config: Any = None,
+) -> Any:
+    """Wrap ``tool`` so each call gets a per-call timeout and TRANSPORT-only retry.
+
+    The tool-path arm of the single-responsibility retry split: ``_llm_retry``
+    owns model-output recovery; this owns the wire. Each attempt runs inside
+    ``asyncio.timeout(timeout)`` (parity with ``mcp_session``'s ``timeout=30`` —
+    the factory path otherwise inherits the adapter's 300s read timeout), and a
+    failure is retried with bounded exponential backoff ONLY when it is:
+
+    - a transport error (the narrow :func:`_is_transport_error` allowlist —
+      ``ToolException``/isError is a RESULT the model must see and is NEVER
+      retried; classification trumps idempotency), AND
+    - safe to replay: CONNECT-phase failures (refused, DNS) retry regardless —
+      nothing was sent; AMBIGUOUS post-send failures (read timeout, reset,
+      protocol error) retry ONLY when the tool is declared idempotent.
+
+    Idempotency arrives via the FACTORY-CALL CHANNEL: ``tool_config`` (the dict
+    core passes as ``factory(config, tool_config)``) carrying ``idempotent=True``
+    — single-sourced from the node's ``Tool(idempotent=)`` spec, never a second
+    hand-set flag. Missing/None/unknown means NON-idempotent (never replay).
+
+    A retry is the SAME logical call: it happens inside the wrapped coroutine,
+    invisible to ``ToolBudgetTracker`` — budget counts the logical call once.
+    Composed OUTERMOST in the factory (after identity injection, rename, and the
+    output-model wrap) so a retry re-runs the whole transport call while domain
+    errors from any inner layer propagate untouched.
+    """
+    from langchain_core.tools import ToolException
+
+    idempotent = bool((tool_config or {}).get("idempotent") or False) if isinstance(tool_config, dict) else False
+    orig = tool.coroutine
+
+    async def _resilient(**kwargs: Any) -> Any:
+        attempt = 0
+        while True:
+            attempt += 1
+            try:
+                async with asyncio.timeout(timeout):
+                    return await orig(**kwargs)
+            except (ToolException, asyncio.CancelledError):
+                raise  # a RESULT (isError) or a cancellation — never transport
+            except BaseException as exc:  # noqa: BLE001 - classify, then re-raise or retry
+                leaf = _unwrap_single(exc)
+                if isinstance(leaf, (ToolException, asyncio.CancelledError)):
+                    raise
+                if not _is_transport_error(leaf):
+                    raise
+                if attempt >= max_attempts:
+                    raise
+                if not idempotent and not _is_pre_send_safe(leaf):
+                    raise  # ambiguous post-send failure on a non-idempotent tool
+                await asyncio.sleep(backoff * (2 ** (attempt - 1)))
+
+    return tool.model_copy(update={"coroutine": _resilient})
 
 
 @dataclass(frozen=True)
@@ -271,6 +395,9 @@ def _make_tool_factory(
     stdio_token_arg: str,
     output_model: type[BaseModel] | None = None,
     parse: ParseFn | None = None,
+    timeout: float | None = 30.0,
+    max_attempts: int = 3,
+    backoff: float = 0.25,
 ) -> ToolFactory:
     """Build ONE consumer-owned async factory for ``tool_name`` on ``server_key``.
 
@@ -280,9 +407,12 @@ def _make_tool_factory(
     matches the ``Tool`` spec / factory key, and (when ``output_model`` is declared)
     wrap it so the result is the rehydrated model.
 
-    The ``output_model`` wrap happens LAST — after identity injection and rename —
-    so it wraps the already-injected coroutine (token injection preserved) and the
-    renamed tool."""
+    The ``output_model`` wrap happens after identity injection and rename — so it
+    wraps the already-injected coroutine (token injection preserved) and the
+    renamed tool. The transport-resilience wrap is OUTERMOST (per-call ``timeout``
+    + transport-only bounded retry; idempotency read from the factory-call
+    ``tool_config`` channel) so a retry re-runs the whole transport call while
+    isError/domain errors from any inner layer propagate untouched."""
 
     async def _factory(config: Any, tool_config: Any) -> Any:
         token = await _resolve_token(token_provider, config)
@@ -310,7 +440,13 @@ def _make_tool_factory(
             tool = tool.model_copy(update={"name": rename_to})
         if output_model is not None:
             tool = _wrap_output_model(tool, tool_name, output_model, parse)
-        return tool
+        return _with_transport_resilience(
+            tool,
+            timeout=timeout,
+            max_attempts=max_attempts,
+            backoff=backoff,
+            tool_config=tool_config,
+        )
 
     return _factory
 
@@ -323,6 +459,9 @@ def mcp_tool_factories(
     stdio_token_arg: str = "token",
     output_models: dict[str, type[BaseModel]] | None = None,
     parses: dict[str, ParseFn] | None = None,
+    timeout: float | None = 30.0,
+    max_attempts: int = 3,
+    backoff: float = 0.25,
 ) -> dict[str, ToolFactory]:
     """Build the ``{name: async factory}`` dict for ``compile(tool_factories=...)``.
 
@@ -348,6 +487,13 @@ def mcp_tool_factories(
     keyword — stdio has no headers, so the transport-aware token path needs to know
     which tool argument carries identity (default ``"token"``, matching the demo
     server's echoed arg).
+
+    ``timeout`` / ``max_attempts`` / ``backoff`` tune the per-call transport
+    resilience every built tool carries (see :func:`_with_transport_resilience`):
+    each call is bounded by ``timeout`` seconds (parity with ``mcp_session``) and a
+    TRANSPORT failure retries with bounded backoff — an ``isError`` result never
+    retries, and an ambiguous post-send failure replays only when the node's
+    ``Tool(idempotent=True)`` spec says so (threaded via the factory-call channel).
     """
     factories: dict[str, ToolFactory] = {}
     for server_key, spec in servers.items():
@@ -368,6 +514,9 @@ def mcp_tool_factories(
                 stdio_token_arg,
                 output_model=(output_models or {}).get(key),
                 parse=(parses or {}).get(key),
+                timeout=timeout,
+                max_attempts=max_attempts,
+                backoff=backoff,
             )
     return factories
 
@@ -382,6 +531,9 @@ def mcp_tool_factory(
     stdio_token_arg: str = "token",
     output_model: type[BaseModel] | None = None,
     parse: ParseFn | None = None,
+    timeout: float | None = 30.0,
+    max_attempts: int = 3,
+    backoff: float = 0.25,
 ) -> ToolFactory:
     """Build ONE lazy async factory for a SINGLE known tool — no build-time connect.
 
@@ -414,6 +566,12 @@ def mcp_tool_factory(
     annotation) raises a typed ``ValueError``; a server ``isError`` follows the
     adapter-native error path unchanged.
 
+    ``timeout`` / ``max_attempts`` / ``backoff`` tune the per-call transport
+    resilience (see :func:`_with_transport_resilience`): each call is bounded by
+    ``timeout`` seconds and a TRANSPORT failure retries with bounded backoff —
+    an ``isError`` result never retries; an ambiguous post-send failure replays
+    only when the node's ``Tool(idempotent=True)`` spec says so.
+
     A thin public alias over the same builder the plural form delegates to — the
     client stays owned strictly inside the returned factory (the nmb2 invariant).
     """
@@ -426,6 +584,9 @@ def mcp_tool_factory(
         stdio_token_arg,
         output_model=output_model,
         parse=parse,
+        timeout=timeout,
+        max_attempts=max_attempts,
+        backoff=backoff,
     )
 
 

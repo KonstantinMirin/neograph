@@ -51,8 +51,8 @@ from neograph_mcp._client import (
     _client_for,
     _resolve_token,
     _resolve_token_no_config,
+    _unwrap_single,
 )
-from neograph_mcp._session import _unwrap_single
 
 
 class McpRunContext:

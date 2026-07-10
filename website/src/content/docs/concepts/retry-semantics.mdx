@@ -48,6 +48,19 @@ A non-conforming model (DeepSeek, some Anthropic deployments, anything that occa
 
 This layer is also where SDK-level retries belong (the LangChain `with_retry` shown above; OpenAI's `max_retries` constructor arg; Anthropic's equivalent). The framework does not duplicate this work.
 
+### The tool-path arm: MCP transport resilience
+
+The `llm_factory` retry covers the *model* client's transport. An `agent`/`act` node also makes *tool* calls over a transport — and an MCP tool call can hit the same connection resets, DNS blips, and timeouts. The `neograph_mcp` battery bounds and retries that arm in the factory it builds: every tool from `mcp_tool_factory` / `mcp_tool_factories` carries a per-call `timeout` (default 30s, parity with `mcp_session`) and a bounded backoff retry on **transport failures only**.
+
+Classification is strict, and it preserves the no-replay guarantees of the layers below:
+
+- A tool-level `isError` result is a *real result* the model must see. It is never retried — classification trumps idempotency.
+- A CONNECT-phase failure (connection refused, DNS) retries regardless: nothing was sent, so nothing can have executed.
+- An *ambiguous* post-send failure (read timeout, mid-flight reset) replays **only** when the node's `Tool(idempotent=True)` spec says the tool is replay-safe. The flag travels from the spec through the factory-call channel — one authority, the same one the resource-replay gate uses. Missing means non-idempotent means never replayed.
+- A retry is the same logical call: it happens inside the bound tool's coroutine, invisible to the tool budget.
+
+Tune with `mcp_tool_factory(..., timeout=, max_attempts=, backoff=)`.
+
 ## Layer 2 — LLM output-quality failures: `LlmConfig.max_retries`
 
 The transport succeeded but the LLM returned something neograph cannot parse: malformed JSON, missing required field, wrong type, hallucinated structure. The transport-layer retry above will not help — the *next* call is just as likely to be malformed as this one.

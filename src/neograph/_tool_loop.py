@@ -300,6 +300,18 @@ def _lookup_factory(tool_name: str, per_compile_tools: dict[str, Any]) -> Any:
     return factory
 
 
+def _factory_tool_config(tool_spec: Any) -> dict[str, Any]:
+    """The dict a tool factory receives as its second argument: the spec's
+    ``config`` plus the spec-declared replay-safety flag.
+
+    ``idempotent`` rides the factory-call channel so a factory-built wrapper
+    (e.g. the MCP battery's transport retry) reads the SAME authority as the
+    hydration replay gate — the node's ``Tool(idempotent=)`` — instead of a
+    second hand-set flag that could drift. The spec flag wins over a same-named
+    ``config`` key: ``Tool.idempotent`` is the declared contract."""
+    return {**tool_spec.config, "idempotent": tool_spec.idempotent}
+
+
 def _instantiate_tools(
     tools: list,
     tool_factory_lookup: dict[str, Any] | None,
@@ -315,7 +327,7 @@ def _instantiate_tools(
         factory = _lookup_factory(tool_spec.name, per_compile_tools)
         if asyncio.iscoroutinefunction(factory):
             _raise_async_factory_error(tool_spec.name, node_name)
-        result = factory(config, tool_spec.config)
+        result = factory(config, _factory_tool_config(tool_spec))
         if inspect.isawaitable(result):
             # Close a coroutine to avoid the 'coroutine was never awaited' warning
             # (a non-coroutine awaitable has no close()).
@@ -340,7 +352,7 @@ async def _ainstantiate_tools(
     tool_instances: dict[str, Any] = {}
     for tool_spec in tools:
         factory = _lookup_factory(tool_spec.name, per_compile_tools)
-        result = factory(config, tool_spec.config)
+        result = factory(config, _factory_tool_config(tool_spec))
         if inspect.isawaitable(result):
             result = await result
         tool_instances[tool_spec.name] = result
