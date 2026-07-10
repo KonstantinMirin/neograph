@@ -40,7 +40,8 @@ zero network at construction; the connect fires on the first load of each name.
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 from neograph_mcp._client import (
     HttpServer,
