@@ -172,7 +172,19 @@ class DefaultPromptCompiler:
         hand-rolling a callable loader.
         """
         if callable(self.loader):
-            return self.loader(template)
+            text = self.loader(template)
+            if text is None:
+                # A callable loader returns None for a name it cannot resolve (the
+                # not-found contract, mirroring the dir loader's FileNotFoundError).
+                # Fail loud HERE with the template name rather than letting None
+                # surface as an opaque TypeError deep in substitution.
+                raise ConfigurationError.build(
+                    f"Prompt template '{template}' not found by the compiler's loader",
+                    hint="The callable loader returned None for this name. Check the "
+                    "node's prompt= against the names the loader can resolve (e.g. "
+                    "the MCP server's declared prompts for mcp_prompt_source).",
+                )
+            return text
         return (Path(self.loader) / f"{template}{self.suffix}").read_text()
 
     def build_vars(

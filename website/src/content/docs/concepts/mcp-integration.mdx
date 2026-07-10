@@ -5,13 +5,14 @@ description: How neograph consumes Model Context Protocol servers — typed tool
 
 neograph is an MCP *client*, and its design stance fits in one sentence: **neograph never owns an MCP session — the adapters own connection lifecycle; neograph owns typing, wiring, and replay-safety.** Every MCP touchpoint is a consumer-supplied callable passed through config (a tool factory, a resource fetcher, a replayer), so routing, auth, and connection lifetime stay in your hands while the framework guarantees what it is actually good at: that the right node gets the right capability, under the right identity, with typed data on both sides.
 
-MCP has two halves, and neograph maps each onto a surface you already know:
+MCP defines three primitives, and neograph maps each onto a surface you already know:
 
 | MCP concept | What it is | neograph surface |
 |---|---|---|
 | **Tools** (bind) | Capabilities the *model* decides to call | `tools=` on `agent`/`act` nodes, filled per node from `mcp_tool_factories()` |
 | **Tools** (compose) | Primitives *your code* calls in sequence | `mcp_session()` — one connection, N calls, typed/structured results |
 | **Resources** | Data the *framework* fetches deterministically | `FromResource` DI marker, the resource manifest, `resource_reader` |
+| **Prompts** | Templates the *server* curates | `mcp_prompt_source()` — a loader for `DefaultPromptCompiler`; the normal placeholder + lint rules apply |
 
 The split matters: a tool call is a model decision inside a ReAct loop; a resource read is dependency injection at node entry. neograph keeps them separate so a deterministic fetch never rides on an LLM's whim, and a model-driven read never bypasses budgets and gates. When *your code* (not the model) must issue several primitive calls and assemble the result — a composite — reach for `mcp_session` instead of binding: connect once, call by name, close.
 

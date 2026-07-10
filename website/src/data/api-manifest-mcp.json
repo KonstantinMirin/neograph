@@ -191,6 +191,13 @@
       "kind": "function",
       "name": "client_credentials_auth",
       "signature": "(server_url: 'str', client_id: 'str', client_secret: 'str', *, scopes: 'str | None' = None, auth_method: \"Literal['client_secret_basic', 'client_secret_post']\" = 'client_secret_basic') -> 'httpx.Auth'"
+    },
+    {
+      "anchor": "mcp_prompt_source",
+      "doc": "Build a ``DefaultPromptCompiler(loader=)`` / ``lint(template_resolver=)``",
+      "kind": "function",
+      "name": "mcp_prompt_source",
+      "signature": "(server_key: 'str', spec: 'StdioServer | HttpServer', *, token_provider: 'TokenProvider | None' = None, stdio_token_arg: 'str' = 'token', timeout: 'float | None' = 30.0) -> 'Callable[[str], str | None]'"
     }
   ]
 }

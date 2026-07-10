@@ -347,6 +347,33 @@ def email_history(deal_id: str, start: str, end: str) -> str:
     return json.dumps({"deal_id": deal_id, "start": start, "end": end, "emails": emails})
 
 
+# ── Prompts: plain @mcp.prompt (server-curated templates; neograph-uagu7) ─────
+
+
+@mcp.prompt()
+def crm_brief(deal_context: str) -> str:
+    """Server-curated CRM briefing template — a PURE passthrough of its argument.
+
+    Purity matters: neograph's ``mcp_prompt_source`` loader recovers the raw
+    template via placeholder-echo (``get_prompt`` with
+    ``arguments={'deal_context': '{deal_context}'}``), so the argument value must
+    flow into the returned text verbatim and never be inspected or used
+    server-side."""
+    return (
+        "Prepare a CRM briefing for the account team.\n\n"
+        f"Deal context:\n{deal_context}\n\n"
+        "Keep it to three bullet points."
+    )
+
+
+@mcp.prompt()
+def crm_followup(deal_context: str) -> str:
+    """Second server-curated template (distinct wording, same argument) — lets a
+    test prove ONE prompt compiler resolves N server prompts by NAME (the
+    loader's name->text contract). Pure passthrough, like ``crm_brief``."""
+    return f"Draft a FOLLOW-UP email for this deal.\n\nDeal context:\n{deal_context}\n"
+
+
 if __name__ == "__main__":
     # stdio (default): no ports, no network. The client spawns this process.
     #

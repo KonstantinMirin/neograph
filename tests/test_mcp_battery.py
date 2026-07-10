@@ -1510,3 +1510,233 @@ class TestMcpProgressStreaming:
         )
         assert final_state["scan_result"] == Claims(items=["done"])
         assert final_state["scan_tool_log"], "the real tool must still have been called"
+
+
+# ── MCP server prompts -> DefaultPromptCompiler loader (neograph-uagu7) ────────
+#
+# TDD RED (neograph-5jrd0.46). `mcp_prompt_source` does NOT exist yet — every
+# test below imports it INSIDE its body (the mcp_session / mcp_run_context /
+# McpProgress red precedent above), so collection stays green and each fails RED
+# at runtime with an ImportError from `neograph_mcp` — the correct red for a
+# not-yet-implemented public surface.
+#
+# Contract under test (uagu7 REFINED design): `mcp_prompt_source(server_key,
+# spec, *, token_provider=None, stdio_token_arg='token', timeout=30.0)` returns
+# a LOADER `Callable[[str], str | None]` for `DefaultPromptCompiler(loader=...)`
+# and `lint(template_resolver=...)` — the THIRD MCP primitive (prompts) feeding
+# the EXISTING prompt-resolution seam, no second path. The loader:
+#   - uses its INCOMING template argument AS the MCP prompt name (no hardcoded
+#     name= — one compiler backs N MCP-backed nodes);
+#   - recovers the raw template via placeholder-echo (prompts/list for declared
+#     arg NAMES, then get_prompt(name, arguments={a: '{'+a+'}'}) — concatenated
+#     message TEXT carries `{arg}` placeholders for the normal compiler);
+#   - returns None for a prompt the server does not declare (loader contract:
+#     None -> not found, fail-loud upstream);
+#   - MEMOIZES name->text in the closure BY DEFAULT (lint + compile share ONE
+#     stdio connect — observed server-side via `_counting_stdio_server`).
+# Real demo server (`crm_brief` / `crm_followup` prompts), fake LLMs only.
+
+
+def _prompt_think_pipeline(brief_prompt: str, followup_prompt: str | None = None):
+    """A pipeline with one scripted upstream `deal_context` producer and one
+    (or two) think node(s) declaring server prompt names, all fed by the SAME
+    upstream — so `{deal_context}` in each server template binds from node input
+    through the NORMAL DefaultPromptCompiler build_vars/substitute chain."""
+    import types
+
+    from neograph import construct_from_module, node
+    from tests.schemas import Claims, RawText
+
+    mod = types.ModuleType("test_mcp_prompt_source_mod")
+
+    @node(outputs=RawText)
+    def deal_context() -> RawText:
+        return RawText(text="ACME-Corp renewal, stage negotiation")
+
+    @node(outputs=Claims, mode="think", model="fast", prompt=brief_prompt)
+    def brief(deal_context: RawText) -> Claims: ...
+
+    mod.deal_context = deal_context
+    mod.brief = brief
+
+    if followup_prompt is not None:
+
+        @node(outputs=Claims, mode="think", model="fast", prompt=followup_prompt)
+        def followup(deal_context: RawText) -> Claims: ...
+
+        mod.followup = followup
+
+    return construct_from_module(mod)
+
+
+@requires_mcp
+class TestMcpPromptSource:
+    """Server prompt templates back neograph node prompts through the unchanged
+    DefaultPromptCompiler + lint(template_resolver=) seam (uagu7 acceptance).
+
+    All RED today: `neograph_mcp` exports no `mcp_prompt_source`."""
+
+    def test_server_prompt_drives_think_node_end_to_end(self):
+        """(1) E2E: a think node with prompt='crm_brief' compiled with
+        DefaultPromptCompiler(loader=mcp_prompt_source(...)) drives a fake LLM —
+        the SERVER template's `{deal_context}` binds from the node's upstream
+        input via the NORMAL compiler, and the rendered prompt the fake saw
+        carries the bound value (not the literal placeholder)."""
+        from neograph import DefaultPromptCompiler, compile, run
+        from neograph_mcp import mcp_prompt_source  # RED: not yet implemented
+        from tests.fakes import build_test_compile_kwargs
+        from tests.schemas import Claims
+        from tests.test_compile_prompt import CapturingFake
+
+        pipeline = _prompt_think_pipeline("crm_brief")
+        fake = CapturingFake(lambda m: m(items=["briefed"]))
+        graph = compile(
+            pipeline,
+            llm_factory=lambda tier: fake,
+            prompt_compiler=DefaultPromptCompiler(loader=mcp_prompt_source("crm", _demo_stdio_server())),
+            **build_test_compile_kwargs(),
+        )
+        result = run(graph, input={"node_id": "e2e"})
+
+        assert result["brief"] == Claims(items=["briefed"])
+        assert len(fake.captured) == 1, "expected exactly one LLM call"
+        content = " ".join(m["content"] for m in fake.captured[0] if m["role"] == "user")
+        # The server-curated template text reached the model...
+        assert "CRM briefing" in content, f"server template text missing from rendered prompt: {content!r}"
+        # ...with {deal_context} BOUND from the upstream node's output...
+        assert "ACME-Corp renewal" in content, f"upstream input did not bind into the template: {content!r}"
+        # ...and no literal placeholder shipped to the model (the agent-stark bug).
+        assert "{deal_context}" not in content
+
+    def test_template_arg_is_the_prompt_name_one_compiler_n_prompts(self):
+        """(2) The loader uses its INCOMING template argument as the MCP prompt
+        name: two nodes declaring two different prompt names resolve two
+        DIFFERENT server prompts through ONE compiler — each node's rendered
+        prompt carries its own server template's distinct wording."""
+        from neograph import DefaultPromptCompiler, compile, run
+        from neograph_mcp import mcp_prompt_source  # RED: not yet implemented
+        from tests.fakes import build_test_compile_kwargs
+        from tests.test_compile_prompt import CapturingFake
+
+        pipeline = _prompt_think_pipeline("crm_brief", "crm_followup")
+        fake = CapturingFake(lambda m: m(items=["ok"]))
+        graph = compile(
+            pipeline,
+            llm_factory=lambda tier: fake,
+            prompt_compiler=DefaultPromptCompiler(loader=mcp_prompt_source("crm", _demo_stdio_server())),
+            **build_test_compile_kwargs(),
+        )
+        run(graph, input={"node_id": "e2e"})
+
+        assert len(fake.captured) == 2, "expected one LLM call per think node"
+        contents = [" ".join(m["content"] for m in msgs if m["role"] == "user") for msgs in fake.captured]
+        briefs = [c for c in contents if "CRM briefing" in c]
+        followups = [c for c in contents if "FOLLOW-UP email" in c]
+        assert len(briefs) == 1 and len(followups) == 1, (
+            f"one compiler must resolve each node's OWN server prompt by name; rendered: {contents!r}"
+        )
+        # Both templates bound the shared upstream input.
+        for content in contents:
+            assert "ACME-Corp renewal" in content
+            assert "{deal_context}" not in content
+
+    def test_undeclared_prompt_name_returns_none_and_compile_fails_loud(self):
+        """(3) The loader contract for not-found: a prompt the server does NOT
+        declare returns None (never raises, never fabricates text) — and a node
+        declaring that prompt fails LOUD upstream through the normal compiler
+        path instead of silently shipping an empty prompt."""
+        from neograph import DefaultPromptCompiler, compile, run
+        from neograph_mcp import mcp_prompt_source  # RED: not yet implemented
+        from tests.fakes import build_test_compile_kwargs
+        from tests.test_compile_prompt import CapturingFake
+
+        loader = mcp_prompt_source("crm", _demo_stdio_server())
+        assert loader("no_such_prompt") is None
+        # Control: a declared prompt resolves to real template text.
+        brief = loader("crm_brief")
+        assert brief is not None and "{deal_context}" in brief
+
+        pipeline = _prompt_think_pipeline("no_such_prompt")
+        fake = CapturingFake(lambda m: m(items=["never"]))
+        graph = compile(
+            pipeline,
+            llm_factory=lambda tier: fake,
+            prompt_compiler=DefaultPromptCompiler(loader=loader),
+            **build_test_compile_kwargs(),
+        )
+        from neograph.errors import ConfigurationError
+
+        with pytest.raises(ConfigurationError, match="no_such_prompt"):
+            run(graph, input={"node_id": "e2e"})
+        assert fake.captured == [], "an unresolvable prompt must never reach the model"
+
+    def test_loader_memoizes_repeated_loads_connect_once(self, tmp_path):
+        """(4) Memoization is the DEFAULT: two load calls for the same name do
+        exactly ONE stdio connect (observed server-side as subprocess spawns via
+        `_counting_stdio_server` — lint + compile share one connect), and both
+        calls return the same placeholder-echoed template text."""
+        from neograph_mcp import mcp_prompt_source  # RED: not yet implemented
+
+        marker = tmp_path / "connects.log"
+        loader = mcp_prompt_source("crm", _counting_stdio_server(marker))
+
+        first = loader("crm_brief")
+        second = loader("crm_brief")
+
+        assert first is not None and first == second
+        # Placeholder-echo recovered the raw template: the declared argument
+        # came back as a `{deal_context}` placeholder for the normal compiler.
+        assert "{deal_context}" in first
+        assert _connect_count(marker) == 1, (
+            f"two loads of the same prompt must connect ONCE (memoized), "
+            f"observed {_connect_count(marker)} stdio spawns"
+        )
+
+    def test_lint_validates_server_template_placeholders(self):
+        """(5) The SAME loader closure is the lint template_resolver: a node that
+        supplies `deal_context` lints clean, and a node that CANNOT supply it
+        (upstream named differently) gets the `{deal_context}` placeholder
+        flagged through the normal template-ref rules — no new lint rule."""
+        from neograph import Construct, Node
+        from neograph.lint import lint
+        from neograph_mcp import mcp_prompt_source  # RED: not yet implemented
+        from tests.schemas import Claims, RawText
+
+        resolver = mcp_prompt_source("crm", _demo_stdio_server())
+
+        ok = Construct(
+            "prompted_ok",
+            nodes=[
+                Node.scripted("deal_context", fn="noop", outputs=RawText),
+                Node(
+                    "brief",
+                    prompt="crm_brief",
+                    model="default",
+                    outputs=Claims,
+                    inputs={"deal_context": RawText},
+                ),
+            ],
+        )
+        issues = lint(ok, template_resolver=resolver)
+        assert [i for i in issues if "template" in i.kind] == []
+
+        bad = Construct(
+            "prompted_bad",
+            nodes=[
+                Node.scripted("summary", fn="noop", outputs=RawText),
+                Node(
+                    "brief",
+                    prompt="crm_brief",
+                    model="default",
+                    outputs=Claims,
+                    inputs={"summary": RawText},
+                ),
+            ],
+        )
+        issues = lint(bad, template_resolver=resolver)
+        template_issues = [i for i in issues if "template" in i.kind]
+        assert len(template_issues) == 1, (
+            f"the server template's {{deal_context}} must be flagged unresolvable: "
+            f"{[(i.kind, i.param) for i in issues]}"
+        )
+        assert template_issues[0].param == "deal_context"

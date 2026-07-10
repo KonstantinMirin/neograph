@@ -46,6 +46,9 @@ from neograph_mcp._client import (  # noqa: E402 — after the fail-loud extra c
 from neograph_mcp._progress import (  # noqa: E402 — after the fail-loud extra check by design
     McpProgress,
 )
+from neograph_mcp._prompt import (  # noqa: E402 — after the fail-loud extra check by design
+    mcp_prompt_source,
+)
 from neograph_mcp._run_context import (  # noqa: E402 — after the fail-loud extra check by design
     McpRunContext,
     mcp_run_context,
@@ -72,4 +75,5 @@ __all__ = [
     "McpRunContext",
     "McpProgress",
     "client_credentials_auth",
+    "mcp_prompt_source",
 ]
