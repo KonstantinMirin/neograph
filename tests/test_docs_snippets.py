@@ -45,13 +45,100 @@ The wrapper ``find_examples_mdx`` is added by the implement atom
 
 from __future__ import annotations
 
+import enum
 import importlib
 import re
+import typing
 from collections.abc import Iterable
 from pathlib import Path
 from uuid import uuid4
 
 import pytest
+from pydantic import BaseModel
+
+from neograph.testing.fakes import StructuredFake
+
+# Provider API-key env vars whose presence would let a doc snippet's real
+# llm_factory (e.g. quick-start's ``ChatOpenAI(api_key=os.environ["OPENAI_API_KEY"])``)
+# succeed and make a LIVE network call. btqzq deletes them before executing any
+# page so the offline path is DETERMINISTIC regardless of ambient env (the Core
+# Invariant: no Stage-D-executed snippet ever reaches a real LLM/API key).
+_PROVIDER_KEY_ENV_VARS = (
+    "OPENAI_API_KEY",
+    "ANTHROPIC_API_KEY",
+    "OPENROUTER_API_KEY",
+    "GOOGLE_API_KEY",
+    "COHERE_API_KEY",
+)
+
+
+def _build_instance(model: type[BaseModel]) -> BaseModel:
+    """Construct a minimal valid instance of ``model`` by type-defaulting its
+    required fields (recursively for nested models). Net-new piece for btqzq's
+    generic offline think-mode double: the fake has no per-node output knowledge,
+    so it fills required fields with type-appropriate zero values."""
+    return model(**{
+        name: _default_for(field.annotation)
+        for name, field in model.model_fields.items()
+        if field.is_required()
+    })
+
+
+def _default_for(annotation: typing.Any) -> typing.Any:
+    """A type-appropriate zero value for a field annotation (Optional/Union,
+    containers, nested BaseModel, Enum, Literal, primitives)."""
+    origin = typing.get_origin(annotation)
+    args = typing.get_args(annotation)
+    if origin is typing.Union:  # Optional[X] / Union[...] -> first non-None member
+        non_none = [a for a in args if a is not type(None)]
+        return _default_for(non_none[0]) if non_none else None
+    if origin is typing.Literal:
+        return args[0] if args else None
+    if origin in (list, set, frozenset, tuple):
+        return origin() if origin is not tuple else ()
+    if origin is dict:
+        return {}
+    if isinstance(annotation, type):
+        if issubclass(annotation, BaseModel):
+            return _build_instance(annotation)
+        if issubclass(annotation, enum.Enum):
+            return next(iter(annotation))
+        if issubclass(annotation, bool):
+            return False
+        if issubclass(annotation, int):
+            return 0
+        if issubclass(annotation, float):
+            return 0.0
+        if issubclass(annotation, str):
+            return ""
+    return None
+
+
+def _seed_offline_llm(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make Stage-D snippet execution offline-deterministic (btqzq).
+
+    Deletes provider API keys, then patches the ``_get_llm`` seam at BOTH binding
+    sites (mirroring ``install_fake_llm``) with a FALLBACK wrapper: call the real
+    ``_get_llm`` (so snippets that pass their own fake ``llm_factory``, e.g.
+    testing.mdx, are untouched) and substitute a generic ``StructuredFake`` ONLY
+    when the real factory raises ``KeyError`` -- the deterministic env-missing
+    signal from a ``os.environ["..._API_KEY"]`` factory. Any OTHER exception
+    propagates, so genuine construction/resolution drift still fails the suite."""
+    for env_var in _PROVIDER_KEY_ENV_VARS:
+        monkeypatch.delenv(env_var, raising=False)
+
+    import neograph._llm as _llm_mod
+
+    original_get_llm = _llm_mod._get_llm
+
+    def _offline_get_llm(*args: typing.Any, **kwargs: typing.Any) -> typing.Any:
+        try:
+            return original_get_llm(*args, **kwargs)
+        except KeyError:
+            return StructuredFake(_build_instance)
+
+    monkeypatch.setattr("neograph._llm._get_llm", _offline_get_llm)
+    monkeypatch.setattr("neograph._tool_loop._get_llm", _offline_get_llm)
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DOCS_ROOT = REPO_ROOT / "website" / "src" / "content" / "docs"
@@ -173,7 +260,9 @@ DOC_PAGES = sorted(_PAGES_BY_PATH, key=str)
 
 
 @pytest.mark.parametrize("page", DOC_PAGES, ids=lambda p: str(p.relative_to(DOCS_ROOT)))
-def test_docs_page_python_snippets_execute(page: Path, eval_example) -> None:
+def test_docs_page_python_snippets_execute(
+    page: Path, eval_example, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Every unskipped python block on a page runs (threading page state).
 
     One test per ``.mdx`` page (NOT per block) so the case is debuggable under
@@ -191,6 +280,10 @@ def test_docs_page_python_snippets_execute(page: Path, eval_example) -> None:
     """
     text = page.read_text("utf-8")
     blocks = _PAGES_BY_PATH[page]
+
+    # Offline-deterministic LLM seam: a snippet that constructs a real provider
+    # factory resolves to a generic fake instead of a live call (btqzq).
+    _seed_offline_llm(monkeypatch)
 
     acc: dict = {}
     executed = 0
