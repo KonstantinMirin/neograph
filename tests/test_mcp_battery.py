@@ -1027,3 +1027,235 @@ class TestMcpSession:
         result = asyncio.run(neograph.arun(graph, input={}, config=cfg))
 
         assert result["compose"] == DealSummary(query="acme", deal_count=1, acting_as="operator-A")
+
+
+# ── Consumer-held run-scoped connection reuse: mcp_run_context (neograph-cnxlx) ─
+#
+# TDD RED (neograph-5jrd0.14). `mcp_run_context` does NOT exist yet — the FINAL
+# design on neograph-cnxlx is a consumer-held async CM in the battery (NOT a
+# _run_cache extension): the consumer opens it AROUND arun(), it holds ONE live
+# adapter session per server for the whole run (opened AND closed in the
+# consumer's single long-lived task — the only disposal the anyio cancel scopes
+# allow, per the spike on cnxlx), threads the held sessions into config via
+# `ctx.config(base_config)`, and the tool factory binds tools to the held session
+# when present. WITHOUT the CM (or for a server with no held entry) the factory
+# falls back UNCHANGED to the adapter's stateless per-call path.
+#
+# Every reuse test imports `mcp_run_context` INSIDE its body so collection stays
+# green and each fails RED with an ImportError from `neograph_mcp` — the correct
+# red for a not-yet-implemented public surface (the mcp_session TDD precedent
+# above). The stateless-fallback control (b) intentionally passes TODAY: it pins
+# the unchanged-behavior half of the contract.
+#
+# CONNECT COUNTING: for stdio, one connect == one subprocess spawn of the demo
+# server (adapter sessions spawn a fresh process each). `_counting_stdio_server`
+# wraps the spawn in a one-liner that appends a line to a marker file before
+# exec'ing the real demo server — a SERVER-SIDE count, independent of which
+# client-internal API the implementation ends up calling.
+
+
+def _counting_stdio_server(marker: Path):
+    """A StdioServer that records every subprocess spawn (== stdio connect) into
+    ``marker``, then runs the real demo server unchanged."""
+    from neograph_mcp import StdioServer
+
+    wrapper = (
+        "import pathlib, runpy, sys\n"
+        "with pathlib.Path(sys.argv[1]).open('a') as f:\n"
+        "    f.write('connect\\n')\n"
+        "path = sys.argv[2]\n"
+        "sys.argv = [path]\n"
+        "runpy.run_path(path, run_name='__main__')\n"
+    )
+    return StdioServer(command=sys.executable, args=["-c", wrapper, str(marker), str(DEMO_SERVER)])
+
+
+def _connect_count(marker: Path) -> int:
+    if not marker.exists():
+        return 0
+    return len(marker.read_text().splitlines())
+
+
+def _multi_turn_react_fake(tool_name: str, n_calls: int):
+    """A ReActFake scripting ``n_calls`` sequential tool-call TURNS (a true N-turn
+    ReAct loop — one tool call per superstep), then a final structured answer."""
+    from tests.fakes import ReActFake
+    from tests.schemas import Claims
+
+    return ReActFake(
+        tool_calls=[
+            *[[{"name": tool_name, "args": {"query": f"q{i}"}, "id": f"c{i}"}] for i in range(n_calls)],
+            [],
+        ],
+        final=lambda m: m(items=["done"]),
+        output_model=Claims,
+    )
+
+
+def _compile_counting_agent(marker: Path, n_calls: int):
+    """Compile the shared one-node agent construct against a CONNECT-COUNTED demo
+    server, with per-run identity minted from ``config['configurable']['op']``.
+    Returns ``(graph, spec)`` — ``spec`` is the same counted server spec, for
+    handing to ``mcp_run_context`` under the same ``"crm"`` key."""
+    from neograph import compile
+    from neograph_mcp import mcp_tool_factory
+    from tests.fakes import build_test_compile_kwargs, configure_fake_llm
+
+    spec = _counting_stdio_server(marker)
+    factory = mcp_tool_factory(
+        "crm",
+        spec,
+        tool_name="crm_search",
+        token_provider=lambda configurable: configurable.get("op", "anon"),
+        stdio_token_arg="token",
+    )
+    construct = _build_agent_construct("crm_search")
+    llm_kw = configure_fake_llm(lambda tier: _multi_turn_react_fake("crm_search", n_calls))
+    graph = compile(construct, tool_factories={"crm_search": factory}, **build_test_compile_kwargs(), **llm_kw)
+    return graph, spec
+
+
+@requires_mcp
+class TestMcpRunContext:
+    """Consumer-held run-scoped connection reuse (neograph-cnxlx acceptance).
+
+    All RED today (ImportError on `mcp_run_context`) except (b), the stateless
+    control, which pins the unchanged fallback behavior. Real demo server, real
+    `await`, NO MCP mocking — connects observed server-side as subprocess spawns.
+    """
+
+    async def test_n_turn_agent_under_run_context_connects_once(self, tmp_path):
+        """(a) An N-turn agent (3 ReAct tool-call turns) run INSIDE
+        `async with mcp_run_context(...)` with `ctx.config(base)` threaded into
+        `arun()` does exactly ONE connect (the CM's own session open at entry),
+        not N — every turn's tool call rides the held session, and the factory's
+        discovery skips its own client build."""
+        import neograph
+        from neograph_mcp import mcp_run_context
+        from tests.schemas import Claims
+
+        marker = tmp_path / "connects.log"
+        graph, spec = _compile_counting_agent(marker, n_calls=3)
+
+        base = {"configurable": {"op": "operator-A"}}
+        async with mcp_run_context(
+            {"crm": spec},
+            token_provider=lambda configurable: configurable.get("op", "anon"),
+            config=base,
+        ) as ctx:
+            result = await neograph.arun(graph, input={"query": "acme"}, config=ctx.config(base))
+
+        assert result["scan_result"] == Claims(items=["done"])
+        assert len(result["scan_tool_log"]) == 3, "expected all 3 ReAct turns to have called the tool"
+        assert _connect_count(marker) == 1, (
+            f"N-turn agent under mcp_run_context must connect ONCE, "
+            f"observed {_connect_count(marker)} stdio spawns"
+        )
+
+    async def test_same_pipeline_without_context_still_passes_stateless(self, tmp_path):
+        """(b) CONTROL (passes today): the SAME pipeline WITHOUT the CM completes
+        via the adapter's stateless per-call fallback — unchanged behavior — and
+        the connect counter observably registers MULTIPLE connects (>= one per
+        tool call), proving the counting instrumentation is live and that (a)'s
+        `== 1` is a real reduction, not a counter artifact."""
+        import neograph
+        from tests.schemas import Claims
+
+        marker = tmp_path / "connects.log"
+        graph, _spec = _compile_counting_agent(marker, n_calls=3)
+
+        result = await neograph.arun(graph, input={"query": "acme"}, config={"configurable": {"op": "operator-A"}})
+
+        assert result["scan_result"] == Claims(items=["done"])
+        assert len(result["scan_tool_log"]) == 3
+        assert _connect_count(marker) >= 3, (
+            f"stateless per-call fallback should connect per tool call; "
+            f"observed only {_connect_count(marker)} spawns — counter dead or behavior changed"
+        )
+
+    async def test_open_and_close_in_consumer_task_no_cancel_scope_error(self, tmp_path):
+        """(c) The spike repro as a regression shape: the held session is opened
+        AND closed in the consumer's task while the supersteps' tool calls ride
+        it from LangGraph's per-superstep tasks. The run must complete and the
+        CM must exit cleanly — NO anyio cancel-scope RuntimeError ('Attempted to
+        exit cancel scope in a different task than it was entered in')."""
+        import neograph
+        from neograph_mcp import mcp_run_context
+        from tests.schemas import Claims
+
+        marker = tmp_path / "connects.log"
+        graph, spec = _compile_counting_agent(marker, n_calls=2)
+
+        base = {"configurable": {"op": "operator-A"}}
+        try:
+            async with mcp_run_context(
+                {"crm": spec},
+                token_provider=lambda configurable: configurable.get("op", "anon"),
+                config=base,
+            ) as ctx:
+                result = await neograph.arun(graph, input={"query": "acme"}, config=ctx.config(base))
+        except RuntimeError as exc:  # pragma: no cover - the failure mode under test
+            pytest.fail(f"cancel-scope task-affinity violation closing mcp_run_context: {exc!r}")
+
+        assert result["scan_result"] == Claims(items=["done"])
+
+    async def test_per_run_identity_rides_the_held_session_path(self, tmp_path):
+        """(d) Per-run identity on the HELD path: under the CM, the demo server
+        echoes the token_provider-minted token under `acting_as` for every turn's
+        call — and the connect count of 1 proves those calls rode the held
+        session, not a stateless-fallback reconnect that would mint identity
+        anyway."""
+        import neograph
+        from neograph_mcp import mcp_run_context
+        from tests.schemas import Claims
+
+        marker = tmp_path / "connects.log"
+        graph, spec = _compile_counting_agent(marker, n_calls=2)
+
+        base = {"configurable": {"op": "operator-A"}}
+        async with mcp_run_context(
+            {"crm": spec},
+            token_provider=lambda configurable: configurable.get("op", "anon"),
+            config=base,
+        ) as ctx:
+            result = await neograph.arun(graph, input={"query": "acme"}, config=ctx.config(base))
+
+        assert result["scan_result"] == Claims(items=["done"])
+        tool_log = result["scan_tool_log"]
+        assert len(tool_log) == 2
+        for ti in tool_log:
+            assert "operator-A" in repr(ti.typed_result) or "operator-A" in ti.result, (
+                f"per-run identity did not reach the server on the held-session path: {ti.result!r}"
+            )
+        assert _connect_count(marker) == 1, (
+            "identity assertion must ride the HELD path (1 connect), not the fallback"
+        )
+
+    async def test_absent_held_entry_falls_back_to_reconnect_not_hang(self, tmp_path):
+        """(e) A config whose held-session map has NO entry for the factory's
+        server key (the CM holds a DIFFERENT server) must fall back to the
+        stateless reconnect path — the run completes promptly (bounded by an
+        explicit timeout: a hang here is the failure mode) with connects
+        observed on the counted server."""
+        import neograph
+        from neograph_mcp import mcp_run_context
+        from tests.schemas import Claims
+
+        marker = tmp_path / "connects.log"
+        graph, _spec = _compile_counting_agent(marker, n_calls=2)
+
+        base = {"configurable": {"op": "operator-A"}}
+        # The CM holds ONLY "other" — the pipeline's "crm" factory finds no entry.
+        async with mcp_run_context(
+            {"other": _demo_stdio_server()},
+            token_provider=lambda configurable: configurable.get("op", "anon"),
+            config=base,
+        ) as ctx:
+            async with asyncio.timeout(120):
+                result = await neograph.arun(graph, input={"query": "acme"}, config=ctx.config(base))
+
+        assert result["scan_result"] == Claims(items=["done"])
+        assert len(result["scan_tool_log"]) == 2
+        assert _connect_count(marker) >= 1, (
+            "absent held entry must reconnect through the stateless path (connects observed)"
+        )

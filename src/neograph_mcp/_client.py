@@ -61,6 +61,25 @@ TokenProvider = Callable[..., Awaitable[str] | str]
 # already a JSON object, not opaque bytes.
 ParseFn = Callable[[dict[str, Any]], BaseModel]
 
+# Battery-private, CONFIG-ONLY key: mcp_run_context stashes its held
+# {server_key: live_session} map under config['configurable'][RUN_SESSIONS_KEY]
+# so the tool factory can bind to a held session instead of reconnecting per
+# call. Never enters state or a checkpoint (sessions are not serialisable);
+# defined HERE (not _run_context.py) to keep the import graph one-way
+# (_run_context -> _client).
+RUN_SESSIONS_KEY = "_neograph_mcp_run_sessions"
+
+
+def _held_sessions(config: Any) -> dict[str, Any]:
+    """The run-context's held ``{server_key: session}`` map from ``config``, or
+    ``{}`` when the consumer did not open (or thread) an ``mcp_run_context`` —
+    the factory then falls back to the stateless per-call path."""
+    if isinstance(config, dict):
+        configurable = config.get("configurable", {}) or {}
+    else:
+        configurable = getattr(config, "configurable", {}) or {}
+    return configurable.get(RUN_SESSIONS_KEY) or {}
+
 
 @dataclass(frozen=True)
 class StdioServer:
@@ -267,8 +286,18 @@ def _make_tool_factory(
 
     async def _factory(config: Any, tool_config: Any) -> Any:
         token = await _resolve_token(token_provider, config)
-        client = _client_for(server_key, spec, token)
-        tools = await client.get_tools(server_name=server_key)
+        held = _held_sessions(config).get(server_key)
+        if held is not None:
+            # Consumer-held run-scoped session (mcp_run_context): bind the tool
+            # to the ONE live connection instead of the stateless per-call path.
+            # Import inside the factory like _client_for's own adapter import —
+            # keeps module import light behind the fail-loud extra check.
+            from langchain_mcp_adapters.tools import load_mcp_tools
+
+            tools = await load_mcp_tools(held, server_name=server_key)
+        else:
+            client = _client_for(server_key, spec, token)
+            tools = await client.get_tools(server_name=server_key)
         tool = next((t for t in tools if t.name == tool_name), None)
         if tool is None:
             raise ValueError(

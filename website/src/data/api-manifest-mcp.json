@@ -123,6 +123,21 @@
       "kind": "exception",
       "name": "McpToolCallError",
       "signature": "(server_key: 'str', tool_name: 'str', content: 'list[dict[str, Any]]', structured: 'dict[str, Any] | None' = None) -> 'None'"
+    },
+    {
+      "anchor": "mcp_run_context",
+      "doc": "Build an :class:`McpRunContext` holding ONE live MCP connection per server",
+      "kind": "function",
+      "name": "mcp_run_context",
+      "signature": "(servers: 'dict[str, StdioServer | HttpServer]', *, token_provider: 'TokenProvider | None' = None, config: 'Any | None' = None, timeout: 'float | None' = 30.0) -> 'McpRunContext'"
+    },
+    {
+      "anchor": "mcpruncontext",
+      "bases": [],
+      "doc": "Run-scoped holder of one persistent MCP session per server.",
+      "kind": "class",
+      "name": "McpRunContext",
+      "signature": "(servers: 'dict[str, StdioServer | HttpServer]', *, token_provider: 'TokenProvider | None', config: 'Any | None', timeout: 'float | None') -> 'None'"
     }
   ]
 }
