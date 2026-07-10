@@ -40,6 +40,9 @@ from neograph_mcp._client import (  # noqa: E402 — after the fail-loud extra c
     mcp_tool_factories,
     mcp_tool_factory,
 )
+from neograph_mcp._progress import (  # noqa: E402 — after the fail-loud extra check by design
+    McpProgress,
+)
 from neograph_mcp._run_context import (  # noqa: E402 — after the fail-loud extra check by design
     McpRunContext,
     mcp_run_context,
@@ -64,4 +67,5 @@ __all__ = [
     "McpToolCallError",
     "mcp_run_context",
     "McpRunContext",
+    "McpProgress",
 ]

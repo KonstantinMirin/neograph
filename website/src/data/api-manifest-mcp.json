@@ -138,6 +138,46 @@
       "kind": "class",
       "name": "McpRunContext",
       "signature": "(servers: 'dict[str, StdioServer | HttpServer]', *, token_provider: 'TokenProvider | None', config: 'Any | None', timeout: 'float | None') -> 'None'"
+    },
+    {
+      "anchor": "mcpprogress",
+      "bases": [],
+      "doc": "One MCP progress notification, surfaced through ``emit_progress``.",
+      "fields": [
+        {
+          "annotation": "str",
+          "default": null,
+          "name": "server",
+          "required": true
+        },
+        {
+          "annotation": "str",
+          "default": null,
+          "name": "tool",
+          "required": true
+        },
+        {
+          "annotation": "float",
+          "default": null,
+          "name": "progress",
+          "required": true
+        },
+        {
+          "annotation": "float | None",
+          "default": "None",
+          "name": "total",
+          "required": false
+        },
+        {
+          "annotation": "str | None",
+          "default": "None",
+          "name": "message",
+          "required": false
+        }
+      ],
+      "kind": "pydantic_model",
+      "name": "McpProgress",
+      "signature": "(server: str, tool: str, progress: float, total: float | None = None, message: str | None = None)"
     }
   ]
 }

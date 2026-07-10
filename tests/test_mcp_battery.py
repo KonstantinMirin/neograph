@@ -1259,3 +1259,254 @@ class TestMcpRunContext:
         assert _connect_count(marker) >= 1, (
             "absent held entry must reconnect through the stateless path (connects observed)"
         )
+
+
+# ── MCP progress notifications -> stream()/astream() custom channel (fflpt) ────
+#
+# TDD RED (neograph-5jrd0.30). The typed `McpProgress` event model and the
+# Callbacks(on_progress=...) wiring through `_client_for` do NOT exist yet —
+# `neograph_mcp` exports no `McpProgress`. Every test below imports `McpProgress`
+# INSIDE its body (the mcp_session / mcp_run_context red precedent above), so
+# collection stays green and each fails RED at runtime with an ImportError.
+#
+# Contract under test (fflpt Core Invariant): a long-running MCP tool that emits
+# `notifications/progress` surfaces each notification through the EXISTING
+# emit_progress custom-stream seam as a typed `McpProgress` envelope
+#   {"neograph_event": "progress", "event_type": "McpProgress",
+#    "data": {server, tool, progress, total, message}}
+# tagged with server + tool, IN ORDER — and progress is OBSERVABILITY, never
+# control flow: the tool RESULT is identical with and without a progress
+# consumer, progress never enters state or the checkpoint, and a tool that
+# emits no progress is a total no-op. Real demo server (`slow_export`), real
+# `await`, NO MCP mocking.
+
+N_PROGRESS_STEPS = 3
+
+
+def _slow_export_react_fake(n: int):
+    """One slow_export(n=...) tool-call turn, then the final structured answer."""
+    from tests.fakes import ReActFake
+    from tests.schemas import Claims
+
+    return ReActFake(
+        tool_calls=[
+            [{"name": "slow_export", "args": {"n": n}, "id": "c1"}],
+            [],
+        ],
+        final=lambda m: m(items=["done"]),
+        output_model=Claims,
+    )
+
+
+def _compile_progress_agent(tool_name: str, react_fake_builder, checkpointer=None):
+    """Compile the shared one-node agent construct binding ``tool_name`` from the
+    real stdio demo server through the battery's per-run tool factory."""
+    from neograph import compile
+    from neograph_mcp import mcp_tool_factory
+    from tests.fakes import build_test_compile_kwargs, configure_fake_llm
+
+    factory = mcp_tool_factory("crm", _demo_stdio_server(), tool_name=tool_name)
+    construct = _build_agent_construct(tool_name)
+    llm_kw = configure_fake_llm(lambda tier: react_fake_builder())
+    return compile(
+        construct,
+        tool_factories={tool_name: factory},
+        checkpointer=checkpointer,
+        **build_test_compile_kwargs(),
+        **llm_kw,
+    )
+
+
+def _mcp_progress_chunks(customs: list) -> list[dict]:
+    """The McpProgress envelopes among a run's custom-stream chunks."""
+    return [
+        c
+        for c in customs
+        if isinstance(c, dict) and c.get("neograph_event") == "progress" and c.get("event_type") == "McpProgress"
+    ]
+
+
+@requires_mcp
+class TestMcpProgressStreaming:
+    """MCP progress notifications surface via astream(stream_mode='custom')
+    (neograph-fflpt acceptance). All RED today: `McpProgress` is not yet exported
+    from `neograph_mcp` and no progress callback is wired into the factory."""
+
+    async def test_slow_export_progress_surfaces_in_order_via_astream_custom(self):
+        """(1) An agent node bound to the demo `slow_export` tool, driven via
+        astream(stream_mode='custom'), surfaces exactly N `McpProgress` events
+        IN ORDER — progress fraction/total/message matching the server's
+        `ctx.report_progress(i, n, f'step {i}')` calls — each tagged with the
+        server key and tool name."""
+        import neograph
+        from neograph_mcp import McpProgress  # RED: not yet implemented
+
+        graph = _compile_progress_agent(
+            "slow_export", lambda: _slow_export_react_fake(N_PROGRESS_STEPS)
+        )
+
+        customs = [
+            ch async for ch in neograph.astream(graph, input={"query": "export"}, stream_mode="custom")
+        ]
+
+        prog = _mcp_progress_chunks(customs)
+        assert len(prog) == N_PROGRESS_STEPS, (
+            f"expected exactly {N_PROGRESS_STEPS} McpProgress events, got {len(prog)}: {customs!r}"
+        )
+
+        events = [McpProgress(**c["data"]) for c in prog]
+        # IN ORDER, matching the server's report_progress(i, n, 'step i') calls.
+        assert [(e.progress, e.total, e.message) for e in events] == [
+            (float(i), float(N_PROGRESS_STEPS), f"step {i}") for i in range(1, N_PROGRESS_STEPS + 1)
+        ]
+        # Tagged with server + tool.
+        for e in events:
+            assert e.server == "crm"
+            assert e.tool == "slow_export"
+
+    async def test_arun_unaffected_and_tool_result_identical_with_and_without_consumer(self):
+        """(2) Progress is OBSERVABILITY, never control flow: a NON-streaming
+        arun() of the same pipeline completes unaffected (the emit_progress
+        warn-once under a non-streaming driver is tolerated by design), and the
+        tool RESULT is identical with and without a live progress consumer.
+        The streaming leg must observably HAVE surfaced progress, else the
+        'with a consumer' half of the comparison is vacuous."""
+        import warnings
+
+        import neograph
+        from neograph_mcp import McpProgress  # noqa: F401  # RED: not yet implemented
+        from tests.schemas import Claims
+
+        graph = _compile_progress_agent(
+            "slow_export", lambda: _slow_export_react_fake(N_PROGRESS_STEPS)
+        )
+
+        # Leg A: non-streaming arun — no progress consumer.
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")  # warn-once under a non-streaming driver: benign, by design
+            plain = await neograph.arun(graph, input={"query": "export"})
+
+        # Leg B: streaming driver with a live custom consumer (multi-mode so the
+        # SAME run yields both the progress chunks and the final state).
+        chunks = [
+            ch
+            async for ch in neograph.astream(
+                graph, input={"query": "export"}, stream_mode=["custom", "values"]
+            )
+        ]
+        customs = [payload for mode, payload in chunks if mode == "custom"]
+        values = [payload for mode, payload in chunks if mode == "values"]
+        streamed = values[-1]
+
+        assert _mcp_progress_chunks(customs), (
+            "streaming leg surfaced no McpProgress events — the with-consumer comparison is vacuous"
+        )
+
+        # The pipeline output and the TOOL result are identical across both legs.
+        # Normalize the adapter's run-random content-block ids first: langchain's
+        # create_text_block stamps a fresh 'lc_<uuid>' per invocation, so two
+        # separate RUNS can never match on that field — run randomness, not
+        # progress-consumer drift.
+        import re as _re
+
+        def _norm(result: str) -> str:
+            return _re.sub(r"lc_[0-9a-f-]+", "lc_<id>", result)
+
+        assert plain["scan_result"] == streamed["scan_result"] == Claims(items=["done"])
+        plain_ti, streamed_ti = plain["scan_tool_log"][0], streamed["scan_tool_log"][0]
+        assert _norm(plain_ti.result) == _norm(streamed_ti.result), (
+            f"tool result drifted under a progress consumer:\n"
+            f"  without: {plain_ti.result!r}\n  with:    {streamed_ti.result!r}"
+        )
+        assert _norm(repr(plain_ti.typed_result)) == _norm(repr(streamed_ti.typed_result))
+        # Deterministic server payload reached both legs.
+        assert f"'exported': {N_PROGRESS_STEPS}" in plain_ti.result or str(N_PROGRESS_STEPS) in plain_ti.result
+
+    async def test_progress_never_enters_state_or_checkpoint(self, tmp_path):
+        """(3) Progress events are EPHEMERAL: they never enter the final state or
+        the checkpoint — and the McpProgress envelope key is NOT neo_*-prefixed,
+        pinning the state-isolation MECHANISM (a non-neo_ envelope is a user
+        payload `_finalize_chunk` passes through and state never carries),
+        mirroring tests/modes/test_emit_progress.py."""
+        from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
+
+        import neograph
+        from neograph._state_keys import StateKeys
+        from neograph_mcp import McpProgress  # noqa: F401  # RED: not yet implemented
+        from tests.schemas import Claims
+
+        db = str(tmp_path / "progress_checkpoints.sqlite")
+        async with AsyncSqliteSaver.from_conn_string(db) as saver:
+            graph = _compile_progress_agent(
+                "slow_export",
+                lambda: _slow_export_react_fake(N_PROGRESS_STEPS),
+                checkpointer=saver,
+            )
+            config = {"configurable": {"thread_id": "mcp-progress-iso"}}
+
+            chunks = [
+                ch
+                async for ch in neograph.astream(
+                    graph, input={"query": "export"}, config=config, stream_mode=["custom", "values"]
+                )
+            ]
+            customs = [payload for mode, payload in chunks if mode == "custom"]
+            final_state = [payload for mode, payload in chunks if mode == "values"][-1]
+
+            prog = _mcp_progress_chunks(customs)
+            assert prog, "no McpProgress events surfaced — the isolation assertions would be vacuous"
+
+            # The envelope key is deliberately NOT neo_*-prefixed: it is a USER
+            # payload, not framework state — the mechanism keeping it out of
+            # _finalize_chunk stripping and out of the state bus entirely.
+            for envelope in prog:
+                assert not any(k.startswith(StateKeys.FRAMEWORK_PREFIX) for k in envelope), (
+                    f"McpProgress envelope carries a neo_* key: {envelope!r}"
+                )
+            assert not "neograph_event".startswith(StateKeys.FRAMEWORK_PREFIX)
+
+            # Final state: the run completed, and no progress payload leaked in.
+            assert final_state["scan_result"] == Claims(items=["done"])
+            assert "neograph_event" not in final_state
+            for value in final_state.values():
+                assert not (isinstance(value, dict) and value.get("neograph_event") == "progress")
+
+            # Checkpoint: no snapshot in the thread's history carries a progress
+            # payload — observed through the public state-history surface over
+            # the REAL sqlite saver.
+            snapshots = [s async for s in graph.aget_state_history(config)]
+            assert snapshots, "expected checkpoints from the sqlite saver"
+            for snap in snapshots:
+                dump = repr(snap.values)
+                assert "neograph_event" not in dump, f"progress envelope leaked into a checkpoint: {dump[:400]}"
+                assert "McpProgress" not in dump, f"McpProgress leaked into a checkpoint: {dump[:400]}"
+
+        # Belt-and-braces: the raw checkpoint DB bytes never mention the envelope.
+        raw = Path(db).read_bytes()
+        assert b"neograph_event" not in raw
+        assert b"McpProgress" not in raw
+
+    async def test_tool_emitting_no_progress_is_a_noop(self):
+        """(4) A tool that emits NO progress (crm_search) through the SAME
+        callback-wired factory path is a total no-op: zero McpProgress events on
+        the custom channel, and the run's result is unchanged."""
+        import neograph
+        from neograph_mcp import McpProgress  # noqa: F401  # RED: not yet implemented
+        from tests.schemas import Claims
+
+        graph = _compile_progress_agent("crm_search", lambda: _react_fake("crm_search"))
+
+        chunks = [
+            ch
+            async for ch in neograph.astream(
+                graph, input={"query": "acme"}, stream_mode=["custom", "values"]
+            )
+        ]
+        customs = [payload for mode, payload in chunks if mode == "custom"]
+        final_state = [payload for mode, payload in chunks if mode == "values"][-1]
+
+        assert _mcp_progress_chunks(customs) == [], (
+            f"a progress-less tool must surface ZERO McpProgress events: {customs!r}"
+        )
+        assert final_state["scan_result"] == Claims(items=["done"])
+        assert final_state["scan_tool_log"], "the real tool must still have been called"

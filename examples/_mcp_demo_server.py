@@ -97,12 +97,13 @@ server does not need to work around them
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import pathlib
 from typing import Any
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp import Context, FastMCP
 from mcp.types import ResourceLink, TextContent
 from pydantic import AnyUrl, BaseModel
 
@@ -295,6 +296,22 @@ def update_deal(deal_id: str, stage: str, token: str = "anon") -> dict[str, Any]
         "acting_as": token,
         "bearer_identity": _bearer_identity(),
     }
+
+
+@mcp.tool()
+async def slow_export(n: int, ctx: Context, token: str = "anon") -> dict[str, Any]:
+    """LONG-RUNNING export — the MCP progress-notification demo (neograph-fflpt).
+
+    Reports progress ``i / n`` with message ``step i`` for each of the ``n``
+    steps via ``ctx.report_progress`` (FastMCP sends ``notifications/progress``
+    only when the CLIENT attached a progressToken — i.e. passed a progress
+    callback — so this is a silent no-op for callback-less clients), then
+    returns a DETERMINISTIC result so callers can assert the result is
+    byte-identical with and without a progress consumer."""
+    for i in range(1, n + 1):
+        await ctx.report_progress(i, n, f"step {i}")
+        await asyncio.sleep(0.01)
+    return {"exported": n, "acting_as": token, "bearer_identity": _bearer_identity()}
 
 
 @mcp.tool()

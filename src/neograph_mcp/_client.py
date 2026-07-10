@@ -246,14 +246,26 @@ def _connection(spec: StdioServer | HttpServer, token: str | None) -> dict[str, 
     return conn
 
 
-def _client_for(server_key: str, spec: StdioServer | HttpServer, token: str | None) -> Any:
+def _client_for(
+    server_key: str,
+    spec: StdioServer | HttpServer,
+    token: str | None,
+    *,
+    callbacks: Any | None = None,
+) -> Any:
     """Create a consumer-held MultiServerMCPClient for ONE server (function-local
-    import keeps the module import light and the fail-loud check in ``__init__``)."""
+    import keeps the module import light and the fail-loud check in ``__init__``).
+
+    ``callbacks`` (an adapter ``Callbacks``) rides the client constructor —
+    ``get_tools()`` forwards it into ``load_mcp_tools`` verbatim, so the built
+    tools carry e.g. an ``on_progress`` notification handler with no change to
+    the build path. Default ``None`` keeps discovery / resource paths
+    callback-free."""
     from langchain_mcp_adapters.client import MultiServerMCPClient
 
     # The connection dict matches the adapter's Stdio/StreamableHttp TypedDicts at
     # runtime; cast past the structural mismatch the plain dict builder produces.
-    return MultiServerMCPClient(cast(Any, {server_key: _connection(spec, token)}))
+    return MultiServerMCPClient(cast(Any, {server_key: _connection(spec, token)}), callbacks=callbacks)
 
 
 async def _resolve_token(token_provider: TokenProvider | None, config: Any) -> str | None:
@@ -415,7 +427,10 @@ def _make_tool_factory(
     isError/domain errors from any inner layer propagate untouched."""
 
     async def _factory(config: Any, tool_config: Any) -> Any:
+        from neograph_mcp._progress import _progress_callbacks
+
         token = await _resolve_token(token_provider, config)
+        callbacks = _progress_callbacks(server_key)
         held = _held_sessions(config).get(server_key)
         if held is not None:
             # Consumer-held run-scoped session (mcp_run_context): bind the tool
@@ -424,9 +439,9 @@ def _make_tool_factory(
             # keeps module import light behind the fail-loud extra check.
             from langchain_mcp_adapters.tools import load_mcp_tools
 
-            tools = await load_mcp_tools(held, server_name=server_key)
+            tools = await load_mcp_tools(held, callbacks=callbacks, server_name=server_key)
         else:
-            client = _client_for(server_key, spec, token)
+            client = _client_for(server_key, spec, token, callbacks=callbacks)
             tools = await client.get_tools(server_name=server_key)
         tool = next((t for t in tools if t.name == tool_name), None)
         if tool is None:
