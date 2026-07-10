@@ -61,6 +61,7 @@ from neograph_mcp._client import (
     _resolve_token,
     _resolve_token_no_config,
 )
+from neograph_mcp._typed import rehydrate
 
 
 class McpToolCallError(Exception):
@@ -332,15 +333,7 @@ class McpSession:
             raise McpToolCallError(self._server_key, tool_name, content, structured)
 
         if output_model is not None:
-            if structured is None:
-                raise ValueError(
-                    f"MCP tool '{tool_name}' was declared with output_model="
-                    f"{output_model.__name__} but the server returned no structuredContent. "
-                    f"The server tool likely has a bare '-> dict' / '-> list' return "
-                    f"annotation; use '-> dict[str, Any]' or a Pydantic return type so "
-                    f"FastMCP emits structuredContent."
-                )
-            return parse(structured) if parse is not None else output_model.model_validate(structured)
+            return rehydrate(output_model, parse, structured, tool_name)
 
         return McpCallResult(content=content, structured=structured)
 

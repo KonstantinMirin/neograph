@@ -45,6 +45,8 @@ from urllib.parse import urlparse
 
 from pydantic import BaseModel
 
+from neograph_mcp._typed import rehydrate
+
 # A consumer-owned tool factory: (config, tool_config) -> tool (or awaitable of one).
 # The MCP-style factories this module builds are async (they await a token
 # provider / build an MCP client), so they must be driven by arun().
@@ -236,15 +238,7 @@ def _wrap_output_model(
     async def _typed(**kwargs: Any) -> BaseModel:
         _content, artifact = await orig(**kwargs)  # isError raises here → propagates
         structured = artifact.get("structured_content") if artifact else None
-        if structured is None:
-            raise ValueError(
-                f"MCP tool '{tool_name}' was declared with output_model="
-                f"{output_model.__name__} but the server returned no structuredContent. "
-                f"The server tool likely has a bare '-> dict' / '-> list' return "
-                f"annotation; use '-> dict[str, Any]' or a Pydantic return type so "
-                f"FastMCP emits structuredContent."
-            )
-        return parse(structured) if parse is not None else output_model.model_validate(structured)
+        return rehydrate(output_model, parse, structured, tool_name)
 
     return tool.model_copy(update={"coroutine": _typed, "response_format": "content"})
 
