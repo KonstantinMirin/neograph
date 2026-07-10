@@ -133,7 +133,13 @@ class McpSession:
     async def __aenter__(self) -> McpSession: ...
     async def __aexit__(self, *exc) -> None: ...
 
-    async def call(self, tool_name: str, args: dict[str, Any] | None = None) -> McpCallResult: ...
+    async def call(
+        self,
+        tool_name: str,
+        args: dict[str, Any] | None = None,
+        *,
+        output: type[BaseModel] | None = None,
+    ) -> McpCallResult | BaseModel: ...
     async def tool_names(self) -> list[str]: ...   # paginated tools/list over the same session (cached)
 
 
@@ -215,6 +221,20 @@ private `_convert_call_tool_result`:
 converted error content + any structuredContent). Replicating the table rather
 than importing the private symbol keeps the parity claim honest AND avoids
 private-import fragility; ~30 lines, pinned by tests.
+
+**Typed rehydration (`output=`).** MCP tools that return a schema-serializable
+value (a Pydantic model or `dict[str, Any]` on a FastMCP server) arrive with
+`structuredContent`. Passing `output=MyModel` makes `call()` return
+`MyModel.model_validate(structuredContent)` directly — the server serializes
+its model, the consumer rehydrates into its OWN independently-defined model,
+the neograph "type channels" story applied to federated calls. This is exactly
+the stark-8ok envelope unwrap (`Engagements{kind:'engagements', items:[...]}`
+validated client-side). Semantics: `isError=True` still raises
+`McpToolCallError` first; a missing `structuredContent` with `output=` set
+raises `ValueError` naming the tool and the annotation fix (the server returned
+content-only — e.g. a bare `-> dict`/`-> list` FastMCP annotation); a Pydantic
+`ValidationError` propagates untouched (it IS the type-mismatch signal).
+`output=None` (default) returns the full `McpCallResult`.
 
 **stdio identity parity.** Over stdio, identity rides as a tool argument. On the
 first `call()` (lazily, and only when `spec` is `StdioServer` and a token was
@@ -313,17 +333,25 @@ No changes to `src/neograph` (core). No changes to compile()/factory seams.
   Consistency wins; the httpx.Auth escape hatch remains available to a
   hand-rolling consumer.
 
-## 6. Prerequisite: demo server must emit `structuredContent`
+## 6. Prerequisite: demo server must emit `structuredContent` — **DONE 2026-07-10**
 
 *(probed)* FastMCP on mcp 1.28.1 emits `structuredContent` only for
 schema-serializable return annotations: `-> dict` and `-> list` yield **None**;
-`-> dict[str, Any]` and `-> SomeModel` yield the payload. Every current demo
-tool is annotated `-> dict` or `-> list`, so structured-fidelity tests are
-unwritable today. Prerequisite step: change the demo-server annotations to
-`dict[str, Any]` (and/or add one BaseModel-returning tool). This is additive
-for examples 23/24/25 but MUST be verified by re-running
-`uv run --extra dev --extra mcp-examples pytest tests/test_mcp_examples_e2e.py`
-(the AGENTS.md examples rule).
+`-> dict[str, Any]` and `-> SomeModel` yield the payload. Every demo tool was
+annotated `-> dict` or `-> list`, so structured-fidelity tests were unwritable.
+
+Landed (user direction: demo the MODEL round-trip, not just typed dicts):
+- `crm_search` now returns a Pydantic model (`CrmSearchResult` with
+  `hits: list[DealHit]`) — FastMCP serializes it into `structuredContent` + an
+  output schema; a client-defined model rehydrates it (probed end-to-end). The
+  field names match the previous dict shape, so text-block consumers
+  (examples 23/25) are unchanged.
+- `kb_lookup`, `crm-perplexity_research`, `update_deal` → `dict[str, Any]`.
+- `get_deal` stays `-> list` DELIBERATELY: it is the resource_link manifest
+  (content-only), and it doubles as the fixture for the `output=`-without-
+  structuredContent `ValueError` path.
+- Verified: `tests/test_mcp_examples_e2e.py` 12 passed; `tests/test_mcp_battery.py`
+  12 passed.
 
 ## 7. Verification plan (integration & E2E only, per ticket)
 
@@ -349,8 +377,11 @@ In `tests/test_mcp_battery.py` (`@requires_mcp`, run
    (iii) a tools/call with `isError=True` → `McpToolCallError` with the error
    content. Mechanism (no server changes needed, verified): a missing required
    argument or an unknown tool name both return `isError=True` from FastMCP.
-5. **structuredContent fidelity**: after §6, a demo tool annotated
-   `-> dict[str, Any]` surfaces its payload verbatim on `.structured`.
+5. **structuredContent fidelity + typed rehydration**: `crm_search` (a
+   model-returning tool, §6) surfaces its payload verbatim on `.structured`;
+   `call("crm_search", ..., output=ClientDefinedModel)` returns the validated
+   model instance; `call("get_deal", ..., output=X)` raises the `ValueError`
+   naming the content-only server annotation.
 6. **E2E composite**: a scripted composite (consumer factory building an lc_tool,
    or a raw-mode node) calls 2 primitives through one session and assembles a
    typed output — driven through `compile()` + `arun()`, asserting the assembled
@@ -365,7 +396,8 @@ In `tests/test_mcp_battery.py` (`@requires_mcp`, run
 
 - **Example 26** (`examples/26_mcp_composite_session.py`): a composite tool over
   the demo server's `crm_search` + `get_deal` — the blessed "scripted composite
-  over federated primitives" pattern stark-8ok asked for. Keyless, needs
+  over federated primitives" pattern stark-8ok asked for, featuring the typed
+  round-trip (`output=` rehydrating the server's serialized model). Keyless, needs
   `--extra mcp-examples`; auto-discovered by `tests/test_mcp_examples_e2e.py`
   (`examples/2?_mcp_*.py` glob).
 - **Website** `walkthrough/mcp-client.mdx` (or a short section on
@@ -400,3 +432,8 @@ In `tests/test_mcp_battery.py` (`@requires_mcp`, run
   (`listChanged`) deliberately unhandled under the lifetime rule.
 - `McpToolCallError` carries structuredContent when present (Degraded-mapping
   consumers may want it).
+- `call(..., output=Model)` typed rehydration (user direction 2026-07-10): the
+  server returns a Pydantic model, the consumer rehydrates `structuredContent`
+  into its own model class — demoed by `crm_search`'s `CrmSearchResult` on the
+  demo server. `isError` beats `output`; missing structuredContent with
+  `output=` → `ValueError`; `ValidationError` propagates.

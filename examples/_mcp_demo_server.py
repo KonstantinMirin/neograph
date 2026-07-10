@@ -100,10 +100,11 @@ from __future__ import annotations
 import json
 import os
 import pathlib
+from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 from mcp.types import ResourceLink, TextContent
-from pydantic import AnyUrl
+from pydantic import AnyUrl, BaseModel
 
 # ── In-memory CRM domain ─────────────────────────────────────────────────────
 
@@ -186,23 +187,50 @@ def _bearer_identity() -> str | None:
 
 
 # ── Tools ────────────────────────────────────────────────────────────────────
+#
+# Return-annotation policy (mcp 1.28.x): FastMCP emits `structuredContent`
+# (plus an output schema) only for schema-serializable annotations — a Pydantic
+# model or `dict[str, Any]`. Bare `dict`/`list` returns are served content-only.
+# `crm_search` returns a MODEL to demo the typed round-trip: the server
+# serializes it, the client rehydrates `structuredContent` into its own
+# Pydantic model. The other tools use `dict[str, Any]`.
+
+
+class DealHit(BaseModel):
+    """One search hit — serialized into `structuredContent` by FastMCP."""
+
+    id: str
+    name: str
+    stage: str
+
+
+class CrmSearchResult(BaseModel):
+    """`crm_search`'s typed payload. Field names match the previous dict shape,
+    so text-block consumers (examples 23/25) are unaffected."""
+
+    query: str
+    hits: list[DealHit]
+    acting_as: str
+    bearer_identity: str | None
 
 
 @mcp.tool()
-def crm_search(query: str, token: str = "anon") -> dict:
+def crm_search(query: str, token: str = "anon") -> CrmSearchResult:
     """Read-only, idempotent. Returns deals whose name matches `query`.
 
     `token` is echoed under `acting_as` — the stdio per-operator identity beat.
     `bearer_identity` echoes the http Authorization header, when present."""
     q = query.lower()
     hits = [
-        {"id": d["id"], "name": d["name"], "stage": d["stage"]} for d in _DEALS.values() if q in str(d["name"]).lower()
+        DealHit(id=str(d["id"]), name=str(d["name"]), stage=str(d["stage"]))
+        for d in _DEALS.values()
+        if q in str(d["name"]).lower()
     ]
-    return {"query": query, "hits": hits, "acting_as": token, "bearer_identity": _bearer_identity()}
+    return CrmSearchResult(query=query, hits=hits, acting_as=token, bearer_identity=_bearer_identity())
 
 
 @mcp.tool(name="crm-perplexity_research")
-def crm_perplexity_research(query: str, token: str = "anon") -> dict:
+def crm_perplexity_research(query: str, token: str = "anon") -> dict[str, Any]:
     """Read-only echo. A GATEWAY-NAMESPACED tool name (`<peer>-<tool>`) mirroring
     how IBM ContextForge re-exposes a federated tool — used by the g2jg battery to
     prove the namespaced->bare rename. `token` echoes under `acting_as`."""
@@ -210,7 +238,7 @@ def crm_perplexity_research(query: str, token: str = "anon") -> dict:
 
 
 @mcp.tool()
-def kb_lookup(topic: str, token: str = "anon") -> dict:
+def kb_lookup(topic: str, token: str = "anon") -> dict[str, Any]:
     """Read-only, idempotent. Returns a knowledge-base article for `topic`."""
     return {
         "topic": topic,
@@ -248,7 +276,7 @@ def get_deal(deal_id: str, token: str = "anon") -> list:
 
 
 @mcp.tool()
-def update_deal(deal_id: str, stage: str, token: str = "anon") -> dict:
+def update_deal(deal_id: str, stage: str, token: str = "anon") -> dict[str, Any]:
     """MUTATING. Advances a deal's stage — the gated-mutation beat (example 23).
 
     (Mutation is in-process only; it does not persist across stdio subprocess
