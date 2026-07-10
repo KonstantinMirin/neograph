@@ -9,9 +9,10 @@ express — tracing to IDENTICAL IR. This suite is the permanent guard:
   is structurally identical to the declarative one (``assert_ir_identical``).
 - ``REQUIRED_CAPABILITIES`` is the ratchet: a new declarative capability is
   added to the required set FIRST; the coverage test then fails loud until
-  its forward() twin row lands. Phase-2 capabilities (Oracle ensemble,
-  Operator/interrupt HITL) are tracked in ``PHASE2_PENDING`` and move into
-  the required set when neograph-e9zse.5/.6 ship their tracing surfaces.
+  its forward() twin row lands. Phase-2 capabilities (Oracle ensemble via
+  neograph-e9zse.5, Operator/interrupt HITL via neograph-e9zse.6) have all
+  shipped their corpus rows; ``PHASE2_PENDING`` is now empty and exists only
+  as the parking slot for future phased capabilities.
 
 Do NOT special-case any single topology: the cascade reference shape
 (intake -> Loop(get_claims -> Each(verify) -> collect) -> explain) is one
@@ -32,8 +33,8 @@ import pytest
 from pydantic import BaseModel
 
 from neograph import Construct, Each, ForwardConstruct, Node, compile, run
-from neograph.modifiers import Loop, Oracle
-from tests.fakes import build_test_compile_kwargs, register_scripted
+from neograph.modifiers import Loop, Operator, Oracle
+from tests.fakes import build_test_compile_kwargs, register_condition, register_scripted
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Shared schemas + condition callables (module-level so declarative and
@@ -103,6 +104,11 @@ def _register_corpus_fns():
     register_scripted("par_refine", lambda t, _c: PText(text="refined"))
     register_scripted("par_grade", lambda data, _c: PVerdict(summary="graded"))
     register_scripted("par_merge", lambda variants, _c: variants[0])
+    # Operator conditions are registered the same way declarative HITL tests
+    # do (tests/modifiers/test_operator.py). Parity rows only ASSEMBLE
+    # Constructs (never compile), so registration is not load-bearing here,
+    # but keeping it mirrors the real usage and stays harmless.
+    register_condition("par_review", lambda state: None)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -132,6 +138,15 @@ def _modifier_oracle_params(item):
             oracle.merge_model,
             oracle.merge_fn,
         )
+    return None
+
+
+def _modifier_operator_params(item):
+    """``when`` (registered condition name, a string) of an Operator modifier
+    on a Node or Construct — the single field the HITL modifier carries
+    (src/neograph/modifiers.py Operator)."""
+    if item.has_modifier(Operator):
+        return item.get_modifier(Operator).when
     return None
 
 
@@ -169,6 +184,9 @@ def assert_ir_identical(traced, decl, path="root"):
             f"{path}: Oracle modifier params differ on {decl.name!r}"
         )
         _assert_oracle_hooks_identical(traced, decl, path)
+        assert _modifier_operator_params(traced) == _modifier_operator_params(decl), (
+            f"{path}: Operator.when differs on {decl.name!r}"
+        )
         assert traced.has_modifier(Loop) == decl.has_modifier(Loop), (
             f"{path}: Loop modifier presence differs on {decl.name!r}"
         )
@@ -206,6 +224,9 @@ def assert_ir_identical(traced, decl, path="root"):
             f"{path}: per-node Oracle params differ on {decl.name!r}"
         )
         _assert_oracle_hooks_identical(traced, decl, path)
+        assert _modifier_operator_params(traced) == _modifier_operator_params(decl), (
+            f"{path}: per-node Operator.when differs on {decl.name!r}"
+        )
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -642,6 +663,79 @@ def _fwd_oracle_ensemble_sub_construct():
     return Twin().nodes
 
 
+def _decl_operator_interrupt():
+    """Node-form HITL: a bare ``Node | Operator(when=<registered name>)``
+    member — the declarative twin of verbatim class-attr pass-through."""
+    return Construct(
+        "twin",
+        nodes=[
+            Node.scripted("seed", fn="par_text", outputs=PText),
+            Node.scripted("gate", fn="par_refine", inputs=PText, outputs=PText)
+            | Operator(when="par_review"),
+        ],
+    ).nodes
+
+
+def _fwd_operator_interrupt():
+    """Forward twin built via CLASS-ATTR piping — deliberately NOT via a
+    ``self.interrupt(...)`` builder. This row verifies that a piped
+    ``Node | Operator`` class attribute passes through the tracer VERBATIM
+    (Architect Review decision: the pass-through is what this row locks;
+    the builder is locked by 'operator_interrupt_sub_construct')."""
+
+    class Twin(ForwardConstruct):
+        seed = Node.scripted("seed", fn="par_text", outputs=PText)
+        gate = Node.scripted("gate", fn="par_refine", inputs=PText, outputs=PText) | Operator(
+            when="par_review"
+        )
+
+        def forward(self, topic):
+            t = self.seed(topic)
+            return self.gate(t)
+
+    return Twin().nodes
+
+
+def _decl_operator_interrupt_sub_construct():
+    """Body-form HITL: ``Construct(input=,output=,nodes=[...]) | Operator``
+    with the deterministic 'interrupt-{slug}' name (slug = member names),
+    same convention the ensemble builder uses ('ensemble-draft-polish')."""
+    return Construct(
+        "twin",
+        nodes=[
+            Node.scripted("seed", fn="par_text", outputs=PText),
+            Construct(
+                "interrupt-check-approve",
+                input=PText,
+                output=PVerdict,
+                nodes=[
+                    Node.scripted("check", fn="par_refine", inputs=PText, outputs=PText),
+                    Node.scripted(
+                        "approve", fn="par_grade", inputs={"check": PText}, outputs=PVerdict
+                    ),
+                ],
+            )
+            | Operator(when="par_review"),
+        ],
+    ).nodes
+
+
+def _fwd_operator_interrupt_sub_construct():
+    """Forward twin via the NEW ``self.interrupt(target, *, when=)`` surface
+    (neograph-e9zse.6). RED until the builder ships in forward.py."""
+
+    class Twin(ForwardConstruct):
+        seed = Node.scripted("seed", fn="par_text", outputs=PText)
+        check = Node.scripted("check", fn="par_refine", inputs=PText, outputs=PText)
+        approve = Node.scripted("approve", fn="par_grade", inputs={"check": PText}, outputs=PVerdict)
+
+        def forward(self, topic):
+            t = self.seed(topic)
+            return self.interrupt([self.check, self.approve], when="par_review")(t)
+
+    return Twin().nodes
+
+
 PARITY_CORPUS = [
     ParityRow("straight_line", _decl_straight_line, _fwd_straight_line),
     ParityRow("fan_in", _decl_fan_in, _fwd_fan_in),
@@ -659,6 +753,12 @@ PARITY_CORPUS = [
         _decl_oracle_ensemble_sub_construct,
         _fwd_oracle_ensemble_sub_construct,
     ),
+    ParityRow("operator_interrupt", _decl_operator_interrupt, _fwd_operator_interrupt),
+    ParityRow(
+        "operator_interrupt_sub_construct",
+        _decl_operator_interrupt_sub_construct,
+        _fwd_operator_interrupt_sub_construct,
+    ),
 ]
 
 # The ratchet: a NEW declarative capability is added here FIRST; the coverage
@@ -669,8 +769,9 @@ REQUIRED_CAPABILITIES = frozenset(row.capability for row in PARITY_CORPUS)
 # into REQUIRED_CAPABILITIES (with its corpus row) when the surface ships.
 #   - "oracle_ensemble" / "oracle_ensemble_sub_construct" shipped with
 #     neograph-e9zse.5 (self.ensemble()) — their corpus rows carry coverage.
-#   - "operator_interrupt" -> neograph-e9zse.6 (HITL exposure)
-PHASE2_PENDING = frozenset({"operator_interrupt"})
+#   - "operator_interrupt" / "operator_interrupt_sub_construct" ship with
+#     neograph-e9zse.6 (self.interrupt()) — their corpus rows carry coverage.
+PHASE2_PENDING = frozenset()
 
 
 class TestParityMatrix:

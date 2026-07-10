@@ -69,7 +69,7 @@ from neograph._state_keys import StateKeys
 from neograph.conditions import OPERATORS
 from neograph.construct import Construct
 from neograph.errors import ConstructError
-from neograph.modifiers import Each, Loop, Oracle
+from neograph.modifiers import Each, Loop, Operator, Oracle
 from neograph.naming import field_name_for
 from neograph.node import Node, TypeSpecStatic
 
@@ -488,7 +488,7 @@ def _declared_primary_of_body_item(item: Any) -> TypeSpecStatic:
         return normalize_outputs(_declared_output(item._node)).primary
     if isinstance(item, (_EachCall, _LoopCall)):
         return _declared_primary_of_body_item(item._body[-1]) if item._body else None
-    if isinstance(item, _EnsembleCall):
+    if isinstance(item, _ModifierWrapCall):
         target = item._target
         if isinstance(target, _NodeCall):
             return normalize_outputs(_declared_output(target._node)).primary
@@ -588,11 +588,11 @@ class _LoopCall:
                 hint="pass at least one node reference: self.loop(body=[self.some_node], ...)",
             )
         for nc in self._body:
-            if not isinstance(nc, (_NodeCall, _EachCall, _LoopCall, _EnsembleCall)):
+            if not isinstance(nc, (_NodeCall, _EachCall, _LoopCall, _ModifierWrapCall)):
                 raise ConstructError.build(
                     "self.loop() body must contain node references (self.node_name)",
                     expected="node reference (self.node_name) or a deferred "
-                    "self.each()/self.loop()/self.ensemble() builder",
+                    "self.each()/self.loop()/self.ensemble()/self.interrupt() builder",
                     found=type(nc).__name__,
                 )
 
@@ -927,36 +927,36 @@ class _EachCall:
         return item_type
 
 
-class _EnsembleCall:
-    """Returned by _ForwardSelf.ensemble(). When called with a proxy, builds
-    the Oracle-modified member and records it in the tracer — IR-identical
-    to the declarative twin, form-aware:
+class _ModifierWrapCall:
+    """Shared machinery for tracer builders that wrap a node reference or a
+    node list with one pipeable modifier (Oracle, Operator). Form-aware:
 
-    - node form (target is a node reference) → a bare ``Node | Oracle``
-      member, exactly as declarative ``node | Oracle(...)``;
+    - node form (target is a node reference) → a bare ``Node | <modifier>``
+      member, exactly as the declarative ``node | Modifier(...)`` pipe;
     - body form (target is a list of node references) → a
-      ``Construct(input=, output=, nodes=body) | Oracle`` sub-construct
-      with the deterministic ``ensemble-{slug}`` name.
+      ``Construct(input=, output=, nodes=body) | <modifier>`` sub-construct
+      with the deterministic ``{kind}-{slug}`` name.
 
-    Usage in forward()::
-
-        best = self.ensemble(self.gen, n=3, merge_fn="combine")(draft)
-        best = self.ensemble([self.draft, self.polish], n=3, merge_fn="combine")(t)
+    Subclasses set ``_kind`` (name prefix + occurrence-counter key) and
+    ``_surface`` (the user-facing method name, for error messages).
     """
+
+    _kind: str
+    _surface: str
 
     def __init__(
         self,
         target: _NodeCall | list[_NodeCall],
-        oracle: Oracle,
+        modifier: Any,
         tracer: _Tracer,
     ) -> None:
         self._target = target
-        self._oracle = oracle
+        self._modifier = modifier
         self._tracer = tracer
 
     def __call__(self, input_proxy: _Proxy) -> _Proxy:
         if isinstance(self._target, _NodeCall):
-            member = self._target._node | self._oracle
+            member = self._target._node | self._modifier
             self._tracer.record(member)
             return _Proxy(
                 source_node=member,
@@ -973,8 +973,8 @@ class _EnsembleCall:
             input_type = normalize_outputs(_declared_output(body_nodes[-1])).primary
         if input_type is None:
             raise ConstructError.build(
-                "self.ensemble() input type could not be inferred",
-                hint="call self.ensemble(...)(proxy) where proxy is a node output",
+                f"{self._surface} input type could not be inferred",
+                hint=f"call {self._surface[:-2]}(...)(proxy) where proxy is a node output",
             )
 
         sub = self._materialize(body_nodes, input_type)
@@ -990,14 +990,14 @@ class _EnsembleCall:
         preceding: list[Node | Construct],
         outer_input_type: TypeSpecStatic,
     ) -> Node | Construct:
-        """Build this ensemble as a NESTED body member of an enclosing loop —
-        form-aware: a node-form target stays a bare ``Node | Oracle`` member
-        (a Construct wrap would be non-twin IR); a body-form target becomes
-        the ``Construct | Oracle`` sub-construct. Never records into the
-        tracer — the enclosing construct owns the placement.
+        """Build this wrap as a NESTED body member of an enclosing loop —
+        form-aware: a node-form target stays a bare ``Node | <modifier>``
+        member (a Construct wrap would be non-twin IR); a body-form target
+        becomes the ``Construct | <modifier>`` sub-construct. Never records
+        into the tracer — the enclosing construct owns the placement.
         """
         if isinstance(self._target, _NodeCall):
-            return self._target._node | self._oracle
+            return self._target._node | self._modifier
 
         body_nodes = self._validated_body_nodes()
         if preceding:
@@ -1006,7 +1006,7 @@ class _EnsembleCall:
             input_type = outer_input_type
         if input_type is None:
             raise ConstructError.build(
-                "nested self.ensemble() input type could not be inferred",
+                f"nested {self._surface} input type could not be inferred",
                 hint="ensure the preceding loop-body member declares an output type",
             )
         return self._materialize(body_nodes, input_type)
@@ -1014,26 +1014,26 @@ class _EnsembleCall:
     def _validated_body_nodes(self) -> list[Node]:
         if not isinstance(self._target, list):
             raise ConstructError.build(
-                "self.ensemble() target must be a node reference or a list of them",
+                f"{self._surface} target must be a node reference or a list of them",
                 expected="self.node_name or [self.a, self.b]",
                 found=type(self._target).__name__,
             )
         for nc in self._target:
             if not isinstance(nc, _NodeCall):
                 raise ConstructError.build(
-                    "self.ensemble() body must contain node references (self.node_name)",
+                    f"{self._surface} body must contain node references (self.node_name)",
                     expected="node reference (self.node_name)",
                     found=type(nc).__name__,
                 )
         if not self._target:
             raise ConstructError.build(
-                "self.ensemble() body must contain at least one node",
-                hint="pass at least one node reference: self.ensemble([self.some_node], ...)",
+                f"{self._surface} body must contain at least one node",
+                hint=f"pass at least one node reference: {self._surface[:-2]}([self.some_node], ...)",
             )
         return [nc._node for nc in self._target]
 
     def _materialize(self, body_nodes: list[Node], input_type: TypeSpecStatic) -> Construct:
-        """Build the body-form ``Construct | Oracle`` WITHOUT recording it."""
+        """Build the body-form ``Construct | <modifier>`` WITHOUT recording it."""
         # Copy-not-mutate: never write inputs onto class-level Nodes
         # (same rule as _LoopCall/_EachCall, neograph-2o9n).
         body_nodes_copy = []
@@ -1045,9 +1045,11 @@ class _EnsembleCall:
         output_type = normalize_outputs(_declared_output(body_nodes[-1])).primary
 
         body_slug = "-".join(n.name for n in body_nodes)
-        occurrence = self._tracer.next_occurrence("ensemble", body_slug)
+        occurrence = self._tracer.next_occurrence(self._kind, body_slug)
         name = (
-            f"ensemble-{body_slug}" if occurrence == 0 else f"ensemble-{body_slug}-{occurrence}"
+            f"{self._kind}-{body_slug}"
+            if occurrence == 0
+            else f"{self._kind}-{body_slug}-{occurrence}"
         )
 
         return (
@@ -1057,8 +1059,34 @@ class _EnsembleCall:
                 output=output_type,
                 nodes=body_nodes_copy,
             )
-            | self._oracle
+            | self._modifier
         )
+
+
+class _EnsembleCall(_ModifierWrapCall):
+    """Returned by _ForwardSelf.ensemble() — Oracle wrap.
+
+    Usage in forward()::
+
+        best = self.ensemble(self.gen, n=3, merge_fn="combine")(draft)
+        best = self.ensemble([self.draft, self.polish], n=3, merge_fn="combine")(t)
+    """
+
+    _kind = "ensemble"
+    _surface = "self.ensemble()"
+
+
+class _InterruptCall(_ModifierWrapCall):
+    """Returned by _ForwardSelf.interrupt() — Operator (HITL) wrap.
+
+    Usage in forward()::
+
+        approved = self.interrupt(self.validate, when="any_test_failed")(result)
+        approved = self.interrupt([self.check, self.approve], when="needs_review")(t)
+    """
+
+    _kind = "interrupt"
+    _surface = "self.interrupt()"
 
 
 class _ForwardSelf:
@@ -1201,6 +1229,25 @@ class _ForwardSelf:
 
         tracer: _Tracer = object.__getattribute__(self, "_neo_tracer")
         return _EnsembleCall(target, Oracle(**oracle_kwargs), tracer)
+
+    def interrupt(self, target: Any, *, when: str) -> _InterruptCall:
+        """Define a human-in-the-loop gate (Operator modifier).
+
+        ``when`` is a registered condition name, exactly as the declarative
+        ``node | Operator(when=...)`` pipe. Returns a callable that, when
+        called with a proxy, emits the declarative twin IR — form-aware:
+
+        - ``self.interrupt(self.validate, when=...)`` →
+          bare ``Node | Operator(...)``
+        - ``self.interrupt([self.check, self.approve], when=...)`` →
+          ``Construct(input=, output=, nodes=[...]) | Operator(...)``
+
+        Usage::
+
+            approved = self.interrupt(self.validate, when="any_test_failed")(result)
+        """
+        tracer: _Tracer = object.__getattribute__(self, "_neo_tracer")
+        return _InterruptCall(target, Operator(when=when), tracer)
 
 
 def _run_trace(

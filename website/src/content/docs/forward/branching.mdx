@@ -1,9 +1,9 @@
 ---
 title: Branching and Loops in forward()
-description: if compiles to conditional edges, self.loop() compiles to cycles, for compiles to fan-out, and try/except limitations in v1.
+description: if compiles to conditional edges, self.loop() to cycles, self.each() to fan-out, self.ensemble() to Oracle, self.interrupt() to HITL gates — plus try/except limitations in v1.
 ---
 
-The power of `ForwardConstruct` is that Python control flow becomes graph topology. An `if` statement compiles to a conditional edge. `self.loop()` compiles to a graph cycle. A `for` loop over a proxy attribute compiles to an Each fan-out. The framework discovers both arms of a branch by re-tracing `forward()` with alternate branch decisions.
+The power of `ForwardConstruct` is that Python control flow becomes graph topology. An `if` statement compiles to a conditional edge. `self.loop()` compiles to a graph cycle. A `for` loop over a proxy attribute (or the general `self.each()`) compiles to an Each fan-out. `self.ensemble()` builds an Oracle ensemble, `self.interrupt()` a human-in-the-loop gate — and the builders nest, so a fan-out inside a loop is one expression. The framework discovers both arms of a branch by re-tracing `forward()` with alternate branch decisions.
 
 ## if compiles to conditional edges
 
@@ -160,6 +160,78 @@ def refine(draft: Draft) -> Draft: ...
 ```
 
 See the [Loop with loop_when](/node-api/modifier-kwargs/#loop-with-loop_when-and-max_iterations) section for the full pattern.
+
+## self.each() compiles to Each fan-out with a custom key
+
+The bare `for` loop above is sugar for the trivial case: a single node, keyed on `label`. The general form is `self.each()` — a custom dispatch key, a multi-node body wrapped into one sub-construct, and `on_error='collect'` fault handling:
+
+{/* test-skip: illustrative fragment: node attrs elided for brevity */}
+```python
+class FanOut(ForwardConstruct):
+    seed   = Node(outputs=ClaimBatch, prompt='seed', model='fast')
+    verify = Node(outputs=MatchResult, prompt='verify', model='reason')
+
+    def forward(self, topic):
+        batch = self.seed(topic)
+        each_verify = self.each(body=[self.verify], key='claim_id')
+        return each_verify(batch.claims)
+```
+
+`self.each(body=[...], key=...)` returns a deferred builder; calling it with a proxy attribute (or a raw dotted path like `'seed.claims'`) builds `Construct(input=item, output=..., nodes=body) | Each(over=..., key=...)` — the exact IR the declarative form produces. Downstream nodes see the barrier as `dict[str, T]` keyed by your `key=` field.
+
+## Builders nest inside loop bodies
+
+`self.loop(body=[...])` accepts node references and deferred builders — `self.each()`, another `self.loop()`, `self.ensemble()`, `self.interrupt()` — so fan-out-inside-loop topologies write naturally. A nested `self.each()` is never called directly, so its `over=` path is supplied at construction; the root is a loop-body peer's field or `neo_subgraph_input.<field>`:
+
+{/* test-skip: illustrative fragment: node attrs elided for brevity */}
+```python
+class Cascade(ForwardConstruct):
+    def forward(self, topic):
+        batch = self.intake(topic)
+        return self.loop(
+            body=[
+                self.get_claims,
+                self.each(body=[self.verify], key='cid', over='get_claims.claims'),
+                self.collect,          # consumes inputs={'each_verify': dict[str, MatchResult]}
+            ],
+            when=lambda d: d is None or d.score < 0.5,
+            max_iterations=3,
+        )(batch)
+```
+
+A node placed after a sub-construct member must declare its `inputs=` explicitly (it consumes the sub-construct's state field, not the loop port) — the tracer fails loud at trace time otherwise. A loop body cannot end with a fanned-out member; add a collector node after the `self.each()`.
+
+## self.ensemble() compiles to Oracle
+
+`self.ensemble()` builds the existing `Oracle` modifier — N parallel generators plus a judge-merge. Kwargs mirror `Oracle` fields 1:1:
+
+{/* test-skip: illustrative fragment: node attrs elided for brevity */}
+```python
+class Ensembled(ForwardConstruct):
+    def forward(self, topic):
+        draft = self.seed(topic)
+        # node form -> Node | Oracle(...)
+        best = self.ensemble(self.gen, n=3, merge_fn='combine')(draft)
+        # body form -> Construct(...) | Oracle(...)
+        best = self.ensemble([self.draft, self.polish], n=3, merge_fn='combine')(draft)
+        return best
+```
+
+The surface is form-aware: a node reference emits the bare `Node | Oracle` member, a list emits a `Construct | Oracle` sub-construct — each byte-identical to its declarative twin, including when nested inside a `self.loop()` body.
+
+## self.interrupt() compiles to Operator (human-in-the-loop)
+
+`self.interrupt()` attaches the existing `Operator` modifier — the graph checkpoints and stops when the registered condition fires, and resumes with `run(graph, resume={...})`:
+
+{/* test-skip: illustrative fragment: node attrs elided for brevity */}
+```python
+class Gated(ForwardConstruct):
+    def forward(self, topic):
+        result = self.validate(topic)
+        return self.interrupt(self.apply, when='any_test_failed')(result)
+```
+
+A plain `Node | Operator(when=...)` class attribute also passes through tracing verbatim, so existing declarative pipe habits keep working inside `ForwardConstruct`.
 
 ## Example: quality gate with retry
 
