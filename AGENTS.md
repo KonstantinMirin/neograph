@@ -95,7 +95,7 @@ Current rules encoded in `effective_producer_type`:
 A downstream node can consume an Each-modified upstream's fanned-out results as a `list[X]`:
 
 ```python
-@node(output=Summary)
+@node(outputs=Summary)
 def summarize(verify: list[MatchResult]) -> Summary: ...
 ```
 
@@ -191,7 +191,7 @@ Every module that logs binds a module-level logger with the **bare** call: `log 
 from typing import Annotated
 from neograph import node, FromInput, FromConfig
 
-@node(output=Result)
+@node(outputs=Result)
 def my_node(
     upstream:   Claims,                              # upstream @node
     topic:      Annotated[str, FromInput],           # from run(input={...})
