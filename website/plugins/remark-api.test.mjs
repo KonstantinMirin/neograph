@@ -130,13 +130,16 @@ test('bare token not in the manifest is left inert (never throws)', () => {
 
 // (f) SOFT tier heading-gate: resolved symbol with no live heading is NOT linked.
 test('resolved symbol without a live heading is not linked (heading-gating)', () => {
-  // Oracle is a real manifest symbol (fielded pydantic model) but `oracle` is NOT a live
-  // reference-page heading (the hand-written heading embeds a signature). Linking would
-  // emit a dead anchor. SOFT tier: resolve (no throw) but stay plain inlineCode. This is
-  // the documented Stage B seam Stage C closes (manifest-owned anchors).
-  const tree = run(para('Oracle'));
+  // `NeographError` is a real manifest symbol (kind=exception) but it has NO per-symbol
+  // reference heading — exceptions live in the fenced error-hierarchy tree (neograph-uorb4),
+  // which the harvester skips, so no `#neographerror` anchor is emitted. SOFT tier: resolve
+  // (no throw) but stay plain inlineCode rather than emit a dead anchor. This is the
+  // heading-gate decline path (remark-api.mjs:161). (Post-Stage-C, exception symbols are the
+  // sole resolves-but-no-heading class — every other symbol now has a manifest-generated
+  // heading, pinned by TestCrossLinkCoverageCapstone.)
+  const tree = run(para('NeographError'));
   assert.ok(!has(tree, (n) => n.type === 'link'), 'must not link to a nonexistent reference-page anchor');
-  assert.ok(has(tree, (n) => n.type === 'inlineCode' && n.value === 'Oracle'), 'left as plain inlineCode');
+  assert.ok(has(tree, (n) => n.type === 'inlineCode' && n.value === 'NeographError'), 'left as plain inlineCode');
 });
 
 // (g) Self-cleaning ignore: a historical-contrast ref to a removed field does not throw.
@@ -167,15 +170,15 @@ test('stale ignore entry that now resolves FAILS the build', async () => {
   );
 });
 
-// (i) Kind-namespaced anchors (Stage C / neograph-rfl7b DECISION 1): the former
-// node/Node (and tool/Tool) bare-slug COLLISION is gone. The Python generator
-// kind-namespaces every colliding symbol's anchor: `node` (fn) -> `node-function`,
-// `Node` (model) -> `node-model` (likewise tool/Tool). A bare `Node` now resolves
-// via NAME-keyed lookup to its OWN `node-model` anchor and must NEVER mis-link to
-// the decorator's `node-function` section. Until Stage C renders a `node-model`
-// heading it stays inert (SOFT tier: no live heading -> no autolink) — but the
-// cross-symbol mis-link the old shared `node` anchor caused is now impossible.
-test('bare Node no longer mis-links to the node-function anchor (disambiguated)', () => {
+// (i) Kind-namespaced anchors (Stage C / neograph-kec0k, closing rfl7b DECISION 1):
+// the former node/Node (and tool/Tool) bare-slug COLLISION is gone. The Python
+// generator kind-namespaces every colliding symbol's anchor: `node` (fn) ->
+// `node-function`, `Node` (model) -> `node-model` (likewise tool/Tool). Stage C
+// (kec0k) now RENDERS the kind-namespaced headings, so a bare `Node` resolves via
+// NAME-keyed lookup to its OWN `node-model` anchor AND autolinks there — while
+// NEVER mis-linking to the decorator's `node-function` section. This is the exact
+// silent-inert -> resolving flip neograph-wqzel makes permanent.
+test('bare Node resolves to node-model and never mis-links to node-function (disambiguated)', () => {
   const manifest = JSON.parse(
     readFileSync(fileURLToPath(new URL('../src/data/api-manifest.json', import.meta.url)), 'utf8'),
   );
@@ -184,12 +187,36 @@ test('bare Node no longer mis-links to the node-function anchor (disambiguated)'
   assert.equal(byName.node.anchor, 'node-function', 'node fn anchor must be kind-namespaced');
   assert.equal(byName.Node.anchor, 'node-model', 'Node model anchor must be kind-namespaced');
   assert.notEqual(byName.node.anchor, byName.Node.anchor, 'node/Node anchors must be distinct');
-  // A bare `Node` must not cross-link to the decorator's `node-function` anchor.
   const tree = run(para('Node'));
+  // Positive: bare Node now autolinks to its OWN node-model anchor (Stage C heading).
+  assert.ok(
+    has(tree, (n) => n.type === 'link' && n.url.includes('#node-model')),
+    'bare Node must autolink to its node-model anchor now that Stage C renders the heading',
+  );
+  // Negative: it must NOT cross-link to the decorator's node-function anchor.
   assert.ok(
     !has(tree, (n) => n.type === 'link' && n.url.includes('#node-function')),
     'bare Node must not autolink to the @node decorator (node-function) anchor',
   );
+});
+
+// (i2) The 4 collision-pair refs each RESOLVE to their kind-namespaced anchor now
+// that Stage C (kec0k) renders the headings — the motivating defect (silent-inert
+// node/Node/tool/Tool refs) is closed, pinned here at the plugin layer.
+test('all four collision symbols autolink to their kind-namespaced anchors', () => {
+  const cases = [
+    ['node', '#node-function'],
+    ['Node', '#node-model'],
+    ['tool', '#tool-function'],
+    ['Tool', '#tool-model'],
+  ];
+  for (const [token, anchor] of cases) {
+    const tree = run(para(token));
+    assert.ok(
+      has(tree, (n) => n.type === 'link' && n.url.includes(anchor)),
+      `bare \`${token}\` must autolink to ${anchor} (Stage C kind-namespaced heading)`,
+    );
+  }
 });
 
 // (j) L2 nested-link-guard: inlineCode inside an existing link is NOT re-wrapped.

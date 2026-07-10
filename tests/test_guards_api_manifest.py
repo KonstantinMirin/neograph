@@ -764,44 +764,13 @@ class TestReferenceSectionRendering:
             f"heading generation."
         )
 
-    # ── Guard 2: single heading per anchor (fence-aware, manifest-scoped) ──
-    def test_every_non_exception_anchor_has_exactly_one_matching_heading(self):
-        """Each NON-exception manifest anchor is emitted by EXACTLY ONE heading
-        in api.mdx whose slug == the anchor.
-
-        Parse ALL headings (levels 1-6, fence-aware -- mirroring remark-api.mjs)
-        and slug each heading TEXT via the generator's slug(). Organizer headings
-        that map to no manifest anchor are IGNORED (the guard is scoped to the
-        intersection with manifest anchors, per refine MEDIUM-2). Exception
-        anchors are excluded (uorb4's fenced tree).
-
-        FAILS today: the current headings embed full signatures (e.g.
-        '### `Node(name, *, mode, ...)`') which slug to garbage, so the 4
-        collision anchors (node-function/node-model/tool-function/tool-model) and
-        50+ other symbols have ZERO matching headings.
-        """
-        gen = _load_gen_api_manifest()
-        assert API_MDX_PATH.exists(), f"reference page missing at {API_MDX_PATH}"
-        heading_slugs = _reference_heading_slugs(API_MDX_PATH.read_text(), gen)
-        counts = Counter(heading_slugs)
-
-        problems: list[str] = []
-        for symbol in self._non_exception_symbols(gen):
-            anchor = symbol["anchor"]
-            seen = counts.get(anchor, 0)
-            if seen != 1:
-                problems.append(
-                    f"symbol {symbol['name']!r} (kind={symbol['kind']}, "
-                    f"anchor={anchor!r}) is emitted by {seen} heading(s), "
-                    f"expected EXACTLY 1 heading whose slug == the anchor"
-                )
-        assert not problems, (
-            "single-heading-per-anchor violated -- every NON-exception manifest "
-            "anchor must have exactly one api.mdx heading slugging to it "
-            "(Stage C, neograph-kec0k). Signature-in-heading sections slug to "
-            "garbage; replace them with the manifest-generated headings:\n"
-            + "\n".join(problems)
-        )
+    # NOTE (neograph-wqzel): the single-heading-per-anchor COVERAGE assertion
+    # that once lived here has been SUBSUMED by the cross-linking capstone
+    # ``TestCrossLinkCoverageCapstone`` below, which derives the autolinkable set
+    # from the plugin's OWN bare-token regexes (not just kind!='exception') and is
+    # the single coverage authority. This class keeps the freshness guard (the
+    # byte-for-byte region==render test above — the real anti-band-aid enforcer),
+    # the exception-exclusion guard, and the collision-anchor guard.
 
     def test_collision_anchors_each_have_exactly_one_kind_namespaced_heading(self):
         """The 4 disambiguated collision anchors (node-function/node-model/
@@ -1115,3 +1084,258 @@ class TestLintKindTableRendering:
             f"of the {len(manifest_kinds)} manifest lint_issue_kinds must appear "
             f"as a `{{kind}}` row so the table can't silently lose a kind."
         )
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# Class 8 -- wqzel: cross-linking coverage CAPSTONE (the SINGLE coverage
+#            authority; subsumes kec0k's per-symbol coverage test)
+#
+# CORE INVARIANT: for every manifest symbol the remark-api plugin CAN autolink
+# (name matches the plugin's SOFT bare-token predicate RE_BARE_PASCAL /
+# RE_BARE_SNAKE, minus the enumerated deliberate exclusions), api.mdx MUST
+# contain EXACTLY ONE heading whose github-slugger slug == that symbol's anchor
+# -- so no autolinkable symbol silently stays inert (remark-api.mjs declines to
+# emit a link when no matching heading exists).
+#
+# Distinct value over kec0k's kind!=exception proxy:
+#   (a) derives the set from the PLUGIN's ACTUAL regex predicate, tying the
+#       guarantee to what the plugin LITERALLY links;
+#   (b) enumerates the deliberate exclusions IN the guard WITH reasons
+#       (self-documenting, anti-band-aid);
+#   (c) cross-source PIN (review MEDIUM-3): reads RE_BARE_PASCAL/RE_BARE_SNAKE
+#       out of remark-api.mjs and asserts the Python mirror equals them, so the
+#       Python copy can't silently drift from what the plugin links (the
+#       AGENTS.md runtime-vs-lint lockstep pattern);
+#   (d) an explicit mutation-proof meta-test.
+#
+# STATUS: this is a guard-guarding-EXISTING behavior -- coverage is already
+# complete post-kec0k/cvjfm, so the coverage assertion PASSES on committed
+# state. The RED artifact is the mutation-proof
+# (test_coverage_guard_bites_when_a_generated_heading_is_deleted): deleting ONE
+# generated heading from a COPY of api.mdx makes the coverage check RAISE.
+# ════════════════════════════════════════════════════════════════════════════
+
+PLUGIN_PATH = REPO_ROOT / "website" / "plugins" / "remark-api.mjs"
+
+# The plugin's SOFT bare-token predicate, mirrored VERBATIM from
+# website/plugins/remark-api.mjs:38-39. A bare token whose name matches
+# RE_BARE_PASCAL (Node, Oracle) OR RE_BARE_SNAKE (compile, render_prompt) is
+# autolink-CAPABLE; whether a link actually emits is gated by heading presence.
+# PROC-2: NAMED module-level constants, each with a test_slip_* meta-test below.
+# The cross-source pin (test_python_bare_regexes_match_plugin_literals) asserts
+# these two pattern strings equal the plugin's literals so they can't drift.
+_RE_BARE_PASCAL = re.compile(r"^[A-Z][A-Za-z0-9]+$")
+_RE_BARE_SNAKE = re.compile(r"^[a-z][a-z0-9_]+$")
+
+# Extracts the two `const RE_BARE_... = /<body>/;` regex literals from the
+# plugin so the cross-source pin can compare the plugin's LITERAL pattern body
+# against the Python mirror above. PROC-2: NAMED constant with a test_slip_*.
+_MJS_BARE_REGEX_LITERAL_RE = re.compile(
+    r"const\s+(?P<name>RE_BARE_[A-Z]+)\s*=\s*/(?P<body>.+?)/\s*;"
+)
+
+# Deliberate exclusion 1 -- exception-kind symbols. All PascalCase (=>
+# SOFT-linkable by RE_BARE_PASCAL), BUT they render as uorb4's FENCED
+# error-hierarchy tree with NO per-symbol heading (fence-skipped by the
+# harvester), so prose refs to them intentionally stay inert. Reason baked in:
+# owned by the fenced error tree (uorb4 DECISION 3), not per-symbol headings.
+_EXCLUDE_EXCEPTION_KIND = "exception"
+
+# Deliberate exclusion 2 -- "intentionally-inert bare-lowercase tokens" =
+# manifest names matching NEITHER bare regex. EMPTY today (research: no such
+# tokens; VERIFIED every manifest name matches one of the two bare regexes). The
+# guard both encodes the predicate AND asserts the set stays empty, so a future
+# publicly-unlinkable symbol surfaces loudly instead of being silently dropped.
+INTENTIONALLY_INERT: frozenset[str] = frozenset()
+
+
+class TestCrossLinkCoverageCapstone:
+    """wqzel capstone: every autolinkable manifest symbol has exactly one
+    api.mdx heading whose slug == its anchor -- turning the plugin's silent
+    decline-to-link into a loud, drift-checked coverage property."""
+
+    def _symbols(self, gen) -> list[dict]:
+        manifest = gen.build_manifest()
+        symbols = manifest.get("symbols") or manifest.get("api_symbols") or []
+        assert symbols, "manifest symbols list is empty -- __all__ walk is broken"
+        return symbols
+
+    def _is_bare_linkable(self, name: str) -> bool:
+        return bool(_RE_BARE_PASCAL.match(name) or _RE_BARE_SNAKE.match(name))
+
+    def _autolinkable(self, gen) -> list[dict]:
+        """The plugin-regex-derived autolinkable set MINUS the enumerated
+        deliberate exclusions (exception-kind + the empty intentionally-inert
+        set). This is the single coverage authority's checked set."""
+        out: list[dict] = []
+        for s in self._symbols(gen):
+            name = s["name"]
+            if not self._is_bare_linkable(name):
+                continue
+            if s.get("kind") == _EXCLUDE_EXCEPTION_KIND:
+                continue
+            if name in INTENTIONALLY_INERT:
+                continue
+            out.append(s)
+        return out
+
+    def _assert_coverage(self, gen, mdx_text: str) -> None:
+        """Assert every autolinkable symbol has EXACTLY ONE slug==anchor heading
+        in ``mdx_text``. Factored out so the live guard and the mutation-proof
+        exercise the SAME coverage logic (the mutation feeds a mutated copy)."""
+        counts = Counter(_reference_heading_slugs(mdx_text, gen))
+        problems: list[str] = []
+        for symbol in self._autolinkable(gen):
+            anchor = symbol["anchor"]
+            seen = counts.get(anchor, 0)
+            if seen != 1:
+                problems.append(
+                    f"symbol {symbol['name']!r} (kind={symbol['kind']}, "
+                    f"anchor={anchor!r}) is emitted by {seen} heading(s), "
+                    f"expected EXACTLY 1 heading whose slug == the anchor"
+                )
+        assert not problems, (
+            "cross-link coverage violated -- every AUTOLINKABLE manifest symbol "
+            "(plugin bare-token predicate, minus exception-kind + the empty "
+            "intentionally-inert set) must have exactly one api.mdx heading "
+            "slugging to its anchor, else the plugin silently declines to link "
+            "prose refs (wqzel capstone). Offenders:\n" + "\n".join(problems)
+        )
+
+    # ── the single coverage authority (PASSES on committed state) ────────────
+    def test_every_autolinkable_symbol_has_exactly_one_reference_heading(self):
+        """CAPSTONE: each plugin-autolinkable manifest symbol has exactly one
+        slug==anchor heading in api.mdx. PASSES on committed state (coverage is
+        complete post-kec0k/cvjfm); the RED artifact is the mutation-proof below.
+        """
+        gen = _load_gen_api_manifest()
+        assert API_MDX_PATH.exists(), f"reference page missing at {API_MDX_PATH}"
+        checked = self._autolinkable(gen)
+        assert checked, (
+            "autolinkable set is empty -- the bare-token predicate matched no "
+            "manifest symbol; the plugin-regex derivation is broken."
+        )
+        self._assert_coverage(gen, API_MDX_PATH.read_text())
+
+    def test_intentionally_inert_bare_lowercase_set_is_empty(self):
+        """The 'intentionally-inert bare-lowercase tokens' exclusion is EMPTY
+        today: every manifest name matches one of the two bare regexes. Asserting
+        emptiness means a FUTURE publicly-unlinkable symbol (a name matching
+        neither regex) surfaces LOUDLY here instead of being silently dropped
+        from the coverage set."""
+        gen = _load_gen_api_manifest()
+        unlinkable = sorted(
+            s["name"] for s in self._symbols(gen) if not self._is_bare_linkable(s["name"])
+        )
+        assert unlinkable == list(INTENTIONALLY_INERT), (
+            f"manifest carries publicly-unlinkable symbol name(s) {unlinkable} "
+            f"matching NEITHER bare regex. Either the plugin predicate changed "
+            f"(update the mirror + cross-source pin) or a new symbol is unlinkable "
+            f"-- enumerate it in INTENTIONALLY_INERT with a reason, or give it a "
+            f"linkable name."
+        )
+
+    # ── cross-source PIN (review MEDIUM-3): Python mirror == plugin literals ──
+    def test_python_bare_regexes_match_plugin_literals(self):
+        """The Python mirror (_RE_BARE_PASCAL/_RE_BARE_SNAKE) MUST equal the
+        LITERAL regex bodies in website/plugins/remark-api.mjs, so the Python
+        copy can't silently drift from what the plugin actually links (AGENTS.md
+        runtime-vs-lint lockstep). Reads the two `const RE_BARE_... = /.../;`
+        literals out of the plugin and compares pattern bodies byte-for-byte."""
+        assert PLUGIN_PATH.exists(), (
+            f"remark-api plugin missing at {PLUGIN_PATH} -- cannot cross-pin the "
+            f"bare-token predicate."
+        )
+        plugin_src = PLUGIN_PATH.read_text()
+        found = {
+            m.group("name"): m.group("body")
+            for m in _MJS_BARE_REGEX_LITERAL_RE.finditer(plugin_src)
+        }
+        assert {"RE_BARE_PASCAL", "RE_BARE_SNAKE"} <= set(found), (
+            f"could not extract both bare-token regex literals from the plugin; "
+            f"found {sorted(found)}. remark-api.mjs:38-39 may have been renamed "
+            f"or reformatted -- update _MJS_BARE_REGEX_LITERAL_RE."
+        )
+        assert found["RE_BARE_PASCAL"] == _RE_BARE_PASCAL.pattern, (
+            f"RE_BARE_PASCAL drifted: plugin literal /{found['RE_BARE_PASCAL']}/ "
+            f"!= Python mirror /{_RE_BARE_PASCAL.pattern}/. Re-sync the Python "
+            f"mirror with remark-api.mjs:38 (the coverage set must match what the "
+            f"plugin literally links)."
+        )
+        assert found["RE_BARE_SNAKE"] == _RE_BARE_SNAKE.pattern, (
+            f"RE_BARE_SNAKE drifted: plugin literal /{found['RE_BARE_SNAKE']}/ "
+            f"!= Python mirror /{_RE_BARE_SNAKE.pattern}/. Re-sync the Python "
+            f"mirror with remark-api.mjs:39."
+        )
+
+    # ── mutation-proof: the RED artifact (guard bites on a deleted heading) ──
+    def test_coverage_guard_bites_when_a_generated_heading_is_deleted(self):
+        """Mutation-proof: deleting ONE generated heading from a COPY of api.mdx
+        makes the coverage assertion RAISE -- proving the capstone actually bites
+        (it guards existing behavior, so it can only pass; this shows it is not a
+        no-op). Mutates in-memory text, NEVER the file on disk (anti-band-aid: the
+        real headings must come from the Stage-C renderer)."""
+        gen = _load_gen_api_manifest()
+        text = API_MDX_PATH.read_text()
+        anchors = {s["anchor"] for s in self._autolinkable(gen)}
+        lines = text.split("\n")
+
+        # Fence-aware scan for the first heading line whose slug is an
+        # autolinkable anchor; drop exactly that line.
+        fence = False
+        drop_idx: int | None = None
+        for i, line in enumerate(lines):
+            if line.lstrip().startswith("```"):
+                fence = not fence
+                continue
+            if fence:
+                continue
+            match = _HEADING_RE.match(line)
+            if match and gen.slug(match.group(1)) in anchors:
+                drop_idx = i
+                break
+        assert drop_idx is not None, (
+            "no autolinkable heading found in api.mdx to mutate -- the coverage "
+            "guard cannot be mutation-proven (headings missing entirely?)."
+        )
+        mutated = "\n".join(lines[:drop_idx] + lines[drop_idx + 1:])
+        # Sanity: the mutation removed a real anchor heading.
+        assert mutated != text, "mutation did not change the text"
+        with pytest.raises(AssertionError):
+            self._assert_coverage(gen, mutated)
+
+    # ── PROC-2 slip meta-tests for the three regex constants introduced here ─
+    def test_slip_re_bare_pascal(self):
+        """Slip meta-test for _RE_BARE_PASCAL (PROC-2): matches bare PascalCase,
+        rejects snake_case, dotted, and mixed forms."""
+        assert _RE_BARE_PASCAL.match("Node")
+        assert _RE_BARE_PASCAL.match("Oracle")
+        assert _RE_BARE_PASCAL.match("CheckpointSchemaError")
+        # Rejects snake_case, dotted refs, a leading-lowercase name, and empty.
+        assert _RE_BARE_PASCAL.match("compile") is None
+        assert _RE_BARE_PASCAL.match("Node.name") is None
+        assert _RE_BARE_PASCAL.match("render_prompt") is None
+        assert _RE_BARE_PASCAL.match("") is None
+
+    def test_slip_re_bare_snake(self):
+        """Slip meta-test for _RE_BARE_SNAKE (PROC-2): matches bare snake_case /
+        lowercase idents, rejects PascalCase, dotted, and mixed-upper forms."""
+        assert _RE_BARE_SNAKE.match("compile")
+        assert _RE_BARE_SNAKE.match("render_prompt")
+        assert _RE_BARE_SNAKE.match("node")
+        # Rejects PascalCase, dotted refs, an upper-containing name, and empty.
+        assert _RE_BARE_SNAKE.match("Node") is None
+        assert _RE_BARE_SNAKE.match("node.name") is None
+        assert _RE_BARE_SNAKE.match("render_Prompt") is None
+        assert _RE_BARE_SNAKE.match("") is None
+
+    def test_slip_mjs_bare_regex_literal_re(self):
+        """Slip meta-test for _MJS_BARE_REGEX_LITERAL_RE (PROC-2): extracts the
+        name + body of a `const RE_BARE_... = /.../;` literal and rejects
+        non-matching lines."""
+        m = _MJS_BARE_REGEX_LITERAL_RE.search("const RE_BARE_PASCAL = /^[A-Z][A-Za-z0-9]+$/;")
+        assert m is not None
+        assert m.group("name") == "RE_BARE_PASCAL"
+        assert m.group("body") == "^[A-Z][A-Za-z0-9]+$"
+        assert _MJS_BARE_REGEX_LITERAL_RE.search("const RE_DOTTED = /^x$/;") is None
+        assert _MJS_BARE_REGEX_LITERAL_RE.search("just prose") is None
