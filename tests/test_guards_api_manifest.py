@@ -843,3 +843,165 @@ class TestReferenceSectionRendering:
         assert _HEADING_RE.match("not a heading") is None
         # Rejects an empty-text heading marker (needs \s+ then >=1 char).
         assert _HEADING_RE.match("### ") is None
+
+
+# ════════════════════════════════════════════════════════════════════════════
+# Class 6 -- error-hierarchy tree <-> manifest consistency (neograph-uorb4)
+# ════════════════════════════════════════════════════════════════════════════
+
+# Tree-glyph parsers (PROC-2: NAMED constants, each with a test_slip_* meta-test).
+# The error tree is a hand-authored fenced block whose STRUCTURE (class set +
+# parent links) must stay consistent with the manifest's exception_hierarchy[];
+# curated content the manifest cannot express (the '(base)'/'(ValueError)'
+# parentheticals, the em-dash descriptions, the lifecycle-phase sibling order) is
+# deliberately NOT asserted. The parser is intentionally coupled to the current
+# 2-space glyph rendering (a cosmetic reindent is a sanctioned false-positive
+# whose purpose is to force re-verification -- reviewer LOW-3).
+_TREE_BRANCH_RE = re.compile(r"^(?P<pre>[ │]*)(?:├──|└──)\s*(?P<rest>\S.*)$")
+_TREE_TRAILING_PAREN_RE = re.compile(r"\s*\([^)]*\)\s*$")
+_ERROR_SECTION_HEADING_RE = re.compile(r"^#{1,6}\s+Error Hierarchy\s*$")
+
+
+def _bare_class_name(rest: str) -> str:
+    """Isolate the bare class name from a tree line body.
+
+    Strip the em-dash description tail first, then ANY trailing parenthetical
+    group so both 'NeographError (base)' (root) and 'ConstructError (ValueError)'
+    reduce to the class name (refinement neograph-uqy66.53).
+    """
+    name = rest.split("—", 1)[0]  # drop ' — description'
+    name = _TREE_TRAILING_PAREN_RE.sub("", name)
+    return name.strip()
+
+
+def _glyph_column(line: str) -> int:
+    """Column of the branch glyph (nearest is the parent); -1 for the glyph-less root."""
+    for i, ch in enumerate(line):
+        if ch in "├└":  # ├ or └
+            return i
+    return -1
+
+
+def _parse_error_tree(mdx_text: str) -> dict[str, str | None]:
+    """Recover ``{class_name: parent_name_or_None}`` from the fenced error tree.
+
+    Locate the '## Error Hierarchy' section, take the first ``` fence, and derive
+    parentage by glyph-column indentation: each node's parent is the nearest
+    preceding line at a shallower glyph column (the root has no glyph).
+    """
+    lines = mdx_text.split("\n")
+    start = next(
+        (i for i, ln in enumerate(lines) if _ERROR_SECTION_HEADING_RE.match(ln)),
+        None,
+    )
+    assert start is not None, "api.mdx is missing the 'Error Hierarchy' section (uorb4)."
+    fence_open = next((i for i in range(start + 1, len(lines)) if lines[i].lstrip().startswith("```")), None)
+    assert fence_open is not None, "no fenced code block after '## Error Hierarchy'."
+    fence_close = next((i for i in range(fence_open + 1, len(lines)) if lines[i].lstrip().startswith("```")), None)
+    assert fence_close is not None, "unterminated error-tree fence."
+
+    parent_of: dict[str, str | None] = {}
+    stack: list[tuple[int, str]] = []  # (glyph_column, name)
+    for line in lines[fence_open + 1 : fence_close]:
+        if not line.strip():
+            continue
+        m = _TREE_BRANCH_RE.match(line)
+        col = _glyph_column(line)
+        rest = m.group("rest") if m else line.strip()
+        name = _bare_class_name(rest)
+        while stack and stack[-1][0] >= col:
+            stack.pop()
+        parent_of[name] = stack[-1][1] if stack else None
+        stack.append((col, name))
+    return parent_of
+
+
+class TestErrorHierarchyTreeConsistency:
+    """The hand-authored error tree's STRUCTURE stays consistent with the
+    manifest's ``exception_hierarchy[]`` (neograph-uorb4). Guards a NON-behavioral
+    disease (doc structure drifting from code) -- the red artifact is a
+    mutation-proof, not a naturally-failing test."""
+
+    def _manifest_hierarchy(self) -> list[dict]:
+        manifest = json.loads(CORE_MANIFEST_PATH.read_text())
+        entries = manifest.get("exception_hierarchy") or []
+        assert entries, "manifest exception_hierarchy is empty -- errors walk broken"
+        return entries
+
+    def test_tree_class_set_matches_manifest_when_committed(self):
+        """The set of classes in the doc tree == the manifest exception set.
+
+        Structure-only (NOT order, NOT descriptions). Mutation-proven: dropping or
+        adding a class in the tree fails this assertion.
+        """
+        tree = _parse_error_tree(API_MDX_PATH.read_text())
+        manifest_names = {e["name"] for e in self._manifest_hierarchy()}
+        only_tree = sorted(set(tree) - manifest_names)
+        only_manifest = sorted(manifest_names - set(tree))
+        assert not only_tree and not only_manifest, (
+            f"error-tree class set drifted from the manifest: "
+            f"only-in-tree={only_tree} only-in-manifest={only_manifest}. "
+            f"Update the api.mdx Error Hierarchy tree to match exception_hierarchy[]."
+        )
+
+    def test_tree_parent_links_match_manifest_when_committed(self):
+        """Each class's tree-derived parent == its manifest parent (NeographError -> None)."""
+        tree = _parse_error_tree(API_MDX_PATH.read_text())
+        manifest_parent = {e["name"]: e["parent"] for e in self._manifest_hierarchy()}
+        problems = [
+            f"{name}: tree parent {tree[name]!r} != manifest parent {manifest_parent.get(name)!r}"
+            for name in tree
+            if name in manifest_parent and tree[name] != manifest_parent[name]
+        ]
+        assert not problems, (
+            "error-tree parent links drifted from the manifest:\n" + "\n".join(problems)
+        )
+
+    def test_no_exception_class_is_a_markdown_heading(self):
+        """No exception class appears as a markdown HEADING (fence-aware).
+
+        The tree is a fenced block, so its 11 exception anchors ship exactly once
+        (as manifest symbols). A heading whose slug == an exception anchor would
+        double-emit the anchor. Exact slug-equality (not substring), so a legit
+        future '### ExecutionError semantics' heading would NOT trip it.
+        """
+        gen = _load_gen_api_manifest()
+        heading_slugs = set(_reference_heading_slugs(API_MDX_PATH.read_text(), gen))
+        manifest = gen.build_manifest()
+        exc_anchors = {s["anchor"] for s in manifest["symbols"] if s.get("kind") == "exception"}
+        leaked = sorted(exc_anchors & heading_slugs)
+        assert not leaked, (
+            f"exception anchor(s) {leaked} are emitted as markdown heading(s); "
+            f"exceptions live only in the fenced error tree (uorb4) -- double-emit."
+        )
+
+    # ── PROC-2 slip meta-tests for the tree-parser regex constants ──
+    def test_slip_tree_branch_re(self):
+        """_TREE_BRANCH_RE matches ├──/└── child lines (with │ rails) and rejects
+        the glyph-less root and prose."""
+        assert _TREE_BRANCH_RE.match("  ├── ConstructError (ValueError)  — x").group("rest").startswith("ConstructError")
+        assert _TREE_BRANCH_RE.match("  │     └── CheckpointSchemaError  — y").group("rest").startswith("CheckpointSchemaError")
+        # Root line has no branch glyph -> no match.
+        assert _TREE_BRANCH_RE.match("NeographError (base)") is None
+        # Prose / empty rest -> no match.
+        assert _TREE_BRANCH_RE.match("just prose") is None
+        assert _TREE_BRANCH_RE.match("  ├── ") is None
+
+    def test_slip_tree_trailing_paren_re(self):
+        """_TREE_TRAILING_PAREN_RE strips exactly ONE trailing parenthetical, and
+        only at end-of-string (not a mid-name paren)."""
+        assert _TREE_TRAILING_PAREN_RE.sub("", "NeographError (base)") == "NeographError"
+        assert _TREE_TRAILING_PAREN_RE.sub("", "ConstructError (ValueError)") == "ConstructError"
+        # No trailing paren -> unchanged.
+        assert _TREE_TRAILING_PAREN_RE.sub("", "CompileError") == "CompileError"
+        # Only strips at the end (a name with no trailing paren keeps its text).
+        assert _TREE_TRAILING_PAREN_RE.sub("", "Foo") == "Foo"
+
+    def test_slip_error_section_heading_re(self):
+        """_ERROR_SECTION_HEADING_RE matches the 'Error Hierarchy' section heading
+        at any level and rejects lookalikes."""
+        assert _ERROR_SECTION_HEADING_RE.match("## Error Hierarchy")
+        assert _ERROR_SECTION_HEADING_RE.match("### Error Hierarchy  ")
+        # Rejects a heading with trailing prose and non-heading lines.
+        assert _ERROR_SECTION_HEADING_RE.match("## Error Hierarchy and wiring") is None
+        assert _ERROR_SECTION_HEADING_RE.match("Error Hierarchy") is None
