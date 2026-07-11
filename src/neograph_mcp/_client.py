@@ -18,11 +18,15 @@ engine or neograph run-layer internals — it produces plain factories/callables
 existing seams already accept (enforced by
 ``tests/test_guards_mcp_session_ownership.py``).
 
-## Transport-aware per-run identity
+## Transport-aware per-request identity
 
-stdio has no HTTP headers, so per-run identity rides as a tool ARGUMENT (default
-name ``token``; the demo server echoes it under ``acting_as``). streamable-http
-uses a bearer ``Authorization`` header. ``mcp_tool_factories`` handles both.
+stdio has no HTTP headers, so identity rides as a tool ARGUMENT (default name
+``token``; the demo server echoes it under ``acting_as``), re-resolved from the
+provider per call. streamable-http wraps the provider in a PER-REQUEST
+``httpx.Auth`` that stamps the bearer ``Authorization`` header — never a static
+connect-time header, so a refreshing provider takes effect mid-run even though
+the built tools are cached for the whole run (neograph-qslrx).
+``mcp_tool_factories`` handles both.
 
 ## namespace / collision policy
 
@@ -222,16 +226,20 @@ class StdioServer:
 class HttpServer:
     """A streamable-http MCP server.
 
-    Two identity paths, by production shape:
+    Two identity paths, by production shape — BOTH ride the transport's
+    persistent httpx client as an ``httpx.Auth`` driven per request:
 
-    - ``token_provider`` (static bearer): per-run identity minted from config
-      rides as a bearer ``Authorization`` header set at connect.
+    - ``token_provider`` (bearer): the provider is wrapped in an internal
+      per-request Auth that re-invokes it on EVERY request and stamps the
+      returned value as the bearer ``Authorization`` header — so a refreshing
+      provider takes effect mid-run (no more connect-time freeze), while a
+      static-string provider keeps sending the same value.
     - ``auth`` (OAuth): an ``httpx.Auth`` — e.g. the battery's
-      ``client_credentials_auth(...)`` wrapping the SDK provider — attached to
-      the transport's persistent httpx client, handling token exchange, expiry,
-      and 401-triggered refresh WITHOUT a reconnect. When both are set, ``auth``
-      WINS: an Auth manages its own ``Authorization`` header, so the bearer
-      token is not also stamped (no conflicting header).
+      ``client_credentials_auth(...)`` wrapping the SDK provider — handling
+      token exchange, expiry, and 401-triggered refresh WITHOUT a reconnect.
+      When both are set, ``auth`` WINS: an Auth manages its own
+      ``Authorization`` header, so the provider is not also consulted (one
+      identity mechanism per connection).
 
     neograph only CARRIES ``auth`` to the adapter connection; the token itself
     never enters state, a checkpoint, or the schema fingerprint."""
@@ -244,35 +252,36 @@ class HttpServer:
 # ── transport wiring ──────────────────────────────────────────────────────────
 
 
-def _connection(spec: StdioServer | HttpServer, token: str | None) -> dict[str, Any]:
+def _connection(spec: StdioServer | HttpServer, *, auth: Any = None) -> dict[str, Any]:
     """Build the langchain-mcp-adapters connection dict for one server + identity.
 
     The SINGLE choke point for transport identity — a change here lights all
-    three surfaces (tool factories, resource fetcher, ``mcp_session``) at once.
-    ``HttpServer.auth`` (an httpx.Auth) rides the adapter's ``auth`` key and
-    WINS over a minted bearer token: an Auth manages its own ``Authorization``
-    header, so stamping the static bearer alongside it would send conflicting
-    credentials."""
+    surfaces (tool factories, discovery, resource fetcher, ``mcp_session``,
+    ``mcp_run_context``, prompt source) at once. http identity is ALWAYS an
+    ``httpx.Auth`` on the adapter's ``auth`` key, driven per request by the
+    transport's persistent httpx client — there is deliberately NO static
+    ``Authorization`` header stamp (a connect-time bearer freezes for the
+    connection's lifetime; the qslrx mid-run stale-token bug). ``auth`` falls
+    back to ``spec.auth`` so a caller that builds no identity still carries an
+    explicitly-configured OAuth Auth."""
     if isinstance(spec, StdioServer):
         conn: dict[str, Any] = {"transport": "stdio", "command": spec.command, "args": list(spec.args)}
         if spec.env is not None:
             conn["env"] = dict(spec.env)
         return conn
-    headers = dict(spec.headers or {})
-    if token is not None and spec.auth is None:
-        headers["Authorization"] = f"Bearer {token}"
     conn = {"transport": "streamable_http", "url": spec.url}
-    if spec.auth is not None:
-        conn["auth"] = spec.auth
-    if headers:
-        conn["headers"] = headers
+    conn_auth = auth if auth is not None else spec.auth
+    if conn_auth is not None:
+        conn["auth"] = conn_auth
+    if spec.headers:
+        conn["headers"] = dict(spec.headers)
     return conn
 
 
 def _client_for(
     server_key: str,
     spec: StdioServer | HttpServer,
-    token: str | None,
+    auth: Any = None,
     *,
     callbacks: Any | None = None,
 ) -> Any:
@@ -288,7 +297,7 @@ def _client_for(
 
     # The connection dict matches the adapter's Stdio/StreamableHttp TypedDicts at
     # runtime; cast past the structural mismatch the plain dict builder produces.
-    return MultiServerMCPClient(cast(Any, {server_key: _connection(spec, token)}), callbacks=callbacks)
+    return MultiServerMCPClient(cast(Any, {server_key: _connection(spec, auth=auth)}), callbacks=callbacks)
 
 
 async def _resolve_token(token_provider: TokenProvider | None, config: Any) -> str | None:
@@ -318,6 +327,88 @@ async def _resolve_token_no_config(token_provider: TokenProvider | None) -> str 
     if inspect.isawaitable(result):
         result = await result
     return result
+
+
+def _resolve_token_sync(token_provider: TokenProvider, config: Any, *, use_config: bool) -> str | None:
+    """Sync-flow twin of the resolvers above: a SYNC provider resolves in place;
+    an async provider cannot be awaited on a sync httpx flow, so it fails loud
+    (silently sending NO identity would be worse than the error)."""
+    if use_config:
+        if isinstance(config, dict):
+            configurable = config.get("configurable", {}) or {}
+        else:
+            configurable = getattr(config, "configurable", {}) or {}
+        result = token_provider(configurable)
+    else:
+        try:
+            result = token_provider()
+        except TypeError:
+            result = token_provider({})
+    if inspect.isawaitable(result):
+        result.close()  # type: ignore[attr-defined]  # suppress the never-awaited warning
+        raise RuntimeError(
+            "async token_provider cannot be resolved on a sync httpx auth flow; "
+            "the MCP streamable-http transport drives requests async"
+        )
+    return result
+
+
+def _token_provider_auth(token_provider: TokenProvider, config: Any, *, use_config: bool) -> Any:
+    """Wrap ``token_provider`` in an ``httpx.Auth`` that re-invokes it PER REQUEST
+    and stamps the returned value as the bearer ``Authorization`` header.
+
+    This is what un-freezes the bearer mid-run (neograph-qslrx): the RUN_ID tool
+    cache holds the tool/client for the whole run, but identity is re-resolved on
+    every request through the SAME per-request mechanism ``HttpServer.auth``
+    (OAuth) already rides — so a refreshing provider takes effect without a
+    reconnect, while a static-string provider keeps sending the same value.
+
+    ``config`` is captured at build time (the cached tool holds the FIRST
+    superstep's config); freshness comes from re-INVOKING the provider, not from
+    config re-capture — ``configurable`` is run-static, so this is sound.
+    httpx imported function-local per the module's deferred-import convention."""
+    import httpx
+
+    class _TokenProviderAuth(httpx.Auth):
+        async def async_auth_flow(self, request: Any) -> Any:
+            token = await (
+                _resolve_token(token_provider, config) if use_config else _resolve_token_no_config(token_provider)
+            )
+            if token is not None:
+                request.headers["Authorization"] = f"Bearer {token}"
+            yield request
+
+        def sync_auth_flow(self, request: Any) -> Any:
+            token = _resolve_token_sync(token_provider, config, use_config=use_config)
+            if token is not None:
+                request.headers["Authorization"] = f"Bearer {token}"
+            yield request
+
+    return _TokenProviderAuth()
+
+
+def _http_identity(
+    spec: StdioServer | HttpServer,
+    token_provider: TokenProvider | None,
+    config: Any,
+    *,
+    use_config: bool = True,
+) -> Any:
+    """The ONE http-identity builder every surface calls before ``_client_for``.
+
+    Precedence (pinned by test_mcp_oauth.py test 4): an explicit
+    ``HttpServer.auth`` (real OAuth) WINS over the ``token_provider`` wrap;
+    with neither, the connection is anonymous. stdio carries no http identity
+    (its token rides as a tool argument), so the answer is always ``None``.
+    ``use_config=False`` selects the no-config provider shape (resource /
+    prompt / discovery paths, which carry no run config)."""
+    if not isinstance(spec, HttpServer):
+        return None
+    if spec.auth is not None:
+        return spec.auth
+    if token_provider is None:
+        return None
+    return _token_provider_auth(token_provider, config, use_config=use_config)
 
 
 def _run_sync(coro: Coroutine[Any, Any, Any]) -> Any:
@@ -352,13 +443,17 @@ def _declares_arg(declared_names: Any, arg_name: str) -> bool:
         return False
 
 
-def _inject_stdio_token(tool: Any, token: str, arg_name: str) -> Any:
-    """Wrap a stdio tool so every call carries per-run identity as ``arg_name``.
+def _inject_stdio_token(tool: Any, token_provider: TokenProvider, config: Any, arg_name: str) -> Any:
+    """Wrap a stdio tool so every call carries identity as ``arg_name``,
+    re-resolved from ``token_provider`` PER CALL.
 
-    stdio has no headers, so identity travels as a tool argument. Only injected
-    when the tool actually declares ``arg_name`` (else the server would reject an
-    unknown kwarg); our value overrides any model-supplied one so identity is
-    framework-carried, never LLM-chosen."""
+    stdio has no headers, so identity travels as a tool argument. The provider
+    is re-invoked inside the coroutine (never closed over as a build-time value)
+    so a refreshing provider takes effect mid-run — the stdio twin of the
+    per-request http Auth (neograph-qslrx). Only injected when the tool actually
+    declares ``arg_name`` (else the server would reject an unknown kwarg); our
+    value overrides any model-supplied one so identity is framework-carried,
+    never LLM-chosen."""
     # Access tool.args inside the guard: a tool without an introspectable schema
     # may raise here (the factory-path fallback must stay declares=False).
     try:
@@ -371,15 +466,24 @@ def _inject_stdio_token(tool: Any, token: str, arg_name: str) -> Any:
     original = tool.coroutine
 
     async def _with_identity(**kwargs: Any) -> Any:
-        kwargs[arg_name] = token
+        token = await _resolve_token(token_provider, config)
+        if token is not None:
+            kwargs[arg_name] = token
         return await original(**kwargs)
 
     return tool.model_copy(update={"coroutine": _with_identity})
 
 
-async def _discover_tool_names(server_key: str, spec: StdioServer | HttpServer) -> list[str]:
-    """Connect once (identity-agnostic) to enumerate the server's tool names."""
-    client = _client_for(server_key, spec, None)
+async def _discover_tool_names(
+    server_key: str,
+    spec: StdioServer | HttpServer,
+    token_provider: TokenProvider | None = None,
+) -> list[str]:
+    """Connect once to enumerate the server's tool names, carrying whatever http
+    identity is configured (``spec.auth`` or a wrapped ``token_provider``) — a
+    guarded server's listing is no longer an anonymous blind spot. No run config
+    exists at build time, so the provider resolves via its no-config shape."""
+    client = _client_for(server_key, spec, _http_identity(spec, token_provider, None, use_config=False))
     tools = await client.get_tools(server_name=server_key)
     return [t.name for t in tools]
 
@@ -436,11 +540,14 @@ def _make_tool_factory(
 ) -> ToolFactory:
     """Build ONE consumer-owned async factory for ``tool_name`` on ``server_key``.
 
-    Per superstep: mint identity from config, build a fresh client (owned here,
-    disposed by the adapter's stateless-per-call session model), fetch the tool,
-    bind per-run identity, (when namespaced) rename it so the LLM-facing name
+    Build a client (owned here, disposed by the adapter's stateless-per-call
+    session model) whose http identity is a PER-REQUEST httpx.Auth over
+    ``token_provider`` (or the spec's explicit ``auth``), fetch the tool, bind
+    per-call stdio identity, (when namespaced) rename it so the LLM-facing name
     matches the ``Tool`` spec / factory key, and (when ``output_model`` is declared)
-    wrap it so the result is the rehydrated model.
+    wrap it so the result is the rehydrated model. The built tool is cached per
+    run (RUN_ID), but identity is re-resolved per request/call, so a refreshing
+    provider takes effect mid-run.
 
     The ``output_model`` wrap happens after identity injection and rename — so it
     wraps the already-injected coroutine (token injection preserved) and the
@@ -452,7 +559,6 @@ def _make_tool_factory(
     async def _factory(config: Any, tool_config: Any) -> Any:
         from neograph_mcp._progress import _progress_callbacks
 
-        token = await _resolve_token(token_provider, config)
         callbacks = _progress_callbacks(server_key)
         held = _held_sessions(config).get(server_key)
         if held is not None:
@@ -464,7 +570,8 @@ def _make_tool_factory(
 
             tools = await load_mcp_tools(held, callbacks=callbacks, server_name=server_key)
         else:
-            client = _client_for(server_key, spec, token, callbacks=callbacks)
+            auth = _http_identity(spec, token_provider, config)
+            client = _client_for(server_key, spec, auth, callbacks=callbacks)
             tools = await client.get_tools(server_name=server_key)
         tool = next((t for t in tools if t.name == tool_name), None)
         if tool is None:
@@ -472,8 +579,8 @@ def _make_tool_factory(
                 f"MCP server '{server_key}' no longer exposes tool '{tool_name}' "
                 f"(available: {sorted(t.name for t in tools)})"
             )
-        if isinstance(spec, StdioServer) and token is not None:
-            tool = _inject_stdio_token(tool, token, stdio_token_arg)
+        if isinstance(spec, StdioServer) and token_provider is not None:
+            tool = _inject_stdio_token(tool, token_provider, config, stdio_token_arg)
         if rename_to is not None:
             tool = tool.model_copy(update={"name": rename_to})
         if output_model is not None:
@@ -535,7 +642,7 @@ def mcp_tool_factories(
     """
     factories: dict[str, ToolFactory] = {}
     for server_key, spec in servers.items():
-        names = _run_sync(_discover_tool_names(server_key, spec))
+        names = _run_sync(_discover_tool_names(server_key, spec, token_provider))
         for name in names:
             key = f"{server_key}::{name}" if namespace else name
             if key in factories:
@@ -698,8 +805,8 @@ def mcp_resource_fetcher(
 
     async def fetcher(uri: str) -> tuple[Any, str | None]:
         server_key = _route_uri(servers, uri)
-        token = await _resolve_token_no_config(token_provider)
-        client = _client_for(server_key, servers[server_key], token)
+        auth = _http_identity(servers[server_key], token_provider, None, use_config=False)
+        client = _client_for(server_key, servers[server_key], auth)
         error: McpError | None = None
         result: Any = None
         async with client.session(server_key) as session:
@@ -715,8 +822,8 @@ def mcp_resource_fetcher(
 
     async def replayer(tool_name: str, args: dict) -> Any:
         server_key, real = _route_tool(servers, tool_name)
-        token = await _resolve_token_no_config(token_provider)
-        client = _client_for(server_key, servers[server_key], token)
+        auth = _http_identity(servers[server_key], token_provider, None, use_config=False)
+        client = _client_for(server_key, servers[server_key], auth)
         async with client.session(server_key) as session:
             result = await session.call_tool(real, args or {})
         # Return the raw content list so neograph's _first_resource_link_uri scans

@@ -21,9 +21,10 @@ Usage — the consumer holds the context around the run and threads it via confi
     async with mcp_run_context({"crm": spec}, token_provider=..., config=base) as ctx:
         result = await neograph.arun(graph, input=..., config=ctx.config(base))
 
-- ``__aenter__`` mints per-run identity (same ``_resolve_token`` path as every
-  other surface) and opens one persistent adapter session per server — all in
-  the consumer's task. ``__aexit__`` closes them in reverse (LIFO) order in that
+- ``__aenter__`` wires http identity as a PER-REQUEST httpx.Auth (the same
+  ``_http_identity`` builder as every other surface — a refreshing
+  ``token_provider`` survives the run's whole superstep span) and opens one
+  persistent adapter session per server — all in the consumer's task. ``__aexit__`` closes them in reverse (LIFO) order in that
   same task: safe disposal by construction.
 - ``ctx.config(base)`` returns a config whose ``configurable`` carries the held
   sessions under a battery-private key. The tool factory binds to a held session
@@ -49,8 +50,7 @@ from neograph_mcp._client import (
     StdioServer,
     TokenProvider,
     _client_for,
-    _resolve_token,
-    _resolve_token_no_config,
+    _http_identity,
     _unwrap_single,
 )
 
@@ -83,13 +83,16 @@ class McpRunContext:
     async def __aenter__(self) -> McpRunContext:
         try:
             for server_key, spec in self._servers.items():
-                # Mint identity exactly as the factory/session surfaces do.
-                if self._config is not None:
-                    token = await _resolve_token(self._token_provider, self._config)
-                else:
-                    token = await _resolve_token_no_config(self._token_provider)
+                # http identity rides each held connection as a PER-REQUEST
+                # httpx.Auth — the held sessions span every superstep of the
+                # run, so a connect-time bearer would freeze for the whole run
+                # (neograph-qslrx). stdio identity is injected per call by the
+                # tool factory, not here.
+                auth = _http_identity(
+                    spec, self._token_provider, self._config, use_config=self._config is not None
+                )
                 async with asyncio.timeout(self._timeout):
-                    client = _client_for(server_key, spec, token)
+                    client = _client_for(server_key, spec, auth)
                     cm = client.session(server_key)
                     session = await cm.__aenter__()
                 self._cms.append(cm)
@@ -143,10 +146,12 @@ def mcp_run_context(
     driven WITHOUT this context keeps today's per-call reconnect behavior
     (the adapter's documented default for stateless tools).
 
-    ``token_provider`` mints per-run identity at entry (from
-    ``config['configurable']`` when ``config`` is given, else called bare) —
-    the same resolution every other battery surface uses; ``timeout`` (seconds,
-    default 30) bounds each server's connect. Construction is ZERO network I/O.
+    ``token_provider`` supplies http identity as a PER-REQUEST httpx.Auth
+    (re-invoked on every request, from ``config['configurable']`` when
+    ``config`` is given, else called bare) — the same mechanism every other
+    battery surface uses, so a refreshing provider takes effect across the held
+    sessions; ``timeout`` (seconds, default 30) bounds each server's connect.
+    Construction is ZERO network I/O.
     """
     return McpRunContext(
         servers,

@@ -48,6 +48,7 @@ from neograph_mcp._client import (
     StdioServer,
     TokenProvider,
     _client_for,
+    _http_identity,
     _resolve_token_no_config,
     _run_sync,
     _unwrap_single,
@@ -82,10 +83,12 @@ def mcp_prompt_source(
     cache: dict[str, str | None] = {}
 
     async def _fetch(name: str) -> str | None:
+        # http identity rides as a per-request Auth; the bare token is still
+        # resolved for the stdio prompt-argument injection below.
         token = await _resolve_token_no_config(token_provider)
         try:
             async with asyncio.timeout(timeout):
-                client = _client_for(server_key, spec, token)
+                client = _client_for(server_key, spec, _http_identity(spec, token_provider, None, use_config=False))
                 async with client.session(server_key) as session:
                     declared = await _declared_prompt_args(session, name)
                     if declared is None:

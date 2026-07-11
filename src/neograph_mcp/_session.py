@@ -58,6 +58,7 @@ from neograph_mcp._client import (
     TokenProvider,
     _client_for,
     _declares_arg,
+    _http_identity,
     _resolve_token,
     _resolve_token_no_config,
     _unwrap_single,
@@ -177,10 +178,14 @@ class McpSession:
     """One MCP connection, N tool calls. Async context manager; consumer-owned.
 
     Build via :func:`mcp_session`. Zero network at construction; the connect fires
-    at ``__aenter__`` (bounded by ``timeout``). Identity is minted ONCE at entry
-    (from ``config['configurable']`` via ``token_provider`` when ``config`` is
-    given, else the no-config provider shape). Open it INSIDE the node/tool body
-    that uses it, enter and exit in the same task, and never store it.
+    at ``__aenter__`` (bounded by ``timeout``). http identity rides the
+    connection as a PER-REQUEST httpx.Auth (``token_provider`` is re-invoked on
+    every request, so a refreshing provider survives a long-lived session);
+    stdio identity is minted once at entry (from ``config['configurable']`` via
+    ``token_provider`` when ``config`` is given, else the no-config provider
+    shape) and injected as a tool argument per call. Open it INSIDE the
+    node/tool body that uses it, enter and exit in the same task, and never
+    store it.
     """
 
     def __init__(
@@ -208,14 +213,21 @@ class McpSession:
         self._names: list[str] | None = None
 
     async def __aenter__(self) -> McpSession:
-        # Mint identity once (config path when config given, else no-config path).
-        if self._config is not None:
-            self._token = await _resolve_token(self._token_provider, self._config)
-        else:
-            self._token = await _resolve_token_no_config(self._token_provider)
+        # http identity rides the connection as a PER-REQUEST httpx.Auth (so a
+        # refreshing token_provider takes effect across this long-lived session
+        # — neograph-qslrx); stdio identity is minted once at entry and injected
+        # as a tool argument per call.
+        auth = _http_identity(
+            self._spec, self._token_provider, self._config, use_config=self._config is not None
+        )
+        if isinstance(self._spec, StdioServer):
+            if self._config is not None:
+                self._token = await _resolve_token(self._token_provider, self._config)
+            else:
+                self._token = await _resolve_token_no_config(self._token_provider)
         try:
             async with asyncio.timeout(self._timeout):
-                client = _client_for(self._server_key, self._spec, self._token)
+                client = _client_for(self._server_key, self._spec, auth)
                 self._cm = client.session(self._server_key)
                 self._session = await self._cm.__aenter__()
         except BaseException as exc:  # noqa: BLE001 - normalise the transport's group wrapping

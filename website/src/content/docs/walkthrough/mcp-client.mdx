@@ -114,7 +114,7 @@ So a sync `run()` fails loud with a `ConfigurationError` pointing you to `arun()
 
 ## Beat 3 — per-run identity
 
-Each run carries its own identity. The `token_provider` reads `config['configurable']['mcp_auth']` and mints the token; neograph never inspects it — it only carries it from config to the tool.
+Each run carries its own identity. The `token_provider` reads `config['configurable']['mcp_auth']` and mints the token; neograph never inspects it — it only carries it from config to the tool. The provider is re-invoked **per request** (over streamable-http it rides as an `httpx.Auth`; over stdio it is re-resolved per tool call), so a provider that re-fetches a short-lived credential takes effect mid-run even on runs whose tool phase outlives the IdP's token lifespan. A provider that returns a static string keeps sending that same value — per-request invocation makes refresh *possible*; whether the token changes is your provider's business. For turnkey exchange/expiry/401-refresh, use `HttpServer(auth=...)` below.
 
 {/* test-skip: top-level await/async snippet (not runnable as a plain module) */}
 ```python
@@ -267,7 +267,7 @@ from neograph_mcp import mcp_session
 @node(mode="raw", outputs=DealReview)
 async def deal_review(state, config):
     async with mcp_session("crm", CRM, token_provider=token_provider, config=config) as s:
-        # Two primitives over ONE connection; identity minted once at entry.
+        # Two primitives over ONE connection; http identity re-resolved per request.
         search = await s.call("crm_search", {"query": "Acme"}, output_model=CrmSearchResult)
         deal   = await s.call("get_deal", {"deal_id": search.hits[0].id})
     detail = json.loads(deal.text or "{}")          # McpCallResult: .text / .content / .structured

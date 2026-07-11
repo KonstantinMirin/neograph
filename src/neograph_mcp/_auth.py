@@ -1,12 +1,13 @@
 """First-class production OAuth for ``HttpServer`` — SDK-wrapping battery helpers.
 
-``token_provider`` returns a bare bearer string minted once per superstep and
-stamped into a static ``Authorization`` header — it structurally cannot do
-401-triggered refresh-without-reconnect. Real OAuth identity lives on the
-TRANSPORT: an ``httpx.Auth`` attached to ``HttpServer(auth=...)`` rides the
-adapter's persistent httpx client (the ``_connection`` choke point wires it for
-all three surfaces — tool factories, resource fetcher, ``mcp_session``) and
-handles token exchange, expiry, and refresh on its own.
+``token_provider`` returns a bare bearer string, re-invoked PER REQUEST via an
+internal ``httpx.Auth`` wrap — so a refreshing provider takes effect mid-run,
+but it cannot do 401-triggered refresh or token exchange on its own. Real OAuth
+identity lives on the TRANSPORT the same way: an ``httpx.Auth`` attached to
+``HttpServer(auth=...)`` rides the adapter's persistent httpx client (the
+``_connection`` choke point wires it for all surfaces — tool factories,
+resource fetcher, ``mcp_session``) and handles token exchange, expiry, and
+refresh on its own. An explicit ``auth`` WINS over ``token_provider``.
 
 These helpers WRAP the MCP SDK's shipped providers — token exchange/refresh is
 never re-implemented here. The SDK providers live in
