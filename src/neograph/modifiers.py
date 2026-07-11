@@ -260,12 +260,6 @@ class Modifiable:
 
                 validate_loop_self_edge(result)
             elif isinstance(result, Construct):
-                # Construct-level Loop with history=True — not supported yet
-                if modifier.history:
-                    raise ConstructError.build(
-                        "Loop(history=True) is not supported on Constructs",
-                        hint="history tracking is only available on Node-level Loops",
-                    )
                 # Construct: validate output compat with input
                 from neograph._construct_validation import validate_loop_construct
 
@@ -568,7 +562,6 @@ class Loop(Modifier, frozen=True):
     when: str | Callable[[Any], bool]  # str (registered condition name) or predicate. True = continue looping.
     max_iterations: int = 10
     on_exhaust: str = "error"  # "error" raises ExecutionError, "last" returns last result
-    history: bool = False  # collect each iteration's output in state
 
     def model_post_init(self, __context: Any) -> None:
         if self.on_exhaust not in ("error", "last"):

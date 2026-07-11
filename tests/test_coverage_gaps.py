@@ -922,26 +922,6 @@ class TestBuildStateUpdate:
         assert result["test_result"] == {"a": RawText(text="ok")}
         assert result["test_meta"] == {"a": Claims(items=["x"])}
 
-    def test_loop_history_field_written(self):
-        """Loop with history=True writes to history field (lines 231-232)."""
-        from pydantic import create_model
-
-        from neograph._state_bus import adapt_state
-        from neograph._state_write import _build_state_update
-
-        n = Node("test", outputs=RawText) | Loop(when=lambda x: True, max_iterations=3, history=True)
-
-        StateModel = create_model(
-            "FakeState",
-            neo_loop_count_test=(int, 0),
-        )
-        state = StateModel()
-
-        result = _build_state_update(n, "test", RawText(text="v1"), adapt_state(state))
-        assert result["test"] == RawText(text="v1")
-        assert result["neo_loop_count_test"] == 1
-        assert result["neo_loop_history_test"] == RawText(text="v1")
-
 
 # ═══════════════════════════════════════════════════════════════════════════
 # factory.py — Produce wrapper dict-form (line 376)
@@ -1436,35 +1416,6 @@ class TestBranchArmConstructState:
 
         # Construct without output should NOT create a state field
         assert "bno_sub" not in state_model.model_fields
-
-
-# ═══════════════════════════════════════════════════════════════════════════
-# state.py — Loop history field creation (line 170)
-# ═══════════════════════════════════════════════════════════════════════════
-
-
-class TestLoopHistoryStateField:
-    """Loop with history=True creates a history field in state model."""
-
-    def test_loop_history_field_exists_in_state(self):
-        """Loop(history=True) creates neo_loop_history_{name} field (line 170)."""
-        from neograph.state import compile_state_model
-
-        n = Node.scripted("refine", fn="f", inputs=Draft, outputs=Draft) | Loop(
-            when=lambda d: True, max_iterations=3, history=True
-        )
-
-        pipeline = Construct(
-            "hist-test",
-            nodes=[
-                Node.scripted("seed", fn="f", outputs=Draft),
-                n,
-            ],
-        )
-        state_model = compile_state_model(pipeline)
-
-        assert "neo_loop_history_refine" in state_model.model_fields
-        assert "neo_loop_count_refine" in state_model.model_fields
 
 
 # ═══════════════════════════════════════════════════════════════════════════

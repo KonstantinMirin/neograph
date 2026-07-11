@@ -304,7 +304,7 @@ lookup_type(name: 'str') -> 'type[BaseModel]'
 
 {/* test-skip: generated API signature (declaration, not runnable) */}
 ```python
-Loop(when: str | collections.abc.Callable[[Any], bool], max_iterations: int = 10, on_exhaust: str = 'error', history: bool = False)
+Loop(when: str | collections.abc.Callable[[Any], bool], max_iterations: int = 10, on_exhaust: str = 'error')
 ```
 
 | Field | Type | Required | Default |
@@ -312,7 +312,6 @@ Loop(when: str | collections.abc.Callable[[Any], bool], max_iterations: int = 10
 | <span id="loop-when"></span>`when` | `str | collections.abc.Callable[[Any], bool]` | yes |  |
 | <span id="loop-max_iterations"></span>`max_iterations` | `int` | no | `10` |
 | <span id="loop-on_exhaust"></span>`on_exhaust` | `str` | no | `'error'` |
-| <span id="loop-history"></span>`history` | `bool` | no | `False` |
 
 ### merge_fn
 
@@ -346,7 +345,7 @@ MergePreProcess(*args, **kwargs)
 
 {/* test-skip: generated API signature (declaration, not runnable) */}
 ```python
-node(fn: 'Callable | None' = None, *, mode: "Literal['think', 'agent', 'act', 'scripted', 'raw'] | None" = None, inputs: 'Any' = None, outputs: 'Any' = None, model: 'str | None' = None, prompt: 'str | None' = None, llm_config: 'dict[str, Any] | LlmConfig | None' = None, tools: 'list[Tool] | None' = None, name: 'str | None' = None, map_over: 'str | None' = None, map_key: 'str | None' = None, map_on_error: "Literal['raise', 'collect']" = 'raise', ensemble_n: 'int | None' = None, models: 'list[str] | None' = None, merge_fn: 'str | None' = None, merge_prompt: 'str | None' = None, merge_pre_process: 'Callable | None' = None, merge_post_process: 'Callable | None' = None, merge_fallback: 'Callable | None' = None, merge_model: 'str | None' = None, interrupt_when: 'str | Callable | None' = None, renderer: 'Renderer | None' = None, context: 'list[str] | None' = None, skip_when: 'Callable | None' = None, skip_value: 'Callable | None' = None, gate_tools_when: 'Callable | str | None' = None, loop_when: 'str | Callable | None' = None, max_iterations: 'int | None' = None, on_exhaust: "Literal['error', 'last'] | None" = None, loop_history: 'bool' = False) -> 'Any'
+node(fn: 'Callable | None' = None, *, mode: "Literal['think', 'agent', 'act', 'scripted', 'raw'] | None" = None, inputs: 'Any' = None, outputs: 'Any' = None, model: 'str | None' = None, prompt: 'str | None' = None, llm_config: 'dict[str, Any] | LlmConfig | None' = None, tools: 'list[Tool] | None' = None, name: 'str | None' = None, map_over: 'str | None' = None, map_key: 'str | None' = None, map_on_error: "Literal['raise', 'collect']" = 'raise', ensemble_n: 'int | None' = None, models: 'list[str] | None' = None, merge_fn: 'str | None' = None, merge_prompt: 'str | None' = None, merge_pre_process: 'Callable | None' = None, merge_post_process: 'Callable | None' = None, merge_fallback: 'Callable | None' = None, merge_model: 'str | None' = None, interrupt_when: 'str | Callable | None' = None, renderer: 'Renderer | None' = None, context: 'list[str] | None' = None, skip_when: 'Callable | None' = None, skip_value: 'Callable | None' = None, gate_tools_when: 'Callable | str | None' = None, loop_when: 'str | Callable | None' = None, max_iterations: 'int | None' = None, on_exhaust: "Literal['error', 'last'] | None" = None) -> 'Any'
 ```
 
 ### Node (model)
@@ -653,7 +652,7 @@ node | Loop(when=lambda d: d is None or d.score < 0.8, max_iterations=5)
 construct | Loop(when=lambda d: d is None or d.score < 0.8, max_iterations=10)
 ```
 
-The `merge_prompt` path on `Oracle` receives upstream context as a dict `{"variants": [...], upstream_key: val, ...}` instead of a bare variant list; templates use `${variants}` for the variant list and `${upstream.field}` for upstream data. `Each(over, key)` fans out over a dotted-path collection, keying results by `getattr(item, key)`. `Operator(when)` is a human-in-the-loop interrupt whose `when` is a registered condition name. `Loop(when, ...)` is a cycle modifier: on a Node it self-loops (output feeds back as input); on a Construct the sub-construct re-runs with its output as the next input. `when` receives the latest output (which may be `None` on the first iteration, so the callable must be None-safe, e.g. `lambda d: d is None or d.score < 0.8`); when `history=True`, each iteration's output is collected in a state list field.
+The `merge_prompt` path on `Oracle` receives upstream context as a dict `{"variants": [...], upstream_key: val, ...}` instead of a bare variant list; templates use `${variants}` for the variant list and `${upstream.field}` for upstream data. `Each(over, key)` fans out over a dotted-path collection, keying results by `getattr(item, key)`. `Operator(when)` is a human-in-the-loop interrupt whose `when` is a registered condition name. `Loop(when, ...)` is a cycle modifier: on a Node it self-loops (output feeds back as input); on a Construct the sub-construct re-runs with its output as the next input. `when` receives the latest output (which may be `None` on the first iteration, so the callable must be None-safe, e.g. `lambda d: d is None or d.score < 0.8`). A self-loop node's output field is itself an append-list of every iteration, so `result[node]` is the full iteration history (last element is the final value).
 
 When `output != input` on a Construct Loop, the sub-construct re-reads original inputs from parent state on each iteration instead of feeding output back — this enables produce+validate patterns. The `|` syntax returns a new Node/Construct with the modifier appended, so you can chain: `node | Oracle(...) | Operator(...)`.
 

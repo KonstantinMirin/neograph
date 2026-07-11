@@ -137,9 +137,6 @@ def _build_state_update(
         # Counter bootstrap (absent/None -> 0) lives in StateBus.get_counter.
         current_count = state.get_counter(count_field) if state is not None else 0
         update[count_field] = current_count + 1
-        if loop_mod.history:
-            history_field = StateKeys.loop_history(field_name)
-            update[history_field] = result
 
     return update
 

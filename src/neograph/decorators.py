@@ -280,7 +280,6 @@ def node(
     loop_when: str | Callable | None = None,
     max_iterations: int | None = None,
     on_exhaust: Literal["error", "last"] | None = None,
-    loop_history: bool = False,
 ) -> Any:
     """Decorator that turns a function into a Node spec with signature-inferred
     dependencies. Supports both `@node` and `@node(...)` call forms.
@@ -321,15 +320,12 @@ def node(
     Loop self-refinement::
 
         @node(outputs=Draft, prompt='rw/draft', model='reason',
-              loop_when='needs_work', max_iterations=5, loop_history=True)
+              loop_when='needs_work', max_iterations=5)
         def draft(topic: RawText) -> Draft: ...
 
-    ``loop_history=True`` forwards to ``Loop(history=True)`` — prior
-    iterations accumulate in ``neo_loop_history_{node}``. Requires
-    ``loop_when=`` (without it no Loop is composed and the kwarg would be
-    silently dead). ForwardConstruct's ``self.loop()`` wraps a sub-construct,
-    where Loop bans ``history`` — the @node self-loop is the Node-level
-    shape where it is legal.
+    A self-loop node's output field accumulates every iteration as a list
+    (the ``_append_loop_result`` reducer), so ``result[node]`` is the full
+    iteration history; the last element is the final value.
 
     Merge hooks (``merge_prompt`` path only)::
 
@@ -384,14 +380,6 @@ def node(
                 "map_over= (Each) and loop_when= (Loop) cannot be combined on the same node",
                 node=(name or f.__name__).replace("_", "-"),
                 hint="use a sub-construct with Loop inside an Each fan-out instead",
-            )
-        if loop_history and loop_when is None:
-            # Without loop_when no Loop modifier is composed at all, so the
-            # kwarg would be silently dead — same pairing rule as map_over/map_key.
-            raise ConstructError.build(
-                "loop_history= requires loop_when=",
-                node=(name or f.__name__).replace("_", "-"),
-                hint="pass loop_when='<condition>' to compose the Loop that records history",
             )
 
         # -- Mode inference: if not explicitly set, infer from kwargs ----------
@@ -677,12 +665,6 @@ def node(
             }
             if on_exhaust is not None:
                 loop_kwargs["on_exhaust"] = on_exhaust
-            if loop_history:
-                # Conditional-include: Loop's history=False default stays
-                # authoritative. Node-level self-loop is the one @node shape
-                # where history is legal (Construct-level Loop bans it);
-                # ForwardConstruct's self.loop() is structurally exempt.
-                loop_kwargs["history"] = True
             n = n | Loop(**loop_kwargs)
             _register_sidecar(n, f, param_names)
             if param_res:

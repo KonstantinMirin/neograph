@@ -155,71 +155,6 @@ class TestSelfLoop:
 
 
 # =============================================================================
-# @node decorator: loop_history= kwarg (neograph-d5pvl, three-surface parity)
-# =============================================================================
-
-
-class TestNodeDecoratorLoopHistory:
-    """@node decorator: loop_history= forwards onto the composed Loop.
-
-    Parity target: modifiers.Loop.history (bool, default False) — Node-level
-    only. @node's loop_when path composes a Node-level self-loop, exactly the
-    supported shape.
-
-    Three-surface parity exemption: ForwardConstruct self.loop() is
-    structurally EXEMPT — FC loops build a sub-construct, and
-    Construct | Loop(history=True) raises ConstructError by design
-    (modifiers.py Construct-level history ban, pinned by
-    test_raises_when_history_true_on_construct_loop). The programmatic
-    surface (Node | Loop(history=True)) already carries the field.
-    """
-
-    def test_loop_carries_history_when_loop_history_true(self):
-        """@node(loop_when=..., loop_history=True) composes Loop(history=True)."""
-
-        @node(
-            outputs=Draft,
-            loop_when=lambda d: d is None or d.score < 0.8,
-            max_iterations=5,
-            loop_history=True,
-        )
-        def refine(seed: Draft) -> Draft:
-            return Draft(content="v", iteration=seed.iteration + 1, score=seed.score + 0.3)
-
-        loop_mod = refine.get_modifier(Loop)
-        assert isinstance(loop_mod, Loop)
-        assert loop_mod.history is True
-
-    def test_loop_history_stays_false_default_when_omitted(self):
-        """Omitting loop_history= leaves Loop's own default (False)
-        authoritative — the decorator must not shadow the modifier default."""
-
-        @node(
-            outputs=Draft,
-            loop_when=lambda d: d is None or d.score < 0.8,
-            max_iterations=5,
-        )
-        def refine(seed: Draft) -> Draft:
-            return Draft(content="v", iteration=seed.iteration + 1, score=seed.score + 0.3)
-
-        loop_mod = refine.get_modifier(Loop)
-        assert isinstance(loop_mod, Loop)
-        assert loop_mod.history is False
-
-    def test_decoration_raises_when_loop_history_without_loop_when(self):
-        """loop_history=True without loop_when= raises ConstructError at
-        decoration time — no Loop is composed at all in that case, so the
-        kwarg would otherwise be silently dead (pairing-guard precedent:
-        map_over-requires-map_key)."""
-
-        with pytest.raises(ConstructError, match="loop_when"):
-
-            @node(outputs=Draft, loop_history=True)
-            def refine(seed: Draft) -> Draft:
-                return Draft(content="v", score=0.9)
-
-
-# =============================================================================
 # Pattern 2: Multi-node loop — review → revise cycle
 # =============================================================================
 
@@ -471,32 +406,6 @@ class TestLoopValidation:
         sub = sub | Oracle(n=3, merge_fn="combine")
         with pytest.raises(ConstructError, match="Cannot combine Oracle and Loop"):
             sub | Loop(when=lambda d: True, max_iterations=3)
-
-    def test_raises_when_history_true_on_construct_loop(self):
-        """Construct | Loop(history=True) raises ConstructError."""
-        from neograph import Loop
-
-        sub = Construct(
-            name="sub",
-            nodes=[Node.scripted("inner", fn="noop", outputs=Draft)],
-            input=Draft,
-            output=Draft,
-        )
-        with pytest.raises(ConstructError, match="history=True.*not supported on Constructs"):
-            sub | Loop(when=lambda d: True, max_iterations=3, history=True)
-
-    def test_history_false_on_construct_loop_is_fine(self):
-        """Construct | Loop(history=False) is allowed — no false positive."""
-        from neograph import Loop
-
-        sub = Construct(
-            name="sub",
-            nodes=[Node.scripted("inner", fn="noop", outputs=Draft)],
-            input=Draft,
-            output=Draft,
-        )
-        result = sub | Loop(when=lambda d: True, max_iterations=3, history=False)
-        assert result.has_modifier(Loop)
 
     def test_oracle_alone_still_works(self):
         """Oracle without Loop is fine — no false positive."""
@@ -1844,25 +1753,100 @@ class TestLoopOverAgent:
         assert history[-1].score == 0.9
 
 
-class TestLoopHistoryRuntimeAndRedundancy:
-    """Runtime coverage for ``loop_history=`` / ``Loop(history=True)`` — the
-    surface that had ZERO end-to-end tests before (only construction asserts),
-    plus an explicit PIN of its redundancy with the self-loop's main append
-    field. See docs/design/loop-history-archaeology-2026-07-11.md.
+class TestLoopHistoryRemoved:
+    """TDD-inverted removal guard for neograph-eef83: ``Loop.history`` /
+    ``loop_history=`` / ``neo_loop_history_{node}`` are REMOVED. The self-loop's
+    MAIN output field (``result[node]``, accumulated by ``_append_loop_result``)
+    is the single output-visible history; the separate history field was
+    born-redundant (docs/design/loop-history-archaeology-2026-07-11.md).
 
-    Archaeology (why this exists): ``Loop.history`` was a schema-first
-    speculative field (born 2026-04-07 in 057689b alongside now-removed
-    ``reenter``/``loop_to``). The self-loop's MAIN output field already
-    accumulates every iteration via ``_append_loop_result`` (wired the same day,
-    5083d5f, whose message calls it "history preserved"), so the separate
-    ``neo_loop_history_{node}`` field duplicates it. history is legal ONLY on a
-    Node self-loop (banned on Constructs), i.e. exactly where the main field
-    already collects — hence total redundancy. These tests make that provable at
-    runtime so the keep-vs-remove decision (neograph-eef83) rests on
-    executed behavior, not inspection.
+    These tests assert the POST-removal state, so on current HEAD (history still
+    present) the first three MUST FAIL — that is the TDD red. The fourth is a
+    keep-existing-behavior invariant guard: it must be GREEN now and STAY GREEN
+    through the removal (it proves the removal doesn't nick the main accumulator).
+
+    Anti-band-aid (from the plan): assertion #1 pins ``not hasattr`` — NOT a
+    raise. ``Modifier`` has no ``extra='forbid'``, so a removed field is silently
+    ignored; do NOT add ``extra='forbid'`` to force a raise.
     """
 
-    def _self_loop_graph(self, history: bool):
+    def test_loop_modifier_has_no_history_field_on_programmatic_surface(self):
+        """PROGRAMMATIC/DECLARATIVE: after removal ``Loop`` carries no ``history``
+        attribute at all. Modifier ignores unknown kwargs (no extra='forbid'), so
+        this is a ``hasattr`` pin, not a raise. FAILS now (field still declared)."""
+        loop = Loop(when=lambda d: True, max_iterations=3)
+        assert not hasattr(loop, "history")
+
+    def test_node_decorator_rejects_loop_history_kwarg(self):
+        """@node SURFACE: ``node()`` is keyword-only with no **kwargs, so after
+        the ``loop_history=`` param is removed, passing it raises TypeError
+        (unknown keyword argument). FAILS now (kwarg still accepted)."""
+        with pytest.raises(TypeError):
+
+            @node(
+                outputs=Draft,
+                loop_when=lambda d: d is None or d.score < 0.9,
+                max_iterations=3,
+                loop_history=True,
+            )
+            def refine(seed: Draft) -> Draft:  # pragma: no cover - decoration raises
+                return Draft(content="x", iteration=seed.iteration + 1)
+
+    def test_self_loop_creates_no_history_state_field(self):
+        """STATE: running a self-loop with a real checkpointer creates NO
+        ``neo_loop_history_*`` key in ``get_state().values``. Built on the
+        programmatic surface with a now-defunct ``Loop(history=True)`` kwarg,
+        which ``Modifier`` silently ignores (no ``extra='forbid'``), proving the
+        state field is gone and the reducer no longer wires it."""
+        from langgraph.checkpoint.memory import MemorySaver
+
+        calls = [0]
+
+        def seed_fn(input_data, config):
+            return Draft(content="v0", iteration=0, score=0.0)
+
+        def refine_fn(input_data, config):
+            calls[0] += 1
+            return Draft(
+                content=f"v{calls[0]}", iteration=calls[0], score=0.3 * calls[0]
+            )
+
+        register_scripted("eef83_seed", seed_fn)
+        register_scripted("eef83_refine", refine_fn)
+
+        pipeline = Construct(
+            "eef83-state",
+            nodes=[
+                Node.scripted("seed", fn="eef83_seed", outputs=Draft),
+                Node.scripted(
+                    "refine",
+                    fn="eef83_refine",
+                    inputs={"seed": Draft, "refine": Draft},
+                    outputs=Draft,
+                )
+                | Loop(
+                    when=lambda d: d is None or d.score < 0.8,
+                    max_iterations=5,
+                    history=True,
+                ),
+            ],
+        )
+        graph = compile(
+            pipeline, **build_test_compile_kwargs(checkpointer=MemorySaver())
+        )
+        cfg = {"configurable": {"thread_id": "eef83-state"}}
+        run(graph, input={"node_id": "s1"}, config=cfg)
+
+        values = graph.get_state(cfg).values
+        history_keys = [k for k in values if k.startswith("neo_loop_history")]
+        assert history_keys == [], f"loop-history state field(s) present: {history_keys}"
+
+    def test_main_append_field_accumulates_every_iteration_without_any_flag(self):
+        """CORE-INVARIANT GUARD (GREEN now, STAYS GREEN through removal): a
+        self-loop's ``result['refine']`` STILL accumulates every iteration via the
+        main ``_append_loop_result`` field, independent of any history flag. This
+        is the load-bearing regression guard proving the removal leaves the main
+        output-visible history intact — no ``loop_history=`` involved."""
         from langgraph.checkpoint.memory import MemorySaver
 
         @node(outputs=Draft)
@@ -1873,7 +1857,6 @@ class TestLoopHistoryRuntimeAndRedundancy:
             outputs=Draft,
             loop_when=lambda d: d is None or d.score < 0.9,
             max_iterations=5,
-            loop_history=history,
         )
         def refine(seed: Draft) -> Draft:
             return Draft(
@@ -1882,47 +1865,12 @@ class TestLoopHistoryRuntimeAndRedundancy:
                 score=seed.score + 0.4,
             )
 
-        pipeline = construct_from_functions(f"hist-{history}", [seed, refine])
+        pipeline = construct_from_functions("eef83-main-field", [seed, refine])
         graph = compile(pipeline, checkpointer=MemorySaver())
-        return graph
-
-    def test_loop_history_collects_every_iteration_at_runtime(self):
-        """history=True genuinely writes each iteration into
-        neo_loop_history_refine, readable via get_state() (the documented read
-        path, modifier-kwargs.mdx). This was previously UNTESTED end-to-end."""
-        graph = self._self_loop_graph(history=True)
-        cfg = {"configurable": {"thread_id": "hist-runtime"}}
-        run(graph, input={"node_id": "h1"}, config=cfg)
-
-        hist = graph.get_state(cfg).values.get("neo_loop_history_refine")
-        assert isinstance(hist, list), f"history field absent/empty: {hist!r}"
-        assert [d.iteration for d in hist] == [1, 2, 3], hist
-        assert [round(d.score, 1) for d in hist] == [0.4, 0.8, 1.2], hist
-
-    def test_loop_history_field_duplicates_the_main_append_field(self):
-        """REDUNDANCY PIN: on the self-loop (history's only legal surface), the
-        main output field ``result['refine']`` already accumulates every
-        iteration as a list, and ``neo_loop_history_refine`` carries the SAME
-        per-iteration data. If a future change gives history a DISTINCT purpose,
-        this test must change with it — the pin documents today's equivalence."""
-        graph = self._self_loop_graph(history=True)
-        cfg = {"configurable": {"thread_id": "hist-dup"}}
-        result = run(graph, input={"node_id": "h1"}, config=cfg)
+        cfg = {"configurable": {"thread_id": "eef83-main"}}
+        result = run(graph, input={"node_id": "m1"}, config=cfg)
 
         main = result["refine"]  # list[Draft] via _append_loop_result
-        hist = graph.get_state(cfg).values["neo_loop_history_refine"]
-        assert [d.iteration for d in main] == [d.iteration for d in hist]
-        assert [d.score for d in main] == [d.score for d in hist]
-
-    def test_main_append_field_alone_preserves_history_without_the_flag(self):
-        """The redundancy's root: WITHOUT history=True, result['refine'] STILL
-        contains every iteration (the append reducer). This is what made the
-        separate history field redundant on its birth-day."""
-        graph = self._self_loop_graph(history=False)
-        cfg = {"configurable": {"thread_id": "no-hist"}}
-        result = run(graph, input={"node_id": "h1"}, config=cfg)
-
-        main = result["refine"]
         assert [d.iteration for d in main] == [1, 2, 3], main
-        # And the history field was never created when the flag is off.
+        # And no history state field exists without the flag either.
         assert "neo_loop_history_refine" not in graph.get_state(cfg).values

@@ -234,8 +234,6 @@ def compile_state_model(
             field_name = field_name_for(n.name)
             fields[StateKeys.loop_count(field_name)] = (int, 0)
             loop = n_mods["loop"]
-            if loop.history:
-                fields[StateKeys.loop_history(field_name)] = (Annotated[list, _concat_reducer], [])
 
     # Subgraph input port — when this Construct declares an input type
     if construct.input is not None:

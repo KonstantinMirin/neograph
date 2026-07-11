@@ -146,7 +146,7 @@
       "doc": "Decorator that turns a function into a Node spec with signature-inferred",
       "kind": "function",
       "name": "node",
-      "signature": "(fn: 'Callable | None' = None, *, mode: \"Literal['think', 'agent', 'act', 'scripted', 'raw'] | None\" = None, inputs: 'Any' = None, outputs: 'Any' = None, model: 'str | None' = None, prompt: 'str | None' = None, llm_config: 'dict[str, Any] | LlmConfig | None' = None, tools: 'list[Tool] | None' = None, name: 'str | None' = None, map_over: 'str | None' = None, map_key: 'str | None' = None, map_on_error: \"Literal['raise', 'collect']\" = 'raise', ensemble_n: 'int | None' = None, models: 'list[str] | None' = None, merge_fn: 'str | None' = None, merge_prompt: 'str | None' = None, merge_pre_process: 'Callable | None' = None, merge_post_process: 'Callable | None' = None, merge_fallback: 'Callable | None' = None, merge_model: 'str | None' = None, interrupt_when: 'str | Callable | None' = None, renderer: 'Renderer | None' = None, context: 'list[str] | None' = None, skip_when: 'Callable | None' = None, skip_value: 'Callable | None' = None, gate_tools_when: 'Callable | str | None' = None, loop_when: 'str | Callable | None' = None, max_iterations: 'int | None' = None, on_exhaust: \"Literal['error', 'last'] | None\" = None, loop_history: 'bool' = False) -> 'Any'"
+      "signature": "(fn: 'Callable | None' = None, *, mode: \"Literal['think', 'agent', 'act', 'scripted', 'raw'] | None\" = None, inputs: 'Any' = None, outputs: 'Any' = None, model: 'str | None' = None, prompt: 'str | None' = None, llm_config: 'dict[str, Any] | LlmConfig | None' = None, tools: 'list[Tool] | None' = None, name: 'str | None' = None, map_over: 'str | None' = None, map_key: 'str | None' = None, map_on_error: \"Literal['raise', 'collect']\" = 'raise', ensemble_n: 'int | None' = None, models: 'list[str] | None' = None, merge_fn: 'str | None' = None, merge_prompt: 'str | None' = None, merge_pre_process: 'Callable | None' = None, merge_post_process: 'Callable | None' = None, merge_fallback: 'Callable | None' = None, merge_model: 'str | None' = None, interrupt_when: 'str | Callable | None' = None, renderer: 'Renderer | None' = None, context: 'list[str] | None' = None, skip_when: 'Callable | None' = None, skip_value: 'Callable | None' = None, gate_tools_when: 'Callable | str | None' = None, loop_when: 'str | Callable | None' = None, max_iterations: 'int | None' = None, on_exhaust: \"Literal['error', 'last'] | None\" = None) -> 'Any'"
     },
     {
       "anchor": "construct_from_module",
@@ -438,17 +438,11 @@
           "default": "'error'",
           "name": "on_exhaust",
           "required": false
-        },
-        {
-          "annotation": "bool",
-          "default": "False",
-          "name": "history",
-          "required": false
         }
       ],
       "kind": "pydantic_model",
       "name": "Loop",
-      "signature": "(when: str | collections.abc.Callable[[Any], bool], max_iterations: int = 10, on_exhaust: str = 'error', history: bool = False)"
+      "signature": "(when: str | collections.abc.Callable[[Any], bool], max_iterations: int = 10, on_exhaust: str = 'error')"
     },
     {
       "anchor": "operator",

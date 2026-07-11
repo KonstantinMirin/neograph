@@ -1,6 +1,6 @@
-# Valid: the three parity kwargs added under neograph-d5pvl — merge_model=
-# (-> Oracle.merge_model), loop_history= (-> Loop.history, riding loop_when=),
-# and map_on_error= (-> Each.on_error) — all compile through @node.
+# Valid: the parity kwargs added under neograph-d5pvl — merge_model=
+# (-> Oracle.merge_model) and map_on_error= (-> Each.on_error) — compile
+# through @node. (loop_history= was removed as born-redundant, neograph-eef83.)
 from pydantic import BaseModel
 
 from neograph import construct_from_functions, node
@@ -55,7 +55,6 @@ def seed() -> Draft:
     model="fast",
     loop_when=lambda d: d is None or d.score < 0.8,
     max_iterations=3,
-    loop_history=True,
 )
 def refine(seed: Draft) -> Draft: ...
 

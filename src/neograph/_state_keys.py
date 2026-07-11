@@ -126,10 +126,6 @@ class StateKeys:
         """Per-loop iteration counter field name."""
         return f"neo_loop_count_{field_name}"
 
-    @staticmethod
-    def loop_history(field_name: str) -> str:
-        """Per-loop state-history field name (skip_when bookkeeping)."""
-        return f"neo_loop_history_{field_name}"
 
     @staticmethod
     def oracle_collector(field_name: str) -> str:
