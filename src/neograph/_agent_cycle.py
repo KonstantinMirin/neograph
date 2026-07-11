@@ -32,6 +32,7 @@ owns the topology (add_node / conditional edges). No engine execution verb
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -414,6 +415,35 @@ def _tool_call_precheck(
     return "run", tool_fn
 
 
+def _idempotent_repeat_key(tc: dict, idempotent_by_tool: dict[str, bool]) -> str | None:
+    """Canonical (tool, args) key for the repeat-call guard — ONLY for ``Tool(idempotent=True)``
+    tools (the same opt-in flag that gates transport/hydration replay). A repeated identical call
+    within one node is a re-emit (typically a parse-failure retry re-issuing a served batch with
+    fresh tool_call ids), not new work: serving it from the cycle's own history keeps the budget
+    for UNSWEPT work (the ox-troubleshooting-demo 8ko.34 coverage crowd-out). None disables."""
+    if not idempotent_by_tool.get(tc.get("name", "")):
+        return None
+    try:
+        args_canon = json.dumps(tc.get("args") or {}, sort_keys=True, default=str)
+    except (TypeError, ValueError):
+        return None
+    return f"{tc['name']}::{args_canon}"
+
+
+def _seed_repeat_cache(prior_interactions: Any, idempotent_by_tool: dict[str, bool]) -> dict[str, str]:
+    """Rebuild the repeat cache from the node's ACCUMULATED tool_log channel, so the guard holds
+    across supersteps (each tools superstep sees every prior turn's served results)."""
+    cache: dict[str, str] = {}
+    for interaction in prior_interactions or []:
+        key = _idempotent_repeat_key(
+            {"name": getattr(interaction, "tool_name", ""), "args": getattr(interaction, "args", {})},
+            idempotent_by_tool,
+        )
+        if key is not None:
+            cache[key] = getattr(interaction, "result", "")
+    return cache
+
+
 def _build_tool_interaction(
     tc: dict,
     result: Any,
@@ -618,9 +648,9 @@ def make_agent_cycle_bodies(
         return {msgs_key: new_msgs, tlog_key: interactions, manifest_key: refs, budget_key: budget}
 
     def _run_tool_calls(
-        tool_calls: list, tracker: Any, tp: _TurnPrep, config: RunnableConfig
+        tool_calls: list, tracker: Any, tp: _TurnPrep, config: RunnableConfig, repeat_cache: dict[str, str]
     ) -> tuple[list, list, list]:
-        """Sync execution seam: precheck → invoke → advance-then-record, one call
+        """Sync execution seam: precheck → repeat-guard → invoke → advance-then-record, one call
         at a time in tool_call order. Divergent twin of ``_arun_tool_calls``
         (which pre-reserves budget before a concurrent gather); the sync path has
         no gather, so it advances the tracker inline per successful call."""
@@ -632,6 +662,12 @@ def make_agent_cycle_bodies(
             if kind == "msg":
                 new_msgs.append(payload)
                 continue
+            repeat_key = _idempotent_repeat_key(tc, idempotent_by_tool)
+            if repeat_key is not None and repeat_key in repeat_cache:
+                # Idempotent repeat (8ko.34): serve the cycle's own prior render — no re-invoke,
+                # no budget spend, no duplicate ToolInteraction.
+                new_msgs.append(ToolMessage(content=repeat_cache[repeat_key], tool_call_id=tc["id"]))
+                continue
             t0 = time.monotonic()
             try:
                 result = payload.invoke(tc["args"], config=config)
@@ -639,13 +675,15 @@ def make_agent_cycle_bodies(
                 _raise_sync_tool_async(node.name, tc["name"], exc)
             elapsed_ms = int((time.monotonic() - t0) * 1000)
             interaction, msg = _record_tool_result(tc, result, elapsed_ms, tracker, tp.effective_renderer)
+            if repeat_key is not None:
+                repeat_cache[repeat_key] = interaction.result
             interactions.append(interaction)
             refs.extend(_lift_resource_refs(result, tc, idempotent_by_tool.get(tc["name"], False)))
             new_msgs.append(msg)
         return new_msgs, interactions, refs
 
     async def _arun_tool_calls(
-        tool_calls: list, tracker: Any, tp: _TurnPrep, config: RunnableConfig
+        tool_calls: list, tracker: Any, tp: _TurnPrep, config: RunnableConfig, repeat_cache: dict[str, str]
     ) -> tuple[list, list, list]:
         """Async execution seam — the ONLY divergence from ``_run_tool_calls`` is
         concurrency neograph-dyy7. CRITICAL: Phase 1 pre-reserves each runnable
@@ -657,13 +695,18 @@ def make_agent_cycle_bodies(
         checks would race ahead of any record_call. ``plan`` preserves the
         original tool_call order so the ToolMessage / ToolInteraction message
         history holds regardless of which coroutine finishes first."""
-        # Phase 1 (sequential, in tool_call order): precheck + PRE-RESERVE budget.
+        # Phase 1 (sequential, in tool_call order): precheck + repeat-guard + PRE-RESERVE budget.
         plan: list[tuple[str, Any]] = []  # ("msg", ToolMessage) | ("run", tc)
         coros = []
         for tc in tool_calls:
             kind, payload = _tool_call_precheck(tc, tracker, tp.prep.tool_instances)
             if kind == "msg":
                 plan.append(("msg", payload))
+                continue
+            repeat_key = _idempotent_repeat_key(tc, idempotent_by_tool)
+            if repeat_key is not None and repeat_key in repeat_cache:
+                # Idempotent repeat (8ko.34): serve the prior render — no invoke, no budget.
+                plan.append(("msg", ToolMessage(content=repeat_cache[repeat_key], tool_call_id=tc["id"])))
                 continue
             tracker.record_call(tc["name"])  # pre-reserve so parallel calls honor budget
             plan.append(("run", tc))
@@ -684,6 +727,9 @@ def make_agent_cycle_bodies(
             tc = payload
             result, elapsed_ms = next(result_iter)
             interaction, msg = _build_tool_interaction(tc, result, elapsed_ms, tp.effective_renderer)
+            repeat_key = _idempotent_repeat_key(tc, idempotent_by_tool)
+            if repeat_key is not None:
+                repeat_cache[repeat_key] = interaction.result
             interactions.append(interaction)
             refs.extend(_lift_resource_refs(result, tc, idempotent_by_tool.get(tc["name"], False)))
             new_msgs.append(msg)
@@ -696,7 +742,8 @@ def make_agent_cycle_bodies(
         early, tool_calls, tracker = _tools_prelude(bus, tp, budget)
         if early is not None:
             return early
-        new_msgs, interactions, refs = _run_tool_calls(tool_calls, tracker, tp, config)
+        repeat_cache = _seed_repeat_cache(bus.get(tlog_key), idempotent_by_tool)
+        new_msgs, interactions, refs = _run_tool_calls(tool_calls, tracker, tp, config, repeat_cache)
         return _tools_result(new_msgs, interactions, refs, tracker, budget)
 
     async def atools_body(state: BaseModel, config: RunnableConfig) -> dict[str, Any]:
@@ -706,7 +753,8 @@ def make_agent_cycle_bodies(
         early, tool_calls, tracker = _tools_prelude(bus, tp, budget)
         if early is not None:
             return early
-        new_msgs, interactions, refs = await _arun_tool_calls(tool_calls, tracker, tp, config)
+        repeat_cache = _seed_repeat_cache(bus.get(tlog_key), idempotent_by_tool)
+        new_msgs, interactions, refs = await _arun_tool_calls(tool_calls, tracker, tp, config, repeat_cache)
         return _tools_result(new_msgs, interactions, refs, tracker, budget)
 
     # ── {node}__parse ─────────────────────────────────────────────────────
