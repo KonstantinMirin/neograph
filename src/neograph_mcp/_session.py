@@ -178,14 +178,15 @@ class McpSession:
     """One MCP connection, N tool calls. Async context manager; consumer-owned.
 
     Build via :func:`mcp_session`. Zero network at construction; the connect fires
-    at ``__aenter__`` (bounded by ``timeout``). http identity rides the
-    connection as a PER-REQUEST httpx.Auth (``token_provider`` is re-invoked on
-    every request, so a refreshing provider survives a long-lived session);
-    stdio identity is minted once at entry (from ``config['configurable']`` via
-    ``token_provider`` when ``config`` is given, else the no-config provider
-    shape) and injected as a tool argument per call. Open it INSIDE the
-    node/tool body that uses it, enter and exit in the same task, and never
-    store it.
+    at ``__aenter__`` (bounded by ``timeout``). Identity is PER-CALL FRESH on
+    both transports: http rides the connection as a per-request httpx.Auth
+    (``token_provider`` is re-invoked on every request), and stdio re-resolves
+    ``token_provider`` on every :meth:`call` (from ``config['configurable']``
+    when ``config`` is given, else the no-config provider shape) before
+    injecting it as a tool argument — a consumer PINS identity by returning a
+    constant from the provider, never by the framework freezing it
+    (neograph-hs3mr). Open it INSIDE the node/tool body that uses it, enter and
+    exit in the same task, and never store it.
     """
 
     def __init__(
@@ -205,7 +206,6 @@ class McpSession:
         self._stdio_token_arg = stdio_token_arg
         self._timeout = timeout
         # Populated at __aenter__.
-        self._token: str | None = None
         self._session: Any = None
         self._cm: Any = None
         # Lazily cached tool-arg declarations (stdio identity injection + tool_names).
@@ -215,16 +215,12 @@ class McpSession:
     async def __aenter__(self) -> McpSession:
         # http identity rides the connection as a PER-REQUEST httpx.Auth (so a
         # refreshing token_provider takes effect across this long-lived session
-        # — neograph-qslrx); stdio identity is minted once at entry and injected
-        # as a tool argument per call.
+        # — neograph-qslrx); stdio identity is re-resolved per .call() (never
+        # minted here — neograph-hs3mr), so nothing identity-shaped happens at
+        # entry for stdio.
         auth = _http_identity(
             self._spec, self._token_provider, self._config, use_config=self._config is not None
         )
-        if isinstance(self._spec, StdioServer):
-            if self._config is not None:
-                self._token = await _resolve_token(self._token_provider, self._config)
-            else:
-                self._token = await _resolve_token_no_config(self._token_provider)
         try:
             async with asyncio.timeout(self._timeout):
                 client = _client_for(self._server_key, self._spec, auth)
@@ -298,10 +294,12 @@ class McpSession:
     ) -> McpCallResult | BaseModel:
         """Call ``tool_name`` with ``args`` over this session; return the result.
 
-        Over stdio, per-run identity is injected as the ``stdio_token_arg`` argument
-        when the tool declares it (minted token OVERRIDES a caller-supplied value —
-        identity is framework-carried); over http it rides the bearer header set at
-        connect, so nothing is injected here. ``isError=True`` raises
+        Over stdio, identity is re-resolved from ``token_provider`` for THIS call
+        and injected as the ``stdio_token_arg`` argument when the tool declares it
+        (the resolved token OVERRIDES a caller-supplied value — identity is
+        framework-carried, per-call fresh on every transport); over http it rides
+        as a per-request httpx.Auth, so nothing is injected here.
+        ``isError=True`` raises
         :class:`McpToolCallError`. With ``output_model`` the server's
         ``structuredContent`` is rehydrated into that model (via ``parse`` if given)
         and returned bare — a content-only tool raises the same typed ``ValueError``
@@ -309,11 +307,19 @@ class McpSession:
         ``output_model`` the full :class:`McpCallResult` is returned.
         """
         call_args = dict(args or {})
-        if isinstance(self._spec, StdioServer) and self._token is not None:
+        if isinstance(self._spec, StdioServer) and self._token_provider is not None:
             await self._ensure_listing()
             assert self._declared_args is not None
             if _declares_arg(self._declared_args.get(tool_name, set()), self._stdio_token_arg):
-                call_args[self._stdio_token_arg] = self._token
+                # Re-resolve identity for THIS call (declares-check first, so a
+                # tool that carries no identity never invokes the provider) —
+                # the stdio twin of the per-request http Auth (neograph-hs3mr).
+                if self._config is not None:
+                    token = await _resolve_token(self._token_provider, self._config)
+                else:
+                    token = await _resolve_token_no_config(self._token_provider)
+                if token is not None:
+                    call_args[self._stdio_token_arg] = token
 
         read_timeout = timedelta(seconds=self._timeout) if self._timeout is not None else None
         result = await self._session.call_tool(tool_name, call_args, read_timeout_seconds=read_timeout)
@@ -350,9 +356,12 @@ def mcp_session(
     re-exposes federated tools namespaced, e.g. ``<peer>-<tool>``); there is no
     rename on this path — discover names via :meth:`McpSession.tool_names`.
 
-    ``token_provider`` mints per-run identity (from ``config['configurable']`` when
-    ``config`` is given, else called with no arguments); ``stdio_token_arg`` is the
-    tool argument identity rides on for stdio (http uses a bearer header);
+    ``token_provider`` mints identity PER CALL on every transport (from
+    ``config['configurable']`` when ``config`` is given, else called with no
+    arguments): http re-invokes it per request via httpx.Auth, stdio re-resolves
+    it on every ``call()``; a constant-returning provider pins one identity for
+    the session. ``stdio_token_arg`` is the tool argument identity rides on for
+    stdio (http uses a bearer header);
     ``timeout`` (seconds, default 30) bounds the connect and each call — pass
     ``None`` to opt out (NOT recommended: a hung server otherwise stalls up to 300s).
 

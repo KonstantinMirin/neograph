@@ -113,3 +113,84 @@ class TestNoStaticAuthorizationStampInBattery:
         assert _scan_authorization_stamps(sanctioned) == [], (
             "scanner wrongly flagged the sanctioned per-request request.headers stamp"
         )
+
+
+# ── The mint-once freeze form (neograph-hs3mr) ─────────────────────────────────
+# Storing a resolved token on INSTANCE STATE (``self.x = await _resolve_token(...)``)
+# is the freeze: the value outlives the call that minted it and gets reused across
+# .call()s (the last fork qslrx left — McpSession's stdio branch). Every sanctioned
+# resolution assigns to a LOCAL inside the per-call / per-request function that
+# consumes it, so it cannot freeze by construction.
+
+_RESOLVERS = {"_resolve_token", "_resolve_token_no_config", "_resolve_token_sync"}
+
+
+def _calls_resolver(node: ast.expr) -> bool:
+    """True when ``node`` (possibly awaited) is a call to one of the resolvers."""
+    inner = node.value if isinstance(node, ast.Await) else node
+    return (
+        isinstance(inner, ast.Call)
+        and isinstance(inner.func, ast.Name)
+        and inner.func.id in _RESOLVERS
+    )
+
+
+def _scan_frozen_token_attrs(source: str, filename: str = "<mem>") -> list[str]:
+    """Every assignment of a resolver result to an ATTRIBUTE (instance/object
+    state), as ``file:line`` strings. Locals are sanctioned; attributes freeze."""
+    offenders: list[str] = []
+    tree = ast.parse(source, filename=filename)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and _calls_resolver(node.value):
+            if any(isinstance(t, ast.Attribute) for t in node.targets):
+                offenders.append(f"{filename}:{node.lineno}")
+        if isinstance(node, ast.AnnAssign) and node.value is not None and _calls_resolver(node.value):
+            if isinstance(node.target, ast.Attribute):
+                offenders.append(f"{filename}:{node.lineno}")
+    return offenders
+
+
+class TestNoMintOnceTokenOnInstanceState:
+    def test_battery_stores_no_resolved_token_on_instance_state(self):
+        """The real tree: src/neograph_mcp never assigns a ``_resolve_token*``
+        result to an attribute — identity is resolved into a LOCAL, per call."""
+        offenders: list[str] = []
+        for path in sorted(MCP_SRC.rglob("*.py")):
+            rel = str(path.relative_to(MCP_SRC))
+            offenders.extend(_scan_frozen_token_attrs(path.read_text(), rel))
+        assert offenders == [], (
+            "resolved token stored on instance state in src/neograph_mcp — a "
+            "mint-once token outlives the call that resolved it and freezes "
+            "identity across .call()s (neograph-hs3mr). Re-resolve via "
+            f"_resolve_token* inside the per-call path instead. Offenders: {offenders}"
+        )
+
+    def test_scanner_flags_planted_mint_once_attr(self):
+        """Positive meta-test: the pre-fix McpSession freeze form is caught."""
+        planted = (
+            "async def __aenter__(self):\n"
+            "    self._token = await _resolve_token(self._token_provider, self._config)\n"
+            "    return self\n"
+        )
+        assert _scan_frozen_token_attrs(planted), "scanner missed the mint-once self._token form"
+
+    def test_scanner_flags_annotated_and_sync_forms(self):
+        """Would-be-missed meta-test: an annotated assignment and the sync
+        resolver must not slip past."""
+        annotated = "self._token: str | None = await _resolve_token_no_config(provider)\n"
+        sync_form = "self.tok = _resolve_token_sync(provider, config, use_config=True)\n"
+        assert _scan_frozen_token_attrs(annotated), "scanner missed the AnnAssign form"
+        assert _scan_frozen_token_attrs(sync_form), "scanner missed the sync-resolver form"
+
+    def test_scanner_accepts_per_call_local_resolution(self):
+        """Negative meta-test: the sanctioned per-call LOCAL assignment is NOT
+        flagged."""
+        sanctioned = (
+            "async def call(self, tool_name, args=None):\n"
+            "    token = await _resolve_token(self._token_provider, self._config)\n"
+            "    if token is not None:\n"
+            "        call_args['token'] = token\n"
+        )
+        assert _scan_frozen_token_attrs(sanctioned) == [], (
+            "scanner wrongly flagged the sanctioned per-call local resolution"
+        )

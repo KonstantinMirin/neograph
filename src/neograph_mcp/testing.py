@@ -26,11 +26,13 @@ the fake from the demo server's CAPTURED payload.
 
 ## Identity, not transport
 
-The fake mints per-run identity through the SAME ``_resolve_token`` /
-``_resolve_token_no_config`` the real session uses at ``__aenter__``, and records it
-separately on each call (``.calls[].identity``). It does NOT simulate transport-level
-``stdio_token_arg`` injection-into-args (that needs a live server tools-list the fake
-has no access to) — identity is surfaced via ``.calls[].identity``, NEVER folded into
+The fake resolves identity PER CALL through the SAME ``_resolve_token`` /
+``_resolve_token_no_config`` the real session uses — identity is per-call fresh on
+every real surface/transport (neograph-hs3mr), so the fake mirrors that: each
+``.call()`` re-invokes the provider and records the resolved value on
+``.calls[].identity``. It does NOT simulate transport-level ``stdio_token_arg``
+injection-into-args (that needs a live server tools-list the fake has no access
+to) — identity is surfaced via ``.calls[].identity``, NEVER folded into
 ``.calls[].args``, so consumer assertions stay stable regardless of transport.
 
 Importing this module fail-loud-requires the ``mcp`` extra (like any
@@ -66,7 +68,7 @@ __all__ = [
 @dataclass(frozen=True)
 class RecordedCall:
     """One recorded ``.call()`` — the tool, the VERBATIM caller args (no injected
-    identity), and the per-run identity minted at session entry."""
+    identity), and the identity resolved from ``token_provider`` for THIS call."""
 
     tool: str
     args: dict[str, Any]
@@ -77,10 +79,10 @@ class FakeMcpSession:
     """A serverless drop-in for :class:`~neograph_mcp.McpSession`.
 
     Script results keyed by tool name (``results=``) and/or mark tools that must
-    surface an ``isError`` (``errors=``). ``async with`` mints per-run identity via
-    the same resolver the real session uses; each :meth:`call` records a
-    :class:`RecordedCall` and honours the real ``output_model`` rehydration + typed
-    errors. No subprocess, no network.
+    surface an ``isError`` (``errors=``). Each :meth:`call` re-resolves identity
+    via the same per-call resolvers the real session uses (neograph-hs3mr) and
+    records a :class:`RecordedCall`, honouring the real ``output_model``
+    rehydration + typed errors. No subprocess, no network.
     """
 
     def __init__(
@@ -103,19 +105,21 @@ class FakeMcpSession:
         self._server_key = server_key
         self._token_provider = token_provider
         self._config = config
-        self._token: str | None = None
         self._entered = False
         self.calls: list[RecordedCall] = []
 
     async def __aenter__(self) -> FakeMcpSession:
-        # Mint identity once, exactly as McpSession.__aenter__ does (config path when
-        # config is given, else the no-config provider shape).
-        if self._config is not None:
-            self._token = await _resolve_token(self._token_provider, self._config)
-        else:
-            self._token = await _resolve_token_no_config(self._token_provider)
+        # No identity is minted here — the real session resolves identity per
+        # .call() (neograph-hs3mr), and the fake mirrors that exactly.
         self._entered = True
         return self
+
+    async def _resolve_identity(self) -> str | None:
+        """Resolve identity for ONE call, exactly as ``McpSession.call`` does
+        (config path when config is given, else the no-config provider shape)."""
+        if self._config is not None:
+            return await _resolve_token(self._token_provider, self._config)
+        return await _resolve_token_no_config(self._token_provider)
 
     async def __aexit__(self, *exc: Any) -> None:
         self._entered = False
@@ -171,7 +175,7 @@ class FakeMcpSession:
         """
         # Record BEFORE any raise: even an isError call is a recorded interaction
         # (identity is surfaced separately, caller args stay verbatim).
-        recorded = RecordedCall(tool=tool_name, args=dict(args or {}), identity=self._token)
+        recorded = RecordedCall(tool=tool_name, args=dict(args or {}), identity=await self._resolve_identity())
         self.calls.append(recorded)
 
         scripted = self._resolve_scripted(tool_name, args)
@@ -210,8 +214,8 @@ def fake_mcp_tool_factory(
 
     Returns an async ``(config, tool_config) -> StructuredTool`` suitable for
     ``compile(tool_factories={tool_name: factory})``. The built tool records each
-    invocation onto ``calls`` (with the per-run identity minted via the same
-    ``_resolve_token`` the real factory uses) and returns ``result`` — or, when
+    invocation onto ``calls`` (with identity re-resolved PER CALL via the same
+    ``_resolve_token`` the real factory path uses) and returns ``result`` — or, when
     ``output_model`` is declared, the REAL rehydrated model built from ``structured``
     via the shared :func:`~neograph_mcp._typed.rehydrate` (so
     ``ToolInteraction.typed_result`` parity holds). No subprocess, no network.
@@ -230,9 +234,11 @@ def fake_mcp_tool_factory(
     recorded: list[RecordedCall] = calls if calls is not None else []
 
     async def factory(config: Any, tool_config: Any) -> Any:
-        identity = await _resolve_token(token_provider, config)
-
         async def _run(**kwargs: Any) -> Any:
+            # Re-resolve identity PER CALL, exactly as the real factory path's
+            # _inject_stdio_token does (never closed over at build time —
+            # neograph-hs3mr).
+            identity = await _resolve_token(token_provider, config)
             recorded.append(RecordedCall(tool=tool_name, args=dict(kwargs), identity=identity))
             if output_model is not None:
                 return rehydrate(output_model, parse, structured, tool_name)

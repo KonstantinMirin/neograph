@@ -185,7 +185,8 @@ class TestFakeSessionComposite:
         calls = made[0].calls
         assert [c.tool for c in calls] == ["crm_search", "get_deal"]
         assert [c.args for c in calls] == [{"query": "acme"}, {"deal_id": "D1"}]
-        # Identity minted ONCE via the SAME _resolve_token path the real session uses.
+        # Identity resolved PER CALL via the SAME _resolve_token path the real
+        # session uses (a constant provider pins one principal).
         assert [c.identity for c in calls] == ["operator-A", "operator-A"]
 
     async def test_tool_names_returns_scripted_keys(self):
@@ -299,9 +300,9 @@ class TestFakeSessionErrorParity:
 class TestFakeToolFactory:
     """``fake_mcp_tool_factory`` is a real ``ToolFactory``: it drops into
     ``compile(tool_factories={...})`` and drives an agent node with NO subprocess /
-    NO protocol, recording the per-run identity minted via the same ``_resolve_token``
-    the real factory uses, and returning the REAL rehydrated model as the tool
-    result (shared ``rehydrate`` — no echo chamber)."""
+    NO protocol, recording the identity resolved PER CALL via the same
+    ``_resolve_token`` the real factory path uses, and returning the REAL
+    rehydrated model as the tool result (shared ``rehydrate`` — no echo chamber)."""
 
     def test_fake_tool_factory_drives_agent_node_and_records_identity(self):
         import asyncio
@@ -350,6 +351,64 @@ class TestFakeToolFactory:
         assert rec.tool == "crm_search"
         assert rec.args == {"query": "acme"}
         assert rec.identity == "operator-A"
+
+
+# ── Per-call identity parity (neograph-hs3mr): fakes refresh like the real thing ─
+
+
+@requires_mcp
+class TestFakePerCallIdentityParity:
+    """Identity is per-call fresh on every REAL surface/transport (neograph-hs3mr);
+    the fakes must mirror that or a test green on the fake could hide a
+    refresh-vs-freeze divergence on the real path (the anti-echo-chamber
+    invariant applied to identity)."""
+
+    async def test_fake_session_resolves_identity_per_call(self):
+        """A rotating provider yields a DIFFERENT ``.calls[].identity`` per call —
+        the fake twin of the real stdio-session freshness pin."""
+        from neograph_mcp import McpCallResult
+        from neograph_mcp.testing import FakeMcpSession
+
+        minted: list[str] = []
+
+        def provider(configurable):
+            minted.append(f"fake-tok-{len(minted) + 1}")
+            return minted[-1]
+
+        async with FakeMcpSession(
+            results={"crm_search": McpCallResult(content=[], structured=None)},
+            token_provider=provider,
+        ) as s:
+            await s.call("crm_search", {"query": "acme"})
+            await s.call("crm_search", {"query": "globex"})
+
+        identities = [c.identity for c in s.calls]
+        assert identities == ["fake-tok-1", "fake-tok-2"], (
+            f"fake session froze identity across calls: {identities} — the real "
+            "session re-resolves per call (neograph-hs3mr)"
+        )
+
+    async def test_fake_tool_factory_resolves_identity_per_call(self):
+        """The built fake tool re-resolves the provider on every invocation —
+        the fake twin of the real ``_inject_stdio_token`` per-call injection."""
+        from neograph_mcp.testing import fake_mcp_tool_factory
+
+        minted: list[str] = []
+
+        def provider(configurable):
+            minted.append(f"ftool-tok-{len(minted) + 1}")
+            return minted[-1]
+
+        factory = fake_mcp_tool_factory("crm_search", result="ok", token_provider=provider)
+        tool = await factory({"configurable": {}}, None)
+        await tool.coroutine(query="acme")
+        await tool.coroutine(query="globex")
+
+        identities = [c.identity for c in factory.recorded_calls]
+        assert identities == ["ftool-tok-1", "ftool-tok-2"], (
+            f"fake tool factory froze the build-time identity: {identities} — the real "
+            "factory path re-resolves per call (neograph-qslrx/hs3mr)"
+        )
 
 
 # ── Surface 3: the resource fetcher tuple (FromResource path), keyless ─────────

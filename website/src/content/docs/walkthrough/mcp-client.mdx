@@ -285,7 +285,7 @@ async def deal_review(state, config):
 - `mcp_session(...)` **composes**: one connection, N calls by name, typed/structured results (`McpCallResult` / `output_model=`), a `timeout` guard — use it for a scripted composite that issues the primitive calls itself
 - Each node's `tools=` (and `tool_factories=`) is its privilege boundary; a research agent with no `update_deal` cannot mutate
 - MCP tools are async-only — drive with `arun()`; `lint()` flags `tool_requires_async_driver` for a sync `run()`
-- `token_provider` reads `config['configurable']['mcp_auth']` for per-run identity — a tool argument over stdio, a bearer header (`httpx.Auth`) over streamable-http
+- `token_provider` reads `config['configurable']['mcp_auth']` for identity — a tool argument over stdio, a bearer header (`httpx.Auth`) over streamable-http. It is re-invoked **per call** on every surface and transport (bound tools, `mcp_session` calls, http requests): a refreshing provider takes effect mid-run, a constant provider pins one principal — the framework never freezes identity at connect
 - `gate_tools_when` pauses before a mutation fires; approve runs it exactly once, deny never runs it and the agent is told why
 - `ToolInteraction.typed_result` carries the structured MCP payload; mark read-only readers `idempotent=True`
 

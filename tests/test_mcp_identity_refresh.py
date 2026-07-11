@@ -194,6 +194,44 @@ class TestTokenProviderMidRunRefresh:
         )
         assert len(minted) >= 2
 
+    async def test_stdio_session_reresolves_token_provider_per_call(self):
+        """(6, session path — stdio twin, neograph-hs3mr) within ONE held stdio
+        ``mcp_session`` connection, each ``call()`` must carry a freshly-resolved
+        token as the ``stdio_token_arg`` argument — not the value minted once at
+        ``__aenter__``. The http side of the SAME surface already refreshes
+        per request; a transport-dependent freeze here is the last mint-once
+        fork left by neograph-qslrx."""
+        from neograph_mcp import mcp_session
+
+        provider, minted = _counting_provider("sess-stdio")
+        async with mcp_session("crm", _demo_stdio_server(), token_provider=provider) as session:
+            first = (await session.call("crm_search", {"query": "acme"})).structured["acting_as"]
+            second = (await session.call("crm_search", {"query": "globex"})).structured["acting_as"]
+
+        assert first and first.startswith("sess-stdio-"), first
+        assert second and second.startswith("sess-stdio-"), second
+        assert second != first, (
+            f"second stdio call on the same session reused the frozen token {first!r} — "
+            "identity must be per-call fresh on EVERY surface and transport (neograph-hs3mr)"
+        )
+        assert len(minted) >= 2
+
+    async def test_stdio_session_static_provider_keeps_sending_the_same_value(self):
+        """(7, regression) a constant token_provider over a stdio session still
+        sends the SAME identity on every ``call()`` — per-call re-resolution
+        makes refresh POSSIBLE; a constant provider is how a consumer PINS one
+        principal for the whole session (the framework never freezes for you)."""
+        from neograph_mcp import mcp_session
+
+        async with mcp_session(
+            "crm", _demo_stdio_server(), token_provider=lambda configurable: "operator-static"
+        ) as session:
+            first = (await session.call("crm_search", {"query": "acme"})).structured["acting_as"]
+            second = (await session.call("crm_search", {"query": "globex"})).structured["acting_as"]
+
+        assert first == "operator-static"
+        assert second == "operator-static"
+
     async def test_httpx_auth_runs_per_request_through_the_cached_tool(self, tmp_path):
         """(4, load-bearing pin — green today) an ``HttpServer.auth`` httpx.Auth
         is driven PER REQUEST through the RUN_ID-cached tool across supersteps:
