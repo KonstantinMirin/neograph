@@ -46,3 +46,16 @@ class TestDesignDocsNodeKwargDrift:
             "only the plural forms). Fix these design-doc snippets:\n  "
             + "\n  ".join(offenders)
         )
+
+    def test_slip_node_singular_output(self):
+        """Regex-slip: the plural forms must never match — `outputs=`/`inputs=`
+        break the `=` adjacency the pattern requires — while both singular
+        kwargs match anywhere in the @node argument list, whitespace included."""
+        assert _NODE_SINGULAR_OUTPUT.search("@node(output=SwarmResult)")
+        assert _NODE_SINGULAR_OUTPUT.search('@node(mode="agent", output = NextTarget)')
+        assert _NODE_SINGULAR_OUTPUT.search("@node(input=Claims)")
+        # Plural forms are the real API — must NOT match.
+        assert not _NODE_SINGULAR_OUTPUT.search("@node(outputs=SwarmResult)")
+        assert not _NODE_SINGULAR_OUTPUT.search('@node(mode="agent", inputs={"a": A})')
+        # `output=` outside a @node call (e.g. Construct(output=...)) is legit API.
+        assert not _NODE_SINGULAR_OUTPUT.search("Construct(output=Summary, nodes=[...])")
