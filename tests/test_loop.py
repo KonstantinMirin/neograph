@@ -1842,3 +1842,87 @@ class TestLoopOverAgent:
         history = result["refiner"]
         assert isinstance(history, list) and len(history) == 3, history
         assert history[-1].score == 0.9
+
+
+class TestLoopHistoryRuntimeAndRedundancy:
+    """Runtime coverage for ``loop_history=`` / ``Loop(history=True)`` — the
+    surface that had ZERO end-to-end tests before (only construction asserts),
+    plus an explicit PIN of its redundancy with the self-loop's main append
+    field. See docs/design/loop-history-archaeology-2026-07-11.md.
+
+    Archaeology (why this exists): ``Loop.history`` was a schema-first
+    speculative field (born 2026-04-07 in 057689b alongside now-removed
+    ``reenter``/``loop_to``). The self-loop's MAIN output field already
+    accumulates every iteration via ``_append_loop_result`` (wired the same day,
+    5083d5f, whose message calls it "history preserved"), so the separate
+    ``neo_loop_history_{node}`` field duplicates it. history is legal ONLY on a
+    Node self-loop (banned on Constructs), i.e. exactly where the main field
+    already collects — hence total redundancy. These tests make that provable at
+    runtime so the keep-vs-remove decision (neograph-eef83) rests on
+    executed behavior, not inspection.
+    """
+
+    def _self_loop_graph(self, history: bool):
+        from langgraph.checkpoint.memory import MemorySaver
+
+        @node(outputs=Draft)
+        def seed() -> Draft:
+            return Draft(content="v0", iteration=0, score=0.0)
+
+        @node(
+            outputs=Draft,
+            loop_when=lambda d: d is None or d.score < 0.9,
+            max_iterations=5,
+            loop_history=history,
+        )
+        def refine(seed: Draft) -> Draft:
+            return Draft(
+                content=f"v{seed.iteration + 1}",
+                iteration=seed.iteration + 1,
+                score=seed.score + 0.4,
+            )
+
+        pipeline = construct_from_functions(f"hist-{history}", [seed, refine])
+        graph = compile(pipeline, checkpointer=MemorySaver())
+        return graph
+
+    def test_loop_history_collects_every_iteration_at_runtime(self):
+        """history=True genuinely writes each iteration into
+        neo_loop_history_refine, readable via get_state() (the documented read
+        path, modifier-kwargs.mdx). This was previously UNTESTED end-to-end."""
+        graph = self._self_loop_graph(history=True)
+        cfg = {"configurable": {"thread_id": "hist-runtime"}}
+        run(graph, input={"node_id": "h1"}, config=cfg)
+
+        hist = graph.get_state(cfg).values.get("neo_loop_history_refine")
+        assert isinstance(hist, list), f"history field absent/empty: {hist!r}"
+        assert [d.iteration for d in hist] == [1, 2, 3], hist
+        assert [round(d.score, 1) for d in hist] == [0.4, 0.8, 1.2], hist
+
+    def test_loop_history_field_duplicates_the_main_append_field(self):
+        """REDUNDANCY PIN: on the self-loop (history's only legal surface), the
+        main output field ``result['refine']`` already accumulates every
+        iteration as a list, and ``neo_loop_history_refine`` carries the SAME
+        per-iteration data. If a future change gives history a DISTINCT purpose,
+        this test must change with it — the pin documents today's equivalence."""
+        graph = self._self_loop_graph(history=True)
+        cfg = {"configurable": {"thread_id": "hist-dup"}}
+        result = run(graph, input={"node_id": "h1"}, config=cfg)
+
+        main = result["refine"]  # list[Draft] via _append_loop_result
+        hist = graph.get_state(cfg).values["neo_loop_history_refine"]
+        assert [d.iteration for d in main] == [d.iteration for d in hist]
+        assert [d.score for d in main] == [d.score for d in hist]
+
+    def test_main_append_field_alone_preserves_history_without_the_flag(self):
+        """The redundancy's root: WITHOUT history=True, result['refine'] STILL
+        contains every iteration (the append reducer). This is what made the
+        separate history field redundant on its birth-day."""
+        graph = self._self_loop_graph(history=False)
+        cfg = {"configurable": {"thread_id": "no-hist"}}
+        result = run(graph, input={"node_id": "h1"}, config=cfg)
+
+        main = result["refine"]
+        assert [d.iteration for d in main] == [1, 2, 3], main
+        # And the history field was never created when the flag is off.
+        assert "neo_loop_history_refine" not in graph.get_state(cfg).values
