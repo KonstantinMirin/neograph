@@ -40,6 +40,7 @@ dependency.
 
 from __future__ import annotations
 
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from typing import Any
 
@@ -84,14 +85,20 @@ class FakeMcpSession:
 
     def __init__(
         self,
-        results: dict[str, McpCallResult] | None = None,
+        results: dict[str, McpCallResult | list[McpCallResult] | Callable[[dict[str, Any]], McpCallResult]]
+        | None = None,
         *,
         errors: set[str] | None = None,
         server_key: str = "fake",
         token_provider: TokenProvider | None = None,
         config: Any | None = None,
     ) -> None:
-        self._results = dict(results or {})
+        # Internal storage also holds an Iterator[McpCallResult] once a list value is consumed
+        # (converted in place on first use — see _resolve_scripted); the public param stays
+        # constant | list | callable.
+        self._results: dict[
+            str, McpCallResult | list[McpCallResult] | Callable[[dict[str, Any]], McpCallResult] | Iterator[McpCallResult]
+        ] = dict(results or {})
         self._errors = set(errors or set())
         self._server_key = server_key
         self._token_provider = token_provider
@@ -118,6 +125,36 @@ class FakeMcpSession:
         paginated ``tools/list`` (scripted results + error-marked tools)."""
         return list(self._results.keys() | self._errors)
 
+    def _resolve_scripted(self, tool_name: str, args: dict[str, Any] | None) -> McpCallResult | None:
+        """Resolve a tool's tri-modal scripted VALUE to a concrete :class:`McpCallResult`
+        (neograph-4o7yu): a bare ``McpCallResult`` is a CONSTANT (backward-compat); a
+        ``list[McpCallResult]`` is a FIFO SEQUENCE (converted to an iterator IN PLACE under the
+        same key so ``tool_names()`` / the not-found list keep working); a ``Callable`` is a
+        per-args RESOLVER (must return an ``McpCallResult``). ``None`` -> not scripted. Called
+        AFTER the ``RecordedCall`` append, so a sequence-exhaustion raise still records the call."""
+        value = self._results.get(tool_name)
+        if value is None:
+            return None
+        if callable(value):
+            result = value(dict(args or {}))
+            if not isinstance(result, McpCallResult):
+                raise TypeError(
+                    f"FakeMcpSession resolver for '{tool_name}' must return an McpCallResult, "
+                    f"got {type(result).__name__}."
+                )
+            return result
+        if isinstance(value, list):
+            value = self._results[tool_name] = iter(value)  # FIFO: iterator in place on first use
+        if isinstance(value, Iterator):
+            try:
+                return next(value)
+            except StopIteration:
+                raise RuntimeError(
+                    f"FakeMcpSession sequence for '{tool_name}' is exhausted "
+                    f"(more calls than scripted results)."
+                ) from None
+        return value  # a constant McpCallResult
+
     async def call(
         self,
         tool_name: str,
@@ -129,14 +166,15 @@ class FakeMcpSession:
         """Look up the scripted result, record the call (with identity), and return
         it — honouring the real ``isError`` -> :class:`McpToolCallError`,
         ``output_model`` rehydration, and missing-``structuredContent`` ``ValueError``
-        semantics.
+        semantics. The per-tool scripted value is tri-modal (neograph-4o7yu): a constant, a
+        FIFO ``list``, or a per-args ``Callable`` (see :meth:`_resolve_scripted`).
         """
         # Record BEFORE any raise: even an isError call is a recorded interaction
         # (identity is surfaced separately, caller args stay verbatim).
         recorded = RecordedCall(tool=tool_name, args=dict(args or {}), identity=self._token)
         self.calls.append(recorded)
 
-        scripted = self._results.get(tool_name)
+        scripted = self._resolve_scripted(tool_name, args)
 
         if tool_name in self._errors:
             content = scripted.content if scripted is not None else []

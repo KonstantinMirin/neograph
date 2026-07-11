@@ -386,3 +386,295 @@ class TestFakeResourceFetcher:
         fetcher, _replayer = fake_mcp_resource_fetcher(resources={"mcp://crm/notes/D1": ("x", None)})
         with pytest.raises(KeyError, match="no scripted resource"):
             await fetcher("mcp://crm/unknown/Z9")
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# TDD RED (neograph-82fys.6) for neograph-4o7yu — tri-modal FakeMcpSession results
+#
+# CORE INVARIANT (neograph-4o7yu): FakeMcpSession's per-tool ``results=`` VALUE
+# widens to tri-modal — ``McpCallResult`` (constant, unchanged) | ``list[McpCallResult]``
+# (FIFO sequence) | ``Callable[[args], McpCallResult]`` (per-args resolver) — so a
+# CLIENT-SIDE COMPOSITE that calls ONE federated tool N times differing only by ARGS
+# (the hubspot ``search_crm_objects`` fan) can be scripted to return N DISTINCT
+# envelopes. The resolved envelope STILL funnels through the ONE shared
+# ``neograph_mcp._typed.rehydrate`` (anti-echo-chamber parity, unchanged), resolution
+# happens AFTER the RecordedCall append (a FIFO-exhaustion raise is still recorded),
+# and a resolver MUST return an ``McpCallResult`` (fail-loud otherwise).
+#
+# These tests are RED today: the widened value type does not exist — a list/callable
+# ``results=`` value is returned as-is (bare, not an McpCallResult) or breaks on
+# ``scripted.structured`` in the output_model path.
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+# ── Client-side models for the per-args composite (hubspot_comms shape) ───────
+
+
+class ClientObjectHit(BaseModel):
+    id: str
+    label: str
+
+
+class ClientObjectSearch(BaseModel):
+    """The typed result of one ``search_crm_objects`` call — rehydrated per objectType."""
+
+    object_type: str
+    hits: list[ClientObjectHit]
+
+
+class CommsBundle(BaseModel):
+    """The assembled composite output — built from FIVE same-tool calls by args."""
+
+    company_id: str
+    contact_ids: list[str]
+    deal_ids: list[str]
+    ticket_ids: list[str]
+    note_ids: list[str]
+
+
+# Recorded-real-shaped payloads the fake resolver dispatches on objectType. Distinct
+# per type so the composite CANNOT assemble correctly unless each of the 5 same-tool
+# calls returns ITS OWN envelope (the whole point of neograph-4o7yu).
+_CRM_PAYLOADS = {
+    "companies": {"object_type": "companies", "hits": [{"id": "C1", "label": "Acme Inc"}]},
+    "contacts": {
+        "object_type": "contacts",
+        "hits": [{"id": "P1", "label": "Jane Doe"}, {"id": "P2", "label": "John Roe"}],
+    },
+    "deals": {"object_type": "deals", "hits": [{"id": "D1", "label": "Acme Renewal"}]},
+    "tickets": {"object_type": "tickets", "hits": [{"id": "T1", "label": "SEV1 outage"}]},
+    "notes": {"object_type": "notes", "hits": [{"id": "N1", "label": "QBR recap"}]},
+}
+
+
+class TestFakeSessionPerArgs:
+    """A per-args RESOLVER (``results={tool: callable}``) makes N same-tool calls
+    return N DISTINCT scripted envelopes — the ticket's exact composite scenario —
+    driven through the REAL client path (``compile()`` + ``arun()`` on a raw node),
+    with output_model rehydration still routed through the shared ``_typed.rehydrate``."""
+
+    async def test_resolver_dispatches_five_same_tool_calls_by_args(self, monkeypatch):
+        """Drive a raw-mode composite that calls ``search_crm_objects`` FIVE times —
+        once for the company, then four times for associated object types — over a
+        FakeMcpSession scripted with a single per-args RESOLVER. Assert the assembled
+        ``CommsBundle`` carries each type's DISTINCT ids (proving each call returned its
+        own envelope, rehydrated via the shared helper), that all five calls were
+        recorded with their verbatim distinct args, and that the real transport was
+        never touched."""
+        import neograph
+        import neograph_mcp._client as _client_mod
+        from neograph import compile, construct_from_functions, node
+        from neograph_mcp import McpCallResult
+        from neograph_mcp.testing import FakeMcpSession
+
+        def _boom(*a, **k):
+            raise AssertionError("FakeMcpSession touched the real MCP transport (_client_for)")
+
+        monkeypatch.setattr(_client_mod, "_client_for", _boom)
+
+        # The blessed mechanism: the fake IS a function of args, exactly like the server.
+        def crm_resolver(args: dict) -> McpCallResult:
+            return McpCallResult(content=[], structured=_CRM_PAYLOADS[args["objectType"]])
+
+        made: list = []
+
+        def build_session(config):
+            s = FakeMcpSession(results={"search_crm_objects": crm_resolver}, config=config)
+            made.append(s)
+            return s
+
+        @node(mode="raw", outputs=CommsBundle)
+        async def hubspot_comms(state, config):
+            cfg = config["configurable"]
+            async with cfg["session_builder"](config) as s:
+                company = await s.call(
+                    "search_crm_objects",
+                    {"objectType": "companies", "query": cfg["domain"]},
+                    output_model=ClientObjectSearch,
+                )
+                company_id = company.hits[0].id
+                associated: dict[str, list[str]] = {}
+                for object_type in ("contacts", "deals", "tickets", "notes"):
+                    res = await s.call(
+                        "search_crm_objects",
+                        {"objectType": object_type, "associatedWith": company_id},
+                        output_model=ClientObjectSearch,
+                    )
+                    associated[object_type] = [h.id for h in res.hits]
+            return {
+                "hubspot_comms": CommsBundle(
+                    company_id=company_id,
+                    contact_ids=associated["contacts"],
+                    deal_ids=associated["deals"],
+                    ticket_ids=associated["tickets"],
+                    note_ids=associated["notes"],
+                )
+            }
+
+        pipeline = construct_from_functions("hubspot-comms", [hubspot_comms])
+        graph = compile(pipeline)
+
+        result = await neograph.arun(
+            graph,
+            input={},
+            config={"configurable": {"domain": "acme.com", "session_builder": build_session}},
+        )
+
+        # Each same-tool call returned ITS OWN envelope -> the bundle assembles distinctly.
+        bundle: CommsBundle = result["hubspot_comms"]
+        assert bundle == CommsBundle(
+            company_id="C1",
+            contact_ids=["P1", "P2"],
+            deal_ids=["D1"],
+            ticket_ids=["T1"],
+            note_ids=["N1"],
+        )
+
+        # All FIVE same-tool calls recorded with their verbatim, DISTINCT args.
+        assert len(made) == 1, "the composite opened exactly one session"
+        calls = made[0].calls
+        assert [c.tool for c in calls] == ["search_crm_objects"] * 5
+        assert [c.args for c in calls] == [
+            {"objectType": "companies", "query": "acme.com"},
+            {"objectType": "contacts", "associatedWith": "C1"},
+            {"objectType": "deals", "associatedWith": "C1"},
+            {"objectType": "tickets", "associatedWith": "C1"},
+            {"objectType": "notes", "associatedWith": "C1"},
+        ]
+
+    async def test_resolver_envelope_routes_through_shared_rehydrate(self):
+        """The resolver only picks WHICH envelope — a resolver-resolved envelope with
+        ``structured=None`` and ``output_model=`` set raises the SAME typed
+        ``ValueError`` the real session raises (naming the tool, mentioning
+        ``structuredContent``), proving the resolved envelope still funnels through the
+        shared ``_typed.rehydrate`` (NOT a bare AttributeError on ``.structured``)."""
+        from neograph_mcp import McpCallResult
+        from neograph_mcp.testing import FakeMcpSession
+
+        def content_only_resolver(args: dict) -> McpCallResult:
+            return McpCallResult(content=[{"type": "text", "text": "[]"}], structured=None)
+
+        async with FakeMcpSession(results={"search_crm_objects": content_only_resolver}) as s:
+            with pytest.raises(ValueError) as excinfo:
+                await s.call("search_crm_objects", {"objectType": "deals"}, output_model=ClientObjectSearch)
+
+        msg = str(excinfo.value)
+        assert "search_crm_objects" in msg, f"typed error must name the tool: {msg!r}"
+        assert "structuredContent" in msg, f"typed error must mention structuredContent: {msg!r}"
+
+    async def test_resolver_returning_non_result_fails_loud(self):
+        """A resolver that returns a NON-``McpCallResult`` fails LOUD with a clear
+        message naming the tool and the required return type — NOT a misleading
+        'no scripted result' KeyError, NOT a downstream AttributeError on ``.structured``
+        (the tool IS scripted; the resolver's contract was violated)."""
+        from neograph_mcp.testing import FakeMcpSession
+
+        async with FakeMcpSession(
+            results={"search_crm_objects": lambda args: {"not": "an McpCallResult"}}
+        ) as s:
+            with pytest.raises(TypeError) as excinfo:
+                await s.call("search_crm_objects", {"objectType": "contacts"})
+
+        msg = str(excinfo.value)
+        assert "search_crm_objects" in msg, f"contract error must name the tool: {msg!r}"
+        assert "McpCallResult" in msg, f"contract error must name the required return type: {msg!r}"
+
+
+class TestFakeSessionSequence:
+    """A FIFO SEQUENCE (``results={tool: [r1, r2, ...]}``) returns each scripted
+    envelope in call order; exhaustion (empty list or over-calling) fails LOUD, and
+    the exhausted call is STILL recorded (resolution happens after the append)."""
+
+    async def test_list_value_consumed_fifo_in_call_order(self):
+        """Three same-tool calls against a 3-element sequence return r1, r2, r3 in
+        order — distinct envelopes per call (the order-only convenience case)."""
+        from neograph_mcp import McpCallResult
+        from neograph_mcp.testing import FakeMcpSession
+
+        r1 = McpCallResult(content=[{"type": "text", "text": "first"}], structured=None)
+        r2 = McpCallResult(content=[{"type": "text", "text": "second"}], structured=None)
+        r3 = McpCallResult(content=[{"type": "text", "text": "third"}], structured=None)
+
+        async with FakeMcpSession(results={"search_crm_objects": [r1, r2, r3]}) as s:
+            a = await s.call("search_crm_objects", {"objectType": "contacts"})
+            b = await s.call("search_crm_objects", {"objectType": "deals"})
+            c = await s.call("search_crm_objects", {"objectType": "tickets"})
+
+        assert [a, b, c] == [r1, r2, r3]
+        assert [x.text for x in (a, b, c)] == ["first", "second", "third"]
+
+    async def test_empty_sequence_raises_loud_exhaustion_on_first_call(self):
+        """An EMPTY-list sequence (``[]``) raises a LOUD exhaustion error on the very
+        FIRST call, naming the tool — not a silent None / misleading not-found."""
+        from neograph_mcp.testing import FakeMcpSession
+
+        async with FakeMcpSession(results={"search_crm_objects": []}) as s:
+            with pytest.raises(RuntimeError, match="exhausted") as excinfo:
+                await s.call("search_crm_objects", {"objectType": "contacts"})
+
+        assert "search_crm_objects" in str(excinfo.value), "exhaustion error must name the tool"
+
+    async def test_over_calling_sequence_raises_and_still_records_the_call(self):
+        """Over-calling a non-empty sequence raises a clear exhaustion error AND the
+        exhausted call is STILL recorded in ``.calls`` (resolution runs AFTER the
+        RecordedCall append — an exhausted call is a real interaction)."""
+        from neograph_mcp import McpCallResult
+        from neograph_mcp.testing import FakeMcpSession
+
+        only = McpCallResult(content=[{"type": "text", "text": "only"}], structured=None)
+
+        async with FakeMcpSession(results={"search_crm_objects": [only]}) as s:
+            first = await s.call("search_crm_objects", {"objectType": "contacts"})
+            assert first == only
+            n_before = len(s.calls)
+            with pytest.raises(RuntimeError, match="exhausted"):
+                await s.call("search_crm_objects", {"objectType": "deals"})
+
+            # The exhausted call is recorded (append precedes resolution).
+            assert len(s.calls) == n_before + 1
+            assert s.calls[-1].tool == "search_crm_objects"
+            assert s.calls[-1].args == {"objectType": "deals"}
+
+
+class TestFakeSessionMixedModeBackwardCompat:
+    """Backward-compat + per-value dispatch: a bare ``McpCallResult`` still means
+    'constant every call', and a MIXED dict (one constant + one list + one callable in
+    the SAME ``results=``) dispatches PER-VALUE — with ``tool_names()`` listing ALL
+    scripted tools including the sequence/callable ones (the regression the review
+    flagged)."""
+
+    async def test_mixed_modes_dispatch_per_value_and_tool_names_lists_all(self):
+        from neograph_mcp import McpCallResult
+        from neograph_mcp.testing import FakeMcpSession
+
+        const = McpCallResult(content=[{"type": "text", "text": "const"}], structured=None)
+        seq1 = McpCallResult(content=[{"type": "text", "text": "seq-1"}], structured=None)
+        seq2 = McpCallResult(content=[{"type": "text", "text": "seq-2"}], structured=None)
+
+        def resolver(args: dict) -> McpCallResult:
+            return McpCallResult(content=[{"type": "text", "text": f"resolved-{args['objectType']}"}], structured=None)
+
+        async with FakeMcpSession(
+            results={
+                "get_config": const,  # constant (backward-compat)
+                "poll_status": [seq1, seq2],  # FIFO sequence
+                "search_crm_objects": resolver,  # per-args resolver
+            }
+        ) as s:
+            # tool_names() lists ALL scripted tools — incl. the sequence + callable ones.
+            names = await s.tool_names()
+            assert set(names) == {"get_config", "poll_status", "search_crm_objects"}
+
+            # Constant: identical every call (unchanged name-only behaviour).
+            assert await s.call("get_config", {"k": "a"}) == const
+            assert await s.call("get_config", {"k": "b"}) == const
+
+            # Sequence: FIFO, per-value cursor independent of the other tools.
+            assert await s.call("poll_status", {"n": 1}) == seq1
+            assert await s.call("poll_status", {"n": 2}) == seq2
+
+            # Resolver: per-args, in the SAME dict, dispatched independently.
+            deals = await s.call("search_crm_objects", {"objectType": "deals"})
+            notes = await s.call("search_crm_objects", {"objectType": "notes"})
+            assert deals.text == "resolved-deals"
+            assert notes.text == "resolved-notes"
