@@ -1721,6 +1721,16 @@ class TestMemberSelectionPredicateMonopoly:
     Construct: silent-skip vs collect). The fix monopolizes classification in
     `_classify_member` inside _member_select.py; the builder's entry points
     and core must delegate to it and never re-derive membership inline.
+
+    Documented exemption (neograph-gtzkd, ratified by architect review):
+    ForwardConstruct._discover_node_attrs (forward.py) keeps its private
+    isinstance(v, Node) walk BY DESIGN — it is a name -> Node lookup table
+    feeding the tracer, not a membership classifier (membership is fixed by
+    forward() tracing; sub-pipelines enter via self.each()/self.loop()/
+    self.ensemble()). The exemption is contract-pinned by
+    tests/test_forward.py::TestConstructClassAttrFailsLoud (a Construct
+    class attr fails loud at class-definition time). Disease scans should
+    not re-flag that site.
     """
 
     BUILDER = SRC_DIR / "_construct_builder.py"

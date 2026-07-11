@@ -2693,3 +2693,42 @@ class TestLoopOverSubConstructBody:
 
         with pytest.raises(ConstructError, match="declare inputs"):
             BadCollector()
+
+
+class TestConstructClassAttrFailsLoud:
+    """neograph-gtzkd: the _discover_node_attrs exemption contract.
+
+    ForwardConstruct pipeline membership is fixed by forward() tracing;
+    ``_discover_node_attrs`` is a name->Node lookup table feeding the tracer
+    and is deliberately EXEMPT from ``_member_select._classify_member``. That
+    exemption is safe ONLY while a non-Node pipeline object declared as a
+    class attribute fails LOUD at class-definition time (PydanticUserError
+    via ``model_config ignored_types=(Node,)``) instead of being silently
+    dropped from discovery. This test pins that loud failure: if
+    ``ignored_types`` ever widens to include ``Construct`` without the
+    membership/tracer work (sub-construct class-attr support), this test
+    fails and forces the feature decision to be made consciously.
+    Cross-refs: src/neograph/forward.py (_discover_node_attrs),
+    src/neograph/_member_select.py, tests/test_guards_assembly.py
+    (TestMemberSelectionPredicateMonopoly).
+    """
+
+    def test_class_definition_raises_when_construct_declared_as_class_attr(self):
+        """A Construct instance as a ForwardConstruct class attribute must
+        raise at class-DEFINITION time — not be silently ignored by the
+        Node-only attr walk."""
+        from pydantic import PydanticUserError
+
+        sub = Construct(
+            "sub-pipeline",
+            nodes=[Node.scripted("inner", fn="gtzkd_inner_fn", outputs=RawText)],
+        )
+
+        with pytest.raises(PydanticUserError, match="non-annotated attribute"):
+
+            class BadPipeline(ForwardConstruct):
+                start = Node.scripted("start", fn="gtzkd_start_fn", outputs=Claims)
+                verify = sub  # Construct, not Node — must fail loud here
+
+                def forward(self, topic):
+                    return self.start(topic)

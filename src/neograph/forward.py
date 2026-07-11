@@ -185,6 +185,17 @@ class ForwardConstruct(Construct):
 
         Reverse MRO walk means root-to-leaf, so subclass values overwrite
         parent values — matching nn.Module parameter discovery semantics.
+
+        Deliberately EXEMPT from `_member_select._classify_member` (the
+        xv9ay membership-predicate monopoly, evaluated under neograph-gtzkd):
+        this walk is a name -> Node lookup table feeding the tracer, not a
+        membership classifier — pipeline membership is fixed by forward()
+        tracing, and sub-pipelines enter a trace via self.each() /
+        self.loop() / self.ensemble(), never as class attrs. The exemption
+        is safe only while a Construct class attribute fails LOUD at
+        class-definition time (PydanticUserError via the model_config
+        ``ignored_types=(Node,)`` gate above) — pinned by
+        tests/test_forward.py::TestConstructClassAttrFailsLoud.
         """
         discovered: dict[str, Node] = {}
         for klass in reversed(cls.__mro__):
