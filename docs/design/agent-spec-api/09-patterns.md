@@ -31,11 +31,11 @@
 Swarm(first_agent="agent_a", relationships=[("agent_a", "agent_b"), ("agent_a", "agent_c")])
 
 # Reconstructed as neograph router + Send fan-out
-@node(mode="agent", output=NextTarget)
+@node(mode="agent", outputs=NextTarget)
 def router(swarm_input: SwarmInput, relationships: Annotated[RelationshipsConfig, FromConfig]) -> NextTarget:
     # LLM chooses next recipient from relationships
 
-@node(output=SwarmResult)
+@node(outputs=SwarmResult)
 def swarm_entry(first_agent_call: SomeInput) -> SwarmResult:
     pass  # Initial agent invocation
 
@@ -55,11 +55,11 @@ agent_c = Node(..., name="agent_c")
 ManagerWorkers(manager=AgentNode, workers=[AgentNode, ...])
 
 # Reconstructed as neograph router + worker sub-constructs + Loop
-@node(mode="agent", output=WorkerAssignment)
+@node(mode="agent", outputs=WorkerAssignment)
 def manager_router(task: Task) -> WorkerAssignment:  # Which worker?
     pass
 
-@node(output=WorkResult)
+@node(outputs=WorkResult)
 def worker_a(task: Task) -> WorkResult:
     pass
 
