@@ -25,7 +25,6 @@ from pydantic import BaseModel
 
 from neograph import Construct, Node, compile, run
 
-
 # ── Schemas ──────────────────────────────────────────────────────────────
 
 class Claims(BaseModel, frozen=True):
@@ -188,4 +187,4 @@ if __name__ == "__main__":
     )
 
     print(f"\nResult: {result['report'].text}")
-    print(f"\nAll config accessible: node_id, project_root, rate_limiter — no boilerplate")
+    print("\nAll config accessible: node_id, project_root, rate_limiter — no boilerplate")

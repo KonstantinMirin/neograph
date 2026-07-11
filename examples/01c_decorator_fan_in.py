@@ -11,9 +11,13 @@ construct_from_module topologically sorts the graph at import time.
 Run:  python examples/01c_decorator_fan_in.py
 """
 from __future__ import annotations
+
 import sys
+
 from pydantic import BaseModel
+
 from neograph import compile, construct_from_module, node, run
+
 
 # ── Schemas ──────────────────────────────────────────────────────────────
 class Claims(BaseModel, frozen=True):

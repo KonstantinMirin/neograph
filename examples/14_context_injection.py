@@ -27,7 +27,6 @@ from langchain_core.messages import AIMessage
 from pydantic import BaseModel, Field
 
 from neograph import (
-    Construct,
     Tool,
     ToolInteraction,
     compile,
@@ -35,7 +34,6 @@ from neograph import (
     node,
     run,
 )
-
 
 # -- Schemas ------------------------------------------------------------------
 

@@ -31,10 +31,9 @@ from pydantic import BaseModel, Field
 
 from neograph import (
     Construct,
+    DelimitedRenderer,
     Node,
     XmlRenderer,
-    DelimitedRenderer,
-    JsonRenderer,
     describe_type,
     describe_value,
     render_input,
@@ -42,7 +41,6 @@ from neograph import (
 )
 from neograph._llm_runtime import LlmRuntime
 from neograph.renderers import build_rendered_input
-
 
 # -- Schemas ----------------------------------------------------------------
 

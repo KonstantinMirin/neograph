@@ -42,7 +42,6 @@ from neograph import (
     run,
 )
 
-
 # ── Models ───────────────────────────────────────────────────────────────
 
 class ResearchResult(BaseModel, frozen=True):
@@ -76,7 +75,7 @@ class HydratedResearch(BaseModel, frozen=True):
     metadata: dict = Field(default_factory=dict)
     internal_score: float = 0.0
 
-    def render_for_prompt(self) -> "ResearchPresentation":
+    def render_for_prompt(self) -> ResearchPresentation:
         """Return a slim typed projection for LLM consumption."""
         return ResearchPresentation(
             content=self.raw_html[:200].strip(),

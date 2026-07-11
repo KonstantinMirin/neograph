@@ -25,10 +25,8 @@ from pathlib import Path
 
 from pydantic import BaseModel
 
-from neograph import compile, configure_image, run
-from neograph import Construct, Node
+from neograph import Construct, Node, compile, configure_image, run
 from neograph._image import resolve_image
-
 
 # ── Schemas ──────────────────────────────────────────────────────────────
 
@@ -61,8 +59,12 @@ class FakeLLM:
         return self._model(result="analyzed" if has_image else "no-image")
 
 
-_llm_factory = lambda tier: FakeLLM(tier)
-_prompt_compiler = lambda t, d, **kw: [{"role": "user", "content": t}]
+def _llm_factory(tier):
+    return FakeLLM(tier)
+
+
+def _prompt_compiler(t, d, **kw):
+    return [{"role": "user", "content": t}]
 
 
 # ── Set up a safe upload directory ───────────────────────────────────────

@@ -20,7 +20,6 @@ from pydantic import BaseModel
 
 from neograph import compile, construct_from_module, node, run
 
-
 # ── Schemas ──────────────────────────────────────────────────────────────
 
 class ClusterGroup(BaseModel, frozen=True):

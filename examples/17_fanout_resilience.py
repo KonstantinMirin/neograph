@@ -17,12 +17,9 @@ Run:
 
 from __future__ import annotations
 
-import sys
-
 from pydantic import BaseModel
 
 from neograph import Construct, Each, Node, compile, run
-
 
 # ── Schemas ──────────────────────────────────────────────────────────────
 
@@ -105,7 +102,7 @@ def main():
     except Exception as e:
         print(f"Failed: {e}")
         print(f"  Attempts so far: {attempt_count}")
-        print(f"  Documents that succeeded are checkpointed.")
+        print("  Documents that succeeded are checkpointed.")
         print()
 
     # ── Simulate fixing the issue (top up credits, wait for rate limit) ──
@@ -131,7 +128,7 @@ def main():
                 print(f"  {doc_id}: {r.summary} ({r.word_count} words)")
         print()
         print(f"Total attempts per document: {attempt_count}")
-        print(f"  doc-03 needed 2 attempts, all others needed 1.")
+        print("  doc-03 needed 2 attempts, all others needed 1.")
     except Exception as e:
         print(f"Resume also failed: {e}")
 

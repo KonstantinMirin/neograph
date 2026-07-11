@@ -50,6 +50,7 @@ class Report(BaseModel):
 
 def run_langgraph():
     from typing import TypedDict
+
     from langgraph.graph import END, START, StateGraph
 
     # --- CHILD GRAPH (separate state schema) ---
@@ -129,7 +130,7 @@ def run_neograph():
         pipeline,
         llm_factory=lambda tier: llm,
         prompt_compiler=lambda template, data, **kw: [{"role": "user", "content": (
-            f"Break 'API rate limiting' into 3-5 factual claims." if template == "decompose"
+            "Break 'API rate limiting' into 3-5 factual claims." if template == "decompose"
             else f"Score each claim as high/medium/low: {data}" if template == "score"
             else f"Write a brief report: {data}"
         )}],

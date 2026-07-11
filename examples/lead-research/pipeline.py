@@ -19,26 +19,23 @@ if str(_HERE) not in sys.path:
 sys.path.insert(0, str(_HERE.parent))  # examples/ — for _shared helper
 
 from _shared import make_template_prompt_compiler
+from schemas import (
+    CompanyProfile,
+    Lead,
+    LeadBatch,
+    LeadReport,
+    NewsItem,
+    NewsList,
+    QualifiedLeads,
+)
 
 from neograph import (
-    Construct,
     Each,
     compile,
     construct_from_functions,
     node,
     run,
 )
-
-from schemas import (
-    CompanyProfile,
-    Lead,
-    LeadBatch,
-    LeadReport,
-    NewsList,
-    NewsItem,
-    QualifiedLeads,
-)
-
 
 # =============================================================================
 # Data + LLM setup

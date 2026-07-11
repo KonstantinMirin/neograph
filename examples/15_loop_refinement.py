@@ -25,13 +25,12 @@ from __future__ import annotations
 from pydantic import BaseModel
 
 from neograph import (
+    Loop,
     compile,
     construct_from_functions,
     node,
     run,
 )
-from neograph import Loop
-
 
 # -- Schemas ------------------------------------------------------------------
 
@@ -282,7 +281,7 @@ def demo_forward_loop():
     print(f"Draft output: {result.get('draft')}")
     # The loop body is a sub-construct; its output appears under the
     # sub-construct name, not individual node names.
-    for key, val in result.items():
+    for val in result.values():
         if isinstance(val, list) and val and hasattr(val[0], "score"):
             for i, d in enumerate(val):
                 print(f"  [{i+1}] score={d.score:.1f} content={d.content!r}")

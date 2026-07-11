@@ -26,7 +26,6 @@ from pydantic import BaseModel
 
 from neograph import compile, construct_from_module, node, run
 
-
 # ── Schemas ──────────────────────────────────────────────────────────────
 
 class Claims(BaseModel, frozen=True):

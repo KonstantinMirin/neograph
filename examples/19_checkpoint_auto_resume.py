@@ -23,9 +23,8 @@ Run:
 
 from __future__ import annotations
 
-from pydantic import BaseModel
-
 from langgraph.checkpoint.memory import MemorySaver
+from pydantic import BaseModel
 
 from neograph import (
     CheckpointSchemaError,
@@ -34,7 +33,6 @@ from neograph import (
     node,
     run,
 )
-
 
 # -- Schemas ------------------------------------------------------------------
 # Shared types that stay the same across both pipeline versions.
@@ -234,7 +232,7 @@ def demo_strict_mode():
         run(graph_v2, input={"node_id": "demo"}, config=config, auto_resume=False)
         print("  ERROR: expected CheckpointSchemaError but none was raised")
     except CheckpointSchemaError as e:
-        print(f"  Caught CheckpointSchemaError (expected)")
+        print("  Caught CheckpointSchemaError (expected)")
         print(f"  Invalidated nodes: {sorted(e.invalidated_nodes)}")
         print(f"  Message: {e}")
 
@@ -242,6 +240,7 @@ def demo_strict_mode():
 if __name__ == "__main__":
     # Suppress framework logs so the example output is clear.
     import logging
+
     import structlog
     logging.getLogger().setLevel(logging.WARNING)
     structlog.configure(wrapper_class=structlog.make_filtering_bound_logger(logging.WARNING))

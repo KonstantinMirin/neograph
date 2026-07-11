@@ -22,7 +22,6 @@ from pydantic import BaseModel
 
 from neograph import compile, construct_from_module, node, run
 
-
 # ── Schemas ──────────────────────────────────────────────────────────────
 
 class Analysis(BaseModel, frozen=True):
@@ -89,7 +88,7 @@ if __name__ == "__main__":
 
     if "__interrupt__" in result:
         interrupt_data = result["__interrupt__"]
-        print(f"\nGraph PAUSED. Interrupt payload:")
+        print("\nGraph PAUSED. Interrupt payload:")
         for interrupt in interrupt_data:
             print(f"  {interrupt.value}")
 

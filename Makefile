@@ -10,7 +10,7 @@ test:
 
 # Ruff linter
 lint:
-	uv run ruff check src/neograph/ tests/
+	uv run ruff check src/neograph/ tests/ examples/
 
 # Mypy type checker
 typecheck:
@@ -18,4 +18,4 @@ typecheck:
 
 # Auto-fix ruff issues
 fix:
-	uv run ruff check src/neograph/ tests/ --fix
+	uv run ruff check src/neograph/ tests/ examples/ --fix

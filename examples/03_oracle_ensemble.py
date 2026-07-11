@@ -24,7 +24,6 @@ from pydantic import BaseModel
 
 from neograph import compile, construct_from_module, node, run
 
-
 # ── Schemas ──────────────────────────────────────────────────────────────
 
 class Topic(BaseModel, frozen=True):
@@ -84,7 +83,7 @@ if __name__ == "__main__":
     result = run(graph, input={"node_id": "REQ-001"})
 
     merged = result["decompose"]
-    print(f"=== Same-model ensemble (3 generators) ===")
+    print("=== Same-model ensemble (3 generators) ===")
     print(f"{len(merged.items)} unique claims:")
     for claim in merged.items:
         print(f"  - {claim}")
@@ -124,7 +123,7 @@ if __name__ == "__main__":
     multi_merged = multi_result["multi_gen"]
     print(f"=== Multi-model ensemble (models={['reason', 'fast', 'creative']}) ===")
     print(f"Models used: {seen_models}")
-    print(f"Merged claims:")
+    print("Merged claims:")
     for claim in multi_merged.items:
         print(f"  - {claim}")
     print()
@@ -194,7 +193,7 @@ if __name__ == "__main__":
     hooks_result = run(hooks_graph, input={"node_id": "REQ-003"})
 
     hooks_merged = hooks_result["decompose_hooks"]
-    print(f"=== Merge hooks (fallback fires — no LLM configured) ===")
+    print("=== Merge hooks (fallback fires — no LLM configured) ===")
     print(f"Fallback produced {len(hooks_merged.items)} claims:")
     for claim in hooks_merged.items:
         print(f"  - {claim}")

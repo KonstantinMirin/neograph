@@ -23,7 +23,6 @@ from pydantic import BaseModel
 
 from neograph import Construct, Node, Oracle, compile, run
 
-
 # ── Schemas ──────────────────────────────────────────────────────────────
 
 class Claims(BaseModel, frozen=True):

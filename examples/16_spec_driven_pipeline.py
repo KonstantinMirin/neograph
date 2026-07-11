@@ -33,7 +33,6 @@ from pathlib import Path
 
 from neograph import compile, load_spec, lookup_type, run
 
-
 # -- Scripted node implementations -------------------------------------------
 # These functions are what the LLM's spec points at via scripted_fn names.
 # Signature: (input_data, config) -> output_model_instance
@@ -139,8 +138,8 @@ def main():
 
     # -- Load --
     print("=== Loading pipeline spec ===")
-    print(f"  Spec:    16_security_analysis.yaml")
-    print(f"  Project: 16_project.yaml")
+    print("  Spec:    16_security_analysis.yaml")
+    print("  Project: 16_project.yaml")
     construct = load_spec(spec_path, project=project_path)
 
     print(f"\n  Pipeline: {construct.name}")

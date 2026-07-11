@@ -26,7 +26,6 @@ from pydantic import BaseModel, Field
 
 from neograph import compile, construct_from_module, node, run
 
-
 # ── Schemas ──────────────────────────────────────────────────────────────
 
 class ProductPhoto(BaseModel, frozen=True):
@@ -69,17 +68,21 @@ class FakeVisionLLM:
         else:
             text = content
             has_image = False
-            print(f"    VLM received: plain text, no image")
+            print("    VLM received: plain text, no image")
 
         return self._model(
             category="electronics" if has_image else "unknown",
             quality_score=0.92 if has_image else 0.0,
-            description=f"High-quality product photo" if has_image else "No image provided",
+            description="High-quality product photo" if has_image else "No image provided",
         )
 
 
-_llm_factory = lambda tier: FakeVisionLLM(tier)
-_prompt_compiler = lambda t, d, **kw: [{"role": "user", "content": t}]
+def _llm_factory(tier):
+    return FakeVisionLLM(tier)
+
+
+def _prompt_compiler(t, d, **kw):
+    return [{"role": "user", "content": t}]
 
 
 # ── Pipeline ─────────────────────────────────────────────────────────────

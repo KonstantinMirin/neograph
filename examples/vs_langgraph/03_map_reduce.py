@@ -46,6 +46,7 @@ class BestJoke(BaseModel):
 def run_langgraph():
     import operator
     from typing import Annotated, TypedDict
+
     from langgraph.graph import END, START, StateGraph
     from langgraph.types import Send
 
@@ -123,7 +124,7 @@ def run_neograph():
         prompt_compiler=lambda template, data, **kw: [{"role": "user", "content": (
             "Write a short joke about programming languages."
             if template == "generate"
-            else f"Pick the best joke and return it as a single item list:\n"
+            else "Pick the best joke and return it as a single item list:\n"
                  # Oracle merge passes data={"variants": [<Jokes>, ...]} — read the
                  # variant list, not the dict itself (neograph-iu05).
                  + "\n".join(f"- {v.items[0]}" for v in data["variants"] if v.items)

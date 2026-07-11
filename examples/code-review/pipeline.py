@@ -14,37 +14,29 @@ import sys
 from pathlib import Path
 from typing import Annotated
 
-from pydantic import BaseModel
-
 _HERE = Path(__file__).resolve().parent
 if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 sys.path.insert(0, str(_HERE.parent))  # examples/ — for _shared helper
 
 from _shared import make_template_prompt_compiler
-
-from neograph import (
-    Construct,
-    Each,
-    FromInput,
-    Node,
-    compile,
-    construct_from_functions,
-    node,
-    run,
-)
-
 from schemas import (
     ChangedFile,
     ChangedFiles,
     FileReview,
-    Finding,
     LogicFindings,
     ReviewReport,
     SecurityFindings,
     StyleFindings,
 )
 
+from neograph import (
+    FromInput,
+    compile,
+    construct_from_functions,
+    node,
+    run,
+)
 
 # =============================================================================
 # Data + LLM setup
@@ -168,9 +160,9 @@ def merge_file_findings(
     )
     return FileReview(
         path=file.path,
-        findings=sorted(all_findings, key=lambda f: list(
-            ("critical", "high", "medium", "low", "info")
-        ).index(f.severity.value)),
+        findings=sorted(all_findings, key=lambda f: [
+            "critical", "high", "medium", "low", "info"
+        ].index(f.severity.value)),
     )
 
 

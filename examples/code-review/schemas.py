@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from enum import Enum
+from enum import StrEnum
 
 from pydantic import BaseModel
 
 
-class Severity(str, Enum):
+class Severity(StrEnum):
     critical = "critical"
     high = "high"
     medium = "medium"

@@ -49,7 +49,8 @@ class Summary(BaseModel):
 # ═══════════════════════════════════════════════════════════════════════════
 
 def run_langgraph():
-    from typing import Annotated, TypedDict
+    from typing import TypedDict
+
     from langgraph.graph import END, START, StateGraph
 
     # --- State schema (manual, must include every field) ---

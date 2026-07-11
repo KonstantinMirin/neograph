@@ -27,9 +27,6 @@ if str(_HERE) not in sys.path:
 sys.path.insert(0, str(_HERE.parent))  # examples/ — for _shared helper
 
 from _shared import make_template_prompt_compiler
-
-from neograph import FromInput, compile, construct_from_functions, node, run
-
 from schemas import (
     AnalysisResult,
     GeneratedSpec,
@@ -38,6 +35,7 @@ from schemas import (
     WorkflowRequest,
 )
 
+from neograph import FromInput, compile, construct_from_functions, node, run
 
 # =============================================================================
 # LLM setup
@@ -259,11 +257,11 @@ def main():
     status = "VALID" if validation.valid else "INVALID"
     print(f"\n[validate] {status}")
     if validation.errors:
-        print(f"[validate] Errors:")
+        print("[validate] Errors:")
         for e in validation.errors:
             print(f"    {e}")
     if validation.warnings:
-        print(f"[validate] Warnings:")
+        print("[validate] Warnings:")
         for w in validation.warnings:
             print(f"    {w}")
     print(f"[validate] Parsed nodes: {validation.parsed_node_names}")

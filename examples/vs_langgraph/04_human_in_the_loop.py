@@ -44,6 +44,7 @@ class Report(BaseModel):
 
 def run_langgraph():
     from typing import TypedDict
+
     from langgraph.checkpoint.memory import MemorySaver
     from langgraph.graph import END, START, StateGraph
     from langgraph.types import Command, interrupt
@@ -112,7 +113,7 @@ def run_langgraph():
 def run_neograph():
     from langgraph.checkpoint.memory import MemorySaver
 
-    from neograph import (Construct, Node, Operator, compile, run)
+    from neograph import Construct, Node, Operator, compile, run
 
     # Pipeline — Operator modifier handles the interrupt
     analyze = Node(name="analyze", mode="think", outputs=Analysis, model="fast", prompt="analyze")
@@ -128,7 +129,7 @@ def run_neograph():
         checkpointer=MemorySaver(),
         llm_factory=lambda tier: llm,
         prompt_compiler=lambda template, data, **kw: [{"role": "user", "content": (
-            f"Analyze 'microservice security'. List 3 claims and rate confidence 0-1."
+            "Analyze 'microservice security'. List 3 claims and rate confidence 0-1."
             if template == "analyze"
             else f"Write a brief report based on: {data}"
         )}],

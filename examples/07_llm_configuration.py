@@ -28,7 +28,6 @@ from pydantic import BaseModel
 
 from neograph import compile, construct_from_module, node, run
 
-
 # ── Schemas ──────────────────────────────────────────────────────────────
 
 class Claims(BaseModel, frozen=True):
@@ -109,9 +108,10 @@ def fake_llm_factory(tier, node_name=None, llm_config=None):
 
 
 _llm_factory = fake_llm_factory if USE_FAKE else real_llm_factory
-_prompt_compiler = lambda template, data: [{"role": "user", "content": (
-    f"Process this: {data}" if data else "Generate claims about system security"
-)}]
+def _prompt_compiler(template, data):
+    return [{"role": "user", "content": (
+        f"Process this: {data}" if data else "Generate claims about system security"
+    )}]
 
 
 # ══════════════════════════════════════════════════════════════════════════
