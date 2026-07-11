@@ -155,6 +155,71 @@ class TestSelfLoop:
 
 
 # =============================================================================
+# @node decorator: loop_history= kwarg (neograph-d5pvl, three-surface parity)
+# =============================================================================
+
+
+class TestNodeDecoratorLoopHistory:
+    """@node decorator: loop_history= forwards onto the composed Loop.
+
+    Parity target: modifiers.Loop.history (bool, default False) — Node-level
+    only. @node's loop_when path composes a Node-level self-loop, exactly the
+    supported shape.
+
+    Three-surface parity exemption: ForwardConstruct self.loop() is
+    structurally EXEMPT — FC loops build a sub-construct, and
+    Construct | Loop(history=True) raises ConstructError by design
+    (modifiers.py Construct-level history ban, pinned by
+    test_raises_when_history_true_on_construct_loop). The programmatic
+    surface (Node | Loop(history=True)) already carries the field.
+    """
+
+    def test_loop_carries_history_when_loop_history_true(self):
+        """@node(loop_when=..., loop_history=True) composes Loop(history=True)."""
+
+        @node(
+            outputs=Draft,
+            loop_when=lambda d: d is None or d.score < 0.8,
+            max_iterations=5,
+            loop_history=True,
+        )
+        def refine(seed: Draft) -> Draft:
+            return Draft(content="v", iteration=seed.iteration + 1, score=seed.score + 0.3)
+
+        loop_mod = refine.get_modifier(Loop)
+        assert isinstance(loop_mod, Loop)
+        assert loop_mod.history is True
+
+    def test_loop_history_stays_false_default_when_omitted(self):
+        """Omitting loop_history= leaves Loop's own default (False)
+        authoritative — the decorator must not shadow the modifier default."""
+
+        @node(
+            outputs=Draft,
+            loop_when=lambda d: d is None or d.score < 0.8,
+            max_iterations=5,
+        )
+        def refine(seed: Draft) -> Draft:
+            return Draft(content="v", iteration=seed.iteration + 1, score=seed.score + 0.3)
+
+        loop_mod = refine.get_modifier(Loop)
+        assert isinstance(loop_mod, Loop)
+        assert loop_mod.history is False
+
+    def test_decoration_raises_when_loop_history_without_loop_when(self):
+        """loop_history=True without loop_when= raises ConstructError at
+        decoration time — no Loop is composed at all in that case, so the
+        kwarg would otherwise be silently dead (pairing-guard precedent:
+        map_over-requires-map_key)."""
+
+        with pytest.raises(ConstructError, match="loop_when"):
+
+            @node(outputs=Draft, loop_history=True)
+            def refine(seed: Draft) -> Draft:
+                return Draft(content="v", score=0.9)
+
+
+# =============================================================================
 # Pattern 2: Multi-node loop — review → revise cycle
 # =============================================================================
 

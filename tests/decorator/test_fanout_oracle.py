@@ -327,6 +327,162 @@ class TestNodeDecoratorOracle:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# @node decorator: merge_model= kwarg (neograph-d5pvl, three-surface parity)
+#
+# Parity target: modifiers.Oracle.merge_model (str, default 'reason') — the
+# model tier used for the merge_prompt LLM-judge invoke. Already exposed on
+# the programmatic Oracle, ForwardConstruct self.ensemble(), and the spec
+# loader; @node is the only surface missing it.
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TestNodeDecoratorOracleMergeModel:
+    """@node decorator: merge_model= forwards onto the composed Oracle."""
+
+    def test_oracle_carries_merge_model_when_merge_model_set(self):
+        """@node(ensemble_n=, merge_prompt=, merge_model='fast') composes an
+        Oracle whose merge_model == 'fast'."""
+
+        @node(
+            mode="think",
+            outputs=Claims,
+            prompt="rw/decompose",
+            model="reason",
+            ensemble_n=2,
+            merge_prompt="rw/decompose-merge",
+            merge_model="fast",
+        )
+        def decompose(topic: RawText) -> Claims: ...
+
+        oracle_mod = decompose.get_modifier(Oracle)
+        assert isinstance(oracle_mod, Oracle)
+        assert oracle_mod.merge_model == "fast"
+
+    def test_oracle_merge_model_stays_reason_default_when_omitted(self):
+        """Omitting merge_model= leaves Oracle's own default ('reason')
+        authoritative — the decorator must not shadow the modifier default."""
+
+        @node(
+            mode="think",
+            outputs=Claims,
+            prompt="rw/decompose",
+            model="reason",
+            ensemble_n=2,
+            merge_prompt="rw/decompose-merge",
+        )
+        def decompose(topic: RawText) -> Claims: ...
+
+        oracle_mod = decompose.get_modifier(Oracle)
+        assert isinstance(oracle_mod, Oracle)
+        assert oracle_mod.merge_model == "reason"
+
+    def test_decoration_accepts_merge_model_when_merge_fn_also_set(self):
+        """Silent-ignore parity: @node with BOTH merge_fn= and merge_model=
+        must NOT raise — identical to the programmatic
+        Oracle(merge_fn=..., merge_model=...) semantics, where merge_model is
+        silently unused on the merge_fn path. A decorator-only fail-loud
+        would re-introduce the exact validation asymmetry this parity work
+        eliminates (architect ruling on neograph-d5pvl Decision 2)."""
+
+        # Programmatic reference behavior: no error, field simply carried.
+        programmatic = Oracle(n=2, merge_fn="combine", merge_model="fast")
+        assert programmatic.merge_model == "fast"
+
+        @node(
+            mode="think",
+            outputs=Claims,
+            prompt="rw/decompose",
+            model="reason",
+            ensemble_n=2,
+            merge_fn="combine",
+            merge_model="fast",
+        )
+        def decompose(topic: RawText) -> Claims: ...
+
+        oracle_mod = decompose.get_modifier(Oracle)
+        assert isinstance(oracle_mod, Oracle)
+        assert oracle_mod.merge_fn == "combine"
+        assert oracle_mod.merge_model == "fast"
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# @node decorator: map_on_error= kwarg (neograph-d5pvl, three-surface parity)
+#
+# Parity target: modifiers.Each.on_error (Literal['raise','collect'],
+# default 'raise') — already exposed programmatically via
+# Node | Each(on_error=) and Node.map(on_error=). @node builds Each at TWO
+# sites (Each×Oracle fusion + plain map_over); both must carry it.
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TestNodeDecoratorEachOnError:
+    """@node decorator: map_on_error= forwards onto the composed Each."""
+
+    def test_each_carries_on_error_collect_when_map_on_error_set_plain_path(self):
+        """Plain map_over path (no Oracle): @node(map_over=, map_key=,
+        map_on_error='collect') composes Each(on_error='collect')."""
+
+        @node(
+            mode="scripted",
+            outputs=MatchResult,
+            map_over="make_clusters.groups",
+            map_key="label",
+            map_on_error="collect",
+        )
+        def verify(cluster: ClusterGroup) -> MatchResult:
+            return MatchResult(cluster_label=cluster.label, matched=[])
+
+        each = verify.get_modifier(Each)
+        assert isinstance(each, Each)
+        assert each.on_error == "collect"
+
+    def test_each_carries_on_error_collect_when_map_on_error_set_fused_path(self):
+        """Each×Oracle fusion path: map_over + ensemble kwargs + map_on_error
+        must thread on_error to the fused Each construction site too."""
+
+        register_scripted(
+            "combine_map_on_error_fused",
+            lambda variants, config: variants[0],
+        )
+
+        @node(
+            mode="scripted",
+            outputs=MatchResult,
+            map_over="make_clusters.groups",
+            map_key="label",
+            map_on_error="collect",
+            ensemble_n=2,
+            merge_fn="combine_map_on_error_fused",
+        )
+        def verify(cluster: ClusterGroup) -> MatchResult:
+            return MatchResult(cluster_label=cluster.label, matched=[])
+
+        # Fusion actually happened: both modifiers present.
+        oracle_mod = verify.get_modifier(Oracle)
+        assert isinstance(oracle_mod, Oracle)
+        each = verify.get_modifier(Each)
+        assert isinstance(each, Each)
+        assert each.on_error == "collect"
+
+    def test_each_on_error_stays_raise_default_when_map_on_error_omitted(self):
+        """Omitting map_on_error= leaves Each's own default ('raise')
+        authoritative — zero behavior change for existing pipelines."""
+
+        @node(
+            mode="scripted",
+            outputs=MatchResult,
+            map_over="make_clusters.groups",
+            map_key="label",
+        )
+        def verify(cluster: ClusterGroup) -> MatchResult:
+            return MatchResult(cluster_label=cluster.label, matched=[])
+
+        each = verify.get_modifier(Each)
+        assert isinstance(each, Each)
+        assert each.on_error == "raise"
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # @node(mode='raw') — LangGraph escape hatch via unified @node decorator
 #
 # Raw mode folds @raw_node into @node: the user writes a classic

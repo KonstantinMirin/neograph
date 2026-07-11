@@ -163,6 +163,7 @@ def _build_oracle_kwargs(
     merge_pre_process: Callable | None = None,
     merge_post_process: Callable | None = None,
     merge_fallback: Callable | None = None,
+    merge_model: str | None = None,
 ) -> dict[str, Any]:
     """Build and validate Oracle modifier kwargs from @node decorator arguments.
 
@@ -227,7 +228,25 @@ def _build_oracle_kwargs(
         oracle_kw["merge_post_process"] = merge_post_process
     if merge_fallback is not None:
         oracle_kw["merge_fallback"] = merge_fallback
+    if merge_model is not None:
+        # Conditional-include so Oracle's 'reason' default stays authoritative.
+        # Semantics are identical to programmatic Oracle(merge_model=...) —
+        # including silent-ignore alongside merge_fn (pure-sugar invariant:
+        # no decorator-only validation the modifier itself does not perform).
+        oracle_kw["merge_model"] = merge_model
     return oracle_kw
+
+
+def _build_each_kwargs(
+    map_over: str | None, map_key: str | None, map_on_error: str
+) -> dict[str, Any]:
+    """Each modifier kwargs from @node decorator arguments (both the fused
+    Each×Oracle path and the plain fan-out path). Conditional-include for
+    ``on_error`` so Each's ``'raise'`` default stays authoritative."""
+    each_kw: dict[str, Any] = {"over": map_over, "key": map_key}
+    if map_on_error != "raise":
+        each_kw["on_error"] = map_on_error
+    return each_kw
 
 
 def node(
@@ -243,6 +262,7 @@ def node(
     name: str | None = None,
     map_over: str | None = None,
     map_key: str | None = None,
+    map_on_error: Literal["raise", "collect"] = "raise",
     ensemble_n: int | None = None,
     models: list[str] | None = None,
     merge_fn: str | None = None,
@@ -250,6 +270,7 @@ def node(
     merge_pre_process: Callable | None = None,
     merge_post_process: Callable | None = None,
     merge_fallback: Callable | None = None,
+    merge_model: str | None = None,
     interrupt_when: str | Callable | None = None,
     renderer: Renderer | None = None,
     context: list[str] | None = None,
@@ -259,6 +280,7 @@ def node(
     loop_when: str | Callable | None = None,
     max_iterations: int | None = None,
     on_exhaust: Literal["error", "last"] | None = None,
+    loop_history: bool = False,
 ) -> Any:
     """Decorator that turns a function into a Node spec with signature-inferred
     dependencies. Supports both `@node` and `@node(...)` call forms.
@@ -279,6 +301,8 @@ def node(
     ``Each(over=map_over, key=map_key)``. The first parameter whose name does
     NOT match any upstream ``@node`` is treated as the fan-out item receiver;
     ``construct_from_module`` skips it in topology wiring.
+    ``map_on_error='collect'`` forwards to ``Each(on_error='collect')``
+    (per-item failures collected instead of raised).
 
     Oracle ensemble::
 
@@ -289,7 +313,23 @@ def node(
     When any of ``ensemble_n``, ``merge_fn``, or ``merge_prompt`` is set the
     node is composed with ``Oracle(n=..., merge_fn=..., merge_prompt=...)``.
     Exactly one of ``merge_fn`` or ``merge_prompt`` is required; ``ensemble_n``
-    defaults to 3 if omitted.
+    defaults to 3 if omitted. ``merge_model='<tier>'`` forwards to
+    ``Oracle(merge_model=...)`` — the model tier the merge call uses
+    (default ``'reason'``; like the programmatic Oracle, it is silently
+    ignored on the ``merge_fn`` path).
+
+    Loop self-refinement::
+
+        @node(outputs=Draft, prompt='rw/draft', model='reason',
+              loop_when='needs_work', max_iterations=5, loop_history=True)
+        def draft(topic: RawText) -> Draft: ...
+
+    ``loop_history=True`` forwards to ``Loop(history=True)`` — prior
+    iterations accumulate in ``neo_loop_history_{node}``. Requires
+    ``loop_when=`` (without it no Loop is composed and the kwarg would be
+    silently dead). ForwardConstruct's ``self.loop()`` wraps a sub-construct,
+    where Loop bans ``history`` — the @node self-loop is the Node-level
+    shape where it is legal.
 
     Merge hooks (``merge_prompt`` path only)::
 
@@ -344,6 +384,14 @@ def node(
                 "map_over= (Each) and loop_when= (Loop) cannot be combined on the same node",
                 node=(name or f.__name__).replace("_", "-"),
                 hint="use a sub-construct with Loop inside an Each fan-out instead",
+            )
+        if loop_history and loop_when is None:
+            # Without loop_when no Loop modifier is composed at all, so the
+            # kwarg would be silently dead — same pairing rule as map_over/map_key.
+            raise ConstructError.build(
+                "loop_history= requires loop_when=",
+                node=(name or f.__name__).replace("_", "-"),
+                hint="pass loop_when='<condition>' to compose the Loop that records history",
             )
 
         # -- Mode inference: if not explicitly set, infer from kwargs ----------
@@ -556,9 +604,10 @@ def node(
                 merge_pre_process=merge_pre_process,
                 merge_post_process=merge_post_process,
                 merge_fallback=merge_fallback,
+                merge_model=merge_model,
             )
             n = n | Oracle(**oracle_kw)
-            n = n | Each(over=map_over, key=map_key)  # type: ignore[arg-type]
+            n = n | Each(**_build_each_kwargs(map_over, map_key, map_on_error))
             _register_sidecar(n, f, param_names)
             if param_res:
                 _set_param_res(n, param_res)
@@ -567,7 +616,7 @@ def node(
         # -- Fan-out via Each when map_over is set (no Oracle) -----------------
         if map_over is not None:
             # Apply | Each(...) — this creates a new Node via model_copy.
-            n_mapped = n | Each(over=map_over, key=map_key)  # type: ignore[arg-type]
+            n_mapped = n | Each(**_build_each_kwargs(map_over, map_key, map_on_error))
             # The model_copy produced a new id(); re-register the sidecar on
             # the new instance so construct_from_module can find it.
             _register_sidecar(n_mapped, f, param_names)
@@ -591,6 +640,7 @@ def node(
                 merge_pre_process=merge_pre_process,
                 merge_post_process=merge_post_process,
                 merge_fallback=merge_fallback,
+                merge_model=merge_model,
             )
             n = n | Oracle(**oracle_kw)
             _register_sidecar(n, f, param_names)
@@ -627,6 +677,12 @@ def node(
             }
             if on_exhaust is not None:
                 loop_kwargs["on_exhaust"] = on_exhaust
+            if loop_history:
+                # Conditional-include: Loop's history=False default stays
+                # authoritative. Node-level self-loop is the one @node shape
+                # where history is legal (Construct-level Loop bans it);
+                # ForwardConstruct's self.loop() is structurally exempt.
+                loop_kwargs["history"] = True
             n = n | Loop(**loop_kwargs)
             _register_sidecar(n, f, param_names)
             if param_res:

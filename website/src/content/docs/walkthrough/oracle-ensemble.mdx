@@ -220,7 +220,7 @@ def decompose() -> Claims: ...
 
 The framework passes all generator outputs to an LLM with the given prompt template. The LLM produces the final merged result as structured output. Use this when merging requires judgment (picking the best analysis, synthesizing contradictory results).
 
-The merge runs on the `reason` tier by default. To use a different model for the judge step, set it on the programmatic modifier — `Oracle(merge_prompt=..., merge_model="fast")` — or via the `merge_model:` key in the spec format; it is not a `@node` kwarg.
+The merge runs on the `reason` tier by default. To use a different model for the judge step, pass `merge_model="fast"` — as a `@node` kwarg, on the programmatic modifier (`Oracle(merge_prompt=..., merge_model="fast")`), or via the `merge_model:` key in the spec format. Like the programmatic Oracle, it only applies on the `merge_prompt` path (a `merge_fn` merge never calls a model).
 
 ### Merge hooks
 

@@ -56,7 +56,7 @@ How it works:
 - The `cluster` parameter does not match any upstream `@node` — the framework recognizes it as the fan-out item receiver and skips it in topology wiring.
 - Under the hood, `@node` applies `| Each(over=..., key=...)` to the created Node.
 
-Both `map_over` and `map_key` are required together. Passing one without the other raises `ConstructError`.
+Both `map_over` and `map_key` are required together. Passing one without the other raises `ConstructError`. To collect per-item failures instead of raising on the first one, add `map_on_error="collect"` — it forwards to `Each(on_error='collect')`.
 
 ## Ensemble with ensemble_n, merge_fn, and merge_prompt
 
@@ -540,13 +540,13 @@ Difference from inputs:
 
 Context fields are forwarded into sub-constructs automatically. If a node inside a sub-construct declares `context=["build_catalog"]`, the parent state value is copied into the sub-graph's state at invocation time. See example 14 (`examples/14_context_injection.py`) for the full pattern with sub-constructs and Each fan-out.
 
-## Loop history with Loop(history=True)
+## Loop history with loop_history=True
 
-Collect every iteration's output into a separate history field for debugging or audit trails. History is an option on the `Loop` **modifier** (`Loop(history=True)`), not a `@node` kwarg -- apply it programmatically to the decorated node.
+Collect every iteration's output into a separate history field for debugging or audit trails. Pass `loop_history=True` alongside `loop_when=` and the node's `Loop` modifier is composed with `history=True`; the programmatic form `Loop(history=True)` is equivalent. `loop_history=` requires `loop_when=` -- without a loop there is nothing to record, and the decorator raises `ConstructError`.
 
 ```python
 from pydantic import BaseModel
-from neograph import node, construct_from_functions, Loop, compile, run
+from neograph import node, construct_from_functions, compile, run
 from langgraph.checkpoint.memory import InMemorySaver
 
 class Draft(BaseModel, frozen=True):
@@ -558,21 +558,18 @@ class Draft(BaseModel, frozen=True):
 def seed() -> Draft:
     return Draft(content="initial", score=0.0)
 
-@node(outputs=Draft)
+@node(
+    outputs=Draft,
+    loop_when=lambda d: d is None or d.score < 0.8,
+    max_iterations=5,
+    loop_history=True,
+)
 def refine(seed: Draft) -> Draft:
     return Draft(
         content=f"v{seed.iteration + 1}",
         iteration=seed.iteration + 1,
         score=seed.score + 0.3,
     )
-
-# history= is a Loop-modifier option, not a @node kwarg. Apply it programmatically
-# to the decorated node, then assemble the pipeline as usual.
-refine = refine | Loop(
-    when=lambda d: d is None or d.score < 0.8,
-    max_iterations=5,
-    history=True,
-)
 
 pipeline = construct_from_functions("writer", [seed, refine])
 graph = compile(pipeline, checkpointer=InMemorySaver())
