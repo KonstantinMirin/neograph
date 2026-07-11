@@ -763,7 +763,28 @@ PARITY_CORPUS = [
 
 # The ratchet: a NEW declarative capability is added here FIRST; the coverage
 # test below then fails loud until its forward() twin row lands in the corpus.
-REQUIRED_CAPABILITIES = frozenset(row.capability for row in PARITY_CORPUS)
+# INDEPENDENT literal by contract (neograph-zrcln): never derive this from
+# PARITY_CORPUS — the coverage test asserts set EQUALITY against the corpus,
+# so a deleted row and an unregistered new row both fail loud. A meta-guard
+# (tests/test_guards_parity_ratchet.py) pins the independence.
+REQUIRED_CAPABILITIES = frozenset(
+    {
+        "straight_line",
+        "fan_in",
+        "per_node_fan_out",
+        "each_sub_construct_custom_key",
+        "each_on_error_collect",
+        "loop_over_nodes",
+        "loop_over_sub_construct_body",
+        "loop_in_loop",
+        "multi_output_dict",
+        "skip_marks",
+        "oracle_ensemble",
+        "oracle_ensemble_sub_construct",
+        "operator_interrupt",
+        "operator_interrupt_sub_construct",
+    }
+)
 
 # Phase-2 tracing surfaces (epic neograph-e9zse): move each key from here
 # into REQUIRED_CAPABILITIES (with its corpus row) when the surface ships.
@@ -802,6 +823,49 @@ class TestParityRatchet:
             f"declarative capabilities without a forward() parity row: {sorted(missing)}. "
             "Add the forward() twin (and its corpus row) before shipping the capability."
         )
+        unregistered = covered - REQUIRED_CAPABILITIES
+        assert not unregistered, (
+            f"corpus rows not registered in REQUIRED_CAPABILITIES: {sorted(unregistered)}. "
+            "Add the capability name to the literal required set — the ratchet only "
+            "protects rows it knows about (a row missing from the set could later be "
+            "deleted without any failure)."
+        )
+
+    def test_every_slot_rule_modifier_is_exercised_by_corpus(self):
+        """Surface-enumeration ratchet (neograph-zrcln fix, option B): every
+        modifier type registered in the production ``_SLOT_RULES`` table — the
+        table any ``|``-appliable modifier MUST join (``with_modifier`` raises
+        for unknown types) — must be exercised by at least one corpus row's
+        declarative IR. A NEW declarative modifier shipped without a forward()
+        parity twin fails HERE automatically, from a source of truth fully
+        independent of the corpus."""
+        from neograph.modifiers import _SLOT_RULES
+
+        required_types = {rule.mod_type for rule in _SLOT_RULES}
+
+        def _collect(items, acc):
+            for item in items:
+                ms = getattr(item, "modifier_set", None)
+                if ms is not None:
+                    for mod in (ms.each, ms.oracle, ms.loop, ms.operator):
+                        if mod is not None:
+                            acc.add(type(mod))
+                nested = getattr(item, "nodes", None)
+                if nested:
+                    _collect(nested, acc)
+
+        _register_corpus_fns()
+        exercised: set[type] = set()
+        for row in PARITY_CORPUS:
+            _collect(row.declarative_nodes(), exercised)
+
+        unexercised = required_types - exercised
+        assert not unexercised, (
+            f"declarative modifier type(s) with NO parity corpus coverage: "
+            f"{sorted(t.__name__ for t in unexercised)}. Every modifier in "
+            "modifiers._SLOT_RULES needs at least one PARITY_CORPUS row proving "
+            "its forward() twin traces to identical IR."
+        )
 
     def test_corpus_has_no_duplicate_capability_keys(self):
         keys = [row.capability for row in PARITY_CORPUS]
@@ -813,6 +877,10 @@ class TestParityRatchet:
             f"{sorted(overlap)} shipped: remove from PHASE2_PENDING (its corpus row "
             "now carries the coverage)"
         )
+
+    # The non-tautology meta-guard (REQUIRED_CAPABILITIES must not derive
+    # from PARITY_CORPUS) lives in tests/test_guards_parity_ratchet.py with
+    # its positive/negative meta-tests (neograph-zrcln).
 
 
 class TestNestedEnsembleFormAware:
