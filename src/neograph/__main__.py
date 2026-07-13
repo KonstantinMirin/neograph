@@ -11,9 +11,11 @@ import argparse
 import importlib
 import json
 import sys
+import traceback
 from pathlib import Path
 from typing import Any
 
+from neograph._dev_warnings import DEV_MODE
 from neograph._ir_branch import iter_with_arms
 from neograph.construct import Construct
 from neograph.naming import field_name_for
@@ -238,6 +240,8 @@ def cmd_test_scaffold(args: argparse.Namespace) -> int:
         except FileExistsError:
             print(f"SKIP  {output_dir} already exists (use --overwrite)")
         except Exception as exc:
+            if DEV_MODE:
+                traceback.print_exc()
             print(f"FAIL  {construct.name}: {exc}")
             return 1
 

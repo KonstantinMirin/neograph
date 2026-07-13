@@ -80,6 +80,26 @@ __all__ = ["ForwardConstruct"]
 _MAX_BRANCHES = 8
 
 
+def _primary_type(item: Node | Construct) -> Any:
+    """The primary declared-output type of a node/construct — the downstream
+    state-bus type the tracer uses for edge and port typing.
+
+    Returns the post-merge output type (consumer-facing). This INTENTIONALLY
+    diverges from ``_dispatch._resolve_primary_output``, neograph-2yi7q:
+      - here / edges / ports: post-merge type B (what flows on the state bus —
+        ``state.py`` writes ``output_type`` = ``node.outputs`` for the
+        consumer-facing field)
+      - ``_resolve_primary_output``: the per-variant ``gen_type`` A passed to the
+        LLM as the invocation schema (``_dispatch`` -> ``invoke_structured``)
+    For a type-transforming Oracle (``merge_fn`` A->B) these MUST differ, and
+    ``_ir_normalize.oracle_gen_type_for`` fires the override exactly when the
+    declared output is the post-merge B. Do NOT route these call sites through
+    ``_resolve_primary_output`` — that would infer gen_type A for downstream
+    edges while the bus carries B, breaking edge type-inference.
+    """
+    return normalize_outputs(_declared_output(item)).primary
+
+
 def _attr_chain_after_prefix(source_node: Node | Construct | None, full_name: str) -> list[str]:
     """Strip the ``out_of_<node>`` proxy-name prefix and return the attr chain.
 
@@ -513,13 +533,13 @@ def _declared_primary_of_body_item(item: Any) -> TypeSpecStatic:
     inference — a node ref's declared primary, or (recursively) the last
     body item's primary for deferred self.each()/self.loop() builders."""
     if isinstance(item, _NodeCall):
-        return normalize_outputs(_declared_output(item._node)).primary
+        return _primary_type(item._node)
     if isinstance(item, (_EachCall, _LoopCall)):
         return _declared_primary_of_body_item(item._body[-1]) if item._body else None
     if isinstance(item, _ModifierWrapCall):
         target = item._target
         if isinstance(target, _NodeCall):
-            return normalize_outputs(_declared_output(target._node)).primary
+            return _primary_type(target._node)
         return _declared_primary_of_body_item(target[-1]) if target else None
     return None
 
@@ -561,7 +581,7 @@ class _LoopCall:
         # (produce+validate pattern, neograph-vt4y).
         source_node = input_proxy._neo_source
         if source_node is not None:
-            input_type = normalize_outputs(_declared_output(source_node)).primary
+            input_type = _primary_type(source_node)
         else:
             input_type = _declared_primary_of_body_item(self._body[-1]) if self._body else None
 
@@ -596,7 +616,7 @@ class _LoopCall:
         into the tracer — the enclosing construct owns the placement.
         """
         if preceding:
-            input_type = normalize_outputs(_declared_output(preceding[-1])).primary
+            input_type = _primary_type(preceding[-1])
         else:
             input_type = outer_input_type
         if input_type is None:
@@ -670,7 +690,7 @@ class _LoopCall:
         # Boundary ports are single types; a dict-form declared output collapses
         # to its primary key (secondary outputs are not the loop value).
         # _declared_output abstracts the Node.outputs / Construct.output split.
-        output_type = normalize_outputs(_declared_output(members[-1])).primary
+        output_type = _primary_type(members[-1])
 
         # A fanned-out terminal member writes dict[str, X] to the bus, which
         # can never satisfy the output-boundary contract (X). The assembly
@@ -850,7 +870,7 @@ class _EachCall:
                 bn = bn.model_copy(update={"inputs": item_type})
             body_nodes_copy.append(bn)
 
-        output_type = normalize_outputs(_declared_output(body_nodes[-1])).primary
+        output_type = _primary_type(body_nodes[-1])
 
         body_slug = "-".join(n.name for n in body_nodes)
         occurrence = self._tracer.next_occurrence("each", body_slug)
@@ -920,7 +940,7 @@ class _EachCall:
     ) -> TypeSpecStatic:
         """Walk the producer's declared output along the attr chain and
         extract the fanned item type (the sub-construct's input port)."""
-        typ = normalize_outputs(_declared_output(source_node)).primary
+        typ = _primary_type(source_node)
         return self._walk_item_type(typ, attr_parts, over_path)
 
     def _walk_item_type(
@@ -996,9 +1016,9 @@ class _ModifierWrapCall:
 
         source_node = input_proxy._neo_source
         if source_node is not None:
-            input_type = normalize_outputs(_declared_output(source_node)).primary
+            input_type = _primary_type(source_node)
         else:
-            input_type = normalize_outputs(_declared_output(body_nodes[-1])).primary
+            input_type = _primary_type(body_nodes[-1])
         if input_type is None:
             raise ConstructError.build(
                 f"{self._surface} input type could not be inferred",
@@ -1029,7 +1049,7 @@ class _ModifierWrapCall:
 
         body_nodes = self._validated_body_nodes()
         if preceding:
-            input_type = normalize_outputs(_declared_output(preceding[-1])).primary
+            input_type = _primary_type(preceding[-1])
         else:
             input_type = outer_input_type
         if input_type is None:
@@ -1070,7 +1090,7 @@ class _ModifierWrapCall:
                 bn = bn.model_copy(update={"inputs": input_type})
             body_nodes_copy.append(bn)
 
-        output_type = normalize_outputs(_declared_output(body_nodes[-1])).primary
+        output_type = _primary_type(body_nodes[-1])
 
         body_slug = "-".join(n.name for n in body_nodes)
         occurrence = self._tracer.next_occurrence(self._kind, body_slug)

@@ -351,6 +351,13 @@ def compute_node_fingerprints(construct: Any) -> dict[str, str]:
     """
     import hashlib
 
+    def _fp(name: str, typ: Any) -> str:
+        # The fingerprint contract: sha256('{name}:{type_signature}')[:12]. The
+        # :12 width and '{name}:{sig}' layout are load-bearing — schema and node
+        # fingerprints move in lockstep, neograph-v63o, so the two branches
+        # (dict-form per-key + singular) MUST share one definition, neograph-2yi7q.
+        return hashlib.sha256(f"{name}:{_type_signature(typ)}".encode()).hexdigest()[:12]
+
     from neograph.naming import field_name_for
 
     result: dict[str, str] = {}
@@ -376,10 +383,10 @@ def compute_node_fingerprints(construct: Any) -> dict[str, str]:
             # Dict-form outputs: fingerprint each key
             for key, typ in no.all_keys.items():
                 full_name = output_field_name(fname, key)
-                result[full_name] = hashlib.sha256(f"{full_name}:{_type_signature(typ)}".encode()).hexdigest()[:12]
+                result[full_name] = _fp(full_name, typ)
         else:
             typ = no.primary
-            result[fname] = hashlib.sha256(f"{fname}:{_type_signature(typ)}".encode()).hexdigest()[:12]
+            result[fname] = _fp(fname, typ)
 
     for item in construct.nodes:
         if isinstance(item, _BranchNode):
