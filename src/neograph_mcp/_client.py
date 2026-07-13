@@ -807,8 +807,13 @@ def mcp_resource_fetcher(
     - ``fetcher(uri) -> (content, mime)``: reads a resource over a consumer-owned
       session. An ``McpError`` (e.g. a ``-32002`` expiry) is caught INSIDE the
       session context and re-raised AFTER the ``async with`` closes — so it escapes
-      as a bare ``McpError`` rather than an anyio-teardown ``ExceptionGroup``, which
-      is exactly what ``hydrate_resource_ref`` treats as candidate expiry (-> replay).
+      as a bare ``McpError`` rather than an anyio-teardown ``ExceptionGroup`` (the
+      bare-leaf exit-boundary invariant, neograph-lcrwd). This is EXCEPTION-SURFACE
+      consistency only: ``hydrate_resource_ref`` treats ANY fetch failure as
+      candidate expiry (``di.py`` ``except Exception``), so replay engages whether
+      the error surfaces bare or grouped — the unwrap just makes the ``read_error``
+      it carries (and any resulting ``ResourceExpiredError.cause``) the bare
+      ``McpError`` instead of a group.
     - ``replayer(tool_name, args) -> raw_result``: re-invokes the producing call
       through the same client so an expired ``resource_link`` can be re-derived. The
       raw session's ``resource_link`` blocks are preserved (unlike the langchain
