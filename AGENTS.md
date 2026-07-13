@@ -474,7 +474,7 @@ it (xfail-style) before documenting it here.
 
 ## Examples
 
-20 runnable examples in `examples/`, each narrated as a walkthrough on neograph.pro. Most use `@node` except two that stay declarative (example 10 mixed, example 11 config injection). Sub-constructs (example 05) can now use either `@node` with `construct_from_functions(input=, output=)` or declarative `Construct(input=, output=, nodes=[...])`.
+21 runnable examples in `examples/`, each narrated as a walkthrough on neograph.pro. Most use `@node` except two that stay declarative (example 10 mixed, example 11 config injection). Example 27 is the ForwardConstruct imperative-wiring showcase (branch/self.loop/self.each/self.ensemble/self.interrupt, keyless, pinned by `tests/test_example_forward_wiring.py`). Sub-constructs (example 05) can now use either `@node` with `construct_from_functions(input=, output=)` or declarative `Construct(input=, output=, nodes=[...])`.
 
 **Examples must run end-to-end.** Breaking one is a regression. When you change an API surface, run every example that doesn't require real API keys (01, 01c, 02, 03, 04, 05, 06, 08, 09, 10). The keyed examples are 07 and observable_pipeline.py — both hit real OpenRouter (observable_pipeline additionally pushes to Langfuse; run it with `--extra langfuse`), and both were verified passing end-to-end on 2026-07-09. Example 11 was converted to a FakeLLM and is keyless. Document any new failures separately.
 
