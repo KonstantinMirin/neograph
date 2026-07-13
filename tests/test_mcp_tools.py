@@ -202,7 +202,7 @@ class TestRawBaseToolAcceptance:
         graph = compile(pipeline, **build_test_compile_kwargs(), **_llm_kw)
         result = run(graph, input={"node_id": "n1"})
         # Call-recording assertion (LOAD-BEARING for "tool turn skipped" regression)
-        assert calls, f"Tool 'run_search' was never called (tool turn skipped)"
+        assert calls, "Tool 'run_search' was never called (tool turn skipped)"
         assert calls == [({"query": "q"}, "result:q")], f"Tool call mismatch: {calls}"
         # Output value assertion (pins final-output shape)
         assert result["scan"] == Claims(items=["done"])
