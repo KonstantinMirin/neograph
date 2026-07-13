@@ -6,12 +6,19 @@ The bare-leaf invariant (neograph-2itlh): every transport-touching ``await``
 handler raises ``_unwrap_single(...)`` on exit — so a single-leaf transport
 ``ExceptionGroup`` surfaces as its bare leaf, not a grouped wrapper.
 
-RATCHETING guard with a shrinking allowlist. The allowlist holds the
-known-DEFERRED sites (``neograph-lcrwd``): transport calls not yet
-unwrap-guarded. It may only SHRINK — when ``neograph-lcrwd`` wraps a deferred
-site, it MUST be removed here. A NEW unwrapped transport call anywhere in the
-battery fails the guard (it is not in the allowlist); an allowlisted site that
-gets wrapped also fails (the allowlist must shrink).
+Two sanctioned handler forms, by boundary shape (neograph-lcrwd):
+- in-place: ``raise _unwrap_single(exc) from None`` (held-session boundaries —
+  no CM exit between the raise and the consumer);
+- capture-then-reraise: ``leaf = _unwrap_single(exc)`` in the handler with the
+  bare leaf re-raised AFTER the ``async with`` closes (consumer-owned-session
+  boundaries — an in-scope raise would be RE-wrapped by the anyio teardown).
+
+RATCHETING guard with a shrinking allowlist. The allowlist holds known-DEFERRED
+sites: transport calls not yet unwrap-guarded. It may only SHRINK — wrapping a
+deferred site MUST remove it here. A NEW unwrapped transport call anywhere in
+the battery fails the guard (it is not in the allowlist); an allowlisted site
+that gets wrapped also fails (the allowlist must shrink). As of neograph-lcrwd
+the allowlist is EMPTY — every battery boundary unwraps.
 
 Scope: the NAMED transport-method boundaries. The ``_resilient`` tool-call
 wrapper (which wraps ``orig(**kwargs)``, not a named MCP method) is covered
@@ -34,26 +41,31 @@ _TRANSPORT_METHODS = frozenset(
     {"get_tools", "load_mcp_tools", "call_tool", "list_tools", "read_resource", "get_prompt"}
 )
 
-# Known-DEFERRED sites (neograph-lcrwd): transport calls NOT yet unwrap-guarded.
-# (module_stem, enclosing_function, method). Remove a row when neograph-lcrwd
-# wraps it — the allowlist may only shrink.
-_DEFERRED_ALLOWLIST = frozenset(
-    {
-        ("_client", "fetcher", "read_resource"),
-        ("_client", "replayer", "call_tool"),
-        ("_session", "_ensure_listing", "list_tools"),
-        ("_session", "call", "call_tool"),
-    }
-)
+# Known-DEFERRED sites: transport calls NOT yet unwrap-guarded, as
+# (module_stem, enclosing_function, method). EMPTY since neograph-lcrwd wrapped
+# the last four (_session call/_ensure_listing, _client fetcher/replayer) — the
+# allowlist may only shrink, so it stays empty.
+_DEFERRED_ALLOWLIST: frozenset[tuple[str, str, str]] = frozenset()
+
+
+def _is_unwrap_call(expr: ast.expr | None) -> bool:
+    return (
+        isinstance(expr, ast.Call)
+        and isinstance(expr.func, ast.Name)
+        and expr.func.id == "_unwrap_single"
+    )
 
 
 def _has_unwrap_raise(node: ast.AST) -> bool:
-    """True if ``node``'s subtree contains a ``raise _unwrap_single(...)``."""
+    """True if ``node``'s subtree normalises via ``_unwrap_single`` — either the
+    in-place ``raise _unwrap_single(...)`` or the capture-then-reraise form's
+    ``leaf = _unwrap_single(...)`` (the leaf is re-raised after the ``async
+    with`` closes, outside the handler)."""
     for n in ast.walk(node):
-        if isinstance(n, ast.Raise) and isinstance(n.exc, ast.Call):
-            f = n.exc.func
-            if isinstance(f, ast.Name) and f.id == "_unwrap_single":
-                return True
+        if isinstance(n, ast.Raise) and _is_unwrap_call(n.exc):
+            return True
+        if isinstance(n, ast.Assign) and _is_unwrap_call(n.value):
+            return True
     return False
 
 
@@ -184,6 +196,27 @@ def test_meta_try_with_non_unwrap_except_is_still_a_violation() -> None:
         "    return error\n"
     )
     assert unwrap_violations(src) == [("f", "read_resource", 3)]
+
+
+def test_meta_capture_then_reraise_is_not_a_violation() -> None:
+    """Positive: the consumer-owned-session form — the handler CAPTURES the
+    unwrapped leaf (``leaf = _unwrap_single(exc)``) and re-raises it after the
+    ``async with`` closes (an in-scope raise would be re-wrapped by the anyio
+    teardown) — satisfies the invariant."""
+    src = (
+        "async def f(client, uri):\n"
+        "    error = None\n"
+        "    async with client.session('x') as session:\n"
+        "        try:\n"
+        "            result = await session.read_resource(uri)\n"
+        "        except BaseException as exc:\n"
+        "            leaf = _unwrap_single(exc)\n"
+        "            error = leaf\n"
+        "    if error is not None:\n"
+        "        raise error\n"
+        "    return result\n"
+    )
+    assert unwrap_violations(src) == []
 
 
 def test_meta_bare_function_transport_call_is_detected() -> None:

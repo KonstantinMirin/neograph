@@ -821,22 +821,27 @@ def mcp_resource_fetcher(
     arguments on this path (bind per-run identity by constructing the fetcher inside
     the run scope, or return a static token).
     """
-    from mcp.shared.exceptions import McpError
     from pydantic import AnyUrl
 
     async def fetcher(uri: str) -> tuple[Any, str | None]:
         server_key = _route_uri(servers, uri)
         auth = _http_identity(servers[server_key], token_provider, None, use_config=False)
         client = _client_for(server_key, servers[server_key], auth)
-        error: McpError | None = None
+        error: BaseException | None = None
         result: Any = None
         async with client.session(server_key) as session:
             try:
                 result = await session.read_resource(AnyUrl(uri))
-            except McpError as exc:
-                # Catch in-scope: escaping the `async with` wraps it in an anyio
-                # ExceptionGroup; re-raise the bare McpError after the block closes.
-                error = exc
+            except BaseException as exc:  # noqa: BLE001 - normalise the transport's group wrapping
+                # Capture in-scope: raising here would cross the `async with` exit
+                # and be RE-wrapped by the anyio teardown; re-raise the bare leaf
+                # after the block closes. A bare McpError (e.g. a -32002 expiry)
+                # unwraps to itself, so hydrate_resource_ref's candidate-expiry
+                # (-> replay) contract now holds for the grouped form too.
+                leaf = _unwrap_single(exc)
+                if isinstance(leaf, asyncio.CancelledError):
+                    raise  # cancellation propagates in its original form (exempt)
+                error = leaf
         if error is not None:
             raise error
         return _read_resource_content(result)
@@ -845,8 +850,20 @@ def mcp_resource_fetcher(
         server_key, real = _route_tool(servers, tool_name)
         auth = _http_identity(servers[server_key], token_provider, None, use_config=False)
         client = _client_for(server_key, servers[server_key], auth)
+        error: BaseException | None = None
+        result: Any = None
         async with client.session(server_key) as session:
-            result = await session.call_tool(real, args or {})
+            try:
+                result = await session.call_tool(real, args or {})
+            except BaseException as exc:  # noqa: BLE001 - normalise the transport's group wrapping
+                # Same capture-then-reraise as fetcher: an in-scope raise would be
+                # re-wrapped by the anyio teardown at the `async with` exit.
+                leaf = _unwrap_single(exc)
+                if isinstance(leaf, asyncio.CancelledError):
+                    raise  # cancellation propagates in its original form (exempt)
+                error = leaf
+        if error is not None:
+            raise error
         # Return the raw content list so neograph's _first_resource_link_uri scans
         # the fresh resource_link blocks (raw session preserves the 'resource_link'
         # block type; the langchain adapter would rewrite it to 'file').

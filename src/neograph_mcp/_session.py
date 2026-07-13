@@ -250,7 +250,12 @@ class McpSession:
         declared: dict[str, set[str]] = {}
         cursor: str | None = None
         while True:
-            result = await self._session.list_tools(cursor)
+            try:
+                result = await self._session.list_tools(cursor)
+            except BaseException as exc:  # noqa: BLE001 - normalise the transport's group wrapping
+                if isinstance(_unwrap_single(exc), asyncio.CancelledError):
+                    raise  # cancellation propagates in its original form (exempt)
+                raise _unwrap_single(exc) from None
             for tool in result.tools:
                 names.append(tool.name)
                 schema = getattr(tool, "inputSchema", None) or {}
@@ -322,7 +327,12 @@ class McpSession:
                     call_args[self._stdio_token_arg] = token
 
         read_timeout = timedelta(seconds=self._timeout) if self._timeout is not None else None
-        result = await self._session.call_tool(tool_name, call_args, read_timeout_seconds=read_timeout)
+        try:
+            result = await self._session.call_tool(tool_name, call_args, read_timeout_seconds=read_timeout)
+        except BaseException as exc:  # noqa: BLE001 - normalise the transport's group wrapping
+            if isinstance(_unwrap_single(exc), asyncio.CancelledError):
+                raise  # cancellation propagates in its original form (exempt)
+            raise _unwrap_single(exc) from None
 
         content = _convert_content(getattr(result, "content", None))
         structured = getattr(result, "structuredContent", None)
