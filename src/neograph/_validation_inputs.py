@@ -129,6 +129,13 @@ def _check_fan_in_inputs(
     # Both must be handled so the programmatic `Node(inputs=...) | Each(...)`
     # path works without requiring fan_out_param to be set.
     fan_out_key = getattr(item, "fan_out_param", None)
+    # The reserved Keymaker "handoff" input reads the mesh channel, not a named
+    # upstream producer (design §3.3). It is set ONLY by the normalizer, so a
+    # NON-mesh node that declares a "handoff" input has handoff_param=None and
+    # still fails the "no upstream node named 'handoff'" check below — the
+    # desired rejection. Legal mesh members skip it here (the counterpart to the
+    # fan_out_key skip). review MEDIUM-1.
+    handoff_key = getattr(item, "handoff_param", None)
     ms = getattr(item, "modifier_set", None)
     has_each = ms is not None and ms.each is not None
     # ``producers`` is already keyed by field_name, so the
@@ -149,6 +156,8 @@ def _check_fan_in_inputs(
     _each_skip_used = fan_out_key is not None
     for upstream_name, expected_type in inputs_dict.items():
         if upstream_name == fan_out_key:
+            continue
+        if upstream_name == handoff_key:
             continue
         if upstream_name not in producers:
             # If the node has an Each modifier, ONE unmatched key is the

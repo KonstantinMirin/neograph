@@ -461,6 +461,82 @@
       "signature": "(when: str)"
     },
     {
+      "anchor": "keymaker",
+      "bases": [],
+      "doc": "Dynamic-handoff modifier \u2014 one modifier with two modes (design \u00a72.1).",
+      "fields": [
+        {
+          "annotation": "list[str] | None",
+          "default": "None",
+          "name": "peers",
+          "required": false
+        },
+        {
+          "annotation": "str",
+          "default": "'goto'",
+          "name": "route",
+          "required": false
+        },
+        {
+          "annotation": "int",
+          "default": "10",
+          "name": "max_hops",
+          "required": false
+        },
+        {
+          "annotation": "Literal['error', 'exit']",
+          "default": "'error'",
+          "name": "on_exhaust",
+          "required": false
+        },
+        {
+          "annotation": "str | None",
+          "default": "None",
+          "name": "spec_field",
+          "required": false
+        },
+        {
+          "annotation": "str | None",
+          "default": "None",
+          "name": "input_field",
+          "required": false
+        },
+        {
+          "annotation": "type[pydantic.main.BaseModel] | str | None",
+          "default": "None",
+          "name": "output",
+          "required": false
+        },
+        {
+          "annotation": "dict[str, collections.abc.Callable] | None",
+          "default": "None",
+          "name": "scripted",
+          "required": false
+        },
+        {
+          "annotation": "dict[str, collections.abc.Callable] | None",
+          "default": "None",
+          "name": "conditions",
+          "required": false
+        },
+        {
+          "annotation": "Literal['raise']",
+          "default": "'raise'",
+          "name": "on_invalid",
+          "required": false
+        }
+      ],
+      "kind": "pydantic_model",
+      "name": "Keymaker",
+      "signature": "(peers: list[str] | None = None, route: str = 'goto', max_hops: int = 10, on_exhaust: Literal['error', 'exit'] = 'error', spec_field: str | None = None, input_field: str | None = None, output: type[pydantic.main.BaseModel] | str | None = None, scripted: dict[str, collections.abc.Callable] | None = None, conditions: dict[str, collections.abc.Callable] | None = None, on_invalid: Literal['raise'] = 'raise')"
+    },
+    {
+      "anchor": "handoff_end",
+      "doc": "str(object='') -> str",
+      "kind": "other",
+      "name": "HANDOFF_END"
+    },
+    {
       "anchor": "node-model",
       "bases": [],
       "doc": "A typed processing block. The unit of graph specification.",
@@ -538,6 +614,12 @@
           "required": false
         },
         {
+          "annotation": "str | None",
+          "default": "None",
+          "name": "handoff_param",
+          "required": false
+        },
+        {
           "annotation": "neograph.renderers.Renderer | None",
           "default": "None",
           "name": "renderer",
@@ -576,7 +658,7 @@
       ],
       "kind": "pydantic_model",
       "name": "Node",
-      "signature": "(name: str, modifier_set: ModifierSet = <factory:ModifierSet>, mode: Literal['think', 'agent', 'act', 'scripted'] = 'think', inputs: Any = None, outputs: Any = None, model: str | None = None, prompt: str | None = None, llm_config: LlmConfig = <factory:LlmConfig>, tools: list[neograph.tool.Tool | langchain_core.tools.base.BaseTool] = [], scripted_fn: str | None = None, raw_fn: neograph.node.RawNodeFn | None = None, fan_out_param: str | None = None, renderer: neograph.renderers.Renderer | None = None, context: list[str] | None = None, skip_when: neograph.node.SkipPredicate | None = None, skip_value: neograph.node.SkipValueFactory | None = None, gate_tools_when: collections.abc.Callable | str | None = None, oracle_gen_type: type[pydantic.main.BaseModel] | None = None)"
+      "signature": "(name: str, modifier_set: ModifierSet = <factory:ModifierSet>, mode: Literal['think', 'agent', 'act', 'scripted'] = 'think', inputs: Any = None, outputs: Any = None, model: str | None = None, prompt: str | None = None, llm_config: LlmConfig = <factory:LlmConfig>, tools: list[neograph.tool.Tool | langchain_core.tools.base.BaseTool] = [], scripted_fn: str | None = None, raw_fn: neograph.node.RawNodeFn | None = None, fan_out_param: str | None = None, handoff_param: str | None = None, renderer: neograph.renderers.Renderer | None = None, context: list[str] | None = None, skip_when: neograph.node.SkipPredicate | None = None, skip_value: neograph.node.SkipValueFactory | None = None, gate_tools_when: collections.abc.Callable | str | None = None, oracle_gen_type: type[pydantic.main.BaseModel] | None = None)"
     },
     {
       "anchor": "tool-model",

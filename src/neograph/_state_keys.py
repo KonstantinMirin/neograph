@@ -126,6 +126,25 @@ class StateKeys:
         """Per-loop iteration counter field name."""
         return f"neo_loop_count_{field_name}"
 
+    @staticmethod
+    def handoff_hops(field_name: str) -> str:
+        """Per-mesh hop-budget counter field name (Keymaker, design §3.4).
+
+        Keyed off the mesh ENTRY's producer field. Plain ``(int, 0)`` state
+        field, incremented by each member's wrapper (T2/T3), like ``loop_count``.
+        """
+        return f"neo_handoff_hops_{field_name}"
+
+    @staticmethod
+    def handoff_payload(field_name: str) -> str:
+        """Per-mesh shared channel field name (Keymaker, design §3.3).
+
+        Keyed off the mesh ENTRY's producer field. Each hop writes its payload
+        here so a peer can read it via the reserved ``handoff`` inputs key
+        regardless of which member routed to it.
+        """
+        return f"neo_handoff_{field_name}"
+
 
     @staticmethod
     def oracle_collector(field_name: str) -> str:

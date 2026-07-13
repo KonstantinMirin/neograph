@@ -148,6 +148,31 @@ class _FanOutParamNormalizer:
         return {}
 
 
+class _HandoffParamNormalizer:
+    """Set ``node.handoff_param`` for a Keymaker + dict-form node that declares
+    the reserved ``"handoff"`` inputs key (design §3.3).
+
+    Unlike the Each fan-out receiver (inferred by candidate-elimination), the
+    handoff receiver is a NAMED reserved key — so ``apply`` returns the literal
+    ``"handoff"`` with no inference. This is the SOLE writer of
+    ``node.handoff_param`` (review H2 / neograph-k7bg): all three API surfaces
+    carry the ``"handoff"`` inputs key explicitly and converge here, so no
+    assembly path (decorator, builder, loader) writes the field — writing it in
+    an assembly path would re-create the neograph-ts7 three-surface parity bug.
+    """
+
+    def applies_to(self, node: Node) -> bool:
+        if node.handoff_param is not None:
+            return False
+        if node.modifier_set.keymaker is None:
+            return False
+        ni = normalize_inputs(node.inputs)
+        return ni.is_dict_form and "handoff" in ni.by_name
+
+    def apply(self, node: Node, peer_field_names: set[str]) -> dict[str, Any]:
+        return {"handoff_param": "handoff"}
+
+
 def oracle_gen_type_for(node: Node) -> type[BaseModel] | None:
     """The per-generator output type inferred from a node's Oracle ``merge_fn``.
 
@@ -206,6 +231,7 @@ class _OracleGenTypeNormalizer:
 _NORMALIZERS: list[IrNormalizer] = [
     _FanOutParamNormalizer(),
     _OracleGenTypeNormalizer(),
+    _HandoffParamNormalizer(),
 ]
 
 

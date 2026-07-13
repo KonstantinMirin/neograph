@@ -512,6 +512,10 @@ def _add_subgraph(
             else:
                 graph.add_edge(START, sub.name)
             last_name = sub.name
+        case ModifierCombo.KEYMAKER:
+            # T1 fail-loud staging (T2 replaces): Keymaker-on-Construct is also
+            # rejected at assembly (D-MESH-LEVEL); arm keeps the match exhaustive.
+            raise CompileError.build("Keymaker lowering lands in T2", found=f"Keymaker on sub-construct '{sub.name}'")
         case _ as unreachable:
             assert_never(unreachable)
 
@@ -616,6 +620,11 @@ def _add_node_to_graph(
                 else:
                     graph.add_edge(START, node_name)
                 last_name = node_name
+        case ModifierCombo.KEYMAKER:
+            # T1 fail-loud staging (T2 neograph-on6jt replaces with the mesh-aware
+            # walk + _add_keymaker_mesh): raising rather than mis-lowering a mesh
+            # member as a bare node keeps the durability guarantee honest.
+            raise CompileError.build("Keymaker lowering lands in T2", found=f"Keymaker on node '{node.name}'")
         case _ as unreachable:
             assert_never(unreachable)
 

@@ -62,8 +62,10 @@ from neograph.hitl import ask_human
 from neograph.lint import LintIssue, lint
 from neograph.loader import load_spec
 from neograph.modifiers import (
+    HANDOFF_END,
     Each,
     EachFailure,
+    Keymaker,
     Loop,
     MergeFallback,
     MergePostProcess,
@@ -127,6 +129,8 @@ __all__ = [
     "EachFailure",
     "Loop",
     "Operator",
+    "Keymaker",
+    "HANDOFF_END",
     # Low-level IR (advanced use: programmatic construction, IR tests)
     "Node",
     "Tool",

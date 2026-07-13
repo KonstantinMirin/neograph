@@ -198,6 +198,12 @@ def compile_state_model(
                 # Each×Oracle on Constructs not supported
                 # Compiler raises earlier; this is a defensive fallback.
                 fields[field_name] = (sub.output | None, None)
+            case ModifierCombo.KEYMAKER:
+                # Keymaker on a Construct is rejected at assembly (D-MESH-LEVEL:
+                # mesh members are sibling Nodes, not sub-constructs), so this
+                # arm is defensively-unreachable — mirror the EACH_ORACLE
+                # fallback rather than crash the state build.
+                fields[field_name] = (sub.output | None, None)
             case _ as unreachable:
                 assert_never(unreachable)
 
@@ -234,6 +240,22 @@ def compile_state_model(
             field_name = field_name_for(n.name)
             fields[StateKeys.loop_count(field_name)] = (int, 0)
             loop = n_mods["loop"]
+
+    # Keymaker support: per-mesh hop counter + shared payload channel, keyed off
+    # the mesh ENTRY (the first Keymaker member in node order — design §3.1
+    # "the first member is the entry"; assembly validation guarantees one
+    # contiguous mesh at this level). Both are neo_-prefixed → excluded from the
+    # schema fingerprint (member OUTPUT fields carry the fingerprint). The
+    # channel/counter are runtime-inert until T2 lowering reads them.
+    keymaker_members = [n for n in nodes_only if classify_modifiers(n)[0] == ModifierCombo.KEYMAKER]
+    if keymaker_members:
+        entry = keymaker_members[0]
+        entry_field = field_name_for(entry.name)
+        # Single-type by assembly validation (dict-form members rejected); typed
+        # Any so the `| None` field spec matches the sibling arms' pattern.
+        payload: Any = _declared_output(entry)
+        fields[StateKeys.handoff_hops(entry_field)] = (int, 0)
+        fields[StateKeys.handoff_payload(entry_field)] = (payload | None, None)
 
     # Subgraph input port — when this Construct declares an input type
     if construct.input is not None:
@@ -504,7 +526,11 @@ def _add_output_field(node: Node, fields: dict[str, Any]) -> None:
                 | ModifierCombo.EACH_OPERATOR
                 | ModifierCombo.LOOP
                 | ModifierCombo.LOOP_OPERATOR
+                | ModifierCombo.KEYMAKER
             ):
+                # KEYMAKER dict-form is rejected at assembly (D-DICT-OUTPUTS);
+                # the arm is defensively-unreachable and defers to the per-key
+                # single-output builder (which treats KEYMAKER as bare).
                 for output_key, output_type in no.all_keys.items():
                     key_field = output_field_name(field_name, output_key)
                     _add_single_output_field(node, key_field, output_type, fields)
@@ -563,7 +589,10 @@ def _add_single_output_field(
                 Annotated[list[output_type], _append_loop_result],
                 [],
             )
-        case ModifierCombo.BARE | ModifierCombo.OPERATOR:
+        case ModifierCombo.BARE | ModifierCombo.OPERATOR | ModifierCombo.KEYMAKER:
+            # A Keymaker mesh member writes its OWN output field as a plain
+            # value (like a bare node); the mesh channel + hop counter are
+            # separate neo_-prefixed fields added per mesh entry below.
             fields[field_name] = (output_type | None, None)
         case _ as unreachable:
             assert_never(unreachable)

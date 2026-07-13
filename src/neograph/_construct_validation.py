@@ -37,6 +37,7 @@ from neograph._ir_protocols import ConstructLike
 from neograph._normalize import _declared_output
 from neograph._state_keys import StateKeys
 from neograph._validation_inputs import _check_item_input
+from neograph._validation_keymaker import _check_keymaker_mesh
 from neograph._validation_modifiers import (
     _validate_merge_hooks,
     validate_loop_construct,
@@ -318,6 +319,13 @@ def _validate_node_chain(
             oracle = item.modifier_set.oracle
             if oracle is not None and oracle.merge_prompt is not None:
                 _validate_merge_hooks(oracle, item, construct.name)
+
+    # Keymaker mesh rules (design §5): a single end-of-walk helper enforces every
+    # mesh assembly rule for this construct level (peers, contiguity, single mesh,
+    # uniform payload, route field, reserved-key typing, entry-only knobs). Runs
+    # once per level; the recursion above re-invokes _validate_node_chain for each
+    # sub-construct, so a nested mesh is checked at its own level.
+    _check_keymaker_mesh(construct)
 
     # Sub-construct output boundary contract: if construct.output is declared,
     # at least one internal node must produce a compatible type.

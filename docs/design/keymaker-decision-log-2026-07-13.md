@@ -63,3 +63,48 @@ explicit keymaker arms (exclusion table is hard-coded); all FIVE assert_never si
 tasks to stay one-molecule-sized.
 
 <!-- Implementation decisions appended below as they are made. -->
+
+## Implementation decisions (T1 — neograph-rwion)
+
+**D7 — T1 legal mesh ASSEMBLES but does not COMPILE; the compile-staging error is
+pinned, and the should_pass fixture is deferred to T2.** The T1 scope pins the
+compiler arms as fail-loud `CompileError("Keymaker lowering lands in T2")` (bead
+scope + D6). This collides with two artifacts the write-test author produced that
+expect a legal mesh to `compile()` successfully: the three `TestLegalMeshAssembles`
+tests and the `should_pass/keymaker_mesh_minimal.py` fixture (the check-fixtures
+harness compiles every should_pass Construct). Resolution, smallest defensible:
+(1) the three `TestLegalMeshAssembles` tests keep their three-surface-parity intent
+but assert the T1 reality — the `Construct(...)` ASSEMBLES cleanly (all §5 validation
+passes) and `compile()` raises `CompileError` matching "lands in T2"; a new
+`test_keymaker_compile_is_staged_to_t2` pins the staged error directly (T2 replaces
+it). (2) The legal-mesh fixture moves from `should_pass/` to `should_fail/` with
+`# CHECK_ERROR: lands in T2` for T1; T2 (which "replaces the pinning test") moves it
+back to `should_pass/` once lowering lands. Rationale: honoring the pinned fail-loud
+staging (never silently mis-lower a mesh member as a bare node) outranks the bead's
+"should_pass ×1" AC detail, which is only satisfiable once T2 lowering exists.
+Alternatives rejected: (a) compiling a mesh member as a bare node in T1 — a silent
+wrong-compile, violates the production-quality/fail-loud rule; (b) dodging the
+harness by not binding a module-level Construct in the fixture — a misleading
+should_pass that proves nothing.
+
+**D9 — a SIXTH `ModifierCombo` exhaustive match site exists (`_state_write.py:94`).**
+Review M3 / the T1 bead enumerated FIVE `assert_never` sites needing a KEYMAKER arm
+(compiler.py ×2, state.py:202/512/569). mypy flagged a sixth: the Each-wrapping
+`match combo` in `_build_state_update` (`_state_write.py:94`). Folded KEYMAKER into
+the no-Each-wrapping arm (`BARE|OPERATOR|ORACLE|...`): a mesh member writes its own
+output plainly, never fan-out-key-wrapped. Runtime-unreachable in T1 (compile
+fail-loud-stages before a member executes), but the arm is required for
+exhaustiveness. Recorded so T2/T3 know the site exists.
+
+**D8 — direct-`ModifierSet(...)` conflict tests assert on message, not exception
+type.** The write-test author's four `TestDirectModifierSetConflicts` tests expected
+`ConstructError`, but a `ModifierSet(...)` construction raises the exclusion from
+`model_post_init`, where Pydantic wraps it into a `ValidationError` (a `ValueError`
+subclass) — the exact established convention in
+`test_modifier_edge_cases.test_each_loop_rejected_at_construction`
+(`pytest.raises(Exception, match=...)`). Updated the four tests to
+`pytest.raises(Exception, match="Cannot combine Keymaker and ...")` so both the
+wrapped (direct) and unwrapped (pipe) forms pass while still asserting the offender-
+naming message. The Core Invariant ("ConstructError naming the offender") is
+satisfied in spirit: the ConstructError is the wrapped cause on the direct path and
+raised directly on the pipe path.

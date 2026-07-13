@@ -20,6 +20,7 @@ VALIDATION_CLUSTER = frozenset(
         "_validation_types.py",
         "_validation_inputs.py",
         "_validation_modifiers.py",
+        "_validation_keymaker.py",
     }
 )
 
@@ -1494,6 +1495,7 @@ def _seam_violations(src_dir: pathlib.Path) -> list[str]:
         "neograph._validation_types",
         "neograph._validation_inputs",
         "neograph._validation_modifiers",
+        "neograph._validation_keymaker",
     }
     violations: list[str] = []
     for py_file in sorted(src_dir.glob("*.py")):
@@ -1531,11 +1533,12 @@ def _star_import_violations(src_dir: pathlib.Path) -> list[str]:
 class TestValidationModuleBoundary:
     """neograph-gig0: _construct_validation.py (1005L) is split by validation concern.
 
-    After the split the cluster is four flat peer modules (no sub-package,
+    After the split the cluster is flat peer modules (no sub-package,
     matching the neograph-3zai builder-split precedent):
       - _validation_types.py     — type-compat primitives + shared vocab
       - _validation_inputs.py    — fan-in + Each fan-out consumer-input checks
       - _validation_modifiers.py — Loop self-edge/construct + Oracle merge hooks
+      - _validation_keymaker.py  — Keymaker mesh assembly rules (design §5)
       - _construct_validation.py — orchestrator (_validate_node_chain) + the
         single public re-export seam.
 
@@ -1573,6 +1576,9 @@ class TestValidationModuleBoundary:
             "def validate_loop_self_edge",
             "def validate_loop_construct",
             "def _validate_merge_hooks",
+        },
+        "_validation_keymaker.py": {
+            "def _check_keymaker_mesh",
         },
         "_construct_validation.py": {
             "def _validate_node_chain",

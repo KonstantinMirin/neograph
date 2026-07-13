@@ -243,6 +243,8 @@ FromInput(*, required: 'bool' = True) -> 'None'
 FromResource(uri: 'str | None' = None, *, ref: 'str | None' = None, mime: 'str | None' = None, parse: 'Callable[[Any, str | None], Any] | None' = None, required: 'bool' = True, max_bytes: 'int | None' = None) -> 'None'
 ```
 
+### HANDOFF_END
+
 ### inject_schema
 
 {/* test-skip: generated API signature (declaration, not runnable) */}
@@ -256,6 +258,26 @@ inject_schema(vars: 'dict[str, Any]', output_model: 'type[BaseModel] | None' = N
 ```python
 JsonRenderer(*, indent: 'int' = 2) -> 'None'
 ```
+
+### Keymaker
+
+{/* test-skip: generated API signature (declaration, not runnable) */}
+```python
+Keymaker(peers: list[str] | None = None, route: str = 'goto', max_hops: int = 10, on_exhaust: Literal['error', 'exit'] = 'error', spec_field: str | None = None, input_field: str | None = None, output: type[pydantic.main.BaseModel] | str | None = None, scripted: dict[str, collections.abc.Callable] | None = None, conditions: dict[str, collections.abc.Callable] | None = None, on_invalid: Literal['raise'] = 'raise')
+```
+
+| Field | Type | Required | Default |
+|-------|------|----------|---------|
+| <span id="keymaker-peers"></span>`peers` | `list[str] | None` | no | `None` |
+| <span id="keymaker-route"></span>`route` | `str` | no | `'goto'` |
+| <span id="keymaker-max_hops"></span>`max_hops` | `int` | no | `10` |
+| <span id="keymaker-on_exhaust"></span>`on_exhaust` | `Literal['error', 'exit']` | no | `'error'` |
+| <span id="keymaker-spec_field"></span>`spec_field` | `str | None` | no | `None` |
+| <span id="keymaker-input_field"></span>`input_field` | `str | None` | no | `None` |
+| <span id="keymaker-output"></span>`output` | `type[pydantic.main.BaseModel] | str | None` | no | `None` |
+| <span id="keymaker-scripted"></span>`scripted` | `dict[str, collections.abc.Callable] | None` | no | `None` |
+| <span id="keymaker-conditions"></span>`conditions` | `dict[str, collections.abc.Callable] | None` | no | `None` |
+| <span id="keymaker-on_invalid"></span>`on_invalid` | `Literal['raise']` | no | `'raise'` |
 
 ### lint
 
@@ -352,7 +374,7 @@ node(fn: 'Callable | None' = None, *, mode: "Literal['think', 'agent', 'act', 's
 
 {/* test-skip: generated API signature (declaration, not runnable) */}
 ```python
-Node(name: str, modifier_set: ModifierSet = <factory:ModifierSet>, mode: Literal['think', 'agent', 'act', 'scripted'] = 'think', inputs: Any = None, outputs: Any = None, model: str | None = None, prompt: str | None = None, llm_config: LlmConfig = <factory:LlmConfig>, tools: list[neograph.tool.Tool | langchain_core.tools.base.BaseTool] = [], scripted_fn: str | None = None, raw_fn: neograph.node.RawNodeFn | None = None, fan_out_param: str | None = None, renderer: neograph.renderers.Renderer | None = None, context: list[str] | None = None, skip_when: neograph.node.SkipPredicate | None = None, skip_value: neograph.node.SkipValueFactory | None = None, gate_tools_when: collections.abc.Callable | str | None = None, oracle_gen_type: type[pydantic.main.BaseModel] | None = None)
+Node(name: str, modifier_set: ModifierSet = <factory:ModifierSet>, mode: Literal['think', 'agent', 'act', 'scripted'] = 'think', inputs: Any = None, outputs: Any = None, model: str | None = None, prompt: str | None = None, llm_config: LlmConfig = <factory:LlmConfig>, tools: list[neograph.tool.Tool | langchain_core.tools.base.BaseTool] = [], scripted_fn: str | None = None, raw_fn: neograph.node.RawNodeFn | None = None, fan_out_param: str | None = None, handoff_param: str | None = None, renderer: neograph.renderers.Renderer | None = None, context: list[str] | None = None, skip_when: neograph.node.SkipPredicate | None = None, skip_value: neograph.node.SkipValueFactory | None = None, gate_tools_when: collections.abc.Callable | str | None = None, oracle_gen_type: type[pydantic.main.BaseModel] | None = None)
 ```
 
 | Field | Type | Required | Default |
@@ -369,6 +391,7 @@ Node(name: str, modifier_set: ModifierSet = <factory:ModifierSet>, mode: Literal
 | <span id="node-model-scripted_fn"></span>`scripted_fn` | `str | None` | no | `None` |
 | <span id="node-model-raw_fn"></span>`raw_fn` | `neograph.node.RawNodeFn | None` | no | `None` |
 | <span id="node-model-fan_out_param"></span>`fan_out_param` | `str | None` | no | `None` |
+| <span id="node-model-handoff_param"></span>`handoff_param` | `str | None` | no | `None` |
 | <span id="node-model-renderer"></span>`renderer` | `neograph.renderers.Renderer | None` | no | `None` |
 | <span id="node-model-context"></span>`context` | `list[str] | None` | no | `None` |
 | <span id="node-model-skip_when"></span>`skip_when` | `neograph.node.SkipPredicate | None` | no | `None` |

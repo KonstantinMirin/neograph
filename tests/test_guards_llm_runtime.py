@@ -968,7 +968,10 @@ class TestNormalizeIrIsSoleIrFieldWriter:
     """
 
     # IR-level inferred fields owned by normalize_ir.
-    IR_FIELDS = frozenset({"fan_out_param", "oracle_gen_type"})
+    # ``handoff_param`` (Keymaker reserved-'handoff' receiver, neograph-rwion)
+    # joins the single-writer set: _ir_normalize._HandoffParamNormalizer is its
+    # SOLE writer, keyed off the reserved 'handoff' inputs key (review H2).
+    IR_FIELDS = frozenset({"fan_out_param", "oracle_gen_type", "handoff_param"})
 
     # Sanctioned (file, field) pre-population writes outside _ir_normalize.
     # After neograph-k7bg, _construct_builder no longer writes fan_out_param —

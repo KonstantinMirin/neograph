@@ -203,6 +203,14 @@ class Node(Modifiable, BaseModel):
     # validator to skip upstream-name validation for this key.
     fan_out_param: str | None = None
 
+    # Which inputs key reads the Keymaker mesh channel (neo_handoff_<entry>)
+    # instead of a named upstream state field — the reserved "handoff" key
+    # (design §3.3). Written ONLY by the IR normalizer (_ir_normalize.py),
+    # keyed off the presence of the reserved "handoff" inputs key on a
+    # Keymaker-modified node — the exact fan_out_param single-writer ownership
+    # rule (neograph-k7bg, review H2). No assembly path may write it.
+    handoff_param: str | None = None
+
     # Pluggable prompt-input renderer. When set, the factory layer renders
     # input data through this renderer before prompt insertion. Dispatch
     # hierarchy: model.render_for_prompt() > node.renderer > global > None.

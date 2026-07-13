@@ -69,6 +69,7 @@ ANY_ALLOWLIST: dict[str, str] = {
     "modifiers.py:MergePreProcess.__call__:return": "invoke_structured accepts BaseModel | dict[str, Any] | str; dict-form retains Any value type",
     "modifiers.py:Oracle.model_post_init:__context": "Pydantic model_post_init context payload; framework-internal",
     "modifiers.py:Loop.model_post_init:__context": "Pydantic model_post_init context payload; framework-internal",
+    "modifiers.py:Keymaker.model_post_init:__context": "Pydantic model_post_init context payload; framework-internal",
     "modifiers.py:ModifierSet.model_post_init:__context": "Pydantic model_post_init context payload; framework-internal",
     # ── _construct_validation.py — IR introspection over user-declared types ──
     # Cluster-5 entries (effective_producer_type:return, _check_item_input:input_type,
@@ -506,9 +507,9 @@ NEOGRAPH_ERROR_ALLOWLIST: dict[str, str] = {
     # ── modifiers.py — Pydantic field_validator + proxy attribute protocol ──
     # _PathRecorder.__getattr__ implements the attribute protocol. Pydantic
     # @field_validator boundaries catch ValueError into ValidationError.
-    "modifiers.py:192": "AttributeError is the Python attribute-protocol contract (private-attr guard)",
-    "modifiers.py:428": "Pydantic @field_validator boundary; ValueError is rolled into ValidationError",
-    "modifiers.py:503": "Pydantic @field_validator boundary; ValueError is rolled into ValidationError",
+    "modifiers.py:199": "AttributeError is the Python attribute-protocol contract (private-attr guard)",
+    "modifiers.py:439": "Pydantic @field_validator boundary; ValueError is rolled into ValidationError",
+    "modifiers.py:514": "Pydantic @field_validator boundary; ValueError is rolled into ValidationError",
     # ── node.py — Pydantic BeforeValidator boundary ──
     # _validate_type_spec runs inside Pydantic field validation; Pydantic
     # catches TypeError and rolls it into ValidationError.

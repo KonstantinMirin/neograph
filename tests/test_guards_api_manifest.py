@@ -1271,11 +1271,15 @@ _MJS_BARE_REGEX_LITERAL_RE = re.compile(
 _EXCLUDE_EXCEPTION_KIND = "exception"
 
 # Deliberate exclusion 2 -- "intentionally-inert bare-lowercase tokens" =
-# manifest names matching NEITHER bare regex. EMPTY today (research: no such
-# tokens; VERIFIED every manifest name matches one of the two bare regexes). The
-# guard both encodes the predicate AND asserts the set stays empty, so a future
+# manifest names matching NEITHER bare regex. The guard both encodes the
+# predicate AND asserts the set equals this enumeration, so a future
 # publicly-unlinkable symbol surfaces loudly instead of being silently dropped.
-INTENTIONALLY_INERT: frozenset[str] = frozenset()
+#   - HANDOFF_END: an ALL_CAPS module-level SENTINEL CONSTANT (Keymaker's
+#     "leave the mesh" route value, neograph-rwion). It matches neither the
+#     PascalCase-type nor the snake_case-callable bare regex, so it has no
+#     autolink target and no per-symbol reference heading — it is documented
+#     inline in the Keymaker prose, not as its own linkable heading.
+INTENTIONALLY_INERT: frozenset[str] = frozenset({"HANDOFF_END"})
 
 
 class TestCrossLinkCoverageCapstone:
