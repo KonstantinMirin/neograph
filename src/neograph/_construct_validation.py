@@ -29,6 +29,8 @@ from __future__ import annotations
 from collections import OrderedDict
 from enum import Enum
 
+import structlog
+
 from neograph._fan_agent import raise_if_unsupported_fan_over_agent
 from neograph._ir_branch import iter_with_arms
 from neograph._ir_protocols import ConstructLike
@@ -58,6 +60,8 @@ from neograph.di import DIKind as _DIKind
 from neograph.errors import ConstructError
 from neograph.naming import field_name_for, output_field_name
 from neograph.node import Node
+
+log = structlog.get_logger()
 
 # Re-export seam per neograph-gig0: these names form the validation cluster's
 # public surface. construct.py imports _validate_node_chain + ConstructError;
@@ -238,9 +242,7 @@ def _validate_node_chain(
         # valid, just easy to misuse.
         if isinstance(item, Node) and item.modifier_set.loop is not None:
             if item.skip_when is not None and item.skip_value is None:
-                import structlog
-
-                structlog.get_logger(__name__).error(
+                log.warning(
                     "loop_skip_when_no_skip_value",
                     node=item.name,
                     msg=(

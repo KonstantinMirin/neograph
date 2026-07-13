@@ -13,6 +13,7 @@ from __future__ import annotations
 import json as _json
 from typing import Any
 
+import structlog
 from json_repair import repair_json
 from langchain_core.runnables import RunnableConfig
 from pydantic import BaseModel, ValidationError
@@ -22,6 +23,8 @@ from neograph._dsml import contains_dsml
 from neograph._usage import _usage_dict
 from neograph.describe_type import describe_type
 from neograph.errors import ExecutionError
+
+log = structlog.get_logger()
 
 
 def _extract_balanced(text: str, start: int, open_ch: str, close_ch: str) -> str | None:
@@ -365,9 +368,7 @@ def _dsml_recovery_messages(
     if not contains_dsml(raw_text):
         return None
 
-    import structlog
-
-    structlog.get_logger("neograph").warning(
+    log.warning(
         "trailing_tool_call_markup",
         strategy=strategy,
         hint="model emitted tool-call markup; retrying with targeted directive",

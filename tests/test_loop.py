@@ -1186,8 +1186,8 @@ class TestLoopSkipWhenCounterIncrement:
         with capture_logs() as logs:
             pipeline = construct_from_functions("skip-loop", [seed, refine])
 
-        error_logs = [l for l in logs if l.get("log_level") == "error" and "skip_value" in l.get("msg", "")]
-        assert error_logs, f"Expected error log about skip_value, got: {logs}"
+        warn_logs = [l for l in logs if l.get("log_level") == "warning" and "skip_value" in l.get("msg", "")]
+        assert warn_logs, f"Expected warning log about skip_value, got: {logs}"
 
         graph = compile(pipeline, **build_test_compile_kwargs(), **__llm_kw)
 
