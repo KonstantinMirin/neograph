@@ -581,7 +581,8 @@ class TestCheckpointResume:
         # First run hits the interrupt
         result = run(graph, input={"node_id": "test"}, config=config)
         assert call_log == ["a"]
-        assert "__interrupt" in str(result) or result.get("a") is not None
+        # Interrupt fired: __interrupt__ key present (LangGraph surface for Operator interrupts)
+        assert "__interrupt__" in result, f"No interrupt in result: {list(result.keys())}"
 
         # Resume WITHOUT _neo_input in config — should not crash
         clean_config = {"configurable": {"thread_id": "test-op-resume"}}

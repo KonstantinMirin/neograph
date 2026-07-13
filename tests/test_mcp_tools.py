@@ -164,7 +164,17 @@ class TestRawBaseToolAcceptance:
         assert produced is raw
 
     def test_raw_base_tool_runs_end_to_end_without_manual_registration(self):
+        calls: list[tuple[dict[str, object], str]] = []
+
+        def _run_wrapped(query: str, *, config=None) -> str:
+            result_inner = _run(query, config=config)
+            calls.append(({"query": query}, result_inner))
+            return result_inner
+
         raw = _make_sync_base_tool("run_search")
+        # Wrap the tool's _run to record calls (LOAD-BEARING: catches "tool turn skipped")
+        _run = raw._run
+        raw._run = _run_wrapped  # type: ignore[method-assign]
 
         mod = _types.ModuleType("test_mcp_e2e_mod")
 
@@ -191,7 +201,11 @@ class TestRawBaseToolAcceptance:
         _llm_kw = configure_fake_llm(lambda tier: fake)
         graph = compile(pipeline, **build_test_compile_kwargs(), **_llm_kw)
         result = run(graph, input={"node_id": "n1"})
-        assert result is not None
+        # Call-recording assertion (LOAD-BEARING for "tool turn skipped" regression)
+        assert calls, f"Tool 'run_search' was never called (tool turn skipped)"
+        assert calls == [({"query": "q"}, "result:q")], f"Tool call mismatch: {calls}"
+        # Output value assertion (pins final-output shape)
+        assert result["scan"] == Claims(items=["done"])
 
 
 def Node_agent(**kwargs):

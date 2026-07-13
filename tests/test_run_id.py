@@ -15,6 +15,7 @@ file-backed ``SqliteSaver`` per project convention.
 from __future__ import annotations
 
 import asyncio
+import re
 
 from langgraph.checkpoint.sqlite import SqliteSaver
 
@@ -139,7 +140,11 @@ class TestMintRunIdHelper:
     def test_mint_run_id_handles_none_config(self):
         """None config collapses to a fresh dict carrying the id."""
         out = _mint_run_id(None)
-        assert out["configurable"][StateKeys.RUN_ID] is not None
+        run_id = out["configurable"][StateKeys.RUN_ID]
+        # Pin RUN_ID is a 32-char hex string (uuid4().hex format)
+        assert isinstance(run_id, str), f"RUN_ID must be str, got {type(run_id).__name__}"
+        assert len(run_id) == 32, f"RUN_ID must be 32 chars (uuid4().hex), got {len(run_id)}: {run_id!r}"
+        assert re.fullmatch(r"[0-9a-f]{32}", run_id), f"RUN_ID must be 32-char hex, got {run_id!r}"
 
     def test_parallel_arun_share_config_get_distinct_ids(self):
         """(5c) Two arun() calls sharing ONE config dict each mint their own id;

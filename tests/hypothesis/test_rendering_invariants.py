@@ -95,7 +95,8 @@ class TestRenderInputNeverRaises:
     def test_single_model_no_crash(self, model):
         """Single model input: render_input always returns without raising."""
         result = render_input(model, renderer=None)
-        assert result is not None
+        # render_input returns a BAML string, NOT RenderedInput (that's build_rendered_input's type)
+        assert isinstance(result, str) and result.strip(), f"render_input returned non-string or empty: {result!r}"
 
     @given(data=fan_in_dict())
     @settings(max_examples=50)
@@ -109,7 +110,8 @@ class TestRenderInputNeverRaises:
     def test_render_single_no_crash(self, model):
         """_render_single never raises for any model."""
         result = _render_single(model, None)
-        assert result is not None
+        # _render_single returns a BAML string, NOT None
+        assert isinstance(result, str) and result.strip(), f"_render_single returned non-string or empty: {result!r}"
 
 
 # ── Invariant: dict keys preserved ──────────────────────────────────────

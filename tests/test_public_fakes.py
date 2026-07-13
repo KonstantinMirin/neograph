@@ -116,10 +116,12 @@ class TestPublicImportSurface:
             StructuredFake,
             TextFake,
         )
+        from neograph.testing import fakes
 
-        assert StructuredFake is not None
-        assert ReActFake is not None
-        assert TextFake is not None
+        # Object-identity: verify the public import IS the internal source
+        assert StructuredFake is fakes.StructuredFake, "StructuredFake import mismatch"
+        assert ReActFake is fakes.ReActFake, "ReActFake import mismatch"
+        assert TextFake is fakes.TextFake, "TextFake import mismatch"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
