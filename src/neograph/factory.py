@@ -16,6 +16,7 @@ from neograph._dispatch import _dispatch_for_mode
 from neograph._execute import _aexecute_node, _execute_node, _type_name
 from neograph._llm_runtime import EMPTY_RUNTIME, LlmRuntime
 from neograph._normalize import primary_output_field
+from neograph._state_bus import adapt_state
 from neograph._state_keys import StateKeys
 from neograph._trace import named
 from neograph.errors import ConfigurationError, ExecutionError
@@ -102,6 +103,9 @@ def make_keymaker_fn(
     entry_field: str,
     exit_name: str,
     *,
+    max_hops: int,
+    on_exhaust: str,
+    entry_name: str,
     runtime: LlmRuntime = EMPTY_RUNTIME,
     scripted_lookup: dict[str, Callable] | None = None,
     tool_factory_lookup: dict[str, Callable] | None = None,
@@ -129,8 +133,24 @@ def make_keymaker_fn(
     no channel key is threaded into ``make_node_fn`` here. ``HANDOFF_END`` is
     byte-identical to LangGraph's ``END`` sentinel, so it is mapped to the
     pass-through ``exit_name`` node rather than terminating the whole graph.
+
+    HOP BUDGET (design §3.4, decision D11/D12): ``max_hops``/``on_exhaust`` are
+    ENTRY-only knobs, but this wrapper runs per MEMBER — so ``_add_keymaker_mesh``
+    sources them from the mesh entry (``members[0]``) plus the entry's name (for
+    the error ``node=``) and threads them into EVERY member's wrapper as closure
+    params (same closure-capture threading as ``entry_field``/``exit_name``). A
+    "hop" is a member routing to a PEER (mesh continuation); routing to
+    ``HANDOFF_END`` leaves the mesh cleanly and is NOT budget-gated and does NOT
+    increment the counter. The shared, entry-keyed counter
+    ``StateKeys.handoff_hops(entry_field)`` is read from the INCOMING ``state``
+    (not the local ``update`` dict) so hops accumulate across DIFFERENT members;
+    the check is BEFORE emitting the peer goto (``count >= max_hops`` — Loop
+    parity), so ``max_hops=N`` allows exactly N peer-hops. ``on_exhaust=="error"``
+    raises ``ExecutionError`` naming the entry (no new exception class, Loop
+    parity); ``"exit"`` routes to ``exit_name`` with the last payload on the bus.
     """
     channel_key = StateKeys.handoff_payload(entry_field)
+    count_field = StateKeys.handoff_hops(entry_field)
     payload_field = primary_output_field(field_name_for(node.name), node.outputs)
     route_field = keymaker.route
     valid_targets = set(keymaker.peers or ()) | {HANDOFF_END}
@@ -142,7 +162,7 @@ def make_keymaker_fn(
         tool_factory_lookup=tool_factory_lookup,
     )
 
-    def _to_command(update: dict[str, Any]) -> Command:
+    def _to_command(update: dict[str, Any], state: BaseModel) -> Command:
         payload = update[payload_field]
         target = getattr(payload, route_field)
         if target not in valid_targets:
@@ -153,17 +173,38 @@ def make_keymaker_fn(
                 node=node.name,
                 hint="a mesh member may route only to a declared peer or HANDOFF_END",
             )
-        # T3 seam: the hop-budget counter read-modify-write on
-        # StateKeys.handoff_hops(entry_field) + the max_hops check land HERE,
-        # before the goto. Kept out of T2 so T3 need not rip out inlined budget.
-        goto = exit_name if target == HANDOFF_END else target
-        return Command(goto=goto, update={**update, channel_key: payload})
+        # HANDOFF_END is a clean mesh exit — never budget-gated, never counted.
+        if target == HANDOFF_END:
+            return Command(goto=exit_name, update={**update, channel_key: payload})
+        # Peer continuation: enforce the entry's hop budget BEFORE emitting the
+        # goto. Counter bootstrap (absent/None -> 0) lives in StateBus.get_counter;
+        # read the SHARED counter from incoming state so hops accumulate across
+        # members (the update dict never carries it — a from-update read would
+        # always bootstrap 0 and break accumulation).
+        current = adapt_state(state).get_counter(count_field)
+        if current >= max_hops:
+            if on_exhaust == "exit":
+                return Command(
+                    goto=exit_name,
+                    update={**update, channel_key: payload, count_field: current},
+                )
+            raise ExecutionError.build(
+                "Keymaker handoff exceeded max_hops",
+                expected=f"convergence within {max_hops} hops",
+                found=f"{max_hops} hops exhausted",
+                node=entry_name,
+                hint="raise the entry's max_hops or route to HANDOFF_END sooner",
+            )
+        return Command(
+            goto=target,
+            update={**update, channel_key: payload, count_field: current + 1},
+        )
 
     def keymaker_wrapper(state: BaseModel, config: RunnableConfig) -> Command:
-        return _to_command(inner.invoke(state, config))
+        return _to_command(inner.invoke(state, config), state)
 
     async def akeymaker_wrapper(state: BaseModel, config: RunnableConfig) -> Command:
-        return _to_command(await inner.ainvoke(state, config))
+        return _to_command(await inner.ainvoke(state, config), state)
 
     wrapper = RunnableLambda(keymaker_wrapper, afunc=akeymaker_wrapper)
     return named(wrapper, node.name, mode="keymaker", output_type=_type_name(node.outputs))

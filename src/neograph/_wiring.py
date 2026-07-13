@@ -736,6 +736,14 @@ def _add_keymaker_mesh(
     entry_field = field_name_for(entry.name)
     exit_name = f"__handoff_exit_{entry.name}"
 
+    # max_hops/on_exhaust are ENTRY-only knobs (T1 validation), but the wrapper
+    # runs per member — source the budget from the entry and thread it into every
+    # member's wrapper as closure params (design §3.4, decisions D11/D12).
+    entry_keymaker = entry.modifier_set.keymaker
+    assert isinstance(entry_keymaker, Keymaker)
+    entry_max_hops = entry_keymaker.max_hops
+    entry_on_exhaust = entry_keymaker.on_exhaust
+
     # Pass-through exit node — the mesh's single re-join point (design §3.1 r2).
     def handoff_exit(state: Any) -> dict:
         return {}
@@ -750,6 +758,9 @@ def _add_keymaker_mesh(
             keymaker,
             entry_field,
             exit_name,
+            max_hops=entry_max_hops,
+            on_exhaust=entry_on_exhaust,
+            entry_name=entry.name,
             runtime=runtime,
             scripted_lookup=scripted_lookup,
             tool_factory_lookup=tool_factory_lookup,

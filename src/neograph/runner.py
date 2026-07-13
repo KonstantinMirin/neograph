@@ -27,8 +27,9 @@ from neograph._ir_branch import iter_with_arms
 from neograph._llm_config import _coerce_llm_config
 from neograph._run_cache import evict_run
 from neograph._state_keys import StateKeys, _strip_internals
-from neograph.construct import iter_nodes
+from neograph.construct import Construct, iter_nodes
 from neograph.errors import CheckpointSchemaError, ConfigurationError, ExecutionError
+from neograph.modifiers import ModifierCombo, classify_modifiers
 from neograph.naming import field_name_for
 from neograph.node import Node
 
@@ -48,21 +49,50 @@ _SUPERSTEPS_PER_AGENT_TURN = 2
 _AGENT_CYCLE_OVERHEAD = 3
 
 
+def _mesh_hop_cost(construct: Construct) -> int:
+    """Sum ``entry.max_hops`` ONCE per Keymaker mesh, recursing sub-constructs.
+
+    A K-hop mesh consumes up to K supersteps (one Command(goto) per hop), so the
+    recursion floor must budget for it exactly as it does for agent/act cycles.
+    A contiguous run of Keymaker-modified sibling Nodes is ONE mesh (design
+    §3.1 r2) and only its ENTRY (first member) carries the real ``max_hops``
+    (entry-only, T1) — non-entry members default to 10. ``iter_nodes``
+    leaf-flattens and cannot identify the entry (nor a mesh whose entry left
+    ``max_hops`` at the default), so this uses the level-preserving
+    ``iter_with_arms`` walk that mirrors the compiler's mesh detection and adds
+    the entry's ``max_hops`` once per contiguous run (decision D13).
+    """
+    total = 0
+    prev_was_member = False
+    for item in iter_with_arms(construct):
+        if isinstance(item, Construct):
+            total += _mesh_hop_cost(item)
+            prev_was_member = False
+            continue
+        is_member = isinstance(item, Node) and classify_modifiers(item)[0] == ModifierCombo.KEYMAKER
+        if is_member and not prev_was_member:
+            keymaker = item.modifier_set.keymaker
+            if keymaker is not None:
+                total += keymaker.max_hops  # entry of a contiguous mesh run
+        prev_was_member = is_member
+    return total
+
+
 def _ensure_agent_recursion_limit(
     graph: CompiledNeograph,
     config: RunnableConfig | None,
 ) -> RunnableConfig | None:
-    """Raise ``recursion_limit`` so an agent/act cycle can reach its graceful
-    budget-exhaust → forced-final edge instead of hitting LangGraph's default
+    """Raise ``recursion_limit`` so an agent/act cycle OR a Keymaker mesh can
+    reach its graceful budget-exhaust edge instead of hitting LangGraph's default
     superstep ceiling first.
 
     Each agent/act node's cycle can cost ``max_iterations * 2 + overhead``
-    supersteps; sequential agent nodes run in distinct supersteps, so their costs
-    ADD across the run. The floor sums every agent/act node's worst case on top of
-    the default (which already covers the surrounding non-agent nodes). Only
-    RAISES to the floor — a larger user-supplied ``recursion_limit`` is kept.
-    Pure config mutation (no engine verb); shared verbatim by ``_prepare`` and
-    ``_aprepare``.
+    supersteps; each Keymaker mesh can cost ``entry.max_hops`` supersteps. Both
+    run in distinct supersteps, so their costs ADD across the run. The floor sums
+    every agent/act node's worst case AND every mesh's hop budget on top of the
+    default (which already covers the surrounding non-agent nodes). Only RAISES to
+    the floor — a larger user-supplied ``recursion_limit`` is kept. Pure config
+    mutation (no engine verb); shared verbatim by ``_prepare`` and ``_aprepare``.
     """
     construct = getattr(graph, "construct", None)
     if construct is None:
@@ -74,13 +104,15 @@ def _ensure_agent_recursion_limit(
             max_iters = _coerce_llm_config(node.llm_config).max_iterations
             agent_cost += max_iters * _SUPERSTEPS_PER_AGENT_TURN + _AGENT_CYCLE_OVERHEAD
 
-    if agent_cost == 0:
-        return config  # no agent/act nodes — leave the default untouched
+    mesh_cost = _mesh_hop_cost(construct)
 
-    floor = _LANGGRAPH_DEFAULT_RECURSION_LIMIT + agent_cost
+    if agent_cost == 0 and mesh_cost == 0:
+        return config  # no agent/act nodes and no mesh — leave the default untouched
+
+    floor = _LANGGRAPH_DEFAULT_RECURSION_LIMIT + agent_cost + mesh_cost
     current = (config or {}).get("recursion_limit", _LANGGRAPH_DEFAULT_RECURSION_LIMIT)
     if current >= floor:
-        return config  # user asked for at least what agents need — keep theirs
+        return config  # user asked for at least what agents/mesh need — keep theirs
 
     new_config: RunnableConfig = {**(config or {})}
     new_config["recursion_limit"] = floor

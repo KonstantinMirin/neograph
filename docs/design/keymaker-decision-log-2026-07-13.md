@@ -151,3 +151,52 @@ design; the reviewer forbade it). `Node.handoff_channel` is the SECOND sanctione
 new IR field for Keymaker (beside `handoff_param`); `_input_shape.py` is in-scope
 for T2 (design §4.1's SCOPE table omits it, but §3.3 requires it and the AC
 "genuine cycle end-to-end" forces it — a doc-table gap, not a contradiction).
+
+---
+
+## T3 decisions (hop budget + checkpoint semantics — neograph-0umvg)
+
+**D11 — Hop-budget semantics: a "hop" is a peer continuation; HANDOFF_END exit is never budget-gated.**
+The shared, entry-keyed counter `neo_handoff_hops_<entry_field>` counts member→PEER
+handoffs (mesh continuations). The entry member's own first execution (triggered by the
+static `prev→entry` edge) is NOT a hop; the first peer route out of any member is hop 1.
+Check is BEFORE emitting a peer goto (Loop parity `count >= max_iterations`): if
+`current >= max_hops` apply `on_exhaust`. `max_hops=N` ⇒ exactly N peer-hops allowed,
+then exhaust. A member routing to `HANDOFF_END` leaves the mesh cleanly and is NOT
+budget-checked (it terminates rather than continues; gating it would penalize a
+legitimate exit at the boundary) and does NOT increment the counter. On the allowed
+peer hop the wrapper writes `count_field: current+1`. Counter is read from the INCOMING
+`state` (not the local update dict) so hops accumulate across DIFFERENT members' wrappers.
+- `on_exhaust=="error"` → `ExecutionError.build("handoff exceeded max_hops", node=<entry.name>, ...)`; no new exception class (Loop parity, design §3.4/§6).
+- `on_exhaust=="exit"` → `Command(goto=exit_name, update={**update, channel_key: payload, count_field: current})`; last payload stays on the bus.
+why: matches design §3.4 "checked before emitting the goto" while scoping "the goto" to
+peer-continuation gotos; keeps the existing T2 cycle test green (triage→billing→triage-exit
+= 2 peer-hops under max_hops=6). Boundary pinned test-first.
+alternatives rejected: gating HANDOFF_END too (raises on a legitimate boundary exit);
+check-after-increment (off-by-one vs Loop parity).
+landed: factory.py make_keymaker_fn / _to_command (threads `state` + entry budget params).
+
+**D12 — Budget knobs threaded entry→every-member as closure params (T2 closure-capture analog).**
+`max_hops`/`on_exhaust` are entry-only (T1 validation), but `make_keymaker_fn` runs
+per-member. `_add_keymaker_mesh` sources them from `entry=members[0]`
+(`entry.modifier_set.keymaker.max_hops`/`.on_exhaust`) plus `entry.name` (for the error
+`node=`) and threads them into `make_keymaker_fn` for EVERY member as closure params —
+same closure-capture threading T2 uses for `entry_field`/`exit_name` (not literally D10's
+normalizer stamp; the appropriate analog). Do NOT read the member's own keymaker for the
+budget (non-entry members default max_hops=10).
+landed: _wiring.py:_add_keymaker_mesh, factory.py:make_keymaker_fn signature.
+
+**D13 — Recursion floor covers mesh-only constructs via a level-ordered mesh walk (team-lead adjudicated).**
+`_ensure_agent_recursion_limit` computes `mesh_cost` = Σ entry.max_hops ONCE per mesh, via
+a level-ordered walk that reuses the compiler's contiguous-mesh grouping and recurses
+sub-constructs (NOT `iter_nodes`, which leaf-flattens and cannot identify the entry nor
+find a defaulted-max_hops entry). The zero-guard becomes
+`if agent_cost == 0 and mesh_cost == 0: return config`, so a mesh-ONLY construct still
+raises the floor; required = base + agent_cost + mesh_cost; floor only RAISES (a larger
+user limit is kept).
+why: iter_nodes+model_fields_set detection MISSES a mesh whose entry left max_hops at the
+default 10, and a per-member sum under-counts when entry.max_hops>10 (members report
+default 10) — both unsafe; the level-ordered entry-once walk is exact.
+alternatives rejected: per-member iter_nodes over-approximation (under-counts, unsafe);
+model_fields_set entry detection (misses defaulted entry).
+landed: runner.py:_ensure_agent_recursion_limit + a mesh-cost helper.

@@ -370,3 +370,232 @@ class TestHandoffEndLeavesViaExitNode:
         graph = compile(mesh, **build_test_compile_kwargs())
         run(graph, input={})
         assert after == ["after"]  # 'report' ran after the mesh exited
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# HOP BUDGET (T3 — neograph-0umvg): max_hops + on_exhaust error/exit
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# BINDING SEMANTICS (design §3.4, decision-log D11/D12/D13):
+#   - A "hop" = a member routing to a PEER (mesh continuation). The entry
+#     member's own first execution is NOT a hop; the first peer route out of
+#     ANY member is hop 1.
+#   - Shared entry-keyed counter neo_handoff_hops_<entry_field>. The budget is
+#     CHECKED BEFORE emitting a peer goto: current >= max_hops -> exhaust (Loop
+#     parity). max_hops=N ⇒ exactly N peer-hops allowed, then exhaust.
+#   - A member routing to HANDOFF_END exits cleanly, is NEVER budget-gated and
+#     does NOT increment the counter.
+#   - on_exhaust="error" (default) -> ExecutionError naming the ENTRY node.
+#   - on_exhaust="exit" -> routes to the mesh exit node with the last payload on
+#     the bus (NO raise); a downstream node after the mesh still runs.
+#   - Budget knobs are ENTRY-only; a non-entry member's Keymaker never carries
+#     them (defaults max_hops=10/on_exhaust='error' are irrelevant to the mesh
+#     budget, which uses the ENTRY's values).
+#
+# The T3 seam (factory.py make_keymaker_fn, ~lines 156-160) is currently a
+# comment — the counter RMW + max_hops check do not exist yet, so these tests
+# MUST FAIL now.
+
+import re  # noqa: E402
+
+from neograph._state_keys import StateKeys  # noqa: E402
+
+
+class TestBudgetExhaustRaisesError:
+    """A ping-pong mesh that NEVER routes to HANDOFF_END exhausts the ENTRY's
+    max_hops budget and raises ExecutionError naming the entry (Loop parity).
+
+    Boundary pin (D11/D12): with 2 ping-pong members and entry max_hops=3, the
+    counter is checked before each peer goto. hops 1,2,3 emit
+    (triage->billing->triage->billing), then the 4th member execution's peer
+    route sees current(3) >= 3 and exhausts. So EXACTLY 4 member executions
+    occur, and the raise happens on the 4th's route (its body already ran, so it
+    IS recorded in ``visits``).
+    """
+
+    def _build_pingpong(self, visits, *, on_exhaust="error", max_hops=3):
+        def triage_fn(input_data, config):
+            visits.append("triage")
+            incoming = input_data.get("handoff") if isinstance(input_data, dict) else None
+            nxt = 0 if incoming is None else incoming.hops
+            return RouteHop(goto="billing", hops=nxt + 1)  # forever -> billing
+
+        def billing_fn(input_data, config):
+            visits.append("billing")
+            incoming = input_data["handoff"]
+            return RouteHop(goto="triage", hops=incoming.hops + 1)  # forever -> triage
+
+        register_scripted("km_err_triage", triage_fn)
+        register_scripted("km_err_billing", billing_fn)
+
+        entry = (
+            Node.scripted("triage", fn="km_err_triage", inputs={"handoff": RouteHop}, outputs=RouteHop)
+            | Keymaker(peers=["billing"], max_hops=max_hops, on_exhaust=on_exhaust)
+        )
+        billing = (
+            Node.scripted("billing", fn="km_err_billing", inputs={"handoff": RouteHop}, outputs=RouteHop)
+            | Keymaker(peers=["triage"])
+        )
+        return Construct("swarm-budget-err", nodes=[entry, billing])
+
+    def test_budget_exhaust_raises_execution_error_naming_entry(self):
+        visits: list[str] = []
+        mesh = self._build_pingpong(visits, on_exhaust="error", max_hops=3)
+        graph = compile(mesh, **build_test_compile_kwargs())
+        with pytest.raises(ExecutionError) as exc:
+            run(graph, input={})
+        msg = str(exc.value)
+        assert re.search(r"max_hops|handoff exceeded", msg), msg
+        assert "triage" in msg, f"error must name the ENTRY node: {msg}"
+        # Exactly 4 member executions before the raise (the boundary).
+        assert visits == ["triage", "billing", "triage", "billing"], visits
+
+
+class TestBudgetExhaustExits:
+    """on_exhaust='exit' on the ENTRY: the same never-terminating ping-pong mesh
+    leaves via the pass-through exit node (NO raise) with the last payload on the
+    shared channel, and a plain scripted node placed AFTER the mesh still runs.
+    """
+
+    def test_budget_exhaust_exit_routes_downstream_with_last_payload(self):
+        visits: list[str] = []
+        after: list[str] = []
+
+        def triage_fn(input_data, config):
+            visits.append("triage")
+            incoming = input_data.get("handoff") if isinstance(input_data, dict) else None
+            nxt = 0 if incoming is None else incoming.hops
+            return RouteHop(goto="billing", hops=nxt + 1)
+
+        def billing_fn(input_data, config):
+            visits.append("billing")
+            incoming = input_data["handoff"]
+            return RouteHop(goto="triage", hops=incoming.hops + 1)
+
+        def report_fn(input_data, config):
+            after.append("report")
+            return RouteHop(goto="done")
+
+        register_scripted("km_exit_triage", triage_fn)
+        register_scripted("km_exit_billing", billing_fn)
+        register_scripted("km_exit_report", report_fn)
+
+        entry = (
+            Node.scripted("triage", fn="km_exit_triage", inputs={"handoff": RouteHop}, outputs=RouteHop)
+            | Keymaker(peers=["billing"], max_hops=3, on_exhaust="exit")
+        )
+        billing = (
+            Node.scripted("billing", fn="km_exit_billing", inputs={"handoff": RouteHop}, outputs=RouteHop)
+            | Keymaker(peers=["triage"])
+        )
+        # Plain scripted node AFTER the mesh — reached only if 'exit' routes
+        # through the pass-through exit node rather than raising.
+        downstream = Node.scripted("report", fn="km_exit_report", inputs=RouteHop, outputs=RouteHop)
+        mesh = Construct("swarm-budget-exit", nodes=[entry, billing, downstream])
+        graph = compile(mesh, **build_test_compile_kwargs())
+
+        result = run(graph, input={})  # NO exception on exhaust
+        assert after == ["report"], "downstream node must run after the 'exit' exhaust"
+        # The last payload survives for downstream consumption (design §3.4). The
+        # neo_-prefixed shared channel is stripped from the final result by the
+        # _strip_internals invariant (state.py:410-419), so the observable locus
+        # is the last member's output field — 'billing' ran last before exhaust.
+        last = result.get("billing")
+        assert isinstance(last, RouteHop), result
+        assert last.hops == 4, last  # 3 peer-hops made, exhaust wrote hops=4 payload
+
+
+class TestBudgetBoundaryExactlyMaxHops:
+    """Off-by-one pin: a mesh that makes EXACTLY max_hops peer-hops then routes
+    to HANDOFF_END exits cleanly (no exhaust), and the shared counter equals
+    max_hops. This pins 'max_hops=N ⇒ N peer-hops allowed'.
+
+    Members ping-pong while the carried payload hop count < 3, then route to
+    HANDOFF_END: triage->billing (hop1), billing->triage (hop2),
+    triage->billing (hop3), billing->HANDOFF_END (exit, not a hop). 3 peer-hops
+    == max_hops, so the counter must read 3 and NO exhaust fires.
+    """
+
+    def test_exactly_max_hops_then_handoff_end_exits_clean(self):
+        from langgraph.checkpoint.memory import MemorySaver
+
+        visits: list[str] = []
+        threshold = 3
+
+        def triage_fn(input_data, config):
+            visits.append("triage")
+            incoming = input_data.get("handoff") if isinstance(input_data, dict) else None
+            h = 0 if incoming is None else incoming.hops
+            if h >= threshold:
+                return RouteHop(goto=HANDOFF_END, hops=h)
+            return RouteHop(goto="billing", hops=h + 1)
+
+        def billing_fn(input_data, config):
+            visits.append("billing")
+            incoming = input_data["handoff"]
+            h = incoming.hops
+            if h >= threshold:
+                return RouteHop(goto=HANDOFF_END, hops=h)
+            return RouteHop(goto="triage", hops=h + 1)
+
+        register_scripted("km_bnd_triage", triage_fn)
+        register_scripted("km_bnd_billing", billing_fn)
+
+        entry = (
+            Node.scripted("triage", fn="km_bnd_triage", inputs={"handoff": RouteHop}, outputs=RouteHop)
+            | Keymaker(peers=["billing"], max_hops=threshold)
+        )
+        billing = (
+            Node.scripted("billing", fn="km_bnd_billing", inputs={"handoff": RouteHop}, outputs=RouteHop)
+            | Keymaker(peers=["triage"])
+        )
+        mesh = Construct("swarm-budget-boundary", nodes=[entry, billing])
+        graph = compile(mesh, **build_test_compile_kwargs(checkpointer=MemorySaver()))
+        cfg = {"configurable": {"thread_id": "km-boundary"}}
+        run(graph, input={}, config=cfg)  # clean exit, no exhaust
+
+        # 3 peer-hops (+ the entry's non-hop first exec) => 4 member executions.
+        assert visits == ["triage", "billing", "triage", "billing"], visits
+        # The shared entry-keyed counter counts EXACTLY the peer-hops == max_hops.
+        counter_key = StateKeys.handoff_hops("triage")
+        counter = graph.get_state(cfg).values.get(counter_key)
+        assert counter == threshold, f"{counter_key}={counter!r}, expected {threshold}"
+
+
+class TestRecursionFloorForLargeMesh:
+    """D13 recursion floor: a mesh-ONLY construct (no agent/act nodes) whose
+    entry max_hops EXCEEDS LangGraph's default recursion ceiling (25) must run
+    to on_exhaust WITHOUT a GraphRecursionError — the runner raises the
+    recursion floor by the mesh's max_hops.
+
+    Without the floor, a 30-hop ping-pong hits LangGraph's 25-superstep ceiling
+    and raises GraphRecursionError before the budget fork can fire.
+    """
+
+    def test_large_max_hops_reaches_budget_not_recursion_ceiling(self):
+        def triage_fn(input_data, config):
+            incoming = input_data.get("handoff") if isinstance(input_data, dict) else None
+            nxt = 0 if incoming is None else incoming.hops
+            return RouteHop(goto="billing", hops=nxt + 1)
+
+        def billing_fn(input_data, config):
+            incoming = input_data["handoff"]
+            return RouteHop(goto="triage", hops=incoming.hops + 1)
+
+        register_scripted("km_floor_triage", triage_fn)
+        register_scripted("km_floor_billing", billing_fn)
+
+        entry = (
+            Node.scripted("triage", fn="km_floor_triage", inputs={"handoff": RouteHop}, outputs=RouteHop)
+            | Keymaker(peers=["billing"], max_hops=30, on_exhaust="error")
+        )
+        billing = (
+            Node.scripted("billing", fn="km_floor_billing", inputs={"handoff": RouteHop}, outputs=RouteHop)
+            | Keymaker(peers=["triage"])
+        )
+        mesh = Construct("swarm-floor", nodes=[entry, billing])
+        graph = compile(mesh, **build_test_compile_kwargs())
+        # Reaches the budget fork (ExecutionError), NOT GraphRecursionError.
+        with pytest.raises(ExecutionError) as exc:
+            run(graph, input={})
+        assert re.search(r"max_hops|handoff exceeded", str(exc.value)), str(exc.value)
