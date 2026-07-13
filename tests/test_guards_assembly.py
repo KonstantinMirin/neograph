@@ -81,6 +81,65 @@ class TestErrorBuilderEnforcement:
         )
 
 
+class TestCommandConstructionMonopoly:
+    """Guard (G1, neograph-on6jt) — ``Command(...)`` is constructed ONLY in
+    ``factory.py`` and ``runner.py``.
+
+    LangGraph's ``Command`` is a control-flow escape hatch: a node returning
+    ``Command(goto=...)`` seizes routing from the declared edges. neograph
+    confines that capability to two sites — ``runner.py`` (``Command(resume=)``
+    for Operator-interrupt resume) and ``factory.py`` (``make_keymaker_fn``'s
+    ``Command(goto=, update=)`` for the Keymaker mesh). Any other module
+    constructing a ``Command`` is smuggling in hidden control flow that bypasses
+    the compiler's edge model — this guard ratchets the new capability so it
+    cannot spread. The match is AST-level (an ``ast.Call`` whose callee is the
+    name ``Command``), so docstrings/comments mentioning ``Command(...)`` never
+    trip it.
+
+    If this fails: route the control-flow change through the compiler's edge
+    model (or ``make_keymaker_fn``) instead of returning a raw ``Command`` from a
+    new site — do NOT add the file to the allowlist.
+    """
+
+    _ALLOWED = frozenset({"factory.py", "runner.py"})
+
+    @staticmethod
+    def _command_call_lines(path: pathlib.Path) -> list[int]:
+        try:
+            tree = ast.parse(path.read_text(), filename=str(path))
+        except SyntaxError:
+            return []
+        hits: list[int] = []
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "Command":
+                hits.append(node.lineno)
+        return hits
+
+    def test_command_constructed_only_in_allowed_files(self):
+        violations: list[str] = []
+        for py_file in sorted(SRC_DIR.glob("*.py")):
+            if py_file.name in self._ALLOWED:
+                continue
+            for lineno in self._command_call_lines(py_file):
+                violations.append(f"  {py_file.name}:{lineno}: Command(...) constructed outside the allowlist")
+        assert violations == [], (
+            f"\n{len(violations)} Command(...) construction(s) outside "
+            f"{sorted(self._ALLOWED)}:\n" + "\n".join(violations) + "\n\nConfine Command to factory.py / runner.py (G1)."
+        )
+
+    def test_detector_flags_a_stray_command(self, tmp_path):
+        """Slip check: a Command(...) call in a non-allowlisted file is detected."""
+        bad = tmp_path / "stray.py"
+        bad.write_text("from langgraph.types import Command\nx = Command(goto='n')\n")
+        assert self._command_call_lines(bad) == [2]
+
+    def test_detector_ignores_command_in_docstring(self, tmp_path):
+        """Slip check: a docstring/comment mentioning Command(...) is NOT a call."""
+        ok = tmp_path / "doc.py"
+        ok.write_text('"""We could return Command(goto=x) here but do not."""\nY = 1\n')
+        assert self._command_call_lines(ok) == []
+
+
 class TestErrorBuildBodyMonopoly:
     """Every ``.build`` classmethod delegates message formatting to one helper.
 

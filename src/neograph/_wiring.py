@@ -17,6 +17,7 @@ from langgraph.types import Send, interrupt
 
 from neograph._agent_cycle import make_agent_cycle_bodies, make_tool_gate_bodies
 from neograph._ir_branch import _BranchNode
+from neograph._ir_protocols import ConstructItem
 from neograph._llm_runtime import EMPTY_RUNTIME, LlmRuntime
 from neograph._normalize import normalize_outputs, primary_output_field
 from neograph._oracle import (
@@ -34,9 +35,19 @@ from neograph.construct import Construct
 from neograph.di import _unwrap_loop_value
 from neograph.errors import ConfigurationError, ExecutionError
 from neograph.factory import (
+    make_keymaker_fn,
     make_node_fn,
 )
-from neograph.modifiers import Each, Loop, Operator, Oracle, split_each_path
+from neograph.modifiers import (
+    Each,
+    Keymaker,
+    Loop,
+    ModifierCombo,
+    Operator,
+    Oracle,
+    classify_modifiers,
+    split_each_path,
+)
 from neograph.naming import field_name_for, output_field_name
 from neograph.node import Node
 
@@ -678,6 +689,82 @@ def _add_loop_back_edge(
         router,
         path_map=[reenter_target, exit_name],
     )
+
+    return exit_name
+
+
+def _contiguous_keymaker_mesh(nodes: list[ConstructItem], entry: Node) -> list[Node]:
+    """Collect the contiguous run of Keymaker-modified Nodes starting at ``entry``.
+
+    Called by the compile walk when it reaches a mesh ENTRY. ``entry`` is located
+    by identity, then the run is collected forward while each item is a
+    Keymaker-modified Node (contiguity is guaranteed by assembly validation,
+    design §3.1 r2). Takes the node LIST as a parameter (not ``construct.nodes``),
+    so it does not add a second raw ``.nodes`` walk to the compiler.
+    """
+    start = next(i for i, n in enumerate(nodes) if n is entry)
+    members: list[Node] = []
+    for item in nodes[start:]:
+        if not (isinstance(item, Node) and classify_modifiers(item)[0] == ModifierCombo.KEYMAKER):
+            break
+        members.append(item)
+    return members
+
+
+def _add_keymaker_mesh(
+    graph: StateGraph,
+    members: list[Node],
+    prev_node: str | None,
+    *,
+    runtime: LlmRuntime = EMPTY_RUNTIME,
+    scripted_lookup: dict[str, Callable] | None = None,
+    tool_factory_lookup: dict[str, Callable] | None = None,
+) -> str:
+    """Wire a Keymaker mesh: dynamic Command(goto) handoff (design §4.1, D3).
+
+    ``members`` is the contiguous run of Keymaker-modified sibling Nodes at one
+    construct level; ``members[0]`` is the mesh ENTRY. Unlike Loop (a conditional
+    back-edge router), the mesh has NO static inter-member edges and NO router:
+    each member returns ``Command(goto=peer_or_exit)`` and is registered with
+    ``destinations=`` so LangGraph validates the target set at compile time. The
+    single static edge into the mesh is ``prev → entry``; a pass-through exit node
+    (``__handoff_exit_<entry>``, mirroring Loop's ``__loop_exit_``) is where the
+    linear chain resumes, so the compile walk threads ``prev_node`` forward from
+    it unchanged. Returns the exit node name.
+    """
+    entry = members[0]
+    entry_field = field_name_for(entry.name)
+    exit_name = f"__handoff_exit_{entry.name}"
+
+    # Pass-through exit node — the mesh's single re-join point (design §3.1 r2).
+    def handoff_exit(state: Any) -> dict:
+        return {}
+
+    graph.add_node(exit_name, handoff_exit)
+
+    for member in members:
+        keymaker = member.modifier_set.keymaker
+        assert isinstance(keymaker, Keymaker)  # collected as Keymaker-modified
+        member_fn = make_keymaker_fn(
+            member,
+            keymaker,
+            entry_field,
+            exit_name,
+            runtime=runtime,
+            scripted_lookup=scripted_lookup,
+            tool_factory_lookup=tool_factory_lookup,
+        )
+        # destinations = declared peers ∪ {exit}. HANDOFF_END is a route VALUE
+        # mapped to exit_name inside the wrapper, so exit_name (not HANDOFF_END)
+        # is the goto target that must appear here.
+        destinations = tuple(keymaker.peers or ()) + (exit_name,)
+        graph.add_node(member.name, cast(Any, member_fn), destinations=destinations)
+
+    # The only static edge into the mesh: prev → entry.
+    if prev_node:
+        graph.add_edge(prev_node, entry.name)
+    else:
+        graph.add_edge(START, entry.name)
 
     return exit_name
 

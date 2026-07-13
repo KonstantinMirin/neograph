@@ -374,7 +374,7 @@ node(fn: 'Callable | None' = None, *, mode: "Literal['think', 'agent', 'act', 's
 
 {/* test-skip: generated API signature (declaration, not runnable) */}
 ```python
-Node(name: str, modifier_set: ModifierSet = <factory:ModifierSet>, mode: Literal['think', 'agent', 'act', 'scripted'] = 'think', inputs: Any = None, outputs: Any = None, model: str | None = None, prompt: str | None = None, llm_config: LlmConfig = <factory:LlmConfig>, tools: list[neograph.tool.Tool | langchain_core.tools.base.BaseTool] = [], scripted_fn: str | None = None, raw_fn: neograph.node.RawNodeFn | None = None, fan_out_param: str | None = None, handoff_param: str | None = None, renderer: neograph.renderers.Renderer | None = None, context: list[str] | None = None, skip_when: neograph.node.SkipPredicate | None = None, skip_value: neograph.node.SkipValueFactory | None = None, gate_tools_when: collections.abc.Callable | str | None = None, oracle_gen_type: type[pydantic.main.BaseModel] | None = None)
+Node(name: str, modifier_set: ModifierSet = <factory:ModifierSet>, mode: Literal['think', 'agent', 'act', 'scripted'] = 'think', inputs: Any = None, outputs: Any = None, model: str | None = None, prompt: str | None = None, llm_config: LlmConfig = <factory:LlmConfig>, tools: list[neograph.tool.Tool | langchain_core.tools.base.BaseTool] = [], scripted_fn: str | None = None, raw_fn: neograph.node.RawNodeFn | None = None, fan_out_param: str | None = None, handoff_param: str | None = None, handoff_channel: str | None = None, renderer: neograph.renderers.Renderer | None = None, context: list[str] | None = None, skip_when: neograph.node.SkipPredicate | None = None, skip_value: neograph.node.SkipValueFactory | None = None, gate_tools_when: collections.abc.Callable | str | None = None, oracle_gen_type: type[pydantic.main.BaseModel] | None = None)
 ```
 
 | Field | Type | Required | Default |
@@ -392,6 +392,7 @@ Node(name: str, modifier_set: ModifierSet = <factory:ModifierSet>, mode: Literal
 | <span id="node-model-raw_fn"></span>`raw_fn` | `neograph.node.RawNodeFn | None` | no | `None` |
 | <span id="node-model-fan_out_param"></span>`fan_out_param` | `str | None` | no | `None` |
 | <span id="node-model-handoff_param"></span>`handoff_param` | `str | None` | no | `None` |
+| <span id="node-model-handoff_channel"></span>`handoff_channel` | `str | None` | no | `None` |
 | <span id="node-model-renderer"></span>`renderer` | `neograph.renderers.Renderer | None` | no | `None` |
 | <span id="node-model-context"></span>`context` | `list[str] | None` | no | `None` |
 | <span id="node-model-skip_when"></span>`skip_when` | `neograph.node.SkipPredicate | None` | no | `None` |

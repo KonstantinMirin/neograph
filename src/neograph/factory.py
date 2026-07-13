@@ -9,13 +9,18 @@ from typing import Any
 
 import structlog
 from langchain_core.runnables import Runnable, RunnableConfig, RunnableLambda
+from langgraph.types import Command
 from pydantic import BaseModel
 
 from neograph._dispatch import _dispatch_for_mode
 from neograph._execute import _aexecute_node, _execute_node, _type_name
 from neograph._llm_runtime import EMPTY_RUNTIME, LlmRuntime
+from neograph._normalize import primary_output_field
+from neograph._state_keys import StateKeys
 from neograph._trace import named
 from neograph.errors import ConfigurationError, ExecutionError
+from neograph.modifiers import HANDOFF_END, Keymaker
+from neograph.naming import field_name_for
 from neograph.node import Node
 
 log = structlog.get_logger()
@@ -89,6 +94,79 @@ def make_node_fn(
     # mode + declared output type as span metadata. See neograph-3fm1.
     wrapper = RunnableLambda(node_wrapper, afunc=anode_wrapper)
     return named(wrapper, node.name, mode=node.mode, output_type=_type_name(node.outputs))
+
+
+def make_keymaker_fn(
+    node: Node,
+    keymaker: Keymaker,
+    entry_field: str,
+    exit_name: str,
+    *,
+    runtime: LlmRuntime = EMPTY_RUNTIME,
+    scripted_lookup: dict[str, Callable] | None = None,
+    tool_factory_lookup: dict[str, Callable] | None = None,
+) -> Runnable:
+    """Build a Keymaker mesh-member function (design §4.1, decision D3/D10).
+
+    Wraps the standard :func:`make_node_fn` result: the inner node runs normally
+    and returns its state-update dict, then this wrapper reads the routing field
+    off the member's payload output, validates the target, and returns a
+    ``Command(goto=..., update=...)`` so LangGraph derives control flow from the
+    member's runtime decision. The payload is also written to the shared,
+    entry-keyed mesh channel so the next member reads it via the reserved
+    ``handoff`` inputs key (design §3.3).
+
+    INVARIANT (the durability pitch's one actively-false spot): a route target
+    outside ``peers ∪ {HANDOFF_END}`` raises ``ExecutionError`` HERE — before the
+    goto is emitted — instead of LangGraph silently dropping the update
+    (``_algo.py:312``, the research's #1 constraint).
+
+    ``entry_field`` keys the shared channel (``StateKeys.handoff_payload``), so
+    EVERY member of the mesh WRITES the SAME channel regardless of its own field
+    (one mesh per level — D-SINGLE-MESH). The READ side is symmetric but
+    node-self-contained: the normalizer stamps the same key onto each member's
+    ``handoff_channel`` and ``_extract_input`` reads it there (decision D10), so
+    no channel key is threaded into ``make_node_fn`` here. ``HANDOFF_END`` is
+    byte-identical to LangGraph's ``END`` sentinel, so it is mapped to the
+    pass-through ``exit_name`` node rather than terminating the whole graph.
+    """
+    channel_key = StateKeys.handoff_payload(entry_field)
+    payload_field = primary_output_field(field_name_for(node.name), node.outputs)
+    route_field = keymaker.route
+    valid_targets = set(keymaker.peers or ()) | {HANDOFF_END}
+
+    inner = make_node_fn(
+        node,
+        runtime=runtime,
+        scripted_lookup=scripted_lookup,
+        tool_factory_lookup=tool_factory_lookup,
+    )
+
+    def _to_command(update: dict[str, Any]) -> Command:
+        payload = update[payload_field]
+        target = getattr(payload, route_field)
+        if target not in valid_targets:
+            raise ExecutionError.build(
+                "Keymaker route target is not a declared peer",
+                expected=f"one of {sorted(valid_targets)}",
+                found=f"route field '{route_field}'={target!r}",
+                node=node.name,
+                hint="a mesh member may route only to a declared peer or HANDOFF_END",
+            )
+        # T3 seam: the hop-budget counter read-modify-write on
+        # StateKeys.handoff_hops(entry_field) + the max_hops check land HERE,
+        # before the goto. Kept out of T2 so T3 need not rip out inlined budget.
+        goto = exit_name if target == HANDOFF_END else target
+        return Command(goto=goto, update={**update, channel_key: payload})
+
+    def keymaker_wrapper(state: BaseModel, config: RunnableConfig) -> Command:
+        return _to_command(inner.invoke(state, config))
+
+    async def akeymaker_wrapper(state: BaseModel, config: RunnableConfig) -> Command:
+        return _to_command(await inner.ainvoke(state, config))
+
+    wrapper = RunnableLambda(keymaker_wrapper, afunc=akeymaker_wrapper)
+    return named(wrapper, node.name, mode="keymaker", output_type=_type_name(node.outputs))
 
 
 def _make_raw_wrapper(node: Node) -> Callable:

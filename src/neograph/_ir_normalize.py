@@ -38,6 +38,7 @@ from neograph._ir_branch import iter_item_slots
 from neograph._ir_protocols import ConstructItem
 from neograph._normalize import normalize_inputs, normalize_outputs
 from neograph._sidecar import infer_oracle_gen_type
+from neograph._state_keys import StateKeys
 from neograph.naming import field_name_for, output_field_name
 from neograph.node import Node
 
@@ -254,8 +255,22 @@ def normalize_ir(construct: Construct) -> None:
     # fan-in today, so the limitation is documented rather than closed here.
     # See neograph-vn5f (site 2).
     peer_field_names: set[str] = set()
+    keymaker_members: list[Node] = []
     for item in construct.nodes:
         peer_field_names |= declared_output_fields(item)
+        # Keymaker mesh members at THIS level (top-level siblings, D-MESH-LEVEL).
+        # Collected in the existing allowlisted `.nodes` walk so no new raw walk
+        # is introduced (arm-blind-walk guard).
+        if isinstance(item, Node) and item.modifier_set.keymaker is not None:
+            keymaker_members.append(item)
+
+    # The mesh channel is keyed off the ENTRY (first member in node order — one
+    # mesh per level, design §3.1). Compute it ONCE here (the only place with the
+    # construct-level view) and stamp it onto each member below, so _extract_input
+    # reads the channel self-contained (decision D10, the fan_out_param precedent).
+    handoff_channel: str | None = None
+    if keymaker_members:
+        handoff_channel = StateKeys.handoff_payload(field_name_for(keymaker_members[0].name))
     # iter_item_slots descends into _BranchNode arms and yields each arm node's
     # OWN storage slot (meta.true_arm_nodes[j] / false_arm_nodes[j]), so the
     # model_copy write-back lands where the compiler reads it — not in a
@@ -268,5 +283,12 @@ def normalize_ir(construct: Construct) -> None:
         for normalizer in _NORMALIZERS:
             if normalizer.applies_to(item):
                 updates.update(normalizer.apply(item, peer_field_names))
+        # Stamp the entry-keyed mesh channel onto every Keymaker member (decision
+        # D10). This module is the SOLE writer of handoff_channel — the same
+        # single-writer ownership as handoff_param (review H2 / neograph-k7bg) —
+        # because the entry-keyed key is a construct-level fact no assembly path
+        # can compute per-node. Idempotent: skip if already set.
+        if handoff_channel is not None and item.modifier_set.keymaker is not None and item.handoff_channel is None:
+            updates["handoff_channel"] = handoff_channel
         if updates:
             container[idx] = item.model_copy(update=updates)

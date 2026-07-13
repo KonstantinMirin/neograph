@@ -108,3 +108,46 @@ wrapped (direct) and unwrapped (pipe) forms pass while still asserting the offen
 naming message. The Core Invariant ("ConstructError naming the offender") is
 satisfied in spirit: the ConstructError is the wrapped cause on the direct path and
 raised directly on the pipe path.
+
+## Implementation decisions (T2 — neograph-on6jt)
+
+*(For the morning: T2 raised the compiler.py size-cap guard 690→720 with the
+guard's own remedy honored (mesh wiring helpers `_add_keymaker_mesh` +
+`_contiguous_keymaker_mesh` placed in `_wiring.py`; only the walk orchestration
+and two exhaustiveness arms — core compiler responsibility — remain in
+compiler.py) and the raise history recorded in the guard docstring. A size cap,
+not a disease-baseline growth, but flagged here for ratification.)*
+
+**D10 — the mesh-channel READ side is a node-self-contained IR field
+(`Node.handoff_channel`) stamped by the `_ir_normalize` normalizer, NOT plumbed
+through `_execute_node`.** The T2 architect review (dp-reviewer, MEDIUM) found the
+design's §3.3 read side under-specified: a non-entry member's `_extract_input`
+receives only `(bus, node)` with `node.handoff_param == "handoff"` (the bare
+literal) carrying NO entry-field, so it cannot build the entry-keyed channel key
+`neo_handoff_<entry_field>` — the channel is keyed off the mesh ENTRY
+(one-mesh-per-level, D-SINGLE-MESH), not the member's own field. **Decision
+(lead-adjudicated):** apply the `fan_out_param` precedent exactly — a node-level
+IR field the extract path reads WITHOUT signature changes. `_ir_normalize`
+(`normalize_ir`) already has the construct-level view and is the single writer of
+`handoff_param`; it now also computes the entry-keyed channel once
+(`StateKeys.handoff_payload(field_name_for(entry.name))`) and stamps it onto every
+Keymaker member's new `Node.handoff_channel` field, alongside `handoff_param`.
+`_extract_fan_in_dict` reads `bus.get(node.handoff_channel)` (optional — a member
+reached via a hop always has it populated by the previous hop's `Command` update;
+an entry declaring a `handoff` param on first activation legitimately sees `None`)
+for the reserved `"handoff"` input key. This keeps `_execute_node`,
+`_aexecute_node`, and `make_node_fn` signatures untouched (wrapper uniformity
+preserved), and preserves the single-writer invariant (H2/D5): `_ir_normalize` is
+the SOLE writer of both `handoff_param` and `handoff_channel`, since the
+entry-keyed key is a construct-level fact no assembly path can compute per-node.
+**Alternative rejected — plumbing `entry_field` through `make_node_fn →
+_execute_node → _extract_input`** (the executor's initial implementation): wider
+signature blast radius across the shared dispatch path and it breaks wrapper
+uniformity by adding a Keymaker-specific kwarg to the generic node factory; the
+node-self-contained field mirrors `fan_out_param` more faithfully and localizes
+all Keymaker read-side knowledge to `_ir_normalize` + `_input_shape`. Also
+rejected: state-scanning for the sole `neo_handoff_*` field (non-deterministic by
+design; the reviewer forbade it). `Node.handoff_channel` is the SECOND sanctioned
+new IR field for Keymaker (beside `handoff_param`); `_input_shape.py` is in-scope
+for T2 (design §4.1's SCOPE table omits it, but §3.3 requires it and the AC
+"genuine cycle end-to-end" forces it — a doc-table gap, not a contradiction).

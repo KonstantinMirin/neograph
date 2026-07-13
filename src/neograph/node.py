@@ -211,6 +211,15 @@ class Node(Modifiable, BaseModel):
     # rule (neograph-k7bg, review H2). No assembly path may write it.
     handoff_param: str | None = None
 
+    # The resolved entry-keyed mesh-channel field name (neo_handoff_<entry_field>)
+    # a Keymaker member reads its `handoff` payload from — the fan_out_param
+    # precedent applied to the READ side (decision D10): a node-self-contained IR
+    # field so _extract_input resolves the channel WITHOUT threading a key through
+    # _execute_node. The channel key is entry-keyed (one mesh per level), so only
+    # the construct-level normalizer knows it — hence, like handoff_param, this is
+    # written ONLY by _ir_normalize.py (single-writer, review H2 / neograph-k7bg).
+    handoff_channel: str | None = None
+
     # Pluggable prompt-input renderer. When set, the factory layer renders
     # input data through this renderer before prompt insertion. Dispatch
     # hierarchy: model.render_for_prompt() > node.renderer > global > None.

@@ -25,12 +25,12 @@ import pytest
 from pydantic import BaseModel
 
 from neograph import (
-    CompileError,
     Construct,
     ConstructError,
     Keymaker,
     Node,
     compile,
+    run,
 )
 from neograph._construct_validation import effective_producer_type
 from tests.fakes import build_test_compile_kwargs, register_scripted
@@ -102,27 +102,29 @@ def _legal_mesh() -> Construct:
 # ═══════════════════════════════════════════════════════════════════════════
 
 
-class TestLegalMeshAssembles:
-    """A legal mesh ASSEMBLES cleanly at T1; lowering is staged to T2.
+class TestLegalMeshAssemblesAndCompiles:
+    """A legal mesh ASSEMBLES and COMPILES cleanly (T2 — neograph-on6jt).
 
-    T1 delivers IR + assembly validation only — a legal mesh passes every §5
-    rule so ``Construct(...)`` succeeds, but ``compile()`` fail-loud-stages the
-    mesh lowering as ``CompileError("Keymaker lowering lands in T2")`` (decision
-    D6/D7). These tests therefore assert BOTH: the Construct assembles (no
-    exception) AND compile raises the staged error. Three-surface parity is
-    exercised at the assembly level (declarative + programmatic); the runtime
-    routing tests land in T2. See ``test_keymaker_compile_is_staged_to_t2``.
+    A legal mesh passes every §5 rule so ``Construct(...)`` succeeds, and — now
+    that T2 lowering has landed — ``compile()`` builds the Command(goto) mesh
+    without error (T1 fail-loud-staged this as ``CompileError("lands in T2")``;
+    D7 assigns the flip to T2). Three-surface parity is exercised at the
+    assembly+compile level (declarative + programmatic); the full runtime routing
+    with a genuine cycle lives in ``tests/modifiers/test_keymaker.py``. See
+    ``test_legal_mesh_routes_to_end_and_completes``.
     """
 
-    def test_plain_str_route_mesh_assembles(self):
-        """A plain-str `goto` mesh assembles cleanly (compile staged to T2)."""
+    def test_plain_str_route_mesh_compiles(self):
+        """A plain-str `goto` mesh assembles and compiles cleanly."""
+        register_scripted("f", lambda i, c: Handoff(goto="__end__"))
         mesh = _legal_mesh()
         assert mesh.name == "swarm"  # Construct(...) assembled — no ConstructError
-        with pytest.raises(CompileError, match="lands in T2"):
-            compile(mesh, **build_test_compile_kwargs())
+        compiled = compile(mesh, **build_test_compile_kwargs())
+        assert compiled is not None  # compile() lowered the mesh — no CompileError
 
-    def test_literal_route_mesh_assembles(self):
-        """A Literal-typed route with all members in peers∪{HANDOFF_END} passes."""
+    def test_literal_route_mesh_compiles(self):
+        """A Literal-typed route with all members in peers∪{HANDOFF_END} compiles."""
+        register_scripted("f", lambda i, c: Handoff(goto="__end__"))
         entry = (
             Node.scripted("triage", fn="f", outputs=LiteralHandoff)
             | Keymaker(peers=["billing", "technical"], max_hops=4)
@@ -131,11 +133,12 @@ class TestLegalMeshAssembles:
         technical = _member("technical", [], payload=LiteralHandoff)
         mesh = Construct("typed-swarm", nodes=[entry, billing, technical])
         assert mesh.name == "typed-swarm"  # assembled cleanly
-        with pytest.raises(CompileError, match="lands in T2"):
-            compile(mesh, **build_test_compile_kwargs())
+        compiled = compile(mesh, **build_test_compile_kwargs())
+        assert compiled is not None
 
-    def test_programmatic_pipe_surface_assembles(self):
-        """The programmatic pipe surface produces the same legal (assembling) mesh."""
+    def test_programmatic_pipe_surface_compiles(self):
+        """The programmatic pipe surface produces the same legal (compiling) mesh."""
+        register_scripted("f", lambda i, c: Handoff(goto="__end__"))
         entry = Node.scripted("triage", fn="f", outputs=Handoff) | Keymaker(peers=["billing"], max_hops=6)
         billing = (
             Node.scripted("billing", fn="f", inputs={"handoff": Handoff}, outputs=Handoff)
@@ -143,18 +146,21 @@ class TestLegalMeshAssembles:
         )
         mesh = Construct("swarm2", nodes=[entry, billing])
         assert mesh.name == "swarm2"  # assembled cleanly
-        with pytest.raises(CompileError, match="lands in T2"):
-            compile(mesh, **build_test_compile_kwargs())
+        compiled = compile(mesh, **build_test_compile_kwargs())
+        assert compiled is not None
 
-    def test_keymaker_compile_is_staged_to_t2(self):
-        """T1 fail-loud staging pin: compiling any Keymaker mesh raises CompileError.
-
-        T2 (neograph-on6jt) replaces the compiler placeholder arms with the real
-        mesh lowering and REPLACES this test with a runtime routing assertion.
-        """
-        mesh = _legal_mesh()
-        with pytest.raises(CompileError, match="Keymaker lowering lands in T2"):
-            compile(mesh, **build_test_compile_kwargs())
+    def test_legal_mesh_routes_to_end_and_completes(self):
+        """Runtime routing pin (replaces the T1 staging pin, D7): the legal mesh
+        compiles AND runs — the entry routes to HANDOFF_END and the run completes
+        through the pass-through exit node without a silent drop."""
+        register_scripted("f", lambda i, c: Handoff(goto="__end__"))
+        mesh = _legal_mesh()  # entry fn returns goto="__end__" -> exits immediately
+        graph = compile(mesh, **build_test_compile_kwargs())
+        result = run(graph, input={})
+        # The entry routed to HANDOFF_END; its payload is on the bus with the
+        # route value the wrapper checked (not silently dropped).
+        assert isinstance(result["triage"], Handoff)
+        assert result["triage"].goto == "__end__"
 
 
 # ═══════════════════════════════════════════════════════════════════════════

@@ -36,9 +36,11 @@ from neograph._wiring import (
     _add_agent_cycle,
     _add_branch_to_graph,
     _add_each_oracle_fused,
+    _add_keymaker_mesh,
     _add_loop_back_edge,
     _add_operator_check,
     _add_subgraph_loop,
+    _contiguous_keymaker_mesh,
     _wire_each,
     _wire_oracle,
 )
@@ -240,8 +242,26 @@ def compile(
 
     prev_node: str | None = None
 
+    # A contiguous Keymaker run is a mesh: lowered ONCE at its ENTRY by
+    # _add_keymaker_mesh; the remaining members are recorded in `meshed` so the
+    # walk skips them (review M1 — prevents double-adding). See design §4.1.
+    meshed: set[int] = set()
+
     for item in construct.nodes:
-        if isinstance(item, _BranchNode):
+        if id(item) in meshed:
+            continue  # a non-entry mesh member, already lowered at its entry
+        if isinstance(item, Node) and classify_modifiers(item)[0] == ModifierCombo.KEYMAKER:
+            members = _contiguous_keymaker_mesh(construct.nodes, item)
+            prev_node = _add_keymaker_mesh(
+                graph,
+                members,
+                prev_node,
+                runtime=runtime,
+                scripted_lookup=scripted_lookup,
+                tool_factory_lookup=tool_factory_lookup,
+            )
+            meshed.update(id(m) for m in members)
+        elif isinstance(item, _BranchNode):
             prev_node = _add_branch_to_graph(
                 graph,
                 item,
@@ -513,9 +533,13 @@ def _add_subgraph(
                 graph.add_edge(START, sub.name)
             last_name = sub.name
         case ModifierCombo.KEYMAKER:
-            # T1 fail-loud staging (T2 replaces): Keymaker-on-Construct is also
-            # rejected at assembly (D-MESH-LEVEL); arm keeps the match exhaustive.
-            raise CompileError.build("Keymaker lowering lands in T2", found=f"Keymaker on sub-construct '{sub.name}'")
+            # Keymaker on a sub-construct is illegal in v1 (D-MESH-LEVEL); already
+            # rejected at assembly — this arm is defense-in-depth + exhaustiveness.
+            raise CompileError.build(
+                "Keymaker on a sub-construct is not supported",
+                expected="mesh members must be sibling Nodes (D-MESH-LEVEL)",
+                found=f"Keymaker modifier on sub-construct '{sub.name}'",
+            )
         case _ as unreachable:
             assert_never(unreachable)
 
@@ -621,10 +645,14 @@ def _add_node_to_graph(
                     graph.add_edge(START, node_name)
                 last_name = node_name
         case ModifierCombo.KEYMAKER:
-            # T1 fail-loud staging (T2 neograph-on6jt replaces with the mesh-aware
-            # walk + _add_keymaker_mesh): raising rather than mis-lowering a mesh
-            # member as a bare node keeps the durability guarantee honest.
-            raise CompileError.build("Keymaker lowering lands in T2", found=f"Keymaker on node '{node.name}'")
+            # Unreachable: the mesh-aware walk (M1) lowers a contiguous mesh via
+            # _add_keymaker_mesh before per-node dispatch. Arm kept for match
+            # exhaustiveness; fails loud if the walk ever regresses.
+            raise CompileError.build(
+                "Keymaker member reached per-node dispatch",
+                found=f"Keymaker node '{node.name}' dispatched individually",
+                hint="the compile walk must collapse the contiguous mesh (M1)",
+            )
         case _ as unreachable:
             assert_never(unreachable)
 

@@ -1,9 +1,8 @@
-# CHECK_ERROR: lands in T2
 # A legal minimal Keymaker mesh: it ASSEMBLES cleanly (all §5 validation passes —
 # in particular MEDIUM-1's fan-in 'handoff' skip lets the non-entry member
-# assemble), but T1 fail-loud-stages the mesh LOWERING as a CompileError (D7).
-# T2 (neograph-on6jt) implements lowering and moves this fixture back to
-# should_pass/ (it then imports AND compiles cleanly).
+# assemble) AND compiles cleanly now that T2 (neograph-on6jt) lowering has landed
+# (Command(goto) mesh via _add_keymaker_mesh). The check-fixtures harness compiles
+# every should_pass Construct, so this pins the mesh lowering end to end.
 from pydantic import BaseModel
 
 from neograph import Construct, Keymaker, Node

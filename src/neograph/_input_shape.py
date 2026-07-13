@@ -100,12 +100,28 @@ def _extract_fan_in_dict(state: StateBus, node: Node) -> dict[str, Any]:
     ``neograph._ir_normalize.normalize_ir``) so all three API surfaces —
     declarative, ``@node``, programmatic/YAML — produce identical IR by
     the time the runtime sees the node.
+
+    ``node.handoff_param`` (the reserved ``"handoff"`` inputs key on a Keymaker
+    mesh member) reads the shared mesh channel instead of a peer field, because
+    a member entered from ANY caller cannot read a specific upstream's field
+    (design §3.3). The entry-keyed channel field name lives on
+    ``node.handoff_channel`` — a node-self-contained IR field stamped by the
+    normalizer (decision D10), read here WITHOUT any signature threading, exactly
+    like ``fan_out_param`` reads the fixed ``EACH_ITEM`` slot. Read is OPTIONAL:
+    a member reached via a hop always has the channel populated by the previous
+    hop's ``Command`` update, but an entry declaring a ``handoff`` param on its
+    FIRST activation legitimately sees ``None`` (the channel default).
     """
     ni = normalize_inputs(node.inputs)
     assert ni.is_dict_form
     result: dict[str, Any] = {}
     for input_name, expected_type in ni.by_name.items():
-        if input_name == node.fan_out_param:
+        if node.handoff_param is not None and input_name == node.handoff_param:
+            # StateBus.get optional: Keymaker mesh channel — a member reached via a
+            # hop has it populated by the prior hop's Command update, but an entry
+            # declaring a handoff param on FIRST activation sees None (design §3.3, D10).
+            value = state.get(node.handoff_channel) if node.handoff_channel is not None else None
+        elif input_name == node.fan_out_param:
             # REQUIRED: node IS the fan-out target; EACH_ITEM is the dispatched value.
             value = state.get_required(StateKeys.EACH_ITEM, node_label=node.name)
         else:
@@ -131,7 +147,12 @@ def _extract_single_type(state: StateBus, node: Node) -> Any:
 
 
 def _extract_input(state: StateBus, node: Node) -> Any:
-    """Extract typed input from state — pure dispatch to shape helpers."""
+    """Extract typed input from state — pure dispatch to shape helpers.
+
+    A Keymaker member's reserved ``"handoff"`` input reads its entry-keyed mesh
+    channel from ``node.handoff_channel`` (a normalizer-stamped IR field, decision
+    D10) inside ``_extract_fan_in_dict`` — no signature threading needed.
+    """
     shape = _classify_input_shape(state, node)
     match shape:
         case InputShape.NONE:

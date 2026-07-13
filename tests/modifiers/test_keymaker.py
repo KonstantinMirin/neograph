@@ -211,3 +211,162 @@ class TestDirectModifierSetConflicts:
         register_scripted("cond3", lambda d: True)
         with pytest.raises(Exception, match="Cannot combine Keymaker and Operator"):
             ModifierSet(keymaker=Keymaker(peers=["x"]), operator=Operator(when="cond3"))
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# RUNTIME ROUTING (T2 — neograph-on6jt): Command(goto) mesh lowering
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# These are integration tests through the REAL compile() + run() surface: a
+# scripted mesh routes hop-to-hop via Command(goto), reads each hop's payload
+# off the shared mesh channel via the reserved 'handoff' inputs key, and closes
+# LangGraph's silent-drop hole with an ExecutionError on an out-of-set target.
+# No mocks — scripted members are pure functions registered via register_scripted.
+# Budget (max_hops error/exit) + checkpoint semantics land in T3; @node sugar +
+# full three-surface parity land in T4.
+
+from neograph import Construct, ExecutionError, compile, run  # noqa: E402
+from tests.fakes import build_test_compile_kwargs  # noqa: E402
+
+
+class RouteHop(BaseModel, frozen=True):
+    """Uniform mesh payload with a plain-str route field (design §3.2)."""
+
+    goto: str
+    hops: int = 0
+
+
+class TestMeshRoutesEndToEndWithGenuineCycle:
+    """A Keymaker mesh routes hop-to-hop and completes a GENUINE cycle.
+
+    Flow: START -> triage (channel empty -> route to billing)
+                -> billing (reads triage's payload -> route back to triage)
+                -> triage (channel now populated -> route to HANDOFF_END/exit)
+                -> exit -> END.
+    triage is visited TWICE (the cycle); billing once. The visit order is
+    recorded by the scripted bodies, proving the cycle actually executed rather
+    than a lucky terminal read. Every member consumes the shared mesh channel
+    via the reserved 'handoff' inputs key — the D10 read-side threading.
+    """
+
+    def _build_mesh(self, visits: list[str]) -> Construct:
+        def triage_fn(input_data, config):
+            visits.append("triage")
+            incoming = input_data.get("handoff") if isinstance(input_data, dict) else None
+            # First activation: channel empty -> hand off to billing.
+            # Re-entry (billing routed back): channel populated -> leave the mesh.
+            if incoming is None:
+                return RouteHop(goto="billing", hops=1)
+            return RouteHop(goto=HANDOFF_END, hops=incoming.hops + 1)
+
+        def billing_fn(input_data, config):
+            visits.append("billing")
+            incoming = input_data["handoff"]
+            return RouteHop(goto="triage", hops=incoming.hops + 1)
+
+        register_scripted("km_triage", triage_fn)
+        register_scripted("km_billing", billing_fn)
+
+        entry = (
+            Node.scripted("triage", fn="km_triage", inputs={"handoff": RouteHop}, outputs=RouteHop)
+            | Keymaker(peers=["billing"], max_hops=6)
+        )
+        billing = (
+            Node.scripted("billing", fn="km_billing", inputs={"handoff": RouteHop}, outputs=RouteHop)
+            | Keymaker(peers=["triage"])
+        )
+        return Construct("swarm", nodes=[entry, billing])
+
+    def test_mesh_completes_cycle_and_exits(self):
+        visits: list[str] = []
+        mesh = self._build_mesh(visits)
+        graph = compile(mesh, **build_test_compile_kwargs())
+        run(graph, input={})
+        # triage visited twice (the genuine cycle), billing once, in order.
+        assert visits == ["triage", "billing", "triage"]
+
+
+class TestOutOfSetTargetRaises:
+    """A route value outside peers ∪ {HANDOFF_END} raises ExecutionError.
+
+    This is the INVARIANT: the wrapper checks the target BEFORE emitting the
+    goto, so an out-of-set target fails LOUD instead of LangGraph silently
+    dropping the update (langgraph _algo.py:312, the research's #1 constraint).
+    """
+
+    def test_unknown_target_raises_execution_error(self):
+        register_scripted("km_ghost", lambda i, c: RouteHop(goto="ghost"))
+        register_scripted("km_sink", lambda i, c: RouteHop(goto=HANDOFF_END))
+        entry = (
+            Node.scripted("triage", fn="km_ghost", inputs={"handoff": RouteHop}, outputs=RouteHop)
+            | Keymaker(peers=["billing"], max_hops=6)
+        )
+        billing = (
+            Node.scripted("billing", fn="km_sink", inputs={"handoff": RouteHop}, outputs=RouteHop)
+            | Keymaker(peers=["triage"])
+        )
+        mesh = Construct("swarm-bad", nodes=[entry, billing])
+        graph = compile(mesh, **build_test_compile_kwargs())
+        with pytest.raises(ExecutionError, match="ghost"):
+            run(graph, input={})
+
+
+class TestMeshLowersWithoutDoubleAddingNodes:
+    """The mesh-aware walk collapses the contiguous mesh to ONE dispatch.
+
+    Review M1: without the walk skip, every non-entry member is double-added
+    (once by the mesh helper, once by the outer walk). This pins that each
+    member node name appears EXACTLY ONCE in the compiled LangGraph.
+    """
+
+    def test_each_member_appears_once_in_compiled_graph(self):
+        register_scripted("km_once", lambda i, c: RouteHop(goto=HANDOFF_END))
+        entry = (
+            Node.scripted("triage", fn="km_once", inputs={"handoff": RouteHop}, outputs=RouteHop)
+            | Keymaker(peers=["billing"], max_hops=6)
+        )
+        billing = (
+            Node.scripted("billing", fn="km_once", inputs={"handoff": RouteHop}, outputs=RouteHop)
+            | Keymaker(peers=["triage"])
+        )
+        mesh = Construct("swarm-walk", nodes=[entry, billing])
+        graph = compile(mesh, **build_test_compile_kwargs())
+        node_names = list(graph.graph.get_graph().nodes)
+        assert node_names.count("triage") == 1
+        assert node_names.count("billing") == 1
+
+
+class TestHandoffEndLeavesViaExitNode:
+    """A member routing to HANDOFF_END leaves the mesh via the pass-through
+    exit node, so a downstream node AFTER the mesh still runs (HANDOFF_END is
+    byte-identical to LangGraph END, so it must map to the exit node — not
+    terminate the whole graph)."""
+
+    def test_downstream_runs_after_handoff_end(self):
+        after: list[str] = []
+
+        def entry_fn(input_data, config):
+            return RouteHop(goto=HANDOFF_END)
+
+        def after_fn(input_data, config):
+            after.append("after")
+            return RouteHop(goto="done")
+
+        register_scripted("km_exit_entry", entry_fn)
+        register_scripted("km_after", after_fn)
+
+        entry = (
+            Node.scripted("triage", fn="km_exit_entry", inputs={"handoff": RouteHop}, outputs=RouteHop)
+            | Keymaker(peers=["billing"], max_hops=6)
+        )
+        billing = (
+            Node.scripted("billing", fn="km_after", inputs={"handoff": RouteHop}, outputs=RouteHop)
+            | Keymaker(peers=["triage"])
+        )
+        # A plain scripted node AFTER the mesh — reached only if the mesh exits
+        # via its pass-through exit node rather than terminating the graph.
+        downstream = Node.scripted("report", fn="km_after", inputs=RouteHop, outputs=RouteHop)
+        mesh = Construct("swarm-exit", nodes=[entry, billing, downstream])
+        graph = compile(mesh, **build_test_compile_kwargs())
+        run(graph, input={})
+        assert after == ["after"]  # 'report' ran after the mesh exited

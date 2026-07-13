@@ -667,6 +667,48 @@ class TestNeoStateKeysCentralized:
         bad.write_text('def f(config):\n    return config.get("_neo_oracle_model_override")\n')
         assert self._scan(bad), "slip: _neo_ config key literal must be caught in key position"
 
+    def test_handoff_state_keys_are_centralized(self):
+        """Guard (G2, neograph-on6jt) — Keymaker mesh-channel/hop keys
+        (``neo_handoff_*``) are built ONLY via ``StateKeys.handoff_payload`` /
+        ``StateKeys.handoff_hops``.
+
+        A focused pin on top of Layer A: the mesh channel key
+        (``neo_handoff_<entry>``) and hop counter (``neo_handoff_hops_<entry>``)
+        are keyed off the mesh ENTRY's field. A read site that re-inlines the
+        f-string with the WRONG field (e.g. a member's own field instead of the
+        entry's) is a silent miss — the peer reads an empty channel and the
+        handoff payload never arrives. Centralizing both keys behind the two
+        builders (called by ``state.py``, ``factory.py``, ``_wiring.py``,
+        ``_input_shape.py``) closes that. Layer A already forbids the bare
+        ``neo_handoff_`` fragment anywhere; this test states the Keymaker-specific
+        intent and pins that the builders exist and are the sole source.
+        """
+        from neograph._state_keys import StateKeys
+
+        assert StateKeys.handoff_payload("e") == "neo_handoff_e"
+        assert StateKeys.handoff_hops("e") == "neo_handoff_hops_e"
+        # No inline `neo_handoff` fragment survives outside _state_keys.py.
+        offenders: list[str] = []
+        for py in sorted(SRC_DIR.glob("*.py")):
+            if py.name == "_state_keys.py":
+                continue
+            for lineno, frag in self._scan(py):
+                if frag.startswith("neo_handoff"):
+                    offenders.append(f"  {py.name}:{lineno}: '{frag}'")
+        assert offenders == [], (
+            "inline `neo_handoff` literal(s) found outside _state_keys.py:\n"
+            + "\n".join(offenders)
+            + "\n\nUse StateKeys.handoff_payload / StateKeys.handoff_hops (G2)."
+        )
+
+    def test_slip_handoff_key_literal_now_caught(self, tmp_path):
+        """slip test: a stray ``neo_handoff_`` f-string (the wrong-field bug
+        shape) is flagged by the Layer-A scanner G2 relies on."""
+        bad = tmp_path / "slip_handoff.py"
+        bad.write_text('def f(field):\n    return f"neo_handoff_{field}"\n')
+        hits = self._scan(bad)
+        assert any("neo_handoff_" in h[1] for h in hits), "slip: inline neo_handoff_ f-string must be caught"
+
 
 class TestNoLlmModuleGlobals:
     """LLM runtime configuration must not live in module-level mutable state.
