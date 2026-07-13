@@ -206,13 +206,65 @@ def _receiver_is_graphlike(expr: ast.expr) -> bool:
     return any("graph" in t.lower() for t in _receiver_tokens(expr))
 
 
+def _compile_assignments(source: str) -> set[str]:
+    """Names bound from a ``compile(...)`` call in *source* (neograph-outsr).
+
+    Collects every ``Name = compile(...)`` assignment target so engine verbs on
+    those names are classified as engine calls regardless of the variable name
+    (closing the innocent-name blind spot — ``g = compile(p); g.invoke(...)``).
+    Handles multi-target ``a = b = compile(...)`` via ``ast.Assign.targets``.
+
+    Provenance is Name-only by design: a ``Call`` whose ``func`` is a bare ``compile``
+    ``Name`` marks its targets. This is how neograph's ``compile`` is always invoked
+    (imported as a Name). The ``Attribute`` form (``re.compile(...)``) is deliberately
+    EXCLUDED — it returns regex patterns, not graphs. Blind to aliased imports
+    (``from neograph import compile as build``) — an acceptable, documented narrowing,
+    because the disease is intra-module and ``EXPECTED_ENGINE_SURFACE`` exact-match is
+    the true floor.
+    """
+    names: set[str] = set()
+    for node in ast.walk(ast.parse(source)):
+        if not isinstance(node, ast.Assign):
+            continue
+        call = node.value
+        if not isinstance(call, ast.Call):
+            continue
+        if not (isinstance(call.func, ast.Name) and call.func.id == "compile"):
+            continue
+        for tgt in node.targets:
+            if isinstance(tgt, ast.Name):
+                names.add(tgt.id)
+    return names
+
+
+def _receiver_is_compile_bound(expr: ast.expr, compile_names: set[str]) -> bool:
+    """True if the receiver is a ``Name`` assigned from a ``compile(...)`` call."""
+    return isinstance(expr, ast.Name) and expr.id in compile_names
+
+
+# Execution shared verbs — the ones that DRIVE a compiled graph with input. The
+# innocent-name evasion (neograph-outsr) is about these: a compile(...)-bound
+# receiver being invoked/streamed. ``get_graph`` is INTROSPECTION (mermaid drawing),
+# not execution, so compile-provenance does not flag it — keeping compiler.py's
+# benign ``compiled.get_graph().draw_mermaid()`` out of the engine surface.
+_EXECUTION_SHARED_VERBS = RUNNABLE_SHARED_VERBS - {"get_graph"}
+
+
 def _scan_engine_verbs(source: str) -> list[tuple[str, str]]:
     """Return ``[(verb, kind), ...]`` engine-verb calls in ``source``.
 
     ``kind`` is ``"graph_only"`` (unambiguous, any receiver) or ``"shared"``
     (Runnable-shared verb whose receiver is compiled-graph-like). Layer-2 LLM/tool
     calls (shared verb on a non-graph receiver) are NOT returned.
+
+    Compiled-graph receivers are detected two ways: a ``graph`` token in the name
+    (``_receiver_is_graphlike``), OR a name bound from a ``compile(...)`` call in
+    this same source (``_compile_assignments`` — fresh per source, no global/closure
+    capture). The compile-provenance path is gated on ``_EXECUTION_SHARED_VERBS`` —
+    it catches an innocent name being DRIVEN (invoke/stream/…), not ``get_graph``
+    introspection. Together these close the innocent-name blind spot (neograph-outsr).
     """
+    compile_names = _compile_assignments(source)
     hits: list[tuple[str, str]] = []
     for node in ast.walk(ast.parse(source)):
         if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)):
@@ -220,7 +272,13 @@ def _scan_engine_verbs(source: str) -> list[tuple[str, str]]:
         verb = node.func.attr
         if verb in GRAPH_ONLY_VERBS:
             hits.append((verb, "graph_only"))
-        elif verb in RUNNABLE_SHARED_VERBS and _receiver_is_graphlike(node.func.value):
+        elif verb in RUNNABLE_SHARED_VERBS and (
+            _receiver_is_graphlike(node.func.value)
+            or (
+                verb in _EXECUTION_SHARED_VERBS
+                and _receiver_is_compile_bound(node.func.value, compile_names)
+            )
+        ):
             hits.append((verb, "shared"))
     return hits
 
@@ -355,6 +413,23 @@ class TestEngineVerbsConfinedToEngineSurface:
         hits = _scan_engine_verbs("def n():\n    return graph.invoke(x, config=c)\n")
         assert ("invoke", "shared") in hits
         assert "_wiring.py" not in ALLOWED_SHARED_MODULES  # a real compile-layer module
+
+    def test_meta_compile_bound_to_innocent_name_is_flagged(self) -> None:
+        # Evasion meta-test (neograph-outsr): a compiled graph bound to an
+        # innocent variable name MUST still be flagged as an engine call.
+        # The current token-only heuristic (checking for 'graph' in receiver
+        # names) MISSES this case — this test FAILS until the heuristic is
+        # broadened with compile(...) provenance tracking.
+        source = "g = compile(pipeline)\ng.invoke(state, config=c)\n"
+        hits = _scan_engine_verbs(source)
+        # Should detect that `g` is bound from compile(...) and flag `.invoke`
+        # as a shared (Runnable-shared) engine verb. Currently FAILS because
+        # _receiver_is_graphlike only checks for 'graph' token in names.
+        assert ("invoke", "shared") in hits, (
+            "evasion: compile(...) bound to innocent name 'g' then invoked "
+            "escaped detection — _receiver_is_graphlike must track compile() "
+            "provenance, not just token-matching"
+        )
 
 
 # ═════════════════════════════════════════════════════════════════════════════
