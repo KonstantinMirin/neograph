@@ -193,17 +193,29 @@ def _with_transport_resilience(
                 async with asyncio.timeout(timeout):
                     return await orig(**kwargs)
             except (ToolException, asyncio.CancelledError):
-                raise  # a RESULT (isError) or a cancellation — never transport
+                raise  # a bare RESULT (isError) or cancellation — never transport
             except BaseException as exc:  # noqa: BLE001 - classify, then re-raise or retry
+                # The anyio TaskGroup inside the transport wraps a tools/call
+                # failure in an ExceptionGroup; classify via the unwrapped leaf
+                # but also RE-RAISE the leaf (not the group) so a consumer's
+                # ``except RuntimeError`` / ``except ToolException`` still matches
+                # — converging with _session/_prompt/_run_context (neograph-2itlh).
+                # CancelledError is EXEMPT: cooperative cancellation propagates
+                # through its original (grouped-or-bare) form, so re-raise as-is
+                # rather than unwrapping ``from None`` (which can disturb the
+                # group's cancellation tracking). A bare CancelledError never
+                # reaches here — the first except above catches it.
                 leaf = _unwrap_single(exc)
-                if isinstance(leaf, (ToolException, asyncio.CancelledError)):
-                    raise
+                if isinstance(leaf, ToolException):
+                    raise leaf from None  # a grouped RESULT — surface it bare
+                if isinstance(leaf, asyncio.CancelledError):
+                    raise  # preserve the cancellation's original form
                 if not _is_transport_error(leaf):
-                    raise
+                    raise leaf from None
                 if attempt >= max_attempts:
-                    raise
+                    raise leaf from None
                 if not idempotent and not _is_pre_send_safe(leaf):
-                    raise  # ambiguous post-send failure on a non-idempotent tool
+                    raise leaf from None  # ambiguous post-send failure on a non-idempotent tool
                 await asyncio.sleep(backoff * (2 ** (attempt - 1)))
 
     return tool.model_copy(update={"coroutine": _resilient})
@@ -484,7 +496,10 @@ async def _discover_tool_names(
     guarded server's listing is no longer an anonymous blind spot. No run config
     exists at build time, so the provider resolves via its no-config shape."""
     client = _client_for(server_key, spec, _http_identity(spec, token_provider, None, use_config=False))
-    tools = await client.get_tools(server_name=server_key)
+    try:
+        tools = await client.get_tools(server_name=server_key)
+    except BaseException as exc:  # noqa: BLE001 - surface the bare leaf, not the anyio group
+        raise _unwrap_single(exc) from None
     return [t.name for t in tools]
 
 
@@ -568,11 +583,17 @@ def _make_tool_factory(
             # keeps module import light behind the fail-loud extra check.
             from langchain_mcp_adapters.tools import load_mcp_tools
 
-            tools = await load_mcp_tools(held, callbacks=callbacks, server_name=server_key)
+            try:
+                tools = await load_mcp_tools(held, callbacks=callbacks, server_name=server_key)
+            except BaseException as exc:  # noqa: BLE001 - surface the bare leaf, not the anyio group
+                raise _unwrap_single(exc) from None
         else:
             auth = _http_identity(spec, token_provider, config)
             client = _client_for(server_key, spec, auth, callbacks=callbacks)
-            tools = await client.get_tools(server_name=server_key)
+            try:
+                tools = await client.get_tools(server_name=server_key)
+            except BaseException as exc:  # noqa: BLE001 - surface the bare leaf, not the anyio group
+                raise _unwrap_single(exc) from None
         tool = next((t for t in tools if t.name == tool_name), None)
         if tool is None:
             raise ValueError(

@@ -309,3 +309,119 @@ class TestPerCallTimeout:
             f"a timeout is AMBIGUOUS (post-send): the non-idempotent default must not replay, "
             f"saw {attempts['n']} attempts"
         )
+
+
+# ── 6. ExceptionGroup unwrap: a single-leaf group surfaces as its bare type ───
+
+
+def _grouped_tool(name: str, *, leaf_factory: Any) -> tuple[StructuredTool, dict[str, int]]:
+    """An async-only StructuredTool whose coroutine raises a single-leaf
+    ``ExceptionGroup`` wrapping ``leaf_factory()`` — exactly what the stdio /
+    streamable-http transport's anyio TaskGroup does to a ``tools/call`` failure
+    that surfaces from inside the request (a server-side raise, a per-request
+    identity raise, a mid-flight protocol error).
+
+    The bare-exception doubles above (``_failing_then_ok_tool`` etc.) raise the
+    leaf DIRECTLY, so ``exc`` reaching ``_resilient`` is already bare and the
+    unwrap contract never engages. THIS double raises the GROUPED form so the
+    ``_resilient`` exit boundary is the one under test."""
+    attempts = {"n": 0}
+
+    async def _run() -> str:
+        attempts["n"] += 1
+        raise ExceptionGroup("taskgroup", [leaf_factory()])
+
+    return StructuredTool.from_function(coroutine=_run, name=name, description="grouped-exception double"), attempts
+
+
+@requires_mcp
+class TestGroupedExceptionUnwrappedToBareLeaf:
+    """``_resilient`` classifies via ``leaf = _unwrap_single(exc)`` but must also
+    RE-RAISE the unwrapped leaf (``raise leaf from None``), not the original
+    ``ExceptionGroup`` — so a consumer catching a specific type (``RuntimeError``
+    / ``ValueError`` / their own guard) around a tool call gets that type, never
+    an ExceptionGroup wrapper. Converges ``_resilient`` with
+    ``_session``/``_prompt``/``_run_context``, which already unwrap on exit
+    (neograph-2itlh).
+
+    A genuine MULTI-leaf group (a real double failure) is preserved as-is — no
+    information is discarded."""
+
+    @pytest.mark.parametrize("leaf_type", [RuntimeError, ValueError], ids=["runtime_error", "value_error"])
+    def test_non_transport_grouped_error_surfaces_as_bare_leaf(self, leaf_type: type):
+        tool, attempts = _grouped_tool("domain_grp", leaf_factory=lambda: leaf_type("boom"))
+        wrapped = _wrap(tool, timeout=5.0, max_attempts=3, backoff=0.01, tool_config={})
+
+        with pytest.raises(leaf_type):
+            asyncio.run(wrapped.ainvoke({}))
+
+        assert attempts["n"] == 1, "a non-transport error must surface on first return, never retried"
+
+    def test_transport_grouped_error_retries_then_surfaces_bare_after_exhaustion(self):
+        tool, attempts = _grouped_tool(
+            "always_down_grp", leaf_factory=lambda: ConnectionRefusedError("connection refused")
+        )
+        wrapped = _wrap(tool, timeout=5.0, max_attempts=3, backoff=0.01, tool_config={})
+
+        with pytest.raises(ConnectionError):
+            asyncio.run(wrapped.ainvoke({}))
+
+        assert attempts["n"] == 3, f"transport failure must retry to max_attempts=3, saw {attempts['n']}"
+
+    def test_grouped_is_error_surfaces_as_bare_tool_exception_without_retry(self):
+        tool, attempts = _grouped_tool(
+            "iserror_grp", leaf_factory=lambda: ToolException("server said isError: boom")
+        )
+        # Even IDEMPOTENT must not retry an isError — classification trumps idempotency.
+        wrapped = _wrap(tool, timeout=5.0, max_attempts=3, backoff=0.01, tool_config={"idempotent": True})
+
+        with pytest.raises(ToolException):
+            asyncio.run(wrapped.ainvoke({}))
+
+        assert attempts["n"] == 1, "an isError result must surface on first return, never retried"
+
+    def test_genuine_multi_leaf_group_is_not_flattened(self):
+        """A REAL multi-leaf ExceptionGroup (a genuine double failure) is preserved
+        as-is — ``_unwrap_single`` returns it unchanged (``len(exceptions) > 1``),
+        and ``_resilient`` re-raises the group. No information is discarded."""
+        attempts = {"n": 0}
+
+        async def _run() -> str:
+            attempts["n"] += 1
+            raise ExceptionGroup("double failure", [RuntimeError("a"), ValueError("b")])
+
+        tool = StructuredTool.from_function(coroutine=_run, name="multileaf", description="multi-leaf double")
+        wrapped = _wrap(tool, timeout=5.0, max_attempts=3, backoff=0.01, tool_config={})
+
+        with pytest.raises(BaseExceptionGroup) as exc_info:
+            asyncio.run(wrapped.ainvoke({}))
+
+        assert len(exc_info.value.exceptions) == 2, "a multi-leaf group must NOT be flattened to one leaf"
+        assert attempts["n"] == 1
+
+    def test_grouped_cancelled_error_is_exempt_from_unwrap(self):
+        """``CancelledError`` is EXEMPT from the bare-leaf unwrap: cooperative
+        cancellation propagates through its original (grouped-or-bare) form, so a
+        grouped ``CancelledError`` surfaces as the GROUP, not a bare
+        ``CancelledError`` ``from None`` (which can disturb asyncio/anyio
+        cancellation tracking). Pins the exemption so a future 'consistency'
+        refactor can't silently unwrap it. Uses ``BaseExceptionGroup`` —
+        ``ExceptionGroup`` cannot hold a ``BaseException`` (``CancelledError`` is
+        one since 3.8, so ``ExceptionGroup('...', [CancelledError()])`` raises
+        ``TypeError``)."""
+        attempts = {"n": 0}
+
+        async def _run() -> str:
+            attempts["n"] += 1
+            raise BaseExceptionGroup("taskgroup", [asyncio.CancelledError()])
+
+        tool = StructuredTool.from_function(coroutine=_run, name="cancelled_grp", description="grouped cancellation double")
+        wrapped = _wrap(tool, timeout=5.0, max_attempts=3, backoff=0.01, tool_config={})
+
+        with pytest.raises(BaseExceptionGroup) as exc_info:
+            asyncio.run(wrapped.ainvoke({}))
+
+        # The group is preserved (NOT unwrapped to a bare CancelledError):
+        assert len(exc_info.value.exceptions) == 1
+        assert isinstance(exc_info.value.exceptions[0], asyncio.CancelledError)
+        assert attempts["n"] == 1, "a cancellation must not be retried"
