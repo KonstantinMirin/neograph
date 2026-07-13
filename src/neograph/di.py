@@ -92,6 +92,35 @@ def _get_configurable(config: Any, key: str) -> Any:
     return getattr(cfg, "configurable", {}).get(key)
 
 
+# The single hint literal for the consumer-owned resource fetcher. Routed
+# exclusively through ``_require_fetcher`` so the fail-loud policy has one home
+# — neograph-hnbsq. Prose mentions elsewhere phrase it differently on purpose.
+_FETCHER_HINT = (
+    "provide config['configurable']['{key}'] = "
+    "an async 'fetch(uri) -> (content, mime)' callable"
+)
+
+
+def _require_fetcher(config: Any, *, subject: str, required: bool = True) -> Any:
+    """Read the consumer-owned resource fetcher from ``config['configurable']`` and
+    fail loud when absent. The single monopoly point for the fetcher read + the
+    signature hint — neograph-hnbsq. ``subject`` names the failing consumer for the
+    lead message (e.g. "resource ref ...", "resource tool ...", "resource DI
+    parameter ...") — it is per-site information, not part of the shared invariant.
+    When ``required`` is False and the fetcher is absent, returns ``None`` instead
+    of raising (the optional-resource short-circuit).
+    """
+    fetcher = _get_configurable(config, RESOURCE_FETCHER_KEY)
+    if fetcher is None:
+        if not required:
+            return None
+        raise _ConfigurationError.build(
+            subject,
+            hint=_FETCHER_HINT.format(key=RESOURCE_FETCHER_KEY),
+        )
+    return fetcher
+
+
 def parse_resource_content(
     content: Any,
     mime: str | None,
@@ -186,13 +215,10 @@ async def hydrate_resource_ref(
        replayer configured) or the replay itself fails. Silent staleness is worse
        than a loud failure.
     """
-    fetcher = _get_configurable(config, RESOURCE_FETCHER_KEY)
-    if fetcher is None:
-        raise _ConfigurationError.build(
-            f"resource ref '{getattr(ref, 'uri', '?')}' has no fetcher to read from",
-            hint=f"provide config['configurable']['{RESOURCE_FETCHER_KEY}'] = "
-            "an async 'fetch(uri) -> (content, mime)' callable",
-        )
+    fetcher = _require_fetcher(
+        config,
+        subject=f"resource ref '{getattr(ref, 'uri', '?')}' has no fetcher to read from",
+    )
 
     # 1. read
     read_error: Exception | None = None
@@ -430,15 +456,13 @@ class DIBinding:
         if self.ref_kind is not None:
             return await self._aresolve_from_manifest(config)
 
-        fetcher = _get_configurable(config, RESOURCE_FETCHER_KEY)
+        fetcher = _require_fetcher(
+            config,
+            subject=f"resource DI parameter '{self.name}' has no fetcher to resolve from",
+            required=self.required,
+        )
         if fetcher is None:
-            if not self.required:
-                return None
-            raise _ConfigurationError.build(
-                f"resource DI parameter '{self.name}' has no fetcher to resolve from",
-                hint=f"provide config['configurable']['{RESOURCE_FETCHER_KEY}'] = "
-                "an async 'fetch(uri) -> (content, mime)' callable",
-            )
+            return None
         uri = _expand_uri(self.uri or "", _configurable_dict(config))
         content, mime = await fetcher(uri)
         _enforce_max_bytes(content, self.max_bytes, name=self.name, uri=uri)

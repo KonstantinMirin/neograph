@@ -689,3 +689,81 @@ class TestComboMapMonopoly:
 
     def test_meta_scanner_ignores_unrelated_dict(self):
         assert _combo_map_dict_literals("m = {'a': 1, 'b': 2, 'c': 3, 'd': 4}\n") == 0
+
+
+# neograph-hnbsq — the resource-fetcher fail-loud policy has ONE home (_require_fetcher
+# in di.py with _FETCHER_HINT constant). No src/neograph site hand-rolls the
+# configurable read for the fetcher; the hint literal appears exactly once.
+_FETCHER_HINT_IDIOM = "an async 'fetch(uri) -> (content, mime)' callable"
+
+
+class TestResourceFetcherMonopoly:
+    """neograph-hnbsq: the resource-fetcher fail-loud policy (read from
+    config['configurable'][RESOURCE_FETCHER_KEY], fail loud when absent)
+    has ONE home — _require_fetcher in di.py with _FETCHER_HINT constant.
+    No src/neograph site may hand-roll the configurable read or inline the hint.
+    Cross-file normalized-text guard (src/neograph/**/*.py scope) + delegation
+    check for tool.py. Positive/negative/whitespace-slip meta-tests.
+    """
+
+    def test_fetcher_hint_appears_exactly_once(self):
+        """The fetcher-signature hint literal must appear exactly once across
+        src/neograph/ — the _FETCHER_HINT constant in di.py. The three current
+        inline copies (di.py:194, di.py:440, tool.py:331) must route to
+        _require_fetcher instead. Prose mentions (comments, docstrings) are
+        exempt — the scanner counts the literal hint string only.
+        """
+        total = sum(
+            _normalized_idiom_count(py.read_text(), _FETCHER_HINT_IDIOM)
+            for py in sorted(SRC_DIR.rglob("*.py"))
+        )
+        assert total == 1, (
+            f"\nThe fetcher-signature hint appears {total}x across src/neograph/ "
+            "(must be exactly 1 — only _FETCHER_HINT in di.py).\n"
+            "Route all three sites (di.py:194, di.py:440, tool.py:331) to "
+            "_require_fetcher(config, subject=...) and delete the inline copies."
+        )
+
+    def test_tool_delegates_to_require_fetcher(self):
+        """tool.py's _resolve_fetcher must delegate entirely to di._require_fetcher.
+        After migration, tool.py contains NO hint literal and at least one call to
+        _require_fetcher. The hand-rolled cfg.get('configurable').get(KEY) read
+        (tool.py:325) is replaced by the canonical _get_configurable inside
+        _require_fetcher.
+        """
+        tool_source = (SRC_DIR / "tool.py").read_text()
+        hint_count = _normalized_idiom_count(tool_source, _FETCHER_HINT_IDIOM)
+        assert hint_count == 0, (
+            f"tool.py still contains {hint_count} inline hint literal(s). "
+            "Delete the inline hint and delegate to _require_fetcher."
+        )
+        assert _count_calls(tool_source, "_require_fetcher") >= 1, (
+            "tool.py must call di._require_fetcher (fetcher-read monopoly). "
+            "_resolve_fetcher should delegate entirely."
+        )
+
+    # --- meta-tests ---
+
+    def test_meta_fetcher_hint_catches_duplicate(self):
+        """Positive: two copies of the hint literal count as 2."""
+        dup = (
+            "def a():\n"
+            '    hint = "an async \'fetch(uri) -> (content, mime)\' callable"\n'
+            "def b():\n"
+            '    hint = "an async \'fetch(uri) -> (content, mime)\' callable"\n'
+        )
+        assert _normalized_idiom_count(dup, _FETCHER_HINT_IDIOM) == 2
+
+    def test_meta_fetcher_hint_counts_single_def(self):
+        """Negative: a single definition counts as 1 (the monopoly home)."""
+        single = (
+            '_FETCHER_HINT = "an async \'fetch(uri) -> (content, mime)\' callable"\n'
+            "def _require_fetcher(config, *, subject):\n    ...\n"
+        )
+        assert _normalized_idiom_count(single, _FETCHER_HINT_IDIOM) == 1
+
+    def test_meta_fetcher_hint_resists_whitespace_slip(self):
+        """Regex-slip: a spacing/quote variant must NOT evade the normalized scanner."""
+        spaced = 'hint =  "an async  \'fetch(uri) -> (content, mime)\'  callable"'
+        assert spaced.count(_FETCHER_HINT_IDIOM) == 0  # naive scan misses it
+        assert _normalized_idiom_count(spaced, _FETCHER_HINT_IDIOM) == 1

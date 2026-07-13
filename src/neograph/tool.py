@@ -32,8 +32,7 @@ from langchain_core.runnables import RunnableConfig
 from pydantic import BaseModel, Field, PrivateAttr
 
 from neograph._uri_template import _expand_uri, _extract_uri_vars
-from neograph.di import RESOURCE_FETCHER_KEY, parse_resource_content
-from neograph.errors import ConfigurationError
+from neograph.di import _require_fetcher, parse_resource_content
 
 
 class Tool(BaseModel, frozen=True):
@@ -321,16 +320,17 @@ class BlobResult(BaseModel, frozen=True):
 
 
 def _resolve_fetcher(config: Any, tool_name: str) -> Callable:
-    """Read the consumer-owned async resource fetcher from config; fail loud."""
-    cfg = (config or {}).get("configurable", {}) or {}
-    fetcher = cfg.get(RESOURCE_FETCHER_KEY)
-    if fetcher is None:
-        raise ConfigurationError.build(
-            f"resource tool '{tool_name}' has no resource fetcher to call",
-            hint=f"provide config['configurable']['{RESOURCE_FETCHER_KEY}'] = "
-            "an async 'fetch(uri) -> (content, mime)' callable",
-        )
-    return fetcher
+    """Read the consumer-owned async resource fetcher from config; fail loud.
+
+    Delegates entirely to ``di._require_fetcher`` — the fetcher read, the fail-loud
+    raise, and the signature hint have one home — neograph-hnbsq. Migration also
+    harmonizes this site onto ``di._get_configurable``'s dict+attr config handling
+    (previously dict-only here), matching the two di.py call sites.
+    """
+    return _require_fetcher(
+        config,
+        subject=f"resource tool '{tool_name}' has no resource fetcher to call",
+    )
 
 
 def resource_reader(
