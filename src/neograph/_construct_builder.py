@@ -35,7 +35,7 @@ from neograph._normalize import normalize_inputs
 from neograph._param_classify import (
     _check_di_collisions,
     _classify_constants,
-    _detect_fan_out_params,
+    _detect_channel_skip_params,
     _identify_port_params,
 )
 from neograph._scripted_registry import _register_node_scripted
@@ -258,7 +258,7 @@ def _build_construct_from_decorated(
         construct_name,
     )
     port_params = _identify_port_params(decorated, construct_input, construct_name)
-    fan_out_params = _detect_fan_out_params(decorated, plain_fields, port_params)
+    fan_out_params = _detect_channel_skip_params(decorated, plain_fields, port_params)
     _classify_constants(decorated, plain_fields, sub_by_field, fan_out_params, port_params)
     _check_di_collisions(decorated, plain_fields, sub_by_field)
     adjacency, loop_param_renames, all_known = _build_adjacency(

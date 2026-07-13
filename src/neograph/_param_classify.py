@@ -102,6 +102,64 @@ def _detect_fan_out_params(
     return fan_out_params
 
 
+def _detect_handoff_params(
+    decorated: dict[str, Node],
+    plain_fields: set[str],
+    port_params: dict[str, set[str]],
+) -> dict[str, set[str]]:
+    """Detect the reserved ``"handoff"`` param for Keymaker mesh members.
+
+    A Keymaker member reads its handoff payload from the entry-keyed mesh
+    channel via the reserved ``"handoff"`` inputs key (design §3.3), NOT from a
+    peer @node. So — exactly like the Each fan-out receiver
+    (:func:`_detect_fan_out_params`) — the ``handoff`` signature param names no
+    upstream node and must be SKIPPED in adjacency wiring (and kept in the
+    node's inputs so the normalizer detects the reserved key and
+    ``factory._extract_input`` reads the channel). This is @node topology-wiring
+    classification, not an IR-field write: ``handoff_param`` / ``handoff_channel``
+    remain owned solely by ``_ir_normalize`` for all three surfaces (G3).
+    """
+    handoff_params: dict[str, set[str]] = {}
+    for field_name, n in decorated.items():
+        if field_name in plain_fields:
+            continue
+        if n.modifier_set.keymaker is None:
+            continue
+        sidecar = _get_sidecar(n)
+        if sidecar is None:
+            raise ConstructError.build(
+                "lost sidecar metadata (function + param names)",
+                node=n.name,
+                hint="a modifier was likely applied via | without re-registering the sidecar on the new Node copy",
+            )
+        _, pnames = sidecar
+        di_params = set(_get_param_res(n))
+        _ports = port_params.get(field_name, set())
+        if "handoff" in pnames and "handoff" not in decorated and "handoff" not in di_params and "handoff" not in _ports:
+            handoff_params[field_name] = {"handoff"}
+    return handoff_params
+
+
+def _detect_channel_skip_params(
+    decorated: dict[str, Node],
+    plain_fields: set[str],
+    port_params: dict[str, set[str]],
+) -> dict[str, set[str]]:
+    """Union of framework-channel params to skip in @node adjacency wiring:
+    Each fan-out receivers AND Keymaker reserved-``"handoff"`` receivers.
+
+    Both name no upstream node, are skipped in adjacency, kept in the node's
+    inputs, and passed to the scripted shim identically. This is @node topology
+    classification only — the IR fields ``fan_out_param`` / ``handoff_param`` /
+    ``handoff_channel`` stay owned solely by ``_ir_normalize`` for all three
+    surfaces (guard G3).
+    """
+    skip = _detect_fan_out_params(decorated, plain_fields, port_params)
+    for field_name, hp in _detect_handoff_params(decorated, plain_fields, port_params).items():
+        skip.setdefault(field_name, set()).update(hp)
+    return skip
+
+
 def _classify_constants(
     decorated: dict[str, Node],
     plain_fields: set[str],

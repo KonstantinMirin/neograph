@@ -971,7 +971,15 @@ class TestNormalizeIrIsSoleIrFieldWriter:
     # ``handoff_param`` (Keymaker reserved-'handoff' receiver, neograph-rwion)
     # joins the single-writer set: _ir_normalize._HandoffParamNormalizer is its
     # SOLE writer, keyed off the reserved 'handoff' inputs key (review H2).
-    IR_FIELDS = frozenset({"fan_out_param", "oracle_gen_type", "handoff_param"})
+    # ``handoff_channel`` (neograph-kk262, T4) is the SECOND Keymaker IR field —
+    # the entry-keyed shared-channel name every member reads its 'handoff'
+    # payload from. _ir_normalize computes it once off the mesh entry and stamps
+    # it on every Keymaker member; it is the sibling of the fan_out_param /
+    # handoff_param single-writer rule (D5/D10/H2), so it too must never be
+    # written in decorators.py / _construct_builder.py — only inferred by the
+    # normalizer, identically for all three surfaces (@node, declarative,
+    # programmatic pipe).
+    IR_FIELDS = frozenset({"fan_out_param", "oracle_gen_type", "handoff_param", "handoff_channel"})
 
     # Sanctioned (file, field) pre-population writes outside _ir_normalize.
     # After neograph-k7bg, _construct_builder no longer writes fan_out_param —
