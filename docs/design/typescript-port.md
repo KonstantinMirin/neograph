@@ -1,5 +1,8 @@
 # neograph TypeScript Port -- Solution Design
 
+> **⚠️ Estimate + risk-priority CORRECTED (2026-07-13) — see [`ts-parity-from-examples-2026-07-13.md`](ts-parity-from-examples-2026-07-13.md).**
+> That analysis ported all 34 runnable examples to hypothetical TS (not toy snippets) and found: (1) **real parity is ~16–22 weeks solo, not 8–12** — this doc's estimate omitted whole subsystems (MCP, checkpoint auto-rewind, multimodal); (2) the **risk is misplaced** — the AD-0 transformer below is over-invested and irrelevant to ~half the suite; the true risk is the 3 unmapped subsystems + Python runtime-reflection seams (prompt_compiler/DI/raw-node) that ripple across ~11 examples. Read the corrected doc first; treat the matrix below as the *toy-snippet* baseline it was built from.
+
 ## Executive Summary
 
 neograph's core architecture (Construct IR -> compile -> LangGraph StateGraph -> run) ports cleanly to TypeScript. LangGraph.js is mature and mirrors the Python API.
