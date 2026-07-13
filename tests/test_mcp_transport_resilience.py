@@ -230,6 +230,33 @@ class TestAmbiguousFailureIdempotencyGate:
         assert result == "ok"
         assert attempts["n"] == 2, f"idempotent tool should retry the ambiguous failure once, saw {attempts['n']}"
 
+    def test_grouped_ambiguous_non_idempotent_surfaces_bare_leaf(self):
+        """The ambiguous-non-idempotent terminal (_client.py:218) must surface the
+        BARE leaf, not the anyio ExceptionGroup wrapper — pinning it the same way
+        the other three _resilient terminals are pinned (neograph-2itlh). The
+        existing bare-TimeoutError test above cannot pin this: with a bare exc,
+        ``leaf is exc``, so ``raise`` vs ``raise leaf from None`` is indistinguishable.
+        A single-leaf ExceptionGroup[TimeoutError] (an ambiguous post-send transport
+        failure, not pre-send-safe) on a non-idempotent tool routes to :218; the
+        surfaced exception must be the bare TimeoutError."""
+        tool, attempts = _failing_then_ok_tool(
+            "mutating_call",
+            failures=1,
+            exc_factory=lambda: ExceptionGroup("taskgroup", [TimeoutError("read timed out mid-flight")]),
+        )
+        wrapped = _wrap(tool, timeout=5.0, max_attempts=3, backoff=0.01, tool_config={"idempotent": False})
+
+        with pytest.raises(TimeoutError) as exc_info:
+            asyncio.run(wrapped.ainvoke({}))
+
+        assert not isinstance(exc_info.value, BaseExceptionGroup), (
+            f"ambiguous-non-idempotent terminal must surface the bare leaf, got {type(exc_info.value).__name__}"
+        )
+        assert attempts["n"] == 1, (
+            f"a non-idempotent tool must NEVER be replayed after an ambiguous "
+            f"post-send failure, saw {attempts['n']} attempts"
+        )
+
 
 # ── 4. a retry is the SAME logical call: budget counts it once ────────────────
 
