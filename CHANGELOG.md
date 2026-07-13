@@ -5,6 +5,51 @@ All notable changes to NeoGraph will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] - 2026-07-13
+
+0.7.0 finishes the imperative `ForwardConstruct` surface, removes one born-redundant Loop feature, and hardens MCP identity + error surfacing to "fail loud and precise" at every boundary.
+
+### Breaking
+
+- **`Loop.history` / `@node(loop_history=)` / the `neo_loop_history_{node}` state field removed** (`neograph-eef83`). It duplicated data the self-loop already surfaces: a self-loop node's output field is itself an append-list of every iteration (`result[node]`), so no separate history flag is needed. `history` was legal only on the Node self-loop — exactly where the main field already collects — making it fully redundant. It was a schema-first speculative field, superseded on its birth-day by the append reducer, and `TestLoopHistoryRemoved` guards against its return.
+
+### Added
+
+#### ForwardConstruct expressiveness parity (`neograph-e9zse`)
+
+The imperative `forward()` form can now express every topology the declarative form can, tracing to identical IR:
+
+- **`self.each(body, over=, key=, on_error=)`** — fan-out over a sub-construct with a custom key (not just per-node, not just `key="label"`).
+- **Loop bodies accept nested deferred builders** — `self.loop(body=[... self.each(...) ...])`, the fan-out-inside-loop shape (the cascade topology) that was previously infeasible.
+- **`self.ensemble(...)`** — Oracle ensemble tracing; **`self.interrupt(...)`** — HITL Operator tracing. Both form-aware (node → `Node | Modifier`, list → `Construct | Modifier`), sharing one wrap builder, emitting only existing IR.
+- Fan-in, multi-output dict, and `skip_when` verified through tracing.
+- Branch richness and `try/except` are capped as documented v1 limits with a loud escape to the declarative form (proxy-vs-proxy comparisons now raise at trace time instead of mis-tracing).
+- A parity test matrix + ratchet enforces "traced IR == declarative IR" per topology.
+
+#### Other
+
+- **`@node(merge_model=)` / `@node(map_on_error=)` decorator parity** (`neograph-d5pvl`) — forward to `Oracle.merge_model` / `Each.on_error`.
+- **`construct_from_module` collects module-level sub-constructs** (`neograph-xv9ay`) — one member-selection predicate shared with `construct_from_functions`; a well-formed sub-construct at module level is wired, not silently dropped (an output-less stored-pipeline artifact is skipped with a `ConstructArtifactSkipped` warning).
+- **`FakeMcpSession` per-tool tri-modal values** (`neograph-4o7yu`) — script a composite's N same-tool calls by args or as an ordered sequence.
+- **Idempotent repeat-call guard** in the agent cycle — an identical repeated tool call is served from the cycle's history.
+
+### Fixed
+
+#### MCP identity — per-call fresh on every surface and transport
+
+- **No mid-run token freeze** (`neograph-qslrx`). The static `token_provider` bearer was baked into the connection at build and reused for the whole run via the RUN_ID tool cache; a run whose tool phase outlived the IdP token lifespan sent a stale token. `token_provider` is now wrapped in a per-request `httpx.Auth` (`_TokenProviderAuth`), unifying it onto the same mechanism the OAuth `HttpServer.auth` path uses — identity is re-resolved per request; a static-string provider still pins.
+- **stdio session identity re-resolved per call** (`neograph-hs3mr`) — `McpSession.call()` over stdio no longer mints once at `__aenter__`. Identity is now per-call fresh on every surface and transport; a constant provider pins. Guarded by `TestNoMintOnceTokenOnInstanceState`.
+
+#### MCP error surfacing — fail loud AND precise
+
+- **Bare leaf at every transport exit boundary** (`neograph-2itlh`, `neograph-lcrwd`). anyio wraps exceptions from the streamable-http/stdio transports in `ExceptionGroup`s; a consumer catching a specific exception type around an MCP call now gets that bare type, not a wrapper. Fixed at the build/discovery path (`get_tools`, the factory, `_resilient`) and the mid-session boundaries (`McpSession.call`/`list`, resource fetcher/replayer), with a ratcheting AST guard (empty allowlist) so no boundary can re-wrap again. CancelledError is exempt (cooperative cancellation); multi-leaf groups are preserved.
+
+#### Other
+
+- Design-doc `@node(output=)` → `outputs=` drift + a permanent guard over `docs/design/` (`neograph-1h02l`).
+- De-tautologized the ForwardConstruct parity ratchet — `REQUIRED_CAPABILITIES` is now an independent source of truth (`neograph-zrcln`).
+- Resource-fetcher fail-loud monopolized in `_require_fetcher`; bare module-level logger binding enforced; assorted assertion-strength and guard hardening.
+
 ## [0.6.0] - 2026-07-10
 
 0.6.0 is a large, backward-compatible release over 0.5.0. It adds a full MCP client battery, first-class async execution, typed resource hydration, an agent/act subgraph rework, and a compile-time-verified documentation pipeline. No public 0.5.0 API was removed or changed incompatibly.
