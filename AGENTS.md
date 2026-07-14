@@ -14,6 +14,23 @@ A declarative LLM graph compiler on top of LangGraph. You declare a pipeline as 
 
 ---
 
+## North star: the restriction is the product
+
+neograph's value is **subtractive**. It is not "nicer syntax over LangGraph" — it is a version of LangGraph in which a class of broken programs *cannot be written*. Raw `Command(goto)` lets you jump into the interior of a loop or fan-out and silently deadlock or loop forever; neograph's model — dynamic routing targets a region's declared **entry port**, never its interior — makes that state **unrepresentable**, not merely caught after the fact. This is the same correctness model as statecharts and reducible control-flow graphs: a jump may reach a region's entry, never its middle.
+
+**The decision filter.** Measure every design decision against one question: *does this keep the unwriteable set intact?* A change that buys ergonomics by re-admitting a broken state is a regression **even if every test passes**. Out-constrain LangGraph; do not merely out-feature it.
+
+**The claim, bounded** — the bounded version is the defensible one; do not overclaim:
+- **Unrepresentable** (structural, by construction): invalid entry into a compiled region, non-reducible control flow, type/wiring/fan-in mismatches. Compile errors or unspellable — not runtime checks.
+- **Fail-loud** (caught, never silent): nonterminating-but-legal routing (`max_hops`), schema drift on resume (auto-rewind; fail-loud on no rewind point), missing DI/config.
+- **Not covered** (say so plainly, in docs too): semantically wrong-but-valid routing, and LLM output quality. neograph does not verify these and must not pretend to.
+
+**The tax this charges: zero silent seams, forever.** "Safer than LangGraph by itself" is a claim a *single* silent hole falsifies. The durability story already had one actively-false spot (checkpoint silent-resume) and it was a real dent, not a minor bug. So guard-first TDD, adversarial verification, and fail-loud-over-fail-soft are not process overhead — they are what keeps the positioning *true*. A band-aid that leaves a silent seam is an existential defect here, never deferrable polish.
+
+**The moat** is not any single feature (LangGraph could add a reducibility check tomorrow). It is the coherent, opinionated whole — typed DX + compile-time validation + entry-port routing + durable resume, all pinned by structural guards — implementing a correctness model that LangGraph's primitive-level API deliberately declines to impose. That opinionatedness is the bet.
+
+---
+
 ## Operational: beads workflow
 
 This project uses **bd** (beads) for issue tracking. Run `bd onboard` to get started.
