@@ -188,10 +188,10 @@ Concrete rules derived from this:
 
 - **`node.py`, `construct.py`, `_construct_validation.py`, `factory.py`, `modifiers.py` are off-limits for @node-layer features.** The @node decorator is sugar over the IR; it must produce instances those modules already accept. This was a hard rule during the @node production-readiness epic and it paid off — every gap got fixed in `decorators.py` without touching the IR.
 - **The only exception**: when a genuinely new IR capability is needed (e.g., `ForwardConstruct` needed `_BranchNode` sentinel support in `compiler.py` + `state.py`). Adding those was deliberate and documented.
-- **The KEYMAKER dynamic-handoff exception (mode a peer routing) is the second sanctioned new-IR capability, on the same footing as `_BranchNode`.** A runtime mesh needs IR + runtime support that the linear model does not, so it deliberately adds:
+- **The PORTAL dynamic-handoff exception (mode a peer routing) is the second sanctioned new-IR capability, on the same footing as `_BranchNode`.** (`Portal` was renamed from `Keymaker` before release — `neograph-1t0zh`; the mechanism names below keep the accurate `handoff` word.) A runtime mesh needs IR + runtime support that the linear model does not, so it deliberately adds:
   - **Two IR fields on `Node`** — `Node.handoff_param` (the reserved `handoff` input key, the exact sibling of `fan_out_param`) and `Node.handoff_channel` (the entry-keyed shared mesh channel). **Both are written by a single writer, `_ir_normalize.py`, and nowhere else** — the same single-writer invariant `fan_out_param` has (the `neograph-ts7` lesson), pinned by guard **G3** (`IR_FIELDS` frozenset in `test_guards_llm_runtime.py`). Do NOT set either field in `decorators.py` / `_construct_builder.py`; the three surfaces converge in the normalizer.
-  - **A `Command(goto)` runtime**: a `Keymaker` member lowers to a wrapper returning LangGraph `Command(goto=..., update=...)`, so control flow is derived at runtime, not from a static edge. **`Command(` may be constructed ONLY in `factory.py` and `runner.py`** — the monopoly that ratchets the new capability, pinned by guard **G1** (`TestCommandConstructionMonopoly` in `test_guards_assembly.py`).
-  - **`neo_`-prefixed mesh state keys** built only via `StateKeys.handoff_payload(...)` / `StateKeys.handoff_hops(...)` (no inline f-strings, on top of the Layer-A `neo_`-fragment guard). The mesh-assembly validation rules live in `_validation_keymaker.py` (`_check_keymaker_mesh`).
+  - **A `Command(goto)` runtime**: a `Portal` member lowers to a wrapper returning LangGraph `Command(goto=..., update=...)`, so control flow is derived at runtime, not from a static edge. **`Command(` may be constructed ONLY in `factory.py` and `runner.py`** — the monopoly that ratchets the new capability, pinned by guard **G1** (`TestCommandConstructionMonopoly` in `test_guards_assembly.py`).
+  - **`neo_`-prefixed mesh state keys** built only via `StateKeys.handoff_payload(...)` / `StateKeys.handoff_hops(...)` (no inline f-strings, on top of the Layer-A `neo_`-fragment guard). The mesh-assembly validation rules live in `_validation_portal.py` (`_check_portal_mesh`).
 
   This is the pattern to copy for any future genuinely-new IR capability: add the field(s) with a single writer, confine the new runtime construct to the compiler/runtime layer, and pin both with structural guards written failing-first.
 - **Sub-constructs can be @node or declarative.** `construct_from_functions("verify", [explore, score], input=VerifyClaim, output=ClaimResult)` builds a sub-construct from `@node` functions. Params whose type matches `input=` are port params — they read from `neo_subgraph_input` instead of a peer `@node`. The declarative form `Construct(input=X, output=Y, nodes=[...])` also works. Both produce the same IR.
@@ -204,7 +204,7 @@ The leading-underscore on a *module* name (e.g. `_llm.py`, `_dispatch.py`) is a 
 
 ### Logging convention: module-level bare `get_logger()`
 
-Every module that logs binds a module-level logger with the **bare** call: `log = structlog.get_logger()` (no `__name__` or explicit name argument). structlog resolves the calling module for you, so passing `__name__` is redundant and just invites drift across modules. Do NOT write `get_logger(__name__)` or `get_logger("neograph")` for a new module-level `log`; copy the bare form the other ~12 modules use.
+Every module that logs binds a module-level logger with the **bare** call: `log = structlog.get_logger()` (no `__name__` or explicit name argument). structlog resolves the calling module for you, so passing `__name__` is redundant and just invites drift across modules. Do NOT write `get_logger(__name__)` or `get_logger("neograph")` for a new module-level `log`; copy the bare form the other ~19 modules use.
 
 ---
 
@@ -232,9 +232,9 @@ def my_node(
 
 **Classifier implementation notes** (`_classify_di_params` in `_di_classify.py`, imported by `decorators.py`):
 - Uses `typing.get_type_hints(f, localns=..., include_extras=True)` to preserve `Annotated` metadata.
-- Captures the caller's local namespace in a single shot: `node()` / `merge_fn()` grab `sys._getframe(1).f_locals` ONCE at decoration time (`decorators.py:324`, `:742`) and pass it explicitly as `caller_ns` down to `_classify_di_params` → `_build_annotation_namespace`. No frame-stack walk and no frame-depth arithmetic — the closure carries the captured namespace into `decorator(f)`, so the one hop from user call site to `node()`'s frame is fixed and correct for both the `@node(...)` and bare-`@node` forms. This matters because `from __future__ import annotations` stringifies annotations and strips closure references, so a `class RunCtx` defined inside a test method isn't findable via `f.__globals__` or `f.__closure__`; `caller_ns` supplies it as `localns`. `_build_annotation_namespace` merges the DI markers, the function's closure vars (`inspect.getclosurevars`), and the caller ns (skipping `_`-prefixed names and never shadowing markers).
+- Captures the caller's local namespace in a single shot: `node()` / `merge_fn()` grab `sys._getframe(1).f_locals` ONCE at decoration time (`decorators.py:387`, `:850`) and pass it explicitly as `caller_ns` down to `_classify_di_params` → `_build_annotation_namespace`. No frame-stack walk and no frame-depth arithmetic — the closure carries the captured namespace into `decorator(f)`, so the one hop from user call site to `node()`'s frame is fixed and correct for both the `@node(...)` and bare-`@node` forms. This matters because `from __future__ import annotations` stringifies annotations and strips closure references, so a `class RunCtx` defined inside a test method isn't findable via `f.__globals__` or `f.__closure__`; `caller_ns` supplies it as `localns`. `_build_annotation_namespace` merges the DI markers, the function's closure vars (`inspect.getclosurevars`), and the caller ns (skipping `_`-prefixed names and never shadowing markers).
 
-**Runtime resolution** — one path, `DIBinding.resolve(config)` (`di.py:329`); `_resolve_di_args` (`_di_classify.py`) maps a node's `ParamResolution` to positional args by calling `resolve()` per binding:
+**Runtime resolution** — one path, `DIBinding.resolve(config)` (`di.py:355`); `_resolve_di_args` (`_di_classify.py`) maps a node's `ParamResolution` to positional args by calling `resolve()` per binding:
 - `FROM_INPUT` / `FROM_CONFIG` → read `config['configurable'][name]`; type-check against `inner_type`; raise `ExecutionError` when `required` and missing
 - `FROM_INPUT_MODEL` / `FROM_CONFIG_MODEL` → construct `model_cls` by pulling each field from `config['configurable'][field_name]`
 - `FROM_RESOURCE` → hydrate from the MCP resource URI/ref (with `max_bytes` cap)
@@ -265,7 +265,7 @@ Both are `PrivateAttr(default=None)`, preserved by `model_copy` (Pydantic v2 cop
 
 ## `describe_type` / `describe_value` — LLM-facing schema rendering
 
-`src/neograph/describe_type.py` (512 lines, 15 functions) renders Pydantic models into a TypeScript-style notation that LLMs parse more reliably than JSON Schema. Used by the factory layer to build structured output instructions.
+`src/neograph/describe_type.py` (552 lines, 15 functions) renders Pydantic models into a TypeScript-style notation that LLMs parse more reliably than JSON Schema. Used by the factory layer to build structured output instructions.
 
 **Two public functions** (both re-exported from `neograph`):
 - `describe_type(model, prefix=..., hoist_classes=...)` — renders a model class into a schema string with auto-hoisted nested classes
@@ -275,13 +275,13 @@ Both are `PrivateAttr(default=None)`, preserved by `model_copy` (Pydantic v2 cop
 
 **Handles**: primitives, `list[T]`, `dict[K,V]`, `Optional[T]`, `Union[A,B]`, `Literal[...]`, `Enum`, nested `BaseModel`, `tuple[...]`, forward refs, field descriptions, constraints, and defaults.
 
-**Tests**: `test_renderers.py` — 88 tests covering all type combinations, edge cases, and round-trip parsing.
+**Tests**: `test_renderers.py` — 148 tests covering all type combinations, edge cases, and round-trip parsing.
 
 ---
 
 ## RenderedInput — single rendering abstraction
 
-`src/neograph/renderers.py` (`RenderedInput` dataclass at line 33). The single object that bundles all rendering artifacts for prompt construction. Produced by `build_rendered_input(input_data, renderer=None)`.
+`src/neograph/renderers.py` (`RenderedInput` dataclass at line 34). The single object that bundles all rendering artifacts for prompt construction. Produced by `build_rendered_input(input_data, renderer=None)`.
 
 **Five fields**:
 - `raw: dict[str, Any] | Any` — original Pydantic models, used by inline `${var}` prompts for dotted attribute access
@@ -307,12 +307,12 @@ When a pipeline runs with a checkpointer and the same `thread_id`, neograph dete
 - `compute_node_fingerprints(construct)` — `dict[str, str]` mapping each node's state field to a SHA-256 prefix of `"{field_name}:{_type_signature(type)}"`. Dict-form outputs are fingerprinted per key (`{node}_{key}`). Stashed as `graph.node_fingerprints`.
 - **`_type_signature(typ)` (structural, not qualname-only — neograph-v63o)** — BOTH fingerprints fold one level of field detail through this shared helper: a Pydantic model hashes `module.Qualname` + sorted `(field, str(annotation))` pairs; generics (`list[X]`, `dict[K,V]`, Each's `dict[str, X]`) are unwrapped so a change on the wrapped model is visible. This replaced qualname-only hashing so a **same-`__qualname__` model with a changed field type now invalidates** — the old coarse hash was a false-negative that stopped the rewind from triggering at all. Both fingerprints had to move in lockstep: `str(annotation)` on a same-qualname changed field is identical, so without folding the signature into `compute_schema_fingerprint` too, the schema-fp GATE (`_decide_checkpoint_schema` returns `None` on a match) never opens and the enriched node fingerprint would be dead code.
 
-**At compile time** (`compiler.py:300-301`): both fingerprints are stashed on the compiled graph.
+**At compile time** (`compiler.py:332-333`): both fingerprints are stashed on the compiled graph.
 
-**At run time** (`runner.py:497-500`): the schema fingerprint is injected into the initial state dict (under `StateKeys.SCHEMA_FINGERPRINT`) so it persists in the checkpoint.
+**At run time** (`runner.py:607`): the schema fingerprint is injected into the initial state dict (under `StateKeys.SCHEMA_FINGERPRINT`) so it persists in the checkpoint.
 
 **On resume** (`runner.py:_verify_checkpoint_schema` → `_decide_checkpoint_schema`): the stored schema fingerprint is compared against current. If they differ:
-- `_compute_invalidated_nodes()` (`runner.py:267`) diffs per-node fingerprints to find which nodes changed.
+- `_compute_invalidated_nodes()` (`runner.py:341`) diffs per-node fingerprints to find which nodes changed.
 - `auto_resume=True` (default): `_auto_resume_from_divergence()` walks `get_state_history()` backwards for the OLDEST checkpoint whose `.next` intersects the invalidated set, injects that `checkpoint_id` into config, and `invoke(None)` resumes from there. **Fail-loud on no rewind point (neograph-v63o):** if `invalidated` is non-empty but NO snapshot has an invalidated node pending in `.next` (history pruned, or every invalidated node already ran), it does NOT silently resume from the tip — it raises `CheckpointSchemaError(invalidated_nodes=...)` via the single-sited `_raise_no_rewind_point`, surfaced BEFORE any node re-executes. Silently resuming would re-hand the caller stale results (the durability pitch's one actively-false spot). Empty `invalidated` stays a genuine no-op (nothing changed).
 - `auto_resume=False`: raises `CheckpointSchemaError(invalidated_nodes=...)` for explicit handling.
 
@@ -378,15 +378,15 @@ An LLM-mode node (`think`/`agent`/`act`) never runs its body, so — unlike scri
 |---|---|---|---|
 | `scripted` | No `prompt=`/`model=` | ✓ | `_execute_node` via `ScriptedDispatch` |
 | `think` | `prompt=` + `model=` present | ✗ (dead code) | `_execute_node` via `ThinkDispatch` |
-| `agent` | Same + `tools=` (read-only) | ✗ | `_execute_node` via `ToolDispatch` |
-| `act` | Same + `tools=` (mutations) | ✗ | `_execute_node` via `ToolDispatch` |
+| `agent` | Same + `tools=` (read-only) | ✗ | ReAct cycle (`_agent_cycle.py`) |
+| `act` | Same + `tools=` (mutations) | ✗ | ReAct cycle (`_agent_cycle.py`) |
 | `raw` | Explicit `mode='raw'` | ✓ | `factory._make_raw_wrapper` via `raw_fn` |
 
 **Mode inference**: if `mode=` is not passed, the decorator looks at other kwargs — `prompt=` + `model=` → `think`; neither → `scripted`. Mode `raw` always requires explicit opt-in (enforces the `(state, config)` signature).
 
 **Dead-body warning**: LLM modes emit a `UserWarning` at decoration time if the function body is non-trivial (not `...`, `pass`, or a bare return). AST-based check — handles common false positives.
 
-**Scripted `@node` dispatches via `register_scripted`.** At construct-assembly time, `_register_node_scripted` in `decorators.py` builds a shim closure that resolves `FromInput`/`FromConfig`/constant params from `config`, reads upstream values from `input_data` (the dict returned by `factory._extract_input`), and calls the user function with positional args. The shim is registered via `register_scripted` under a synthesized name, and `node.scripted_fn` points to it. The factory's `_execute_node` picks it up via `ScriptedDispatch` — **one dispatch path for all node modes** (neograph-y8ww).
+**Scripted `@node` dispatches via `register_scripted`.** At construct-assembly time, `_register_node_scripted` in `_scripted_registry.py` (re-exported through `decorators.py`) builds a shim closure that resolves `FromInput`/`FromConfig`/constant params from `config`, reads upstream values from `input_data` (the dict returned by `factory._extract_input`), and calls the user function with positional args. The shim is registered via `register_scripted` under a synthesized name, and `node.scripted_fn` points to it. The factory's `_execute_node` picks it up via `ScriptedDispatch` — **one dispatch path for all node modes** (neograph-y8ww).
 
 `Node.fan_out_param` tells `_extract_input` which `inputs` key should read from `state["neo_each_item"]` instead of from a named upstream field. This is the only IR-level concession to the `@node` layer — it applies equally to programmatic `Each` nodes with dict-form inputs.
 
@@ -410,57 +410,57 @@ An LLM-mode node (`think`/`agent`/`act`) never runs its body, so — unlike scri
 The suite grows every wave, so the counts below rot fast — recount rather than
 trust a frozen number: `ls tests/test_*.py | wc -l` (root),
 `ls tests/{decorator,modes,modifiers,hypothesis}/test_*.py | wc -l` (packages).
-As of 2026-07-08: **89 root `test_*.py` files + 29 package files = 118 total.**
+As of 2026-07-14: **122 root `test_*.py` files + 30 package files = 152 total.**
 
-**Root tests** (~89 files). The table below is a REPRESENTATIVE index of the
+**Root tests** (~122 files). The table below is a REPRESENTATIVE index of the
 primary suites, not an exhaustive enumeration — many focused files (async,
 checkpoint, MCP, guards, observability) are not listed row-by-row.
 
 `test_validation.py` and `test_structural_guards.py` were split by concern in
 neograph-e8jg (no file exceeds 1200 lines; class names unchanged so guards stay
 discoverable). The validation suite is now several files; the structural-guard
-suite has since grown to ~17 `test_guards_*.py` files (`ls tests/test_guards_*.py`).
+suite has since grown to ~27 `test_guards_*.py` files (`ls tests/test_guards_*.py`).
 
 | File | Scope | Tests |
 |------|-------|-------|
 | `test_validation.py` | Core assembly validation: construct/oracle errors, Each-path, name collision, tool/LLM config, output strategy, error builder, TypeSpec, FromInput-required, single-type deprecation | ~72 |
 | `test_fanin_validation.py` | Fan-in: dict-form inputs, Each interop, effective_producer_type, list/dict compat, dict-form outputs, three-surface parity | ~35 |
-| `test_lint.py` | lint() DI bindings, obligation gaps, Loop condition checks | ~29 |
-| `test_template_lint.py` | lint() inline `${var}` and template-ref `{var}` placeholder checks | ~44 |
+| `test_lint.py` | lint() DI bindings, obligation gaps, Loop condition checks | ~34 |
+| `test_template_lint.py` | lint() inline `${var}` and template-ref `{var}` placeholder checks | ~50 |
 | `test_context_validation.py` | Sub-construct context-field + output-boundary validation | ~15 |
-| `test_guards_assembly.py` | Guards: error builder, file-split, assembly import DAG, subconstruct boundaries, dead code, no-Any boundaries, no-sidecar-pattern | ~50 |
-| `test_guards_ir_compiler.py` | Guards: IR typing, compiler wiring, node mutation, branch nodes, build-construct body size, registry dicts | ~23 |
-| `test_guards_sidecar_imports.py` | Guards: sidecar module, function-local import allowlist, tool-loop import graph, langgraph imports, IO polymorphism | ~12 |
+| `test_guards_assembly.py` | Guards: error builder, file-split, assembly import DAG, subconstruct boundaries, dead code, no-Any boundaries, no-sidecar-pattern | ~100 |
+| `test_guards_ir_compiler.py` | Guards: IR typing, compiler wiring, node mutation, branch nodes, build-construct body size, registry dicts | ~30 |
+| `test_guards_sidecar_imports.py` | Guards: sidecar module, function-local import allowlist, tool-loop import graph, langgraph imports, IO polymorphism | ~21 |
 | `test_guards_any_audit.py` | Guards: no-Any in public IR APIs, arbitrary-types justification, public functions raise NeographError | ~10 |
-| `test_guards_function_local_imports.py` | Guards: function-local factory/llm imports, retry-policy signature, StateKeys centralization, no module-level registration | ~23 |
-| `test_guards_llm_runtime.py` | Guards: factory kwargs, LLM responsibility/cohesion, StateBus.get discipline, runtime fan-out, normalize_ir field writer, routing-key invariant | ~30 |
-| `test_renderers.py` | XmlRenderer, DelimitedRenderer, JsonRenderer, describe_type, render_prompt | ~88 |
-| `test_forward.py` | ForwardConstruct base class, tracer, compilation, branching, loops | ~67 |
-| `test_composition.py` | Sub-constructs, @node sub-constructs, state hygiene, reducers, dict-form | ~63 |
+| `test_guards_function_local_imports.py` | Guards: function-local factory/llm imports, retry-policy signature, StateKeys centralization, no module-level registration | ~45 |
+| `test_guards_llm_runtime.py` | Guards: factory kwargs, LLM responsibility/cohesion, StateBus.get discipline, runtime fan-out, normalize_ir field writer, routing-key invariant | ~81 |
+| `test_renderers.py` | XmlRenderer, DelimitedRenderer, JsonRenderer, describe_type, render_prompt | ~148 |
+| `test_forward.py` | ForwardConstruct base class, tracer, compilation, branching, loops | ~95 |
+| `test_composition.py` | Sub-constructs, @node sub-constructs, state hygiene, reducers, dict-form | ~95 |
 | `test_coverage_gaps.py` | Coverage gap tests for uncovered code paths | ~60 |
 | `test_conditions.py` | parse_condition, condition registry | ~45 |
 | `test_loop.py` | Loop modifier: self-loop, Loop-on-Construct, ForwardConstruct, skip_when | ~41 |
 | `test_node_sidecar_contract.py` | Pins PrivateAttr (`_sidecar`/`_param_res`/`_scripted_shim`) preservation across model_copy/pipe/deepcopy | ~8 |
-| `test_inline_prompts.py` | Inline prompt compilation, template rendering | ~29 |
-| `test_di.py` | DI bindings, resolution, typed fields | ~27 |
-| `test_spec_loader.py` | YAML/spec loader, type resolution | ~26 |
+| `test_inline_prompts.py` | Inline prompt compilation, template rendering | ~64 |
+| `test_di.py` | DI bindings, resolution, typed fields | ~37 |
+| `test_spec_loader.py` | YAML/spec loader, type resolution | ~44 |
 | `test_obligation_r1r2.py` | Behavioral obligation tests | ~23 |
-| `test_cli.py` | CLI entry points | ~22 |
+| `test_cli.py` | CLI entry points | ~30 |
 | `test_spec_types.py` | Type registry | ~20 |
 | `test_spec_schema.py` | Spec schema validation | ~14 |
 | `test_model_compat.py` | Pydantic model compatibility | ~14 |
 | `test_fakes.py` | LLM fake infrastructure tests | ~7 |
 | `test_check_fixtures.py` | Compiler safety net (parametrized fixtures) | ~2 |
-| `test_checkpoint_auto_rewind.py` | Schema-aware auto-rewind: fail-loud-on-no-rewind-point contract, sync + async | ~5 |
+| `test_checkpoint_auto_rewind.py` | Schema-aware auto-rewind: fail-loud-on-no-rewind-point contract, sync + async | ~10 |
 
-**Package tests** (29 `test_*.py` files across 4 packages):
+**Package tests** (30 `test_*.py` files across 4 packages):
 
 | Package | Files | Scope | Tests |
 |---------|-------|-------|-------|
-| `decorator/` | 5 files | @node, @tool, @merge_fn decorators; mode inference; DI (incl. `TestMergeFnDuplicateRegistration`); construct assembly; edge cases | ~165 |
-| `modes/` | 10 files | Scripted/think/agent/act/raw modes; execution; output strategies; LLM internals; I/O | ~156 |
-| `modifiers/` | 5 files | Oracle, Each, Operator, compositions, modifier edge cases | ~119 |
-| `hypothesis/` | 9 files | Property-based testing: topologies, invariants, regression | ~71 |
+| `decorator/` | 5 files | @node, @tool, @merge_fn decorators; mode inference; DI (incl. `TestMergeFnDuplicateRegistration`); construct assembly; edge cases | ~183 |
+| `modes/` | 10 files | Scripted/think/agent/act/raw modes; execution; output strategies; LLM internals; I/O | ~360 |
+| `modifiers/` | 6 files | Oracle, Each, Operator, compositions, modifier edge cases | ~204 |
+| `hypothesis/` | 9 files | Property-based testing: topologies, invariants, regression | ~130 |
 
 Supporting files: `conftest.py` (registry cleanup fixture), `schemas.py` (shared Pydantic models + `_producer`/`_consumer` helpers), `fakes.py` (LLM fakes).
 
@@ -499,11 +499,11 @@ it (xfail-style) before documenting it here.
 
 ## Examples
 
-21 runnable examples in `examples/`, each narrated as a walkthrough on neograph.pro. Most use `@node` except two that stay declarative (example 10 mixed, example 11 config injection). Example 27 is the ForwardConstruct imperative-wiring showcase (branch/self.loop/self.each/self.ensemble/self.interrupt, keyless, pinned by `tests/test_example_forward_wiring.py`). Sub-constructs (example 05) can now use either `@node` with `construct_from_functions(input=, output=)` or declarative `Construct(input=, output=, nodes=[...])`.
+30+ runnable examples in `examples/`, most narrated as a walkthrough on neograph.pro. Most use `@node` except two that stay declarative (example 10 mixed, example 11 config injection). Example 27 is the ForwardConstruct imperative-wiring showcase (branch/self.loop/self.each/self.ensemble/self.interrupt, keyless, pinned by `tests/test_example_forward_wiring.py`). Examples 28/29 are the `Portal` dynamic-handoff showcases (peer-routing mesh + runtime flow dispatch), pinned by `tests/test_example_portal.py` / `tests/test_example_portal_dynamic_flow.py`. Sub-constructs (example 05) can now use either `@node` with `construct_from_functions(input=, output=)` or declarative `Construct(input=, output=, nodes=[...])`.
 
 **Examples must run end-to-end.** Breaking one is a regression. When you change an API surface, run every example that doesn't require real API keys (01, 01c, 02, 03, 04, 05, 06, 08, 09, 10). The keyed examples are 07 and observable_pipeline.py — both hit real OpenRouter (observable_pipeline additionally pushes to Langfuse; run it with `--extra langfuse`), and both were verified passing end-to-end on 2026-07-09. Example 11 was converted to a FakeLLM and is keyless. Document any new failures separately.
 
-### MCP examples (23/24/25) — no-key but need the `mcp-examples` extra (neograph-g4q9)
+### MCP examples (23/24/25/26) — no-key but need the `mcp-examples` extra (neograph-g4q9)
 
 The MCP-featuring examples exercise the **real** Model Context Protocol against a
 shared stdio demo server (`examples/_mcp_demo_server.py`) — no fakes at the
@@ -521,8 +521,8 @@ MCP-free (the no-session-ownership guard scans `src/` only) and the core
   fraction read, per-operator auth echo, real `-32002` expiry + self-heal) and
   auto-discovers `examples/2?_mcp_*.py` to run each example as a subprocess (23/24
   plug in via neograph-qb7q / neograph-3m6g; 25 illustrates the singular
-  `mcp_tool_factory` — offline build + gateway rename, neograph-sfdz1).
-- **The distinction to remember**: "no-key" ≠ "no extra". Examples 23/24/25 are on the
+  `mcp_tool_factory` — offline build + gateway rename, neograph-sfdz1; 26 exercises the `mcp_session` composite over one connection).
+- **The distinction to remember**: "no-key" ≠ "no extra". Examples 23/24/25/26 are on the
   no-key list but you must pass `--extra mcp-examples` to run them or their tests.
 - **Two verified `mcp` 1.28.x SDK gaps the demo server works around** (documented
   in the server's module docstring): FastMCP's `@mcp.resource` can't express
@@ -536,7 +536,7 @@ MCP-free (the no-session-ownership guard scans `src/` only) and the core
 
 Astro + Starlight at `website/`. Deployed on Amplify from the main repo, triggered by any push that touches `website/` (actually just any push — Amplify rebuilds on every commit). The build must succeed or the site breaks.
 
-**Always run `npm run build` in `website/` after content changes.** 26 pages, build takes ~2 seconds. Silent breakages are rare but possible (broken MDX frontmatter, missing `Annotated` import in code examples, etc.).
+**Always run `npm run build` in `website/` after content changes.** 46 pages, build takes ~2 seconds. Silent breakages are rare but possible (broken MDX frontmatter, missing `Annotated` import in code examples, etc.).
 
 **Verifiable-docs remark plugin (Stage B, `website/plugins/remark-api.mjs`).** Wired in `astro.config.mjs` under `markdown.remarkPlugins`. It validates + autolinks backticked API-symbol references against the introspection-generated manifest (`website/src/data/api-manifest.json`, regenerated by `scripts/gen_api_manifest.py`). Tiered confidence: a dotted `Type.member` ref to a fielded type with a missing member **fails the Astro build** (HARD); a bare token autolinks on exact match or stays inert (SOFT, never build-failing). Run `npm test` in `website/` (node:test on `plugins/*.test.mjs`) before pushing website/ plugin changes — it is the plugin's regression suite, separate from the pytest gate.
 
