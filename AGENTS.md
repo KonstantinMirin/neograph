@@ -208,9 +208,9 @@ Every module that logs binds a module-level logger with the **bare** call: `log 
 
 ---
 
-## DI surface (post-0.2): `Annotated[T, FromInput/FromConfig]`
+## DI surface: `Annotated[T, FromInput/FromConfig]`
 
-**Breaking change from 0.1.x → 0.2.0.dev**. The old `FromInput[T]` Generic subscription form is gone. The new form uses `typing.Annotated` with `FromInput` / `FromConfig` as markers — the FastAPI `Annotated[User, Depends(...)]` pattern.
+DI params use `typing.Annotated` with `FromInput` / `FromConfig` as markers — the FastAPI `Annotated[User, Depends(...)]` pattern.
 
 ```python
 from typing import Annotated
@@ -316,9 +316,7 @@ When a pipeline runs with a checkpointer and the same `thread_id`, neograph dete
 - `auto_resume=True` (default): `_auto_resume_from_divergence()` walks `get_state_history()` backwards for the OLDEST checkpoint whose `.next` intersects the invalidated set, injects that `checkpoint_id` into config, and `invoke(None)` resumes from there. **Fail-loud on no rewind point (neograph-v63o):** if `invalidated` is non-empty but NO snapshot has an invalidated node pending in `.next` (history pruned, or every invalidated node already ran), it does NOT silently resume from the tip — it raises `CheckpointSchemaError(invalidated_nodes=...)` via the single-sited `_raise_no_rewind_point`, surfaced BEFORE any node re-executes. Silently resuming would re-hand the caller stale results (the durability pitch's one actively-false spot). Empty `invalidated` stays a genuine no-op (nothing changed).
 - `auto_resume=False`: raises `CheckpointSchemaError(invalidated_nodes=...)` for explicit handling.
 
-**Migration (correct-and-desired, pinned)**: the fingerprint FORMAT changed with `_type_signature`, so existing pre-v63o checkpoints show a schema mismatch on first resume after upgrade → every node looks changed → one full re-run. This is deliberate (better than trusting a coarser stale signature) and pinned by `test_old_format_node_fingerprint_invalidates_on_upgrade`.
-
-**What triggers invalidation**: output class renamed, field added/removed/type-changed (including a same-name-class field-type change, post-v63o). Prompt text changes do NOT trigger invalidation (fingerprints are type-based, not content-based).
+**What triggers invalidation**: output class renamed, field added/removed/type-changed (including a same-name-class field-type change). Prompt text changes do NOT trigger invalidation (fingerprints are type-based, not content-based).
 
 ---
 
@@ -556,7 +554,7 @@ Both are Starlight slot overrides configured in `website/astro.config.mjs` under
 ## Things explicitly deleted / avoided
 
 - **`@raw_node` decorator**: removed in favor of `@node(mode='raw')`. Grep should return zero hits.
-- **`FromInput[T]` / `FromConfig[T]` Generic subscription form**: removed in 0.2.0.dev. Use `Annotated[T, FromInput]`. The old form raises `TypeError: type 'FromInput' is not subscriptable`, which is intentional — clean error beats silent breakage.
+- **`FromInput[T]` / `FromConfig[T]` Generic subscription form**: not supported — use `Annotated[T, FromInput]`. The subscription form raises `TypeError: type 'FromInput' is not subscriptable` (intentional; clean error beats silent breakage).
 - **Emojis in docs**: the user explicitly rejected them ("kill emojis, that's sooo LLM-ish"). Don't reintroduce. If a code comment uses one, replace with plain text.
 - **Line counts as a value metric**: the user explicitly rejected framing value around "X lines vs Y lines". The docs talk about what neograph *does* (type safety, durability, observability, focus on logic), not how many lines shorter it is than raw LangGraph. Comparison table "What you don't write" stays on the Why-not-LangGraph page but isn't on the landing.
 - **`TestPyPI` in the release flow**: skipped. The real PyPI release went directly from CI. Documented that TestPyPI is optional, not required, for alpha releases.
