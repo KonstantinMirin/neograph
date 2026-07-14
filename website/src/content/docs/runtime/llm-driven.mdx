@@ -242,6 +242,12 @@ graph = compile(pipeline)
 run(graph, input={"node_id": "daily-001"})
 ```
 
+## Runtime routing: Keymaker
+
+The pipelines above are assembled by an LLM but their topology is fixed once compiled. When you want the ROUTING itself decided at runtime -- a member hands off to a peer chosen while the graph runs -- reach for [Keymaker peer routing](/concepts/keymaker/). A `Keymaker` mesh turns a set of nodes into a runtime swarm: each member emits a payload whose routing field names the next declared peer, neograph lowers that to a `Command(goto)`, and a hop budget guarantees termination. Every reachable peer is still type-checked at assembly. This is the shipped surface today.
+
+A second `Keymaker` mode -- dynamic flow dispatch, where a member runs a whole sub-flow chosen at runtime from a spec -- config-validates at assembly but is not yet dispatchable at runtime. The [Keymaker page](/concepts/keymaker/) documents it as a forthcoming surface.
+
 ## Summary
 
 Four paths to the same compiler:
