@@ -5,6 +5,12 @@ All notable changes to NeoGraph will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **json_mode: a `repair_json` blowup is retryable, and truncation gets a continuation re-prompt, not a blind re-issue** (`neograph-8uoot`). A max_tokens-truncated response sent `json_repair`'s recursive-descent parser over the stack limit; the call sat outside the parse guard, so the error escaped the retry loop and killed the run. `repair_json` failures now become `ExecutionError` and enter the same error-feedback retry as every other malformation. And a `finish_reason == 'length'` / `stop_reason == 'max_tokens'` response with no parseable payload is re-prompted with a continuation directive — the truncated reasoning is fed back and the model is told to emit ONLY the JSON payload — instead of the generic repair message (a blind re-issue at temperature=0 would likely reproduce the same runaway). Truncation logs a `llm_response_truncated` warning for observability. `TestRepairJsonGuarded` pins the guard structurally.
+
 ## [0.7.0] - 2026-07-13
 
 0.7.0 finishes the imperative `ForwardConstruct` surface, removes one born-redundant Loop feature, and hardens MCP identity + error surfacing to "fail loud and precise" at every boundary.

@@ -188,7 +188,20 @@ def _parse_json_response(text: str, output_model: type[BaseModel]) -> BaseModel:
             hint="Check model compatibility with structured output; some models emit XML tool-call markup after budget exhaustion.",
         )
 
-    repaired = repair_json(extracted, return_objects=False)
+    # The repairer input is LLM-controlled text: every blowup it can produce
+    # (ValueError, RecursionError from truncation-driven recursive descent,
+    # anything else) is a data malformation, not a code invariant break — so
+    # it must become ExecutionError and enter the retry loop like any other
+    # malformation, never escape raw.
+    try:
+        repaired = repair_json(extracted, return_objects=False)
+    except Exception as exc:
+        raise ExecutionError.build(
+            f"JSON repair failed for {output_model.__name__} response",
+            expected=f"repairable JSON for {output_model.__name__}",
+            found=f"content json_repair could not process (first 200 chars): {extracted[:200]!r}",
+            hint=f"Underlying error: {type(exc).__name__}: {exc}",
+        ) from exc
 
     # Coerce null → default for fields that have defaults.
     try:
@@ -283,6 +296,51 @@ def _build_retry_msg(
     return _repair_hint(getattr(error, "validation_errors", None), output_model)
 
 
+def _is_truncated(response: Any) -> bool:
+    """True when the provider reports the response hit its output-token cap.
+
+    OpenAI-style providers report ``finish_reason == 'length'``; Anthropic
+    reports ``stop_reason == 'max_tokens'``. A truncated response is KNOWN
+    incomplete, so a parse failure on it calls for continuation, not the
+    generic repair re-prompt."""
+    meta = getattr(response, "response_metadata", None) or {}
+    return meta.get("finish_reason") == "length" or meta.get("stop_reason") == "max_tokens"
+
+
+def _build_continuation_msg(output_model: type[BaseModel]) -> str:
+    """Re-prompt for a length-truncated response with no parseable payload.
+
+    The reasoning tokens are already spent (and fed back as the assistant
+    turn); a blind re-issue of the same prompt at temperature=0 would very
+    likely reproduce the same runaway and truncate again. Instead, direct the
+    model to stop analyzing and emit only the JSON payload."""
+    return (
+        "Your previous response was cut off by the output token limit before "
+        "the JSON payload was emitted. Do not analyze further — your analysis "
+        f"above is sufficient. Emit ONLY the JSON object for {output_model.__name__} now. "
+        "No markdown fences, no explanation."
+    )
+
+
+def _retry_msg_for_failure(
+    error: ExecutionError,
+    response: Any,
+    output_model: type[BaseModel],
+) -> str:
+    """Choose the re-prompt for a json_mode parse failure (both retry twins).
+
+    Length-truncated responses get the continuation directive; everything else
+    keeps the schema-bearing repair hint."""
+    if _is_truncated(response):
+        log.warning(
+            "llm_response_truncated",
+            model=output_model.__name__,
+            hint="output hit the token cap before a parseable payload; re-prompting for emit-only continuation",
+        )
+        return _build_continuation_msg(output_model)
+    return _build_retry_msg(error, output_model)
+
+
 def build_structured_repair_message(
     error: ValidationError,
     output_model: type[BaseModel] | None = None,
@@ -339,7 +397,7 @@ def _invoke_json_with_retry(
         except ExecutionError as exc:
             retry_messages = messages + [
                 {"role": "assistant", "content": raw_text},
-                {"role": "user", "content": _build_retry_msg(exc, output_model)},
+                {"role": "user", "content": _retry_msg_for_failure(exc, response, output_model)},
             ]
             response = llm.invoke(retry_messages, config=config)
             raw_text = response.content if hasattr(response, "content") else str(response)
@@ -452,7 +510,7 @@ async def _ainvoke_json_with_retry(
         except ExecutionError as exc:
             retry_messages = messages + [
                 {"role": "assistant", "content": raw_text},
-                {"role": "user", "content": _build_retry_msg(exc, output_model)},
+                {"role": "user", "content": _retry_msg_for_failure(exc, response, output_model)},
             ]
             response = await llm.ainvoke(retry_messages, config=config)
             raw_text = response.content if hasattr(response, "content") else str(response)
