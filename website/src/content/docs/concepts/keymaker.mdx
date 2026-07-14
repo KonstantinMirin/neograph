@@ -1,13 +1,13 @@
 ---
-title: Keymaker Peer Routing
-description: Turn a set of nodes into a runtime mesh -- each member hands off to a declared peer with Command(goto), type-checked at compile time, bounded by a hop budget.
+title: Keymaker
+description: One modifier, two runtime-routing modes -- a peer mesh (each member hands off to a declared peer with Command(goto)) and dynamic flow dispatch (a member runs a whole sub-flow chosen at runtime from an emitted spec, validated by the same gate as a hand-written pipeline).
 sidebar:
   order: 46
 ---
 
 Most neograph topologies are static: the edges are fixed when you compile. `Keymaker` adds a *mesh* -- a set of nodes where each member decides at RUNTIME which declared peer to hand off to. A triage node routes a ticket to the right specialist; a specialist can route BACK to triage for re-routing (a genuine cycle); a `max_hops` budget guarantees the mesh terminates. Routing is a runtime `Command(goto)`, not a conditional edge fixed at assembly -- yet every reachable peer is type-checked when you build the construct.
 
-This page covers the SHIPPED surface: **mode (a) peer routing**. Mode (b), dynamic flow dispatch, is described at the end as a not-yet-runnable stub.
+`Keymaker` is one modifier with two modes. **Mode (a), peer routing** (most of this page) turns a fixed set of nodes into a mesh. **Mode (b), dynamic flow dispatch** (the last section) lets a member choose a WHOLE sub-flow at runtime from an emitted spec -- both are shipped and runnable.
 
 ## The use case: a typed support swarm
 
@@ -137,7 +137,90 @@ An `Operator` (the human-in-the-loop gate) may NOT sit on a mesh member -- a mem
 
 ## Dynamic flow dispatch (route='decide')
 
-`Keymaker` is one modifier with two modes. Beside peer routing, it declares a second mode -- `Keymaker(route="decide", spec_field=..., input_field=..., output=..., scripted=...)` -- in which a member dispatches a whole sub-flow chosen at runtime from a spec. This mode **config-validates at assembly today** (the `Keymaker.spec_field` / `Keymaker.input_field` / `Keymaker.output` fields are accepted and checked), but it is **not yet dispatchable at runtime** -- there is no execution wrapper for it in this release. Treat it as a reserved surface: do not wire a `route="decide"` member into a pipeline you intend to run yet. This section will be replaced with runnable documentation when the dispatch path ships.
+Peer routing chooses the next NODE at runtime. The second mode goes further: it chooses a whole SUB-FLOW at runtime. A `Keymaker(route="decide", ...)` member -- the "dispatcher" -- emits, as its own typed output, a neograph *spec* (a `load_spec` dict describing a pipeline) plus the input that flow should run on. The framework then loads, validates, compiles, and runs that emitted flow, and writes its typed result back onto the bus for the rest of the pipeline. The topology did not exist until the dispatcher produced it.
+
+This is the runtime-assembly path (see [LLM-driven pipelines](/runtime/llm-driven/)) turned into a first-class construct: instead of your application glue calling `load_spec` + `compile` + `run` by hand, a `route="decide"` node does it inside the graph, under the same validation and observability as every other node.
+
+### The surface
+
+```python
+from pydantic import BaseModel
+from neograph import Construct, Keymaker, Node, compile, run, register_type
+
+class Decision(BaseModel):      # the dispatcher's OWN output
+    spec: dict                  # a load_spec dict -- the flow to run
+    flow_input: dict            # the input that flow runs on
+
+class Summary(BaseModel, frozen=True):
+    text: str
+
+# A pre-registered building block the emitted flow may wire (see the boundary below).
+def summarize(_input_data, _config) -> Summary:
+    return Summary(text="done")
+
+def plan(_input_data, config) -> Decision:
+    spec = {
+        "name": "chosen-flow",
+        "nodes": [{"name": "s", "mode": "scripted", "scripted_fn": "summarize", "outputs": "Summary"}],
+        "pipeline": {"nodes": ["s"]},
+    }
+    return Decision(spec=spec, flow_input={})
+
+km = Keymaker(
+    route="decide",
+    spec_field="spec",          # which field on the payload holds the spec dict
+    input_field="flow_input",   # which field holds the flow's input
+    output=Summary,             # the type the dispatched flow must produce
+    scripted={"summarize": summarize},   # the ONLY blocks the emitted flow may wire
+)
+planner = Node.scripted("planner", fn="plan", outputs=Decision) | km
+
+register_type("Summary", Summary)   # the emitted spec names outputs by string
+graph = compile(Construct("dispatch", nodes=[planner]), scripted={"plan": plan})
+result = run(graph, input={})
+print(result["planner_dispatch"].text)   # -> done
+```
+
+The dispatched flow's result lands on a regular, fingerprinted state field named `{node}_dispatch` (here `planner_dispatch`). A downstream node consumes it like any other upstream: `Node.scripted("consumer", inputs={"planner_dispatch": Summary}, ...)`. See `examples/29_keymaker_dynamic_flow.py` for a planner that emits two different topologies (a one-node and a two-node flow) depending on its runtime input.
+
+### The contract: if it dispatches, it was validated
+
+The safety property is the whole reason this is a construct and not a raw `eval`. When the dispatcher fires, the framework runs four steps before any dispatched node executes:
+
+1. **`load_spec(spec)`** -- the emitted dict is parsed into a `Construct`, which runs the SAME `_validate_node_chain` gate a hand-written pipeline passes through. No bespoke validator, no relaxed schema. A machine-emitted spec is held to the identical standard as human-authored source.
+2. **Output-contract check** -- if the built flow declares an output boundary, it must equal `Keymaker.output`.
+3. **`compile(...)`** with the pre-registered `scripted=` / `conditions=` blocks.
+4. **Invoke** the compiled flow on `input_field`'s data, extract the value assignable to `Keymaker.output`, and write it to `{node}_dispatch`.
+
+So "if it dispatches, it was validated" holds even for a flow that did not exist until runtime -- the durability and type promises are not weakened by dynamic assembly.
+
+### The capability boundary: composition, not code injection
+
+An emitted flow may wire ONLY the building blocks you pre-registered on the `Keymaker` (`scripted={...}`, and `conditions={...}` for edges). The spec references them by string name; an unknown `scripted_fn` fails loud at compile. A machine-authored flow therefore COMPOSES pre-approved code -- it can select and connect your blocks in new topologies, but it can never introduce new executable code. This is the line that makes runtime dispatch safe to hand to an LLM planner.
+
+### Rejection semantics
+
+An invalid emitted spec is rejected at step 1, and the failure is loud and early. The underlying `ConstructError` (say, a node consuming an upstream nothing produces) surfaces WRAPPED in an `ExecutionError` that names the offending spec -- raised BEFORE any dispatched sub-node body runs. Demo 2 of the example proves this with a sentinel: the invalid flow's body never executes, because validation happens before execution.
+
+{/* test-skip: illustrates the rejection API against a planner that emits an invalid spec (not the valid `graph` built above); the runnable proof is examples/29_keymaker_dynamic_flow.py demo 2. */}
+```python
+from neograph.errors import ExecutionError
+
+try:
+    run(graph, input={})
+except ExecutionError as exc:
+    # names the spec ("invalid-flow") and wraps the ConstructError cause;
+    # no dispatched node ran.
+    print(str(exc).splitlines()[0])
+```
+
+### Durability caveat
+
+In v1 the dispatched inner flow compiles with NO checkpointer. On a parent resume, the whole `route="decide"` node re-executes (re-emit the spec, re-validate, re-run) rather than resuming the inner flow from a mid-flow checkpoint. This is documented-opaque: the inner flow is not independently durable yet. Do not rely on inner-flow checkpoint resume; deeper per-dispatch durability is tracked separately (Tier-2). Everything OUTSIDE the dispatch node checkpoints normally.
+
+### Three-surface note
+
+Mode (b) is built through the declarative pipe form (`Node.scripted(...) | Keymaker(route="decide", ...)`) or the equivalent `Node(name=..., mode="scripted", ...) | Keymaker(...)`. There is no `@node` decorator sugar for it in v1: a runtime-emitted flow has no static dataflow for the decorator (or ForwardConstruct) to build, so there is nothing to thread -- the same exemption peer routing gives ForwardConstruct.
 
 ---
 

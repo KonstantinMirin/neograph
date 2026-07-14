@@ -25,9 +25,9 @@ no network -- but each `@node(peers=...)` stands in for a real agent stage. In
 production `triage` would be `mode='think'` and a specialist `mode='agent'` with
 tools; the `peers=` wiring is byte-identical.
 
-This example covers the SHIPPED surface: mode (a) peer routing. Mode (b) dynamic
-flow dispatch (`Keymaker(route='decide', ...)`) config-validates today but is not
-yet dispatchable at runtime -- see the docs.
+This example covers mode (a) peer routing. Mode (b), dynamic flow dispatch
+(`Keymaker(route='decide', ...)`) -- a member dispatches a whole sub-flow chosen
+at runtime from an emitted spec -- is shown in example 29.
 
 Run (keyless, no network):
     uv run --extra dev python examples/28_keymaker_swarm.py
