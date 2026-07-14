@@ -12,7 +12,7 @@ uv add neograph
 pip install neograph
 ```
 
-Define your LLM pipeline as Python functions. The framework infers the topology, validates types at assembly time, and compiles to [LangGraph](https://github.com/langchain-ai/langgraph) with checkpointing, observability, and tool orchestration. No DSL. No YAML. No `add_node` / `add_edge`.
+Define your LLM pipeline as Python functions. The framework infers the topology, validates types at assembly time, and compiles to [LangGraph](https://github.com/langchain-ai/langgraph) — with checkpointing, durable resume, one-line observability, async execution, an MCP client, and tool orchestration. No DSL. No YAML. No `add_node` / `add_edge`.
 
 **A function is a node. A parameter name is an edge. An `if` is a branch.**
 
@@ -133,7 +133,7 @@ ConstructError: Node 'verify' declares inputs=ClusterGroup but no upstream
   at my_pipeline.py:42
 ```
 
-Types are validated at assembly time — when you define the pipeline, not when you execute it. 68 compile-time check fixtures (52 should-fail + 16 should-pass) backed by a rustc-style fixture suite. 1362 tests total, including Hypothesis property-based testing. CLI validation: `neograph check my_pipeline.py`.
+Types are validated at assembly time — when you define the pipeline, not when you execute it. 94 compile-time check fixtures (64 should-fail + 30 should-pass) backed by a rustc-style fixture suite. 3,200+ tests, including Hypothesis property-based testing. CLI validation: `neograph check my_pipeline.py`.
 
 ## Visualize the compiled graph
 
@@ -157,6 +157,16 @@ Set `NEOGRAPH_DEV=1` for auto-printed DAG summaries after every `compile()`.
 **Retry on failure.** Output-quality retries (malformed JSON, validation errors) are configured per node via `LlmConfig.max_retries`. Transient API failures (network, 429, 5xx) belong in your `llm_factory` via `model.with_retry(...)`. See the retry-semantics page on neograph.pro.
 
 **Test at every level.** `node.run_isolated()` for unit tests. `compile()` + `run()` for integration. `forward()` direct-call for debugging.
+
+## Batteries included
+
+Everything a production agent needs — typed, wired, and durable:
+
+- **MCP client** (`neograph[mcp]`) — connect to Model Context Protocol servers with typed tool results (`output_model=`), typed resource hydration (`Annotated[T, FromResource(uri)]`), per-run identity fresh on every request and transport, run-scoped connections that survive interrupt/resume, gated mutations, progress notifications, transport resilience, and keyless test fakes.
+- **Async-native — one graph, four verbs.** The same compiled graph runs under `run` / `arun` / `stream` / `astream` — no async flag at compile time, no second pipeline. A sync/async driver↔checkpointer mismatch fails loud instead of half-persisting.
+- **Durable resume.** Checkpoint with a `thread_id`; change a node's output schema and neograph auto-rewinds to re-run only the affected nodes — and fails loud rather than hand back stale results.
+- **BAML-style prompt rendering.** Pydantic models render to a TypeScript-like schema LLMs parse more reliably than JSON Schema; inline `${var}` and template-ref prompts; `compile_prompt()` gives byte-identical prompts inside and outside the graph for eval harnesses.
+- **One-line observability.** `observe=` auto-attaches Langfuse tracing and flushes on finish; structured logs and named spans on every node.
 
 ## LLMs can build the graph too
 
@@ -189,7 +199,7 @@ Full documentation is at **[neograph.pro](https://neograph.pro)**:
 
 ## Examples
 
-19 runnable examples in [`examples/`](examples/), 3 multi-file mini-projects ([lead-research](examples/lead-research/), [code-review](examples/code-review/), [spec-builder](examples/spec-builder/)), and 5 side-by-side LangGraph comparisons in [`examples/vs_langgraph/`](examples/vs_langgraph/). Walkthroughs at [neograph.pro](https://neograph.pro/walkthrough/scripted-pipeline/).
+31 runnable examples in [`examples/`](examples/), 6 multi-file mini-projects ([lead-research](examples/lead-research/), [code-review](examples/code-review/), [spec-builder](examples/spec-builder/), [incident-triage](examples/incident-triage/), [lead-outreach](examples/lead-outreach/), [rfp-response](examples/rfp-response/)), and 5 side-by-side LangGraph comparisons in [`examples/vs_langgraph/`](examples/vs_langgraph/). Walkthroughs at [neograph.pro](https://neograph.pro/walkthrough/scripted-pipeline/).
 
 ## License
 

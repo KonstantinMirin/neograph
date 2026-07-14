@@ -6,9 +6,18 @@ Project-specific context and operational workflow for agents working on neograph
 
 ## What neograph is
 
-A declarative LLM graph compiler on top of LangGraph. You declare a pipeline as typed Python functions; neograph infers the DAG from parameter names, validates types at assembly time, and compiles to a LangGraph `StateGraph` with checkpointing, observability, and tool orchestration.
+A declarative LLM graph compiler on top of LangGraph. Declare a pipeline as typed Python functions (`@node`), `ForwardConstruct` classes, or programmatic `Node | Modifier` chains; neograph infers the DAG from parameter names, validates types at assembly time, and compiles to a LangGraph `StateGraph`. Three surfaces, one compiler.
 
-**Positioning**: "the fastest way to build production-grade agents on LangGraph." Typed end-to-end, durable, observable, focused on the logic — not the wiring.
+**Positioning**: all of LangGraph's power, but *safer* and with the wiring handled — write the logic, not the graph. What it has become (`CHANGELOG.md` is the authoritative feature list; keep it and this in sync):
+
+- **Safer control flow** — dynamic routing (`Portal`) targets a region's entry port, never its interior, so a class of LangGraph deadlocks / runaway loops is unrepresentable (see North star).
+- **Compile-time validation** — types, fan-in, and reducibility checked at assembly, before you run; rustc-style check-fixture suite + `neograph check`.
+- **Async-native** — one graph, four verbs (`run` / `arun` / `stream` / `astream`); driver↔checkpointer mismatch fails loud.
+- **Durable** — schema-aware checkpoint auto-rewind; fail-loud on no rewind point.
+- **BAML-style prompt rendering + prompt management** — Pydantic models rendered to TS-like schema LLMs parse reliably (`describe_type`); inline `${var}` and template-ref prompts; public `compile_prompt()` for in-/out-of-graph parity.
+- **MCP client battery** (`neograph[mcp]`) — typed tool results, per-run identity fresh per request and transport, resource hydration, run-scoped connection reuse (reconnect-safe across resume), gated mutations, progress notifications, transport resilience, keyless fakes.
+- **One-line observability** — `observe=` Langfuse auto-attach; structured logs + named spans per node.
+- **Agents & HITL** — agent/act ReAct subgraphs, typed tool logs, `ask_human()`, tool-approval gates.
 
 **Website**: [neograph.pro](https://neograph.pro) (Astro + Starlight at `website/`, deployed via AWS Amplify on every push). Don't forget to update website content when API surfaces change.
 
@@ -16,18 +25,11 @@ A declarative LLM graph compiler on top of LangGraph. You declare a pipeline as 
 
 ## North star: the restriction is the product
 
-neograph's value is **subtractive**. It is not "nicer syntax over LangGraph" — it is a version of LangGraph in which a class of broken programs *cannot be written*. Raw `Command(goto)` lets you jump into the interior of a loop or fan-out and silently deadlock or loop forever; neograph's model — dynamic routing targets a region's declared **entry port**, never its interior — makes that state **unrepresentable**, not merely caught after the fact. This is the same correctness model as statecharts and reducible control-flow graphs: a jump may reach a region's entry, never its middle.
+neograph's edge is **subtractive** — a LangGraph in which a class of broken programs *cannot be written*. Raw `Command(goto)` can jump into a loop's interior and silently deadlock; neograph's entry-port routing makes that state **unrepresentable**, not merely caught (the statechart / reducible-control-flow model — a jump reaches a region's entry, never its middle).
 
-**The decision filter.** Measure every design decision against one question: *does this keep the unwriteable set intact?* A change that buys ergonomics by re-admitting a broken state is a regression **even if every test passes**. Out-constrain LangGraph; do not merely out-feature it.
-
-**The claim, bounded** — the bounded version is the defensible one; do not overclaim:
-- **Unrepresentable** (structural, by construction): invalid entry into a compiled region, non-reducible control flow, type/wiring/fan-in mismatches. Compile errors or unspellable — not runtime checks.
-- **Fail-loud** (caught, never silent): nonterminating-but-legal routing (`max_hops`), schema drift on resume (auto-rewind; fail-loud on no rewind point), missing DI/config.
-- **Not covered** (say so plainly, in docs too): semantically wrong-but-valid routing, and LLM output quality. neograph does not verify these and must not pretend to.
-
-**The tax this charges: zero silent seams, forever.** "Safer than LangGraph by itself" is a claim a *single* silent hole falsifies. The durability story already had one actively-false spot (checkpoint silent-resume) and it was a real dent, not a minor bug. So guard-first TDD, adversarial verification, and fail-loud-over-fail-soft are not process overhead — they are what keeps the positioning *true*. A band-aid that leaves a silent seam is an existential defect here, never deferrable polish.
-
-**The moat** is not any single feature (LangGraph could add a reducibility check tomorrow). It is the coherent, opinionated whole — typed DX + compile-time validation + entry-port routing + durable resume, all pinned by structural guards — implementing a correctness model that LangGraph's primitive-level API deliberately declines to impose. That opinionatedness is the bet.
+- **Decision filter**: measure every change against *does this keep the broken-state set unwriteable?* A change that buys ergonomics by re-admitting a silent failure is a regression **even if all tests pass**. Out-constrain LangGraph; don't just out-feature it.
+- **Bounded claim** (don't overclaim): *unrepresentable* — invalid region entry, non-reducible control flow, type/fan-in mismatch; *fail-loud* — `max_hops`, schema drift on resume, missing DI/config; *not covered* — semantically-wrong-but-valid routing, LLM output quality (say so in docs too).
+- **The tax**: "safer than LangGraph" is falsified by a *single* silent seam, so guard-first TDD and fail-loud-over-fail-soft keep the claim true — they are not overhead, and a band-aid that leaves a silent seam is an existential defect, never deferrable polish. The moat is the opinionated whole, not any one feature.
 
 ---
 
