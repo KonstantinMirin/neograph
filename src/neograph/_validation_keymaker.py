@@ -51,10 +51,17 @@ def _check_keymaker_mesh(construct: ConstructLike) -> None:
     into sub-constructs), so a mesh at any depth is checked.
     """
     nodes = list(construct.nodes)
+    # PEER-mode members only. A dispatch-mode Keymaker (route="decide") is NOT a
+    # mesh member (review M1): it is a standalone linear node whose payload is the
+    # emitted spec, not a routed handoff, so the route-field/payload-uniformity
+    # checks below do not apply. Including it here would look for a field literally
+    # named "decide" on its payload and reject a valid dispatch node.
     member_positions = [
         i
         for i, item in enumerate(nodes)
-        if getattr(item, "modifier_set", None) is not None and item.modifier_set.keymaker is not None
+        if getattr(item, "modifier_set", None) is not None
+        and item.modifier_set.keymaker is not None
+        and not item.modifier_set.keymaker.is_dispatch
     ]
     if not member_positions:
         return

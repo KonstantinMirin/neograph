@@ -16,6 +16,7 @@ from neograph._ir_branch import _BranchNode
 from neograph.construct import Construct
 from neograph.errors import CompileError
 from neograph.naming import field_name_for, output_field_name
+from neograph.spec_types import lookup_type
 
 log = structlog.get_logger()
 from typing import assert_never
@@ -247,7 +248,17 @@ def compile_state_model(
     # contiguous mesh at this level). Both are neo_-prefixed → excluded from the
     # schema fingerprint (member OUTPUT fields carry the fingerprint). The
     # channel/counter are runtime-inert until T2 lowering reads them.
-    keymaker_members = [n for n in nodes_only if classify_modifiers(n)[0] == ModifierCombo.KEYMAKER]
+    def _is_dispatch(n: Node) -> bool:
+        km = n.modifier_set.keymaker
+        return km is not None and km.is_dispatch
+
+    # PEER-mode members only: a dispatch node (route="decide") is NOT a mesh member
+    # — it has no hop counter / mesh channel; it gets a {field}_dispatch field below.
+    keymaker_members = [
+        n
+        for n in nodes_only
+        if classify_modifiers(n)[0] == ModifierCombo.KEYMAKER and not _is_dispatch(n)
+    ]
     if keymaker_members:
         entry = keymaker_members[0]
         entry_field = field_name_for(entry.name)
@@ -256,6 +267,22 @@ def compile_state_model(
         payload: Any = _declared_output(entry)
         fields[StateKeys.handoff_hops(entry_field)] = (int, 0)
         fields[StateKeys.handoff_payload(entry_field)] = (payload | None, None)
+
+    # Keymaker DISPATCH support (design §4.2): a route="decide" node writes the
+    # dispatched flow's typed result to a regular (fingerprinted, NON-neo_-prefixed)
+    # field `{field_name}_dispatch` — an output-contract change correctly
+    # invalidates checkpoints. The node's OWN output (the emitted spec/input model)
+    # is written to its plain output field by the KEYMAKER arm in
+    # `_add_single_output_field`; this is the SEPARATE dispatch-result field.
+    for n in nodes_only:
+        if _is_dispatch(n):
+            km = n.modifier_set.keymaker
+            assert km is not None  # _is_dispatch guarantees it
+            out_spec = km.output
+            assert out_spec is not None  # dispatch-mode invariant (T1 validation)
+            dispatch_field = output_field_name(field_name_for(n.name), "dispatch")
+            resolved = lookup_type(out_spec) if isinstance(out_spec, str) else out_spec
+            fields[dispatch_field] = (resolved | None, None)
 
     # Subgraph input port — when this Construct declares an input type
     if construct.input is not None:

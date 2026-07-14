@@ -61,6 +61,7 @@ from neograph.di import DIKind as _DIKind
 from neograph.errors import ConstructError
 from neograph.naming import field_name_for, output_field_name
 from neograph.node import Node
+from neograph.spec_types import lookup_type
 
 log = structlog.get_logger()
 
@@ -236,6 +237,25 @@ def _validate_node_chain(
                     effective_type=effective_producer_type(item),
                     label=label,
                 )
+
+            # Keymaker DISPATCH (route="decide", design §4.2): besides its own
+            # output (the emitted spec/input model, registered above), the node
+            # produces the dispatched flow's result on a SEPARATE field
+            # `{field}_dispatch` typed by the required Keymaker.output. Register it
+            # so a downstream `inputs={"<node>_dispatch": OutType}` consumer
+            # type-checks — mirrors the dict-form per-key producer registration.
+            if isinstance(item, Node):
+                keymaker = item.modifier_set.keymaker
+                if keymaker is not None and keymaker.is_dispatch and keymaker.output is not None:
+                    resolved = keymaker.output
+                    if isinstance(resolved, str):
+                        resolved = lookup_type(resolved)
+                    dispatch_field = output_field_name(field_name, "dispatch")
+                    producers[dispatch_field] = Producer(
+                        field_name=dispatch_field,
+                        effective_type=resolved,
+                        label=f"node '{name}' dispatch result",
+                    )
 
         # Loop + skip_when without skip_value is surprising.
         # The counter still increments so the loop exits, but re-entry

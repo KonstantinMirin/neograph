@@ -140,6 +140,130 @@ class TestCommandConstructionMonopoly:
         assert self._command_call_lines(ok) == []
 
 
+class TestKeymakerDispatchDiscriminationMonopoly:
+    """Guard (neograph-f27xo) — the peer-vs-dispatch mode discriminator lives in
+    ONE place: ``modifiers.py`` (``Keymaker.is_dispatch`` + the ``DISPATCH_ROUTE``
+    sentinel). Every other layer — the assembly validator, the mesh collector, the
+    compiler walk, the state builder, the producer registration — discriminates the
+    mode through ``keymaker.is_dispatch``, NEVER an inline ``route == "decide"``
+    comparison.
+
+    Rationale (the team-lead's anti-band-aid adjudication): dispatch mode is checked
+    at 5+ call sites; if each spells ``route == "decide"`` inline, a sixth site can
+    silently forget it and mis-route a dispatch node into the peer mesh (the exact
+    M1/M2 defect this task fixed). One predicate = one source of truth. This mirrors
+    the ``_declared_output`` / ``effective_producer_type`` monopolies. AST-level (a
+    ``Compare`` against the string constant), so docstrings/comments that mention
+    ``route="decide"`` never trip it.
+
+    If this fails: add/keep the check as ``keymaker.is_dispatch``, not the inline
+    literal.
+    """
+
+    @staticmethod
+    def _decide_literal_comparisons(path: pathlib.Path) -> list[int]:
+        try:
+            tree = ast.parse(path.read_text(), filename=str(path))
+        except SyntaxError:
+            return []
+        hits: list[int] = []
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Compare):
+                operands = [node.left, *node.comparators]
+                if any(isinstance(o, ast.Constant) and o.value == "decide" for o in operands):
+                    hits.append(node.lineno)
+        return hits
+
+    def test_decide_literal_only_compared_in_modifiers(self):
+        violations: list[str] = []
+        for py_file in sorted(SRC_DIR.glob("*.py")):
+            if py_file.name == "modifiers.py":
+                continue
+            for lineno in self._decide_literal_comparisons(py_file):
+                violations.append(f"  {py_file.name}:{lineno}: inline `route == \"decide\"` comparison")
+        assert violations == [], (
+            f"\n{len(violations)} inline dispatch-mode discrimination(s) outside modifiers.py:\n"
+            + "\n".join(violations)
+            + "\n\nUse `keymaker.is_dispatch` — the single source of truth (neograph-f27xo)."
+        )
+
+    def test_detector_flags_inline_decide_comparison(self, tmp_path):
+        """Slip check: an inline `route == "decide"` comparison is detected."""
+        bad = tmp_path / "stray.py"
+        bad.write_text('def f(km):\n    if km.route == "decide":\n        return 1\n')
+        assert self._decide_literal_comparisons(bad) == [2]
+
+    def test_detector_ignores_decide_in_docstring(self, tmp_path):
+        """Slip check: a docstring mentioning route="decide" is NOT a comparison."""
+        ok = tmp_path / "doc.py"
+        ok.write_text('"""dispatch mode uses route="decide" to select."""\nY = 1\n')
+        assert self._decide_literal_comparisons(ok) == []
+
+
+class TestKeymakerDispatchRoutesThroughCanonicalGate:
+    """Guard (neograph-f27xo) — the Keymaker DISPATCH wrapper validates an emitted
+    spec ONLY through the canonical ``load_spec`` gate + ``compile()``, never a
+    bespoke validator or schema subset (the mode-b anti-band-aid / Core Invariant).
+
+    Mode (b) recompiles a machine-emitted spec at runtime. The whole safety
+    argument is that an emitted spec passes the SAME ``Construct(...)`` gate
+    (``construct.py:194``) as a hand-written pipeline — so ``make_keymaker_dispatch_fn``
+    MUST call ``load_spec`` (which builds the Construct through that gate) and MUST
+    NOT hand-roll a second spec->Construct path (``_validate_spec`` / ``_build_construct``)
+    or a schema subset. The behavioral rejection test pins the runtime effect; this
+    structural guard ratchets the class-level rule so a future refactor cannot
+    quietly swap in a bespoke validator while keeping tests green. AST-level, so
+    docstrings mentioning these names never trip it.
+
+    If this fails: route the emitted spec through ``load_spec`` (+ ``compile``),
+    not a private validator.
+    """
+
+    _BANNED = frozenset({"_validate_spec", "_build_construct"})
+
+    @staticmethod
+    def _dispatch_fn_call_names() -> set[str]:
+        tree = ast.parse((SRC_DIR / "factory.py").read_text(), filename="factory.py")
+        for node in ast.walk(tree):
+            if isinstance(node, ast.FunctionDef) and node.name == "make_keymaker_dispatch_fn":
+                names: set[str] = set()
+                for sub in ast.walk(node):
+                    if isinstance(sub, ast.Call):
+                        callee = sub.func
+                        if isinstance(callee, ast.Name):
+                            names.add(callee.id)
+                        elif isinstance(callee, ast.Attribute):
+                            names.add(callee.attr)
+                return names
+        raise AssertionError("make_keymaker_dispatch_fn not found in factory.py")
+
+    def test_dispatch_wrapper_calls_load_spec(self):
+        names = self._dispatch_fn_call_names()
+        assert "load_spec" in names, (
+            "make_keymaker_dispatch_fn must validate the emitted spec via the canonical "
+            "load_spec gate (the SAME Construct(...) validation as hand-written pipelines)."
+        )
+
+    def test_dispatch_wrapper_has_no_bespoke_validator(self):
+        names = self._dispatch_fn_call_names()
+        offenders = self._BANNED & names
+        assert not offenders, (
+            f"make_keymaker_dispatch_fn calls a bespoke spec->Construct path {sorted(offenders)} "
+            "instead of routing through load_spec — this bypasses the canonical gate (anti-band-aid)."
+        )
+
+    def test_detector_flags_a_bespoke_call(self):
+        """Slip check: the scanner would catch a banned bespoke-validator call."""
+        src = "def make_keymaker_dispatch_fn():\n    return _build_construct(spec)\n"
+        tree = ast.parse(src)
+        names = {
+            c.func.id
+            for c in ast.walk(tree)
+            if isinstance(c, ast.Call) and isinstance(c.func, ast.Name)
+        }
+        assert self._BANNED & names == {"_build_construct"}
+
+
 class TestErrorBuildBodyMonopoly:
     """Every ``.build`` classmethod delegates message formatting to one helper.
 

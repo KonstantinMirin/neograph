@@ -527,11 +527,14 @@ class TestCompilerWiringSplit:
         690 -> 720 for the Keymaker mesh-aware compile walk (neograph-on6jt): the
         walk orchestration + two exhaustiveness arms are core compiler
         responsibility; the mesh WIRING helpers (_add_keymaker_mesh,
-        _contiguous_keymaker_mesh) were moved to _wiring.py per this guard."""
+        _contiguous_keymaker_mesh) were moved to _wiring.py per this guard. Raised
+        720 -> 735 for the Keymaker DISPATCH walk arm (neograph-f27xo, mode b): the
+        route="decide" discriminator is walk orchestration (same category as the
+        mesh arm); its WIRING helper (_add_keymaker_dispatch) lives in _wiring.py."""
         compiler = SRC_DIR / "compiler.py"
         line_count = len(compiler.read_text().splitlines())
-        assert line_count < 720, (
-            f"compiler.py is {line_count} lines — must be < 720. Move wiring helpers to _wiring.py."
+        assert line_count < 735, (
+            f"compiler.py is {line_count} lines — must be < 735. Move wiring helpers to _wiring.py."
         )
 
     def test_wiring_module_exists(self):

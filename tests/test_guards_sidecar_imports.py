@@ -63,6 +63,14 @@ class TestSidecarModule:
 # Names are included so a NEW import in an allowlisted file/module pairing
 # still trips the guard.
 FUNCTION_LOCAL_IMPORT_ALLOWLIST: set[tuple[str, str, frozenset[str]]] = {
+    # factory.py — REAL cycle: the Keymaker dispatch wrapper (mode b, route=
+    # "decide", neograph-f27xo) recompiles the emitted sub-flow via compile(), but
+    # compiler.py imports _wiring -> factory at module level, so a top-level `from
+    # neograph.compiler import compile` here cycles. Function-local import is the
+    # truthful fix (load_spec / _scan_subgraph_output / lookup_type are module-level
+    # — their modules do not import factory). Retires if compile() relocates out of
+    # the factory import chain.
+    ("factory.py", "neograph.compiler", frozenset({"compile"})),
     # __main__.py — CLI command bodies defer heavy graph imports to keep
     # `neograph --help` startup fast. Justification: import latency, not cycle.
     ("__main__.py", "neograph.compiler", frozenset({"compile"})),

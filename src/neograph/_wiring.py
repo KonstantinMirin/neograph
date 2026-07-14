@@ -35,6 +35,7 @@ from neograph.construct import Construct
 from neograph.di import _unwrap_loop_value
 from neograph.errors import ConfigurationError, ExecutionError
 from neograph.factory import (
+    make_keymaker_dispatch_fn,
     make_keymaker_fn,
     make_node_fn,
 )
@@ -707,6 +708,14 @@ def _contiguous_keymaker_mesh(nodes: list[ConstructItem], entry: Node) -> list[N
     for item in nodes[start:]:
         if not (isinstance(item, Node) and classify_modifiers(item)[0] == ModifierCombo.KEYMAKER):
             break
+        # A dispatch-mode Keymaker (route="decide") is NOT a mesh member — it is a
+        # standalone linear node lowered by _add_keymaker_dispatch (review M2). Stop
+        # the run here so a dispatch node contiguous with a peer mesh is never
+        # absorbed into `members` (which would mesh-wire it and skip its dispatch
+        # wiring). The assembly-side collector (_validation_keymaker) agrees.
+        km = item.modifier_set.keymaker
+        if km is not None and km.is_dispatch:
+            break
         members.append(item)
     return members
 
@@ -778,6 +787,42 @@ def _add_keymaker_mesh(
         graph.add_edge(START, entry.name)
 
     return exit_name
+
+
+def _add_keymaker_dispatch(
+    graph: StateGraph,
+    node: Node,
+    prev_node: str | None,
+    *,
+    runtime: LlmRuntime = EMPTY_RUNTIME,
+    scripted_lookup: dict[str, Callable] | None = None,
+    tool_factory_lookup: dict[str, Callable] | None = None,
+) -> str:
+    """Wire a Keymaker DISPATCH node (``route="decide"``, design §4.2, reduced v1).
+
+    Unlike the peer mesh (which returns ``Command(goto=...)`` and needs
+    ``destinations=``), a dispatch node is a plain LINEAR node: it runs its body,
+    validates+compiles+invokes the emitted flow inside
+    :func:`make_keymaker_dispatch_fn`, and returns a plain state-update dict. So it
+    wires exactly like a bare node — a static ``prev → node`` edge in, and the walk
+    threads ``prev_node`` forward so the next item adds the ``node → next`` edge.
+    NO ``Command`` (keeps the G1 monopoly narrow). Returns the node name.
+    """
+    keymaker = node.modifier_set.keymaker
+    assert isinstance(keymaker, Keymaker)  # dispatched by the KEYMAKER walk arm
+    dispatch_fn = make_keymaker_dispatch_fn(
+        node,
+        keymaker,
+        runtime=runtime,
+        scripted_lookup=scripted_lookup,
+        tool_factory_lookup=tool_factory_lookup,
+    )
+    graph.add_node(node.name, cast(Any, dispatch_fn))
+    if prev_node:
+        graph.add_edge(prev_node, node.name)
+    else:
+        graph.add_edge(START, node.name)
+    return node.name
 
 
 def _add_subgraph_loop(

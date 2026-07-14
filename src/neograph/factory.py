@@ -18,11 +18,14 @@ from neograph._llm_runtime import EMPTY_RUNTIME, LlmRuntime
 from neograph._normalize import primary_output_field
 from neograph._state_bus import adapt_state
 from neograph._state_keys import StateKeys
+from neograph._subconstruct import _scan_subgraph_output
 from neograph._trace import named
-from neograph.errors import ConfigurationError, ExecutionError
+from neograph.errors import ConfigurationError, ConstructError, ExecutionError
+from neograph.loader import load_spec
 from neograph.modifiers import HANDOFF_END, Keymaker
-from neograph.naming import field_name_for
+from neograph.naming import field_name_for, output_field_name
 from neograph.node import Node
+from neograph.spec_types import lookup_type
 
 log = structlog.get_logger()
 
@@ -208,6 +211,148 @@ def make_keymaker_fn(
 
     wrapper = RunnableLambda(keymaker_wrapper, afunc=akeymaker_wrapper)
     return named(wrapper, node.name, mode="keymaker", output_type=_type_name(node.outputs))
+
+
+def make_keymaker_dispatch_fn(
+    node: Node,
+    keymaker: Keymaker,
+    *,
+    runtime: LlmRuntime = EMPTY_RUNTIME,
+    scripted_lookup: dict[str, Callable] | None = None,
+    tool_factory_lookup: dict[str, Callable] | None = None,
+) -> Runnable:
+    """Build a Keymaker DISPATCH-mode wrapper (``route="decide"``, design §3.5/§4.2).
+
+    Mode (b), reduced v1. Wraps the standard :func:`make_node_fn` result: the
+    dispatcher body runs and emits, as its OWN typed output, a neograph spec dict
+    (``keymaker.spec_field``) and a dispatch input dict (``keymaker.input_field``).
+    This wrapper then, per the design's four steps:
+
+    1. ``load_spec(spec_dict)`` -> ``Construct(...)`` — THE validation gate. This is
+       the SAME eager ``_validate_node_chain`` (``construct.py:194``) hand-written
+       pipelines pass through (ANTI-BAND-AID: no bespoke validator, no schema
+       subset). A bad spec raises ``ConstructError``/``ConfigurationError`` HERE,
+       BEFORE anything executes; we re-raise it WRAPPED in ``ExecutionError`` naming
+       the spec (``on_invalid="raise"``, §3.5) with the ``ConstructError`` chained as
+       ``__cause__``.
+    2. Output-contract check: if the built flow declares an ``output`` boundary, it
+       must equal ``keymaker.output`` (resolved via ``lookup_type`` when a str) —
+       ``ExecutionError`` on mismatch, before compile. Top-level emitted flows carry
+       no ``output`` boundary; their contract is enforced at step 4 by the typed
+       result scan (a flow that produces the wrong type yields no assignable value).
+    3. ``compile(sub, scripted=keymaker.scripted, conditions=keymaker.conditions)`` —
+       the emitted flow may wire ONLY the pre-registered building blocks
+       (D-DISPATCH-REGISTRIES); an unknown ``scripted_fn`` fails loud at compile. NO
+       checkpointer is passed — mode-(b) durability is documented-opaque (§7; Tier-2
+       is neograph-mrb2y).
+    4. Invoke the compiled flow with ``input_field``'s dict and extract the value
+       assignable to ``keymaker.output`` via the shared :func:`_scan_subgraph_output`
+       (the same typed-output scan sub-constructs use); ``None`` (nothing produced
+       the required type) raises ``ExecutionError``. The result is written to a new
+       regular (fingerprinted) state field ``{node_field}_dispatch``.
+
+    Reduced v1 is a LINEAR arm: this wrapper returns a plain state-update dict (NOT a
+    ``Command``), so ``_add_keymaker_dispatch`` wires it with a static next edge and
+    the G1 Command-construction monopoly stays narrow.
+
+    Sync/async parity: the ``_prepare`` (load/contract/compile) and ``_finish``
+    (scan/write) steps are shared; only ``compiled.invoke`` vs ``await
+    compiled.ainvoke`` differs between the twins (mirrors :func:`make_subgraph_fn`).
+    """
+    field_name = field_name_for(node.name)
+    payload_field = primary_output_field(field_name, node.outputs)
+    dispatch_field = output_field_name(field_name, "dispatch")
+    spec_field = keymaker.spec_field
+    input_field = keymaker.input_field
+    assert spec_field is not None and input_field is not None  # dispatch-mode invariant (T1 validation)
+
+    inner = make_node_fn(
+        node,
+        runtime=runtime,
+        scripted_lookup=scripted_lookup,
+        tool_factory_lookup=tool_factory_lookup,
+    )
+
+    def _resolve_expected() -> type[BaseModel]:
+        out = keymaker.output
+        if isinstance(out, str):
+            return lookup_type(out)
+        assert out is not None  # dispatch-mode invariant (T1 validation)
+        return out
+
+    def _prepare(update: dict[str, Any]) -> tuple[Any, type[BaseModel], str, Any]:
+        """Shared pre-invoke: read the emitted spec/input, run the SAME gate, compile.
+
+        Returns ``(compiled, expected_output, spec_name, dispatch_input)``. Contains
+        NO invoke — the sync/async twins supply that so the gate + compile logic
+        cannot drift between them.
+        """
+        # `compile` is the ONE function-local import here: compiler.py imports
+        # _wiring -> factory, so a module-level `from neograph.compiler import
+        # compile` would cycle. load_spec / _scan_subgraph_output / lookup_type
+        # are module-level (their modules do not import factory).
+        from neograph.compiler import compile as compile_construct
+
+        decision = update[payload_field]
+        spec_dict = getattr(decision, spec_field)
+        dispatch_input = getattr(decision, input_field)
+        expected = _resolve_expected()
+        spec_name = spec_dict.get("name", "<unnamed>") if isinstance(spec_dict, dict) else "<unnamed>"
+
+        try:
+            sub = load_spec(spec_dict)
+        except (ConstructError, ConfigurationError) as gate_error:
+            # The emitted spec failed the SAME Construct(...) gate as a hand-written
+            # pipeline — surface it wrapped, naming the spec, BEFORE anything runs.
+            raise ExecutionError.build(
+                "dispatched flow spec is invalid",
+                construct=spec_name,
+                found=str(gate_error),
+                node=node.name,
+                hint="the emitted spec failed the same Construct(...) validation gate as a hand-written pipeline",
+            ) from gate_error
+
+        if sub.output is not None and sub.output is not expected:
+            raise ExecutionError.build(
+                "dispatched flow output-contract mismatch",
+                expected=getattr(expected, "__name__", str(expected)),
+                found=f"flow '{spec_name}' declares output {getattr(sub.output, '__name__', sub.output)}",
+                node=node.name,
+                hint="the emitted flow's declared output must equal Keymaker.output",
+            )
+
+        compiled = compile_construct(sub, scripted=keymaker.scripted, conditions=keymaker.conditions)
+        return compiled, expected, spec_name, dispatch_input
+
+    def _finish(
+        update: dict[str, Any], result: dict[str, Any], expected: type[BaseModel], spec_name: str
+    ) -> dict[str, Any]:
+        """Shared post-invoke: extract the typed output, write ``{node}_dispatch``."""
+        out = _scan_subgraph_output(result, expected)
+        if out is None:
+            raise ExecutionError.build(
+                "dispatched flow did not produce the required output type",
+                expected=getattr(expected, "__name__", str(expected)),
+                found=f"flow '{spec_name}' produced no value assignable to it",
+                node=node.name,
+                hint="a route='decide' flow must produce Keymaker.output",
+            )
+        return {**update, dispatch_field: out}
+
+    def dispatch_wrapper(state: BaseModel, config: RunnableConfig) -> dict[str, Any]:
+        update = inner.invoke(state, config)
+        compiled, expected, spec_name, dispatch_input = _prepare(update)
+        result = compiled.invoke(dispatch_input, config=config)
+        return _finish(update, result, expected, spec_name)
+
+    async def adispatch_wrapper(state: BaseModel, config: RunnableConfig) -> dict[str, Any]:
+        update = await inner.ainvoke(state, config)
+        compiled, expected, spec_name, dispatch_input = _prepare(update)
+        result = await compiled.ainvoke(dispatch_input, config=config)
+        return _finish(update, result, expected, spec_name)
+
+    wrapper = RunnableLambda(dispatch_wrapper, afunc=adispatch_wrapper)
+    return named(wrapper, node.name, mode="keymaker-dispatch", output_type=_type_name(node.outputs))
 
 
 def _make_raw_wrapper(node: Node) -> Callable:

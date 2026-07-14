@@ -589,6 +589,11 @@ class Loop(Modifier, frozen=True):
 
 
 HANDOFF_END = "__end__"
+
+# The `route` sentinel that selects Keymaker's dynamic-flow-definition (dispatch)
+# mode. The literal lives HERE ONLY — every layer discriminates the mode through
+# `Keymaker.is_dispatch`, never an inline `route == "decide"` string check.
+DISPATCH_ROUTE = "decide"
 """Route-field value meaning "leave the mesh" (design §2.1). Public sentinel."""
 
 
@@ -634,9 +639,22 @@ class Keymaker(Modifier, frozen=True):
     conditions: dict[str, Callable] | None = None  # condition registry for the emitted flow
     on_invalid: Literal["raise"] = "raise"  # v1: raise only (kwarg reserved)
 
+    @property
+    def is_dispatch(self) -> bool:
+        """Mode discriminator — the SINGLE SOURCE OF TRUTH for peer vs dispatch.
+
+        True for dynamic-flow-definition mode (``route == DISPATCH_ROUTE``), False
+        for peer routing. EVERY layer (validator, wiring collector, compiler walk,
+        state builder, producer registration) discriminates the mode ONLY through
+        this property — never an inline ``route == "decide"`` string check, so a new
+        call site cannot forget the rule (anti-band-aid; pinned by a structural
+        guard that bans the inline literal outside this module).
+        """
+        return self.route == DISPATCH_ROUTE
+
     def model_post_init(self, __context: Any) -> None:
         is_peer = self.peers is not None
-        is_dispatch = self.route == "decide"
+        is_dispatch = self.is_dispatch
         if is_peer and is_dispatch:
             raise ConfigurationError.build(
                 "Keymaker cannot be both peer mode and dispatch mode",

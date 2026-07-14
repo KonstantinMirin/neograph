@@ -36,6 +36,7 @@ from neograph._wiring import (
     _add_agent_cycle,
     _add_branch_to_graph,
     _add_each_oracle_fused,
+    _add_keymaker_dispatch,
     _add_keymaker_mesh,
     _add_loop_back_edge,
     _add_operator_check,
@@ -251,6 +252,16 @@ def compile(
         if id(item) in meshed:
             continue  # a non-entry mesh member, already lowered at its entry
         if isinstance(item, Node) and classify_modifiers(item)[0] == ModifierCombo.KEYMAKER:
+            keymaker = item.modifier_set.keymaker
+            if keymaker is not None and keymaker.is_dispatch:
+                # Dispatch mode (design §4.2): a standalone LINEAR node (plain
+                # add_node + static edge, NO Command), never a mesh member —
+                # _contiguous_keymaker_mesh / _validation_keymaker exclude it.
+                prev_node = _add_keymaker_dispatch(
+                    graph, item, prev_node, runtime=runtime,
+                    scripted_lookup=scripted_lookup, tool_factory_lookup=tool_factory_lookup,
+                )
+                continue
             members = _contiguous_keymaker_mesh(construct.nodes, item)
             prev_node = _add_keymaker_mesh(
                 graph,
