@@ -433,9 +433,9 @@ Python `for`/`while` loops in `forward()` don't compile to graph cycles -- they 
 
 ## Peer routing with peers, route, max_hops, and on_exhaust
 
-The `peers=` keyword turns a node into a member of a runtime mesh -- it builds a `Keymaker` the same way `loop_when=` builds a `Loop`. Each member decides at runtime which declared peer to hand off to; neograph lowers the decision to a `Command(goto)`. See [Keymaker Peer Routing](/concepts/keymaker/) for the full model.
+The `peers=` keyword turns a node into a member of a runtime mesh -- it builds a `Portal` the same way `loop_when=` builds a `Loop`. Each member decides at runtime which declared peer to hand off to; neograph lowers the decision to a `Command(goto)`. See [Portal Peer Routing](/concepts/portal/) for the full model.
 
-{/* test-skip: illustrative fragment: `Handoff` is defined in the Keymaker page narrative, not in a runnable block here */}
+{/* test-skip: illustrative fragment: `Handoff` is defined in the Portal page narrative, not in a runnable block here */}
 ```python
 @node(outputs=Handoff, peers=["billing", "technical"], max_hops=6)
 def triage(handoff: Handoff) -> Handoff: ...
@@ -446,12 +446,12 @@ def billing(handoff: Handoff) -> Handoff: ...
 
 | Keyword | What it does |
 |---|---|
-| `peers=["a", "b"]` | The declared peers this member may hand off to (directed, per-member). `peers=[]` makes a terminal member that can only route to `HANDOFF_END`. Passing `peers=` is what builds the `Keymaker`. |
+| `peers=["a", "b"]` | The declared peers this member may hand off to (directed, per-member). `peers=[]` makes a terminal member that can only route to `HANDOFF_END`. Passing `peers=` is what builds the `Portal`. |
 | `route="goto"` | The field on the node's output payload whose value names the next peer. Defaults to `"goto"`. |
 | `max_hops=6` | Caps the total hand-offs (the mesh analogue of `max_iterations`). An **entry-only** knob -- declare it on the member that starts the mesh, not on every peer. Defaults to 10. |
 | `on_exhaust="error"` | What happens when the budget is spent: `"error"` (default) raises `ExecutionError`; `"exit"` leaves the mesh cleanly with the last payload. |
 
-The `on_exhaust=` keyword is shared with `Loop` and routed by trigger: with `peers=` it feeds a `Keymaker` (which accepts `"error"` / `"exit"`), and with `loop_when=` it feeds a `Loop` (which accepts `"error"` / `"last"`). The `Keymaker` field itself is `Literal["error", "exit"]` -- `"last"` is a `Loop`-only value.
+The `on_exhaust=` keyword is shared with `Loop` and routed by trigger: with `peers=` it feeds a `Portal` (which accepts `"error"` / `"exit"`), and with `loop_when=` it feeds a `Loop` (which accepts `"error"` / `"last"`). The `Portal` field itself is `Literal["error", "exit"]` -- `"last"` is a `Loop`-only value.
 
 ### Restrictions
 

@@ -69,7 +69,7 @@ ANY_ALLOWLIST: dict[str, str] = {
     "modifiers.py:MergePreProcess.__call__:return": "invoke_structured accepts BaseModel | dict[str, Any] | str; dict-form retains Any value type",
     "modifiers.py:Oracle.model_post_init:__context": "Pydantic model_post_init context payload; framework-internal",
     "modifiers.py:Loop.model_post_init:__context": "Pydantic model_post_init context payload; framework-internal",
-    "modifiers.py:Keymaker.model_post_init:__context": "Pydantic model_post_init context payload; framework-internal",
+    "modifiers.py:Portal.model_post_init:__context": "Pydantic model_post_init context payload; framework-internal",
     "modifiers.py:ModifierSet.model_post_init:__context": "Pydantic model_post_init context payload; framework-internal",
     # ── _construct_validation.py — IR introspection over user-declared types ──
     # Cluster-5 entries (effective_producer_type:return, _check_item_input:input_type,

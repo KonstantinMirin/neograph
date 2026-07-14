@@ -203,16 +203,16 @@ class Node(Modifiable, BaseModel):
     # validator to skip upstream-name validation for this key.
     fan_out_param: str | None = None
 
-    # Which inputs key reads the Keymaker mesh channel (neo_handoff_<entry>)
+    # Which inputs key reads the Portal mesh channel (neo_handoff_<entry>)
     # instead of a named upstream state field — the reserved "handoff" key
     # (design §3.3). Written ONLY by the IR normalizer (_ir_normalize.py),
     # keyed off the presence of the reserved "handoff" inputs key on a
-    # Keymaker-modified node — the exact fan_out_param single-writer ownership
+    # Portal-modified node — the exact fan_out_param single-writer ownership
     # rule (neograph-k7bg, review H2). No assembly path may write it.
     handoff_param: str | None = None
 
     # The resolved entry-keyed mesh-channel field name (neo_handoff_<entry_field>)
-    # a Keymaker member reads its `handoff` payload from — the fan_out_param
+    # a Portal member reads its `handoff` payload from — the fan_out_param
     # precedent applied to the READ side (decision D10): a node-self-contained IR
     # field so _extract_input resolves the channel WITHOUT threading a key through
     # _execute_node. The channel key is entry-keyed (one mesh per level), so only

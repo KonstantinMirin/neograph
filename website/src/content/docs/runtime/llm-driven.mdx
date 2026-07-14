@@ -242,11 +242,11 @@ graph = compile(pipeline)
 run(graph, input={"node_id": "daily-001"})
 ```
 
-## Runtime routing: Keymaker
+## Runtime routing: Portal
 
-The pipelines above are assembled by an LLM but their topology is fixed once compiled. When you want the ROUTING itself decided at runtime -- a member hands off to a peer chosen while the graph runs -- reach for [Keymaker peer routing](/concepts/keymaker/). A `Keymaker` mesh turns a set of nodes into a runtime swarm: each member emits a payload whose routing field names the next declared peer, neograph lowers that to a `Command(goto)`, and a hop budget guarantees termination. Every reachable peer is still type-checked at assembly. This is the shipped surface today.
+The pipelines above are assembled by an LLM but their topology is fixed once compiled. When you want the ROUTING itself decided at runtime -- a member hands off to a peer chosen while the graph runs -- reach for [Portal peer routing](/concepts/portal/). A `Portal` mesh turns a set of nodes into a runtime swarm: each member emits a payload whose routing field names the next declared peer, neograph lowers that to a `Command(goto)`, and a hop budget guarantees termination. Every reachable peer is still type-checked at assembly. This is the shipped surface today.
 
-A second `Keymaker` mode -- [dynamic flow dispatch](/concepts/keymaker/#dynamic-flow-dispatch-routedecide) -- takes the runtime-assembly pattern on this page and makes it a first-class construct. Instead of your application glue calling `load_spec` + `compile` + `run` by hand, a `route="decide"` member emits a spec as its own output and the framework loads, validates (through the SAME `Construct(...)` gate as a hand-written pipeline), compiles, and runs it inside the graph -- the dispatch is now a construct, not app glue. The emitted flow may wire only pre-registered building blocks, so a machine composes pre-approved code rather than injecting new code.
+A second `Portal` mode -- [dynamic flow dispatch](/concepts/portal/#dynamic-flow-dispatch-routedecide) -- takes the runtime-assembly pattern on this page and makes it a first-class construct. Instead of your application glue calling `load_spec` + `compile` + `run` by hand, a `route="decide"` member emits a spec as its own output and the framework loads, validates (through the SAME `Construct(...)` gate as a hand-written pipeline), compiles, and runs it inside the graph -- the dispatch is now a construct, not app glue. The emitted flow may wire only pre-registered building blocks, so a machine composes pre-approved code rather than injecting new code.
 
 ## Summary
 

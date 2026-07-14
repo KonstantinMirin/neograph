@@ -22,7 +22,7 @@ from neograph._subconstruct import _scan_subgraph_output
 from neograph._trace import named
 from neograph.errors import ConfigurationError, ConstructError, ExecutionError
 from neograph.loader import load_spec
-from neograph.modifiers import HANDOFF_END, Keymaker
+from neograph.modifiers import HANDOFF_END, Portal
 from neograph.naming import field_name_for, output_field_name
 from neograph.node import Node
 from neograph.spec_types import lookup_type
@@ -100,9 +100,9 @@ def make_node_fn(
     return named(wrapper, node.name, mode=node.mode, output_type=_type_name(node.outputs))
 
 
-def make_keymaker_fn(
+def make_portal_fn(
     node: Node,
-    keymaker: Keymaker,
+    portal: Portal,
     entry_field: str,
     exit_name: str,
     *,
@@ -113,7 +113,7 @@ def make_keymaker_fn(
     scripted_lookup: dict[str, Callable] | None = None,
     tool_factory_lookup: dict[str, Callable] | None = None,
 ) -> Runnable:
-    """Build a Keymaker mesh-member function (design §4.1, decision D3/D10).
+    """Build a Portal mesh-member function (design §4.1, decision D3/D10).
 
     Wraps the standard :func:`make_node_fn` result: the inner node runs normally
     and returns its state-update dict, then this wrapper reads the routing field
@@ -138,7 +138,7 @@ def make_keymaker_fn(
     pass-through ``exit_name`` node rather than terminating the whole graph.
 
     HOP BUDGET (design §3.4, decision D11/D12): ``max_hops``/``on_exhaust`` are
-    ENTRY-only knobs, but this wrapper runs per MEMBER — so ``_add_keymaker_mesh``
+    ENTRY-only knobs, but this wrapper runs per MEMBER — so ``_add_portal_mesh``
     sources them from the mesh entry (``members[0]``) plus the entry's name (for
     the error ``node=``) and threads them into EVERY member's wrapper as closure
     params (same closure-capture threading as ``entry_field``/``exit_name``). A
@@ -155,8 +155,8 @@ def make_keymaker_fn(
     channel_key = StateKeys.handoff_payload(entry_field)
     count_field = StateKeys.handoff_hops(entry_field)
     payload_field = primary_output_field(field_name_for(node.name), node.outputs)
-    route_field = keymaker.route
-    valid_targets = set(keymaker.peers or ()) | {HANDOFF_END}
+    route_field = portal.route
+    valid_targets = set(portal.to or ()) | {HANDOFF_END}
 
     inner = make_node_fn(
         node,
@@ -170,7 +170,7 @@ def make_keymaker_fn(
         target = getattr(payload, route_field)
         if target not in valid_targets:
             raise ExecutionError.build(
-                "Keymaker route target is not a declared peer",
+                "Portal route target is not a declared peer",
                 expected=f"one of {sorted(valid_targets)}",
                 found=f"route field '{route_field}'={target!r}",
                 node=node.name,
@@ -192,7 +192,7 @@ def make_keymaker_fn(
                     update={**update, channel_key: payload, count_field: current},
                 )
             raise ExecutionError.build(
-                "Keymaker handoff exceeded max_hops",
+                "Portal handoff exceeded max_hops",
                 expected=f"convergence within {max_hops} hops",
                 found=f"{max_hops} hops exhausted",
                 node=entry_name,
@@ -203,29 +203,29 @@ def make_keymaker_fn(
             update={**update, channel_key: payload, count_field: current + 1},
         )
 
-    def keymaker_wrapper(state: BaseModel, config: RunnableConfig) -> Command:
+    def portal_wrapper(state: BaseModel, config: RunnableConfig) -> Command:
         return _to_command(inner.invoke(state, config), state)
 
-    async def akeymaker_wrapper(state: BaseModel, config: RunnableConfig) -> Command:
+    async def aportal_wrapper(state: BaseModel, config: RunnableConfig) -> Command:
         return _to_command(await inner.ainvoke(state, config), state)
 
-    wrapper = RunnableLambda(keymaker_wrapper, afunc=akeymaker_wrapper)
-    return named(wrapper, node.name, mode="keymaker", output_type=_type_name(node.outputs))
+    wrapper = RunnableLambda(portal_wrapper, afunc=aportal_wrapper)
+    return named(wrapper, node.name, mode="portal", output_type=_type_name(node.outputs))
 
 
-def make_keymaker_dispatch_fn(
+def make_portal_dispatch_fn(
     node: Node,
-    keymaker: Keymaker,
+    portal: Portal,
     *,
     runtime: LlmRuntime = EMPTY_RUNTIME,
     scripted_lookup: dict[str, Callable] | None = None,
     tool_factory_lookup: dict[str, Callable] | None = None,
 ) -> Runnable:
-    """Build a Keymaker DISPATCH-mode wrapper (``route="decide"``, design §3.5/§4.2).
+    """Build a Portal DISPATCH-mode wrapper (``route="decide"``, design §3.5/§4.2).
 
     Mode (b), reduced v1. Wraps the standard :func:`make_node_fn` result: the
     dispatcher body runs and emits, as its OWN typed output, a neograph spec dict
-    (``keymaker.spec_field``) and a dispatch input dict (``keymaker.input_field``).
+    (``portal.spec_field``) and a dispatch input dict (``portal.input_field``).
     This wrapper then, per the design's four steps:
 
     1. ``load_spec(spec_dict)`` -> ``Construct(...)`` — THE validation gate. This is
@@ -236,23 +236,23 @@ def make_keymaker_dispatch_fn(
        the spec (``on_invalid="raise"``, §3.5) with the ``ConstructError`` chained as
        ``__cause__``.
     2. Output-contract check: if the built flow declares an ``output`` boundary, it
-       must equal ``keymaker.output`` (resolved via ``lookup_type`` when a str) —
+       must equal ``portal.output`` (resolved via ``lookup_type`` when a str) —
        ``ExecutionError`` on mismatch, before compile. Top-level emitted flows carry
        no ``output`` boundary; their contract is enforced at step 4 by the typed
        result scan (a flow that produces the wrong type yields no assignable value).
-    3. ``compile(sub, scripted=keymaker.scripted, conditions=keymaker.conditions)`` —
+    3. ``compile(sub, scripted=portal.scripted, conditions=portal.conditions)`` —
        the emitted flow may wire ONLY the pre-registered building blocks
        (D-DISPATCH-REGISTRIES); an unknown ``scripted_fn`` fails loud at compile. NO
        checkpointer is passed — mode-(b) durability is documented-opaque (§7; Tier-2
        is neograph-mrb2y).
     4. Invoke the compiled flow with ``input_field``'s dict and extract the value
-       assignable to ``keymaker.output`` via the shared :func:`_scan_subgraph_output`
+       assignable to ``portal.output`` via the shared :func:`_scan_subgraph_output`
        (the same typed-output scan sub-constructs use); ``None`` (nothing produced
        the required type) raises ``ExecutionError``. The result is written to a new
        regular (fingerprinted) state field ``{node_field}_dispatch``.
 
     Reduced v1 is a LINEAR arm: this wrapper returns a plain state-update dict (NOT a
-    ``Command``), so ``_add_keymaker_dispatch`` wires it with a static next edge and
+    ``Command``), so ``_add_portal_dispatch`` wires it with a static next edge and
     the G1 Command-construction monopoly stays narrow.
 
     Sync/async parity: the ``_prepare`` (load/contract/compile) and ``_finish``
@@ -262,8 +262,8 @@ def make_keymaker_dispatch_fn(
     field_name = field_name_for(node.name)
     payload_field = primary_output_field(field_name, node.outputs)
     dispatch_field = output_field_name(field_name, "dispatch")
-    spec_field = keymaker.spec_field
-    input_field = keymaker.input_field
+    spec_field = portal.spec_field
+    input_field = portal.input_field
     assert spec_field is not None and input_field is not None  # dispatch-mode invariant (T1 validation)
 
     inner = make_node_fn(
@@ -274,7 +274,7 @@ def make_keymaker_dispatch_fn(
     )
 
     def _resolve_expected() -> type[BaseModel]:
-        out = keymaker.output
+        out = portal.output
         if isinstance(out, str):
             return lookup_type(out)
         assert out is not None  # dispatch-mode invariant (T1 validation)
@@ -318,10 +318,10 @@ def make_keymaker_dispatch_fn(
                 expected=getattr(expected, "__name__", str(expected)),
                 found=f"flow '{spec_name}' declares output {getattr(sub.output, '__name__', sub.output)}",
                 node=node.name,
-                hint="the emitted flow's declared output must equal Keymaker.output",
+                hint="the emitted flow's declared output must equal Portal.output",
             )
 
-        compiled = compile_construct(sub, scripted=keymaker.scripted, conditions=keymaker.conditions)
+        compiled = compile_construct(sub, scripted=portal.scripted, conditions=portal.conditions)
         return compiled, expected, spec_name, dispatch_input
 
     def _finish(
@@ -335,7 +335,7 @@ def make_keymaker_dispatch_fn(
                 expected=getattr(expected, "__name__", str(expected)),
                 found=f"flow '{spec_name}' produced no value assignable to it",
                 node=node.name,
-                hint="a route='decide' flow must produce Keymaker.output",
+                hint="a route='decide' flow must produce Portal.output",
             )
         return {**update, dispatch_field: out}
 
@@ -352,7 +352,7 @@ def make_keymaker_dispatch_fn(
         return _finish(update, result, expected, spec_name)
 
     wrapper = RunnableLambda(dispatch_wrapper, afunc=adispatch_wrapper)
-    return named(wrapper, node.name, mode="keymaker-dispatch", output_type=_type_name(node.outputs))
+    return named(wrapper, node.name, mode="portal-dispatch", output_type=_type_name(node.outputs))
 
 
 def _make_raw_wrapper(node: Node) -> Callable:

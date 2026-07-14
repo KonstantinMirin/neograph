@@ -50,11 +50,11 @@ _AGENT_CYCLE_OVERHEAD = 3
 
 
 def _mesh_hop_cost(construct: Construct) -> int:
-    """Sum ``entry.max_hops`` ONCE per Keymaker mesh, recursing sub-constructs.
+    """Sum ``entry.max_hops`` ONCE per Portal mesh, recursing sub-constructs.
 
     A K-hop mesh consumes up to K supersteps (one Command(goto) per hop), so the
     recursion floor must budget for it exactly as it does for agent/act cycles.
-    A contiguous run of Keymaker-modified sibling Nodes is ONE mesh (design
+    A contiguous run of Portal-modified sibling Nodes is ONE mesh (design
     §3.1 r2) and only its ENTRY (first member) carries the real ``max_hops``
     (entry-only, T1) — non-entry members default to 10. ``iter_nodes``
     leaf-flattens and cannot identify the entry (nor a mesh whose entry left
@@ -69,11 +69,11 @@ def _mesh_hop_cost(construct: Construct) -> int:
             total += _mesh_hop_cost(item)
             prev_was_member = False
             continue
-        is_member = isinstance(item, Node) and classify_modifiers(item)[0] == ModifierCombo.KEYMAKER
+        is_member = isinstance(item, Node) and classify_modifiers(item)[0] == ModifierCombo.PORTAL
         if is_member and not prev_was_member:
-            keymaker = item.modifier_set.keymaker
-            if keymaker is not None:
-                total += keymaker.max_hops  # entry of a contiguous mesh run
+            portal = item.modifier_set.portal
+            if portal is not None:
+                total += portal.max_hops  # entry of a contiguous mesh run
         prev_was_member = is_member
     return total
 
@@ -82,12 +82,12 @@ def _ensure_agent_recursion_limit(
     graph: CompiledNeograph,
     config: RunnableConfig | None,
 ) -> RunnableConfig | None:
-    """Raise ``recursion_limit`` so an agent/act cycle OR a Keymaker mesh can
+    """Raise ``recursion_limit`` so an agent/act cycle OR a Portal mesh can
     reach its graceful budget-exhaust edge instead of hitting LangGraph's default
     superstep ceiling first.
 
     Each agent/act node's cycle can cost ``max_iterations * 2 + overhead``
-    supersteps; each Keymaker mesh can cost ``entry.max_hops`` supersteps. Both
+    supersteps; each Portal mesh can cost ``entry.max_hops`` supersteps. Both
     run in distinct supersteps, so their costs ADD across the run. The floor sums
     every agent/act node's worst case AND every mesh's hop budget on top of the
     default (which already covers the surrounding non-agent nodes). Only RAISES to

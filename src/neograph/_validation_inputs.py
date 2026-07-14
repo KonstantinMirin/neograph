@@ -129,7 +129,7 @@ def _check_fan_in_inputs(
     # Both must be handled so the programmatic `Node(inputs=...) | Each(...)`
     # path works without requiring fan_out_param to be set.
     fan_out_key = getattr(item, "fan_out_param", None)
-    # The reserved Keymaker "handoff" input reads the mesh channel, not a named
+    # The reserved Portal "handoff" input reads the mesh channel, not a named
     # upstream producer (design §3.3). It is set ONLY by the normalizer, so a
     # NON-mesh node that declares a "handoff" input has handoff_param=None and
     # still fails the "no upstream node named 'handoff'" check below — the

@@ -88,9 +88,9 @@ def _build_state_update(
             | ModifierCombo.ORACLE_OPERATOR
             | ModifierCombo.LOOP
             | ModifierCombo.LOOP_OPERATOR
-            | ModifierCombo.KEYMAKER
+            | ModifierCombo.PORTAL
         ):
-            # KEYMAKER: a mesh member writes its own output plainly (no Each
+            # PORTAL: a mesh member writes its own output plainly (no Each
             # key-wrapping). Runtime-unreachable in T1 (compile fail-loud-stages
             # before a member executes), but the arm keeps the match exhaustive.
             each_mod = None

@@ -36,12 +36,12 @@ from neograph._wiring import (
     _add_agent_cycle,
     _add_branch_to_graph,
     _add_each_oracle_fused,
-    _add_keymaker_dispatch,
-    _add_keymaker_mesh,
     _add_loop_back_edge,
     _add_operator_check,
+    _add_portal_dispatch,
+    _add_portal_mesh,
     _add_subgraph_loop,
-    _contiguous_keymaker_mesh,
+    _contiguous_portal_mesh,
     _wire_each,
     _wire_oracle,
 )
@@ -243,27 +243,27 @@ def compile(
 
     prev_node: str | None = None
 
-    # A contiguous Keymaker run is a mesh: lowered ONCE at its ENTRY by
-    # _add_keymaker_mesh; the remaining members are recorded in `meshed` so the
+    # A contiguous Portal run is a mesh: lowered ONCE at its ENTRY by
+    # _add_portal_mesh; the remaining members are recorded in `meshed` so the
     # walk skips them (review M1 — prevents double-adding). See design §4.1.
     meshed: set[int] = set()
 
     for item in construct.nodes:
         if id(item) in meshed:
             continue  # a non-entry mesh member, already lowered at its entry
-        if isinstance(item, Node) and classify_modifiers(item)[0] == ModifierCombo.KEYMAKER:
-            keymaker = item.modifier_set.keymaker
-            if keymaker is not None and keymaker.is_dispatch:
+        if isinstance(item, Node) and classify_modifiers(item)[0] == ModifierCombo.PORTAL:
+            portal = item.modifier_set.portal
+            if portal is not None and portal.is_dispatch:
                 # Dispatch mode (design §4.2): a standalone LINEAR node (plain
                 # add_node + static edge, NO Command), never a mesh member —
-                # _contiguous_keymaker_mesh / _validation_keymaker exclude it.
-                prev_node = _add_keymaker_dispatch(
+                # _contiguous_portal_mesh / _validation_portal exclude it.
+                prev_node = _add_portal_dispatch(
                     graph, item, prev_node, runtime=runtime,
                     scripted_lookup=scripted_lookup, tool_factory_lookup=tool_factory_lookup,
                 )
                 continue
-            members = _contiguous_keymaker_mesh(construct.nodes, item)
-            prev_node = _add_keymaker_mesh(
+            members = _contiguous_portal_mesh(construct.nodes, item)
+            prev_node = _add_portal_mesh(
                 graph,
                 members,
                 prev_node,
@@ -543,13 +543,13 @@ def _add_subgraph(
             else:
                 graph.add_edge(START, sub.name)
             last_name = sub.name
-        case ModifierCombo.KEYMAKER:
-            # Keymaker on a sub-construct is illegal in v1 (D-MESH-LEVEL); already
+        case ModifierCombo.PORTAL:
+            # Portal on a sub-construct is illegal in v1 (D-MESH-LEVEL); already
             # rejected at assembly — this arm is defense-in-depth + exhaustiveness.
             raise CompileError.build(
-                "Keymaker on a sub-construct is not supported",
+                "Portal on a sub-construct is not supported",
                 expected="mesh members must be sibling Nodes (D-MESH-LEVEL)",
-                found=f"Keymaker modifier on sub-construct '{sub.name}'",
+                found=f"Portal modifier on sub-construct '{sub.name}'",
             )
         case _ as unreachable:
             assert_never(unreachable)
@@ -655,13 +655,13 @@ def _add_node_to_graph(
                 else:
                     graph.add_edge(START, node_name)
                 last_name = node_name
-        case ModifierCombo.KEYMAKER:
+        case ModifierCombo.PORTAL:
             # Unreachable: the mesh-aware walk (M1) lowers a contiguous mesh via
-            # _add_keymaker_mesh before per-node dispatch. Arm kept for match
+            # _add_portal_mesh before per-node dispatch. Arm kept for match
             # exhaustiveness; fails loud if the walk ever regresses.
             raise CompileError.build(
-                "Keymaker member reached per-node dispatch",
-                found=f"Keymaker node '{node.name}' dispatched individually",
+                "Portal member reached per-node dispatch",
+                found=f"Portal node '{node.name}' dispatched individually",
                 hint="the compile walk must collapse the contiguous mesh (M1)",
             )
         case _ as unreachable:

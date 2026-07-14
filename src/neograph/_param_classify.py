@@ -113,9 +113,9 @@ def _detect_handoff_params(
     plain_fields: set[str],
     port_params: dict[str, set[str]],
 ) -> dict[str, set[str]]:
-    """Detect the reserved ``"handoff"`` param for Keymaker mesh members.
+    """Detect the reserved ``"handoff"`` param for Portal mesh members.
 
-    A Keymaker member reads its handoff payload from the entry-keyed mesh
+    A Portal member reads its handoff payload from the entry-keyed mesh
     channel via the reserved ``"handoff"`` inputs key (design §3.3), NOT from a
     peer @node. So — exactly like the Each fan-out receiver
     (:func:`_detect_fan_out_params`) — the ``handoff`` signature param names no
@@ -129,7 +129,7 @@ def _detect_handoff_params(
     for field_name, n in decorated.items():
         if field_name in plain_fields:
             continue
-        if n.modifier_set.keymaker is None:
+        if n.modifier_set.portal is None:
             continue
         sidecar = _get_sidecar(n)
         if sidecar is None:
@@ -152,7 +152,7 @@ def _detect_channel_skip_params(
     port_params: dict[str, set[str]],
 ) -> dict[str, set[str]]:
     """Union of framework-channel params to skip in @node adjacency wiring:
-    Each fan-out receivers AND Keymaker reserved-``"handoff"`` receivers.
+    Each fan-out receivers AND Portal reserved-``"handoff"`` receivers.
 
     Both name no upstream node, are skipped in adjacency, kept in the node's
     inputs, and passed to the scripted shim identically. This is @node topology

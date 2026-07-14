@@ -668,7 +668,7 @@ class TestNeoStateKeysCentralized:
         assert self._scan(bad), "slip: _neo_ config key literal must be caught in key position"
 
     def test_handoff_state_keys_are_centralized(self):
-        """Guard (G2, neograph-on6jt) — Keymaker mesh-channel/hop keys
+        """Guard (G2, neograph-on6jt) — Portal mesh-channel/hop keys
         (``neo_handoff_*``) are built ONLY via ``StateKeys.handoff_payload`` /
         ``StateKeys.handoff_hops``.
 
@@ -680,7 +680,7 @@ class TestNeoStateKeysCentralized:
         handoff payload never arrives. Centralizing both keys behind the two
         builders (called by ``state.py``, ``factory.py``, ``_wiring.py``,
         ``_input_shape.py``) closes that. Layer A already forbids the bare
-        ``neo_handoff_`` fragment anywhere; this test states the Keymaker-specific
+        ``neo_handoff_`` fragment anywhere; this test states the Portal-specific
         intent and pins that the builders exist and are the sole source.
         """
         from neograph._state_keys import StateKeys

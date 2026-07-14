@@ -63,7 +63,7 @@ class TestSidecarModule:
 # Names are included so a NEW import in an allowlisted file/module pairing
 # still trips the guard.
 FUNCTION_LOCAL_IMPORT_ALLOWLIST: set[tuple[str, str, frozenset[str]]] = {
-    # factory.py — REAL cycle: the Keymaker dispatch wrapper (mode b, route=
+    # factory.py — REAL cycle: the Portal dispatch wrapper (mode b, route=
     # "decide", neograph-f27xo) recompiles the emitted sub-flow via compile(), but
     # compiler.py imports _wiring -> factory at module level, so a top-level `from
     # neograph.compiler import compile` here cycles. Function-local import is the

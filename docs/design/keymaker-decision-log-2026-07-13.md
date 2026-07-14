@@ -1,3 +1,5 @@
+> **RENAMED 2026-07-14 (neograph-1t0zh):** the construct designed here as *Keymaker* shipped as **`Portal`** — a functional name that reads for newcomers and spans both modes (peer routing + dynamic flow). This document is preserved verbatim as the historical design record; its body still uses the original *Keymaker* name. See `website/src/content/docs/concepts/portal.mdx` for the shipped API.
+
 # KEYMAKER overnight build — decision log
 
 Autonomous run, night of 2026-07-13 → 2026-07-14. Epic: neograph-t1f7z (feature bead: neograph-07inf).

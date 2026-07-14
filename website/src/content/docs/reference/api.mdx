@@ -259,26 +259,6 @@ inject_schema(vars: 'dict[str, Any]', output_model: 'type[BaseModel] | None' = N
 JsonRenderer(*, indent: 'int' = 2) -> 'None'
 ```
 
-### Keymaker
-
-{/* test-skip: generated API signature (declaration, not runnable) */}
-```python
-Keymaker(peers: list[str] | None = None, route: str = 'goto', max_hops: int = 10, on_exhaust: Literal['error', 'exit'] = 'error', spec_field: str | None = None, input_field: str | None = None, output: type[pydantic.main.BaseModel] | str | None = None, scripted: dict[str, collections.abc.Callable] | None = None, conditions: dict[str, collections.abc.Callable] | None = None, on_invalid: Literal['raise'] = 'raise')
-```
-
-| Field | Type | Required | Default |
-|-------|------|----------|---------|
-| <span id="keymaker-peers"></span>`peers` | `list[str] | None` | no | `None` |
-| <span id="keymaker-route"></span>`route` | `str` | no | `'goto'` |
-| <span id="keymaker-max_hops"></span>`max_hops` | `int` | no | `10` |
-| <span id="keymaker-on_exhaust"></span>`on_exhaust` | `Literal['error', 'exit']` | no | `'error'` |
-| <span id="keymaker-spec_field"></span>`spec_field` | `str | None` | no | `None` |
-| <span id="keymaker-input_field"></span>`input_field` | `str | None` | no | `None` |
-| <span id="keymaker-output"></span>`output` | `type[pydantic.main.BaseModel] | str | None` | no | `None` |
-| <span id="keymaker-scripted"></span>`scripted` | `dict[str, collections.abc.Callable] | None` | no | `None` |
-| <span id="keymaker-conditions"></span>`conditions` | `dict[str, collections.abc.Callable] | None` | no | `None` |
-| <span id="keymaker-on_invalid"></span>`on_invalid` | `Literal['raise']` | no | `'raise'` |
-
 ### lint
 
 {/* test-skip: generated API signature (declaration, not runnable) */}
@@ -367,7 +347,7 @@ MergePreProcess(*args, **kwargs)
 
 {/* test-skip: generated API signature (declaration, not runnable) */}
 ```python
-node(fn: 'Callable | None' = None, *, mode: "Literal['think', 'agent', 'act', 'scripted', 'raw'] | None" = None, inputs: 'Any' = None, outputs: 'Any' = None, model: 'str | None' = None, prompt: 'str | None' = None, llm_config: 'dict[str, Any] | LlmConfig | None' = None, tools: 'list[Tool] | None' = None, name: 'str | None' = None, map_over: 'str | None' = None, map_key: 'str | None' = None, map_on_error: "Literal['raise', 'collect']" = 'raise', ensemble_n: 'int | None' = None, models: 'list[str] | None' = None, merge_fn: 'str | None' = None, merge_prompt: 'str | None' = None, merge_pre_process: 'Callable | None' = None, merge_post_process: 'Callable | None' = None, merge_fallback: 'Callable | None' = None, merge_model: 'str | None' = None, interrupt_when: 'str | Callable | None' = None, renderer: 'Renderer | None' = None, context: 'list[str] | None' = None, skip_when: 'Callable | None' = None, skip_value: 'Callable | None' = None, gate_tools_when: 'Callable | str | None' = None, loop_when: 'str | Callable | None' = None, max_iterations: 'int | None' = None, on_exhaust: "Literal['error', 'last', 'exit'] | None" = None, peers: 'list[str] | None' = None, route: 'str | None' = None, max_hops: 'int | None' = None) -> 'Any'
+node(fn: 'Callable | None' = None, *, mode: "Literal['think', 'agent', 'act', 'scripted', 'raw'] | None" = None, inputs: 'Any' = None, outputs: 'Any' = None, model: 'str | None' = None, prompt: 'str | None' = None, llm_config: 'dict[str, Any] | LlmConfig | None' = None, tools: 'list[Tool] | None' = None, name: 'str | None' = None, map_over: 'str | None' = None, map_key: 'str | None' = None, map_on_error: "Literal['raise', 'collect']" = 'raise', ensemble_n: 'int | None' = None, models: 'list[str] | None' = None, merge_fn: 'str | None' = None, merge_prompt: 'str | None' = None, merge_pre_process: 'Callable | None' = None, merge_post_process: 'Callable | None' = None, merge_fallback: 'Callable | None' = None, merge_model: 'str | None' = None, interrupt_when: 'str | Callable | None' = None, renderer: 'Renderer | None' = None, context: 'list[str] | None' = None, skip_when: 'Callable | None' = None, skip_value: 'Callable | None' = None, gate_tools_when: 'Callable | str | None' = None, loop_when: 'str | Callable | None' = None, max_iterations: 'int | None' = None, on_exhaust: "Literal['error', 'last', 'exit'] | None" = None, portal: 'list[str] | None' = None, route: 'str | None' = None, max_hops: 'int | None' = None) -> 'Any'
 ```
 
 ### Node (model)
@@ -428,6 +408,26 @@ Oracle(n: int = 3, models: list[str] | None = None, merge_prompt: str | None = N
 | <span id="oracle-merge_pre_process"></span>`merge_pre_process` | `neograph.modifiers.MergePreProcess | None` | no | `None` |
 | <span id="oracle-merge_post_process"></span>`merge_post_process` | `neograph.modifiers.MergePostProcess | None` | no | `None` |
 | <span id="oracle-merge_fallback"></span>`merge_fallback` | `neograph.modifiers.MergeFallback | None` | no | `None` |
+
+### Portal
+
+{/* test-skip: generated API signature (declaration, not runnable) */}
+```python
+Portal(to: list[str] | None = None, route: str = 'goto', max_hops: int = 10, on_exhaust: Literal['error', 'exit'] = 'error', spec_field: str | None = None, input_field: str | None = None, output: type[pydantic.main.BaseModel] | str | None = None, scripted: dict[str, collections.abc.Callable] | None = None, conditions: dict[str, collections.abc.Callable] | None = None, on_invalid: Literal['raise'] = 'raise')
+```
+
+| Field | Type | Required | Default |
+|-------|------|----------|---------|
+| <span id="portal-to"></span>`to` | `list[str] | None` | no | `None` |
+| <span id="portal-route"></span>`route` | `str` | no | `'goto'` |
+| <span id="portal-max_hops"></span>`max_hops` | `int` | no | `10` |
+| <span id="portal-on_exhaust"></span>`on_exhaust` | `Literal['error', 'exit']` | no | `'error'` |
+| <span id="portal-spec_field"></span>`spec_field` | `str | None` | no | `None` |
+| <span id="portal-input_field"></span>`input_field` | `str | None` | no | `None` |
+| <span id="portal-output"></span>`output` | `type[pydantic.main.BaseModel] | str | None` | no | `None` |
+| <span id="portal-scripted"></span>`scripted` | `dict[str, collections.abc.Callable] | None` | no | `None` |
+| <span id="portal-conditions"></span>`conditions` | `dict[str, collections.abc.Callable] | None` | no | `None` |
+| <span id="portal-on_invalid"></span>`on_invalid` | `Literal['raise']` | no | `'raise'` |
 
 ### ProducingCall
 

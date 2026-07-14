@@ -65,13 +65,13 @@ from neograph.modifiers import (
     HANDOFF_END,
     Each,
     EachFailure,
-    Keymaker,
     Loop,
     MergeFallback,
     MergePostProcess,
     MergePreProcess,
     Operator,
     Oracle,
+    Portal,
 )
 from neograph.node import Node, RawNodeFn, SkipPredicate, SkipValueFactory, TypeSpecStatic
 from neograph.progress import emit_progress
@@ -129,7 +129,7 @@ __all__ = [
     "EachFailure",
     "Loop",
     "Operator",
-    "Keymaker",
+    "Portal",
     "HANDOFF_END",
     # Low-level IR (advanced use: programmatic construction, IR tests)
     "Node",

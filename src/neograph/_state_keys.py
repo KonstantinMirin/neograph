@@ -128,7 +128,7 @@ class StateKeys:
 
     @staticmethod
     def handoff_hops(field_name: str) -> str:
-        """Per-mesh hop-budget counter field name (Keymaker, design §3.4).
+        """Per-mesh hop-budget counter field name (Portal, design §3.4).
 
         Keyed off the mesh ENTRY's producer field. Plain ``(int, 0)`` state
         field, incremented by each member's wrapper (T2/T3), like ``loop_count``.
@@ -137,7 +137,7 @@ class StateKeys:
 
     @staticmethod
     def handoff_payload(field_name: str) -> str:
-        """Per-mesh shared channel field name (Keymaker, design §3.3).
+        """Per-mesh shared channel field name (Portal, design §3.3).
 
         Keyed off the mesh ENTRY's producer field. Each hop writes its payload
         here so a peer can read it via the reserved ``handoff`` inputs key

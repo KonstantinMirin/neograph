@@ -6,8 +6,6 @@ from __future__ import annotations
 import pytest
 from pydantic import BaseModel
 
-from neograph._normalize import normalize_inputs
-
 from neograph import (
     Construct,
     ConstructError,
@@ -20,6 +18,7 @@ from neograph import (
     node,
     run,
 )
+from neograph._normalize import normalize_inputs
 from tests.fakes import build_test_compile_kwargs
 from tests.schemas import (
     Claims,

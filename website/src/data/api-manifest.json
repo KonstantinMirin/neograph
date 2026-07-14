@@ -146,7 +146,7 @@
       "doc": "Decorator that turns a function into a Node spec with signature-inferred",
       "kind": "function",
       "name": "node",
-      "signature": "(fn: 'Callable | None' = None, *, mode: \"Literal['think', 'agent', 'act', 'scripted', 'raw'] | None\" = None, inputs: 'Any' = None, outputs: 'Any' = None, model: 'str | None' = None, prompt: 'str | None' = None, llm_config: 'dict[str, Any] | LlmConfig | None' = None, tools: 'list[Tool] | None' = None, name: 'str | None' = None, map_over: 'str | None' = None, map_key: 'str | None' = None, map_on_error: \"Literal['raise', 'collect']\" = 'raise', ensemble_n: 'int | None' = None, models: 'list[str] | None' = None, merge_fn: 'str | None' = None, merge_prompt: 'str | None' = None, merge_pre_process: 'Callable | None' = None, merge_post_process: 'Callable | None' = None, merge_fallback: 'Callable | None' = None, merge_model: 'str | None' = None, interrupt_when: 'str | Callable | None' = None, renderer: 'Renderer | None' = None, context: 'list[str] | None' = None, skip_when: 'Callable | None' = None, skip_value: 'Callable | None' = None, gate_tools_when: 'Callable | str | None' = None, loop_when: 'str | Callable | None' = None, max_iterations: 'int | None' = None, on_exhaust: \"Literal['error', 'last', 'exit'] | None\" = None, peers: 'list[str] | None' = None, route: 'str | None' = None, max_hops: 'int | None' = None) -> 'Any'"
+      "signature": "(fn: 'Callable | None' = None, *, mode: \"Literal['think', 'agent', 'act', 'scripted', 'raw'] | None\" = None, inputs: 'Any' = None, outputs: 'Any' = None, model: 'str | None' = None, prompt: 'str | None' = None, llm_config: 'dict[str, Any] | LlmConfig | None' = None, tools: 'list[Tool] | None' = None, name: 'str | None' = None, map_over: 'str | None' = None, map_key: 'str | None' = None, map_on_error: \"Literal['raise', 'collect']\" = 'raise', ensemble_n: 'int | None' = None, models: 'list[str] | None' = None, merge_fn: 'str | None' = None, merge_prompt: 'str | None' = None, merge_pre_process: 'Callable | None' = None, merge_post_process: 'Callable | None' = None, merge_fallback: 'Callable | None' = None, merge_model: 'str | None' = None, interrupt_when: 'str | Callable | None' = None, renderer: 'Renderer | None' = None, context: 'list[str] | None' = None, skip_when: 'Callable | None' = None, skip_value: 'Callable | None' = None, gate_tools_when: 'Callable | str | None' = None, loop_when: 'str | Callable | None' = None, max_iterations: 'int | None' = None, on_exhaust: \"Literal['error', 'last', 'exit'] | None\" = None, portal: 'list[str] | None' = None, route: 'str | None' = None, max_hops: 'int | None' = None) -> 'Any'"
     },
     {
       "anchor": "construct_from_module",
@@ -461,14 +461,14 @@
       "signature": "(when: str)"
     },
     {
-      "anchor": "keymaker",
+      "anchor": "portal",
       "bases": [],
       "doc": "Dynamic-handoff modifier \u2014 one modifier with two modes (design \u00a72.1).",
       "fields": [
         {
           "annotation": "list[str] | None",
           "default": "None",
-          "name": "peers",
+          "name": "to",
           "required": false
         },
         {
@@ -527,8 +527,8 @@
         }
       ],
       "kind": "pydantic_model",
-      "name": "Keymaker",
-      "signature": "(peers: list[str] | None = None, route: str = 'goto', max_hops: int = 10, on_exhaust: Literal['error', 'exit'] = 'error', spec_field: str | None = None, input_field: str | None = None, output: type[pydantic.main.BaseModel] | str | None = None, scripted: dict[str, collections.abc.Callable] | None = None, conditions: dict[str, collections.abc.Callable] | None = None, on_invalid: Literal['raise'] = 'raise')"
+      "name": "Portal",
+      "signature": "(to: list[str] | None = None, route: str = 'goto', max_hops: int = 10, on_exhaust: Literal['error', 'exit'] = 'error', spec_field: str | None = None, input_field: str | None = None, output: type[pydantic.main.BaseModel] | str | None = None, scripted: dict[str, collections.abc.Callable] | None = None, conditions: dict[str, collections.abc.Callable] | None = None, on_invalid: Literal['raise'] = 'raise')"
     },
     {
       "anchor": "handoff_end",

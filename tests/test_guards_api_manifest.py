@@ -1274,11 +1274,11 @@ _EXCLUDE_EXCEPTION_KIND = "exception"
 # manifest names matching NEITHER bare regex. The guard both encodes the
 # predicate AND asserts the set equals this enumeration, so a future
 # publicly-unlinkable symbol surfaces loudly instead of being silently dropped.
-#   - HANDOFF_END: an ALL_CAPS module-level SENTINEL CONSTANT (Keymaker's
+#   - HANDOFF_END: an ALL_CAPS module-level SENTINEL CONSTANT (Portal's
 #     "leave the mesh" route value, neograph-rwion). It matches neither the
 #     PascalCase-type nor the snake_case-callable bare regex, so it has no
 #     autolink target and no per-symbol reference heading — it is documented
-#     inline in the Keymaker prose, not as its own linkable heading.
+#     inline in the Portal prose, not as its own linkable heading.
 INTENTIONALLY_INERT: frozenset[str] = frozenset({"HANDOFF_END"})
 
 

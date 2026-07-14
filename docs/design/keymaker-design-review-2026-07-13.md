@@ -1,3 +1,5 @@
+> **RENAMED 2026-07-14 (neograph-1t0zh):** the construct designed here as *Keymaker* shipped as **`Portal`** — a functional name that reads for newcomers and spans both modes (peer routing + dynamic flow). This document is preserved verbatim as the historical design record; its body still uses the original *Keymaker* name. See `website/src/content/docs/concepts/portal.mdx` for the shipped API.
+
 # Independent architect review — KEYMAKER design (dynamic-handoff-2026-07-13.md)
 
 Reviewer: independent (did not author). Verified against `src/neograph/` at develop HEAD,

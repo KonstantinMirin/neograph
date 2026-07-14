@@ -20,7 +20,7 @@ VALIDATION_CLUSTER = frozenset(
         "_validation_types.py",
         "_validation_inputs.py",
         "_validation_modifiers.py",
-        "_validation_keymaker.py",
+        "_validation_portal.py",
     }
 )
 
@@ -88,8 +88,8 @@ class TestCommandConstructionMonopoly:
     LangGraph's ``Command`` is a control-flow escape hatch: a node returning
     ``Command(goto=...)`` seizes routing from the declared edges. neograph
     confines that capability to two sites — ``runner.py`` (``Command(resume=)``
-    for Operator-interrupt resume) and ``factory.py`` (``make_keymaker_fn``'s
-    ``Command(goto=, update=)`` for the Keymaker mesh). Any other module
+    for Operator-interrupt resume) and ``factory.py`` (``make_portal_fn``'s
+    ``Command(goto=, update=)`` for the Portal mesh). Any other module
     constructing a ``Command`` is smuggling in hidden control flow that bypasses
     the compiler's edge model — this guard ratchets the new capability so it
     cannot spread. The match is AST-level (an ``ast.Call`` whose callee is the
@@ -97,7 +97,7 @@ class TestCommandConstructionMonopoly:
     trip it.
 
     If this fails: route the control-flow change through the compiler's edge
-    model (or ``make_keymaker_fn``) instead of returning a raw ``Command`` from a
+    model (or ``make_portal_fn``) instead of returning a raw ``Command`` from a
     new site — do NOT add the file to the allowlist.
     """
 
@@ -140,12 +140,12 @@ class TestCommandConstructionMonopoly:
         assert self._command_call_lines(ok) == []
 
 
-class TestKeymakerDispatchDiscriminationMonopoly:
+class TestPortalDispatchDiscriminationMonopoly:
     """Guard (neograph-f27xo) — the peer-vs-dispatch mode discriminator lives in
-    ONE place: ``modifiers.py`` (``Keymaker.is_dispatch`` + the ``DISPATCH_ROUTE``
+    ONE place: ``modifiers.py`` (``Portal.is_dispatch`` + the ``DISPATCH_ROUTE``
     sentinel). Every other layer — the assembly validator, the mesh collector, the
     compiler walk, the state builder, the producer registration — discriminates the
-    mode through ``keymaker.is_dispatch``, NEVER an inline ``route == "decide"``
+    mode through ``portal.is_dispatch``, NEVER an inline ``route == "decide"``
     comparison.
 
     Rationale (the team-lead's anti-band-aid adjudication): dispatch mode is checked
@@ -156,7 +156,7 @@ class TestKeymakerDispatchDiscriminationMonopoly:
     ``Compare`` against the string constant), so docstrings/comments that mention
     ``route="decide"`` never trip it.
 
-    If this fails: add/keep the check as ``keymaker.is_dispatch``, not the inline
+    If this fails: add/keep the check as ``portal.is_dispatch``, not the inline
     literal.
     """
 
@@ -184,7 +184,7 @@ class TestKeymakerDispatchDiscriminationMonopoly:
         assert violations == [], (
             f"\n{len(violations)} inline dispatch-mode discrimination(s) outside modifiers.py:\n"
             + "\n".join(violations)
-            + "\n\nUse `keymaker.is_dispatch` — the single source of truth (neograph-f27xo)."
+            + "\n\nUse `portal.is_dispatch` — the single source of truth (neograph-f27xo)."
         )
 
     def test_detector_flags_inline_decide_comparison(self, tmp_path):
@@ -200,14 +200,14 @@ class TestKeymakerDispatchDiscriminationMonopoly:
         assert self._decide_literal_comparisons(ok) == []
 
 
-class TestKeymakerDispatchRoutesThroughCanonicalGate:
-    """Guard (neograph-f27xo) — the Keymaker DISPATCH wrapper validates an emitted
+class TestPortalDispatchRoutesThroughCanonicalGate:
+    """Guard (neograph-f27xo) — the Portal DISPATCH wrapper validates an emitted
     spec ONLY through the canonical ``load_spec`` gate + ``compile()``, never a
     bespoke validator or schema subset (the mode-b anti-band-aid / Core Invariant).
 
     Mode (b) recompiles a machine-emitted spec at runtime. The whole safety
     argument is that an emitted spec passes the SAME ``Construct(...)`` gate
-    (``construct.py:194``) as a hand-written pipeline — so ``make_keymaker_dispatch_fn``
+    (``construct.py:194``) as a hand-written pipeline — so ``make_portal_dispatch_fn``
     MUST call ``load_spec`` (which builds the Construct through that gate) and MUST
     NOT hand-roll a second spec->Construct path (``_validate_spec`` / ``_build_construct``)
     or a schema subset. The behavioral rejection test pins the runtime effect; this
@@ -225,7 +225,7 @@ class TestKeymakerDispatchRoutesThroughCanonicalGate:
     def _dispatch_fn_call_names() -> set[str]:
         tree = ast.parse((SRC_DIR / "factory.py").read_text(), filename="factory.py")
         for node in ast.walk(tree):
-            if isinstance(node, ast.FunctionDef) and node.name == "make_keymaker_dispatch_fn":
+            if isinstance(node, ast.FunctionDef) and node.name == "make_portal_dispatch_fn":
                 names: set[str] = set()
                 for sub in ast.walk(node):
                     if isinstance(sub, ast.Call):
@@ -235,12 +235,12 @@ class TestKeymakerDispatchRoutesThroughCanonicalGate:
                         elif isinstance(callee, ast.Attribute):
                             names.add(callee.attr)
                 return names
-        raise AssertionError("make_keymaker_dispatch_fn not found in factory.py")
+        raise AssertionError("make_portal_dispatch_fn not found in factory.py")
 
     def test_dispatch_wrapper_calls_load_spec(self):
         names = self._dispatch_fn_call_names()
         assert "load_spec" in names, (
-            "make_keymaker_dispatch_fn must validate the emitted spec via the canonical "
+            "make_portal_dispatch_fn must validate the emitted spec via the canonical "
             "load_spec gate (the SAME Construct(...) validation as hand-written pipelines)."
         )
 
@@ -248,13 +248,13 @@ class TestKeymakerDispatchRoutesThroughCanonicalGate:
         names = self._dispatch_fn_call_names()
         offenders = self._BANNED & names
         assert not offenders, (
-            f"make_keymaker_dispatch_fn calls a bespoke spec->Construct path {sorted(offenders)} "
+            f"make_portal_dispatch_fn calls a bespoke spec->Construct path {sorted(offenders)} "
             "instead of routing through load_spec — this bypasses the canonical gate (anti-band-aid)."
         )
 
     def test_detector_flags_a_bespoke_call(self):
         """Slip check: the scanner would catch a banned bespoke-validator call."""
-        src = "def make_keymaker_dispatch_fn():\n    return _build_construct(spec)\n"
+        src = "def make_portal_dispatch_fn():\n    return _build_construct(spec)\n"
         tree = ast.parse(src)
         names = {
             c.func.id
@@ -1678,7 +1678,7 @@ def _seam_violations(src_dir: pathlib.Path) -> list[str]:
         "neograph._validation_types",
         "neograph._validation_inputs",
         "neograph._validation_modifiers",
-        "neograph._validation_keymaker",
+        "neograph._validation_portal",
     }
     violations: list[str] = []
     for py_file in sorted(src_dir.glob("*.py")):
@@ -1721,7 +1721,7 @@ class TestValidationModuleBoundary:
       - _validation_types.py     — type-compat primitives + shared vocab
       - _validation_inputs.py    — fan-in + Each fan-out consumer-input checks
       - _validation_modifiers.py — Loop self-edge/construct + Oracle merge hooks
-      - _validation_keymaker.py  — Keymaker mesh assembly rules (design §5)
+      - _validation_portal.py  — Portal mesh assembly rules (design §5)
       - _construct_validation.py — orchestrator (_validate_node_chain) + the
         single public re-export seam.
 
@@ -1760,8 +1760,8 @@ class TestValidationModuleBoundary:
             "def validate_loop_construct",
             "def _validate_merge_hooks",
         },
-        "_validation_keymaker.py": {
-            "def _check_keymaker_mesh",
+        "_validation_portal.py": {
+            "def _check_portal_mesh",
         },
         "_construct_validation.py": {
             "def _validate_node_chain",

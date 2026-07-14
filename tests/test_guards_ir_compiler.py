@@ -524,13 +524,13 @@ class TestCompilerWiringSplit:
 
         Cap raised 600 -> 690 for the m0tv ruff-format pass (mechanical rewrap
         inflated line counts, zero code change; actual 679 post-format). Raised
-        690 -> 720 for the Keymaker mesh-aware compile walk (neograph-on6jt): the
+        690 -> 720 for the Portal mesh-aware compile walk (neograph-on6jt): the
         walk orchestration + two exhaustiveness arms are core compiler
-        responsibility; the mesh WIRING helpers (_add_keymaker_mesh,
-        _contiguous_keymaker_mesh) were moved to _wiring.py per this guard. Raised
-        720 -> 735 for the Keymaker DISPATCH walk arm (neograph-f27xo, mode b): the
+        responsibility; the mesh WIRING helpers (_add_portal_mesh,
+        _contiguous_portal_mesh) were moved to _wiring.py per this guard. Raised
+        720 -> 735 for the Portal DISPATCH walk arm (neograph-f27xo, mode b): the
         route="decide" discriminator is walk orchestration (same category as the
-        mesh arm); its WIRING helper (_add_keymaker_dispatch) lives in _wiring.py."""
+        mesh arm); its WIRING helper (_add_portal_dispatch) lives in _wiring.py."""
         compiler = SRC_DIR / "compiler.py"
         line_count = len(compiler.read_text().splitlines())
         assert line_count < 735, (

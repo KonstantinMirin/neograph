@@ -839,14 +839,14 @@ class TestParityRatchet:
         declarative IR. A NEW declarative modifier shipped without a forward()
         parity twin fails HERE automatically, from a source of truth fully
         independent of the corpus."""
-        from neograph.modifiers import _SLOT_RULES, Keymaker
+        from neograph.modifiers import _SLOT_RULES, Portal
 
-        # ForwardConstruct is exempt from Keymaker in v1 (D-FORWARD-EXEMPT,
+        # ForwardConstruct is exempt from Portal in v1 (D-FORWARD-EXEMPT,
         # neograph-rwion): a runtime mesh has NO static dataflow for the tracer
         # to thread (every member is simultaneously producer and consumer of the
         # mesh channel), so there is no forward() twin to trace. A self.handoff()
         # builder is a documented fast-follow. Remove from this set when it ships.
-        forward_exempt = {Keymaker}
+        forward_exempt = {Portal}
 
         required_types = {rule.mod_type for rule in _SLOT_RULES} - forward_exempt
 

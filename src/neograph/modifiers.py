@@ -75,7 +75,7 @@ class ModifierCombo(Enum):
     ORACLE = auto()  # Oracle only
     LOOP = auto()  # Loop only
     OPERATOR = auto()  # Operator only
-    KEYMAKER = auto()  # Keymaker only (dynamic handoff; excludes all others — D-NO-OPERATOR-COMBO)
+    PORTAL = auto()  # Portal only (dynamic handoff; excludes all others — D-NO-OPERATOR-COMBO)
     EACH_ORACLE = auto()  # Each + Oracle (fusion)
     EACH_OPERATOR = auto()  # Each + Operator
     ORACLE_OPERATOR = auto()  # Oracle + Operator
@@ -98,7 +98,7 @@ _COMBO_MAP: dict[frozenset[str], ModifierCombo] = {
     frozenset({"oracle", "operator"}): ModifierCombo.ORACLE_OPERATOR,
     frozenset({"loop", "operator"}): ModifierCombo.LOOP_OPERATOR,
     frozenset({"each", "oracle", "operator"}): ModifierCombo.EACH_ORACLE_OPERATOR,
-    frozenset({"keymaker"}): ModifierCombo.KEYMAKER,
+    frozenset({"portal"}): ModifierCombo.PORTAL,
 }
 
 
@@ -123,8 +123,8 @@ def classify_modifiers(item: ConstructItem) -> tuple[ModifierCombo, dict]:
             mods["loop"] = ms.loop
         if ms.operator is not None:
             mods["operator"] = ms.operator
-        if ms.keymaker is not None:
-            mods["keymaker"] = ms.keymaker
+        if ms.portal is not None:
+            mods["portal"] = ms.portal
         return ms.combo, mods
 
     # Fallback for duck-typed items (e.g. _BranchNode)
@@ -136,7 +136,7 @@ def classify_modifiers(item: ConstructItem) -> tuple[ModifierCombo, dict]:
     oracle = get_mod(Oracle)
     loop = get_mod(Loop)
     operator = get_mod(Operator)
-    keymaker = get_mod(Keymaker)
+    portal = get_mod(Portal)
 
     mods = {}
     if each:
@@ -147,8 +147,8 @@ def classify_modifiers(item: ConstructItem) -> tuple[ModifierCombo, dict]:
         mods["loop"] = loop
     if operator:
         mods["operator"] = operator
-    if keymaker:
-        mods["keymaker"] = keymaker
+    if portal:
+        mods["portal"] = portal
 
     # Map to enum
     has = frozenset(mods.keys())
@@ -283,8 +283,8 @@ class Modifiable:
             return self.modifier_set.loop is not None
         if modifier_type is Operator:
             return self.modifier_set.operator is not None
-        if modifier_type is Keymaker:
-            return self.modifier_set.keymaker is not None
+        if modifier_type is Portal:
+            return self.modifier_set.portal is not None
         return False
 
     def get_modifier(self, modifier_type: type[Modifier]) -> Modifier | None:
@@ -297,8 +297,8 @@ class Modifiable:
             return self.modifier_set.loop
         if modifier_type is Operator:
             return self.modifier_set.operator
-        if modifier_type is Keymaker:
-            return self.modifier_set.keymaker
+        if modifier_type is Portal:
+            return self.modifier_set.portal
         return None
 
     def map(
@@ -590,35 +590,35 @@ class Loop(Modifier, frozen=True):
 
 HANDOFF_END = "__end__"
 
-# The `route` sentinel that selects Keymaker's dynamic-flow-definition (dispatch)
+# The `route` sentinel that selects Portal's dynamic-flow-definition (dispatch)
 # mode. The literal lives HERE ONLY — every layer discriminates the mode through
-# `Keymaker.is_dispatch`, never an inline `route == "decide"` string check.
+# `Portal.is_dispatch`, never an inline `route == "decide"` string check.
 DISPATCH_ROUTE = "decide"
 """Route-field value meaning "leave the mesh" (design §2.1). Public sentinel."""
 
 
-class Keymaker(Modifier, frozen=True):
+class Portal(Modifier, frozen=True):
     """Dynamic-handoff modifier — one modifier with two modes (design §2.1).
 
-    Mode (a) — peer routing (``peers=[...]``): a node picks its successor at
+    Mode (a) — peer routing (``to=[...]``): a node picks its successor at
     runtime from a declared peer set. Lowers to ``Command(goto=<peer>)`` (T2).
     Mode (b) — dynamic flow definition (``route="decide"``): the node emits the
     spec of the next flow; neograph validates -> compiles -> dispatches it.
 
     Usage:
         # peer routing (typed swarm):
-        Node("billing", ...) | Keymaker(peers=["triage", "technical"], max_hops=6)
+        Node("billing", ...) | Portal(to=["triage", "technical"], max_hops=6)
 
         # dynamic flow definition:
-        Node("planner", ...) | Keymaker(route="decide", spec_field="spec",
+        Node("planner", ...) | Portal(route="decide", spec_field="spec",
                                         input_field="dispatch_input", output=Summary)
 
     The mode is discriminated in ``model_post_init`` (mirrors ``Loop``):
-    ``peers`` set => peer mode (``route`` must not be ``"decide"``);
+    ``to`` set => peer mode (``route`` must not be ``"decide"``);
     ``route == "decide"`` => dispatch mode (requires ``spec_field`` /
     ``input_field`` / ``output``; forbids the peer-mode knobs). Neither or both
     => ``ConfigurationError``. Excludes every other modifier (Each/Oracle/Loop/
-    Operator) — Keymaker owns the node's outgoing edge (D-NO-OPERATOR-COMBO).
+    Operator) — Portal owns the node's outgoing edge (D-NO-OPERATOR-COMBO).
     """
 
     # arbitrary_types_allowed: for the ``output`` class field and the
@@ -626,7 +626,7 @@ class Keymaker(Modifier, frozen=True):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     # -- mode (a): peer routing --
-    peers: list[str] | None = None  # declared successor names (directed, per-node)
+    to: list[str] | None = None  # declared successor names (directed, per-node)
     route: str = "goto"  # mode (a): routing FIELD on the payload model; mode (b): literal "decide"
     max_hops: int = 10  # mesh budget; settable ONLY on the entry member
     on_exhaust: Literal["error", "exit"] = "error"
@@ -653,38 +653,38 @@ class Keymaker(Modifier, frozen=True):
         return self.route == DISPATCH_ROUTE
 
     def model_post_init(self, __context: Any) -> None:
-        is_peer = self.peers is not None
+        is_peer = self.to is not None
         is_dispatch = self.is_dispatch
         if is_peer and is_dispatch:
             raise ConfigurationError.build(
-                "Keymaker cannot be both peer mode and dispatch mode",
-                expected="peers=[...] (peer routing) XOR route='decide' (dynamic flow)",
-                found="peers set AND route=='decide'",
+                "Portal cannot be both peer mode and dispatch mode",
+                expected="to=[...] (peer routing) XOR route='decide' (dynamic flow)",
+                found="to set AND route=='decide'",
             )
         if not is_peer and not is_dispatch:
             raise ConfigurationError.build(
-                "Keymaker requires a mode",
-                expected="peers=[...] (peer routing) or route='decide' (dynamic flow)",
-                found="neither peers nor route='decide' provided",
+                "Portal requires a mode",
+                expected="to=[...] (peer routing) or route='decide' (dynamic flow)",
+                found="neither to nor route='decide' provided",
             )
         if is_peer:
             if self.max_hops < 1:
                 raise ConfigurationError.build(
-                    "Keymaker max_hops must be >= 1",
+                    "Portal max_hops must be >= 1",
                     found=str(self.max_hops),
                 )
         else:  # dispatch mode (route == "decide")
             missing = [f for f in ("spec_field", "input_field", "output") if getattr(self, f) is None]
             if missing:
                 raise ConfigurationError.build(
-                    "Keymaker dispatch mode requires spec_field, input_field, and output",
+                    "Portal dispatch mode requires spec_field, input_field, and output",
                     expected="spec_field=, input_field=, output=",
                     found=f"missing: {missing}",
                 )
             forbidden = [k for k in ("max_hops", "on_exhaust") if k in self.model_fields_set]
             if forbidden:
                 raise ConfigurationError.build(
-                    "Keymaker dispatch mode forbids peer-mode knobs",
+                    "Portal dispatch mode forbids peer-mode knobs",
                     expected="no max_hops/on_exhaust in dispatch mode",
                     found=f"peer-mode knobs set: {forbidden}",
                 )
@@ -714,47 +714,47 @@ _ORACLE_LOOP_CONFLICT = (
     "Cannot combine Oracle and Loop on the same item",
     "Use a sub-construct: nest the Loop body inside an Oracle ensemble, or vice versa",
 )
-# Keymaker excludes EVERY other modifier: it owns the node's outgoing edge, so
+# Portal excludes EVERY other modifier: it owns the node's outgoing edge, so
 # no other modifier's edge/postlude can compose with a Command-returning member
 # (D-NO-OPERATOR-COMBO). The excludes are RECIPROCAL — listed on BOTH the
-# Keymaker row and each sibling row — so a conflict is rejected with a clean
+# Portal row and each sibling row — so a conflict is rejected with a clean
 # ConstructError regardless of pipe order (review MEDIUM-2). Without the sibling-
-# side entries, ``node | Keymaker() | Each()`` (Keymaker landing first) would
+# side entries, ``node | Portal() | Each()`` (Portal landing first) would
 # slip past ``with_modifier`` and raise a raw KeyError in ``ModifierSet.combo``.
-_KEYMAKER_HINT = (
-    "Keymaker owns the node's outgoing edge; place the other modifier on the node "
+_PORTAL_HINT = (
+    "Portal owns the node's outgoing edge; place the other modifier on the node "
     "before the mesh entry or after the mesh exit"
 )
 
 
 def _km_conflict(this_label: str) -> tuple[str, str]:
-    """(message, hint) for a ``this_label`` slot row rejecting a Keymaker peer.
+    """(message, hint) for a ``this_label`` slot row rejecting a Portal peer.
 
     Names ``this_label`` so the fixture/error regex (e.g. ``[Ll]oop`` /
     ``[Oo]perator``) matches whichever modifier landed second.
     """
-    return (f"Cannot combine {this_label} and Keymaker on the same item", _KEYMAKER_HINT)
+    return (f"Cannot combine {this_label} and Portal on the same item", _PORTAL_HINT)
 
 
 _SLOT_RULES: tuple[_SlotRule, ...] = (
-    _SlotRule(Each, "each", "Each", (("loop", *_EACH_LOOP_CONFLICT), ("keymaker", *_km_conflict("Each")))),
-    _SlotRule(Oracle, "oracle", "Oracle", (("loop", *_ORACLE_LOOP_CONFLICT), ("keymaker", *_km_conflict("Oracle")))),
+    _SlotRule(Each, "each", "Each", (("loop", *_EACH_LOOP_CONFLICT), ("portal", *_km_conflict("Each")))),
+    _SlotRule(Oracle, "oracle", "Oracle", (("loop", *_ORACLE_LOOP_CONFLICT), ("portal", *_km_conflict("Oracle")))),
     _SlotRule(
         Loop,
         "loop",
         "Loop",
-        (("each", *_EACH_LOOP_CONFLICT), ("oracle", *_ORACLE_LOOP_CONFLICT), ("keymaker", *_km_conflict("Loop"))),
+        (("each", *_EACH_LOOP_CONFLICT), ("oracle", *_ORACLE_LOOP_CONFLICT), ("portal", *_km_conflict("Loop"))),
     ),
-    _SlotRule(Operator, "operator", "Operator", (("keymaker", *_km_conflict("Operator")),)),
+    _SlotRule(Operator, "operator", "Operator", (("portal", *_km_conflict("Operator")),)),
     _SlotRule(
-        Keymaker,
-        "keymaker",
-        "Keymaker",
+        Portal,
+        "portal",
+        "Portal",
         (
-            ("each", "Cannot combine Keymaker and Each on the same item", _KEYMAKER_HINT),
-            ("oracle", "Cannot combine Keymaker and Oracle on the same item", _KEYMAKER_HINT),
-            ("loop", "Cannot combine Keymaker and Loop on the same item", _KEYMAKER_HINT),
-            ("operator", "Cannot combine Keymaker and Operator on the same item", _KEYMAKER_HINT),
+            ("each", "Cannot combine Portal and Each on the same item", _PORTAL_HINT),
+            ("oracle", "Cannot combine Portal and Oracle on the same item", _PORTAL_HINT),
+            ("loop", "Cannot combine Portal and Loop on the same item", _PORTAL_HINT),
+            ("operator", "Cannot combine Portal and Operator on the same item", _PORTAL_HINT),
         ),
     ),
 )
@@ -774,7 +774,7 @@ class ModifierSet(BaseModel, frozen=True):
     oracle: Oracle | None = None
     loop: Loop | None = None
     operator: Operator | None = None
-    keymaker: Keymaker | None = None
+    portal: Portal | None = None
 
     @property
     def combo(self) -> ModifierCombo:
@@ -788,8 +788,8 @@ class ModifierSet(BaseModel, frozen=True):
             has.add("loop")
         if self.operator is not None:
             has.add("operator")
-        if self.keymaker is not None:
-            has.add("keymaker")
+        if self.portal is not None:
+            has.add("portal")
         return _COMBO_MAP[frozenset(has)]
 
     def model_post_init(self, __context: Any) -> None:
@@ -805,19 +805,19 @@ class ModifierSet(BaseModel, frozen=True):
                 "Cannot combine Oracle and Loop on the same item",
                 hint="Use a sub-construct: nest the Loop body inside an Oracle ensemble, or vice versa",
             )
-        # Keymaker excludes every other modifier (review M2: this direct-
+        # Portal excludes every other modifier (review M2: this direct-
         # construct path uses hard-coded pairwise arms — it does NOT read
-        # _SLOT_RULES, so without these arms a direct ModifierSet(keymaker=...,
+        # _SLOT_RULES, so without these arms a direct ModifierSet(portal=...,
         # loop=...) would silently pass while the pipe path rejects, the exact
         # parity hazard). Mirrors the D-NO-OPERATOR-COMBO reciprocal excludes.
-        if self.keymaker is not None and self.each is not None:
-            raise ConstructError.build("Cannot combine Keymaker and Each on the same item", hint=_KEYMAKER_HINT)
-        if self.keymaker is not None and self.oracle is not None:
-            raise ConstructError.build("Cannot combine Keymaker and Oracle on the same item", hint=_KEYMAKER_HINT)
-        if self.keymaker is not None and self.loop is not None:
-            raise ConstructError.build("Cannot combine Keymaker and Loop on the same item", hint=_KEYMAKER_HINT)
-        if self.keymaker is not None and self.operator is not None:
-            raise ConstructError.build("Cannot combine Keymaker and Operator on the same item", hint=_KEYMAKER_HINT)
+        if self.portal is not None and self.each is not None:
+            raise ConstructError.build("Cannot combine Portal and Each on the same item", hint=_PORTAL_HINT)
+        if self.portal is not None and self.oracle is not None:
+            raise ConstructError.build("Cannot combine Portal and Oracle on the same item", hint=_PORTAL_HINT)
+        if self.portal is not None and self.loop is not None:
+            raise ConstructError.build("Cannot combine Portal and Loop on the same item", hint=_PORTAL_HINT)
+        if self.portal is not None and self.operator is not None:
+            raise ConstructError.build("Cannot combine Portal and Operator on the same item", hint=_PORTAL_HINT)
 
     def with_modifier(self, mod: Modifier) -> ModifierSet:
         """Return a new ModifierSet with the given modifier added.
@@ -864,6 +864,6 @@ class ModifierSet(BaseModel, frozen=True):
             result.append(self.loop)
         if self.operator is not None:
             result.append(self.operator)
-        if self.keymaker is not None:
-            result.append(self.keymaker)
+        if self.portal is not None:
+            result.append(self.portal)
         return result

@@ -35,17 +35,17 @@ from neograph.construct import Construct
 from neograph.di import _unwrap_loop_value
 from neograph.errors import ConfigurationError, ExecutionError
 from neograph.factory import (
-    make_keymaker_dispatch_fn,
-    make_keymaker_fn,
     make_node_fn,
+    make_portal_dispatch_fn,
+    make_portal_fn,
 )
 from neograph.modifiers import (
     Each,
-    Keymaker,
     Loop,
     ModifierCombo,
     Operator,
     Oracle,
+    Portal,
     classify_modifiers,
     split_each_path,
 )
@@ -694,33 +694,33 @@ def _add_loop_back_edge(
     return exit_name
 
 
-def _contiguous_keymaker_mesh(nodes: list[ConstructItem], entry: Node) -> list[Node]:
-    """Collect the contiguous run of Keymaker-modified Nodes starting at ``entry``.
+def _contiguous_portal_mesh(nodes: list[ConstructItem], entry: Node) -> list[Node]:
+    """Collect the contiguous run of Portal-modified Nodes starting at ``entry``.
 
     Called by the compile walk when it reaches a mesh ENTRY. ``entry`` is located
     by identity, then the run is collected forward while each item is a
-    Keymaker-modified Node (contiguity is guaranteed by assembly validation,
+    Portal-modified Node (contiguity is guaranteed by assembly validation,
     design §3.1 r2). Takes the node LIST as a parameter (not ``construct.nodes``),
     so it does not add a second raw ``.nodes`` walk to the compiler.
     """
     start = next(i for i, n in enumerate(nodes) if n is entry)
     members: list[Node] = []
     for item in nodes[start:]:
-        if not (isinstance(item, Node) and classify_modifiers(item)[0] == ModifierCombo.KEYMAKER):
+        if not (isinstance(item, Node) and classify_modifiers(item)[0] == ModifierCombo.PORTAL):
             break
-        # A dispatch-mode Keymaker (route="decide") is NOT a mesh member — it is a
-        # standalone linear node lowered by _add_keymaker_dispatch (review M2). Stop
+        # A dispatch-mode Portal (route="decide") is NOT a mesh member — it is a
+        # standalone linear node lowered by _add_portal_dispatch (review M2). Stop
         # the run here so a dispatch node contiguous with a peer mesh is never
         # absorbed into `members` (which would mesh-wire it and skip its dispatch
-        # wiring). The assembly-side collector (_validation_keymaker) agrees.
-        km = item.modifier_set.keymaker
+        # wiring). The assembly-side collector (_validation_portal) agrees.
+        km = item.modifier_set.portal
         if km is not None and km.is_dispatch:
             break
         members.append(item)
     return members
 
 
-def _add_keymaker_mesh(
+def _add_portal_mesh(
     graph: StateGraph,
     members: list[Node],
     prev_node: str | None,
@@ -729,9 +729,9 @@ def _add_keymaker_mesh(
     scripted_lookup: dict[str, Callable] | None = None,
     tool_factory_lookup: dict[str, Callable] | None = None,
 ) -> str:
-    """Wire a Keymaker mesh: dynamic Command(goto) handoff (design §4.1, D3).
+    """Wire a Portal mesh: dynamic Command(goto) handoff (design §4.1, D3).
 
-    ``members`` is the contiguous run of Keymaker-modified sibling Nodes at one
+    ``members`` is the contiguous run of Portal-modified sibling Nodes at one
     construct level; ``members[0]`` is the mesh ENTRY. Unlike Loop (a conditional
     back-edge router), the mesh has NO static inter-member edges and NO router:
     each member returns ``Command(goto=peer_or_exit)`` and is registered with
@@ -748,10 +748,10 @@ def _add_keymaker_mesh(
     # max_hops/on_exhaust are ENTRY-only knobs (T1 validation), but the wrapper
     # runs per member — source the budget from the entry and thread it into every
     # member's wrapper as closure params (design §3.4, decisions D11/D12).
-    entry_keymaker = entry.modifier_set.keymaker
-    assert isinstance(entry_keymaker, Keymaker)
-    entry_max_hops = entry_keymaker.max_hops
-    entry_on_exhaust = entry_keymaker.on_exhaust
+    entry_portal = entry.modifier_set.portal
+    assert isinstance(entry_portal, Portal)
+    entry_max_hops = entry_portal.max_hops
+    entry_on_exhaust = entry_portal.on_exhaust
 
     # Pass-through exit node — the mesh's single re-join point (design §3.1 r2).
     def handoff_exit(state: Any) -> dict:
@@ -760,11 +760,11 @@ def _add_keymaker_mesh(
     graph.add_node(exit_name, handoff_exit)
 
     for member in members:
-        keymaker = member.modifier_set.keymaker
-        assert isinstance(keymaker, Keymaker)  # collected as Keymaker-modified
-        member_fn = make_keymaker_fn(
+        portal = member.modifier_set.portal
+        assert isinstance(portal, Portal)  # collected as Portal-modified
+        member_fn = make_portal_fn(
             member,
-            keymaker,
+            portal,
             entry_field,
             exit_name,
             max_hops=entry_max_hops,
@@ -777,7 +777,7 @@ def _add_keymaker_mesh(
         # destinations = declared peers ∪ {exit}. HANDOFF_END is a route VALUE
         # mapped to exit_name inside the wrapper, so exit_name (not HANDOFF_END)
         # is the goto target that must appear here.
-        destinations = tuple(keymaker.peers or ()) + (exit_name,)
+        destinations = tuple(portal.to or ()) + (exit_name,)
         graph.add_node(member.name, cast(Any, member_fn), destinations=destinations)
 
     # The only static edge into the mesh: prev → entry.
@@ -789,7 +789,7 @@ def _add_keymaker_mesh(
     return exit_name
 
 
-def _add_keymaker_dispatch(
+def _add_portal_dispatch(
     graph: StateGraph,
     node: Node,
     prev_node: str | None,
@@ -798,21 +798,21 @@ def _add_keymaker_dispatch(
     scripted_lookup: dict[str, Callable] | None = None,
     tool_factory_lookup: dict[str, Callable] | None = None,
 ) -> str:
-    """Wire a Keymaker DISPATCH node (``route="decide"``, design §4.2, reduced v1).
+    """Wire a Portal DISPATCH node (``route="decide"``, design §4.2, reduced v1).
 
     Unlike the peer mesh (which returns ``Command(goto=...)`` and needs
     ``destinations=``), a dispatch node is a plain LINEAR node: it runs its body,
     validates+compiles+invokes the emitted flow inside
-    :func:`make_keymaker_dispatch_fn`, and returns a plain state-update dict. So it
+    :func:`make_portal_dispatch_fn`, and returns a plain state-update dict. So it
     wires exactly like a bare node — a static ``prev → node`` edge in, and the walk
     threads ``prev_node`` forward so the next item adds the ``node → next`` edge.
     NO ``Command`` (keeps the G1 monopoly narrow). Returns the node name.
     """
-    keymaker = node.modifier_set.keymaker
-    assert isinstance(keymaker, Keymaker)  # dispatched by the KEYMAKER walk arm
-    dispatch_fn = make_keymaker_dispatch_fn(
+    portal = node.modifier_set.portal
+    assert isinstance(portal, Portal)  # dispatched by the PORTAL walk arm
+    dispatch_fn = make_portal_dispatch_fn(
         node,
-        keymaker,
+        portal,
         runtime=runtime,
         scripted_lookup=scripted_lookup,
         tool_factory_lookup=tool_factory_lookup,

@@ -37,12 +37,12 @@ from neograph._ir_protocols import ConstructLike
 from neograph._normalize import _declared_output
 from neograph._state_keys import StateKeys
 from neograph._validation_inputs import _check_item_input
-from neograph._validation_keymaker import _check_keymaker_mesh
 from neograph._validation_modifiers import (
     _validate_merge_hooks,
     validate_loop_construct,
     validate_loop_self_edge,
 )
+from neograph._validation_portal import _check_portal_mesh
 from neograph._validation_types import (
     _MISSING,
     NodeItem,
@@ -238,16 +238,16 @@ def _validate_node_chain(
                     label=label,
                 )
 
-            # Keymaker DISPATCH (route="decide", design §4.2): besides its own
+            # Portal DISPATCH (route="decide", design §4.2): besides its own
             # output (the emitted spec/input model, registered above), the node
             # produces the dispatched flow's result on a SEPARATE field
-            # `{field}_dispatch` typed by the required Keymaker.output. Register it
+            # `{field}_dispatch` typed by the required Portal.output. Register it
             # so a downstream `inputs={"<node>_dispatch": OutType}` consumer
             # type-checks — mirrors the dict-form per-key producer registration.
             if isinstance(item, Node):
-                keymaker = item.modifier_set.keymaker
-                if keymaker is not None and keymaker.is_dispatch and keymaker.output is not None:
-                    resolved = keymaker.output
+                portal = item.modifier_set.portal
+                if portal is not None and portal.is_dispatch and portal.output is not None:
+                    resolved = portal.output
                     if isinstance(resolved, str):
                         resolved = lookup_type(resolved)
                     dispatch_field = output_field_name(field_name, "dispatch")
@@ -340,12 +340,12 @@ def _validate_node_chain(
             if oracle is not None and oracle.merge_prompt is not None:
                 _validate_merge_hooks(oracle, item, construct.name)
 
-    # Keymaker mesh rules (design §5): a single end-of-walk helper enforces every
+    # Portal mesh rules (design §5): a single end-of-walk helper enforces every
     # mesh assembly rule for this construct level (peers, contiguity, single mesh,
     # uniform payload, route field, reserved-key typing, entry-only knobs). Runs
     # once per level; the recursion above re-invokes _validate_node_chain for each
     # sub-construct, so a nested mesh is checked at its own level.
-    _check_keymaker_mesh(construct)
+    _check_portal_mesh(construct)
 
     # Sub-construct output boundary contract: if construct.output is declared,
     # at least one internal node must produce a compatible type.

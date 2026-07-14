@@ -106,7 +106,7 @@ from neograph._sidecar import (  # noqa: F401 — re-exported for backward compa
 )
 from neograph.describe_type import type_display_name
 from neograph.di import DIBinding, DIKind
-from neograph.modifiers import Each, Keymaker, Loop, Operator, Oracle
+from neograph.modifiers import Each, Loop, Operator, Oracle, Portal
 from neograph.node import Node
 from neograph.renderers import Renderer
 from neograph.tool import Tool
@@ -249,19 +249,19 @@ def _build_each_kwargs(
     return each_kw
 
 
-def _build_keymaker_kwargs(
-    peers: list[str], route: str | None, max_hops: int | None, on_exhaust: str | None
+def _build_portal_kwargs(
+    portal: list[str], route: str | None, max_hops: int | None, on_exhaust: str | None
 ) -> dict[str, Any]:
-    """Keymaker (peer-mode) modifier kwargs from @node decorator arguments.
+    """Portal (peer-mode) modifier kwargs from @node decorator arguments.
 
     Conditional-include for ``route`` / ``max_hops`` / ``on_exhaust`` so the
     modifier's own defaults (``route='goto'``, ``max_hops=10``,
     ``on_exhaust='error'``) stay authoritative AND ``model_fields_set`` matches
-    the programmatic ``| Keymaker(...)`` form field-for-field. That identity is
-    load-bearing, not cosmetic: ``_validation_keymaker`` reads
-    ``Keymaker.model_fields_set`` to enforce the entry-only ``max_hops`` /
+    the programmatic ``| Portal(...)`` form field-for-field. That identity is
+    load-bearing, not cosmetic: ``_validation_portal`` reads
+    ``Portal.model_fields_set`` to enforce the entry-only ``max_hops`` /
     ``on_exhaust`` knobs, so a non-entry member must NOT carry them set."""
-    km_kw: dict[str, Any] = {"peers": peers}
+    km_kw: dict[str, Any] = {"to": portal}
     if route is not None:
         km_kw["route"] = route
     if max_hops is not None:
@@ -302,7 +302,7 @@ def node(
     loop_when: str | Callable | None = None,
     max_iterations: int | None = None,
     on_exhaust: Literal["error", "last", "exit"] | None = None,
-    peers: list[str] | None = None,
+    portal: list[str] | None = None,
     route: str | None = None,
     max_hops: int | None = None,
 ) -> Any:
@@ -407,38 +407,38 @@ def node(
                 hint="use a sub-construct with Loop inside an Each fan-out instead",
             )
 
-        # -- Validate Keymaker peer-mode sugar (peers=/route=/max_hops=) -------
-        # ``peers=`` builds a Keymaker, exactly as ``loop_when=`` builds a Loop.
+        # -- Validate Portal peer-mode sugar (portal=/route=/max_hops=) -------
+        # ``portal=`` builds a Portal, exactly as ``loop_when=`` builds a Loop.
         # It owns the node's outgoing edge, so it is mutually exclusive with the
         # other edge-shaping modifiers; reject the conflicts at decoration
         # (mirror the map_over/loop_when raise above).
         _km_node = (name or f.__name__).replace("_", "-")
-        if peers is not None and map_over is not None:
+        if portal is not None and map_over is not None:
             raise ConstructError.build(
-                "peers= (Keymaker) and map_over= (Each) cannot be combined on the same node",
+                "portal= (Portal) and map_over= (Each) cannot be combined on the same node",
                 node=_km_node,
-                hint="Keymaker owns the node's outgoing edge; a mesh member cannot also fan out",
+                hint="Portal owns the node's outgoing edge; a mesh member cannot also fan out",
             )
-        if peers is not None and loop_when is not None:
+        if portal is not None and loop_when is not None:
             raise ConstructError.build(
-                "peers= (Keymaker) and loop_when= (Loop) cannot be combined on the same node",
+                "portal= (Portal) and loop_when= (Loop) cannot be combined on the same node",
                 node=_km_node,
-                hint="Keymaker owns the node's outgoing edge; a mesh member cannot also self-loop",
+                hint="Portal owns the node's outgoing edge; a mesh member cannot also self-loop",
             )
         # A peer-mode routing knob with no mesh to attach to is a decoration
         # error (mirror map_key-requires-map_over). ``on_exhaust`` is EXEMPT —
         # it is shared with Loop and routed by trigger below.
-        if peers is None and max_hops is not None:
+        if portal is None and max_hops is not None:
             raise ConstructError.build(
-                "max_hops= requires peers=",
+                "max_hops= requires portal=",
                 node=_km_node,
-                hint="pass peers=[...] to declare a Keymaker mesh member (max_hops is a mesh budget)",
+                hint="pass portal=[...] to declare a Portal mesh member (max_hops is a mesh budget)",
             )
-        if peers is None and route is not None:
+        if portal is None and route is not None:
             raise ConstructError.build(
-                "route= requires peers=",
+                "route= requires portal=",
                 node=_km_node,
-                hint="pass peers=[...] to declare a Keymaker mesh member (route is its per-node routing field)",
+                hint="pass portal=[...] to declare a Portal mesh member (route is its per-node routing field)",
             )
 
         # -- Mode inference: if not explicitly set, infer from kwargs ----------
@@ -717,8 +717,8 @@ def node(
                 _set_param_res(n, param_res)
 
         # -- Loop when loop_when is set -----------------------------------------
-        # ``on_exhaust`` is shared with the Keymaker sugar (below); route it by
-        # trigger. On the Loop path Keymaker's 'exit' is the cross-modifier
+        # ``on_exhaust`` is shared with the Portal sugar (below); route it by
+        # trigger. On the Loop path Portal's 'exit' is the cross-modifier
         # value — reject it with a clean ConstructError. Any other invalid value
         # falls through to Loop.model_post_init's own ConfigurationError.
         if loop_when is not None:
@@ -727,7 +727,7 @@ def node(
                     "loop_when= (Loop) does not accept on_exhaust='exit'",
                     node=_km_node,
                     found=repr(on_exhaust),
-                    hint="'exit' is a Keymaker (peers=) value; use 'last' to return the last iteration",
+                    hint="'exit' is a Portal (portal=) value; use 'last' to return the last iteration",
                 )
             loop_kwargs: dict[str, Any] = {
                 "when": loop_when,
@@ -740,23 +740,23 @@ def node(
             if param_res:
                 _set_param_res(n, param_res)
 
-        # -- Keymaker (peer-mode dynamic handoff) when peers= is set ------------
-        # Presence of ``peers=`` builds the Keymaker, mirroring ``loop_when=`` ->
+        # -- Portal (peer-mode dynamic handoff) when portal= is set ------------
+        # Presence of ``portal=`` builds the Portal, mirroring ``loop_when=`` ->
         # Loop. This is PURE SUGAR: it only builds + pipes the modifier. The
         # normalizer (_ir_normalize) infers handoff_param + handoff_channel on
         # Construct assembly, IDENTICALLY for all three surfaces — decorators.py
         # writes NEITHER IR field (the neograph-ts7 / fan_out_param single-writer
         # rule, guard G3). The reserved 'handoff' param flows through the normal
         # signature-inferred inputs dict with no special-casing.
-        if peers is not None:
+        if portal is not None:
             if on_exhaust == "last":
                 raise ConstructError.build(
-                    "peers= (Keymaker) does not accept on_exhaust='last'",
+                    "portal= (Portal) does not accept on_exhaust='last'",
                     node=_km_node,
                     found=repr(on_exhaust),
                     hint="'last' is a Loop (loop_when=) value; use 'exit' to leave the mesh on budget exhaustion",
                 )
-            n = n | Keymaker(**_build_keymaker_kwargs(peers, route, max_hops, on_exhaust))
+            n = n | Portal(**_build_portal_kwargs(portal, route, max_hops, on_exhaust))
             _register_sidecar(n, f, param_names)
             if param_res:
                 _set_param_res(n, param_res)

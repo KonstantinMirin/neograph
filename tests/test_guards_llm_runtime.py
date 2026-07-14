@@ -968,13 +968,13 @@ class TestNormalizeIrIsSoleIrFieldWriter:
     """
 
     # IR-level inferred fields owned by normalize_ir.
-    # ``handoff_param`` (Keymaker reserved-'handoff' receiver, neograph-rwion)
+    # ``handoff_param`` (Portal reserved-'handoff' receiver, neograph-rwion)
     # joins the single-writer set: _ir_normalize._HandoffParamNormalizer is its
     # SOLE writer, keyed off the reserved 'handoff' inputs key (review H2).
-    # ``handoff_channel`` (neograph-kk262, T4) is the SECOND Keymaker IR field —
+    # ``handoff_channel`` (neograph-kk262, T4) is the SECOND Portal IR field —
     # the entry-keyed shared-channel name every member reads its 'handoff'
     # payload from. _ir_normalize computes it once off the mesh entry and stamps
-    # it on every Keymaker member; it is the sibling of the fan_out_param /
+    # it on every Portal member; it is the sibling of the fan_out_param /
     # handoff_param single-writer rule (D5/D10/H2), so it too must never be
     # written in decorators.py / _construct_builder.py — only inferred by the
     # normalizer, identically for all three surfaces (@node, declarative,

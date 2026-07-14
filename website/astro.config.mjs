@@ -57,7 +57,7 @@ export default defineConfig({
 						{ label: 'Observability', slug: 'concepts/observability' },
 						{ label: 'LLM Configuration', slug: 'concepts/llm-configuration' },
 						{ label: 'Each x Oracle Fusion', slug: 'concepts/each-oracle-fusion' },
-						{ label: 'Keymaker Peer Routing', slug: 'concepts/keymaker' },
+						{ label: 'Portal Peer Routing', slug: 'concepts/portal' },
 						{ label: 'Prompt Compiler', slug: 'concepts/prompt-compiler' },
 						{ label: 'Migrating your prompt compiler', slug: 'concepts/migrating-prompt-compilers' },
 						{ label: 'Evaluating Prompts', slug: 'concepts/evaluating-prompts' },

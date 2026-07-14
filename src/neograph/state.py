@@ -199,8 +199,8 @@ def compile_state_model(
                 # Each×Oracle on Constructs not supported
                 # Compiler raises earlier; this is a defensive fallback.
                 fields[field_name] = (sub.output | None, None)
-            case ModifierCombo.KEYMAKER:
-                # Keymaker on a Construct is rejected at assembly (D-MESH-LEVEL:
+            case ModifierCombo.PORTAL:
+                # Portal on a Construct is rejected at assembly (D-MESH-LEVEL:
                 # mesh members are sibling Nodes, not sub-constructs), so this
                 # arm is defensively-unreachable — mirror the EACH_ORACLE
                 # fallback rather than crash the state build.
@@ -242,25 +242,25 @@ def compile_state_model(
             fields[StateKeys.loop_count(field_name)] = (int, 0)
             loop = n_mods["loop"]
 
-    # Keymaker support: per-mesh hop counter + shared payload channel, keyed off
-    # the mesh ENTRY (the first Keymaker member in node order — design §3.1
+    # Portal support: per-mesh hop counter + shared payload channel, keyed off
+    # the mesh ENTRY (the first Portal member in node order — design §3.1
     # "the first member is the entry"; assembly validation guarantees one
     # contiguous mesh at this level). Both are neo_-prefixed → excluded from the
     # schema fingerprint (member OUTPUT fields carry the fingerprint). The
     # channel/counter are runtime-inert until T2 lowering reads them.
     def _is_dispatch(n: Node) -> bool:
-        km = n.modifier_set.keymaker
+        km = n.modifier_set.portal
         return km is not None and km.is_dispatch
 
     # PEER-mode members only: a dispatch node (route="decide") is NOT a mesh member
     # — it has no hop counter / mesh channel; it gets a {field}_dispatch field below.
-    keymaker_members = [
+    portal_members = [
         n
         for n in nodes_only
-        if classify_modifiers(n)[0] == ModifierCombo.KEYMAKER and not _is_dispatch(n)
+        if classify_modifiers(n)[0] == ModifierCombo.PORTAL and not _is_dispatch(n)
     ]
-    if keymaker_members:
-        entry = keymaker_members[0]
+    if portal_members:
+        entry = portal_members[0]
         entry_field = field_name_for(entry.name)
         # Single-type by assembly validation (dict-form members rejected); typed
         # Any so the `| None` field spec matches the sibling arms' pattern.
@@ -268,15 +268,15 @@ def compile_state_model(
         fields[StateKeys.handoff_hops(entry_field)] = (int, 0)
         fields[StateKeys.handoff_payload(entry_field)] = (payload | None, None)
 
-    # Keymaker DISPATCH support (design §4.2): a route="decide" node writes the
+    # Portal DISPATCH support (design §4.2): a route="decide" node writes the
     # dispatched flow's typed result to a regular (fingerprinted, NON-neo_-prefixed)
     # field `{field_name}_dispatch` — an output-contract change correctly
     # invalidates checkpoints. The node's OWN output (the emitted spec/input model)
-    # is written to its plain output field by the KEYMAKER arm in
+    # is written to its plain output field by the PORTAL arm in
     # `_add_single_output_field`; this is the SEPARATE dispatch-result field.
     for n in nodes_only:
         if _is_dispatch(n):
-            km = n.modifier_set.keymaker
+            km = n.modifier_set.portal
             assert km is not None  # _is_dispatch guarantees it
             out_spec = km.output
             assert out_spec is not None  # dispatch-mode invariant (T1 validation)
@@ -553,11 +553,11 @@ def _add_output_field(node: Node, fields: dict[str, Any]) -> None:
                 | ModifierCombo.EACH_OPERATOR
                 | ModifierCombo.LOOP
                 | ModifierCombo.LOOP_OPERATOR
-                | ModifierCombo.KEYMAKER
+                | ModifierCombo.PORTAL
             ):
-                # KEYMAKER dict-form is rejected at assembly (D-DICT-OUTPUTS);
+                # PORTAL dict-form is rejected at assembly (D-DICT-OUTPUTS);
                 # the arm is defensively-unreachable and defers to the per-key
-                # single-output builder (which treats KEYMAKER as bare).
+                # single-output builder (which treats PORTAL as bare).
                 for output_key, output_type in no.all_keys.items():
                     key_field = output_field_name(field_name, output_key)
                     _add_single_output_field(node, key_field, output_type, fields)
@@ -616,8 +616,8 @@ def _add_single_output_field(
                 Annotated[list[output_type], _append_loop_result],
                 [],
             )
-        case ModifierCombo.BARE | ModifierCombo.OPERATOR | ModifierCombo.KEYMAKER:
-            # A Keymaker mesh member writes its OWN output field as a plain
+        case ModifierCombo.BARE | ModifierCombo.OPERATOR | ModifierCombo.PORTAL:
+            # A Portal mesh member writes its OWN output field as a plain
             # value (like a bare node); the mesh channel + hop counter are
             # separate neo_-prefixed fields added per mesh entry below.
             fields[field_name] = (output_type | None, None)
