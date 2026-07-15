@@ -89,9 +89,16 @@ A compile-time artifact stashed on the compiled graph, the same way
 `schema_fingerprint`/`node_fingerprints` are stashed (`compiler.py`'s
 `CompiledNeograph` construction). Shape: `dict[str, str]`, DX-facing name →
 LangGraph entry node name. Computed once per `compile()` level — it never
-crosses a sub-Construct boundary. Crossing that boundary is explicitly
-`neograph-do0d9`'s `Command.PARENT` mechanism; keep the two mechanisms
-textually separate so implementers don't conflate them.
+crosses a sub-Construct boundary. Crossing that boundary is
+`neograph-do0d9`'s separate cross-boundary mechanism; keep the two mechanisms
+textually separate so implementers don't conflate them. **(Correction,
+2026-07-15:** the naive `Command(graph=Command.PARENT)` path was spiked and
+does **not** propagate through neograph's isolated `sub_graph.invoke()` —
+catching it swallows the escape into a silent seam, letting it propagate
+crashes. do0d9 is redesigned as a neograph-native parent-scoped bubble-up: the
+wrapper catches the escape intent and writes it onto the parent mesh channel
+(`StateKeys.handoff_payload`) for the parent mesh to route on. See the
+`neograph-do0d9` bead.**)
 
 ### Mechanism 2: mesh-transparent exit
 
