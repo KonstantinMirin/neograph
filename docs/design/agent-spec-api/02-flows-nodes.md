@@ -19,7 +19,7 @@
 | **AgentNode** | Run an Agent (ReAct or other agentic component) | Node + ToolNode | Node(mode="agent") with tools= OR Node(mode="act") | agent/act modes compile to ReAct cycle (agent/tools/parse nodes) | DIRECT |
 | **ToolNode** | Execute a tool (ClientTool/ServerTool/MCPTool/BuiltinTool) | ToolNode | Node.scripted() OR Tool spec with mcp_tool_factory | scripted nodes; MCP tools bound via mcp_tool_factory | DIRECT |
 | **ApiNode** | Perform API call with config, provide parts of response as outputs | Node | Node.scripted() (scripted fn does HTTP) | Scripted function uses httpx/aiohttp | DIRECT |
-| **BranchingNode** | Conditional branching: input value → branch mapping | add_conditional_edges | Operator(when=...) OR ForwardConstruct if/elif/else | Operator compiles to check node + conditional edge | DIRECT (Operator) |
+| **BranchingNode** | Conditional branching: input value → branch mapping | add_conditional_edges | Operator(when=...) OR ForwardConstruct if/elif/else | On the neograph-IR side, Operator lowers to a single linear check node with an UNCONDITIONAL edge in and an in-node conditional `interrupt()` call (`_add_operator_check`, `graph.add_edge`, not `add_conditional_edges`) — NOT a direct BranchingNode. On EXPORT to Agent Spec, the faithful target is the BranchingNode+InputMessageNode composite below, which reconstructs that in-node condition using real Agent Spec primitives | LOWER (Operator, see "Operator → BranchingNode + InputMessageNode" below) |
 | **MapNode** | Map-reduce: apply Flow to each collection element, reduce outputs | Send() + barrier | Each(over=..., key=...) modifier | Each compiles to router + Send() per item + barrier | DIRECT |
 | **ParallelMapNode** | Concurrent map-style workflows | Send() + barrier (same as MapNode) | Each(over=...) modifier (no separate primitive) | Each already parallel; no distinction needed | DIRECT |
 | **ParallelFlowNode** | Concurrent workflow execution (N independent flows in parallel) | Send() (one per branch) | Oracle(n=N, models=[...]) WITHOUT merge_fn | Oracle fans out N variants; merge_fn makes it ensemble | LOWER (Oracle) |
@@ -123,18 +123,51 @@ Lowers to:
 
 **Cost neograph hides**: the full 227-line pattern (explicit branch + cycle wiring vs one modifier).
 
-### Operator → BranchingNode + gated edge
+### Operator → BranchingNode + InputMessageNode
 
 ```
 node | Operator(when="needs_approval")
 ```
 
-Lowers to:
-- Check node (condition → interrupt or bypass)
-- `BranchingNode` routing
-- LangGraph `interrupt()` on true branch
+**Verified against pyagentspec 26.1.2 source** (`inputmessagenode.py`, `branchingnode.py`,
+`_node_execution.py`, `_langgraphconverter.py` — not asserted from the neograph side):
+`InputMessageNode` is the real HITL-pause primitive (its own reference LangGraph adapter
+lowers it to `interrupt()`, the same call neograph's `Operator` uses); `BranchingNode` is a
+pure `Dict[str,str]`-keyed router with NO pause/interrupt semantics of its own. Neither node
+alone is faithful — the composite is:
 
-**Status**: exact lowering still TBD in implementation (gated edge vs explicit check node).
+- `BranchingNode(mapping={<condition-string>: PAUSE_BRANCH})` — the conditional gate. Only
+  the pause-branch key needs an entry; any unmapped input value falls to `DEFAULT_BRANCH`,
+  which IS the bypass path (no second explicit mapping entry needed).
+- `ControlFlowEdge(from_branch=PAUSE_BRANCH) -> InputMessageNode` — the actual
+  pause/interrupt/resume node, wired off the pause branch.
+- `ControlFlowEdge(from_branch=DEFAULT_BRANCH) -> reconverge` — the bypass path, and the
+  post-`InputMessageNode` path also lands on the same `reconverge` node (both paths
+  converge on one shared downstream node).
+
+**Coercion obligation (do not skip this)**: `BranchingNode.mapping` keys are literal
+strings — the mapping VALUE is a branch LABEL, not a node name, and `ControlFlowEdge.
+from_branch` selects on that label. neograph's `Operator.when` yields a Python truthy
+`should_pause` (a bool or message string) delivered via a `DataFlowEdge` into the
+BranchingNode's input. Without an explicit boolean-to-string-key coercion step (render
+`should_pause` to the exact mapping-key string before the `DataFlowEdge`), a Python
+`True`/truthy value will NOT match the literal key and the composite would silently
+ALWAYS take `DEFAULT_BRANCH` — bypassing, never pausing. This is a silent fail-soft
+degradation the exporter (neograph-i3zsh) must either explicitly implement or mark as a
+documented GAP; it must never be presented as automatic or requiring no extra wiring.
+
+**Interrupt-payload asymmetry**: the pyagentspec reference adapter lowers InputMessageNode
+to `interrupt("")` with the prompt carried by the STATIC `message:` field, whereas
+neograph's Operator passes `interrupt(should_pause)` — a DYNAMIC runtime value. A
+dynamic-payload Operator is an explicit, documented lossy-export edge case (flag in
+metadata, do not silently coerce), not something InputMessageNode's schema can carry
+directly (it always returns exactly one `StringProperty` output).
+
+**Callable `when=` GAP**: a callable `Operator.when=` does not serialize (callable-valued
+fields are a documented export GAP elsewhere in this doc set) — only the string/registered-
+condition case is handled by the composite above.
+
+**Status**: verified and pinned (2026-07-15, neograph-03djs) — no longer TBD.
 
 ### Mode mapping
 

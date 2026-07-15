@@ -139,7 +139,7 @@ From `loader.py` and `_spec_schema.py`:
 | `node \| Oracle(n=3, models=[...], merge_fn="combine")` | `ParallelFlowNode` of 3 `LlmNode` flows + separate merge `ToolNode` + fan-out/fan-in `DataFlowEdge`s | ~4-6 nodes + ~8 edges → 1 modifier line |
 | Oracle per-variant model selection (`_oracle_model`) | **No representation** — N hand-instantiated `LlmNode`s with different `llm_config` | Static `LlmConfig` per node, dynamic per-variant choice lost |
 | `node \| Loop(when="continue")` | `BranchingNode` with condition → `{continue: back-edge, done: next}` + cyclic `ControlFlowEdge` + self `DataFlowEdge` | 227-line pattern (Oracle's own how-to) compressed to 1 line |
-| `node \| Operator(when="check")` | `BranchingNode` / gated edge (exact lowering TBD) | Interrupt semantics |
+| `node \| Operator(when="check")` | `BranchingNode(mapping={cond: PAUSE_BRANCH})` + `ControlFlowEdge` → `InputMessageNode` (pause branch) / reconverge (default branch) — verified against pyagentspec 26.1.2 (see 02-flows-nodes.md) | Interrupt semantics + boolean→string-key coercion for `should_pause` |
 
 **Callable-valued fields do NOT serialize:**
 - `raw_fn`, `skip_when`, `skip_value` (callables → reject or emit name/placeholder)

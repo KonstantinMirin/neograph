@@ -75,7 +75,7 @@ Ranked by how much they actually matter:
 | **OAuth / PKCE / Scope family** | 10 | Entirely outside neograph IR. Handle at the provider/LangChain-client layer; orthogonal to the wire format. |
 | **mTLS MCP transports** | 07 | `SSEmTLSTransport`/`StreamableHTTPmTLSTransport` = WayFlow's own ~50-line httpx additions. Tiny, matchable (competitive §4a). |
 | **Datastores** | 11 | One-way **import-only** shim (name-bound scripted `@node`). Export yields opaque `ToolNode`/`ApiNode`. Correct trade — neograph composes data access as `@node`s over LangChain. |
-| **InputMessageNode / OutputMessageNode** | 02 | `interrupt()` not first-class in neograph (exposed via LangGraph, no node); conversation/message state not modeled. |
+| **InputMessageNode / OutputMessageNode** | 02 | IMPORT-DIRECTION gap only: `interrupt()` not first-class in neograph (exposed via LangGraph, no node); conversation/message state not modeled — there is no InputMessageNode-equivalent IR node to import INTO. EXPORT direction is NOT a gap: `Operator(when=...)` synthesizes a faithful `InputMessageNode` (verified against pyagentspec 26.1.2 source, neograph-03djs) via the `BranchingNode`+`InputMessageNode` composite documented in 02. |
 | **tuple / Literal / Enum types** | 01 | NO-REPR — valid neograph I/O with no `Property` form. Downgrade (tuple→list, Literal→string, Enum→string) + `metadata["neograph/original_type"]`, or rely on the `neograph/source` embed. |
 
 ---

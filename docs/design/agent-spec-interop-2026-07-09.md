@@ -171,7 +171,7 @@ constructs (no modifier recovery).
 | `node \| Oracle(models=[…], merge_fn=…)` | **no node** — `ParallelFlowNode` of N single-`LlmNode` flows (N `LlmConfig`s) + a merge `LlmNode`/`ToolNode` + fan-out/fan-in edges | ~4-6 nodes + ~8 edges → 1 modifier |
 | Oracle per-variant model selection (`_oracle_model`) | **no representation** — N hand-instantiated `LlmNode`s | static `LlmConfig` per node |
 | `… \| Loop(when=…)` | `BranchingNode` (condition → `{continue: back-edge, done: next}`) + cyclic `ControlFlowEdge`s + self `DataFlowEdge`s | the whole 227-line pattern |
-| `Operator(when=…)` | condition → `BranchingNode` / gated edge (exact lowering TBD in impl) | — |
+| `Operator(when=…)` | condition → `BranchingNode(mapping={cond: PAUSE_BRANCH})` + `ControlFlowEdge(from_branch=PAUSE_BRANCH)` → `InputMessageNode` + `ControlFlowEdge(from_branch=DEFAULT_BRANCH)` → reconverge (verified against pyagentspec 26.1.2, neograph-03djs — boolean-to-string-key coercion required, see 02-flows-nodes.md) | boolean→string-key coercion for `should_pause` |
 
 **`Oracle` is the flagship gap:** ensemble / best-of-N + per-variant model
 selection has NO Agent Spec node. It only survives export by expansion. Advertise
