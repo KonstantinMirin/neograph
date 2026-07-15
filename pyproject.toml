@@ -63,6 +63,13 @@ dev = [
     "ruff>=0.3",
     "mypy>=1.8",
 ]
+# neograph-nkjv9: Agent Spec Property<->spec_types type-registry bridge.
+# NOT a core dep — src/neograph stays Agent-Spec-free by default (imports of
+# pyagentspec in spec_types.py are function-local/import-guarded). Run with:
+#   uv run --extra dev --extra agent-spec pytest tests/test_agent_spec_types.py
+agent-spec = [
+    "pyagentspec>=26.1.0,<27",
+]
 
 [project.scripts]
 neograph = "neograph.__main__:main"
