@@ -7,9 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Work in progress on `develop` toward 0.8.0 — the `Portal` dynamic-handoff surface (peer-routing mesh + runtime flow dispatch). Changelog entries land when 0.8.0 is cut.
+
+## [0.7.1] - 2026-07-15
+
+A maintenance release: two bug fixes surfaced by a downstream consumer, plus documentation and example additions that accrued after the 0.7.0 tag. No new public API — the `Portal` dynamic-handoff surface remains on `develop` for 0.8.0.
+
 ### Fixed
 
 - **json_mode: a `repair_json` blowup is retryable, and truncation gets a continuation re-prompt, not a blind re-issue** (`neograph-8uoot`). A max_tokens-truncated response sent `json_repair`'s recursive-descent parser over the stack limit; the call sat outside the parse guard, so the error escaped the retry loop and killed the run. `repair_json` failures now become `ExecutionError` and enter the same error-feedback retry as every other malformation. And a `finish_reason == 'length'` / `stop_reason == 'max_tokens'` response with no parseable payload is re-prompted with a continuation directive — the truncated reasoning is fed back and the model is told to emit ONLY the JSON payload — instead of the generic repair message (a blind re-issue at temperature=0 would likely reproduce the same runaway). Truncation logs a `llm_response_truncated` warning for observability. `TestRepairJsonGuarded` pins the guard structurally.
+- **dict-output reference params take peer priority over port classification** (`neograph-f45ad3b`). `_identify_port_params` classified any sub-construct param whose type subclasses the construct input as a port param, even when its name was a `{upstream}_{output_key}` reference to a dict-output producer — so a downstream node consuming an enriched subclass of the construct input failed assembly with a spurious `neo_subgraph_input` type mismatch. Dict-output references now get the same priority as peer `@node` names; true port params are unchanged.
+
+### Added
+
+- **Example 27 — ForwardConstruct imperative agent-wiring showcase.** A runnable walkthrough of `branch` / `self.loop` / `self.each` / `self.ensemble` / `self.interrupt` in the imperative `forward()` surface (a 0.7.0 feature), pinned by `tests/test_example_forward_wiring.py`.
+
+### Documentation
+
+- README refreshed to the current 0.7 surface (MCP client, async-native four-verb execution, durable resume, BAML-style rendering, one-line observability).
+- AGENTS.md de-staled: reference sections, guardrails, and north-star positioning brought current.
+- Design notes added under `docs/design/` (Agent Spec ratification, TypeScript feature-parity study).
 
 ## [0.7.0] - 2026-07-13
 
