@@ -30,8 +30,9 @@ it does not introduce a new one.
 **On the lowering substrate**: this doc's two mechanisms name a
 *destination*, not how that destination is reached. Whether a routing
 target is lowered via `Command(goto=...)+destinations=` or a
-router+`path_map` equivalent is a separate, orthogonal decision — see
-"A note on lowering substrate" below.
+router+`path_map` equivalent is orthogonal to this taxonomy — see
+"A note on lowering substrate" below (the lowering is settled:
+`Command(goto)`, ratified).
 
 ---
 
@@ -128,19 +129,21 @@ compiler or decorators.
 
 ## A note on lowering substrate (D-LOWERING-DISSENT)
 
-`docs/design/keymaker-decision-log-2026-07-13.md` marks **D-LOWERING-DISSENT**
-as ESCALATED / genuinely contested: v1 kept `Command(goto)+destinations=`
-per the `neograph-07inf` bead pin and v2 forward-compatibility, but the
-reviewer preferred a router+`path_map` alternative, and the decision log's
-own morning action is "DECIDE: ratify `Command(goto)` or switch to
-router+`path_map`" — filed as a bead, unresolved as of this doc's writing.
+**D-LOWERING-DISSENT is RATIFIED** (`neograph-7t7tf`, closed 2026-07-15):
+`Command(goto=...)+destinations=` is the confirmed lowering. The reviewer's
+router+`path_map` alternative was overruled because `path_map` cannot express
+runtime-computed or cross-construct targets (Portal mode (b),
+`Command.PARENT`), so it cannot carry Portal's identity; `path_map` stays the
+right lowering only for build-time-known fan-out (`Each`/`Oracle`). The
+historical dissent is recorded in
+`docs/design/keymaker-decision-log-2026-07-13.md`.
 
 The entry-label-map and mesh-transparent-exit mechanisms above are
-**lowering-substrate-agnostic**: they name a destination; whether that
-destination is reached via `Command(goto)+destinations=` or a
-router+`path_map` equivalent is the separate, still-open D-LOWERING-DISSENT
-decision — not something this taxonomy doc settles. This keeps the
-taxonomy durable if v1's lowering substrate changes.
+nonetheless **lowering-substrate-agnostic** by design: they name a
+*destination*, not how it is reached. That is a durability property — the
+taxonomy survives untouched even if the ratified `Command(goto)` substrate is
+ever revisited — not a hedge on an open decision. The lowering choice is
+settled; the taxonomy simply does not depend on it.
 
 ---
 
