@@ -270,6 +270,14 @@ class TestLlmResponsibilityDiscipline:
                 "_repair_hint",
                 "build_structured_repair_message",
                 "structured_retry_messages",
+                # neograph-8uoot: truncation-aware retry. _is_truncated reads the
+                # provider's finish_reason/stop_reason; _build_continuation_msg is
+                # the emit-only continuation directive for length-truncated
+                # responses; _retry_msg_for_failure is the single-site chooser both
+                # retry twins call (continuation vs generic repair hint).
+                "_is_truncated",
+                "_build_continuation_msg",
+                "_retry_msg_for_failure",
             }
         ),
         "_llm_render.py": frozenset(
@@ -338,7 +346,11 @@ class TestLlmResponsibilityDiscipline:
         # into a shared pure repair-hint body (_repair_hint + _validation_error_details)
         # that the new structured re-prompt builders (build_structured_repair_message,
         # structured_retry_messages) reuse. Reviewed increase — shared, not duplicated.
-        "_llm_retry.py": 510,
+        # neograph-8uoot: 510 -> 565. repair_json is now guarded (its blowups
+        # become ExecutionError instead of escaping the retry loop) and
+        # length-truncated responses get a continuation re-prompt via the
+        # shared _retry_msg_for_failure chooser. Reviewed increase.
+        "_llm_retry.py": 565,
         # neograph-v569: 310 -> 445. The public standalone compile_prompt landed
         # here (its change axis) with a thorough public docstring, a shared
         # render-then-compile core (_render_and_compile, which render_prompt now
@@ -2112,3 +2124,84 @@ class TestDiInputsInjectedAtLlmDispatchSeams:
             "    return {'config': config}\n"
         )
         assert "_agent_cycle.py" in self._seams_missing_injection(tmp_path)
+
+
+class TestRepairJsonGuarded:
+    """Every ``repair_json(...)`` call in src/ must sit inside a try/except.
+
+    neograph-8uoot: a max_tokens-truncated 290KB response sent json_repair's
+    recursive-descent parser over the stack limit; the call sat one line ABOVE
+    the guarded block, so the ValueError/RecursionError escaped
+    ``_invoke_json_with_retry`` uncaught and killed the run — bypassing the
+    retry machinery built for exactly this malformation class. Repairer input
+    is LLM-controlled text: every blowup it produces is a data malformation
+    and must be converted to ExecutionError inside a guard.
+
+    AST-walk guard (no regex-slip case): positive + negative meta-tests suffice.
+    """
+
+    @staticmethod
+    def _unguarded_repair_calls(source: str) -> list[int]:
+        """Line numbers of repair_json() calls not inside a try body that has
+        at least one except handler (try/finally does not count)."""
+        tree = ast.parse(source)
+        guarded_spans: list[tuple[int, int]] = []
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Try) and node.handlers:
+                start = node.body[0].lineno
+                end = max(getattr(n, "end_lineno", n.lineno) or n.lineno for n in node.body)
+                guarded_spans.append((start, end))
+        offenders: list[int] = []
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            fn = node.func
+            name = fn.id if isinstance(fn, ast.Name) else (fn.attr if isinstance(fn, ast.Attribute) else None)
+            if name == "repair_json" and not any(s <= node.lineno <= e for s, e in guarded_spans):
+                offenders.append(node.lineno)
+        return offenders
+
+    def test_no_unguarded_repair_json_call_in_src(self):
+        offenders: dict[str, list[int]] = {}
+        for path in sorted(SRC_DIR.glob("**/*.py")):
+            lines = self._unguarded_repair_calls(path.read_text())
+            if lines:
+                offenders[path.name] = lines
+        assert not offenders, (
+            f"repair_json() called outside a try/except guard: {offenders}. "
+            "Repairer input is LLM-controlled text — wrap the call and convert "
+            "failures to ExecutionError so the retry loop handles them "
+            "(neograph-8uoot)."
+        )
+
+    # ---- meta-tests: prove the guard actually discriminates ----
+
+    def test_meta_positive_bare_call_is_detected(self):
+        src = "def parse(text):\n    repaired = repair_json(text)\n    return repaired\n"
+        assert self._unguarded_repair_calls(src) == [2]
+
+    def test_meta_positive_try_finally_without_except_is_detected(self):
+        src = (
+            "def parse(text):\n"
+            "    try:\n"
+            "        repaired = repair_json(text)\n"
+            "    finally:\n"
+            "        pass\n"
+        )
+        assert self._unguarded_repair_calls(src) == [3]
+
+    def test_meta_negative_guarded_call_is_allowed(self):
+        src = (
+            "def parse(text):\n"
+            "    try:\n"
+            "        repaired = repair_json(text)\n"
+            "    except Exception as exc:\n"
+            "        raise ExecutionError('repair failed') from exc\n"
+            "    return repaired\n"
+        )
+        assert self._unguarded_repair_calls(src) == []
+
+    def test_meta_positive_attribute_call_is_detected(self):
+        # json_repair.repair_json(...) (module-qualified) must also be caught.
+        src = "def parse(text):\n    return json_repair.repair_json(text)\n"
+        assert self._unguarded_repair_calls(src) == [2]
