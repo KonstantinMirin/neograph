@@ -18,6 +18,7 @@ from neograph import (
     node,
     run,
 )
+from neograph._normalize import normalize_inputs
 from tests.fakes import build_test_compile_kwargs
 from tests.schemas import (
     Claims,
@@ -731,3 +732,61 @@ class TestFanInErrorsMigratedToBuild:
         assert "'b'" in msg
         assert "Claims" in msg
         assert "RawText" in msg
+
+
+class TestDictOutputParamPortPriority:
+    """Dict-output reference params take priority over port classification.
+
+    The regression shape (ox wnp.4): construct input=Base, an upstream node emits dict-form
+    outputs whose 'result' type SUBCLASSES the construct input (an enriched Base), and a
+    downstream node consumes '{upstream}_result'. Port identification must recognise the
+    dict-output reference — a param is a port ONLY when it matches no producer, mirroring
+    the existing 'peer @node takes priority' rule."""
+
+    def test_dict_output_param_subclassing_construct_input_binds_to_the_output(self):
+        class Base(BaseModel):
+            x: str = "b"
+
+        class Enriched(Base):
+            verdict: str = "ok"
+
+        @node(mode="scripted", outputs={"result": Enriched, "meta": RawText})
+        def judge(inp: Base) -> Enriched:
+            return Enriched(x=inp.x)
+
+        @node(mode="scripted", outputs=Enriched)
+        def seal(judge_result: Enriched) -> Enriched:
+            # judge_result references judge's dict output; Enriched subclasses the construct
+            # input, so pre-fix this param was misclassified as a port (neo_subgraph_input).
+            return judge_result
+
+        # Must build, and the param must bind to the dict output — not the subgraph input port.
+        built = construct_from_functions("dict-output-port-priority", [judge, seal], input=Base, output=Enriched)
+        seal_node = next(n for n in built.nodes if n.name == "seal")
+        seal_inputs = normalize_inputs(seal_node.inputs).by_name
+        assert "judge_result" in seal_inputs
+        assert "neo_subgraph_input" not in seal_inputs
+
+    def test_true_port_param_still_binds_when_dict_outputs_exist(self):
+        """The port path is untouched: a param typed as the construct input with a
+        non-producer name still reads neo_subgraph_input."""
+
+        class Base(BaseModel):
+            x: str = "b"
+
+        class Enriched(Base):
+            verdict: str = "ok"
+
+        @node(mode="scripted", outputs={"result": RawText, "meta": Claims})
+        def explore(inp: Base) -> RawText:
+            return RawText(text=inp.x)
+
+        @node(mode="scripted", outputs=Enriched)
+        def seal(explore_result: RawText, original: Base) -> Enriched:
+            return Enriched(x=original.x)
+
+        built = construct_from_functions("port-still-works", [explore, seal], input=Base, output=Enriched)
+        seal_node = next(n for n in built.nodes if n.name == "seal")
+        seal_inputs = normalize_inputs(seal_node.inputs).by_name
+        assert "neo_subgraph_input" in seal_inputs  # `original: Base` still reads the port
+        assert "explore_result" in seal_inputs

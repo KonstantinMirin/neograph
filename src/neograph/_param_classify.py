@@ -20,6 +20,7 @@ from __future__ import annotations
 import inspect
 from typing import TYPE_CHECKING
 
+from neograph._construct_graph import _resolve_dict_output_param
 from neograph._construct_validation import ConstructError
 from neograph._normalize import normalize_inputs
 from neograph._sidecar import _get_param_res, _get_sidecar, _set_param_res
@@ -53,6 +54,11 @@ def _identify_port_params(
         for pname, ptype in ni.by_name.items():
             if pname in decorated:
                 continue  # peer @node takes priority
+            if _resolve_dict_output_param(pname, decorated) is not None:
+                # A {upstream}_{output_key} reference to a dict-output producer takes the same
+                # priority as a peer @node — otherwise a dict output whose type subclasses the
+                # construct input is misclassified as a port and fan-in validation rejects it.
+                continue
             try:
                 if isinstance(ptype, type) and issubclass(ptype, construct_input):
                     ports.add(pname)
