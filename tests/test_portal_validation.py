@@ -246,8 +246,20 @@ class TestMeshStructureErrors:
             Construct("swarm", nodes=[entry, keyed_sub])
         assert "sub" in str(exc.value).lower() or "construct" in str(exc.value).lower()
 
-    def test_agent_member_rejected(self):
-        """An agent-mode mesh member raises (D-MEMBER-MODES: scripted/think/raw only)."""
+    def test_agent_member_accepted_as_mesh_member(self):
+        """An agent-mode mesh member is ACCEPTED at assembly (neograph-nnds9).
+
+        D-MEMBER-MODES (docs/design/dynamic-handoff-2026-07-13.md) was the v1
+        boundary cut rejecting agent/act members; portal-addressability-2026-07-15.md
+        names nnds9 as the task that relaxes it (`_check_portal_mesh`,
+        src/neograph/_validation_portal.py:96-104). This is the TDD-red pin for
+        that relaxation: assembling a mesh with an agent-mode member must NOT
+        raise ConstructError -- it currently does, because the blanket
+        `member.mode in ('agent', 'act')` rejection has not yet been narrowed.
+        Was `test_agent_member_rejected` (retired here per neograph-vihe7.29
+        step 7 -- the pin inverts rather than duplicates, since the old and new
+        behavior are mutually exclusive for the same input).
+        """
         entry = _member("triage", ["researcher"], handoff=False)
         researcher = Node(
             "researcher",
@@ -258,9 +270,8 @@ class TestMeshStructureErrors:
             inputs={"handoff": Handoff},
             outputs=Handoff,
         ) | Portal(to=["triage"])
-        with pytest.raises(ConstructError) as exc:
-            Construct("swarm", nodes=[entry, researcher])
-        assert "agent" in str(exc.value).lower() or "researcher" in str(exc.value)
+        mesh = Construct("swarm", nodes=[entry, researcher])  # must NOT raise
+        assert mesh.name == "swarm"
 
     def test_dict_form_outputs_on_member_rejected(self):
         """dict-form outputs on a Portal member raise (D-DICT-OUTPUTS)."""

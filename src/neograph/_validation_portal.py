@@ -93,15 +93,14 @@ def _check_portal_mesh(construct: ConstructLike) -> None:
                 construct=construct.name,
                 location=_source_location(),
             )
-        if member.mode in ("agent", "act"):
-            raise ConstructError.build(
-                f"Portal mesh member '{name}' is an {member.mode}-mode node",
-                expected="mesh members must be scripted/think/raw (D-MEMBER-MODES)",
-                found=f"mode={member.mode}",
-                node=name,
-                construct=construct.name,
-                location=_source_location(),
-            )
+        # D-MEMBER-MODES (dynamic-handoff-2026-07-13.md): v1 rejected agent/act
+        # members here (their multi-node ReAct cycle needed separate
+        # terminal-hop Command plumbing). Resolved by neograph-nnds9 — the
+        # rejection is narrowed, not deleted: agent/act members still satisfy
+        # every OTHER check in this function (uniform payload, route field,
+        # dict-outputs-forbidden, contiguity, peer existence, single-mesh,
+        # entry-only max_hops/on_exhaust, reserved handoff key) mode-
+        # independently via Node.outputs/_declared_output, unchanged below.
         if normalize_outputs(member.outputs).is_dict_form:
             raise ConstructError.build(
                 f"Portal mesh member '{name}' declares dict-form outputs",

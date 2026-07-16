@@ -49,33 +49,82 @@ _SUPERSTEPS_PER_AGENT_TURN = 2
 _AGENT_CYCLE_OVERHEAD = 3
 
 
-def _mesh_hop_cost(construct: Construct) -> int:
-    """Sum ``entry.max_hops`` ONCE per Portal mesh, recursing sub-constructs.
+def _member_hop_cost(node: Node) -> int:
+    """Superstep cost of ONE hop through a Portal mesh member.
 
-    A K-hop mesh consumes up to K supersteps (one Command(goto) per hop), so the
-    recursion floor must budget for it exactly as it does for agent/act cycles.
-    A contiguous run of Portal-modified sibling Nodes is ONE mesh (design
+    Atomic members (scripted/think/raw) cost exactly 1 superstep per hop —
+    the pre-nnds9 assumption. An agent/act member's hop re-enters its own
+    ReAct cycle (agent<->tools loop, up to ``max_iterations`` turns) before
+    its parse node ever emits the mesh ``Command`` — so ONE hop through an
+    agent/act member can itself cost ``max_iterations * 2 + overhead``
+    supersteps. Mirrors the flat per-node agent/act cost computed in
+    ``_ensure_agent_recursion_limit``.
+    """
+    if node.mode in ("agent", "act"):
+        max_iters = _coerce_llm_config(node.llm_config).max_iterations
+        return max_iters * _SUPERSTEPS_PER_AGENT_TURN + _AGENT_CYCLE_OVERHEAD
+    return 1
+
+
+def _mesh_hop_cost(construct: Construct) -> int:
+    """Sum the worst-case superstep cost of every Portal mesh, recursing
+    sub-constructs.
+
+    A K-hop mesh consumes up to K hops (one ``Command(goto)`` per hop), each
+    landing on WHICHEVER member the route target names — so the worst case is
+    every hop landing on the mesh's MOST EXPENSIVE member (per
+    ``_member_hop_cost``), not a flat 1-superstep-per-hop assumption (which
+    undercounts an agent/act member's own internal ReAct supersteps). A
+    contiguous run of Portal-modified sibling Nodes is ONE mesh (design
     §3.1 r2) and only its ENTRY (first member) carries the real ``max_hops``
     (entry-only, T1) — non-entry members default to 10. ``iter_nodes``
     leaf-flattens and cannot identify the entry (nor a mesh whose entry left
     ``max_hops`` at the default), so this uses the level-preserving
-    ``iter_with_arms`` walk that mirrors the compiler's mesh detection and adds
-    the entry's ``max_hops`` once per contiguous run (decision D13).
+    ``iter_with_arms`` walk that mirrors the compiler's mesh detection.
     """
     total = 0
-    prev_was_member = False
+    current_run: list[Node] = []
+
+    def _flush() -> None:
+        nonlocal total
+        if not current_run:
+            return
+        entry_portal = current_run[0].modifier_set.portal
+        if entry_portal is not None:
+            per_hop = max(_member_hop_cost(m) for m in current_run)
+            total += entry_portal.max_hops * per_hop
+        current_run.clear()
+
     for item in iter_with_arms(construct):
         if isinstance(item, Construct):
+            _flush()
             total += _mesh_hop_cost(item)
-            prev_was_member = False
             continue
-        is_member = isinstance(item, Node) and classify_modifiers(item)[0] == ModifierCombo.PORTAL
-        if is_member and not prev_was_member:
-            portal = item.modifier_set.portal
-            if portal is not None:
-                total += portal.max_hops  # entry of a contiguous mesh run
-        prev_was_member = is_member
+        if isinstance(item, Node) and classify_modifiers(item)[0] == ModifierCombo.PORTAL:
+            current_run.append(item)
+        else:
+            _flush()
+    _flush()
     return total
+
+
+def _portal_mesh_member_ids(construct: Construct) -> set[int]:
+    """``id()`` of every Node that is a Portal mesh member, recursing
+    sub-constructs.
+
+    An agent/act mesh member's cost is captured ENTIRELY by ``_mesh_hop_cost``
+    (its per-hop ReAct-cycle cost, times the mesh's ``max_hops``) — so the flat
+    per-node ``agent_cost`` loop in ``_ensure_agent_recursion_limit`` must
+    EXCLUDE mesh members, or an agent/act mesh member's cost is double-counted
+    (once flat, once mesh-aware).
+    """
+    ids: set[int] = set()
+    for item in iter_with_arms(construct):
+        if isinstance(item, Construct):
+            ids |= _portal_mesh_member_ids(item)
+        elif isinstance(item, Node) and classify_modifiers(item)[0] == ModifierCombo.PORTAL:
+            ids.add(id(item))
+    return ids
 
 
 def _ensure_agent_recursion_limit(
@@ -86,21 +135,28 @@ def _ensure_agent_recursion_limit(
     reach its graceful budget-exhaust edge instead of hitting LangGraph's default
     superstep ceiling first.
 
-    Each agent/act node's cycle can cost ``max_iterations * 2 + overhead``
-    supersteps; each Portal mesh can cost ``entry.max_hops`` supersteps. Both
-    run in distinct supersteps, so their costs ADD across the run. The floor sums
-    every agent/act node's worst case AND every mesh's hop budget on top of the
-    default (which already covers the surrounding non-agent nodes). Only RAISES to
-    the floor — a larger user-supplied ``recursion_limit`` is kept. Pure config
-    mutation (no engine verb); shared verbatim by ``_prepare`` and ``_aprepare``.
+    Each STANDALONE agent/act node's cycle can cost ``max_iterations * 2 +
+    overhead`` supersteps; each Portal mesh can cost up to
+    ``entry.max_hops * worst_member_hop_cost`` supersteps (an agent/act mesh
+    member's own hop cost, per ``_mesh_hop_cost``/``_member_hop_cost``). Both
+    run in distinct supersteps, so their costs ADD across the run. The floor
+    sums every STANDALONE agent/act node's worst case AND every mesh's
+    worst-case hop budget on top of the default (which already covers the
+    surrounding non-agent nodes) — an agent/act node that is ALSO a Portal
+    mesh member is excluded from the flat per-node sum
+    (``_portal_mesh_member_ids``) so its cost is not double-counted (once
+    flat, once mesh-aware). Only RAISES to the floor — a larger
+    user-supplied ``recursion_limit`` is kept. Pure config mutation (no
+    engine verb); shared verbatim by ``_prepare`` and ``_aprepare``.
     """
     construct = getattr(graph, "construct", None)
     if construct is None:
         return config
 
+    mesh_member_ids = _portal_mesh_member_ids(construct)
     agent_cost = 0
     for node in iter_nodes(construct):
-        if isinstance(node, Node) and node.mode in ("agent", "act"):
+        if isinstance(node, Node) and node.mode in ("agent", "act") and id(node) not in mesh_member_ids:
             max_iters = _coerce_llm_config(node.llm_config).max_iterations
             agent_cost += max_iters * _SUPERSTEPS_PER_AGENT_TURN + _AGENT_CYCLE_OVERHEAD
 

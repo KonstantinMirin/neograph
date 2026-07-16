@@ -95,6 +95,11 @@ ANY_ALLOWLIST: dict[str, str] = {
     "factory.py:_extract_fan_in_dict:return": "dict of upstream values; element types declared by node.inputs",
     "factory.py:_extract_single_type:return": "user-supplied upstream value; type declared by node.inputs",
     "factory.py:_extract_input:return": "user-supplied extracted input; type declared by node.inputs",
+    # ── factory.py — Portal routing decision (neograph-nnds9 extraction) ──
+    "factory.py:_portal_route_to_command:update": "state update dict; values typed by user node outputs",
+    "factory.py:make_portal_agent_cycle_fn:return": "ReAct-cycle body dict; callables typed by _agent_cycle, opaque here",
+    # ── _wiring.py — shared agent-cycle wiring (neograph-nnds9) ──
+    "_wiring.py:_wire_agent_cycle_body:parts": "ReAct-cycle body dict from make_agent_cycle_bodies/make_portal_agent_cycle_fn; opaque here",
     # ── _dispatch.py — render boundary; context_data is now precise (dict[str, str]) ──
     "_dispatch.py:_render_input:input_data": "user-supplied extracted input; type declared by node.inputs",
     "_dispatch.py:_render_input:return": "RenderedInput.raw or RenderedInput.for_template_ref; user-typed payload",

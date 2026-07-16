@@ -113,8 +113,14 @@ already uses. No new state-key scheme.
 does not pin.** For a multi-node PORT-BEARING region (agent/act cycle,
 sub-Construct), which node counts as the "exit node" — the parse node? the
 router's done-arm? the subgraph's opaque-node boundary? — is deferred to
-`neograph-nnds9`/`neograph-do0d9` to resolve per region class. This doc
-establishes that an exit node must exist and be singular for a region to
+`neograph-nnds9`/`neograph-do0d9` to resolve per region class. **(Resolved
+for the agent/act region class, 2026-07-16:** the `{node}__parse` node is
+the exit — the ONE node whose returned update is piped through Portal's
+routing decision (`Command(goto=...)`); the entry is `{node}__agent` (both
+other members' targets and the mesh's own static entry edge resolve
+through it); the interior `__tools`/loopback nodes are never Portal-visible.
+See `neograph-nnds9`.**) This doc establishes that an exit node must exist
+and be singular for a region to
 qualify as PORT-BEARING; it does not enumerate every region's exit node.
 
 ### Constraints on implementers

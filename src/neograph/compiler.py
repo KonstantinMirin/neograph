@@ -270,6 +270,7 @@ def compile(
                 runtime=runtime,
                 scripted_lookup=scripted_lookup,
                 tool_factory_lookup=tool_factory_lookup,
+                condition_lookup=condition_lookup,
             )
             meshed.update(id(m) for m in members)
         elif isinstance(item, _BranchNode):
