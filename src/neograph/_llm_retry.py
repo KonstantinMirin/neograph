@@ -115,17 +115,67 @@ def _is_list_annotation(annotation: Any) -> bool:
     return annotation is list
 
 
+_STRINGLY_NULL = frozenset({"null", "none", "nil", "n/a", "na"})
+
+
+def _optional_inner_types(annotation: Any) -> tuple[Any, ...] | None:
+    """Non-None member types of an Optional annotation, else None.
+
+    Returns the tuple of non-``NoneType`` members when *annotation* is a Union
+    that admits ``None`` (``int | None``, ``Optional[Enum]``, ``X | Y | None``);
+    returns ``None`` when the field is not nullable (so callers leave it alone).
+    """
+    import types
+    from typing import Union, get_args, get_origin
+
+    origin = get_origin(annotation)
+    if origin is Union or origin is getattr(types, "UnionType", ()):
+        args = get_args(annotation)
+        if type(None) in args:
+            return tuple(a for a in args if a is not type(None))
+    return None
+
+
+def _is_stringly_null(val: Any, annotation: Any) -> bool:
+    """True when *val* is a string sentinel meaning "no value" for a nullable field.
+
+    LLMs (GLM 5.2) intermittently emit the *string* ``"null"`` (or ``"none"``,
+    ``""``) for Optional numeric/enum/bool fields instead of a JSON ``null``.
+    json_repair leaves the string intact and Pydantic then rejects it
+    (``int_parsing`` / ``enum``), aborting the node. We coerce the sentinel to
+    ``None`` — but ONLY when the field is Optional, so a legitimately-typed
+    ``str`` value is never destroyed. The empty string is treated as a sentinel
+    only when the field cannot itself be a plain ``str`` (where ``""`` is valid).
+    """
+    if not isinstance(val, str):
+        return False
+    non_none = _optional_inner_types(annotation)
+    if non_none is None:
+        return False
+    low = val.strip().lower()
+    if low in _STRINGLY_NULL:
+        return True
+    return low == "" and not any(t is str for t in non_none)
+
+
 def _apply_null_defaults(data: dict, model: type[BaseModel]) -> None:
     """Replace null values with field defaults, recursively.
 
     Mutates *data* in place. Applies when the JSON value is None and the field
     has either an explicit default or a default_factory. Also recurses into
-    nested BaseModel fields and list[BaseModel] items.
+    nested BaseModel fields and list[BaseModel] items. Stringly-null sentinels
+    (the string ``"null"``/``"none"``/``""``) on Optional fields are first
+    coerced to ``None`` so the same default/None disposition applies.
     """
     for field_name, field_info in model.model_fields.items():
         if field_name not in data:
             continue
         val = data[field_name]
+
+        # GLM emits the STRING "null" for Optional numeric/enum fields; normalize
+        # it to a real None BEFORE the null-disposition branches below run.
+        if _is_stringly_null(val, field_info.annotation):
+            data[field_name] = val = None
 
         if val is None and field_info.default is not PydanticUndefined:
             data[field_name] = field_info.default
