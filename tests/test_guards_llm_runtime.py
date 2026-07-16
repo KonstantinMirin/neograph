@@ -278,6 +278,12 @@ class TestLlmResponsibilityDiscipline:
                 "_is_truncated",
                 "_build_continuation_msg",
                 "_retry_msg_for_failure",
+                # stark-h46: stringly-null repair. GLM emits the STRING "null" for
+                # Optional numeric/enum fields; _is_stringly_null (guarded by
+                # _optional_inner_types so only nullable fields are touched)
+                # normalizes the sentinel to None inside _apply_null_defaults.
+                "_optional_inner_types",
+                "_is_stringly_null",
             }
         ),
         "_llm_render.py": frozenset(
@@ -350,7 +356,11 @@ class TestLlmResponsibilityDiscipline:
         # become ExecutionError instead of escaping the retry loop) and
         # length-truncated responses get a continuation re-prompt via the
         # shared _retry_msg_for_failure chooser. Reviewed increase.
-        "_llm_retry.py": 565,
+        # stark-h46: 565 -> 615. Stringly-null repair (_is_stringly_null +
+        # _optional_inner_types) so the STRING "null" GLM emits for Optional
+        # numeric/enum fields is normalized to None inside _apply_null_defaults
+        # instead of crashing the node. Reviewed increase.
+        "_llm_retry.py": 615,
         # neograph-v569: 310 -> 445. The public standalone compile_prompt landed
         # here (its change axis) with a thorough public docstring, a shared
         # render-then-compile core (_render_and_compile, which render_prompt now
