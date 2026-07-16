@@ -589,6 +589,121 @@ class TestParseJsonResponseLenientParsing:
         assert result.label == "alpha"
         assert result.tags == ["alpha"]
 
+    def test_stringly_null_coerced_to_none_for_optional_int(self):
+        """The STRING "null" for an Optional[int] field must coerce to None.
+
+        BUG stark-h46: GLM 5.2 intermittently emits the *string* ``"null"`` (not
+        JSON ``null``) for Optional numeric fields (e.g.
+        ``freshness_days: int | None``). json_repair leaves the string intact and
+        Pydantic then raises ``int_parsing``, aborting the whole node. The parse
+        must coerce the sentinel to ``None`` instead of crashing.
+        """
+        from pydantic import BaseModel
+
+        from neograph._llm_retry import _parse_json_response
+
+        class Company(BaseModel):
+            name: str
+            freshness_days: int | None = None
+
+        text = '{"name": "ElectraVehicles", "freshness_days": "null"}'
+        result = _parse_json_response(text, Company)
+        assert result.name == "ElectraVehicles"
+        assert result.freshness_days is None
+
+    def test_stringly_null_coerced_for_optional_enum(self):
+        """The STRING "null" for an Optional[Enum] field must coerce to None.
+
+        stark-h46: ``round_type: FundingRoundType | None`` received ``"null"`` →
+        pydantic ``enum`` error. Coerce to None.
+        """
+        from enum import StrEnum
+
+        from pydantic import BaseModel
+
+        from neograph._llm_retry import _parse_json_response
+
+        class FundingRoundType(StrEnum):
+            seed = "seed"
+            series_a = "series_a"
+
+        class FundingRound(BaseModel):
+            amount: str
+            round_type: FundingRoundType | None = None
+
+        text = '{"amount": "10M", "round_type": "null"}'
+        result = _parse_json_response(text, FundingRound)
+        assert result.amount == "10M"
+        assert result.round_type is None
+
+    def test_stringly_null_coerced_in_nested_list_items(self):
+        """Stringly-null coercion recurses into list[BaseModel] items.
+
+        stark-h46: ``company.hiring_signals.0.total_open_roles`` (Optional[int])
+        got ``"null"``. The coercion must reach nested list items, not just the
+        top-level object.
+        """
+        from pydantic import BaseModel
+
+        from neograph._llm_retry import _parse_json_response
+
+        class HiringSignal(BaseModel):
+            role: str
+            total_open_roles: int | None = None
+
+        class Company(BaseModel):
+            name: str
+            hiring_signals: list[HiringSignal]
+
+        text = (
+            '{"name": "Electra", "hiring_signals": '
+            '[{"role": "eng", "total_open_roles": "null"}, '
+            '{"role": "sales", "total_open_roles": "none"}]}'
+        )
+        result = _parse_json_response(text, Company)
+        assert result.hiring_signals[0].total_open_roles is None
+        assert result.hiring_signals[1].total_open_roles is None
+
+    def test_stringly_null_preserves_legit_string_value(self):
+        """A real string value must NOT be destroyed by the sentinel coercion.
+
+        The coercion only fires on Optional fields whose non-None member is not a
+        plain ``str`` (numeric/enum), OR on the exact sentinels — a legitimate
+        ``str | None`` holding real text is untouched, and "" stays "" for a str
+        field.
+        """
+        from pydantic import BaseModel
+
+        from neograph._llm_retry import _parse_json_response
+
+        class Profile(BaseModel):
+            summary: str | None = None
+            note: str = ""
+
+        text = '{"summary": "a real description", "note": ""}'
+        result = _parse_json_response(text, Profile)
+        assert result.summary == "a real description"
+        assert result.note == ""
+
+    def test_stringly_null_not_coerced_for_required_non_optional(self):
+        """A non-Optional int field that got "null" is NOT silently coerced.
+
+        The field cannot hold None, so coercing would just move the crash. It must
+        still fail loud (retry re-prompt territory), never become a bare success
+        with a wrong value.
+        """
+        from pydantic import BaseModel
+
+        from neograph._llm_retry import _parse_json_response
+        from neograph.errors import ExecutionError
+
+        class Metric(BaseModel):
+            count: int  # required, non-Optional
+
+        text = '{"count": "null"}'
+        with pytest.raises(ExecutionError, match="Validation failed"):
+            _parse_json_response(text, Metric)
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 # TEST: _call_structured TypeError fallback for include_raw (neograph-rdu.11)
