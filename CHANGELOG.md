@@ -5,6 +5,14 @@ All notable changes to NeoGraph will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.2] - 2026-07-16
+
+A hotfix release: one bug fix, cut directly from `main`/v0.7.1 (not from `develop`, which carries unreleased 0.8.0-track work).
+
+### Fixed
+
+- **Structured parse no longer aborts on a stringly-`"null"` LLM emission for Optional fields.** Some models (observed: GLM 5.2) intermittently emit the JSON *string* `"null"` (or `"none"`/`""`) for an `Optional` numeric/enum field instead of a real JSON `null` — `json_repair` leaves the string intact and Pydantic then raised `int_parsing`/`enum`, aborting the whole node mid-run. `_apply_null_defaults` now recognizes the stringly-null sentinel on Optional fields only (verified via the field's annotation, never the value) and coerces it to `None` before the existing null/default disposition runs, recursing into nested models and `list[BaseModel]` items exactly as it already did for real `None`. A required (non-Optional) field receiving `"null"` still fails loud.
+
 ## [0.7.1] - 2026-07-15
 
 A maintenance release: two bug fixes surfaced by a downstream consumer, plus documentation and example additions that accrued after the 0.7.0 tag. No new public API — the `Portal` dynamic-handoff surface remains on `develop` for 0.8.0.
