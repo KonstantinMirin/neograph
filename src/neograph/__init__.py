@@ -18,6 +18,7 @@ For advanced use (IR-level tests, programmatic construction from config,
 sub-constructs), see Node and Construct directly.
 """
 
+from neograph._agent_spec import to_agent_spec
 from neograph._image import configure_image, resolve_image
 from neograph._llm import (
     CostCallback,
@@ -195,6 +196,8 @@ __all__ = [
     "SkipPredicate",
     "SkipValueFactory",
     "RawNodeFn",
+    # Agent Spec interop (export)
+    "to_agent_spec",
 ]
 
 __version__ = "0.8.0"

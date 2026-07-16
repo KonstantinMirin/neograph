@@ -1306,6 +1306,13 @@
       "kind": "class",
       "name": "RawNodeFn",
       "signature": "(*args, **kwargs)"
+    },
+    {
+      "anchor": "to_agent_spec",
+      "doc": "Export a neograph ``Construct`` (IR) to an Open Agent Spec ``Flow``.",
+      "kind": "function",
+      "name": "to_agent_spec",
+      "signature": "(construct: 'Construct') -> 'Flow'"
     }
   ]
 }
