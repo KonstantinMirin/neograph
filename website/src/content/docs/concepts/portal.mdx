@@ -137,18 +137,18 @@ An `Operator` (the human-in-the-loop gate) may NOT sit on a mesh member -- a mem
 
 ## Dynamic flow dispatch (route='decide')
 
-Peer routing chooses the next NODE at runtime. The second mode goes further: it chooses a whole SUB-FLOW at runtime. A `Portal(route="decide", ...)` member -- the "dispatcher" -- emits, as its own typed output, a neograph *spec* (a `load_spec` dict describing a pipeline) plus the input that flow should run on. The framework then loads, validates, compiles, and runs that emitted flow, and writes its typed result back onto the bus for the rest of the pipeline. The topology did not exist until the dispatcher produced it.
+Peer routing chooses the next NODE at runtime. The second mode goes further: it chooses a whole SUB-FLOW at runtime. A `Portal(route="decide", ...)` member -- the "dispatcher" -- emits, as its own typed output, a neograph-flavored *Agent Spec* dict (the SAME format `to_agent_spec()` exports / `from_agent_spec()` imports) plus the input that flow should run on. The framework then deserializes, validates, compiles, and runs that emitted flow, and writes its typed result back onto the bus for the rest of the pipeline. The topology did not exist until the dispatcher produced it.
 
-This is the runtime-assembly path (see [LLM-driven pipelines](/runtime/llm-driven/)) turned into a first-class construct: instead of your application glue calling `load_spec` + `compile` + `run` by hand, a `route="decide"` node does it inside the graph, under the same validation and observability as every other node.
+This is the runtime-assembly path (see [LLM-driven pipelines](/runtime/llm-driven/)) turned into a first-class construct: instead of your application glue calling `from_agent_spec` + `compile` + `run` by hand, a `route="decide"` node does it inside the graph, under the same validation and observability as every other node.
 
 ### The surface
 
 ```python
 from pydantic import BaseModel
-from neograph import Construct, Portal, Node, compile, run, register_type
+from neograph import Construct, Portal, Node, compile, run, to_agent_spec
 
 class Decision(BaseModel):      # the dispatcher's OWN output
-    spec: dict                  # a load_spec dict -- the flow to run
+    spec: dict                  # a neograph-flavored Agent Spec dict -- the flow to run
     flow_input: dict            # the input that flow runs on
 
 class Summary(BaseModel, frozen=True):
@@ -159,11 +159,11 @@ def summarize(_input_data, _config) -> Summary:
     return Summary(text="done")
 
 def plan(_input_data, config) -> Decision:
-    spec = {
-        "name": "chosen-flow",
-        "nodes": [{"name": "s", "mode": "scripted", "scripted_fn": "summarize", "outputs": "Summary"}],
-        "pipeline": {"nodes": ["s"]},
-    }
+    # A real planner builds the spec dict by exporting a Construct through
+    # to_agent_spec() -- the SAME canonical emitter, never a hand-authored
+    # envelope (so the emitted spec stays honest to what from_agent_spec expects).
+    chosen = Construct("chosen-flow", nodes=[Node.scripted("s", fn="summarize", outputs=Summary)])
+    spec = to_agent_spec(chosen).to_dict()
     return Decision(spec=spec, flow_input={})
 
 km = Portal(
@@ -175,7 +175,6 @@ km = Portal(
 )
 planner = Node.scripted("planner", fn="plan", outputs=Decision) | km
 
-register_type("Summary", Summary)   # the emitted spec names outputs by string
 graph = compile(Construct("dispatch", nodes=[planner]), scripted={"plan": plan})
 result = run(graph, input={})
 print(result["planner_dispatch"].text)   # -> done
@@ -187,7 +186,7 @@ The dispatched flow's result lands on a regular, fingerprinted state field named
 
 The safety property is the whole reason this is a construct and not a raw `eval`. When the dispatcher fires, the framework runs four steps before any dispatched node executes:
 
-1. **`load_spec(spec)`** -- the emitted dict is parsed into a `Construct`, which runs the SAME `_validate_node_chain` gate a hand-written pipeline passes through. No bespoke validator, no relaxed schema. A machine-emitted spec is held to the identical standard as human-authored source.
+1. **`AgentSpecDeserializer().from_dict(spec)` -> `from_agent_spec(flow)`** -- the emitted dict is deserialized and imported into a `Construct`, which runs the SAME `_validate_node_chain` gate a hand-written pipeline passes through. No bespoke validator, no relaxed schema. A machine-emitted spec is held to the identical standard as human-authored source.
 2. **Output-contract check** -- if the built flow declares an output boundary, it must equal `Portal.output`.
 3. **`compile(...)`** with the pre-registered `scripted=` / `conditions=` blocks.
 4. **Invoke** the compiled flow on `input_field`'s data, extract the value assignable to `Portal.output`, and write it to `{node}_dispatch`.
@@ -200,7 +199,7 @@ An emitted flow may wire ONLY the building blocks you pre-registered on the `Por
 
 ### Rejection semantics
 
-An invalid emitted spec is rejected at step 1, and the failure is loud and early. The underlying `ConstructError` (say, a node consuming an upstream nothing produces) surfaces WRAPPED in an `ExecutionError` that names the offending spec -- raised BEFORE any dispatched sub-node body runs. Demo 2 of the example proves this with a sentinel: the invalid flow's body never executes, because validation happens before execution.
+An invalid emitted spec is rejected at step 1, and the failure is loud and early. The underlying error (say, an agent/act-mode node -- `to_agent_spec` can lower it, but `from_agent_spec`'s import-side reconstruction is a tracked follow-up) surfaces WRAPPED in an `ExecutionError` that names the offending spec -- raised BEFORE any dispatched sub-node body runs. Demo 2 of the example proves this with a sentinel: the invalid flow's body never executes, because validation happens before execution.
 
 {/* test-skip: illustrates the rejection API against a planner that emits an invalid spec (not the valid `graph` built above); the runnable proof is examples/29_portal_dynamic_flow.py demo 2. */}
 ```python
@@ -209,7 +208,7 @@ from neograph.errors import ExecutionError
 try:
     run(graph, input={})
 except ExecutionError as exc:
-    # names the spec ("invalid-flow") and wraps the ConstructError cause;
+    # names the spec ("invalid-flow") and wraps the underlying import error;
     # no dispatched node ran.
     print(str(exc).splitlines()[0])
 ```

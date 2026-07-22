@@ -10,7 +10,7 @@ from typing import Any
 import structlog
 from langchain_core.runnables import Runnable, RunnableConfig, RunnableLambda
 from langgraph.types import Command
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from neograph._agent_cycle import make_agent_cycle_bodies
 from neograph._dispatch import _dispatch_for_mode
@@ -22,7 +22,7 @@ from neograph._state_keys import StateKeys
 from neograph._subconstruct import _scan_subgraph_output
 from neograph._trace import named
 from neograph.errors import ConfigurationError, ConstructError, ExecutionError
-from neograph.loader import load_spec
+from neograph.loader import from_agent_spec
 from neograph.modifiers import HANDOFF_END, Portal
 from neograph.naming import field_name_for, output_field_name
 from neograph.node import Node
@@ -377,16 +377,20 @@ def make_portal_dispatch_fn(
     """Build a Portal DISPATCH-mode wrapper (``route="decide"``, design §3.5/§4.2).
 
     Mode (b), reduced v1. Wraps the standard :func:`make_node_fn` result: the
-    dispatcher body runs and emits, as its OWN typed output, a neograph spec dict
-    (``portal.spec_field``) and a dispatch input dict (``portal.input_field``).
-    This wrapper then, per the design's four steps:
+    dispatcher body runs and emits, as its OWN typed output, a neograph-flavored
+    Agent Spec dict (``portal.spec_field``) and a dispatch input dict
+    (``portal.input_field``). This wrapper then, per the design's four steps:
 
-    1. ``load_spec(spec_dict)`` -> ``Construct(...)`` — THE validation gate. This is
-       the SAME eager ``_validate_node_chain`` (``construct.py:194``) hand-written
-       pipelines pass through (ANTI-BAND-AID: no bespoke validator, no schema
-       subset). A bad spec raises ``ConstructError``/``ConfigurationError`` HERE,
+    1. ``AgentSpecDeserializer().from_dict(spec_dict)`` -> ``Flow`` ->
+       ``from_agent_spec(flow)`` -> ``Construct(...)`` — THE validation gate. This
+       is the SAME single modifier-aware runtime spec-loading path ``to_agent_spec``
+       (export) and a mode-(b) planner (dispatch) share — never a second, bespoke
+       native-``Spec``-dict serializer. It is also the SAME eager
+       ``_validate_node_chain`` (``construct.py:194``) hand-written pipelines pass
+       through (ANTI-BAND-AID: no bespoke validator, no schema subset). A bad spec
+       raises ``ConstructError``/``ConfigurationError``/``ValidationError`` HERE,
        BEFORE anything executes; we re-raise it WRAPPED in ``ExecutionError`` naming
-       the spec (``on_invalid="raise"``, §3.5) with the ``ConstructError`` chained as
+       the spec (``on_invalid="raise"``, §3.5) with the original chained as
        ``__cause__``.
     2. Output-contract check: if the built flow declares an ``output`` boundary, it
        must equal ``portal.output`` (resolved via ``lookup_type`` when a str) —
@@ -440,11 +444,25 @@ def make_portal_dispatch_fn(
         NO invoke — the sync/async twins supply that so the gate + compile logic
         cannot drift between them.
         """
-        # `compile` is the ONE function-local import here: compiler.py imports
-        # _wiring -> factory, so a module-level `from neograph.compiler import
-        # compile` would cycle. load_spec / _scan_subgraph_output / lookup_type
-        # are module-level (their modules do not import factory).
+        # `compile` is the ONE cycle-avoidance function-local import here:
+        # compiler.py imports _wiring -> factory, so a module-level `from
+        # neograph.compiler import compile` would cycle. `AgentSpecDeserializer`
+        # is function-local for the OTHER reason function-local imports are
+        # allowlisted: an optional-dependency guard (mirrors
+        # `_agent_spec._import_agent_spec_flow_classes()`) -- src/neograph stays
+        # Agent-Spec-free by default. from_agent_spec / _scan_subgraph_output /
+        # lookup_type are module-level (their modules do not import factory).
         from neograph.compiler import compile as compile_construct
+
+        try:
+            from pyagentspec.serialization import AgentSpecDeserializer
+        except ImportError as exc:
+            raise ConfigurationError.build(
+                "pyagentspec is not installed",
+                expected="the [agent-spec] optional extra",
+                found="ImportError on pyagentspec.serialization",
+                hint="install with: uv sync --extra agent-spec (or pip install neograph[agent-spec])",
+            ) from exc
 
         decision = update[payload_field]
         spec_dict = getattr(decision, spec_field)
@@ -453,8 +471,14 @@ def make_portal_dispatch_fn(
         spec_name = spec_dict.get("name", "<unnamed>") if isinstance(spec_dict, dict) else "<unnamed>"
 
         try:
-            sub = load_spec(spec_dict)
-        except (ConstructError, ConfigurationError) as gate_error:
+            # ONE modifier-aware runtime spec-loading path (Core Invariant):
+            # deserialize the Agent-Spec-flavored dict a mode-(b) planner
+            # emits into a live Flow, then hand it to the SAME from_agent_spec
+            # (01i0g) that reads any other Agent Spec Flow -- never a second,
+            # bespoke native-Spec dict-dispatch serializer.
+            flow = AgentSpecDeserializer().from_dict(spec_dict)
+            sub = from_agent_spec(flow)
+        except (ConstructError, ConfigurationError, ValidationError) as gate_error:
             # The emitted spec failed the SAME Construct(...) gate as a hand-written
             # pipeline — surface it wrapped, naming the spec, BEFORE anything runs.
             raise ExecutionError.build(

@@ -22,7 +22,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 import structlog
-from pydantic import BaseModel, create_model
+from pydantic import BaseModel, ConfigDict, create_model
 
 from neograph.errors import ConfigurationError
 
@@ -281,7 +281,15 @@ def _property_to_field_type(prop: Property) -> tuple[Any, Any]:
             field_type, field_default = _property_to_field_type(field_prop)
             fields[field_name] = (field_type, field_default)
         model_name = prop.title or "AnonymousNestedModel"
-        return create_model(model_name, __base__=BaseModel, **fields), ...
+        # from_attributes: a reconstructed Agent Spec import has no back-reference
+        # to the ORIGINAL Pydantic class name (Property only carries per-field
+        # shape, never a model-level identity) -- the model built here is
+        # structurally equivalent, not identical. Runtime state passed between
+        # dispatched nodes (e.g. Portal mode (b)) is a REAL instance of the
+        # original class; from_attributes lets Pydantic validate it into this
+        # reconstructed model by matching attribute names, rather than requiring
+        # exact class identity LangGraph's state coercion would otherwise demand.
+        return create_model(model_name, __base__=BaseModel, __config__=ConfigDict(from_attributes=True), **fields), ...
 
     if isinstance(prop, pas.NullProperty):
         return type(None), None
@@ -296,6 +304,17 @@ def _property_to_field_type(prop: Property) -> tuple[Any, Any]:
     for prop_cls, py_type in primitive_map.items():
         if isinstance(prop, prop_cls):
             return py_type, ...
+
+    # Verified pyagentspec round-trip gap: a Property serialized via
+    # to_dict() (Flow.to_dict()/AgentSpecSerializer) does not carry a
+    # component_type discriminator, so AgentSpecDeserializer.from_dict()
+    # cannot resolve the concrete subclass (StringProperty etc.) and hands
+    # back a bare `Property` instead. `prop.json_schema` DOES survive
+    # (it's the original JSON-Schema dict) -- reuse `_resolve_field_type`
+    # (the JSON-Schema-dict twin of this exact function) rather than a
+    # second walker, per the Core Invariant.
+    if type(prop) is pas.Property and prop.json_schema:
+        return _resolve_field_type(prop.json_schema), ...
 
     raise ConfigurationError.build(
         f"Agent Spec Property type {type(prop).__name__} has no neograph type representation",
@@ -322,7 +341,11 @@ def agent_spec_properties_to_types(properties: list[Property], name: str) -> Non
         field_type, field_default = _property_to_field_type(prop)
         fields[prop.title] = (field_type, field_default)
 
-    model = create_model(name, __base__=BaseModel, **fields)
+    # from_attributes: see the identical rationale in _property_to_field_type's
+    # ObjectProperty branch -- this top-level model has no identity link back
+    # to the original class either, and runtime state crossing a dispatched
+    # node boundary is a real instance of that original class.
+    model = create_model(name, __base__=BaseModel, __config__=ConfigDict(from_attributes=True), **fields)
     register_type(name, model)
 
 

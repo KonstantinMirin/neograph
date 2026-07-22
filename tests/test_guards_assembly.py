@@ -201,25 +201,28 @@ class TestPortalDispatchDiscriminationMonopoly:
 
 
 class TestPortalDispatchRoutesThroughCanonicalGate:
-    """Guard (neograph-f27xo) — the Portal DISPATCH wrapper validates an emitted
-    spec ONLY through the canonical ``load_spec`` gate + ``compile()``, never a
-    bespoke validator or schema subset (the mode-b anti-band-aid / Core Invariant).
+    """Guard (neograph-f27xo, re-pointed by neograph-0la8v) — the Portal
+    DISPATCH wrapper validates an emitted spec ONLY through the canonical
+    ``from_agent_spec`` gate + ``compile()``, never a bespoke validator or
+    schema subset (the mode-b anti-band-aid / Core Invariant).
 
     Mode (b) recompiles a machine-emitted spec at runtime. The whole safety
     argument is that an emitted spec passes the SAME ``Construct(...)`` gate
     (``construct.py:194``) as a hand-written pipeline — so ``make_portal_dispatch_fn``
-    MUST call ``load_spec`` (which builds the Construct through that gate) and MUST
-    NOT hand-roll a second spec->Construct path (``_validate_spec`` / ``_build_construct``)
+    MUST call ``from_agent_spec`` (which builds the Construct through that gate --
+    mode (b)'s runtime dispatch format IS the neograph-flavored Agent Spec
+    ``to_agent_spec()`` emits, per 0la8v) and MUST NOT hand-roll a second
+    spec->Construct path (``load_spec`` / ``_validate_spec`` / ``_build_construct``)
     or a schema subset. The behavioral rejection test pins the runtime effect; this
     structural guard ratchets the class-level rule so a future refactor cannot
     quietly swap in a bespoke validator while keeping tests green. AST-level, so
     docstrings mentioning these names never trip it.
 
-    If this fails: route the emitted spec through ``load_spec`` (+ ``compile``),
+    If this fails: route the emitted spec through ``from_agent_spec`` (+ ``compile``),
     not a private validator.
     """
 
-    _BANNED = frozenset({"_validate_spec", "_build_construct"})
+    _BANNED = frozenset({"load_spec", "_validate_spec", "_build_construct"})
 
     @staticmethod
     def _dispatch_fn_call_names() -> set[str]:
@@ -237,11 +240,11 @@ class TestPortalDispatchRoutesThroughCanonicalGate:
                 return names
         raise AssertionError("make_portal_dispatch_fn not found in factory.py")
 
-    def test_dispatch_wrapper_calls_load_spec(self):
+    def test_dispatch_wrapper_calls_from_agent_spec(self):
         names = self._dispatch_fn_call_names()
-        assert "load_spec" in names, (
+        assert "from_agent_spec" in names, (
             "make_portal_dispatch_fn must validate the emitted spec via the canonical "
-            "load_spec gate (the SAME Construct(...) validation as hand-written pipelines)."
+            "from_agent_spec gate (the SAME Construct(...) validation as hand-written pipelines)."
         )
 
     def test_dispatch_wrapper_has_no_bespoke_validator(self):
@@ -249,7 +252,7 @@ class TestPortalDispatchRoutesThroughCanonicalGate:
         offenders = self._BANNED & names
         assert not offenders, (
             f"make_portal_dispatch_fn calls a bespoke spec->Construct path {sorted(offenders)} "
-            "instead of routing through load_spec — this bypasses the canonical gate (anti-band-aid)."
+            "instead of routing through from_agent_spec — this bypasses the canonical gate (anti-band-aid)."
         )
 
     def test_detector_flags_a_bespoke_call(self):
