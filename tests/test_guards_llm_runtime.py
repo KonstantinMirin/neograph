@@ -284,6 +284,13 @@ class TestLlmResponsibilityDiscipline:
                 # normalizes the sentinel to None inside _apply_null_defaults.
                 "_optional_inner_types",
                 "_is_stringly_null",
+                # neograph-zhwgh: shape-driven nested descent. _unwrap_optional
+                # peels one Optional layer; _descend_null_defaults is the single
+                # recursive classifier that reaches interiors of Optional-wrapped
+                # models/lists, dict-of-models, and list-of-optional-models so
+                # _apply_null_defaults no longer hand-enumerates container shapes.
+                "_unwrap_optional",
+                "_descend_null_defaults",
             }
         ),
         "_llm_render.py": frozenset(
@@ -360,7 +367,14 @@ class TestLlmResponsibilityDiscipline:
         # _optional_inner_types) so the STRING "null" GLM emits for Optional
         # numeric/enum fields is normalized to None inside _apply_null_defaults
         # instead of crashing the node. Reviewed increase.
-        "_llm_retry.py": 615,
+        # neograph-zhwgh: 615 -> 665. Shape-driven nested descent
+        # (_unwrap_optional + _descend_null_defaults) replaces the 0.7.2
+        # hand-enumerated (bare-model, bare-list-of-model) descent that silently
+        # skipped every container shape it did not spell out -- Optional-wrapped
+        # models/lists, dict-of-models, list-of-optional-models. One recursive
+        # classifier now reaches every leaf model dict at any depth. Reviewed
+        # increase (net: kills the whole missing-shape bug family, not one case).
+        "_llm_retry.py": 665,
         # neograph-v569: 310 -> 445. The public standalone compile_prompt landed
         # here (its change axis) with a thorough public docstring, a shared
         # render-then-compile core (_render_and_compile, which render_prompt now

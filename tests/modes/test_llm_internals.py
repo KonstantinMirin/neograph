@@ -664,6 +664,142 @@ class TestParseJsonResponseLenientParsing:
         assert result.hiring_signals[0].total_open_roles is None
         assert result.hiring_signals[1].total_open_roles is None
 
+    def test_stringly_null_coerced_inside_optional_nested_model(self):
+        """Stringly-null coercion recurses THROUGH an Optional-wrapped nested model.
+
+        BUG neograph-zhwgh (0.7.3 completeness): the 0.7.2 fix coerces a direct
+        top-level ``Model | None`` field, but the recursion into a nested model
+        only fired when the field annotation was a bare ``BaseModel`` type. A
+        field typed ``parent: Company | None`` is a Union, so the descent was
+        skipped and a stringly-``"null"`` on the INTERIOR (e.g. ``parent.langs``,
+        a ``list[str] | None``) reached Pydantic raw -> list_type crash.
+        """
+        from pydantic import BaseModel
+
+        from neograph._llm_retry import _parse_json_response
+
+        class Company(BaseModel):
+            name: str
+            langs: list[str] | None = None
+            parent: Company | None = None
+
+        Company.model_rebuild()
+
+        text = '{"name": "A", "parent": {"name": "B", "langs": "null"}}'
+        result = _parse_json_response(text, Company)
+        assert result.parent is not None
+        assert result.parent.name == "B"
+        assert result.parent.langs is None
+
+    def test_stringly_null_coerced_inside_optional_list_of_models(self):
+        """Stringly-null coercion recurses THROUGH an Optional-wrapped list-of-models.
+
+        neograph-zhwgh: ``products: list[Product] | None`` is a Union, so the
+        list-item descent (guarded by ``get_origin(...) is list``) was skipped and
+        an interior ``price: int | None`` holding ``"null"`` crashed with
+        int_parsing. The 0.7.2 code only reached items of a NON-optional
+        ``list[Product]``.
+        """
+        from pydantic import BaseModel
+
+        from neograph._llm_retry import _parse_json_response
+
+        class Product(BaseModel):
+            name: str
+            price: int | None = None
+
+        class Company(BaseModel):
+            name: str
+            products: list[Product] | None = None
+
+        text = '{"name": "A", "products": [{"name": "p", "price": "null"}, {"name": "q", "price": "none"}]}'
+        result = _parse_json_response(text, Company)
+        assert result.products is not None
+        assert result.products[0].price is None
+        assert result.products[1].price is None
+
+    def test_stringly_null_legit_values_preserved_through_optional_wrappers(self):
+        """Optional-wrapped nested models/lists with LEGIT interiors are untouched.
+
+        The Optional-unwrapping descent must not corrupt real data: a populated
+        ``parent`` model and a real ``list[str]`` survive, and a genuine interior
+        int is preserved.
+        """
+        from pydantic import BaseModel
+
+        from neograph._llm_retry import _parse_json_response
+
+        class Product(BaseModel):
+            name: str
+            price: int | None = None
+
+        class Company(BaseModel):
+            name: str
+            langs: list[str] | None = None
+            products: list[Product] | None = None
+            parent: Company | None = None
+
+        Company.model_rebuild()
+
+        text = (
+            '{"name": "A", "langs": ["en", "fr"], '
+            '"products": [{"name": "p", "price": 5}], '
+            '"parent": {"name": "B", "langs": ["de"]}}'
+        )
+        result = _parse_json_response(text, Company)
+        assert result.langs == ["en", "fr"]
+        assert result.products[0].price == 5
+        assert result.parent.name == "B"
+        assert result.parent.langs == ["de"]
+
+    def test_stringly_null_coerced_inside_dict_of_models(self):
+        """Stringly-null coercion recurses into dict[str, BaseModel] VALUES.
+
+        neograph-zhwgh: the 0.7.2 descent hand-enumerated only bare-model and
+        bare-list-of-model shapes, so a ``dict[str, Product]`` field's interior
+        (``by_sku['x'].price``) was never reached. The shape-driven descent walks
+        mapping values too.
+        """
+        from pydantic import BaseModel
+
+        from neograph._llm_retry import _parse_json_response
+
+        class Product(BaseModel):
+            name: str
+            price: int | None = None
+
+        class Catalog(BaseModel):
+            name: str
+            by_sku: dict[str, Product]
+
+        text = '{"name": "A", "by_sku": {"x": {"name": "p", "price": "null"}}}'
+        result = _parse_json_response(text, Catalog)
+        assert result.by_sku["x"].price is None
+
+    def test_stringly_null_coerced_inside_list_of_optional_models(self):
+        """Stringly-null coercion recurses into list[Model | None] items.
+
+        neograph-zhwgh: ``list[Product | None]`` has a Union element type, so the
+        old ``isinstance(args[0], type)`` element guard rejected it and the item
+        interiors were skipped. The shape-driven descent re-peels Optional per
+        element, and a real ``None`` element is left untouched.
+        """
+        from pydantic import BaseModel
+
+        from neograph._llm_retry import _parse_json_response
+
+        class Product(BaseModel):
+            name: str
+            price: int | None = None
+
+        class Bag(BaseModel):
+            items: list[Product | None]
+
+        text = '{"items": [{"name": "p", "price": "null"}, null]}'
+        result = _parse_json_response(text, Bag)
+        assert result.items[0].price is None
+        assert result.items[1] is None
+
     def test_stringly_null_preserves_legit_string_value(self):
         """A real string value must NOT be destroyed by the sentinel coercion.
 
