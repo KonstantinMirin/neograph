@@ -1313,6 +1313,13 @@
       "kind": "function",
       "name": "to_agent_spec",
       "signature": "(construct: 'Construct') -> 'Flow'"
+    },
+    {
+      "anchor": "from_agent_spec",
+      "doc": "Import an Open Agent Spec ``Flow`` into a neograph ``Construct`` --",
+      "kind": "function",
+      "name": "from_agent_spec",
+      "signature": "(flow: 'Any') -> 'Construct'"
     }
   ]
 }

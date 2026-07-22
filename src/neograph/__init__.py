@@ -61,7 +61,7 @@ from neograph.errors import (
 from neograph.forward import ForwardConstruct
 from neograph.hitl import ask_human
 from neograph.lint import LintIssue, lint
-from neograph.loader import load_spec
+from neograph.loader import from_agent_spec, load_spec
 from neograph.modifiers import (
     HANDOFF_END,
     Each,
@@ -196,8 +196,9 @@ __all__ = [
     "SkipPredicate",
     "SkipValueFactory",
     "RawNodeFn",
-    # Agent Spec interop (export)
+    # Agent Spec interop (export + import)
     "to_agent_spec",
+    "from_agent_spec",
 ]
 
 __version__ = "0.8.0"
