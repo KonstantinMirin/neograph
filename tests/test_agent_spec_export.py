@@ -240,6 +240,22 @@ class TestToAgentSpecRejectsUnrepresentableFields:
         with pytest.raises(ConfigurationError, match="handoff"):
             to_agent_spec(pipeline)
 
+    @pytest.mark.parametrize("mode", ["agent", "act"])
+    def test_agent_act_node_is_rejected_not_silently_downgraded(self, mode):
+        """agent/act export would silently drop the node's prompt/model/tools
+        into a lossy ToolNode placeholder — the Core Invariant forbids the silent
+        downgrade, so it fails loud until the real AgentNode+tools lowering lands
+        (neograph-i3zsh.1)."""
+        from neograph._agent_spec import to_agent_spec
+        from neograph.errors import ConfigurationError
+        from neograph.node import Node
+
+        node = Node(name="explore", mode=mode, model="research", prompt="explore", outputs=RawText)
+        pipeline = Construct("agent-pipeline", nodes=[node])
+
+        with pytest.raises(ConfigurationError, match="round-trip-safe"):
+            to_agent_spec(pipeline)
+
     def test_callable_gate_tools_when_is_rejected(self):
         from neograph._agent_spec import to_agent_spec
         from neograph.errors import ConfigurationError

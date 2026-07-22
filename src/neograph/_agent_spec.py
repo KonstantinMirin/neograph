@@ -11,15 +11,21 @@ check-node-with-interrupt), per the exporter's Core Invariant: this is the
 SAME lowering neograph performs when compiling, expressed in Agent Spec
 vocabulary instead of LangGraph's — never a second, divergent lowering.
 
-Every irreversible flattening rides in ``neograph/``-prefixed ``metadata``
-markers (Layer A: per-group modifier markers; Layer B: whole-pipeline
-``Flow.metadata['neograph/source']``) so the export stays BOTH a portable
-flat Agent Spec (markers are ignorable by foreign runtimes) AND a lossless
-neograph round-trip source. Constructs that cannot be lowered at all
-(``raw_fn``, ``skip_when``/``skip_value``, a callable ``Loop.when``, Oracle
-merge hooks, ``renderer``, Portal ``handoff_param``/``handoff_channel``, a
-callable ``gate_tools_when``) FAIL LOUD via ``ConfigurationError`` — never a
-silent downgrade or truncation.
+Every irreversible flattening that CAN round-trip rides in
+``neograph/``-prefixed ``metadata`` markers (per-group modifier markers:
+``neograph/oracle_spec`` / ``each_spec`` / ``loop_spec`` / ``operator_spec``)
+so the export stays BOTH a portable flat Agent Spec (markers are ignorable by
+foreign runtimes) AND a neograph round-trip source for those constructs.
+There is NO whole-pipeline ``Flow.metadata['neograph/source']`` fallback —
+round-trip fidelity comes from the per-group markers, not a full-IR blob.
+Constructs that cannot be lowered round-trip-safely FAIL LOUD via
+``ConfigurationError`` rather than emit a lossy placeholder — never a silent
+downgrade or truncation: ``raw_fn``, ``skip_when``/``skip_value``, a callable
+``Loop.when``, Oracle merge hooks, ``renderer``, Portal
+``handoff_param``/``handoff_channel``, a callable ``gate_tools_when`` (no Agent
+Spec representation at all), and ``agent``/``act`` mode (would silently drop
+prompt/model/tools — real ``AgentNode``+tools lowering tracked in
+``neograph-i3zsh.1``).
 
 Import-guarded (mirrors ``spec_types._import_agent_spec_property_classes()``)
 so ``src/neograph`` core stays Agent-Spec-free by default — only calling
@@ -156,16 +162,21 @@ def _lower_node(node: Node) -> SpecNode:
         )
 
     if node.mode in ("agent", "act"):
-        # Best-effort AgentNode lowering: no single-node Agent Spec construct
-        # captures the full ReAct tool loop, so the agent identity rides in
-        # metadata (round-trip marker) while the node itself carries the
-        # declared boundary ports.
-        return nodes_mod.ToolNode(
-            name=node.name,
-            inputs=inputs or None,
-            outputs=outputs or None,
-            tool=_make_server_tool(node, tools_mod, inputs, outputs),
-            metadata={"neograph/mode": node.mode},
+        # Agent/act export is NOT yet round-trip-safe. No single Agent Spec node
+        # captures the ReAct tool loop, and a ToolNode placeholder would SILENTLY
+        # drop the node's prompt/model/tools (`_make_server_tool` fabricates one
+        # tool from the I/O signature, not the node's real `tools=[...]`), leaving
+        # only a `neograph/mode` marker. Per the Core Invariant (never silently
+        # drop), reject it until the real AgentNode+tools lowering lands — rather
+        # than ship a lossy placeholder that breaks round-trip once from_agent_spec
+        # exists. Tracked in neograph-i3zsh.1.
+        raise ConfigurationError.build(
+            f"node {node.name!r} is {node.mode!r} mode — agent/act export to Agent Spec "
+            "is not yet round-trip-safe (prompt/model/tools would be silently dropped)",
+            expected="scripted or think mode",
+            found=f"{node.mode!r} mode",
+            hint="agent/act -> AgentNode+tools lowering is tracked in neograph-i3zsh.1; "
+            "until it lands, export fails loud rather than emit a lossy ToolNode placeholder",
         )
 
     # scripted / raw already rejected raw_fn above; scripted_fn is name-only.
