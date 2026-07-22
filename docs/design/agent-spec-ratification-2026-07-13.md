@@ -42,7 +42,7 @@ Round-trip codes: **DIRECT** (structure preserved both ways) · **LOWER** (expor
 | Agent Spec | neograph | Round-trip | Verdict |
 |---|---|---|---|
 | `ManagerWorkers` | router `@node` + worker sub-constructs + `Loop` | reconstructable | NOT A GAP (recipe over existing primitives). RATIFIED. |
-| `Swarm` | no combinator (static DAG ≠ peer-to-peer runtime handoff) | **GAP** | **Import: REJECT-with-error (§3a).** |
+| `Swarm` | `Portal` mesh (`Command(goto)`+`destinations=`, shipped 2026-07-14) | reconstructable (v1: sibling peers, one construct level) | **SUPERSEDED 2026-07-22: Import onto Portal mesh (§3a).** Was REJECT-with-error at ratification; superseded once Portal shipped. |
 | `RemoteAgent` / `OciAgent` / `A2AAgent` | client-initiated scripted/raw HTTP node + DI + metadata | **BEST-EFFORT** | **Import: best-effort lower (§3b).** |
 | `ServerTool` / `BuiltinTool` | orchestrator-side execution — none in neograph | **GAP** | Import: FAIL with clear error (client-only substrate). RATIFIED unchanged. |
 | `RemoteTool` | scripted `@node` + full spec in `metadata['neograph/remote_tool']` | BEST-EFFORT (lossy: declarative HTTP shape → function body) | RATIFIED. |
@@ -77,11 +77,20 @@ Resume is `run(graph, resume={...}, config)` → LangGraph `Command`. Both truth
 
 ## 3. The two localized import decisions
 
-### 3a. Swarm — REJECT with a clear error (do NOT best-effort lower)
+### 3a. Swarm — SUPERSEDED 2026-07-22: import onto a native Portal mesh (was: REJECT)
+
+**This section is superseded.** At ratification time (2026-07-13), neograph had no runtime-decentralized peer-routing mechanism, so a Swarm import could only be a lossy "router-in-the-middle" reconstruction — hence the original REJECT decision below. `Portal` (formerly Keymaker) shipped afterward (epic neograph-t1f7z, 2026-07-14) and gives neograph its own `Command(goto)`+`destinations=` peer-routing mesh — a genuine runtime-decentralized primitive, not a static-DAG approximation. Swarm's `relationships`-driven runtime handoff now has a faithful, non-lossy target: a Portal mesh. Confirmed by explicit user decision 2026-07-22 (neograph-01i0g triage) in favor of import over reject.
+
+**Current decision:** `from_agent_spec()` imports a Swarm-shaped Agent Spec Flow onto a Portal mesh — v1 scope: sibling-node peers at one construct level (matches Portal export's own v1 scope); cross-construct-boundary handoff remains deferred (neograph-do0d9, blocked pending a parent-scoped bubble-up design). `first_agent` maps to the mesh's entry member; `relationships` maps to each member's `destinations=`. This is doable losslessly because Portal mesh membership is already a first-class, marker-carrying neograph primitive (`neograph/modifier` markers on mesh members, symmetric to Oracle/Each/Loop/Operator) — there is no "silent mis-reconstruction" risk the original REJECT decision was guarding against, since the reconstruction target is a real primitive, not an approximation.
+
+<details>
+<summary>Original 2026-07-13 REJECT decision (superseded, kept for history)</summary>
 
 Swarm is genuinely runtime-decentralized: agents choose the next recipient at runtime from `relationships`. neograph is a static-DAG, edges-inferred-from-types compiler. A best-effort "router-in-the-middle" reconstruction changes runtime semantics (topologically-ordered ≠ peer-to-peer) — exactly the silent-mis-reconstruction the interop doc's "VERIFY, don't trust / fail-loud" discipline (§6a) and the "validation as a safety rail for MACHINE-authored graphs" thesis (§1a) exist to prevent.
 
 **Decision:** `from_agent_spec()` raises a `NeographError` naming `Swarm` as unsupported-on-import, and preserves `first_agent` + `relationships` in `metadata` for a possible future combinator. **No lossy lowering.** (Swarm remains "addable later as a first-class combinator over `Command(goto)`/`Send`" — a separate feature, not part of this import path.)
+
+</details>
 
 ### 3b. RemoteAgent / A2AAgent / OciAgent — BEST-EFFORT lower
 
@@ -134,5 +143,5 @@ The mapping is comprehensive and, apart from the single Operator mischaracteriza
 **Caveats (must clear before/within the exporter task):**
 1. Apply the five §4 doc corrections BEFORE writing `to_agent_spec()` — the Operator lowering must target `BranchingNode(gate)→InputMessageNode→reconverge`, not a bare BranchingNode.
 2. The §6.1 metadata-round-trip survival test must pass before the marker/embed (lossless) tier is trusted.
-3. `from_agent_spec()` must RAISE on `Swarm` / `ServerTool` / `BuiltinTool` (no silent lossy lower); best-effort only for client-initiated RemoteAgent/A2AAgent + RemoteTool, each with a warning.
+3. `from_agent_spec()` must RAISE on `ServerTool` / `BuiltinTool` (no silent lossy lower); best-effort only for client-initiated RemoteAgent/A2AAgent + RemoteTool, each with a warning. `Swarm` no longer raises — see §3a (superseded 2026-07-22): it imports onto a Portal mesh instead, since that reconstruction is now lossless (a real primitive, not an approximation).
 4. `pyagentspec` behind the `[agent-spec]` extra; license confirmed Apache-2.0 on the package.

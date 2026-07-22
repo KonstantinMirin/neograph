@@ -240,27 +240,124 @@ class TestToAgentSpecRejectsUnrepresentableFields:
         with pytest.raises(ConfigurationError, match="handoff"):
             to_agent_spec(pipeline)
 
-    @pytest.mark.parametrize("mode", ["agent", "act"])
-    def test_agent_act_node_is_rejected_not_silently_downgraded(self, mode):
-        """agent/act export would silently drop the node's prompt/model/tools
-        into a lossy ToolNode placeholder — the Core Invariant forbids the silent
-        downgrade, so it fails loud until the real AgentNode+tools lowering lands
-        (neograph-i3zsh.1)."""
-        from neograph._agent_spec import to_agent_spec
-        from neograph.errors import ConfigurationError
-        from neograph.node import Node
-
-        node = Node(name="explore", mode=mode, model="research", prompt="explore", outputs=RawText)
-        pipeline = Construct("agent-pipeline", nodes=[node])
-
-        with pytest.raises(ConfigurationError, match="round-trip-safe"):
-            to_agent_spec(pipeline)
-
     def test_callable_gate_tools_when_is_rejected(self):
         from neograph._agent_spec import to_agent_spec
         from neograph.errors import ConfigurationError
 
         node = _producer("seed", RawText).model_copy(update={"mode": "agent", "gate_tools_when": lambda s: True})
+        pipeline = Construct("gate-pipeline", nodes=[node])
+
+        with pytest.raises(ConfigurationError, match="gate_tools_when"):
+            to_agent_spec(pipeline)
+
+
+class TestToAgentSpecLowersAgentActMode:
+    """Pins neograph-i3zsh.1's EXPORT-SIDE-ONLY acceptance criteria (re-scoped
+    2026-07-22 per architect review, see neograph-f0j1e.36): an agent/act mode
+    Node must lower to a real ``pyagentspec`` ``AgentNode``+``Agent``+
+    ``ServerTool`` composite -- never the fail-loud placeholder it replaces --
+    AND stamp a ``neograph/agent_spec`` marker carrying every field a future
+    importer needs to reconstruct the node losslessly (mode, prompt, model,
+    tools incl. budget/config/idempotent, gate_tools_when string form,
+    context).
+
+    NOTE: this test does NOT exercise an actual export -> import round trip.
+    No ``from_agent_spec()`` importer exists yet in this codebase; that is
+    EXPLICITLY DEFERRED to neograph-01i0g, which owns the importer and depends
+    on this task. This test only proves the marker is lossless-IN-PRINCIPLE
+    (contains every field an importer would need) plus JSON-serializability,
+    per neograph-i3zsh.1's re-scoped acceptance criteria.
+    """
+
+    @pytest.mark.parametrize("mode", ["agent", "act"])
+    def test_agent_act_node_lowers_to_agent_node_not_tool_node(self, mode):
+        from neograph._agent_spec import to_agent_spec
+        from neograph.node import Node
+        from neograph.tool import Tool
+
+        node = Node(
+            name="explore",
+            mode=mode,
+            model="research",
+            prompt="explore the codebase",
+            outputs=RawText,
+            tools=[Tool("search_code", budget=5, idempotent=True), Tool("write_file", config={"root": "/tmp"})],
+        )
+        pipeline = Construct("agent-pipeline", nodes=[node])
+
+        flow = to_agent_spec(pipeline)
+
+        from pyagentspec.flows.nodes import AgentNode, ToolNode
+
+        spec_node = next(n for n in flow.nodes if n.name == "explore")
+        assert isinstance(spec_node, AgentNode), (
+            f"agent/act mode node must lower to a pyagentspec AgentNode, not {type(spec_node).__name__} "
+            "-- the ToolNode placeholder silently dropped prompt/model/tools"
+        )
+        assert not isinstance(spec_node, ToolNode)
+
+        assert spec_node.agent.system_prompt == "explore the codebase"
+        assert spec_node.agent.llm_config.model_id == "research"
+        tool_names = {t.name for t in spec_node.agent.tools}
+        assert tool_names == {"search_code", "write_file"}
+
+    @pytest.mark.parametrize("mode", ["agent", "act"])
+    def test_agent_act_marker_carries_every_reconstruction_field(self, mode):
+        """The neograph/agent_spec marker must carry every field the plain
+        Agent/ServerTool primitives cannot represent, so a future
+        from_agent_spec() can rebuild the exact node -- and it must be
+        actually JSON-serializable (no callable/_bound_tool leak)."""
+        import json
+
+        from neograph._agent_spec import to_agent_spec
+        from neograph.node import Node
+        from neograph.tool import Tool
+
+        notes = _producer("explore_notes", RawText)
+        node = Node(
+            name="explore",
+            mode=mode,
+            model="research",
+            prompt="explore the codebase",
+            outputs=RawText,
+            tools=[Tool("search_code", budget=5, idempotent=True, config={"depth": 2})],
+            gate_tools_when="always",
+            context=["explore_notes"],
+        )
+        pipeline = Construct("agent-pipeline", nodes=[notes, node])
+
+        flow = to_agent_spec(pipeline)
+
+        spec_node = next(n for n in flow.nodes if n.name == "explore")
+        marker = spec_node.metadata["neograph/agent_spec"]
+
+        assert marker["mode"] == mode
+        assert marker["prompt"] == "explore the codebase"
+        assert marker["model"] == "research"
+        assert marker["gate_tools_when"] == "always"
+        assert marker["context"] == ["explore_notes"]
+
+        tool_entries = {t["name"]: t for t in marker["tools"]}
+        assert tool_entries["search_code"]["budget"] == 5
+        assert tool_entries["search_code"]["idempotent"] is True
+        assert tool_entries["search_code"]["config"] == {"depth": 2}
+
+        # Round-trip-losslessness IN PRINCIPLE (no importer yet, neograph-01i0g)
+        # requires the marker to actually be JSON-serializable end to end --
+        # a live _bound_tool or callable leaking through would silently break
+        # any future from_agent_spec() reconstruction.
+        json.dumps(marker)
+
+    def test_callable_gate_tools_when_still_rejected_for_agent_mode(self):
+        """Real lowering must not accidentally swallow the pre-existing
+        callable-gate_tools_when rejection -- _reject_unrepresentable_fields
+        still runs before the mode dispatch."""
+        from neograph._agent_spec import to_agent_spec
+        from neograph.errors import ConfigurationError
+
+        node = _producer("seed", RawText).model_copy(
+            update={"mode": "agent", "gate_tools_when": lambda s: True}
+        )
         pipeline = Construct("gate-pipeline", nodes=[node])
 
         with pytest.raises(ConfigurationError, match="gate_tools_when"):

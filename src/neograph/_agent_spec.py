@@ -23,9 +23,12 @@ Constructs that cannot be lowered round-trip-safely FAIL LOUD via
 downgrade or truncation: ``raw_fn``, ``skip_when``/``skip_value``, a callable
 ``Loop.when``, Oracle merge hooks, ``renderer``, Portal
 ``handoff_param``/``handoff_channel``, a callable ``gate_tools_when`` (no Agent
-Spec representation at all), and ``agent``/``act`` mode (would silently drop
-prompt/model/tools — real ``AgentNode``+tools lowering tracked in
-``neograph-i3zsh.1``).
+Spec representation at all). ``agent``/``act`` mode lowers to a real
+``AgentNode``+``Agent``+``ServerTool`` composite, stamped with a
+``neograph/agent_spec`` marker carrying every field the plain primitives
+cannot represent (mode/prompt/model/tools/gate_tools_when/context) — EXPORT
+SIDE ONLY: the actual export->import round trip is deferred to
+``neograph-01i0g``, which owns the ``from_agent_spec()`` importer.
 
 Import-guarded (mirrors ``spec_types._import_agent_spec_property_classes()``)
 so ``src/neograph`` core stays Agent-Spec-free by default — only calling
@@ -34,7 +37,7 @@ so ``src/neograph`` core stays Agent-Spec-free by default — only calling
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from neograph._ir_branch import _BranchNode, iter_with_arms
 from neograph._normalize import normalize_inputs, normalize_outputs
@@ -43,6 +46,7 @@ from neograph.errors import ConfigurationError
 from neograph.modifiers import Each, Loop, ModifierCombo, Operator, Oracle, classify_modifiers
 from neograph.node import Node
 from neograph.spec_types import model_to_agent_spec_properties
+from neograph.tool import Tool
 
 if TYPE_CHECKING:
     from pyagentspec.flows.edges import ControlFlowEdge, DataFlowEdge
@@ -162,21 +166,20 @@ def _lower_node(node: Node) -> SpecNode:
         )
 
     if node.mode in ("agent", "act"):
-        # Agent/act export is NOT yet round-trip-safe. No single Agent Spec node
-        # captures the ReAct tool loop, and a ToolNode placeholder would SILENTLY
-        # drop the node's prompt/model/tools (`_make_server_tool` fabricates one
-        # tool from the I/O signature, not the node's real `tools=[...]`), leaving
-        # only a `neograph/mode` marker. Per the Core Invariant (never silently
-        # drop), reject it until the real AgentNode+tools lowering lands — rather
-        # than ship a lossy placeholder that breaks round-trip once from_agent_spec
-        # exists. Tracked in neograph-i3zsh.1.
-        raise ConfigurationError.build(
-            f"node {node.name!r} is {node.mode!r} mode — agent/act export to Agent Spec "
-            "is not yet round-trip-safe (prompt/model/tools would be silently dropped)",
-            expected="scripted or think mode",
-            found=f"{node.mode!r} mode",
-            hint="agent/act -> AgentNode+tools lowering is tracked in neograph-i3zsh.1; "
-            "until it lands, export fails loud rather than emit a lossy ToolNode placeholder",
+        # EXPORT-SIDE-ONLY lossless lowering (neograph-i3zsh.1): a real
+        # pyagentspec AgentNode+Agent+ServerTool composite, never the
+        # ToolNode placeholder that used to silently drop prompt/model/tools.
+        # The `neograph/agent_spec` marker carries everything a future
+        # from_agent_spec() importer (neograph-01i0g, which depends on this
+        # task) needs to reconstruct the node exactly -- the actual
+        # export->import round trip is explicitly deferred there.
+        agent = _make_agent(node, tools_mod, inputs, outputs)
+        return nodes_mod.AgentNode(
+            name=node.name,
+            inputs=inputs or None,
+            outputs=outputs or None,
+            agent=agent,
+            metadata={"neograph/mode": node.mode, "neograph/agent_spec": _agent_spec_marker(node)},
         )
 
     # scripted / raw already rejected raw_fn above; scripted_fn is name-only.
@@ -186,6 +189,67 @@ def _lower_node(node: Node) -> SpecNode:
         outputs=outputs or None,
         tool=_make_server_tool(node, tools_mod, inputs, outputs),
     )
+
+
+def _make_agent(node: Node, tools_mod: Any, inputs: list[Property], outputs: list[Property]) -> Any:
+    from pyagentspec.agent import Agent
+
+    # node.tools is declared list[Tool | BaseTool], but _normalize_raw_base_tools
+    # (node.py) normalizes any raw BaseTool to Tool at construction time -- same
+    # cast precedent as _agent_cycle.py:235.
+    tools = cast("list[Tool]", node.tools)
+    return Agent(
+        name=f"{node.name}-agent",
+        llm_config=_make_llm_config(node),
+        system_prompt=node.prompt or "",
+        tools=[_tool_to_server_tool(tool, tools_mod) for tool in tools],
+        inputs=inputs or None,
+        outputs=outputs or None,
+        human_in_the_loop=False,
+    )
+
+
+def _tool_to_server_tool(tool: Any, tools_mod: Any) -> Any:
+    """Lower one neograph ``Tool`` to a ``ServerTool``, name-only.
+
+    Mirrors ``_make_server_tool``'s ``ServerTool`` shape but is a standalone
+    helper: this is an agent/act node's ``tools=[...]`` list attaching to its
+    ``Agent``, not a scripted/think node's own ``ToolNode.tool=`` field (a
+    different Agent Spec primitive entirely). Budget/config/idempotent ride
+    only in the ``neograph/agent_spec`` marker (see ``_agent_spec_marker``);
+    ``tool._bound_tool`` (a live callable) is never referenced here.
+    """
+    return tools_mod.ServerTool(
+        name=tool.name,
+        description=f"neograph tool {tool.name!r}",
+        inputs=None,
+        outputs=None,
+    )
+
+
+def _agent_spec_marker(node: Node) -> dict[str, Any]:
+    """Build the ``neograph/agent_spec`` reconstruction blob for an agent/act
+    node — every field the plain ``Agent``/``ServerTool`` primitives cannot
+    represent, so a future ``from_agent_spec()`` importer can rebuild the
+    exact node. Callable ``gate_tools_when`` is already rejected by
+    ``_reject_unrepresentable_fields`` before this runs; only the string form
+    reaches here.
+    """
+    # node.tools is declared list[Tool | BaseTool], but _normalize_raw_base_tools
+    # (node.py) normalizes any raw BaseTool to Tool at construction time -- same
+    # cast precedent as _agent_cycle.py:235.
+    tools = cast(list[Tool], node.tools)
+    return {
+        "mode": node.mode,
+        "prompt": node.prompt,
+        "model": node.model,
+        "tools": [
+            {"name": tool.name, "budget": tool.budget, "config": tool.config, "idempotent": tool.idempotent}
+            for tool in tools
+        ],
+        "gate_tools_when": node.gate_tools_when,
+        "context": node.context,
+    }
 
 
 def _make_llm_config(node: Node) -> Any:
