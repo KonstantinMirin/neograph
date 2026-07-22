@@ -14,6 +14,7 @@ pre-registered entries.
 from __future__ import annotations
 
 import json
+import warnings
 from pathlib import Path
 from typing import Any
 
@@ -35,7 +36,12 @@ from neograph.errors import ConfigurationError
 from neograph.modifiers import Each, Loop, Operator, Oracle
 from neograph.naming import field_name_for
 from neograph.node import Node
-from neograph.spec_types import agent_spec_properties_to_types, load_project_types, lookup_type
+from neograph.spec_types import (
+    _structural_type_name,
+    agent_spec_properties_to_types,
+    load_project_types,
+    lookup_type,
+)
 from neograph.tool import Tool
 
 log = structlog.get_logger()
@@ -61,16 +67,22 @@ def _import_agent_spec_import_classes() -> Any:
     return nodes_mod
 
 
-def _agent_spec_props_to_type(props: Any, name: str) -> Any:
+def _agent_spec_props_to_type(props: Any) -> Any:
     """Register + look up a Pydantic model from a list of Agent Spec
     ``Property`` objects, or ``None`` if there are none.
 
     Reuses ``spec_types.agent_spec_properties_to_types`` (the neograph-nkjv9
-    import-direction bridge) -- never a second Property walker.
+    import-direction bridge) -- never a second Property walker. The
+    registration NAME is derived structurally (``spec_types._structural_type_name``,
+    the SAME canonical helper the nested-object reconstruction branch uses),
+    not from the node's own name -- so a type appearing in two different
+    places (e.g. a self-loop's own output feeding back as one of its own
+    inputs) reconstructs to ONE shared class, not two incompatible ones.
     """
     if not props:
         return None
 
+    name = _structural_type_name(props)
     agent_spec_properties_to_types(props, name)
     return lookup_type(name)
 
@@ -126,27 +138,51 @@ def _reconstruct_primitive_node(spec_node: Any, flow: Any, output_types: dict[st
             found=cls_name,
         )
 
-    outputs = _agent_spec_props_to_type(spec_node.outputs, f"{spec_node.name}__Outputs")
-    inputs = _inputs_from_data_edges(spec_node.name, flow, output_types)
+    outputs = _agent_spec_props_to_type(spec_node.outputs)
+    # DataFlowEdges name the PRODUCER (dict-form, keyed by upstream name) --
+    # but a self-contained node with no external upstream (e.g. Each's inner
+    # node in its own single-node sub-flow) has no edges at all, even though
+    # its OWN Property list still declares its input shape. Fall back to
+    # that single-type reconstruction rather than silently dropping it.
+    inputs = _inputs_from_data_edges(spec_node.name, flow, output_types) or _agent_spec_props_to_type(
+        spec_node.inputs
+    )
     output_types[spec_node.name] = outputs
 
     return Node(name=spec_node.name, mode=mode, inputs=inputs, outputs=outputs, prompt=prompt, model=model,
                 scripted_fn=scripted_fn)
 
 
-def _reconstruct_oracle_group(group: list[Any], flow: Any, output_types: dict[str, Any]) -> Node:
+def _reconstruct_oracle_group(group: list[Any], flow: Any, output_types: dict[str, Any]) -> Node | None:
     """Reconstruct an Oracle-modified Node from its exported variant+merge
-    group -- the inverse of ``_agent_spec._lower_oracle``."""
+    group -- the inverse of ``_agent_spec._lower_oracle``.
+
+    Returns ``None`` (and WARNs) if the marker's ``n`` no longer matches the
+    ACTUAL number of variant nodes present -- a stale/hand-edited marker
+    must never be blindly trusted into a silently-wrong reconstruction
+    (per the Core Invariant's per-group re-lower-and-diff discipline). The
+    caller falls back to importing every node in the group as a bare
+    primitive.
+    """
 
     merge_node = group[-1]
     variant_nodes = group[:-1]
     spec = merge_node.metadata["neograph/oracle_spec"]
 
+    if len(variant_nodes) != spec["n"]:
+        warnings.warn(
+            f"Oracle group {merge_node.name!r}: marker declares n={spec['n']!r} but "
+            f"{len(variant_nodes)} variant node(s) are actually present -- the marker is "
+            "stale (hand-edited Flow). Falling back to primitive-level import for this group.",
+            stacklevel=2,
+        )
+        return None
+
     base_variant = variant_nodes[0]
     base_prompt = base_variant.prompt_template
     base_model = spec.get("models")[0] if spec.get("models") else base_variant.llm_config.model_id
 
-    outputs = _agent_spec_props_to_type(merge_node.outputs, f"{merge_node.name}__Outputs")
+    outputs = _agent_spec_props_to_type(merge_node.outputs)
     inputs = _inputs_from_data_edges(merge_node.name, flow, output_types)
     output_types[merge_node.name] = outputs
 
@@ -180,12 +216,19 @@ def _reconstruct_each_node(map_node: Any, flow: Any, output_types: dict[str, Any
         )
     inner_output_types: dict[str, Any] = {}
     inner = _reconstruct_primitive_node(inner_nodes[0], map_node.subflow, inner_output_types)
+    # Rename only -- KEEP the inner node's own reconstructed `inputs` (its
+    # per-item Property signature, e.g. Tagged): Each's fan-out mechanism
+    # feeds each item via `neo_each_item` state, not a dict-form upstream
+    # mapping, so overwriting inputs with the MapNode's EXTERNAL data edges
+    # (the collection producer, e.g. "seed") would be wrong -- that external
+    # edge names the COLLECTION's owner, not the fanned-out item's shape.
     inner = inner.model_copy(update={"name": map_node.name})
 
-    outputs = _agent_spec_props_to_type(map_node.outputs, f"{map_node.name}__Outputs")
-    inputs = _inputs_from_data_edges(map_node.name, flow, output_types)
-    output_types[map_node.name] = outputs
-    inner = inner.model_copy(update={"inputs": inputs, "outputs": outputs})
+    # _lower_each's MapNode never sets its own outputs= (only the wrapped
+    # inner node's SpecNode carries the per-item output Properties) -- the
+    # per-item output type is the inner node's, not the MapNode's (unset).
+    if not normalize_outputs(inner.outputs).is_none:
+        output_types[map_node.name] = normalize_outputs(inner.outputs).primary
 
     return inner | Each(over=each_spec["over"], key=each_spec.get("key"))
 
@@ -198,8 +241,8 @@ def _reconstruct_loop_item(body_spec: Any, check_spec: Any, flow: Any, output_ty
     inner_output_types: dict[str, Any] = {}
     body = _reconstruct_primitive_node(body_spec, flow, inner_output_types)
 
-    outputs = _agent_spec_props_to_type(check_spec.outputs, f"{check_spec.name}__Outputs") or body.outputs
-    inputs = _inputs_from_data_edges(check_spec.name, flow, output_types)
+    outputs = body.outputs
+    inputs = _inputs_from_data_edges(body_spec.name, flow, output_types)
     output_types[body_spec.name] = outputs
     body = body.model_copy(update={"inputs": inputs, "outputs": outputs} if inputs is not None else {})
 
@@ -344,7 +387,16 @@ def from_agent_spec(flow: Any) -> Construct:
             else:
                 pipeline_items.append(_reconstruct_primitive_node(spec_node, flow, output_types))
         elif kind == "oracle":
-            pipeline_items.append(_reconstruct_oracle_group(payload, flow, output_types))
+            reconstructed = _reconstruct_oracle_group(payload, flow, output_types)
+            if reconstructed is not None:
+                pipeline_items.append(reconstructed)
+            else:
+                # Stale marker -- fall back to importing every node in the
+                # group as a bare primitive (per the Core Invariant: never
+                # silently reconstruct a modifier that diverges from the
+                # actual structure).
+                for spec_node in payload:
+                    pipeline_items.append(_reconstruct_primitive_node(spec_node, flow, output_types))
         elif kind == "each":
             pipeline_items.append(_reconstruct_each_node(payload, flow, output_types))
         elif kind == "loop":

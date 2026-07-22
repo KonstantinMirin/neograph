@@ -493,13 +493,20 @@ def _lower_operator(node: Node, operator: Operator) -> tuple[SpecNode, list[Spec
     return check, [input_message], [pause_edge]
 
 
-def _lower_construct_item(item: Any) -> tuple[list[SpecNode], list[ControlFlowEdge], list[DataFlowEdge], SpecNode]:
+def _lower_construct_item(
+    item: Any,
+) -> tuple[list[SpecNode], list[ControlFlowEdge], list[DataFlowEdge], SpecNode, SpecNode]:
     """Lower one top-level construct item (Node/Construct/_BranchNode) to
-    (all_spec_nodes, extra_control_edges, extra_data_edges, primary_node).
+    (all_spec_nodes, extra_control_edges, extra_data_edges, primary_node, data_node).
 
     ``primary_node`` is the node other items' ControlFlowEdges attach to
     (the item's DX-visible identity — e.g. an Operator's check node, or an
-    Oracle's merge node).
+    Oracle's merge node). ``data_node`` is the node that actually carries the
+    item's typed input/output Properties for DataFlowEdge wiring — usually
+    the SAME as ``primary_node``, except for LOOP, where the control-flow
+    ``primary`` (the check ``BranchingNode``) declares no inputs/outputs at
+    all; the wrapped ``body`` node is the one with real Properties, so
+    external data edges must target/source it, not the bare check node.
     """
     nodes_mod, flow_mod, _edges_mod, _property_mod, _tools_mod = _import_agent_spec_flow_classes()
 
@@ -509,12 +516,12 @@ def _lower_construct_item(item: Any) -> tuple[list[SpecNode], list[ControlFlowEd
             mapping={"true": "true", "false": "false"},
             metadata={"neograph/branch": True},
         )
-        return [branch], [], [], branch
+        return [branch], [], [], branch, branch
 
     if isinstance(item, Construct):
         sub_flow = to_agent_spec(item)
         flow_node = nodes_mod.FlowNode(name=item.name, subflow=sub_flow)
-        return [flow_node], [], [], flow_node
+        return [flow_node], [], [], flow_node, flow_node
 
     if not isinstance(item, Node):
         raise ConfigurationError.build(
@@ -527,27 +534,27 @@ def _lower_construct_item(item: Any) -> tuple[list[SpecNode], list[ControlFlowEd
 
     if combo == ModifierCombo.ORACLE:
         variant_and_merge, control_edges, data_edges = _lower_oracle(item, mods["oracle"])
-        return variant_and_merge, control_edges, data_edges, variant_and_merge[-1]
+        return variant_and_merge, control_edges, data_edges, variant_and_merge[-1], variant_and_merge[-1]
 
     if combo == ModifierCombo.EACH:
         map_node = _lower_each(item, mods["each"])
-        return [map_node], [], [], map_node
+        return [map_node], [], [], map_node, map_node
 
     if combo == ModifierCombo.LOOP:
         body = _lower_node(item)
         branch, extra_control, extra_data = _lower_loop(item, mods["loop"], body)
-        return [body, branch], extra_control, extra_data, branch
+        return [body, branch], extra_control, extra_data, branch, body
 
     if combo == ModifierCombo.OPERATOR:
         _nodes_mod, _flow_mod, edges_mod, _property_mod, _tools_mod = _import_agent_spec_flow_classes()
         primary = _lower_node(item)
         check, extra_nodes, extra_control = _lower_operator(item, mods["operator"])
         pre_edge = edges_mod.ControlFlowEdge(name=f"{item.name}__to_operator_check", from_node=primary, to_node=check)
-        return [primary, check, *extra_nodes], [pre_edge, *extra_control], [], check
+        return [primary, check, *extra_nodes], [pre_edge, *extra_control], [], check, check
 
     if combo == ModifierCombo.BARE:
         primary = _lower_node(item)
-        return [primary], [], [], primary
+        return [primary], [], [], primary, primary
 
     raise ConfigurationError.build(
         f"node {item.name!r} has modifier combination {combo.name} — no Agent Spec lowering yet",
@@ -572,15 +579,17 @@ def to_agent_spec(construct: Construct) -> Flow:
     control_edges: list[ControlFlowEdge] = []
     data_edges: list[DataFlowEdge] = []
     primaries: list[SpecNode] = []
+    data_nodes: list[SpecNode] = []
     item_by_name: dict[str, Any] = {}
 
     for item in iter_with_arms(construct):
         item_by_name[item.name] = item
-        lowered_nodes, extra_control, extra_data, primary = _lower_construct_item(item)
+        lowered_nodes, extra_control, extra_data, primary, data_node = _lower_construct_item(item)
         all_nodes.extend(lowered_nodes)
         control_edges.extend(extra_control)
         data_edges.extend(extra_data)
         primaries.append(primary)
+        data_nodes.append(data_node)
 
     # Explicit ControlFlowEdge per adjacent pair in Construct.nodes order.
     for prev_primary, next_primary in zip(primaries, primaries[1:], strict=False):
@@ -592,29 +601,32 @@ def to_agent_spec(construct: Construct) -> Flow:
             )
         )
 
-    # Explicit DataFlowEdge per Node.inputs upstream-name mapping.
+    # Explicit DataFlowEdge per Node.inputs upstream-name mapping. Uses
+    # data_node (not primary): for LOOP, primary is the bare check
+    # BranchingNode (no Properties at all), while data_node is the wrapped
+    # body node that actually owns the typed inputs/outputs.
     ordered_items = list(iter_with_arms(construct))
-    primary_by_item_name = dict(zip((item.name for item in ordered_items), primaries, strict=True))
+    data_node_by_item_name = dict(zip((item.name for item in ordered_items), data_nodes, strict=True))
     for idx, item in enumerate(ordered_items):
         if not isinstance(item, Node):
             continue
         ni = normalize_inputs(item.inputs)
         if ni.is_none:
             continue
-        dest_primary = primary_by_item_name[item.name]
+        dest_node = data_node_by_item_name[item.name]
 
         if ni.is_dict_form:
             # Dict-form fan-in: named upstream -> Property title per key.
             for upstream_name in ni.by_name:
-                source_primary = primary_by_item_name.get(upstream_name)
-                if source_primary is None:
+                source_node = data_node_by_item_name.get(upstream_name)
+                if source_node is None:
                     continue
                 data_edges.append(
                     edges_mod.DataFlowEdge(
                         name=f"{upstream_name}_to_{item.name}",
-                        source_node=source_primary,
+                        source_node=source_node,
                         source_output=upstream_name,
-                        destination_node=dest_primary,
+                        destination_node=dest_node,
                         destination_input=upstream_name,
                     )
                 )
@@ -633,15 +645,15 @@ def to_agent_spec(construct: Construct) -> Flow:
                 continue
             if not (issubclass(no.primary, ni.single_type) or issubclass(ni.single_type, no.primary)):
                 continue
-            source_primary = primary_by_item_name[upstream.name]
+            source_node = data_node_by_item_name[upstream.name]
             upstream_props = {p.title for p in _properties_for(no.primary)}
             for shared_title in input_props & upstream_props:
                 data_edges.append(
                     edges_mod.DataFlowEdge(
                         name=f"{upstream.name}_to_{item.name}_{shared_title}",
-                        source_node=source_primary,
+                        source_node=source_node,
                         source_output=shared_title,
-                        destination_node=dest_primary,
+                        destination_node=dest_node,
                         destination_input=shared_title,
                     )
                 )

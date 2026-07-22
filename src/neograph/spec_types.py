@@ -241,6 +241,31 @@ def _import_agent_spec_property_classes() -> Any:
     return pyagentspec_property
 
 
+def _structural_type_name(props: list[Property]) -> str:
+    """Derive a registry name purely from a Property list's STRUCTURE
+    (title + type, sorted), not from any node/model name.
+
+    A reconstructed Agent Spec import has no back-reference to the original
+    Pydantic class name (Property carries only per-field shape) -- so two
+    DIFFERENT sites reconstructing the SAME structural shape (e.g. a
+    self-loop's own output feeding back as one of its own inputs, or a
+    nested object type appearing both top-level and inside a list) would
+    otherwise synthesize DIFFERENT, incompatible classes and fail
+    construct-validation type-compatibility checks even though the data is
+    identical. Naming the registration purely by structure makes
+    ``register_type``'s existing content-match idempotency
+    (``_fields_match``) automatically reuse ONE class for every
+    structurally-identical Property list -- the single canonical helper
+    both the top-level bridge (``agent_spec_properties_to_types``) and the
+    nested-object branch (``_property_to_field_type``) use.
+    """
+    import hashlib
+
+    sig = tuple(sorted((p.title, str(getattr(p, "type", None))) for p in props))
+    digest = hashlib.sha256(repr(sig).encode()).hexdigest()[:16]
+    return f"AgentSpecType_{digest}"
+
+
 def _property_to_field_type(prop: Property) -> tuple[Any, Any]:
     """Map a single Agent Spec ``Property`` to a (type, default) field spec.
 
@@ -280,7 +305,14 @@ def _property_to_field_type(prop: Property) -> tuple[Any, Any]:
         for field_name, field_prop in prop.properties.items():
             field_type, field_default = _property_to_field_type(field_prop)
             fields[field_name] = (field_type, field_default)
-        model_name = prop.title or "AnonymousNestedModel"
+        # Structural dedup (see _structural_type_name): a nested object
+        # appearing in two different places (e.g. top-level AND inside a
+        # list) must reconstruct to the SAME class both times, or type
+        # compatibility checks between them fail even though the data is
+        # identical. register_type's content-match idempotency does the
+        # actual reuse; this is the canonical (register + lookup) path, not
+        # a second ad-hoc create_model call.
+        model_name = _structural_type_name(list(prop.properties.values()))
         # from_attributes: a reconstructed Agent Spec import has no back-reference
         # to the ORIGINAL Pydantic class name (Property only carries per-field
         # shape, never a model-level identity) -- the model built here is
@@ -289,7 +321,9 @@ def _property_to_field_type(prop: Property) -> tuple[Any, Any]:
         # original class; from_attributes lets Pydantic validate it into this
         # reconstructed model by matching attribute names, rather than requiring
         # exact class identity LangGraph's state coercion would otherwise demand.
-        return create_model(model_name, __base__=BaseModel, __config__=ConfigDict(from_attributes=True), **fields), ...
+        model = create_model(model_name, __base__=BaseModel, __config__=ConfigDict(from_attributes=True), **fields)
+        register_type(model_name, model)
+        return lookup_type(model_name), ...
 
     if isinstance(prop, pas.NullProperty):
         return type(None), None
