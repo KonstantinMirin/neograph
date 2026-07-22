@@ -215,15 +215,34 @@ def _tool_to_server_tool(tool: Any, tools_mod: Any) -> Any:
     Mirrors ``_make_server_tool``'s ``ServerTool`` shape but is a standalone
     helper: this is an agent/act node's ``tools=[...]`` list attaching to its
     ``Agent``, not a scripted/think node's own ``ToolNode.tool=`` field (a
-    different Agent Spec primitive entirely). Budget/config/idempotent ride
-    only in the ``neograph/agent_spec`` marker (see ``_agent_spec_marker``);
-    ``tool._bound_tool`` (a live callable) is never referenced here.
+    different Agent Spec primitive entirely). ``ServerTool`` is used
+    UNIFORMLY for every neograph ``Tool`` export (MCP-bound or not) --
+    MCP-ness is a runtime factory-registration detail
+    (``mcp_tool_factory``), never a wire-format distinction (pyagentspec has
+    no ``MCPTool`` class; doc s7/s8's 'do not own the MCP gateway'
+    positioning).
+
+    Stamps a ``neograph/tool_spec`` marker on the ServerTool itself
+    (budget/config/idempotent -- name-only fields with no plain-``ServerTool``
+    equivalent), mirroring ``ToolSpec``'s shape (``_spec_schema.py:66``) and
+    the established ``metadata['neograph/*_spec']`` marker convention. Per
+    the Core Invariant, ``tool._bound_tool`` (a live callable) is NEVER
+    referenced here -- factory binding is exclusively a runtime,
+    post-deserialization concern.
     """
     return tools_mod.ServerTool(
         name=tool.name,
         description=f"neograph tool {tool.name!r}",
         inputs=None,
         outputs=None,
+        metadata={
+            "neograph/tool_spec": {
+                "name": tool.name,
+                "budget": tool.budget,
+                "config": tool.config,
+                "idempotent": tool.idempotent,
+            }
+        },
     )
 
 

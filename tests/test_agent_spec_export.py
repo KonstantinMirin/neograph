@@ -364,6 +364,98 @@ class TestToAgentSpecLowersAgentActMode:
             to_agent_spec(pipeline)
 
 
+class TestToolToServerToolExportOnlySlice:
+    """Pins ``_tool_to_server_tool``'s export-only slice (neograph-l7gvy, refined
+    2026-07-22 per architect review, atom neograph-f0j1e.30/.31).
+
+    Scope is deliberately narrow: THIS test only pins the standalone pure
+    helper's per-tool metadata shape. It does NOT exercise import or a full
+    export->import round trip -- that slice is explicitly deferred, gated on
+    neograph-01i0g (from_agent_spec), per the refined Implementation Plan
+    step 3.
+
+    Core Invariant under test: a neograph ``Tool``'s budget/config/idempotent
+    survive into a per-tool ``neograph/tool_spec`` metadata marker (mirroring
+    the ``neograph/oracle_spec`` marker convention), and no concrete
+    callable/``_bound_tool`` ever leaks into that serialized marker. Also pins
+    that ``ServerTool`` is the uniform Agent Spec primitive for ALL neograph
+    Tool exports -- no ``MCPTool`` reference anywhere (pyagentspec 26.1.2 has
+    no such class; encoding MCP-ness into the wire format would itself
+    violate the name-only Core Invariant).
+    """
+
+    def test_tool_to_server_tool_stamps_neograph_tool_spec_marker_with_budget_config_idempotent(self):
+        from neograph._agent_spec import _tool_to_server_tool
+        from neograph.tool import Tool
+
+        tool = Tool("search_code", budget=5, idempotent=True, config={"depth": 2})
+
+        import pyagentspec.tools as tools_mod
+        from pyagentspec.tools import ServerTool
+
+        server_tool = _tool_to_server_tool(tool, tools_mod)
+
+        assert isinstance(server_tool, ServerTool), (
+            f"_tool_to_server_tool must return a ServerTool uniformly for ALL neograph Tool "
+            f"exports (MCP-bound or not), got {type(server_tool).__name__}"
+        )
+
+        marker = server_tool.metadata["neograph/tool_spec"]
+        assert marker == {
+            "name": "search_code",
+            "budget": 5,
+            "config": {"depth": 2},
+            "idempotent": True,
+        }
+
+    def test_tool_to_server_tool_marker_never_leaks_bound_tool_callable(self):
+        """A Tool synthesized from a raw LangChain BaseTool carries a live
+        callable on the PrivateAttr ``_bound_tool``. That callable must never
+        appear in the serialized ``neograph/tool_spec`` marker -- factory
+        binding is exclusively a runtime, post-deserialization concern."""
+        import json
+
+        from neograph._agent_spec import _tool_to_server_tool
+        from neograph.tool import Tool
+
+        tool = Tool("write_file", budget=3)
+        object.__setattr__(tool, "_bound_tool", lambda *a, **kw: "i am a live callable")
+
+        import pyagentspec.tools as tools_mod
+
+        server_tool = _tool_to_server_tool(tool, tools_mod)
+        marker = server_tool.metadata["neograph/tool_spec"]
+
+        assert "_bound_tool" not in marker
+        assert not any(callable(v) for v in marker.values()), (
+            "no callable may appear anywhere in the serialized neograph/tool_spec marker"
+        )
+
+        # Scoped narrowly to the invariant this test guards (per architect
+        # review LOW finding): json.dumps just the tool_spec sub-dict, not a
+        # blanket dump of arbitrary user-supplied Tool.config.
+        json.dumps(marker)
+
+    def test_no_mcp_tool_class_used_anywhere_in_tool_export(self):
+        """ServerTool is used uniformly for every neograph Tool export --
+        MCP-ness is never encoded as a distinct Agent Spec tool class/type,
+        per the ratified Core Invariant (name-only wire format) and the
+        architect review's MEDIUM finding foreclosing the MCPTool question."""
+        import pyagentspec.tools as tools_mod
+
+        assert not hasattr(tools_mod, "MCPTool"), (
+            "pyagentspec has no MCPTool class in the pinned SDK version -- if this "
+            "ever changes, neograph's tool export must still NOT adopt it (would "
+            "violate the name-only invariant by encoding MCP-ness into the wire format)"
+        )
+
+        from neograph._agent_spec import _tool_to_server_tool
+        from neograph.tool import Tool
+
+        server_tool = _tool_to_server_tool(Tool("search_code", budget=1), tools_mod)
+        assert type(server_tool).__name__ == "ServerTool"
+
+
 class TestToAgentSpecLowersModifiers:
     """Pins each modifier's LOWER composite per the Core Invariant: every
     modifier flattens to Agent Spec primitives stamped with a
