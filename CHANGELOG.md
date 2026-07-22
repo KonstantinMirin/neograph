@@ -5,6 +5,14 @@ All notable changes to NeoGraph will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.3] - 2026-07-22
+
+A hotfix release completing the 0.7.2 stringly-`"null"` repair, cut directly from `main`.
+
+### Fixed
+
+- **Stringly-`"null"` coercion now reaches interiors of `Optional`-wrapped nested models and lists.** 0.7.2 coerced a stringly-`"null"` on a *direct* Optional field (including `list[X] | None` and `Model | None`), but its recursive descent into nested models/lists only fired when the field annotation was a *bare* `BaseModel` or `list[...]` — an `Optional` wrapper (`parent: Company | None`, `products: list[Product] | None`) is a `Union`, so both descent branches were skipped and a stringly-`"null"` on an *interior* field (e.g. `parent.langs: list[str] | None`, `products[i].price: int | None`) still reached Pydantic raw and aborted the node with `list_type`/`int_parsing`. `_apply_null_defaults` now peels a single `Optional` wrapper (via the new single-site `_unwrap_optional` seam) before the nested-model and list-item descent, so the coercion reaches every Optional scalar leaf at any depth. Legit interior values are preserved; a required (non-Optional) field receiving `"null"` still fails loud. Covered by deterministic regressions plus a Hypothesis property sweep over randomized Optional/nested/list topologies.
+
 ## [0.7.2] - 2026-07-16
 
 A hotfix release: one bug fix, cut directly from `main`/v0.7.1 (not from `develop`, which carries unreleased 0.8.0-track work).
