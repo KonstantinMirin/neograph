@@ -164,7 +164,11 @@ EXPECTED_ENGINE_SURFACE = frozenset(
 # Compile-layer modules must not import the run layer. Only the package facade
 # (__init__.py, the run layer's own public export point) and runner.py itself are
 # exempt from the "no neograph.runner import" rule.
-IMPORT_DIRECTION_EXEMPT = frozenset({"runner.py", "__init__.py"})
+# _hot_swap.py is a top-of-stack ORCHESTRATION FACADE (a sibling to the package
+# facade __init__.py), not a compile-layer module: resume_from_agent_spec composes
+# loader -> compiler -> runner (the Tier-2 durable hot-swap, neograph-mrb2y). It
+# sits ABOVE the run layer and legitimately references it, exactly like __init__.
+IMPORT_DIRECTION_EXEMPT = frozenset({"runner.py", "__init__.py", "_hot_swap.py"})
 
 
 # ── Detectors (operate on source text so meta-tests can feed synthetics) ──────
@@ -442,7 +446,9 @@ class TestRunLayerNotImportedByCompileLayer:
     import, dodging the circular import it itself created) was removed by relocating
     ``_strip_internals`` to the neutral ``_state_keys`` module. This keeps it gone:
     only the package facade (``__init__.py``, which re-exports run/arun/stream/
-    astream) and ``runner.py`` itself may reference the run layer."""
+    astream), the orchestration facade ``_hot_swap.py`` (which COMPOSES
+    loader->compiler->runner for the Tier-2 durable hot-swap), and ``runner.py``
+    itself may reference the run layer."""
 
     def test_no_compile_layer_module_imports_runner(self) -> None:
         offenders: list[str] = []

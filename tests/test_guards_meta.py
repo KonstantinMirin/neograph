@@ -437,6 +437,13 @@ class TestNoNearDuplicateHelperNames:
             "the private _compile_prompt seam (_llm_render.py); private/public "
             "underscore convention, ticket-mandated public name (v569)."
         ),
+        # neograph-mrb2y: a-prefix async twin of the Tier-2 durable hot-swap
+        # facade (_hot_swap.py) — the async form composes arun, the sync form
+        # composes run. Same deliberate sync/async twin convention as run/arun.
+        frozenset({"aresume_from_agent_spec", "resume_from_agent_spec"}): (
+            "lev=1: async twin of the durable hot-swap helper (_hot_swap.py); "
+            "composes arun instead of run."
+        ),
     }
 
     @staticmethod

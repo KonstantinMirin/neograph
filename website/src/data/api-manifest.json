@@ -1320,6 +1320,20 @@
       "kind": "function",
       "name": "from_agent_spec",
       "signature": "(flow: 'Any') -> 'Construct'"
+    },
+    {
+      "anchor": "resume_from_agent_spec",
+      "doc": "Recompile an Agent Spec ``Flow`` and resume it durably on the same thread.",
+      "kind": "function",
+      "name": "resume_from_agent_spec",
+      "signature": "(flow: 'Flow', *, checkpointer: 'BaseCheckpointSaver', config: 'RunnableConfig', auto_resume: 'bool' = True, **runtime_kwargs: 'Any') -> 'Any'"
+    },
+    {
+      "anchor": "aresume_from_agent_spec",
+      "doc": "Async twin of :func:`resume_from_agent_spec` (composes ``arun``).",
+      "kind": "function",
+      "name": "aresume_from_agent_spec",
+      "signature": "(flow: 'Flow', *, checkpointer: 'BaseCheckpointSaver', config: 'RunnableConfig', auto_resume: 'bool' = True, **runtime_kwargs: 'Any') -> 'Any'"
     }
   ]
 }
