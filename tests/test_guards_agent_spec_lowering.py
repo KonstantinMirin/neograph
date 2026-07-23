@@ -25,6 +25,20 @@ def _lower_node_source() -> str:
     raise AssertionError("_lower_node not found in _agent_spec.py")
 
 
+def _to_agent_spec_source() -> str:
+    tree = ast.parse(AGENT_SPEC_FILE.read_text())
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "to_agent_spec":
+            return ast.get_source_segment(AGENT_SPEC_FILE.read_text(), node) or ""
+    raise AssertionError("to_agent_spec not found in _agent_spec.py")
+
+
+def _dict_form_fan_in_branch(source: str) -> str:
+    start = source.index("if ni.is_dict_form:")
+    end = source.index("# Single-type inputs (convenience shorthand):", start)
+    return source[start:end]
+
+
 class TestAgentActModeLowersToAgentNode:
     """_lower_node's agent/act branch must construct a real AgentNode, never
     a ToolNode placeholder or a bare fail-loud with no lowering at all."""
@@ -68,3 +82,54 @@ class TestAgentActModeLowersToAgentNode:
             "agent/act lowering must stamp a neograph/agent_spec marker so a future "
             "from_agent_spec() importer can reconstruct the node losslessly"
         )
+
+
+class TestDictFormFanInResolvesRealPropertyTitles:
+    """Structural guard for neograph-ozxqw's codebase-scan MIGRATE row.
+
+    Disease pattern: ``to_agent_spec()``'s dict-form fan-in branch (a
+    downstream node with ``inputs={'seed': A}``, @node's PRIMARY fan-in
+    shape) must build each ``DataFlowEdge`` from a resolved output/input
+    Property TITLE (via ``_properties_for``) -- never the raw inputs-dict
+    KEY (the upstream node's bare NAME), which is not itself a Property
+    title and crashes pyagentspec's own ``DataFlowEdge`` validator.
+    """
+
+    def test_dict_form_branch_resolves_via_properties_for(self):
+        branch = _dict_form_fan_in_branch(_to_agent_spec_source())
+        assert "_properties_for(" in branch, (
+            "dict-form fan-in must resolve Property titles via _properties_for(), "
+            "not construct DataFlowEdges directly from the raw inputs-dict key"
+        )
+
+    def test_dict_form_branch_never_uses_bare_upstream_name_as_property_title(self):
+        branch = _dict_form_fan_in_branch(_to_agent_spec_source())
+        assert "source_output=upstream_name" not in branch, (
+            "regression of neograph-ozxqw: source_output must be a real output "
+            "Property title, never the bare upstream inputs-dict key"
+        )
+        assert "destination_input=upstream_name" not in branch, (
+            "regression of neograph-ozxqw: destination_input must be a real input "
+            "Property title, never the bare upstream inputs-dict key"
+        )
+
+    def test_meta_guard_catches_the_disease_pattern_if_reintroduced(self):
+        """Meta-test (positive+negative pair, not regex-based -- plain
+        substring checks have no regex-slip failure mode): prove the two
+        assertions above actually flag the pre-fix disease pattern, so this
+        guard isn't vacuously passing only because the current source
+        happens to be fixed."""
+        buggy_branch = (
+            "if ni.is_dict_form:\n"
+            "    for upstream_name in ni.by_name:\n"
+            "        source_node = data_node_by_item_name.get(upstream_name)\n"
+            "        data_edges.append(\n"
+            "            edges_mod.DataFlowEdge(\n"
+            "                source_output=upstream_name,\n"
+            "                destination_input=upstream_name,\n"
+            "            )\n"
+            "        )\n"
+        )
+        assert "source_output=upstream_name" in buggy_branch
+        assert "destination_input=upstream_name" in buggy_branch
+        assert "_properties_for(" not in buggy_branch

@@ -202,6 +202,52 @@ class TestToAgentSpecExportsFlow:
         assert hasattr(neograph, "to_agent_spec")
 
 
+class TestToAgentSpecExportsDictFormFanIn:
+    """Pins ``to_agent_spec()`` against @node's PRIMARY fan-in shape: a
+    downstream node with a typed upstream param (``def f(seed: A)``) compiles
+    to dict-form ``inputs={'seed': A}`` (keyed by upstream NODE NAME, not by
+    output property title). ``TestToAgentSpecExportsFlow`` above only covers
+    the single-type ``inputs=RawText`` shorthand via the ``_consumer`` helper
+    -- never this dict-form shape, which is the dominant one @node produces.
+
+    Reproduces neograph-ozxqw: ``_agent_spec.py``'s dict-form fan-in branch
+    sets ``DataFlowEdge.source_output=upstream_name`` (the inputs-dict KEY =
+    the upstream node's NAME), instead of the source node's real exported
+    output Property TITLE -- so pyagentspec's own DataFlowEdge validator
+    raises a raw ``pydantic.ValidationError`` ("does not have any property
+    with that name") for any two-node dict-form-fan-in chain, even though the
+    pipeline compiles and runs fine in neograph.
+    """
+
+    def test_two_node_dict_form_fan_in_chain_exports_without_raising(self):
+        from neograph._agent_spec import to_agent_spec
+        from neograph.node import Node
+
+        seed = _producer("seed", RawText)
+        summarize = Node.scripted("summarize", fn="g", inputs={"seed": RawText}, outputs=Claims)
+        pipeline = Construct("dict-fanin-chain", nodes=[seed, summarize])
+
+        # Must not raise pydantic.ValidationError -- to_agent_spec's fan-in
+        # edge must reference a REAL property of the source node.
+        flow = to_agent_spec(pipeline)
+
+        from pyagentspec.flows.edges import DataFlowEdge
+
+        seed_spec_node = next(n for n in flow.nodes if n.name == "seed")
+        seed_output_titles = {p.title for p in (seed_spec_node.outputs or [])}
+        assert seed_output_titles, "expected 'seed' to export at least one output Property"
+
+        data_edges = [e for e in flow.data_flow_connections if isinstance(e, DataFlowEdge)]
+        fanin_edge = next(
+            e for e in data_edges if e.source_node.name == "seed" and e.destination_node.name == "summarize"
+        )
+        assert fanin_edge.source_output in seed_output_titles, (
+            f"DataFlowEdge.source_output={fanin_edge.source_output!r} must be a real output "
+            f"Property of node 'seed' ({seed_output_titles}), not the raw inputs-dict key "
+            "'seed' (the upstream NODE NAME)"
+        )
+
+
 class TestToAgentSpecRejectsUnrepresentableFields:
     """Pins the Core Invariant's fail-loud contract: a construct that cannot
     be lowered must raise ``ConfigurationError``, never silently downgrade.

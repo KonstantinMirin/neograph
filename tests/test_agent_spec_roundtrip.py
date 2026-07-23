@@ -237,6 +237,40 @@ class TestForeignAgentSpecImportsAsPrimitives:
         assert result["consumer"].value == "got: hello"
 
 
+class TestDictFormFanInRoundTrip:
+    """Pins ozxqw's acceptance criterion: a real two-node @node-shaped
+    pipeline using the PRIMARY dict-form fan-in (``inputs={'seed': Claims}``,
+    the shape @node's decoration always produces for a typed upstream param)
+    must export -> import -> compile -> RUN with behavior preserved -- not
+    just structurally export without raising (that narrower claim is already
+    pinned in test_agent_spec_export.py::TestToAgentSpecExportsDictFormFanIn).
+    """
+
+    def test_dict_form_fan_in_round_trips_and_runs(self):
+        def seed_fn(input_data, config):
+            return Claims(items=["hello", "world"])
+
+        register_scripted("rt_dictfanin_seed", seed_fn)
+
+        def consume_fn(input_data, config):
+            return Result(value=f"got: {input_data['seed'].items[0]}")
+
+        register_scripted("rt_dictfanin_consume", consume_fn)
+
+        seed = Node.scripted("seed", fn="rt_dictfanin_seed", outputs=Claims)
+        consumer = Node.scripted(
+            "consumer", fn="rt_dictfanin_consume", inputs={"seed": Claims}, outputs=Result
+        )
+        pipeline = Construct("dict-fanin-flow", nodes=[seed, consumer])
+
+        flow = to_agent_spec(pipeline)
+        imported = from_agent_spec(flow)
+        graph = compile(imported, **build_test_compile_kwargs())
+        result = run(graph, input={"node_id": "dict-fanin-rt"})
+
+        assert result["consumer"].value == "got: hello"
+
+
 class TestStaleMarkerDoesNotSilentlyReconstruct:
     """Round-trip-marker item (3): a hand-edited Flow whose Oracle marker no
     longer matches the actual primitives around it (variant count mismatch)

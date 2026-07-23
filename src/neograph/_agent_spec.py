@@ -635,20 +635,43 @@ def to_agent_spec(construct: Construct) -> Flow:
         dest_node = data_node_by_item_name[item.name]
 
         if ni.is_dict_form:
-            # Dict-form fan-in: named upstream -> Property title per key.
+            # Dict-form fan-in: named upstream -> per-field Property edges.
+            # upstream_name is the inputs-dict KEY (the upstream NODE'S NAME),
+            # never itself a Property title -- resolve the upstream's real
+            # output Property titles (mirrors the single-type fallback below
+            # and the Oracle/Loop precedent, which all key on prop.title).
             for upstream_name in ni.by_name:
+                upstream_item = item_by_name.get(upstream_name)
                 source_node = data_node_by_item_name.get(upstream_name)
-                if source_node is None:
-                    continue
-                data_edges.append(
-                    edges_mod.DataFlowEdge(
-                        name=f"{upstream_name}_to_{item.name}",
-                        source_node=source_node,
-                        source_output=upstream_name,
-                        destination_node=dest_node,
-                        destination_input=upstream_name,
+                if upstream_item is None or source_node is None or not isinstance(upstream_item, Node):
+                    raise ConfigurationError.build(
+                        f"node {item.name!r}'s dict-form inputs references upstream "
+                        f"{upstream_name!r}, which has no exportable Agent Spec node",
+                        expected="an upstream Node producing a resolvable output",
+                        found=f"no node named {upstream_name!r} in the construct",
+                        hint="dict-form fan-in against a multi-output producer referenced "
+                        "via '{upstream}_{key}' naming has no Agent Spec representation yet",
                     )
-                )
+                no = normalize_outputs(upstream_item.outputs)
+                if no.is_none or no.is_dict_form:
+                    raise ConfigurationError.build(
+                        f"node {item.name!r}'s dict-form inputs references upstream "
+                        f"{upstream_name!r}, whose outputs are not a single exportable type",
+                        expected="a single-type Node.outputs on the upstream node",
+                        found=f"{upstream_name!r}.outputs is dict-form or None",
+                        hint="multi-output (dict-form outputs) producers referenced by a "
+                        "downstream dict-form input have no Agent Spec representation yet",
+                    )
+                for prop in _properties_for(no.primary):
+                    data_edges.append(
+                        edges_mod.DataFlowEdge(
+                            name=f"{upstream_name}_to_{item.name}_{prop.title}",
+                            source_node=source_node,
+                            source_output=prop.title,
+                            destination_node=dest_node,
+                            destination_input=f"{upstream_name}.{prop.title}",
+                        )
+                    )
             continue
 
         # Single-type inputs (convenience shorthand): the producer is
