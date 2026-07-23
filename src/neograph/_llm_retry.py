@@ -136,6 +136,26 @@ def _optional_inner_types(annotation: Any) -> tuple[Any, ...] | None:
     return None
 
 
+def _unwrap_optional(annotation: Any) -> Any:
+    """Peel a single ``X | None`` wrapper, returning ``X``; else the annotation.
+
+    ``Company | None`` -> ``Company``; ``list[Product] | None`` -> ``list[Product]``;
+    a plain ``list[Product]`` or ``Company`` is returned unchanged. An ambiguous
+    nullable union with more than one non-None member (``A | B | None``) is left
+    intact -- there is no single interior type to recurse into, so the caller's
+    ``issubclass``/``origin`` checks correctly decline it.
+
+    This is the single Optional-unwrapping seam for the nested-recursion descent:
+    without it, ``isinstance(annotation, type)`` and ``get_origin(...) is list``
+    both reject an Optional-wrapped model/list and the descent silently skips the
+    interior. See neograph-zhwgh.
+    """
+    non_none = _optional_inner_types(annotation)
+    if non_none is not None and len(non_none) == 1:
+        return non_none[0]
+    return annotation
+
+
 def _is_stringly_null(val: Any, annotation: Any) -> bool:
     """True when *val* is a string sentinel meaning "no value" for a nullable field.
 
@@ -158,14 +178,57 @@ def _is_stringly_null(val: Any, annotation: Any) -> bool:
     return low == "" and not any(t is str for t in non_none)
 
 
+def _descend_null_defaults(val: Any, annotation: Any) -> None:
+    """Recurse :func:`_apply_null_defaults` into any BaseModel dict nested within
+    *val*, driven by *annotation*'s container shape.
+
+    ONE shape classifier instead of a per-shape branch list. It peels a single
+    ``Optional`` wrapper, then dispatches on the concrete runtime value:
+
+    - a model dict (``val`` is a dict, annotation a ``BaseModel``) -> recurse into it;
+    - a ``list[...]`` -> recurse into each element against the item annotation;
+    - a ``dict[K, V]`` -> recurse into each value against ``V``.
+
+    The recursion re-peels ``Optional`` at every level, so *every* container
+    composition -- ``list[Product] | None``, ``dict[str, Product]``,
+    ``list[Product | None]``, ``Optional[dict[str, list[Product]]]`` -- reaches
+    its leaf model dicts. This replaced a hand-enumerated (bare-model,
+    bare-list-of-model) descent that silently skipped every shape it did not
+    spell out, which is how the Optional-wrapped and dict-of-model interiors
+    kept crashing. See neograph-zhwgh. (``tuple[...]`` is intentionally out of
+    scope -- LLM structured output does not emit heterogeneous tuples.)
+    """
+    from typing import get_args, get_origin
+
+    annotation = _unwrap_optional(annotation)
+
+    if isinstance(val, dict):
+        if isinstance(annotation, type) and issubclass(annotation, BaseModel):
+            _apply_null_defaults(val, annotation)
+            return
+        if get_origin(annotation) is dict:
+            args = get_args(annotation)
+            if len(args) == 2:
+                for item in val.values():
+                    _descend_null_defaults(item, args[1])
+        return
+
+    if isinstance(val, list) and get_origin(annotation) is list:
+        args = get_args(annotation)
+        if args:
+            for item in val:
+                _descend_null_defaults(item, args[0])
+
+
 def _apply_null_defaults(data: dict, model: type[BaseModel]) -> None:
     """Replace null values with field defaults, recursively.
 
     Mutates *data* in place. Applies when the JSON value is None and the field
-    has either an explicit default or a default_factory. Also recurses into
-    nested BaseModel fields and list[BaseModel] items. Stringly-null sentinels
-    (the string ``"null"``/``"none"``/``""``) on Optional fields are first
-    coerced to ``None`` so the same default/None disposition applies.
+    has either an explicit default or a default_factory. Also recurses (via
+    :func:`_descend_null_defaults`) into nested BaseModel fields nested within
+    ``list`` / ``dict`` / ``Optional`` containers to any depth. Stringly-null
+    sentinels (the string ``"null"``/``"none"``/``""``) on Optional fields are
+    first coerced to ``None`` so the same default/None disposition applies.
     """
     for field_name, field_info in model.model_fields.items():
         if field_name not in data:
@@ -197,22 +260,11 @@ def _apply_null_defaults(data: dict, model: type[BaseModel]) -> None:
                 data[field_name] = factory(data)  # type: ignore[call-arg]
             continue
 
-        annotation = field_info.annotation
-        if isinstance(val, dict) and isinstance(annotation, type) and issubclass(annotation, BaseModel):
-            _apply_null_defaults(val, annotation)
-            continue
-
-        if isinstance(val, list):
-            from typing import get_args, get_origin
-
-            origin = get_origin(annotation)
-            if origin is list:
-                args = get_args(annotation)
-                if args and isinstance(args[0], type) and issubclass(args[0], BaseModel):
-                    inner_model = args[0]
-                    for item in val:
-                        if isinstance(item, dict):
-                            _apply_null_defaults(item, inner_model)
+        # Recurse into nested model dicts wherever they sit -- directly, under an
+        # Optional wrapper, or inside a list/dict container -- so stringly-null
+        # interiors are normalized at every depth. ``val`` is a concrete
+        # dict/list here (the None branches above returned).
+        _descend_null_defaults(val, field_info.annotation)
 
 
 def _parse_json_response(text: str, output_model: type[BaseModel]) -> BaseModel:

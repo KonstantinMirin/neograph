@@ -133,7 +133,7 @@ ConstructError: Node 'verify' declares inputs=ClusterGroup but no upstream
   at my_pipeline.py:42
 ```
 
-Types are validated at assembly time — when you define the pipeline, not when you execute it. 94 compile-time check fixtures (64 should-fail + 30 should-pass) backed by a rustc-style fixture suite. 3,200+ tests, including Hypothesis property-based testing. CLI validation: `neograph check my_pipeline.py`.
+Types are validated at assembly time — when you define the pipeline, not when you execute it. 94 compile-time check fixtures (64 should-fail + 30 should-pass) backed by a rustc-style fixture suite. 3,300+ tests, including Hypothesis property-based testing. CLI validation: `neograph check my_pipeline.py`.
 
 ## Visualize the compiled graph
 
