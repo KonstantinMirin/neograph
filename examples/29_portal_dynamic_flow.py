@@ -21,9 +21,8 @@ Two self-contained demos:
                           the runtime request; each is compiled + run and its
                           typed result lands on the `{planner}_dispatch` channel.
   2. Rejection path    -- the planner emits a spec `from_agent_spec()` cannot
-                          import (an agent/act-mode node -- exportable since
-                          neograph-i3zsh.1, but import-side reconstruction is a
-                          tracked follow-up, neograph-aa5gq). The shared gate
+                          import (a top-level `OutputMessageNode`, a pyagentspec
+                          primitive neograph has no lowering for). The shared gate
                           rejects it: a `ConfigurationError` surfaces WRAPPED in
                           an `ExecutionError` naming the spec, and it fires BEFORE
                           any dispatched sub-node body runs (a module-level
@@ -160,20 +159,32 @@ def _thorough_spec() -> dict:
     return _agent_spec_flavored("thorough-flow", [draft, polish])
 
 
-# A Flow `from_agent_spec` cannot import: an agent/act-mode node lowers
-# (i3zsh.1) to a real AgentNode on EXPORT, but from_agent_spec's IMPORT side
-# fails loud on AgentNode (agent/act import is a tracked follow-up,
-# neograph-aa5gq) -- the natural Agent-Spec-flavored equivalent of "this spec
+# A Flow `from_agent_spec` cannot import: it contains a top-level
+# `OutputMessageNode`, a pyagentspec primitive `from_agent_spec` has no lowering
+# for -- a `ConfigurationError` ("unsupported type 'OutputMessageNode' for
+# primitive import"), the natural Agent-Spec-flavored equivalent of "this spec
 # cannot be reconstructed into a runnable Construct". This exercises the SAME
-# wrapped-ExecutionError rejection path the pre-0la8v "unknown upstream" case
-# did (a dangling reference has no equivalent in this format:
-# `from_agent_spec` derives inputs strictly from real DataFlowEdges, so it
-# structurally cannot produce a Construct referencing a nonexistent node).
+# wrapped-ExecutionError rejection path a native-format validation error did.
+# (It formerly relied on an agent/act-mode AgentNode failing loud on IMPORT;
+# neograph-aa5gq made agent/act import lossless, so the rejection vehicle moved
+# to a genuinely-unsupported primitive.)
 def _invalid_spec() -> dict:
-    return _agent_spec_flavored(
-        "invalid-flow",
-        [Node(name="tail", mode="agent", model="fast", prompt="unused", outputs=Summary, tools=[])],
-    )
+    from pyagentspec.flows.edges import ControlFlowEdge
+    from pyagentspec.flows.flow import Flow
+    from pyagentspec.flows.nodes import EndNode, OutputMessageNode, StartNode
+
+    start = StartNode(name="invalid_start")
+    emit = OutputMessageNode(name="emit", message="unimportable primitive")
+    end = EndNode(name="invalid_end")
+    return Flow(
+        name="invalid-flow",
+        start_node=start,
+        nodes=[start, emit, end],
+        control_flow_connections=[
+            ControlFlowEdge(name="inv_e1", from_node=start, to_node=emit),
+            ControlFlowEdge(name="inv_e2", from_node=emit, to_node=end),
+        ],
+    ).to_dict()
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -253,7 +264,8 @@ def demo_dynamic_dispatch() -> None:
 # Demo 2 -- REJECTION PATH: a spec `from_agent_spec` cannot import is caught at
 # the gate.
 # ═════════════════════════════════════════════════════════════════════════════
-# The planner emits a spec from_agent_spec cannot yet reconstruct (an AgentNode).
+# The planner emits a spec from_agent_spec cannot reconstruct (an unsupported
+# top-level OutputMessageNode primitive).
 # Because an emitted spec passes the SAME Construct(...) gate as a hand-written
 # pipeline, the defect is caught at from_agent_spec -- the ConfigurationError
 # surfaces WRAPPED in an ExecutionError naming the offending spec, raised BEFORE

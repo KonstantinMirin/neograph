@@ -20,8 +20,18 @@ from typing import Any
 
 import structlog
 import yaml  # type: ignore[import-untyped]
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError, create_model
 
+from neograph._agent_spec import (
+    _MARK_AGENT_SPEC,
+    _MARK_EACH_SPEC,
+    _MARK_GROUP_ID,
+    _MARK_LOOP_SPEC,
+    _MARK_MODIFIER,
+    _MARK_OPERATOR_SPEC,
+    _MARK_ORACLE_SPEC,
+    _MARK_TOOL_SPEC,
+)
 from neograph._normalize import normalize_outputs, primary_output_field
 from neograph._spec_schema import (
     ConstructSpec,
@@ -33,7 +43,7 @@ from neograph._state_keys import StateKeys
 from neograph.conditions import parse_condition
 from neograph.construct import Construct
 from neograph.errors import ConfigurationError
-from neograph.modifiers import Each, Loop, Operator, Oracle
+from neograph.modifiers import Each, Loop, Operator, Oracle, Portal
 from neograph.naming import field_name_for
 from neograph.node import Node
 from neograph.spec_types import (
@@ -108,35 +118,130 @@ def _inputs_from_data_edges(dest_name: str, flow: Any, output_types: dict[str, A
     return inputs or None
 
 
+def _tools_from_marker(marker_tools: list[dict[str, Any]]) -> list[Tool]:
+    """Rebuild neograph ``Tool`` specs from the flat ``neograph/agent_spec``
+    tools list (the EXACT inverse of ``_agent_spec._agent_spec_marker``'s
+    ``tools=[{name, budget, config, idempotent}, ...]`` blob)."""
+    return [
+        Tool(t["name"], budget=t["budget"], config=t["config"], idempotent=t["idempotent"])
+        for t in marker_tools
+    ]
+
+
+def _tools_from_foreign_agent(agent: Any) -> list[Tool]:
+    """Best-effort rebuild of ``Tool`` specs from a foreign ``Agent``'s
+    ``tools`` (each a ``ServerTool``). A ServerTool that still carries a
+    ``neograph/tool_spec`` marker restores budget/config/idempotent; a truly
+    foreign one is reconstructed name-only. Returns an empty list (never None --
+    ``Node.tools`` rejects None) when the agent declares no tools."""
+    tools: list[Tool] = []
+    for st in getattr(agent, "tools", None) or []:
+        ts = (getattr(st, "metadata", None) or {}).get(_MARK_TOOL_SPEC)
+        if ts:
+            tools.append(Tool(ts["name"], budget=ts["budget"], config=ts["config"], idempotent=ts["idempotent"]))
+        else:
+            tools.append(Tool(st.name))
+    return tools
+
+
+def _node_from_spec_agent(
+    name: str, agent: Any, marker: dict[str, Any] | None, inputs: Any, outputs: Any
+) -> Node:
+    """Build an agent/act ``Node`` from an Agent Spec agent, dispatching on
+    marker presence (refinement addendum MEDIUM-2).
+
+    * ``marker`` present (a neograph-exported ``AgentNode``) -> LOSSLESS gap-1
+      inversion: mode/prompt/model/tools (incl. each Tool's
+      budget/config/idempotent)/gate_tools_when/context all restored from the
+      ``neograph/agent_spec`` blob.
+    * ``marker`` absent (a FOREIGN ``Agent``, e.g. a Swarm member) -> best-effort
+      gap-3 reconstruction: mode='agent' (read-only, conservative) built from
+      the plain ``Agent``'s ``system_prompt`` / ``llm_config.model_id`` /
+      ``tools``.
+
+    Shared by BOTH the AgentNode branch (gaps 1/3) and the Swarm member builder
+    (gap 2) -- a raw ``metadata[_MARK_AGENT_SPEC]`` read in the Swarm path would
+    ``KeyError`` on foreign agents that carry no marker.
+    """
+    if marker is not None:
+        return Node(
+            name=name,
+            mode=marker["mode"],
+            inputs=inputs,
+            outputs=outputs,
+            prompt=marker["prompt"],
+            model=marker["model"],
+            tools=_tools_from_marker(marker["tools"]),
+            gate_tools_when=marker["gate_tools_when"],
+            context=marker["context"],
+        )
+
+    llm_config = getattr(agent, "llm_config", None)
+    return Node(
+        name=name,
+        mode="agent",
+        inputs=inputs,
+        outputs=outputs,
+        prompt=getattr(agent, "system_prompt", None) or None,
+        model=getattr(llm_config, "model_id", None),
+        tools=_tools_from_foreign_agent(agent),
+    )
+
+
+def _reconstruct_agent_node(spec_node: Any, inputs: Any, outputs: Any) -> Node:
+    """Reconstruct a neograph Node from an ``AgentNode`` (gaps 1 & 3).
+
+    Dispatches on the ``neograph/agent_spec`` marker and the wrapped agent's
+    runtime type:
+
+    * marker present -> LOSSLESS agent/act reconstruction (gap 1).
+    * marker absent, ``.agent`` is a plain ``Agent`` -> best-effort agent-mode
+      (gap 3, foreign agent).
+    * marker absent, ``.agent`` is a client-initiated
+      ``RemoteAgent``/``A2AAgent``/``OciAgent`` -> name-bound scripted stand-in
+      + WARNING (gap 3, ratification §3b): never a silent drop, never fail-loud.
+    * anything else (e.g. a ServerTool-as-agent, an orchestrator-side surface)
+      -> FAIL LOUD (the principled line, ratification §3b).
+    """
+    marker = (getattr(spec_node, "metadata", None) or {}).get(_MARK_AGENT_SPEC)
+    agent = spec_node.agent
+    agent_type = type(agent).__name__
+
+    if marker is not None or agent_type == "Agent":
+        return _node_from_spec_agent(spec_node.name, agent, marker, inputs, outputs)
+
+    if agent_type in ("RemoteAgent", "A2AAgent", "OciAgent"):
+        warnings.warn(
+            f"AgentNode {spec_node.name!r} wraps a client-initiated {agent_type} with no "
+            "neograph agent-spec marker -- importing best-effort as a name-bound scripted "
+            f"Node (scripted_fn={spec_node.name!r}); the runtime binds the endpoint at compile "
+            "time. This is a downgrade of the remote-agent semantics, not a lossless import.",
+            stacklevel=2,
+        )
+        return Node(
+            name=spec_node.name,
+            mode="scripted",
+            inputs=inputs,
+            outputs=outputs,
+            scripted_fn=spec_node.name,
+        )
+
+    raise ConfigurationError.build(
+        f"Flow node {spec_node.name!r} is an AgentNode wrapping a {agent_type!r} with no "
+        "neograph agent-spec marker -- no best-effort lowering",
+        expected="a neograph-exported Agent (marker), a plain Agent, or a client-initiated "
+        "RemoteAgent/A2AAgent/OciAgent",
+        found=f"AgentNode.agent is a {agent_type}",
+        hint="orchestrator-side agents (e.g. a ServerTool-as-agent) have no client-initiated "
+        "handoff semantics to lower -- this fails loud rather than silently downgrade "
+        "(ratification agent-spec-ratification-2026-07-13.md §3b)",
+    )
+
+
 def _reconstruct_primitive_node(spec_node: Any, flow: Any, output_types: dict[str, Any]) -> Node:
     """Reconstruct a bare (unmodified) neograph Node from an Agent Spec
     primitive node -- the inverse of ``_agent_spec._lower_node``."""
     cls_name = type(spec_node).__name__
-
-    if cls_name == "LlmNode":
-        mode, prompt, model, scripted_fn = "think", spec_node.prompt_template, spec_node.llm_config.model_id, None
-    elif cls_name == "ToolNode":
-        mode, prompt, model, scripted_fn = "scripted", None, None, spec_node.tool.name
-    elif cls_name == "AgentNode":
-        # Symmetric with the export-side gate (neograph-i3zsh.1's marker
-        # exists, but the IMPORT-side reconstruction of an AgentNode+tools
-        # composite back into an agent/act Node is a separate follow-up --
-        # fail loud rather than silently downgrade to a plain scripted/think
-        # stand-in that would drop the ReAct tool-loop semantics.
-        raise ConfigurationError.build(
-            f"Flow node {spec_node.name!r} is an AgentNode -- agent/act mode import "
-            "is not yet supported",
-            expected="LlmNode, ToolNode, or a recognized modifier composite",
-            found="AgentNode",
-            hint="from_agent_spec cannot yet reconstruct agent/act nodes from an "
-            "AgentNode+tools composite; this is a tracked follow-up, not a silent drop",
-        )
-    else:
-        raise ConfigurationError.build(
-            f"Flow node {spec_node.name!r} has unsupported type {cls_name!r} for primitive import",
-            expected="LlmNode, ToolNode, AgentNode, or FlowNode",
-            found=cls_name,
-        )
 
     outputs = _agent_spec_props_to_type(spec_node.outputs)
     # DataFlowEdges name the PRODUCER (dict-form, keyed by upstream name) --
@@ -148,6 +253,21 @@ def _reconstruct_primitive_node(spec_node: Any, flow: Any, output_types: dict[st
         spec_node.inputs
     )
     output_types[spec_node.name] = outputs
+
+    if cls_name == "AgentNode":
+        # gap 1 (lossless marker inversion) + gap 3 (foreign/remote best-effort).
+        return _reconstruct_agent_node(spec_node, inputs, outputs)
+
+    if cls_name == "LlmNode":
+        mode, prompt, model, scripted_fn = "think", spec_node.prompt_template, spec_node.llm_config.model_id, None
+    elif cls_name == "ToolNode":
+        mode, prompt, model, scripted_fn = "scripted", None, None, spec_node.tool.name
+    else:
+        raise ConfigurationError.build(
+            f"Flow node {spec_node.name!r} has unsupported type {cls_name!r} for primitive import",
+            expected="LlmNode, ToolNode, AgentNode, or FlowNode",
+            found=cls_name,
+        )
 
     return Node(name=spec_node.name, mode=mode, inputs=inputs, outputs=outputs, prompt=prompt, model=model,
                 scripted_fn=scripted_fn)
@@ -167,7 +287,7 @@ def _reconstruct_oracle_group(group: list[Any], flow: Any, output_types: dict[st
 
     merge_node = group[-1]
     variant_nodes = group[:-1]
-    spec = merge_node.metadata["neograph/oracle_spec"]
+    spec = merge_node.metadata[_MARK_ORACLE_SPEC]
 
     if len(variant_nodes) != spec["n"]:
         warnings.warn(
@@ -206,7 +326,7 @@ def _reconstruct_each_node(map_node: Any, flow: Any, output_types: dict[str, Any
     """Reconstruct an Each-modified Node from its exported MapNode --
     the inverse of ``_agent_spec._lower_each``."""
 
-    each_spec = map_node.metadata["neograph/each_spec"]
+    each_spec = map_node.metadata[_MARK_EACH_SPEC]
     inner_nodes = [n for n in map_node.subflow.nodes if type(n).__name__ not in ("StartNode", "EndNode")]
     if len(inner_nodes) != 1:
         raise ConfigurationError.build(
@@ -237,7 +357,7 @@ def _reconstruct_loop_item(body_spec: Any, check_spec: Any, flow: Any, output_ty
     """Reconstruct a Loop-modified Node from its exported body+check pair --
     the inverse of ``_agent_spec._lower_loop``."""
 
-    loop_spec = check_spec.metadata["neograph/loop_spec"]
+    loop_spec = check_spec.metadata[_MARK_LOOP_SPEC]
     inner_output_types: dict[str, Any] = {}
     body = _reconstruct_primitive_node(body_spec, flow, inner_output_types)
 
@@ -255,7 +375,7 @@ def _reconstruct_operator_item(
 ) -> Node:
     """Reconstruct an Operator-modified Node from its exported
     primary+check+pause composite -- the inverse of ``_agent_spec._lower_operator``."""
-    operator_spec = check_spec.metadata["neograph/operator_spec"]
+    operator_spec = check_spec.metadata[_MARK_OPERATOR_SPEC]
     inner_output_types: dict[str, Any] = {}
     primary = _reconstruct_primitive_node(primary_spec, flow, inner_output_types)
 
@@ -287,13 +407,13 @@ def _group_flow_items(flow: Any) -> list[tuple[str, Any]]:
             continue
 
         metadata = node.metadata or {}
-        modifier = metadata.get("neograph/modifier")
+        modifier = metadata.get(_MARK_MODIFIER)
 
         if modifier == "oracle":
-            group_id = metadata["neograph/group_id"]
+            group_id = metadata[_MARK_GROUP_ID]
             group = [node]
             j = i + 1
-            while j < n and ((nodes[j].metadata or {}).get("neograph/group_id") == group_id):
+            while j < n and ((nodes[j].metadata or {}).get(_MARK_GROUP_ID) == group_id):
                 group.append(nodes[j])
                 j += 1
             items.append(("oracle", group))
@@ -320,7 +440,7 @@ def _group_flow_items(flow: Any) -> list[tuple[str, Any]]:
         nxt = nodes[i + 1] if i + 1 < n else None
         if nxt is not None:
             nxt_name = nxt.name
-            nxt_modifier = (nxt.metadata or {}).get("neograph/modifier")
+            nxt_modifier = (nxt.metadata or {}).get(_MARK_MODIFIER)
             edge_to_nxt = any(
                 e.from_node.name == node.name and e.to_node.name == nxt_name for e in flow.control_flow_connections
             )
@@ -350,6 +470,94 @@ def _group_flow_items(flow: Any) -> list[tuple[str, Any]]:
     return items
 
 
+def _swarm_agents_ordered(swarm: Any) -> list[Any]:
+    """The Swarm's agents in mesh order: ``first_agent`` FIRST (it becomes the
+    entry member, so ``max_hops``/``on_exhaust`` ride its Portal), then every
+    other agent in order of first appearance across the directed
+    ``relationships`` tuples. Deduplicated by identity."""
+    ordered: list[Any] = []
+    seen: set[int] = set()
+
+    def _add(agent: Any) -> None:
+        if id(agent) not in seen:
+            seen.add(id(agent))
+            ordered.append(agent)
+
+    _add(swarm.first_agent)
+    for src, dst in swarm.relationships:
+        _add(src)
+        _add(dst)
+    return ordered
+
+
+def _synthesize_swarm_payload(swarm: Any, agents: list[Any]) -> type[BaseModel]:
+    """Synthesize the SINGLE uniform mesh payload model reused (by identity)
+    as every member's ``outputs`` AND ``inputs['handoff']`` -- ``_check_portal_mesh``
+    checks uniform-payload and the reserved handoff key with ``is`` identity.
+
+    Always carries the Portal ``route`` field (``goto: str``). The Swarm's
+    declared Properties (its own ``inputs``/``outputs``) and each agent's output
+    schema are FOLDED IN as optional data fields where present, so a
+    data-carrying Swarm does not silently lose its data channel (refinement
+    addendum: no-silent-downgrade)."""
+    fields: dict[str, Any] = {"goto": (str, ...)}
+
+    prop_sources = [getattr(swarm, "outputs", None), getattr(swarm, "inputs", None)]
+    prop_sources.extend(getattr(agent, "outputs", None) for agent in agents)
+    for props in prop_sources:
+        model = _agent_spec_props_to_type(props)
+        if model is None:
+            continue
+        for fname, finfo in model.model_fields.items():
+            if fname == "goto" or fname in fields:
+                continue
+            # Optional (default None) so a member that does not fill every folded
+            # field can still emit the uniform payload.
+            fields[fname] = (finfo.annotation | None, None)
+
+    return create_model(f"{swarm.name}_SwarmHandoff", __base__=BaseModel, **fields)
+
+
+def _reconstruct_swarm_mesh(swarm: Any) -> Construct:
+    """Import a foreign pyagentspec ``Swarm`` onto a native Portal peer mesh
+    (gap 2, ratification §3a).
+
+    A ``Swarm`` is a top-level ``AgenticComponent`` (NOT a ``Flow`` node), so it
+    is dispatched here at the ``from_agent_spec`` entry, not through
+    ``_reconstruct_primitive_node``. Each Swarm agent becomes an agent-mode
+    member ``Node(inputs={'handoff': Payload}, outputs=Payload) | Portal(to=[peers])``;
+    ``first_agent`` is the entry (``nodes[0]``). ``handoff_param``/``handoff_channel``
+    are NOT set here -- ``normalize_ir`` is their sole writer (fires in
+    ``Construct.__init__``) -- and the assembled mesh is validated by the same
+    ``_check_portal_mesh`` a hand-written mesh gets.
+
+    This is a best-effort/warning arm (Core Invariant no-silent-downgrade): the
+    synthesized payload is route-centric and the members are name-bound live-LLM
+    agents needing a factory at compile.
+    """
+    agents = _swarm_agents_ordered(swarm)
+    payload = _synthesize_swarm_payload(swarm, agents)
+
+    members: list[Any] = []
+    for agent in agents:
+        peers = [dst.name for (src, dst) in swarm.relationships if src is agent]
+        # The reserved mesh-channel input key is the literal "handoff" (design
+        # §3.3, mirrored in example 28's declarative form and _ir_normalize's
+        # sole-writer check); normalize_ir derives handoff_param/handoff_channel.
+        member = _node_from_spec_agent(agent.name, agent, None, {"handoff": payload}, payload)
+        members.append(member | Portal(to=peers))
+
+    warnings.warn(
+        f"Swarm {swarm.name!r} imported onto a native Portal mesh (best-effort): the mesh "
+        "payload is a route-only synthesis (a 'goto' field plus any folded Swarm/agent data "
+        "properties) and the members are name-bound live-LLM agents requiring an LLM factory "
+        "at compile. This is a structural downgrade of the Swarm's own runtime, not a lossless "
+        "import.",
+        stacklevel=2,
+    )
+    return Construct(name=swarm.name, nodes=members)
+
+
 def from_agent_spec(flow: Any) -> Construct:
     """Import an Open Agent Spec ``Flow`` into a neograph ``Construct`` --
     the inverse of ``to_agent_spec()``.
@@ -367,11 +575,21 @@ def from_agent_spec(flow: Any) -> Construct:
     fidelity rides only on the per-group markers, matching what
     ``to_agent_spec`` actually emits.
 
-    Agent/act (``AgentNode``) reconstruction and Swarm-onto-Portal-mesh
-    import are explicitly NOT implemented here (both fail loud rather than
-    silently downgrade) -- tracked as separate follow-ups.
+    Agent/act (``AgentNode``) reconstruction is implemented per neograph-aa5gq:
+    a ``neograph/agent_spec`` marker reconstructs the exact agent/act Node
+    losslessly; a foreign ``Agent`` imports best-effort as agent-mode; a
+    client-initiated ``RemoteAgent``/``A2AAgent``/``OciAgent`` imports
+    best-effort as a name-bound scripted Node WITH a warning. A top-level
+    ``Swarm`` imports onto a native Portal mesh (also best-effort, with a
+    warning). Orchestrator-side surfaces (e.g. a ServerTool-as-agent) still
+    fail loud rather than silently downgrade.
     """
     _import_agent_spec_import_classes()
+
+    # A Swarm is a top-level AgenticComponent (NOT a Flow node), so it never
+    # reaches the Flow.nodes walk below -- dispatch it onto a Portal mesh here.
+    if type(flow).__name__ == "Swarm":
+        return _reconstruct_swarm_mesh(flow)
 
     output_types: dict[str, Any] = {}
     pipeline_items: list[Any] = []

@@ -59,6 +59,26 @@ __all__ = ["to_agent_spec"]
 _DEFAULT_BRANCH = "default"
 _PAUSE_BRANCH = "pause"
 
+# ── Agent-Spec metadata marker keys (neograph-aa5gq Step 0) ──────────────────
+# The SINGLE source of truth for every ``neograph/*`` metadata marker key. Both
+# the export side (this module) and the import side (``loader.py``, which imports
+# these) reference these named constants — NEVER a re-inlined string literal — so
+# a typo cannot silently split the export<->import contract and downgrade a
+# marker-bearing primitive to the fail-loud/foreign path. Pinned (no re-inlined
+# literals + exact wire-value asserts) by tests/test_guards_agent_spec_markers.py.
+_MARK_MODE = "neograph/mode"
+_MARK_AGENT_SPEC = "neograph/agent_spec"
+_MARK_TOOL_SPEC = "neograph/tool_spec"
+_MARK_REMOTE_AGENT = "neograph/remote_agent"
+_MARK_MODIFIER = "neograph/modifier"
+_MARK_GROUP_ID = "neograph/group_id"
+_MARK_VARIANT = "neograph/variant"
+_MARK_ORACLE_SPEC = "neograph/oracle_spec"
+_MARK_EACH_SPEC = "neograph/each_spec"
+_MARK_LOOP_SPEC = "neograph/loop_spec"
+_MARK_OPERATOR_SPEC = "neograph/operator_spec"
+_MARK_BRANCH = "neograph/branch"
+
 
 def _import_agent_spec_flow_classes() -> Any:
     """Function-local import of pyagentspec's Flow/node/edge classes.
@@ -166,20 +186,19 @@ def _lower_node(node: Node) -> SpecNode:
         )
 
     if node.mode in ("agent", "act"):
-        # EXPORT-SIDE-ONLY lossless lowering (neograph-i3zsh.1): a real
-        # pyagentspec AgentNode+Agent+ServerTool composite, never the
-        # ToolNode placeholder that used to silently drop prompt/model/tools.
-        # The `neograph/agent_spec` marker carries everything a future
-        # from_agent_spec() importer (neograph-01i0g, which depends on this
-        # task) needs to reconstruct the node exactly -- the actual
-        # export->import round trip is explicitly deferred there.
+        # Lossless lowering (neograph-i3zsh.1): a real pyagentspec
+        # AgentNode+Agent+ServerTool composite, never the ToolNode placeholder
+        # that used to silently drop prompt/model/tools. The `neograph/agent_spec`
+        # marker carries everything the from_agent_spec() importer needs to
+        # reconstruct the node exactly -- the export->import round trip is now
+        # implemented (neograph-aa5gq, loader._reconstruct_agent_node).
         agent = _make_agent(node, tools_mod, inputs, outputs)
         return nodes_mod.AgentNode(
             name=node.name,
             inputs=inputs or None,
             outputs=outputs or None,
             agent=agent,
-            metadata={"neograph/mode": node.mode, "neograph/agent_spec": _agent_spec_marker(node)},
+            metadata={_MARK_MODE: node.mode, _MARK_AGENT_SPEC: _agent_spec_marker(node)},
         )
 
     # scripted / raw already rejected raw_fn above; scripted_fn is name-only.
@@ -236,7 +255,7 @@ def _tool_to_server_tool(tool: Any, tools_mod: Any) -> Any:
         inputs=None,
         outputs=None,
         metadata={
-            "neograph/tool_spec": {
+            _MARK_TOOL_SPEC: {
                 "name": tool.name,
                 "budget": tool.budget,
                 "config": tool.config,
@@ -321,7 +340,7 @@ def _lower_oracle(node: Node, oracle: Oracle) -> tuple[list[SpecNode], list[Cont
                 outputs=gen_outputs or None,
                 llm_config=_make_llm_config(Node(name=node.name, model=model_tier or node.model)),
                 prompt_template=node.prompt or "",
-                metadata={"neograph/modifier": "oracle", "neograph/group_id": group_id, "neograph/variant": i},
+                metadata={_MARK_MODIFIER: "oracle", _MARK_GROUP_ID: group_id, _MARK_VARIANT: i},
             )
         )
 
@@ -334,9 +353,9 @@ def _lower_oracle(node: Node, oracle: Oracle) -> tuple[list[SpecNode], list[Cont
             llm_config=_make_llm_config(Node(name=node.name, model=oracle.merge_model)),
             prompt_template=oracle.merge_prompt,
             metadata={
-                "neograph/modifier": "oracle",
-                "neograph/group_id": group_id,
-                "neograph/oracle_spec": {
+                _MARK_MODIFIER: "oracle",
+                _MARK_GROUP_ID: group_id,
+                _MARK_ORACLE_SPEC: {
                     "n": oracle.n,
                     "models": oracle.models,
                     "merge_prompt": oracle.merge_prompt,
@@ -356,9 +375,9 @@ def _lower_oracle(node: Node, oracle: Oracle) -> tuple[list[SpecNode], list[Cont
                 outputs=outputs or None,
             ),
             metadata={
-                "neograph/modifier": "oracle",
-                "neograph/group_id": group_id,
-                "neograph/oracle_spec": {
+                _MARK_MODIFIER: "oracle",
+                _MARK_GROUP_ID: group_id,
+                _MARK_ORACLE_SPEC: {
                     "n": oracle.n,
                     "models": oracle.models,
                     "merge_fn": oracle.merge_fn,
@@ -410,8 +429,8 @@ def _lower_each(node: Node, each: Each) -> SpecNode:
         name=node.name,
         subflow=sub_flow,
         metadata={
-            "neograph/modifier": "each",
-            "neograph/each_spec": {"over": each.over, "key": each.key, "on_error": each.on_error},
+            _MARK_MODIFIER: "each",
+            _MARK_EACH_SPEC: {"over": each.over, "key": each.key, "on_error": each.on_error},
         },
     )
 
@@ -437,8 +456,8 @@ def _lower_loop(node: Node, loop: Loop, body: SpecNode) -> tuple[SpecNode, list[
         name=f"{node.name}__loop_check",
         mapping={"continue": "continue", "done": "done"},
         metadata={
-            "neograph/modifier": "loop",
-            "neograph/loop_spec": {
+            _MARK_MODIFIER: "loop",
+            _MARK_LOOP_SPEC: {
                 "when": loop.when,
                 "max_iterations": loop.max_iterations,
                 "on_exhaust": loop.on_exhaust,
@@ -481,7 +500,7 @@ def _lower_operator(node: Node, operator: Operator) -> tuple[SpecNode, list[Spec
     check = nodes_mod.BranchingNode(
         name=f"{node.name}__operator_check",
         mapping={"true": _PAUSE_BRANCH, "false": _DEFAULT_BRANCH},
-        metadata={"neograph/modifier": "operator", "neograph/operator_spec": {"when": operator.when}},
+        metadata={_MARK_MODIFIER: "operator", _MARK_OPERATOR_SPEC: {"when": operator.when}},
     )
     input_message = nodes_mod.InputMessageNode(
         name=f"{node.name}__operator_pause",
@@ -514,7 +533,7 @@ def _lower_construct_item(
         branch = nodes_mod.BranchingNode(
             name=item.name,
             mapping={"true": "true", "false": "false"},
-            metadata={"neograph/branch": True},
+            metadata={_MARK_BRANCH: True},
         )
         return [branch], [], [], branch, branch
 

@@ -161,28 +161,34 @@ def _mismatch_spec() -> dict:
 
 
 def _invalid_spec() -> dict:
-    """A Flow from_agent_spec cannot import: an agent/act-mode node lowers
-    (i3zsh.1) to a real AgentNode on EXPORT, but from_agent_spec's IMPORT side
-    fails loud on AgentNode (agent/act import is a tracked follow-up,
-    neograph-aa5gq) -- the natural Agent-Spec-flavored equivalent of "this
-    spec cannot be reconstructed into a runnable Construct", exercising the
-    SAME wrapped-ExecutionError rejection path a native-format validation
-    error used to (a dangling upstream reference has no equivalent in this
-    format: from_agent_spec derives inputs strictly from real DataFlowEdges,
-    so it cannot produce a "references a nonexistent node" Construct)."""
-    return _agent_spec_flavored(
-        "invalid-flow",
-        [
-            Node(
-                name="tail",
-                mode="agent",
-                model="fast",
-                prompt="unused",
-                outputs=Summary,
-                tools=[],
-            )
+    """A Flow ``from_agent_spec`` cannot import: it contains a top-level
+    ``OutputMessageNode``, a pyagentspec primitive ``from_agent_spec``'s
+    ``_reconstruct_primitive_node`` has no lowering for -> ``ConfigurationError``
+    "unsupported type 'OutputMessageNode' for primitive import", the natural
+    Agent-Spec-flavored equivalent of "this spec cannot be reconstructed into a
+    runnable Construct", exercising the SAME wrapped-ExecutionError rejection
+    path a native-format validation error used to.
+
+    (This formerly relied on an agent/act-mode ``AgentNode`` failing loud on
+    IMPORT; neograph-aa5gq made agent/act import lossless, so the rejection
+    vehicle moved to a genuinely-unsupported primitive.)"""
+    from pyagentspec.flows.edges import ControlFlowEdge
+    from pyagentspec.flows.flow import Flow
+    from pyagentspec.flows.nodes import EndNode, OutputMessageNode, StartNode
+
+    start = StartNode(name="invalid_start")
+    emit = OutputMessageNode(name="emit", message="unimportable primitive")
+    end = EndNode(name="invalid_end")
+    flow = Flow(
+        name="invalid-flow",
+        start_node=start,
+        nodes=[start, emit, end],
+        control_flow_connections=[
+            ControlFlowEdge(name="inv_e1", from_node=start, to_node=emit),
+            ControlFlowEdge(name="inv_e2", from_node=emit, to_node=end),
         ],
     )
+    return flow.to_dict()
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -243,8 +249,8 @@ def _mismatch_construct() -> Construct:
 
 
 def _reject_construct() -> Construct:
-    """A dispatcher emitting a spec ``from_agent_spec`` cannot import (an
-    AgentNode -- see ``_invalid_spec()``)."""
+    """A dispatcher emitting a spec ``from_agent_spec`` cannot import (a
+    top-level OutputMessageNode -- see ``_invalid_spec()``)."""
     _dispatch_scripted("planner_reject", DispatchDecision(spec=_invalid_spec(), dispatch_input={}))
     km = Portal(
         route="decide",

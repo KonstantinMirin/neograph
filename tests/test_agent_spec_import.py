@@ -180,18 +180,22 @@ class TestFromAgentSpecReconstructsOracleMarker:
         assert oracle.merge_fn == "combine"
 
 
-class TestFromAgentSpecFailsLoudOnAgentNode:
-    """Pins the GATE (2026-07-22, per bead notes): from_agent_spec must NOT
-    claim round-trip fidelity for agent/act nodes until neograph-i3zsh.1's
-    marker is consumed -- symmetric with the export side's current
-    fail-loud-on-agent/act-import-not-yet-implemented state. Encountering an
-    AgentNode on import must fail loud (ConfigurationError), never silently
-    downgrade to a plain ToolNode/scripted stand-in.
+class TestFromAgentSpecReconstructsAgentNode:
+    """INVERTED from the former fail-loud pin (neograph-aa5gq): now that
+    neograph-i3zsh.1's ``neograph/agent_spec`` marker is consumed on import,
+    an ``AgentNode`` must reconstruct the EXACT agent/act Node losslessly --
+    never silently downgrade to a plain ToolNode/scripted stand-in (which
+    would drop the ReAct tool-loop semantics), and never fail loud.
+
+    The former ``TestFromAgentSpecFailsLoudOnAgentNode`` asserted the OPPOSITE
+    (``ConfigurationError`` on AgentNode); aa5gq's Implementation Plan point 1
+    explicitly inverts that pin into this losslessness assertion. The
+    exhaustive field-by-field + tool-budget/config/idempotent coverage lives
+    in ``tests/test_agent_spec_roundtrip.py::TestAgentNodeRoundTripLosslessness``.
     """
 
-    def test_agent_node_in_flow_is_rejected_not_silently_downgraded(self):
+    def test_agent_node_in_flow_reconstructs_to_agent_mode_node(self):
         from neograph._agent_spec import to_agent_spec
-        from neograph.errors import ConfigurationError
         from neograph.loader import from_agent_spec
         from neograph.node import Node
         from neograph.tool import Tool
@@ -208,5 +212,10 @@ class TestFromAgentSpecFailsLoudOnAgentNode:
 
         flow = to_agent_spec(pipeline)  # exports to a real AgentNode (i3zsh.1)
 
-        with pytest.raises(ConfigurationError, match="(?i)agent"):
-            from_agent_spec(flow)
+        imported = from_agent_spec(flow)
+        reconstructed = next(n for n in imported.nodes if getattr(n, "name", None) == "explore")
+        assert reconstructed.mode == "agent"
+        assert reconstructed.prompt == "explore the codebase"
+        assert reconstructed.model == "research"
+        assert reconstructed.tools is not None
+        assert [t.name for t in reconstructed.tools] == ["search_code"]
