@@ -81,18 +81,17 @@ def _check_portal_mesh(construct: ConstructLike) -> None:
                 location=_source_location(),
             )
 
-    # Member SHAPE checks first: a Construct/agent/dict member has no single
-    # payload type, so the payload/route checks below would be meaningless.
+    # Member SHAPE checks first: an agent/dict member has no single payload
+    # type, so the payload/route checks below would be meaningless.
+    #
+    # do0d9 (§4 Q2): a Construct member is ADMITTED as a first-class mesh member
+    # — its declared boundary output (``_declared_output``) must be the uniform
+    # mesh payload, checked by the uniform-payload rule below exactly as for a
+    # Node member. The former blanket ``isinstance(member, Node)`` rejection is
+    # relaxed. The dict-form check stays Node-only: a Construct's boundary is a
+    # single ``.output`` type (no dict-form analog).
     for member in members:
         name = getattr(member, "name", "?")
-        if not isinstance(member, Node):
-            raise ConstructError.build(
-                f"Portal mesh member '{name}' is a Construct",
-                expected="mesh members must be sibling Nodes (D-MESH-LEVEL)",
-                found="a sub-construct carries a Portal modifier",
-                construct=construct.name,
-                location=_source_location(),
-            )
         # D-MEMBER-MODES (dynamic-handoff-2026-07-13.md): v1 rejected agent/act
         # members here (their multi-node ReAct cycle needed separate
         # terminal-hop Command plumbing). Resolved by neograph-nnds9 — the
@@ -101,7 +100,7 @@ def _check_portal_mesh(construct: ConstructLike) -> None:
         # dict-outputs-forbidden, contiguity, peer existence, single-mesh,
         # entry-only max_hops/on_exhaust, reserved handoff key) mode-
         # independently via Node.outputs/_declared_output, unchanged below.
-        if normalize_outputs(member.outputs).is_dict_form:
+        if isinstance(member, Node) and normalize_outputs(member.outputs).is_dict_form:
             raise ConstructError.build(
                 f"Portal mesh member '{name}' declares dict-form outputs",
                 expected="a single payload output type (D-DICT-OUTPUTS)",
@@ -111,8 +110,11 @@ def _check_portal_mesh(construct: ConstructLike) -> None:
                 location=_source_location(),
             )
 
-    # Past the shape checks every member is a Portal-modified Node (else we
-    # raised). Narrow the list so the rules below read the typed surface.
+    # Past the shape checks every member is a Portal-modified Node OR a
+    # Portal-modified Construct. The rules below read only the Portal-agnostic
+    # surface (``.name`` / ``_declared_output`` / ``modifier_set.portal``); the
+    # one Node-only rule (reserved handoff-key typing) guards on isinstance.
+    # ``cast`` keeps the typed Node surface for the Portal-modifier accessors.
     node_members = cast("list[Node]", members)
 
     # Contiguity: members occupy consecutive positions; the first is the entry.
@@ -237,8 +239,14 @@ def _check_portal_mesh(construct: ConstructLike) -> None:
         )
 
     # Reserved handoff input: a member declaring inputs={'handoff': T} must type
-    # T as the payload model (the mesh channel type, design §3.3).
+    # T as the payload model (the mesh channel type, design §3.3). This rule is
+    # Node-ONLY by design (§4 Q2): a Construct member's boundary port is its
+    # singular ``.input`` (typed + validated by _add_subgraph's own boundary
+    # check), not a fan-in ``inputs`` dict — there is no Construct analog to a
+    # reserved ``handoff`` inputs key, so a Construct member is skipped here.
     for member in node_members:
+        if not isinstance(member, Node):
+            continue
         inputs = member.inputs
         if isinstance(inputs, dict) and "handoff" in inputs and inputs["handoff"] is not payload:
             raise ConstructError.build(

@@ -54,7 +54,9 @@ def _scan_subgraph_output(sub_result: dict[str, Any], sub_output_type: type) -> 
     return None
 
 
-def make_subgraph_fn(sub: Construct, sub_graph: CompiledStateGraph) -> RunnableLambda:
+def make_subgraph_fn(
+    sub: Construct, sub_graph: CompiledStateGraph, *, handoff_channel: str | None = None
+) -> RunnableLambda:
     """Create a Runnable that runs a sub-Construct in isolation.
 
     Extracts input from parent state by type, runs sub_graph, extracts output
@@ -70,6 +72,16 @@ def make_subgraph_fn(sub: Construct, sub_graph: CompiledStateGraph) -> RunnableL
     must propagate through every nesting level). The two twins share the same
     input-extraction (``_build_sub_input``) and update-shaping
     (``_build_update``) helpers so the sync/async paths cannot drift.
+
+    ``handoff_channel`` (do0d9 site 7): when this sub-construct is a Portal mesh
+    MEMBER, its boundary input MUST be sourced DETERMINISTICALLY from the routed
+    parent handoff channel (``StateKeys.handoff_payload(entry_field)``) — NOT the
+    blind reverse type-scan below. In a uniform-payload mesh every member field
+    AND the channel hold the same payload type, so a blind scan can feed the
+    WRONG instance (a silent mis-route the North Star forbids). This mirrors the
+    atomic member's reserved-``handoff`` read (``_input_shape.py:119-123``). The
+    default (``None``) keeps every NON-mesh sub-construct on the general blind
+    scan; only ``make_portal_subgraph_fn`` passes the channel key.
     """
     sub_log = log.bind(subgraph=sub.name)
     field_name = field_name_for(sub.name)
@@ -118,6 +130,20 @@ def make_subgraph_fn(sub: Construct, sub_graph: CompiledStateGraph) -> RunnableL
             each_item = bus.get(StateKeys.EACH_ITEM)
             if each_item is not None:
                 input_data = each_item
+
+        # Portal mesh member (do0d9 site 7): source the boundary input
+        # DETERMINISTICALLY from the routed parent handoff channel, taking
+        # precedence over the blind type-scan below. A member reached via a hop
+        # always has the channel populated by the prior hop's Command update; on
+        # the mesh entry's first activation the channel default (None) falls
+        # through to the type-scan.
+        if input_data is None and handoff_channel is not None:
+            # StateBus.get optional: Portal mesh channel — populated by the prior
+            # hop's Command update for a member reached via a hop; the mesh
+            # entry's first activation legitimately sees None (design §3.3, D10).
+            channel_val = bus.get(handoff_channel)
+            if channel_val is not None:
+                input_data = channel_val
 
         # First iteration, non-loop, or input!=output loop re-entry:
         # extract input by type from parent state.

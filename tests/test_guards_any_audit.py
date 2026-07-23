@@ -145,6 +145,8 @@ ANY_ALLOWLIST: dict[str, str] = {
     "_wiring.py:_construct_loop_unwrap:return": "user-supplied loop value; type declared by the sub-construct output",
     "_wiring.py:_add_branch_to_graph:checkpointer": "LangGraph checkpointer (BaseCheckpointSaver | None) threaded opaquely into the arm sub-construct compile; mirrors _add_subgraph's checkpointer: Any (neograph-faf8)",
     "_wiring.py:_add_arm_nodes:checkpointer": "LangGraph checkpointer (BaseCheckpointSaver | None) threaded opaquely into the arm sub-construct compile; extracted verbatim from _add_branch_to_graph:checkpointer (DRY-07 dedup, neograph-7w0d)",
+    "_wiring.py:_add_portal_mesh:checkpointer": "LangGraph checkpointer (BaseCheckpointSaver | None) threaded opaquely into a sub-construct Portal mesh member's compile; mirrors _add_subgraph's checkpointer: Any (do0d9)",
+    "_wiring.py:_make_portal_subgraph_member_fn:checkpointer": "LangGraph checkpointer (BaseCheckpointSaver | None) threaded opaquely into the sub-construct mesh-member compile; mirrors _add_subgraph's checkpointer: Any (do0d9)",
     # ── _ir_normalize.py — IrNormalizer.apply update dict ──
     "_ir_normalize.py:IrNormalizer.apply:return": "model_copy update dict; heterogeneous IR field values (str fan_out_param, type[BaseModel] oracle_gen_type)",
 }

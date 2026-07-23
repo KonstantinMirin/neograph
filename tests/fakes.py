@@ -65,8 +65,21 @@ def register_scripted(name: str, fn: _Callable) -> None:
     Writes into a test-local dict in `tests/fakes.py`; the autouse fixture in
     `tests/conftest.py` resets these dicts between tests. Tests pass the
     accumulated registrations to compile() via `**build_test_compile_kwargs()`.
+
+    ALSO seeds the src-side decoration registry (`_runtime_registry`) that a
+    BARE `compile()` reads directly — so a declarative `Node.scripted(fn=...)`
+    pipeline compiles WITHOUT `**build_test_compile_kwargs()` (matching the
+    intuitive expectation and the src `register_scripted`). The autouse
+    `_clean_registries` conftest fixture calls `_runtime_registry.reset()` each
+    test, and the check-fixture harness snapshots `_decoration_registry`, so
+    this seeding is fully isolated between tests. Registering a fn never makes a
+    DIFFERENT (unregistered) name resolve, so negative "not registered" tests
+    are unaffected.
     """
     _TEST_SCRIPTED[name] = fn
+    from neograph._runtime_registry import register_scripted as _src_register_scripted
+
+    _src_register_scripted(name, fn)
 
 
 def register_condition(name: str, fn: _Callable) -> None:

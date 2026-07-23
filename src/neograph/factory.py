@@ -5,7 +5,7 @@ from __future__ import annotations
 import inspect
 import time
 from collections.abc import Callable
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import structlog
 from langchain_core.runnables import Runnable, RunnableConfig, RunnableLambda
@@ -19,7 +19,7 @@ from neograph._llm_runtime import EMPTY_RUNTIME, LlmRuntime
 from neograph._normalize import primary_output_field
 from neograph._state_bus import adapt_state
 from neograph._state_keys import StateKeys
-from neograph._subconstruct import _scan_subgraph_output
+from neograph._subconstruct import _scan_subgraph_output, make_subgraph_fn
 from neograph._trace import named
 from neograph.errors import ConfigurationError, ConstructError, ExecutionError
 from neograph.loader import from_agent_spec
@@ -27,6 +27,11 @@ from neograph.modifiers import HANDOFF_END, Portal
 from neograph.naming import field_name_for, output_field_name
 from neograph.node import Node
 from neograph.spec_types import lookup_type
+
+if TYPE_CHECKING:
+    from langgraph.graph.state import CompiledStateGraph
+
+    from neograph.construct import Construct
 
 log = structlog.get_logger()
 
@@ -274,6 +279,95 @@ def _portal_route_to_command(
         goto=resolved_target,
         update={**update, channel_key: payload, count_field: current + 1},
     )
+
+
+def make_portal_subgraph_fn(
+    sub: Construct,
+    sub_graph: CompiledStateGraph,
+    portal: Portal,
+    entry_field: str,
+    exit_name: str,
+    *,
+    max_hops: int,
+    on_exhaust: str,
+    entry_name: str,
+    target_resolve: dict[str, str] | None = None,
+) -> Runnable:
+    """Build a sub-construct Portal mesh-member function (do0d9, §3.1 site 1).
+
+    The sub-construct counterpart of :func:`make_portal_fn` for a mesh member
+    that is a whole ``Construct``. Wraps the standard :func:`make_subgraph_fn`
+    runnable (both sync/async twins) and pipes its returned update dict through
+    the SAME :func:`_portal_route_to_command` routing decision atomic and
+    agent/act members use — so the target-validation / hop-budget / mesh-channel
+    write logic is single-sourced across every member class (§3 steps 3-4).
+
+    A routing decision made INSIDE the isolated sub-construct is carried OUT as
+    the sub-construct's declared-output payload (``Construct.output``); the
+    parent mesh routes on it exactly as a same-level handoff. This is the SOLE
+    new ``Command(``-adjacent site, and it delegates the actual ``Command`` build
+    to the already-existing ``_portal_route_to_command`` — so NO new ``Command(``
+    literal is added at all (guard G1 satisfied, §4 Q5).
+
+    The payload is keyed off :func:`make_subgraph_fn`'s update dict —
+    ``{field_name_for(sub.name): payload}`` — NOT ``node.outputs`` (a ``Construct``
+    has no ``.outputs``; its boundary output is ``.output``, singular). The
+    boundary INPUT is sourced deterministically from the parent handoff channel
+    (``make_subgraph_fn(handoff_channel=...)``, §3.1 site 7), never a blind
+    reverse type-scan that could feed a same-typed decoy.
+
+    Sync/async parity: wraps BOTH ``make_subgraph_fn`` twins and pipes each
+    through the sync/async pair already present in ``_portal_route_to_command``'s
+    callers (mirrors :func:`make_portal_fn`).
+    """
+    channel_key = StateKeys.handoff_payload(entry_field)
+    count_field = StateKeys.handoff_hops(entry_field)
+    # A Construct writes its declared output to the bare field_name (no dict-form
+    # analog); make_subgraph_fn's _build_update returns {field_name_for(sub.name):
+    # payload}. Key the routing read off that same field (LOW note, §3.1).
+    payload_field = field_name_for(sub.name)
+    route_field = portal.route
+    valid_targets = set(portal.to or ()) | {HANDOFF_END}
+
+    inner = make_subgraph_fn(sub, sub_graph, handoff_channel=channel_key)
+
+    def portal_subgraph_wrapper(state: BaseModel, config: RunnableConfig) -> Command:
+        return _portal_route_to_command(
+            inner.invoke(state, config),
+            state,
+            payload_field=payload_field,
+            route_field=route_field,
+            valid_targets=valid_targets,
+            channel_key=channel_key,
+            count_field=count_field,
+            max_hops=max_hops,
+            on_exhaust=on_exhaust,
+            exit_name=exit_name,
+            node_name=sub.name,
+            entry_name=entry_name,
+            target_resolve=target_resolve,
+        )
+
+    async def aportal_subgraph_wrapper(state: BaseModel, config: RunnableConfig) -> Command:
+        return _portal_route_to_command(
+            await inner.ainvoke(state, config),
+            state,
+            payload_field=payload_field,
+            route_field=route_field,
+            valid_targets=valid_targets,
+            channel_key=channel_key,
+            count_field=count_field,
+            max_hops=max_hops,
+            on_exhaust=on_exhaust,
+            exit_name=exit_name,
+            node_name=sub.name,
+            entry_name=entry_name,
+            target_resolve=target_resolve,
+        )
+
+    wrapper = RunnableLambda(portal_subgraph_wrapper, afunc=aportal_subgraph_wrapper)
+    output_name = sub.output.__name__ if sub.output is not None else None
+    return named(wrapper, sub.name, mode="portal-subgraph", output_type=output_name)
 
 
 def make_portal_agent_cycle_fn(

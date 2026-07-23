@@ -267,6 +267,8 @@ def compile(
                 graph,
                 members,
                 prev_node,
+                checkpointer=checkpointer,
+                parent_state_model=state_model,
                 runtime=runtime,
                 scripted_lookup=scripted_lookup,
                 tool_factory_lookup=tool_factory_lookup,

@@ -14,6 +14,7 @@ import structlog
 from langchain_core.runnables import Runnable, RunnableConfig, RunnableLambda
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Send, interrupt
+from pydantic import BaseModel
 
 from neograph._agent_cycle import make_agent_cycle_bodies, make_tool_gate_bodies
 from neograph._ir_branch import _BranchNode
@@ -39,6 +40,7 @@ from neograph.factory import (
     make_portal_agent_cycle_fn,
     make_portal_dispatch_fn,
     make_portal_fn,
+    make_portal_subgraph_fn,
 )
 from neograph.modifiers import (
     Each,
@@ -695,19 +697,21 @@ def _add_loop_back_edge(
     return exit_name
 
 
-def _contiguous_portal_mesh(nodes: list[ConstructItem], entry: Node) -> list[Node]:
-    """Collect the contiguous run of Portal-modified Nodes starting at ``entry``.
+def _contiguous_portal_mesh(nodes: list[ConstructItem], entry: Node) -> list[ConstructItem]:
+    """Collect the contiguous run of Portal-modified members starting at ``entry``.
 
     Called by the compile walk when it reaches a mesh ENTRY. ``entry`` is located
     by identity, then the run is collected forward while each item is a
-    Portal-modified Node (contiguity is guaranteed by assembly validation,
-    design §3.1 r2). Takes the node LIST as a parameter (not ``construct.nodes``),
+    Portal-modified member — a Node OR a sub-``Construct`` (do0d9, §3.1 site 4):
+    a Construct mesh member currently TERMINATED the run, so this relaxation lets
+    it be included. Contiguity is guaranteed by assembly validation
+    (design §3.1 r2). Takes the node LIST as a parameter (not ``construct.nodes``),
     so it does not add a second raw ``.nodes`` walk to the compiler.
     """
     start = next(i for i, n in enumerate(nodes) if n is entry)
-    members: list[Node] = []
+    members: list[ConstructItem] = []
     for item in nodes[start:]:
-        if not (isinstance(item, Node) and classify_modifiers(item)[0] == ModifierCombo.PORTAL):
+        if classify_modifiers(item)[0] != ModifierCombo.PORTAL:
             break
         # A dispatch-mode Portal (route="decide") is NOT a mesh member — it is a
         # standalone linear node lowered by _add_portal_dispatch (review M2). Stop
@@ -721,11 +725,75 @@ def _contiguous_portal_mesh(nodes: list[ConstructItem], entry: Node) -> list[Nod
     return members
 
 
+def _make_portal_subgraph_member_fn(
+    sub: Construct,
+    portal: Portal,
+    entry_field: str,
+    exit_name: str,
+    *,
+    max_hops: int,
+    on_exhaust: str,
+    entry_name: str,
+    target_resolve: dict[str, str],
+    checkpointer: Any = None,
+    parent_state_model: type[BaseModel] | None = None,
+    runtime: LlmRuntime = EMPTY_RUNTIME,
+    scripted_lookup: dict[str, Callable] | None = None,
+    condition_lookup: dict[str, Callable] | None = None,
+    tool_factory_lookup: dict[str, Callable] | None = None,
+) -> Runnable:
+    """Compile a sub-Construct mesh member and wrap its boundary as a Portal fn.
+
+    The sub-construct is compiled into its own isolated graph — the SAME
+    recursive ``compile()`` threading ``_add_subgraph`` uses (checkpointer +
+    runtime + scripted/condition/tool lookups + parent-derived context types) —
+    and its boundary runnable is piped through ``factory.make_portal_subgraph_fn``
+    (do0d9, §3.1 sites 1/4/7). No ``Command`` is constructed here (guard G1);
+    the factory delegates to the shared ``_portal_route_to_command``.
+    """
+    # Circular import: the sub-construct compiles via compile(). Import here to
+    # avoid the cycle (compiler.py imports this module), mirroring _add_arm_nodes.
+    from neograph.compiler import compile as _compile
+
+    # Build context_types from the parent state model so context fields get their
+    # concrete parent types instead of Any (parity with _add_subgraph).
+    _context_types: dict[str, type] | None = None
+    if parent_state_model is not None:
+        _context_types = {
+            fname: finfo.annotation
+            for fname, finfo in parent_state_model.model_fields.items()
+            if finfo.annotation is not None
+        }
+
+    sub_graph = _compile(
+        sub,
+        checkpointer=checkpointer,
+        _context_types=_context_types,
+        _runtime=runtime,
+        _scripted_lookup=scripted_lookup,
+        conditions=condition_lookup,
+        tool_factories=tool_factory_lookup,
+    )
+    return make_portal_subgraph_fn(
+        sub,
+        sub_graph.graph,
+        portal,
+        entry_field,
+        exit_name,
+        max_hops=max_hops,
+        on_exhaust=on_exhaust,
+        entry_name=entry_name,
+        target_resolve=target_resolve,
+    )
+
+
 def _add_portal_mesh(
     graph: StateGraph,
-    members: list[Node],
+    members: list[ConstructItem],
     prev_node: str | None,
     *,
+    checkpointer: Any = None,
+    parent_state_model: type[BaseModel] | None = None,
     runtime: LlmRuntime = EMPTY_RUNTIME,
     scripted_lookup: dict[str, Callable] | None = None,
     tool_factory_lookup: dict[str, Callable] | None = None,
@@ -758,8 +826,15 @@ def _add_portal_mesh(
     entry_field = field_name_for(entry.name)
     exit_name = f"__handoff_exit_{entry.name}"
 
+    # ENTRY-LABEL MAP: a DX-visible peer name may not be its real LangGraph node
+    # name. An agent/act member's real entry is ``{name}__agent``; an atomic Node
+    # OR a sub-``Construct`` member maps to ITSELF (a Construct compiles to ONE
+    # opaque boundary node added under ``sub.name`` — do0d9). ``getattr(...,
+    # "mode")`` because a ``Construct`` has no ``.mode`` field.
     entry_label_map = {
-        member.name: (f"{member.name}__agent" if member.mode in ("agent", "act") else member.name)
+        member.name: (
+            f"{member.name}__agent" if getattr(member, "mode", None) in ("agent", "act") else member.name
+        )
         for member in members
     }
 
@@ -780,6 +855,34 @@ def _add_portal_mesh(
     for member in members:
         portal = member.modifier_set.portal
         assert isinstance(portal, Portal)  # collected as Portal-modified
+        if isinstance(member, Construct):
+            # A sub-Construct mesh member (do0d9, §3.1 site 4): compile the
+            # sub-construct into its OWN isolated graph exactly as _add_subgraph
+            # does (threading checkpointer + runtime + lookups), then wrap the
+            # boundary node with make_portal_subgraph_fn so its declared-output
+            # payload drives parent routing through the SAME Command(goto) path.
+            subgraph_fn = _make_portal_subgraph_member_fn(
+                member,
+                portal,
+                entry_field,
+                exit_name,
+                max_hops=entry_max_hops,
+                on_exhaust=entry_on_exhaust,
+                entry_name=entry.name,
+                target_resolve=entry_label_map,
+                checkpointer=checkpointer,
+                parent_state_model=parent_state_model,
+                runtime=runtime,
+                scripted_lookup=scripted_lookup,
+                condition_lookup=condition_lookup,
+                tool_factory_lookup=tool_factory_lookup,
+            )
+            destinations = tuple(entry_label_map.get(t, t) for t in (portal.to or ())) + (exit_name,)
+            graph.add_node(member.name, cast(Any, subgraph_fn), destinations=destinations)
+            continue
+        # Past the Construct branch every remaining member is a Portal-modified
+        # Node (atomic or agent/act) — narrow for the Node-typed wiring calls.
+        assert isinstance(member, Node)
         if member.mode in ("agent", "act"):
             _add_portal_agent_cycle_member(
                 graph,

@@ -231,8 +231,18 @@ class TestMeshStructureErrors:
         msg = str(exc.value)
         assert "billing" in msg and "max_hops" in msg
 
-    def test_mesh_member_is_construct_rejected(self):
-        """A sub-Construct as a mesh member raises (D-MESH-LEVEL: siblings only)."""
+    def test_mesh_member_is_construct_accepted(self):
+        """A sub-Construct is ACCEPTED as a first-class mesh member (do0d9).
+
+        The v1 blanket "Portal mesh member is a Construct" rejection
+        (`_check_portal_mesh`, D-MESH-LEVEL) is relaxed by do0d9: a Construct
+        member whose declared boundary output (`_declared_output`) is the mesh's
+        uniform payload assembles cleanly and drives parent routing via the same
+        Command(goto) path. Was `test_mesh_member_is_construct_rejected` — the pin
+        INVERTS (old/new behavior are mutually exclusive for the same input),
+        mirroring the nnds9 agent-member relaxation
+        (`test_agent_member_accepted_as_mesh_member`).
+        """
         register_scripted("sub_f", lambda i, c: Handoff(goto="__end__"))
         sub = Construct(
             "sub",
@@ -242,9 +252,8 @@ class TestMeshStructureErrors:
         )
         keyed_sub = sub | Portal(to=["triage"])
         entry = _member("triage", ["sub"], handoff=False)
-        with pytest.raises(ConstructError) as exc:
-            Construct("swarm", nodes=[entry, keyed_sub])
-        assert "sub" in str(exc.value).lower() or "construct" in str(exc.value).lower()
+        mesh = Construct("swarm", nodes=[entry, keyed_sub])  # must NOT raise
+        assert mesh.name == "swarm"
 
     def test_agent_member_accepted_as_mesh_member(self):
         """An agent-mode mesh member is ACCEPTED at assembly (neograph-nnds9).

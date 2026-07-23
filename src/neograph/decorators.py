@@ -761,6 +761,23 @@ def node(
             if param_res:
                 _set_param_res(n, param_res)
 
+        # Eager scripted-shim registration (do0d9): a bare @node placed DIRECTLY
+        # into a declarative ``Construct(nodes=[...])`` — e.g. a Portal mesh
+        # member alongside a sub-construct member — never passes through
+        # ``_build_construct_from_decorated`` (the construct_from_* path), so its
+        # shim would otherwise stay unregistered (``scripted_fn=None``) and
+        # ``compile()`` fails with "Scripted function 'None' not registered".
+        # Registering here at the @node layer (AGENTS.md: fix @node gaps in
+        # decorators.py, NOT the IR) closes that gap. The inputs are already
+        # DI-stripped at decoration, so an empty port/fan-out map is correct for
+        # the declarative case; ``construct_from_functions`` RE-registers with
+        # full port/fan-out context (unconditional in _cleanup_inputs_and_register)
+        # and overwrites this default, so the topo-sorted surface is unchanged.
+        if n.mode == "scripted" and n.raw_fn is None and n.scripted_fn is None and _get_sidecar(n) is not None:
+            synthetic = _register_node_scripted(n)
+            if synthetic is not None:
+                n = n.model_copy(update={"scripted_fn": synthetic})
+
         return n
 
     # Support both @node and @node(...) forms (see tool.py:130-132).

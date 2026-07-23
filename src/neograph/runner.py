@@ -49,7 +49,7 @@ _SUPERSTEPS_PER_AGENT_TURN = 2
 _AGENT_CYCLE_OVERHEAD = 3
 
 
-def _member_hop_cost(node: Node) -> int:
+def _member_hop_cost(member: Node | Construct) -> int:
     """Superstep cost of ONE hop through a Portal mesh member.
 
     Atomic members (scripted/think/raw) cost exactly 1 superstep per hop —
@@ -59,9 +59,15 @@ def _member_hop_cost(node: Node) -> int:
     agent/act member can itself cost ``max_iterations * 2 + overhead``
     supersteps. Mirrors the flat per-node agent/act cost computed in
     ``_ensure_agent_recursion_limit``.
+
+    A sub-``Construct`` mesh member (do0d9, §3.1 site 6) costs exactly 1 opaque
+    boundary superstep per hop — its interior runs as a SEPARATE isolated Pregel
+    invocation reusing the shared config ``recursion_limit`` (Q4:
+    sub-construct-internal work contributes 0 to the PARENT budget), so the
+    parent floor must NOT fold the interior worst-case in.
     """
-    if node.mode in ("agent", "act"):
-        max_iters = _coerce_llm_config(node.llm_config).max_iterations
+    if isinstance(member, Node) and member.mode in ("agent", "act"):
+        max_iters = _coerce_llm_config(member.llm_config).max_iterations
         return max_iters * _SUPERSTEPS_PER_AGENT_TURN + _AGENT_CYCLE_OVERHEAD
     return 1
 
@@ -83,7 +89,7 @@ def _mesh_hop_cost(construct: Construct) -> int:
     ``iter_with_arms`` walk that mirrors the compiler's mesh detection.
     """
     total = 0
-    current_run: list[Node] = []
+    current_run: list[Node | Construct] = []
 
     def _flush() -> None:
         nonlocal total
@@ -96,6 +102,14 @@ def _mesh_hop_cost(construct: Construct) -> int:
         current_run.clear()
 
     for item in iter_with_arms(construct):
+        # A Portal-carrying Construct member (do0d9, §3.1 site 6) is a mesh
+        # member kept IN the parent contiguous run (cost 1, opaque boundary) —
+        # NOT flushed and re-costed as its own standalone nested mesh, which
+        # would mis-segment the parent mesh (excluding the boundary hop) and the
+        # members after it. This branch precedes the plain-Construct recursion.
+        if isinstance(item, Construct) and classify_modifiers(item)[0] == ModifierCombo.PORTAL:
+            current_run.append(item)
+            continue
         if isinstance(item, Construct):
             _flush()
             total += _mesh_hop_cost(item)
@@ -120,7 +134,16 @@ def _portal_mesh_member_ids(construct: Construct) -> set[int]:
     """
     ids: set[int] = set()
     for item in iter_with_arms(construct):
-        if isinstance(item, Construct):
+        if isinstance(item, Construct) and classify_modifiers(item)[0] == ModifierCombo.PORTAL:
+            # A Portal-carrying Construct mesh member (do0d9, §3.1 site 6): its
+            # interior runs as a separate isolated invoke (0 parent-budget
+            # contribution, Q4) and its per-hop cost is 1 in _mesh_hop_cost — so
+            # EXCLUDE its boundary AND every interior leaf node from the flat
+            # per-node agent-cost loop, or a nested agent/act node would be
+            # double-counted (mesh member cost 1, yet also flat-counted).
+            ids.add(id(item))
+            ids |= {id(n) for n in iter_nodes(item)}
+        elif isinstance(item, Construct):
             ids |= _portal_mesh_member_ids(item)
         elif isinstance(item, Node) and classify_modifiers(item)[0] == ModifierCombo.PORTAL:
             ids.add(id(item))

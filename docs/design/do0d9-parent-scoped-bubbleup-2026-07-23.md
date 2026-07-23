@@ -86,10 +86,35 @@ reach the named parent peer.
 
 **Not in scope (deferred, per the ratified addressability doc):**
 
-- **Shape (ii) — parent peer routing *into* a sub-construct's entry.** That is
-  Mechanism 1 (entry-label map) territory (`portal-addressability-2026-07-15.md`),
-  a separate mechanism. do0d9 is bubble-OUT only.
+- **Shape (ii) — parent peer routing *into* a sub-construct by NAME/entry-label
+  addressing.** That is Mechanism 1 (entry-label map) territory
+  (`portal-addressability-2026-07-15.md`), a separate mechanism where a peer
+  *chooses among a sub-construct's multiple internal entry ports by label*. do0d9
+  does not add entry-label addressing.
 - **Native LangGraph subgraph-as-node nesting** — rejected (§7).
+
+**Scope clarification (post-review, 2026-07-23) — the boundary-node handoff-IN is
+IN scope and is NOT shape (ii).** An architect review flagged that §2 read as
+"route-INTO out of scope" while the acceptance topology needs a peer's
+`Command(goto=<subconstruct>)` to land on the sub-construct boundary node and
+deliver the routed payload. These are two different things: shape (ii)
+(deferred) is *entry-label addressing* — picking which interior port a
+name resolves to. The boundary-node **handoff-IN** do0d9 DOES cover is the
+ordinary Portal delivery of the reserved `handoff` payload to a mesh member's
+single entry — identical to how an atomic member receives its `handoff` input,
+except the member is a sub-construct whose single entry is its boundary port
+(`Construct.input`). A sub-construct has exactly one entry port, so there is no
+label-choice to make and Mechanism 1 is not invoked. **This handoff-IN delivery
+MUST be deterministic (site 7, §3.1)** — it is the exact locus §8 finding 5 marks
+unspiked, and the review's MEDIUM finding: `make_subgraph_fn._build_sub_input`
+sources the boundary input via a **blind reverse type-scan**
+(`_scan_subgraph_input`, `_subconstruct.py:34-40`), which in a uniform-payload
+mesh (every member output field AND the `neo_handoff_<entry>` channel hold a
+`Handoff`) can feed the sub-construct the WRONG `Handoff` instance — a
+wrong-but-typed input, i.e. a silent mis-route the North Star forbids. Site 7
+replaces that blind scan, for a Construct mesh member, with a deterministic read
+of the parent handoff channel (mirroring the atomic member's reserved-`handoff`
+read, `_input_shape.py:119-123`).
 
 **Collapsed into this design (an honest §8 spike finding):** the re-scope note on
 `neograph-do0d9` separated "internal member escapes" (do0d9) from "whole-Construct
@@ -182,11 +207,91 @@ one:**
   convention (`_wiring.py:761`) extends the same way agent/act peers got
   `{peer}__agent` — a sub-construct parent peer maps to its boundary node name.
 
+- **`runner.py` recursion-limit accounting (added 2026-07-23 by the do0d9
+  codebase disease scan — the original 5-site list MISSED this).** The
+  recursion-limit floor is computed by a SECOND, independent walk over
+  `construct.nodes` that also assumes a mesh member is a `Node`:
+  `_mesh_hop_cost` (`runner.py:69`, its `iter_with_arms` loop at `:98-107`)
+  and `_portal_mesh_member_ids` (`runner.py:111`). When a `Construct` is a
+  **mid-mesh** member, `_mesh_hop_cost`'s `isinstance(item, Construct)` branch
+  (`:99-101`) **flushes** the parent contiguous run and re-costs the Construct as
+  its own nested mesh — so the parent mesh's `max_hops * per_hop` budget EXCLUDES
+  the sub-construct boundary hop, and the members after it (`specialist`,
+  `closer`) are mis-segmented into a spurious second mesh with a fake entry. An
+  under-count raises `GraphRecursionError` before the mesh reaches its graceful
+  budget-exhaust edge (a loud wrong-behavior, not a silent seam, but still a
+  do0d9 regression on the exact spike/example topology). **The fix is narrow
+  (post-review, 2026-07-23 — the earlier "per-hop = interior cost / continuation"
+  phrasing was muddled and risked an under-count):** fix ONLY the flush
+  mis-segmentation at `:99-101` so a Portal-carrying `Construct` member does NOT
+  break the parent contiguous run. A Construct member's per-parent-superstep cost
+  is **1** (one opaque boundary node, exactly like an atomic member) — its
+  interior runs as a *separate isolated Pregel invocation* that reuses the shared
+  config `recursion_limit` (Q4: sub-construct-internal work contributes 0 to the
+  *parent* budget), so the parent floor must NOT fold the interior worst-case in.
+  The existing `:101` `isinstance(item, Construct)` recursion into `_mesh_hop_cost`
+  for a *standalone nested* Construct stays; the only change is that a
+  **Portal-carrying** Construct member is kept in the contiguous run (cost 1)
+  instead of flushing it. Over-approximation stays safe (only ever raises the
+  floor); an under-count is the bug to avoid. Also include the Construct member's
+  boundary id in `_portal_mesh_member_ids` so the flat agent-cost loop
+  (`runner.py:159`) does not double-count an agent/act node nested inside it.
+  `runner.py` is already inside the guard-G1 allowlist, so no new `Command(`
+  constraint is touched. **This is site 6.**
+
+- **Deterministic boundary handoff-IN for a Construct mesh member (site 7, added
+  2026-07-23 by architect review — the route-INTO determinism the 6-site
+  bubble-OUT plan omitted).** When a peer's `Command(goto=<subconstruct>)` lands
+  on the boundary node, `make_portal_subgraph_fn` wraps `make_subgraph_fn`, whose
+  `_build_sub_input` sources the sub-construct's boundary input via
+  `_scan_subgraph_input` — a **blind reverse type-scan over ALL parent keys**
+  (`_subconstruct.py:34-40`). In a uniform-payload Portal mesh, *every* member's
+  output field AND the `neo_handoff_<entry>` channel hold a `Handoff`, so the
+  blind scan picks the first reversed-key-order match — NOT necessarily the routed
+  channel payload. That is a wrong-but-typed input ⇒ the sub-construct runs on the
+  WRONG `Handoff` ⇒ a **silent mis-route the North Star forbids**. Atomic members
+  do NOT have this problem: they read their reserved `handoff` input
+  deterministically from `node.handoff_channel` (`_input_shape.py:119-123`). do0d9
+  must give the Construct-member boundary the SAME deterministic sourcing: when the
+  boundary node is a Portal mesh member, its boundary input MUST be read from the
+  parent handoff channel (`StateKeys.handoff_payload(entry_field)`), not the blind
+  type-scan. The Construct's `.input` must therefore equal the mesh's uniform
+  payload type (validated at assembly by the extended `_check_portal_mesh`, §4 Q2).
+  This is the exact locus `§8` finding 5 admits is unspiked — it MUST be built and
+  proven end-to-end (an actual `Construct` object in a `Portal` member list,
+  routed to, running on the routed payload) before do0d9 closes. `make_subgraph_fn`
+  itself stays a general blind-scan for non-mesh sub-constructs; the deterministic
+  read is applied by `make_portal_subgraph_fn` at the mesh-member boundary (so the
+  change is scoped to the Portal path, not all sub-constructs).
+
+**`make_portal_subgraph_fn` field-name note (LOW, review):** it keys the returned
+payload off `make_subgraph_fn`'s update dict — `{field_name_for(sub.name):
+payload}` — NOT `node.outputs` (a `Construct` has no `.outputs`; `make_portal_fn`'s
+`payload_field = primary_output_field(field_name, node.outputs)` at `factory.py:159`
+has no Construct analog). Read the payload back through `_declared_output(member)`
+(the same fix as the `_validation_portal.py:104` correction).
+
+**Site 3 (`_ir_normalize`) is TDD-GATED (LOW, review): do NOT edit the G3
+single-writer speculatively.** For the in-scope Node-entry topology, `portal_members[0]`
+(entry channel) is a Node, so a Construct member's absence from `portal_members`
+does not change the entry computation; `peer_field_names` (`:260`) already collects
+declared-output fields for ALL items un-gated; and the Construct's own channel
+arrives via the `_add_portal_mesh` closure, not a stamped `.handoff_channel`
+(Construct has no such field). So it is plausible site 3 needs **no** edit. Build
+the end-to-end test first; touch `_ir_normalize` ONLY if the green path demands it.
+
 None of this changes the MECHANISM (§3's data flow is correct and
 spike-confirmed for the routing/channel/hop-budget primitives) — it changes the
 honest size of the implementation task. An implementer following only the
 original one-bullet framing would hit `AttributeError`s in at least two of these
-five sites on the first attempt.
+sites on the first attempt, a `GraphRecursionError` on the sixth, and — most
+dangerously — a **silent mis-route** on the seventh (the blind-type-scan boundary
+input). Seven sites total: (1) `make_portal_subgraph_fn`, (2) `_check_portal_mesh`
+×2, (3) `_ir_normalize` (TDD-gated — may be a no-op), (4) `_wiring`, (5) fixtures +
+example, (6) `runner.py` hop-cost flush fix, (7) deterministic channel-sourced
+boundary handoff-IN. Sites 1–5 are `AttributeError`-prone wiring; 6 is a loud
+recursion mis-count; 7 is the only silent-seam-prone one and is the acceptance's
+real unspiked locus (§8 finding 5).
 
 ---
 
