@@ -215,6 +215,7 @@ def _dispatch_pipeline() -> Construct:
         spec_field="spec",
         input_field="flow_input",
         output=Summary,
+        max_depth=5,
         # the emitted flow may wire ONLY these pre-registered blocks:
         scripted={
             "brief_summary": brief_summary,
@@ -283,6 +284,7 @@ def _rejecting_pipeline() -> Construct:
         spec_field="spec",
         input_field="flow_input",
         output=Summary,
+        max_depth=5,
     )
     planner = Node.scripted("planner", fn="rejecting_planner", outputs=DispatchDecision) | km
     return Construct("dynamic-reject", nodes=[planner])

@@ -111,7 +111,9 @@ class TestModeDiscrimination:
 
     def test_dispatch_mode_constructs(self):
         """A well-formed dispatch-mode Portal constructs cleanly."""
-        km = Portal(route="decide", spec_field="spec", input_field="dispatch_input", output=Handoff)
+        km = Portal(
+            route="decide", spec_field="spec", input_field="dispatch_input", output=Handoff, max_depth=5
+        )
         assert km.route == "decide"
         assert km.to is None
 

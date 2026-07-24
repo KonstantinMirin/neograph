@@ -610,16 +610,45 @@ def make_portal_dispatch_fn(
             )
         return {**update, dispatch_field: out}
 
+    def _check_and_increment_depth(config: RunnableConfig) -> RunnableConfig:
+        """Read the incoming depth off config, raise if already at
+        ``max_depth`` — BEFORE the dispatcher's own body runs (louder and
+        cheaper than checking after: no wasted planner call, no wasted
+        spec validation/compile) — and return a NEW config (copy-not-
+        mutate, mirrors ``runner.py``'s ``_ensure_agent_recursion_limit``)
+        carrying the depth incremented by exactly one, for the nested
+        ``compiled.invoke``/``ainvoke``. Depth is a LINEAGE property across
+        fresh per-level compiled sub-flows, so it MUST live on
+        ``config['configurable']`` only — a state-bus counter would reset
+        to 0 at every nesting level.
+        """
+        assert portal.max_depth is not None  # dispatch-mode invariant (T1 validation)
+        configurable = dict((config or {}).get("configurable") or {})
+        depth = configurable.get(StateKeys.PORTAL_DISPATCH_DEPTH, 0)
+        if depth >= portal.max_depth:
+            raise ExecutionError.build(
+                "Portal dispatch exceeded max_depth",
+                construct=node.name,
+                found=f"depth {depth} >= max_depth {portal.max_depth}",
+                node=node.name,
+                hint="a self-extending flow must bound its own recursion via Portal(max_depth=...)",
+            )
+        new_config: RunnableConfig = {**(config or {})}
+        new_config["configurable"] = {**configurable, StateKeys.PORTAL_DISPATCH_DEPTH: depth + 1}
+        return new_config
+
     def dispatch_wrapper(state: BaseModel, config: RunnableConfig) -> dict[str, Any]:
+        child_config = _check_and_increment_depth(config)
         update = inner.invoke(state, config)
         compiled, expected, spec_name, dispatch_input = _prepare(update)
-        result = compiled.invoke(dispatch_input, config=config)
+        result = compiled.invoke(dispatch_input, config=child_config)
         return _finish(update, result, expected, spec_name)
 
     async def adispatch_wrapper(state: BaseModel, config: RunnableConfig) -> dict[str, Any]:
+        child_config = _check_and_increment_depth(config)
         update = await inner.ainvoke(state, config)
         compiled, expected, spec_name, dispatch_input = _prepare(update)
-        result = await compiled.ainvoke(dispatch_input, config=config)
+        result = await compiled.ainvoke(dispatch_input, config=child_config)
         return _finish(update, result, expected, spec_name)
 
     wrapper = RunnableLambda(dispatch_wrapper, afunc=adispatch_wrapper)

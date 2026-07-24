@@ -221,6 +221,7 @@ def _happy_construct(*, programmatic: bool) -> Construct:
         spec_field="spec",
         input_field="dispatch_input",
         output=Summary,
+        max_depth=5,
         scripted={"_make_summary": _make_summary},
     )
     if programmatic:
@@ -242,6 +243,7 @@ def _mismatch_construct() -> Construct:
         spec_field="spec",
         input_field="dispatch_input",
         output=Summary,  # != the flow's Other -> output-contract mismatch
+        max_depth=5,
         scripted={"_make_other": _make_other},
     )
     planner = Node.scripted("planner", fn="planner_mismatch", outputs=DispatchDecision) | km
@@ -257,6 +259,7 @@ def _reject_construct() -> Construct:
         spec_field="spec",
         input_field="dispatch_input",
         output=Summary,
+        max_depth=5,
     )
     planner = Node.scripted("planner", fn="planner_reject", outputs=DispatchDecision) | km
     return Construct("dispatch-reject", nodes=[planner])
@@ -284,6 +287,7 @@ class TestDispatchNodeAssemblesAndCompiles:
             spec_field="spec",
             input_field="dispatch_input",
             output=Summary,
+            max_depth=5,
             scripted={"_make_summary": _make_summary},
         )
         _dispatch_scripted("planner_solo", DispatchDecision(spec=_happy_spec(), dispatch_input={}))
@@ -297,6 +301,7 @@ class TestDispatchNodeAssemblesAndCompiles:
             spec_field="spec",
             input_field="dispatch_input",
             output=Summary,
+            max_depth=5,
             scripted={"_make_summary": _make_summary},
         )
         _dispatch_scripted("planner_solo2", DispatchDecision(spec=_happy_spec(), dispatch_input={}))
@@ -513,6 +518,7 @@ class TestDispatchAcceptsAgentSpecFlavoredSpec:
             spec_field="spec",
             input_field="dispatch_input",
             output=Summary,
+            max_depth=5,
             scripted={"_make_summary": _make_summary},
         )
         if programmatic:
@@ -553,6 +559,7 @@ class TestDispatchAcceptsAgentSpecFlavoredSpec:
             spec_field="spec",
             input_field="dispatch_input",
             output=Summary,
+            max_depth=5,
             scripted={"_make_summary": _make_summary},
         )
         planner = Node.scripted("planner", fn="planner_agent_spec_happy_async", outputs=DispatchDecision) | km

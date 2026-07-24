@@ -524,11 +524,17 @@
           "default": "'raise'",
           "name": "on_invalid",
           "required": false
+        },
+        {
+          "annotation": "int | None",
+          "default": "None",
+          "name": "max_depth",
+          "required": false
         }
       ],
       "kind": "pydantic_model",
       "name": "Portal",
-      "signature": "(to: list[str] | None = None, route: str = 'goto', max_hops: int = 10, on_exhaust: Literal['error', 'exit'] = 'error', spec_field: str | None = None, input_field: str | None = None, output: type[pydantic.main.BaseModel] | str | None = None, scripted: dict[str, collections.abc.Callable] | None = None, conditions: dict[str, collections.abc.Callable] | None = None, on_invalid: Literal['raise'] = 'raise')"
+      "signature": "(to: list[str] | None = None, route: str = 'goto', max_hops: int = 10, on_exhaust: Literal['error', 'exit'] = 'error', spec_field: str | None = None, input_field: str | None = None, output: type[pydantic.main.BaseModel] | str | None = None, scripted: dict[str, collections.abc.Callable] | None = None, conditions: dict[str, collections.abc.Callable] | None = None, on_invalid: Literal['raise'] = 'raise', max_depth: int | None = None)"
     },
     {
       "anchor": "handoff_end",
@@ -1309,7 +1315,7 @@
     },
     {
       "anchor": "to_agent_spec",
-      "doc": "Export a neograph ``Construct`` (IR) to an Open Agent Spec ``Flow``.",
+      "doc": "Export a neograph ``Construct`` (IR) to an Open Agent Spec ``Flow``",
       "kind": "function",
       "name": "to_agent_spec",
       "signature": "(construct: 'Construct') -> 'Flow'"

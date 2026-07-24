@@ -638,6 +638,7 @@ class Portal(Modifier, frozen=True):
     scripted: dict[str, Callable] | None = None  # building-block registry for the emitted flow
     conditions: dict[str, Callable] | None = None  # condition registry for the emitted flow
     on_invalid: Literal["raise"] = "raise"  # v1: raise only (kwarg reserved)
+    max_depth: int | None = None  # REQUIRED in dispatch mode (self-extending-flow budget); forbidden in peer mode
 
     @property
     def is_dispatch(self) -> bool:
@@ -673,12 +674,23 @@ class Portal(Modifier, frozen=True):
                     "Portal max_hops must be >= 1",
                     found=str(self.max_hops),
                 )
+            if "max_depth" in self.model_fields_set:
+                raise ConfigurationError.build(
+                    "Portal peer mode forbids max_depth — max_depth is a dispatch-mode-only "
+                    "self-extending-flow budget (the mirror image of max_hops/on_exhaust being "
+                    "forbidden in dispatch mode)",
+                    expected="no max_depth in peer mode",
+                    found="max_depth set",
+                )
         else:  # dispatch mode (route == "decide")
             missing = [f for f in ("spec_field", "input_field", "output") if getattr(self, f) is None]
+            if self.max_depth is None:
+                missing.append("max_depth")
             if missing:
                 raise ConfigurationError.build(
-                    "Portal dispatch mode requires spec_field, input_field, and output",
-                    expected="spec_field=, input_field=, output=",
+                    "Portal dispatch mode requires spec_field, input_field, output, and max_depth "
+                    "(no numeric default — every self-extending Portal must declare its own bound)",
+                    expected="spec_field=, input_field=, output=, max_depth=",
                     found=f"missing: {missing}",
                 )
             forbidden = [k for k in ("max_hops", "on_exhaust") if k in self.model_fields_set]

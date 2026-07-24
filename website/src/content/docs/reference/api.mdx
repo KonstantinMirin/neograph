@@ -427,7 +427,7 @@ Oracle(n: int = 3, models: list[str] | None = None, merge_prompt: str | None = N
 
 {/* test-skip: generated API signature (declaration, not runnable) */}
 ```python
-Portal(to: list[str] | None = None, route: str = 'goto', max_hops: int = 10, on_exhaust: Literal['error', 'exit'] = 'error', spec_field: str | None = None, input_field: str | None = None, output: type[pydantic.main.BaseModel] | str | None = None, scripted: dict[str, collections.abc.Callable] | None = None, conditions: dict[str, collections.abc.Callable] | None = None, on_invalid: Literal['raise'] = 'raise')
+Portal(to: list[str] | None = None, route: str = 'goto', max_hops: int = 10, on_exhaust: Literal['error', 'exit'] = 'error', spec_field: str | None = None, input_field: str | None = None, output: type[pydantic.main.BaseModel] | str | None = None, scripted: dict[str, collections.abc.Callable] | None = None, conditions: dict[str, collections.abc.Callable] | None = None, on_invalid: Literal['raise'] = 'raise', max_depth: int | None = None)
 ```
 
 | Field | Type | Required | Default |
@@ -442,6 +442,7 @@ Portal(to: list[str] | None = None, route: str = 'goto', max_hops: int = 10, on_
 | <span id="portal-scripted"></span>`scripted` | `dict[str, collections.abc.Callable] | None` | no | `None` |
 | <span id="portal-conditions"></span>`conditions` | `dict[str, collections.abc.Callable] | None` | no | `None` |
 | <span id="portal-on_invalid"></span>`on_invalid` | `Literal['raise']` | no | `'raise'` |
+| <span id="portal-max_depth"></span>`max_depth` | `int | None` | no | `None` |
 
 ### ProducingCall
 

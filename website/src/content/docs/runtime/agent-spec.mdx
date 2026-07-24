@@ -9,6 +9,7 @@ neograph pipelines can export to and import from [Oracle's Open Agent Spec](http
 
 Agent Spec is a machine format other tools can read. Exporting to it means a neograph pipeline can hand off to (or interop with) any Agent-Spec-aware runtime, without neograph becoming the only place that can execute it. Importing from it means a foreign, hand-authored Agent Spec Flow can be run through neograph's compiler.
 
+{/* test-skip: illustrative snippet, my_pipeline is a placeholder */}
 ```python
 from neograph import Construct, to_agent_spec
 from neograph.loader import from_agent_spec

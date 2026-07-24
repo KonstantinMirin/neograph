@@ -96,6 +96,18 @@ class StateKeys:
     # neograph-awor) so TestNeoStateKeysCentralized's `_neo_` matcher can see it —
     # config keys never persist, so the rename has no checkpoint/compat impact.
     ORACLE_MODEL_OVERRIDE = "_neo_oracle_model_override"
+    # PORTAL_DISPATCH_DEPTH is a config['configurable'] key (NOT a state-bus
+    # key): Portal mode-(b) dispatch (route="decide") self-extending flows
+    # nest by calling compile_construct(...) + compiled.invoke(...) on a
+    # BRAND-NEW sub-flow each level, with fresh initial state -- a state-bus
+    # counter would reset to 0 at every nesting level, silently defeating a
+    # depth budget. Depth is therefore a LINEAGE property carried ONLY on
+    # config, incremented via a copy-not-mutate child config
+    # (make_portal_dispatch_fn) before each nested compiled.invoke/ainvoke.
+    # Mirrors the DI_INPUTS / RESOURCE_MANIFEST_INJECT / ORACLE_MODEL_OVERRIDE
+    # config-injection pattern. Never enters state — cannot touch the schema
+    # fingerprint.
+    PORTAL_DISPATCH_DEPTH = "_neo_portal_dispatch_depth"
     # RUN_ID is a config['configurable'] key (NOT a state-bus key): a
     # framework-minted per-run correlation id, minted fresh per execution attempt
     # by ``_mint_run_id`` in the pre-engine brains (``_prepare`` / ``_aprepare``),

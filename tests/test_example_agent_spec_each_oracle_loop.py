@@ -175,7 +175,11 @@ def test_oracle_panel_pipeline_round_trips_and_runs():
 
     ensemble_field = next(k for k in result if not k.startswith("neo_") and "node_id" not in k)
     merged = result[ensemble_field]
-    assert merged is not None
+    merged_field = next(iter(type(merged).model_fields))
+    merged_values = getattr(merged, merged_field)
+    assert merged_values == ["variant", "variant", "variant"], (
+        "expected the 3 Oracle-fanned-out generator variants merged into one list"
+    )
 
 
 def test_loop_panel_pipeline_round_trips_and_runs():

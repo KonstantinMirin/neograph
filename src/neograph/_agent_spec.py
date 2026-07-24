@@ -586,8 +586,8 @@ def _lower_construct_item(
 
 def _lower_portal_mesh_to_swarm(construct: Construct, members: list[Node], tools_mod: Any) -> Any:
     """Export a Portal mode-(a) peer mesh to a top-level pyagentspec ``Swarm``
-    (neograph-5x43u) -- the export-direction mirror of ``loader.py``'s
-    ``_reconstruct_swarm_mesh`` Swarm import.
+    -- the export-direction mirror of ``loader.py``'s ``_reconstruct_swarm_mesh``
+    Swarm import.
 
     Swarm.first_agent/relationships are typed ``AgenticComponent`` (pyagentspec
     swarm.py/agent.py), so each member lowers to a real ``Agent`` (via the
@@ -652,19 +652,20 @@ def to_agent_spec(construct: Construct) -> Flow:
     """
     _nodes_mod, flow_mod, edges_mod, _property_mod, tools_mod = _import_agent_spec_flow_classes()
 
+    all_items = list(iter_with_arms(construct))
     mesh_members = [
         item
-        for item in construct.nodes
+        for item in all_items
         if isinstance(item, Node)
         and item.modifier_set.portal is not None
         and not item.modifier_set.portal.is_dispatch
     ]
     if mesh_members:
-        if len(mesh_members) != len(construct.nodes):
+        if len(mesh_members) != len(all_items):
             raise ConfigurationError.build(
                 f"construct {construct.name!r} mixes a Portal peer mesh with non-mesh nodes",
                 expected="a construct that is EITHER entirely a Portal mesh OR has no Portal mesh members",
-                found=f"{len(mesh_members)} mesh member(s) out of {len(construct.nodes)} total node(s)",
+                found=f"{len(mesh_members)} mesh member(s) out of {len(all_items)} total node(s)",
                 hint="a Swarm is a top-level AgenticComponent, not a Flow node — a mixed "
                 "mesh+Flow construct has no single Agent Spec export shape yet",
             )

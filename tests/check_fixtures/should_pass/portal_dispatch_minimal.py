@@ -28,6 +28,6 @@ pipeline = Construct(
     "dispatch",
     nodes=[
         Node.scripted("planner", fn="km_dispatch", outputs=Emitted)
-        | Portal(route="decide", spec_field="spec", input_field="dispatch_input", output=Summary),
+        | Portal(route="decide", spec_field="spec", input_field="dispatch_input", output=Summary, max_depth=5),
     ],
 )

@@ -171,6 +171,7 @@ km = Portal(
     spec_field="spec",          # which field on the payload holds the spec dict
     input_field="flow_input",   # which field holds the flow's input
     output=Summary,             # the type the dispatched flow must produce
+    max_depth=5,                 # self-extending-flow recursion budget (required, no default)
     scripted={"summarize": summarize},   # the ONLY blocks the emitted flow may wire
 )
 planner = Node.scripted("planner", fn="plan", outputs=Decision) | km
