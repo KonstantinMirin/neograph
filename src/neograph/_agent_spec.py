@@ -44,6 +44,7 @@ from neograph._normalize import normalize_inputs, normalize_outputs
 from neograph.construct import Construct
 from neograph.errors import ConfigurationError
 from neograph.modifiers import Each, Loop, ModifierCombo, Operator, Oracle, classify_modifiers
+from neograph.naming import field_name_for
 from neograph.node import Node
 from neograph.spec_types import model_to_agent_spec_properties
 from neograph.tool import Tool
@@ -471,6 +472,30 @@ def _lower_loop(node: Node, loop: Loop, body: SpecNode) -> tuple[SpecNode, list[
             name=f"{node.name}__loop_back", from_node=branch, from_branch="continue", to_node=body
         ),
     ]
+    # Dict-form inputs prefix each Property title as "{upstream}.{field}"
+    # (per _properties_for's dict-form convention) -- the body node's real
+    # input Property is "{key}.{field}", never the bare "{field}", so the
+    # self-edge's destination_input must be resolved against the SAME key
+    # the runtime feeds the re-entry value into. That key is whichever
+    # dict-form inputs entry has a type compatible with the node's own
+    # output type (mirrors the single-type upstream-resolution scan below:
+    # a Loop-fed key could be a self-reference — "key matching the node's
+    # own name" per the validator's Loop rule — OR the ORIGINAL upstream
+    # producer's name, e.g. inputs={'seed': Draft} — either way it's the
+    # key whose declared type matches the fed-back output).
+    ni = normalize_inputs(node.inputs)
+    no_self = normalize_outputs(node.outputs)
+    dest_prefix = ""
+    if ni.is_dict_form and not no_self.is_dict_form:
+        self_field = field_name_for(node.name)
+        if self_field in ni.by_name:
+            dest_prefix = f"{self_field}."
+        else:
+            for key, typ in ni.by_name.items():
+                if isinstance(typ, type) and (issubclass(no_self.primary, typ) or issubclass(typ, no_self.primary)):
+                    dest_prefix = f"{key}."
+                    break
+
     data_edges: list[DataFlowEdge] = []
     for prop in _properties_for(node.outputs):
         data_edges.append(
@@ -479,7 +504,7 @@ def _lower_loop(node: Node, loop: Loop, body: SpecNode) -> tuple[SpecNode, list[
                 source_node=body,
                 source_output=prop.title,
                 destination_node=body,
-                destination_input=prop.title,
+                destination_input=f"{dest_prefix}{prop.title}",
             )
         )
     return branch, control_edges, data_edges

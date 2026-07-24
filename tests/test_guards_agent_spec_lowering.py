@@ -39,6 +39,14 @@ def _dict_form_fan_in_branch(source: str) -> str:
     return source[start:end]
 
 
+def _lower_loop_source() -> str:
+    tree = ast.parse(AGENT_SPEC_FILE.read_text())
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "_lower_loop":
+            return ast.get_source_segment(AGENT_SPEC_FILE.read_text(), node) or ""
+    raise AssertionError("_lower_loop not found in _agent_spec.py")
+
+
 class TestAgentActModeLowersToAgentNode:
     """_lower_node's agent/act branch must construct a real AgentNode, never
     a ToolNode placeholder or a bare fail-loud with no lowering at all."""
@@ -170,3 +178,48 @@ class TestDictFormFanInSkipsFanOutReceiver:
             "            raise ConfigurationError.build(...)\n"
         )
         assert "fan_out_param" not in buggy_branch
+
+
+class TestLoopSelfEdgeResolvesDictFormDestinationTitle:
+    """Structural guard for neograph-qtfof.2's codebase-scan MIGRATE row.
+
+    Disease pattern: ``_lower_loop``'s self-edge must not construct
+    ``destination_input`` from a BARE output Property title alone -- dict-form
+    inputs prefix input Property titles as ``'{key}.{field}'`` (per
+    ``_properties_for``'s dict-form convention), so a bare title crashes
+    pyagentspec's own ``DataFlowEdge`` validator for any Loop-wrapped node
+    declared with @node's PRIMARY dict-form inputs shape.
+    """
+
+    def test_loop_self_edge_computes_a_dict_form_destination_prefix(self):
+        source = _lower_loop_source()
+        assert "dest_prefix" in source, (
+            "_lower_loop's self-edge must resolve a dict-form destination "
+            "prefix (via node.inputs' dict-form key), not assume the "
+            "destination's input Property title is always bare"
+        )
+        assert 'destination_input=f"{dest_prefix}{prop.title}"' in source, (
+            "the self-edge's destination_input must be built from the resolved "
+            "dest_prefix, never destination_input=prop.title alone"
+        )
+
+    def test_meta_guard_catches_the_disease_pattern_if_reintroduced(self):
+        """Meta-test (positive+negative pair, not regex-based -- plain
+        substring checks have no regex-slip failure mode): prove the
+        assertions above actually flag a pre-fix function body that
+        constructs destination_input from the bare title alone."""
+        buggy_source = (
+            "def _lower_loop(node, loop, body):\n"
+            "    data_edges = []\n"
+            "    for prop in _properties_for(node.outputs):\n"
+            "        data_edges.append(\n"
+            "            edges_mod.DataFlowEdge(\n"
+            "                source_node=body,\n"
+            "                source_output=prop.title,\n"
+            "                destination_node=body,\n"
+            "                destination_input=prop.title,\n"
+            "            )\n"
+            "        )\n"
+        )
+        assert "dest_prefix" not in buggy_source
+        assert 'destination_input=f"{dest_prefix}{prop.title}"' not in buggy_source

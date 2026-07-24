@@ -620,6 +620,34 @@ class TestToAgentSpecLowersModifiers:
         ]
         assert len(back_edges) == 1, "expected a cyclic ControlFlowEdge back into the loop body"
 
+    def test_loop_dict_form_inputs_self_edge_exports_without_error(self):
+        """neograph-qtfof.2: a Loop-modified node with DICT-FORM inputs
+        (@node's primary shape, inputs={'refine': Claims} self-referencing)
+        must export its self-edge cleanly. ``_lower_loop``'s self-edge
+        construction assumed destination_input matches a BARE output
+        Property title, but dict-form inputs prefix input Property titles
+        as '{upstream}.{field}' (per ``_properties_for``'s dict-form
+        convention) -- so the self-edge must target the PREFIXED input
+        title for the Loop self-reference key, not the bare title."""
+        from neograph._agent_spec import to_agent_spec
+        from neograph.modifiers import Loop
+        from neograph.node import Node
+
+        node = Node.scripted("refine", fn="refine_fn", inputs={"refine": Claims}, outputs=Claims)
+        node = node | Loop(when="claims_incomplete", max_iterations=3)
+        pipeline = Construct("loop-dict-form-pipeline", nodes=[node])
+
+        # Must not raise pydantic.ValidationError -- the self-edge must
+        # reference a REAL input Property of the body node.
+        flow = to_agent_spec(pipeline)
+
+        from pyagentspec.flows.nodes import BranchingNode
+
+        branch_nodes = [
+            n for n in flow.nodes if isinstance(n, BranchingNode) and n.metadata.get("neograph/modifier") == "loop"
+        ]
+        assert len(branch_nodes) == 1
+
     def test_callable_loop_when_is_rejected(self):
         from neograph._agent_spec import to_agent_spec
         from neograph.errors import ConfigurationError

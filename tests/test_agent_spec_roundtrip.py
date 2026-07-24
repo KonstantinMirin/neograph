@@ -151,6 +151,44 @@ class TestEachOracleLoopRoundTripPreservesBehavior:
         assert result["refine"][-1].score >= 0.8
         assert result["refine"][-1].iteration == 3
 
+    def test_loop_dict_form_inputs_round_trips_and_runs(self):
+        """neograph-qtfof.2: a Loop-modified node declared with @node's
+        PRIMARY dict-form inputs shape (inputs={'seed': Draft}, not the
+        single-type inputs=Draft shorthand) must export and round-trip
+        identically to the single-type case above."""
+        call_count = [0]
+
+        def seed_fn(input_data, config):
+            return Draft(content="v0", iteration=0, score=0.0)
+
+        register_scripted("rt_loop_dict_seed", seed_fn)
+
+        def refine_fn(input_data, config):
+            call_count[0] += 1
+            prev = input_data["seed"]
+            return Draft(content=f"v{call_count[0]}", iteration=prev.iteration + 1, score=prev.score + 0.3)
+
+        register_scripted("rt_loop_dict_refine", refine_fn)
+
+        seed = Node.scripted("seed", fn="rt_loop_dict_seed", outputs=Draft)
+        refine = Node.scripted("refine", fn="rt_loop_dict_refine", inputs={"seed": Draft}, outputs=Draft) | Loop(
+            when="score < 0.8", max_iterations=10
+        )
+        pipeline = Construct("loop-dict-form-roundtrip", nodes=[seed, refine])
+
+        # Must not raise -- to_agent_spec's self-edge must target the
+        # dict-form-prefixed 'seed.<field>' input Property, not the bare title.
+        flow = to_agent_spec(pipeline)
+        imported = from_agent_spec(flow)
+
+        graph = compile(imported, **build_test_compile_kwargs())
+        result = run(graph, input={"node_id": "loop-dict-rt"})
+
+        assert call_count[0] == 3
+        assert isinstance(result["refine"], list)
+        assert result["refine"][-1].score >= 0.8
+        assert result["refine"][-1].iteration == 3
+
     def test_oracle_round_trips_and_runs(self):
         # Oracle round-trips only for "think" mode today: _lower_oracle
         # unconditionally lowers variants to LlmNode (and from_agent_spec's
