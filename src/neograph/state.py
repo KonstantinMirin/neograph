@@ -199,11 +199,12 @@ def compile_state_model(
                 # Each×Oracle on Constructs not supported
                 # Compiler raises earlier; this is a defensive fallback.
                 fields[field_name] = (sub.output | None, None)
-            case ModifierCombo.PORTAL:
-                # Portal on a Construct is rejected at assembly (D-MESH-LEVEL:
-                # mesh members are sibling Nodes, not sub-constructs), so this
-                # arm is defensively-unreachable — mirror the EACH_ORACLE
-                # fallback rather than crash the state build.
+            case ModifierCombo.PORTAL | ModifierCombo.PORTAL_OPERATOR:
+                # Portal (with or without Operator) on a Construct is rejected
+                # at assembly (D-MESH-LEVEL: mesh members are sibling Nodes,
+                # not sub-constructs), so this arm is defensively-unreachable —
+                # mirror the EACH_ORACLE fallback rather than crash the state
+                # build.
                 fields[field_name] = (sub.output | None, None)
             case _ as unreachable:
                 assert_never(unreachable)
@@ -257,7 +258,7 @@ def compile_state_model(
     portal_members = [
         n
         for n in nodes_only
-        if classify_modifiers(n)[0] == ModifierCombo.PORTAL and not _is_dispatch(n)
+        if classify_modifiers(n)[0] in (ModifierCombo.PORTAL, ModifierCombo.PORTAL_OPERATOR) and not _is_dispatch(n)
     ]
     if portal_members:
         entry = portal_members[0]
@@ -267,6 +268,15 @@ def compile_state_model(
         payload: Any = _declared_output(entry)
         fields[StateKeys.handoff_hops(entry_field)] = (int, 0)
         fields[StateKeys.handoff_payload(entry_field)] = (payload | None, None)
+
+    # Portal+Operator approval gate: each Operator-guarded
+    # member gets its OWN proposed-target field (unlike the mesh-entry-keyed
+    # hop counter/channel above) -- the approval node reads it to know which
+    # peer to route to on approval.
+    for n in portal_members:
+        if n.modifier_set.operator is not None:
+            member_field = field_name_for(n.name)
+            fields[StateKeys.portal_proposed_target(member_field)] = (str | None, None)
 
     # Portal DISPATCH support (design §4.2): a route="decide" node writes the
     # dispatched flow's typed result to a regular (fingerprinted, NON-neo_-prefixed)
@@ -556,6 +566,7 @@ def _add_output_field(node: Node, fields: dict[str, Any]) -> None:
                 | ModifierCombo.LOOP
                 | ModifierCombo.LOOP_OPERATOR
                 | ModifierCombo.PORTAL
+                | ModifierCombo.PORTAL_OPERATOR
             ):
                 # PORTAL dict-form is rejected at assembly (D-DICT-OUTPUTS);
                 # the arm is defensively-unreachable and defers to the per-key
@@ -618,10 +629,11 @@ def _add_single_output_field(
                 Annotated[list[output_type], _append_loop_result],
                 [],
             )
-        case ModifierCombo.BARE | ModifierCombo.OPERATOR | ModifierCombo.PORTAL:
-            # A Portal mesh member writes its OWN output field as a plain
-            # value (like a bare node); the mesh channel + hop counter are
-            # separate neo_-prefixed fields added per mesh entry below.
+        case ModifierCombo.BARE | ModifierCombo.OPERATOR | ModifierCombo.PORTAL | ModifierCombo.PORTAL_OPERATOR:
+            # A Portal mesh member (with or without an Operator approval gate)
+            # writes its OWN output field as a plain value (like a bare node);
+            # the mesh channel + hop counter are separate neo_-prefixed fields
+            # added per mesh entry below.
             fields[field_name] = (output_type | None, None)
         case _ as unreachable:
             assert_never(unreachable)

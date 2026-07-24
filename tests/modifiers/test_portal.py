@@ -156,16 +156,37 @@ class TestPipeSlotConflicts:
         with pytest.raises(ConstructError):
             _base() | Loop(when=lambda d: False, max_iterations=2) | Portal(to=["x"])
 
-    def test_portal_then_operator_raises(self):
-        """Portal + Operator is ILLEGAL in v1 (D-NO-OPERATOR-COMBO)."""
+    def test_portal_peer_then_operator_assembles(self):
+        """Portal PEER mode + Operator is now legal (neograph-kdr1u, D4 lift):
+        a human-approval gate spliced onto the dynamic path. Both pipe orders
+        must assemble (review LOW finding: 3 reciprocal edit sites)."""
         register_scripted("cond", lambda d: True)
-        with pytest.raises(ConstructError):
-            _base() | Portal(to=["x"]) | Operator(when="cond")
+        node = _base() | Portal(to=["x"]) | Operator(when="cond")
+        assert node.modifier_set.portal is not None
+        assert node.modifier_set.operator is not None
 
-    def test_operator_then_portal_raises(self):
+    def test_operator_then_portal_peer_assembles(self):
         register_scripted("cond2", lambda d: True)
-        with pytest.raises(ConstructError):
-            _base() | Operator(when="cond2") | Portal(to=["x"])
+        node = _base() | Operator(when="cond2") | Portal(to=["x"])
+        assert node.modifier_set.portal is not None
+        assert node.modifier_set.operator is not None
+
+    def test_portal_dispatch_then_operator_raises(self):
+        """Portal DISPATCH mode (route='decide') + Operator stays illegal:
+        dispatch has no peer to approve a handoff TO and no mesh-exit analog
+        for a rejection to route to."""
+        register_scripted("cond3", lambda d: True)
+        with pytest.raises(ConstructError, match="dispatch mode"):
+            _base() | Portal(
+                route="decide", spec_field="s", input_field="i", output=Handoff, max_depth=5
+            ) | Operator(when="cond3")
+
+    def test_operator_then_portal_dispatch_raises(self):
+        register_scripted("cond4", lambda d: True)
+        with pytest.raises(ConstructError, match="dispatch mode"):
+            _base() | Operator(when="cond4") | Portal(
+                route="decide", spec_field="s", input_field="i", output=Handoff, max_depth=5
+            )
 
 
 class TestDuplicatePortal:
@@ -209,10 +230,21 @@ class TestDirectModifierSetConflicts:
         with pytest.raises(Exception, match="Cannot combine Portal and Loop"):
             ModifierSet(portal=Portal(to=["x"]), loop=Loop(when=lambda d: False, max_iterations=2))
 
-    def test_portal_and_operator_direct_raises(self):
-        register_scripted("cond3", lambda d: True)
-        with pytest.raises(Exception, match="Cannot combine Portal and Operator"):
-            ModifierSet(portal=Portal(to=["x"]), operator=Operator(when="cond3"))
+    def test_portal_peer_and_operator_direct_assembles(self):
+        """Direct-ModifierSet-construction path parity with the pipe path
+        (review M2): Portal PEER + Operator is legal here too (neograph-kdr1u)."""
+        register_scripted("cond5", lambda d: True)
+        ms = ModifierSet(portal=Portal(to=["x"]), operator=Operator(when="cond5"))
+        assert ms.portal is not None
+        assert ms.operator is not None
+
+    def test_portal_dispatch_and_operator_direct_raises(self):
+        register_scripted("cond6", lambda d: True)
+        with pytest.raises(Exception, match="dispatch mode"):
+            ModifierSet(
+                portal=Portal(route="decide", spec_field="s", input_field="i", output=Handoff, max_depth=5),
+                operator=Operator(when="cond6"),
+            )
 
 
 # ═══════════════════════════════════════════════════════════════════════════

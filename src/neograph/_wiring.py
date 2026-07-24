@@ -38,6 +38,7 @@ from neograph.errors import ConfigurationError, ExecutionError
 from neograph.factory import (
     make_node_fn,
     make_portal_agent_cycle_fn,
+    make_portal_approval_fn,
     make_portal_dispatch_fn,
     make_portal_fn,
     make_portal_subgraph_fn,
@@ -711,7 +712,7 @@ def _contiguous_portal_mesh(nodes: list[ConstructItem], entry: Node) -> list[Con
     start = next(i for i, n in enumerate(nodes) if n is entry)
     members: list[ConstructItem] = []
     for item in nodes[start:]:
-        if classify_modifiers(item)[0] != ModifierCombo.PORTAL:
+        if classify_modifiers(item)[0] not in (ModifierCombo.PORTAL, ModifierCombo.PORTAL_OPERATOR):
             break
         # A dispatch-mode Portal (route="decide") is NOT a mesh member — it is a
         # standalone linear node lowered by _add_portal_dispatch (review M2). Stop
@@ -900,6 +901,8 @@ def _add_portal_mesh(
                 target_resolve=entry_label_map,
             )
             continue
+        operator = member.modifier_set.operator
+        approve_name = f"{member.name}__approve" if operator is not None else None
         member_fn = make_portal_fn(
             member,
             portal,
@@ -912,14 +915,37 @@ def _add_portal_mesh(
             scripted_lookup=scripted_lookup,
             tool_factory_lookup=tool_factory_lookup,
             target_resolve=entry_label_map,
+            approve_name=approve_name,
         )
-        # destinations = declared peers ∪ {exit}, resolved through the
-        # entry-label map so an agent/act peer's destination is its real
-        # entry node name. HANDOFF_END is a route VALUE mapped to exit_name
-        # inside the wrapper, so exit_name (not HANDOFF_END) is the goto
-        # target that must appear here.
-        destinations = tuple(entry_label_map.get(t, t) for t in (portal.to or ())) + (exit_name,)
-        graph.add_node(member.name, cast(Any, member_fn), destinations=destinations)
+        if approve_name is not None:
+            assert operator is not None  # approve_name is derived from operator above
+            # neograph-kdr1u (D4 lift): the member's OWN destinations become
+            # ONLY the approval node + exit -- ALL peer routes now detour
+            # through {member}__approve (HANDOFF_END stays direct/unguarded,
+            # wired inside the member's own Command via _portal_route_to_command).
+            # The approval node's OWN destinations are the declared peers ∪
+            # {exit} (whichever peer gets approved).
+            proposed_field = StateKeys.portal_proposed_target(field_name_for(member.name))
+            count_field = StateKeys.handoff_hops(entry_field)
+            approval_fn = make_portal_approval_fn(
+                member.name,
+                operator,
+                count_field=count_field,
+                proposed_field=proposed_field,
+                exit_name=exit_name,
+                condition_lookup=condition_lookup,
+            )
+            approval_destinations = tuple(entry_label_map.get(t, t) for t in (portal.to or ())) + (exit_name,)
+            graph.add_node(approve_name, cast(Any, approval_fn), destinations=approval_destinations)
+            graph.add_node(member.name, cast(Any, member_fn), destinations=(approve_name, exit_name))
+        else:
+            # destinations = declared peers ∪ {exit}, resolved through the
+            # entry-label map so an agent/act peer's destination is its real
+            # entry node name. HANDOFF_END is a route VALUE mapped to exit_name
+            # inside the wrapper, so exit_name (not HANDOFF_END) is the goto
+            # target that must appear here.
+            destinations = tuple(entry_label_map.get(t, t) for t in (portal.to or ())) + (exit_name,)
+            graph.add_node(member.name, cast(Any, member_fn), destinations=destinations)
 
     # The only static edge into the mesh: prev → entry, resolved through the
     # SAME entry-label map — an agent/act ENTRY's real node is

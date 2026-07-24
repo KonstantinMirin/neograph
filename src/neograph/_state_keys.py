@@ -160,6 +160,18 @@ class StateKeys:
         return f"neo_handoff_{field_name}"
 
     @staticmethod
+    def portal_proposed_target(field_name: str) -> str:
+        """Portal+Operator approval gate: the routing target proposed by an
+        Operator-guarded mesh member, pending human approval.
+
+        Keyed off the MEMBER's own producer field (each approval-guarded
+        member has its own approval node, unlike the mesh-entry-keyed
+        handoff_payload/handoff_hops channels). Internal framework field --
+        neo_-prefixed, never read by user code.
+        """
+        return f"neo_portal_proposed_{field_name}"
+
+    @staticmethod
     def dispatch_error(field_name: str) -> str:
         """Portal dispatch on_invalid='route_to_error' payload field name. Keyed off the dispatch node's own producer field,
         via the SAME per-output-key naming convention as the sibling

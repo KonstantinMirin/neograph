@@ -120,12 +120,19 @@ def _try_compile(mod: object, *, try_without_llm: bool = True) -> Exception | No
     this False — an LLM-mode node (e.g. an agent) legitimately requires runtime
     config, so it can only be expected to compile WITH the placeholder LLM.
     """
+    from langgraph.checkpoint.memory import MemorySaver
+
     from neograph.compiler import compile
     from neograph.construct import Construct
 
     placeholder_llm_kwargs = {
         "llm_factory": lambda tier: None,
         "prompt_compiler": lambda template, data, **kw: [],
+        # A placeholder checkpointer so an Operator-carrying fixture (which
+        # always requires one to compile, regardless of its condition) isn't
+        # universally excluded from this harness -- harmless for fixtures
+        # that don't need one.
+        "checkpointer": MemorySaver(),
     }
 
     for name in dir(mod):

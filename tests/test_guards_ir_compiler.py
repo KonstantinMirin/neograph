@@ -530,11 +530,17 @@ class TestCompilerWiringSplit:
         _contiguous_portal_mesh) were moved to _wiring.py per this guard. Raised
         720 -> 735 for the Portal DISPATCH walk arm (neograph-f27xo, mode b): the
         route="decide" discriminator is walk orchestration (same category as the
-        mesh arm); its WIRING helper (_add_portal_dispatch) lives in _wiring.py."""
+        mesh arm); its WIRING helper (_add_portal_dispatch) lives in _wiring.py.
+        Raised 735 -> 745 for the PORTAL_OPERATOR exhaustiveness arm (Portal+
+        Operator D4 lift): the new ModifierCombo value needs a case in each of
+        the two existing exhaustive matches (sub-construct dispatch, per-node
+        dispatch) that this walk already owns -- no new wiring logic, purely
+        exhaustiveness upkeep for a combo the mesh-aware walk (M1) already
+        collapses before either match is reached."""
         compiler = SRC_DIR / "compiler.py"
         line_count = len(compiler.read_text().splitlines())
-        assert line_count < 735, (
-            f"compiler.py is {line_count} lines — must be < 735. Move wiring helpers to _wiring.py."
+        assert line_count < 745, (
+            f"compiler.py is {line_count} lines — must be < 745. Move wiring helpers to _wiring.py."
         )
 
     def test_wiring_module_exists(self):

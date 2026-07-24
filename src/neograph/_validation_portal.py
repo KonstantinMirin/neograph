@@ -110,6 +110,25 @@ def _check_portal_mesh(construct: ConstructLike) -> None:
                 location=_source_location(),
             )
 
+        # neograph-kdr1u (D4 lift): the approval-node splice is implemented for
+        # ATOMIC members only (scripted/think/raw). An agent/act member or a
+        # Construct member carrying an Operator gate is NARROWED-REJECTED —
+        # never silently accepted with a ban lift wider than the splice
+        # actually covers (D4's own silent-never-fires failure mode, just one
+        # member class later).
+        member_operator = getattr(getattr(member, "modifier_set", None), "operator", None)
+        if member_operator is not None and (not isinstance(member, Node) or member.mode in ("agent", "act")):
+            raise ConstructError.build(
+                f"Portal mesh member '{name}' combines Operator with a "
+                f"{'sub-construct' if not isinstance(member, Node) else member.mode + '-mode'} member",
+                expected="Operator+Portal approval gate on an ATOMIC (scripted/think/raw) member only",
+                found=f"Operator on a {'sub-construct' if not isinstance(member, Node) else member.mode} member",
+                node=name,
+                construct=construct.name,
+                location=_source_location(),
+                hint="agent/act and sub-construct mesh members do not yet support the approval-node splice",
+            )
+
     # Past the shape checks every member is a Portal-modified Node OR a
     # Portal-modified Construct. The rules below read only the Portal-agnostic
     # surface (``.name`` / ``_declared_output`` / ``modifier_set.portal``); the

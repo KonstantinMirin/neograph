@@ -75,12 +75,13 @@ class ModifierCombo(Enum):
     ORACLE = auto()  # Oracle only
     LOOP = auto()  # Loop only
     OPERATOR = auto()  # Operator only
-    PORTAL = auto()  # Portal only (dynamic handoff; excludes all others — D-NO-OPERATOR-COMBO)
+    PORTAL = auto()  # Portal only (dynamic handoff; excludes Each/Oracle/Loop)
     EACH_ORACLE = auto()  # Each + Oracle (fusion)
     EACH_OPERATOR = auto()  # Each + Operator
     ORACLE_OPERATOR = auto()  # Oracle + Operator
     LOOP_OPERATOR = auto()  # Loop + Operator
     EACH_ORACLE_OPERATOR = auto()  # Each + Oracle + Operator
+    PORTAL_OPERATOR = auto()  # Portal (PEER mode only) + Operator — human-approval gate on the dynamic path
 
 
 # Single source of truth: modifier-name frozenset -> ModifierCombo. Both
@@ -99,6 +100,7 @@ _COMBO_MAP: dict[frozenset[str], ModifierCombo] = {
     frozenset({"loop", "operator"}): ModifierCombo.LOOP_OPERATOR,
     frozenset({"each", "oracle", "operator"}): ModifierCombo.EACH_ORACLE_OPERATOR,
     frozenset({"portal"}): ModifierCombo.PORTAL,
+    frozenset({"portal", "operator"}): ModifierCombo.PORTAL_OPERATOR,
 }
 
 
@@ -776,7 +778,14 @@ _SLOT_RULES: tuple[_SlotRule, ...] = (
         "Loop",
         (("each", *_EACH_LOOP_CONFLICT), ("oracle", *_ORACLE_LOOP_CONFLICT), ("portal", *_km_conflict("Loop"))),
     ),
-    _SlotRule(Operator, "operator", "Operator", (("portal", *_km_conflict("Operator")),)),
+    # Operator no longer excludes Portal (neograph-kdr1u, D4 lift): a Portal
+    # PEER-mode member may carry an Operator human-approval gate, spliced onto
+    # the dynamic Command(goto) path (_add_portal_mesh's approval-node
+    # splice) — never a statically-appended edge (the D4 bug). The dispatch-
+    # mode-only / non-atomic-member-only narrowing is enforced separately
+    # (model_post_init's dispatch-mode check below; _validation_portal.py's
+    # atomic-only mesh-member check), not via a blanket exclude here.
+    _SlotRule(Operator, "operator", "Operator", ()),
     _SlotRule(
         Portal,
         "portal",
@@ -785,7 +794,6 @@ _SLOT_RULES: tuple[_SlotRule, ...] = (
             ("each", "Cannot combine Portal and Each on the same item", _PORTAL_HINT),
             ("oracle", "Cannot combine Portal and Oracle on the same item", _PORTAL_HINT),
             ("loop", "Cannot combine Portal and Loop on the same item", _PORTAL_HINT),
-            ("operator", "Cannot combine Portal and Operator on the same item", _PORTAL_HINT),
         ),
     ),
 )
@@ -847,8 +855,16 @@ class ModifierSet(BaseModel, frozen=True):
             raise ConstructError.build("Cannot combine Portal and Oracle on the same item", hint=_PORTAL_HINT)
         if self.portal is not None and self.loop is not None:
             raise ConstructError.build("Cannot combine Portal and Loop on the same item", hint=_PORTAL_HINT)
-        if self.portal is not None and self.operator is not None:
-            raise ConstructError.build("Cannot combine Portal and Operator on the same item", hint=_PORTAL_HINT)
+        # Portal (PEER mode) + Operator is now legal (neograph-kdr1u, D4 lift) —
+        # a human-approval gate spliced onto the dynamic path. Dispatch mode
+        # (route="decide") + Operator stays illegal: dispatch has no "peer" to
+        # approve a handoff TO, and no mesh-exit analog for a rejection to
+        # route to.
+        if self.portal is not None and self.operator is not None and self.portal.is_dispatch:
+            raise ConstructError.build(
+                "Cannot combine Portal (dispatch mode) and Operator on the same item",
+                hint="Operator+Portal approval gate is defined for PEER mode (to=[...]) only",
+            )
 
     def with_modifier(self, mod: Modifier) -> ModifierSet:
         """Return a new ModifierSet with the given modifier added.
@@ -882,7 +898,17 @@ class ModifierSet(BaseModel, frozen=True):
             if getattr(self, conflict_slot) is not None:
                 raise ConstructError.build(message, hint=hint)
 
-        return self.model_copy(update={rule.slot: mod})
+        result = self.model_copy(update={rule.slot: mod})
+        # Portal (dispatch mode) + Operator stays illegal regardless of pipe
+        # order — a dynamic (not static-exclude-table-expressible) check since
+        # it depends on the Portal INSTANCE's is_dispatch, mirrors the
+        # model_post_init arm above (the direct-ModifierSet-construction path).
+        if result.portal is not None and result.operator is not None and result.portal.is_dispatch:
+            raise ConstructError.build(
+                "Cannot combine Portal (dispatch mode) and Operator on the same item",
+                hint="Operator+Portal approval gate is defined for PEER mode (to=[...]) only",
+            )
+        return result
 
     def to_list(self) -> list[Modifier]:
         """Return modifiers as a list (backward compat bridge)."""

@@ -69,6 +69,12 @@ def _member_hop_cost(member: Node | Construct) -> int:
     if isinstance(member, Node) and member.mode in ("agent", "act"):
         max_iters = _coerce_llm_config(member.llm_config).max_iterations
         return max_iters * _SUPERSTEPS_PER_AGENT_TURN + _AGENT_CYCLE_OVERHEAD
+    # An Operator-guarded member detours through its
+    # {member}__approve node before reaching the peer — one extra superstep
+    # per hop over the un-guarded atomic case.
+    ms = getattr(member, "modifier_set", None)
+    if ms is not None and ms.operator is not None:
+        return 2
     return 1
 
 
@@ -107,14 +113,14 @@ def _mesh_hop_cost(construct: Construct) -> int:
         # NOT flushed and re-costed as its own standalone nested mesh, which
         # would mis-segment the parent mesh (excluding the boundary hop) and the
         # members after it. This branch precedes the plain-Construct recursion.
-        if isinstance(item, Construct) and classify_modifiers(item)[0] == ModifierCombo.PORTAL:
+        if isinstance(item, Construct) and classify_modifiers(item)[0] in (ModifierCombo.PORTAL, ModifierCombo.PORTAL_OPERATOR):
             current_run.append(item)
             continue
         if isinstance(item, Construct):
             _flush()
             total += _mesh_hop_cost(item)
             continue
-        if isinstance(item, Node) and classify_modifiers(item)[0] == ModifierCombo.PORTAL:
+        if isinstance(item, Node) and classify_modifiers(item)[0] in (ModifierCombo.PORTAL, ModifierCombo.PORTAL_OPERATOR):
             current_run.append(item)
         else:
             _flush()
@@ -134,7 +140,7 @@ def _portal_mesh_member_ids(construct: Construct) -> set[int]:
     """
     ids: set[int] = set()
     for item in iter_with_arms(construct):
-        if isinstance(item, Construct) and classify_modifiers(item)[0] == ModifierCombo.PORTAL:
+        if isinstance(item, Construct) and classify_modifiers(item)[0] in (ModifierCombo.PORTAL, ModifierCombo.PORTAL_OPERATOR):
             # A Portal-carrying Construct mesh member (do0d9, §3.1 site 6): its
             # interior runs as a separate isolated invoke (0 parent-budget
             # contribution, Q4) and its per-hop cost is 1 in _mesh_hop_cost — so
@@ -145,7 +151,7 @@ def _portal_mesh_member_ids(construct: Construct) -> set[int]:
             ids |= {id(n) for n in iter_nodes(item)}
         elif isinstance(item, Construct):
             ids |= _portal_mesh_member_ids(item)
-        elif isinstance(item, Node) and classify_modifiers(item)[0] == ModifierCombo.PORTAL:
+        elif isinstance(item, Node) and classify_modifiers(item)[0] in (ModifierCombo.PORTAL, ModifierCombo.PORTAL_OPERATOR):
             ids.add(id(item))
     return ids
 

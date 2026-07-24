@@ -71,6 +71,13 @@ FUNCTION_LOCAL_IMPORT_ALLOWLIST: set[tuple[str, str, frozenset[str]]] = {
     # — their modules do not import factory). Retires if compile() relocates out of
     # the factory import chain.
     ("factory.py", "neograph.compiler", frozenset({"compile"})),
+    # factory.py — REAL cycle: make_portal_approval_fn (Portal+Operator D4
+    # lift, neograph-kdr1u) needs _resolve_condition to resolve Operator.when,
+    # but _wiring.py imports factory.py at module level (make_portal_fn et
+    # al.), so a top-level `from neograph._wiring import _resolve_condition`
+    # here cycles. Function-local import is the truthful fix. Retires if
+    # _resolve_condition relocates out of the _wiring import chain.
+    ("factory.py", "neograph._wiring", frozenset({"_resolve_condition"})),
     # __main__.py — CLI command bodies defer heavy graph imports to keep
     # `neograph --help` startup fast. Justification: import latency, not cycle.
     ("__main__.py", "neograph.compiler", frozenset({"compile"})),

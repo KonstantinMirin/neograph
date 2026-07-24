@@ -251,7 +251,10 @@ def compile(
     for item in construct.nodes:
         if id(item) in meshed:
             continue  # a non-entry mesh member, already lowered at its entry
-        if isinstance(item, Node) and classify_modifiers(item)[0] == ModifierCombo.PORTAL:
+        if isinstance(item, Node) and classify_modifiers(item)[0] in (
+            ModifierCombo.PORTAL,
+            ModifierCombo.PORTAL_OPERATOR,
+        ):
             portal = item.modifier_set.portal
             if portal is not None and portal.is_dispatch:
                 # Dispatch mode (design §4.2): a standalone LINEAR node (plain
@@ -546,9 +549,10 @@ def _add_subgraph(
             else:
                 graph.add_edge(START, sub.name)
             last_name = sub.name
-        case ModifierCombo.PORTAL:
-            # Portal on a sub-construct is illegal in v1 (D-MESH-LEVEL); already
-            # rejected at assembly — this arm is defense-in-depth + exhaustiveness.
+        case ModifierCombo.PORTAL | ModifierCombo.PORTAL_OPERATOR:
+            # Portal (with or without Operator) on a sub-construct is illegal in
+            # v1 (D-MESH-LEVEL); already rejected at assembly — this arm is
+            # defense-in-depth + exhaustiveness.
             raise CompileError.build(
                 "Portal on a sub-construct is not supported",
                 expected="mesh members must be sibling Nodes (D-MESH-LEVEL)",
@@ -658,7 +662,7 @@ def _add_node_to_graph(
                 else:
                     graph.add_edge(START, node_name)
                 last_name = node_name
-        case ModifierCombo.PORTAL:
+        case ModifierCombo.PORTAL | ModifierCombo.PORTAL_OPERATOR:
             # Unreachable: the mesh-aware walk (M1) lowers a contiguous mesh via
             # _add_portal_mesh before per-node dispatch. Arm kept for match
             # exhaustiveness; fails loud if the walk ever regresses.

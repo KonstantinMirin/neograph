@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any
 
 import structlog
 from langchain_core.runnables import Runnable, RunnableConfig, RunnableLambda
-from langgraph.types import Command
+from langgraph.types import Command, interrupt
 from pydantic import BaseModel, ValidationError
 
 from neograph._agent_cycle import make_agent_cycle_bodies
@@ -23,7 +23,7 @@ from neograph._subconstruct import _scan_subgraph_output, make_subgraph_fn
 from neograph._trace import named
 from neograph.errors import ConfigurationError, ConstructError, ExecutionError
 from neograph.loader import from_agent_spec
-from neograph.modifiers import HANDOFF_END, Portal
+from neograph.modifiers import HANDOFF_END, Operator, Portal
 from neograph.naming import field_name_for, output_field_name
 from neograph.node import Node
 from neograph.spec_types import lookup_type
@@ -119,6 +119,7 @@ def make_portal_fn(
     scripted_lookup: dict[str, Callable] | None = None,
     tool_factory_lookup: dict[str, Callable] | None = None,
     target_resolve: dict[str, str] | None = None,
+    approve_name: str | None = None,
 ) -> Runnable:
     """Build a Portal mesh-member function (design §4.1, decision D3/D10).
 
@@ -164,6 +165,7 @@ def make_portal_fn(
     payload_field = primary_output_field(field_name_for(node.name), node.outputs)
     route_field = portal.route
     valid_targets = set(portal.to or ()) | {HANDOFF_END}
+    proposed_field = StateKeys.portal_proposed_target(field_name_for(node.name)) if approve_name else None
 
     inner = make_node_fn(
         node,
@@ -187,6 +189,8 @@ def make_portal_fn(
             node_name=node.name,
             entry_name=entry_name,
             target_resolve=target_resolve,
+            approve_name=approve_name,
+            proposed_field=proposed_field,
         )
 
     async def aportal_wrapper(state: BaseModel, config: RunnableConfig) -> Command:
@@ -204,6 +208,8 @@ def make_portal_fn(
             node_name=node.name,
             entry_name=entry_name,
             target_resolve=target_resolve,
+            approve_name=approve_name,
+            proposed_field=proposed_field,
         )
 
     wrapper = RunnableLambda(portal_wrapper, afunc=aportal_wrapper)
@@ -225,6 +231,8 @@ def _portal_route_to_command(
     node_name: str,
     entry_name: str,
     target_resolve: dict[str, str] | None = None,
+    approve_name: str | None = None,
+    proposed_field: str | None = None,
 ) -> Command:
     """Shared Portal routing decision: state-update dict -> ``Command(goto=...)``.
 
@@ -241,6 +249,14 @@ def _portal_route_to_command(
     mechanism 1) — atomic peers map to themselves; an agent/act peer's real
     entry is ``{peer}__agent``. Defaults to identity when omitted (v1 atomic
     mesh, unaffected by nnds9).
+
+    ``approve_name``/``proposed_field``: when the member
+    carries an Operator approval gate, a PEER route (never HANDOFF_END —
+    "leaving the mesh is not a handoff") detours to ``{member}__approve``
+    INSTEAD of the peer directly, carrying the proposed (already hop-budget-
+    checked) target on ``proposed_field`` — the hop counter is NOT
+    incremented here; ``make_portal_approval_fn`` increments it ONLY on
+    approval, so a rejected hop costs nothing.
     """
     payload = update[payload_field]
     target = getattr(payload, route_field)
@@ -252,15 +268,16 @@ def _portal_route_to_command(
             node=node_name,
             hint="a mesh member may route only to a declared peer or HANDOFF_END",
         )
-    # HANDOFF_END is a clean mesh exit — never budget-gated, never counted.
+    # HANDOFF_END is a clean mesh exit — never budget-gated, never counted,
+    # and never approval-guarded (Operator guards the HANDOFF, not the exit).
     if target == HANDOFF_END:
         return Command(goto=exit_name, update={**update, channel_key: payload})
     resolved_target = (target_resolve or {}).get(target, target)
     # Peer continuation: enforce the entry's hop budget BEFORE emitting the
-    # goto. Counter bootstrap (absent/None -> 0) lives in StateBus.get_counter;
-    # read the SHARED counter from incoming state so hops accumulate across
-    # members (the update dict never carries it — a from-update read would
-    # always bootstrap 0 and break accumulation).
+    # goto (or the approval detour). Counter bootstrap (absent/None -> 0) lives
+    # in StateBus.get_counter; read the SHARED counter from incoming state so
+    # hops accumulate across members (the update dict never carries it — a
+    # from-update read would always bootstrap 0 and break accumulation).
     current = adapt_state(state).get_counter(count_field)
     if current >= max_hops:
         if on_exhaust == "exit":
@@ -275,10 +292,72 @@ def _portal_route_to_command(
             node=entry_name,
             hint="raise the entry's max_hops or route to HANDOFF_END sooner",
         )
+    if approve_name is not None:
+        assert proposed_field is not None
+        return Command(
+            goto=approve_name,
+            update={**update, channel_key: payload, proposed_field: resolved_target},
+        )
     return Command(
         goto=resolved_target,
         update={**update, channel_key: payload, count_field: current + 1},
     )
+
+
+def make_portal_approval_fn(
+    node_name: str,
+    operator: Operator,
+    *,
+    count_field: str,
+    proposed_field: str,
+    exit_name: str,
+    condition_lookup: dict[str, Callable] | None = None,
+) -> Callable[[BaseModel, RunnableConfig], Command]:
+    """Build the ``{member}__approve`` node (neograph-kdr1u, Portal+Operator
+    D4 lift) -- the ONLY ``interrupt()`` site on an approval-guarded member's
+    dynamic path.
+
+    ANTI-BAND-AID (the D4 invariant): the interrupt lives ONLY here, never in
+    the member's own wrapper (:func:`make_portal_fn`) -- that naive shape
+    re-runs the member's LLM/tool spend on resume (LangGraph resumes an
+    interrupted node FROM THE TOP), proven failing by the spike
+    (``tests/test_spike_portal_operator_approval.py::TestNaiveInWrapperShapeFailsTheCrux``).
+    Splicing this cheap, side-effect-free node onto the ``Command(goto)`` path
+    means a resume re-runs ONLY this node.
+
+    ``operator.when`` gates whether the node interrupts at all -- a falsy
+    predicate passes through to the proposed target WITHOUT pausing (mirrors
+    ``_add_operator_check``'s conditional-interrupt shape). On resume, the
+    decision is expected to be a dict with an ``"approved"`` key (the
+    ``run(graph, resume={"approved": bool}, ...)`` convention): truthy ->
+    ``Command(goto=proposed_target)`` with the hop counter incremented
+    (an approved hop costs exactly one -- the SAME accounting a direct,
+    unguarded hop would have used, just deferred past the approval); falsy ->
+    ``Command(goto=exit_name)`` WITHOUT incrementing (a rejected hop is free).
+
+    Confined to factory.py per guard G1 (``TestCommandConstructionMonopoly``).
+    """
+    # Cycle-avoidance function-local import: _wiring.py imports factory.py
+    # (make_portal_fn et al.), so a module-level import here would cycle.
+    # Mirrors _prepare's `from neograph.compiler import compile` pattern.
+    from neograph._wiring import _resolve_condition
+
+    condition_fn = _resolve_condition(operator.when, condition_lookup)
+
+    def approval_check(state: BaseModel, config: RunnableConfig) -> Command:
+        should_pause = condition_fn(state)
+        if should_pause:
+            decision = interrupt(should_pause)
+            approved = isinstance(decision, dict) and bool(decision.get("approved"))
+        else:
+            approved = True
+        proposed_target = getattr(state, proposed_field)
+        if not approved:
+            return Command(goto=exit_name, update={})
+        current = adapt_state(state).get_counter(count_field)
+        return Command(goto=proposed_target, update={count_field: current + 1})
+
+    return approval_check
 
 
 def make_portal_subgraph_fn(
