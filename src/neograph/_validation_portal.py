@@ -15,13 +15,13 @@ consulted — mesh members produce their declared output type unchanged.
 
 from __future__ import annotations
 
-from typing import Literal, cast, get_args, get_origin
+from typing import Any, Literal, cast, get_args, get_origin
 
 from neograph._ir_protocols import ConstructLike
 from neograph._normalize import _declared_output, normalize_outputs
 from neograph._validation_types import _MISSING, _fmt_type, _resolve_field_annotation, _source_location
 from neograph.errors import ConstructError
-from neograph.modifiers import HANDOFF_END, Portal
+from neograph.modifiers import HANDOFF_END, Portal, _group_portal_members
 from neograph.node import Node
 
 
@@ -38,14 +38,18 @@ def _member_portal(node: Node) -> Portal:
 
 
 def _check_portal_mesh(construct: ConstructLike) -> None:
-    """Validate the Portal mesh at ONE construct level (design §5).
+    """Validate every Portal mesh at ONE construct level (design §5, extended
+    by neograph-fefar to >1 NAMED mesh per level).
 
-    A **mesh** is the set of Portal-modified sibling Nodes at this level. This
-    single helper enforces every design-§5 assembly rule, raising a
-    ``ConstructError`` that names the offender (ANTI-BAND-AID: the mesh rules
-    live here in the validation walk, never inlined in decorators/compiler).
-    ``effective_producer_type`` is deliberately NOT consulted — mesh members
-    produce their declared output type unchanged.
+    A **mesh** is one NAMED group (``Portal.name``, ``None`` = the implicit
+    default group) of Portal-modified sibling Nodes at this level. Every
+    design-§5 assembly rule is enforced PER GROUP -- each group is checked
+    completely independently (own contiguity, own uniform payload, own
+    connected-component, own entry-only knobs, own route field) via
+    :func:`_group_portal_members`, the SAME shared grouping helper the IR
+    normalizer and the compiler's mesh collector use -- never a re-derived
+    inline grouping (ANTI-BAND-AID: a construct that validates must lower
+    exactly as validated).
 
     Called once per construct level from ``_validate_node_chain`` (which recurses
     into sub-constructs), so a mesh at any depth is checked.
@@ -56,22 +60,22 @@ def _check_portal_mesh(construct: ConstructLike) -> None:
     # emitted spec, not a routed handoff, so the route-field/payload-uniformity
     # checks below do not apply. Including it here would look for a field literally
     # named "decide" on its payload and reject a valid dispatch node.
-    member_positions = [
-        i
+    member_positions = {
+        id(item): i
         for i, item in enumerate(nodes)
         if getattr(item, "modifier_set", None) is not None
         and item.modifier_set.portal is not None
         and not item.modifier_set.portal.is_dispatch
-    ]
+    }
     if not member_positions:
         return
 
-    members = [nodes[i] for i in member_positions]
-    member_names = {getattr(m, "name", None) for m in members}
+    all_members = [nodes[i] for i in member_positions.values()]
     sibling_names = {getattr(n, "name", None) for n in nodes}
 
     # A sibling producer literally named "handoff" collides with the reserved
-    # mesh-channel input key (design §3.3 / D-RESERVED-KEY).
+    # mesh-channel input key (design §3.3 / D-RESERVED-KEY). Construct-wide,
+    # not per-group.
     for item in nodes:
         if getattr(item, "name", None) == "handoff":
             raise ConstructError.build(
@@ -80,6 +84,29 @@ def _check_portal_mesh(construct: ConstructLike) -> None:
                 construct=construct.name,
                 location=_source_location(),
             )
+
+    groups = _group_portal_members(all_members)
+    for group_name, members in groups.items():
+        _check_one_mesh_group(construct, members, member_positions, nodes, sibling_names, group_name)
+
+
+def _check_one_mesh_group(
+    construct: ConstructLike,
+    members: list[Any],
+    member_positions: dict[int, int],
+    nodes: list[Any],
+    sibling_names: set[str | None],
+    group_name: str | None,
+) -> None:
+    """Every design-§5 assembly rule for ONE named mesh group.
+
+    Extracted from the single-mesh-per-level ``_check_portal_mesh`` so each
+    group gets the identical rule set applied independently -- unchanged
+    logic, just scoped to ``members`` (one group) instead of every Portal
+    member at the level.
+    """
+    member_names = {getattr(m, "name", None) for m in members}
+    group_positions = [member_positions[id(m)] for m in members]
 
     # Member SHAPE checks first: an agent/dict member has no single payload
     # type, so the payload/route checks below would be meaningless.
@@ -136,12 +163,14 @@ def _check_portal_mesh(construct: ConstructLike) -> None:
     # ``cast`` keeps the typed Node surface for the Portal-modifier accessors.
     node_members = cast("list[Node]", members)
 
-    # Contiguity: members occupy consecutive positions; the first is the entry.
-    lo, hi = member_positions[0], member_positions[-1]
-    if hi - lo + 1 != len(member_positions):
-        gap_names = [getattr(nodes[i], "name", "?") for i in range(lo, hi + 1) if i not in member_positions]
+    # Contiguity WITHIN this group: this group's own members occupy consecutive
+    # positions among THEMSELVES (another group's members interleaved would
+    # split this group, same as a plain non-Portal node would).
+    lo, hi = min(group_positions), max(group_positions)
+    if hi - lo + 1 != len(group_positions):
+        gap_names = [getattr(nodes[i], "name", "?") for i in range(lo, hi + 1) if i not in group_positions]
         raise ConstructError.build(
-            "Portal mesh members must be contiguous in the construct",
+            f"Portal mesh members must be contiguous in the construct{f' (mesh {group_name!r})' if group_name else ''}",
             expected="all mesh members adjacent, entry first",
             found=f"non-member nodes split the mesh: {gap_names}",
             construct=construct.name,
@@ -163,7 +192,7 @@ def _check_portal_mesh(construct: ConstructLike) -> None:
                 location=_source_location(),
             )
 
-    # Peers: every peer names a Portal-modified sibling.
+    # Peers: every peer names a Portal-modified sibling IN THIS SAME GROUP.
     for member in node_members:
         for peer in _member_portal(member).to or []:
             if peer not in sibling_names:
@@ -177,16 +206,17 @@ def _check_portal_mesh(construct: ConstructLike) -> None:
                 )
             if peer not in member_names:
                 raise ConstructError.build(
-                    f"Portal member '{member.name}' names peer '{peer}' which is not Portal-modified",
-                    expected="every peer must be a Portal mesh member",
-                    found=f"'{peer}' is a plain (non-Portal) sibling",
+                    f"Portal member '{member.name}' names peer '{peer}' which is not in the same mesh",
+                    expected=f"every peer must be a member of this mesh ({sorted(n for n in member_names if n)})",
+                    found=f"'{peer}' is not a member of this mesh",
                     node=member.name,
                     construct=construct.name,
                     location=_source_location(),
                 )
 
-    # Single mesh per level: members form ONE connected component under the peer
-    # relation (treated undirected). Two disjoint closures = two meshes.
+    # Single mesh per GROUP: members form ONE connected component under the peer
+    # relation (treated undirected). Two disjoint closures within one group = two
+    # meshes sharing a name (still illegal -- D-SINGLE-MESH, now per-group).
     adjacency: dict[str, set[str]] = {m.name: set() for m in node_members}
     for member in node_members:
         for peer in _member_portal(member).to or []:
@@ -203,14 +233,15 @@ def _check_portal_mesh(construct: ConstructLike) -> None:
     if seen != set(adjacency):
         unreached = sorted(set(adjacency) - seen)
         raise ConstructError.build(
-            "two disjoint Portal meshes at one construct level",
-            expected="one connected mesh per level (D-SINGLE-MESH)",
+            "two disjoint Portal meshes at one construct level"
+            + (f" (mesh {group_name!r})" if group_name else ""),
+            expected="one connected mesh per group per level (D-SINGLE-MESH)",
             found=f"members not reachable from entry '{entry.name}': {unreached}",
             construct=construct.name,
             location=_source_location(),
         )
 
-    # max_hops / on_exhaust are entry-only knobs.
+    # max_hops / on_exhaust are entry-only knobs (per group).
     for member in node_members[1:]:
         for knob in ("max_hops", "on_exhaust"):
             if knob in _member_portal(member).model_fields_set:

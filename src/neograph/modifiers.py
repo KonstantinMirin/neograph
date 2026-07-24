@@ -7,7 +7,7 @@ node | Operator(when="has_open_questions")
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from enum import Enum, auto
 from typing import TYPE_CHECKING, Any, Literal, NamedTuple, Protocol, Self, runtime_checkable
 
@@ -632,6 +632,7 @@ class Portal(Modifier, frozen=True):
     route: str = "goto"  # mode (a): routing FIELD on the payload model; mode (b): literal "decide"
     max_hops: int = 10  # mesh budget; settable ONLY on the entry member
     on_exhaust: Literal["error", "exit"] = "error"
+    name: str | None = None  # mesh group name (peer mode only); None = the implicit default group
 
     # -- mode (b): dynamic flow definition (route="decide") --
     spec_field: str | None = None  # output-model field holding the emitted Spec dict
@@ -702,11 +703,11 @@ class Portal(Modifier, frozen=True):
                     expected="spec_field=, input_field=, output=, max_depth=",
                     found=f"missing: {missing}",
                 )
-            forbidden = [k for k in ("max_hops", "on_exhaust") if k in self.model_fields_set]
+            forbidden = [k for k in ("max_hops", "on_exhaust", "name") if k in self.model_fields_set]
             if forbidden:
                 raise ConfigurationError.build(
                     "Portal dispatch mode forbids peer-mode knobs",
-                    expected="no max_hops/on_exhaust in dispatch mode",
+                    expected="no max_hops/on_exhaust/name in dispatch mode",
                     found=f"peer-mode knobs set: {forbidden}",
                 )
             if self.on_invalid == "route_to_error" and self.error_handler is None:
@@ -721,6 +722,34 @@ class Portal(Modifier, frozen=True):
                     expected="on_invalid='route_to_error' when error_handler is set",
                     found=f"on_invalid={self.on_invalid!r} with error_handler set",
                 )
+
+
+def _group_portal_members(items: Sequence[ConstructItem]) -> dict[str | None, list[ConstructItem]]:
+    """Partition a construct level's PEER-mode Portal members into named mesh
+    groups (neograph-fefar, D-SINGLE-MESH's named-mesh extension).
+
+    The SINGLE source of truth for "which mesh does this member belong to" --
+    the validator (``_validation_portal._check_portal_mesh``), the IR
+    normalizer (``_ir_normalize.py``'s ``handoff_channel`` writer), and the
+    compiler's contiguous-mesh collector (``_wiring.py:_contiguous_portal_mesh``)
+    all group members via THIS function, never a re-derived inline grouping --
+    a construct that validates must lower exactly as validated.
+
+    Grouping key is ``Portal.name`` -- ``None`` is the implicit DEFAULT group
+    (unchanged pre-fefar behavior: all unnamed members are one mesh). Order is
+    preserved: each group's member list is in construct order, and groups
+    themselves appear in first-occurrence order (dict insertion order).
+
+    ``items`` must already be filtered to PEER-mode Portal members (dispatch-
+    mode Portals excluded by the caller, mirroring every other Portal-mesh
+    call site's convention).
+    """
+    groups: dict[str | None, list[ConstructItem]] = {}
+    for item in items:
+        portal = item.modifier_set.portal
+        assert portal is not None, "caller must pre-filter to Portal-modified members"
+        groups.setdefault(portal.name, []).append(item)
+    return groups
 
 
 class _SlotRule(NamedTuple):

@@ -427,7 +427,7 @@ Oracle(n: int = 3, models: list[str] | None = None, merge_prompt: str | None = N
 
 {/* test-skip: generated API signature (declaration, not runnable) */}
 ```python
-Portal(to: list[str] | None = None, route: str = 'goto', max_hops: int = 10, on_exhaust: Literal['error', 'exit'] = 'error', spec_field: str | None = None, input_field: str | None = None, output: type[pydantic.main.BaseModel] | str | None = None, scripted: dict[str, collections.abc.Callable] | None = None, conditions: dict[str, collections.abc.Callable] | None = None, on_invalid: Literal['raise', 'route_to_error'] = 'raise', error_handler: str | None = None, max_depth: int | None = None)
+Portal(to: list[str] | None = None, route: str = 'goto', max_hops: int = 10, on_exhaust: Literal['error', 'exit'] = 'error', name: str | None = None, spec_field: str | None = None, input_field: str | None = None, output: type[pydantic.main.BaseModel] | str | None = None, scripted: dict[str, collections.abc.Callable] | None = None, conditions: dict[str, collections.abc.Callable] | None = None, on_invalid: Literal['raise', 'route_to_error'] = 'raise', error_handler: str | None = None, max_depth: int | None = None)
 ```
 
 | Field | Type | Required | Default |
@@ -436,6 +436,7 @@ Portal(to: list[str] | None = None, route: str = 'goto', max_hops: int = 10, on_
 | <span id="portal-route"></span>`route` | `str` | no | `'goto'` |
 | <span id="portal-max_hops"></span>`max_hops` | `int` | no | `10` |
 | <span id="portal-on_exhaust"></span>`on_exhaust` | `Literal['error', 'exit']` | no | `'error'` |
+| <span id="portal-name"></span>`name` | `str | None` | no | `None` |
 | <span id="portal-spec_field"></span>`spec_field` | `str | None` | no | `None` |
 | <span id="portal-input_field"></span>`input_field` | `str | None` | no | `None` |
 | <span id="portal-output"></span>`output` | `type[pydantic.main.BaseModel] | str | None` | no | `None` |

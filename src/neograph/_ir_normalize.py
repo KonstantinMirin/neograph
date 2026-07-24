@@ -39,6 +39,7 @@ from neograph._ir_protocols import ConstructItem
 from neograph._normalize import normalize_inputs, normalize_outputs
 from neograph._sidecar import infer_oracle_gen_type
 from neograph._state_keys import StateKeys
+from neograph.modifiers import _group_portal_members
 from neograph.naming import field_name_for, output_field_name
 from neograph.node import Node
 
@@ -264,13 +265,18 @@ def normalize_ir(construct: Construct) -> None:
         if isinstance(item, Node) and item.modifier_set.portal is not None:
             portal_members.append(item)
 
-    # The mesh channel is keyed off the ENTRY (first member in node order — one
-    # mesh per level, design §3.1). Compute it ONCE here (the only place with the
-    # construct-level view) and stamp it onto each member below, so _extract_input
-    # reads the channel self-contained (decision D10, the fan_out_param precedent).
-    handoff_channel: str | None = None
-    if portal_members:
-        handoff_channel = StateKeys.handoff_payload(field_name_for(portal_members[0].name))
+    # The mesh channel is keyed off each NAMED GROUP's own ENTRY (first member
+    # of that group in node order — neograph-fefar extends design §3.1 from
+    # one mesh per level to one mesh per (level, name) pair). Computed ONCE
+    # here (the only place with the construct-level view) via the SAME shared
+    # grouping helper the validator and compiler mesh collector use
+    # (_group_portal_members) — never a re-derived inline grouping — and
+    # stamped onto each member below, so _extract_input reads the channel
+    # self-contained (decision D10, the fan_out_param precedent).
+    handoff_channels: dict[str | None, str] = {
+        group_name: StateKeys.handoff_payload(field_name_for(members[0].name))
+        for group_name, members in _group_portal_members(portal_members).items()
+    }
     # iter_item_slots descends into _BranchNode arms and yields each arm node's
     # OWN storage slot (meta.true_arm_nodes[j] / false_arm_nodes[j]), so the
     # model_copy write-back lands where the compiler reads it — not in a
@@ -287,8 +293,12 @@ def normalize_ir(construct: Construct) -> None:
         # D10). This module is the SOLE writer of handoff_channel — the same
         # single-writer ownership as handoff_param (review H2 / neograph-k7bg) —
         # because the entry-keyed key is a construct-level fact no assembly path
-        # can compute per-node. Idempotent: skip if already set.
-        if handoff_channel is not None and item.modifier_set.portal is not None and item.handoff_channel is None:
-            updates["handoff_channel"] = handoff_channel
+        # can compute per-node. Idempotent: skip if already set. Keyed by the
+        # member's OWN mesh group so each named mesh gets its
+        # own channel, never one shared across disjoint named meshes.
+        if item.modifier_set.portal is not None and item.handoff_channel is None:
+            group_channel = handoff_channels.get(item.modifier_set.portal.name)
+            if group_channel is not None:
+                updates["handoff_channel"] = group_channel
         if updates:
             container[idx] = item.model_copy(update=updates)

@@ -50,6 +50,7 @@ from neograph.modifiers import (
     Operator,
     Oracle,
     Portal,
+    _group_portal_members,
     classify_modifiers,
     split_each_path,
 )
@@ -709,21 +710,28 @@ def _contiguous_portal_mesh(nodes: list[ConstructItem], entry: Node) -> list[Con
     (design §3.1 r2). Takes the node LIST as a parameter (not ``construct.nodes``),
     so it does not add a second raw ``.nodes`` walk to the compiler.
     """
+    entry_portal = entry.modifier_set.portal
+    entry_group = entry_portal.name if entry_portal is not None else None
     start = next(i for i, n in enumerate(nodes) if n is entry)
-    members: list[ConstructItem] = []
+    candidates: list[ConstructItem] = []
     for item in nodes[start:]:
         if classify_modifiers(item)[0] not in (ModifierCombo.PORTAL, ModifierCombo.PORTAL_OPERATOR):
             break
         # A dispatch-mode Portal (route="decide") is NOT a mesh member — it is a
         # standalone linear node lowered by _add_portal_dispatch (review M2). Stop
         # the run here so a dispatch node contiguous with a peer mesh is never
-        # absorbed into `members` (which would mesh-wire it and skip its dispatch
-        # wiring). The assembly-side collector (_validation_portal) agrees.
+        # absorbed into `candidates` (which would mesh-wire it and skip its
+        # dispatch wiring). The assembly-side collector (_validation_portal) agrees.
         km = item.modifier_set.portal
         if km is not None and km.is_dispatch:
             break
-        members.append(item)
-    return members
+        candidates.append(item)
+    # neograph-fefar: `candidates` may span >1 NAMED mesh if a different-named
+    # mesh sits immediately adjacent (no gap) -- _group_portal_members (the SAME
+    # shared grouping helper the validator/normalizer use, never a re-derived
+    # inline grouping) isolates just the entry's own group. Already validated
+    # contiguous WITHIN itself by _check_portal_mesh, so this lookup is safe.
+    return _group_portal_members(candidates)[entry_group]
 
 
 def _make_portal_subgraph_member_fn(

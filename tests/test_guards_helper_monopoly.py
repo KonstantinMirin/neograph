@@ -767,3 +767,60 @@ class TestResourceFetcherMonopoly:
         spaced = 'hint =  "an async  \'fetch(uri) -> (content, mime)\'  callable"'
         assert spaced.count(_FETCHER_HINT_IDIOM) == 0  # naive scan misses it
         assert _normalized_idiom_count(spaced, _FETCHER_HINT_IDIOM) == 1
+
+
+# neograph-fefar: named-mesh grouping ("which mesh does this Portal member
+# belong to") has ONE home, _group_portal_members in modifiers.py. The
+# validator (_validation_portal.py), the IR normalizer (_ir_normalize.py), and
+# the compiler's contiguous-mesh collector (_wiring.py) all delegate to it —
+# a construct that validates must lower exactly as validated, which breaks if
+# any of the three re-derives the grouping inline.
+_PORTAL_GROUPING_HOME = "modifiers.py"
+_PORTAL_GROUPING_IDIOM = "groups.setdefault(portal.name, []).append(item)"
+_PORTAL_GROUPING_CALLERS = ("_validation_portal.py", "_ir_normalize.py", "_wiring.py", "state.py")
+
+
+class TestPortalMeshGroupingMonopoly:
+    """neograph-fefar: _group_portal_members is the single source for Portal
+    named-mesh grouping. No caller may hand-roll the setdefault-by-portal-name
+    idiom; every consumer must call the shared helper.
+    """
+
+    def test_defined_in_exactly_one_home(self):
+        modules = _modules_defining(SRC_DIR, "_group_portal_members")
+        assert modules == [_PORTAL_GROUPING_HOME], (
+            f"_group_portal_members defined in {modules} (expected exactly [{_PORTAL_GROUPING_HOME}])"
+        )
+
+    def test_grouping_idiom_appears_only_in_its_helper(self):
+        total = sum(
+            _normalized_idiom_count(py.read_text(), _PORTAL_GROUPING_IDIOM) for py in sorted(SRC_DIR.glob("*.py"))
+        )
+        assert total == 1, (
+            f"\nPortal-mesh grouping idiom appears {total}x across src "
+            "(must be exactly 1 — only inside _group_portal_members). "
+            "Call _group_portal_members(items) instead of re-inlining."
+        )
+
+    def test_all_known_callers_delegate(self):
+        violations: list[str] = []
+        for fname in _PORTAL_GROUPING_CALLERS:
+            source = (SRC_DIR / fname).read_text()
+            if _count_calls(source, "_group_portal_members") < 1:
+                violations.append(f"  {fname} does not call _group_portal_members")
+        assert violations == [], "\nPortal-mesh grouping delegation violations:\n" + "\n".join(violations)
+
+    # --- meta-tests ---
+
+    def test_meta_home_scanner_flags_second_definition(self, tmp_path):
+        (tmp_path / "modifiers.py").write_text("def _group_portal_members(items):\n    return {}\n")
+        (tmp_path / "rogue.py").write_text("def _group_portal_members(items):\n    return {}\n")
+        assert _modules_defining(tmp_path, "_group_portal_members") == [
+            "modifiers.py",
+            "rogue.py",
+        ]
+
+    def test_meta_grouping_idiom_resists_whitespace_slip(self):
+        spaced = "groups.setdefault( portal.name , [] ).append( item )"
+        assert spaced.count(_PORTAL_GROUPING_IDIOM) == 0  # naive scan misses it
+        assert _normalized_idiom_count(spaced, _PORTAL_GROUPING_IDIOM) == 1

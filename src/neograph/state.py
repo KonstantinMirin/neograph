@@ -23,7 +23,7 @@ from typing import assert_never
 
 from neograph._normalize import _declared_output, normalize_outputs
 from neograph._state_keys import StateKeys
-from neograph.modifiers import EachFailure, ModifierCombo, classify_modifiers
+from neograph.modifiers import EachFailure, ModifierCombo, _group_portal_members, classify_modifiers
 from neograph.node import Node
 
 
@@ -244,11 +244,14 @@ def compile_state_model(
             loop = n_mods["loop"]
 
     # Portal support: per-mesh hop counter + shared payload channel, keyed off
-    # the mesh ENTRY (the first Portal member in node order — design §3.1
-    # "the first member is the entry"; assembly validation guarantees one
-    # contiguous mesh at this level). Both are neo_-prefixed → excluded from the
+    # EACH NAMED GROUP's own ENTRY (the first member of that group in node
+    # order — neograph-fefar extends design §3.1 from one mesh per level to
+    # one mesh per (level, name) pair; assembly validation guarantees one
+    # contiguous mesh per group). Both are neo_-prefixed → excluded from the
     # schema fingerprint (member OUTPUT fields carry the fingerprint). The
-    # channel/counter are runtime-inert until T2 lowering reads them.
+    # channel/counter are runtime-inert until T2 lowering reads them. Grouped
+    # via the SAME shared helper (_group_portal_members) the validator and IR
+    # normalizer use — never a re-derived inline grouping.
     def _is_dispatch(n: Node) -> bool:
         km = n.modifier_set.portal
         return km is not None and km.is_dispatch
@@ -260,8 +263,8 @@ def compile_state_model(
         for n in nodes_only
         if classify_modifiers(n)[0] in (ModifierCombo.PORTAL, ModifierCombo.PORTAL_OPERATOR) and not _is_dispatch(n)
     ]
-    if portal_members:
-        entry = portal_members[0]
+    for _group_name, group_members in _group_portal_members(portal_members).items():
+        entry = group_members[0]
         entry_field = field_name_for(entry.name)
         # Single-type by assembly validation (dict-form members rejected); typed
         # Any so the `| None` field spec matches the sibling arms' pattern.
