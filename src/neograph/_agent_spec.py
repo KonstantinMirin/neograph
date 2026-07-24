@@ -717,7 +717,14 @@ def to_agent_spec(construct: Construct) -> Flow:
             # never itself a Property title -- resolve the upstream's real
             # output Property titles (mirrors the single-type fallback below
             # and the Oracle/Loop precedent, which all key on prop.title).
+            fan_out_key = getattr(item, "fan_out_param", None)
             for upstream_name in ni.by_name:
+                if upstream_name == fan_out_key:
+                    # The Each fan-out receiver slot is not an upstream NODE
+                    # name -- it's populated per-item by the MapNode's own
+                    # sub-flow wiring (_lower_each), so no DataFlowEdge here
+                    # (mirrors _validation_inputs.py's fan_out_param skip).
+                    continue
                 upstream_item = item_by_name.get(upstream_name)
                 source_node = data_node_by_item_name.get(upstream_name)
                 if upstream_item is None or source_node is None or not isinstance(upstream_item, Node):

@@ -133,3 +133,40 @@ class TestDictFormFanInResolvesRealPropertyTitles:
         assert "source_output=upstream_name" in buggy_branch
         assert "destination_input=upstream_name" in buggy_branch
         assert "_properties_for(" not in buggy_branch
+
+
+class TestDictFormFanInSkipsFanOutReceiver:
+    """Structural guard for neograph-qtfof.1's codebase-scan MIGRATE row.
+
+    Disease pattern: ``to_agent_spec()``'s dict-form fan-in branch must skip
+    the Each fan-out RECEIVER key (``item.fan_out_param``) before treating a
+    dict-form inputs key as an upstream NODE name -- otherwise a legitimate
+    ``map_over=``/programmatic-Each dict-form node raises a false
+    ``ConfigurationError`` ("no exportable Agent Spec node") for its own
+    fan-out item slot, which is populated per-item by the MapNode's own
+    sub-flow wiring, not by a peer node.
+    """
+
+    def test_dict_form_branch_checks_fan_out_param_before_lookup(self):
+        branch = _dict_form_fan_in_branch(_to_agent_spec_source())
+        assert "fan_out_param" in branch, (
+            "dict-form fan-in must read item.fan_out_param and skip that key "
+            "before doing the upstream-node lookup -- mirrors "
+            "_validation_inputs.py's fan_out_param skip"
+        )
+
+    def test_meta_guard_catches_the_disease_pattern_if_reintroduced(self):
+        """Meta-test (positive+negative pair, not regex-based -- plain
+        substring checks have no regex-slip failure mode): prove the
+        assertion above actually flags a pre-fix branch with no
+        fan_out_param skip at all, so this guard isn't vacuously passing
+        only because the current source happens to be fixed."""
+        buggy_branch = (
+            "if ni.is_dict_form:\n"
+            "    for upstream_name in ni.by_name:\n"
+            "        upstream_item = item_by_name.get(upstream_name)\n"
+            "        source_node = data_node_by_item_name.get(upstream_name)\n"
+            "        if upstream_item is None or source_node is None:\n"
+            "            raise ConfigurationError.build(...)\n"
+        )
+        assert "fan_out_param" not in buggy_branch

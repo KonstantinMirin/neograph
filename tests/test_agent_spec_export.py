@@ -42,7 +42,7 @@ pytest.importorskip("pyagentspec")
 
 from neograph import Construct  # noqa: E402
 
-from .schemas import Claims, RawText, _consumer, _producer  # noqa: E402
+from .schemas import ClusterGroup, Clusters, Claims, MatchResult, RawText, _consumer, _producer  # noqa: E402
 
 
 class TestMetadataMarkerRoundTripSurvivesRealPyagentspec:
@@ -540,6 +540,59 @@ class TestToAgentSpecLowersModifiers:
         assert len(map_nodes) == 1
         assert map_nodes[0].metadata["neograph/modifier"] == "each"
         assert map_nodes[0].metadata["neograph/each_spec"]["over"] == "items"
+
+    def test_map_over_dict_form_fan_out_receiver_exports_without_error(self):
+        """neograph-qtfof.1: @node's map_over= sugar (dict-form inputs where
+        one key is the Each fan-out RECEIVER, not an upstream node) must
+        export cleanly -- the fan-out receiver key is not itself an upstream
+        NODE name, so to_agent_spec's dict-form fan-in loop must skip it
+        (mirroring _validation_inputs.py's fan_out_param skip) instead of
+        raising ConfigurationError."""
+        from pyagentspec.flows.nodes import MapNode
+
+        from neograph import node
+        from neograph._agent_spec import to_agent_spec
+        from neograph.decorators import construct_from_functions
+
+        @node(outputs=Clusters)
+        def clusters() -> Clusters:
+            return Clusters(groups=[ClusterGroup(label="a", claim_ids=["1"])])
+
+        @node(outputs=MatchResult, map_over="clusters.groups", map_key="label")
+        def verify(cluster: ClusterGroup) -> MatchResult:
+            return MatchResult(cluster_label=cluster.label, matched=[])
+
+        pipeline = construct_from_functions("fanout-only-export", [clusters, verify])
+
+        flow = to_agent_spec(pipeline)
+
+        map_nodes = [n for n in flow.nodes if isinstance(n, MapNode)]
+        assert len(map_nodes) == 1
+
+    def test_programmatic_each_with_dict_form_fan_out_receiver_exports_without_error(self):
+        """Three-surface parity for qtfof.1: the programmatic
+        ``Node(inputs={...}) | Each(...)`` equivalent must export the same
+        as the @node ``map_over=`` sugar -- the normalizer sets
+        ``fan_out_param`` for both surfaces, so the same skip applies."""
+        from pyagentspec.flows.nodes import MapNode
+
+        from neograph._agent_spec import to_agent_spec
+        from neograph.modifiers import Each
+        from neograph.node import Node
+
+        make = _producer("make", Clusters)
+        canonicalize = Node.scripted(
+            "canonicalize",
+            fn="f",
+            inputs={"group": ClusterGroup},
+            outputs=MatchResult,
+        ) | Each(over="make.groups", key="label")
+        pipeline = Construct("fanout-only-export-programmatic", nodes=[make, canonicalize])
+
+        flow = to_agent_spec(pipeline)
+
+        map_nodes = [n for n in flow.nodes if isinstance(n, MapNode)]
+        assert len(map_nodes) == 1
 
     def test_loop_lowers_to_branching_node_with_back_edge_and_loop_marker(self):
         from pyagentspec.flows.edges import ControlFlowEdge
