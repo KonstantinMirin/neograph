@@ -1,0 +1,51 @@
+---
+title: "Agent Spec Interop"
+description: "Export a neograph pipeline to the Oracle Open Agent Spec format, and import a foreign Agent Spec back in."
+---
+
+neograph pipelines can export to and import from [Oracle's Open Agent Spec](https://github.com/oracle/agent-spec) — a flat, primitive-level interchange format — via `to_agent_spec()` and `from_agent_spec()`. This is an INTEROP layer added *beside* neograph's own high-level Spec (`_spec_schema.py`), not a replacement for it: the neograph Spec is modifier-aware (one-line `Oracle`/`Each`/`Loop` slots), while Agent Spec is flat primitives with no modifier concept.
+
+## Why this exists
+
+Agent Spec is a machine format other tools can read. Exporting to it means a neograph pipeline can hand off to (or interop with) any Agent-Spec-aware runtime, without neograph becoming the only place that can execute it. Importing from it means a foreign, hand-authored Agent Spec Flow can be run through neograph's compiler.
+
+```python
+from neograph import Construct, to_agent_spec
+from neograph.loader import from_agent_spec
+
+flow = to_agent_spec(my_pipeline)          # neograph Construct -> pyagentspec Flow
+reconstructed = from_agent_spec(flow)       # pyagentspec Flow -> neograph Construct
+```
+
+## The fidelity table: modifiers lower to primitives
+
+Agent Spec has no concept of neograph's modifiers. Exporting *flattens* them to the primitives that already exist in the format — the same lowering neograph does when compiling to LangGraph, just expressed in Agent Spec's vocabulary:
+
+| neograph | Agent Spec lowering |
+|---|---|
+| `Each` | a `MapNode` wrapping an extracted sub-`Flow` |
+| `Oracle` | **no native node at all** — N parallel `LlmNode`s (fan-out) + one merge node + explicit fan-out/fan-in edges |
+| `Loop` | a `BranchingNode` + a cyclic `ControlFlowEdge` back-edge + self-referencing `DataFlowEdge`s |
+| `Operator` | a `BranchingNode` pause/continue split + an `InputMessageNode` |
+
+Oracle is the flagship gap to point at: there is no first-class "ensemble" concept in Agent Spec, so a single `Oracle(n=3, merge_fn=...)` line expands into a genuinely larger flat graph — a concrete demonstration of what the modifier layer buys you.
+
+## See it side-by-side
+
+[`examples/31_agent_spec_each_oracle_loop.py`](https://github.com/KonstantinMirin/neograph/blob/main/examples/31_agent_spec_each_oracle_loop.py) builds three small, independent pipelines — one per modifier (`Each`, `Oracle`, `Loop`) — and for each one prints the *real* Agent Spec `Flow` that `to_agent_spec()` emits, along with its actual line count (computed from the live JSON dump, never a hand-typed number). Run it with:
+
+```bash
+uv run --extra agent-spec python examples/31_agent_spec_each_oracle_loop.py
+```
+
+Each panel then round-trips through `to_agent_spec` → `from_agent_spec` → `compile` → `run` and produces the same result as the original, non-round-tripped pipeline — proving the export isn't just structurally plausible, it's behaviorally faithful.
+
+## Known gap: scripted-mode Oracle
+
+Oracle currently round-trips correctly only when the generator node uses `mode="think"`. A `mode="scripted"` Oracle node reconstructs as a `think`-mode node on import regardless of its original mode — tracked as a follow-up, not yet fixed. The example above uses `mode="think"` with a keyless fake LLM, matching the currently-correct path.
+
+## Round-trip markers
+
+Export stamps `neograph/`-prefixed metadata markers (e.g. `neograph/oracle_spec`, `neograph/each_spec`, `neograph/loop_spec`) on the lowered primitives, so a neograph-produced Agent Spec re-imports losslessly — recovering the original modifier, not just its flattened primitives. A foreign Agent Spec with no such markers still imports correctly; it just falls back to primitive-level reconstruction (no modifier recovery), since the markers are purely additive.
+
+This is also how [Portal](/concepts/portal/)'s mode (b) dynamic dispatch works under the hood — a dispatching node emits a neograph-flavored Agent Spec at runtime and validates it before executing.

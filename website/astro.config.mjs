@@ -83,6 +83,7 @@ export default defineConfig({
 					items: [
 						{ label: 'Programmatic API', slug: 'runtime/programmatic' },
 						{ label: 'LLM-Driven Pipelines', slug: 'runtime/llm-driven' },
+						{ label: 'Agent Spec Interop', slug: 'runtime/agent-spec' },
 					],
 				},
 				{
