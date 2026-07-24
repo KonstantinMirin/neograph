@@ -591,3 +591,133 @@ class TestRemoteAgentBestEffortImport:
             for msg in messages
         ), f"expected a best-effort RemoteAgent warning, got {messages!r}"
 
+
+# ── neograph-pt85t: import-side endpoint + class-discriminator sidecar ──
+
+
+class TestRemoteAgentEndpointSidecarCapture:
+    """pt85t (import-side only, per the refined post-review plan): the
+    best-effort ``_reconstruct_agent_node`` branch must not just downgrade a
+    client-initiated RemoteAgent/A2AAgent/OciAgent to a bare name-bound
+    scripted Node -- it must ALSO stash the endpoint config AND the concrete
+    agent CLASS name on a ``Node`` PrivateAttr sidecar (``_remote_agent_endpoint``,
+    the fourth sidecar alongside ``_sidecar``/``_param_res``/``_scripted_shim``
+    at node.py:264-266), so a future export-side lowering (neograph-qtfof) can
+    pick the correct subclass to reconstruct.
+
+    Per-family attribute names verified against the installed pyagentspec SDK
+    (NOT assumed -- the reviewer's MEDIUM 1 finding):
+      * A2AAgent   -> agent_url: str, connection_config: A2AConnectionConfig
+      * OciAgent   -> agent_endpoint_id: str, client_config: OciClientConfig
+      * RemoteAgent (the abstract base) has NO instantiable concrete form of
+        its own in the installed SDK (``abstract=True`` in
+        pyagentspec/remoteagent.py; direct instantiation raises TypeError) --
+        every real object dispatched through this branch is necessarily an
+        A2AAgent or OciAgent (or a future sibling), so there is no third,
+        independently-attributed "RemoteAgent" family to construct a fixture
+        for. The two concrete families below are the exhaustive set the
+        installed SDK can actually produce.
+
+    Sidecar contract asserted here: ``node._remote_agent_endpoint`` is a
+    ``(agent_class_name, {attr_name: value, ...})`` pair, keyed by the
+    PER-FAMILY attribute names above (not a blind two-field getattr that
+    would silently capture None for a mismatched family).
+
+    FAILS NOW: ``_reconstruct_agent_node``'s best-effort branch only builds a
+    bare ``Node(mode="scripted", ...)`` and never sets any such PrivateAttr,
+    so ``_remote_agent_endpoint`` is None (the PrivateAttr's declared default)
+    on the reconstructed Node.
+    """
+
+    def _flow_with_a2a_agent(self):
+        from pyagentspec.a2aagent import A2AAgent, A2AConnectionConfig
+        from pyagentspec.flows.flow import Flow
+
+        agent = Node(name="remote_helper", mode="agent", model="fast", prompt="help", outputs=Result)
+        flow = to_agent_spec(Construct("remote-pipeline", nodes=[agent]))
+        agent_node = next(n for n in flow.nodes if type(n).__name__ == "AgentNode")
+        remote = A2AAgent(
+            name="remote_helper",
+            agent_url="http://svc.example/agent",
+            connection_config=A2AConnectionConfig(name="conn"),
+            outputs=agent_node.outputs,
+        )
+        new_nodes = [
+            n.model_copy(update={"agent": remote, "metadata": {}})
+            if type(n).__name__ == "AgentNode"
+            else n
+            for n in flow.nodes
+        ]
+        return Flow.from_dict(flow.model_copy(update={"nodes": new_nodes}).to_dict())
+
+    def _flow_with_oci_agent(self):
+        from pyagentspec.flows.flow import Flow
+        from pyagentspec.llms.ociclientconfig import OciClientConfigWithInstancePrincipal
+        from pyagentspec.ociagent import OciAgent
+
+        agent = Node(name="remote_helper", mode="agent", model="fast", prompt="help", outputs=Result)
+        flow = to_agent_spec(Construct("remote-pipeline", nodes=[agent]))
+        agent_node = next(n for n in flow.nodes if type(n).__name__ == "AgentNode")
+        remote = OciAgent(
+            name="remote_helper",
+            agent_endpoint_id="ocid1.aiagentendpoint.oc1..example",
+            client_config=OciClientConfigWithInstancePrincipal(
+                name="oci-client-config",
+                service_endpoint="https://agent.oci.example",
+            ),
+            outputs=agent_node.outputs,
+        )
+        new_nodes = [
+            n.model_copy(update={"agent": remote, "metadata": {}})
+            if type(n).__name__ == "AgentNode"
+            else n
+            for n in flow.nodes
+        ]
+        return Flow.from_dict(flow.model_copy(update={"nodes": new_nodes}).to_dict())
+
+    def test_a2a_agent_endpoint_and_class_survive_on_sidecar(self):
+        flow = self._flow_with_a2a_agent()
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            imported = from_agent_spec(flow)
+
+        member = next(n for n in imported.nodes if getattr(n, "name", None) == "remote_helper")
+        assert isinstance(member, Node)
+
+        sidecar = member._remote_agent_endpoint
+        assert sidecar is not None, (
+            "expected _reconstruct_agent_node to stash the A2AAgent endpoint "
+            "on the _remote_agent_endpoint PrivateAttr sidecar"
+        )
+        agent_class_name, endpoint_fields = sidecar
+        assert agent_class_name == "A2AAgent"
+        assert endpoint_fields["agent_url"] == "http://svc.example/agent"
+        assert endpoint_fields["connection_config"].name == "conn"
+
+    def test_oci_agent_endpoint_and_class_survive_on_sidecar(self):
+        flow = self._flow_with_oci_agent()
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            imported = from_agent_spec(flow)
+
+        member = next(n for n in imported.nodes if getattr(n, "name", None) == "remote_helper")
+        assert isinstance(member, Node)
+
+        sidecar = member._remote_agent_endpoint
+        assert sidecar is not None, (
+            "expected _reconstruct_agent_node to stash the OciAgent endpoint "
+            "on the _remote_agent_endpoint PrivateAttr sidecar"
+        )
+        agent_class_name, endpoint_fields = sidecar
+        assert agent_class_name == "OciAgent"
+        # OciAgent uses DIFFERENT attribute names than A2AAgent
+        # (agent_endpoint_id/client_config, not agent_url/connection_config)
+        # -- a blind two-field getattr keyed on the A2A names would silently
+        # capture None here instead of failing loud.
+        assert endpoint_fields["agent_endpoint_id"] == "ocid1.aiagentendpoint.oc1..example"
+        assert endpoint_fields["client_config"].service_endpoint == "https://agent.oci.example"
+        assert "agent_url" not in endpoint_fields
+        assert "connection_config" not in endpoint_fields
+

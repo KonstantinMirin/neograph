@@ -261,9 +261,14 @@ class Node(Modifiable, BaseModel):
     # _param_res: DI bindings from _classify_di_params.
     # _scripted_shim: the closure built at construct-build time. compile()
     #   reads it and inserts the entry into the per-compile scripted dict.
+    # _remote_agent_endpoint: (agent_class_name, {attr_name: value}) stashed by
+    #   loader.py's best-effort AgentNode reconstruction so a
+    #   future export-side lowering can pick the correct RemoteAgent subclass
+    #   and endpoint config to reconstruct. None for every other Node.
     _sidecar: tuple[Callable, tuple[str, ...]] | None = PrivateAttr(default=None)
     _param_res: dict | None = PrivateAttr(default=None)
     _scripted_shim: Callable | None = PrivateAttr(default=None)
+    _remote_agent_endpoint: tuple[str, dict[str, Any]] | None = PrivateAttr(default=None)
 
     # arbitrary_types_allowed: required for the runtime_checkable Protocol
     # fields ``raw_fn``, ``renderer``, ``skip_when``, ``skip_value`` (none of

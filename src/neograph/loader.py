@@ -188,6 +188,17 @@ def _node_from_spec_agent(
     )
 
 
+# Per-family endpoint attribute names for the client-initiated remote-agent
+# best-effort branch -- verified against the installed
+# pyagentspec SDK, NOT a blind two-field getattr shared across families.
+# RemoteAgent itself is abstract (no endpoint fields of its own) and has no
+# instantiable concrete form beyond the two families below.
+_REMOTE_AGENT_ENDPOINT_ATTRS: dict[str, tuple[str, ...]] = {
+    "A2AAgent": ("agent_url", "connection_config"),
+    "OciAgent": ("agent_endpoint_id", "client_config"),
+}
+
+
 def _reconstruct_agent_node(spec_node: Any, inputs: Any, outputs: Any) -> Node:
     """Reconstruct a neograph Node from an ``AgentNode`` (gaps 1 & 3).
 
@@ -218,13 +229,16 @@ def _reconstruct_agent_node(spec_node: Any, inputs: Any, outputs: Any) -> Node:
             "time. This is a downgrade of the remote-agent semantics, not a lossless import.",
             stacklevel=2,
         )
-        return Node(
+        node = Node(
             name=spec_node.name,
             mode="scripted",
             inputs=inputs,
             outputs=outputs,
             scripted_fn=spec_node.name,
         )
+        attr_names = _REMOTE_AGENT_ENDPOINT_ATTRS.get(agent_type, ())
+        node._remote_agent_endpoint = (agent_type, {name: getattr(agent, name) for name in attr_names})
+        return node
 
     raise ConfigurationError.build(
         f"Flow node {spec_node.name!r} is an AgentNode wrapping a {agent_type!r} with no "
