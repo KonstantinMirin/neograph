@@ -47,7 +47,9 @@ from neograph import (
     compile,
     run,
 )
-from neograph.errors import ConfigurationError, ExecutionError
+from neograph._state_keys import StateKeys
+from neograph.errors import ConfigurationError, ConstructError, ExecutionError
+from neograph.naming import field_name_for
 from neograph.runner import arun
 from neograph.spec_types import register_type
 from tests.fakes import build_test_compile_kwargs, register_scripted
@@ -467,6 +469,158 @@ def _agent_spec_flavored_happy_spec() -> dict:
     )
     flow = to_agent_spec(source)
     return flow.to_dict()
+
+
+class TestOnInvalidRouteToError:
+    """4pr04 -- Portal.on_invalid='route_to_error' for emitted-spec dispatch.
+
+    Core Invariant (design refine, neograph-4pr04): when an emitted spec fails
+    the SAME ``Construct(...)``/``from_agent_spec`` validation gate that
+    ``TestDispatchRejectionPath`` exercises for ``on_invalid='raise'``, a
+    dispatcher configured with ``on_invalid='route_to_error'`` routes to a
+    named sibling ``Portal.error_handler`` node (``Command(goto=...)``)
+    instead of raising. Pins:
+
+      - the dispatch node's success field (``{node}_dispatch``) is ABSENT on
+        the error path (it does NOT coexist with the error payload);
+      - the error payload lands on ``StateKeys.dispatch_error(field_name)``
+        (a new StateKeys helper mirroring ``handoff_payload``/``handoff_hops``)
+        and carries the spec name + the underlying gate error message,
+        mirroring ``ExecutionError.build(construct=, found=)``'s shape;
+      - the dispatched sub-flow body NEVER runs (rejected before execution,
+        same as the ``on_invalid='raise'`` path);
+      - ``Portal.error_handler`` must name an existing sibling ``Node`` --
+        assembly-time ``ConstructError`` otherwise (mirrors the mesh
+        peer-existence check in ``_validation_portal.py``);
+      - scope: ``route_to_error`` covers ONLY the emitted-spec
+        validation-gate failure. The output-contract-mismatch raise site
+        (``TestDispatchOutputContractMismatch``) still raises even when
+        ``on_invalid='route_to_error'`` is set -- it is a DIFFERENT failure
+        point in ``make_portal_dispatch_fn``, out of this bead's scope.
+
+    TDD RED (2026-07-24): ``Portal.on_invalid`` is still
+    ``Literal["raise"]`` and there is no ``Portal.error_handler`` field, so
+    constructing ``Portal(on_invalid="route_to_error", error_handler=...)``
+    below raises a pydantic ``ValidationError`` before any dispatch/wiring/
+    validation logic exists. This test pins the CORRECT future behavior and
+    will go GREEN once 4pr04 lands (widened ``on_invalid`` Literal +
+    ``error_handler`` field + the mirrored-mesh Command wiring +
+    ``StateKeys.dispatch_error`` + the dispatch-only sibling-existence
+    validation helper).
+    """
+
+    def _route_to_error_construct(self) -> Construct:
+        _dispatch_scripted(
+            "planner_route_to_error", DispatchDecision(spec=_invalid_spec(), dispatch_input={})
+        )
+
+        def _handle_error_body(input_data, config):
+            return Final(echo="error-handled")
+
+        register_scripted("handle_error_body", _handle_error_body)
+
+        km = Portal(
+            route="decide",
+            spec_field="spec",
+            input_field="dispatch_input",
+            output=Summary,
+            max_depth=5,
+            on_invalid="route_to_error",
+            error_handler="handler",
+        )
+        planner = Node.scripted("planner", fn="planner_route_to_error", outputs=DispatchDecision) | km
+        handler = Node.scripted("handler", fn="handle_error_body", outputs=Final)
+        return Construct("dispatch-route-to-error", nodes=[planner, handler])
+
+    def test_route_to_error_dispatches_to_sibling_handler_sync(self):
+        DISPATCHED_BODY_RAN.clear()
+        c = self._route_to_error_construct()
+        graph = compile(c, **build_test_compile_kwargs())
+
+        result = run(graph, input={})  # must NOT raise -- routed, not rejected
+
+        # Routed to the error handler instead of raising ExecutionError.
+        assert isinstance(result["handler"], Final)
+        assert result["handler"].echo == "error-handled"
+        # The success field does not coexist with the error path.
+        assert result.get("planner_dispatch") is None
+        # Rejected BEFORE any dispatched sub-node body executed.
+        assert DISPATCHED_BODY_RAN == []
+        # Error payload names the invalid spec and wraps the gate error.
+        error_field = StateKeys.dispatch_error(field_name_for("planner"))
+        payload = str(result[error_field])
+        assert "invalid-flow" in payload
+        assert "AgentNode" in payload
+
+    async def test_route_to_error_dispatches_to_sibling_handler_async(self):
+        DISPATCHED_BODY_RAN.clear()
+        c = self._route_to_error_construct()
+        graph = compile(c, **build_test_compile_kwargs())
+
+        result = await arun(graph, input={})  # must NOT raise -- routed, not rejected
+
+        assert isinstance(result["handler"], Final)
+        assert result["handler"].echo == "error-handled"
+        assert result.get("planner_dispatch") is None
+        assert DISPATCHED_BODY_RAN == []
+        error_field = StateKeys.dispatch_error(field_name_for("planner"))
+        payload = str(result[error_field])
+        assert "invalid-flow" in payload
+        assert "AgentNode" in payload
+
+    def test_error_handler_must_name_existing_sibling(self):
+        """Assembly-time ConstructError when error_handler names no sibling
+        (mirrors the mesh peer-existence check, ``_validation_portal.py``).
+        """
+        _dispatch_scripted(
+            "planner_bad_handler", DispatchDecision(spec=_invalid_spec(), dispatch_input={})
+        )
+        km = Portal(
+            route="decide",
+            spec_field="spec",
+            input_field="dispatch_input",
+            output=Summary,
+            max_depth=5,
+            on_invalid="route_to_error",
+            error_handler="does_not_exist",
+        )
+        planner = Node.scripted("planner", fn="planner_bad_handler", outputs=DispatchDecision) | km
+
+        with pytest.raises(ConstructError):
+            Construct("dispatch-bad-handler", nodes=[planner])
+
+    def test_output_contract_mismatch_still_raises_under_route_to_error(self):
+        """Scope: ``route_to_error`` covers ONLY the emitted-spec
+        validation-gate failure -- the output-contract-mismatch raise site
+        (a DIFFERENT failure point in ``make_portal_dispatch_fn``) still
+        raises ``ExecutionError`` even when ``on_invalid='route_to_error'``
+        is configured."""
+        _dispatch_scripted(
+            "planner_mismatch_rte", DispatchDecision(spec=_mismatch_spec(), dispatch_input={})
+        )
+
+        def _noop_handler(input_data, config):
+            return Final(echo="should-not-run")
+
+        register_scripted("noop_handler_rte", _noop_handler)
+
+        km = Portal(
+            route="decide",
+            spec_field="spec",
+            input_field="dispatch_input",
+            output=Summary,  # != the flow's Other -> output-contract mismatch
+            max_depth=5,
+            on_invalid="route_to_error",
+            error_handler="handler",
+            scripted={"_make_other": _make_other},
+        )
+        planner = Node.scripted("planner", fn="planner_mismatch_rte", outputs=DispatchDecision) | km
+        handler = Node.scripted("handler", fn="noop_handler_rte", outputs=Final)
+        c = Construct("dispatch-mismatch-rte", nodes=[planner, handler])
+        graph = compile(c, **build_test_compile_kwargs())
+
+        with pytest.raises(ExecutionError):
+            run(graph, input={})
 
 
 class TestDispatchAcceptsAgentSpecFlavoredSpec:

@@ -17,6 +17,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from neograph.naming import output_field_name
+
 
 class StateKeys:
     """Named `neo_*` state-bus keys.
@@ -156,6 +158,22 @@ class StateKeys:
         regardless of which member routed to it.
         """
         return f"neo_handoff_{field_name}"
+
+    @staticmethod
+    def dispatch_error(field_name: str) -> str:
+        """Portal dispatch on_invalid='route_to_error' payload field name. Keyed off the dispatch node's own producer field,
+        via the SAME per-output-key naming convention as the sibling
+        ``{field_name}_dispatch`` success field (``output_field_name``) --
+        NOT ``neo_``-prefixed: unlike the mesh's internal handoff_payload/
+        handoff_hops channels, this field is user-visible (the named
+        error_handler sibling AND the top-level caller both read it off the
+        run() result), so it must survive the engine's neo_* stripping.
+        Carries the invalid spec's name + the underlying gate error message
+        (mirrors ExecutionError.build(construct=, found=)'s shape). Does NOT
+        coexist with the success field ({field_name}_dispatch) on the same
+        invocation.
+        """
+        return output_field_name(field_name, "dispatch_error")
 
 
     @staticmethod

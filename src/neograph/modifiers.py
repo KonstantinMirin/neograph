@@ -637,7 +637,8 @@ class Portal(Modifier, frozen=True):
     output: type[BaseModel] | str | None = None  # REQUIRED in mode (b): dispatched-flow output type
     scripted: dict[str, Callable] | None = None  # building-block registry for the emitted flow
     conditions: dict[str, Callable] | None = None  # condition registry for the emitted flow
-    on_invalid: Literal["raise"] = "raise"  # v1: raise only (kwarg reserved)
+    on_invalid: Literal["raise", "route_to_error"] = "raise"  # emitted-spec validation-gate failure handling
+    error_handler: str | None = None  # sibling Node to route to when on_invalid='route_to_error'
     max_depth: int | None = None  # REQUIRED in dispatch mode (self-extending-flow budget); forbidden in peer mode
 
     @property
@@ -682,6 +683,12 @@ class Portal(Modifier, frozen=True):
                     expected="no max_depth in peer mode",
                     found="max_depth set",
                 )
+            if "error_handler" in self.model_fields_set:
+                raise ConfigurationError.build(
+                    "Portal peer mode forbids error_handler — it is a dispatch-mode-only knob",
+                    expected="no error_handler in peer mode",
+                    found="error_handler set",
+                )
         else:  # dispatch mode (route == "decide")
             missing = [f for f in ("spec_field", "input_field", "output") if getattr(self, f) is None]
             if self.max_depth is None:
@@ -699,6 +706,18 @@ class Portal(Modifier, frozen=True):
                     "Portal dispatch mode forbids peer-mode knobs",
                     expected="no max_hops/on_exhaust in dispatch mode",
                     found=f"peer-mode knobs set: {forbidden}",
+                )
+            if self.on_invalid == "route_to_error" and self.error_handler is None:
+                raise ConfigurationError.build(
+                    "Portal on_invalid='route_to_error' requires error_handler=",
+                    expected="error_handler=<sibling Node name>",
+                    found="error_handler not set",
+                )
+            if self.on_invalid == "raise" and self.error_handler is not None:
+                raise ConfigurationError.build(
+                    "Portal error_handler is only meaningful with on_invalid='route_to_error'",
+                    expected="on_invalid='route_to_error' when error_handler is set",
+                    found=f"on_invalid={self.on_invalid!r} with error_handler set",
                 )
 
 

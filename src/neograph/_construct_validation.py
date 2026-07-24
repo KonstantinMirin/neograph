@@ -42,7 +42,7 @@ from neograph._validation_modifiers import (
     validate_loop_construct,
     validate_loop_self_edge,
 )
-from neograph._validation_portal import _check_portal_mesh
+from neograph._validation_portal import _check_portal_dispatch_error_handler, _check_portal_mesh
 from neograph._validation_types import (
     _MISSING,
     NodeItem,
@@ -346,6 +346,7 @@ def _validate_node_chain(
     # once per level; the recursion above re-invokes _validate_node_chain for each
     # sub-construct, so a nested mesh is checked at its own level.
     _check_portal_mesh(construct)
+    _check_portal_dispatch_error_handler(construct)
 
     # Sub-construct output boundary contract: if construct.output is declared,
     # at least one internal node must produce a compatible type.

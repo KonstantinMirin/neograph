@@ -467,6 +467,7 @@ def make_portal_dispatch_fn(
     runtime: LlmRuntime = EMPTY_RUNTIME,
     scripted_lookup: dict[str, Callable] | None = None,
     tool_factory_lookup: dict[str, Callable] | None = None,
+    exit_name: str | None = None,
 ) -> Runnable:
     """Build a Portal DISPATCH-mode wrapper (``route="decide"``, design §3.5/§4.2).
 
@@ -531,12 +532,20 @@ def make_portal_dispatch_fn(
         assert out is not None  # dispatch-mode invariant (T1 validation)
         return out
 
-    def _prepare(update: dict[str, Any]) -> tuple[Any, type[BaseModel], str, Any]:
+    def _prepare(update: dict[str, Any]) -> tuple[Any, type[BaseModel], str, Any, str | None]:
         """Shared pre-invoke: read the emitted spec/input, run the SAME gate, compile.
 
-        Returns ``(compiled, expected_output, spec_name, dispatch_input)``. Contains
-        NO invoke — the sync/async twins supply that so the gate + compile logic
-        cannot drift between them.
+        Returns ``(compiled, expected_output, spec_name, dispatch_input,
+        gate_error_message)``. ``gate_error_message`` is non-None ONLY when
+        ``portal.on_invalid == 'route_to_error'`` and the spec-validation gate
+        (deserialize + ``from_agent_spec``) failed -- in that case ``compiled``/
+        ``dispatch_input`` are meaningless and the caller must route to
+        ``portal.error_handler`` instead of invoking. Scope: route_to_error
+        covers ONLY this gate failure, never the output-contract-mismatch
+        check below it, which always raises regardless of ``on_invalid``.
+
+        Contains NO invoke — the sync/async twins supply that so the gate +
+        compile logic cannot drift between them.
         """
         # `compile` is the ONE cycle-avoidance function-local import here:
         # compiler.py imports _wiring -> factory, so a module-level `from
@@ -574,7 +583,11 @@ def make_portal_dispatch_fn(
             sub = from_agent_spec(flow)
         except (ConstructError, ConfigurationError, ValidationError) as gate_error:
             # The emitted spec failed the SAME Construct(...) gate as a hand-written
-            # pipeline — surface it wrapped, naming the spec, BEFORE anything runs.
+            # pipeline. on_invalid='route_to_error': signal the caller to route to
+            # error_handler instead of raising. on_invalid='raise' (default):
+            # surface it wrapped, naming the spec, BEFORE anything runs.
+            if portal.on_invalid == "route_to_error":
+                return None, expected, spec_name, None, f"{spec_name}: {gate_error}"
             raise ExecutionError.build(
                 "dispatched flow spec is invalid",
                 construct=spec_name,
@@ -593,7 +606,7 @@ def make_portal_dispatch_fn(
             )
 
         compiled = compile_construct(sub, scripted=portal.scripted, conditions=portal.conditions)
-        return compiled, expected, spec_name, dispatch_input
+        return compiled, expected, spec_name, dispatch_input, None
 
     def _finish(
         update: dict[str, Any], result: dict[str, Any], expected: type[BaseModel], spec_name: str
@@ -637,19 +650,35 @@ def make_portal_dispatch_fn(
         new_config["configurable"] = {**configurable, StateKeys.PORTAL_DISPATCH_DEPTH: depth + 1}
         return new_config
 
-    def dispatch_wrapper(state: BaseModel, config: RunnableConfig) -> dict[str, Any]:
+    error_field = StateKeys.dispatch_error(field_name) if portal.on_invalid == "route_to_error" else None
+
+    def dispatch_wrapper(state: BaseModel, config: RunnableConfig) -> dict[str, Any] | Command:
         child_config = _check_and_increment_depth(config)
         update = inner.invoke(state, config)
-        compiled, expected, spec_name, dispatch_input = _prepare(update)
+        compiled, expected, spec_name, dispatch_input, gate_error_msg = _prepare(update)
+        if gate_error_msg is not None:
+            assert error_field is not None and exit_name is not None  # route_to_error invariant
+            return Command(goto=portal.error_handler, update={**update, error_field: gate_error_msg})
         result = compiled.invoke(dispatch_input, config=child_config)
-        return _finish(update, result, expected, spec_name)
+        final_update = _finish(update, result, expected, spec_name)
+        if portal.on_invalid == "route_to_error":
+            assert exit_name is not None
+            return Command(goto=exit_name, update=final_update)
+        return final_update
 
-    async def adispatch_wrapper(state: BaseModel, config: RunnableConfig) -> dict[str, Any]:
+    async def adispatch_wrapper(state: BaseModel, config: RunnableConfig) -> dict[str, Any] | Command:
         child_config = _check_and_increment_depth(config)
         update = await inner.ainvoke(state, config)
-        compiled, expected, spec_name, dispatch_input = _prepare(update)
+        compiled, expected, spec_name, dispatch_input, gate_error_msg = _prepare(update)
+        if gate_error_msg is not None:
+            assert error_field is not None and exit_name is not None  # route_to_error invariant
+            return Command(goto=portal.error_handler, update={**update, error_field: gate_error_msg})
         result = await compiled.ainvoke(dispatch_input, config=child_config)
-        return _finish(update, result, expected, spec_name)
+        final_update = _finish(update, result, expected, spec_name)
+        if portal.on_invalid == "route_to_error":
+            assert exit_name is not None
+            return Command(goto=exit_name, update=final_update)
+        return final_update
 
     wrapper = RunnableLambda(dispatch_wrapper, afunc=adispatch_wrapper)
     return named(wrapper, node.name, mode="portal-dispatch", output_type=_type_name(node.outputs))

@@ -945,16 +945,48 @@ def _add_portal_dispatch(
 ) -> str:
     """Wire a Portal DISPATCH node (``route="decide"``, design §4.2, reduced v1).
 
-    Unlike the peer mesh (which returns ``Command(goto=...)`` and needs
-    ``destinations=``), a dispatch node is a plain LINEAR node: it runs its body,
-    validates+compiles+invokes the emitted flow inside
-    :func:`make_portal_dispatch_fn`, and returns a plain state-update dict. So it
-    wires exactly like a bare node — a static ``prev → node`` edge in, and the walk
-    threads ``prev_node`` forward so the next item adds the ``node → next`` edge.
-    NO ``Command`` (keeps the G1 monopoly narrow). Returns the node name.
+    ``on_invalid='raise'`` (default): a dispatch node is a plain LINEAR node —
+    it runs its body, validates+compiles+invokes the emitted flow inside
+    :func:`make_portal_dispatch_fn`, and returns a plain state-update dict. So
+    it wires exactly like a bare node — a static ``prev → node`` edge in, and
+    the walk threads ``prev_node`` forward so the next item adds the
+    ``node → next`` edge. NO ``Command`` (keeps the G1 monopoly narrow).
+
+    ``on_invalid='route_to_error'``: mirrors the mesh's
+    pass-through-exit-node pattern (``_add_portal_mesh``) — a synthetic
+    ``__dispatch_exit_<node>`` node is the single re-join point; BOTH the
+    success and error paths return ``Command(goto=...)`` (never a static
+    out-edge alongside a conditional Command on the same node), registered
+    with ``destinations=(exit_name, error_handler)``. Returns the exit node
+    name so the walk continues the linear chain from there.
     """
     portal = node.modifier_set.portal
     assert isinstance(portal, Portal)  # dispatched by the PORTAL walk arm
+
+    if portal.on_invalid == "route_to_error":
+        exit_name = f"__dispatch_exit_{node.name}"
+
+        def dispatch_exit(state: Any) -> dict:
+            return {}
+
+        graph.add_node(exit_name, dispatch_exit)
+
+        dispatch_fn = make_portal_dispatch_fn(
+            node,
+            portal,
+            runtime=runtime,
+            scripted_lookup=scripted_lookup,
+            tool_factory_lookup=tool_factory_lookup,
+            exit_name=exit_name,
+        )
+        assert portal.error_handler is not None  # T1 validation (route_to_error requires it)
+        graph.add_node(node.name, cast(Any, dispatch_fn), destinations=(exit_name, portal.error_handler))
+        if prev_node:
+            graph.add_edge(prev_node, node.name)
+        else:
+            graph.add_edge(START, node.name)
+        return exit_name
+
     dispatch_fn = make_portal_dispatch_fn(
         node,
         portal,

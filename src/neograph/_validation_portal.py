@@ -258,3 +258,31 @@ def _check_portal_mesh(construct: ConstructLike) -> None:
                 construct=construct.name,
                 location=_source_location(),
             )
+
+
+def _check_portal_dispatch_error_handler(construct: ConstructLike) -> None:
+    """Validate a dispatch-mode Portal's ``error_handler`` names a real sibling. A SEPARATE check from ``_check_portal_mesh``: that
+    function deliberately excludes dispatch-mode Portals (they are not mesh
+    members), so a dispatch-only construct is never visited by it. Mirrors
+    the mesh peer-existence check's fail-loud-at-assembly discipline.
+    """
+    nodes = list(construct.nodes)
+    sibling_names = {getattr(item, "name", None) for item in nodes}
+    for item in nodes:
+        if not isinstance(item, Node):
+            continue
+        portal = item.modifier_set.portal
+        if portal is None or not portal.is_dispatch:
+            continue
+        if portal.on_invalid != "route_to_error":
+            continue
+        if portal.error_handler not in sibling_names:
+            raise ConstructError.build(
+                f"node {item.name!r}'s Portal.error_handler {portal.error_handler!r} "
+                "does not name a sibling Node in this construct",
+                expected=f"one of {sorted(n for n in sibling_names if n is not None)}",
+                found=repr(portal.error_handler),
+                node=item.name,
+                construct=construct.name,
+                location=_source_location(),
+            )

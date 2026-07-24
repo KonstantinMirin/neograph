@@ -283,6 +283,8 @@ def compile_state_model(
             dispatch_field = output_field_name(field_name_for(n.name), "dispatch")
             resolved = lookup_type(out_spec) if isinstance(out_spec, str) else out_spec
             fields[dispatch_field] = (resolved | None, None)
+            if km.on_invalid == "route_to_error":
+                fields[StateKeys.dispatch_error(field_name_for(n.name))] = (str | None, None)
 
     # Subgraph input port — when this Construct declares an input type
     if construct.input is not None:
