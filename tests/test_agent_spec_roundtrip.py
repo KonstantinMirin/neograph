@@ -232,6 +232,89 @@ class TestEachOracleLoopRoundTripPreservesBehavior:
         assert len(merged.items) == 3
 
 
+class TestScriptedNodeHyphenatedNameAfterRoundTrip:
+    """neograph-qtfof.3: @node's decoration-time hyphenation (a Python
+    function named ``each_seed`` gets ``node.name='each-seed'``) means the
+    sidecar-based self-registration (``node._scripted_shim``) is lost across
+    an Agent Spec round-trip -- ``from_agent_spec`` reconstructs a brand-new
+    Node with only a string ``scripted_fn`` (the exported node's hyphenated
+    ``.name``), no callable, no sidecar. This is documented as WORKING AS
+    DESIGNED (``from_agent_spec`` does primitive-level import, no
+    modifier/sidecar recovery) -- but the compile-time gate must fail loud
+    with an ACCURATE hint (the hyphenated key), never silently misresolve or
+    raise an unhelpful error. This test pins that existing fail-loud
+    contract as a regression guard (docs/design callout is the rest of this
+    ticket's scope, not a code fix)."""
+
+    def test_missing_scripted_kwarg_fails_loud_with_hyphenated_hint(self):
+        from neograph import node
+        from neograph.decorators import construct_from_functions
+        from neograph.errors import ConfigurationError
+
+        @node(outputs=Claims)
+        def each_seed():
+            return Claims(items=["a"])
+
+        pipeline = construct_from_functions("scripted-hyphenation-rt", [each_seed])
+        assert pipeline.nodes[0].name == "each-seed", "sanity: @node hyphenates the function name"
+
+        flow = to_agent_spec(pipeline)
+        imported = from_agent_spec(flow)
+
+        with pytest.raises(ConfigurationError, match="each-seed") as exc_info:
+            compile(imported, **build_test_compile_kwargs())
+        assert "scripted={'each-seed'" in str(exc_info.value), (
+            "the fail-loud hint must name the HYPHENATED key -- the underscore "
+            "form matching the user's original Python function name would be "
+            "the natural-but-wrong guess"
+        )
+
+    def test_underscore_key_natural_guess_also_fails_loud(self):
+        """The DX trap: a user who doesn't know about hyphenation will
+        naturally try scripted={'each_seed': fn} (matching their Python
+        function name). That guess must ALSO fail loud with the same
+        accurate hint -- never silently no-op or misresolve."""
+        from neograph import node
+        from neograph.decorators import construct_from_functions
+        from neograph.errors import ConfigurationError
+
+        @node(outputs=Claims)
+        def each_seed():
+            return Claims(items=["a"])
+
+        pipeline = construct_from_functions("scripted-hyphenation-rt-2", [each_seed])
+        flow = to_agent_spec(pipeline)
+        imported = from_agent_spec(flow)
+
+        def wrong_key_fn(input_data, config):
+            return Claims(items=["b"])
+
+        with pytest.raises(ConfigurationError, match="each-seed"):
+            compile(imported, scripted={"each_seed": wrong_key_fn}, **build_test_compile_kwargs())
+
+    def test_hyphenated_scripted_kwarg_resolves_correctly(self):
+        """The documented workaround: passing scripted={'each-seed': fn}
+        (the HYPHENATED key, per the fail-loud hint) resolves correctly and
+        runs."""
+        from neograph import node
+        from neograph.decorators import construct_from_functions
+
+        @node(outputs=Claims)
+        def each_seed():
+            return Claims(items=["a"])
+
+        pipeline = construct_from_functions("scripted-hyphenation-rt-3", [each_seed])
+        flow = to_agent_spec(pipeline)
+        imported = from_agent_spec(flow)
+
+        def replacement_fn(input_data, config):
+            return Claims(items=["b"])
+
+        graph = compile(imported, scripted={"each-seed": replacement_fn}, **build_test_compile_kwargs())
+        result = run(graph, input={"node_id": "hyphenation-rt"})
+        assert result["each_seed"].items == ["b"]
+
+
 class TestForeignAgentSpecImportsAsPrimitives:
     """Item (a) + round-trip-marker item (2)+(4): a Flow with no neograph/*
     metadata (simulating a foreign/third-party Agent Spec, or a 'golden doc'
