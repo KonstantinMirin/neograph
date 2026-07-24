@@ -611,3 +611,91 @@ class TestToAgentSpecLowersModifiers:
         assert any(e.from_branch == "pause" for e in pause_edges), (
             "expected the PAUSE_BRANCH edge (not DEFAULT_BRANCH) into InputMessageNode"
         )
+
+
+# ── neograph-5x43u: Portal mode (a) peer mesh EXPORT direction ──────────────
+
+
+class TestPortalMeshExportsToSwarm:
+    """Pins 5x43u: ``to_agent_spec``'s export-direction mirror of
+    ``loader.py``'s Swarm import (``_reconstruct_swarm_mesh``). A Portal
+    mode-(a) peer mesh (``handoff_param``/``handoff_channel`` set by
+    ``_ir_normalize.py``) must lower to a top-level pyagentspec ``Swarm`` --
+    ``first_agent``/``relationships`` of real ``Agent`` objects (pyagentspec
+    ``swarm.py:105-107`` + ``agent.py:23`` type them ``AgenticComponent``, so
+    a Flow ``LlmNode`` cannot go there) -- never the current fail-loud
+    reject. The entry-only knobs (``max_hops``/``on_exhaust``/``route``) have
+    no native ``Swarm`` field, so they ride a ``neograph/portal_spec``
+    metadata marker (mirrors the ``oracle_spec``/``each_spec``/``loop_spec``
+    per-group marker convention) so the information is not lost even though
+    the current Swarm *importer* does not read it back yet.
+
+    FAILS NOW: ``_reject_unrepresentable_fields`` (``_agent_spec.py``) still
+    raises ``ConfigurationError`` for ANY node with ``handoff_param``/
+    ``handoff_channel`` set -- the reject 5x43u replaces with this lowering.
+    """
+
+    def _mesh(self) -> Construct:
+        from pydantic import BaseModel
+
+        from neograph import Node, Portal
+
+        class Handoff(BaseModel, frozen=True):
+            goto: str
+            note: str = ""
+
+        triage = Node.scripted("triage", fn="fn_triage", outputs=Handoff) | Portal(
+            to=["billing"], max_hops=6, on_exhaust="exit"
+        )
+        billing = Node.scripted(
+            "billing", fn="fn_billing", inputs={"handoff": Handoff}, outputs=Handoff
+        ) | Portal(to=[])
+        return Construct("swarm-mesh", nodes=[triage, billing])
+
+    def test_portal_peer_mesh_lowers_to_swarm(self):
+        from pyagentspec.agent import Agent
+        from pyagentspec.swarm import Swarm
+
+        from neograph._agent_spec import to_agent_spec
+
+        mesh = self._mesh()
+        swarm = to_agent_spec(mesh)
+
+        assert isinstance(swarm, Swarm), (
+            f"expected to_agent_spec to return a top-level pyagentspec Swarm "
+            f"(AgenticComponent) for a Portal peer mesh, got {type(swarm)!r}"
+        )
+
+        # first_agent is the entry member (Construct.nodes order) and a real
+        # Agent -- NOT an LlmNode -- because Swarm.first_agent/relationships
+        # are typed AgenticComponent (pyagentspec/swarm.py:105-107).
+        assert isinstance(swarm.first_agent, Agent)
+        assert swarm.first_agent.name == "triage-agent"
+
+        relationship_names = {(a.name, b.name) for a, b in swarm.relationships}
+        assert relationship_names == {("triage-agent", "billing-agent")}
+        assert all(isinstance(a, Agent) and isinstance(b, Agent) for a, b in swarm.relationships)
+
+        # Entry-only knobs (max_hops/on_exhaust) and the routing field name
+        # ride a neograph/portal_spec marker -- Swarm has no native field for
+        # any of them.
+        marker = swarm.metadata["neograph/portal_spec"]
+        assert marker["max_hops"] == 6
+        assert marker["on_exhaust"] == "exit"
+        assert marker["route"] == "goto"
+
+    def test_mixed_mesh_and_plain_flow_node_is_rejected(self):
+        """A Construct mixing a Portal mesh with an ordinary (non-mesh) Flow
+        node has no single top-level export shape (a Swarm is not a Flow
+        node) -- the v1 answer is a fail-loud ConfigurationError, never a
+        silent partial export of just the mesh or just the plain node.
+        """
+        from neograph._agent_spec import to_agent_spec
+        from neograph.errors import ConfigurationError
+
+        mesh = self._mesh()
+        plain = _producer("extra", Claims)
+        mixed = Construct("mixed-mesh-and-flow", nodes=[*mesh.nodes, plain])
+
+        with pytest.raises(ConfigurationError):
+            to_agent_spec(mixed)

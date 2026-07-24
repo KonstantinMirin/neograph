@@ -59,6 +59,7 @@ _EXPECTED_MARKER_VALUES = {
     "neograph/loop_spec",
     "neograph/operator_spec",
     "neograph/branch",
+    "neograph/portal_spec",
 }
 
 

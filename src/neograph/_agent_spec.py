@@ -78,6 +78,7 @@ _MARK_EACH_SPEC = "neograph/each_spec"
 _MARK_LOOP_SPEC = "neograph/loop_spec"
 _MARK_OPERATOR_SPEC = "neograph/operator_spec"
 _MARK_BRANCH = "neograph/branch"
+_MARK_PORTAL_SPEC = "neograph/portal_spec"
 
 
 def _import_agent_spec_flow_classes() -> Any:
@@ -583,8 +584,65 @@ def _lower_construct_item(
     )
 
 
+def _lower_portal_mesh_to_swarm(construct: Construct, members: list[Node], tools_mod: Any) -> Any:
+    """Export a Portal mode-(a) peer mesh to a top-level pyagentspec ``Swarm``
+    (neograph-5x43u) -- the export-direction mirror of ``loader.py``'s
+    ``_reconstruct_swarm_mesh`` Swarm import.
+
+    Swarm.first_agent/relationships are typed ``AgenticComponent`` (pyagentspec
+    swarm.py/agent.py), so each member lowers to a real ``Agent`` (via the
+    SAME ``_make_agent`` helper agent/act-mode Flow nodes use), never an
+    ``LlmNode``. The entry-only knobs (``max_hops``/``on_exhaust``/``route``)
+    have no native ``Swarm`` field -- they ride a ``neograph/portal_spec``
+    metadata marker (mirrors the Oracle/Each/Loop per-group marker
+    convention), so the information is not lost even though the current
+    Swarm importer does not read it back yet.
+
+    ``construct.nodes`` is trusted here: ``_check_portal_mesh`` (construct-
+    assembly validation) has ALREADY enforced contiguity/entry-first/uniform-
+    payload/reachability for any Construct reaching export, so every ``to``
+    peer reference is guaranteed to name a real member of this same mesh.
+    """
+    entry = members[0]
+    entry_portal = entry.modifier_set.portal
+    assert entry_portal is not None  # collected as Portal-modified
+
+    # pyagentspec's Agent ties inputs/outputs Properties to {{placeholder}}
+    # names in its own system_prompt (ComponentWithIO._validate_no_extra_
+    # property) -- a mesh member's payload Properties (e.g. dict-form-
+    # prefixed "handoff.note") are not prompt placeholders, so passing them
+    # unconditionally raises "did not expect any properties" for any member
+    # without a matching prompt template. Mesh Agents carry no I/O Properties;
+    # the payload/routing shape rides the neograph/portal_spec marker instead.
+    agents_by_name: dict[str, Any] = {}
+    for member in members:
+        agents_by_name[member.name] = _make_agent(member, tools_mod, [], [])
+
+    relationships = [
+        (agents_by_name[member.name], agents_by_name[peer])
+        for member in members
+        for peer in (member.modifier_set.portal.to or [])  # type: ignore[union-attr]
+    ]
+
+    from pyagentspec.swarm import Swarm
+
+    return Swarm(
+        name=construct.name,
+        first_agent=agents_by_name[entry.name],
+        relationships=relationships,
+        metadata={
+            _MARK_PORTAL_SPEC: {
+                "max_hops": entry_portal.max_hops,
+                "on_exhaust": entry_portal.on_exhaust,
+                "route": entry_portal.route,
+            }
+        },
+    )
+
+
 def to_agent_spec(construct: Construct) -> Flow:
-    """Export a neograph ``Construct`` (IR) to an Open Agent Spec ``Flow``.
+    """Export a neograph ``Construct`` (IR) to an Open Agent Spec ``Flow``
+    (or, for a Portal mode-(a) peer mesh, a top-level ``Swarm``).
 
     LOWERS every modifier to flat Agent Spec primitives — the same lowering
     neograph performs when compiling to LangGraph, expressed in Agent Spec
@@ -592,7 +650,25 @@ def to_agent_spec(construct: Construct) -> Flow:
     cannot represent, rather than silently downgrading. See module
     docstring for the Core Invariant.
     """
-    _nodes_mod, flow_mod, edges_mod, _property_mod, _tools_mod = _import_agent_spec_flow_classes()
+    _nodes_mod, flow_mod, edges_mod, _property_mod, tools_mod = _import_agent_spec_flow_classes()
+
+    mesh_members = [
+        item
+        for item in construct.nodes
+        if isinstance(item, Node)
+        and item.modifier_set.portal is not None
+        and not item.modifier_set.portal.is_dispatch
+    ]
+    if mesh_members:
+        if len(mesh_members) != len(construct.nodes):
+            raise ConfigurationError.build(
+                f"construct {construct.name!r} mixes a Portal peer mesh with non-mesh nodes",
+                expected="a construct that is EITHER entirely a Portal mesh OR has no Portal mesh members",
+                found=f"{len(mesh_members)} mesh member(s) out of {len(construct.nodes)} total node(s)",
+                hint="a Swarm is a top-level AgenticComponent, not a Flow node — a mixed "
+                "mesh+Flow construct has no single Agent Spec export shape yet",
+            )
+        return _lower_portal_mesh_to_swarm(construct, mesh_members, tools_mod)
 
     all_nodes: list[SpecNode] = []
     control_edges: list[ControlFlowEdge] = []
