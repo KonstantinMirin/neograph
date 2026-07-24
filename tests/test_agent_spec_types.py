@@ -69,6 +69,18 @@ class _Contact(BaseModel):
     nickname: str | None = None
 
 
+class _Tagged(BaseModel, frozen=True):
+    label: str
+
+
+class _Bag(BaseModel, frozen=True):
+    items: list[_Tagged]
+
+
+class _Claims(BaseModel, frozen=True):
+    items: list[str]
+
+
 class TestPydanticToAgentSpecPropertyRoundTrip:
     """Pydantic BaseModel -> Agent Spec Property list -> back to Pydantic."""
 
@@ -214,3 +226,51 @@ class TestRefPointerResolution:
         instance = resolved(city="Paris", zip_code=None)
         assert instance.city == "Paris"
         assert instance.zip_code is None
+
+
+class TestStructuralTypeNameDistinguishesListItemTypes:
+    """neograph-qtfof.4: ``_structural_type_name`` must hash LIST/DICT item
+    types structurally, not just the bare top-level JSON-schema type
+    keyword ('array'/'object'). Two DIFFERENT models each with a single
+    field named 'items' -- one ``list[str]``, one ``list[_Tagged]`` -- must
+    register under DIFFERENT structural names, or the second reconstruction
+    silently reuses the first's cached (wrong-shaped) class."""
+
+    def test_list_of_str_and_list_of_model_with_same_field_name_hash_differently(self):
+        from neograph.spec_types import _structural_type_name, model_to_agent_spec_properties
+
+        bag_props = model_to_agent_spec_properties(_Bag)
+        claims_props = model_to_agent_spec_properties(_Claims)
+
+        bag_name = _structural_type_name(bag_props)
+        claims_name = _structural_type_name(claims_props)
+
+        assert bag_name != claims_name, (
+            "list[_Tagged] (nested object items) and list[str] (primitive "
+            "items) both have a single field titled 'items' of top-level "
+            "type 'array' -- the structural signature must recurse into "
+            "the list's item schema so these hash differently"
+        )
+
+    def test_reconstructing_both_shapes_in_one_process_does_not_collide(self):
+        """End-to-end: the exact scenario from the bug report -- two
+        independent panels in one script/process, Bag reconstructed first,
+        then Claims -- must not silently reuse Bag's cached class for
+        Claims' data."""
+        from neograph.loader import _agent_spec_props_to_type
+        from neograph.spec_types import model_to_agent_spec_properties
+
+        bag_props = model_to_agent_spec_properties(_Bag)
+        claims_props = model_to_agent_spec_properties(_Claims)
+
+        BagRebuilt = _agent_spec_props_to_type(bag_props)
+        ClaimsRebuilt = _agent_spec_props_to_type(claims_props)
+
+        assert BagRebuilt is not ClaimsRebuilt
+
+        bag_instance = BagRebuilt(items=[{"label": "a"}])
+        assert bag_instance.items[0].label == "a"
+
+        # Must NOT raise "items.0: Input should be a valid dictionary, got str"
+        claims_instance = ClaimsRebuilt(items=["x", "y"])
+        assert claims_instance.items == ["x", "y"]

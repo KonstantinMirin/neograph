@@ -241,9 +241,39 @@ def _import_agent_spec_property_classes() -> Any:
     return pyagentspec_property
 
 
+def _property_type_signature(prop: Property) -> Any:
+    """Recursive structural signature for a single Property's TYPE.
+
+    ``Property.type`` carries only the bare top-level JSON-schema keyword
+    (e.g. ``'array'``), never the nested item/value/field schema -- so two
+    structurally DIFFERENT properties (``list[str]`` vs ``list[SomeModel]``)
+    both signature to the same bare ``'array'`` if the recursion stops
+    there. This walks into ``ListProperty.item_type``,
+    ``DictProperty.value_type``, ``ObjectProperty.properties``, and
+    ``UnionProperty.any_of`` so the signature is genuinely structural at
+    every depth, not just the top level. Used exclusively by
+    ``_structural_type_name`` -- keep the two in lockstep.
+    """
+    pas = _import_agent_spec_property_classes()
+
+    if isinstance(prop, pas.ListProperty):
+        return ("array", _property_type_signature(prop.item_type))
+    if isinstance(prop, pas.DictProperty):
+        return ("object_map", _property_type_signature(prop.value_type))
+    if isinstance(prop, pas.ObjectProperty):
+        return (
+            "object",
+            tuple(sorted((name, _property_type_signature(p)) for name, p in prop.properties.items())),
+        )
+    if isinstance(prop, pas.UnionProperty):
+        return ("union", tuple(sorted(_property_type_signature(m) for m in prop.any_of)))
+    return str(getattr(prop, "type", None))
+
+
 def _structural_type_name(props: list[Property]) -> str:
     """Derive a registry name purely from a Property list's STRUCTURE
-    (title + type, sorted), not from any node/model name.
+    (title + recursive type signature, sorted), not from any node/model
+    name.
 
     A reconstructed Agent Spec import has no back-reference to the original
     Pydantic class name (Property carries only per-field shape) -- so two
@@ -258,10 +288,15 @@ def _structural_type_name(props: list[Property]) -> str:
     structurally-identical Property list -- the single canonical helper
     both the top-level bridge (``agent_spec_properties_to_types``) and the
     nested-object branch (``_property_to_field_type``) use.
+
+    The type half of the signature recurses via ``_property_type_signature``
+    -- a bare top-level type keyword (e.g. ``'array'``) is not enough to
+    distinguish ``list[str]`` from ``list[SomeModel]`` when both share a
+    field name (neograph-qtfof.4).
     """
     import hashlib
 
-    sig = tuple(sorted((p.title, str(getattr(p, "type", None))) for p in props))
+    sig = tuple(sorted((p.title, _property_type_signature(p)) for p in props))
     digest = hashlib.sha256(repr(sig).encode()).hexdigest()[:16]
     return f"AgentSpecType_{digest}"
 
