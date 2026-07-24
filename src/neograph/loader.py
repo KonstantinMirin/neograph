@@ -118,6 +118,32 @@ def _inputs_from_data_edges(dest_name: str, flow: Any, output_types: dict[str, A
     return inputs or None
 
 
+def _dict_form_inputs_from_props(props: Any) -> dict[str, Any] | None:
+    """Reconstruct a dict-form ``Node.inputs`` from dotted-prefixed input
+    Properties, the inverse of ``_agent_spec._properties_for``'s dict-form
+    ``p.title = f"{key}.{p.title}"`` prefixing.
+
+    ``to_agent_spec`` flattens a dict-form ``inputs={'k': SomeModel}`` into one
+    Property per field titled ``"k.field"``. A FLAT reconstruction
+    (``_agent_spec_props_to_type``) would build a single model with dotted field
+    names (``{'k.field': ...}``) whose structural type hash does NOT match the
+    producer's — the neograph-3lk2l / qtfof.4 type-identity loss. Grouping the
+    Properties back by their ``k`` prefix and reconstructing each group's model
+    from the UN-prefixed field Properties restores the original per-key type, so
+    the Each fan-out receiver reconstructs to the SAME structural class as the
+    producer's list element. Returns ``None`` when no Property is dotted (leave
+    the caller's default single-type reconstruction in charge)."""
+    if not props:
+        return None
+    groups: dict[str, list[Any]] = {}
+    for p in props:
+        if "." not in p.title:
+            return None
+        key, _, rest = p.title.partition(".")
+        groups.setdefault(key, []).append(p.model_copy(update={"title": rest}))
+    return {key: _agent_spec_props_to_type(group) for key, group in groups.items()} or None
+
+
 def _tools_from_marker(marker_tools: list[dict[str, Any]]) -> list[Tool]:
     """Rebuild neograph ``Tool`` specs from the flat ``neograph/agent_spec``
     tools list (the EXACT inverse of ``_agent_spec._agent_spec_marker``'s
@@ -349,14 +375,27 @@ def _reconstruct_each_node(map_node: Any, flow: Any, output_types: dict[str, Any
             found=f"{len(inner_nodes)} inner nodes",
         )
     inner_output_types: dict[str, Any] = {}
-    inner = _reconstruct_primitive_node(inner_nodes[0], map_node.subflow, inner_output_types)
+    inner_spec = inner_nodes[0]
+    inner = _reconstruct_primitive_node(inner_spec, map_node.subflow, inner_output_types)
     # Rename only -- KEEP the inner node's own reconstructed `inputs` (its
     # per-item Property signature, e.g. Tagged): Each's fan-out mechanism
     # feeds each item via `neo_each_item` state, not a dict-form upstream
     # mapping, so overwriting inputs with the MapNode's EXTERNAL data edges
     # (the collection producer, e.g. "seed") would be wrong -- that external
     # edge names the COLLECTION's owner, not the fanned-out item's shape.
-    inner = inner.model_copy(update={"name": map_node.name})
+    update: dict[str, Any] = {"name": map_node.name}
+    # PRIMARY @node shape (map_over= / dict-form inputs): the inner node's input
+    # Properties are dotted-prefixed ("cluster.v", "source.c"). Un-group them
+    # back to per-key types so the fan-out receiver reconstructs to the SAME
+    # structural class as the producer's list element (Each's assembly checks
+    # then pass through the dict-form fan_out_param skip, exactly like the
+    # original @node did) instead of a flat {"cluster.v": ...} model whose hash
+    # never matches -- neograph-3lk2l. The single-type inner shape (the legacy
+    # ``Node.scripted(inputs=Tagged)`` form, no dot) is left untouched.
+    dict_inputs = _dict_form_inputs_from_props(inner_spec.inputs)
+    if dict_inputs is not None:
+        update["inputs"] = dict_inputs
+    inner = inner.model_copy(update=update)
 
     # _lower_each's MapNode never sets its own outputs= (only the wrapped
     # inner node's SpecNode carries the per-item output Properties) -- the
@@ -393,7 +432,10 @@ def _reconstruct_operator_item(
     inner_output_types: dict[str, Any] = {}
     primary = _reconstruct_primitive_node(primary_spec, flow, inner_output_types)
 
-    inputs = _inputs_from_data_edges(check_spec.name, flow, output_types)
+    # External inputs land on the PRIMARY node (the real lowered node carrying
+    # the Properties), not the property-less check BranchingNode -- mirror
+    # to_agent_spec's input_targets routing for OPERATOR.
+    inputs = _inputs_from_data_edges(primary_spec.name, flow, output_types)
     if not normalize_outputs(primary.outputs).is_none:
         output_types[primary_spec.name] = normalize_outputs(primary.outputs).primary
     if inputs is not None:

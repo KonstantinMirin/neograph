@@ -43,8 +43,21 @@ _JSON_SCHEMA_TYPE_MAP: dict[str, type] = {
 
 
 def _fields_match(a: type[BaseModel], b: type[BaseModel]) -> bool:
-    """Return True if both models have the same field names."""
-    return set(a.model_fields.keys()) == set(b.model_fields.keys())
+    """Return True if both models have the same field names AND field types.
+
+    Comparing only field NAMES (the pre-neograph-wqb5t behaviour) treated two
+    structurally DIFFERENT models sharing a name set — e.g.
+    ``Bag(items: list[Tagged])`` vs ``Claims(items: list[str])`` — as the same
+    schema, so ``register_type`` silently no-oped on the second call under a
+    reused EXPLICIT name (loader's caller-supplied path) and kept the first,
+    wrong-shaped class. Folding the field annotation (via ``str`` — stable for
+    the deterministically-named synthesized types) into the comparison makes a
+    genuine type mismatch overwrite/warn instead of silently collapsing."""
+
+    def _sig(m: type[BaseModel]) -> dict[str, str]:
+        return {name: str(field.annotation) for name, field in m.model_fields.items()}
+
+    return _sig(a) == _sig(b)
 
 
 def register_type(name: str, cls: type[BaseModel]) -> None:

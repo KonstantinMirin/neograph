@@ -416,7 +416,17 @@ def _lower_each(node: Node, each: Each) -> SpecNode:
     nodes_mod, flow_mod, edges_mod, _property_mod, _tools_mod = _import_agent_spec_flow_classes()
 
     inner = _lower_node(node)
-    start_node = nodes_mod.StartNode(name=f"{node.name}__each_start")
+    # The MapNode infers its OWN inputs as ``iterated_{title}`` for every
+    # property in ``subflow.inputs`` (pyagentspec MapNode._get_inferred_inputs,
+    # which reads the sub-flow's StartNode inputs). Declare the inner node's
+    # input Properties on the StartNode so a NON-fan-out context input (e.g.
+    # ``verify(source: RawText, cluster: Elem)`` with ``map_over``) has a valid
+    # ``iterated_source.text`` destination for its top-level DataFlowEdge — the
+    # fan-out-receiver-only case stays valid too (its inferred input is simply
+    # left unconnected, populated per-item from the iterated collection).
+    # neograph-hf505.
+    inner_inputs = _properties_for(node.inputs)
+    start_node = nodes_mod.StartNode(name=f"{node.name}__each_start", inputs=inner_inputs or None)
     end_node = nodes_mod.EndNode(name=f"{node.name}__each_end")
     sub_flow = flow_mod.Flow(
         name=f"{node.name}__each_body",
@@ -540,18 +550,32 @@ def _lower_operator(node: Node, operator: Operator) -> tuple[SpecNode, list[Spec
 
 def _lower_construct_item(
     item: Any,
-) -> tuple[list[SpecNode], list[ControlFlowEdge], list[DataFlowEdge], SpecNode, SpecNode]:
+) -> tuple[list[SpecNode], list[ControlFlowEdge], list[DataFlowEdge], SpecNode, SpecNode, list[tuple[SpecNode, bool]]]:
     """Lower one top-level construct item (Node/Construct/_BranchNode) to
-    (all_spec_nodes, extra_control_edges, extra_data_edges, primary_node, data_node).
+    (all_spec_nodes, extra_control_edges, extra_data_edges, primary_node,
+    data_node, input_targets).
 
     ``primary_node`` is the node other items' ControlFlowEdges attach to
     (the item's DX-visible identity — e.g. an Operator's check node, or an
-    Oracle's merge node). ``data_node`` is the node that actually carries the
-    item's typed input/output Properties for DataFlowEdge wiring — usually
-    the SAME as ``primary_node``, except for LOOP, where the control-flow
-    ``primary`` (the check ``BranchingNode``) declares no inputs/outputs at
-    all; the wrapped ``body`` node is the one with real Properties, so
-    external data edges must target/source it, not the bare check node.
+    Oracle's merge node). ``data_node`` is the node that OTHER items read this
+    item's OUTPUT Properties FROM (usually the same as ``primary_node``, except
+    for LOOP, where the control-flow ``primary`` — the check ``BranchingNode``
+    — declares no Properties, so the wrapped ``body`` is the output source).
+
+    ``input_targets`` is the modifier-aware answer to "when a downstream edge
+    feeds THIS item an external input, which SpecNode(s) receive it, and does
+    the destination_input need the MapNode ``iterated_`` prefix?" — the single
+    place every modifier destination's input routing lives, so the dict-form /
+    single-type edge loops in ``to_agent_spec`` never re-derive it per-symptom:
+
+      * BARE / LOOP / Construct / _BranchNode → the node that carries the input
+        Properties (``data_node``), bare titles.
+      * EACH → the MapNode, ``iterated_``-prefixed (its inputs are inferred as
+        ``iterated_{title}`` from the sub-flow StartNode). neograph-hf505.
+      * OPERATOR → the PRIMARY node (the real lowered node with Properties), NOT
+        the ``check`` BranchingNode (which declares none).
+      * ORACLE → EVERY variant node (each variant independently consumes the
+        external input); the merge node consumes only the variant fan-in.
     """
     nodes_mod, flow_mod, _edges_mod, _property_mod, _tools_mod = _import_agent_spec_flow_classes()
 
@@ -561,12 +585,12 @@ def _lower_construct_item(
             mapping={"true": "true", "false": "false"},
             metadata={_MARK_BRANCH: True},
         )
-        return [branch], [], [], branch, branch
+        return [branch], [], [], branch, branch, [(branch, False)]
 
     if isinstance(item, Construct):
         sub_flow = to_agent_spec(item)
         flow_node = nodes_mod.FlowNode(name=item.name, subflow=sub_flow)
-        return [flow_node], [], [], flow_node, flow_node
+        return [flow_node], [], [], flow_node, flow_node, [(flow_node, False)]
 
     if not isinstance(item, Node):
         raise ConfigurationError.build(
@@ -579,27 +603,29 @@ def _lower_construct_item(
 
     if combo == ModifierCombo.ORACLE:
         variant_and_merge, control_edges, data_edges = _lower_oracle(item, mods["oracle"])
-        return variant_and_merge, control_edges, data_edges, variant_and_merge[-1], variant_and_merge[-1]
+        variants = variant_and_merge[:-1]
+        merge = variant_and_merge[-1]
+        return variant_and_merge, control_edges, data_edges, merge, merge, [(v, False) for v in variants]
 
     if combo == ModifierCombo.EACH:
         map_node = _lower_each(item, mods["each"])
-        return [map_node], [], [], map_node, map_node
+        return [map_node], [], [], map_node, map_node, [(map_node, True)]
 
     if combo == ModifierCombo.LOOP:
         body = _lower_node(item)
         branch, extra_control, extra_data = _lower_loop(item, mods["loop"], body)
-        return [body, branch], extra_control, extra_data, branch, body
+        return [body, branch], extra_control, extra_data, branch, body, [(body, False)]
 
     if combo == ModifierCombo.OPERATOR:
         _nodes_mod, _flow_mod, edges_mod, _property_mod, _tools_mod = _import_agent_spec_flow_classes()
         primary = _lower_node(item)
         check, extra_nodes, extra_control = _lower_operator(item, mods["operator"])
         pre_edge = edges_mod.ControlFlowEdge(name=f"{item.name}__to_operator_check", from_node=primary, to_node=check)
-        return [primary, check, *extra_nodes], [pre_edge, *extra_control], [], check, check
+        return [primary, check, *extra_nodes], [pre_edge, *extra_control], [], check, primary, [(primary, False)]
 
     if combo == ModifierCombo.BARE:
         primary = _lower_node(item)
-        return [primary], [], [], primary, primary
+        return [primary], [], [], primary, primary, [(primary, False)]
 
     raise ConfigurationError.build(
         f"node {item.name!r} has modifier combination {combo.name} — no Agent Spec lowering yet",
@@ -702,15 +728,17 @@ def to_agent_spec(construct: Construct) -> Flow:
     primaries: list[SpecNode] = []
     data_nodes: list[SpecNode] = []
     item_by_name: dict[str, Any] = {}
+    input_targets_by_item_name: dict[str, list[tuple[SpecNode, bool]]] = {}
 
     for item in iter_with_arms(construct):
         item_by_name[item.name] = item
-        lowered_nodes, extra_control, extra_data, primary, data_node = _lower_construct_item(item)
+        lowered_nodes, extra_control, extra_data, primary, data_node, input_targets = _lower_construct_item(item)
         all_nodes.extend(lowered_nodes)
         control_edges.extend(extra_control)
         data_edges.extend(extra_data)
         primaries.append(primary)
         data_nodes.append(data_node)
+        input_targets_by_item_name[item.name] = input_targets
 
     # Explicit ControlFlowEdge per adjacent pair in Construct.nodes order.
     for prev_primary, next_primary in zip(primaries, primaries[1:], strict=False):
@@ -722,19 +750,49 @@ def to_agent_spec(construct: Construct) -> Flow:
             )
         )
 
-    # Explicit DataFlowEdge per Node.inputs upstream-name mapping. Uses
-    # data_node (not primary): for LOOP, primary is the bare check
-    # BranchingNode (no Properties at all), while data_node is the wrapped
-    # body node that actually owns the typed inputs/outputs.
+    # Explicit DataFlowEdge per Node.inputs upstream-name mapping. The
+    # destination(s) come from the item's modifier-aware ``input_targets`` (see
+    # _lower_construct_item): a MapNode wants ``iterated_``-prefixed inputs, an
+    # Oracle fans each external input to EVERY variant, an Operator targets its
+    # PRIMARY (not the property-less check node) — one rule, no per-modifier
+    # re-derivation here. As a SOURCE, the upstream's output still comes from
+    # its single ``data_node``.
     ordered_items = list(iter_with_arms(construct))
     data_node_by_item_name = dict(zip((item.name for item in ordered_items), data_nodes, strict=True))
+
+    def _emit_input_edges(item_name: str, upstream_name: str, source_node: SpecNode, source_title: str) -> None:
+        """Emit one DataFlowEdge per (destination target, prefix) for a single
+        source Property. ``upstream_name`` is the dict-form key ('' for the
+        single-type path, where the destination input title is the bare
+        Property title, not '{upstream}.{title}')."""
+        for target_node, iterated in input_targets_by_item_name[item_name]:
+            if iterated:
+                # A MapNode infers its inputs as ``iterated_{json_schema title}``
+                # — and pyagentspec forbids dots in json_schema titles, so the
+                # inner node's dict-form ``{key}.{field}`` prefix lives only on
+                # Property.title; the inferred MapNode input is the BARE
+                # ``iterated_{field}``. Target that, not the dotted form.
+                dest_input = f"iterated_{source_title}"
+            elif upstream_name:
+                dest_input = f"{upstream_name}.{source_title}"
+            else:
+                dest_input = source_title
+            data_edges.append(
+                edges_mod.DataFlowEdge(
+                    name=f"{source_node.name}_to_{target_node.name}_{dest_input}",
+                    source_node=source_node,
+                    source_output=source_title,
+                    destination_node=target_node,
+                    destination_input=dest_input,
+                )
+            )
+
     for idx, item in enumerate(ordered_items):
         if not isinstance(item, Node):
             continue
         ni = normalize_inputs(item.inputs)
         if ni.is_none:
             continue
-        dest_node = data_node_by_item_name[item.name]
 
         if ni.is_dict_form:
             # Dict-form fan-in: named upstream -> per-field Property edges.
@@ -772,15 +830,7 @@ def to_agent_spec(construct: Construct) -> Flow:
                         "downstream dict-form input have no Agent Spec representation yet",
                     )
                 for prop in _properties_for(no.primary):
-                    data_edges.append(
-                        edges_mod.DataFlowEdge(
-                            name=f"{upstream_name}_to_{item.name}_{prop.title}",
-                            source_node=source_node,
-                            source_output=prop.title,
-                            destination_node=dest_node,
-                            destination_input=f"{upstream_name}.{prop.title}",
-                        )
-                    )
+                    _emit_input_edges(item.name, upstream_name, source_node, prop.title)
             continue
 
         # Single-type inputs (convenience shorthand): the producer is
@@ -799,15 +849,7 @@ def to_agent_spec(construct: Construct) -> Flow:
             source_node = data_node_by_item_name[upstream.name]
             upstream_props = {p.title for p in _properties_for(no.primary)}
             for shared_title in input_props & upstream_props:
-                data_edges.append(
-                    edges_mod.DataFlowEdge(
-                        name=f"{upstream.name}_to_{item.name}_{shared_title}",
-                        source_node=source_node,
-                        source_output=shared_title,
-                        destination_node=dest_node,
-                        destination_input=shared_title,
-                    )
-                )
+                _emit_input_edges(item.name, "", source_node, shared_title)
             break
 
     if not primaries:
