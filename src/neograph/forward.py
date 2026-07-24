@@ -54,7 +54,7 @@ from __future__ import annotations
 import dataclasses
 import operator as op_module
 from collections.abc import Iterator
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 from pydantic import ConfigDict
 
@@ -71,7 +71,7 @@ from neograph._state_keys import StateKeys
 from neograph.conditions import OPERATORS
 from neograph.construct import Construct
 from neograph.errors import ConstructError
-from neograph.modifiers import Each, Loop, Operator, Oracle
+from neograph.modifiers import Each, Loop, Operator, Oracle, Portal
 from neograph.naming import field_name_for
 from neograph.node import Node, TypeSpecStatic
 
@@ -1296,6 +1296,60 @@ class _ForwardSelf:
         """
         tracer: _Tracer = object.__getattribute__(self, "_neo_tracer")
         return _InterruptCall(target, Operator(when=when), tracer)
+
+    def handoff(
+        self,
+        members: list[Any],
+        to: dict[str, list[str]],
+        max_hops: int = 10,
+        on_exhaust: Literal["error", "exit"] = "error",
+        entry: Any = None,
+    ) -> None:
+        """Define a Portal mode-(a) peer-routing mesh.
+
+        D-FORWARD-EXEMPT: unlike ``self.interrupt``/``self.ensemble``, a mesh
+        has NO static dataflow to thread through a proxy -- every member is
+        simultaneously producer and consumer of the mesh channel (design
+        §3.3). So ``self.handoff`` is a batch-RECORD, not a wrap-and-return-
+        callable: it records each member DIRECTLY into the tracer's node
+        list, matching ``examples/28_portal_swarm.py``'s declarative
+        ``Construct(nodes=[member | Portal(to=[...]), ...])`` shape
+        byte-for-byte (no wrapping sub-Construct). ``max_hops``/``on_exhaust``
+        are ENTRY-only knobs (mirrors ``Portal`` itself) -- applied ONLY to
+        the entry member (``entry``, or ``members[0]`` when omitted); every
+        other member gets a bare ``Portal(to=...)`` with neither kwarg set,
+        so ``_validation_portal._check_portal_mesh``'s entry-only-knobs rule
+        is satisfied by construction, not by caller discipline.
+
+        ``to`` maps each member's DX name -> its declared peer list (mirrors
+        ``Portal.to`` 1:1) -- never resurrect ``peers=``.
+
+        Scope: v1 supports a terminal/whole-graph mesh only (self.handoff has
+        no proxy input/output); mid-pipeline mesh embedding is not supported.
+
+        Usage::
+
+            self.handoff(
+                members=[self.triage, self.billing],
+                to={"triage": ["billing"], "billing": []},
+                max_hops=6,
+            )
+        """
+        tracer: _Tracer = object.__getattribute__(self, "_neo_tracer")
+
+        def _unwrap(item: Any) -> Node:
+            return item._node if isinstance(item, _NodeCall) else item
+
+        nodes = [_unwrap(m) for m in members]
+        entry_node = _unwrap(entry) if entry is not None else nodes[0]
+
+        for node in nodes:
+            peers = to.get(node.name, [])
+            if node is entry_node:
+                wrapped = node | Portal(to=peers, max_hops=max_hops, on_exhaust=on_exhaust)
+            else:
+                wrapped = node | Portal(to=peers)
+            tracer.record(wrapped)
 
 
 def _run_trace(
