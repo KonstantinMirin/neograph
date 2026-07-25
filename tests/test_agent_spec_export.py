@@ -410,6 +410,66 @@ class TestToAgentSpecLowersAgentActMode:
             to_agent_spec(pipeline)
 
 
+class TestToAgentSpecPlaceholderInputGuard:
+    """Pins the fail-loud guard (neograph-m57mn, Option B): a think/agent/act
+    ``LlmNode``/``Agent`` construction with real upstream ``Node.inputs`` and
+    a prompt that does NOT literally spell out matching ``{{ title }}``
+    placeholders must raise a clean ``ConfigurationError`` -- never let
+    pyagentspec's own raw ``pydantic.ValidationError`` ("did not expect any
+    properties") leak out of ``to_agent_spec()``. neograph's own prompt
+    syntax (``${var}``/template-ref) is never scanned by pyagentspec's
+    ``{{ }}``-only inference, so this is a genuine NO-REPR gap, same
+    established convention as ``raw_fn``/``skip_when``/callable ``Loop.when``.
+    """
+
+    def test_bare_think_mode_node_with_real_input_is_rejected(self):
+        from neograph._agent_spec import to_agent_spec
+        from neograph.errors import ConfigurationError
+        from neograph.node import Node
+
+        prod = _producer("seed", RawText)
+        node = Node(name="think1", mode="think", model="fast", prompt="hello", inputs=RawText, outputs=Claims)
+        pipeline = Construct("think-pipeline", nodes=[prod, node])
+
+        with pytest.raises(ConfigurationError, match="think1"):
+            to_agent_spec(pipeline)
+
+    def test_bare_agent_mode_node_with_real_input_is_rejected(self):
+        from neograph._agent_spec import to_agent_spec
+        from neograph.errors import ConfigurationError
+        from neograph.node import Node
+
+        prod = _producer("seed", RawText)
+        node = Node(name="agent1", mode="agent", model="fast", prompt="hello", inputs=RawText, outputs=Claims)
+        pipeline = Construct("agent-pipeline", nodes=[prod, node])
+
+        with pytest.raises(ConfigurationError, match="agent1"):
+            to_agent_spec(pipeline)
+
+    def test_think_mode_node_with_matching_placeholder_still_exports(self):
+        """The guard must not be a blanket rejection -- a prompt that DOES
+        spell out a matching ``{{ }}`` placeholder for every real input
+        Property still exports cleanly (this is pyagentspec's own supported
+        authoring shape, just not neograph's native ``${var}`` syntax)."""
+        from pyagentspec.flows.nodes import LlmNode
+
+        from neograph._agent_spec import to_agent_spec
+        from neograph.node import Node
+
+        prod = _producer("seed", RawText)
+        node = Node(
+            name="think1", mode="think", model="fast", prompt="hello {{ text }}", inputs=RawText, outputs=Claims
+        )
+        pipeline = Construct("think-pipeline", nodes=[prod, node])
+
+        flow = to_agent_spec(pipeline)
+
+        spec_node = next(n for n in flow.nodes if n.name == "think1")
+        assert isinstance(spec_node, LlmNode)
+        assert spec_node.prompt_template == "hello {{ text }}"
+        assert {p.title for p in (spec_node.inputs or [])} == {"text"}
+
+
 class TestToolToServerToolExportOnlySlice:
     """Pins ``_tool_to_server_tool``'s export-only slice (neograph-l7gvy, refined
     2026-07-22 per architect review, atom neograph-f0j1e.30/.31).
@@ -523,6 +583,62 @@ class TestToAgentSpecLowersModifiers:
         assert len(oracle_nodes) == 3, "expected 2 variant nodes + 1 merge node, all marker-stamped"
         group_ids = {n.metadata["neograph/group_id"] for n in oracle_nodes}
         assert len(group_ids) == 1, "all Oracle-group nodes must share one group_id"
+
+    def test_oracle_scripted_mode_variants_lower_to_tool_node_not_llm_node(self):
+        """neograph-m57mn Option A: ``_lower_oracle`` must dispatch variant
+        construction per ``node.mode`` (mirroring ``_lower_node``), not build
+        an unconditional ``LlmNode`` -- a scripted-mode (no prompt=/model=)
+        Oracle node's variants have no prompt text at all, so an LlmNode
+        variant would ALWAYS fail pyagentspec's placeholder-inference
+        validation. ``ToolNode`` has zero placeholder coupling (its inferred
+        inputs just echo ``tool.inputs``), so real ``Node.inputs`` pass
+        through cleanly."""
+        from pyagentspec.flows.nodes import LlmNode, ToolNode
+
+        from neograph._agent_spec import to_agent_spec
+        from neograph.modifiers import Oracle
+        from neograph.node import Node
+
+        prod = _producer("seed", RawText)
+        gen = Node.scripted("gen", fn="gen_fn", inputs=RawText, outputs=Claims)
+        gen = gen | Oracle(n=2, merge_fn="combine")
+        pipeline = Construct("oracle-scripted-pipeline", nodes=[prod, gen])
+
+        flow = to_agent_spec(pipeline)
+
+        variant_nodes = [
+            n
+            for n in flow.nodes
+            if n.metadata and n.metadata.get("neograph/modifier") == "oracle" and "neograph/variant" in n.metadata
+        ]
+        assert len(variant_nodes) == 2, "expected 2 scripted-mode Oracle variants"
+        for variant in variant_nodes:
+            assert isinstance(variant, ToolNode), (
+                f"scripted-mode Oracle variant must lower to ToolNode, not {type(variant).__name__} "
+                "-- an unconditional LlmNode fails pyagentspec's placeholder-inference validation"
+            )
+            assert not isinstance(variant, LlmNode)
+
+    def test_oracle_merge_prompt_branch_with_real_gen_outputs_is_rejected(self):
+        """neograph-m57mn addendum (post-review 4th site): ``_lower_oracle``'s
+        ``oracle.merge_prompt`` branch builds an ``LlmNode`` merge node gated
+        on ``oracle.merge_prompt`` truthiness, INDEPENDENT of ``node.mode`` --
+        a scripted-mode node can legally carry ``merge_prompt=...``, and
+        ``merge_node.inputs=gen_outputs`` (virtually always non-empty) then
+        hits the exact same placeholder-coupling wall, with zero prior test
+        coverage. Must raise a clean ConfigurationError, not a raw pydantic
+        ValidationError."""
+        from neograph._agent_spec import to_agent_spec
+        from neograph.errors import ConfigurationError
+        from neograph.modifiers import Oracle
+        from neograph.node import Node
+
+        gen = Node(name="gen", mode="scripted", outputs=Claims)
+        gen = gen | Oracle(n=2, merge_prompt="pick best: ${variants}")
+        pipeline = Construct("oracle-merge-prompt-pipeline", nodes=[gen])
+
+        with pytest.raises(ConfigurationError, match="gen"):
+            to_agent_spec(pipeline)
 
     def test_each_lowers_to_map_node_with_each_spec_marker(self):
         from pyagentspec.flows.nodes import MapNode

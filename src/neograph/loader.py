@@ -338,16 +338,32 @@ def _reconstruct_oracle_group(group: list[Any], flow: Any, output_types: dict[st
         )
         return None
 
+    # neograph-m57mn Option A: variants no longer lower unconditionally to
+    # LlmNode (_agent_spec._lower_oracle now dispatches per node.mode), so
+    # reconstruction must dispatch per the variant's ACTUAL Agent Spec type
+    # too -- the inverse of that same dispatch, mirroring
+    # _reconstruct_primitive_node's LlmNode/ToolNode branching.
     base_variant = variant_nodes[0]
-    base_prompt = base_variant.prompt_template
-    base_model = spec.get("models")[0] if spec.get("models") else base_variant.llm_config.model_id
+    base_cls = type(base_variant).__name__
+    if base_cls == "LlmNode":
+        base_mode, base_prompt, base_scripted_fn = "think", base_variant.prompt_template, None
+        base_model = spec.get("models")[0] if spec.get("models") else base_variant.llm_config.model_id
+    elif base_cls == "ToolNode":
+        base_mode, base_prompt, base_scripted_fn = "scripted", None, base_variant.tool.name
+        base_model = spec.get("models")[0] if spec.get("models") else None
+    else:
+        raise ConfigurationError.build(
+            f"Oracle group {merge_node.name!r}'s variant node has unsupported type {base_cls!r}",
+            expected="LlmNode or ToolNode",
+            found=base_cls,
+        )
 
     outputs = _agent_spec_props_to_type(merge_node.outputs)
     inputs = _inputs_from_data_edges(merge_node.name, flow, output_types)
     output_types[merge_node.name] = outputs
 
-    base_node = Node(name=merge_node.name, mode="think", inputs=inputs, outputs=outputs, prompt=base_prompt,
-                      model=base_model)
+    base_node = Node(name=merge_node.name, mode=base_mode, inputs=inputs, outputs=outputs, prompt=base_prompt,
+                      model=base_model, scripted_fn=base_scripted_fn)
 
     oracle_kwargs: dict[str, Any] = {"n": spec["n"]}
     if spec.get("models"):

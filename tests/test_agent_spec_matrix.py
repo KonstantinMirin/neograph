@@ -192,17 +192,14 @@ CELLS: dict[str, callable] = {
     "operator-single": build_operator_single,
 }
 
-# Cells that stay RED behind a FILED, wired blocker (NOT a fan-out-family
-# regression). The matrix keeps enumerating them so the surface can't silently
-# regress; xfail(strict=True) flips to a FAILURE the moment the blocker is
-# fixed, forcing the xfail to be removed. See the blocker for the root cause.
-#
-# neograph-m57mn: an Oracle(ensemble) node with ANY external input fails export
-# because pyagentspec's LlmNode couples inputs to {{prompt placeholders}} —
-# a distinct mechanism from the Each fan-out title/type families this task
-# converges. Both the export and the (cascading) round-trip cells are pinned.
-_XFAIL_EXPORT = {"oracle-single", "oracle-dict"}
-_XFAIL_ROUND_TRIP = {"oracle-single", "oracle-dict"}
+# neograph-m57mn (fixed): an Oracle(ensemble, scripted-mode) node's variants
+# used to unconditionally lower to LlmNode regardless of node.mode, so ANY
+# external input failed pyagentspec's {{prompt placeholder}} inference. Fixed
+# by dispatching variant construction per node.mode (scripted -> ToolNode,
+# which has zero placeholder coupling) -- see _agent_spec.py's
+# _check_placeholder_inputs and _lower_oracle's per-mode dispatch.
+_XFAIL_EXPORT: set[str] = set()
+_XFAIL_ROUND_TRIP: set[str] = set()
 _ORACLE_INPUT_BLOCKER = "neograph-m57mn: Oracle+external-input export (LlmNode placeholder coupling)"
 
 

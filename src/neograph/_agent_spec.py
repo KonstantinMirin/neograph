@@ -151,6 +151,47 @@ def _reject_unrepresentable_fields(node: Node) -> None:
         )
 
 
+def _check_placeholder_inputs(prompt_text: str, input_props: list[Property], node_name: str) -> None:
+    """Fail loud (Option B, neograph-m57mn) when real input Properties are
+    not all literally referenced as ``{{ title }}`` placeholders in the
+    prompt/system-prompt text about to back an ``LlmNode``/``Agent``.
+
+    pyagentspec's ``LlmNode``/``Agent`` infer AND validate their own
+    ``inputs`` by scanning the prompt string for jinja-style ``{{ }}``
+    placeholders (``ComponentWithIO._get_inferred_inputs`` /
+    ``_validate_inputs``, ``component.py:1589-1683``) — entirely independent
+    of neograph's own ``${var}``/template-ref prompt syntax. Reuses
+    pyagentspec's own ``get_placeholders_from_json_object`` (the exact
+    scanner ``_get_inferred_inputs`` itself calls) rather than hand-rolling a
+    second one, per the Core Invariant's one-validator/one-source-of-truth
+    style. Called BEFORE constructing the ``LlmNode``/``Agent`` — a raw
+    pydantic ``ValidationError`` from inside their ``__init__`` is never an
+    acceptable substitute for this module's ``ConfigurationError`` NO-REPR
+    convention (``raw_fn``, ``skip_when``, callable ``Loop.when``, Oracle
+    merge hooks, etc.).
+    """
+    if not input_props:
+        return
+    from pyagentspec.templating import get_placeholders_from_json_object
+
+    placeholders = set(get_placeholders_from_json_object(prompt_text))
+    missing = [p.title for p in input_props if p.title not in placeholders]
+    if missing:
+        raise ConfigurationError.build(
+            f"node {node_name!r} has real input(s) not referenced as '{{{{ }}}}' placeholders "
+            "in its prompt text",
+            expected="every input Property title to appear as a literal '{{ title }}' "
+            "placeholder in the prompt (pyagentspec's LlmNode/Agent infer and validate "
+            "inputs by scanning the prompt text for jinja-style placeholders)",
+            found=f"missing placeholder(s) for: {missing}",
+            hint="neograph's own ${var}/template-ref prompt syntax is never scanned by "
+            "pyagentspec — a think/agent/act node (or Oracle merge_prompt) with real "
+            "inputs has no faithful Agent Spec representation unless its prompt text also "
+            "literally spells out '{{ title }}' for each input "
+            "(doc agent-spec-oracle-inputs-2026-07-25.md)",
+        )
+
+
 def _properties_for(type_spec: Any) -> list[Property]:
     """Convert a Node.inputs/outputs TypeSpec (None | type | dict[str, type]) to Properties.
 
@@ -179,6 +220,7 @@ def _lower_node(node: Node) -> SpecNode:
     outputs = _properties_for(node.outputs)
 
     if node.mode == "think":
+        _check_placeholder_inputs(node.prompt or "", inputs, node.name)
         return nodes_mod.LlmNode(
             name=node.name,
             inputs=inputs or None,
@@ -214,6 +256,8 @@ def _lower_node(node: Node) -> SpecNode:
 
 def _make_agent(node: Node, tools_mod: Any, inputs: list[Property], outputs: list[Property]) -> Any:
     from pyagentspec.agent import Agent
+
+    _check_placeholder_inputs(node.prompt or "", inputs, node.name)
 
     # node.tools is declared list[Tool | BaseTool], but _normalize_raw_base_tools
     # (node.py) normalizes any raw BaseTool to Tool at construction time -- same
@@ -335,19 +379,65 @@ def _lower_oracle(node: Node, oracle: Oracle) -> tuple[list[SpecNode], list[Cont
 
     variant_nodes: list[SpecNode] = []
     for i, model_tier in enumerate(variant_models):
-        variant_nodes.append(
-            nodes_mod.LlmNode(
-                name=f"{node.name}__variant_{i}",
-                inputs=inputs or None,
-                outputs=gen_outputs or None,
-                llm_config=_make_llm_config(Node(name=node.name, model=model_tier or node.model)),
-                prompt_template=node.prompt or "",
-                metadata={_MARK_MODIFIER: "oracle", _MARK_GROUP_ID: group_id, _MARK_VARIANT: i},
+        variant_name = f"{node.name}__variant_{i}"
+        variant_metadata = {_MARK_MODIFIER: "oracle", _MARK_GROUP_ID: group_id, _MARK_VARIANT: i}
+
+        # neograph-m57mn Option A: dispatch per node.mode, mirroring
+        # _lower_node's think/agent-act/else dispatch -- an unconditional
+        # LlmNode was itself the root cause of the scripted-mode Oracle
+        # export bug (a scripted node has zero prompt text, so ANY input
+        # always fails pyagentspec's placeholder-inference validation).
+        if node.mode == "think":
+            _check_placeholder_inputs(node.prompt or "", inputs, variant_name)
+            variant_nodes.append(
+                nodes_mod.LlmNode(
+                    name=variant_name,
+                    inputs=inputs or None,
+                    outputs=gen_outputs or None,
+                    llm_config=_make_llm_config(Node(name=node.name, model=model_tier or node.model)),
+                    prompt_template=node.prompt or "",
+                    metadata=variant_metadata,
+                )
             )
-        )
+        elif node.mode in ("agent", "act"):
+            # No test cell exercises Oracle+agent/act; fail loud rather than
+            # invent a lowering for an untested combination (m57mn scope).
+            raise ConfigurationError.build(
+                f"node {node.name!r}'s Oracle variant has mode={node.mode!r} — "
+                "Oracle+agent/act export has no Agent Spec lowering yet",
+                expected="Oracle variant mode 'scripted', 'raw', or 'think'",
+                found=f"mode={node.mode!r}",
+                hint="agent/act-mode Oracle variants are out of scope for neograph-m57mn "
+                "(no test cell exercises this combination)",
+            )
+        else:
+            # scripted / raw: ToolNode has zero placeholder coupling (its
+            # inferred inputs just echo tool.inputs), mirroring
+            # _make_server_tool's ServerTool shape.
+            variant_nodes.append(
+                nodes_mod.ToolNode(
+                    name=variant_name,
+                    inputs=inputs or None,
+                    outputs=gen_outputs or None,
+                    tool=tools_mod.ServerTool(
+                        # node.scripted_fn or node.name -- mirrors
+                        # _make_server_tool's naming so a round trip
+                        # reconstructs the SAME scripted_fn for every variant.
+                        name=node.scripted_fn or node.name,
+                        description=f"Oracle variant {i} for {node.name!r}",
+                        inputs=inputs or None,
+                        outputs=gen_outputs or None,
+                    ),
+                    metadata=variant_metadata,
+                )
+            )
 
     outputs = _properties_for(node.outputs)
     if oracle.merge_prompt:
+        # Gated on oracle.merge_prompt truthiness, NOT node.mode -- a
+        # scripted-mode node can legally carry merge_prompt=... (neograph-
+        # m57mn addendum, 4th guard call site).
+        _check_placeholder_inputs(oracle.merge_prompt, gen_outputs, node.name)
         merge_node = nodes_mod.LlmNode(
             name=f"{node.name}",
             inputs=gen_outputs or None,
