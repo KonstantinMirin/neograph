@@ -42,7 +42,7 @@ pytest.importorskip("pyagentspec")
 
 from neograph import Construct  # noqa: E402
 
-from .schemas import ClusterGroup, Clusters, Claims, MatchResult, RawText, _consumer, _producer  # noqa: E402
+from .schemas import Claims, ClusterGroup, Clusters, MatchResult, RawText, _consumer, _producer  # noqa: E402
 
 
 class TestMetadataMarkerRoundTripSurvivesRealPyagentspec:
