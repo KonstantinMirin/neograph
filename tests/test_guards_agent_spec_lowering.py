@@ -47,6 +47,14 @@ def _lower_loop_source() -> str:
     raise AssertionError("_lower_loop not found in _agent_spec.py")
 
 
+def _lower_each_source() -> str:
+    tree = ast.parse(AGENT_SPEC_FILE.read_text())
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "_lower_each":
+            return ast.get_source_segment(AGENT_SPEC_FILE.read_text(), node) or ""
+    raise AssertionError("_lower_each not found in _agent_spec.py")
+
+
 class TestAgentActModeLowersToAgentNode:
     """_lower_node's agent/act branch must construct a real AgentNode, never
     a ToolNode placeholder or a bare fail-loud with no lowering at all."""
@@ -198,9 +206,12 @@ class TestLoopSelfEdgeResolvesDictFormDestinationTitle:
             "prefix (via node.inputs' dict-form key), not assume the "
             "destination's input Property title is always bare"
         )
-        assert 'destination_input=f"{dest_prefix}{prop.title}"' in source, (
-            "the self-edge's destination_input must be built from the resolved "
-            "dest_prefix, never destination_input=prop.title alone"
+        assert 'dotted = f"{dest_prefix}{prop.title}"' in source, (
+            "the self-edge's destination title must be built from the resolved "
+            "dest_prefix (dotted = f'{dest_prefix}{prop.title}'), never the bare "
+            "prop.title alone -- Option F (neograph-cbpyx) then routes this dotted "
+            "title through the body's flat placeholder map when the loop body is a "
+            "translated LLM node, but the dict-form prefix resolution is unchanged"
         )
 
     def test_meta_guard_catches_the_disease_pattern_if_reintroduced(self):
@@ -222,4 +233,60 @@ class TestLoopSelfEdgeResolvesDictFormDestinationTitle:
             "        )\n"
         )
         assert "dest_prefix" not in buggy_source
-        assert 'destination_input=f"{dest_prefix}{prop.title}"' not in buggy_source
+        assert 'dotted = f"{dest_prefix}{prop.title}"' not in buggy_source
+
+
+class TestEachSubflowStartInputsGatedOnTranslation:
+    """Structural guard for neograph-cbpyx's MEDIUM-1 review finding.
+
+    Disease pattern (the construction-centric anchoring blind spot the
+    review caught): the Option F consumer sweep must cover NON-DataFlowEdge
+    input-name consumers too, not just ``DataFlowEdge`` construction sites.
+    ``_lower_each``'s sub-flow ``StartNode.inputs`` is such a consumer of
+    ``_properties_for(node.inputs)``. When the inner node is
+    placeholder-translated (an LLM-mode node), its declared inputs are the
+    FLAT ``${var}->{{ flat }}`` names, so the StartNode MUST use the SAME
+    flat titles (via ``_node_translation``) or the sub-flow ships an
+    unfillable ``{{ item_v }}`` to a foreign consumer -- a silent seam worse
+    than a red cell. A regression that unconditionally builds the StartNode
+    from ``_properties_for(node.inputs)`` (the pre-fix shape) reintroduces
+    exactly the dotted/flat mismatch this ticket eliminated.
+    """
+
+    def test_each_start_inputs_are_gated_on_translation_eligibility(self):
+        source = _lower_each_source()
+        assert "_is_translation_eligible(node)" in source, (
+            "_lower_each must gate its sub-flow StartNode.inputs on "
+            "_is_translation_eligible(node): a translated inner node's flat "
+            "input titles must flow to the StartNode, not the untranslated "
+            "dotted _properties_for(node.inputs) titles"
+        )
+        assert "_node_translation(node)" in source, (
+            "the translation-eligible branch must derive the StartNode's "
+            "inputs from _node_translation(node) (the SAME flat map the inner "
+            "node was translated with), never a second, divergent computation"
+        )
+        # The StartNode must consume the gated `inner_inputs` variable, never a
+        # direct _properties_for(node.inputs) call inline on the StartNode.
+        assert "inputs=inner_inputs" in source, (
+            "the StartNode must declare inputs=inner_inputs (the branch-resolved "
+            "Property list), so the translation gate above actually reaches the "
+            "sub-flow boundary"
+        )
+
+    def test_meta_guard_catches_the_disease_pattern_if_reintroduced(self):
+        """Meta-test (positive+negative pair, not regex-based -- plain
+        substring checks have no regex-slip failure mode): prove the
+        assertions above actually flag a pre-fix body that builds the
+        StartNode unconditionally from the untranslated dotted Properties."""
+        buggy_source = (
+            "def _lower_each(node, each):\n"
+            "    inner = _lower_node(node)\n"
+            "    start_node = nodes_mod.StartNode(\n"
+            "        name=f'{node.name}__each_start',\n"
+            "        inputs=_properties_for(node.inputs) or None,\n"
+            "    )\n"
+        )
+        assert "_is_translation_eligible(node)" not in buggy_source
+        assert "_node_translation(node)" not in buggy_source
+        assert "inputs=inner_inputs" not in buggy_source

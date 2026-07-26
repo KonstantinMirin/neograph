@@ -41,6 +41,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 from neograph._ir_branch import _BranchNode, iter_with_arms
 from neograph._normalize import normalize_inputs, normalize_outputs
+from neograph._placeholders import DOLLAR_RE, apply_scanner
 from neograph.construct import Construct
 from neograph.errors import ConfigurationError
 from neograph.modifiers import Each, Loop, ModifierCombo, Operator, Oracle, classify_modifiers
@@ -80,6 +81,7 @@ _MARK_LOOP_SPEC = "neograph/loop_spec"
 _MARK_OPERATOR_SPEC = "neograph/operator_spec"
 _MARK_BRANCH = "neograph/branch"
 _MARK_PORTAL_SPEC = "neograph/portal_spec"
+_MARK_PROMPT_SPEC = "neograph/prompt_spec"
 
 
 def _import_agent_spec_flow_classes() -> Any:
@@ -151,45 +153,123 @@ def _reject_unrepresentable_fields(node: Node) -> None:
         )
 
 
-def _check_placeholder_inputs(prompt_text: str, input_props: list[Property], node_name: str) -> None:
-    """Fail loud (Option B, neograph-m57mn) when real input Properties are
-    not all literally referenced as ``{{ title }}`` placeholders in the
-    prompt/system-prompt text about to back an ``LlmNode``/``Agent``.
+def _translate_placeholders(
+    prompt_text: str, input_props: list[Property], node_name: str
+) -> tuple[str, list[Property], dict[str, str]]:
+    """Translate neograph ``${path}`` placeholders to pyagentspec ``{{ flat }}``
+    form (Option F, neograph-cbpyx — amends m57mn's Option-B fail-loud guard).
 
-    pyagentspec's ``LlmNode``/``Agent`` infer AND validate their own
-    ``inputs`` by scanning the prompt string for jinja-style ``{{ }}``
-    placeholders (``ComponentWithIO._get_inferred_inputs`` /
-    ``_validate_inputs``, ``component.py:1589-1683``) — entirely independent
-    of neograph's own ``${var}``/template-ref prompt syntax. Reuses
-    pyagentspec's own ``get_placeholders_from_json_object`` (the exact
-    scanner ``_get_inferred_inputs`` itself calls) rather than hand-rolling a
-    second one, per the Core Invariant's one-validator/one-source-of-truth
-    style. Called BEFORE constructing the ``LlmNode``/``Agent`` — a raw
-    pydantic ``ValidationError`` from inside their ``__init__`` is never an
-    acceptable substitute for this module's ``ConfigurationError`` NO-REPR
-    convention (``raw_fn``, ``skip_when``, callable ``Loop.when``, Oracle
-    merge hooks, etc.).
+    neograph's ``${var}``/``${var.field}`` and pyagentspec's ``{{ var }}`` are two
+    syntaxes for the IDENTICAL flat, non-recursive text substitution. This rewrites
+    each ``${path}`` to ``{{ path_with_dots_as_underscores }}`` and returns the
+    Properties the exported ``LlmNode``/``Agent`` should declare — exactly the
+    scanned names, so pyagentspec's own placeholder inference/validation
+    (``ComponentWithIO._get_inferred_inputs`` / ``_validate_inputs``) passes by
+    construction. REUSES the ONE ``${...}`` scanner (``_placeholders.DOLLAR_RE`` +
+    ``apply_scanner``) — never a second grammar (the anti-duplication invariant).
+
+    Returns ``(rewritten_text, referenced_props, flat_to_original)``:
+      * ``rewritten_text`` — prompt with every ``${path}`` -> ``{{ flat }}``.
+      * ``referenced_props`` — one ``StringProperty(title=flat)`` per unique scanned
+        path (names only; pyagentspec infers inputs by NAME, and round-trip type
+        fidelity rides the ``neograph/prompt_spec`` marker, not these props).
+      * ``flat_to_original`` — ``{flat_name: original_dotted_path}``, consumed by the
+        input-edge / StartNode consumer sweep to route ``destination_input`` through
+        the SAME flat name (drop an edge whose source path is unreferenced).
+
+    Fail loud (``ConfigurationError``) on a ``${path}`` whose first segment is not a
+    declared input (dangling), and on two distinct paths flattening to one name
+    (collision — names both paths AND the collided flat name).
     """
-    if not input_props:
-        return
-    from pyagentspec.templating import get_placeholders_from_json_object
+    from pyagentspec.property import StringProperty
 
-    placeholders = set(get_placeholders_from_json_object(prompt_text))
-    missing = [p.title for p in input_props if p.title not in placeholders]
-    if missing:
-        raise ConfigurationError.build(
-            f"node {node_name!r} has real input(s) not referenced as '{{{{ }}}}' placeholders "
-            "in its prompt text",
-            expected="every input Property title to appear as a literal '{{ title }}' "
-            "placeholder in the prompt (pyagentspec's LlmNode/Agent infer and validate "
-            "inputs by scanning the prompt text for jinja-style placeholders)",
-            found=f"missing placeholder(s) for: {missing}",
-            hint="neograph's own ${var}/template-ref prompt syntax is never scanned by "
-            "pyagentspec — a think/agent/act node (or Oracle merge_prompt) with real "
-            "inputs has no faithful Agent Spec representation unless its prompt text also "
-            "literally spells out '{{ title }}' for each input "
-            "(doc agent-spec-oracle-inputs-2026-07-25.md)",
-        )
+    declared_keys = {p.title.split(".", 1)[0] for p in input_props}
+    flat_to_original: dict[str, str] = {}
+    ordered: list[str] = []
+
+    def resolve(raw: str) -> str:
+        path = raw.strip()
+        first = path.split(".", 1)[0]
+        if first not in declared_keys:
+            raise ConfigurationError.build(
+                f"node {node_name!r}'s prompt references ${{{path}}}, whose first segment "
+                f"{first!r} is not a declared input",
+                expected=f"a ${{...}} path rooted at one of the declared inputs {sorted(declared_keys)}",
+                found=f"dangling placeholder ${{{path}}}",
+                hint="every inline ${var} placeholder in an exported LLM-mode prompt must "
+                "resolve to a declared Node.input (the value has no other data path).",
+            )
+        flat = path.replace(".", "_")
+        prev = flat_to_original.get(flat)
+        if prev is not None and prev != path:
+            raise ConfigurationError.build(
+                f"node {node_name!r}'s prompt has two distinct placeholders {prev!r} and "
+                f"{path!r} that both flatten to the same name {flat!r}",
+                expected="each ${path} to flatten (. -> _) to a unique placeholder name",
+                found=f"collision: {prev!r} and {path!r} both -> {flat!r}",
+                hint="rename one of the colliding upstream inputs/fields so the flattened "
+                "pyagentspec placeholder names stay distinct.",
+            )
+        if flat not in flat_to_original:
+            flat_to_original[flat] = path
+            ordered.append(flat)
+        return f"{{{{ {flat} }}}}"
+
+    rewritten = apply_scanner(prompt_text, DOLLAR_RE, resolve)
+    referenced_props: list[Property] = [StringProperty(title=flat) for flat in ordered]
+    return rewritten, referenced_props, flat_to_original
+
+
+def _node_translation(node: Node) -> tuple[str, list[Property], dict[str, str]]:
+    """Recompute a node's placeholder translation (``rewritten_text``,
+    ``referenced_props``, ``original_to_flat``) from its prompt + declared inputs.
+
+    The SINGLE per-node translation seam every construction site AND every
+    consumer (input edges, Loop self-edge, Oracle fan-in, Each StartNode)
+    re-derives from — so ``destination_input`` names are computed by the ONE
+    translator, never re-inferred per-symptom. Idempotent: the node was already
+    translated during ``_lower_construct_item`` (any collision/dangling already
+    raised there), so re-running here cannot introduce a new raise. Returns
+    ``original_to_flat`` (dotted path -> flat name) — the inverse of
+    ``_translate_placeholders``'s ``flat_to_original`` — for edge routing.
+    """
+    _, ref_props, flat_to_original = _translate_placeholders(
+        node.prompt or "", _properties_for(node.inputs), node.name
+    )
+    original_to_flat = {path: flat for flat, path in flat_to_original.items()}
+    return node.prompt or "", ref_props, original_to_flat
+
+
+def _is_translation_eligible(item: Any) -> bool:
+    """A construct item whose exported prompt is placeholder-translated: an
+    LLM-mode (``think``/``agent``/``act``) ``Node``. Gates the consumer sweep on
+    the CONSUMING ITEM's mode — NOT the destination SpecNode class (a MapNode
+    wrapping a translated inner is still a translation target). Scripted/raw
+    nodes have no ${var} prompt, so their edges keep the untranslated dotted form.
+    """
+    return isinstance(item, Node) and item.mode in ("think", "agent", "act")
+
+
+def _prompt_spec_marker(node: Node, flat_to_original: dict[str, str]) -> dict[str, Any]:
+    """Build the strictly JSON-native ``neograph/prompt_spec`` round-trip marker.
+
+    Carries the UNtranslated ``${var}`` text + the full original input TypeSpec so
+    ``from_agent_spec`` reconstructs the exact original ``Node`` — including inputs
+    the prompt never referenced (whose translated ``LlmNode`` drops both Property
+    and DataFlowEdge, a real topology change). MUST stay JSON-native (str / dict /
+    list only): ``p.json_schema`` is the plain JSON-Schema dict (NOT a live
+    pyagentspec ``Property`` object, which would degrade to a dict across a
+    JSON/YAML wire round trip and break the loader's un-flatten). The dotted
+    ``title`` (``"{key}.{field}"``) is stored alongside so the loader can regroup
+    by upstream key via the EXISTING ``_dict_form_inputs_from_props``.
+    """
+    return {
+        "original_text": node.prompt or "",
+        "placeholder_map": dict(flat_to_original),
+        "original_inputs": [
+            {"title": p.title, "json_schema": p.json_schema} for p in _properties_for(node.inputs)
+        ],
+    }
 
 
 def _properties_for(type_spec: Any) -> list[Property]:
@@ -220,13 +300,19 @@ def _lower_node(node: Node) -> SpecNode:
     outputs = _properties_for(node.outputs)
 
     if node.mode == "think":
-        _check_placeholder_inputs(node.prompt or "", inputs, node.name)
+        # Option F neograph-cbpyx: translate ${path} -> {{ flat }}; the LlmNode
+        # declares ONLY the referenced flat Properties, and the neograph/prompt_spec
+        # marker carries the untranslated text + full original inputs for round trip.
+        rewritten, ref_props, flat_to_original = _translate_placeholders(
+            node.prompt or "", inputs, node.name
+        )
         return nodes_mod.LlmNode(
             name=node.name,
-            inputs=inputs or None,
+            inputs=ref_props or None,
             outputs=outputs or None,
             llm_config=_make_llm_config(node),
-            prompt_template=node.prompt or "",
+            prompt_template=rewritten,
+            metadata={_MARK_PROMPT_SPEC: _prompt_spec_marker(node, flat_to_original)},
         )
 
     if node.mode in ("agent", "act"):
@@ -235,14 +321,28 @@ def _lower_node(node: Node) -> SpecNode:
         # that used to silently drop prompt/model/tools. The `neograph/agent_spec`
         # marker carries everything the from_agent_spec() importer needs to
         # reconstruct the node exactly -- the export->import round trip is now
-        # implemented (neograph-aa5gq, loader._reconstruct_agent_node).
-        agent = _make_agent(node, tools_mod, inputs, outputs)
+        # implemented (neograph-aa5gq, loader._reconstruct_agent_node). Option F:
+        # the Agent's system_prompt is placeholder-translated and the AgentNode
+        # declares the referenced flat Properties; the original ${var} text rides
+        # the existing neograph/agent_spec marker (marker["prompt"]).
+        rewritten, ref_props, flat_to_original = _translate_placeholders(node.prompt or "", inputs, node.name)
+        agent = _make_agent(node, tools_mod, ref_props, outputs, rewritten)
         return nodes_mod.AgentNode(
             name=node.name,
-            inputs=inputs or None,
+            inputs=ref_props or None,
             outputs=outputs or None,
             agent=agent,
-            metadata={_MARK_MODE: node.mode, _MARK_AGENT_SPEC: _agent_spec_marker(node)},
+            metadata={
+                _MARK_MODE: node.mode,
+                _MARK_AGENT_SPEC: _agent_spec_marker(node),
+                # The neograph/prompt_spec marker carries the FULL original inputs so
+                # a translated agent/act node (whose declared inputs are the flat
+                # placeholder names) reconstructs its true input TypeSpec -- e.g. an
+                # Each fan-out receiver must round-trip to the SAME element type as
+                # the producer's list element neograph-3lk2l. marker["prompt"] on
+                # _MARK_AGENT_SPEC already carries the untranslated ${var} text.
+                _MARK_PROMPT_SPEC: _prompt_spec_marker(node, flat_to_original),
+            },
         )
 
     # scripted / raw already rejected raw_fn above; scripted_fn is name-only.
@@ -254,10 +354,14 @@ def _lower_node(node: Node) -> SpecNode:
     )
 
 
-def _make_agent(node: Node, tools_mod: Any, inputs: list[Property], outputs: list[Property]) -> Any:
+def _make_agent(
+    node: Node, tools_mod: Any, inputs: list[Property], outputs: list[Property], system_prompt: str
+) -> Any:
+    """Build the pyagentspec ``Agent`` for an agent/act node. ``inputs`` are the
+    Option-F-translated referenced flat Properties and ``system_prompt`` is the
+    ``{{ flat }}``-rewritten text (both computed once in ``_lower_node``); the
+    original ``${var}`` text rides ``neograph/agent_spec`` marker["prompt"]."""
     from pyagentspec.agent import Agent
-
-    _check_placeholder_inputs(node.prompt or "", inputs, node.name)
 
     # node.tools is declared list[Tool | BaseTool], but _normalize_raw_base_tools
     # (node.py) normalizes any raw BaseTool to Tool at construction time -- same
@@ -266,7 +370,7 @@ def _make_agent(node: Node, tools_mod: Any, inputs: list[Property], outputs: lis
     return Agent(
         name=f"{node.name}-agent",
         llm_config=_make_llm_config(node),
-        system_prompt=node.prompt or "",
+        system_prompt=system_prompt,
         tools=[_tool_to_server_tool(tool, tools_mod) for tool in tools],
         inputs=inputs or None,
         outputs=outputs or None,
@@ -388,14 +492,21 @@ def _lower_oracle(node: Node, oracle: Oracle) -> tuple[list[SpecNode], list[Cont
         # export bug (a scripted node has zero prompt text, so ANY input
         # always fails pyagentspec's placeholder-inference validation).
         if node.mode == "think":
-            _check_placeholder_inputs(node.prompt or "", inputs, variant_name)
+            # Option F neograph-cbpyx: every think variant shares the node's
+            # prompt/inputs, so one translation feeds all N. The neograph/prompt_spec
+            # marker on the variant lets _reconstruct_oracle_group recover the
+            # untranslated base prompt + original inputs.
+            rewritten, ref_props, flat_to_original = _translate_placeholders(
+                node.prompt or "", inputs, variant_name
+            )
+            variant_metadata[_MARK_PROMPT_SPEC] = _prompt_spec_marker(node, flat_to_original)
             variant_nodes.append(
                 nodes_mod.LlmNode(
                     name=variant_name,
-                    inputs=inputs or None,
+                    inputs=ref_props or None,
                     outputs=gen_outputs or None,
                     llm_config=_make_llm_config(Node(name=node.name, model=model_tier or node.model)),
-                    prompt_template=node.prompt or "",
+                    prompt_template=rewritten,
                     metadata=variant_metadata,
                 )
             )
@@ -433,17 +544,26 @@ def _lower_oracle(node: Node, oracle: Oracle) -> tuple[list[SpecNode], list[Cont
             )
 
     outputs = _properties_for(node.outputs)
+    # Option F neograph-cbpyx: the merge LlmNode's prompt references the variant
+    # outputs via ${...}; translate to {{ flat }} and route the variant->merge
+    # fan-in DataFlowEdges through the SAME flat map. merge_orig_to_flat stays empty
+    # (no translation) for the merge_fn ToolNode branch, so its fan-in edges keep the
+    # raw gen_output titles.
+    merge_orig_to_flat: dict[str, str] = {}
     if oracle.merge_prompt:
         # Gated on oracle.merge_prompt truthiness, NOT node.mode -- a
         # scripted-mode node can legally carry merge_prompt=... (neograph-
-        # m57mn addendum, 4th guard call site).
-        _check_placeholder_inputs(oracle.merge_prompt, gen_outputs, node.name)
+        # m57mn addendum, translated at the 4th Option-F site).
+        merge_rewritten, merge_ref_props, merge_flat_to_orig = _translate_placeholders(
+            oracle.merge_prompt, gen_outputs, node.name
+        )
+        merge_orig_to_flat = {path: flat for flat, path in merge_flat_to_orig.items()}
         merge_node = nodes_mod.LlmNode(
             name=f"{node.name}",
-            inputs=gen_outputs or None,
+            inputs=merge_ref_props or None,
             outputs=outputs or None,
             llm_config=_make_llm_config(Node(name=node.name, model=oracle.merge_model)),
-            prompt_template=oracle.merge_prompt,
+            prompt_template=merge_rewritten,
             metadata={
                 _MARK_MODIFIER: "oracle",
                 _MARK_GROUP_ID: group_id,
@@ -484,13 +604,23 @@ def _lower_oracle(node: Node, oracle: Oracle) -> tuple[list[SpecNode], list[Cont
             edges_mod.ControlFlowEdge(name=f"{group_id}_fanout_{i}", from_node=variant, to_node=merge_node)
         )
         for prop in gen_outputs:
+            # When the merge node is a translated LlmNode (merge_prompt), its
+            # declared input is the flat placeholder name; route the fan-in edge
+            # through the SAME flat map and drop it if the merge prompt never
+            # referenced this variant output (unreferenced -> no data path).
+            if oracle.merge_prompt:
+                dest_input = merge_orig_to_flat.get(prop.title)
+                if dest_input is None:
+                    continue
+            else:
+                dest_input = prop.title
             data_edges.append(
                 edges_mod.DataFlowEdge(
                     name=f"{group_id}_fanin_{i}_{prop.title}",
                     source_node=variant,
                     source_output=prop.title,
                     destination_node=merge_node,
-                    destination_input=prop.title,
+                    destination_input=dest_input,
                 )
             )
 
@@ -515,7 +645,18 @@ def _lower_each(node: Node, each: Each) -> SpecNode:
     # fan-out-receiver-only case stays valid too (its inferred input is simply
     # left unconnected, populated per-item from the iterated collection).
     # neograph-hf505.
-    inner_inputs = _properties_for(node.inputs)
+    #
+    # Option F consumer sweep (neograph-cbpyx, MEDIUM-1): the StartNode is a
+    # NON-DataFlowEdge consumer of _properties_for(node.inputs). When the inner
+    # node is placeholder-translated (LLM mode), its declared inputs are the flat
+    # ${var}->{{ flat }} names, so the StartNode MUST use the SAME flat titles or
+    # the sub-flow ships an unfillable ``{{ item_v }}`` (the inner's inferred input
+    # and the StartNode's declared input would not match). Scripted inners keep the
+    # untranslated dotted Properties.
+    if _is_translation_eligible(node):
+        _rewritten, inner_inputs, _flat = _node_translation(node)
+    else:
+        inner_inputs = _properties_for(node.inputs)
     start_node = nodes_mod.StartNode(name=f"{node.name}__each_start", inputs=inner_inputs or None)
     end_node = nodes_mod.EndNode(name=f"{node.name}__each_end")
     sub_flow = flow_mod.Flow(
@@ -596,15 +737,27 @@ def _lower_loop(node: Node, loop: Loop, body: SpecNode) -> tuple[SpecNode, list[
                     dest_prefix = f"{key}."
                     break
 
+    # Option F consumer sweep neograph-cbpyx: when the loop body is a
+    # placeholder-translated LLM node, its declared inputs are flat ${var}->{{ flat }}
+    # names, so the self-feedback edge's destination_input must route through the
+    # body's flat map (drop it if the fed-back output isn't referenced in the prompt).
+    body_orig_to_flat = _node_translation(node)[2] if _is_translation_eligible(node) else {}
     data_edges: list[DataFlowEdge] = []
     for prop in _properties_for(node.outputs):
+        dotted = f"{dest_prefix}{prop.title}"
+        if _is_translation_eligible(node):
+            dest_input = body_orig_to_flat.get(dotted)
+            if dest_input is None:
+                continue
+        else:
+            dest_input = dotted
         data_edges.append(
             edges_mod.DataFlowEdge(
                 name=f"{node.name}__loop_self_{prop.title}",
                 source_node=body,
                 source_output=prop.title,
                 destination_node=body,
-                destination_input=f"{dest_prefix}{prop.title}",
+                destination_input=dest_input,
             )
         )
     return branch, control_edges, data_edges
@@ -757,7 +910,11 @@ def _lower_portal_mesh_to_swarm(construct: Construct, members: list[Node], tools
     # the payload/routing shape rides the neograph/portal_spec marker instead.
     agents_by_name: dict[str, Any] = {}
     for member in members:
-        agents_by_name[member.name] = _make_agent(member, tools_mod, [], [])
+        # Mesh Agents carry NO I/O Properties (inputs=[]), so there is nothing to
+        # placeholder-translate -- pass the member's prompt through unchanged as the
+        # system_prompt (the payload/routing shape rides the neograph/portal_spec
+        # marker, not prompt placeholders).
+        agents_by_name[member.name] = _make_agent(member, tools_mod, [], [], member.prompt or "")
 
     relationships = [
         (agents_by_name[member.name], agents_by_name[peer])
@@ -854,19 +1011,36 @@ def to_agent_spec(construct: Construct) -> Flow:
         """Emit one DataFlowEdge per (destination target, prefix) for a single
         source Property. ``upstream_name`` is the dict-form key ('' for the
         single-type path, where the destination input title is the bare
-        Property title, not '{upstream}.{title}')."""
+        Property title, not '{upstream}.{title}').
+
+        Option F consumer sweep neograph-cbpyx: when the CONSUMING item is
+        placeholder-translated (LLM mode), the destination declares the flat
+        ${var}->{{ flat }} name, so the dotted ``{upstream}.{title}`` (and the
+        MapNode's ``iterated_``-prefixed form) route through the item's flat map —
+        and the edge is DROPPED when the source path was never referenced in the
+        prompt (a real topology change: the translated primitive has no data path
+        to that value). Scripted/raw destinations keep the untranslated form.
+        """
+        dest_item = item_by_name.get(item_name)
+        translate = _is_translation_eligible(dest_item)
+        orig_to_flat = _node_translation(cast("Node", dest_item))[2] if translate else {}
+        dotted = f"{upstream_name}.{source_title}" if upstream_name else source_title
         for target_node, iterated in input_targets_by_item_name[item_name]:
-            if iterated:
+            if translate:
+                flat = orig_to_flat.get(dotted)
+                if flat is None:
+                    continue
+                core = flat
+            elif iterated:
                 # A MapNode infers its inputs as ``iterated_{json_schema title}``
                 # — and pyagentspec forbids dots in json_schema titles, so the
                 # inner node's dict-form ``{key}.{field}`` prefix lives only on
                 # Property.title; the inferred MapNode input is the BARE
                 # ``iterated_{field}``. Target that, not the dotted form.
-                dest_input = f"iterated_{source_title}"
-            elif upstream_name:
-                dest_input = f"{upstream_name}.{source_title}"
+                core = source_title
             else:
-                dest_input = source_title
+                core = dotted
+            dest_input = f"iterated_{core}" if iterated else core
             data_edges.append(
                 edges_mod.DataFlowEdge(
                     name=f"{source_node.name}_to_{target_node.name}_{dest_input}",

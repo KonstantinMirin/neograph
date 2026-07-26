@@ -411,39 +411,73 @@ class TestToAgentSpecLowersAgentActMode:
 
 
 class TestToAgentSpecPlaceholderInputGuard:
-    """Pins the fail-loud guard (neograph-m57mn, Option B): a think/agent/act
-    ``LlmNode``/``Agent`` construction with real upstream ``Node.inputs`` and
-    a prompt that does NOT literally spell out matching ``{{ title }}``
-    placeholders must raise a clean ``ConfigurationError`` -- never let
-    pyagentspec's own raw ``pydantic.ValidationError`` ("did not expect any
-    properties") leak out of ``to_agent_spec()``. neograph's own prompt
-    syntax (``${var}``/template-ref) is never scanned by pyagentspec's
-    ``{{ }}``-only inference, so this is a genuine NO-REPR gap, same
-    established convention as ``raw_fn``/``skip_when``/callable ``Loop.when``.
+    """Pins the Option F placeholder translation (neograph-cbpyx, which AMENDS
+    m57mn's Option-B fail-loud guard). A think/agent/act node's native
+    ``${var}`` prompt is TRANSLATED to pyagentspec's ``{{ flat }}`` syntax --
+    the two are the same flat text substitution, so there IS a faithful
+    representation and rejection was the wrong call. The remaining fail-loud is
+    narrower: a ``${path}`` whose first segment is not a declared input (a
+    genuinely dangling reference) still raises a clean ``ConfigurationError``
+    (never a leaked pyagentspec ``pydantic.ValidationError``), same convention as
+    ``raw_fn``/``skip_when``/callable ``Loop.when``. (See
+    tests/test_agent_spec_placeholder_translation.py for the full matrix incl.
+    collision and round-trip.)
     """
 
-    def test_bare_think_mode_node_with_real_input_is_rejected(self):
+    def test_bare_think_mode_node_with_dollar_ref_translates(self):
+        """A single-type-input think node whose ${var} prompt references its input
+        exports cleanly, with the prompt rewritten to {{ flat }} and the LlmNode
+        declaring the referenced flat Property (Option F, not rejection)."""
+        from pyagentspec.flows.nodes import LlmNode
+
+        from neograph._agent_spec import to_agent_spec
+        from neograph.node import Node
+
+        prod = _producer("seed", RawText)  # RawText.text -> single-type title 'text'
+        node = Node(name="think1", mode="think", model="fast", prompt="hello ${text}", inputs=RawText, outputs=Claims)
+        pipeline = Construct("think-pipeline", nodes=[prod, node])
+
+        flow = to_agent_spec(pipeline)
+
+        spec_node = next(n for n in flow.nodes if n.name == "think1")
+        assert isinstance(spec_node, LlmNode)
+        assert spec_node.prompt_template == "hello {{ text }}"
+        assert {p.title for p in (spec_node.inputs or [])} == {"text"}
+
+    def test_bare_agent_mode_node_with_dollar_ref_translates(self):
+        """agent-mode is translated the same way -- the Agent's system_prompt is
+        rewritten and the AgentNode declares the referenced flat Property."""
+        from pyagentspec.flows.nodes import AgentNode
+
+        from neograph._agent_spec import to_agent_spec
+        from neograph.node import Node
+
+        prod = _producer("seed", RawText)
+        node = Node(name="agent1", mode="agent", model="fast", prompt="hello ${text}", inputs=RawText, outputs=Claims)
+        pipeline = Construct("agent-pipeline", nodes=[prod, node])
+
+        flow = to_agent_spec(pipeline)
+
+        spec_node = next(n for n in flow.nodes if n.name == "agent1")
+        assert isinstance(spec_node, AgentNode)
+        assert {p.title for p in (spec_node.inputs or [])} == {"text"}
+        assert spec_node.agent.system_prompt == "hello {{ text }}"
+
+    def test_dangling_dollar_ref_still_fails_loud(self):
+        """The narrower remaining fail-loud: a ${path} whose first segment names no
+        declared input has no data path in the exported primitive -> clean
+        ConfigurationError, not a leaked pyagentspec ValidationError."""
         from neograph._agent_spec import to_agent_spec
         from neograph.errors import ConfigurationError
         from neograph.node import Node
 
         prod = _producer("seed", RawText)
-        node = Node(name="think1", mode="think", model="fast", prompt="hello", inputs=RawText, outputs=Claims)
+        node = Node(
+            name="think1", mode="think", model="fast", prompt="hello ${nope}", inputs=RawText, outputs=Claims
+        )
         pipeline = Construct("think-pipeline", nodes=[prod, node])
 
         with pytest.raises(ConfigurationError, match="think1"):
-            to_agent_spec(pipeline)
-
-    def test_bare_agent_mode_node_with_real_input_is_rejected(self):
-        from neograph._agent_spec import to_agent_spec
-        from neograph.errors import ConfigurationError
-        from neograph.node import Node
-
-        prod = _producer("seed", RawText)
-        node = Node(name="agent1", mode="agent", model="fast", prompt="hello", inputs=RawText, outputs=Claims)
-        pipeline = Construct("agent-pipeline", nodes=[prod, node])
-
-        with pytest.raises(ConfigurationError, match="agent1"):
             to_agent_spec(pipeline)
 
     def test_think_mode_node_with_matching_placeholder_still_exports(self):

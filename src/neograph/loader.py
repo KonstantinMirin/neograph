@@ -30,6 +30,7 @@ from neograph._agent_spec import (
     _MARK_MODIFIER,
     _MARK_OPERATOR_SPEC,
     _MARK_ORACLE_SPEC,
+    _MARK_PROMPT_SPEC,
     _MARK_TOOL_SPEC,
 )
 from neograph._normalize import normalize_outputs, primary_output_field
@@ -47,6 +48,7 @@ from neograph.modifiers import Each, Loop, Operator, Oracle, Portal
 from neograph.naming import field_name_for
 from neograph.node import Node
 from neograph.spec_types import (
+    _import_agent_spec_property_classes,
     _structural_type_name,
     agent_spec_properties_to_types,
     load_project_types,
@@ -142,6 +144,59 @@ def _dict_form_inputs_from_props(props: Any) -> dict[str, Any] | None:
         key, _, rest = p.title.partition(".")
         groups.setdefault(key, []).append(p.model_copy(update={"title": rest}))
     return {key: _agent_spec_props_to_type(group) for key, group in groups.items()} or None
+
+
+def _augment_inputs_from_prompt_marker(
+    inputs: Any, marker: dict[str, Any], output_types: dict[str, Any]
+) -> dict[str, Any] | None:
+    """Restore the ORIGINAL dict-form ``Node.inputs`` from a ``neograph/prompt_spec``
+    marker's JSON-native ``original_inputs`` (Option F, neograph-cbpyx).
+
+    An Option-F-translated ``LlmNode``/variant declares only the referenced FLAT
+    Properties, so its own ``inputs`` (and its DataFlowEdges) have lost every input
+    the prompt never referenced. Starting from the edge-derived ``inputs`` (which
+    already carry the CORRECT producer types for referenced inputs -- the SAME
+    structural type object the producer registered), this ADDS every original input
+    key the edges missed. A dict-form input KEY is the upstream NODE name, so a
+    missing key's type is taken from that producer's already-reconstructed output
+    (``output_types[key]``) -- guaranteeing type-identity with the producer for the
+    fan-in validator, and staying stable across a JSON wire round trip (both sides
+    reconstruct from the SAME producer node). Only when no same-named producer
+    exists does it fall back to rebuilding the type from the marker's JSON-native
+    ``json_schema`` (a bare ``Property`` that ``spec_types._property_to_field_type``
+    resolves via ``json_schema``), regrouped by the EXISTING
+    ``_dict_form_inputs_from_props``."""
+    entries = marker.get("original_inputs")
+    if not entries:
+        return inputs if isinstance(inputs, dict) else None
+
+    ordered_keys: list[str] = []
+    for e in entries:
+        key = e["title"].split(".", 1)[0]
+        if key not in ordered_keys:
+            ordered_keys.append(key)
+
+    result: dict[str, Any] = dict(inputs) if isinstance(inputs, dict) else {}
+    for key in ordered_keys:
+        if key in result:
+            continue
+        if key in output_types and output_types[key] is not None:
+            result[key] = output_types[key]
+            continue
+        pas = _import_agent_spec_property_classes()
+        group = [
+            pas.Property.model_construct(
+                title=e["title"].partition(".")[2],
+                json_schema=e["json_schema"],
+                type=e["json_schema"].get("type"),
+                description=None,
+                default=None,
+            )
+            for e in entries
+            if e["title"].split(".", 1)[0] == key
+        ]
+        result[key] = _agent_spec_props_to_type(group)
+    return result or None
 
 
 def _tools_from_marker(marker_tools: list[dict[str, Any]]) -> list[Tool]:
@@ -296,10 +351,28 @@ def _reconstruct_primitive_node(spec_node: Any, flow: Any, output_types: dict[st
 
     if cls_name == "AgentNode":
         # gap 1 (lossless marker inversion) + gap 3 (foreign/remote best-effort).
+        # Option F neograph-cbpyx: a translated agent/act node declares only the
+        # flat placeholder inputs, so restore the ORIGINAL input TypeSpec from the
+        # neograph/prompt_spec marker (an Each fan-out receiver must round-trip to
+        # the producer's list element type -- neograph-3lk2l).
+        prompt_marker = (getattr(spec_node, "metadata", None) or {}).get(_MARK_PROMPT_SPEC)
+        if prompt_marker is not None:
+            inputs = _augment_inputs_from_prompt_marker(inputs, prompt_marker, output_types)
         return _reconstruct_agent_node(spec_node, inputs, outputs)
 
     if cls_name == "LlmNode":
-        mode, prompt, model, scripted_fn = "think", spec_node.prompt_template, spec_node.llm_config.model_id, None
+        # Option F neograph-cbpyx: prefer the neograph/prompt_spec marker -- it
+        # carries the UNtranslated ${var} prompt and the FULL original inputs
+        # (incl. any the prompt never referenced, whose flat LlmNode dropped both
+        # Property and DataFlowEdge). Fall back to the translated prompt_template /
+        # data-edge inputs for a pre-Option-F or foreign LlmNode with no marker.
+        marker = (getattr(spec_node, "metadata", None) or {}).get(_MARK_PROMPT_SPEC)
+        if marker is not None:
+            prompt = marker["original_text"]
+            inputs = _augment_inputs_from_prompt_marker(inputs, marker, output_types)
+        else:
+            prompt = spec_node.prompt_template
+        mode, model, scripted_fn = "think", spec_node.llm_config.model_id, None
     elif cls_name == "ToolNode":
         mode, prompt, model, scripted_fn = "scripted", None, None, spec_node.tool.name
     else:
@@ -345,8 +418,13 @@ def _reconstruct_oracle_group(group: list[Any], flow: Any, output_types: dict[st
     # _reconstruct_primitive_node's LlmNode/ToolNode branching.
     base_variant = variant_nodes[0]
     base_cls = type(base_variant).__name__
+    base_prompt_marker = (getattr(base_variant, "metadata", None) or {}).get(_MARK_PROMPT_SPEC)
     if base_cls == "LlmNode":
-        base_mode, base_prompt, base_scripted_fn = "think", base_variant.prompt_template, None
+        # Option F neograph-cbpyx: prefer the variant's neograph/prompt_spec
+        # marker for the UNtranslated base prompt (fallback to the translated
+        # prompt_template for a pre-Option-F/foreign variant).
+        base_prompt = base_prompt_marker["original_text"] if base_prompt_marker else base_variant.prompt_template
+        base_mode, base_scripted_fn = "think", None
         base_model = spec.get("models")[0] if spec.get("models") else base_variant.llm_config.model_id
     elif base_cls == "ToolNode":
         base_mode, base_prompt, base_scripted_fn = "scripted", None, base_variant.tool.name
@@ -359,7 +437,12 @@ def _reconstruct_oracle_group(group: list[Any], flow: Any, output_types: dict[st
         )
 
     outputs = _agent_spec_props_to_type(merge_node.outputs)
+    # Option F neograph-cbpyx: a think variant's external inputs are translated
+    # to flat placeholder names, so prefer the variant marker's ORIGINAL dict-form
+    # inputs (fallback to the merge node's data-edge inputs for scripted/foreign).
     inputs = _inputs_from_data_edges(merge_node.name, flow, output_types)
+    if base_prompt_marker is not None:
+        inputs = _augment_inputs_from_prompt_marker(inputs, base_prompt_marker, output_types)
     output_types[merge_node.name] = outputs
 
     base_node = Node(name=merge_node.name, mode=base_mode, inputs=inputs, outputs=outputs, prompt=base_prompt,

@@ -161,11 +161,33 @@ SHAPES: tuple[str, ...] = ("single", "dict")
 #                context: Each fan-out receiver + a non-fan-out context input.
 
 
-def _llm_kwargs(mode: str) -> dict[str, object]:
-    """@node kwargs that select the execution mode; scripted adds none."""
+def _input_refs(combo: ModifierCombo, shape: str) -> str:
+    """The ``${path}`` references an LLM-mode cell's prompt must contain so Option F
+    (neograph-cbpyx) can translate them to ``{{ flat }}`` placeholders. Every
+    declared input is referenced (an input a prompt never mentions is dropped from
+    the exported primitive), and the paths are the REAL dotted @node input titles
+    (``{param}.{field}``), not the old generic ``${x}`` (which named no declared
+    input and could never turn a cell green)."""
+    if combo is ModifierCombo.EACH:
+        if shape == "single":
+            return "${item.v}"
+        if shape == "dict":
+            return "${item.v} ${pb.b}"
+        return "${source.c} ${item.v}"  # context
+    # BARE / ORACLE / LOOP / OPERATOR
+    if shape == "single":
+        return "${prod.a}"
+    return "${pa.a} ${pb.b}"
+
+
+def _llm_kwargs(mode: str, combo: ModifierCombo, shape: str) -> dict[str, object]:
+    """@node kwargs that select the execution mode; scripted adds none. The prompt
+    references the cell's REAL declared inputs (via ``_input_refs``) so Option F
+    translates them -- Oracle's merge_prompt template is set separately in the
+    ORACLE branch (it references the variant output ``${ok}``, not the inputs)."""
     if mode == "scripted":
         return {}
-    kw: dict[str, object] = {"mode": mode, "model": "fast", "prompt": "process ${x}"}
+    kw: dict[str, object] = {"mode": mode, "model": "fast", "prompt": f"process {_input_refs(combo, shape)}"}
     if mode == "agent":
         kw["tools"] = [Tool(name="t_read", budget=1)]
     if mode == "act":
@@ -186,7 +208,7 @@ def build_cell(mode: str, combo: ModifierCombo, config: str | None, shape: str) 
     Any condition / merge referenced by a modifier is registered inside the
     builder because conftest's autouse fixture resets every registry per test.
     """
-    lk = _llm_kwargs(mode)
+    lk = _llm_kwargs(mode, combo, shape)
     nm = _cell_id(mode, combo, config, shape)
 
     if combo is ModifierCombo.BARE:
@@ -249,7 +271,10 @@ def build_cell(mode: str, combo: ModifierCombo, config: str | None, shape: str) 
         if config == "merge_fn":
             oracle_kw["merge_fn"] = "m_combine"
         else:
-            oracle_kw["merge_prompt"] = "combine ${variants}"
+            # merge_prompt references the variant OUTPUT (gen node outputs=Out -> the
+            # single-type bare title 'ok'), so Option F translates ${ok} -> {{ ok }}
+            # and routes the variant->merge fan-in edge through that flat name.
+            oracle_kw["merge_prompt"] = "combine ${ok}"
 
         if shape == "single":
 
@@ -360,10 +385,16 @@ CELLS: dict[str, tuple[str, ModifierCombo, str | None, str]] = _generate_cells()
 # classified fails loud. Membership is the CURRENT observed behavior at HEAD
 # (neograph-00447 probe); do NOT "fix" a RED cell here -- that is neograph-i7k7j.
 
-# Builds, exports, and round-trips cleanly today (all scripted-mode; Oracle only
-# with merge_fn -- an LLM-free ToolNode lowering with zero placeholder coupling).
+# Builds, exports, and round-trips cleanly. Since Option F (neograph-cbpyx), every
+# LLM-mode (think/agent/act) cell whose prompt references its real inputs via
+# ${path} exports too: the translator rewrites ${prod.a} -> {{ prod_a }} and the
+# consumer sweep (input edges, Loop self-edge, Oracle fan-in, Each StartNode) routes
+# every destination_input through the SAME flat name. The ONLY remaining RED_EXPORT
+# cells are Oracle+agent/act (no lowering yet -- neograph-i7k7j); Oracle+think and
+# Oracle merge_prompt (scripted+think) are now GREEN.
 GREEN: frozenset[str] = frozenset(
     {
+        # scripted (LLM-free ToolNode lowerings; green pre-Option-F)
         "scripted-bare-single",
         "scripted-bare-dict",
         "scripted-each-single",
@@ -375,6 +406,38 @@ GREEN: frozenset[str] = frozenset(
         "scripted-operator-dict",
         "scripted-oracle-merge_fn-single",
         "scripted-oracle-merge_fn-dict",
+        # scripted Oracle merge_prompt (translated merge LlmNode) -- green via Option F
+        "scripted-oracle-merge_prompt-single",
+        "scripted-oracle-merge_prompt-dict",
+        # think -- all green via Option F
+        "think-bare-single",
+        "think-bare-dict",
+        "think-each-single",
+        "think-each-dict",
+        "think-each-context",
+        "think-loop-single",
+        "think-loop-dict",
+        "think-operator-single",
+        "think-operator-dict",
+        "think-oracle-merge_fn-single",
+        "think-oracle-merge_fn-dict",
+        "think-oracle-merge_prompt-single",
+        "think-oracle-merge_prompt-dict",
+        # agent -- BARE/EACH-single/LOOP-single/OPERATOR green via Option F
+        # (each-dict/context + loop-dict are UNREPRESENTABLE; oracle stays RED)
+        "agent-bare-single",
+        "agent-bare-dict",
+        "agent-each-single",
+        "agent-loop-single",
+        "agent-operator-single",
+        "agent-operator-dict",
+        # act -- same shape as agent
+        "act-bare-single",
+        "act-bare-dict",
+        "act-each-single",
+        "act-loop-single",
+        "act-operator-single",
+        "act-operator-dict",
     }
 )
 
@@ -398,8 +461,10 @@ UNREPRESENTABLE: frozenset[str] = frozenset(
 RED_EXPORT: frozenset[str] = frozenset(CELLS) - GREEN - UNREPRESENTABLE
 
 _I7K7J_BLOCKER = (
-    "neograph-i7k7j: Agent Spec export red cell (LLM-mode dotted-title placeholder "
-    "coupling / Oracle merge_prompt / Oracle+agent-act no-lowering)"
+    "neograph-i7k7j: Oracle+agent/act lowering not yet implemented -- _lower_oracle "
+    "raises for agent/act-mode variants (_agent_spec.py, 'Oracle+agent/act export has "
+    "no Agent Spec lowering yet'). NOT placeholder coupling (Option F / neograph-cbpyx "
+    "translated every think/scripted Oracle + LLM-mode cell to GREEN)."
 )
 
 # The prior hand-typed CELLS keys, expressed in the derived scheme. An EXPLICIT
