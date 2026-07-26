@@ -61,6 +61,38 @@ NODE_FAMILIES: dict[str, str] = {
 FAMILIES = frozenset({"text_scan", "structural", "echo"})
 
 
+# -- Derived: placeholder-prompt-emitting export constructors (neograph-tjupj) -
+
+PLACEHOLDER_PROMPT_EMITTING_CONSTRUCTORS: frozenset[str] = (
+    frozenset({n for n, f in NODE_FAMILIES.items() if f == "text_scan"}) | {"AgentNode"}
+)
+"""pyagentspec constructor names whose neograph-EXPORT emission carries
+neograph-authored ``${var}`` prompt text and therefore MUST be preceded by a
+``_translate_placeholders(`` call in ``src/neograph/_agent_spec.py``.
+
+DERIVED, never hand-copied -- two layered facts, single-sourced here so a new
+coupled primitive is a LOUD add, not a silent miss:
+
+* ``{n for n, f in NODE_FAMILIES.items() if f == "text_scan"}`` -- the
+  pyagentspec placeholder-coupled family straight off ``NODE_FAMILIES`` (Tier A).
+  ``LlmNode`` is the flow-node fed ``prompt_template=<translated>``; the OTHER
+  text_scan members it collects (currently ``InputMessageNode``; ``ApiNode`` /
+  ``OutputMessageNode`` are never constructed by the exporter) are NOT hidden --
+  they are narrowed at the guard by a NAMED exemption (``InputMessageNode`` is a
+  Portal routing-CHECK node, not prompt-bearing), not by dropping them here.
+* ``| {"AgentNode"}`` -- an exporter-specific augmentation. ``AgentNode`` is
+  ``structural`` to pyagentspec (``NODE_FAMILIES`` faithfully mirrors its
+  ``_get_inferred_inputs``; do NOT reclassify it), but neograph populates the
+  nested ``Agent.system_prompt`` with TRANSLATED text via ``_make_agent(...)``,
+  so the export site is placeholder-coupled.
+
+Bare ``Agent(...)`` (the sub-constructor inside ``_make_agent``) is deliberately
+NOT in this set: it receives an already-translated ``system_prompt`` PARAM, so
+demanding a same-body translate would be a false positive -- its pairing is
+enforced at the ``_make_agent`` CALL sites instead.
+"""
+
+
 # -- Tier B: pyagentspec-dependent completeness walk (lazy import) ------------
 
 
