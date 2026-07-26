@@ -1,0 +1,110 @@
+"""Shared pyagentspec node capability registry (neograph-00447).
+
+This module is the SINGLE source of truth for how neograph's Agent Spec export
+tooling classifies pyagentspec's concrete ``flows.nodes`` primitives by their
+``_get_inferred_inputs`` family. It is a SHARED artifact: both the exhaustive
+export matrix (``tests/test_agent_spec_matrix.py``) and the AST structural guard
+(``tests/test_guards_agent_spec_lowering.py`` / neograph-tjupj) consume it --
+neither re-derives its own copy.
+
+Two tiers, deliberately split (neograph-00447 architect-review finding M2):
+
+* **Tier A -- ``NODE_FAMILIES``**: a pure ``dict[str, str]`` of class-name ->
+  family. It imports NOTHING from pyagentspec, so a consumer that only needs the
+  name-string classification (the pure-AST always-on structural guard) can
+  ``from tests.agent_spec_capabilities import NODE_FAMILIES`` and stay always-on
+  in the core suite. Importing this module must NEVER trigger a
+  ``pytest.importorskip('pyagentspec')`` skip -- a structural guard silently not
+  running is exactly the silent seam the north star forbids.
+
+* **Tier B -- ``all_concrete_flow_node_classes`` / ``assert_registry_complete``**:
+  the pyagentspec-dependent completeness walk. It imports pyagentspec *inside the
+  function body* (lazy), so callers invoke it under their OWN
+  ``pytest.importorskip('pyagentspec')``. The completeness assertion compares the
+  Tier-A keyset against the live-walked concrete subclass set, so a new primitive
+  pyagentspec ships later fails LOUD instead of silently going unclassified.
+
+Families (verified from each class's ``_get_inferred_inputs`` source):
+
+* ``text_scan``   -- inputs must appear as ``{{ }}`` placeholders in text/config
+                     (scanned via ``get_placeholders_from_json_object``).
+* ``structural``  -- inputs are read from a nested flow's StartNode / subflow /
+                     agent (structural, not text).
+* ``echo``        -- inputs merely echo ``self.inputs`` / ``tool.inputs`` /
+                     outputs; no coupling.
+"""
+
+from __future__ import annotations
+
+# -- Tier A: pure name-string classification (NO pyagentspec import) ----------
+
+NODE_FAMILIES: dict[str, str] = {
+    # text-scan / placeholder-coupled
+    "LlmNode": "text_scan",
+    "ApiNode": "text_scan",
+    "InputMessageNode": "text_scan",
+    "OutputMessageNode": "text_scan",
+    # structural / subflow-based
+    "AgentNode": "structural",
+    "FlowNode": "structural",
+    "CatchExceptionNode": "structural",
+    "MapNode": "structural",
+    "ParallelMapNode": "structural",
+    "ParallelFlowNode": "structural",
+    # unconstrained-echo
+    "ToolNode": "echo",
+    "BranchingNode": "echo",
+    "StartNode": "echo",
+    "EndNode": "echo",
+}
+
+FAMILIES = frozenset({"text_scan", "structural", "echo"})
+
+
+# -- Tier B: pyagentspec-dependent completeness walk (lazy import) ------------
+
+
+def all_concrete_flow_node_classes() -> set[str]:
+    """Names of every concrete ``pyagentspec.flows`` Node subclass, walked live.
+
+    Imports pyagentspec lazily inside the body so importing this module (Tier A)
+    never requires the ``agent-spec`` extra. Callers must guard invocation with
+    their own ``pytest.importorskip('pyagentspec')``.
+    """
+    import inspect
+
+    from pyagentspec.flows.node import Node as _PNode
+
+    def _walk(cls: type) -> set[type]:
+        found: set[type] = set()
+        for sub in cls.__subclasses__():
+            found.add(sub)
+            found |= _walk(sub)
+        return found
+
+    return {c.__name__ for c in _walk(_PNode) if not inspect.isabstract(c)}
+
+
+def assert_registry_complete() -> None:
+    """Fail LOUD if ``NODE_FAMILIES`` and the live pyagentspec node set diverge.
+
+    A new pyagentspec primitive (added upstream) -> ``missing`` non-empty ->
+    someone must classify it here (and the AST guard picks it up for free). A
+    class we classify that pyagentspec dropped -> ``stale`` non-empty. Also pins
+    that every value is a known family.
+    """
+    walked = all_concrete_flow_node_classes()
+    registered = set(NODE_FAMILIES)
+
+    missing = walked - registered
+    stale = registered - walked
+    assert not missing, (
+        "pyagentspec ships concrete flows.nodes Node subclass(es) NOT classified "
+        f"in NODE_FAMILIES: {sorted(missing)}. Add each to NODE_FAMILIES with its "
+        "_get_inferred_inputs family (text_scan / structural / echo)."
+    )
+    assert not stale, (
+        f"NODE_FAMILIES classifies name(s) pyagentspec no longer ships: {sorted(stale)}."
+    )
+    bad_family = {k: v for k, v in NODE_FAMILIES.items() if v not in FAMILIES}
+    assert not bad_family, f"NODE_FAMILIES has unknown family value(s): {bad_family}"
