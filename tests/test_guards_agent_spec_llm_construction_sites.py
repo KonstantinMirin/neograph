@@ -154,19 +154,29 @@ MAKE_AGENT_UNPAIRED_ALLOWLIST: frozenset[str] = frozenset({"_lower_portal_mesh_t
 # added -- verify it has a paired _translate_placeholders/_node_translation call
 # OR a named exemption OR a ticketed shrinking-allowlist entry; never silent
 # drift. Current census (grep-verified, src/neograph/_agent_spec.py):
-#   node sites (6): LlmNode :309/:504/:589, AgentNode :330/:544, InputMessageNode :812
-#   _make_agent (3): :329 + :539 (paired), :945 (_lower_portal_mesh_to_swarm, allowlisted)
-EXPECTED_NODE_SITES = 6
-EXPECTED_MAKE_AGENT_SITES = 3
-EXPECTED_PAIRED_NODE_SITES = 5  # 6 collected minus InputMessageNode:812 (exempt)
-EXPECTED_PAIRED_MAKE_AGENT_SITES = 2  # 3 collected minus :945 (allowlisted)
+#   node sites (4): LlmNode _lower_generation_step + _lower_oracle merge_node,
+#     AgentNode _lower_generation_step, InputMessageNode Portal-input.
+#   _make_agent (2): _lower_generation_step (paired), _lower_portal_mesh_to_swarm
+#     (allowlisted, neograph-s7zt3.1).
+# neograph-2s2o6 consolidation: _lower_node's + _lower_oracle-variant's two
+# hand-written mode dispatches collapsed into ONE _lower_generation_step, so the
+# 5 SEMANTIC dispatch branches now map onto 3 PHYSICAL paired coupled sites
+# (LlmNode-think + AgentNode-agent/act inside _lower_generation_step, + the
+# _lower_oracle merge_prompt LlmNode). Fewer physical sites, SAME pairing
+# invariant -- the guard's discriminating power (the _unpaired check + meta-guard)
+# is unchanged; these counts are the census tripwire, not the safety net.
+EXPECTED_NODE_SITES = 4
+EXPECTED_MAKE_AGENT_SITES = 2
+EXPECTED_PAIRED_NODE_SITES = 3  # 4 collected minus InputMessageNode (exempt)
+EXPECTED_PAIRED_MAKE_AGENT_SITES = 1  # 2 collected minus the Portal-Swarm allowlisted site
 
-# Req-4 reconciliation: the matrix (tests/test_agent_spec_matrix.py) proves
-# exactly 5 dispatch branches emit a placeholder-coupled flow node:
-# _lower_node{think->LlmNode, agent/act->AgentNode} and
-# _lower_oracle{think-variant->LlmNode, agent/act-variant->AgentNode,
-# merge_prompt->LlmNode}. The guard's paired NODE-site count must equal this.
-MATRIX_COUPLED_DISPATCH_BRANCHES = 5
+# Req-4 reconciliation: post-2s2o6 the 5 SEMANTIC matrix dispatch branches
+# (_lower_node{think,agent/act} + _lower_oracle{think-variant,agent/act-variant,
+# merge_prompt}) lower through the shared _lower_generation_step, so they collapse
+# onto 3 PHYSICAL placeholder-coupled construction sites. The guard's paired
+# NODE-site count must equal this physical count (a lost/added physical site still
+# fails loud); it is NO LONGER the semantic-branch count (which stays 5).
+PHYSICAL_COUPLED_SITES = 3
 
 
 class TestPlaceholderEmittingSitesAreExhaustivelyCollected:
@@ -185,7 +195,7 @@ class TestPlaceholderEmittingSitesAreExhaustivelyCollected:
         by_name: dict[str, int] = {}
         for s in NODE_SITES:
             by_name[s.name] = by_name.get(s.name, 0) + 1
-        assert by_name == {"LlmNode": 3, "AgentNode": 2, "InputMessageNode": 1}, (
+        assert by_name == {"LlmNode": 2, "AgentNode": 1, "InputMessageNode": 1}, (
             f"coupled-constructor breakdown drifted: {by_name}"
         )
 
@@ -287,11 +297,12 @@ class TestMatrixReconciliation:
     def test_paired_node_sites_equal_matrix_coupled_dispatch_branches(self):
         unpaired = _unpaired(NODE_SITES, TRANSLATE_BY_FUNC)
         paired = len(NODE_SITES) - len(unpaired)
-        assert paired == MATRIX_COUPLED_DISPATCH_BRANCHES, (
-            f"guard paired node sites ({paired}) must equal the matrix's "
-            f"{MATRIX_COUPLED_DISPATCH_BRANCHES} coupled dispatch branches "
-            "(_lower_node think+agent/act, _lower_oracle think-variant+"
-            "agent/act-variant+merge_prompt)."
+        assert paired == PHYSICAL_COUPLED_SITES, (
+            f"guard paired node sites ({paired}) must equal the "
+            f"{PHYSICAL_COUPLED_SITES} PHYSICAL coupled construction sites the 5 "
+            "SEMANTIC matrix dispatch branches collapse onto post-2s2o6 "
+            "(LlmNode-think + AgentNode-agent/act in _lower_generation_step, + the "
+            "_lower_oracle merge_prompt LlmNode). A lost/added physical site fails loud."
         )
 
     def test_portal_swarm_is_the_recorded_req4_discrepancy(self):

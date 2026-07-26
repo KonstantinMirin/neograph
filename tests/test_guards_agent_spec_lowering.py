@@ -55,16 +55,28 @@ def _lower_each_source() -> str:
     raise AssertionError("_lower_each not found in _agent_spec.py")
 
 
+def _lower_generation_step_source() -> str:
+    """The shared per-node.mode dispatch (neograph-2s2o6). Post-refactor the
+    think/agent-act/scripted construction lives here, NOT in _lower_node."""
+    tree = ast.parse(AGENT_SPEC_FILE.read_text())
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "_lower_generation_step":
+            return ast.get_source_segment(AGENT_SPEC_FILE.read_text(), node) or ""
+    raise AssertionError("_lower_generation_step not found in _agent_spec.py")
+
+
 class TestAgentActModeLowersToAgentNode:
-    """_lower_node's agent/act branch must construct a real AgentNode, never
-    a ToolNode placeholder or a bare fail-loud with no lowering at all."""
+    """The shared _lower_generation_step's agent/act branch must construct a real
+    AgentNode, never a ToolNode placeholder or a bare fail-loud with no lowering at
+    all. Retargeted from _lower_node to _lower_generation_step (neograph-2s2o6): the
+    per-mode dispatch now lives in the shared function; _lower_node is a thin wrapper."""
 
     def test_agent_act_branch_constructs_agent_node(self):
         """Positive: the current source builds an AgentNode for agent/act mode."""
-        source = _lower_node_source()
+        source = _lower_generation_step_source()
         assert "AgentNode(" in source, (
-            "_lower_node's agent/act branch must construct a pyagentspec AgentNode "
-            "-- the ToolNode placeholder silently dropped prompt/model/tools"
+            "_lower_generation_step's agent/act branch must construct a pyagentspec "
+            "AgentNode -- the ToolNode placeholder silently dropped prompt/model/tools"
         )
 
     def test_agent_act_branch_does_not_construct_bare_tool_node_only(self):
@@ -74,7 +86,7 @@ class TestAgentActModeLowersToAgentNode:
         the exact pre-i3zsh.1 regression by checking the two constructors
         are not conflated: AgentNode must appear BEFORE the final bare
         ToolNode return (which is reached only by scripted/raw modes)."""
-        source = _lower_node_source()
+        source = _lower_generation_step_source()
         agent_idx = source.find("mode in (\"agent\", \"act\")")
         agent_node_idx = source.find("AgentNode(")
         tool_node_idx = source.rfind("nodes_mod.ToolNode(")
@@ -92,11 +104,19 @@ class TestAgentActModeLowersToAgentNode:
 
     def test_agent_act_branch_stamps_reconstruction_marker(self):
         """Every irreversible flattening must carry a neograph/-prefixed marker
-        (per the exporter's Core Invariant) -- agent/act is no exception."""
-        source = _lower_node_source()
-        assert "neograph/agent_spec" in source, (
-            "agent/act lowering must stamp a neograph/agent_spec marker so a future "
-            "from_agent_spec() importer can reconstruct the node losslessly"
+        (per the exporter's Core Invariant) -- agent/act is no exception.
+
+        Strengthened (neograph-2s2o6, review MEDIUM-3): assert the EXECUTABLE
+        stamping (_MARK_AGENT_SPEC constant + the _agent_spec_marker() call), NOT
+        only the comment literal 'neograph/agent_spec'. The prior comment-keyed
+        check was vacuous -- deleting the real stamping while keeping the comment
+        stayed green. The comment migrated with the branch, but the token is what
+        actually guarantees the marker is emitted."""
+        source = _lower_generation_step_source()
+        assert "_MARK_AGENT_SPEC: _agent_spec_marker(node)" in source, (
+            "agent/act lowering must stamp the neograph/agent_spec marker via the "
+            "_MARK_AGENT_SPEC constant + _agent_spec_marker(node) call (executable "
+            "token, not a comment) so from_agent_spec() reconstructs the node losslessly"
         )
 
 
@@ -234,6 +254,131 @@ class TestLoopSelfEdgeResolvesDictFormDestinationTitle:
         )
         assert "dest_prefix" not in buggy_source
         assert 'dotted = f"{dest_prefix}{prop.title}"' not in buggy_source
+
+
+def _func_def(name: str) -> ast.FunctionDef:
+    tree = ast.parse(AGENT_SPEC_FILE.read_text())
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == name:
+            return node
+    raise AssertionError(f"{name} not found in _agent_spec.py")
+
+
+def _all_func_names() -> set[str]:
+    tree = ast.parse(AGENT_SPEC_FILE.read_text())
+    return {n.name for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)}
+
+
+def _oracle_variant_loop() -> ast.For:
+    """The ``for i, model_tier in enumerate(variant_models):`` per-variant loop
+    inside ``_lower_oracle`` -- the exact region that must delegate its
+    per-node.mode construction, matched by its iterable (not by line number)."""
+    fn = _func_def("_lower_oracle")
+    for node in ast.walk(fn):
+        if isinstance(node, ast.For) and "variant_models" in ast.unparse(node.iter):
+            return node
+    raise AssertionError("_lower_oracle's variant loop (over variant_models) not found")
+
+
+def _construction_calls_in(node: ast.AST, class_names: frozenset[str]) -> list[str]:
+    """Every ``Call`` under ``node`` whose callee is one of ``class_names``
+    (matched as ``mod.ClassName(...)`` Attribute OR bare ``ClassName(...)``
+    Name) -- an AST shape match, never a line-number or substring match."""
+    found: list[str] = []
+    for sub in ast.walk(node):
+        if isinstance(sub, ast.Call):
+            func = sub.func
+            if isinstance(func, ast.Attribute):
+                name = func.attr
+            elif isinstance(func, ast.Name):
+                name = func.id
+            else:
+                name = None
+            if name in class_names:
+                found.append(name)
+    return found
+
+
+_GENERATION_NODE_CTORS: frozenset[str] = frozenset({"LlmNode", "AgentNode"})
+
+
+class TestPerModeDispatchLivesInOneSharedFunction:
+    """Anti-re-duplication structural guard for neograph-2s2o6 (disease-scan
+    REQUIRED; refinement x02ki.12 step 5b) -- written FAILING-FIRST.
+
+    Disease: the per-``node.mode`` THREE-WAY generation-step dispatch
+    (``think`` -> LlmNode / ``agent``,``act`` -> AgentNode+_make_agent /
+    ``scripted``,``raw`` -> ToolNode) is hand-written as TWO independent copies
+    -- one in ``_lower_node``, one inline in ``_lower_oracle``'s variant loop.
+    This is the exact 'one validator, not two' / 'single source of truth, do
+    not re-inline elsewhere' pattern CLAUDE.md bans (``effective_producer_type``,
+    ``_check_fan_in_inputs``); it was just never applied here.
+
+    The invariant (north-star -- keep the disease UNWRITEABLE): the LlmNode/
+    AgentNode construction dispatch must live in EXACTLY ONE shared function
+    (``_lower_generation_step``); both ``_lower_node`` and the ``_lower_oracle``
+    variant loop DELEGATE to it and construct NO LlmNode/AgentNode of their own.
+
+    FAILS on current code (both functions still hold their own dispatch); the
+    2s2o6 extract turns it GREEN. The ``_lower_oracle`` MERGE LlmNode/ToolNode
+    (built OUTSIDE the variant loop, per the plan) is deliberately NOT in scope
+    -- only the per-variant generation-step dispatch is.
+    """
+
+    def test_lower_node_body_constructs_no_llm_or_agent_node(self) -> None:
+        found = _construction_calls_in(_func_def("_lower_node"), _GENERATION_NODE_CTORS)
+        assert not found, (
+            "_lower_node must be a thin wrapper that DELEGATES the per-node.mode "
+            "generation-step dispatch to _lower_generation_step -- it still "
+            f"constructs {sorted(set(found))} of its own (the disease: two copies of "
+            "the three-way dispatch). Extract the dispatch into _lower_generation_step "
+            "(neograph-2s2o6) so it lives in exactly one place."
+        )
+
+    def test_lower_oracle_variant_loop_constructs_no_llm_or_agent_node(self) -> None:
+        found = _construction_calls_in(_oracle_variant_loop(), _GENERATION_NODE_CTORS)
+        assert not found, (
+            "_lower_oracle's per-variant loop must DELEGATE to _lower_generation_step "
+            f"-- it still constructs {sorted(set(found))} inline (the SECOND hand-written "
+            "copy of the three-way dispatch). Call the shared _lower_generation_step per "
+            "variant tier instead (neograph-2s2o6)."
+        )
+
+    def test_shared_generation_step_function_holds_the_dispatch(self) -> None:
+        names = _all_func_names()
+        assert "_lower_generation_step" in names, (
+            "the unified per-node.mode dispatch must live in a shared function named "
+            "_lower_generation_step (neograph-2s2o6) -- it does not exist yet, so the "
+            "dispatch is still duplicated across _lower_node and _lower_oracle."
+        )
+        constructed = set(_construction_calls_in(_func_def("_lower_generation_step"), _GENERATION_NODE_CTORS))
+        assert constructed == _GENERATION_NODE_CTORS, (
+            "_lower_generation_step must be the ONE home of the three-way dispatch: it "
+            f"must construct both {sorted(_GENERATION_NODE_CTORS)} (think + agent/act "
+            f"branches), found {sorted(constructed)}."
+        )
+
+    def test_meta_guard_detector_flags_construction_and_passes_delegation(self) -> None:
+        """Positive+negative meta-test (mirrors the file convention): prove the AST
+        detector actually flags a function that constructs LlmNode/AgentNode AND
+        passes one that only delegates -- so the guard isn't vacuously green."""
+        buggy = ast.parse(
+            "def f():\n"
+            "    if node.mode == 'think':\n"
+            "        return nodes_mod.LlmNode(name=name)\n"
+            "    return nodes_mod.AgentNode(name=name)\n"
+        )
+        delegating = ast.parse(
+            "def f():\n"
+            "    return _lower_generation_step(node, name=name, outputs=outputs, metadata={})\n"
+        )
+        assert sorted(set(_construction_calls_in(buggy, _GENERATION_NODE_CTORS))) == ["AgentNode", "LlmNode"], (
+            "meta-guard: the detector must flag a body that constructs LlmNode/AgentNode"
+        )
+        assert _construction_calls_in(delegating, _GENERATION_NODE_CTORS) == [], (
+            "meta-guard: the detector must pass a body that only delegates to "
+            "_lower_generation_step"
+        )
 
 
 class TestEachSubflowStartInputsGatedOnTranslation:

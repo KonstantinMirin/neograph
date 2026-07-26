@@ -291,28 +291,41 @@ def _properties_for(type_spec: Any) -> list[Property]:
     return model_to_agent_spec_properties(type_spec)
 
 
-def _lower_node(node: Node) -> SpecNode:
-    """Dispatch a single neograph Node to its Agent Spec primitive by mode."""
-    _reject_unrepresentable_fields(node)
+def _lower_generation_step(
+    node: Node,
+    *,
+    name: str,
+    outputs: list[Property],
+    metadata: dict[str, Any],
+    model_tier: str | None = None,
+    tool_description: str | None = None,
+) -> SpecNode:
+    """The SINGLE per-node.mode generation dispatch (think / agent-act / scripted-raw).
+
+    Shared by BOTH callers (neograph-2s2o6, retiring the two hand-written copies that
+    were the 'one validator, not two' anti-pattern CLAUDE.md bans elsewhere):
+    ``_lower_node`` passes ``name=node.name``/``metadata={}``; ``_lower_oracle``'s
+    variant loop passes ``name=f'{node.name}__variant_{i}'``, the oracle group/variant
+    markers as ``metadata``, and the per-variant ``model_tier`` (Oracle.models). A new
+    mode branch or a fix now lands in ONE place for every caller -- if agent/act-mode
+    Oracle variants get a lowering change, they get it for free, never a third copy.
+    """
     nodes_mod, _flow_mod, _edges_mod, _property_mod, tools_mod = _import_agent_spec_flow_classes()
 
     inputs = _properties_for(node.inputs)
-    outputs = _properties_for(node.outputs)
 
     if node.mode == "think":
         # Option F neograph-cbpyx: translate ${path} -> {{ flat }}; the LlmNode
         # declares ONLY the referenced flat Properties, and the neograph/prompt_spec
         # marker carries the untranslated text + full original inputs for round trip.
-        rewritten, ref_props, flat_to_original = _translate_placeholders(
-            node.prompt or "", inputs, node.name
-        )
+        rewritten, ref_props, flat_to_original = _translate_placeholders(node.prompt or "", inputs, name)
         return nodes_mod.LlmNode(
-            name=node.name,
+            name=name,
             inputs=ref_props or None,
             outputs=outputs or None,
-            llm_config=_make_llm_config(node),
+            llm_config=_make_llm_config(Node(name=node.name, model=model_tier or node.model)),
             prompt_template=rewritten,
-            metadata={_MARK_PROMPT_SPEC: _prompt_spec_marker(node, flat_to_original)},
+            metadata={**metadata, _MARK_PROMPT_SPEC: _prompt_spec_marker(node, flat_to_original)},
         )
 
     if node.mode in ("agent", "act"):
@@ -324,15 +337,21 @@ def _lower_node(node: Node) -> SpecNode:
         # implemented (neograph-aa5gq, loader._reconstruct_agent_node). Option F:
         # the Agent's system_prompt is placeholder-translated and the AgentNode
         # declares the referenced flat Properties; the original ${var} text rides
-        # the existing neograph/agent_spec marker (marker["prompt"]).
-        rewritten, ref_props, flat_to_original = _translate_placeholders(node.prompt or "", inputs, node.name)
-        agent = _make_agent(node, tools_mod, ref_props, outputs, rewritten)
+        # the existing neograph/agent_spec marker (marker["prompt"]). Per-variant
+        # Oracle.models tier + a unique component name ride the model_copy
+        # (agent_source); the neograph/agent_spec + prompt_spec markers keep the
+        # ORIGINAL node (model=node.model), so _reconstruct_oracle_group recovers
+        # base_node | Oracle(models=...).
+        rewritten, ref_props, flat_to_original = _translate_placeholders(node.prompt or "", inputs, name)
+        agent_source = node.model_copy(update={"name": name, "model": model_tier or node.model})
+        agent = _make_agent(agent_source, tools_mod, ref_props, outputs, rewritten)
         return nodes_mod.AgentNode(
-            name=node.name,
+            name=name,
             inputs=ref_props or None,
             outputs=outputs or None,
             agent=agent,
             metadata={
+                **metadata,
                 _MARK_MODE: node.mode,
                 _MARK_AGENT_SPEC: _agent_spec_marker(node),
                 # The neograph/prompt_spec marker carries the FULL original inputs so
@@ -345,13 +364,26 @@ def _lower_node(node: Node) -> SpecNode:
             },
         )
 
-    # scripted / raw already rejected raw_fn above; scripted_fn is name-only.
+    # scripted / raw already rejected raw_fn upstream; scripted_fn is name-only.
     return nodes_mod.ToolNode(
-        name=node.name,
+        name=name,
         inputs=inputs or None,
         outputs=outputs or None,
-        tool=_make_server_tool(node, tools_mod, inputs, outputs),
+        tool=_make_server_tool(node, tools_mod, inputs, outputs, description=tool_description),
+        metadata=metadata,
     )
+
+
+def _lower_node(node: Node) -> SpecNode:
+    """Dispatch a single neograph Node to its Agent Spec primitive by mode.
+
+    Thin wrapper over the shared ``_lower_generation_step`` neograph-2s2o6: the
+    per-mode dispatch lives in ONE place. ``_lower_node`` adds only the top-level
+    ``_reject_unrepresentable_fields`` guard that the Oracle-variant path deliberately
+    omits, and passes the node's own name + empty base metadata.
+    """
+    _reject_unrepresentable_fields(node)
+    return _lower_generation_step(node, name=node.name, outputs=_properties_for(node.outputs), metadata={})
 
 
 def _make_agent(
@@ -447,10 +479,16 @@ def _make_llm_config(node: Node) -> Any:
     return SpecLlmConfig(name=f"{node.name}-llm", model_id=node.model or "default")
 
 
-def _make_server_tool(node: Node, tools_mod: Any, inputs: list[Property], outputs: list[Property]) -> Any:
+def _make_server_tool(
+    node: Node,
+    tools_mod: Any,
+    inputs: list[Property],
+    outputs: list[Property],
+    description: str | None = None,
+) -> Any:
     return tools_mod.ServerTool(
         name=node.scripted_fn or node.name,
-        description=f"neograph node {node.name!r} (mode={node.mode})",
+        description=description if description is not None else f"neograph node {node.name!r} (mode={node.mode})",
         inputs=inputs or None,
         outputs=outputs or None,
     )
@@ -478,7 +516,6 @@ def _lower_oracle(node: Node, oracle: Oracle) -> tuple[list[SpecNode], list[Cont
 
     group_id = f"{node.name}__oracle"
     variant_models = oracle.models if oracle.models else [node.model] * oracle.n
-    inputs = _properties_for(node.inputs)
     gen_outputs = _properties_for(node.oracle_gen_type) if node.oracle_gen_type else _properties_for(node.outputs)
 
     variant_nodes: list[SpecNode] = []
@@ -486,90 +523,24 @@ def _lower_oracle(node: Node, oracle: Oracle) -> tuple[list[SpecNode], list[Cont
         variant_name = f"{node.name}__variant_{i}"
         variant_metadata = {_MARK_MODIFIER: "oracle", _MARK_GROUP_ID: group_id, _MARK_VARIANT: i}
 
-        # neograph-m57mn Option A: dispatch per node.mode, mirroring
-        # _lower_node's think/agent-act/else dispatch -- an unconditional
-        # LlmNode was itself the root cause of the scripted-mode Oracle
-        # export bug (a scripted node has zero prompt text, so ANY input
-        # always fails pyagentspec's placeholder-inference validation).
-        if node.mode == "think":
-            # Option F neograph-cbpyx: every think variant shares the node's
-            # prompt/inputs, so one translation feeds all N. The neograph/prompt_spec
-            # marker on the variant lets _reconstruct_oracle_group recover the
-            # untranslated base prompt + original inputs.
-            rewritten, ref_props, flat_to_original = _translate_placeholders(
-                node.prompt or "", inputs, variant_name
+        # Unified per-node.mode dispatch neograph-2s2o6: each Oracle variant
+        # lowers through the SAME _lower_generation_step _lower_node uses -- one
+        # dispatch, not two. The variant carries the oracle group/variant markers
+        # (base metadata) plus its per-variant Oracle.models tier; think/agent-act/
+        # scripted are all handled identically to the top-level node, so the merge
+        # node + variant->merge edges below stay mode-agnostic. (An unconditional
+        # LlmNode was the root cause of the scripted-mode Oracle export bug --
+        # neograph-m57mn; the shared dispatch prevents that class of drift.)
+        variant_nodes.append(
+            _lower_generation_step(
+                node,
+                name=variant_name,
+                outputs=gen_outputs,
+                metadata=variant_metadata,
+                model_tier=model_tier,
+                tool_description=f"Oracle variant {i} for {node.name!r}",
             )
-            variant_metadata[_MARK_PROMPT_SPEC] = _prompt_spec_marker(node, flat_to_original)
-            variant_nodes.append(
-                nodes_mod.LlmNode(
-                    name=variant_name,
-                    inputs=ref_props or None,
-                    outputs=gen_outputs or None,
-                    llm_config=_make_llm_config(Node(name=node.name, model=model_tier or node.model)),
-                    prompt_template=rewritten,
-                    metadata=variant_metadata,
-                )
-            )
-        elif node.mode in ("agent", "act"):
-            # Design B, neograph-i7k7j: mirror _lower_node's agent/act branch per
-            # variant -- a real AgentNode+Agent, the SAME lowering _lower_node uses,
-            # never a divergent one (Core Invariant). N variants + one merge is the
-            # semantic Oracle lowering; the compile-time isolation auto-wrap
-            # (_fan_agent_wrap) is a LangGraph-runtime detail, so bare AgentNode
-            # variants are faithful and round-trip re-wraps on recompile.
-            #   - Option F: the Agent's system_prompt is placeholder-translated and
-            #     the AgentNode declares the referenced flat Properties; the original
-            #     ${var} text rides neograph/agent_spec marker["prompt"].
-            #   - Per-variant model tier (Oracle.models): pass a model_copy carrying
-            #     the tier AND a UNIQUE name so each Agent/LlmConfig gets a distinct
-            #     pyagentspec component name (no N-way collision). The tier axis
-            #     round-trips via the Oracle marker's `models` on the merge node, so
-            #     the neograph/agent_spec marker keeps the BASE node (model=node.model)
-            #     and _reconstruct_oracle_group recovers base_node | Oracle(models=...).
-            #   - dict-form (multi-key) agent OUTPUTS never reach here: they are
-            #     rejected at Construct.__init__ by raise_if_unsupported_fan_over_agent
-            #     (_fan_agent.py, via _validate_node_chain) -- upstream of both compile
-            #     and export -- so an export-path guard would be unreachable dead code.
-            rewritten, ref_props, flat_to_original = _translate_placeholders(
-                node.prompt or "", inputs, variant_name
-            )
-            variant_agent_source = node.model_copy(
-                update={"name": variant_name, "model": model_tier or node.model}
-            )
-            agent = _make_agent(variant_agent_source, tools_mod, ref_props, gen_outputs, rewritten)
-            variant_metadata[_MARK_MODE] = node.mode
-            variant_metadata[_MARK_AGENT_SPEC] = _agent_spec_marker(node)
-            variant_metadata[_MARK_PROMPT_SPEC] = _prompt_spec_marker(node, flat_to_original)
-            variant_nodes.append(
-                nodes_mod.AgentNode(
-                    name=variant_name,
-                    inputs=ref_props or None,
-                    outputs=gen_outputs or None,
-                    agent=agent,
-                    metadata=variant_metadata,
-                )
-            )
-        else:
-            # scripted / raw: ToolNode has zero placeholder coupling (its
-            # inferred inputs just echo tool.inputs), mirroring
-            # _make_server_tool's ServerTool shape.
-            variant_nodes.append(
-                nodes_mod.ToolNode(
-                    name=variant_name,
-                    inputs=inputs or None,
-                    outputs=gen_outputs or None,
-                    tool=tools_mod.ServerTool(
-                        # node.scripted_fn or node.name -- mirrors
-                        # _make_server_tool's naming so a round trip
-                        # reconstructs the SAME scripted_fn for every variant.
-                        name=node.scripted_fn or node.name,
-                        description=f"Oracle variant {i} for {node.name!r}",
-                        inputs=inputs or None,
-                        outputs=gen_outputs or None,
-                    ),
-                    metadata=variant_metadata,
-                )
-            )
+        )
 
     outputs = _properties_for(node.outputs)
     # Option F neograph-cbpyx: the merge LlmNode's prompt references the variant
