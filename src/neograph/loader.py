@@ -419,34 +419,47 @@ def _reconstruct_oracle_group(group: list[Any], flow: Any, output_types: dict[st
     base_variant = variant_nodes[0]
     base_cls = type(base_variant).__name__
     base_prompt_marker = (getattr(base_variant, "metadata", None) or {}).get(_MARK_PROMPT_SPEC)
-    if base_cls == "LlmNode":
-        # Option F neograph-cbpyx: prefer the variant's neograph/prompt_spec
-        # marker for the UNtranslated base prompt (fallback to the translated
-        # prompt_template for a pre-Option-F/foreign variant).
-        base_prompt = base_prompt_marker["original_text"] if base_prompt_marker else base_variant.prompt_template
-        base_mode, base_scripted_fn = "think", None
-        base_model = spec.get("models")[0] if spec.get("models") else base_variant.llm_config.model_id
-    elif base_cls == "ToolNode":
-        base_mode, base_prompt, base_scripted_fn = "scripted", None, base_variant.tool.name
-        base_model = spec.get("models")[0] if spec.get("models") else None
-    else:
-        raise ConfigurationError.build(
-            f"Oracle group {merge_node.name!r}'s variant node has unsupported type {base_cls!r}",
-            expected="LlmNode or ToolNode",
-            found=base_cls,
-        )
 
     outputs = _agent_spec_props_to_type(merge_node.outputs)
-    # Option F neograph-cbpyx: a think variant's external inputs are translated
-    # to flat placeholder names, so prefer the variant marker's ORIGINAL dict-form
-    # inputs (fallback to the merge node's data-edge inputs for scripted/foreign).
+    # Option F neograph-cbpyx: a think/agent variant's external inputs are
+    # translated to flat placeholder names, so prefer the variant marker's
+    # ORIGINAL dict-form inputs (fallback to the merge node's data-edge inputs
+    # for scripted/foreign).
     inputs = _inputs_from_data_edges(merge_node.name, flow, output_types)
     if base_prompt_marker is not None:
         inputs = _augment_inputs_from_prompt_marker(inputs, base_prompt_marker, output_types)
     output_types[merge_node.name] = outputs
 
-    base_node = Node(name=merge_node.name, mode=base_mode, inputs=inputs, outputs=outputs, prompt=base_prompt,
-                      model=base_model, scripted_fn=base_scripted_fn)
+    if base_cls == "AgentNode":
+        # Design B round-trip, neograph-i7k7j: the variant is a real AgentNode+Agent
+        # (the inverse of _lower_oracle's agent/act branch). Reuse the primitive
+        # AgentNode reconstructor to recover mode/prompt/model/tools/gate_tools_when/
+        # context from the neograph/agent_spec marker, then rename it to the GROUP
+        # name (the merge node) and attach Oracle below. The per-variant model tier
+        # is discarded here -- it round-trips via the Oracle marker's `models`, so the
+        # marker (built from the BASE node) already carries the base model.
+        base_node = _reconstruct_agent_node(base_variant, inputs, outputs).model_copy(
+            update={"name": merge_node.name}
+        )
+    else:
+        if base_cls == "LlmNode":
+            # Option F neograph-cbpyx: prefer the variant's neograph/prompt_spec
+            # marker for the UNtranslated base prompt (fallback to the translated
+            # prompt_template for a pre-Option-F/foreign variant).
+            base_prompt = base_prompt_marker["original_text"] if base_prompt_marker else base_variant.prompt_template
+            base_mode, base_scripted_fn = "think", None
+            base_model = spec.get("models")[0] if spec.get("models") else base_variant.llm_config.model_id
+        elif base_cls == "ToolNode":
+            base_mode, base_prompt, base_scripted_fn = "scripted", None, base_variant.tool.name
+            base_model = spec.get("models")[0] if spec.get("models") else None
+        else:
+            raise ConfigurationError.build(
+                f"Oracle group {merge_node.name!r}'s variant node has unsupported type {base_cls!r}",
+                expected="LlmNode, ToolNode, or AgentNode",
+                found=base_cls,
+            )
+        base_node = Node(name=merge_node.name, mode=base_mode, inputs=inputs, outputs=outputs, prompt=base_prompt,
+                          model=base_model, scripted_fn=base_scripted_fn)
 
     oracle_kwargs: dict[str, Any] = {"n": spec["n"]}
     if spec.get("models"):

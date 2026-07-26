@@ -389,9 +389,10 @@ CELLS: dict[str, tuple[str, ModifierCombo, str | None, str]] = _generate_cells()
 # LLM-mode (think/agent/act) cell whose prompt references its real inputs via
 # ${path} exports too: the translator rewrites ${prod.a} -> {{ prod_a }} and the
 # consumer sweep (input edges, Loop self-edge, Oracle fan-in, Each StartNode) routes
-# every destination_input through the SAME flat name. The ONLY remaining RED_EXPORT
-# cells are Oracle+agent/act (no lowering yet -- neograph-i7k7j); Oracle+think and
-# Oracle merge_prompt (scripted+think) are now GREEN.
+# every destination_input through the SAME flat name. Since Design B (neograph-i7k7j:
+# direct AgentNode Oracle variants), the last export gap closed too -- RED_EXPORT is
+# now EMPTY. Every buildable cell is GREEN; the only non-GREEN cells are the six
+# UNREPRESENTABLE ones neograph's own assembly rejects.
 GREEN: frozenset[str] = frozenset(
     {
         # scripted (LLM-free ToolNode lowerings; green pre-Option-F)
@@ -423,14 +424,19 @@ GREEN: frozenset[str] = frozenset(
         "think-oracle-merge_fn-dict",
         "think-oracle-merge_prompt-single",
         "think-oracle-merge_prompt-dict",
-        # agent -- BARE/EACH-single/LOOP-single/OPERATOR green via Option F
-        # (each-dict/context + loop-dict are UNREPRESENTABLE; oracle stays RED)
+        # agent -- BARE/EACH-single/LOOP-single/OPERATOR green via Option F;
+        # ORACLE green via Design B (neograph-i7k7j: direct AgentNode variants).
+        # (each-dict/context + loop-dict are UNREPRESENTABLE.)
         "agent-bare-single",
         "agent-bare-dict",
         "agent-each-single",
         "agent-loop-single",
         "agent-operator-single",
         "agent-operator-dict",
+        "agent-oracle-merge_fn-single",
+        "agent-oracle-merge_fn-dict",
+        "agent-oracle-merge_prompt-single",
+        "agent-oracle-merge_prompt-dict",
         # act -- same shape as agent
         "act-bare-single",
         "act-bare-dict",
@@ -438,6 +444,10 @@ GREEN: frozenset[str] = frozenset(
         "act-loop-single",
         "act-operator-single",
         "act-operator-dict",
+        "act-oracle-merge_fn-single",
+        "act-oracle-merge_fn-dict",
+        "act-oracle-merge_prompt-single",
+        "act-oracle-merge_prompt-dict",
     }
 )
 
@@ -455,16 +465,17 @@ UNREPRESENTABLE: frozenset[str] = frozenset(
     }
 )
 
-# Everything else builds but ``to_agent_spec`` raises today -- the agent-spec
-# export gap neograph-i7k7j owns. Derived (not hand-listed) so it can't drift out
-# of sync with the generated set or the two explicit buckets above.
+# Any buildable cell that ``to_agent_spec`` cannot yet lower. Derived (not
+# hand-listed) so it can't drift out of sync with the generated set or the two
+# explicit buckets above. As of Design B, neograph-i7k7j, this is EMPTY -- every
+# buildable cell exports and round-trips; the bucket + its strict-xfail branch stay
+# as the standing ratchet that fails loud if a FUTURE change reopens an export gap.
 RED_EXPORT: frozenset[str] = frozenset(CELLS) - GREEN - UNREPRESENTABLE
 
-_I7K7J_BLOCKER = (
-    "neograph-i7k7j: Oracle+agent/act lowering not yet implemented -- _lower_oracle "
-    "raises for agent/act-mode variants (_agent_spec.py, 'Oracle+agent/act export has "
-    "no Agent Spec lowering yet'). NOT placeholder coupling (Option F / neograph-cbpyx "
-    "translated every think/scripted Oracle + LLM-mode cell to GREEN)."
+_RED_EXPORT_REASON = (
+    "to_agent_spec has no lowering for this cell yet (a known export gap). RED_EXPORT is "
+    "empty at HEAD (Option F / neograph-cbpyx + Design B / neograph-i7k7j closed the last "
+    "gaps); a cell landing here means a regression or a newly-derived axis nobody classified."
 )
 
 # The prior hand-typed CELLS keys, expressed in the derived scheme. An EXPLICIT
@@ -551,7 +562,7 @@ class TestAgentSpecExportMatrix:
             return
 
         if cell_id in RED_EXPORT:
-            request.node.add_marker(pytest.mark.xfail(reason=_I7K7J_BLOCKER, strict=True))
+            request.node.add_marker(pytest.mark.xfail(reason=_RED_EXPORT_REASON, strict=True))
 
         construct = build_cell(mode, combo, config, shape)
         # Must not raise (hf505: Each + context input raised a pydantic
@@ -577,7 +588,7 @@ class TestAgentSpecRoundTripMatrix:
             return
 
         if cell_id in RED_EXPORT:
-            request.node.add_marker(pytest.mark.xfail(reason=_I7K7J_BLOCKER, strict=True))
+            request.node.add_marker(pytest.mark.xfail(reason=_RED_EXPORT_REASON, strict=True))
 
         construct = build_cell(mode, combo, config, shape)
         flow = to_agent_spec(construct)

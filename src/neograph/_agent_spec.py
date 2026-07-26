@@ -511,15 +511,43 @@ def _lower_oracle(node: Node, oracle: Oracle) -> tuple[list[SpecNode], list[Cont
                 )
             )
         elif node.mode in ("agent", "act"):
-            # No test cell exercises Oracle+agent/act; fail loud rather than
-            # invent a lowering for an untested combination (m57mn scope).
-            raise ConfigurationError.build(
-                f"node {node.name!r}'s Oracle variant has mode={node.mode!r} — "
-                "Oracle+agent/act export has no Agent Spec lowering yet",
-                expected="Oracle variant mode 'scripted', 'raw', or 'think'",
-                found=f"mode={node.mode!r}",
-                hint="agent/act-mode Oracle variants are out of scope for neograph-m57mn "
-                "(no test cell exercises this combination)",
+            # Design B, neograph-i7k7j: mirror _lower_node's agent/act branch per
+            # variant -- a real AgentNode+Agent, the SAME lowering _lower_node uses,
+            # never a divergent one (Core Invariant). N variants + one merge is the
+            # semantic Oracle lowering; the compile-time isolation auto-wrap
+            # (_fan_agent_wrap) is a LangGraph-runtime detail, so bare AgentNode
+            # variants are faithful and round-trip re-wraps on recompile.
+            #   - Option F: the Agent's system_prompt is placeholder-translated and
+            #     the AgentNode declares the referenced flat Properties; the original
+            #     ${var} text rides neograph/agent_spec marker["prompt"].
+            #   - Per-variant model tier (Oracle.models): pass a model_copy carrying
+            #     the tier AND a UNIQUE name so each Agent/LlmConfig gets a distinct
+            #     pyagentspec component name (no N-way collision). The tier axis
+            #     round-trips via the Oracle marker's `models` on the merge node, so
+            #     the neograph/agent_spec marker keeps the BASE node (model=node.model)
+            #     and _reconstruct_oracle_group recovers base_node | Oracle(models=...).
+            #   - dict-form (multi-key) agent OUTPUTS never reach here: they are
+            #     rejected at Construct.__init__ by raise_if_unsupported_fan_over_agent
+            #     (_fan_agent.py, via _validate_node_chain) -- upstream of both compile
+            #     and export -- so an export-path guard would be unreachable dead code.
+            rewritten, ref_props, flat_to_original = _translate_placeholders(
+                node.prompt or "", inputs, variant_name
+            )
+            variant_agent_source = node.model_copy(
+                update={"name": variant_name, "model": model_tier or node.model}
+            )
+            agent = _make_agent(variant_agent_source, tools_mod, ref_props, gen_outputs, rewritten)
+            variant_metadata[_MARK_MODE] = node.mode
+            variant_metadata[_MARK_AGENT_SPEC] = _agent_spec_marker(node)
+            variant_metadata[_MARK_PROMPT_SPEC] = _prompt_spec_marker(node, flat_to_original)
+            variant_nodes.append(
+                nodes_mod.AgentNode(
+                    name=variant_name,
+                    inputs=ref_props or None,
+                    outputs=gen_outputs or None,
+                    agent=agent,
+                    metadata=variant_metadata,
+                )
             )
         else:
             # scripted / raw: ToolNode has zero placeholder coupling (its
