@@ -34,7 +34,7 @@ from typing import TYPE_CHECKING, Any, Protocol, cast
 
 from pydantic import BaseModel
 
-from neograph._ir_branch import iter_item_slots
+from neograph._ir_branch import _BranchNode, iter_item_slots
 from neograph._ir_protocols import ConstructItem
 from neograph._normalize import normalize_inputs, normalize_outputs
 from neograph._sidecar import infer_oracle_gen_type
@@ -256,13 +256,24 @@ def normalize_ir(construct: Construct) -> None:
     # fan-in today, so the limitation is documented rather than closed here.
     # See neograph-vn5f (site 2).
     peer_field_names: set[str] = set()
-    portal_members: list[Node] = []
+    portal_members: list[ConstructItem] = []
     for item in construct.nodes:
         peer_field_names |= declared_output_fields(item)
         # Portal mesh members at THIS level (top-level siblings, D-MESH-LEVEL).
         # Collected in the existing allowlisted `.nodes` walk so no new raw walk
-        # is introduced (arm-blind-walk guard).
-        if isinstance(item, Node) and item.modifier_set.portal is not None:
+        # is introduced (arm-blind-walk guard). A member — including the mesh
+        # ENTRY — may be a sub-Construct (neograph-s7zt3.5): excluding it here
+        # would feed _group_portal_members the wrong entry, so the entry-keyed
+        # channel stamped onto the Node PEERS below points at an empty channel
+        # (handoff resolves to None at runtime). `not isinstance(_BranchNode)`
+        # is the runtime-safe equivalent of `isinstance((Node, Construct))` over
+        # construct.nodes (whose items are exactly Node | Construct | _BranchNode):
+        # Construct cannot be imported here without growing the never-grow
+        # function-local-import allowlist, and only a _BranchNode is neither. The
+        # write-back loop below stays Node-only (a Construct has no
+        # handoff_channel field); only DETECTION of which entry the peers belong
+        # to needs the Construct-inclusive walk.
+        if not isinstance(item, _BranchNode) and item.modifier_set.portal is not None:
             portal_members.append(item)
 
     # The mesh channel is keyed off each NAMED GROUP's own ENTRY (first member

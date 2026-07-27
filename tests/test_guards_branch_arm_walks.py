@@ -102,6 +102,14 @@ _ALLOWLIST: Counter = Counter(
         ("state.py", "nodes_only = [n for n in construct.nodes if isinstance(n, Node)]"): 1,
         ("state.py", "sub_constructs = [n for n in construct.nodes if isinstance(n, Construct)]"): 1,
         ("state.py", "branch_nodes = [n for n in construct.nodes if isinstance(n, _BranchNode)]"): 1,
+        # Portal mesh-member partition (neograph-s7zt3.5) — DELIBERATELY TOP-LEVEL
+        # only: a Portal mesh is one contiguous run of sibling members at ONE
+        # construct level (D-MESH-LEVEL); a mesh never spans branch arms. Filters
+        # construct.nodes DIRECTLY (not nodes_only) so a sub-Construct mesh ENTRY is
+        # not excluded and order is preserved for _group_portal_members' entry pick.
+        # Routing through an arm-descending iterator would be WRONG (it would admit
+        # arm-nested nodes that cannot be mesh members).
+        ("state.py", "for m in construct.nodes"): 1,
         # Test-scaffold codegen introspection. The two top-level _collect_items /
         # _collect_edges walks were migrated to iter_with_arms in neograph-gfoq; the
         # remaining inner walk descends a sub-construct's own node list one level

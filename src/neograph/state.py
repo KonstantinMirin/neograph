@@ -13,6 +13,7 @@ import structlog
 from pydantic import BaseModel, create_model
 
 from neograph._ir_branch import _BranchNode
+from neograph._ir_protocols import ConstructItem
 from neograph.construct import Construct
 from neograph.errors import CompileError
 from neograph.naming import field_name_for, output_field_name
@@ -252,16 +253,23 @@ def compile_state_model(
     # channel/counter are runtime-inert until T2 lowering reads them. Grouped
     # via the SAME shared helper (_group_portal_members) the validator and IR
     # normalizer use — never a re-derived inline grouping.
-    def _is_dispatch(n: Node) -> bool:
+    def _is_dispatch(n: ConstructItem) -> bool:
         km = n.modifier_set.portal
         return km is not None and km.is_dispatch
 
     # PEER-mode members only: a dispatch node (route="decide") is NOT a mesh member
     # — it has no hop counter / mesh channel; it gets a {field}_dispatch field below.
-    portal_members = [
-        n
-        for n in nodes_only
-        if classify_modifiers(n)[0] in (ModifierCombo.PORTAL, ModifierCombo.PORTAL_OPERATOR) and not _is_dispatch(n)
+    #
+    # Filter over construct.nodes DIRECTLY, preserving position (neograph-s7zt3.5):
+    # a Portal member may be a sub-Construct — including the mesh ENTRY. Do NOT
+    # source from `nodes_only` (excludes a Construct entry) nor from
+    # `nodes_only + sub_constructs` (concatenation reorders relative to
+    # construct.nodes, so _group_portal_members — which treats group_members[0] as
+    # the entry — would pick a Node peer as the entry and mis-key the channel).
+    portal_members: list[ConstructItem] = [
+        m
+        for m in construct.nodes
+        if classify_modifiers(m)[0] in (ModifierCombo.PORTAL, ModifierCombo.PORTAL_OPERATOR) and not _is_dispatch(m)
     ]
     for _group_name, group_members in _group_portal_members(portal_members).items():
         entry = group_members[0]
@@ -276,9 +284,9 @@ def compile_state_model(
     # member gets its OWN proposed-target field (unlike the mesh-entry-keyed
     # hop counter/channel above) -- the approval node reads it to know which
     # peer to route to on approval.
-    for n in portal_members:
-        if n.modifier_set.operator is not None:
-            member_field = field_name_for(n.name)
+    for m in portal_members:
+        if m.modifier_set.operator is not None:
+            member_field = field_name_for(m.name)
             fields[StateKeys.portal_proposed_target(member_field)] = (str | None, None)
 
     # Portal DISPATCH support (design §4.2): a route="decide" node writes the

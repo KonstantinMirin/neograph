@@ -11,7 +11,7 @@ Wiring helpers (Each, Oracle, Loop, Branch, Operator topology) live in _wiring.p
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Any
+from typing import Any, cast
 
 import structlog
 from langgraph.graph import END, START, StateGraph
@@ -251,7 +251,10 @@ def compile(
     for item in construct.nodes:
         if id(item) in meshed:
             continue  # a non-entry mesh member, already lowered at its entry
-        if isinstance(item, Node) and classify_modifiers(item)[0] in (
+        # A mesh ENTRY may be a sub-Construct (neograph-s7zt3.5) — the same
+        # first-class Portal member a non-entry position already admits (do0d9).
+        # The mesh helpers are Construct-agnostic; only DETECTION needed relaxing.
+        if isinstance(item, (Node, Construct)) and classify_modifiers(item)[0] in (
             ModifierCombo.PORTAL,
             ModifierCombo.PORTAL_OPERATOR,
         ):
@@ -259,13 +262,19 @@ def compile(
             if portal is not None and portal.is_dispatch:
                 # Dispatch mode (design §4.2): a standalone LINEAR node (plain
                 # add_node + static edge, NO Command), never a mesh member —
-                # _contiguous_portal_mesh / _validation_portal exclude it.
+                # _contiguous_portal_mesh / _validation_portal exclude it. A
+                # Construct is never is_dispatch (rejected upstream), so this
+                # arm stays Node-only — asserted, not assumed.
+                assert isinstance(item, Node)
                 prev_node = _add_portal_dispatch(
                     graph, item, prev_node, runtime=runtime,
                     scripted_lookup=scripted_lookup, tool_factory_lookup=tool_factory_lookup,
                 )
                 continue
-            members = _contiguous_portal_mesh(construct.nodes, item)
+            # entry may be a Node OR a sub-Construct; _contiguous_portal_mesh reads
+            # only .modifier_set/identity but is annotated `entry: Node` (_wiring.py)
+            # — the cast confines the relaxation here.
+            members = _contiguous_portal_mesh(construct.nodes, cast("Node", item))
             prev_node = _add_portal_mesh(
                 graph,
                 members,
