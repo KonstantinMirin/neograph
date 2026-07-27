@@ -104,6 +104,72 @@ _COMBO_MAP: dict[frozenset[str], ModifierCombo] = {
 }
 
 
+class PrimaryShape(Enum):
+    """The primary body-shape a ModifierCombo decomposes to, orthogonal to
+    the Operator wrapper. Every combo reduces to exactly one of these five."""
+
+    BARE = auto()
+    EACH = auto()
+    ORACLE = auto()
+    LOOP = auto()
+    PORTAL = auto()
+
+
+class ComboDecomposition(NamedTuple):
+    """How a ModifierCombo decomposes into a primary body-shape plus an
+    optional orthogonal Operator wrapper. This is the ONE place that answers
+    "what does this combo mean"; consumers (compiler.py, _agent_spec.py, and
+    the other combo-dispatch sites) consult it instead of re-deriving it.
+    """
+
+    primary: PrimaryShape  # BARE | EACH | ORACLE | LOOP | PORTAL
+    has_operator: bool  # True for every *_OPERATOR combo
+
+
+# Single source of truth for combo *meaning* (decomposition), complementing
+# _COMBO_MAP's single source of truth for combo *classification*. A total
+# function over ModifierCombo: every enum value has exactly one entry, pinned
+# by a partition guard the same shape as _COMBO_MAP's own exhaustiveness.
+# EACH_ORACLE/EACH_ORACLE_OPERATOR are primary=EACH because compiler.py fuses
+# them (a single Node's map_over/ensemble_n M x N Send topology) rather than
+# nesting -- the fusion, not a table gap.
+COMBO_DECOMPOSITION: dict[ModifierCombo, ComboDecomposition] = {
+    ModifierCombo.BARE: ComboDecomposition(PrimaryShape.BARE, False),
+    ModifierCombo.EACH: ComboDecomposition(PrimaryShape.EACH, False),
+    ModifierCombo.ORACLE: ComboDecomposition(PrimaryShape.ORACLE, False),
+    ModifierCombo.LOOP: ComboDecomposition(PrimaryShape.LOOP, False),
+    ModifierCombo.OPERATOR: ComboDecomposition(PrimaryShape.BARE, True),
+    ModifierCombo.PORTAL: ComboDecomposition(PrimaryShape.PORTAL, False),
+    ModifierCombo.EACH_ORACLE: ComboDecomposition(PrimaryShape.EACH, False),  # fused
+    ModifierCombo.EACH_OPERATOR: ComboDecomposition(PrimaryShape.EACH, True),
+    ModifierCombo.ORACLE_OPERATOR: ComboDecomposition(PrimaryShape.ORACLE, True),
+    ModifierCombo.LOOP_OPERATOR: ComboDecomposition(PrimaryShape.LOOP, True),
+    ModifierCombo.EACH_ORACLE_OPERATOR: ComboDecomposition(PrimaryShape.EACH, True),  # fused + operator
+    ModifierCombo.PORTAL_OPERATOR: ComboDecomposition(PrimaryShape.PORTAL, True),
+}
+
+
+SUB_CONSTRUCT_UNSUPPORTED_COMBOS: frozenset[ModifierCombo] = frozenset(
+    {ModifierCombo.EACH_ORACLE, ModifierCombo.EACH_ORACLE_OPERATOR}
+)
+"""ModifierCombo values that are meaningful on a bare Node but have no defined
+lowering when the SAME combo is attached to a Construct used as one item inside
+another Construct. Each x Oracle fusion is defined entirely in terms of a single
+Node's map_over/ensemble_n fields (an M x N Send topology), which a multi-node
+Construct structurally lacks -- a pre-existing compiler restriction
+(compiler.py's Each x Oracle sub-construct CompileError), not an Agent Spec one.
+Consulted FIRST, unconditionally, by both compiler.py's _add_subgraph and
+_agent_spec.py's Construct-item handling before any Construct-level lowering.
+
+Portal combos (PORTAL/PORTAL_OPERATOR) are deliberately EXCLUDED from this set:
+not because a Construct Portal mesh member is impossible (it is not -- a Construct
+CAN be a non-entry mesh member today), but because such a member routes through
+the dedicated mesh path (_contiguous_portal_mesh/_add_portal_mesh in _wiring.py),
+not the generic Construct-item modifier-check path this frozenset governs. The
+mesh path has its own eligibility rules; this set is not the place they live.
+"""
+
+
 def classify_modifiers(item: ConstructItem) -> tuple[ModifierCombo, dict]:
     """Classify an item's modifiers into a ModifierCombo enum value.
 
