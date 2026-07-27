@@ -930,3 +930,122 @@ class TestPortalMeshExportsToSwarm:
 
         with pytest.raises(ConfigurationError):
             to_agent_spec(mixed)
+
+
+# ── neograph-s7zt3.1: mesh-member ${var} prompts must never ship raw ─────────
+
+
+class TestPortalMeshMemberPromptNeverShipsRawPlaceholder:
+    """Pins s7zt3.1: ``_lower_portal_mesh_to_swarm`` passed ``member.prompt``
+    UNTRANSLATED into ``_make_agent`` (``Agent(system_prompt=...)``), so an
+    agent-mode mesh member with ``inputs={'handoff': Payload}`` and a
+    ``${handoff.note}`` prompt exported a raw neograph ``${...}`` into a
+    foreign Swarm runtime that speaks pyagentspec ``{{ }}`` placeholders and
+    will NEVER fill it -- and pyagentspec does not flag it (``${...}`` is not
+    its grammar), so it shipped SILENTLY. That is exactly the North-Star
+    silent-seam class: the export must either Option-F-translate the prompt
+    (like every other ``_make_agent`` caller) or fail loud -- never ship raw.
+
+    The in-code assumption these tests falsify: 'mesh Agents carry NO I/O
+    Properties, so there is nothing to placeholder-translate'. A mesh member
+    CAN declare the reserved ``handoff`` input (``_check_portal_mesh``
+    validates it) and reference it from its prompt.
+    """
+
+    def _placeholder_mesh(self) -> Construct:
+        from pydantic import BaseModel
+
+        from neograph import Node, Portal
+
+        class Handoff(BaseModel, frozen=True):
+            goto: str
+            note: str = ""
+
+        triage = Node(
+            name="triage",
+            mode="agent",
+            prompt="Handle the case: ${handoff.note}",
+            model="gpt-4o",
+            inputs={"handoff": Handoff},
+            outputs=Handoff,
+        ) | Portal(to=["billing"], max_hops=6, on_exhaust="exit")
+        billing = Node(
+            name="billing",
+            mode="agent",
+            prompt="Bill it: ${handoff.note}",
+            model="gpt-4o",
+            inputs={"handoff": Handoff},
+            outputs=Handoff,
+        ) | Portal(to=[])
+        return Construct("swarm-mesh-placeholders", nodes=[triage, billing])
+
+    def _swarm_agents(self, swarm) -> list:
+        agents = {id(swarm.first_agent): swarm.first_agent}
+        for a, b in swarm.relationships:
+            agents[id(a)] = a
+            agents[id(b)] = b
+        return list(agents.values())
+
+    def test_mesh_member_prompt_placeholders_never_ship_raw(self):
+        """North-Star invariant, fix-shape-agnostic: exporting a mesh whose
+        member prompts reference ``${handoff.*}`` either fails loud
+        (ConfigurationError) or produces Agents whose system_prompt carries
+        NO raw ``${`` -- silent raw-`${var}` shipping is the one outcome the
+        invariant forbids, and it is what happens today.
+        """
+        from neograph._agent_spec import to_agent_spec
+        from neograph.errors import ConfigurationError
+
+        mesh = self._placeholder_mesh()
+        try:
+            swarm = to_agent_spec(mesh)
+        except ConfigurationError:
+            return  # fail-loud is a sanctioned outcome
+
+        for agent in self._swarm_agents(swarm):
+            assert "${" not in (agent.system_prompt or ""), (
+                f"Swarm member Agent {agent.name!r} shipped a RAW neograph "
+                f"${{...}} placeholder in system_prompt "
+                f"{agent.system_prompt!r} -- a foreign pyagentspec runtime "
+                f"speaks {{{{ }}}}, will never fill it, and does not flag it. "
+                f"Translate (Option F) or fail loud; never ship raw."
+            )
+
+    def test_mesh_member_prompt_is_option_f_translated_with_declared_props(self):
+        """The landed fix shape: each mesh Agent's system_prompt is the
+        ``{{ flat }}``-rewritten wire form and the Agent declares exactly the
+        referenced flat Properties (so pyagentspec's own placeholder
+        inference/validation passes by construction) -- the SAME Option-F
+        contract every other ``_make_agent`` caller honors.
+        """
+        from neograph._agent_spec import to_agent_spec
+
+        swarm = to_agent_spec(self._placeholder_mesh())
+
+        assert swarm.first_agent.system_prompt == "Handle the case: {{ handoff_note }}"
+        assert [p.title for p in (swarm.first_agent.inputs or [])] == ["handoff_note"], (
+            "the mesh Agent must declare the referenced flat Property so "
+            "pyagentspec's ComponentWithIO validation matches the rewritten prompt"
+        )
+
+    def test_mesh_member_prompt_round_trips_to_original_grammar(self):
+        """Ticket requirement 'must round-trip if translated': the untranslated
+        ``${var}`` text rides a per-member ``neograph/prompt_spec`` marker on
+        the Agent, and ``from_agent_spec`` prefers it -- so an exported mesh
+        imports back with the ORIGINAL neograph prompt grammar, not the
+        ``{{ flat }}`` wire form.
+        """
+        from neograph._agent_spec import to_agent_spec
+        from neograph.loader import from_agent_spec
+
+        swarm = to_agent_spec(self._placeholder_mesh())
+        with pytest.warns(UserWarning, match="best-effort"):
+            mesh = from_agent_spec(swarm)
+
+        # Members import under the exported Agent names ('{node}-agent' -- the
+        # pre-existing, documented best-effort rename of the Swarm import, not
+        # part of s7zt3.1). What s7zt3.1 pins is the PROMPT grammar: original
+        # ${var} text, never the {{ flat }} wire form.
+        prompts = {n.name: n.prompt for n in mesh.nodes}
+        assert prompts["triage-agent"] == "Handle the case: ${handoff.note}"
+        assert prompts["billing-agent"] == "Bill it: ${handoff.note}"

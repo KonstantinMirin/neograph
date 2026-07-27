@@ -32,13 +32,14 @@ registry (``PLACEHOLDER_PROMPT_EMITTING_CONSTRUCTORS`` = text_scan family
 ``| {"AgentNode"}``). A new text_scan prompt-bearing primitive pyagentspec ships
 auto-flows into the walk -- a LOUD add, not a silent miss.
 
-## Known unpaired site rides a SHRINKING allowlist (not a silent skip)
+## No unpaired ``_make_agent`` sites remain (s7zt3.1 FIXED)
 
-``_make_agent`` at ``_lower_portal_mesh_to_swarm`` ships a raw ``${var}`` to a
-foreign Swarm agent's ``system_prompt`` (empirically reproduced 2026-07-27).
-Tracked by BUG neograph-s7zt3.1. It rides a one-entry allowlist keyed to that
-bug; when s7zt3.1 is fixed the entry is removed and the guard tightens (asserted
-by the exactly-1 meta-check below).
+``_make_agent`` at ``_lower_portal_mesh_to_swarm`` used to ship a raw ``${var}``
+to a foreign Swarm agent's ``system_prompt`` (BUG neograph-s7zt3.1, empirically
+reproduced 2026-07-27). It rode a one-entry SHRINKING allowlist keyed to that
+bug; the fix routed the mesh-member prompt through ``_translate_placeholders``
+like every sibling site, the entry was removed, and the guard is now maximally
+tight: EVERY ``_make_agent`` call must be translation-paired, no exceptions.
 """
 
 from __future__ import annotations
@@ -142,12 +143,12 @@ NODE_SITE_EXEMPTIONS: frozenset[tuple[str, str]] = frozenset(
 # false positive. Its pairing is enforced at the _make_agent CALL sites (family
 # b) below, not here.
 
-# -- SHRINKING allowlist (req-4 escalation) -- keyed to BUG neograph-s7zt3.1 ---
-# Matched by ENCLOSING FUNCTION NAME (line numbers drift), not by line number.
-# _lower_portal_mesh_to_swarm's _make_agent ships a raw ${var} to a foreign Swarm
-# agent (empirically reproduced 2026-07-27). When s7zt3.1 is FIXED, remove this
-# entry and the guard tightens -- the exactly-1 meta-check below enforces that.
-MAKE_AGENT_UNPAIRED_ALLOWLIST: frozenset[str] = frozenset({"_lower_portal_mesh_to_swarm"})
+# The req-4 SHRINKING allowlist (MAKE_AGENT_UNPAIRED_ALLOWLIST) is GONE: its
+# sole entry (_lower_portal_mesh_to_swarm, BUG neograph-s7zt3.1) was removed when
+# the fix paired that site with _translate_placeholders, per the allowlist's own
+# exactly-1 meta-check instructions. Every _make_agent call is now unconditionally
+# translation-paired -- a new unpaired site fails loud with no escape hatch short
+# of filing a ticketed bug and re-introducing a one-entry allowlist keyed to it.
 
 # -- Expected counts (req-3 drift tripwire) ----------------------------------
 # If any count below changes, a new placeholder-emitting / _make_agent site was
@@ -157,7 +158,7 @@ MAKE_AGENT_UNPAIRED_ALLOWLIST: frozenset[str] = frozenset({"_lower_portal_mesh_t
 #   node sites (4): LlmNode _lower_generation_step + _lower_oracle merge_node,
 #     AgentNode _lower_generation_step, InputMessageNode Portal-input.
 #   _make_agent (2): _lower_generation_step (paired), _lower_portal_mesh_to_swarm
-#     (allowlisted, neograph-s7zt3.1).
+#     (paired since the s7zt3.1 fix).
 # neograph-2s2o6 consolidation: _lower_node's + _lower_oracle-variant's two
 # hand-written mode dispatches collapsed into ONE _lower_generation_step, so the
 # 5 SEMANTIC dispatch branches now map onto 3 PHYSICAL paired coupled sites
@@ -168,7 +169,7 @@ MAKE_AGENT_UNPAIRED_ALLOWLIST: frozenset[str] = frozenset({"_lower_portal_mesh_t
 EXPECTED_NODE_SITES = 4
 EXPECTED_MAKE_AGENT_SITES = 2
 EXPECTED_PAIRED_NODE_SITES = 3  # 4 collected minus InputMessageNode (exempt)
-EXPECTED_PAIRED_MAKE_AGENT_SITES = 1  # 2 collected minus the Portal-Swarm allowlisted site
+EXPECTED_PAIRED_MAKE_AGENT_SITES = 2  # ALL of them -- no allowlist since the s7zt3.1 fix
 
 # Req-4 reconciliation: post-2s2o6 the 5 SEMANTIC matrix dispatch branches
 # (_lower_node{think,agent/act} + _lower_oracle{think-variant,agent/act-variant,
@@ -248,37 +249,18 @@ class TestEveryCoupledNodeSiteIsTranslationPaired:
 
 
 class TestEveryMakeAgentCallIsTranslationPaired:
-    """Every _make_agent call is preceded by a translate call -- except the ONE
-    confirmed unpaired site on the shrinking allowlist (neograph-s7zt3.1)."""
+    """Every _make_agent call is preceded by a translate call -- no exceptions
+    (the s7zt3.1 shrinking allowlist was emptied and removed by the fix)."""
 
-    def test_every_unpaired_make_agent_call_is_allowlisted(self):
+    def test_every_make_agent_call_is_translation_paired(self):
         unpaired = _unpaired(MAKE_AGENT_SITES, TRANSLATE_BY_FUNC)
-        offenders = [s for s in unpaired if s.func not in MAKE_AGENT_UNPAIRED_ALLOWLIST]
-        assert not offenders, (
+        assert not unpaired, (
             "_make_agent call(s) with NO preceding _translate_placeholders call in "
             "the same enclosing function -- a raw ${var} would reach the nested "
-            f"Agent.system_prompt on the wire: {offenders}. Either add the pairing "
-            "or (if a genuine, ticketed seam) escalate it as its own bug and add a "
-            "shrinking-allowlist entry keyed to that bug."
-        )
-
-    def test_the_confirmed_unpaired_site_is_lower_portal_mesh_to_swarm(self):
-        unpaired = _unpaired(MAKE_AGENT_SITES, TRANSLATE_BY_FUNC)
-        unpaired_funcs = {s.func for s in unpaired}
-        assert unpaired_funcs == {"_lower_portal_mesh_to_swarm"}, (
-            "the ONLY confirmed unpaired _make_agent site must be in "
-            f"_lower_portal_mesh_to_swarm (neograph-s7zt3.1); got {unpaired_funcs}"
-        )
-
-    def test_allowlist_has_exactly_one_entry_so_it_tightens_when_s7zt3_1_fixed(self):
-        # SHRINKING: when neograph-s7zt3.1 is fixed, the _lower_portal_mesh_to_swarm
-        # entry is removed, this drops to 0, and the guard tightens. The exact-1
-        # assertion is what forces that removal (not a silent perpetual skip).
-        assert len(MAKE_AGENT_UNPAIRED_ALLOWLIST) == 1, (
-            "the _make_agent unpaired allowlist must have EXACTLY one entry "
-            "(_lower_portal_mesh_to_swarm, neograph-s7zt3.1) -- a second entry means "
-            "a new unticketed seam slipped in; zero means s7zt3.1 is fixed and this "
-            "allowlist (and the test) should be removed."
+            f"Agent.system_prompt on the wire: {unpaired}. Add the pairing; if a "
+            "genuine, ticketed seam, escalate it as its own bug and re-introduce a "
+            "one-entry shrinking allowlist keyed to that bug (see neograph-s7zt3.1 "
+            "for the precedent)."
         )
 
     def test_paired_make_agent_count(self):
@@ -291,8 +273,8 @@ class TestEveryMakeAgentCallIsTranslationPaired:
 
 class TestMatrixReconciliation:
     """Req-4: the guard's paired-node-site count must equal the matrix's coupled
-    dispatch-branch count, and the Portal->Swarm discrepancy is RECORDED, not
-    papered over."""
+    dispatch-branch count, and the Portal->Swarm discrepancy (once RECORDED via
+    the shrinking allowlist) is now CLOSED by the s7zt3.1 fix."""
 
     def test_paired_node_sites_equal_matrix_coupled_dispatch_branches(self):
         unpaired = _unpaired(NODE_SITES, TRANSLATE_BY_FUNC)
@@ -305,18 +287,24 @@ class TestMatrixReconciliation:
             "_lower_oracle merge_prompt LlmNode). A lost/added physical site fails loud."
         )
 
-    def test_portal_swarm_is_the_recorded_req4_discrepancy(self):
-        # Req-4 finding, recorded not papered over: the matrix classifies Portal as
+    def test_portal_swarm_req4_discrepancy_is_closed(self):
+        # Req-4 finding, recorded then FIXED: the matrix classifies Portal as
         # per-node UNSUPPORTED, so it never exercises the successful Portal->Swarm
         # lowering -- guard AND matrix shared that blind spot. Family (b)
-        # (_make_agent CALL sites) is what closes it: it surfaces the :945 seam,
-        # escalated as neograph-s7zt3.1. This test pins that the discrepancy lives
-        # in exactly _lower_portal_mesh_to_swarm.
+        # (_make_agent CALL sites) surfaced the seam, escalated as
+        # neograph-s7zt3.1, whose fix paired _lower_portal_mesh_to_swarm's
+        # _make_agent with _translate_placeholders. This test pins BOTH halves:
+        # the once-discrepant function now carries its own translate call, and no
+        # unpaired _make_agent site exists anywhere.
+        assert TRANSLATE_BY_FUNC.get("_lower_portal_mesh_to_swarm"), (
+            "_lower_portal_mesh_to_swarm must call _translate_placeholders (the "
+            "s7zt3.1 fix) -- its disappearance means the mesh-member prompt "
+            "translation was removed or moved without updating this guard."
+        )
         unpaired_make_agent = _unpaired(MAKE_AGENT_SITES, TRANSLATE_BY_FUNC)
-        assert {s.func for s in unpaired_make_agent} == {"_lower_portal_mesh_to_swarm"}, (
-            "the req-4 discrepancy (matrix blind to the successful Portal->Swarm "
-            "lowering) must surface as the unpaired _make_agent in "
-            "_lower_portal_mesh_to_swarm, escalated as neograph-s7zt3.1."
+        assert unpaired_make_agent == [], (
+            "the req-4 Portal->Swarm discrepancy was closed by neograph-s7zt3.1; "
+            f"an unpaired _make_agent site reappeared: {unpaired_make_agent}"
         )
 
 

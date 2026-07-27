@@ -713,6 +713,14 @@ def _reconstruct_swarm_mesh(swarm: Any) -> Construct:
         # §3.3, mirrored in example 28's declarative form and _ir_normalize's
         # sole-writer check); normalize_ir derives handoff_param/handoff_channel.
         member = _node_from_spec_agent(agent.name, agent, None, {"handoff": payload}, payload)
+        # Option F (neograph-s7zt3.1): a neograph-exported mesh Agent carries the
+        # untranslated ${var} prompt in a neograph/prompt_spec marker (its
+        # system_prompt is the translated {{ flat }} wire form) -- prefer it so
+        # the round trip recovers the original grammar. Foreign Swarms have no
+        # marker and keep the system_prompt as-is.
+        prompt_marker = (getattr(agent, "metadata", None) or {}).get(_MARK_PROMPT_SPEC)
+        if prompt_marker is not None:
+            member = member.model_copy(update={"prompt": prompt_marker["original_text"] or None})
         members.append(member | Portal(to=peers))
 
     warnings.warn(

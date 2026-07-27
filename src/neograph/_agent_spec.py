@@ -900,20 +900,28 @@ def _lower_portal_mesh_to_swarm(construct: Construct, members: list[Node], tools
     entry_portal = entry.modifier_set.portal
     assert entry_portal is not None  # collected as Portal-modified
 
-    # pyagentspec's Agent ties inputs/outputs Properties to {{placeholder}}
-    # names in its own system_prompt (ComponentWithIO._validate_no_extra_
-    # property) -- a mesh member's payload Properties (e.g. dict-form-
-    # prefixed "handoff.note") are not prompt placeholders, so passing them
-    # unconditionally raises "did not expect any properties" for any member
-    # without a matching prompt template. Mesh Agents carry no I/O Properties;
-    # the payload/routing shape rides the neograph/portal_spec marker instead.
+    # pyagentspec's Agent ties inputs Properties to {{placeholder}} names in its
+    # own system_prompt (ComponentWithIO._validate_no_extra_property), so a mesh
+    # member's prompt is Option-F-translated exactly like every other _make_agent
+    # caller (neograph-s7zt3.1): the Agent declares ONLY the referenced flat
+    # Properties, which match the rewritten {{ flat }} names by construction. A
+    # member may reference the reserved 'handoff' input (${handoff.field}) --
+    # shipping it raw would hand a foreign Swarm runtime a placeholder it can
+    # neither fill nor flag. Outputs stay [] -- the payload/routing shape rides
+    # the neograph/portal_spec marker, and the untranslated ${var} text rides a
+    # per-member neograph/prompt_spec marker on the Agent itself so the Swarm
+    # import recovers the original prompt grammar.
     agents_by_name: dict[str, Any] = {}
     for member in members:
-        # Mesh Agents carry NO I/O Properties (inputs=[]), so there is nothing to
-        # placeholder-translate -- pass the member's prompt through unchanged as the
-        # system_prompt (the payload/routing shape rides the neograph/portal_spec
-        # marker, not prompt placeholders).
-        agents_by_name[member.name] = _make_agent(member, tools_mod, [], [], member.prompt or "")
+        rewritten, ref_props, flat_to_original = _translate_placeholders(
+            member.prompt or "", _properties_for(member.inputs), member.name
+        )
+        agent = _make_agent(member, tools_mod, ref_props, [], rewritten)
+        agent.metadata = {
+            **(agent.metadata or {}),
+            _MARK_PROMPT_SPEC: _prompt_spec_marker(member, flat_to_original),
+        }
+        agents_by_name[member.name] = agent
 
     relationships = [
         (agents_by_name[member.name], agents_by_name[peer])
