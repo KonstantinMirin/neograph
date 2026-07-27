@@ -1,0 +1,4 @@
+# file: /Users/konst/projects/neograph/src/neograph/_validation_inputs.py
+# hypothesis_version: 6.151.12
+
+['fan_out_param', 'list[...]', 'model_fields', 'modifier_set']

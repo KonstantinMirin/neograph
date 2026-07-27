@@ -1,0 +1,4 @@
+# file: /Users/konst/projects/neograph/src/neograph/testing/fakes.py
+# hypothesis_version: 6.151.12
+
+[0.0, 0.02, 0.5, '1', 'args', 'arguments', 'completion_tokens', 'done', 'fake', 'fast', 'function', 'id', 'include_raw', 'input_tokens', 'json', 'llm_factory', 'name', 'ok', 'output_tokens', 'parsed', 'prompt_tokens', 'q', 'raw', 'search', 'token_usage', 'tool_calls', 'total_tokens', 'type', 'x', '{"items": ["done"]}']

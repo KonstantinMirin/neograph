@@ -1,0 +1,4 @@
+# file: /Users/konst/projects/neograph/src/neograph/_input_shape.py
+# hypothesis_version: 6.151.12
+
+['each_item', 'fan_in_dict', 'loop_reentry', 'none', 'single_type']

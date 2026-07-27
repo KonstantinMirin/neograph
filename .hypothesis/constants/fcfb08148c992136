@@ -1,0 +1,4 @@
+# file: /Users/konst/projects/neograph/src/neograph/tool.py
+# hypothesis_version: 6.151.12
+
+['&', '*', '+', ',', '?', '_bound_tool', 'ascii', 'configurable', 'metadata', 'name', 'ng_idempotent', 'ng_tool_budget', 'read_blob', 'read_blob_Args']

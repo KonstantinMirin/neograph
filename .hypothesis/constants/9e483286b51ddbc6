@@ -1,0 +1,4 @@
+# file: /Users/konst/projects/neograph/src/neograph/_member_select.py
+# hypothesis_version: 6.151.12
+
+['decorated_node', 'plain_node', 'sub_construct']

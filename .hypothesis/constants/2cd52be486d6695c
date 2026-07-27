@@ -1,0 +1,4 @@
+# file: /Users/konst/projects/neograph/src/neograph/_llm_dispatch.py
+# hypothesis_version: 6.151.12
+
+['json_mode', 'structured', 'text']

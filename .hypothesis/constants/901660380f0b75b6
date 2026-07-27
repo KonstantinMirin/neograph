@@ -1,0 +1,4 @@
+# file: /Users/konst/projects/neograph/src/neograph/_validation_modifiers.py
+# hypothesis_version: 6.151.12
+
+[', ', 'merge_fallback', 'merge_post_process', 'merge_pre_process', 'oracle_gen_type', 'return']

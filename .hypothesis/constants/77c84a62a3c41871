@@ -1,0 +1,4 @@
+# file: /Users/konst/projects/neograph/src/neograph/_state_write.py
+# hypothesis_version: 6.151.12
+
+['each', 'loop', 'node_skipped', 'skip_when']

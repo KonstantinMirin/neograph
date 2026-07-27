@@ -1,0 +1,4 @@
+# file: /Users/konst/projects/neograph/src/neograph/renderers.py
+# hypothesis_version: 6.151.12
+
+['always', 'item', 'never', 'once', 'render_for_prompt']

@@ -1,0 +1,4 @@
+# file: /Users/konst/projects/neograph/src/neograph/loader.py
+# hypothesis_version: 6.151.12
+
+[4096, 1048576, 'A2AAgent', 'Agent', 'AgentNode', 'EndNode', 'FlowNode', 'LlmNode', 'OciAgent', 'RemoteAgent', 'StartNode', 'Swarm', 'ToolNode', '[', 'agent', 'bare', 'budget', 'config', 'context', 'continue', 'each', 'gate_tools_when', 'goto', 'handoff', 'idempotent', 'inputs', 'invalid spec', 'key', 'llm_config', 'loop', 'max_iterations', 'merge_fn', 'merge_model', 'merge_prompt', 'metadata', 'mode', 'model', 'model_id', 'models', 'n', 'name', 'on_exhaust', 'operator', 'oracle', 'outputs', 'over', 'pause', 'prompt', 'scripted', 'system_prompt', 'think', 'tools', 'when', '{']

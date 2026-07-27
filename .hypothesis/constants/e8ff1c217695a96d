@@ -1,0 +1,4 @@
+# file: /Users/konst/projects/neograph/src/neograph/_di_classify.py
+# hypothesis_version: 6.151.12
+
+['Annotated', 'FromConfig', 'FromInput', '_', 'from_config', 'from_config_model', 'from_input', 'from_input_model', 'required']

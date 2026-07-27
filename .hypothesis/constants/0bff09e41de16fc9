@@ -1,0 +1,4 @@
+# file: /Users/konst/projects/neograph/src/neograph/prompt.py
+# hypothesis_version: 6.151.12
+
+['${', '.md', 'brace', 'content', 'dollar', 'json_schema', 'role', 'system', 'user', '{', '}']

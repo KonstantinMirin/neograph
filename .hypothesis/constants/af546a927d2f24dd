@@ -1,0 +1,4 @@
+# file: /Users/konst/projects/neograph/src/neograph/_execute.py
+# hypothesis_version: 6.151.12
+
+['node_complete', 'node_start', 'run_id', 'scripted']

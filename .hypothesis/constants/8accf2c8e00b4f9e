@@ -1,0 +1,4 @@
+# file: /Users/konst/projects/neograph/src/neograph/_llm.py
+# hypothesis_version: 6.151.12
+
+['LLM not configured', 'cost_callback_failed', 'duration_s', 'input_tokens', 'json_mode', 'llm_call', 'llm_config', 'mode', 'node_name', 'output_tokens', 'think', 'tier', 'total_tokens']

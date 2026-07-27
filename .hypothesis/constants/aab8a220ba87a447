@@ -1,0 +1,4 @@
+# file: /Users/konst/projects/neograph/src/neograph/compiler.py
+# hypothesis_version: 6.151.12
+
+[' [conditional]', 'BARE', 'END', 'None', "Pass conditions={'", 'START', '__end__', '__start__', '_scripted_shim', 'act', 'agent', 'checkpointer=None', 'compile()', 'compile_complete', 'compile_start', 'config', 'each', 'input', 'input=None', 'loop', 'operator', 'oracle', 'subgraph', 'subgraph_compile']

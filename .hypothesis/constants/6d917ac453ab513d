@@ -1,0 +1,4 @@
+# file: /Users/konst/projects/neograph/src/neograph/_llm_runtime.py
+# hypothesis_version: 6.151.12
+
+['__all__', 'act', 'agent', 'llm_factory', 'prompt_compiler', 'think']

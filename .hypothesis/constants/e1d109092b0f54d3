@@ -1,0 +1,4 @@
+# file: /Users/konst/projects/neograph/src/neograph/spec_types.py
+# hypothesis_version: 6.151.12
+
+['#/$defs/', '$defs', '$ref', 'AnonymousNestedModel', 'additionalProperties', 'anyOf', 'array', 'boolean', 'const', 'enum', 'integer', 'items', 'null', 'number', 'object', 'object_map', 'prefixItems', 'properties', 'required', 'string', 'title', 'type', 'types', 'union']

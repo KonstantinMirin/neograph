@@ -1,0 +1,4 @@
+# file: /Users/konst/projects/neograph/src/neograph/_validation_modifiers.py
+# hypothesis_version: 6.151.12
+
+[', ', '?', 'act', 'agent', 'handoff', 'list[Node]', 'max_hops', 'merge_fallback', 'merge_post_process', 'merge_pre_process', 'modifier_set', 'name', 'on_exhaust', 'oracle_gen_type', 'outputs={...}', 'return', 'str or Literal[...]']

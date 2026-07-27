@@ -1,0 +1,4 @@
+# file: /Users/konst/projects/neograph/src/neograph_mcp/_client.py
+# hypothesis_version: 6.151.12
+
+['::', 'Authorization', 'args', 'blob', 'command', 'configurable', 'content', 'contents', 'coroutine', 'env', 'headers', 'mimeType', 'name', 'stdio', 'streamable_http', 'text', 'token', 'transport', 'url']

@@ -1,0 +1,4 @@
+# file: /Users/konst/projects/neograph/src/neograph/_agent_spec.py
+# hypothesis_version: 6.151.12
+
+['act', 'agent', 'at least one node', 'continue', 'default', 'done', 'each', 'false', 'key', 'loop', 'max_iterations', 'merge_fn', 'merge_model', 'merge_prompt', 'models', 'n', 'neograph/branch', 'neograph/each_spec', 'neograph/group_id', 'neograph/loop_spec', 'neograph/mode', 'neograph/modifier', 'neograph/oracle_spec', 'neograph/variant', 'on_error', 'on_exhaust', 'operator', 'oracle', 'over', 'pause', 'raw_fn set', 'renderer set', 'think', 'to_agent_spec', 'true', 'user_input', 'when']

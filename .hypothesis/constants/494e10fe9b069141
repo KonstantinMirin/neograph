@@ -1,0 +1,4 @@
+# file: /Users/konst/projects/neograph/src/neograph/state.py
+# hypothesis_version: 6.151.12
+
+['__qualname__', 'act', 'agent', 'collect', 'each', 'each_duplicate_keys', 'ignore', 'kept_existing', 'loop', 'node name collision']

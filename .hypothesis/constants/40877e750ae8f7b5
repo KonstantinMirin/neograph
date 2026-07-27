@@ -1,0 +1,4 @@
+# file: /Users/konst/projects/neograph/src/neograph/_tool_loop.py
+# hypothesis_version: 6.151.12
+
+['Tool result:', 'args', 'assistant', 'close', 'content', 'dict_type', 'idempotent', 'input_tokens', 'llm_call', 'loc', 'message', 'name', 'output_tokens', 'react', 'role', 'structured', 'system', 'tool_calls', 'type', 'usage_metadata', 'user']

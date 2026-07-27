@@ -1,0 +1,4 @@
+# file: /Users/konst/projects/neograph/src/neograph/_llm_config.py
+# hypothesis_version: 6.151.12
+
+['forbid', 'json_mode', 'provider_kwargs', 'structured', 'text']

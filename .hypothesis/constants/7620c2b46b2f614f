@@ -1,0 +1,4 @@
+# file: /Users/konst/projects/neograph/src/neograph/_param_classify.py
+# hypothesis_version: 6.151.12
+
+['FromConfig', 'FromInput', 'input']

@@ -1,0 +1,4 @@
+# file: /Users/konst/projects/neograph/src/neograph/_agent_cycle.py
+# hypothesis_version: 6.151.12
+
+[1000, '_oracle_model', 'agent', 'approved', 'args', 'calls', 'configurable', 'forced_final', 'gate', 'id', 'input_tokens', 'iteration', 'max iterations', 'max_iterations', 'name', 'names', 'node_complete', 'node_start', 'parse', 'reason', 'router', 'skipped', 't0', 'token budget', 'token_budget', 'tool_calls', 'tools', 'usage_metadata']

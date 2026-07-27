@@ -1,0 +1,4 @@
+# file: /Users/konst/projects/neograph/src/neograph/_llm_retry.py
+# hypothesis_version: 6.151.12
+
+['"', "'", '; ', '[', '\\', ']', '__args__', '__origin__', 'assistant', 'content', 'finish_reason', 'input_tokens', 'length', 'max_retries', 'max_tokens', 'model_fields', 'output_tokens', 'response_metadata', 'role', 'stop_reason', 'usage_metadata', 'user', 'validation_errors', '{', '}']

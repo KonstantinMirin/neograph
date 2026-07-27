@@ -1,0 +1,4 @@
+# file: /Users/konst/projects/neograph/src/neograph/_ir_normalize.py
+# hypothesis_version: 6.151.12
+
+['fan_out_param', 'handoff', 'handoff_channel', 'handoff_param', 'name', 'oracle_gen_type', 'type[BaseModel]']

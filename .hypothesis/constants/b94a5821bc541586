@@ -1,0 +1,4 @@
+# file: /Users/konst/projects/neograph/src/neograph/_fan_agent_wrap.py
+# hypothesis_version: 6.151.12
+
+['fan_out_param', 'inputs', 'modifier_set', 'nodes']
